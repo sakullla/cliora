@@ -6,6 +6,7 @@
 .quick span,.add span,.heading span,.identity span { color: var(--muted); font-size: 12px; }
 .heading { display: flex; align-items: baseline; gap: 12px; margin-top: 10px; }
 .project { display: grid; gap: 14px; }
+.repair { border-color: var(--accent); }
 .identity { display: grid; gap: 5px; min-width: 0; }
 .identity span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .controls,.actions,.extra { display: flex; align-items: center; gap: 9px; }

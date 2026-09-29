@@ -92,6 +92,88 @@ test('home resumes with native session ID and explicit normal or YOLO mode', asy
   ]);
 });
 
+test('tray repair opens the exact missing project even when no CLI is managed', async ({ page }) => {
+  await page.addInitScript(() => {
+    const callbacks = new Map<number, (event: unknown) => void>();
+    const listeners = new Map<string, number[]>();
+    let nextCallback = 0;
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
+      __emitRepair: (payload: unknown) => {
+        for (const id of listeners.get('cliora:tray-repair') ?? []) callbacks.get(id)?.({ event: 'cliora:tray-repair', payload });
+      },
+      __TAURI_INTERNALS__: {
+        transformCallback: (callback: (event: unknown) => void) => { const id = ++nextCallback; callbacks.set(id, callback); return id; },
+        invoke: async (command: string, args: { event?: string; handler?: number } = {}) => {
+          if (command === 'plugin:event|listen') { listeners.set(args.event!, [...(listeners.get(args.event!) ?? []), args.handler!]); return nextCallback; }
+          if (command === 'plugin:event|unlisten') return null;
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: [], theme: 'system' }, tools: [] };
+          if (command === 'list_cli_adapters') return { registered: [{ id: 'grok', name: 'Grok', interfaceFormats: [] }], managedIds: [], preservedUnknown: [] };
+          if (command === 'list_projects') return [{ id: 'moved-project', name: '旧项目', path: 'C:\\旧目录', available: false, preferredTool: 'grok', lastOpened: 1, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {} }];
+          throw new Error(`Unexpected native command: ${command}`);
+        },
+      },
+    });
+  });
+  await page.goto('/');
+  const input = page.getByRole('textbox', { name: '旧项目 新目录' });
+  await expect(input).toBeVisible();
+  await page.evaluate(() => (window as typeof window & { __emitRepair: (target: unknown) => void }).__emitRepair({ page: 'home', projectId: 'moved-project', toolId: null, scope: null, projectPath: null, profileId: null }));
+  await expect(input).toBeFocused();
+  await expect(page.getByText('已有项目仍可查看和重新关联')).toBeVisible();
+});
+
+test('tray conflict targets the active tool page with project scope and profile', async ({ page }) => {
+  await page.addInitScript(() => {
+    const callbacks = new Map<number, (event: unknown) => void>();
+    const listeners = new Map<string, number[]>();
+    const requests: unknown[] = [];
+    let nextCallback = 0;
+    const profile = { id: 'daily', tool: 'grok', name: '日常配置', version: 2, inheritCommon: false, files: { config: 'model = "grok"' }, suppressed: {}, nativeCredentials: {}, connection: null };
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
+      __workspaceRequests: requests,
+      __emitRepair: (payload: unknown) => {
+        for (const id of listeners.get('cliora:tray-repair') ?? []) callbacks.get(id)?.({ event: 'cliora:tray-repair', payload });
+      },
+      __TAURI_INTERNALS__: {
+        transformCallback: (callback: (event: unknown) => void) => { const id = ++nextCallback; callbacks.set(id, callback); return id; },
+        invoke: async (command: string, args: { event?: string; handler?: number; toolId?: string; scope?: string; projectPath?: string } = {}) => {
+          if (command === 'plugin:event|listen') { listeners.set(args.event!, [...(listeners.get(args.event!) ?? []), args.handler!]); return nextCallback; }
+          if (command === 'plugin:event|unlisten') return null;
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['grok'], theme: 'system' }, tools: [{ id: 'grok', name: 'Grok', installation: 'not_checked', configuration: 'not_checked' }] };
+          if (command === 'list_cli_adapters') return { registered: [{ id: 'grok', name: 'Grok', interfaceFormats: [] }], managedIds: ['grok'], preservedUnknown: [] };
+          if (command === 'list_projects') return [];
+          if (command === 'get_registered_tool_workspace') {
+            requests.push({ toolId: args.toolId, scope: args.scope, projectPath: args.projectPath });
+            return {
+              probe: { selectedPath: 'C:\\tools\\grok.cmd', installations: [], nativeFiles: [{ role: 'config', path: 'C:\\项目\\.grok\\config.toml', format: 'toml', writable: true, reason: null, sensitive: false }], nativeWrites: { state: 'supported', reason: '可编辑原生配置' }, interfaceFormats: [], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '', installCommand: null, upgradeCommand: null },
+              profiles: [profile], common: null, binding: { profileId: 'daily', profileVersion: 1 }, snapshots: [], recoveryNeeded: [], customPath: null,
+            };
+          }
+          throw new Error(`Unexpected native command: ${command}`);
+        },
+      },
+    });
+  });
+  await page.goto('/');
+  await page.evaluate(() => (window as typeof window & { __emitRepair: (target: unknown) => void }).__emitRepair({ page: 'connections', toolId: 'grok', scope: 'global', projectId: null, projectPath: null, profileId: 'daily' }));
+  await expect(page.getByRole('heading', { name: '工具与连接', level: 1 })).toBeVisible();
+  await page.evaluate(() => (window as typeof window & { __emitRepair: (target: unknown) => void }).__emitRepair({ page: 'connections', toolId: 'grok', scope: 'project', projectId: 'project-1', projectPath: 'C:\\项目', profileId: 'daily' }));
+  await expect(page.getByRole('combobox', { name: '配置范围' })).toHaveValue('project');
+  await expect(page.getByRole('textbox', { name: '项目目录' })).toHaveValue('C:\\项目');
+  await expect(page.getByRole('heading', { name: '日常配置' })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as typeof window & { __workspaceRequests: Array<Record<string, unknown>> }).__workspaceRequests.some((item) => item.toolId === 'grok' && item.scope === 'project' && item.projectPath === 'C:\\项目'))).toBe(true);
+  await page.getByRole('button', { name: '常用设置' }).click();
+  await page.getByRole('textbox', { name: '配置名称' }).fill('未保存的日常配置');
+  page.once('dialog', (dialog) => void dialog.dismiss());
+  await page.evaluate(() => (window as typeof window & { __emitRepair: (target: unknown) => void }).__emitRepair({ page: 'connections', toolId: 'grok', scope: 'global', projectId: null, projectPath: null, profileId: 'daily' }));
+  await expect(page.getByRole('combobox', { name: '配置范围' })).toHaveValue('project');
+  await expect(page.getByRole('textbox', { name: '配置名称' })).toHaveValue('未保存的日常配置');
+});
+
 test('home opens Claude Code native JSON editor with full disk text', async ({ page }) => {
   await page.addInitScript(() => {
     const profile = {

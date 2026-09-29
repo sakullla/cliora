@@ -27,6 +27,50 @@ enum Action {
         tool: String,
         project: String,
     },
+    RepairProject {
+        project: String,
+    },
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RepairTarget {
+    page: &'static str,
+    tool_id: Option<String>,
+    scope: Option<Scope>,
+    project_id: Option<String>,
+    project_path: Option<String>,
+    profile_id: Option<String>,
+}
+
+impl RepairTarget {
+    fn project(project_id: String) -> Self {
+        Self {
+            page: "home",
+            tool_id: None,
+            scope: None,
+            project_id: Some(project_id),
+            project_path: None,
+            profile_id: None,
+        }
+    }
+
+    fn connection(
+        tool_id: String,
+        scope: Scope,
+        project_id: Option<String>,
+        project_path: Option<String>,
+        profile_id: Option<String>,
+    ) -> Self {
+        Self {
+            page: "connections",
+            tool_id: Some(tool_id),
+            scope: Some(scope),
+            project_id,
+            project_path,
+            profile_id,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -68,10 +112,64 @@ pub fn show_main(app: &AppHandle) {
     }
 }
 
-fn report_error(app: &AppHandle, message: String) {
+fn report_error(app: &AppHandle, message: String, repair: Option<RepairTarget>) {
     app.state::<TrayState>().set_error(message.clone());
-    let _ = app.emit("cliora:tray-error", message);
     show_main(app);
+    if let Some(target) = repair {
+        let _ = app.emit("cliora:tray-repair", target);
+    }
+    let _ = app.emit("cliora:tray-error", message);
+}
+
+fn applied_label(
+    profiles: &[profile::RegisteredProfile],
+    binding: Option<&apply::AppliedBinding>,
+) -> String {
+    let Some(binding) = binding else {
+        return "未选择".into();
+    };
+    let Some(profile) = profiles.iter().find(|item| item.id == binding.profile_id) else {
+        return format!("已应用配置 {} · 当前列表不可用", binding.profile_id);
+    };
+    if profile.version == binding.profile_version {
+        profile.name.clone()
+    } else {
+        format!(
+            "{} · 有未应用修改（已应用 v{}）",
+            profile.name, binding.profile_version
+        )
+    }
+}
+
+fn profile_state_label(
+    profile: &profile::RegisteredProfile,
+    binding: Option<&apply::AppliedBinding>,
+    pending: bool,
+) -> String {
+    if let Some(binding) = binding.filter(|binding| binding.profile_id == profile.id) {
+        let status = if binding.profile_version == profile.version {
+            String::new()
+        } else {
+            format!(" · 有未应用修改（已应用 v{}）", binding.profile_version)
+        };
+        format!("✓ {}{}", profile.name, status)
+    } else if pending {
+        format!("{} · 待重新应用", profile.name)
+    } else {
+        profile.name.clone()
+    }
+}
+
+fn recent_action(project_id: &str, tool: Option<&str>, available: bool) -> Action {
+    match (available, tool) {
+        (true, Some(tool)) => Action::Launch {
+            tool: tool.to_owned(),
+            project: project_id.to_owned(),
+        },
+        _ => Action::RepairProject {
+            project: project_id.to_owned(),
+        },
+    }
 }
 
 fn simple_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
@@ -229,15 +327,7 @@ pub fn refresh(app: &AppHandle) -> Result<(), String> {
     let (tools, recent) = data;
     for (tool, name, profiles, global) in &tools {
         let submenu = Submenu::new(app, name, true).map_err(|error| error.to_string())?;
-        let global_name = global
-            .as_ref()
-            .and_then(|binding| {
-                profiles.iter().find(|item| {
-                    item.id == binding.profile_id && item.version == binding.profile_version
-                })
-            })
-            .map(|profile| profile.name.as_str())
-            .unwrap_or("未选择");
+        let global_name = applied_label(profiles, global.as_ref());
         submenu
             .append(&new_item(
                 app,
@@ -247,9 +337,6 @@ pub fn refresh(app: &AppHandle) -> Result<(), String> {
             )?)
             .map_err(|error| error.to_string())?;
         for profile in profiles {
-            let chosen = global.as_ref().is_some_and(|binding| {
-                binding.profile_id == profile.id && binding.profile_version == profile.version
-            });
             submenu
                 .append(&register_action(
                     app,
@@ -261,7 +348,7 @@ pub fn refresh(app: &AppHandle) -> Result<(), String> {
                         profile: profile.id.clone(),
                         project: None,
                     },
-                    &format!("{}{}", if chosen { "✓ " } else { "" }, profile.name),
+                    &profile_state_label(profile, global.as_ref(), false),
                     true,
                 )?)
                 .map_err(|error| error.to_string())?;
@@ -275,10 +362,9 @@ pub fn refresh(app: &AppHandle) -> Result<(), String> {
                 })
                 .map_err(|error| error.message)?;
             for profile in profiles {
-                let chosen = binding.as_ref().is_some_and(|active| {
-                    active.profile_id == profile.id && active.profile_version == profile.version
-                });
-                let pending = !chosen
+                let pending = binding
+                    .as_ref()
+                    .is_none_or(|active| active.profile_id != profile.id)
                     && project
                         .selected_profiles
                         .get(tool)
@@ -295,11 +381,9 @@ pub fn refresh(app: &AppHandle) -> Result<(), String> {
                             project: Some(project.id.clone()),
                         },
                         &format!(
-                            "{}{} · {} · 项目{}",
-                            if chosen { "✓ " } else { "" },
+                            "{} · {} · 项目",
                             project.name,
-                            profile.name,
-                            if pending { " · 待重新应用" } else { "" }
+                            profile_state_label(profile, binding.as_ref(), pending)
                         ),
                         true,
                     )?)
@@ -315,11 +399,10 @@ pub fn refresh(app: &AppHandle) -> Result<(), String> {
             .preferred_tool
             .as_ref()
             .filter(|id| tools.iter().any(|entry| &entry.0 == *id));
-        let enabled = project.available && tool.is_some();
         let label = if !project.available {
-            format!("{} · 目录需重关联", project.name)
+            format!("{} · 目录需重关联 · 点击修复", project.name)
         } else if tool.is_none() {
-            format!("{} · 请在主窗口选择工具", project.name)
+            format!("{} · 选择工具 · 点击修复", project.name)
         } else {
             let name = tools
                 .iter()
@@ -328,10 +411,7 @@ pub fn refresh(app: &AppHandle) -> Result<(), String> {
                 .unwrap_or("");
             format!("{} · {}", project.name, name)
         };
-        let action = Action::Launch {
-            tool: tool.cloned().unwrap_or_default(),
-            project: project.id.clone(),
-        };
+        let action = recent_action(&project.id, tool.map(String::as_str), project.available);
         recent_menu
             .append(&register_action(
                 app,
@@ -340,7 +420,7 @@ pub fn refresh(app: &AppHandle) -> Result<(), String> {
                 generation,
                 action,
                 &label,
-                enabled,
+                true,
             )?)
             .map_err(|error| error.to_string())?;
     }
@@ -397,6 +477,10 @@ fn on_menu(app: &AppHandle, id: &str) {
     match action {
         Action::Show => show_main(app),
         Action::Quit => app.exit(0),
+        Action::RepairProject { project } => {
+            show_main(app);
+            let _ = app.emit("cliora:tray-repair", RepairTarget::project(project));
+        }
         Action::Switch {
             tool,
             profile,
@@ -404,6 +488,7 @@ fn on_menu(app: &AppHandle, id: &str) {
         } => {
             let app = app.clone();
             std::thread::spawn(move || {
+                let project_id = project.clone();
                 let scope = if project.is_some() {
                     Scope::Project
                 } else {
@@ -421,24 +506,36 @@ fn on_menu(app: &AppHandle, id: &str) {
                     Ok(Some(project)) if project.available => project.path,
                     Ok(None) => None,
                     _ => {
-                        report_error(&app, "项目目录已移动，请在主窗口重新关联".into());
+                        report_error(
+                            &app,
+                            "项目目录已移动，请重新关联".into(),
+                            project_id.map(RepairTarget::project),
+                        );
                         return;
                     }
                 };
+                let repair = RepairTarget::connection(
+                    tool.clone(),
+                    scope,
+                    project_id,
+                    path.clone(),
+                    Some(profile.clone()),
+                );
                 if let Err(error) =
                     commands::apply_registered_now(&app, &tool, &profile, scope, path, false)
                 {
-                    report_error(&app, error.message);
+                    report_error(&app, error.message, Some(repair));
                     return;
                 }
                 if let Err(error) = refresh(&app) {
-                    report_error(&app, error);
+                    report_error(&app, error, None);
                 }
             });
         }
         Action::Launch { tool, project } => {
             let app = app.clone();
             std::thread::spawn(move || {
+                let repair = RepairTarget::project(project.clone());
                 let request = LaunchRequest {
                     tool_id: tool,
                     project_id: Some(project),
@@ -446,11 +543,91 @@ fn on_menu(app: &AppHandle, id: &str) {
                     mode: LaunchMode::Normal,
                 };
                 if let Err(error) = commands::launch_now(&app, request) {
-                    report_error(&app, error.message);
+                    report_error(&app, error.message, Some(repair));
                 } else if let Err(error) = refresh(&app) {
-                    report_error(&app, error);
+                    report_error(&app, error, None);
                 }
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn saved_profile(version: u64) -> profile::RegisteredProfile {
+        profile::RegisteredProfile {
+            id: "daily".into(),
+            tool: "grok".into(),
+            name: "日常".into(),
+            version,
+            inherit_common: false,
+            files: BTreeMap::new(),
+            suppressed: BTreeMap::new(),
+            connection: None,
+            native_credentials: BTreeMap::new(),
+        }
+    }
+
+    fn old_binding() -> apply::AppliedBinding {
+        apply::AppliedBinding {
+            scope_key: "global".into(),
+            tool: "grok".into(),
+            profile_id: "daily".into(),
+            profile_version: 1,
+            managed: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn saved_new_version_does_not_erase_the_applied_old_version_in_global_or_project_menu() {
+        let profile = saved_profile(2);
+        let binding = old_binding();
+        assert_eq!(
+            applied_label(&[profile.clone()], Some(&binding)),
+            "日常 · 有未应用修改（已应用 v1）"
+        );
+        assert_eq!(
+            profile_state_label(&profile, Some(&binding), false),
+            "✓ 日常 · 有未应用修改（已应用 v1）"
+        );
+        assert_eq!(
+            profile_state_label(&profile, Some(&binding), true),
+            "✓ 日常 · 有未应用修改（已应用 v1）"
+        );
+        assert_eq!(
+            profile_state_label(&profile, None, true),
+            "日常 · 待重新应用"
+        );
+        assert_eq!(applied_label(&[saved_profile(1)], Some(&binding)), "日常");
+    }
+
+    #[test]
+    fn invalid_recent_project_opens_repair_instead_of_disabled_launch() {
+        assert!(
+            matches!(recent_action("project-1", Some("grok"), false), Action::RepairProject { project } if project == "project-1")
+        );
+        assert!(
+            matches!(recent_action("project-1", None, true), Action::RepairProject { project } if project == "project-1")
+        );
+        assert!(
+            matches!(recent_action("project-1", Some("grok"), true), Action::Launch { tool, project } if tool == "grok" && project == "project-1")
+        );
+        let target = RepairTarget::connection(
+            "grok".into(),
+            Scope::Project,
+            Some("project-1".into()),
+            Some("C:\\项目".into()),
+            Some("daily".into()),
+        );
+        let json = serde_json::to_value(target).unwrap();
+        assert_eq!(json["page"], "connections");
+        assert_eq!(json["toolId"], "grok");
+        assert_eq!(json["scope"], "project");
+        assert_eq!(json["projectId"], "project-1");
+        assert_eq!(json["projectPath"], "C:\\项目");
+        assert_eq!(json["profileId"], "daily");
     }
 }
