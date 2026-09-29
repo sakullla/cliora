@@ -29,6 +29,20 @@ impl CliId {
             CliId::OpenCode => "OpenCode",
         }
     }
+
+    pub fn stable_id(self) -> &'static str {
+        match self {
+            CliId::Codex => "codex",
+            CliId::ClaudeCode => "claude_code",
+            CliId::Grok => "grok",
+            CliId::Pi => "pi",
+            CliId::OpenCode => "open_code",
+        }
+    }
+
+    pub fn from_stable_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|tool| tool.stable_id() == id)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -40,10 +54,59 @@ pub enum Theme {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(from = "PreferencesWire", into = "PreferencesWire")]
 pub struct Preferences {
     pub schema_version: u32,
     pub managed_tools: Vec<CliId>,
     pub theme: Theme,
+    /// Future/absent adapters remain in the saved setting without entering
+    /// the current five-tool UI or being silently dropped by another update.
+    unknown_managed_tools: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct PreferencesWire {
+    schema_version: u32,
+    managed_tools: Vec<String>,
+    theme: Theme,
+}
+
+impl From<PreferencesWire> for Preferences {
+    fn from(wire: PreferencesWire) -> Self {
+        let mut managed_tools = Vec::new();
+        let mut unknown_managed_tools = Vec::new();
+        for id in wire.managed_tools {
+            if let Some(tool) = CliId::from_stable_id(&id) {
+                if !managed_tools.contains(&tool) {
+                    managed_tools.push(tool);
+                }
+            } else if !unknown_managed_tools.contains(&id) {
+                unknown_managed_tools.push(id);
+            }
+        }
+        Self {
+            schema_version: wire.schema_version,
+            managed_tools,
+            theme: wire.theme,
+            unknown_managed_tools,
+        }
+    }
+}
+
+impl From<Preferences> for PreferencesWire {
+    fn from(preferences: Preferences) -> Self {
+        let mut managed_tools: Vec<String> = preferences
+            .managed_tools
+            .into_iter()
+            .map(|tool| tool.stable_id().to_owned())
+            .collect();
+        managed_tools.extend(preferences.unknown_managed_tools);
+        Self {
+            schema_version: preferences.schema_version,
+            managed_tools,
+            theme: preferences.theme,
+        }
+    }
 }
 
 impl Default for Preferences {
@@ -52,16 +115,42 @@ impl Default for Preferences {
             schema_version: 1,
             managed_tools: CliId::ALL.to_vec(),
             theme: Theme::System,
+            unknown_managed_tools: Vec::new(),
         }
     }
 }
 
 impl Preferences {
+    pub fn unknown_managed_tools(&self) -> &[String] {
+        &self.unknown_managed_tools
+    }
+
     pub fn set_managed(&mut self, ids: &[CliId]) {
         self.managed_tools = CliId::ALL
             .into_iter()
             .filter(|id| ids.contains(id))
             .collect();
+    }
+
+    pub fn set_registered_managed(
+        &mut self,
+        ids: &[String],
+        is_registered: impl Fn(&str) -> bool,
+    ) -> Result<(), String> {
+        if ids.iter().any(|id| !is_registered(id)) {
+            return Err("不能管理未注册的 CLI 适配器".into());
+        }
+        self.managed_tools = CliId::ALL
+            .into_iter()
+            .filter(|tool| ids.iter().any(|id| id == tool.stable_id()))
+            .collect();
+        self.unknown_managed_tools.retain(|id| !is_registered(id));
+        for id in ids {
+            if CliId::from_stable_id(id).is_none() && !self.unknown_managed_tools.contains(id) {
+                self.unknown_managed_tools.push(id.clone());
+            }
+        }
+        Ok(())
     }
 }
 
@@ -81,7 +170,10 @@ pub struct Bootstrap {
 }
 
 impl Bootstrap {
-    pub fn new(preferences: Preferences) -> Self {
+    pub fn new(mut preferences: Preferences) -> Self {
+        // The active UI only understands registered built-ins. The database
+        // keeps unknown IDs; the adapter catalog exposes them read-only.
+        preferences.unknown_managed_tools.clear();
         Self {
             preferences,
             tools: CliId::ALL
@@ -100,6 +192,27 @@ impl Bootstrap {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn registered_management_can_select_future_adapter_and_preserve_absent_one() {
+        let mut preferences: Preferences = serde_json::from_str(
+            r#"{"schema_version":1,"managed_tools":["codex","future_cli","missing_cli"],"theme":"system"}"#,
+        ).unwrap();
+        let registered = |id: &str| CliId::from_stable_id(id).is_some() || id == "future_cli";
+        preferences
+            .set_registered_managed(&["pi".into(), "future_cli".into()], registered)
+            .unwrap();
+        assert_eq!(preferences.managed_tools, vec![CliId::Pi]);
+        assert_eq!(
+            preferences.unknown_managed_tools(),
+            &["missing_cli", "future_cli"]
+        );
+        assert!(preferences
+            .set_registered_managed(&["missing_cli".into()], registered)
+            .is_err());
+        let stored = serde_json::to_string(&preferences).unwrap();
+        assert!(stored.contains("future_cli") && stored.contains("missing_cli"));
+    }
 
     #[test]
     fn managed_set_is_canonical_and_can_be_empty() {

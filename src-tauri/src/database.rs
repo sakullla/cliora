@@ -144,6 +144,56 @@ mod tests {
     use crate::domain::{CliId, Theme};
 
     #[test]
+    fn unknown_managed_id_survives_bootstrap_and_settings_update() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("prefs.db")).unwrap();
+        db.with_connection(|conn| {
+            conn.execute("INSERT INTO app_settings (key, value) VALUES ('preferences', ?1)",
+                [r#"{"schema_version":1,"managed_tools":["codex","future_cli"],"theme":"system"}"#])
+                .map_err(|error| error.to_string())?;
+            conn.execute("INSERT INTO native_profiles (id, tool, version, data) VALUES ('future-profile', 'future_cli', 1, ?1)",
+                [r#"{"id":"future-profile","tool":"future_cli","name":"Future","version":1}"#])
+                .map_err(|error| error.to_string())?;
+            Ok(())
+        }).unwrap();
+        let saved = db
+            .update_preferences(|preferences| preferences.theme = Theme::Dark)
+            .unwrap();
+        assert_eq!(saved.managed_tools, vec![CliId::Codex]);
+        assert_eq!(saved.unknown_managed_tools(), &["future_cli"]);
+        let updated = db
+            .update_preferences(|preferences| preferences.set_managed(&[CliId::Pi]))
+            .unwrap();
+        assert_eq!(updated.managed_tools, vec![CliId::Pi]);
+        assert_eq!(updated.unknown_managed_tools(), &["future_cli"]);
+        let raw: String = db
+            .with_connection(|conn| {
+                conn.query_row(
+                    "SELECT value FROM app_settings WHERE key = 'preferences'",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|error| error.to_string())
+            })
+            .unwrap();
+        assert!(raw.contains("future_cli"));
+        let bootstrap = crate::domain::Bootstrap::new(db.preferences().unwrap());
+        let ipc = serde_json::to_string(&bootstrap).unwrap();
+        assert!(!ipc.contains("future_cli"));
+        let profile_count: i64 = db
+            .with_connection(|conn| {
+                conn.query_row(
+                    "SELECT COUNT(*) FROM native_profiles WHERE tool = 'future_cli'",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|error| error.to_string())
+            })
+            .unwrap();
+        assert_eq!(profile_count, 1);
+    }
+
+    #[test]
     fn settings_survive_reopening_database_including_empty_selection() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("cliora.db");

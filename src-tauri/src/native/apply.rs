@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use super::adapter::{self, NativeFile, Scope};
 use super::auth;
 use super::format;
-use super::profile::{self, Connection, NativeProfile};
+use super::profile::{self, NativeProfile, RegisteredCommon, RegisteredProfile};
 use super::transaction::{self, ApplyOutcome, FieldChange, FilePatch};
 use crate::credentials::CredentialStore;
 use crate::database::Database;
@@ -20,13 +20,13 @@ const SECRET_HASH: &str = "__cliora_secret_sha256";
 const REMOVED_FIELD: &str = "__cliora_removed_field";
 
 #[derive(Debug, Default)]
-struct NativeSecrets {
+pub struct NativeSecrets {
     values: BTreeMap<String, BTreeMap<String, String>>,
     removals: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl NativeSecrets {
-    fn put(&mut self, role: &str, path: &[&str], value: String) {
+    pub(crate) fn put(&mut self, role: &str, path: &[&str], value: String) {
         let pointer = pointer(
             &path
                 .iter()
@@ -42,7 +42,7 @@ impl NativeSecrets {
             .insert(pointer, value);
     }
 
-    fn remove(&mut self, role: &str, path: &[&str]) {
+    pub(crate) fn remove(&mut self, role: &str, path: &[&str]) {
         let pointer = pointer(
             &path
                 .iter()
@@ -59,7 +59,7 @@ impl NativeSecrets {
     }
 }
 
-fn read_secret(id: &str, credentials: &dyn CredentialStore) -> Result<String, String> {
+pub(crate) fn read_secret(id: &str, credentials: &dyn CredentialStore) -> Result<String, String> {
     if !profile::valid_connection_secret_ref(id) {
         return Err("原生密钥引用无效，请重新安全接入".into());
     }
@@ -73,142 +73,26 @@ fn read_secret(id: &str, credentials: &dyn CredentialStore) -> Result<String, St
 }
 
 fn native_secrets(
-    profile: &NativeProfile,
+    registry: &super::adapters::Registry,
+    profile: &RegisteredProfile,
     scope: Scope,
     credentials: &dyn CredentialStore,
 ) -> Result<NativeSecrets, String> {
-    profile::validate_native_credentials(profile)?;
+    let adapter = registry
+        .get(&profile.tool)
+        .ok_or("未注册的 CLI 适配器，不能应用")?;
+    for (role, entries) in &profile.native_credentials {
+        for (name, id) in entries {
+            if !adapter.accepts_native_credential(role, name)
+                || !profile::valid_connection_secret_ref(id)
+            {
+                return Err("原生凭据标识无效，请重新安全接入".into());
+            }
+        }
+    }
     let mut result = NativeSecrets::default();
-    if profile.tool == CliId::ClaudeCode {
-        let project = scope == Scope::Project;
-        // A profile that uses native login or a different account must also
-        // account for credentials already on disk, even if they were never
-        // managed by this application. Claude reads both project files.
-        for role in if project {
-            &["settings", "local_settings"][..]
-        } else {
-            &["settings"][..]
-        } {
-            result.remove(role, &["env", "ANTHROPIC_API_KEY"]);
-            result.remove(role, &["env", "ANTHROPIC_AUTH_TOKEN"]);
-        }
-        let local = profile.native_credentials.get("local_settings");
-        for (role, entries) in &profile.native_credentials {
-            for (name, id) in entries {
-                if profile
-                    .connection
-                    .as_ref()
-                    .is_some_and(|connection| connection.secret_ref.is_some())
-                {
-                    // A replacement connection owns authentication. Imported
-                    // credentials must not keep the previous account active.
-                    result.remove(
-                        if project {
-                            "local_settings"
-                        } else {
-                            "settings"
-                        },
-                        &["env", name],
-                    );
-                    if project {
-                        result.remove("settings", &["env", name]);
-                    }
-                    continue;
-                }
-                if project && role == "settings" {
-                    result.remove("settings", &["env", name]);
-                    if local.is_some_and(|items| items.contains_key(name)) {
-                        continue;
-                    }
-                }
-                let destination = if project {
-                    "local_settings"
-                } else {
-                    "settings"
-                };
-                result.put(destination, &["env", name], read_secret(id, credentials)?);
-            }
-        }
-    }
-    if let Some(connection) = &profile.connection {
-        if let Some(id) = &connection.secret_ref {
-            let secret = read_secret(id, credentials)?;
-            let provider = connection.provider_id.as_str();
-            let model = connection.model.as_str();
-            match profile.tool {
-                CliId::Codex => {
-                    if scope == Scope::Project {
-                        return Err("Codex 项目层不能写入供应商密钥；请使用全局配置".into());
-                    }
-                    result.put(
-                        "settings",
-                        &["model_providers", provider, "experimental_bearer_token"],
-                        secret,
-                    );
-                    result.remove("settings", &["model_providers", provider, "env_key"]);
-                }
-                CliId::ClaudeCode => {
-                    let name = connection
-                        .auth_env_var
-                        .as_deref()
-                        .unwrap_or("ANTHROPIC_API_KEY");
-                    if !matches!(name, "ANTHROPIC_API_KEY" | "ANTHROPIC_AUTH_TOKEN") {
-                        return Err(
-                            "Claude Code 原生认证只支持 ANTHROPIC_API_KEY 或 ANTHROPIC_AUTH_TOKEN"
-                                .into(),
-                        );
-                    }
-                    let destination = if scope == Scope::Project {
-                        "local_settings"
-                    } else {
-                        "settings"
-                    };
-                    result.put(destination, &["env", name], secret);
-                    result.remove(
-                        destination,
-                        &[
-                            "env",
-                            if name == "ANTHROPIC_API_KEY" {
-                                "ANTHROPIC_AUTH_TOKEN"
-                            } else {
-                                "ANTHROPIC_API_KEY"
-                            },
-                        ],
-                    );
-                    if scope == Scope::Project {
-                        result.remove("settings", &["env", "ANTHROPIC_API_KEY"]);
-                        result.remove("settings", &["env", "ANTHROPIC_AUTH_TOKEN"]);
-                    }
-                }
-                CliId::Grok => {
-                    if scope == Scope::Project {
-                        return Err("Grok 项目层不能写入供应商密钥；请使用全局配置".into());
-                    }
-                    result.put("settings", &["model", model, "api_key"], secret);
-                    result.remove("settings", &["model", model, "env_key"]);
-                }
-                CliId::Pi => {
-                    if scope == Scope::Project {
-                        return Err("Pi 项目层不能写入供应商密钥；请使用全局配置".into());
-                    }
-                    result.put("models", &["providers", provider, "apiKey"], secret);
-                }
-                CliId::OpenCode => {
-                    if scope == Scope::Project {
-                        return Err(
-                            "OpenCode 项目共享配置不能写入明文密钥；请使用全局配置或原生登录"
-                                .into(),
-                        );
-                    }
-                    result.put(
-                        "settings",
-                        &["provider", provider, "options", "apiKey"],
-                        secret,
-                    );
-                }
-            }
-        }
-    }
+    adapter.restore_imported_secrets(profile, scope, credentials, &mut result)?;
+    adapter.write_connection_secret(profile, scope, credentials, &mut result)?;
     Ok(result)
 }
 
@@ -229,43 +113,11 @@ fn managed_value(value: Option<&Value>, marker: Option<&Value>, integrity: &[u8;
     }
 }
 
-fn existing_secret_field(tool: CliId, role: &str, root: &Value) -> bool {
-    fn objects(value: Option<&Value>) -> Option<&serde_json::Map<String, Value>> {
-        value.and_then(Value::as_object)
-    }
-    match (tool, role) {
-        (CliId::ClaudeCode, "settings" | "local_settings") => {
-            objects(root.get("env")).is_some_and(|env| {
-                env.contains_key("ANTHROPIC_API_KEY") || env.contains_key("ANTHROPIC_AUTH_TOKEN")
-            })
-        }
-        (CliId::Codex, "settings") => {
-            objects(root.get("model_providers")).is_some_and(|providers| {
-                providers
-                    .values()
-                    .any(|item| item.get("experimental_bearer_token").is_some())
-            })
-        }
-        (CliId::Grok, "settings") => objects(root.get("model"))
-            .is_some_and(|models| models.values().any(|item| item.get("api_key").is_some())),
-        (CliId::Pi, "models") => objects(root.get("providers"))
-            .is_some_and(|providers| providers.values().any(|item| item.get("apiKey").is_some())),
-        (CliId::OpenCode, "settings") => objects(root.get("provider")).is_some_and(|providers| {
-            providers.values().any(|item| {
-                item.get("options")
-                    .and_then(|options| options.get("apiKey"))
-                    .is_some()
-            })
-        }),
-        _ => false,
-    }
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppliedBinding {
     pub scope_key: String,
-    pub tool: CliId,
+    pub tool: String,
     pub profile_id: String,
     pub profile_version: u64,
     pub managed: Managed,
@@ -276,14 +128,6 @@ pub struct AppliedBinding {
 pub struct NativePreview {
     pub documents: BTreeMap<String, Value>,
     pub sources: BTreeMap<String, BTreeMap<String, String>>,
-}
-
-fn tool_key(tool: CliId) -> String {
-    serde_json::to_value(tool)
-        .unwrap()
-        .as_str()
-        .unwrap()
-        .to_string()
 }
 
 fn pointer(path: &[String]) -> String {
@@ -316,7 +160,7 @@ fn flatten(value: &Value, path: &mut Vec<String>, output: &mut BTreeMap<String, 
     }
 }
 
-fn set_json(root: &mut Value, path: &[&str], value: Value) {
+pub(crate) fn set_json(root: &mut Value, path: &[&str], value: Value) {
     let mut cursor = root;
     for segment in &path[..path.len() - 1] {
         if !cursor.get(*segment).is_some_and(Value::is_object) {
@@ -333,147 +177,13 @@ fn set_json(root: &mut Value, path: &[&str], value: Value) {
         .insert(path.last().unwrap().to_string(), value);
 }
 
+#[cfg(test)]
 fn connection_documents(
     tool: CliId,
-    connection: &Connection,
+    connection: &profile::Connection,
     scope: Scope,
 ) -> Result<BTreeMap<String, Value>, String> {
-    if scope == Scope::Project && matches!(tool, CliId::Codex | CliId::Grok | CliId::Pi) {
-        return Err("此工具的项目层不能安全写入供应商连接；请使用全局配置".into());
-    }
-    let mut result = BTreeMap::new();
-    let mut settings = json!({});
-    let format = connection.interface_format.as_str();
-    let provider = connection.provider_id.as_str();
-    let model = connection.model.as_str();
-    let base = connection.base_url.as_str();
-    let env_name = profile::auth_env_name(tool, connection);
-    let env = env_name.as_deref();
-    match tool {
-        CliId::Codex => {
-            if format != "openai_responses" {
-                return Err("Codex 此版本只支持 Responses 供应商接口".into());
-            }
-            set_json(&mut settings, &["model"], json!(model));
-            set_json(&mut settings, &["model_provider"], json!(provider));
-            set_json(
-                &mut settings,
-                &["model_providers", provider, "name"],
-                json!(provider),
-            );
-            set_json(
-                &mut settings,
-                &["model_providers", provider, "base_url"],
-                json!(base),
-            );
-            set_json(
-                &mut settings,
-                &["model_providers", provider, "wire_api"],
-                json!("responses"),
-            );
-            if let Some(env) = env {
-                set_json(
-                    &mut settings,
-                    &["model_providers", provider, "env_key"],
-                    json!(env),
-                );
-            }
-        }
-        CliId::ClaudeCode => {
-            if format != "anthropic_messages" {
-                return Err("Claude Code 此版本只支持 Anthropic Messages 接口".into());
-            }
-            set_json(&mut settings, &["model"], json!(model));
-            set_json(&mut settings, &["env", "ANTHROPIC_BASE_URL"], json!(base));
-        }
-        CliId::Grok => {
-            let backend = match format {
-                "openai_completions" => "chat_completions",
-                "openai_responses" => "responses",
-                "anthropic_messages" => "messages",
-                _ => return Err("Grok 不支持所选接口格式".into()),
-            };
-            set_json(&mut settings, &["models", "default"], json!(model));
-            set_json(&mut settings, &["model", model, "model"], json!(model));
-            set_json(&mut settings, &["model", model, "base_url"], json!(base));
-            set_json(
-                &mut settings,
-                &["model", model, "api_backend"],
-                json!(backend),
-            );
-            if let Some(env) = env {
-                set_json(&mut settings, &["model", model, "env_key"], json!(env));
-            }
-        }
-        CliId::Pi => {
-            let api = match format {
-                "openai_completions" => "openai-completions",
-                "openai_responses" => "openai-responses",
-                "anthropic_messages" => "anthropic-messages",
-                _ => return Err("Pi 不支持所选接口格式".into()),
-            };
-            set_json(&mut settings, &["defaultProvider"], json!(provider));
-            set_json(&mut settings, &["defaultModel"], json!(model));
-            let mut models = json!({});
-            set_json(
-                &mut models,
-                &["providers", provider, "baseUrl"],
-                json!(base),
-            );
-            set_json(&mut models, &["providers", provider, "api"], json!(api));
-            set_json(
-                &mut models,
-                &["providers", provider, "models"],
-                json!([{"id":model}]),
-            );
-            if let Some(env) = env {
-                set_json(
-                    &mut models,
-                    &["providers", provider, "apiKey"],
-                    json!(format!("${{{env}}}")),
-                );
-            }
-            result.insert("models".into(), models);
-        }
-        CliId::OpenCode => {
-            let npm = match format {
-                "openai_completions" => "@ai-sdk/openai-compatible",
-                "openai_responses" => "@ai-sdk/openai",
-                "anthropic_messages" => "@ai-sdk/anthropic",
-                _ => return Err("OpenCode 不支持所选接口格式".into()),
-            };
-            set_json(
-                &mut settings,
-                &["model"],
-                json!(format!("{provider}/{model}")),
-            );
-            set_json(&mut settings, &["provider", provider, "npm"], json!(npm));
-            set_json(
-                &mut settings,
-                &["provider", provider, "name"],
-                json!(provider),
-            );
-            set_json(
-                &mut settings,
-                &["provider", provider, "options", "baseURL"],
-                json!(base),
-            );
-            set_json(
-                &mut settings,
-                &["provider", provider, "models", model, "name"],
-                json!(model),
-            );
-            if let Some(env) = env {
-                set_json(
-                    &mut settings,
-                    &["provider", provider, "options", "apiKey"],
-                    json!(format!("{{env:{env}}}")),
-                );
-            }
-        }
-    }
-    result.insert("settings".into(), settings);
-    Ok(result)
+    super::adapters::known(tool).connection_documents(connection, scope)
 }
 
 fn scope_key(scope: Scope, project: Option<&Path>) -> Result<String, String> {
@@ -497,10 +207,18 @@ pub fn get_binding(
     tool: CliId,
     key: &str,
 ) -> Result<Option<AppliedBinding>, String> {
+    get_registered_binding(db, tool.stable_id(), key)
+}
+
+pub fn get_registered_binding(
+    db: &Database,
+    tool: &str,
+    key: &str,
+) -> Result<Option<AppliedBinding>, String> {
     db.with_connection(|conn| {
-        let row: Option<(String, i64, String)> = conn.query_row("SELECT profile_id, profile_version, managed FROM applied_bindings WHERE scope_key = ?1 AND tool = ?2", params![key, tool_key(tool)], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).optional().map_err(|e| e.to_string())?;
+        let row: Option<(String, i64, String)> = conn.query_row("SELECT profile_id, profile_version, managed FROM applied_bindings WHERE scope_key = ?1 AND tool = ?2", params![key, tool], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).optional().map_err(|e| e.to_string())?;
         row.map(|(profile_id, profile_version, managed)| {
-            Ok(AppliedBinding { scope_key: key.into(), tool, profile_id, profile_version: profile_version as u64, managed: serde_json::from_str(&managed).map_err(|_| "活动配置记录损坏")? })
+            Ok(AppliedBinding { scope_key: key.into(), tool: tool.into(), profile_id, profile_version: profile_version as u64, managed: serde_json::from_str(&managed).map_err(|_| "活动配置记录损坏")? })
         }).transpose()
     })
 }
@@ -510,6 +228,25 @@ pub fn desired_documents(
     common: Option<&profile::CommonConfig>,
     scope: Scope,
 ) -> Result<BTreeMap<String, Value>, String> {
+    let registered = RegisteredProfile::from(profile.clone());
+    let common = common.cloned().map(RegisteredCommon::from);
+    desired_registered_documents(
+        &super::adapters::Registry::builtins(),
+        &registered,
+        common.as_ref(),
+        scope,
+    )
+}
+
+pub fn desired_registered_documents(
+    registry: &super::adapters::Registry,
+    profile: &RegisteredProfile,
+    common: Option<&RegisteredCommon>,
+    scope: Scope,
+) -> Result<BTreeMap<String, Value>, String> {
+    let adapter = registry
+        .get(&profile.tool)
+        .ok_or("未注册的 CLI 适配器，不能应用")?;
     let mut roles: BTreeSet<String> = profile.files.keys().cloned().collect();
     if profile.inherit_common {
         if let Some(common) = common {
@@ -517,48 +254,24 @@ pub fn desired_documents(
         }
     }
     if profile.connection.is_some() {
-        roles.insert("settings".into());
-        if profile.tool == CliId::Pi {
-            roles.insert("models".into());
+        for role in adapter.connection_roles() {
+            roles.insert((*role).into());
         }
     }
     let mut result = BTreeMap::new();
     for role in roles {
-        if scope == Scope::Project && profile.tool == CliId::Pi && role == "models" {
-            return Err("Pi 项目层不支持自定义 models.json".into());
-        }
-        let effective = profile::resolve_file(profile, common, &role)?;
+        adapter.validate_role_scope(&role, scope)?;
+        let effective = profile::resolve_registered_file(registry, profile, common, &role)?;
         result.insert(role, effective.contents);
     }
     if let Some(connection) = &profile.connection {
-        for (role, overlay) in connection_documents(profile.tool, connection, scope)? {
+        for (role, overlay) in adapter.connection_documents(connection, scope)? {
             let existing = result.entry(role).or_insert_with(|| json!({}));
             let (merged, _) = format::resolve(existing, &overlay, &[])?;
             *existing = merged;
         }
     }
-    if scope == Scope::Project {
-        match profile.tool {
-            CliId::Codex => {
-                let settings = result.get("settings");
-                if settings.and_then(|v| v.get("model_provider")).is_some()
-                    || settings.and_then(|v| v.get("model_providers")).is_some()
-                {
-                    return Err("Codex 项目配置不能声明模型供应商".into());
-                }
-            }
-            CliId::Grok => {
-                if let Some(settings) = result.get("settings").and_then(Value::as_object) {
-                    if settings.keys().any(|key| {
-                        !matches!(key.as_str(), "mcp_servers" | "plugins" | "permissions")
-                    }) {
-                        return Err("Grok 项目配置仅支持 MCP、插件和权限".into());
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
+    adapter.validate_documents(scope, &result)?;
     Ok(result)
 }
 
@@ -567,18 +280,38 @@ pub fn preview(
     common: Option<&profile::CommonConfig>,
     scope: Scope,
 ) -> Result<NativePreview, String> {
-    profile::validate_files(profile.tool, &profile.files)?;
-    profile::validate_native_credentials(profile)?;
-    let documents = desired_documents(profile, common, scope)?;
+    let registered = RegisteredProfile::from(profile.clone());
+    let common = common.cloned().map(RegisteredCommon::from);
+    preview_registered(
+        &super::adapters::Registry::builtins(),
+        &registered,
+        common.as_ref(),
+        scope,
+    )
+}
+
+pub fn preview_registered(
+    registry: &super::adapters::Registry,
+    profile: &RegisteredProfile,
+    common: Option<&RegisteredCommon>,
+    scope: Scope,
+) -> Result<NativePreview, String> {
+    profile::validate_registered_files(registry, &profile.tool, &profile.files)?;
+    profile::validate_registered_native_credentials(registry, profile)?;
+    let documents = desired_registered_documents(registry, profile, common, scope)?;
     let mut sources = BTreeMap::new();
     for role in documents.keys() {
         sources.insert(
             role.clone(),
-            profile::resolve_file(profile, common, role)?.source_by_path,
+            profile::resolve_registered_file(registry, profile, common, role)?.source_by_path,
         );
     }
     if let Some(connection) = &profile.connection {
-        for (role, root) in connection_documents(profile.tool, connection, scope)? {
+        for (role, root) in registry
+            .get(&profile.tool)
+            .ok_or("未注册的 CLI 适配器")?
+            .connection_documents(connection, scope)?
+        {
             let mut fields = BTreeMap::new();
             flatten(&root, &mut Vec::new(), &mut fields);
             let entry = sources.entry(role).or_default();
@@ -600,10 +333,39 @@ pub fn apply_validated(
     scope: Scope,
     allow_takeover: bool,
 ) -> Result<ApplyOutcome, String> {
-    let desired = desired_documents(profile, common, scope)?;
-    let secrets = native_secrets(profile, scope, credentials)?;
+    let registered = RegisteredProfile::from(profile.clone());
+    let common = common.cloned().map(RegisteredCommon::from);
+    apply_registered_validated(
+        &super::adapters::Registry::builtins(),
+        db,
+        credentials,
+        &registered,
+        common.as_ref(),
+        native_files,
+        key,
+        scope,
+        allow_takeover,
+    )
+}
+
+pub fn apply_registered_validated(
+    registry: &super::adapters::Registry,
+    db: &Database,
+    credentials: &dyn CredentialStore,
+    profile: &RegisteredProfile,
+    common: Option<&RegisteredCommon>,
+    native_files: &[NativeFile],
+    key: &str,
+    scope: Scope,
+    allow_takeover: bool,
+) -> Result<ApplyOutcome, String> {
+    let adapter = registry
+        .get(&profile.tool)
+        .ok_or("未注册的 CLI 适配器，不能应用")?;
+    let desired = desired_registered_documents(registry, profile, common, scope)?;
+    let secrets = native_secrets(registry, profile, scope, credentials)?;
     let integrity = transaction::integrity_key(db, credentials)?;
-    let old = get_binding(db, profile.tool, key)?;
+    let old = get_registered_binding(db, &profile.tool, key)?;
     let mut new_managed = Managed::new();
     for (role, root) in desired {
         let mut fields = BTreeMap::new();
@@ -707,7 +469,7 @@ pub fn apply_validated(
                     .values()
                     .any(|value| value.get(SECRET_HASH).is_some())
             })
-            || existing_secret_field(profile.tool, &role, &original);
+            || adapter.has_native_secret(&role, &original);
         if !changes.is_empty() || (sensitive && file_path.is_file()) {
             patches.push(FilePatch {
                 path: file_path.to_path_buf(),
@@ -722,15 +484,23 @@ pub fn apply_validated(
     if patches.is_empty() {
         return transaction::commit_matching(db, &matching_baselines, |tx| {
             let json = serde_json::to_string(&new_managed).map_err(|e| e.to_string())?;
-            tx.execute("INSERT INTO applied_bindings (scope_key, tool, profile_id, profile_version, managed) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(scope_key, tool) DO UPDATE SET profile_id = excluded.profile_id, profile_version = excluded.profile_version, managed = excluded.managed", params![key, tool_key(profile.tool), profile.id, profile.version as i64, json]).map_err(|e| e.to_string())?;
+            tx.execute("INSERT INTO applied_bindings (scope_key, tool, profile_id, profile_version, managed) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(scope_key, tool) DO UPDATE SET profile_id = excluded.profile_id, profile_version = excluded.profile_version, managed = excluded.managed", params![key, profile.tool, profile.id, profile.version as i64, json]).map_err(|e| e.to_string())?;
             Ok(())
         });
     }
-    transaction::apply(db, credentials, &patches, |tx| {
-        let json = serde_json::to_string(&new_managed).map_err(|e| e.to_string())?;
-        tx.execute("INSERT INTO applied_bindings (scope_key, tool, profile_id, profile_version, managed) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(scope_key, tool) DO UPDATE SET profile_id = excluded.profile_id, profile_version = excluded.profile_version, managed = excluded.managed", params![key, tool_key(profile.tool), profile.id, profile.version as i64, json]).map_err(|e| e.to_string())?;
-        Ok(())
-    })
+    super::adapters::commit_registered_patches(
+        registry,
+        &profile.tool,
+        native_files,
+        db,
+        credentials,
+        &patches,
+        |tx| {
+            let json = serde_json::to_string(&new_managed).map_err(|e| e.to_string())?;
+            tx.execute("INSERT INTO applied_bindings (scope_key, tool, profile_id, profile_version, managed) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(scope_key, tool) DO UPDATE SET profile_id = excluded.profile_id, profile_version = excluded.profile_version, managed = excluded.managed", params![key, profile.tool, profile.id, profile.version as i64, json]).map_err(|e| e.to_string())?;
+            Ok(())
+        },
+    )
 }
 
 pub fn apply_profile(
@@ -744,20 +514,47 @@ pub fn apply_profile(
     custom_path: Option<&Path>,
     allow_takeover: bool,
 ) -> Result<ApplyOutcome, String> {
-    let profile = profile::get_profile(db, profile_id)?;
+    apply_registered_profile(
+        &super::adapters::Registry::builtins(),
+        db,
+        credentials,
+        tool.stable_id(),
+        profile_id,
+        scope,
+        home,
+        project,
+        custom_path,
+        allow_takeover,
+    )
+}
+
+pub fn apply_registered_profile(
+    registry: &super::adapters::Registry,
+    db: &Database,
+    credentials: &dyn CredentialStore,
+    tool: &str,
+    profile_id: &str,
+    scope: Scope,
+    home: &Path,
+    project: Option<&Path>,
+    custom_path: Option<&Path>,
+    allow_takeover: bool,
+) -> Result<ApplyOutcome, String> {
+    let profile = profile::get_registered_profile(db, profile_id)?;
     if profile.tool != tool {
         return Err("配置属于另一个 CLI".into());
     }
     if let Some(connection) = &profile.connection {
         auth::verify_stored_credential(connection, credentials)?;
     }
-    let common = profile::get_common(db, tool)?;
+    let common = profile::get_registered_common(db, tool)?;
     let key = scope_key(scope, project)?;
-    let probe = adapter::probe(tool, custom_path, home, project, scope);
+    let probe = adapter::probe_registered(registry, tool, custom_path, home, project, scope)?;
     if probe.native_writes.state != "supported" {
         return Err(probe.native_writes.reason.into());
     }
-    apply_validated(
+    apply_registered_validated(
+        registry,
         db,
         credentials,
         &profile,
@@ -772,6 +569,7 @@ pub fn apply_profile(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::native::profile::Connection;
     use std::collections::HashMap;
     use std::fs;
     use std::sync::Mutex;
@@ -1249,9 +1047,14 @@ mod tests {
         assert!(written.contains("token-test-value"));
         assert!(!written.contains("ANTHROPIC_API_KEY"));
         profile.connection.as_mut().unwrap().auth_env_var = Some("CUSTOM_TOKEN".into());
-        assert!(native_secrets(&profile, Scope::Global, &store)
-            .unwrap_err()
-            .contains("只支持"));
+        assert!(native_secrets(
+            &super::super::adapters::Registry::builtins(),
+            &RegisteredProfile::from(profile.clone()),
+            Scope::Global,
+            &store
+        )
+        .unwrap_err()
+        .contains("只支持"));
         let mut raw = profile.clone();
         raw.files.insert(
             "settings".into(),

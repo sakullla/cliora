@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use super::format::FileKind;
+use super::adapters::{self, CliAdapter, Registry};
 use crate::domain::CliId;
 
 #[derive(Clone, Debug, Serialize)]
@@ -61,7 +61,7 @@ pub struct Capability {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolProbe {
-    pub tool: CliId,
+    pub tool: String,
     pub installations: Vec<Installation>,
     pub selected_path: Option<String>,
     pub native_files: Vec<NativeFile>,
@@ -75,8 +75,12 @@ pub struct ToolProbe {
     pub provider_presets: Vec<ProviderPreset>,
 }
 
-fn provider_presets(tool: CliId, known: bool) -> Vec<ProviderPreset> {
-    let formats = interface_formats(tool, known);
+fn provider_presets(adapter: &dyn CliAdapter, known: bool) -> Vec<ProviderPreset> {
+    let formats = if known {
+        adapter.interface_formats().to_vec()
+    } else {
+        Vec::new()
+    };
     let mut presets = Vec::new();
     if formats.contains(&"openai_responses") {
         presets.push(ProviderPreset {
@@ -98,11 +102,7 @@ fn provider_presets(tool: CliId, known: bool) -> Vec<ProviderPreset> {
         presets.push(ProviderPreset {
             id: "anthropic",
             label: "Anthropic API",
-            base_url: if tool == CliId::ClaudeCode {
-                "https://api.anthropic.com"
-            } else {
-                "https://api.anthropic.com/v1"
-            },
+            base_url: adapter.anthropic_base_url(),
             interface_format: "anthropic_messages",
             source_url: "https://platform.claude.com/docs/en/api/overview",
         });
@@ -110,17 +110,7 @@ fn provider_presets(tool: CliId, known: bool) -> Vec<ProviderPreset> {
     presets
 }
 
-fn npm_package(tool: CliId) -> &'static str {
-    match tool {
-        CliId::Codex => "@openai/codex",
-        CliId::ClaudeCode => "@anthropic-ai/claude-code",
-        CliId::Grok => "@xai-official/grok",
-        CliId::Pi => "@earendil-works/pi-coding-agent",
-        CliId::OpenCode => "opencode-ai",
-    }
-}
-
-fn source_of(path: &Path, tool: CliId) -> &'static str {
+fn source_of(path: &Path, adapter: &dyn CliAdapter) -> &'static str {
     let ext = path.extension().and_then(|v| v.to_str()).unwrap_or("");
     if ext.eq_ignore_ascii_case("ps1") || ext.eq_ignore_ascii_case("cmd") {
         if let Ok(file) = std::fs::File::open(path) {
@@ -129,16 +119,12 @@ fn source_of(path: &Path, tool: CliId) -> &'static str {
                 return "unknown";
             }
             let sample = String::from_utf8_lossy(&bytes).replace('\\', "/");
-            if sample.contains("node_modules/") && sample.contains(npm_package(tool)) {
+            if sample.contains("node_modules/") && sample.contains(adapter.npm_package()) {
                 return "npm_shim";
             }
         }
     }
-    let normalized = path
-        .to_string_lossy()
-        .replace('\\', "/")
-        .to_ascii_lowercase();
-    if tool == CliId::ClaudeCode && normalized.contains("/.local/bin/claude") {
+    if adapter.recognizes_native_install_path(path) {
         return "claude_native";
     }
     "unknown"
@@ -197,31 +183,32 @@ fn node_version() -> Option<(u32, u32, u32)> {
     parse_node_version(&String::from_utf8_lossy(&output.stdout))
 }
 
-fn node_dependency_status(tool: CliId, version: Option<(u32, u32, u32)>) -> &'static str {
+fn node_dependency_status(
+    adapter: &dyn CliAdapter,
+    version: Option<(u32, u32, u32)>,
+) -> &'static str {
     match version {
         None => "missing",
-        Some(version) if tool == CliId::ClaudeCode && version.0 < 22 => "outdated",
-        Some(version) if tool == CliId::Pi && version < (22, 19, 0) => "outdated",
+        Some(version)
+            if adapter
+                .minimum_node_version()
+                .is_some_and(|minimum| version < minimum) =>
+        {
+            "outdated"
+        }
         Some(_) => "found",
     }
 }
 
-fn dependencies(tool: CliId, source: &str, no_candidates: bool) -> Vec<Dependency> {
+fn dependencies(adapter: &dyn CliAdapter, source: &str, no_candidates: bool) -> Vec<Dependency> {
     let mut result = Vec::new();
-    let needs_npm =
-        source == "npm_shim" || (no_candidates && !matches!(tool, CliId::ClaudeCode | CliId::Grok));
+    let needs_npm = source == "npm_shim" || (no_candidates && adapter.node_required_when_missing());
     if needs_npm {
         let version = node_version();
         result.push(Dependency {
             name: "Node.js",
-            status: node_dependency_status(tool, version),
-            detail: if tool == CliId::Pi {
-                "Pi 的 npm 安装需要 Node.js 22.19 或更新版本"
-            } else if tool == CliId::ClaudeCode {
-                "Claude Code 的 npm 安装需要 Node.js 22 或更新版本"
-            } else {
-                "npm 命令入口需要 Node.js"
-            },
+            status: node_dependency_status(adapter, version),
+            detail: adapter.node_dependency_detail(),
             help_url: "https://nodejs.org/en/download",
         });
         result.push(Dependency {
@@ -231,7 +218,7 @@ fn dependencies(tool: CliId, source: &str, no_candidates: bool) -> Vec<Dependenc
             help_url: "https://nodejs.org/en/download",
         });
     }
-    if cfg!(windows) && tool == CliId::Pi {
+    if cfg!(windows) && adapter.requires_windows_bash() {
         let bash = on_path("bash")
             || env::var_os("ProgramFiles")
                 .is_some_and(|dir| PathBuf::from(dir).join("Git/bin/bash.exe").is_file());
@@ -245,47 +232,12 @@ fn dependencies(tool: CliId, source: &str, no_candidates: bool) -> Vec<Dependenc
     result
 }
 
-fn install_command(tool: CliId) -> Option<String> {
-    if tool == CliId::ClaudeCode {
-        return Some(
-            if cfg!(windows) {
-                "irm https://claude.ai/install.ps1 | iex"
-            } else {
-                "curl -fsSL https://claude.ai/install.sh | bash"
-            }
-            .into(),
-        );
-    }
-    if tool == CliId::Grok {
-        return Some(
-            if cfg!(windows) {
-                "irm https://x.ai/cli/install.ps1 | iex"
-            } else {
-                "curl -fsSL https://x.ai/cli/install.sh | bash"
-            }
-            .into(),
-        );
-    }
-    Some(if tool == CliId::Pi {
-        format!("npm install -g --ignore-scripts {}", npm_package(tool))
-    } else {
-        format!("npm install -g {}", npm_package(tool))
-    })
+fn install_command(adapter: &dyn CliAdapter) -> Option<String> {
+    adapter.install_command()
 }
 
-fn upgrade_command(tool: CliId, source: &str) -> Option<String> {
-    match source {
-        "npm_shim" => Some(if tool == CliId::Pi {
-            format!(
-                "npm install -g --ignore-scripts {}@latest",
-                npm_package(tool)
-            )
-        } else {
-            format!("npm install -g {}@latest", npm_package(tool))
-        }),
-        "claude_native" if tool == CliId::ClaudeCode => Some("claude update".into()),
-        _ => None,
-    }
+fn upgrade_command(adapter: &dyn CliAdapter, source: &str) -> Option<String> {
+    adapter.upgrade_command(source)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -295,43 +247,8 @@ pub enum Scope {
     Project,
 }
 
-fn command_name(tool: CliId) -> &'static str {
-    match tool {
-        CliId::Codex => "codex",
-        CliId::ClaudeCode => "claude",
-        CliId::Grok => "grok",
-        CliId::Pi => "pi",
-        CliId::OpenCode => "opencode",
-    }
-}
-
-fn install_guidance(tool: CliId) -> (&'static str, &'static str) {
-    match tool {
-        CliId::Codex => (
-            "https://developers.openai.com/codex/cli",
-            "按官方文档更新 Codex CLI；使用原安装来源升级。",
-        ),
-        CliId::ClaudeCode => (
-            "https://code.claude.com/docs/en/setup",
-            "按 Claude Code 安装来源更新；原生安装可使用 claude update。",
-        ),
-        CliId::Grok => (
-            "https://x.ai/cli",
-            "按 xAI Build 官方安装说明更新 Grok CLI。",
-        ),
-        CliId::Pi => (
-            "https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent",
-            "使用安装 Pi 的同一包管理器更新。",
-        ),
-        CliId::OpenCode => (
-            "https://opencode.ai/docs/",
-            "使用 opencode upgrade 或原安装来源更新。",
-        ),
-    }
-}
-
-fn candidates(tool: CliId) -> Vec<PathBuf> {
-    let name = command_name(tool);
+fn candidates(adapter: &dyn CliAdapter) -> Vec<PathBuf> {
+    let name = adapter.command();
     let mut paths = Vec::new();
     let suffixes: &[&str] = if cfg!(windows) {
         &[".exe", ".ps1", ".cmd", ""]
@@ -351,26 +268,10 @@ fn candidates(tool: CliId) -> Vec<PathBuf> {
     paths
 }
 
-fn version_from_output(tool: CliId, path: &Path, output: &str) -> Option<String> {
+fn version_from_output(adapter: &dyn CliAdapter, path: &Path, output: &str) -> Option<String> {
     let basename = path.file_stem()?.to_str()?.to_ascii_lowercase();
     let lower = output.to_ascii_lowercase();
-    let identity = match tool {
-        CliId::Codex => lower.contains("codex"),
-        CliId::ClaudeCode => lower.contains("claude"),
-        CliId::Grok => lower.contains("grok"),
-        CliId::Pi => {
-            lower.contains("pi ")
-                || (basename == "pi"
-                    && (lower.starts_with('v')
-                        || lower.chars().next().is_some_and(|c| c.is_ascii_digit())))
-        }
-        CliId::OpenCode => {
-            lower.contains("opencode")
-                || (basename == "opencode"
-                    && (lower.starts_with('v')
-                        || lower.chars().next().is_some_and(|c| c.is_ascii_digit())))
-        }
-    };
+    let identity = adapter.version_identity(&basename, &lower);
     if !identity {
         return None;
     }
@@ -382,8 +283,8 @@ fn version_from_output(tool: CliId, path: &Path, output: &str) -> Option<String>
         .map(str::to_string)
 }
 
-fn run_version(path: &Path, tool: CliId) -> Installation {
-    let source = source_of(path, tool);
+fn run_version(path: &Path, adapter: &dyn CliAdapter) -> Installation {
+    let source = source_of(path, adapter);
     let mut command = if cfg!(windows)
         && path
             .extension()
@@ -467,7 +368,7 @@ fn run_version(path: &Path, tool: CliId) -> Installation {
     );
     let preview: String = combined.chars().take(160).collect();
     let version = if output.status.success() {
-        version_from_output(tool, path, &preview)
+        version_from_output(adapter, path, &preview)
     } else {
         None
     };
@@ -490,40 +391,18 @@ fn run_version(path: &Path, tool: CliId) -> Installation {
 }
 
 pub fn probe_path(tool: CliId, path: &Path) -> Installation {
-    run_version(path, tool)
+    run_version(path, adapters::known(tool))
 }
 
-fn supported_version(tool: CliId, version: &str) -> bool {
-    let prefix = match tool {
-        CliId::Codex => "0.158.",
-        CliId::ClaudeCode => "2.1.",
-        CliId::Grok => "1.0.",
-        CliId::Pi => "0.87.",
-        CliId::OpenCode => "1.18.",
-    };
-    version.starts_with(prefix)
-}
-
-fn file(
-    role: &'static str,
-    path: PathBuf,
-    kind: FileKind,
-    writable: bool,
-    reason: Option<&'static str>,
-    sensitive: bool,
-) -> NativeFile {
-    NativeFile {
-        role,
-        path: path.display().to_string(),
-        format: match kind {
-            FileKind::Toml => "toml",
-            FileKind::Json => "json",
-            FileKind::Jsonc => "jsonc",
-        },
-        writable,
-        reason,
-        sensitive,
-    }
+pub fn probe_registered_path(
+    registry: &Registry,
+    id: &str,
+    path: &Path,
+) -> Result<Installation, String> {
+    Ok(run_version(
+        path,
+        registry.get(id).ok_or("未注册的 CLI 适配器，不能探测")?,
+    ))
 }
 
 pub fn native_files(
@@ -533,201 +412,85 @@ pub fn native_files(
     project: Option<&Path>,
     known_version: bool,
 ) -> Vec<NativeFile> {
-    let root = match scope {
-        Scope::Global => None,
-        Scope::Project => project,
-    };
-    if scope == Scope::Project && root.is_none() {
-        return Vec::new();
-    }
-    let writable = known_version;
-    let unknown = if writable {
-        None
-    } else {
-        Some("此版本的原生写入能力尚未验证")
-    };
-    match (tool, root) {
-        (CliId::Codex, None) => vec![file(
-            "settings",
-            env::var_os("CODEX_HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| home.join(".codex"))
-                .join("config.toml"),
-            FileKind::Toml,
-            writable,
-            unknown,
-            false,
-        )],
-        (CliId::Codex, Some(project)) => vec![file(
-            "settings",
-            project.join(".codex/config.toml"),
-            FileKind::Toml,
-            writable,
-            unknown,
-            false,
-        )],
-        (CliId::ClaudeCode, None) => vec![file(
-            "settings",
-            home.join(".claude/settings.json"),
-            FileKind::Json,
-            writable,
-            unknown,
-            false,
-        )],
-        (CliId::ClaudeCode, Some(project)) => vec![
-            file(
-                "settings",
-                project.join(".claude/settings.json"),
-                FileKind::Json,
-                writable,
-                unknown,
-                false,
-            ),
-            file(
-                "local_settings",
-                project.join(".claude/settings.local.json"),
-                FileKind::Json,
-                writable,
-                unknown,
-                false,
-            ),
-        ],
-        (CliId::Grok, None) => vec![file(
-            "settings",
-            env::var_os("GROK_HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| home.join(".grok"))
-                .join("config.toml"),
-            FileKind::Toml,
-            writable,
-            unknown,
-            false,
-        )],
-        (CliId::Grok, Some(project)) => vec![file(
-            "settings",
-            project.join(".grok/config.toml"),
-            FileKind::Toml,
-            writable,
-            if writable {
-                Some("项目配置仅支持 MCP、插件和权限；连接与模型须在用户范围设置")
-            } else {
-                unknown
-            },
-            false,
-        )],
-        (CliId::Pi, None) => {
-            let directory = env::var_os("PI_CODING_AGENT_DIR")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| home.join(".pi/agent"));
-            vec![
-                file(
-                    "settings",
-                    directory.join("settings.json"),
-                    FileKind::Json,
-                    writable,
-                    unknown,
-                    false,
-                ),
-                file(
-                    "models",
-                    directory.join("models.json"),
-                    FileKind::Jsonc,
-                    writable,
-                    unknown,
-                    false,
-                ),
-                file(
-                    "auth",
-                    directory.join("auth.json"),
-                    FileKind::Json,
-                    false,
-                    Some("原生凭据文件独立保护，不进入配置草稿"),
-                    true,
-                ),
-            ]
-        }
-        (CliId::Pi, Some(project)) => vec![file(
-            "settings",
-            project.join(".pi/settings.json"),
-            FileKind::Json,
-            writable,
-            unknown,
-            false,
-        )],
-        (CliId::OpenCode, None) => {
-            let directory = env::var_os("XDG_CONFIG_HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| home.join(".config"))
-                .join("opencode");
-            let jsonc = directory.join("opencode.jsonc");
-            if jsonc.exists() {
-                vec![file(
-                    "settings",
-                    jsonc,
-                    FileKind::Jsonc,
-                    writable,
-                    unknown,
-                    false,
-                )]
-            } else {
-                vec![file(
-                    "settings",
-                    directory.join("opencode.json"),
-                    FileKind::Json,
-                    writable,
-                    unknown,
-                    false,
-                )]
-            }
-        }
-        (CliId::OpenCode, Some(project)) => {
-            let jsonc = project.join("opencode.jsonc");
-            if jsonc.exists() {
-                vec![file(
-                    "settings",
-                    jsonc,
-                    FileKind::Jsonc,
-                    writable,
-                    unknown,
-                    false,
-                )]
-            } else {
-                vec![file(
-                    "settings",
-                    project.join("opencode.json"),
-                    FileKind::Json,
-                    writable,
-                    unknown,
-                    false,
-                )]
-            }
-        }
-    }
+    adapters::known(tool).native_files(scope, home, project, known_version)
 }
 
 pub fn interface_formats(tool: CliId, known: bool) -> Vec<&'static str> {
-    if !known {
-        return Vec::new();
+    if known {
+        adapters::known(tool).interface_formats().to_vec()
+    } else {
+        Vec::new()
     }
-    match tool {
-        CliId::Codex => vec!["openai_responses"],
-        CliId::ClaudeCode => vec!["anthropic_messages"],
-        CliId::Grok => vec![
-            "openai_completions",
-            "openai_responses",
-            "anthropic_messages",
-        ],
-        CliId::Pi => vec![
-            "openai_completions",
-            "openai_responses",
-            "anthropic_messages",
-        ],
-        CliId::OpenCode => vec![
-            "openai_completions",
-            "openai_responses",
-            "anthropic_messages",
-        ],
+}
+
+pub fn probe_registered(
+    registry: &Registry,
+    id: &str,
+    custom_path: Option<&Path>,
+    home: &Path,
+    project: Option<&Path>,
+    scope: Scope,
+) -> Result<ToolProbe, String> {
+    let adapter = registry
+        .get(id)
+        .ok_or("未注册的 CLI 适配器，不能探测或写入")?;
+    let mut paths = candidates(adapter);
+    if let Some(path) = custom_path {
+        paths.retain(|candidate| candidate != path);
+        paths.insert(0, path.to_path_buf());
     }
+    let installations: Vec<_> = paths
+        .into_iter()
+        .map(|path| run_version(&path, adapter))
+        .collect();
+    let selected = installations.iter().find(|item| item.status == "available");
+    let writable = selected
+        .and_then(|item| item.version.as_deref())
+        .is_some_and(|version| !adapter.explicitly_incompatible_native_version(version));
+    let native_writes = if writable {
+        Capability {
+            state: "supported",
+            reason: "已确认 CLI 身份，原生配置可编辑",
+            evidence: "cli_identity_and_format",
+        }
+    } else if selected.is_some() {
+        Capability {
+            state: "unsupported",
+            reason: "此 CLI 版本的原生配置格式已确认不兼容",
+            evidence: "adapter_incompatibility",
+        }
+    } else {
+        Capability {
+            state: "unknown",
+            reason: "未发现可确认身份的 CLI",
+            evidence: "version_probe",
+        }
+    };
+    let (install_url, upgrade_hint) = adapter.install_guidance();
+    let source = selected.map(|item| item.source).unwrap_or("unknown");
+    let no_candidates = installations.is_empty();
+    Ok(ToolProbe {
+        tool: id.to_owned(),
+        selected_path: selected.map(|item| item.path.clone()),
+        installations,
+        native_files: adapter.native_files(scope, home, project, writable),
+        native_writes,
+        interface_formats: if writable {
+            adapter.interface_formats().to_vec()
+        } else {
+            Vec::new()
+        },
+        install_url,
+        upgrade_hint,
+        dependencies: dependencies(adapter, source, no_candidates),
+        install_command: if no_candidates {
+            install_command(adapter)
+        } else {
+            None
+        },
+        upgrade_command: upgrade_command(adapter, source),
+        provider_presets: provider_presets(adapter, writable),
+    })
 }
 
 pub fn probe(
@@ -737,59 +500,15 @@ pub fn probe(
     project: Option<&Path>,
     scope: Scope,
 ) -> ToolProbe {
-    let mut paths = candidates(tool);
-    if let Some(path) = custom_path {
-        paths.retain(|candidate| candidate != path);
-        paths.insert(0, path.to_path_buf());
-    }
-    let installations: Vec<_> = paths
-        .into_iter()
-        .map(|path| run_version(&path, tool))
-        .collect();
-    let selected = installations.iter().find(|item| item.status == "available");
-    let known = selected
-        .and_then(|item| item.version.as_deref())
-        .is_some_and(|version| supported_version(tool, version));
-    let native_writes = if known {
-        Capability {
-            state: "supported",
-            reason: "当前版本的原生配置映射已覆盖",
-            evidence: "versioned_adapter",
-        }
-    } else if selected.is_some() {
-        Capability {
-            state: "unknown",
-            reason: "检测到 CLI，但此版本尚无已验证映射；可查看原生文件",
-            evidence: "version_probe",
-        }
-    } else {
-        Capability {
-            state: "unknown",
-            reason: "未发现可确认身份的 CLI",
-            evidence: "version_probe",
-        }
-    };
-    let (install_url, upgrade_hint) = install_guidance(tool);
-    let source = selected.map(|item| item.source).unwrap_or("unknown");
-    let no_candidates = installations.is_empty();
-    ToolProbe {
-        tool,
-        selected_path: selected.map(|item| item.path.clone()),
-        installations,
-        native_files: native_files(tool, scope, home, project, known),
-        native_writes,
-        interface_formats: interface_formats(tool, known),
-        install_url,
-        upgrade_hint,
-        dependencies: dependencies(tool, source, no_candidates),
-        install_command: if no_candidates {
-            install_command(tool)
-        } else {
-            None
-        },
-        upgrade_command: upgrade_command(tool, source),
-        provider_presets: provider_presets(tool, known),
-    }
+    probe_registered(
+        &Registry::builtins(),
+        adapters::legacy_id(tool),
+        custom_path,
+        home,
+        project,
+        scope,
+    )
+    .expect("built-in adapter registered")
 }
 
 #[cfg(test)]
@@ -797,21 +516,70 @@ mod tests {
     use super::*;
 
     #[test]
-    fn versions_do_not_assert_unknown_write_capability() {
-        assert!(supported_version(CliId::Codex, "0.158.0"));
-        assert!(!supported_version(CliId::Codex, "0.159.0"));
+    fn recognized_newer_minor_version_is_not_rejected_for_native_editing() {
+        assert!(!adapters::known(CliId::Codex).explicitly_incompatible_native_version("0.159.0"));
+        assert!(adapters::plan_launch(
+            &adapters::Registry::builtins(),
+            "codex",
+            "0.159.0",
+            None,
+            adapters::LaunchMode::Normal
+        )
+        .is_ok());
         assert_eq!(
-            version_from_output(CliId::Codex, Path::new("codex.ps1"), "codex-cli 0.158.0"),
+            version_from_output(
+                adapters::known(CliId::Codex),
+                Path::new("codex.ps1"),
+                "codex-cli 0.158.0"
+            ),
             Some("0.158.0".into())
         );
         assert_eq!(
-            version_from_output(CliId::Codex, Path::new("renamed.exe"), "codex-cli 0.158.0"),
+            version_from_output(
+                adapters::known(CliId::Codex),
+                Path::new("renamed.exe"),
+                "codex-cli 0.158.0"
+            ),
             Some("0.158.0".into())
         );
         assert_eq!(
-            version_from_output(CliId::Codex, Path::new("codex.ps1"), "claude 0.158.0"),
+            version_from_output(
+                adapters::known(CliId::Codex),
+                Path::new("codex.ps1"),
+                "claude 0.158.0"
+            ),
             None
         );
+        let temp = tempfile::tempdir().unwrap();
+        let executable = if cfg!(windows) {
+            temp.path().join("codex.ps1")
+        } else {
+            temp.path().join("codex")
+        };
+        if cfg!(windows) {
+            std::fs::write(&executable, "Write-Output 'codex-cli 0.159.0'\n").unwrap();
+        } else {
+            std::fs::write(&executable, "#!/bin/sh\necho 'codex-cli 0.159.0'\n").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700))
+                    .unwrap();
+            }
+        }
+        let result = probe_registered(
+            &Registry::builtins(),
+            "codex",
+            Some(&executable),
+            temp.path(),
+            None,
+            Scope::Global,
+        )
+        .unwrap();
+        assert_eq!(result.installations[0].version.as_deref(), Some("0.159.0"));
+        assert_eq!(result.native_writes.state, "supported");
+        assert!(result.native_files[0].writable);
+        assert_eq!(result.native_files[0].reason, None);
     }
 
     #[test]
@@ -819,14 +587,21 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let shim = temp.path().join("grok.ps1");
         std::fs::write(&shim, "$basedir/node_modules/@xai-official/grok/bin/grok").unwrap();
-        assert_eq!(source_of(&shim, CliId::Grok), "npm_shim");
+        assert_eq!(source_of(&shim, adapters::known(CliId::Grok)), "npm_shim");
         assert_eq!(
-            upgrade_command(CliId::Grok, source_of(&shim, CliId::Grok)).as_deref(),
+            upgrade_command(
+                adapters::known(CliId::Grok),
+                source_of(&shim, adapters::known(CliId::Grok))
+            )
+            .as_deref(),
             Some("npm install -g @xai-official/grok@latest")
         );
         std::fs::write(&shim, "unrelated launcher").unwrap();
-        assert_eq!(source_of(&shim, CliId::Grok), "unknown");
-        assert_eq!(upgrade_command(CliId::Grok, "unknown"), None);
+        assert_eq!(source_of(&shim, adapters::known(CliId::Grok)), "unknown");
+        assert_eq!(
+            upgrade_command(adapters::known(CliId::Grok), "unknown"),
+            None
+        );
 
         let pi_shim = temp.path().join("pi.ps1");
         std::fs::write(
@@ -834,38 +609,38 @@ mod tests {
             "$basedir/node_modules/@earendil-works/pi-coding-agent/dist/cli.js",
         )
         .unwrap();
-        assert_eq!(source_of(&pi_shim, CliId::Pi), "npm_shim");
+        assert_eq!(source_of(&pi_shim, adapters::known(CliId::Pi)), "npm_shim");
         assert_eq!(
-            install_command(CliId::Pi).as_deref(),
+            install_command(adapters::known(CliId::Pi)).as_deref(),
             Some("npm install -g --ignore-scripts @earendil-works/pi-coding-agent")
         );
         assert_eq!(
-            upgrade_command(CliId::Pi, "npm_shim").as_deref(),
+            upgrade_command(adapters::known(CliId::Pi), "npm_shim").as_deref(),
             Some("npm install -g --ignore-scripts @earendil-works/pi-coding-agent@latest")
         );
         assert_eq!(parse_node_version("v22.18.9"), Some((22, 18, 9)));
         assert_eq!(parse_node_version("v22.19.0"), Some((22, 19, 0)));
         assert!(parse_node_version("not a version").is_none());
         assert_eq!(
-            node_dependency_status(CliId::Pi, Some((22, 18, 9))),
+            node_dependency_status(adapters::known(CliId::Pi), Some((22, 18, 9))),
             "outdated"
         );
         assert_eq!(
-            node_dependency_status(CliId::Pi, Some((22, 19, 0))),
+            node_dependency_status(adapters::known(CliId::Pi), Some((22, 19, 0))),
             "found"
         );
     }
 
     #[test]
     fn presets_only_offer_documented_addresses_in_tool_supported_formats() {
-        assert!(provider_presets(CliId::Codex, false).is_empty());
-        let codex = provider_presets(CliId::Codex, true);
+        assert!(provider_presets(adapters::known(CliId::Codex), false).is_empty());
+        let codex = provider_presets(adapters::known(CliId::Codex), true);
         assert_eq!(codex.len(), 2);
         assert!(codex
             .iter()
             .all(|item| item.interface_format == "openai_responses"
                 && item.base_url.starts_with("https://")));
-        let claude = provider_presets(CliId::ClaudeCode, true);
+        let claude = provider_presets(adapters::known(CliId::ClaudeCode), true);
         assert_eq!(claude.len(), 1);
         assert_eq!(claude[0].base_url, "https://api.anthropic.com");
     }
