@@ -24,13 +24,18 @@ test('native settings result drives the home list and empty management stays rec
       preferences: { schema_version: 1, managed_tools: managed, theme },
       tools: Object.entries(names).map(([id, name]) => ({ id, name, installation: 'not_checked', configuration: 'not_checked' })),
     });
+    const catalog = () => ({
+      registered: Object.entries(names).map(([id, name]) => ({ id, name, interfaceFormats: [], nativeConfig: { state: 'available', reason: '' }, launch: { state: 'planned', reason: '' }, resume: { state: 'planned', reason: '' }, resources: { state: 'planned', reason: '' }, history: { state: 'planned', reason: '' } })),
+      managedIds: managed, preservedUnknown: [],
+    });
     Object.assign(window, {
       isTauri: true,
       __TAURI_INTERNALS__: {
-        invoke: async (command: string, args: { managedTools?: string[]; theme?: string } = {}) => {
-          if (command === 'set_managed_tools') managed = args.managedTools ?? managed;
+        invoke: async (command: string, args: { managedIds?: string[]; theme?: string } = {}) => {
+          if (command === 'set_registered_managed_tools') { managed = args.managedIds ?? managed; return catalog(); }
           if (command === 'set_theme') theme = args.theme ?? theme;
-          if (command === 'get_tool_workspace') return {
+          if (command === 'list_cli_adapters') return catalog();
+          if (command === 'get_registered_tool_workspace') return {
             probe: { selectedPath: null, installations: [], nativeFiles: [], nativeWrites: { state: 'unknown', reason: '尚未安装' } },
             profiles: [], binding: null, snapshots: [], recoveryNeeded: [], common: null, customPath: null,
           };
@@ -69,7 +74,11 @@ test('home opens Claude Code native JSON editor with full disk text', async ({ p
           preferences: { schema_version: 1, managed_tools: ['claude_code'], theme: 'system' },
           tools: [{ id: 'claude_code', name: 'Claude Code', installation: 'not_checked', configuration: 'not_checked' }],
         };
-        if (command === 'get_tool_workspace') return {
+        if (command === 'list_cli_adapters') return {
+          registered: [{ id: 'claude_code', name: 'Claude Code', interfaceFormats: ['anthropic_messages'] }],
+          managedIds: ['claude_code'], preservedUnknown: [],
+        };
+        if (command === 'get_registered_tool_workspace') return {
           probe: {
             selectedPath: 'C:\\tools\\claude.cmd',
             installations: [{ path: 'C:\\tools\\claude.cmd', version: '2.1.283', source: 'npm_shim', status: 'available', detail: null }],
@@ -82,8 +91,8 @@ test('home opens Claude Code native JSON editor with full disk text', async ({ p
           snapshots: [{ role: 'settings', fingerprint: 'present', error: null }],
           recoveryNeeded: [], customPath: null,
         };
-        if (command === 'read_native_file_for_edit') return '{"env":{"ANTHROPIC_API_KEY":"disk-key"},"model":"claude-sonnet"}';
-        if (command === 'inspect_native_draft') return {};
+        if (command === 'read_registered_native_file_for_edit') return '{"env":{"ANTHROPIC_API_KEY":"disk-key"},"model":"claude-sonnet"}';
+        if (command === 'inspect_registered_native_draft') return {};
         throw new Error(`Unexpected native command: ${command}`);
       } },
     });
@@ -104,7 +113,11 @@ test('an existing Claude JSON file opens directly without first creating a named
           preferences: { schema_version: 1, managed_tools: ['claude_code'], theme: 'system' },
           tools: [{ id: 'claude_code', name: 'Claude Code', installation: 'not_checked', configuration: 'not_checked' }],
         };
-        if (command === 'get_tool_workspace') return {
+        if (command === 'list_cli_adapters') return {
+          registered: [{ id: 'claude_code', name: 'Claude Code', interfaceFormats: ['anthropic_messages'] }],
+          managedIds: ['claude_code'], preservedUnknown: [],
+        };
+        if (command === 'get_registered_tool_workspace') return {
           probe: {
             selectedPath: 'C:\\tools\\claude.cmd', installations: [],
             nativeFiles: [{ role: 'settings', path: 'C:\\Users\\test\\.claude\\settings.json', format: 'json', writable: true, reason: null, sensitive: false }],
@@ -116,12 +129,12 @@ test('an existing Claude JSON file opens directly without first creating a named
           snapshots: [{ role: 'settings', fingerprint: 'present', error: null }],
           recoveryNeeded: [], customPath: null,
         };
-        if (command === 'prepare_native_import_from_disk') return {
+        if (command === 'prepare_registered_native_import_from_disk') return {
           files: { settings: '{"model":"claude-sonnet"}' }, inspection: { connection: null },
           migratedSecret: true, nativeCredentials: {},
         };
-        if (command === 'read_native_file_for_edit') return '{"env":{"ANTHROPIC_API_KEY":"disk-key"},"model":"claude-sonnet"}';
-        if (command === 'inspect_native_draft') return {};
+        if (command === 'read_registered_native_file_for_edit') return '{"env":{"ANTHROPIC_API_KEY":"disk-key"},"model":"claude-sonnet"}';
+        if (command === 'inspect_registered_native_draft') return {};
         throw new Error(`Unexpected native command: ${command}`);
       } },
     });
@@ -132,14 +145,53 @@ test('an existing Claude JSON file opens directly without first creating a named
   await expect(page.getByRole('textbox', { name: 'settings 配置草稿' })).toHaveValue(/ANTHROPIC_API_KEY.*disk-key/);
 });
 
-test('storage failure preserves an actionable page and retry loads repaired data', async ({ page }) => {
+test('a newly registered CLI appears without adding tool-specific shell code', async ({ page }) => {
   await page.addInitScript(() => {
-    let calls = 0;
     Object.assign(window, {
       isTauri: true,
-      __TAURI_INTERNALS__: { invoke: async () => {
-        calls += 1;
-        if (calls <= 2) throw { code: 'storage_unavailable', message: '无法打开本机数据库', action: '先备份原数据库，再检查磁盘和权限；修复后点击重试。', data_directory: 'C:\\Users\\test\\AppData\\Roaming\\Cliora' };
+      __TAURI_INTERNALS__: { invoke: async (command: string) => {
+        if (command === 'get_bootstrap') return {
+          preferences: { schema_version: 1, managed_tools: [], theme: 'system' }, tools: [],
+        };
+        if (command === 'list_cli_adapters') return {
+          registered: [{ id: 'kimi_code', name: 'Kimi Code', interfaceFormats: ['openai_completions'] }],
+          managedIds: ['kimi_code'], preservedUnknown: [],
+        };
+        if (command === 'get_registered_tool_workspace') return {
+          probe: {
+            selectedPath: null, installations: [], nativeFiles: [], nativeWrites: { state: 'unknown', reason: '未发现 CLI' },
+            interfaceFormats: [], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '', installCommand: null, upgradeCommand: null,
+          },
+          profiles: [], common: null, binding: null, snapshots: [], recoveryNeeded: [], customPath: null,
+        };
+        throw new Error(`Unexpected native command: ${command}`);
+      } },
+    });
+  });
+  await page.goto('/');
+  await expect(page.locator('[aria-label="管理中的工具"]')).toContainText('Kimi Code');
+  await page.getByRole('button', { name: '编辑配置 →' }).click();
+  await expect(page.getByRole('tab', { name: 'Kimi Code' })).toBeVisible();
+});
+
+test('storage failure preserves an actionable page and retry loads repaired data', async ({ page }) => {
+  await page.addInitScript(() => {
+    let bootstrapAttempts = 0;
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_INTERNALS__: { invoke: async (command: string) => {
+        if (command === 'get_bootstrap') {
+          bootstrapAttempts += 1;
+          if (bootstrapAttempts <= 2) throw { code: 'storage_unavailable', message: '无法打开本机数据库', action: '先备份原数据库，再检查磁盘和权限；修复后点击重试。', data_directory: 'C:\\Users\\test\\AppData\\Roaming\\Cliora' };
+        }
+        if (command === 'list_cli_adapters') return {
+          registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [] }],
+          managedIds: ['codex'], preservedUnknown: [],
+        };
+        if (command === 'get_registered_tool_workspace') return {
+          probe: { selectedPath: null, installations: [], nativeFiles: [], nativeWrites: { state: 'unknown', reason: '尚未安装' } },
+          profiles: [], common: null, binding: null, snapshots: [], recoveryNeeded: [], customPath: null,
+        };
         return {
           preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' },
           tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }],
