@@ -16,6 +16,240 @@ use crate::domain::CliId;
 
 type Managed = BTreeMap<String, BTreeMap<String, Value>>;
 
+const SECRET_HASH: &str = "__cliora_secret_sha256";
+const REMOVED_FIELD: &str = "__cliora_removed_field";
+
+#[derive(Debug, Default)]
+struct NativeSecrets {
+    values: BTreeMap<String, BTreeMap<String, String>>,
+    removals: BTreeMap<String, BTreeSet<String>>,
+}
+
+impl NativeSecrets {
+    fn put(&mut self, role: &str, path: &[&str], value: String) {
+        let pointer = pointer(
+            &path
+                .iter()
+                .map(|part| (*part).to_owned())
+                .collect::<Vec<_>>(),
+        );
+        if let Some(removals) = self.removals.get_mut(role) {
+            removals.remove(&pointer);
+        }
+        self.values
+            .entry(role.into())
+            .or_default()
+            .insert(pointer, value);
+    }
+
+    fn remove(&mut self, role: &str, path: &[&str]) {
+        let pointer = pointer(
+            &path
+                .iter()
+                .map(|part| (*part).to_owned())
+                .collect::<Vec<_>>(),
+        );
+        if let Some(values) = self.values.get_mut(role) {
+            values.remove(&pointer);
+        }
+        self.removals
+            .entry(role.into())
+            .or_default()
+            .insert(pointer);
+    }
+}
+
+fn read_secret(id: &str, credentials: &dyn CredentialStore) -> Result<String, String> {
+    if !profile::valid_connection_secret_ref(id) {
+        return Err("原生密钥引用无效，请重新安全接入".into());
+    }
+    let secret = credentials
+        .get(id)
+        .map_err(|_| "系统凭据库中找不到原生密钥，请重新安全接入")?;
+    if secret.is_empty() {
+        return Err("原生密钥为空，请重新安全接入".into());
+    }
+    Ok(secret)
+}
+
+fn native_secrets(
+    profile: &NativeProfile,
+    scope: Scope,
+    credentials: &dyn CredentialStore,
+) -> Result<NativeSecrets, String> {
+    profile::validate_native_credentials(profile)?;
+    let mut result = NativeSecrets::default();
+    if profile.tool == CliId::ClaudeCode {
+        let project = scope == Scope::Project;
+        let local = profile.native_credentials.get("local_settings");
+        for (role, entries) in &profile.native_credentials {
+            for (name, id) in entries {
+                if profile
+                    .connection
+                    .as_ref()
+                    .is_some_and(|connection| connection.secret_ref.is_some())
+                {
+                    // A replacement connection owns authentication. Imported
+                    // credentials must not keep the previous account active.
+                    result.remove(
+                        if project {
+                            "local_settings"
+                        } else {
+                            "settings"
+                        },
+                        &["env", name],
+                    );
+                    if project {
+                        result.remove("settings", &["env", name]);
+                    }
+                    continue;
+                }
+                if project && role == "settings" {
+                    result.remove("settings", &["env", name]);
+                    if local.is_some_and(|items| items.contains_key(name)) {
+                        continue;
+                    }
+                }
+                let destination = if project {
+                    "local_settings"
+                } else {
+                    "settings"
+                };
+                result.put(destination, &["env", name], read_secret(id, credentials)?);
+            }
+        }
+    }
+    if let Some(connection) = &profile.connection {
+        if let Some(id) = &connection.secret_ref {
+            let secret = read_secret(id, credentials)?;
+            let provider = connection.provider_id.as_str();
+            let model = connection.model.as_str();
+            match profile.tool {
+                CliId::Codex => {
+                    if scope == Scope::Project {
+                        return Err("Codex 项目层不能写入供应商密钥；请使用全局配置".into());
+                    }
+                    result.put(
+                        "settings",
+                        &["model_providers", provider, "experimental_bearer_token"],
+                        secret,
+                    );
+                    result.remove("settings", &["model_providers", provider, "env_key"]);
+                }
+                CliId::ClaudeCode => {
+                    let name = connection
+                        .auth_env_var
+                        .as_deref()
+                        .unwrap_or("ANTHROPIC_API_KEY");
+                    if !matches!(name, "ANTHROPIC_API_KEY" | "ANTHROPIC_AUTH_TOKEN") {
+                        return Err(
+                            "Claude Code 原生认证只支持 ANTHROPIC_API_KEY 或 ANTHROPIC_AUTH_TOKEN"
+                                .into(),
+                        );
+                    }
+                    let destination = if scope == Scope::Project {
+                        "local_settings"
+                    } else {
+                        "settings"
+                    };
+                    result.put(destination, &["env", name], secret);
+                    result.remove(
+                        destination,
+                        &[
+                            "env",
+                            if name == "ANTHROPIC_API_KEY" {
+                                "ANTHROPIC_AUTH_TOKEN"
+                            } else {
+                                "ANTHROPIC_API_KEY"
+                            },
+                        ],
+                    );
+                    if scope == Scope::Project {
+                        result.remove("settings", &["env", "ANTHROPIC_API_KEY"]);
+                        result.remove("settings", &["env", "ANTHROPIC_AUTH_TOKEN"]);
+                    }
+                }
+                CliId::Grok => {
+                    if scope == Scope::Project {
+                        return Err("Grok 项目层不能写入供应商密钥；请使用全局配置".into());
+                    }
+                    result.put("settings", &["model", model, "api_key"], secret);
+                    result.remove("settings", &["model", model, "env_key"]);
+                }
+                CliId::Pi => {
+                    if scope == Scope::Project {
+                        return Err("Pi 项目层不能写入供应商密钥；请使用全局配置".into());
+                    }
+                    result.put("models", &["providers", provider, "apiKey"], secret);
+                }
+                CliId::OpenCode => {
+                    if scope == Scope::Project {
+                        return Err(
+                            "OpenCode 项目共享配置不能写入明文密钥；请使用全局配置或原生登录"
+                                .into(),
+                        );
+                    }
+                    result.put(
+                        "settings",
+                        &["provider", provider, "options", "apiKey"],
+                        secret,
+                    );
+                }
+            }
+        }
+    }
+    Ok(result)
+}
+
+fn managed_value(value: Option<&Value>, marker: Option<&Value>) -> bool {
+    match marker {
+        Some(Value::Object(map)) if map.get(REMOVED_FIELD) == Some(&Value::Bool(true)) => {
+            value.is_none()
+        }
+        Some(Value::Object(map))
+            if map.len() == 1 && map.get(SECRET_HASH).and_then(Value::as_str).is_some() =>
+        {
+            value.and_then(Value::as_str).is_some_and(|secret| {
+                map.get(SECRET_HASH).and_then(Value::as_str)
+                    == Some(transaction::fingerprint(secret.as_bytes()).as_str())
+            })
+        }
+        _ => value == marker,
+    }
+}
+
+fn existing_secret_field(tool: CliId, role: &str, root: &Value) -> bool {
+    fn objects(value: Option<&Value>) -> Option<&serde_json::Map<String, Value>> {
+        value.and_then(Value::as_object)
+    }
+    match (tool, role) {
+        (CliId::ClaudeCode, "settings" | "local_settings") => {
+            objects(root.get("env")).is_some_and(|env| {
+                env.contains_key("ANTHROPIC_API_KEY") || env.contains_key("ANTHROPIC_AUTH_TOKEN")
+            })
+        }
+        (CliId::Codex, "settings") => {
+            objects(root.get("model_providers")).is_some_and(|providers| {
+                providers
+                    .values()
+                    .any(|item| item.get("experimental_bearer_token").is_some())
+            })
+        }
+        (CliId::Grok, "settings") => objects(root.get("model"))
+            .is_some_and(|models| models.values().any(|item| item.get("api_key").is_some())),
+        (CliId::Pi, "models") => objects(root.get("providers"))
+            .is_some_and(|providers| providers.values().any(|item| item.get("apiKey").is_some())),
+        (CliId::OpenCode, "settings") => objects(root.get("provider")).is_some_and(|providers| {
+            providers.values().any(|item| {
+                item.get("options")
+                    .and_then(|options| options.get("apiKey"))
+                    .is_some()
+            })
+        }),
+        _ => false,
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppliedBinding {
@@ -322,6 +556,8 @@ pub fn preview(
     common: Option<&profile::CommonConfig>,
     scope: Scope,
 ) -> Result<NativePreview, String> {
+    profile::validate_files(profile.tool, &profile.files)?;
+    profile::validate_native_credentials(profile)?;
     let documents = desired_documents(profile, common, scope)?;
     let mut sources = BTreeMap::new();
     for role in documents.keys() {
@@ -354,12 +590,29 @@ pub fn apply_validated(
     allow_takeover: bool,
 ) -> Result<ApplyOutcome, String> {
     let desired = desired_documents(profile, common, scope)?;
+    let secrets = native_secrets(profile, scope, credentials)?;
     let old = get_binding(db, profile.tool, key)?;
     let mut new_managed = Managed::new();
     for (role, root) in desired {
         let mut fields = BTreeMap::new();
         flatten(&root, &mut Vec::new(), &mut fields);
         new_managed.insert(role, fields);
+    }
+    for (role, fields) in &secrets.values {
+        for (pointer, secret) in fields {
+            new_managed.entry(role.clone()).or_default().insert(
+                pointer.clone(),
+                json!({SECRET_HASH: transaction::fingerprint(secret.as_bytes())}),
+            );
+        }
+    }
+    for (role, pointers) in &secrets.removals {
+        for pointer in pointers {
+            new_managed
+                .entry(role.clone())
+                .or_default()
+                .insert(pointer.clone(), json!({REMOVED_FIELD: true}));
+        }
     }
     let old_managed = old.as_ref().map(|value| &value.managed);
     let roles: BTreeSet<_> = new_managed
@@ -403,19 +656,33 @@ pub fn apply_validated(
                 .try_fold(&original, |value, part| value.get(part));
             let old_value = previous_fields.and_then(|fields| fields.get(&pointer));
             let new_value = next_fields.and_then(|fields| fields.get(&pointer));
+            let native_new = secrets
+                .values
+                .get(&role)
+                .and_then(|fields| fields.get(&pointer))
+                .map(|value| Value::String(value.clone()));
+            let removed = secrets
+                .removals
+                .get(&role)
+                .is_some_and(|pointers| pointers.contains(&pointer));
+            let expected_new = if removed {
+                None
+            } else {
+                native_new.as_ref().or(new_value)
+            };
             if let Some(old_value) = old_value {
-                if current != Some(old_value) && current != new_value {
+                if !managed_value(current, Some(old_value)) && current != expected_new {
                     return Err(format!("上次管理的字段已被外部修改：{role}{pointer}"));
                 }
-            } else if current.is_some() && current != new_value && !allow_takeover {
+            } else if current.is_some() && current != expected_new && !allow_takeover {
                 return Err(format!(
                     "原生文件已有不同的字段值：{role}{pointer}；请确认接管"
                 ));
             }
-            if current != new_value {
+            if current != expected_new {
                 changes.push(FieldChange {
                     path,
-                    value: new_value.cloned(),
+                    value: expected_new.cloned(),
                 });
             }
         }
@@ -425,6 +692,16 @@ pub fn apply_validated(
                 kind,
                 baseline,
                 changes,
+                sensitive: secrets
+                    .values
+                    .get(&role)
+                    .is_some_and(|fields| !fields.is_empty())
+                    || previous_fields.is_some_and(|fields| {
+                        fields
+                            .values()
+                            .any(|value| value.get(SECRET_HASH).is_some())
+                    })
+                    || existing_secret_field(profile.tool, &role, &original),
             });
         }
     }
@@ -621,5 +898,314 @@ mod tests {
             "@ai-sdk/openai"
         );
         assert!(connection_documents(CliId::Codex, &connection, Scope::Project).is_err());
+    }
+
+    fn secret_profile(tool: CliId, name: &str, provider: &str, id: &str) -> NativeProfile {
+        NativeProfile {
+            id: name.into(),
+            tool,
+            name: name.into(),
+            version: 1,
+            inherit_common: false,
+            files: BTreeMap::new(),
+            suppressed: BTreeMap::new(),
+            native_credentials: BTreeMap::new(),
+            connection: Some(Connection {
+                provider_id: provider.into(),
+                interface_format: if tool == CliId::ClaudeCode {
+                    "anthropic_messages"
+                } else {
+                    "openai_responses"
+                }
+                .into(),
+                base_url: "https://example.test/v1".into(),
+                model: "model-a".into(),
+                secret_ref: Some(id.into()),
+                auth_env_var: None,
+            }),
+        }
+    }
+
+    fn native_role(role: &'static str, path: &Path, format: &'static str) -> NativeFile {
+        NativeFile {
+            role,
+            path: path.display().to_string(),
+            format,
+            writable: true,
+            reason: None,
+            sensitive: false,
+        }
+    }
+
+    #[test]
+    fn all_five_cli_credentials_are_native_and_never_enter_bindings_or_journal_plaintext() {
+        let id = "connection-00000000-0000-4000-8000-000000000001";
+        let cases = [
+            (CliId::Codex, "toml", "experimental_bearer_token"),
+            (CliId::ClaudeCode, "json", "ANTHROPIC_API_KEY"),
+            (CliId::Grok, "toml", "api_key"),
+            (CliId::Pi, "json", "apiKey"),
+            (CliId::OpenCode, "json", "apiKey"),
+        ];
+        for (tool, format, field) in cases {
+            let temp = tempfile::tempdir().unwrap();
+            let db = Database::open(&temp.path().join("app.db")).unwrap();
+            let store = MemoryStore::default();
+            let secret = format!("test-only-{tool:?}-private-key");
+            store.put(id, &secret).unwrap();
+            let settings = temp.path().join(if format == "toml" {
+                "settings.toml"
+            } else {
+                "settings.json"
+            });
+            let models = temp.path().join("models.json");
+            let mut files = vec![native_role("settings", &settings, format)];
+            if tool == CliId::Pi {
+                files.push(native_role("models", &models, "jsonc"));
+            }
+            let profile = secret_profile(tool, "first", "demo", id);
+            apply_validated(
+                &db,
+                &store,
+                &profile,
+                None,
+                &files,
+                "global",
+                Scope::Global,
+                false,
+            )
+            .unwrap();
+            let native_text = fs::read_to_string(if tool == CliId::Pi {
+                &models
+            } else {
+                &settings
+            })
+            .unwrap();
+            assert!(native_text.contains(field), "{tool:?}");
+            assert!(native_text.contains(&secret), "{tool:?}");
+            let binding =
+                serde_json::to_string(&get_binding(&db, tool, "global").unwrap()).unwrap();
+            assert!(!binding.contains(&secret), "{tool:?}");
+            db.with_connection(|conn| {
+                let data: String = conn
+                    .query_row("SELECT data FROM native_transactions", [], |row| row.get(0))
+                    .map_err(|e| e.to_string())?;
+                assert!(!data.contains(&secret), "{tool:?}");
+                Ok(())
+            })
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn replacing_claude_connection_key_ignores_stale_imported_reference_and_removes_old_token() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("settings.json");
+        fs::write(&file, r#"{"env":{"ANTHROPIC_API_KEY":"old-native","ANTHROPIC_AUTH_TOKEN":"old-token"},"permissions":{"defaultMode":"default"}}"#).unwrap();
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        let store = MemoryStore::default();
+        let new_id = "connection-00000000-0000-4000-8000-000000000002";
+        store.put(new_id, "new-native-key").unwrap();
+        let mut profile = secret_profile(CliId::ClaudeCode, "replacement", "anthropic", new_id);
+        profile.native_credentials.insert(
+            "settings".into(),
+            BTreeMap::from([(
+                "ANTHROPIC_API_KEY".into(),
+                "connection-00000000-0000-4000-8000-000000000001".into(),
+            )]),
+        );
+        apply_validated(
+            &db,
+            &store,
+            &profile,
+            None,
+            &[native_role("settings", &file, "json")],
+            "global",
+            Scope::Global,
+            true,
+        )
+        .unwrap();
+        let native = fs::read_to_string(&file).unwrap();
+        assert!(native.contains("new-native-key"));
+        assert!(!native.contains("old-native"));
+        assert!(!native.contains("old-token"));
+        assert!(native.contains("defaultMode"));
+    }
+
+    #[test]
+    fn switching_profiles_removes_old_native_key_and_external_edit_is_a_conflict() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("config.toml");
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        let store = MemoryStore::default();
+        let first_id = "connection-00000000-0000-4000-8000-000000000001";
+        let second_id = "connection-00000000-0000-4000-8000-000000000002";
+        store.put(first_id, "old-test-key").unwrap();
+        store.put(second_id, "new-test-key").unwrap();
+        let first = secret_profile(CliId::Codex, "first", "old_provider", first_id);
+        let second = secret_profile(CliId::Codex, "second", "new_provider", second_id);
+        let target = [native_role("settings", &file, "toml")];
+        apply_validated(
+            &db,
+            &store,
+            &first,
+            None,
+            &target,
+            "global",
+            Scope::Global,
+            false,
+        )
+        .unwrap();
+        let first_text = fs::read_to_string(&file).unwrap();
+        assert!(first_text.contains("old-test-key"));
+        apply_validated(
+            &db,
+            &store,
+            &second,
+            None,
+            &target,
+            "global",
+            Scope::Global,
+            false,
+        )
+        .unwrap();
+        let second_text = fs::read_to_string(&file).unwrap();
+        assert!(!second_text.contains("old-test-key"));
+        assert!(second_text.contains("new-test-key"));
+        assert_eq!(
+            get_binding(&db, CliId::Codex, "global")
+                .unwrap()
+                .unwrap()
+                .profile_id,
+            "second"
+        );
+        fs::write(
+            &file,
+            second_text.replace("new-test-key", "external-test-key"),
+        )
+        .unwrap();
+        assert!(apply_validated(
+            &db,
+            &store,
+            &first,
+            None,
+            &target,
+            "global",
+            Scope::Global,
+            false
+        )
+        .unwrap_err()
+        .contains("外部修改"));
+        assert!(fs::read_to_string(&file)
+            .unwrap()
+            .contains("external-test-key"));
+        assert_eq!(
+            get_binding(&db, CliId::Codex, "global")
+                .unwrap()
+                .unwrap()
+                .profile_id,
+            "second"
+        );
+    }
+
+    #[test]
+    fn imported_claude_project_key_moves_to_local_file_without_inventing_model_or_url() {
+        let temp = tempfile::tempdir().unwrap();
+        let shared = temp.path().join(".claude/settings.json");
+        let local = temp.path().join(".claude/settings.local.json");
+        fs::create_dir_all(shared.parent().unwrap()).unwrap();
+        let source = include_str!("../../../tests/fixtures/native/claude-key-only-settings.json");
+        fs::write(&shared, source).unwrap();
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        let store = MemoryStore::default();
+        let imported = super::super::intake::prepare_import(
+            CliId::ClaudeCode,
+            BTreeMap::from([("settings".into(), source.into())]),
+            &store,
+        )
+        .unwrap();
+        let profile = NativeProfile {
+            id: "imported".into(),
+            tool: CliId::ClaudeCode,
+            name: "imported".into(),
+            version: 1,
+            inherit_common: false,
+            files: imported.files,
+            suppressed: BTreeMap::new(),
+            connection: imported.inspection.connection,
+            native_credentials: imported.native_credentials,
+        };
+        let native_files = [
+            native_role("settings", &shared, "json"),
+            native_role("local_settings", &local, "json"),
+        ];
+        assert!(apply_validated(
+            &db,
+            &store,
+            &profile,
+            None,
+            &native_files,
+            "project:test",
+            Scope::Project,
+            false
+        )
+        .unwrap_err()
+        .contains("接管"));
+        assert_eq!(fs::read_to_string(&shared).unwrap(), source);
+        apply_validated(
+            &db,
+            &store,
+            &profile,
+            None,
+            &native_files,
+            "project:test",
+            Scope::Project,
+            true,
+        )
+        .unwrap();
+        let shared_after = fs::read_to_string(&shared).unwrap();
+        let local_after = fs::read_to_string(&local).unwrap();
+        assert!(!shared_after.contains("test-only-global-secret"));
+        assert!(local_after.contains("test-only-global-secret"));
+        assert!(!local_after.contains("ANTHROPIC_BASE_URL"));
+        assert!(!local_after.contains("\"model\""));
+        assert!(shared_after.contains("defaultMode"));
+    }
+
+    #[test]
+    fn claude_auth_token_connection_uses_selected_native_field_and_preview_rejects_raw_secret() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("settings.json");
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        let store = MemoryStore::default();
+        let id = "connection-00000000-0000-4000-8000-000000000001";
+        store.put(id, "token-test-value").unwrap();
+        let mut profile = secret_profile(CliId::ClaudeCode, "token", "anthropic", id);
+        profile.connection.as_mut().unwrap().auth_env_var = Some("ANTHROPIC_AUTH_TOKEN".into());
+        apply_validated(
+            &db,
+            &store,
+            &profile,
+            None,
+            &[native_role("settings", &path, "json")],
+            "global",
+            Scope::Global,
+            false,
+        )
+        .unwrap();
+        let written = fs::read_to_string(&path).unwrap();
+        assert!(written.contains("ANTHROPIC_AUTH_TOKEN"));
+        assert!(written.contains("token-test-value"));
+        assert!(!written.contains("ANTHROPIC_API_KEY"));
+        profile.connection.as_mut().unwrap().auth_env_var = Some("CUSTOM_TOKEN".into());
+        assert!(native_secrets(&profile, Scope::Global, &store)
+            .unwrap_err()
+            .contains("只支持"));
+        let mut raw = profile.clone();
+        raw.files.insert(
+            "settings".into(),
+            r#"{"env":{"ANTHROPIC_API_KEY":"raw-preview-key"}}"#.into(),
+        );
+        assert!(preview(&raw, None, Scope::Global).is_err());
     }
 }

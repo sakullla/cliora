@@ -57,6 +57,23 @@ pub fn inject_profile_credentials(
 ) -> Result<usize, String> {
     profile::validate_native_credentials(native_profile)?;
     let mut values = Vec::new();
+    for role in ["settings", "local_settings"] {
+        if let Some(entries) = native_profile.native_credentials.get(role) {
+            for (name, id) in entries {
+                if native_profile.tool == CliId::ClaudeCode
+                    && native_profile
+                        .connection
+                        .as_ref()
+                        .is_some_and(|connection| connection.secret_ref.is_some())
+                {
+                    continue;
+                }
+                values.push((name.clone(), read_secret(id, credentials)?));
+            }
+        }
+    }
+    // A newly saved connection key must take precedence over credentials
+    // imported from an older native file for the same environment name.
     if let Some(connection) = &native_profile.connection {
         profile::validate_connection(connection)?;
         if let Some(id) = &connection.secret_ref {
@@ -64,13 +81,6 @@ pub fn inject_profile_credentials(
                 .ok_or("无法确定 CLI 认证环境变量")?;
             let value = read_secret(id, credentials)?;
             values.push((name, value));
-        }
-    }
-    for role in ["settings", "local_settings"] {
-        if let Some(entries) = native_profile.native_credentials.get(role) {
-            for (name, id) in entries {
-                values.push((name.clone(), read_secret(id, credentials)?));
-            }
         }
     }
     let count = values.len();

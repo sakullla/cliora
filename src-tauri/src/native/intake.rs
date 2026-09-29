@@ -39,6 +39,42 @@ pub fn prepare_import(
     let mut found = inspect(tool, &files)?;
     let mut pending_secrets: Vec<(String, String)> = Vec::new();
     let mut native_credentials: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+    if matches!(tool, CliId::Codex | CliId::Grok) {
+        let mut text = files.get("settings").cloned().unwrap_or_default();
+        let parsed = format::parse(FileKind::Toml, &text)?;
+        let (collection, field, active) = if tool == CliId::Codex {
+            (
+                "model_providers",
+                "experimental_bearer_token",
+                found.provider_id.as_deref(),
+            )
+        } else {
+            ("model", "api_key", found.model.as_deref())
+        };
+        if let Some(entries) = parsed.get(collection).and_then(Value::as_object) {
+            for (name, entry) in entries {
+                let Some(key) = entry.get(field).and_then(Value::as_str) else {
+                    continue;
+                };
+                if Some(name.as_str()) != active || found.connection.is_none() {
+                    return Err(format!("{collection}.{name}.{field} 含原生密钥，但不是完整的当前连接；请先在 CLI 中选定模型与供应商，原文件未更改"));
+                }
+                if key.is_empty() || key.len() > 16_384 {
+                    return Err("原生 API 密钥为空或过长；原文件未更改".into());
+                }
+                let id = format!("connection-{}", Uuid::new_v4());
+                text = format::set_path(
+                    FileKind::Toml,
+                    &text,
+                    &[collection.into(), name.clone(), field.into()],
+                    None,
+                )?;
+                files.insert("settings".into(), text.clone());
+                found.connection.as_mut().unwrap().secret_ref = Some(id.clone());
+                pending_secrets.push((id, key.to_owned()));
+            }
+        }
+    }
     if tool == CliId::Pi {
         let raw = files.get("models").cloned().unwrap_or_default();
         let models = format::parse(FileKind::Jsonc, &raw)?;
@@ -700,6 +736,66 @@ mod tests {
             }
             profile::validate_files(tool, &imported.files).unwrap();
         }
+    }
+
+    #[test]
+    fn codex_and_grok_native_keys_migrate_without_losing_model_or_custom_fields() {
+        let cases = [
+            (CliId::Codex, "model = \"model-a\"\nmodel_provider = \"demo\"\nkeep = 7\n[model_providers.demo]\nbase_url = \"https://example.test/v1\"\nwire_api = \"responses\"\nexperimental_bearer_token = \"codex-test-key\"\n", "codex-test-key"),
+            (CliId::Grok, "keep = 7\n[models]\ndefault = \"model-a\"\n[model.model-a]\nmodel = \"model-a\"\nbase_url = \"https://example.test/v1\"\napi_backend = \"responses\"\napi_key = \"grok-test-key\"\n", "grok-test-key"),
+        ];
+        for (tool, source, key) in cases {
+            let store = MemoryStore(Mutex::new(BTreeMap::new()));
+            let imported = prepare_import(
+                tool,
+                BTreeMap::from([("settings".into(), source.into())]),
+                &store,
+            )
+            .unwrap();
+            assert!(imported.migrated_secret);
+            assert!(!serde_json::to_string(&imported).unwrap().contains(key));
+            assert!(imported.files["settings"].contains("keep = 7"));
+            let connection = imported.inspection.connection.unwrap();
+            assert_eq!(connection.model, "model-a");
+            assert_eq!(connection.base_url, "https://example.test/v1");
+            assert_eq!(
+                store
+                    .get(connection.secret_ref.as_deref().unwrap())
+                    .unwrap(),
+                key
+            );
+            profile::validate_files(tool, &imported.files).unwrap();
+        }
+    }
+
+    #[test]
+    fn edited_claude_raw_key_and_model_are_reflected_in_safe_import() {
+        let source = r#"{"model":"claude-edited","env":{"ANTHROPIC_BASE_URL":"https://example.test","ANTHROPIC_AUTH_TOKEN":"edited-token"},"permissions":{"defaultMode":"default"}}"#;
+        let store = MemoryStore(Mutex::new(BTreeMap::new()));
+        let imported = prepare_import(
+            CliId::ClaudeCode,
+            BTreeMap::from([("settings".into(), source.into())]),
+            &store,
+        )
+        .unwrap();
+        assert!(!serde_json::to_string(&imported)
+            .unwrap()
+            .contains("edited-token"));
+        assert_eq!(
+            imported.inspection.connection.as_ref().unwrap().model,
+            "claude-edited"
+        );
+        assert_eq!(
+            imported.inspection.connection.as_ref().unwrap().base_url,
+            "https://example.test"
+        );
+        assert_eq!(
+            store
+                .get(&imported.native_credentials["settings"]["ANTHROPIC_AUTH_TOKEN"])
+                .unwrap(),
+            "edited-token"
+        );
+        assert!(imported.files["settings"].contains("defaultMode"));
     }
 
     #[test]

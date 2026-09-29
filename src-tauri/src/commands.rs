@@ -172,6 +172,37 @@ pub struct ToolWorkspace {
     pub recovery_needed: Vec<String>,
 }
 
+fn native_snapshot(file: &adapter::NativeFile) -> NativeSnapshot {
+    if file.sensitive {
+        return NativeSnapshot {
+            role: file.role.into(),
+            text: None,
+            fingerprint: None,
+            error: Some("受保护的原生凭据文件不在通用编辑器中显示".into()),
+        };
+    }
+    match transaction::read_native(Path::new(&file.path)) {
+        Ok(text) if Path::new(&file.path).is_file() => NativeSnapshot {
+            role: file.role.into(),
+            fingerprint: Some(transaction::fingerprint(text.as_bytes())),
+            text: None,
+            error: Some("点击“编辑当前磁盘原文”可查看和修改完整文件".into()),
+        },
+        Ok(_) => NativeSnapshot {
+            role: file.role.into(),
+            fingerprint: None,
+            text: None,
+            error: Some("文件尚不存在".into()),
+        },
+        Err(error) => NativeSnapshot {
+            role: file.role.into(),
+            fingerprint: None,
+            text: None,
+            error: Some(error),
+        },
+    }
+}
+
 #[tauri::command]
 pub async fn get_tool_workspace(
     app: AppHandle,
@@ -195,34 +226,7 @@ pub async fn get_tool_workspace(
             let binding = apply::get_binding(database, tool, &key).map_err(native_error)?;
             let recovery_needed = transaction::recover_pending(database, &SystemCredentialStore)
                 .map_err(native_error)?;
-            let snapshots = probe
-                .native_files
-                .iter()
-                .map(|file| {
-                    if file.sensitive {
-                        return NativeSnapshot {
-                            role: file.role.into(),
-                            text: None,
-                            fingerprint: None,
-                            error: Some("受保护的原生凭据文件不在通用编辑器中显示".into()),
-                        };
-                    }
-                    match transaction::read_native(Path::new(&file.path)) {
-                        Ok(text) => NativeSnapshot {
-                            role: file.role.into(),
-                            fingerprint: Some(transaction::fingerprint(text.as_bytes())),
-                            text: Some(text),
-                            error: None,
-                        },
-                        Err(error) => NativeSnapshot {
-                            role: file.role.into(),
-                            text: None,
-                            fingerprint: None,
-                            error: Some(error),
-                        },
-                    }
-                })
-                .collect();
+            let snapshots = probe.native_files.iter().map(native_snapshot).collect();
             Ok(ToolWorkspace {
                 probe,
                 custom_path: custom.map(|path| path.display().to_string()),
@@ -508,6 +512,75 @@ pub async fn prepare_native_import(
     .await
 }
 
+/// Read selected disk roles inside Rust so raw native credentials never cross
+/// the workspace IPC boundary before they are moved to the credential store.
+#[tauri::command]
+pub async fn prepare_native_import_from_disk(
+    app: AppHandle,
+    tool: CliId,
+    scope: Scope,
+    project_path: Option<String>,
+    roles: Vec<String>,
+    mut files: std::collections::BTreeMap<String, String>,
+) -> Result<intake::NativeImport, ApiError> {
+    blocking(move || {
+        if roles.is_empty() {
+            return Err(native_error("请选择要接入的原生文件".into()));
+        }
+        let home = home()?;
+        let project = checked_project(scope, project_path)?;
+        let state = app.state::<AppState>();
+        state.with_database(&app, |database| {
+            let custom = tool_path(database, tool).map_err(native_error)?;
+            let probe = adapter::probe(tool, custom.as_deref(), &home, project.as_deref(), scope);
+            for role in &roles {
+                let target = probe
+                    .native_files
+                    .iter()
+                    .find(|item| item.role == role && !item.sensitive)
+                    .ok_or_else(|| native_error("所选原生文件角色不受支持".into()))?;
+                let text =
+                    transaction::read_native(Path::new(&target.path)).map_err(native_error)?;
+                if text.trim().is_empty() {
+                    files.remove(role);
+                } else {
+                    files.insert(role.clone(), text);
+                }
+            }
+            intake::prepare_import(tool, files, &SystemCredentialStore).map_err(native_error)
+        })
+    })
+    .await
+}
+
+/// Explicit native-editor action. This is deliberately separate from the
+/// background workspace snapshot, which never returns known raw credentials.
+#[tauri::command]
+pub async fn read_native_file_for_edit(
+    app: AppHandle,
+    tool: CliId,
+    scope: Scope,
+    project_path: Option<String>,
+    role: String,
+) -> Result<String, ApiError> {
+    blocking(move || {
+        let home = home()?;
+        let project = checked_project(scope, project_path)?;
+        let state = app.state::<AppState>();
+        state.with_database(&app, |database| {
+            let custom = tool_path(database, tool).map_err(native_error)?;
+            let probe = adapter::probe(tool, custom.as_deref(), &home, project.as_deref(), scope);
+            let target = probe
+                .native_files
+                .iter()
+                .find(|item| item.role == role && !item.sensitive)
+                .ok_or_else(|| native_error("所选原生文件角色不受支持".into()))?;
+            transaction::read_native(Path::new(&target.path)).map_err(native_error)
+        })
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn set_codex_reasoning_effort(
     text: String,
@@ -573,6 +646,30 @@ pub fn set_theme(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ordinary_workspace_snapshot_never_serializes_a_claude_native_key() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("settings.json");
+        let source = include_str!("../../tests/fixtures/native/claude-key-only-settings.json");
+        std::fs::write(&path, source).unwrap();
+        let file = adapter::NativeFile {
+            role: "settings",
+            path: path.display().to_string(),
+            format: "json",
+            writable: true,
+            reason: None,
+            sensitive: false,
+        };
+        let snapshot = native_snapshot(&file);
+        assert!(snapshot.fingerprint.is_some());
+        assert!(snapshot.text.is_none());
+        assert!(!serde_json::to_string(&snapshot)
+            .unwrap()
+            .contains("test-only-global-secret"));
+        // The separate explicit native-editor path can still read the full file.
+        assert_eq!(transaction::read_native(&path).unwrap(), source);
+    }
 
     #[test]
     fn slow_native_work_runs_on_background_thread() {
