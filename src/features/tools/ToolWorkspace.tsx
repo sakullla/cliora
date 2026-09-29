@@ -313,11 +313,15 @@ export function ToolWorkspacePage({ managedTools, initialTool }: { managedTools:
     if (!roles.length) { setError('还没有可读取的原生配置文件。'); return; }
     try {
       const imported = await native.prepareNativeImportFromDisk(currentTool, scope, projectPath, roles, {});
+      const primaryRole = roles.includes(role) ? role : roles[0];
+      const text = await native.readNativeFileForEdit(currentTool, scope, projectPath, primaryRole);
       if (sequence !== importSequence.current || !stillCurrent(started)) return;
       const next = { ...emptyProfile(currentTool), name: '本机配置', files: imported.files, connection: imported.inspection.connection, nativeCredentials: imported.nativeCredentials };
       setDraft(next); setSelectedId(null); setEditor('profile'); savedDraft.current = '';
-      setInspection(imported.inspection); setView('form'); setError('');
-      setNotice(imported.migratedSecret ? '已将原生 API 密钥迁入系统凭据库；应用后将按 CLI 原生机制写入，磁盘原文件目前尚未更改。' : '已将现有原生文件载入草稿；保存前可检查连接、模型和原文，磁盘文件尚未更改。');
+      setRole(primaryRole);
+      setRawDisk({ context: JSON.stringify([currentTool, scope, projectPath, null, 'profile']), role: primaryRole, original: text, text });
+      setInspection(imported.inspection); setView('native'); setError('');
+      setNotice('已打开当前磁盘原文。保存前不会修改原生文件。');
     } catch (value) { if (sequence === importSequence.current && stillCurrent(started)) setError(errorText(value)); }
   }
 
@@ -378,9 +382,9 @@ export function ToolWorkspacePage({ managedTools, initialTool }: { managedTools:
       <div className={styles.columns}>
         <aside className={styles.profileList} aria-label="命名配置"><div className={styles.listHeading}><strong>命名配置</strong><button type="button" onClick={createProfile}>＋ 新建</button></div>
           <button type="button" className={editor === 'common' ? styles.activeProfile : ''} onClick={editCommon}><strong>通用配置</strong><small>供本工具的命名配置继承</small></button>
-          {workspace.snapshots.some((item) => item.fingerprint && !workspace.probe.nativeFiles.find((file) => file.role === item.role)?.sensitive) && <button type="button" onClick={() => void importCurrentNative()}><strong>从本机配置接入</strong><small>读取当前原生文件作为草稿</small></button>}
+          {workspace.snapshots.some((item) => item.fingerprint && !workspace.probe.nativeFiles.find((file) => file.role === item.role)?.sensitive) && <button type="button" onClick={() => void importCurrentNative()}><strong>编辑当前原生配置</strong><small>打开磁盘上的完整原文</small></button>}
           {workspace.profiles.map((item) => <button key={item.id} type="button" className={editor === 'profile' && selectedId === item.id ? styles.activeProfile : ''} onClick={() => selectProfile(item)}><strong>{item.name}</strong><small>{workspace.binding?.profileId === item.id ? workspace.binding.profileVersion === item.version ? '✓ 当前已应用' : '有未应用的修改' : item.connection?.model || '未应用'}</small></button>)}
-          {!workspace.profiles.length && <p>还没有命名配置。可以新建，或从下方原生文件开始。</p>}
+          {!workspace.profiles.length && <p>还没有命名配置。可以新建，或打开当前原生配置。</p>}
         </aside>
         <div className={styles.editor}>
           <div className={styles.editorHead}><div><small>{editor === 'common' ? '同工具基础' : '命名原生配置'}</small><h2>{editor === 'common' ? '通用配置' : draft?.name || '新配置'}</h2></div><span>{scope === 'global' ? '全局' : '项目'}</span></div>
