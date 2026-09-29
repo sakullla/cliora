@@ -8,9 +8,10 @@ test('records keep search, show native resume command and only launch on request
     ];
     const launches: Array<Record<string, unknown>> = [];
     const clipboard: string[] = [];
+    const control = { delayYolo: false, pending: [] as Array<() => void> };
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (value: string) => { clipboard.push(value); } } });
     Object.assign(window, {
-      isTauri: true, __recordLaunches: launches, __recordClipboard: clipboard,
+      isTauri: true, __recordLaunches: launches, __recordClipboard: clipboard, __recordControl: control,
       __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
         if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }] };
         if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', yoloAvailable: true, interfaceFormats: [] }], managedIds: ['codex'], preservedUnknown: [] };
@@ -27,7 +28,11 @@ test('records keep search, show native resume command and only launch on request
         if (command === 'set_history_favorite') { const item = records.find((value) => value.id === args.id); if (item) item.favorite = args.favorite; return null; }
         if (command === 'set_history_project') { const item = records.find((value) => value.id === args.id); if (item) item.projectId = args.projectId; return null; }
         if (command === 'get_history_usage') return { sessionCount: 2, usageSessions: 1, unknownUsageSessions: 1, partialSessions: 1, staleSessions: 0, input: 150, output: 30, cacheRead: 60, cacheWrite: 0, inputIncludesCache: true, estimatedCost: null, currency: null, priceSources: [], scans: [{ toolId: 'codex', scannedAt: 1, sourceCount: 2, failedCount: 0, incomplete: false, detail: '' }] };
-        if (command === 'copy_history_resume_command') return `Set-Location -LiteralPath '${records.find((item) => item.id === args.id)?.projectId ? 'C:\\new-project' : 'C:\\project'}'; & 'codex' ${args.mode === 'yolo' ? "'--yolo' " : ''}'resume' '1111-2222'`;
+        if (command === 'copy_history_resume_command') {
+          const text = `Set-Location -LiteralPath '${records.find((item) => item.id === args.id)?.projectId ? 'C:\\new-project' : 'C:\\project'}'; & 'codex' ${args.mode === 'yolo' ? "'--yolo' " : ''}'resume' '1111-2222'`;
+          if (args.mode === 'yolo' && control.delayYolo) return new Promise((resolve) => { control.pending.push(() => resolve(text)); });
+          return text;
+        }
         if (command === 'resume_history_session') { launches.push(args); return { toolId: 'codex', projectId: null, mode: args.mode, terminal: 'power_shell', status: 'terminal_requested' }; }
         if (command === 'get_tray_status') return { available: false, error: null };
         throw new Error(`Unexpected IPC: ${command}`);
@@ -39,6 +44,17 @@ test('records keep search, show native resume command and only launch on request
   await navigation.getByRole('button', { name: '使用记录' }).click();
   await expect(page.getByRole('button', { name: /Review change/ })).toBeVisible();
   await expect(page.getByLabel('原生恢复命令')).toContainText("'resume' '1111-2222'");
+  await page.evaluate(() => { (window as typeof window & { __recordControl: { delayYolo: boolean } }).__recordControl.delayYolo = true; });
+  await page.getByRole('combobox', { name: '恢复模式' }).selectOption('yolo');
+  await expect(page.getByLabel('原生恢复命令')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '复制命令' })).toHaveCount(0);
+  await page.getByRole('combobox', { name: '恢复模式' }).selectOption('normal');
+  await page.evaluate(() => {
+    const control = (window as typeof window & { __recordControl: { delayYolo: boolean; pending: Array<() => void> } }).__recordControl;
+    control.delayYolo = false;
+    control.pending.splice(0).forEach((resolve) => resolve());
+  });
+  await expect(page.getByLabel('原生恢复命令')).not.toContainText("'--yolo'");
   await page.getByRole('combobox', { name: '恢复模式' }).selectOption('yolo');
   await expect(page.getByLabel('原生恢复命令')).toContainText("'--yolo'");
   await page.getByRole('combobox', { name: '关联会话项目' }).selectOption('project-new');
@@ -54,5 +70,6 @@ test('records keep search, show native resume command and only launch on request
   await expect(page.getByRole('textbox', { name: '搜索会话' })).toHaveValue('Review');
   await page.getByRole('tab', { name: '用量' }).click();
   await expect(page.getByText('150', { exact: true })).toBeVisible();
+  await expect(page.getByText('输入 token · 已知小计')).toBeVisible();
   await expect(page.getByText('未知', { exact: true })).toBeVisible();
 });

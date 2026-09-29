@@ -29,8 +29,8 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
   const [priceOpen, setPriceOpen] = useState(false);
   const [priceDraft, setPriceDraft] = useState({ currency: 'USD', input: '', output: '', read: '', write: '', source: '' });
   const [mode, setMode] = useState<'normal' | 'yolo'>('normal');
-  const [resumeCommand, setResumeCommand] = useState('');
-  const [resumeError, setResumeError] = useState('');
+  const [resumeCommand, setResumeCommand] = useState<{ key: string; text: string } | null>(null);
+  const [resumeError, setResumeError] = useState<{ key: string; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -80,16 +80,23 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
 
   const selected = detail?.session.id === selectedId ? detail : null;
   const yolo = tools.find((item) => item.id === selected?.session.toolId)?.yoloAvailable ?? false;
+  const resumeKey = selected ? JSON.stringify([selected.session.id, selected.session.updatedAt, selected.session.projectId,
+    selected.session.cwd, selected.resumeReason, mode, yolo]) : '';
+  const readyCommand = resumeCommand?.key === resumeKey ? resumeCommand.text : '';
+  const shownResumeError = resumeError?.key === resumeKey ? resumeError.text : selected?.resumeReason ?? '';
+  const partialTotals = (usage?.usageSessions ?? 0) > 0 && (usage?.unknownUsageSessions ?? 0) > 0;
   useEffect(() => { if (!yolo && mode === 'yolo') setMode('normal'); }, [yolo, mode]);
   useEffect(() => {
+    setResumeCommand(null);
+    setResumeError(null);
     if (!selected || selected.resumeReason || !nativeAvailable || (mode === 'yolo' && !yolo)) {
-      setResumeCommand(''); setResumeError(selected?.resumeReason ?? ''); return;
+      return;
     }
     let live = true;
-    void native.copyHistoryResumeCommand(selected.session.id, mode).then((text) => { if (live) { setResumeCommand(text); setResumeError(''); } })
-      .catch((value) => { if (live) { setResumeCommand(''); setResumeError(errorText(value)); } });
+    void native.copyHistoryResumeCommand(selected.session.id, mode).then((text) => { if (live) { setResumeCommand({ key: resumeKey, text }); setResumeError(null); } })
+      .catch((value) => { if (live) { setResumeCommand(null); setResumeError({ key: resumeKey, text: errorText(value) }); } });
     return () => { live = false; };
-  }, [selectedId, selected?.session.updatedAt, selected?.session.projectId, selected?.session.cwd, selected?.resumeReason, mode, yolo]);
+  }, [resumeKey]);
 
   async function refresh() {
     if (!nativeAvailable) return;
@@ -122,13 +129,13 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
   }
 
   async function copy() {
-    if (!resumeCommand) return;
-    try { await navigator.clipboard.writeText(resumeCommand); setNotice('已复制原生恢复命令，粘贴后由终端执行。'); }
+    if (!readyCommand) return;
+    try { await navigator.clipboard.writeText(readyCommand); setNotice('已复制原生恢复命令，粘贴后由终端执行。'); }
     catch (value) { setError(errorText(value)); }
   }
 
   async function resume() {
-    if (!selected || !resumeCommand) return;
+    if (!selected || !readyCommand) return;
     setBusy(true);
     try { await native.resumeHistorySession(selected.session.id, mode); setNotice('已请求外部终端恢复会话。'); }
     catch (value) { setError(errorText(value)); }
@@ -191,15 +198,15 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
         {(selected.session.partial || selected.session.stale) && <p className={styles.caveat}>原始记录不完整或最近读取失败；仅展示已索引的内容。</p>}
         <div className={styles.actions}><button type="button" onClick={() => void exportSession('markdown')}>导出 Markdown</button><button type="button" onClick={() => void exportSession('json')}>导出 JSON</button></div>
         <div className={styles.resume}><div className={styles.detailHead}><strong>继续会话</strong><select aria-label="恢复模式" value={mode} onChange={(event) => setMode(event.target.value as 'normal' | 'yolo')}><option value="normal">普通模式</option>{yolo && <option value="yolo">YOLO 模式</option>}</select></div>
-          {resumeCommand ? <><pre aria-label="原生恢复命令">{resumeCommand}</pre><div className={styles.actions}><button type="button" onClick={() => void copy()}>复制命令</button><button type="button" className={styles.primary} disabled={busy} onClick={() => void resume()}>在外部终端继续</button></div></> : <p>{resumeError || '正在确认原生恢复命令…'}</p>}
+          {readyCommand ? <><pre aria-label="原生恢复命令">{readyCommand}</pre><div className={styles.actions}><button type="button" onClick={() => void copy()}>复制命令</button><button type="button" className={styles.primary} disabled={busy} onClick={() => void resume()}>在外部终端继续</button></div></> : <p>{shownResumeError || '正在确认原生恢复命令…'}</p>}
           <label className={styles.projectLink}>关联项目<select aria-label="关联会话项目" value={selected.session.projectId ?? ''} onChange={(event) => void assignProject(event.target.value)}><option value="">使用原会话目录</option>{projects.map((item) => <option key={item.id} value={item.id}>{item.name}{item.available ? '' : ' · 目录失效'}</option>)}</select></label>
           {selected.resumeReason && <button type="button" onClick={onOpenProjects}>前往最近项目重新关联目录</button>}
         </div>
         <div className={styles.messages}>{selected.messages.length ? selected.messages.map((item) => <article key={item.id}><small>{item.role === 'user' ? '你' : '助手'} · {day(item.timestamp)}</small><p>{item.text}</p></article>) : <p>此记录没有可读取的对话正文。</p>}</div>
       </> : <div className={styles.empty}>选择左侧会话查看详情。</div>}</div>
     </div> : <div className={styles.usage}>
-      <div className={styles.metrics}><div><small>会话</small><strong>{usage?.sessionCount ?? '—'}</strong></div><div><small>输入 token</small><strong>{amount(usage?.input ?? null)}</strong></div><div><small>输出 token</small><strong>{amount(usage?.output ?? null)}</strong></div><div><small>缓存读取</small><strong>{amount(usage?.cacheRead ?? null)}</strong></div><div><small>缓存写入</small><strong>{amount(usage?.cacheWrite ?? null)}</strong></div><div><small>估算费用</small><strong>{usage?.estimatedCost === null || usage?.estimatedCost === undefined ? '未知' : `${usage.currency ?? ''} ${usage.estimatedCost.toFixed(4)}`}</strong></div></div>
-      <p className={styles.caveat}>仅统计本机可读取的记录；{usage?.usageSessions ?? 0} 个会话有用量，{usage?.unknownUsageSessions ?? 0} 个未知，{usage?.partialSessions ?? 0} 个不完整，{usage?.staleSessions ?? 0} 个源暂不可读。费用为估算，不等于账单。</p>
+      <div className={styles.metrics}><div><small>会话</small><strong>{usage?.sessionCount ?? '—'}</strong></div><div><small>输入 token{partialTotals ? ' · 已知小计' : ''}</small><strong>{amount(usage?.input ?? null)}</strong></div><div><small>输出 token{partialTotals ? ' · 已知小计' : ''}</small><strong>{amount(usage?.output ?? null)}</strong></div><div><small>缓存读取{partialTotals ? ' · 已知小计' : ''}</small><strong>{amount(usage?.cacheRead ?? null)}</strong></div><div><small>缓存写入{partialTotals ? ' · 已知小计' : ''}</small><strong>{amount(usage?.cacheWrite ?? null)}</strong></div><div><small>估算费用</small><strong>{usage?.estimatedCost === null || usage?.estimatedCost === undefined ? '未知' : `${usage.currency ?? ''} ${usage.estimatedCost.toFixed(4)}`}</strong></div></div>
+      <p className={styles.caveat}>仅统计本机可读取的记录；{usage?.usageSessions ?? 0} 个会话有用量，{usage?.unknownUsageSessions ?? 0} 个未知，{usage?.partialSessions ?? 0} 个不完整，{usage?.staleSessions ?? 0} 个源暂不可读。{partialTotals ? '显示的是已知小计，实际总量未知。' : ''}费用为估算，不等于账单。</p>
       <p className={styles.caveat}>输入与缓存按原生口径分别展示；{usage?.inputIncludesCache === true ? '当前输入值包含缓存 token，不应再叠加缓存。' : usage?.inputIncludesCache === false ? '当前输入值不包含单列的缓存 token。' : '当前记录口径混合或未知，请勿自行相加。'}</p>
       {!!usage?.priceSources.length && <div className={styles.priceSources}><strong>价格依据</strong>{usage.priceSources.map((source) => <span key={source}>{source}</span>)}</div>}
       <button type="button" onClick={() => setPriceOpen((old) => !old)}>{priceOpen ? '收起价格设置' : '设置估算价格'}</button>
