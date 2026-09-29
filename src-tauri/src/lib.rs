@@ -3,16 +3,13 @@ pub mod credentials;
 pub mod database;
 pub mod domain;
 
-use tauri::Manager;
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            let directory = app.path().app_data_dir()?;
-            std::fs::create_dir_all(&directory)?;
-            let database = database::Database::open(&directory.join("cliora.db"))?;
-            app.manage(commands::AppState { database });
+            use tauri::Manager;
+            // The window must remain available when local storage needs repair.
+            app.manage(commands::AppState::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

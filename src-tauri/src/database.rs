@@ -5,19 +5,27 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::domain::Preferences;
 
+#[derive(Debug, thiserror::Error)]
+pub enum OpenError {
+    #[error("database version {0} is newer than this application supports")]
+    UnsupportedVersion(u32),
+    #[error(transparent)]
+    Sqlite(#[from] rusqlite::Error),
+}
+
 /// Single owner for local application data. Future modules add tables through numbered migrations.
 pub struct Database {
     connection: Mutex<Connection>,
 }
 
 impl Database {
-    pub fn open(path: &Path) -> Result<Self, rusqlite::Error> {
+    pub fn open(path: &Path) -> Result<Self, OpenError> {
         let mut connection = Connection::open(path)?;
-        connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
         let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         if version > 1 {
-            return Err(rusqlite::Error::InvalidQuery);
+            return Err(OpenError::UnsupportedVersion(version));
         }
+        connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
         if version == 0 {
             let tx = connection.transaction()?;
             tx.execute_batch(
@@ -112,7 +120,9 @@ mod tests {
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch("PRAGMA user_version = 99;").unwrap();
         drop(conn);
-        assert!(Database::open(&path).is_err());
+        let original = std::fs::read(&path).unwrap();
+        assert!(matches!(Database::open(&path), Err(OpenError::UnsupportedVersion(99))));
+        assert_eq!(std::fs::read(&path).unwrap(), original);
         let conn = Connection::open(path).unwrap();
         let version: u32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0)).unwrap();
         assert_eq!(version, 99);
