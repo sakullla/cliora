@@ -15,6 +15,7 @@ use super::transaction::{self, ApplyOutcome, FieldChange, FilePatch};
 use crate::credentials::CredentialStore;
 use crate::database::Database;
 use crate::domain::CliId;
+use crate::resources::mcp::McpDefinition;
 
 mod claude;
 mod codex;
@@ -33,6 +34,14 @@ pub static OPENCODE: opencode::OpenCode = opencode::OpenCode;
 pub struct Facet {
     pub state: &'static str,
     pub reason: &'static str,
+}
+
+#[derive(Clone, Debug)]
+pub struct McpLocation {
+    pub path: PathBuf,
+    pub kind: FileKind,
+    pub root: &'static str,
+    pub child: Option<&'static str>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -169,6 +178,52 @@ pub trait CliAdapter: Sync {
         }
         Ok(Vec::new())
     }
+    fn mcp_location(
+        &self,
+        _scope: Scope,
+        _home: &Path,
+        _project: Option<&Path>,
+    ) -> Option<McpLocation> {
+        None
+    }
+    fn mcp_requires_version(&self) -> bool {
+        false
+    }
+    fn mcp_location_for_version(
+        &self,
+        scope: Scope,
+        home: &Path,
+        project: Option<&Path>,
+        _version: Option<&str>,
+    ) -> Option<McpLocation> {
+        self.mcp_location(scope, home, project)
+    }
+    fn mcp_document(
+        &self,
+        _definition: &McpDefinition,
+        _enabled: bool,
+        _existing: Option<&Value>,
+    ) -> Result<Option<Value>, String> {
+        Err("此 CLI 没有已确认的原生 MCP 配置格式".into())
+    }
+    fn mcp_document_at(
+        &self,
+        definition: &McpDefinition,
+        enabled: bool,
+        existing: Option<&Value>,
+        _location: &McpLocation,
+    ) -> Result<Option<Value>, String> {
+        self.mcp_document(definition, enabled, existing)
+    }
+    fn mcp_disabled_description(&self) -> Option<&'static str> {
+        None
+    }
+    fn skill_root(&self, _scope: Scope, _home: &Path, _project: Option<&Path>) -> Option<PathBuf> {
+        None
+    }
+    fn rule_path(&self, _scope: Scope, _home: &Path, _project: Option<&Path>) -> Option<PathBuf> {
+        None
+    }
     fn install_guidance(&self) -> (&'static str, &'static str);
     fn node_required_when_missing(&self) -> bool {
         true
@@ -220,8 +275,8 @@ pub trait CliAdapter: Sync {
                 reason: "可用原生会话 ID 在外部终端恢复；历史索引后续接入",
             },
             resources: Facet {
-                state: "planned",
-                reason: "资源能力由后续任务确认",
+                state: "available",
+                reason: "原生资源路径由此 CLI 适配器逐项提供",
             },
             history: Facet {
                 state: "planned",

@@ -16,7 +16,7 @@ use crate::native::{
     profile::{self, CommonConfig, Connection, NativeProfile, RegisteredCommon, RegisteredProfile},
     transaction::{self, ApplyOutcome},
 };
-use crate::{launch, projects};
+use crate::{launch, library, projects, resources};
 use std::path::PathBuf;
 
 #[derive(Default)]
@@ -115,6 +115,315 @@ pub(crate) fn native_error(message: String) -> ApiError {
         action: "检查工具版本、原生文件和作用范围后重试；原配置不会自动清空。",
         data_directory: None,
     }
+}
+
+#[tauri::command]
+pub async fn list_library_items(
+    app: AppHandle,
+    kind: library::LibraryKind,
+    project_id: Option<String>,
+    search: String,
+) -> Result<Vec<library::LibraryItem>, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            library::list(db, kind, project_id.as_deref(), &search).map_err(native_error)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn save_library_item(
+    app: AppHandle,
+    draft: library::LibraryDraft,
+) -> Result<library::LibraryItem, ApiError> {
+    blocking(move || {
+        app.state::<AppState>()
+            .with_database(&app, |db| library::save(db, draft).map_err(native_error))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn delete_library_item(
+    app: AppHandle,
+    id: String,
+    expected_version: u64,
+) -> Result<(), ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            library::delete(db, &id, expected_version).map_err(native_error)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn list_mcp_definitions(
+    app: AppHandle,
+) -> Result<Vec<resources::mcp::McpDefinition>, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            resources::mcp::list_definitions(db).map_err(native_error)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn save_mcp_definition(
+    app: AppHandle,
+    draft: resources::mcp::McpDraft,
+) -> Result<resources::mcp::McpDefinition, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            resources::mcp::save_definition(db, draft).map_err(native_error)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn list_native_mcp(
+    app: AppHandle,
+    target: resources::mcp::McpTargetRequest,
+) -> Result<Vec<resources::mcp::NativeMcpEntry>, ApiError> {
+    blocking(move || {
+        let home = home()?;
+        let db = app.state::<AppState>().database(&app)?;
+        resources::mcp::list_native(&db, &adapters::Registry::builtins(), &home, &target)
+            .map_err(native_error)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn preview_mcp_targets(
+    app: AppHandle,
+    definition_id: String,
+    targets: Vec<resources::mcp::McpTargetRequest>,
+) -> Result<Vec<resources::mcp::McpTargetResult>, ApiError> {
+    blocking(move || {
+        let home = home()?;
+        let db = app.state::<AppState>().database(&app)?;
+        Ok(resources::mcp::preview_targets(
+            &db,
+            &adapters::Registry::builtins(),
+            &home,
+            &definition_id,
+            targets,
+        ))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn distribute_mcp(
+    app: AppHandle,
+    definition_id: String,
+    targets: Vec<resources::mcp::McpTargetRequest>,
+) -> Result<Vec<resources::mcp::McpTargetResult>, ApiError> {
+    blocking(move || {
+        let home = home()?;
+        let db = app.state::<AppState>().database(&app)?;
+        Ok(resources::mcp::distribute(
+            &db,
+            &SystemCredentialStore,
+            &adapters::Registry::builtins(),
+            &home,
+            &definition_id,
+            targets,
+        ))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn preview_rule_targets(
+    app: AppHandle,
+    rule_id: String,
+    targets: Vec<resources::rules::RuleTarget>,
+) -> Result<Vec<resources::rules::RulePreview>, ApiError> {
+    blocking(move || {
+        let home = home()?;
+        let db = app.state::<AppState>().database(&app)?;
+        Ok(resources::rules::preview(
+            &db,
+            &adapters::Registry::builtins(),
+            &home,
+            &rule_id,
+            targets,
+        ))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn apply_rule_targets(
+    app: AppHandle,
+    rule_id: String,
+    expected_version: u64,
+    targets: Vec<resources::rules::RuleTarget>,
+) -> Result<Vec<resources::rules::RuleApplyResult>, ApiError> {
+    blocking(move || {
+        let home = home()?;
+        let db = app.state::<AppState>().database(&app)?;
+        Ok(resources::rules::apply(
+            &db,
+            &SystemCredentialStore,
+            &adapters::Registry::builtins(),
+            &home,
+            &rule_id,
+            expected_version,
+            targets,
+        ))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn list_skill_packages(
+    app: AppHandle,
+) -> Result<Vec<resources::skills::SkillPackage>, ApiError> {
+    blocking(move || {
+        app.state::<AppState>()
+            .with_database(&app, |db| resources::skills::list(db).map_err(native_error))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn preview_skill_local(
+    app: AppHandle,
+    source: String,
+) -> Result<resources::skills::SkillImportPreview, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            resources::skills::preview_local(db, &source).map_err(native_error)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn import_skill_local(
+    app: AppHandle,
+    source: String,
+    expected_new: Option<String>,
+    expected_existing: Option<String>,
+) -> Result<resources::skills::SkillPackage, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            resources::skills::import_local(
+                db,
+                &source,
+                expected_new.as_deref(),
+                expected_existing.as_deref(),
+            )
+            .map_err(native_error)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn preview_skill_https_zip(
+    app: AppHandle,
+    source: String,
+    subdirectory: Option<String>,
+) -> Result<resources::skills::SkillImportPreview, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            resources::skills::preview_https_zip(db, &source, subdirectory.as_deref())
+                .map_err(native_error)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn import_skill_https_zip(
+    app: AppHandle,
+    source: String,
+    subdirectory: Option<String>,
+    expected_new: Option<String>,
+    expected_existing: Option<String>,
+) -> Result<resources::skills::SkillPackage, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            resources::skills::import_https_zip(
+                db,
+                &source,
+                subdirectory.as_deref(),
+                expected_new.as_deref(),
+                expected_existing.as_deref(),
+            )
+            .map_err(native_error)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn list_skill_installations(
+    app: AppHandle,
+    package_id: String,
+) -> Result<Vec<resources::skills::SkillInstallation>, ApiError> {
+    blocking(move || {
+        let home = home()?;
+        let db = app.state::<AppState>().database(&app)?;
+        resources::skills::installations(&db, &adapters::Registry::builtins(), &home, &package_id)
+            .map_err(native_error)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn install_skill(
+    app: AppHandle,
+    package_id: String,
+    tool_id: String,
+    scope: Scope,
+    project_path: Option<String>,
+) -> Result<resources::skills::SkillTargetResult, ApiError> {
+    blocking(move || {
+        let home = home()?;
+        let db = app.state::<AppState>().database(&app)?;
+        Ok(resources::skills::install(
+            &db,
+            &adapters::Registry::builtins(),
+            &home,
+            &package_id,
+            &tool_id,
+            scope,
+            project_path.as_deref(),
+        ))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn remove_skill(
+    app: AppHandle,
+    package_id: String,
+    tool_id: String,
+    scope: Scope,
+    project_path: Option<String>,
+) -> Result<resources::skills::SkillTargetResult, ApiError> {
+    blocking(move || {
+        let home = home()?;
+        let db = app.state::<AppState>().database(&app)?;
+        Ok(resources::skills::remove(
+            &db,
+            &adapters::Registry::builtins(),
+            &home,
+            &package_id,
+            &tool_id,
+            scope,
+            project_path.as_deref(),
+        ))
+    })
+    .await
 }
 
 fn tool_path(database: &Database, tool: CliId) -> Result<Option<PathBuf>, String> {

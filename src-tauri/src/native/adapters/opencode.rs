@@ -4,8 +4,8 @@ use std::env;
 use std::path::Path;
 
 use super::{
-    file, project_root, CliAdapter, InspectionFields, LaunchMode, NativeCredentialRefs,
-    PendingSecrets,
+    file, project_root, CliAdapter, InspectionFields, LaunchMode, McpLocation,
+    NativeCredentialRefs, PendingSecrets,
 };
 use crate::credentials::CredentialStore;
 use crate::native::adapter::{NativeFile, Scope};
@@ -14,6 +14,7 @@ use crate::native::format::FileKind;
 use crate::native::intake::NativeInspection;
 use crate::native::intake::{api_format, string_at};
 use crate::native::profile::{self, Connection, RegisteredProfile};
+use crate::resources::mcp::{self, McpDefinition, McpTransport};
 
 pub struct OpenCode;
 
@@ -73,6 +74,141 @@ impl CliAdapter for OpenCode {
         } else {
             Err("OpenCode 不支持此原生文件角色".into())
         }
+    }
+    fn mcp_location(
+        &self,
+        scope: Scope,
+        home: &Path,
+        project: Option<&Path>,
+    ) -> Option<McpLocation> {
+        self.mcp_location_for_version(scope, home, project, None)
+    }
+    fn mcp_requires_version(&self) -> bool {
+        true
+    }
+    fn mcp_location_for_version(
+        &self,
+        scope: Scope,
+        home: &Path,
+        project: Option<&Path>,
+        version: Option<&str>,
+    ) -> Option<McpLocation> {
+        let file = self
+            .native_files(scope, home, project, true)
+            .into_iter()
+            .next()?;
+        let path: std::path::PathBuf = file.path.into();
+        let kind = if file.format == "jsonc" {
+            FileKind::Jsonc
+        } else {
+            FileKind::Json
+        };
+        let major = version.and_then(|text| {
+            text.trim()
+                .trim_start_matches('v')
+                .split('.')
+                .next()?
+                .parse::<u32>()
+                .ok()
+        });
+        let child = match major {
+            Some(2) => Some("servers"),
+            Some(1) => None,
+            Some(_) => return None,
+            None => {
+                let text = crate::native::transaction::read_native(&path).ok()?;
+                let parsed = crate::native::format::parse(kind, &text).ok()?;
+                let root = parsed.get("mcp")?.as_object()?;
+                if root
+                    .get("servers")
+                    .is_some_and(serde_json::Value::is_object)
+                {
+                    Some("servers")
+                } else if root.keys().any(|key| key != "timeout") {
+                    None
+                } else {
+                    return None;
+                }
+            }
+        };
+        Some(McpLocation {
+            path,
+            kind,
+            root: "mcp",
+            child,
+        })
+    }
+    fn mcp_document(
+        &self,
+        definition: &McpDefinition,
+        enabled: bool,
+        existing: Option<&Value>,
+    ) -> Result<Option<Value>, String> {
+        let mut map = match definition.transport {
+            McpTransport::Stdio => {
+                let mut map = mcp::stdio_doc_with_env(definition, existing, "environment");
+                map.remove("args");
+                map.insert(
+                    "command".into(),
+                    json!(std::iter::once(&definition.command)
+                        .chain(definition.args.iter())
+                        .collect::<Vec<_>>()),
+                );
+                map.insert("type".into(), json!("local"));
+                map
+            }
+            McpTransport::Http => {
+                let mut map = mcp::http_doc(definition, existing, "headers");
+                map.insert("type".into(), json!("remote"));
+                map
+            }
+        };
+        map.insert("enabled".into(), json!(enabled));
+        Ok(Some(Value::Object(map)))
+    }
+    fn mcp_document_at(
+        &self,
+        definition: &McpDefinition,
+        enabled: bool,
+        existing: Option<&Value>,
+        location: &McpLocation,
+    ) -> Result<Option<Value>, String> {
+        let mut document = self.mcp_document(definition, enabled, existing)?;
+        if location.child == Some("servers") {
+            if let Some(map) = document.as_mut().and_then(Value::as_object_mut) {
+                map.remove("enabled");
+                map.insert("disabled".into(), json!(!enabled));
+            }
+        }
+        Ok(document)
+    }
+    fn skill_root(
+        &self,
+        scope: Scope,
+        home: &Path,
+        project: Option<&Path>,
+    ) -> Option<std::path::PathBuf> {
+        Some(match scope {
+            Scope::Global => env::var_os("XDG_CONFIG_HOME")
+                .map(Into::into)
+                .unwrap_or_else(|| home.join(".config"))
+                .join("opencode/skills"),
+            Scope::Project => project?.join(".opencode/skills"),
+        })
+    }
+    fn rule_path(
+        &self,
+        scope: Scope,
+        home: &Path,
+        project: Option<&Path>,
+    ) -> Option<std::path::PathBuf> {
+        Some(match scope {
+            Scope::Global => env::var_os("XDG_CONFIG_HOME")
+                .map(Into::into)
+                .unwrap_or_else(|| home.join(".config"))
+                .join("opencode/AGENTS.md"),
+            Scope::Project => project?.join("AGENTS.md"),
+        })
     }
     fn connection_documents(
         &self,

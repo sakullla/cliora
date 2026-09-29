@@ -102,6 +102,34 @@ impl CliAdapter for Pi {
             _ => Err("Pi 不支持此原生文件角色".into()),
         }
     }
+    fn skill_root(
+        &self,
+        scope: Scope,
+        home: &Path,
+        project: Option<&Path>,
+    ) -> Option<std::path::PathBuf> {
+        Some(match scope {
+            Scope::Global => env::var_os("PI_CODING_AGENT_DIR")
+                .map(Into::into)
+                .unwrap_or_else(|| home.join(".pi/agent"))
+                .join("skills"),
+            Scope::Project => project?.join(".pi/skills"),
+        })
+    }
+    fn rule_path(
+        &self,
+        scope: Scope,
+        home: &Path,
+        project: Option<&Path>,
+    ) -> Option<std::path::PathBuf> {
+        Some(match scope {
+            Scope::Global => env::var_os("PI_CODING_AGENT_DIR")
+                .map(Into::into)
+                .unwrap_or_else(|| home.join(".pi/agent"))
+                .join("AGENTS.md"),
+            Scope::Project => project?.join("AGENTS.md"),
+        })
+    }
     fn connection_documents(
         &self,
         connection: &Connection,

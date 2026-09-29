@@ -4,8 +4,8 @@ use std::env;
 use std::path::Path;
 
 use super::{
-    file, project_root, CliAdapter, InspectionFields, LaunchMode, NativeCredentialRefs,
-    PendingSecrets,
+    file, project_root, CliAdapter, InspectionFields, LaunchMode, McpLocation,
+    NativeCredentialRefs, PendingSecrets,
 };
 use crate::credentials::CredentialStore;
 use crate::native::adapter::{NativeFile, Scope};
@@ -14,6 +14,7 @@ use crate::native::format::FileKind;
 use crate::native::intake::NativeInspection;
 use crate::native::intake::{api_format, string_at};
 use crate::native::profile::{self, Connection, RegisteredProfile};
+use crate::resources::mcp::{self, McpDefinition, McpTransport};
 
 pub struct Grok;
 
@@ -77,6 +78,59 @@ impl CliAdapter for Grok {
             Ok(FileKind::Toml)
         } else {
             Err("Grok 不支持此原生文件角色".into())
+        }
+    }
+    fn mcp_location(
+        &self,
+        scope: Scope,
+        home: &Path,
+        project: Option<&Path>,
+    ) -> Option<McpLocation> {
+        let path = self
+            .native_files(scope, home, project, true)
+            .first()?
+            .path
+            .clone();
+        Some(McpLocation {
+            path: path.into(),
+            kind: FileKind::Toml,
+            root: "mcp_servers",
+            child: None,
+        })
+    }
+    fn mcp_document(
+        &self,
+        definition: &McpDefinition,
+        enabled: bool,
+        existing: Option<&Value>,
+    ) -> Result<Option<Value>, String> {
+        let mut map = match definition.transport {
+            McpTransport::Stdio => mcp::stdio_doc(definition, existing),
+            McpTransport::Http => mcp::http_doc(definition, existing, "headers"),
+        };
+        map.insert("enabled".into(), serde_json::json!(enabled));
+        Ok(Some(Value::Object(map)))
+    }
+    fn skill_root(
+        &self,
+        scope: Scope,
+        home: &Path,
+        project: Option<&Path>,
+    ) -> Option<std::path::PathBuf> {
+        Some(match scope {
+            Scope::Global => home.join(".grok/skills"),
+            Scope::Project => project?.join(".grok/skills"),
+        })
+    }
+    fn rule_path(
+        &self,
+        scope: Scope,
+        _home: &Path,
+        project: Option<&Path>,
+    ) -> Option<std::path::PathBuf> {
+        match scope {
+            Scope::Global => None,
+            Scope::Project => Some(project?.join("AGENTS.md")),
         }
     }
     fn connection_documents(

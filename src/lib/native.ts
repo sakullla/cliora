@@ -2,6 +2,8 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 import type { ApiError, Bootstrap, CliId, Theme } from '../types/domain';
 import type { AdapterCatalog, ApplyOutcome, CommonConfig, CommonSaveResult, Connection, ConnectionCheck, ModelDirectory, NativeImport, NativeInspection, NativePreview, NativeProfile, PreservedProfile, RegisteredCommon, RegisteredCommonSaveResult, RegisteredProfile, RegisteredToolWorkspace, Scope, ToolWorkspace } from '../types/native';
 import type { LaunchRequest, LaunchResult, LaunchSettings, Project, TerminalId, TrayStatus } from '../types/launch';
+import type { LibraryDraft, LibraryItem, LibraryKind } from '../types/library';
+import type { McpDefinition, McpDraft, McpTargetRequest, McpTargetResult, NativeMcpEntry, RuleTarget, RulePreview, RuleApplyResult, SkillPackage, SkillImportPreview, SkillInstallation, SkillTargetResult } from '../types/resources';
 
 export const nativeAvailable = isTauri();
 
@@ -31,6 +33,24 @@ async function command<T>(name: string, args?: Record<string, unknown>): Promise
 
 /** Feature modules add named wrappers here; components never invoke arbitrary commands. */
 export const native = {
+  listMcpDefinitions: () => command<McpDefinition[]>('list_mcp_definitions'),
+  saveMcpDefinition: (draft: McpDraft) => command<McpDefinition>('save_mcp_definition', { draft }),
+  listNativeMcp: (target: McpTargetRequest) => command<NativeMcpEntry[]>('list_native_mcp', { target }),
+  previewMcpTargets: (definitionId: string, targets: McpTargetRequest[]) => command<McpTargetResult[]>('preview_mcp_targets', { definitionId, targets }),
+  distributeMcp: (definitionId: string, targets: McpTargetRequest[]) => command<McpTargetResult[]>('distribute_mcp', { definitionId, targets }),
+  previewRuleTargets: (ruleId: string, targets: RuleTarget[]) => command<RulePreview[]>('preview_rule_targets', { ruleId, targets }),
+  applyRuleTargets: (ruleId: string, expectedVersion: number, targets: RuleTarget[]) => command<RuleApplyResult[]>('apply_rule_targets', { ruleId, expectedVersion, targets }),
+  listSkillPackages: () => command<SkillPackage[]>('list_skill_packages'),
+  previewSkillLocal: (source: string) => command<SkillImportPreview>('preview_skill_local', { source }),
+  importSkillLocal: (source: string, expectedNew: string | null, expectedExisting: string | null) => command<SkillPackage>('import_skill_local', { source, expectedNew, expectedExisting }),
+  previewSkillHttpsZip: (source: string, subdirectory: string | null) => command<SkillImportPreview>('preview_skill_https_zip', { source, subdirectory }),
+  importSkillHttpsZip: (source: string, subdirectory: string | null, expectedNew: string | null, expectedExisting: string | null) => command<SkillPackage>('import_skill_https_zip', { source, subdirectory, expectedNew, expectedExisting }),
+  listSkillInstallations: (packageId: string) => command<SkillInstallation[]>('list_skill_installations', { packageId }),
+  installSkill: (packageId: string, toolId: string, scope: Scope, projectPath: string | null) => command<SkillTargetResult>('install_skill', { packageId, toolId, scope, projectPath }),
+  removeSkill: (packageId: string, toolId: string, scope: Scope, projectPath: string | null) => command<SkillTargetResult>('remove_skill', { packageId, toolId, scope, projectPath }),
+  listLibraryItems: (kind: LibraryKind, projectId: string | null, search: string) => command<LibraryItem[]>('list_library_items', { kind, projectId, search }),
+  saveLibraryItem: (draft: LibraryDraft) => command<LibraryItem>('save_library_item', { draft }),
+  deleteLibraryItem: (id: string, expectedVersion: number) => command<void>('delete_library_item', { id, expectedVersion }),
   getBootstrap: () => command<Bootstrap>('get_bootstrap'),
   listProjects: () => command<Project[]>('list_projects'),
   addProject: (projectPath: string, name?: string, preferredTool?: string) => command<Project>('add_project', { projectPath, name: name || null, preferredTool: preferredTool || null }),

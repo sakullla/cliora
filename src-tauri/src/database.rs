@@ -22,7 +22,7 @@ impl Database {
     pub fn open(path: &Path) -> Result<Self, OpenError> {
         let mut connection = Connection::open(path)?;
         let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 4 {
+        if version > 5 {
             return Err(OpenError::UnsupportedVersion(version));
         }
         connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
@@ -110,6 +110,60 @@ impl Database {
                    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
                  );
                  PRAGMA user_version = 4;",
+            )?;
+            tx.commit()?;
+        }
+        if version < 5 {
+            let tx = connection.transaction()?;
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS library_items (
+                   id TEXT PRIMARY KEY NOT NULL,
+                   kind TEXT NOT NULL CHECK(kind IN ('prompt', 'rule')),
+                   title TEXT NOT NULL,
+                   body TEXT NOT NULL,
+                   category TEXT NOT NULL DEFAULT '',
+                   project_id TEXT,
+                   version INTEGER NOT NULL,
+                   updated_at INTEGER NOT NULL,
+                   FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE SET NULL
+                 );
+                 CREATE INDEX IF NOT EXISTS idx_library_kind_project ON library_items(kind, project_id);
+                 CREATE TABLE IF NOT EXISTS skill_packages (
+                   id TEXT PRIMARY KEY NOT NULL,
+                   name TEXT NOT NULL UNIQUE,
+                   description TEXT NOT NULL,
+                   source TEXT NOT NULL,
+                   digest TEXT NOT NULL,
+                   files_json TEXT NOT NULL,
+                   updated_at INTEGER NOT NULL
+                 );
+                 CREATE TABLE IF NOT EXISTS skill_installations (
+                   package_id TEXT NOT NULL,
+                   tool TEXT NOT NULL,
+                   scope_key TEXT NOT NULL,
+                   target_path TEXT NOT NULL,
+                   digest TEXT NOT NULL,
+                   PRIMARY KEY(package_id, tool, scope_key),
+                   FOREIGN KEY(package_id) REFERENCES skill_packages(id) ON DELETE CASCADE
+                 );
+                 CREATE TABLE IF NOT EXISTS mcp_definitions (
+                   id TEXT PRIMARY KEY NOT NULL,
+                   name TEXT NOT NULL,
+                   transport TEXT NOT NULL,
+                   data_json TEXT NOT NULL,
+                   version INTEGER NOT NULL,
+                   UNIQUE(name)
+                 );
+                 CREATE TABLE IF NOT EXISTS mcp_targets (
+                   definition_id TEXT NOT NULL,
+                   tool TEXT NOT NULL,
+                   scope_key TEXT NOT NULL,
+                   enabled INTEGER NOT NULL,
+                   managed_hash TEXT NOT NULL,
+                   PRIMARY KEY(definition_id, tool, scope_key),
+                   FOREIGN KEY(definition_id) REFERENCES mcp_definitions(id) ON DELETE CASCADE
+                 );
+                 PRAGMA user_version = 5;",
             )?;
             tx.commit()?;
         }
@@ -292,7 +346,7 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
-            assert_eq!(version, 4);
+            assert_eq!(version, 5);
             let count: i64 = conn
                 .query_row("SELECT COUNT(*) FROM native_profiles", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;

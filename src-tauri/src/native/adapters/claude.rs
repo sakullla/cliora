@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use super::{
-    file, project_root, CliAdapter, InspectionFields, LaunchMode, NativeCredentialRefs,
-    PendingSecrets,
+    file, project_root, CliAdapter, InspectionFields, LaunchMode, McpLocation,
+    NativeCredentialRefs, PendingSecrets,
 };
 use crate::credentials::CredentialStore;
 use crate::native::adapter::{NativeFile, Scope};
@@ -13,6 +13,7 @@ use crate::native::format::FileKind;
 use crate::native::intake::string_at;
 use crate::native::intake::NativeInspection;
 use crate::native::profile::{Connection, RegisteredProfile};
+use crate::resources::mcp::{self, McpDefinition, McpTransport};
 
 pub struct Claude;
 
@@ -80,6 +81,73 @@ impl CliAdapter for Claude {
         } else {
             Err("Claude Code 不支持此原生文件角色".into())
         }
+    }
+    fn mcp_location(
+        &self,
+        scope: Scope,
+        home: &Path,
+        project: Option<&Path>,
+    ) -> Option<McpLocation> {
+        let path = match scope {
+            Scope::Global => home.join(".claude.json"),
+            Scope::Project => project?.join(".mcp.json"),
+        };
+        Some(McpLocation {
+            path,
+            kind: FileKind::Json,
+            root: "mcpServers",
+            child: None,
+        })
+    }
+    fn mcp_disabled_description(&self) -> Option<&'static str> {
+        Some("停用会移除原生条目，Cliora 中的定义仍保留")
+    }
+    fn mcp_document(
+        &self,
+        definition: &McpDefinition,
+        enabled: bool,
+        existing: Option<&Value>,
+    ) -> Result<Option<Value>, String> {
+        // Claude Code has no per-entry enabled flag in .mcp.json. Removing the
+        // native entry stops loading it; Cliora keeps the definition for re-enable.
+        if !enabled {
+            return Ok(None);
+        }
+        let mut map = match definition.transport {
+            McpTransport::Stdio => mcp::stdio_doc(definition, existing),
+            McpTransport::Http => mcp::http_doc(definition, existing, "headers"),
+        };
+        map.insert(
+            "type".into(),
+            json!(if definition.transport == McpTransport::Http {
+                "http"
+            } else {
+                "stdio"
+            }),
+        );
+        Ok(Some(Value::Object(map)))
+    }
+    fn skill_root(
+        &self,
+        scope: Scope,
+        home: &Path,
+        project: Option<&Path>,
+    ) -> Option<std::path::PathBuf> {
+        Some(match scope {
+            Scope::Global => home.join(".claude/skills"),
+            Scope::Project => project?.join(".claude/skills"),
+        })
+    }
+    fn rule_path(
+        &self,
+        scope: Scope,
+        home: &Path,
+        project: Option<&Path>,
+    ) -> Option<std::path::PathBuf> {
+        Some(match scope {
+            Scope::Global => home.join(".claude/CLAUDE.md"),
+            Scope::Project => project?.join("CLAUDE.md"),
+        })
     }
     fn auth_env_name(&self, connection: &Connection) -> Option<String> {
         connection.auth_env_var.clone().or_else(|| {
