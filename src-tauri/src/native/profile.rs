@@ -52,6 +52,10 @@ pub struct NativeProfile {
     #[serde(default)]
     pub suppressed: BTreeMap<String, Vec<String>>,
     pub connection: Option<Connection>,
+    /// Opaque keyring IDs for credentials removed from native file roles.
+    /// The outer key is the file role; the inner key is the CLI environment name.
+    #[serde(default)]
+    pub native_credentials: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -143,7 +147,7 @@ pub(crate) fn validate_files(tool: CliId, files: &BTreeMap<String, String>) -> R
                 }
             }
         }
-        if tool == CliId::ClaudeCode && role == "settings" {
+        if tool == CliId::ClaudeCode && matches!(role.as_str(), "settings" | "local_settings") {
             if let Some(env) = parsed.get("env").and_then(serde_json::Value::as_object) {
                 if env.contains_key("ANTHROPIC_API_KEY") || env.contains_key("ANTHROPIC_AUTH_TOKEN")
                 {
@@ -350,6 +354,24 @@ pub(crate) fn validate_connection(connection: &Connection) -> Result<(), String>
     Ok(())
 }
 
+pub(crate) fn validate_native_credentials(profile: &NativeProfile) -> Result<(), String> {
+    for (role, credentials) in &profile.native_credentials {
+        if profile.tool != CliId::ClaudeCode
+            || !matches!(role.as_str(), "settings" | "local_settings")
+        {
+            return Err("原生凭据角色不受支持".into());
+        }
+        for (name, id) in credentials {
+            if !matches!(name.as_str(), "ANTHROPIC_API_KEY" | "ANTHROPIC_AUTH_TOKEN")
+                || !valid_connection_secret_ref(id)
+            {
+                return Err("原生凭据标识无效，请重新安全接入".into());
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn save_profile(
     db: &Database,
     mut profile: NativeProfile,
@@ -362,6 +384,7 @@ pub fn save_profile(
         return Err("配置名称不能超过 100 个字符".into());
     }
     validate_files(profile.tool, &profile.files)?;
+    validate_native_credentials(&profile)?;
     if let Some(connection) = &profile.connection {
         validate_connection(connection)?;
     }
@@ -465,6 +488,7 @@ mod tests {
             files: BTreeMap::new(),
             suppressed: BTreeMap::new(),
             connection: None,
+            native_credentials: BTreeMap::new(),
         }
     }
 

@@ -1,0 +1,8 @@
+{
+  "env": {
+    "ANTHROPIC_API_KEY": "test-only-project-secret"
+  },
+  "enabledPlugins": {
+    "example@local": true
+  }
+}

@@ -26,6 +26,7 @@ pub struct NativeImport {
     pub files: BTreeMap<String, String>,
     pub inspection: NativeInspection,
     pub migrated_secret: bool,
+    pub native_credentials: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 /// Import is explicit: literal native keys move to the OS credential store before
@@ -36,7 +37,8 @@ pub fn prepare_import(
     credentials: &dyn CredentialStore,
 ) -> Result<NativeImport, String> {
     let mut found = inspect(tool, &files)?;
-    let mut pending_secret = None;
+    let mut pending_secrets: Vec<(String, String)> = Vec::new();
+    let mut native_credentials: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
     if tool == CliId::Pi {
         let raw = files.get("models").cloned().unwrap_or_default();
         let models = format::parse(FileKind::Jsonc, &raw)?;
@@ -68,7 +70,7 @@ pub fn prepare_import(
                     Some(&json!(format!("${{{env}}}"))),
                 )?;
                 files.insert("models".into(), replaced);
-                pending_secret = Some((id, key.to_owned()));
+                pending_secrets.push((id, key.to_owned()));
             }
         }
     }
@@ -116,31 +118,40 @@ pub fn prepare_import(
                     Some(&json!(format!("{{env:{env}}}"))),
                 )?;
                 files.insert("settings".into(), replaced);
-                pending_secret = Some((id, key.to_owned()));
+                pending_secrets.push((id, key.to_owned()));
             }
         }
     }
     if tool == CliId::ClaudeCode {
-        let raw = files.get("settings").cloned().unwrap_or_default();
-        let settings = format::parse(FileKind::Json, &raw)?;
-        for name in ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"] {
-            let Some(key) = string_at(&settings, &["env", name]) else {
-                continue;
-            };
-            if found.connection.is_none() {
-                return Err("Claude Code 的原生配置包含字面密钥，但缺少可识别的模型或地址；请先补齐连接信息，再安全接入。原文件未更改".into());
+        for role in ["settings", "local_settings"] {
+            let mut text = files.get(role).cloned().unwrap_or_default();
+            let parsed = format::parse(FileKind::Json, &text)?;
+            for name in ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"] {
+                let Some(key) = string_at(&parsed, &["env", name]) else {
+                    continue;
+                };
+                if key.is_empty() || key.len() > 16_384 {
+                    return Err("原生 API 密钥为空或超过系统凭据库限制；原文件未更改".into());
+                }
+                let id = format!("connection-{}", Uuid::new_v4());
+                text = format::set_path(FileKind::Json, &text, &["env".into(), name.into()], None)?;
+                native_credentials
+                    .entry(role.into())
+                    .or_default()
+                    .insert(name.into(), id.clone());
+                pending_secrets.push((id.clone(), key.to_owned()));
+                // An explicit connection may also use an imported API key for
+                // directory tests; a default-only CLI config stays connection-free.
+                if name == "ANTHROPIC_API_KEY" {
+                    if let Some(connection) = found.connection.as_mut() {
+                        connection.secret_ref = Some(id);
+                        connection.auth_env_var = Some(name.into());
+                    }
+                }
             }
-            if key.is_empty() || key.len() > 16_384 {
-                return Err("原生 API 密钥为空或超过系统凭据库限制；原文件未更改".into());
+            if native_credentials.contains_key(role) {
+                files.insert(role.into(), text);
             }
-            let id = format!("connection-{}", Uuid::new_v4());
-            let connection = found.connection.as_mut().unwrap();
-            connection.secret_ref = Some(id.clone());
-            connection.auth_env_var = Some(name.into());
-            let replaced =
-                format::set_path(FileKind::Json, &raw, &["env".into(), name.into()], None)?;
-            files.insert("settings".into(), replaced);
-            pending_secret = Some((id, key.to_owned()));
         }
     }
     profile::validate_files(tool, &files)
@@ -149,10 +160,18 @@ pub fn prepare_import(
         profile::validate_connection(connection)
             .map_err(|error| format!("原生连接不能安全接入：{error}；原文件未更改"))?;
     }
-    if let Some((id, secret)) = &pending_secret {
-        credentials.put(id, secret).map_err(|_| {
-            "系统凭据库保存失败；原文件未更改，请检查系统凭据服务后重试".to_string()
-        })?;
+    for (index, (id, secret)) in pending_secrets.iter().enumerate() {
+        if credentials.put(id, secret).is_err() {
+            let mut rollback_failed = false;
+            for (previous, _) in pending_secrets[..index].iter().rev() {
+                rollback_failed |= credentials.delete(previous).is_err();
+            }
+            return Err(if rollback_failed {
+                "系统凭据库保存失败，且部分新凭据无法清理；原文件未更改，请检查系统凭据服务".into()
+            } else {
+                "系统凭据库保存失败；已清理本次新凭据，原文件未更改".into()
+            });
+        }
     }
     // Re-inspect the sanitized text. The returned draft never includes the key.
     let imported_auth = found.connection.as_ref().map(|connection| {
@@ -173,7 +192,8 @@ pub fn prepare_import(
     Ok(NativeImport {
         files,
         inspection: found,
-        migrated_secret: pending_secret.is_some(),
+        migrated_secret: !pending_secrets.is_empty(),
+        native_credentials,
     })
 }
 
@@ -208,6 +228,17 @@ pub fn inspect(tool: CliId, files: &BTreeMap<String, String>) -> Result<NativeIn
         profile::file_kind(tool, "settings")?,
         files.get("settings").map(String::as_str).unwrap_or(""),
     )?;
+    let local_settings = if tool == CliId::ClaudeCode {
+        format::parse(
+            FileKind::Json,
+            files
+                .get("local_settings")
+                .map(String::as_str)
+                .unwrap_or(""),
+        )?
+    } else {
+        json!({})
+    };
     let models = if tool == CliId::Pi {
         format::parse(
             FileKind::Jsonc,
@@ -240,8 +271,12 @@ pub fn inspect(tool: CliId, files: &BTreeMap<String, String>) -> Result<NativeIn
         }
         CliId::ClaudeCode => {
             provider = Some("anthropic".into());
-            model = string_at(&settings, &["model"]).map(str::to_owned);
-            base = string_at(&settings, &["env", "ANTHROPIC_BASE_URL"]).map(str::to_owned);
+            model = string_at(&local_settings, &["model"])
+                .or_else(|| string_at(&settings, &["model"]))
+                .map(str::to_owned);
+            base = string_at(&local_settings, &["env", "ANTHROPIC_BASE_URL"])
+                .or_else(|| string_at(&settings, &["env", "ANTHROPIC_BASE_URL"]))
+                .map(str::to_owned);
             wire = Some("anthropic_messages");
         }
         CliId::Grok => {
@@ -367,6 +402,7 @@ pub fn set_codex_reasoning_effort(text: &str, effort: Option<&str>) -> Result<St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
 
     struct MemoryStore(Mutex<BTreeMap<String, String>>);
@@ -387,6 +423,194 @@ mod tests {
             self.0.lock().unwrap().remove(id);
             Ok(())
         }
+    }
+
+    struct FailSecondStore {
+        values: Mutex<BTreeMap<String, String>>,
+        writes: AtomicUsize,
+    }
+    impl CredentialStore for FailSecondStore {
+        fn put(&self, id: &str, secret: &str) -> Result<(), String> {
+            if self.writes.fetch_add(1, Ordering::SeqCst) == 1 {
+                return Err("simulated keyring outage".into());
+            }
+            self.values.lock().unwrap().insert(id.into(), secret.into());
+            Ok(())
+        }
+        fn get(&self, id: &str) -> Result<String, String> {
+            self.values
+                .lock()
+                .unwrap()
+                .get(id)
+                .cloned()
+                .ok_or("missing".into())
+        }
+        fn delete(&self, id: &str) -> Result<(), String> {
+            self.values.lock().unwrap().remove(id);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn claude_default_only_key_import_preserves_default_model_and_url() {
+        let source = include_str!("../../../tests/fixtures/native/claude-key-only-settings.json");
+        let files = BTreeMap::from([("settings".into(), source.into())]);
+        let original = files.clone();
+        let store = MemoryStore(Mutex::new(BTreeMap::new()));
+        let imported = prepare_import(CliId::ClaudeCode, files, &store).unwrap();
+        assert_eq!(
+            imported
+                .inspection
+                .connection
+                .as_ref()
+                .map(|value| value.model.as_str()),
+            None
+        );
+        assert!(imported.migrated_secret);
+        assert_eq!(original["settings"], source);
+        assert!(!serde_json::to_string(&imported)
+            .unwrap()
+            .contains("test-only-global-secret"));
+        let id = imported.native_credentials["settings"]["ANTHROPIC_API_KEY"].clone();
+        assert_eq!(store.get(&id).unwrap(), "test-only-global-secret");
+        let temp = tempfile::tempdir().unwrap();
+        let db = crate::database::Database::open(&temp.path().join("app.db")).unwrap();
+        let saved = profile::save_profile(
+            &db,
+            profile::NativeProfile {
+                id: String::new(),
+                tool: CliId::ClaudeCode,
+                name: "默认配置".into(),
+                version: 0,
+                inherit_common: false,
+                files: imported.files,
+                suppressed: BTreeMap::new(),
+                connection: imported.inspection.connection,
+                native_credentials: imported.native_credentials,
+            },
+            None,
+        )
+        .unwrap();
+        let reread = profile::get_profile(&db, &saved.id).unwrap();
+        assert_eq!(
+            reread.native_credentials["settings"]["ANTHROPIC_API_KEY"],
+            id
+        );
+        let documents = super::super::apply::desired_documents(
+            &reread,
+            None,
+            super::super::adapter::Scope::Global,
+        )
+        .unwrap();
+        assert!(documents["settings"].get("model").is_none());
+        assert!(documents["settings"]["env"]
+            .get("ANTHROPIC_BASE_URL")
+            .is_none());
+        assert!(documents["settings"]["env"]
+            .get("ANTHROPIC_API_KEY")
+            .is_none());
+        assert_eq!(
+            documents["settings"]["permissions"]["defaultMode"],
+            "default"
+        );
+    }
+
+    #[test]
+    fn claude_project_local_key_is_scanned_and_import_failure_rolls_back_all_new_keys() {
+        let project = include_str!("../../../tests/fixtures/native/claude-key-only-settings.json");
+        let local = include_str!("../../../tests/fixtures/native/claude-key-only-local.json");
+        let files = BTreeMap::from([
+            ("settings".into(), project.into()),
+            ("local_settings".into(), local.into()),
+        ]);
+        let original = files.clone();
+        let store = MemoryStore(Mutex::new(BTreeMap::new()));
+        let imported = prepare_import(CliId::ClaudeCode, files.clone(), &store).unwrap();
+        assert!(imported.inspection.connection.is_none());
+        assert_eq!(imported.native_credentials.len(), 2);
+        assert!(!serde_json::to_string(&imported)
+            .unwrap()
+            .contains("test-only-project-secret"));
+        assert_eq!(
+            store
+                .get(&imported.native_credentials["local_settings"]["ANTHROPIC_API_KEY"])
+                .unwrap(),
+            "test-only-project-secret"
+        );
+        assert_eq!(original, files);
+
+        let local_only = BTreeMap::from([("local_settings".into(), local.into())]);
+        let local_import = prepare_import(CliId::ClaudeCode, local_only.clone(), &store).unwrap();
+        assert!(local_import.inspection.connection.is_none());
+        assert!(local_import
+            .native_credentials
+            .contains_key("local_settings"));
+        assert!(!local_import.native_credentials.contains_key("settings"));
+        assert_eq!(local_only["local_settings"], local);
+        let temp_raw = tempfile::tempdir().unwrap();
+        let raw_db = crate::database::Database::open(&temp_raw.path().join("app.db")).unwrap();
+        assert!(profile::save_profile(
+            &raw_db,
+            profile::NativeProfile {
+                id: String::new(),
+                tool: CliId::ClaudeCode,
+                name: "raw".into(),
+                version: 0,
+                inherit_common: false,
+                files: local_only,
+                suppressed: BTreeMap::new(),
+                connection: None,
+                native_credentials: BTreeMap::new(),
+            },
+            None
+        )
+        .is_err());
+        let profile = profile::NativeProfile {
+            id: String::new(),
+            tool: CliId::ClaudeCode,
+            name: "项目".into(),
+            version: 0,
+            inherit_common: false,
+            files: imported.files,
+            suppressed: BTreeMap::new(),
+            connection: None,
+            native_credentials: imported.native_credentials,
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let db = crate::database::Database::open(&temp.path().join("app.db")).unwrap();
+        profile::save_profile(&db, profile.clone(), None).unwrap();
+        let documents = super::super::apply::desired_documents(
+            &profile,
+            None,
+            super::super::adapter::Scope::Project,
+        )
+        .unwrap();
+        assert!(documents["local_settings"]["env"]
+            .get("ANTHROPIC_API_KEY")
+            .is_none());
+        assert_eq!(
+            documents["local_settings"]["enabledPlugins"]["example@local"],
+            true
+        );
+        assert!(documents["local_settings"].get("model").is_none());
+
+        let failing = FailSecondStore {
+            values: Mutex::new(BTreeMap::new()),
+            writes: AtomicUsize::new(0),
+        };
+        assert!(prepare_import(CliId::ClaudeCode, files.clone(), &failing)
+            .unwrap_err()
+            .contains("已清理"));
+        assert!(failing.values.lock().unwrap().is_empty());
+        assert_eq!(original, files);
+
+        let malformed = BTreeMap::from([
+            ("settings".into(), project.into()),
+            ("local_settings".into(), "{broken".into()),
+        ]);
+        let untouched = MemoryStore(Mutex::new(BTreeMap::new()));
+        assert!(prepare_import(CliId::ClaudeCode, malformed, &untouched).is_err());
+        assert!(untouched.0.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -422,6 +646,7 @@ mod tests {
             inherit_common: false,
             files: imported.files,
             suppressed: BTreeMap::new(),
+            native_credentials: BTreeMap::new(),
             connection: Some(connection),
         };
         let saved = profile::save_profile(&db, profile, None).unwrap();
@@ -533,6 +758,7 @@ mod tests {
             inherit_common: false,
             files,
             suppressed: BTreeMap::new(),
+            native_credentials: BTreeMap::new(),
             connection: Some(edited),
         };
         let merged = super::super::apply::desired_documents(

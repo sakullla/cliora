@@ -514,6 +514,7 @@ mod tests {
             inherit_common: false,
             files: BTreeMap::from([("settings".into(), format!("model = \"{model}\"\n"))]),
             suppressed: BTreeMap::new(),
+            native_credentials: BTreeMap::new(),
             connection: None,
         }
     }
