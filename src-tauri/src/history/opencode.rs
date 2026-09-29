@@ -44,6 +44,7 @@ pub fn sources(home: &Path) -> Result<Vec<HistorySource>, String> {
             path: path.clone(),
             native_id: Some(id),
             fingerprint: updated.unwrap_or(0).to_string(),
+            fingerprint_error: None,
         });
     }
     if result.len() > MAX_SOURCES {

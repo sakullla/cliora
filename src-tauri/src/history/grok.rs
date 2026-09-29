@@ -9,6 +9,13 @@ use super::{
 };
 
 pub fn sources(home: &Path) -> Result<Vec<HistorySource>, String> {
+    sources_with_fingerprint(home, source_fingerprint)
+}
+
+pub(super) fn sources_with_fingerprint(
+    home: &Path,
+    fingerprint: impl Fn(&Path) -> Result<String, String>,
+) -> Result<Vec<HistorySource>, String> {
     let root = home.join(".grok/sessions");
     if !root.exists() {
         return Ok(Vec::new());
@@ -37,18 +44,17 @@ pub fn sources(home: &Path) -> Result<Vec<HistorySource>, String> {
             if !summary.is_file() || summary.is_symlink() {
                 continue;
             }
-            let fingerprint = ["summary.json", "chat_history.jsonl", "usage.json"]
+            let checked = ["summary.json", "chat_history.jsonl", "usage.json"]
                 .iter()
                 .map(|name| {
                     let file = path.join(name);
                     if file.exists() {
-                        source_fingerprint(&file)
+                        fingerprint(&file)
                     } else {
                         Ok("missing".into())
                     }
                 })
-                .collect::<Result<Vec<_>, _>>()?
-                .join("|");
+                .collect::<Result<Vec<_>, _>>();
             let native_id = path
                 .file_name()
                 .and_then(|value| value.to_str())
@@ -57,7 +63,11 @@ pub fn sources(home: &Path) -> Result<Vec<HistorySource>, String> {
             result.push(HistorySource {
                 path,
                 native_id,
-                fingerprint,
+                fingerprint: checked
+                    .as_ref()
+                    .map(|parts| parts.join("|"))
+                    .unwrap_or_default(),
+                fingerprint_error: checked.err(),
             });
             if result.len() > MAX_SOURCES {
                 return Err("Grok 会话源超过 5000 个，本次未删除旧索引".into());
@@ -117,6 +127,7 @@ pub fn parse(source: &HistorySource) -> Result<ParsedSession, String> {
             path: chat,
             native_id: None,
             fingerprint: String::new(),
+            fingerprint_error: None,
         };
         match read_jsonl(&chat_source, |line, row| {
             let role = row.get("type").and_then(Value::as_str).unwrap_or("");
