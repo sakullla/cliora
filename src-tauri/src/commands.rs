@@ -182,9 +182,9 @@ fn native_snapshot(file: &adapter::NativeFile) -> NativeSnapshot {
         };
     }
     match transaction::read_native(Path::new(&file.path)) {
-        Ok(text) if Path::new(&file.path).is_file() => NativeSnapshot {
+        Ok(_) if Path::new(&file.path).is_file() => NativeSnapshot {
             role: file.role.into(),
-            fingerprint: Some(transaction::fingerprint(text.as_bytes())),
+            fingerprint: Some("present".into()),
             text: None,
             error: Some("点击“编辑当前磁盘原文”可查看和修改完整文件".into()),
         },
@@ -223,9 +223,9 @@ pub async fn get_tool_workspace(
             };
             let profiles = profile::list_profiles(database, tool).map_err(native_error)?;
             let common = profile::get_common(database, tool).map_err(native_error)?;
-            let binding = apply::get_binding(database, tool, &key).map_err(native_error)?;
             let recovery_needed = transaction::recover_pending(database, &SystemCredentialStore)
                 .map_err(native_error)?;
+            let binding = apply::get_binding(database, tool, &key).map_err(native_error)?;
             let snapshots = probe.native_files.iter().map(native_snapshot).collect();
             Ok(ToolWorkspace {
                 probe,
@@ -662,11 +662,14 @@ mod tests {
             sensitive: false,
         };
         let snapshot = native_snapshot(&file);
-        assert!(snapshot.fingerprint.is_some());
+        assert_eq!(snapshot.fingerprint.as_deref(), Some("present"));
         assert!(snapshot.text.is_none());
         assert!(!serde_json::to_string(&snapshot)
             .unwrap()
             .contains("test-only-global-secret"));
+        assert!(!serde_json::to_string(&snapshot)
+            .unwrap()
+            .contains(&transaction::fingerprint(source.as_bytes())));
         // The separate explicit native-editor path can still read the full file.
         assert_eq!(transaction::read_native(&path).unwrap(), source);
     }
