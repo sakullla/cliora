@@ -21,7 +21,7 @@ export type LaunchResult = { toolId: string; projectId: string | null; mode: Lau
 export type TrayStatus = { available: boolean; error: string | null };
 
 export type TrayRepairTarget = {
-  page: 'home' | 'connections';
+  page: 'home' | 'connections' | 'settings';
   toolId: string | null;
   scope: 'global' | 'project' | null;
   projectId: string | null;

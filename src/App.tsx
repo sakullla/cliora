@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { ManagedTools } from './features/home/ManagedTools';
@@ -55,6 +55,14 @@ export default function App() {
   const [recordsTab, setRecordsTab] = useState<RecordsTab>('sessions');
   const [libraryTab, setLibraryTab] = useState<LibraryTab>('prompts');
   const [trayRepair, setTrayRepair] = useState<TrayRepairTarget | null>(null);
+  const activePage = useRef<Page>(page);
+  activePage.current = page;
+  const workspaceDirty = useRef(false);
+  const onWorkspaceDirtyChange = useCallback((dirty: boolean) => { workspaceDirty.current = dirty; }, []);
+  const canLeave = useCallback((next: Page) => {
+    return activePage.current !== 'connections' || next === 'connections' || !workspaceDirty.current
+      || window.confirm('当前工具配置草稿尚未保存，离开页面会丢失这些修改。继续吗？');
+  }, []);
 
   useEffect(() => {
     if (!nativeAvailable) return;
@@ -71,15 +79,16 @@ export default function App() {
       if (active) stops.push(unlisten); else unlisten();
     }).catch(() => {});
     void listen<Omit<TrayRepairTarget, 'sequence'>>('cliora:tray-repair', (event) => {
-      if (!active || (event.payload.page !== 'home' && event.payload.page !== 'connections')) return;
+      if (!active || !['home', 'connections', 'settings'].includes(event.payload.page) || !canLeave(event.payload.page)) return;
       setTrayRepair((old) => ({ ...event.payload, sequence: (old?.sequence ?? 0) + 1 }));
       if (event.payload.page === 'connections' && event.payload.toolId) setTool(event.payload.toolId);
+      if (event.payload.page === 'settings') setSettingsTab('general');
       setPage(event.payload.page);
     }).then((unlisten) => {
       if (active) stops.push(unlisten); else unlisten();
     }).catch(() => {});
     return () => { active = false; stops.forEach((stop) => stop()); };
-  }, []);
+  }, [canLeave]);
 
   async function loadBootstrap() {
     if (!nativeAvailable) return;
@@ -115,6 +124,7 @@ export default function App() {
   const title = titleFor(page);
 
   function go(next: Page) {
+    if (!canLeave(next)) return;
     setPage(next);
     if (loaded) setError(null);
     document.querySelector('main')?.scrollTo({ top: 0 });
@@ -161,7 +171,7 @@ export default function App() {
           {nativeAvailable ? <ProjectLauncher tools={visibleDescriptors} repair={trayRepair?.page === 'home' ? trayRepair : null} /> : <section className="home-secondary"><div className="section-heading"><h2>最近项目</h2></div><div className="subtle-panel"><strong>桌面应用中管理项目</strong><p>可以关联本机目录，并用选定的 CLI 在外部终端启动。</p></div></section>}
         </>}
         {page === 'connections' && <>
-          {selectedTool ? nativeAvailable ? <ToolWorkspacePage managedTools={visibleDescriptors} initialTool={selectedTool} repair={trayRepair?.page === 'connections' ? trayRepair : null} /> : <><div className="tool-tabs" role="tablist" aria-label="工具">{visible.map((item) => <button key={item.id} type="button" role="tab" aria-selected={selectedTool === item.id} className={selectedTool === item.id ? 'active' : ''} onClick={() => setTool(item.id)}>{item.name}</button>)}</div><div className="connection-layout"><div className="profile-column"><div className="column-title">{selectedToolName} 配置</div><div className="muted-copy">浏览器预览不读取本机配置</div></div><div className="detail-panel"><div className="detail-header"><div><div className="eyebrow">原生配置</div><h2>{selectedToolName}</h2></div><span className="status-pill">预览</span></div><Empty title="请在桌面应用中编辑原生配置" detail="桌面应用可读取和保存 CLI 的 TOML / JSON 原文。" /></div></div></> : <Empty title="没有管理中的工具" detail="先在设置中勾选需要管理的 CLI。" action={<button className="button primary" type="button" onClick={() => go('settings')}>前往设置</button>} />}
+          {selectedTool ? nativeAvailable ? <ToolWorkspacePage managedTools={visibleDescriptors} initialTool={selectedTool} repair={trayRepair?.page === 'connections' ? trayRepair : null} onDirtyChange={onWorkspaceDirtyChange} /> : <><div className="tool-tabs" role="tablist" aria-label="工具">{visible.map((item) => <button key={item.id} type="button" role="tab" aria-selected={selectedTool === item.id} className={selectedTool === item.id ? 'active' : ''} onClick={() => setTool(item.id)}>{item.name}</button>)}</div><div className="connection-layout"><div className="profile-column"><div className="column-title">{selectedToolName} 配置</div><div className="muted-copy">浏览器预览不读取本机配置</div></div><div className="detail-panel"><div className="detail-header"><div><div className="eyebrow">原生配置</div><h2>{selectedToolName}</h2></div><span className="status-pill">预览</span></div><Empty title="请在桌面应用中编辑原生配置" detail="桌面应用可读取和保存 CLI 的 TOML / JSON 原文。" /></div></div></> : <Empty title="没有管理中的工具" detail="先在设置中勾选需要管理的 CLI。" action={<button className="button primary" type="button" onClick={() => go('settings')}>前往设置</button>} />}
         </>}
         {page === 'library' && <><PageTabs items={[["prompts", "提示词"], ["rules", "长期规则"]]} value={libraryTab} onChange={setLibraryTab} /><Empty title={libraryTab === 'prompts' ? '还没有提示词' : '还没有长期规则'} detail="资料库功能接入后，内容会保存在本机并支持换设备恢复。" /></>}
         {page === 'records' && <><PageTabs items={[["sessions", "会话"], ["usage", "用量"]]} value={recordsTab} onChange={setRecordsTab} /><Empty title={recordsTab === 'sessions' ? '还没有可查看的会话' : '还没有可统计的用量'} detail={recordsTab === 'sessions' ? '本机 CLI 会话索引接入后，可从这里复制原生恢复命令。' : '仅在读取到真实记录后显示 token 与费用估算。'} /></>}

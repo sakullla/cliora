@@ -109,6 +109,26 @@ pub struct TerminalCommand {
     pub directory: PathBuf,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LaunchStage {
+    ProjectDirectory,
+    Configuration,
+    Tool,
+    Terminal,
+}
+
+#[derive(Debug)]
+pub struct LaunchPlanError {
+    pub stage: LaunchStage,
+    pub message: String,
+}
+
+impl LaunchPlanError {
+    fn new(stage: LaunchStage, message: String) -> Self {
+        Self { stage, message }
+    }
+}
+
 fn on_path(name: &str) -> bool {
     env::var_os("PATH")
         .into_iter()
@@ -236,19 +256,39 @@ pub fn plan(
     home: &Path,
     request: LaunchRequest,
 ) -> Result<LaunchPlan, String> {
+    plan_with_stage(db, registry, home, request).map_err(|error| error.message)
+}
+
+pub fn plan_with_stage(
+    db: &Database,
+    registry: &Registry,
+    home: &Path,
+    request: LaunchRequest,
+) -> Result<LaunchPlan, LaunchPlanError> {
     let adapter = registry
         .get(&request.tool_id)
-        .ok_or("未注册的 CLI 不能启动")?;
+        .ok_or_else(|| LaunchPlanError::new(LaunchStage::Tool, "未注册的 CLI 不能启动".into()))?;
     let project = request
         .project_id
         .as_deref()
         .map(|id| projects::get(db, id))
-        .transpose()?;
+        .transpose()
+        .map_err(|message| LaunchPlanError::new(LaunchStage::ProjectDirectory, message))?;
     let directory = match project.as_ref() {
         Some(project) => {
-            projects::checked_directory(project.path.as_deref().ok_or("项目尚未关联本机目录")?)?
+            let path = project.path.as_deref().ok_or_else(|| {
+                LaunchPlanError::new(LaunchStage::ProjectDirectory, "项目尚未关联本机目录".into())
+            })?;
+            projects::checked_directory(path)
+                .map_err(|message| LaunchPlanError::new(LaunchStage::ProjectDirectory, message))?
         }
-        None => projects::checked_directory(home.to_str().ok_or("用户目录不可识别")?)?,
+        None => {
+            let path = home.to_str().ok_or_else(|| {
+                LaunchPlanError::new(LaunchStage::ProjectDirectory, "用户目录不可识别".into())
+            })?;
+            projects::checked_directory(path)
+                .map_err(|message| LaunchPlanError::new(LaunchStage::ProjectDirectory, message))?
+        }
     };
     let scope = if project.is_some() {
         Scope::Project
@@ -258,34 +298,49 @@ pub fn plan(
     let probe = adapter::probe_registered(
         registry,
         &request.tool_id,
-        custom_cli_path(db, &request.tool_id)?.as_deref(),
+        custom_cli_path(db, &request.tool_id)
+            .map_err(|message| LaunchPlanError::new(LaunchStage::Tool, message))?
+            .as_deref(),
         home,
         project.as_ref().map(|_| directory.as_path()),
         scope,
-    )?;
-    let selected_path = probe
-        .selected_path
-        .as_deref()
-        .ok_or("CLI 未确认安装，请在工具页检查安装路径")?;
+    )
+    .map_err(|message| LaunchPlanError::new(LaunchStage::Tool, message))?;
+    let selected_path = probe.selected_path.as_deref().ok_or_else(|| {
+        LaunchPlanError::new(
+            LaunchStage::Tool,
+            "CLI 未确认安装，请在工具页检查安装路径".into(),
+        )
+    })?;
     let version = probe
         .installations
         .iter()
         .find(|item| item.path == selected_path && item.status == "available")
         .and_then(|item| item.version.as_deref())
-        .ok_or("CLI 版本未确认，请在工具页重新检测")?;
+        .ok_or_else(|| {
+            LaunchPlanError::new(
+                LaunchStage::Tool,
+                "CLI 版本未确认，请在工具页重新检测".into(),
+            )
+        })?;
     let mut cli_args = adapters::plan_launch(
         registry,
         &request.tool_id,
         version,
         request.session_id.as_deref(),
         request.mode,
-    )?;
+    )
+    .map_err(|message| LaunchPlanError::new(LaunchStage::Tool, message))?;
     if let Some(project) = &project {
         let model = project
             .model_overrides
             .get(&request.tool_id)
             .map(String::as_str);
-        cli_args.extend(adapter.project_model_args(model)?);
+        cli_args.extend(
+            adapter
+                .project_model_args(model)
+                .map_err(|message| LaunchPlanError::new(LaunchStage::Tool, message))?,
+        );
     }
     Ok(LaunchPlan {
         tool_id: request.tool_id,
@@ -294,7 +349,8 @@ pub fn plan(
         executable: PathBuf::from(selected_path),
         cli_args,
         directory,
-        terminal: selected_terminal(db)?,
+        terminal: selected_terminal(db)
+            .map_err(|message| LaunchPlanError::new(LaunchStage::Terminal, message))?,
     })
 }
 
