@@ -7,12 +7,15 @@ async function mockResources(page: import('@playwright/test').Page) {
     const skillPackages: Array<Record<string, unknown>> = [];
     const nativeSkills: Array<Record<string, unknown>> = [];
     const writes: unknown[] = [];
+    const pendingPreviews: Array<() => void> = [];
     Object.assign(window, {
       isTauri: true,
       __resourceWrites: writes,
       __resourceSkillPackages: skillPackages,
       __resourceNativeSkills: nativeSkills,
       __resourceMcpConflict: false,
+      __resourceDeferMcpPreview: false,
+      __resourcePendingPreviews: pendingPreviews,
       __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
         if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }] };
         if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], nativeConfig: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
@@ -43,8 +46,14 @@ async function mockResources(page: import('@playwright/test').Page) {
           return item;
         }
         if (command === 'list_native_mcp') return [];
-        if (command === 'preview_mcp_targets') return args.targets.map((target: Record<string, unknown>) =>
-          ({ ...target, status: (window as typeof window & { __resourceMcpConflict: boolean }).__resourceMcpConflict ? 'conflict' : 'ready', detail: '将创建 CLI 原生条目', path: '/tmp/config.toml', baselineHash: 'hash-empty', previewToken: 'bound-token', existing: (window as typeof window & { __resourceMcpConflict: boolean }).__resourceMcpConflict ? { command: 'old-command' } : null, proposed: { command: 'npx' } }));
+        if (command === 'preview_mcp_targets') {
+          const response = args.targets.map((target: Record<string, unknown>) =>
+            ({ ...target, status: (window as typeof window & { __resourceMcpConflict: boolean }).__resourceMcpConflict ? 'conflict' : 'ready', detail: '将创建 CLI 原生条目', path: '/tmp/config.toml', baselineHash: 'hash-empty', previewToken: 'bound-token', existing: (window as typeof window & { __resourceMcpConflict: boolean }).__resourceMcpConflict ? { command: 'old-command' } : null, proposed: { command: 'npx' } }));
+          if ((window as typeof window & { __resourceDeferMcpPreview: boolean }).__resourceDeferMcpPreview) {
+            return new Promise((resolve) => { pendingPreviews.push(() => resolve(response)); });
+          }
+          return response;
+        }
         if (command === 'distribute_mcp') {
           writes.push(args);
           return args.targets.map((target: Record<string, unknown>) => ({ ...target, status: 'written', detail: 'committed', path: '/tmp/config.toml', baselineHash: 'hash-empty' }));
@@ -120,6 +129,36 @@ test('MCP replacement shows both native entries and can be canceled', async ({ p
   await page.getByRole('button', { name: '确认分发' }).click();
   writes = await page.evaluate(() => (window as typeof window & { __resourceWrites: unknown[] }).__resourceWrites);
   expect(writes).toEqual([expect.objectContaining({ targets: [expect.objectContaining({ allowReplace: true, previewToken: 'bound-token' })] })]);
+});
+
+test('an unfinished MCP preview cannot return after switching scope or distribute to the old scope', async ({ page }) => {
+  await mockResources(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('tab', { name: 'MCP' }).click();
+  await page.getByRole('textbox', { name: '名称' }).fill('filesystem');
+  await page.getByRole('textbox', { name: '命令' }).fill('npx');
+  await page.getByRole('button', { name: '保存定义' }).click();
+  await page.getByRole('checkbox', { name: 'Codex' }).check();
+  await page.evaluate(() => { (window as typeof window & { __resourceDeferMcpPreview: boolean }).__resourceDeferMcpPreview = true; });
+  await page.getByRole('button', { name: '预览目标' }).click();
+  await expect.poll(() => page.evaluate(() => (window as typeof window & { __resourcePendingPreviews: unknown[] }).__resourcePendingPreviews.length)).toBe(1);
+  await page.getByLabel('配置范围').selectOption('project');
+  await page.getByRole('textbox', { name: '项目目录' }).fill('/tmp/second-project');
+  await page.getByRole('button', { name: '打开项目' }).click();
+  await page.evaluate(() => {
+    const state = window as typeof window & { __resourceDeferMcpPreview: boolean; __resourcePendingPreviews: Array<() => void> };
+    state.__resourceDeferMcpPreview = false;
+    state.__resourcePendingPreviews.shift()?.();
+  });
+  await expect(page.getByRole('button', { name: '确认分发' })).toHaveCount(0);
+  await page.getByRole('button', { name: '预览目标' }).click();
+  await expect(page.getByRole('button', { name: '确认分发' })).toBeVisible();
+  page.once('dialog', (dialog) => void dialog.accept());
+  await page.getByRole('button', { name: '确认分发' }).click();
+  const writes = await page.evaluate(() => (window as typeof window & { __resourceWrites: Array<{ targets: Array<Record<string, unknown>> }> }).__resourceWrites);
+  expect(writes).toHaveLength(1);
+  expect(writes[0].targets[0]).toEqual(expect.objectContaining({ scope: 'project', projectPath: '/tmp/second-project' }));
 });
 
 test('canceling navigation keeps an unsaved MCP definition', async ({ page }) => {

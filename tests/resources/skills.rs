@@ -355,6 +355,75 @@ fn interrupted_skill_replacement_recovers_old_directory_and_committed_cleanup() 
 }
 
 #[test]
+fn committed_skill_recovery_keeps_a_modified_backup_and_journal() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let source = temp.path().join("my-skill");
+    fs::create_dir_all(&source).unwrap();
+    fs::write(
+        source.join("SKILL.md"),
+        "---\nname: my-skill\ndescription: Package\n---\n",
+    )
+    .unwrap();
+    fs::write(source.join("notes.txt"), "new").unwrap();
+    let package = import_local(&db, source.to_str().unwrap(), None, None).unwrap();
+    let target = temp.path().join("home/.claude/skills/my-skill");
+    fs::create_dir_all(&target).unwrap();
+    fs::write(
+        target.join("SKILL.md"),
+        fs::read(source.join("SKILL.md")).unwrap(),
+    )
+    .unwrap();
+    fs::write(target.join("notes.txt"), "new").unwrap();
+    let id = Uuid::new_v4().to_string();
+    let parent = target.parent().unwrap();
+    let backup = parent.join(format!(".cliora-backup-{id}"));
+    fs::create_dir(&backup).unwrap();
+    fs::write(
+        backup.join("SKILL.md"),
+        "---\nname: my-skill\ndescription: Old\n---\n",
+    )
+    .unwrap();
+    fs::write(backup.join("notes.txt"), "old").unwrap();
+    let old_digest = on_disk_as(&backup, "my-skill").unwrap();
+    save_operation(
+        &db,
+        &SkillOperation {
+            id: id.clone(),
+            package_id: package.id,
+            tool: "claude_code".into(),
+            scope_key: "global".into(),
+            target: target.clone(),
+            stage: parent.join(format!(".cliora-stage-{id}")),
+            backup: backup.clone(),
+            old_digest,
+            old_managed_digest: None,
+            new_digest: Some(package.digest),
+            removing: false,
+            status: "committed".into(),
+        },
+    )
+    .unwrap();
+    fs::write(backup.join("notes.txt"), "changed after commit").unwrap();
+    let error = recover(&db).unwrap_err();
+    assert!(error.contains("备份"), "{error}");
+    assert_eq!(
+        fs::read_to_string(backup.join("notes.txt")).unwrap(),
+        "changed after commit"
+    );
+    assert_eq!(fs::read_to_string(target.join("notes.txt")).unwrap(), "new");
+    let pending: i64 = db
+        .with_connection(|conn| {
+            conn.query_row("SELECT COUNT(*) FROM skill_operations", [], |row| {
+                row.get(0)
+            })
+            .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert_eq!(pending, 1);
+}
+
+#[test]
 fn import_rejects_missing_skill_manifest() {
     let temp = tempfile::tempdir().unwrap();
     let db = Database::open(&temp.path().join("cliora.db")).unwrap();

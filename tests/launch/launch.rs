@@ -77,6 +77,81 @@ fn missing_project_never_falls_back_to_user_home() {
     assert!(failure.message.contains("项目不存在"));
 }
 
+#[test]
+fn launch_recovers_interrupted_skills_before_tool_probe_without_opening_tools_page() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("app.db")).unwrap();
+    let parent = temp.path().join(".claude/skills");
+    std::fs::create_dir_all(&parent).unwrap();
+    let target = parent.join("sample");
+    let stage = parent.join(".cliora-stage-interrupted");
+    let backup = parent.join(".cliora-backup-interrupted");
+    std::fs::create_dir(&stage).unwrap();
+    std::fs::write(stage.join("SKILL.md"), "partial stage").unwrap();
+    db.with_connection(|conn| conn.execute(
+        "INSERT INTO skill_operations (id, package_id, tool, scope_key, target_path, stage_path, backup_path, old_digest, old_managed_digest, new_digest, removing, status) VALUES ('interrupted', 'package', 'claude_code', 'global', ?1, ?2, ?3, NULL, NULL, 'new-digest', 0, 'prepared')",
+        params![target.display().to_string(), stage.display().to_string(), backup.display().to_string()],
+    ).map(|_| ()).map_err(|error| error.to_string())).unwrap();
+    let result = plan_with_stage(
+        &db,
+        &Registry::builtins(),
+        temp.path(),
+        LaunchRequest {
+            tool_id: "unregistered".into(),
+            project_id: None,
+            session_id: None,
+            mode: LaunchMode::Normal,
+        },
+    );
+    assert_eq!(result.unwrap_err().stage, LaunchStage::Tool);
+    assert!(!stage.exists());
+    let pending: i64 = db
+        .with_connection(|conn| {
+            conn.query_row("SELECT COUNT(*) FROM skill_operations", [], |row| {
+                row.get(0)
+            })
+            .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert_eq!(pending, 0);
+}
+
+#[test]
+fn launch_blocks_on_unrecoverable_skill_backup_before_starting_cli() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("app.db")).unwrap();
+    let parent = temp.path().join(".claude/skills");
+    std::fs::create_dir_all(&parent).unwrap();
+    let target = parent.join("sample");
+    let stage = parent.join(".cliora-stage-interrupted");
+    let backup = parent.join(".cliora-backup-interrupted");
+    std::fs::create_dir(&backup).unwrap();
+    std::fs::write(
+        backup.join("SKILL.md"),
+        "---\nname: sample\ndescription: Previous\n---\n",
+    )
+    .unwrap();
+    db.with_connection(|conn| conn.execute(
+        "INSERT INTO skill_operations (id, package_id, tool, scope_key, target_path, stage_path, backup_path, old_digest, old_managed_digest, new_digest, removing, status) VALUES ('interrupted', 'package', 'claude_code', 'global', ?1, ?2, ?3, 'different-digest', NULL, NULL, 1, 'committed')",
+        params![target.display().to_string(), stage.display().to_string(), backup.display().to_string()],
+    ).map(|_| ()).map_err(|error| error.to_string())).unwrap();
+    let failure = plan_with_stage(
+        &db,
+        &Registry::builtins(),
+        temp.path(),
+        LaunchRequest {
+            tool_id: "codex".into(),
+            project_id: None,
+            session_id: None,
+            mode: LaunchMode::Normal,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(failure.stage, LaunchStage::Configuration);
+    assert!(failure.message.contains("备份"));
+    assert!(backup.exists());
+}
+
 #[cfg(windows)]
 #[test]
 fn project_launch_plan_uses_real_probe_and_project_model_without_shell_expansion() {
