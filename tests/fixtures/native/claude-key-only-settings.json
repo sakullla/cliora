@@ -1,0 +1,8 @@
+{
+  "env": {
+    "ANTHROPIC_API_KEY": "test-only-global-secret"
+  },
+  "permissions": {
+    "defaultMode": "default"
+  }
+}

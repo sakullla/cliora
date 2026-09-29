@@ -275,7 +275,10 @@ export function ToolWorkspacePage({ managedTools, initialTool }: { managedTools:
       if (sequence !== importSequence.current || !stillCurrent(started)) return;
       const found = imported.inspection;
       const sameAccount = found.connection && draft.connection?.providerId === found.connection.providerId && draft.connection?.baseUrl === found.connection.baseUrl && draft.connection?.interfaceFormat === found.connection.interfaceFormat;
-      setDraft({ ...draft, files: imported.files, connection: found.connection ? { ...found.connection, secretRef: found.connection.secretRef ?? (sameAccount ? draft.connection?.secretRef ?? null : null) } : draft.connection });
+      const nativeCredentials = { ...draft.nativeCredentials };
+      delete nativeCredentials[role];
+      Object.assign(nativeCredentials, imported.nativeCredentials);
+      setDraft({ ...draft, files: imported.files, nativeCredentials, connection: found.connection ? { ...found.connection, secretRef: found.connection.secretRef ?? (sameAccount ? draft.connection?.secretRef ?? null : null) } : draft.connection });
       setInspection(found); setView('form');
       setNotice(imported.migratedSecret ? '原生 API 密钥已安全迁入系统凭据库，草稿中仅保留环境变量引用；磁盘原文件尚未更改。' : found.connection ? '已从原生文件识别连接与模型，可在表单继续编辑；原文与未知字段保留在草稿中。' : '原生文件已填入草稿；未识别为完整连接的字段仍保留在原文中。');
     } catch (value) { if (sequence === importSequence.current && stillCurrent(started)) setError(errorText(value)); }
@@ -291,7 +294,7 @@ export function ToolWorkspacePage({ managedTools, initialTool }: { managedTools:
     try {
       const imported = await native.prepareNativeImport(currentTool, files);
       if (sequence !== importSequence.current || !stillCurrent(started)) return;
-      const next = { ...emptyProfile(currentTool), name: '本机配置', files: imported.files, connection: imported.inspection.connection };
+      const next = { ...emptyProfile(currentTool), name: '本机配置', files: imported.files, connection: imported.inspection.connection, nativeCredentials: imported.nativeCredentials };
       setDraft(next); setSelectedId(null); setEditor('profile'); savedDraft.current = '';
       setInspection(imported.inspection); setView('form'); setError('');
       setNotice(imported.migratedSecret ? '已将原生 API 密钥迁入系统凭据库，草稿只保留环境变量引用；磁盘原文件尚未更改。' : '已将现有原生文件载入草稿；保存前可检查连接、模型和原文，磁盘文件尚未更改。');
@@ -354,8 +357,9 @@ export function ToolWorkspacePage({ managedTools, initialTool }: { managedTools:
             {view === 'form' && editor === 'profile' && draft && <div className={styles.form}>
               <label>配置名称<input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="例如：日常开发" /></label>
               <label className={styles.check}><input type="checkbox" checked={draft.inheritCommon} onChange={(event) => setDraft({ ...draft, inheritCommon: event.target.checked })} />继承本工具通用配置</label>
+              {Object.values(draft.nativeCredentials ?? {}).some((items) => Object.keys(items).length > 0) && <p className={styles.hint}>原生 API 密钥已存入系统凭据库；未指定的模型与地址继续由 CLI 默认值决定。栖点启动接入后会在子进程中提供密钥，外部终端需自行设置环境变量。</p>}
               <div className={styles.formDivider}><strong>连接与模型</strong><label className={styles.check}><input type="checkbox" checked={!!draft.connection} onChange={(event) => setDraft({ ...draft, connection: event.target.checked ? defaultConnection(workspace.probe.interfaceFormats) : null })} />配置供应商连接</label></div>
-              {(inspection?.providerId || inspection?.model) && <p className={styles.hint}>原生草稿识别到：{inspection.providerId ?? '未知供应商'} · {inspection.model ?? '未指定模型'}{!inspection.connection && '；连接字段不完整，原文仍会保留'}</p>}
+              {(inspection?.providerId || inspection?.model) && <p className={styles.hint}>原生草稿识别到：{inspection.providerId ?? '未知供应商'} · {inspection.model ?? '未指定模型'}{!inspection.connection && (currentTool === 'claude_code' ? '；未指定项沿用 Claude Code 默认值' : '；连接字段不完整，原文仍会保留')}</p>}
               {inspection?.connection && connectionShape(inspection.connection) !== connectionShape(connection) && <button type="button" onClick={adoptInspectedConnection}>按原生草稿更新表单连接</button>}
               {connection && <>
                 {!!workspace.probe.providerPresets.length && <div className={styles.modelBar}><span>常用 API 地址</span>{workspace.probe.providerPresets.map((item) => <button key={item.id} type="button" title={`接口依据：${item.sourceUrl}`} onClick={() => applyPreset(item.id, item.baseUrl, item.interfaceFormat)}>{item.label}</button>)}</div>}
