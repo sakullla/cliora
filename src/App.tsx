@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
+import { ManagedTools } from './features/home/ManagedTools';
+import { ToolWorkspacePage } from './features/tools/ToolWorkspace';
 import { native, nativeAvailable } from './lib/native';
 import { browserBootstrap, CLI_IDS, CLI_NAMES } from './types/domain';
 import type { ApiError, Bootstrap, CliId, Theme } from './types/domain';
@@ -78,6 +80,7 @@ export default function App() {
 
   const managed = bootstrap.preferences.managed_tools;
   const visible = bootstrap.tools.filter((item) => managed.includes(item.id));
+  const visibleIds = visible.map((item) => item.id);
   const selectedTool = visible.some((item) => item.id === tool) ? tool : visible[0]?.id;
   const title = titleFor(page);
 
@@ -124,11 +127,11 @@ export default function App() {
       {loading ? <Empty title="正在读取本机设置" detail="请稍候。" /> : !loaded ? <Empty title="暂时无法读取本机资料" detail="原数据仍保留。请按上方提示处理后重试。" action={<button className="button primary" type="button" onClick={loadBootstrap}>重试读取</button>} /> : <>
         {page === 'home' && <>
           <div className="section-heading"><h2>管理中的工具</h2><button className="text-button" type="button" onClick={() => go('settings')}>调整工具 <span aria-hidden="true">→</span></button></div>
-          {visible.length ? <div className="tool-table"><div className="table-head"><span>工具</span><span>当前状态</span><span>操作</span></div>{visible.map((item) => <div className="tool-row" key={item.id}><div className="tool-identity"><span className="tool-icon" aria-hidden="true">{item.name.slice(0, 1)}</span><span><strong>{item.name}</strong><small>本机工具</small></span></div><div className="tool-state"><strong>尚未检测</strong><small>安装与配置检测将在工具页接入</small></div><button className="button" type="button" onClick={() => { setTool(item.id); go('connections'); }}>查看工具 <span aria-hidden="true">→</span></button></div>)}</div> : <Empty title="尚未管理工具" detail="可在设置中开启需要管理的 CLI。" action={<button className="button primary" type="button" onClick={() => go('settings')}>前往设置</button>} />}
+          {visible.length ? nativeAvailable ? <ManagedTools tools={visibleIds} onOpenTool={(id) => { setTool(id); go('connections'); }} /> : <div className="tool-table"><div className="table-head"><span>工具</span><span>当前状态</span><span>操作</span></div>{visible.map((item) => <div className="tool-row" key={item.id}><div className="tool-identity"><span className="tool-icon" aria-hidden="true">{item.name.slice(0, 1)}</span><span><strong>{item.name}</strong><small>浏览器预览</small></span></div><div className="tool-state"><strong>尚未检测</strong><small>请在桌面应用中读取本机配置</small></div><button className="button" type="button" onClick={() => { setTool(item.id); go('connections'); }}>查看工具 <span aria-hidden="true">→</span></button></div>)}</div> : <Empty title="尚未管理工具" detail="可在设置中开启需要管理的 CLI。" action={<button className="button primary" type="button" onClick={() => go('settings')}>前往设置</button>} />}
           <section className="home-secondary"><div className="section-heading"><h2>最近项目</h2></div><div className="subtle-panel"><strong>还没有本机项目</strong><p>项目映射和外部终端启动接入后，会在这里显示。</p></div></section>
         </>}
         {page === 'connections' && <>
-          {selectedTool ? <><div className="tool-tabs" role="tablist" aria-label="工具">{visible.map((item) => <button key={item.id} type="button" role="tab" aria-selected={selectedTool === item.id} className={selectedTool === item.id ? 'active' : ''} onClick={() => setTool(item.id)}>{item.name}</button>)}</div><div className="connection-layout"><div className="profile-column"><div className="column-title">{CLI_NAMES[selectedTool]} 配置</div><div className="muted-copy">尚无已读取的命名配置</div></div><div className="detail-panel"><div className="detail-header"><div><div className="eyebrow">原生配置</div><h2>{CLI_NAMES[selectedTool]}</h2></div><span className="status-pill">尚未检测</span></div><div className="native-tabs" aria-label="原生配置视图"><span>常用设置</span><span>原生文件</span><span>合并结果</span></div><Empty title="等待读取原生配置" detail="检测本机 CLI 与配置文件后，可在这里编辑原生 TOML / JSON，并查看继承来源。" /></div></div></> : <Empty title="没有管理中的工具" detail="先在设置中勾选需要管理的 CLI。" action={<button className="button primary" type="button" onClick={() => go('settings')}>前往设置</button>} />}
+          {selectedTool ? nativeAvailable ? <ToolWorkspacePage managedTools={visibleIds} initialTool={selectedTool} /> : <><div className="tool-tabs" role="tablist" aria-label="工具">{visible.map((item) => <button key={item.id} type="button" role="tab" aria-selected={selectedTool === item.id} className={selectedTool === item.id ? 'active' : ''} onClick={() => setTool(item.id)}>{item.name}</button>)}</div><div className="connection-layout"><div className="profile-column"><div className="column-title">{CLI_NAMES[selectedTool]} 配置</div><div className="muted-copy">浏览器预览不读取本机配置</div></div><div className="detail-panel"><div className="detail-header"><div><div className="eyebrow">原生配置</div><h2>{CLI_NAMES[selectedTool]}</h2></div><span className="status-pill">预览</span></div><Empty title="请在桌面应用中编辑原生配置" detail="桌面应用可读取和保存 CLI 的 TOML / JSON 原文。" /></div></div></> : <Empty title="没有管理中的工具" detail="先在设置中勾选需要管理的 CLI。" action={<button className="button primary" type="button" onClick={() => go('settings')}>前往设置</button>} />}
         </>}
         {page === 'library' && <><PageTabs items={[["prompts", "提示词"], ["rules", "长期规则"]]} value={libraryTab} onChange={setLibraryTab} /><Empty title={libraryTab === 'prompts' ? '还没有提示词' : '还没有长期规则'} detail="资料库功能接入后，内容会保存在本机并支持换设备恢复。" /></>}
         {page === 'records' && <><PageTabs items={[["sessions", "会话"], ["usage", "用量"]]} value={recordsTab} onChange={setRecordsTab} /><Empty title={recordsTab === 'sessions' ? '还没有可查看的会话' : '还没有可统计的用量'} detail={recordsTab === 'sessions' ? '本机 CLI 会话索引接入后，可从这里复制原生恢复命令。' : '仅在读取到真实记录后显示 token 与费用估算。'} /></>}
