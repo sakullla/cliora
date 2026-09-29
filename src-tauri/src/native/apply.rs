@@ -182,7 +182,11 @@ fn connection_documents(
                 json!([{"id":model}]),
             );
             if let Some(env) = env {
-                set_json(&mut models, &["providers", provider, "apiKey"], json!(env));
+                set_json(
+                    &mut models,
+                    &["providers", provider, "apiKey"],
+                    json!(format!("${{{env}}}")),
+                );
             }
             result.insert("models".into(), models);
         }
@@ -607,6 +611,7 @@ mod tests {
         assert_eq!(grok["settings"]["model"]["m1"]["api_backend"], "responses");
         let pi = connection_documents(CliId::Pi, &connection, Scope::Global).unwrap();
         assert_eq!(pi["models"]["providers"]["demo"]["api"], "openai-responses");
+        assert_eq!(pi["models"]["providers"]["demo"]["apiKey"], "${DEMO_KEY}");
         assert_eq!(pi["settings"]["defaultProvider"], "demo");
         assert_eq!(pi["settings"]["defaultModel"], "m1");
         let opencode = connection_documents(CliId::OpenCode, &connection, Scope::Global).unwrap();

@@ -28,6 +28,7 @@ pub fn run() {
             commands::list_provider_models,
             commands::test_provider_connection,
             commands::inspect_native_draft,
+            commands::prepare_native_import,
             commands::set_codex_reasoning_effort,
             commands::preview_native_profile
         ])

@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { SetStateAction } from 'react';
 import { native, nativeAvailable } from '../../lib/native';
+import { sameDraftRequest } from '../../lib/draftGuard';
+import type { DraftRequest } from '../../lib/draftGuard';
 import { CLI_NAMES } from '../../types/domain';
 import type { ApiError, CliId } from '../../types/domain';
 import { emptyProfile } from '../../types/native';
@@ -34,7 +37,12 @@ export function ToolWorkspacePage({ managedTools, initialTool }: { managedTools:
   const [workspace, setWorkspace] = useState<ToolWorkspace | null>(null);
   const [editor, setEditor] = useState<Editor>('profile');
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [draft, setDraft] = useState<NativeProfile | null>(null);
+  const draftRevision = useRef(0);
+  const [draft, setDraftState] = useState<NativeProfile | null>(null);
+  const setDraft = (value: SetStateAction<NativeProfile | null>) => {
+    draftRevision.current++;
+    setDraftState(value);
+  };
   const [commonDraft, setCommonDraft] = useState<CommonConfig | null>(null);
   const [view, setView] = useState<View>('native');
   const [role, setRole] = useState('settings');
@@ -55,11 +63,19 @@ export function ToolWorkspacePage({ managedTools, initialTool }: { managedTools:
   const loadSequence = useRef(0);
   const modelSequence = useRef(0);
   const inspectionSequence = useRef(0);
+  const importSequence = useRef(0);
+  const reasoningSequence = useRef(0);
   const previewSequence = useRef(0);
   const savedDraft = useRef('');
 
   const visibleTools = managedTools;
   const currentTool = visibleTools.includes(tool) ? tool : visibleTools[0];
+  const draftContext = JSON.stringify([currentTool, scope, projectPath, selectedId, editor]);
+  const latestDraft = useRef<DraftRequest<NativeProfile>>({ context: draftContext, revision: draftRevision.current, draft });
+  latestDraft.current = { context: draftContext, revision: draftRevision.current, draft };
+  const captureDraft = (): DraftRequest<NativeProfile> => ({ ...latestDraft.current });
+  const stillCurrent = (started: DraftRequest<NativeProfile>) => sameDraftRequest(started, { ...latestDraft.current, revision: draftRevision.current });
+  const invalidateDraftRequest = () => { draftRevision.current++; };
   const connection = draft?.connection ?? null;
   const fileSignature = JSON.stringify(draft?.files ?? {});
   const effectiveEnvName = connection?.authEnvVar || (connection?.secretRef && currentTool ? currentTool === 'claude_code' ? 'ANTHROPIC_API_KEY' : `CLIORA_${currentTool.toUpperCase()}_${connection.providerId.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_API_KEY` : null);
@@ -150,6 +166,7 @@ export function ToolWorkspacePage({ managedTools, initialTool }: { managedTools:
   function editCommon() {
     if (!currentTool) return;
     if (dirty && !window.confirm('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return;
+    invalidateDraftRequest();
     const next = structuredClone(workspace?.common ?? { tool: currentTool, version: 0, files: {} });
     setEditor('common'); setCommonDraft(next); savedDraft.current = JSON.stringify(next);
     setView('native'); setError(''); setNotice('');
@@ -199,9 +216,11 @@ export function ToolWorkspacePage({ managedTools, initialTool }: { managedTools:
 
   async function saveSecret() {
     if (!newSecret || !draft?.connection) return;
+    const started = captureDraft();
     setBusy(true); setError('');
     try {
       const secretRef = await native.setConnectionSecret(newSecret);
+      if (!stillCurrent(started)) return;
       setDraft({ ...draft, connection: { ...draft.connection, secretRef } });
       setNewSecret(''); setNotice('密钥已存入系统凭据库，可用于模型目录。CLI 启动功能接入后才能注入子进程；外部终端需自行配置环境变量或原生登录。');
     } catch (value) { setError(errorText(value)); }
@@ -246,38 +265,48 @@ export function ToolWorkspacePage({ managedTools, initialTool }: { managedTools:
 
   async function importDiskFile() {
     if (!draft || !currentTool) return;
+    const started = captureDraft();
+    const sequence = ++importSequence.current;
     const text = workspace?.snapshots.find((item) => item.role === role)?.text;
     if (text === null || text === undefined) return;
     const files = { ...draft.files, [role]: text };
     try {
-      const found = await native.inspectNativeDraft(currentTool, files);
+      const imported = await native.prepareNativeImport(currentTool, files);
+      if (sequence !== importSequence.current || !stillCurrent(started)) return;
+      const found = imported.inspection;
       const sameAccount = found.connection && draft.connection?.providerId === found.connection.providerId && draft.connection?.baseUrl === found.connection.baseUrl && draft.connection?.interfaceFormat === found.connection.interfaceFormat;
-      setDraft({ ...draft, files, connection: found.connection ? { ...found.connection, secretRef: sameAccount ? draft.connection?.secretRef ?? null : null } : draft.connection });
+      setDraft({ ...draft, files: imported.files, connection: found.connection ? { ...found.connection, secretRef: found.connection.secretRef ?? (sameAccount ? draft.connection?.secretRef ?? null : null) } : draft.connection });
       setInspection(found); setView('form');
-      setNotice(found.connection ? '已从原生文件识别连接与模型，可在表单继续编辑；原文与未知字段保留在草稿中。' : '原生文件已填入草稿；未识别为完整连接的字段仍保留在原文中。');
-    } catch (value) { setError(errorText(value)); }
+      setNotice(imported.migratedSecret ? '原生 API 密钥已安全迁入系统凭据库，草稿中仅保留环境变量引用；磁盘原文件尚未更改。' : found.connection ? '已从原生文件识别连接与模型，可在表单继续编辑；原文与未知字段保留在草稿中。' : '原生文件已填入草稿；未识别为完整连接的字段仍保留在原文中。');
+    } catch (value) { if (sequence === importSequence.current && stillCurrent(started)) setError(errorText(value)); }
   }
 
   async function importCurrentNative() {
     if (!workspace || !currentTool) return;
     if (dirty && !window.confirm('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return;
+    const started = captureDraft();
+    const sequence = ++importSequence.current;
     const files = Object.fromEntries(workspace.snapshots.filter((item) => item.text?.trim()).map((item) => [item.role, item.text!])) as Record<string, string>;
     if (!Object.keys(files).length) { setError('还没有可读取的原生配置文件。'); return; }
     try {
-      const found = await native.inspectNativeDraft(currentTool, files);
-      const next = { ...emptyProfile(currentTool), name: '本机配置', files, connection: found.connection };
+      const imported = await native.prepareNativeImport(currentTool, files);
+      if (sequence !== importSequence.current || !stillCurrent(started)) return;
+      const next = { ...emptyProfile(currentTool), name: '本机配置', files: imported.files, connection: imported.inspection.connection };
       setDraft(next); setSelectedId(null); setEditor('profile'); savedDraft.current = '';
-      setInspection(found); setView('form'); setError('');
-      setNotice('已将现有原生文件载入草稿；保存前可检查连接、模型和原文，磁盘文件尚未更改。');
-    } catch (value) { setError(errorText(value)); }
+      setInspection(imported.inspection); setView('form'); setError('');
+      setNotice(imported.migratedSecret ? '已将原生 API 密钥迁入系统凭据库，草稿只保留环境变量引用；磁盘原文件尚未更改。' : '已将现有原生文件载入草稿；保存前可检查连接、模型和原文，磁盘文件尚未更改。');
+    } catch (value) { if (sequence === importSequence.current && stillCurrent(started)) setError(errorText(value)); }
   }
 
   async function changeReasoningEffort(value: string) {
     if (!draft || currentTool !== 'codex') return;
+    const started = captureDraft();
+    const sequence = ++reasoningSequence.current;
     try {
       const settings = await native.setCodexReasoningEffort(draft.files.settings ?? '', value || null);
+      if (sequence !== reasoningSequence.current || !stillCurrent(started)) return;
       setDraft({ ...draft, files: { ...draft.files, settings } });
-    } catch (value) { setError(errorText(value)); }
+    } catch (value) { if (sequence === reasoningSequence.current && stillCurrent(started)) setError(errorText(value)); }
   }
 
   async function deleteCurrent() {
@@ -296,8 +325,8 @@ export function ToolWorkspacePage({ managedTools, initialTool }: { managedTools:
 
   return <section className={styles.workspace} aria-label="工具与连接">
     <div className={styles.toolbar}>
-      <div className={styles.toolSwitcher} role="tablist" aria-label="CLI">{visibleTools.map((id) => <button key={id} type="button" role="tab" aria-selected={currentTool === id} className={currentTool === id ? styles.selected : ''} onClick={() => { if (dirty && !window.confirm('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return; setTool(id); }}>{CLI_NAMES[id]}</button>)}</div>
-      <div className={styles.scopeBar}><label>配置范围 <select value={scope} onChange={(event) => { if (dirty && !window.confirm('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return; setScope(event.target.value as Scope); }}><option value="global">全局</option><option value="project">项目</option></select></label>{scope === 'project' && <><input aria-label="项目目录" placeholder="项目目录的完整路径" value={projectInput} onChange={(event) => setProjectInput(event.target.value)} /><button type="button" onClick={() => { if (dirty && !window.confirm('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return; setProjectPath(projectInput.trim()); }}>打开项目</button></>}</div>
+      <div className={styles.toolSwitcher} role="tablist" aria-label="CLI">{visibleTools.map((id) => <button key={id} type="button" role="tab" aria-selected={currentTool === id} className={currentTool === id ? styles.selected : ''} onClick={() => { if (dirty && !window.confirm('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return; invalidateDraftRequest(); setTool(id); }}>{CLI_NAMES[id]}</button>)}</div>
+      <div className={styles.scopeBar}><label>配置范围 <select value={scope} onChange={(event) => { if (dirty && !window.confirm('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return; invalidateDraftRequest(); setScope(event.target.value as Scope); }}><option value="global">全局</option><option value="project">项目</option></select></label>{scope === 'project' && <><input aria-label="项目目录" placeholder="项目目录的完整路径" value={projectInput} onChange={(event) => setProjectInput(event.target.value)} /><button type="button" onClick={() => { if (dirty && !window.confirm('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return; invalidateDraftRequest(); setProjectPath(projectInput.trim()); }}>打开项目</button></>}</div>
     </div>
     {scope === 'project' && !projectPath.trim() && <p className={styles.hint}>填写项目目录并点击打开后，才会读取该项目的原生配置。切换配置范围不会修改启动目录。</p>}
     {loading && <p className={styles.hint} role="status">正在检测 CLI 与原生文件…</p>}

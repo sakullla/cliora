@@ -7,8 +7,9 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "test": "playwright test",
+    "test:unit": "node --test tests/native/*.test.mjs",
     "test:e2e": "playwright test",
-    "verify": "npm run test && npm run build",
+    "verify": "npm run test:unit && npm run test && npm run build",
     "tauri": "tauri"
   },
   "dependencies": {
