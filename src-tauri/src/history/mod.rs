@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
@@ -211,7 +211,24 @@ pub fn source_fingerprint(path: &Path) -> Result<String, String> {
         .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
         .map(|value| value.as_nanos())
         .unwrap_or(0);
-    Ok(format!("{}:{modified}", metadata.len()))
+    if metadata.is_file() && metadata.len() <= MAX_SOURCE_BYTES {
+        let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
+        let mut digest = Sha256::new();
+        let mut buffer = [0u8; 64 * 1024];
+        loop {
+            let count = file.read(&mut buffer).map_err(|error| error.to_string())?;
+            if count == 0 {
+                break;
+            }
+            digest.update(&buffer[..count]);
+        }
+        return Ok(format!(
+            "{}:{modified}:{:x}",
+            metadata.len(),
+            digest.finalize()
+        ));
+    }
+    Ok(format!("{}:{modified}:oversize", metadata.len()))
 }
 
 pub fn discover_jsonl(
@@ -882,6 +899,12 @@ pub fn usage_summary(db: &Database, filter: &HistoryFilter) -> Result<UsageSumma
         }
     }
     result.input_includes_cache = if mixed_semantics { None } else { semantics };
+    if result.usage_sessions == 0 {
+        result.input = None;
+        result.output = None;
+        result.cache_read = None;
+        result.cache_write = None;
+    }
     if result.usage_sessions == 0 || result.unknown_usage_sessions > 0 {
         result.estimated_cost = None;
     }
@@ -939,35 +962,32 @@ pub fn export(db: &Database, id: &str, format: &str, destination: &Path) -> Resu
     if destination.file_name().is_none() || destination.is_dir() {
         return Err("请选择导出文件".into());
     }
-    let source_path: String = db.with_connection(|conn| {
-        conn.query_row(
-            "SELECT source_path FROM history_sessions WHERE id = ?1",
-            [id],
-            |row| row.get(0),
-        )
-        .map_err(|error| error.to_string())
-    })?;
-    let source = Path::new(&source_path);
-    let source = source
+    // A new file is required even when the chosen destination is an unindexed native source.
+    // create_new also closes the check-then-write race and refuses symlinks and hard links.
+    let target = destination
+        .parent()
+        .ok_or("请选择导出目录")?
         .canonicalize()
-        .unwrap_or_else(|_| source.to_path_buf());
-    let target = if let Ok(metadata) = fs::symlink_metadata(destination) {
-        if metadata.file_type().is_symlink() {
-            return Err("不能导出到符号链接".into());
-        }
-        destination
-            .canonicalize()
+        .map_err(|error| format!("导出目录不可用：{error}"))?
+        .join(destination.file_name().ok_or("请选择导出文件")?);
+    let native_directories: Vec<String> = db.with_connection(|conn| {
+        let mut statement = conn
+            .prepare("SELECT DISTINCT source_path FROM history_sessions")
+            .map_err(|error| error.to_string())?;
+        let paths = statement
+            .query_map([], |row| row.get::<_, String>(0))
             .map_err(|error| error.to_string())?
-    } else {
-        let parent = destination
-            .parent()
-            .ok_or("请选择导出目录")?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        Ok(paths)
+    })?;
+    if native_directories.iter().any(|path| {
+        let source = Path::new(path)
             .canonicalize()
-            .map_err(|error| format!("导出目录不可用：{error}"))?;
-        parent.join(destination.file_name().ok_or("请选择导出文件")?)
-    };
-    if target == source || (source.is_dir() && target.starts_with(&source)) {
-        return Err("不能覆盖原生会话源".into());
+            .unwrap_or_else(|_| PathBuf::from(path));
+        source.is_dir() && target.starts_with(source)
+    }) {
+        return Err("不能导出到原生会话目录".into());
     }
     let detail = detail(db, id)?;
     let contents = if format == "json" {
@@ -988,7 +1008,13 @@ pub fn export(db: &Database, id: &str, format: &str, destination: &Path) -> Resu
         }
         text
     };
-    fs::write(destination, contents).map_err(|error| format!("无法导出会话：{error}"))?;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)
+        .map_err(|error| format!("导出只能创建新文件，不能覆盖现有文件：{error}"))?;
+    file.write_all(contents.as_bytes())
+        .map_err(|error| format!("无法导出会话：{error}"))?;
     Ok(destination.display().to_string())
 }
 

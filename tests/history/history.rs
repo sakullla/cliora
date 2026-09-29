@@ -181,6 +181,79 @@ fn refresh_is_stable_updates_deletes_and_keeps_favorites_and_failed_sources() {
 }
 
 #[test]
+fn same_length_and_restored_mtime_still_refreshes_changed_content() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let root = home.join(".codex/sessions");
+    fs::create_dir_all(&root).unwrap();
+    let source = root.join("rollout-preserved-time.jsonl");
+    fs::copy(fixtures().join("codex-0.158.jsonl"), &source).unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let registry = Registry::with_adapters(vec![&CODEX]).unwrap();
+    refresh(&db, &registry, &home).unwrap();
+    let id = list(&db, &HistoryFilter::default()).unwrap()[0].id.clone();
+    let before = fs::metadata(&source).unwrap();
+    let modified = before.modified().unwrap();
+    let original = fs::read_to_string(&source).unwrap();
+    let changed = original.replace("Looks good.", "Looks fine.");
+    assert_ne!(original, changed);
+    assert_eq!(original.len(), changed.len());
+    fs::write(&source, changed).unwrap();
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&source)
+        .unwrap()
+        .set_times(fs::FileTimes::new().set_modified(modified))
+        .unwrap();
+    assert_eq!(fs::metadata(&source).unwrap().len(), before.len());
+    assert_eq!(fs::metadata(&source).unwrap().modified().unwrap(), modified);
+    refresh(&db, &registry, &home).unwrap();
+    assert!(detail(&db, &id)
+        .unwrap()
+        .messages
+        .iter()
+        .any(|message| message.text == "Looks fine."));
+}
+
+#[test]
+fn unknown_only_usage_is_not_zero_and_mixed_usage_is_a_known_subtotal() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let root = home.join(".codex/sessions");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("rollout-no-usage.jsonl"),
+        r#"{"timestamp":"2026-09-29T08:00:00Z","type":"session_meta","payload":{"id":"55555555-5555-4555-8555-555555555555"}}"#).unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let registry = Registry::with_adapters(vec![&CODEX]).unwrap();
+    refresh(&db, &registry, &home).unwrap();
+    let unknown = usage_summary(&db, &HistoryFilter::default()).unwrap();
+    assert_eq!(unknown.session_count, 1);
+    assert_eq!(unknown.usage_sessions, 0);
+    assert_eq!(unknown.unknown_usage_sessions, 1);
+    assert_eq!(
+        (
+            unknown.input,
+            unknown.output,
+            unknown.cache_read,
+            unknown.cache_write
+        ),
+        (None, None, None, None)
+    );
+    fs::copy(
+        fixtures().join("codex-0.158.jsonl"),
+        root.join("rollout-with-usage.jsonl"),
+    )
+    .unwrap();
+    refresh(&db, &registry, &home).unwrap();
+    let mixed = usage_summary(&db, &HistoryFilter::default()).unwrap();
+    assert_eq!(mixed.session_count, 2);
+    assert_eq!(mixed.usage_sessions, 1);
+    assert_eq!(mixed.unknown_usage_sessions, 1);
+    assert_eq!(mixed.input, Some(150));
+    assert_eq!(mixed.estimated_cost, None);
+}
+
+#[test]
 fn usage_dates_and_manual_price_keep_cache_out_of_double_counting() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
@@ -243,6 +316,12 @@ fn exports_are_separate_read_only_files_and_resume_arguments_are_native() {
     fs::create_dir_all(&root).unwrap();
     let source = root.join("rollout-export.jsonl");
     fs::copy(fixtures().join("codex-0.158.jsonl"), &source).unwrap();
+    let second = root.join("rollout-other.jsonl");
+    fs::copy(fixtures().join("codex-0.158.jsonl"), &second).unwrap();
+    let unindexed = root.join("other-native-file.jsonl");
+    fs::write(&unindexed, "existing original\n").unwrap();
+    let unrelated = temp.path().join("notes.txt");
+    fs::write(&unrelated, "keep me\n").unwrap();
     let original = fs::read(&source).unwrap();
     let db = Database::open(&temp.path().join("cliora.db")).unwrap();
     let registry = Registry::with_adapters(vec![&CODEX]).unwrap();
@@ -259,6 +338,16 @@ fn exports_are_separate_read_only_files_and_resume_arguments_are_native() {
     assert_eq!(value["session"]["toolId"], "codex");
     assert_eq!(fs::read(&source).unwrap(), original);
     assert!(export(&db, &id, "json", &source).is_err());
+    assert!(export(&db, &id, "json", &second).is_err());
+    assert_eq!(fs::read(&second).unwrap(), original);
+    assert!(export(&db, &id, "json", &unindexed).is_err());
+    assert_eq!(
+        fs::read_to_string(&unindexed).unwrap(),
+        "existing original\n"
+    );
+    assert!(export(&db, &id, "json", &unrelated).is_err());
+    assert_eq!(fs::read_to_string(&unrelated).unwrap(), "keep me\n");
+    assert!(export(&db, &id, "json", &temp.path().join("session.md")).is_err());
 
     let all = Registry::builtins();
     let cases = [
