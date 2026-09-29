@@ -30,6 +30,10 @@ test('native settings result drives the home list and empty management stays rec
         invoke: async (command: string, args: { managedTools?: string[]; theme?: string } = {}) => {
           if (command === 'set_managed_tools') managed = args.managedTools ?? managed;
           if (command === 'set_theme') theme = args.theme ?? theme;
+          if (command === 'get_tool_workspace') return {
+            probe: { selectedPath: null, installations: [], nativeFiles: [], nativeWrites: { state: 'unknown', reason: '尚未安装' } },
+            profiles: [], binding: null, snapshots: [], recoveryNeeded: [], common: null, customPath: null,
+          };
           return bootstrap();
         },
       },
@@ -47,8 +51,48 @@ test('native settings result drives the home list and empty management stays rec
   await page.getByRole('combobox', { name: '主题' }).selectOption('dark');
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始' }).click();
-  await expect(page.locator('.tool-row')).toHaveCount(1);
-  await expect(page.locator('.tool-row')).toContainText('Codex');
+  await expect(page.getByRole('button', { name: '编辑配置 →' })).toHaveCount(1);
+  await expect(page.locator('[aria-label="管理中的工具"]')).toContainText('Codex');
+});
+
+test('home opens Claude Code native JSON editor with full disk text', async ({ page }) => {
+  await page.addInitScript(() => {
+    const profile = {
+      id: 'claude-default', tool: 'claude_code', name: '日常', version: 1,
+      inheritCommon: false, files: { settings: '{"model":"claude-sonnet"}' },
+      suppressed: {}, nativeCredentials: {}, connection: null,
+    };
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_INTERNALS__: { invoke: async (command: string) => {
+        if (command === 'get_bootstrap') return {
+          preferences: { schema_version: 1, managed_tools: ['claude_code'], theme: 'system' },
+          tools: [{ id: 'claude_code', name: 'Claude Code', installation: 'not_checked', configuration: 'not_checked' }],
+        };
+        if (command === 'get_tool_workspace') return {
+          probe: {
+            selectedPath: 'C:\\tools\\claude.cmd',
+            installations: [{ path: 'C:\\tools\\claude.cmd', version: '2.1.283', source: 'npm_shim', status: 'available', detail: null }],
+            nativeFiles: [{ role: 'settings', path: 'C:\\Users\\test\\.claude\\settings.json', format: 'json', writable: true, reason: null, sensitive: false }],
+            nativeWrites: { state: 'supported', reason: '已验证此版本' },
+            interfaceFormats: ['anthropic_messages'], providerPresets: [], dependencies: [],
+            installUrl: 'https://code.claude.com/docs/en/setup', upgradeHint: '', installCommand: null, upgradeCommand: null,
+          },
+          profiles: [profile], common: null, binding: null,
+          snapshots: [{ role: 'settings', fingerprint: 'present', error: null }],
+          recoveryNeeded: [], customPath: null,
+        };
+        if (command === 'read_native_file_for_edit') return '{"env":{"ANTHROPIC_API_KEY":"disk-key"},"model":"claude-sonnet"}';
+        if (command === 'inspect_native_draft') return {};
+        throw new Error(`Unexpected native command: ${command}`);
+      } },
+    });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: '编辑配置 →' }).click();
+  await expect(page.getByRole('heading', { name: '工具与连接', level: 1 })).toBeVisible();
+  await page.getByRole('button', { name: '编辑当前磁盘原文' }).click();
+  await expect(page.getByRole('textbox', { name: 'settings 配置草稿' })).toHaveValue(/ANTHROPIC_API_KEY.*disk-key/);
 });
 
 test('storage failure preserves an actionable page and retry loads repaired data', async ({ page }) => {
