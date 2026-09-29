@@ -390,7 +390,7 @@ fn committed_skill_recovery_keeps_a_modified_backup_and_journal() {
         &db,
         &SkillOperation {
             id: id.clone(),
-            package_id: package.id,
+            package_id: package.id.clone(),
             tool: "claude_code".into(),
             scope_key: "global".into(),
             target: target.clone(),
@@ -398,13 +398,70 @@ fn committed_skill_recovery_keeps_a_modified_backup_and_journal() {
             backup: backup.clone(),
             old_digest,
             old_managed_digest: None,
-            new_digest: Some(package.digest),
+            new_digest: Some(package.digest.clone()),
             removing: false,
             status: "committed".into(),
         },
     )
     .unwrap();
     fs::write(backup.join("notes.txt"), "changed after commit").unwrap();
+    let other_parent = temp.path().join("home/.codex/skills");
+    fs::create_dir_all(&other_parent).unwrap();
+    let other_stage = other_parent.join(".cliora-stage-other");
+    fs::create_dir(&other_stage).unwrap();
+    fs::write(
+        other_stage.join("SKILL.md"),
+        fs::read(source.join("SKILL.md")).unwrap(),
+    )
+    .unwrap();
+    save_operation(
+        &db,
+        &SkillOperation {
+            id: "other".into(),
+            package_id: package.id.clone(),
+            tool: "codex".into(),
+            scope_key: "global".into(),
+            target: other_parent.join("my-skill"),
+            stage: other_stage.clone(),
+            backup: other_parent.join(".cliora-backup-other"),
+            old_digest: None,
+            old_managed_digest: None,
+            new_digest: Some(package.digest.clone()),
+            removing: false,
+            status: "prepared".into(),
+        },
+    )
+    .unwrap();
+    let issues = recover_report(&db).unwrap();
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0].tool_id, "claude_code");
+    assert!(issues[0].affects("claude_code", "global"));
+    assert!(!issues[0].affects("codex", "global"));
+    assert!(
+        !other_stage.exists(),
+        "healthy later operation must still recover"
+    );
+    assert_eq!(list(&db).unwrap().len(), 1);
+    assert!(scan_native(
+        &db,
+        &Registry::builtins(),
+        &temp.path().join("home"),
+        "codex",
+        Scope::Global,
+        None
+    )
+    .unwrap()
+    .is_empty());
+    let unrelated = install(
+        &db,
+        &Registry::builtins(),
+        &temp.path().join("home"),
+        &package.id,
+        "codex",
+        Scope::Global,
+        None,
+    );
+    assert_eq!(unrelated.status, "installed", "{}", unrelated.detail);
     let error = recover(&db).unwrap_err();
     assert!(error.contains("备份"), "{error}");
     assert_eq!(

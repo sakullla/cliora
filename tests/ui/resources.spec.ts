@@ -6,6 +6,7 @@ async function mockResources(page: import('@playwright/test').Page) {
     const definitions: Array<Record<string, unknown>> = [];
     const skillPackages: Array<Record<string, unknown>> = [];
     const nativeSkills: Array<Record<string, unknown>> = [];
+    const skillIssues: Array<Record<string, unknown>> = [];
     const writes: unknown[] = [];
     const pendingPreviews: Array<() => void> = [];
     Object.assign(window, {
@@ -13,6 +14,7 @@ async function mockResources(page: import('@playwright/test').Page) {
       __resourceWrites: writes,
       __resourceSkillPackages: skillPackages,
       __resourceNativeSkills: nativeSkills,
+      __resourceSkillIssues: skillIssues,
       __resourceMcpConflict: false,
       __resourceDeferMcpPreview: false,
       __resourcePendingPreviews: pendingPreviews,
@@ -60,6 +62,7 @@ async function mockResources(page: import('@playwright/test').Page) {
         }
         if (command === 'list_skill_packages') return skillPackages;
         if (command === 'list_skill_installations') return [];
+        if (command === 'list_skill_recovery_issues') return [...skillIssues];
         if (command === 'scan_native_skills') return nativeSkills;
         if (command === 'preview_skill_target') return { path: '/tmp/.codex/skills/sample', status: 'conflict', detail: '同名原生 Skills 未受当前包管理', previewToken: 'skill-token', existingDigest: 'old', packageDigest: 'new', changes: [{ path: 'SKILL.md', before: 'old text', after: 'new text', beforeSize: 8, afterSize: 8, beforeDigest: 'old', afterDigest: 'new' }] };
         if (command === 'install_skill') { writes.push(args); return { toolId: args.toolId, scope: args.scope, projectPath: args.projectPath, path: '/tmp/.codex/skills/sample', status: 'installed', detail: '完成' }; }
@@ -194,4 +197,27 @@ test('native Skills are visible and takeover requires a before-after preview', a
   await expect(page.getByRole('status').filter({ hasText: '已安装' })).toBeVisible();
   const writes = await page.evaluate(() => (window as typeof window & { __resourceWrites: Array<Record<string, unknown>> }).__resourceWrites);
   expect(writes).toContainEqual(expect.objectContaining({ previewToken: 'skill-token', allowTakeover: true }));
+});
+
+test('Skills repair remains accessible while packages load and can be rechecked', async ({ page }) => {
+  await mockResources(page);
+  await page.goto('/');
+  await page.evaluate(() => {
+    const state = window as typeof window & { __resourceSkillPackages: Array<Record<string, unknown>>; __resourceSkillIssues: Array<Record<string, unknown>> };
+    state.__resourceSkillPackages.push({ id: 'skill-1', name: 'sample', description: 'Sample', compatibility: null, source: 'local', digest: 'new', fileCount: 1, updatedAt: 1 });
+    state.__resourceSkillIssues.push(
+      { operationId: 'other', toolId: 'grok', scope: 'global', projectPath: null, targetPath: '/tmp/grok', backupPath: '/tmp/grok-backup', detail: 'unrelated' },
+      { operationId: 'broken', toolId: 'codex', scope: 'global', projectPath: null, targetPath: '/tmp/codex', backupPath: '/tmp/codex-backup', detail: '备份内容变化' },
+    );
+  });
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('tab', { name: 'Skills' }).click();
+  await expect(page.getByRole('heading', { name: 'sample' })).toBeVisible();
+  const repair = page.getByRole('alert').filter({ hasText: 'Skills 安装需要检查' });
+  await expect(repair).toContainText('备份内容变化');
+  await expect(repair).toContainText('/tmp/codex-backup');
+  await expect(repair).not.toContainText('unrelated');
+  await page.evaluate(() => { (window as typeof window & { __resourceSkillIssues: unknown[] }).__resourceSkillIssues.splice(0); });
+  await repair.getByRole('button', { name: '重新检查恢复状态' }).click();
+  await expect(repair).toHaveCount(0);
 });

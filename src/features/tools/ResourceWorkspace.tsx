@@ -2,7 +2,7 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { native } from '../../lib/native';
 import type { AdapterDescriptor, Scope } from '../../types/native';
-import type { McpDefinition, McpDraft, McpTargetRequest, McpTargetResult, NativeMcpEntry, NativeSkillEntry, SkillImportPreview, SkillInstallation, SkillPackage, SkillTargetPreview, SkillTargetResult } from '../../types/resources';
+import type { McpDefinition, McpDraft, McpTargetRequest, McpTargetResult, NativeMcpEntry, NativeSkillEntry, SkillImportPreview, SkillInstallation, SkillPackage, SkillRecoveryIssue, SkillTargetPreview, SkillTargetResult } from '../../types/resources';
 import styles from './ResourceWorkspace.module.css';
 
 function errorText(error: unknown) {
@@ -180,6 +180,7 @@ export function McpWorkspace({ toolId, scope, projectPath, tools, onDirtyChange 
 export function SkillsWorkspace({ toolId, scope, projectPath, onDirtyChange }: { toolId: string; scope: Scope; projectPath: string; onDirtyChange?: (dirty: boolean) => void }) {
   const [packages, setPackages] = useState<SkillPackage[]>([]);
   const [nativeEntries, setNativeEntries] = useState<NativeSkillEntry[]>([]);
+  const [recoveryIssues, setRecoveryIssues] = useState<SkillRecoveryIssue[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [installations, setInstallations] = useState<SkillInstallation[]>([]);
   const [url, setUrl] = useState('');
@@ -194,7 +195,14 @@ export function SkillsWorkspace({ toolId, scope, projectPath, onDirtyChange }: {
   const [result, setResult] = useState<SkillTargetResult | null>(null);
   const selected = packages.find((item) => item.id === selectedId);
   const project = scope === 'project' ? projectPath || null : null;
+  const visibleIssues = recoveryIssues.filter((issue) => issue.toolId === toolId);
   useEffect(() => { setPendingTarget(null); }, [toolId, scope, project, selectedId]);
+  useEffect(() => {
+    let live = true;
+    void native.listSkillRecoveryIssues().then((issues) => { if (live) setRecoveryIssues(issues); })
+      .catch((value) => { if (live) setError(errorText(value)); });
+    return () => { live = false; };
+  }, [toolId, scope, project]);
   useEffect(() => {
     if (!toolId || (scope === 'project' && !project)) { setNativeEntries([]); return; }
     let live = true;
@@ -281,8 +289,13 @@ export function SkillsWorkspace({ toolId, scope, projectPath, onDirtyChange }: {
       setPendingTarget(null);
       setInstallations(await native.listSkillInstallations(selected.id));
       setNativeEntries(await native.scanNativeSkills(toolId, scope, project));
+      setRecoveryIssues(await native.listSkillRecoveryIssues());
     } catch (value) { setError(errorText(value)); }
     finally { setBusy(false); }
+  }
+  async function checkRecovery() {
+    try { setRecoveryIssues(await native.listSkillRecoveryIssues()); setError(''); }
+    catch (value) { setError(errorText(value)); }
   }
   return <div className={styles.layout}>
     <aside className={styles.list}>
@@ -295,6 +308,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, onDirtyChange }: {
     </aside>
     <div className={styles.panel}>
       <div className={styles.heading}><div><small>原生 Skills</small><h2>{selected?.name ?? '导入 Skills'}</h2></div><span>{scope === 'global' ? '全局' : '项目'}</span></div>
+      {!!visibleIssues.length && <div className={styles.error} role="alert"><strong>Skills 安装需要检查</strong><p>相关 CLI 启动会暂停。异常备份已保留；检查目录后可重新尝试恢复。</p>{visibleIssues.map((issue) => <div key={issue.operationId} className={styles.fileChange}><strong>{issue.scope === 'global' ? '全局' : `项目 ${issue.projectPath ?? ''}`}</strong><p>{issue.detail}</p><p>目标：{issue.targetPath}</p><p>备份：{issue.backupPath}</p><button type="button" onClick={() => void navigator.clipboard.writeText(issue.backupPath).catch((value) => setError(errorText(value)))}>复制备份路径</button></div>)}<button type="button" onClick={() => void checkRecovery()}>重新检查恢复状态</button></div>}
       {selected && <><p className={styles.muted}>{selected.description || '完整 Skills 包'} · {selected.fileCount} 个文件</p><p className={styles.source}>来源：{selected.source}</p>
         {selected.compatibility && <label className={styles.inline}><input type="checkbox" checked={dependencyChecked} onChange={(event) => setDependencyChecked(event.target.checked)} />已检查所需环境：{selected.compatibility}</label>}
         <p className={styles.muted}>当前 {toolId}：{installed?.state === 'current' ? '已安装' : installed?.state === 'update_available' ? '有更新' : installed?.state === 'conflict' ? '原生目录有外部修改' : installed?.state === 'missing' ? '原生目录缺失' : '未安装'}</p>
