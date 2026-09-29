@@ -13,6 +13,7 @@ function readError(error: unknown): ApiError {
       code: typeof value.code === 'string' ? value.code : 'native_error',
       message: typeof value.message === 'string' ? value.message : '操作失败',
       action: typeof value.action === 'string' ? value.action : '请重试。',
+      data_directory: typeof value.data_directory === 'string' ? value.data_directory : null,
     };
   }
   return { code: 'native_error', message: '原生服务暂时不可用', action: '请重新打开桌面应用。' };

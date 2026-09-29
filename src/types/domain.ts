@@ -24,6 +24,7 @@ export type ApiError = {
   code: string;
   message: string;
   action: string;
+  data_directory?: string | null;
 };
 
 /** The only catalogue used for browser shell rendering before the native bootstrap arrives. */

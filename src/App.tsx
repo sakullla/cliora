@@ -49,8 +49,23 @@ export default function App() {
 
   useEffect(() => {
     if (!nativeAvailable) return;
-    native.getBootstrap().then((value) => { setBootstrap(value); setLoaded(true); }).catch(setError).finally(() => setLoading(false));
+    void loadBootstrap();
   }, []);
+
+  async function loadBootstrap() {
+    if (!nativeAvailable) return;
+    setLoading(true);
+    setError(null);
+    try {
+      setBootstrap(await native.getBootstrap());
+      setLoaded(true);
+    } catch (value) {
+      setLoaded(false);
+      setError(value as ApiError);
+    } finally {
+      setLoading(false);
+    }
+  }
 
   useEffect(() => {
     const mode = bootstrap.preferences.theme;
@@ -68,7 +83,7 @@ export default function App() {
 
   function go(next: Page) {
     setPage(next);
-    setError(null);
+    if (loaded) setError(null);
     document.querySelector('main')?.scrollTo({ top: 0 });
     requestAnimationFrame(() => document.querySelector<HTMLElement>('h1')?.focus());
   }
@@ -104,9 +119,9 @@ export default function App() {
     </aside>
     <main className="content" id="main">
       {!nativeAvailable && <div className="environment-banner" role="status">浏览器预览：原生配置、持久保存和系统凭据仅在桌面应用中可用。</div>}
-      {error && <div className="error-banner" role="alert"><strong>{error.message}</strong><span>{error.action}</span><button type="button" onClick={() => setError(null)} aria-label="关闭错误提示">×</button></div>}
+      {error && <div className="error-banner" role="alert"><div className="error-copy"><strong>{error.message}</strong><span>{error.action}</span>{error.data_directory && <code>{error.data_directory}</code>}</div>{loaded && <button type="button" onClick={() => setError(null)} aria-label="关闭错误提示">×</button>}</div>}
       <header className="page-head"><div><div className="eyebrow">CLIORA · LOCAL WORKSPACE</div><h1 tabIndex={-1}>{title[0]}</h1><p>{title[1]}</p></div>{page === 'home' && <span className="quiet-chip">仅在本机</span>}</header>
-      {loading ? <Empty title="正在读取本机设置" detail="请稍候。" /> : !loaded ? <Empty title="暂时无法读取本机资料" detail="请按上方提示检查并重新打开应用。" /> : <>
+      {loading ? <Empty title="正在读取本机设置" detail="请稍候。" /> : !loaded ? <Empty title="暂时无法读取本机资料" detail="原数据仍保留。请按上方提示处理后重试。" action={<button className="button primary" type="button" onClick={loadBootstrap}>重试读取</button>} /> : <>
         {page === 'home' && <>
           <div className="section-heading"><h2>管理中的工具</h2><button className="text-button" type="button" onClick={() => go('settings')}>调整工具 <span aria-hidden="true">→</span></button></div>
           {visible.length ? <div className="tool-table"><div className="table-head"><span>工具</span><span>当前状态</span><span>操作</span></div>{visible.map((item) => <div className="tool-row" key={item.id}><div className="tool-identity"><span className="tool-icon" aria-hidden="true">{item.name.slice(0, 1)}</span><span><strong>{item.name}</strong><small>本机工具</small></span></div><div className="tool-state"><strong>尚未检测</strong><small>安装与配置检测将在工具页接入</small></div><button className="button" type="button" onClick={() => { setTool(item.id); go('connections'); }}>查看工具 <span aria-hidden="true">→</span></button></div>)}</div> : <Empty title="尚未管理工具" detail="可在设置中开启需要管理的 CLI。" action={<button className="button primary" type="button" onClick={() => go('settings')}>前往设置</button>} />}

@@ -51,13 +51,29 @@ test('native settings result drives the home list and empty management stays rec
   await expect(page.locator('.tool-row')).toContainText('Codex');
 });
 
-test('storage failure does not display default tools as local state', async ({ page }) => {
-  await page.addInitScript(() => Object.assign(window, {
-    isTauri: true,
-    __TAURI_INTERNALS__: { invoke: async () => { throw { code: 'storage_error', message: '无法读取本机设置', action: '检查数据目录。' }; } },
-  }));
+test('storage failure preserves an actionable page and retry loads repaired data', async ({ page }) => {
+  await page.addInitScript(() => {
+    let calls = 0;
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_INTERNALS__: { invoke: async () => {
+        calls += 1;
+        if (calls <= 2) throw { code: 'storage_unavailable', message: '无法打开本机数据库', action: '先备份原数据库，再检查磁盘和权限；修复后点击重试。', data_directory: 'C:\\Users\\test\\AppData\\Roaming\\Cliora' };
+        return {
+          preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' },
+          tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }],
+        };
+      } },
+    });
+  });
   await page.goto('/');
-  await expect(page.getByRole('alert')).toContainText('无法读取本机设置');
+  await expect(page.getByRole('alert')).toContainText('无法打开本机数据库');
+  await expect(page.getByRole('alert')).toContainText('C:\\Users\\test');
   await expect(page.getByText('暂时无法读取本机资料')).toBeVisible();
   await expect(page.locator('.tool-row')).toHaveCount(0);
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置' }).click();
+  await expect(page.getByRole('alert')).toBeVisible();
+  await page.getByRole('button', { name: '重试读取' }).click();
+  await expect(page.getByRole('checkbox', { name: /Codex/ })).toBeVisible();
+  await expect(page.getByRole('alert')).toHaveCount(0);
 });
