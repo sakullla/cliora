@@ -1,5 +1,5 @@
 import { open } from '@tauri-apps/plugin-dialog';
-import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { native } from '../../lib/native';
 import type { AdapterDescriptor, Scope } from '../../types/native';
 import type { McpDefinition, McpDraft, McpTargetRequest, McpTargetResult, NativeMcpEntry, NativeSkillEntry, SkillImportPreview, SkillInstallation, SkillPackage, SkillTargetPreview, SkillTargetResult } from '../../types/resources';
@@ -35,19 +35,27 @@ export function McpWorkspace({ toolId, scope, projectPath, tools, onDirtyChange 
   const [savedFingerprint, setSavedFingerprint] = useState(JSON.stringify([blank(), '', '']));
   const [nativeEntries, setNativeEntries] = useState<NativeMcpEntry[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
-  const [preview, setPreview] = useState<McpTargetResult[] | null>(null);
+  const [previewState, setPreview] = useState<{ context: string; epoch: number; items: McpTargetResult[] } | null>(null);
   const [results, setResults] = useState<McpTargetResult[] | null>(null);
   const [enabled, setEnabled] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [previewBusy, setPreviewBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const project = scope === 'project' ? projectPath || null : null;
   const dirty = JSON.stringify([draft, envText, headerText]) !== savedFingerprint;
+  const previewContext = JSON.stringify([draft, envText, headerText, toolId, scope, project, enabled, selected]);
+  const previewEpochRef = useRef({ context: previewContext, epoch: 0 });
+  if (previewEpochRef.current.context !== previewContext) {
+    previewEpochRef.current = { context: previewContext, epoch: previewEpochRef.current.epoch + 1 };
+  }
+  const previewRequestRef = useRef(0);
+  const preview = previewState?.context === previewContext && previewState.epoch === previewEpochRef.current.epoch ? previewState.items : null;
   useLayoutEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
   useEffect(() => () => { onDirtyChange?.(false); }, [onDirtyChange]);
   const target = useMemo<McpTargetRequest>(() => ({ toolId, scope, projectPath: project, enabled }), [toolId, scope, project, enabled]);
-  useEffect(() => { setPreview(null); }, [toolId, scope, project, enabled]);
-  useEffect(() => { setPreview(null); }, [draft, envText, headerText]);
+  useEffect(() => { setPreview(null); setPreviewBusy(false); }, [toolId, scope, project, enabled, selected]);
+  useEffect(() => { setPreview(null); setPreviewBusy(false); }, [draft, envText, headerText]);
 
   useEffect(() => {
     void native.listMcpDefinitions().then(setDefinitions).catch((value) => setError(errorText(value)));
@@ -94,10 +102,20 @@ export function McpWorkspace({ toolId, scope, projectPath, tools, onDirtyChange 
     if (!draft.id) { setError('请先保存 MCP 定义。'); return; }
     if (dirty) { setError('请先保存 MCP 草稿，再预览分发目标。'); return; }
     if (scope === 'project' && !project) { setError('请先在工具页打开项目目录。'); return; }
-    setBusy(true); setPreview(null); setResults(null); setError('');
-    try { setPreview(await native.previewMcpTargets(draft.id, requests(ids))); }
-    catch (value) { setError(errorText(value)); }
-    finally { setBusy(false); }
+    const context = previewContext;
+    const epoch = previewEpochRef.current.epoch;
+    const request = ++previewRequestRef.current;
+    setPreviewBusy(true); setPreview(null); setResults(null); setError('');
+    try {
+      const items = await native.previewMcpTargets(draft.id, requests(ids));
+      if (request === previewRequestRef.current && epoch === previewEpochRef.current.epoch && context === previewEpochRef.current.context) {
+        setPreview({ context, epoch, items });
+      }
+    } catch (value) {
+      if (request === previewRequestRef.current && epoch === previewEpochRef.current.epoch) setError(errorText(value));
+    } finally {
+      if (request === previewRequestRef.current && epoch === previewEpochRef.current.epoch) setPreviewBusy(false);
+    }
   }
   async function distribute() {
     if (!draft.id || !preview || dirty) return;
@@ -149,7 +167,7 @@ export function McpWorkspace({ toolId, scope, projectPath, tools, onDirtyChange 
         <div className={styles.heading}><div><strong>分发到 CLI</strong><p>每个目标独立写入。已有同名原生条目会先显示冲突。</p></div></div>
         <div className={styles.targetGrid}>{tools.map((item) => <label key={item.id}><input type="checkbox" checked={selected.includes(item.id)} onChange={(event) => { setSelected(event.target.checked ? [...selected, item.id] : selected.filter((id) => id !== item.id)); setPreview(null); }} />{item.name}</label>)}</div>
         <label className={styles.inline}><input type="checkbox" checked={enabled} onChange={(event) => { setEnabled(event.target.checked); setPreview(null); }} />启用 MCP</label>
-        <button type="button" disabled={busy || !selected.length} onClick={() => void inspect()}>预览目标</button>
+        <button type="button" disabled={busy || previewBusy || !selected.length} onClick={() => void inspect()}>预览目标</button>
         {preview && <div className={styles.resultList}>{preview.map((item) => <div key={item.toolId}><p><strong>{tools.find((tool) => tool.id === item.toolId)?.name ?? item.toolId}</strong> · {item.status === 'conflict' ? '同名冲突' : item.status === 'ready' ? '可写入' : '不可写入'} · {item.path ?? ''} <small>{item.detail}</small></p>{(item.existing !== null || item.proposed !== null) && <details className={styles.fileChange} open={item.status === 'conflict'}><summary>查看当前与写入后的原生条目</summary><div className={styles.fileDiff}><div><strong>当前原生条目</strong><pre>{item.existing === null ? '无' : JSON.stringify(item.existing, null, 2)}</pre></div><div><strong>写入后</strong><pre>{item.proposed === null ? '移除' : JSON.stringify(item.proposed, null, 2)}</pre></div></div></details>}</div>)}<button type="button" className={styles.primary} disabled={busy || !preview.some((item) => item.status === 'ready' || item.status === 'conflict')} onClick={() => void distribute()}>确认分发</button></div>}
         {results && <div className={styles.resultList} role="status">{results.map((item) => <p key={item.toolId}>{item.toolId}：{item.status === 'written' ? '已写入' : item.detail}</p>)}{results.some((item) => item.status === 'failed') && <button type="button" onClick={() => void retryFailed()}>重新预览失败目标</button>}</div>}
       </div>}

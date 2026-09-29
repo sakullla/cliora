@@ -305,6 +305,18 @@ fn restore_rollback(op: &SkillOperation) -> Result<(), String> {
     Ok(())
 }
 
+fn verify_backup(op: &SkillOperation) -> Result<(), String> {
+    let name = op
+        .target
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or("Skills 目录名无效")?;
+    if on_disk_as(&op.backup, name)? != op.old_digest {
+        return Err("Skills 备份内容与操作记录不符，已保留现场".into());
+    }
+    Ok(())
+}
+
 fn recover_locked(db: &Database) -> Result<(), String> {
     let operations = db.with_connection(|conn| {
         let mut statement = conn.prepare("SELECT id, package_id, tool, scope_key, target_path, stage_path, backup_path, old_digest, old_managed_digest, new_digest, removing, status FROM skill_operations ORDER BY rowid").map_err(|error| error.to_string())?;
@@ -328,6 +340,7 @@ fn recover_locked(db: &Database) -> Result<(), String> {
             let actual = on_disk(&op.target)?;
             if actual == op.new_digest {
                 if op.backup.exists() {
+                    verify_backup(&op)?;
                     fs::remove_dir_all(&op.backup).map_err(|error| error.to_string())?;
                 }
             } else if actual.is_none()
@@ -346,14 +359,7 @@ fn recover_locked(db: &Database) -> Result<(), String> {
             restore_rollback(&op)?;
         } else if op.status == "prepared" {
             if op.backup.exists() {
-                let name = op
-                    .target
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .ok_or("Skills 目录名无效")?;
-                if on_disk_as(&op.backup, name)? != op.old_digest {
-                    return Err("Skills 备份在恢复前被修改，已保留现场".into());
-                }
+                verify_backup(&op)?;
                 let actual = on_disk(&op.target)?;
                 if actual.is_some() {
                     if actual != op.new_digest {

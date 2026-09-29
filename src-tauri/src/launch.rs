@@ -9,6 +9,7 @@ use crate::database::Database;
 use crate::native::adapter::{self, Scope};
 use crate::native::adapters::{self, LaunchMode, Registry};
 use crate::projects;
+use crate::resources::skills;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -265,6 +266,12 @@ pub fn plan_with_stage(
     home: &Path,
     request: LaunchRequest,
 ) -> Result<LaunchPlan, LaunchPlanError> {
+    skills::recover(db).map_err(|message| {
+        LaunchPlanError::new(
+            LaunchStage::Configuration,
+            format!("Skills 安装恢复失败：{message}"),
+        )
+    })?;
     let adapter = registry
         .get(&request.tool_id)
         .ok_or_else(|| LaunchPlanError::new(LaunchStage::Tool, "未注册的 CLI 不能启动".into()))?;
