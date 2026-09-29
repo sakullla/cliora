@@ -5,6 +5,7 @@ import { sameDraftRequest } from '../../lib/draftGuard';
 import { importedConnection } from '../../lib/nativeDraft';
 import type { DraftRequest } from '../../lib/draftGuard';
 import type { ApiError } from '../../types/domain';
+import type { TrayRepairTarget } from '../../types/launch';
 import type { AdapterDescriptor, Connection, ConnectionCheck, ModelDirectory, NativeInspection, NativePreview, RegisteredCommon, RegisteredProfile, RegisteredToolWorkspace, Scope } from '../../types/native';
 import { authEnvName, uiAdapterFor } from './adapters';
 import styles from './ToolWorkspace.module.css';
@@ -33,11 +34,13 @@ function emptyProfile(tool: string): RegisteredProfile {
   return { id: '', tool, name: '', version: 0, inheritCommon: false, files: {}, suppressed: {}, connection: null, nativeCredentials: {} };
 }
 
-export function ToolWorkspacePage({ managedTools, initialTool }: { managedTools: AdapterDescriptor[]; initialTool?: string }) {
-  const [tool, setTool] = useState<string>(initialTool ?? managedTools[0]?.id ?? '');
-  const [scope, setScope] = useState<Scope>('global');
-  const [projectPath, setProjectPath] = useState('');
-  const [projectInput, setProjectInput] = useState('');
+export function ToolWorkspacePage({ managedTools, initialTool, repair }: { managedTools: AdapterDescriptor[]; initialTool?: string; repair?: TrayRepairTarget | null }) {
+  const [tool, setTool] = useState<string>(repair?.toolId ?? initialTool ?? managedTools[0]?.id ?? '');
+  const [scope, setScope] = useState<Scope>(repair?.scope ?? 'global');
+  const [projectPath, setProjectPath] = useState(repair?.projectPath ?? '');
+  const [projectInput, setProjectInput] = useState(repair?.projectPath ?? '');
+  const [preferredProfileId, setPreferredProfileId] = useState<string | null>(repair?.profileId ?? null);
+  const appliedRepair = useRef(repair?.sequence ?? 0);
   const [workspace, setWorkspace] = useState<RegisteredToolWorkspace | null>(null);
   const [editor, setEditor] = useState<Editor>('profile');
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -115,7 +118,26 @@ export function ToolWorkspacePage({ managedTools, initialTool }: { managedTools:
     } finally { if (sequence === loadSequence.current) setLoading(false); }
   }, []);
 
-  useEffect(() => { if (currentTool) void reload(currentTool, scope, projectPath); }, [currentTool, scope, projectPath, reload]);
+  useEffect(() => { if (currentTool) void reload(currentTool, scope, projectPath, preferredProfileId); }, [currentTool, scope, projectPath, preferredProfileId, reload]);
+
+  useEffect(() => {
+    if (!repair || repair.page !== 'connections' || appliedRepair.current === repair.sequence || !repair.toolId) return;
+    appliedRepair.current = repair.sequence;
+    if (dirty && !window.confirm('当前草稿尚未保存，打开托盘指向的配置会丢失这些修改。继续吗？')) {
+      setNotice('当前草稿已保留；可保存后再从托盘打开修复位置。');
+      return;
+    }
+    invalidateDraftRequest();
+    setTool(repair.toolId);
+    setScope(repair.scope ?? 'global');
+    setProjectPath(repair.projectPath ?? '');
+    setProjectInput(repair.projectPath ?? '');
+    setPreferredProfileId(repair.profileId);
+    setNotice('已打开托盘操作对应的配置位置。');
+    if (repair.toolId === currentTool && repair.scope === scope && (repair.projectPath ?? '') === projectPath && repair.profileId === preferredProfileId) {
+      void reload(repair.toolId, repair.scope, repair.projectPath ?? '', repair.profileId);
+    }
+  }, [repair?.sequence]);
 
   useEffect(() => {
     if (!nativeAvailable || view !== 'merged' || !draft || editor !== 'profile') return;

@@ -19,3 +19,13 @@ export type Project = {
 export type LaunchRequest = { toolId: string; projectId: string | null; sessionId: string | null; mode: LaunchMode };
 export type LaunchResult = { toolId: string; projectId: string | null; mode: LaunchMode; terminal: TerminalId; status: 'terminal_requested' };
 export type TrayStatus = { available: boolean; error: string | null };
+
+export type TrayRepairTarget = {
+  page: 'home' | 'connections';
+  toolId: string | null;
+  scope: 'global' | 'project' | null;
+  projectId: string | null;
+  projectPath: string | null;
+  profileId: string | null;
+  sequence: number;
+};
