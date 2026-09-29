@@ -498,6 +498,17 @@ pub async fn inspect_native_draft(
 }
 
 #[tauri::command]
+pub async fn prepare_native_import(
+    tool: CliId,
+    files: std::collections::BTreeMap<String, String>,
+) -> Result<intake::NativeImport, ApiError> {
+    blocking(move || {
+        intake::prepare_import(tool, files, &SystemCredentialStore).map_err(native_error)
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn set_codex_reasoning_effort(
     text: String,
     effort: Option<String>,

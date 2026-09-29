@@ -176,18 +176,27 @@ pub fn test_connection(
     request_url.set_path(&path);
     let body = match connection.interface_format.as_str() {
         "openai_completions" => {
-            serde_json::json!({"model":connection.model,"messages":[{"role":"user","content":"ping"}],"max_tokens":1})
+            serde_json::json!({"model":connection.model,"messages":[{"role":"user","content":"Reply OK"}],"max_tokens":16})
         }
         "openai_responses" => {
-            serde_json::json!({"model":connection.model,"input":"ping","max_output_tokens":1})
+            serde_json::json!({"model":connection.model,"input":"Reply OK","max_output_tokens":16})
         }
         _ => {
-            serde_json::json!({"model":connection.model,"messages":[{"role":"user","content":"ping"}],"max_tokens":1})
+            serde_json::json!({"model":connection.model,"messages":[{"role":"user","content":"Reply OK"}],"max_tokens":16})
         }
     };
     let model_request = match authorize(client.post(request_url).json(&body)).send() {
         Ok(response) if response.status().is_success() => {
-            step("passed", "最小模型请求成功；供应商可能计费用量")
+            let mut bytes = Vec::new();
+            match response.take(2_000_001).read_to_end(&mut bytes) {
+                Ok(_) if bytes.len() <= 2_000_000 => match serde_json::from_slice::<serde_json::Value>(&bytes) {
+                    Ok(value) if has_model_output(&connection.interface_format, &value) => {
+                        step("passed", "模型返回了有效输出；供应商可能计费用量")
+                    }
+                    _ => step("failed", "模型请求收到 HTTP 成功，但响应缺少所选接口格式的有效输出；请检查格式、模型或输出令牌限制，供应商仍可能计费"),
+                },
+                _ => step("failed", "模型响应无法完整读取或超过 2 MB；不能确认输出，供应商仍可能计费"),
+            }
         }
         Ok(response) => step(
             "failed",
@@ -205,6 +214,51 @@ pub fn test_connection(
         format,
         connectivity,
         model_request,
+    }
+}
+
+fn has_model_output(format: &str, value: &serde_json::Value) -> bool {
+    let nonempty =
+        |value: &serde_json::Value| value.as_str().is_some_and(|text| !text.trim().is_empty());
+    match format {
+        "openai_responses" => value
+            .get("output")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|items| {
+                items.iter().any(|item| {
+                    item.get("type").and_then(serde_json::Value::as_str) == Some("message")
+                        && item
+                            .get("content")
+                            .and_then(serde_json::Value::as_array)
+                            .is_some_and(|parts| {
+                                parts.iter().any(|part| {
+                                    part.get("type").and_then(serde_json::Value::as_str)
+                                        == Some("output_text")
+                                        && part.get("text").is_some_and(&nonempty)
+                                })
+                            })
+                })
+            }),
+        "openai_completions" => value
+            .get("choices")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|items| {
+                items.iter().any(|item| {
+                    item.get("message")
+                        .and_then(|message| message.get("content"))
+                        .is_some_and(&nonempty)
+                })
+            }),
+        "anthropic_messages" => value
+            .get("content")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|parts| {
+                parts.iter().any(|part| {
+                    part.get("type").and_then(serde_json::Value::as_str) == Some("text")
+                        && part.get("text").is_some_and(&nonempty)
+                })
+            }),
+        _ => false,
     }
 }
 
@@ -555,7 +609,16 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let server = thread::spawn(move || {
-            for expected in ["GET /v1/models", "GET /v1/models", "POST /v1/responses"] {
+            for (index, expected) in [
+                "GET /v1/models",
+                "GET /v1/models",
+                "POST /v1/responses",
+                "GET /v1/models",
+                "POST /v1/responses",
+            ]
+            .into_iter()
+            .enumerate()
+            {
                 let (mut stream, _) = listener.accept().unwrap();
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
                 let mut line = String::new();
@@ -568,7 +631,11 @@ mod tests {
                         break;
                     }
                 }
-                let body = "{}";
+                let body = if index == 2 {
+                    r#"{"output":[{"type":"message","content":[{"type":"output_text","text":"OK"}]}]}"#
+                } else {
+                    "{}"
+                };
                 write!(
                     stream,
                     "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -592,6 +659,9 @@ mod tests {
         assert_eq!(free.model_request.state, "skipped");
         let paid = test_connection(CliId::Codex, &connection, &NoCredential, true);
         assert_eq!(paid.model_request.state, "passed");
+        let empty = test_connection(CliId::Codex, &connection, &NoCredential, true);
+        assert_eq!(empty.model_request.state, "failed");
+        assert!(empty.model_request.message.contains("有效输出"));
         server.join().unwrap();
         let mut incompatible = connection;
         incompatible.interface_format = "anthropic_messages".into();
@@ -599,6 +669,48 @@ mod tests {
         assert_eq!(rejected.format.state, "failed");
         assert_eq!(rejected.connectivity.state, "skipped");
         assert_eq!(rejected.model_request.state, "skipped");
+    }
+
+    #[test]
+    fn paid_probe_requires_nonempty_output_in_selected_wire_format() {
+        let examples = [
+            (
+                "openai_responses",
+                serde_json::json!({"output":[{"type":"message","content":[{"type":"output_text","text":"OK"}]}]}),
+            ),
+            (
+                "openai_completions",
+                serde_json::json!({"choices":[{"message":{"content":"OK"}}]}),
+            ),
+            (
+                "anthropic_messages",
+                serde_json::json!({"content":[{"type":"text","text":"OK"}]}),
+            ),
+        ];
+        for (format, valid) in &examples {
+            assert!(has_model_output(format, &valid), "{format}");
+            assert!(
+                !has_model_output(format, &serde_json::json!({})),
+                "{format}"
+            );
+            assert!(
+                !has_model_output(
+                    format,
+                    &serde_json::json!({"choices":[],"output":[],"content":[]})
+                ),
+                "{format}"
+            );
+            for (other, other_value) in examples.iter().filter(|(other, _)| other != format) {
+                assert!(
+                    !has_model_output(format, other_value),
+                    "{format} misread {other}"
+                );
+            }
+        }
+        assert!(!has_model_output(
+            "openai_completions",
+            &serde_json::json!({"choices":[{"message":{"content":"  "}}]})
+        ));
     }
 
     #[test]

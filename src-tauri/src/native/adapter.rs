@@ -115,7 +115,7 @@ fn npm_package(tool: CliId) -> &'static str {
         CliId::Codex => "@openai/codex",
         CliId::ClaudeCode => "@anthropic-ai/claude-code",
         CliId::Grok => "@xai-official/grok",
-        CliId::Pi => "@mariozechner/pi-coding-agent",
+        CliId::Pi => "@earendil-works/pi-coding-agent",
         CliId::OpenCode => "opencode-ai",
     }
 }
@@ -158,7 +158,16 @@ fn on_path(name: &str) -> bool {
         })
 }
 
-fn node_major() -> Option<u32> {
+fn parse_node_version(output: &str) -> Option<(u32, u32, u32)> {
+    let mut parts = output.trim().trim_start_matches('v').split('.');
+    Some((
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+    ))
+}
+
+fn node_version() -> Option<(u32, u32, u32)> {
     if !on_path("node") {
         return None;
     }
@@ -185,13 +194,16 @@ fn node_major() -> Option<u32> {
     if !output.status.success() {
         return None;
     }
-    String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .trim_start_matches('v')
-        .split('.')
-        .next()?
-        .parse()
-        .ok()
+    parse_node_version(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn node_dependency_status(tool: CliId, version: Option<(u32, u32, u32)>) -> &'static str {
+    match version {
+        None => "missing",
+        Some(version) if tool == CliId::ClaudeCode && version.0 < 22 => "outdated",
+        Some(version) if tool == CliId::Pi && version < (22, 19, 0) => "outdated",
+        Some(_) => "found",
+    }
 }
 
 fn dependencies(tool: CliId, source: &str, no_candidates: bool) -> Vec<Dependency> {
@@ -199,15 +211,13 @@ fn dependencies(tool: CliId, source: &str, no_candidates: bool) -> Vec<Dependenc
     let needs_npm =
         source == "npm_shim" || (no_candidates && !matches!(tool, CliId::ClaudeCode | CliId::Grok));
     if needs_npm {
-        let major = node_major();
+        let version = node_version();
         result.push(Dependency {
             name: "Node.js",
-            status: match major {
-                None => "missing",
-                Some(version) if tool == CliId::ClaudeCode && version < 22 => "outdated",
-                Some(_) => "found",
-            },
-            detail: if tool == CliId::ClaudeCode {
+            status: node_dependency_status(tool, version),
+            detail: if tool == CliId::Pi {
+                "Pi 的 npm 安装需要 Node.js 22.19 或更新版本"
+            } else if tool == CliId::ClaudeCode {
                 "Claude Code 的 npm 安装需要 Node.js 22 或更新版本"
             } else {
                 "npm 命令入口需要 Node.js"
@@ -256,12 +266,23 @@ fn install_command(tool: CliId) -> Option<String> {
             .into(),
         );
     }
-    Some(format!("npm install -g {}", npm_package(tool)))
+    Some(if tool == CliId::Pi {
+        format!("npm install -g --ignore-scripts {}", npm_package(tool))
+    } else {
+        format!("npm install -g {}", npm_package(tool))
+    })
 }
 
 fn upgrade_command(tool: CliId, source: &str) -> Option<String> {
     match source {
-        "npm_shim" => Some(format!("npm install -g {}@latest", npm_package(tool))),
+        "npm_shim" => Some(if tool == CliId::Pi {
+            format!(
+                "npm install -g --ignore-scripts {}@latest",
+                npm_package(tool)
+            )
+        } else {
+            format!("npm install -g {}@latest", npm_package(tool))
+        }),
         "claude_native" if tool == CliId::ClaudeCode => Some("claude update".into()),
         _ => None,
     }
@@ -806,6 +827,33 @@ mod tests {
         std::fs::write(&shim, "unrelated launcher").unwrap();
         assert_eq!(source_of(&shim, CliId::Grok), "unknown");
         assert_eq!(upgrade_command(CliId::Grok, "unknown"), None);
+
+        let pi_shim = temp.path().join("pi.ps1");
+        std::fs::write(
+            &pi_shim,
+            "$basedir/node_modules/@earendil-works/pi-coding-agent/dist/cli.js",
+        )
+        .unwrap();
+        assert_eq!(source_of(&pi_shim, CliId::Pi), "npm_shim");
+        assert_eq!(
+            install_command(CliId::Pi).as_deref(),
+            Some("npm install -g --ignore-scripts @earendil-works/pi-coding-agent")
+        );
+        assert_eq!(
+            upgrade_command(CliId::Pi, "npm_shim").as_deref(),
+            Some("npm install -g --ignore-scripts @earendil-works/pi-coding-agent@latest")
+        );
+        assert_eq!(parse_node_version("v22.18.9"), Some((22, 18, 9)));
+        assert_eq!(parse_node_version("v22.19.0"), Some((22, 19, 0)));
+        assert!(parse_node_version("not a version").is_none());
+        assert_eq!(
+            node_dependency_status(CliId::Pi, Some((22, 18, 9))),
+            "outdated"
+        );
+        assert_eq!(
+            node_dependency_status(CliId::Pi, Some((22, 19, 0))),
+            "found"
+        );
     }
 
     #[test]

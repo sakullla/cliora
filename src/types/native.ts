@@ -20,6 +20,7 @@ export type ModelDirectory = { models: string[]; status: 'ready' | 'empty' | 'st
 export type CheckStep = { state: 'passed' | 'partial' | 'failed' | 'skipped'; message: string };
 export type ConnectionCheck = { format: CheckStep; connectivity: CheckStep; modelRequest: CheckStep };
 export type NativeInspection = { providerId: string | null; model: string | null; connection: Connection | null; reasoningEffort: string | null };
+export type NativeImport = { files: Record<string, string>; inspection: NativeInspection; migratedSecret: boolean };
 
 export function emptyProfile(tool: CliId): NativeProfile {
   return { id: '', tool, name: '', version: 0, inheritCommon: false, files: {}, suppressed: {}, connection: null };

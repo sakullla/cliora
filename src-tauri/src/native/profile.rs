@@ -89,7 +89,7 @@ pub fn file_kind(tool: CliId, role: &str) -> Result<FileKind, String> {
     }
 }
 
-fn validate_files(tool: CliId, files: &BTreeMap<String, String>) -> Result<(), String> {
+pub(crate) fn validate_files(tool: CliId, files: &BTreeMap<String, String>) -> Result<(), String> {
     for (role, text) in files {
         if text.len() > 2_000_000 {
             return Err("单个配置文件超过 2 MB 限制".into());
@@ -99,19 +99,82 @@ fn validate_files(tool: CliId, files: &BTreeMap<String, String>) -> Result<(), S
             return Err("单个配置文件解析后超过 2 MB 限制".into());
         }
         reject_plaintext_secrets(&parsed)?;
+        if tool == CliId::Pi && role == "models" {
+            if let Some(providers) = parsed
+                .get("providers")
+                .and_then(serde_json::Value::as_object)
+            {
+                for (name, provider) in providers {
+                    if let Some(key) = provider.get("apiKey").and_then(serde_json::Value::as_str) {
+                        let valid = key
+                            .strip_prefix('$')
+                            .and_then(|tail| {
+                                tail.strip_prefix('{')
+                                    .and_then(|value| value.strip_suffix('}'))
+                                    .or(Some(tail))
+                            })
+                            .is_some_and(valid_env_name);
+                        if !valid {
+                            return Err(format!("Pi 供应商 {name} 的 apiKey 须使用 $NAME 或 ${{NAME}} 环境变量引用；请通过安全接入迁移字面密钥"));
+                        }
+                    }
+                }
+            }
+        }
+        if tool == CliId::OpenCode && role == "settings" {
+            if let Some(providers) = parsed
+                .get("provider")
+                .and_then(serde_json::Value::as_object)
+            {
+                for (name, provider) in providers {
+                    if let Some(key) = provider
+                        .get("options")
+                        .and_then(|value| value.get("apiKey"))
+                        .and_then(serde_json::Value::as_str)
+                    {
+                        if !key
+                            .strip_prefix("{env:")
+                            .and_then(|tail| tail.strip_suffix('}'))
+                            .is_some_and(valid_env_name)
+                        {
+                            return Err(format!("OpenCode 供应商 {name} 的 apiKey 须使用 {{env:NAME}}；请通过安全接入迁移字面密钥"));
+                        }
+                    }
+                }
+            }
+        }
+        if tool == CliId::ClaudeCode && role == "settings" {
+            if let Some(env) = parsed.get("env").and_then(serde_json::Value::as_object) {
+                if env.contains_key("ANTHROPIC_API_KEY") || env.contains_key("ANTHROPIC_AUTH_TOKEN")
+                {
+                    return Err("Claude Code 原生配置中的认证字段不能存入草稿；请通过安全接入迁入系统凭据库".into());
+                }
+            }
+        }
     }
     Ok(())
 }
 
-fn looks_like_env_ref(value: &str) -> bool {
-    let name = value
-        .strip_prefix("{env:")
-        .and_then(|tail| tail.strip_suffix('}'))
-        .unwrap_or(value);
-    !name.is_empty()
+pub(crate) fn valid_env_name(name: &str) -> bool {
+    name.chars()
+        .next()
+        .is_some_and(|first| first.is_ascii_uppercase() || first == '_')
         && name.chars().all(|character| {
             character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
         })
+}
+
+pub(crate) fn env_ref_name(value: &str) -> Option<&str> {
+    let name = value
+        .strip_prefix("{env:")
+        .and_then(|tail| tail.strip_suffix('}'))
+        .or_else(|| {
+            value
+                .strip_prefix("${")
+                .and_then(|tail| tail.strip_suffix('}'))
+        })
+        .or_else(|| value.strip_prefix('$'))?;
+    valid_env_name(name).then_some(name)
 }
 
 fn reject_plaintext_secrets(value: &serde_json::Value) -> Result<(), String> {
@@ -145,7 +208,7 @@ fn reject_plaintext_secrets(value: &serde_json::Value) -> Result<(), String> {
                         | "secret"
                         | "token"
                 );
-                if sensitive && !looks_like_env_ref(value) {
+                if sensitive && env_ref_name(value).is_none() {
                     return Err(format!(
                         "原生字段 {} 可能包含明文密钥；请使用 CLI 原生登录或环境变量引用",
                         path.join(".")
@@ -227,6 +290,66 @@ pub fn get_profile(db: &Database, id: &str) -> Result<NativeProfile, String> {
     })
 }
 
+pub(crate) fn validate_connection(connection: &Connection) -> Result<(), String> {
+    if connection.provider_id.trim().is_empty() {
+        return Err("供应商 ID 不能为空".into());
+    }
+    if connection.provider_id.len() > 80
+        || !connection
+            .provider_id
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_ascii_alphanumeric())
+        || !connection.provider_id.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.')
+        })
+    {
+        return Err("供应商 ID 只能使用字母、数字、点、连字符和下划线".into());
+    }
+    if connection.model.trim().is_empty() {
+        return Err("模型 ID 不能为空".into());
+    }
+    if connection.model.len() > 200 || connection.model.chars().any(char::is_control) {
+        return Err("模型 ID 不能包含控制字符或超过 200 个字符".into());
+    }
+    if connection.base_url.trim().is_empty() {
+        return Err("连接地址不能为空".into());
+    }
+    let url = url::Url::parse(&connection.base_url).map_err(|_| "连接地址不是有效 URL")?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+        || url.query().is_some()
+    {
+        return Err("连接地址须为不含凭据、查询和片段的 HTTP(S) URL".into());
+    }
+    if url.scheme() == "http"
+        && !matches!(
+            url.host_str(),
+            Some("localhost" | "127.0.0.1" | "[::1]" | "::1")
+        )
+    {
+        return Err("远程供应商地址须使用 HTTPS".into());
+    }
+    if connection
+        .auth_env_var
+        .as_deref()
+        .is_some_and(|value| !valid_env_name(value))
+    {
+        return Err("认证环境变量名称只能包含大写字母、数字和下划线".into());
+    }
+    if connection
+        .secret_ref
+        .as_deref()
+        .is_some_and(|id| !valid_connection_secret_ref(id))
+    {
+        return Err("连接密钥标识无效；请重新保存密钥".into());
+    }
+    Ok(())
+}
+
 pub fn save_profile(
     db: &Database,
     mut profile: NativeProfile,
@@ -240,63 +363,7 @@ pub fn save_profile(
     }
     validate_files(profile.tool, &profile.files)?;
     if let Some(connection) = &profile.connection {
-        if connection.provider_id.trim().is_empty() {
-            return Err("供应商 ID 不能为空".into());
-        }
-        if connection.provider_id.len() > 80
-            || !connection
-                .provider_id
-                .chars()
-                .next()
-                .is_some_and(|character| character.is_ascii_alphanumeric())
-            || !connection.provider_id.chars().all(|character| {
-                character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.')
-            })
-        {
-            return Err("供应商 ID 只能使用字母、数字、点、连字符和下划线".into());
-        }
-        if connection.model.trim().is_empty() {
-            return Err("模型 ID 不能为空".into());
-        }
-        if connection.model.len() > 200 || connection.model.chars().any(char::is_control) {
-            return Err("模型 ID 不能包含控制字符或超过 200 个字符".into());
-        }
-        if connection.base_url.trim().is_empty() {
-            return Err("连接地址不能为空".into());
-        }
-        let url = url::Url::parse(&connection.base_url).map_err(|_| "连接地址不是有效 URL")?;
-        if !matches!(url.scheme(), "http" | "https")
-            || url.host_str().is_none()
-            || !url.username().is_empty()
-            || url.password().is_some()
-            || url.fragment().is_some()
-            || url.query().is_some()
-        {
-            return Err("连接地址须为不含凭据、查询和片段的 HTTP(S) URL".into());
-        }
-        if url.scheme() == "http"
-            && !matches!(
-                url.host_str(),
-                Some("localhost" | "127.0.0.1" | "[::1]" | "::1")
-            )
-        {
-            return Err("远程供应商地址须使用 HTTPS".into());
-        }
-        if connection.auth_env_var.as_deref().is_some_and(|value| {
-            value.is_empty()
-                || !value.chars().all(|character| {
-                    character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
-                })
-        }) {
-            return Err("认证环境变量名称只能包含大写字母、数字和下划线".into());
-        }
-        if connection
-            .secret_ref
-            .as_deref()
-            .is_some_and(|id| !valid_connection_secret_ref(id))
-        {
-            return Err("连接密钥标识无效；请重新保存密钥".into());
-        }
+        validate_connection(connection)?;
     }
     db.with_connection(|conn| {
         let tx = conn.transaction().map_err(|e| e.to_string())?;
@@ -461,7 +528,18 @@ mod tests {
             "models".into(),
             r#"{"providers":{"mine":{"apiKey":"MY_KEY"}}}"#.into(),
         );
-        save_profile(&db, item, None).unwrap();
+        assert!(save_profile(&db, item.clone(), None).is_err());
+        assert!(list_profiles(&db, CliId::Pi).unwrap().is_empty());
+        for reference in ["$MY_KEY", "${MY_KEY}"] {
+            item.files.insert(
+                "models".into(),
+                format!(r#"{{"providers":{{"mine":{{"apiKey":"{reference}"}}}}}}"#),
+            );
+            let saved = save_profile(&db, item.clone(), None).unwrap();
+            assert!(saved.files["models"].contains(reference));
+            delete_profile(&db, &saved.id, saved.version).unwrap();
+        }
+        assert_eq!(env_ref_name("MY_KEY"), None);
     }
 
     #[test]
