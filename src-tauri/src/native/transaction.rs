@@ -310,16 +310,7 @@ where
         return Err("没有需要写入的原生字段".into());
     }
     let targets: Vec<_> = prepared.iter().map(|(item, _)| item.path.clone()).collect();
-    let pending = db.with_connection(|conn| {
-        let mut statement = conn.prepare("SELECT data FROM native_transactions WHERE status IN ('prepared', 'applying', 'recovery_needed')").map_err(|e| e.to_string())?;
-        let rows = statement.query_map([], |row| row.get::<_, String>(0)).map_err(|e| e.to_string())?;
-        let mut collision = false;
-        for row in rows {
-            let journal: Journal = serde_json::from_str(&row.map_err(|e| e.to_string())?).map_err(|_| "原生事务日志损坏")?;
-            collision |= journal.files.iter().any(|item| targets.contains(&item.path));
-        }
-        Ok(collision)
-    })?;
+    let pending = pending_target_collision(db, &targets)?;
     if pending {
         return Err("目标文件有未解决的原生事务，请先恢复".into());
     }
@@ -396,6 +387,51 @@ where
     })
 }
 
+fn pending_target_collision(db: &Database, targets: &[PathBuf]) -> Result<bool, String> {
+    db.with_connection(|conn| {
+        let mut statement = conn.prepare("SELECT data FROM native_transactions WHERE status IN ('prepared', 'applying', 'recovery_needed')").map_err(|e| e.to_string())?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0)).map_err(|e| e.to_string())?;
+        let mut collision = false;
+        for row in rows {
+            let journal: Journal = serde_json::from_str(&row.map_err(|e| e.to_string())?).map_err(|_| "原生事务日志损坏")?;
+            collision |= journal.files.iter().any(|item| targets.contains(&item.path));
+        }
+        Ok(collision)
+    })
+}
+
+/// Commit a matching profile only while the same native-write lock protects the
+/// pending journal check and a second read of every unchanged target.
+pub fn commit_matching<F>(
+    db: &Database,
+    baselines: &[(PathBuf, String)],
+    commit: F,
+) -> Result<ApplyOutcome, String>
+where
+    F: FnOnce(&rusqlite::Transaction<'_>) -> Result<(), String>,
+{
+    let _guard = write_lock().lock().map_err(|_| "原生事务服务暂时不可用")?;
+    let targets: Vec<_> = baselines.iter().map(|(path, _)| path.clone()).collect();
+    if pending_target_collision(db, &targets)? {
+        return Err("目标文件有未解决的原生事务，请先恢复".into());
+    }
+    for (path, baseline) in baselines {
+        if fingerprint(read_native(path)?.as_bytes()) != fingerprint(baseline.as_bytes()) {
+            return Err(format!("原生文件在检查期间发生变化：{}", path.display()));
+        }
+    }
+    db.with_connection(|conn| {
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        commit(&tx)?;
+        tx.commit().map_err(|e| e.to_string())
+    })?;
+    Ok(ApplyOutcome {
+        transaction_id: "already-matching".into(),
+        changed_files: Vec::new(),
+        status: "already_matching",
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -421,6 +457,44 @@ mod tests {
             self.0.lock().unwrap().remove(id);
             Ok(())
         }
+    }
+
+    #[test]
+    fn matching_commit_refuses_pending_target_without_changing_binding() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("config.toml");
+        fs::write(&file, "model = \"one\"\n").unwrap();
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        let journal = Journal {
+            id: "pending".into(),
+            key_id: "missing".into(),
+            files: vec![JournalFile {
+                path: file.clone(),
+                existed: true,
+                old_hash: fingerprint(b"model = \"one\"\n"),
+                new_hash: fingerprint(b"model = \"two\"\n"),
+                backup: None,
+                nonce: None,
+                old_readonly: false,
+            }],
+        };
+        save_journal(&db, &journal, "recovery_needed").unwrap();
+        let result = commit_matching(&db, &[(file.clone(), "model = \"one\"\n".into())], |tx| {
+            tx.execute("INSERT INTO applied_bindings (scope_key, tool, profile_id, profile_version, managed) VALUES ('global', 'codex', 'new', 2, '{}')", []).map_err(|e| e.to_string())?;
+            Ok(())
+        });
+        assert!(result.unwrap_err().contains("未解决"));
+        db.with_connection(|conn| {
+            let count: i64 = conn
+                .query_row("SELECT count(*) FROM applied_bindings", [], |row| {
+                    row.get(0)
+                })
+                .map_err(|e| e.to_string())?;
+            assert_eq!(count, 0);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(fs::read_to_string(file).unwrap(), "model = \"one\"\n");
     }
 
     #[test]

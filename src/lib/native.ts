@@ -1,6 +1,6 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import type { ApiError, Bootstrap, CliId, Theme } from '../types/domain';
-import type { ApplyOutcome, CommonConfig, CommonSaveResult, Connection, ModelDirectory, NativePreview, NativeProfile, Scope, ToolWorkspace } from '../types/native';
+import type { ApplyOutcome, CommonConfig, CommonSaveResult, Connection, ConnectionCheck, ModelDirectory, NativeInspection, NativePreview, NativeProfile, Scope, ToolWorkspace } from '../types/native';
 
 export const nativeAvailable = isTauri();
 
@@ -42,5 +42,8 @@ export const native = {
   recoverNativeTransactions: () => command<string[]>('recover_native_transactions'),
   setConnectionSecret: (secret: string) => command<string>('set_connection_secret', { secret }),
   listProviderModels: (connection: Connection, force: boolean, query = '') => command<ModelDirectory>('list_provider_models', { connection, force, query }),
+  testProviderConnection: (tool: CliId, connection: Connection, allowModelRequest: boolean) => command<ConnectionCheck>('test_provider_connection', { tool, connection, allowModelRequest }),
+  inspectNativeDraft: (tool: CliId, files: Record<string, string>) => command<NativeInspection>('inspect_native_draft', { tool, files }),
+  setCodexReasoningEffort: (text: string, effort: string | null) => command<string>('set_codex_reasoning_effort', { text, effort }),
   previewNativeProfile: (profile: NativeProfile, scope: Scope) => command<NativePreview>('preview_native_profile', { profile, scope }),
 };

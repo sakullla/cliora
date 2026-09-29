@@ -1,4 +1,5 @@
 use std::env;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -17,6 +18,25 @@ pub struct Installation {
     pub source: &'static str,
     pub status: &'static str,
     pub detail: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Dependency {
+    pub name: &'static str,
+    pub status: &'static str,
+    pub detail: &'static str,
+    pub help_url: &'static str,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderPreset {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub base_url: &'static str,
+    pub interface_format: &'static str,
+    pub source_url: &'static str,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -49,6 +69,202 @@ pub struct ToolProbe {
     pub interface_formats: Vec<&'static str>,
     pub install_url: &'static str,
     pub upgrade_hint: &'static str,
+    pub dependencies: Vec<Dependency>,
+    pub install_command: Option<String>,
+    pub upgrade_command: Option<String>,
+    pub provider_presets: Vec<ProviderPreset>,
+}
+
+fn provider_presets(tool: CliId, known: bool) -> Vec<ProviderPreset> {
+    let formats = interface_formats(tool, known);
+    let mut presets = Vec::new();
+    if formats.contains(&"openai_responses") {
+        presets.push(ProviderPreset {
+            id: "openai",
+            label: "OpenAI",
+            base_url: "https://api.openai.com/v1",
+            interface_format: "openai_responses",
+            source_url: "https://developers.openai.com/api/docs",
+        });
+        presets.push(ProviderPreset {
+            id: "xai",
+            label: "xAI",
+            base_url: "https://api.x.ai/v1",
+            interface_format: "openai_responses",
+            source_url: "https://docs.x.ai/overview",
+        });
+    }
+    if formats.contains(&"anthropic_messages") {
+        presets.push(ProviderPreset {
+            id: "anthropic",
+            label: "Anthropic API",
+            base_url: if tool == CliId::ClaudeCode {
+                "https://api.anthropic.com"
+            } else {
+                "https://api.anthropic.com/v1"
+            },
+            interface_format: "anthropic_messages",
+            source_url: "https://platform.claude.com/docs/en/api/overview",
+        });
+    }
+    presets
+}
+
+fn npm_package(tool: CliId) -> &'static str {
+    match tool {
+        CliId::Codex => "@openai/codex",
+        CliId::ClaudeCode => "@anthropic-ai/claude-code",
+        CliId::Grok => "@xai-official/grok",
+        CliId::Pi => "@mariozechner/pi-coding-agent",
+        CliId::OpenCode => "opencode-ai",
+    }
+}
+
+fn source_of(path: &Path, tool: CliId) -> &'static str {
+    let ext = path.extension().and_then(|v| v.to_str()).unwrap_or("");
+    if ext.eq_ignore_ascii_case("ps1") || ext.eq_ignore_ascii_case("cmd") {
+        if let Ok(file) = std::fs::File::open(path) {
+            let mut bytes = Vec::new();
+            if file.take(16_384).read_to_end(&mut bytes).is_err() {
+                return "unknown";
+            }
+            let sample = String::from_utf8_lossy(&bytes).replace('\\', "/");
+            if sample.contains("node_modules/") && sample.contains(npm_package(tool)) {
+                return "npm_shim";
+            }
+        }
+    }
+    let normalized = path
+        .to_string_lossy()
+        .replace('\\', "/")
+        .to_ascii_lowercase();
+    if tool == CliId::ClaudeCode && normalized.contains("/.local/bin/claude") {
+        return "claude_native";
+    }
+    "unknown"
+}
+
+fn on_path(name: &str) -> bool {
+    env::var_os("PATH")
+        .into_iter()
+        .flat_map(|paths| env::split_paths(&paths).collect::<Vec<_>>())
+        .any(|dir| {
+            if cfg!(windows) {
+                dir.join(format!("{name}.exe")).is_file()
+                    || dir.join(format!("{name}.cmd")).is_file()
+            } else {
+                dir.join(name).is_file()
+            }
+        })
+}
+
+fn node_major() -> Option<u32> {
+    if !on_path("node") {
+        return None;
+    }
+    let mut child = Command::new("node")
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(20)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+    let output = child.wait_with_output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .trim_start_matches('v')
+        .split('.')
+        .next()?
+        .parse()
+        .ok()
+}
+
+fn dependencies(tool: CliId, source: &str, no_candidates: bool) -> Vec<Dependency> {
+    let mut result = Vec::new();
+    let needs_npm =
+        source == "npm_shim" || (no_candidates && !matches!(tool, CliId::ClaudeCode | CliId::Grok));
+    if needs_npm {
+        let major = node_major();
+        result.push(Dependency {
+            name: "Node.js",
+            status: match major {
+                None => "missing",
+                Some(version) if tool == CliId::ClaudeCode && version < 22 => "outdated",
+                Some(_) => "found",
+            },
+            detail: if tool == CliId::ClaudeCode {
+                "Claude Code 的 npm 安装需要 Node.js 22 或更新版本"
+            } else {
+                "npm 命令入口需要 Node.js"
+            },
+            help_url: "https://nodejs.org/en/download",
+        });
+        result.push(Dependency {
+            name: "npm",
+            status: if on_path("npm") { "found" } else { "missing" },
+            detail: "升级 npm 安装需要 npm",
+            help_url: "https://nodejs.org/en/download",
+        });
+    }
+    if cfg!(windows) && tool == CliId::Pi {
+        let bash = on_path("bash")
+            || env::var_os("ProgramFiles")
+                .is_some_and(|dir| PathBuf::from(dir).join("Git/bin/bash.exe").is_file());
+        result.push(Dependency {
+            name: "Bash",
+            status: if bash { "found" } else { "missing" },
+            detail: "Pi 在 Windows 使用 Bash 执行 shell 工具",
+            help_url: "https://git-scm.com/download/win",
+        });
+    }
+    result
+}
+
+fn install_command(tool: CliId) -> Option<String> {
+    if tool == CliId::ClaudeCode {
+        return Some(
+            if cfg!(windows) {
+                "irm https://claude.ai/install.ps1 | iex"
+            } else {
+                "curl -fsSL https://claude.ai/install.sh | bash"
+            }
+            .into(),
+        );
+    }
+    if tool == CliId::Grok {
+        return Some(
+            if cfg!(windows) {
+                "irm https://x.ai/cli/install.ps1 | iex"
+            } else {
+                "curl -fsSL https://x.ai/cli/install.sh | bash"
+            }
+            .into(),
+        );
+    }
+    Some(format!("npm install -g {}", npm_package(tool)))
+}
+
+fn upgrade_command(tool: CliId, source: &str) -> Option<String> {
+    match source {
+        "npm_shim" => Some(format!("npm install -g {}@latest", npm_package(tool))),
+        "claude_native" if tool == CliId::ClaudeCode => Some("claude update".into()),
+        _ => None,
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -79,7 +295,7 @@ fn install_guidance(tool: CliId) -> (&'static str, &'static str) {
             "按 Claude Code 安装来源更新；原生安装可使用 claude update。",
         ),
         CliId::Grok => (
-            "https://docs.x.ai/build/getting-started",
+            "https://x.ai/cli",
             "按 xAI Build 官方安装说明更新 Grok CLI。",
         ),
         CliId::Pi => (
@@ -146,15 +362,7 @@ fn version_from_output(tool: CliId, path: &Path, output: &str) -> Option<String>
 }
 
 fn run_version(path: &Path, tool: CliId) -> Installation {
-    let source = if path
-        .extension()
-        .and_then(|v| v.to_str())
-        .is_some_and(|v| v.eq_ignore_ascii_case("ps1") || v.eq_ignore_ascii_case("cmd"))
-    {
-        "npm_shim"
-    } else {
-        "executable"
-    };
+    let source = source_of(path, tool);
     let mut command = if cfg!(windows)
         && path
             .extension()
@@ -476,7 +684,7 @@ pub fn native_files(
     }
 }
 
-fn interface_formats(tool: CliId, known: bool) -> Vec<&'static str> {
+pub fn interface_formats(tool: CliId, known: bool) -> Vec<&'static str> {
     if !known {
         return Vec::new();
     }
@@ -541,6 +749,8 @@ pub fn probe(
         }
     };
     let (install_url, upgrade_hint) = install_guidance(tool);
+    let source = selected.map(|item| item.source).unwrap_or("unknown");
+    let no_candidates = installations.is_empty();
     ToolProbe {
         tool,
         selected_path: selected.map(|item| item.path.clone()),
@@ -550,6 +760,14 @@ pub fn probe(
         interface_formats: interface_formats(tool, known),
         install_url,
         upgrade_hint,
+        dependencies: dependencies(tool, source, no_candidates),
+        install_command: if no_candidates {
+            install_command(tool)
+        } else {
+            None
+        },
+        upgrade_command: upgrade_command(tool, source),
+        provider_presets: provider_presets(tool, known),
     }
 }
 
@@ -573,6 +791,35 @@ mod tests {
             version_from_output(CliId::Codex, Path::new("codex.ps1"), "claude 0.158.0"),
             None
         );
+    }
+
+    #[test]
+    fn npm_source_requires_package_evidence_and_unknown_source_gets_no_upgrade_command() {
+        let temp = tempfile::tempdir().unwrap();
+        let shim = temp.path().join("grok.ps1");
+        std::fs::write(&shim, "$basedir/node_modules/@xai-official/grok/bin/grok").unwrap();
+        assert_eq!(source_of(&shim, CliId::Grok), "npm_shim");
+        assert_eq!(
+            upgrade_command(CliId::Grok, source_of(&shim, CliId::Grok)).as_deref(),
+            Some("npm install -g @xai-official/grok@latest")
+        );
+        std::fs::write(&shim, "unrelated launcher").unwrap();
+        assert_eq!(source_of(&shim, CliId::Grok), "unknown");
+        assert_eq!(upgrade_command(CliId::Grok, "unknown"), None);
+    }
+
+    #[test]
+    fn presets_only_offer_documented_addresses_in_tool_supported_formats() {
+        assert!(provider_presets(CliId::Codex, false).is_empty());
+        let codex = provider_presets(CliId::Codex, true);
+        assert_eq!(codex.len(), 2);
+        assert!(codex
+            .iter()
+            .all(|item| item.interface_format == "openai_responses"
+                && item.base_url.starts_with("https://")));
+        let claude = provider_presets(CliId::ClaudeCode, true);
+        assert_eq!(claude.len(), 1);
+        assert_eq!(claude[0].base_url, "https://api.anthropic.com");
     }
 
     #[test]

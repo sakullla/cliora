@@ -10,6 +10,7 @@ use crate::domain::{Bootstrap, CliId, Theme};
 use crate::native::{
     adapter::{self, Scope, ToolProbe},
     apply::{self, AppliedBinding},
+    intake::{self, NativeInspection},
     models::{self, ModelDirectory},
     profile::{self, CommonConfig, Connection, NativeProfile},
     transaction::{self, ApplyOutcome},
@@ -63,11 +64,7 @@ fn open_database(directory: &Path) -> Result<Database, ApiError> {
 }
 
 impl AppState {
-    fn with_database<T>(
-        &self,
-        app: &AppHandle,
-        operation: impl FnOnce(&Database) -> Result<T, ApiError>,
-    ) -> Result<T, ApiError> {
+    fn database(&self, app: &AppHandle) -> Result<Arc<Database>, ApiError> {
         let mut current = self.database.lock().map_err(|_| ApiError {
             code: "storage_unavailable",
             message: "本机数据服务暂时不可用".into(),
@@ -83,18 +80,30 @@ impl AppState {
             })?;
             *current = Some(Arc::new(open_database(&directory)?));
         }
-        let database = current.as_ref().cloned();
-        drop(current);
-        match database {
-            Some(database) => operation(&database),
-            None => Err(ApiError {
-                code: "storage_unavailable",
-                message: "本机数据服务暂时不可用".into(),
-                action: "请重新打开栖点；原数据库不会自动清空。",
-                data_directory: None,
-            }),
-        }
+        current.as_ref().cloned().ok_or(ApiError {
+            code: "storage_unavailable",
+            message: "本机数据服务暂时不可用".into(),
+            action: "请重新打开栖点；原数据库不会自动清空。",
+            data_directory: None,
+        })
     }
+
+    fn with_database<T>(
+        &self,
+        app: &AppHandle,
+        operation: impl FnOnce(&Database) -> Result<T, ApiError>,
+    ) -> Result<T, ApiError> {
+        let database = self.database(app)?;
+        operation(&database)
+    }
+}
+
+async fn blocking<T: Send + 'static>(
+    operation: impl FnOnce() -> Result<T, ApiError> + Send + 'static,
+) -> Result<T, ApiError> {
+    tauri::async_runtime::spawn_blocking(operation)
+        .await
+        .map_err(|_| native_error("后台操作意外中断，请重试".into()))?
 }
 
 fn native_error(message: String) -> ApiError {
@@ -164,89 +173,106 @@ pub struct ToolWorkspace {
 }
 
 #[tauri::command]
-pub fn get_tool_workspace(
+pub async fn get_tool_workspace(
     app: AppHandle,
-    state: State<'_, AppState>,
     tool: CliId,
     scope: Scope,
     project_path: Option<String>,
 ) -> Result<ToolWorkspace, ApiError> {
-    let home = home()?;
-    let project = checked_project(scope, project_path)?;
-    state.with_database(&app, |database| {
-        let custom = tool_path(database, tool).map_err(native_error)?;
-        let probe = adapter::probe(tool, custom.as_deref(), &home, project.as_deref(), scope);
-        let key = match scope {
-            Scope::Global => "global".into(),
-            Scope::Project => format!("project:{}", project.as_ref().unwrap().display()),
-        };
-        let profiles = profile::list_profiles(database, tool).map_err(native_error)?;
-        let common = profile::get_common(database, tool).map_err(native_error)?;
-        let binding = apply::get_binding(database, tool, &key).map_err(native_error)?;
-        let recovery_needed =
-            transaction::recover_pending(database, &SystemCredentialStore).map_err(native_error)?;
-        let snapshots = probe
-            .native_files
-            .iter()
-            .map(|file| {
-                if file.sensitive {
-                    return NativeSnapshot {
-                        role: file.role.into(),
-                        text: None,
-                        fingerprint: None,
-                        error: Some("受保护的原生凭据文件不在通用编辑器中显示".into()),
-                    };
-                }
-                match transaction::read_native(Path::new(&file.path)) {
-                    Ok(text) => NativeSnapshot {
-                        role: file.role.into(),
-                        fingerprint: Some(transaction::fingerprint(text.as_bytes())),
-                        text: Some(text),
-                        error: None,
-                    },
-                    Err(error) => NativeSnapshot {
-                        role: file.role.into(),
-                        text: None,
-                        fingerprint: None,
-                        error: Some(error),
-                    },
-                }
+    blocking(move || {
+        let home = home()?;
+        let project = checked_project(scope, project_path)?;
+        let state = app.state::<AppState>();
+        state.with_database(&app, |database| {
+            let custom = tool_path(database, tool).map_err(native_error)?;
+            let probe = adapter::probe(tool, custom.as_deref(), &home, project.as_deref(), scope);
+            let key = match scope {
+                Scope::Global => "global".into(),
+                Scope::Project => format!("project:{}", project.as_ref().unwrap().display()),
+            };
+            let profiles = profile::list_profiles(database, tool).map_err(native_error)?;
+            let common = profile::get_common(database, tool).map_err(native_error)?;
+            let binding = apply::get_binding(database, tool, &key).map_err(native_error)?;
+            let recovery_needed = transaction::recover_pending(database, &SystemCredentialStore)
+                .map_err(native_error)?;
+            let snapshots = probe
+                .native_files
+                .iter()
+                .map(|file| {
+                    if file.sensitive {
+                        return NativeSnapshot {
+                            role: file.role.into(),
+                            text: None,
+                            fingerprint: None,
+                            error: Some("受保护的原生凭据文件不在通用编辑器中显示".into()),
+                        };
+                    }
+                    match transaction::read_native(Path::new(&file.path)) {
+                        Ok(text) => NativeSnapshot {
+                            role: file.role.into(),
+                            fingerprint: Some(transaction::fingerprint(text.as_bytes())),
+                            text: Some(text),
+                            error: None,
+                        },
+                        Err(error) => NativeSnapshot {
+                            role: file.role.into(),
+                            text: None,
+                            fingerprint: None,
+                            error: Some(error),
+                        },
+                    }
+                })
+                .collect();
+            Ok(ToolWorkspace {
+                probe,
+                custom_path: custom.map(|path| path.display().to_string()),
+                profiles,
+                common,
+                binding,
+                snapshots,
+                recovery_needed,
             })
-            .collect();
-        Ok(ToolWorkspace {
-            probe,
-            custom_path: custom.map(|path| path.display().to_string()),
-            profiles,
-            common,
-            binding,
-            snapshots,
-            recovery_needed,
         })
     })
+    .await
 }
 
 #[tauri::command]
-pub fn set_custom_cli_path(
+pub async fn set_custom_cli_path(
     app: AppHandle,
-    state: State<'_, AppState>,
     tool: CliId,
     path: Option<String>,
 ) -> Result<(), ApiError> {
-    state.with_database(&app, |database| {
-        if let Some(path) = &path {
-            let candidate = PathBuf::from(path);
-            if !candidate.is_file() { return Err(native_error("自定义 CLI 路径不是文件".into())); }
-            let installation = adapter::probe_path(tool, &candidate);
-            if installation.status != "available" { return Err(native_error(installation.detail.unwrap_or("无法确认 CLI 身份".into()))); }
-        }
-        database.with_connection(|conn| {
-            let key = serde_json::to_value(tool).unwrap();
-            let key = key.as_str().unwrap();
-            if let Some(path) = path { conn.execute("INSERT INTO installation_choices (tool, path) VALUES (?1, ?2) ON CONFLICT(tool) DO UPDATE SET path = excluded.path", rusqlite::params![key, path]).map_err(|e| e.to_string())?; }
-            else { conn.execute("DELETE FROM installation_choices WHERE tool = ?1", [key]).map_err(|e| e.to_string())?; }
-            Ok(())
-        }).map_err(native_error)
+    blocking(move || {
+        let state = app.state::<AppState>();
+        state.with_database(&app, |database| {
+            if let Some(path) = &path {
+                let candidate = PathBuf::from(path);
+                if !candidate.is_file() {
+                    return Err(native_error("自定义 CLI 路径不是文件".into()));
+                }
+                let installation = adapter::probe_path(tool, &candidate);
+                if installation.status != "available" {
+                    return Err(native_error(
+                        installation.detail.unwrap_or("无法确认 CLI 身份".into()),
+                    ));
+                }
+            }
+            database
+                .with_connection(|conn| {
+                    let key = serde_json::to_value(tool).unwrap();
+                    let key = key.as_str().unwrap();
+                    if let Some(path) = path {
+                        conn.execute("INSERT INTO installation_choices (tool, path) VALUES (?1, ?2) ON CONFLICT(tool) DO UPDATE SET path = excluded.path", rusqlite::params![key, path]).map_err(|e| e.to_string())?;
+                    } else {
+                        conn.execute("DELETE FROM installation_choices WHERE tool = ?1", [key]).map_err(|e| e.to_string())?;
+                    }
+                    Ok(())
+                })
+                .map_err(native_error)
+        })
     })
+    .await
 }
 
 #[tauri::command]
@@ -274,82 +300,86 @@ pub fn delete_native_profile(
 }
 
 #[tauri::command]
-pub fn save_common_config(
+pub async fn save_common_config(
     app: AppHandle,
-    state: State<'_, AppState>,
     common: CommonConfig,
     expected_version: Option<u64>,
 ) -> Result<CommonSaveResult, ApiError> {
-    let home = home()?;
-    state.with_database(&app, |database| {
-        let saved =
-            profile::save_common(database, common, expected_version).map_err(native_error)?;
-        let tool = saved.tool;
-        let custom = tool_path(database, tool).map_err(native_error)?;
-        let targets: Vec<(String, String)> = database
-            .with_connection(|conn| {
-                let mut statement = conn
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let home = home()?;
+        state.with_database(&app, |database| {
+            let saved =
+                profile::save_common(database, common, expected_version).map_err(native_error)?;
+            let tool = saved.tool;
+            let custom = tool_path(database, tool).map_err(native_error)?;
+            let targets: Vec<(String, String)> =
+                database
+                    .with_connection(|conn| {
+                        let mut statement = conn
                     .prepare("SELECT scope_key, profile_id FROM applied_bindings WHERE tool = ?1")
                     .map_err(|e| e.to_string())?;
-                let rows = statement
-                    .query_map(
-                        [serde_json::to_value(tool).unwrap().as_str().unwrap()],
-                        |row| Ok((row.get(0)?, row.get(1)?)),
-                    )
-                    .map_err(|e| e.to_string())?;
-                rows.map(|row| row.map_err(|e| e.to_string())).collect()
-            })
-            .map_err(native_error)?;
-        let mut applications = Vec::new();
-        for (scope_key, profile_id) in targets {
-            let profile = match profile::get_profile(database, &profile_id) {
-                Ok(profile) => profile,
-                Err(error) => {
-                    applications.push(CommonApplication {
+                        let rows = statement
+                            .query_map(
+                                [serde_json::to_value(tool).unwrap().as_str().unwrap()],
+                                |row| Ok((row.get(0)?, row.get(1)?)),
+                            )
+                            .map_err(|e| e.to_string())?;
+                        rows.map(|row| row.map_err(|e| e.to_string())).collect()
+                    })
+                    .map_err(native_error)?;
+            let mut applications = Vec::new();
+            for (scope_key, profile_id) in targets {
+                let profile = match profile::get_profile(database, &profile_id) {
+                    Ok(profile) => profile,
+                    Err(error) => {
+                        applications.push(CommonApplication {
+                            scope_key,
+                            status: "failed",
+                            detail: Some(error),
+                        });
+                        continue;
+                    }
+                };
+                if !profile.inherit_common {
+                    continue;
+                }
+                let (scope, project) = if let Some(path) = scope_key.strip_prefix("project:") {
+                    (Scope::Project, Some(PathBuf::from(path)))
+                } else {
+                    (Scope::Global, None)
+                };
+                let result = apply::apply_profile(
+                    database,
+                    &SystemCredentialStore,
+                    tool,
+                    &profile_id,
+                    scope,
+                    &home,
+                    project.as_deref(),
+                    custom.as_deref(),
+                    false,
+                );
+                applications.push(match result {
+                    Ok(outcome) => CommonApplication {
+                        scope_key,
+                        status: outcome.status,
+                        detail: None,
+                    },
+                    Err(error) => CommonApplication {
                         scope_key,
                         status: "failed",
                         detail: Some(error),
-                    });
-                    continue;
-                }
-            };
-            if !profile.inherit_common {
-                continue;
+                    },
+                });
             }
-            let (scope, project) = if let Some(path) = scope_key.strip_prefix("project:") {
-                (Scope::Project, Some(PathBuf::from(path)))
-            } else {
-                (Scope::Global, None)
-            };
-            let result = apply::apply_profile(
-                database,
-                &SystemCredentialStore,
-                tool,
-                &profile_id,
-                scope,
-                &home,
-                project.as_deref(),
-                custom.as_deref(),
-                false,
-            );
-            applications.push(match result {
-                Ok(outcome) => CommonApplication {
-                    scope_key,
-                    status: outcome.status,
-                    detail: None,
-                },
-                Err(error) => CommonApplication {
-                    scope_key,
-                    status: "failed",
-                    detail: Some(error),
-                },
-            });
-        }
-        Ok(CommonSaveResult {
-            common: saved,
-            applications,
+            Ok(CommonSaveResult {
+                common: saved,
+                applications,
+            })
         })
     })
+    .await
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -368,68 +398,114 @@ pub struct CommonSaveResult {
 }
 
 #[tauri::command]
-pub fn apply_native_profile(
+pub async fn apply_native_profile(
     app: AppHandle,
-    state: State<'_, AppState>,
     tool: CliId,
     profile_id: String,
     scope: Scope,
     project_path: Option<String>,
     allow_takeover: bool,
 ) -> Result<ApplyOutcome, ApiError> {
-    let home = home()?;
-    let project = checked_project(scope, project_path)?;
-    state.with_database(&app, |database| {
-        let custom = tool_path(database, tool).map_err(native_error)?;
-        apply::apply_profile(
-            database,
-            &SystemCredentialStore,
-            tool,
-            &profile_id,
-            scope,
-            &home,
-            project.as_deref(),
-            custom.as_deref(),
-            allow_takeover,
-        )
-        .map_err(native_error)
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let home = home()?;
+        let project = checked_project(scope, project_path)?;
+        state.with_database(&app, |database| {
+            let custom = tool_path(database, tool).map_err(native_error)?;
+            apply::apply_profile(
+                database,
+                &SystemCredentialStore,
+                tool,
+                &profile_id,
+                scope,
+                &home,
+                project.as_deref(),
+                custom.as_deref(),
+                allow_takeover,
+            )
+            .map_err(native_error)
+        })
     })
+    .await
 }
 
 #[tauri::command]
-pub fn recover_native_transactions(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<Vec<String>, ApiError> {
-    state.with_database(&app, |database| {
-        transaction::recover_pending(database, &SystemCredentialStore).map_err(native_error)
+pub async fn recover_native_transactions(app: AppHandle) -> Result<Vec<String>, ApiError> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        state.with_database(&app, |database| {
+            transaction::recover_pending(database, &SystemCredentialStore).map_err(native_error)
+        })
     })
+    .await
 }
 
 #[tauri::command]
-pub fn set_connection_secret(secret: String) -> Result<String, ApiError> {
-    if secret.is_empty() || secret.len() > 16_384 {
-        return Err(native_error("API 密钥不能为空或超过长度限制".into()));
-    }
-    let id = format!("connection-{}", uuid::Uuid::new_v4());
-    SystemCredentialStore
-        .put(&id, &secret)
-        .map_err(native_error)?;
-    Ok(id)
+pub async fn set_connection_secret(secret: String) -> Result<String, ApiError> {
+    blocking(move || {
+        if secret.is_empty() || secret.len() > 16_384 {
+            return Err(native_error("API 密钥不能为空或超过长度限制".into()));
+        }
+        let id = format!("connection-{}", uuid::Uuid::new_v4());
+        SystemCredentialStore
+            .put(&id, &secret)
+            .map_err(native_error)?;
+        Ok(id)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn list_provider_models(
+pub async fn list_provider_models(
     app: AppHandle,
-    state: State<'_, AppState>,
     connection: Connection,
     force: bool,
     query: String,
 ) -> Result<ModelDirectory, ApiError> {
-    state.with_database(&app, |database| {
-        models::list_models(database, &SystemCredentialStore, &connection, force, &query)
-            .map_err(native_error)
+    blocking(move || {
+        let state = app.state::<AppState>();
+        state.with_database(&app, |database| {
+            models::list_models(database, &SystemCredentialStore, &connection, force, &query)
+                .map_err(native_error)
+        })
     })
+    .await
+}
+
+#[tauri::command]
+pub async fn test_provider_connection(
+    tool: CliId,
+    connection: Connection,
+    allow_model_request: bool,
+) -> Result<models::ConnectionCheck, ApiError> {
+    blocking(move || {
+        Ok(models::test_connection(
+            tool,
+            &connection,
+            &SystemCredentialStore,
+            allow_model_request,
+        ))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn inspect_native_draft(
+    tool: CliId,
+    files: std::collections::BTreeMap<String, String>,
+) -> Result<NativeInspection, ApiError> {
+    blocking(move || intake::inspect(tool, &files).map_err(native_error)).await
+}
+
+#[tauri::command]
+pub async fn set_codex_reasoning_effort(
+    text: String,
+    effort: Option<String>,
+) -> Result<String, ApiError> {
+    blocking(move || {
+        intake::set_codex_reasoning_effort(&text, effort.as_deref()).map_err(native_error)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -486,6 +562,17 @@ pub fn set_theme(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slow_native_work_runs_on_background_thread() {
+        let invocation_thread = std::thread::current().id();
+        let worker_thread = tauri::async_runtime::block_on(blocking(move || {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            Ok(std::thread::current().id())
+        }))
+        .unwrap();
+        assert_ne!(invocation_thread, worker_thread);
+    }
 
     #[test]
     fn damaged_database_is_preserved_and_can_be_retried_after_external_repair() {

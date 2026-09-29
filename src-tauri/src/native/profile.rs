@@ -20,6 +20,26 @@ pub struct Connection {
     pub auth_env_var: Option<String>,
 }
 
+/// Name used by native config and by the launcher's child-only environment.
+/// A stored key is never written into a native config file or sent over IPC.
+pub fn auth_env_name(tool: CliId, connection: &Connection) -> Option<String> {
+    if let Some(name) = &connection.auth_env_var {
+        return Some(name.clone());
+    }
+    connection.secret_ref.as_ref()?;
+    if tool == CliId::ClaudeCode {
+        return Some("ANTHROPIC_API_KEY".into());
+    }
+    let tool_name = tool_key(tool).to_ascii_uppercase().replace('-', "_");
+    let provider = connection
+        .provider_id
+        .to_ascii_uppercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect::<String>();
+    Some(format!("CLIORA_{tool_name}_{provider}_API_KEY"))
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeProfile {
@@ -270,6 +290,13 @@ pub fn save_profile(
         }) {
             return Err("认证环境变量名称只能包含大写字母、数字和下划线".into());
         }
+        if connection
+            .secret_ref
+            .as_deref()
+            .is_some_and(|id| !valid_connection_secret_ref(id))
+        {
+            return Err("连接密钥标识无效；请重新保存密钥".into());
+        }
     }
     db.with_connection(|conn| {
         let tx = conn.transaction().map_err(|e| e.to_string())?;
@@ -289,6 +316,11 @@ pub fn save_profile(
         tx.commit().map_err(|e| e.to_string())?;
         Ok(profile)
     })
+}
+
+pub fn valid_connection_secret_ref(id: &str) -> bool {
+    id.strip_prefix("connection-")
+        .is_some_and(|uuid| Uuid::parse_str(uuid).is_ok())
 }
 
 pub fn delete_profile(db: &Database, id: &str, expected_version: u64) -> Result<(), String> {

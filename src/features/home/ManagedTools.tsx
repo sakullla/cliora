@@ -49,11 +49,12 @@ export function ManagedTools({ tools, onOpenTool }: { tools: CliId[]; onOpenTool
       const loaded = states[tool];
       const workspace = loaded?.workspace;
       const selected = workspace?.profiles.find((item) => item.id === workspace.binding?.profileId);
+      const appliedCurrent = !!selected && workspace?.binding?.profileVersion === selected.version;
       const installed = !!workspace?.probe.selectedPath;
       const writable = workspace?.probe.nativeWrites.state === 'supported';
       return <div className={styles.row} key={tool}>
         <div className={styles.name}><span className={styles.icon}>{CLI_NAMES[tool].slice(0, 1)}</span><span><strong>{CLI_NAMES[tool]}</strong><small>{loaded?.error ? '检测失败' : workspace ? installed ? workspace.probe.installations.find((item) => item.path === workspace.probe.selectedPath)?.version ?? '已安装' : '未确认安装' : '正在检测'}</small></span></div>
-        <div className={styles.current}>{workspace?.profiles.length && writable ? <select aria-label={`${CLI_NAMES[tool]} 全局配置`} value={selected?.id ?? ''} disabled={loaded?.busy} onChange={(event) => void switchProfile(tool, event.target.value)}><option value="">选择配置</option>{workspace.profiles.map((item) => <option key={item.id} value={item.id}>{item.name}{item.connection?.model ? ` · ${item.connection.model}` : ''}</option>)}</select> : <span>{!workspace ? '尚未检测' : !workspace.profiles.length ? '尚未配置' : '此版本暂不能安全切换'}</span>}<small>{loaded?.error ?? (selected ? '已写入原生文件 · 下次启动读取' : workspace?.probe.nativeWrites.reason ?? '等待检测')}</small></div>
+        <div className={styles.current}>{workspace?.profiles.length && writable ? <select aria-label={`${CLI_NAMES[tool]} 全局配置`} value={appliedCurrent ? selected.id : ''} disabled={loaded?.busy} onChange={(event) => void switchProfile(tool, event.target.value)}><option value="">{selected && !appliedCurrent ? `${selected.name} · 有未应用修改` : '选择配置'}</option>{workspace.profiles.map((item) => <option key={item.id} value={item.id}>{item.name}{item.connection?.model ? ` · ${item.connection.model}` : ''}</option>)}</select> : <span>{!workspace ? '尚未检测' : !workspace.profiles.length ? '尚未配置' : '此版本暂不能安全切换'}</span>}<small>{loaded?.error ?? (appliedCurrent ? '已写入原生文件 · 下次启动读取' : selected ? '已保存的修改尚未应用；请在工具页应用' : workspace?.probe.nativeWrites.reason ?? '等待检测')}</small></div>
         <button type="button" onClick={() => onOpenTool(tool)}>编辑配置 →</button>
       </div>;
     })}

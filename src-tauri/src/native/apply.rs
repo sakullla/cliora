@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::adapter::{self, NativeFile, Scope};
+use super::auth;
 use super::format;
 use super::profile::{self, Connection, NativeProfile};
 use super::transaction::{self, ApplyOutcome, FieldChange, FilePatch};
@@ -101,7 +102,8 @@ fn connection_documents(
     let provider = connection.provider_id.as_str();
     let model = connection.model.as_str();
     let base = connection.base_url.as_str();
-    let env = connection.auth_env_var.as_deref();
+    let env_name = profile::auth_env_name(tool, connection);
+    let env = env_name.as_deref();
     match tool {
         CliId::Codex => {
             if format != "openai_responses" {
@@ -362,6 +364,7 @@ pub fn apply_validated(
         .cloned()
         .collect();
     let mut patches = Vec::new();
+    let mut matching_baselines = Vec::new();
     for role in roles {
         let native = native_files
             .iter()
@@ -378,6 +381,7 @@ pub fn apply_validated(
         };
         let file_path = Path::new(&native.path);
         let baseline = transaction::read_native(file_path)?;
+        matching_baselines.push((file_path.to_path_buf(), baseline.clone()));
         let original = format::parse(kind, &baseline)?;
         let next_fields = new_managed.get(&role);
         let previous_fields = old_managed.and_then(|managed| managed.get(&role));
@@ -421,16 +425,10 @@ pub fn apply_validated(
         }
     }
     if patches.is_empty() {
-        db.with_connection(|conn| {
-            let tx = conn.transaction().map_err(|e| e.to_string())?;
+        return transaction::commit_matching(db, &matching_baselines, |tx| {
             let json = serde_json::to_string(&new_managed).map_err(|e| e.to_string())?;
             tx.execute("INSERT INTO applied_bindings (scope_key, tool, profile_id, profile_version, managed) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(scope_key, tool) DO UPDATE SET profile_id = excluded.profile_id, profile_version = excluded.profile_version, managed = excluded.managed", params![key, tool_key(profile.tool), profile.id, profile.version as i64, json]).map_err(|e| e.to_string())?;
-            tx.commit().map_err(|e| e.to_string())
-        })?;
-        return Ok(ApplyOutcome {
-            transaction_id: "already-matching".into(),
-            changed_files: Vec::new(),
-            status: "already_matching",
+            Ok(())
         });
     }
     transaction::apply(db, credentials, &patches, |tx| {
@@ -454,6 +452,9 @@ pub fn apply_profile(
     let profile = profile::get_profile(db, profile_id)?;
     if profile.tool != tool {
         return Err("配置属于另一个 CLI".into());
+    }
+    if let Some(connection) = &profile.connection {
+        auth::verify_stored_credential(connection, credentials)?;
     }
     let common = profile::get_common(db, tool)?;
     let key = scope_key(scope, project)?;
