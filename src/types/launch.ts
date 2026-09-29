@@ -22,6 +22,7 @@ export type TrayStatus = { available: boolean; error: string | null };
 
 export type TrayRepairTarget = {
   page: 'home' | 'connections' | 'settings';
+  resourceView?: 'config' | 'mcp' | 'skills' | null;
   toolId: string | null;
   scope: 'global' | 'project' | null;
   projectId: string | null;

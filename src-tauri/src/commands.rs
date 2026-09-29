@@ -379,6 +379,18 @@ pub async fn list_skill_installations(
 }
 
 #[tauri::command]
+pub async fn list_skill_recovery_issues(
+    app: AppHandle,
+) -> Result<Vec<resources::skills::SkillRecoveryIssue>, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            resources::skills::recover_report(db).map_err(native_error)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn scan_native_skills(
     app: AppHandle,
     tool_id: String,

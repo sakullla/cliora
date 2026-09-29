@@ -53,7 +53,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, repair, onDirtyCh
   };
   const [commonDraft, setCommonDraft] = useState<RegisteredCommon | null>(null);
   const [view, setView] = useState<View>('native');
-  const [resourceView, setResourceView] = useState<'config' | 'mcp' | 'skills'>('config');
+  const [resourceView, setResourceView] = useState<'config' | 'mcp' | 'skills'>(repair?.resourceView ?? 'config');
   const [mcpDirty, setMcpDirty] = useState(false);
   const [skillsDirty, setSkillsDirty] = useState(false);
   const [role, setRole] = useState('settings');
@@ -139,6 +139,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, repair, onDirtyCh
     setProjectPath(repair.projectPath ?? '');
     setProjectInput(repair.projectPath ?? '');
     setPreferredProfileId(repair.profileId);
+    setResourceView(repair.resourceView ?? 'config');
     setNotice('已打开托盘操作对应的配置位置。');
     if (repair.toolId === currentTool && repair.scope === scope && (repair.projectPath ?? '') === projectPath && repair.profileId === preferredProfileId) {
       void reload(repair.toolId, repair.scope, repair.projectPath ?? '', repair.profileId);

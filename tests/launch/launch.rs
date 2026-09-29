@@ -116,8 +116,9 @@ fn launch_recovers_interrupted_skills_before_tool_probe_without_opening_tools_pa
     assert_eq!(pending, 0);
 }
 
+#[cfg(windows)]
 #[test]
-fn launch_blocks_on_unrecoverable_skill_backup_before_starting_cli() {
+fn damaged_claude_skill_backup_blocks_claude_but_not_grok_launch() {
     let temp = tempfile::tempdir().unwrap();
     let db = Database::open(&temp.path().join("app.db")).unwrap();
     let parent = temp.path().join(".claude/skills");
@@ -135,20 +136,124 @@ fn launch_blocks_on_unrecoverable_skill_backup_before_starting_cli() {
         "INSERT INTO skill_operations (id, package_id, tool, scope_key, target_path, stage_path, backup_path, old_digest, old_managed_digest, new_digest, removing, status) VALUES ('interrupted', 'package', 'claude_code', 'global', ?1, ?2, ?3, 'different-digest', NULL, NULL, 1, 'committed')",
         params![target.display().to_string(), stage.display().to_string(), backup.display().to_string()],
     ).map(|_| ()).map_err(|error| error.to_string())).unwrap();
+    let cli = temp.path().join("grok.ps1");
+    std::fs::write(&cli, "Write-Output 'grok 1.0.0'\n").unwrap();
+    db.with_connection(|conn| {
+        conn.execute(
+            "INSERT INTO installation_choices (tool, path) VALUES ('grok', ?1)",
+            [cli.to_str().unwrap()],
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+    })
+    .unwrap();
+    let unrelated = plan_with_stage(
+        &db,
+        &Registry::builtins(),
+        temp.path(),
+        LaunchRequest {
+            tool_id: "grok".into(),
+            project_id: None,
+            session_id: None,
+            mode: LaunchMode::Normal,
+        },
+    )
+    .unwrap();
+    assert_eq!(unrelated.tool_id, "grok");
     let failure = plan_with_stage(
         &db,
         &Registry::builtins(),
         temp.path(),
         LaunchRequest {
-            tool_id: "codex".into(),
+            tool_id: "claude_code".into(),
             project_id: None,
             session_id: None,
             mode: LaunchMode::Normal,
         },
     )
     .unwrap_err();
-    assert_eq!(failure.stage, LaunchStage::Configuration);
+    assert_eq!(failure.stage, LaunchStage::Skills);
     assert!(failure.message.contains("备份"));
+    assert!(backup.exists());
+}
+
+#[cfg(windows)]
+#[test]
+fn damaged_project_skill_backup_only_blocks_that_project() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("app.db")).unwrap();
+    let registry = Registry::builtins();
+    let cli = temp.path().join("grok.ps1");
+    std::fs::write(&cli, "Write-Output 'grok 1.0.0'\n").unwrap();
+    db.with_connection(|conn| {
+        conn.execute(
+            "INSERT INTO installation_choices (tool, path) VALUES ('grok', ?1)",
+            [cli.to_str().unwrap()],
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+    })
+    .unwrap();
+    let first_path = temp.path().join("first");
+    let second_path = temp.path().join("second");
+    std::fs::create_dir_all(&first_path).unwrap();
+    std::fs::create_dir_all(&second_path).unwrap();
+    let first = projects::add(
+        &db,
+        &registry,
+        first_path.to_str().unwrap(),
+        None,
+        Some("grok"),
+    )
+    .unwrap();
+    let second = projects::add(
+        &db,
+        &registry,
+        second_path.to_str().unwrap(),
+        None,
+        Some("grok"),
+    )
+    .unwrap();
+    let parent = first_path.join(".grok/skills");
+    std::fs::create_dir_all(&parent).unwrap();
+    let target = parent.join("sample");
+    let stage = parent.join(".cliora-stage-interrupted");
+    let backup = parent.join(".cliora-backup-interrupted");
+    std::fs::create_dir(&backup).unwrap();
+    std::fs::write(
+        backup.join("SKILL.md"),
+        "---\nname: sample\ndescription: Previous\n---\n",
+    )
+    .unwrap();
+    let scope = format!("project:{}", first_path.canonicalize().unwrap().display());
+    db.with_connection(|conn| conn.execute(
+        "INSERT INTO skill_operations (id, package_id, tool, scope_key, target_path, stage_path, backup_path, old_digest, old_managed_digest, new_digest, removing, status) VALUES ('interrupted', 'package', 'grok', ?1, ?2, ?3, ?4, 'different-digest', NULL, NULL, 1, 'committed')",
+        params![scope, target.display().to_string(), stage.display().to_string(), backup.display().to_string()],
+    ).map(|_| ()).map_err(|error| error.to_string())).unwrap();
+    let request = |project_id: Option<String>| LaunchRequest {
+        tool_id: "grok".into(),
+        project_id,
+        session_id: None,
+        mode: LaunchMode::Normal,
+    };
+    assert_eq!(
+        plan_with_stage(&db, &registry, temp.path(), request(Some(first.id)))
+            .unwrap_err()
+            .stage,
+        LaunchStage::Skills
+    );
+    assert_eq!(
+        plan_with_stage(&db, &registry, temp.path(), request(Some(second.id)))
+            .unwrap()
+            .tool_id,
+        "grok"
+    );
+    assert_eq!(
+        plan_with_stage(&db, &registry, temp.path(), request(None))
+            .unwrap()
+            .tool_id,
+        "grok"
+    );
     assert!(backup.exists());
 }
 

@@ -255,6 +255,50 @@ struct SkillOperation {
     status: String,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillRecoveryIssue {
+    pub operation_id: String,
+    pub tool_id: String,
+    pub scope: Scope,
+    pub project_path: Option<String>,
+    pub target_path: String,
+    pub backup_path: String,
+    pub detail: String,
+    #[serde(skip)]
+    pub scope_key: String,
+}
+
+impl SkillRecoveryIssue {
+    fn from_operation(op: &SkillOperation, detail: String) -> Self {
+        Self {
+            operation_id: op.id.clone(),
+            tool_id: op.tool.clone(),
+            scope: if op.scope_key == "global" {
+                Scope::Global
+            } else {
+                Scope::Project
+            },
+            project_path: op.scope_key.strip_prefix("project:").map(str::to_owned),
+            target_path: op.target.display().to_string(),
+            backup_path: op.backup.display().to_string(),
+            detail,
+            scope_key: op.scope_key.clone(),
+        }
+    }
+
+    pub fn affects(&self, tool: &str, scope_key: &str) -> bool {
+        self.tool_id == tool && (self.scope_key == "global" || self.scope_key == scope_key)
+    }
+
+    fn message(&self) -> String {
+        format!(
+            "{}：{}；备份保留于 {}",
+            self.tool_id, self.detail, self.backup_path
+        )
+    }
+}
+
 fn save_operation(db: &Database, operation: &SkillOperation) -> Result<(), String> {
     db.with_connection(|conn| conn.execute("INSERT INTO skill_operations (id, package_id, tool, scope_key, target_path, stage_path, backup_path, old_digest, old_managed_digest, new_digest, removing, status) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![operation.id, operation.package_id, operation.tool, operation.scope_key, operation.target.display().to_string(), operation.stage.display().to_string(), operation.backup.display().to_string(), operation.old_digest, operation.old_managed_digest, operation.new_digest, operation.removing as i64, operation.status])
@@ -317,7 +361,7 @@ fn verify_backup(op: &SkillOperation) -> Result<(), String> {
     Ok(())
 }
 
-fn recover_locked(db: &Database) -> Result<(), String> {
+fn recover_locked_report(db: &Database) -> Result<Vec<SkillRecoveryIssue>, String> {
     let operations = db.with_connection(|conn| {
         let mut statement = conn.prepare("SELECT id, package_id, tool, scope_key, target_path, stage_path, backup_path, old_digest, old_managed_digest, new_digest, removing, status FROM skill_operations ORDER BY rowid").map_err(|error| error.to_string())?;
         let rows = statement.query_map([], |row| Ok(SkillOperation {
@@ -325,75 +369,95 @@ fn recover_locked(db: &Database) -> Result<(), String> {
             .map_err(|error| error.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?;
         Ok(rows)
     })?;
+    let mut issues = Vec::new();
     for op in operations {
-        let parent = op.target.parent().ok_or("Skills 恢复路径无效")?;
-        if op.stage.parent() != Some(parent)
-            || op.backup.parent() != Some(parent)
-            || op.stage.file_name().and_then(|v| v.to_str())
-                != Some(format!(".cliora-stage-{}", op.id).as_str())
-            || op.backup.file_name().and_then(|v| v.to_str())
-                != Some(format!(".cliora-backup-{}", op.id).as_str())
-        {
-            return Err("Skills 恢复记录路径不匹配；请检查应用数据".into());
-        }
-        if op.status == "committed" {
-            let actual = on_disk(&op.target)?;
-            if actual == op.new_digest {
+        let attempt = (|| {
+            let parent = op.target.parent().ok_or("Skills 恢复路径无效")?;
+            if op.stage.parent() != Some(parent)
+                || op.backup.parent() != Some(parent)
+                || op.stage.file_name().and_then(|v| v.to_str())
+                    != Some(format!(".cliora-stage-{}", op.id).as_str())
+                || op.backup.file_name().and_then(|v| v.to_str())
+                    != Some(format!(".cliora-backup-{}", op.id).as_str())
+            {
+                return Err("Skills 恢复记录路径不匹配；请检查应用数据".into());
+            }
+            if op.status == "committed" {
+                let actual = on_disk(&op.target)?;
+                if actual == op.new_digest {
+                    if op.backup.exists() {
+                        verify_backup(&op)?;
+                        fs::remove_dir_all(&op.backup).map_err(|error| error.to_string())?;
+                    }
+                } else if actual.is_none()
+                    && !op.removing
+                    && (op.backup.exists() || op.old_digest.is_none())
+                {
+                    mark_rollback(db, &op)?;
+                    restore_rollback(&op)?;
+                } else {
+                    return Err(format!(
+                        "Skills {} 在安装后再次变化，保留备份以便检查",
+                        op.target.display()
+                    ));
+                }
+            } else if op.status == "rollback" {
+                restore_rollback(&op)?;
+            } else if op.status == "prepared" {
                 if op.backup.exists() {
                     verify_backup(&op)?;
-                    fs::remove_dir_all(&op.backup).map_err(|error| error.to_string())?;
-                }
-            } else if actual.is_none()
-                && !op.removing
-                && (op.backup.exists() || op.old_digest.is_none())
-            {
-                mark_rollback(db, &op)?;
-                restore_rollback(&op)?;
-            } else {
-                return Err(format!(
-                    "Skills {} 在安装后再次变化，保留备份以便检查",
-                    op.target.display()
-                ));
-            }
-        } else if op.status == "rollback" {
-            restore_rollback(&op)?;
-        } else if op.status == "prepared" {
-            if op.backup.exists() {
-                verify_backup(&op)?;
-                let actual = on_disk(&op.target)?;
-                if actual.is_some() {
-                    if actual != op.new_digest {
-                        return Err("Skills 目录在中断后被外部修改，已保留现场".into());
+                    let actual = on_disk(&op.target)?;
+                    if actual.is_some() {
+                        if actual != op.new_digest {
+                            return Err("Skills 目录在中断后被外部修改，已保留现场".into());
+                        }
+                        fs::remove_dir_all(&op.target).map_err(|error| error.to_string())?;
                     }
-                    fs::remove_dir_all(&op.target).map_err(|error| error.to_string())?;
-                }
-                fs::rename(&op.backup, &op.target).map_err(|error| error.to_string())?;
-            } else {
-                let actual = on_disk(&op.target)?;
-                if op.old_digest.is_some() && actual != op.old_digest {
-                    return Err("Skills 原目录已变化，无法自动恢复".into());
-                }
-                if op.old_digest.is_none() && actual.is_some() {
-                    if actual != op.new_digest {
-                        return Err("Skills 新目录在中断后被外部修改，已保留现场".into());
+                    fs::rename(&op.backup, &op.target).map_err(|error| error.to_string())?;
+                } else {
+                    let actual = on_disk(&op.target)?;
+                    if op.old_digest.is_some() && actual != op.old_digest {
+                        return Err("Skills 原目录已变化，无法自动恢复".into());
                     }
-                    fs::remove_dir_all(&op.target).map_err(|error| error.to_string())?;
+                    if op.old_digest.is_none() && actual.is_some() {
+                        if actual != op.new_digest {
+                            return Err("Skills 新目录在中断后被外部修改，已保留现场".into());
+                        }
+                        fs::remove_dir_all(&op.target).map_err(|error| error.to_string())?;
+                    }
                 }
+            } else {
+                return Err("Skills 恢复记录状态无效".into());
             }
-        } else {
-            return Err("Skills 恢复记录状态无效".into());
+            if op.stage.exists() {
+                fs::remove_dir_all(&op.stage).map_err(|error| error.to_string())?;
+            }
+            clear_operation(db, &op.id)?;
+            Ok::<(), String>(())
+        })();
+        if let Err(detail) = attempt {
+            issues.push(SkillRecoveryIssue::from_operation(&op, detail));
         }
-        if op.stage.exists() {
-            fs::remove_dir_all(&op.stage).map_err(|error| error.to_string())?;
-        }
-        clear_operation(db, &op.id)?;
     }
-    Ok(())
+    Ok(issues)
+}
+
+fn recover_operation_locked(db: &Database, operation_id: &str) -> Result<(), String> {
+    let issues = recover_locked_report(db)?;
+    issues
+        .iter()
+        .find(|issue| issue.operation_id == operation_id)
+        .map_or(Ok(()), |issue| Err(issue.message()))
+}
+
+pub fn recover_report(db: &Database) -> Result<Vec<SkillRecoveryIssue>, String> {
+    let _guard = lock().lock().map_err(|_| "Skills 恢复服务暂时不可用")?;
+    recover_locked_report(db)
 }
 
 pub fn recover(db: &Database) -> Result<(), String> {
-    let _guard = lock().lock().map_err(|_| "Skills 恢复服务暂时不可用")?;
-    recover_locked(db)
+    let issues = recover_report(db)?;
+    issues.first().map_or(Ok(()), |issue| Err(issue.message()))
 }
 
 fn timestamp() -> u64 {
@@ -754,7 +818,7 @@ fn zip_candidate(
     })
 }
 pub fn list(db: &Database) -> Result<Vec<SkillPackage>, String> {
-    recover(db)?;
+    let _ = recover_report(db)?;
     db.with_connection(|conn| {
         let mut statement = conn.prepare("SELECT id, name, description, source, digest, files_json, updated_at FROM skill_packages ORDER BY name COLLATE NOCASE")
             .map_err(|error| error.to_string())?;
@@ -857,7 +921,7 @@ pub fn scan_native(
     scope: Scope,
     project_path: Option<&str>,
 ) -> Result<Vec<NativeSkillEntry>, String> {
-    recover(db)?;
+    let _ = recover_report(db)?;
     let (placeholder, scope_key) = target(registry, home, tool, scope, project_path, "scan")?;
     let root = placeholder.parent().ok_or("Skills 原生目录无效")?;
     if !root.exists() {
@@ -922,9 +986,12 @@ pub fn preview_target(
     scope: Scope,
     project_path: Option<&str>,
 ) -> Result<SkillTargetPreview, String> {
-    recover(db)?;
+    let issues = recover_report(db)?;
     let (package, files) = package(db, package_id)?;
     let (path, scope_key) = target(registry, home, tool, scope, project_path, &package.name)?;
+    if let Some(issue) = issues.iter().find(|issue| issue.affects(tool, &scope_key)) {
+        return Err(issue.message());
+    }
     let old_files = if path.exists() {
         snapshot(&path)?.3
     } else {
@@ -969,7 +1036,7 @@ pub fn installations(
     home: &Path,
     package_id: &str,
 ) -> Result<Vec<SkillInstallation>, String> {
-    recover(db)?;
+    let _ = recover_report(db)?;
     let (package, _) = package(db, package_id)?;
     db.with_connection(|conn| {
         let mut statement = conn.prepare("SELECT tool, scope_key, target_path, digest FROM skill_installations WHERE package_id = ?1 ORDER BY tool, scope_key")
@@ -1076,9 +1143,12 @@ fn operate(
     };
     let attempt = (|| {
         let _guard = lock().lock().map_err(|_| "Skills 写入服务暂时不可用")?;
-        recover_locked(db)?;
+        let issues = recover_locked_report(db)?;
         let (package, files) = package(db, package_id)?;
         let (path, key) = target(registry, home, tool_id, scope, project_path, &package.name)?;
+        if let Some(issue) = issues.iter().find(|issue| issue.affects(tool_id, &key)) {
+            return Err(issue.message());
+        }
         result.path = Some(path.display().to_string());
         let managed: Option<(String, String)> = db.with_connection(|conn| conn.query_row(
             "SELECT target_path, digest FROM skill_installations WHERE package_id = ?1 AND tool = ?2 AND scope_key = ?3",
@@ -1152,7 +1222,7 @@ fn operate(
         save_operation(db, &operation)?;
         if !removing {
             if let Err(error) = fs::create_dir(&stage) {
-                let recovery = recover_locked(db);
+                let recovery = recover_operation_locked(db, &operation.id);
                 return Err(format!(
                     "无法准备 Skills：{error}；{}",
                     recovery.map_or_else(|error| error, |_| "已清理临时目录".into())
@@ -1178,7 +1248,7 @@ fn operate(
                 Ok::<(), String>(())
             })();
             if let Err(error) = staged {
-                let recovery = recover_locked(db);
+                let recovery = recover_operation_locked(db, &operation.id);
                 return Err(format!(
                     "{error}；{}",
                     recovery.map_or_else(|error| error, |_| "已清理临时目录".into())
@@ -1187,13 +1257,13 @@ fn operate(
         }
         if had_old {
             if let Err(error) = fs::rename(&path, &backup) {
-                let _ = recover_locked(db);
+                let _ = recover_operation_locked(db, &operation.id);
                 return Err(format!("无法备份现有 Skills：{error}"));
             }
         }
         if !removing {
             if let Err(error) = fs::rename(&stage, &path) {
-                let _ = recover_locked(db);
+                let _ = recover_operation_locked(db, &operation.id);
                 return Err(format!("无法安装 Skills：{error}"));
             }
         }
@@ -1208,13 +1278,13 @@ fn operate(
             tx.commit().map_err(|error| error.to_string())
         });
         if let Err(error) = saved {
-            let recovery = recover_locked(db);
+            let recovery = recover_operation_locked(db, &operation.id);
             return Err(format!(
                 "Skills 记录失败：{error}；恢复结果：{}",
                 recovery.map_or_else(|error| error, |_| "已恢复旧目录".into())
             ));
         }
-        recover_locked(db)?;
+        recover_operation_locked(db, &operation.id)?;
         Ok(if removing { "removed" } else { "installed" })
     })();
     match attempt {

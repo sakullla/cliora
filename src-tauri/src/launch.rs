@@ -114,6 +114,7 @@ pub struct TerminalCommand {
 pub enum LaunchStage {
     ProjectDirectory,
     Configuration,
+    Skills,
     Tool,
     Terminal,
 }
@@ -266,9 +267,9 @@ pub fn plan_with_stage(
     home: &Path,
     request: LaunchRequest,
 ) -> Result<LaunchPlan, LaunchPlanError> {
-    skills::recover(db).map_err(|message| {
+    let skill_issues = skills::recover_report(db).map_err(|message| {
         LaunchPlanError::new(
-            LaunchStage::Configuration,
+            LaunchStage::Skills,
             format!("Skills 安装恢复失败：{message}"),
         )
     })?;
@@ -302,6 +303,23 @@ pub fn plan_with_stage(
     } else {
         Scope::Global
     };
+    let scope_key = if scope == Scope::Global {
+        "global".to_owned()
+    } else {
+        format!("project:{}", directory.display())
+    };
+    if let Some(issue) = skill_issues
+        .iter()
+        .find(|issue| issue.affects(&request.tool_id, &scope_key))
+    {
+        return Err(LaunchPlanError::new(
+            LaunchStage::Skills,
+            format!(
+                "Skills 安装需修复：{}；异常备份：{}。请在工具页 Skills 查看并重新检查。",
+                issue.detail, issue.backup_path
+            ),
+        ));
+    }
     let probe = adapter::probe_registered(
         registry,
         &request.tool_id,

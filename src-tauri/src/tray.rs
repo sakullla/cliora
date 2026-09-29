@@ -36,6 +36,7 @@ enum Action {
 #[serde(rename_all = "camelCase")]
 struct RepairTarget {
     page: &'static str,
+    resource_view: Option<&'static str>,
     tool_id: Option<String>,
     scope: Option<Scope>,
     project_id: Option<String>,
@@ -47,6 +48,7 @@ impl RepairTarget {
     fn project(project_id: String) -> Self {
         Self {
             page: "home",
+            resource_view: None,
             tool_id: None,
             scope: None,
             project_id: Some(project_id),
@@ -64,6 +66,7 @@ impl RepairTarget {
     ) -> Self {
         Self {
             page: "connections",
+            resource_view: None,
             tool_id: Some(tool_id),
             scope: Some(scope),
             project_id,
@@ -75,6 +78,7 @@ impl RepairTarget {
     fn settings() -> Self {
         Self {
             page: "settings",
+            resource_view: None,
             tool_id: None,
             scope: None,
             project_id: None,
@@ -93,6 +97,17 @@ impl RepairTarget {
                 failure.project_path.clone(),
                 failure.profile_id.clone(),
             ),
+            LaunchStage::Skills => {
+                let mut target = Self::connection(
+                    tool.to_owned(),
+                    Scope::Project,
+                    Some(project.to_owned()),
+                    failure.project_path.clone(),
+                    None,
+                );
+                target.resource_view = Some("skills");
+                target
+            }
             LaunchStage::Tool => Self::connection(
                 tool.to_owned(),
                 Scope::Project,
@@ -683,6 +698,17 @@ mod tests {
         assert_eq!(config["projectPath"], "C:\\项目");
         assert_eq!(config["profileId"], "daily");
         assert_eq!(config["projectId"], project);
+        assert!(config["resourceView"].is_null());
+
+        let skills = serde_json::to_value(RepairTarget::for_launch_failure(
+            "grok",
+            project,
+            &failure(LaunchStage::Skills, Some("C:\\项目"), None),
+        ))
+        .unwrap();
+        assert_eq!(skills["page"], "connections");
+        assert_eq!(skills["resourceView"], "skills");
+        assert_eq!(skills["projectPath"], "C:\\项目");
 
         let directory = serde_json::to_value(RepairTarget::for_launch_failure(
             "grok",

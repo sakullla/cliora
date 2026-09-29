@@ -166,6 +166,9 @@ test('tray conflict targets the active tool page with project scope and profile'
   await expect(page.getByRole('textbox', { name: '项目目录' })).toHaveValue('C:\\项目');
   await expect(page.getByRole('heading', { name: '日常配置' })).toBeVisible();
   await expect.poll(() => page.evaluate(() => (window as typeof window & { __workspaceRequests: Array<Record<string, unknown>> }).__workspaceRequests.some((item) => item.toolId === 'grok' && item.scope === 'project' && item.projectPath === 'C:\\项目'))).toBe(true);
+  await page.evaluate(() => (window as typeof window & { __emitRepair: (target: unknown) => void }).__emitRepair({ page: 'connections', toolId: 'grok', scope: 'project', projectId: 'project-1', projectPath: 'C:\\项目', profileId: 'daily', resourceView: 'skills' }));
+  await expect(page.getByRole('tab', { name: 'Skills' })).toHaveAttribute('aria-selected', 'true');
+  await page.getByRole('tab', { name: '原生配置' }).click();
   await page.getByRole('button', { name: '常用设置' }).click();
   await page.getByRole('textbox', { name: '配置名称' }).fill('未保存的日常配置');
   page.once('dialog', (dialog) => void dialog.dismiss());
