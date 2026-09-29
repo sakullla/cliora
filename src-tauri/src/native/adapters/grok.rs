@@ -49,7 +49,7 @@ impl CliAdapter for Grok {
                 root.join(".grok/config.toml"),
                 FileKind::Toml,
                 known,
-                Some("项目配置仅支持 MCP、插件和权限；连接与模型须在用户范围设置"),
+                Some("Grok 的项目配置只读取 MCP、插件和权限规则；模型与连接在用户配置中设置"),
                 false,
             )],
             None => vec![file(
@@ -180,23 +180,6 @@ impl CliAdapter for Grok {
             pending,
         )
     }
-    fn validate_documents(
-        &self,
-        scope: Scope,
-        documents: &BTreeMap<String, Value>,
-    ) -> Result<(), String> {
-        if scope == Scope::Project {
-            if let Some(settings) = documents.get("settings").and_then(Value::as_object) {
-                if settings
-                    .keys()
-                    .any(|key| !matches!(key.as_str(), "mcp_servers" | "plugins" | "permissions"))
-                {
-                    return Err("Grok 项目配置仅支持 MCP、插件和权限".into());
-                }
-            }
-        }
-        Ok(())
-    }
     fn launch_args(&self, session: Option<&str>, mode: LaunchMode) -> Result<Vec<String>, String> {
         let mut args = Vec::new();
         if let Some(id) = session {
@@ -225,5 +208,19 @@ impl CliAdapter for Grok {
             }
             .into(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn project_toml_keeps_native_permission_and_unrecognized_fields() {
+        let text =
+            "[permission]\nrules = [{ action = 'allow', tool = 'read' }]\n[future]\nflag = true\n";
+        let parsed = crate::native::format::parse(FileKind::Toml, text).unwrap();
+        let documents = BTreeMap::from([("settings".into(), parsed)]);
+        Grok.validate_documents(Scope::Project, &documents).unwrap();
     }
 }
