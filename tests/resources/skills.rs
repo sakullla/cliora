@@ -86,6 +86,275 @@ fn complete_package_install_update_and_external_conflict() {
 }
 
 #[test]
+fn native_scan_and_explicit_takeover_compare_files_and_reject_stale_preview() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let registry = Registry::builtins();
+    let source = temp.path().join("my-skill");
+    fs::create_dir_all(&source).unwrap();
+    fs::write(
+        source.join("SKILL.md"),
+        "---\nname: my-skill\ndescription: Package\n---\n",
+    )
+    .unwrap();
+    fs::write(source.join("notes.txt"), "package text").unwrap();
+    let package = import_local(&db, source.to_str().unwrap(), None, None).unwrap();
+    let home = temp.path().join("home");
+    let target = home.join(".claude/skills/my-skill");
+    fs::create_dir_all(&target).unwrap();
+    fs::write(
+        target.join("SKILL.md"),
+        "---\nname: my-skill\ndescription: Native\n---\n",
+    )
+    .unwrap();
+    fs::write(target.join("notes.txt"), "native text").unwrap();
+    let found = scan_native(&db, &registry, &home, "claude_code", Scope::Global, None).unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].state, "external");
+    assert_eq!(found[0].package_id.as_deref(), Some(package.id.as_str()));
+    let preview = preview_target(
+        &db,
+        &registry,
+        &home,
+        &package.id,
+        "claude_code",
+        Scope::Global,
+        None,
+    )
+    .unwrap();
+    assert_eq!(preview.status, "conflict");
+    assert_eq!(
+        preview
+            .changes
+            .iter()
+            .find(|change| change.path == "notes.txt")
+            .unwrap()
+            .before
+            .as_deref(),
+        Some("native text")
+    );
+    assert_eq!(
+        install(
+            &db,
+            &registry,
+            &home,
+            &package.id,
+            "claude_code",
+            Scope::Global,
+            None
+        )
+        .status,
+        "failed"
+    );
+    fs::write(target.join("notes.txt"), "changed again").unwrap();
+    assert_eq!(
+        install_confirmed(
+            &db,
+            &registry,
+            &home,
+            &package.id,
+            "claude_code",
+            Scope::Global,
+            None,
+            preview.preview_token.as_deref(),
+            true
+        )
+        .status,
+        "failed"
+    );
+    assert_eq!(
+        fs::read_to_string(target.join("notes.txt")).unwrap(),
+        "changed again"
+    );
+    let fresh = preview_target(
+        &db,
+        &registry,
+        &home,
+        &package.id,
+        "claude_code",
+        Scope::Global,
+        None,
+    )
+    .unwrap();
+    let result = install_confirmed(
+        &db,
+        &registry,
+        &home,
+        &package.id,
+        "claude_code",
+        Scope::Global,
+        None,
+        fresh.preview_token.as_deref(),
+        true,
+    );
+    assert_eq!(result.status, "installed", "{}", result.detail);
+    assert_eq!(
+        fs::read_to_string(target.join("notes.txt")).unwrap(),
+        "package text"
+    );
+    assert_eq!(
+        scan_native(&db, &registry, &home, "claude_code", Scope::Global, None).unwrap()[0].state,
+        "managed"
+    );
+}
+
+#[test]
+fn interrupted_skill_replacement_recovers_old_directory_and_committed_cleanup() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let registry = Registry::builtins();
+    let source = temp.path().join("my-skill");
+    fs::create_dir_all(&source).unwrap();
+    fs::write(
+        source.join("SKILL.md"),
+        "---\nname: my-skill\ndescription: Package\n---\n",
+    )
+    .unwrap();
+    fs::write(source.join("notes.txt"), "new").unwrap();
+    let package = import_local(&db, source.to_str().unwrap(), None, None).unwrap();
+    let home = temp.path().join("home");
+    let target = home.join(".claude/skills/my-skill");
+    fs::create_dir_all(&target).unwrap();
+    fs::write(
+        target.join("SKILL.md"),
+        "---\nname: my-skill\ndescription: Old\n---\n",
+    )
+    .unwrap();
+    fs::write(target.join("notes.txt"), "old").unwrap();
+    let old_digest = on_disk(&target).unwrap();
+    let parent = target.parent().unwrap();
+    let id = Uuid::new_v4().to_string();
+    let stage = parent.join(format!(".cliora-stage-{id}"));
+    let backup = parent.join(format!(".cliora-backup-{id}"));
+    fs::create_dir(&stage).unwrap();
+    fs::write(
+        stage.join("SKILL.md"),
+        fs::read(source.join("SKILL.md")).unwrap(),
+    )
+    .unwrap();
+    fs::write(stage.join("notes.txt"), "new").unwrap();
+    save_operation(
+        &db,
+        &SkillOperation {
+            id: id.clone(),
+            package_id: package.id.clone(),
+            tool: "claude_code".into(),
+            scope_key: "global".into(),
+            target: target.clone(),
+            stage: stage.clone(),
+            backup: backup.clone(),
+            old_digest,
+            old_managed_digest: None,
+            new_digest: Some(package.digest.clone()),
+            removing: false,
+            status: "prepared".into(),
+        },
+    )
+    .unwrap();
+    fs::rename(&target, &backup).unwrap();
+    fs::rename(&stage, &target).unwrap();
+    drop(db);
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    recover(&db).unwrap();
+    assert_eq!(fs::read_to_string(target.join("notes.txt")).unwrap(), "old");
+    assert!(!backup.exists());
+    let preview = preview_target(
+        &db,
+        &registry,
+        &home,
+        &package.id,
+        "claude_code",
+        Scope::Global,
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        install_confirmed(
+            &db,
+            &registry,
+            &home,
+            &package.id,
+            "claude_code",
+            Scope::Global,
+            None,
+            preview.preview_token.as_deref(),
+            true
+        )
+        .status,
+        "installed"
+    );
+    let second_id = Uuid::new_v4().to_string();
+    let second_stage = parent.join(format!(".cliora-stage-{second_id}"));
+    let second_backup = parent.join(format!(".cliora-backup-{second_id}"));
+    fs::create_dir(&second_backup).unwrap();
+    fs::write(
+        second_backup.join("SKILL.md"),
+        "---\nname: my-skill\ndescription: Old\n---\n",
+    )
+    .unwrap();
+    fs::write(second_backup.join("notes.txt"), "old").unwrap();
+    save_operation(
+        &db,
+        &SkillOperation {
+            id: second_id,
+            package_id: package.id.clone(),
+            tool: "claude_code".into(),
+            scope_key: "global".into(),
+            target: target.clone(),
+            stage: second_stage,
+            backup: second_backup.clone(),
+            old_digest: on_disk_as(&second_backup, "my-skill").unwrap(),
+            old_managed_digest: None,
+            new_digest: Some(package.digest.clone()),
+            removing: false,
+            status: "committed".into(),
+        },
+    )
+    .unwrap();
+    drop(db);
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    recover(&db).unwrap();
+    assert!(!second_backup.exists());
+    assert_eq!(fs::read_to_string(target.join("notes.txt")).unwrap(), "new");
+    let third_id = Uuid::new_v4().to_string();
+    let third_backup = parent.join(format!(".cliora-backup-{third_id}"));
+    fs::create_dir(&third_backup).unwrap();
+    fs::write(
+        third_backup.join("SKILL.md"),
+        "---\nname: my-skill\ndescription: Old\n---\n",
+    )
+    .unwrap();
+    fs::write(third_backup.join("notes.txt"), "old").unwrap();
+    save_operation(
+        &db,
+        &SkillOperation {
+            id: third_id.clone(),
+            package_id: package.id.clone(),
+            tool: "claude_code".into(),
+            scope_key: "global".into(),
+            target: target.clone(),
+            stage: parent.join(format!(".cliora-stage-{third_id}")),
+            backup: third_backup.clone(),
+            old_digest: on_disk_as(&third_backup, "my-skill").unwrap(),
+            old_managed_digest: None,
+            new_digest: Some(package.digest.clone()),
+            removing: false,
+            status: "committed".into(),
+        },
+    )
+    .unwrap();
+    fs::remove_dir_all(&target).unwrap();
+    drop(db);
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    recover(&db).unwrap();
+    assert_eq!(fs::read_to_string(target.join("notes.txt")).unwrap(), "old");
+    assert!(!third_backup.exists());
+    assert!(installations(&db, &registry, &home, &package.id)
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
 fn import_rejects_missing_skill_manifest() {
     let temp = tempfile::tempdir().unwrap();
     let db = Database::open(&temp.path().join("cliora.db")).unwrap();

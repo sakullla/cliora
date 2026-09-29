@@ -59,6 +59,8 @@ pub struct McpTargetRequest {
     pub baseline_hash: Option<String>,
     #[serde(default)]
     pub allow_replace: bool,
+    #[serde(default)]
+    pub preview_token: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -71,6 +73,9 @@ pub struct McpTargetResult {
     pub status: &'static str,
     pub detail: String,
     pub baseline_hash: Option<String>,
+    pub preview_token: Option<String>,
+    pub existing: Option<Value>,
+    pub proposed: Option<Value>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -305,6 +310,44 @@ fn entry_hash(value: Option<&Value>) -> Result<String, String> {
     ))
 }
 
+fn preview_token(
+    definition: &McpDefinition,
+    target: &McpTargetRequest,
+    location: &McpLocation,
+    scope_key: &str,
+    actual: &str,
+) -> Result<String, String> {
+    let bound = serde_json::to_vec(&(
+        definition.id.as_str(),
+        definition.version,
+        target.tool_id.as_str(),
+        scope_key,
+        location.path.to_string_lossy(),
+        target.enabled,
+        actual,
+    ))
+    .map_err(|error| error.to_string())?;
+    Ok(transaction::fingerprint(&bound))
+}
+
+fn visible_entry(value: Option<&Value>) -> Option<Value> {
+    let mut visible = value.cloned()?;
+    if let Some(fields) = visible.as_object_mut() {
+        for field in ["env", "environment", "headers", "http_headers"] {
+            if let Some(map) = fields.get_mut(field).and_then(Value::as_object_mut) {
+                for (key, content) in map.iter_mut() {
+                    if sensitive_key(key)
+                        && content.as_str().is_some_and(|text| !is_reference(text))
+                    {
+                        *content = Value::String("[已隐藏的原生凭据]".into());
+                    }
+                }
+            }
+        }
+    }
+    Some(visible)
+}
+
 fn managed_hash(
     db: &Database,
     id: &str,
@@ -422,7 +465,7 @@ pub fn preview_targets(
     let definition = get_definition(db, definition_id);
     targets.into_iter().map(|target| {
         let mut result = McpTargetResult { tool_id: target.tool_id.clone(), scope: target.scope,
-            project_path: target.project_path.clone(), path: None, status: "unsupported", detail: String::new(), baseline_hash: None };
+            project_path: target.project_path.clone(), path: None, status: "unsupported", detail: String::new(), baseline_hash: None, preview_token: None, existing: None, proposed: None };
         match target_location(db, registry, &target, home) {
             Ok((location, scope_key)) => {
                 result.path = Some(location.path.display().to_string());
@@ -432,11 +475,16 @@ pub fn preview_targets(
                     let existing = entry_root(&parsed, &location).and_then(|root| root.get(&definition.name));
                     let actual = entry_hash(existing)?;
                     let owned = managed_hash(db, definition_id, &target.tool_id, &scope_key)?;
-                    Ok::<_, String>((existing.is_some(), actual, owned))
+                    let adapter = registry.get(&target.tool_id).ok_or("此 CLI 尚无注册适配器")?;
+                    let proposal = adapter.mcp_document_at(definition, target.enabled, existing, &location)?;
+                    Ok::<_, String>((existing.is_some(), actual, owned, visible_entry(existing), visible_entry(proposal.as_ref()), preview_token(definition, &target, &location, &scope_key, &entry_hash(existing)?)?))
                 })();
                 match inspected {
-                    Ok((exists, actual, owned)) => {
+                    Ok((exists, actual, owned, before, after, token)) => {
                         result.baseline_hash = Some(actual.clone());
+                        result.preview_token = Some(token);
+                        result.existing = before;
+                        result.proposed = after;
                         result.status = if exists && owned.as_deref() != Some(&actual) { "conflict" } else { "ready" };
                         result.detail = if result.status == "conflict" { "同名原生条目未由当前定义管理，或已被外部修改；确认替换前请检查原生内容".into() }
                             else if exists { "将更新当前受管理的原生条目".into() } else { "将创建 CLI 原生条目".into() };
@@ -467,7 +515,7 @@ pub fn distribute(
     let definition = get_definition(db, definition_id);
     targets.into_iter().map(|target| {
         let mut result = McpTargetResult { tool_id: target.tool_id.clone(), scope: target.scope,
-            project_path: target.project_path.clone(), path: None, status: "failed", detail: String::new(), baseline_hash: None };
+            project_path: target.project_path.clone(), path: None, status: "failed", detail: String::new(), baseline_hash: None, preview_token: None, existing: None, proposed: None };
         let attempt = (|| {
             let definition = definition.as_ref().map_err(Clone::clone)?;
             let (location, scope_key) = target_location(db, registry, &target, home)?;
@@ -477,19 +525,22 @@ pub fn distribute(
             let existing = entry_root(&parsed, &location).and_then(|root| root.get(&definition.name));
             let actual_hash = entry_hash(existing)?;
             result.baseline_hash = Some(actual_hash.clone());
+            let token = preview_token(definition, &target, &location, &scope_key, &actual_hash)?;
+            if target.preview_token.as_deref() != Some(token.as_str()) || target.baseline_hash.as_deref() != Some(actual_hash.as_str()) {
+                return Err("MCP 定义、目标范围或原生条目在预览后变化；请重新预览".into());
+            }
             let owned = managed_hash(db, definition_id, &target.tool_id, &scope_key)?;
             if existing.is_some() && owned.as_deref() != Some(&actual_hash) {
-                if !target.allow_replace || target.baseline_hash.as_deref() != Some(&actual_hash) {
+                if !target.allow_replace {
                     return Err("同名原生条目未受当前定义管理或已被外部修改；请预览后确认替换".into());
                 }
-            }
-            if target.allow_replace && target.baseline_hash.as_deref() != Some(&actual_hash) {
-                return Err("原生条目在预览后变化；请重新预览".into());
             }
             let document = adapter.mcp_document_at(definition, target.enabled, existing, &location)?;
             let written_hash = entry_hash(document.as_ref())?;
             let change = transaction::FieldChange { path: entry_path(&location, &definition.name), value: document };
             let commit = |tx: &rusqlite::Transaction<'_>| {
+                let current: i64 = tx.query_row("SELECT version FROM mcp_definitions WHERE id = ?1", [&definition.id], |row| row.get(0)).map_err(|error| error.to_string())?;
+                if current != definition.version as i64 { return Err("MCP 定义在预览后变化；请重新预览".into()); }
                 tx.execute("INSERT INTO mcp_targets (definition_id, tool, scope_key, enabled, managed_hash) VALUES (?1, ?2, ?3, ?4, ?5)
                      ON CONFLICT(definition_id, tool, scope_key) DO UPDATE SET enabled = excluded.enabled, managed_hash = excluded.managed_hash",
                     params![definition.id, target.tool_id, scope_key, target.enabled as i64, written_hash])

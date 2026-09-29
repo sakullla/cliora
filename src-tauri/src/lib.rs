@@ -82,6 +82,8 @@ pub fn run() {
             commands::preview_skill_https_zip,
             commands::import_skill_https_zip,
             commands::list_skill_installations,
+            commands::scan_native_skills,
+            commands::preview_skill_target,
             commands::install_skill,
             commands::remove_skill,
             commands::get_bootstrap,

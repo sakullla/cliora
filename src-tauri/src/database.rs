@@ -22,7 +22,7 @@ impl Database {
     pub fn open(path: &Path) -> Result<Self, OpenError> {
         let mut connection = Connection::open(path)?;
         let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 5 {
+        if version > 6 {
             return Err(OpenError::UnsupportedVersion(version));
         }
         connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
@@ -164,6 +164,27 @@ impl Database {
                    FOREIGN KEY(definition_id) REFERENCES mcp_definitions(id) ON DELETE CASCADE
                  );
                  PRAGMA user_version = 5;",
+            )?;
+            tx.commit()?;
+        }
+        if version < 6 {
+            let tx = connection.transaction()?;
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS skill_operations (
+                   id TEXT PRIMARY KEY NOT NULL,
+                   package_id TEXT NOT NULL,
+                   tool TEXT NOT NULL,
+                   scope_key TEXT NOT NULL,
+                   target_path TEXT NOT NULL,
+                   stage_path TEXT NOT NULL,
+                   backup_path TEXT NOT NULL,
+                   old_digest TEXT,
+                   old_managed_digest TEXT,
+                   new_digest TEXT,
+                   removing INTEGER NOT NULL,
+                   status TEXT NOT NULL
+                 );
+                 PRAGMA user_version = 6;",
             )?;
             tx.commit()?;
         }
@@ -346,7 +367,7 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
-            assert_eq!(version, 5);
+            assert_eq!(version, 6);
             let count: i64 = conn
                 .query_row("SELECT COUNT(*) FROM native_profiles", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
