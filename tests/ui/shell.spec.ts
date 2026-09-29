@@ -95,6 +95,43 @@ test('home opens Claude Code native JSON editor with full disk text', async ({ p
   await expect(page.getByRole('textbox', { name: 'settings 配置草稿' })).toHaveValue(/ANTHROPIC_API_KEY.*disk-key/);
 });
 
+test('an existing Claude JSON file opens directly without first creating a named profile', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_INTERNALS__: { invoke: async (command: string) => {
+        if (command === 'get_bootstrap') return {
+          preferences: { schema_version: 1, managed_tools: ['claude_code'], theme: 'system' },
+          tools: [{ id: 'claude_code', name: 'Claude Code', installation: 'not_checked', configuration: 'not_checked' }],
+        };
+        if (command === 'get_tool_workspace') return {
+          probe: {
+            selectedPath: 'C:\\tools\\claude.cmd', installations: [],
+            nativeFiles: [{ role: 'settings', path: 'C:\\Users\\test\\.claude\\settings.json', format: 'json', writable: true, reason: null, sensitive: false }],
+            nativeWrites: { state: 'supported', reason: '可编辑原生配置' },
+            interfaceFormats: ['anthropic_messages'], providerPresets: [], dependencies: [],
+            installUrl: '', upgradeHint: '', installCommand: null, upgradeCommand: null,
+          },
+          profiles: [], common: null, binding: null,
+          snapshots: [{ role: 'settings', fingerprint: 'present', error: null }],
+          recoveryNeeded: [], customPath: null,
+        };
+        if (command === 'prepare_native_import_from_disk') return {
+          files: { settings: '{"model":"claude-sonnet"}' }, inspection: { connection: null },
+          migratedSecret: true, nativeCredentials: {},
+        };
+        if (command === 'read_native_file_for_edit') return '{"env":{"ANTHROPIC_API_KEY":"disk-key"},"model":"claude-sonnet"}';
+        if (command === 'inspect_native_draft') return {};
+        throw new Error(`Unexpected native command: ${command}`);
+      } },
+    });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: '编辑配置 →' }).click();
+  await page.getByRole('button', { name: '编辑当前原生配置' }).click();
+  await expect(page.getByRole('textbox', { name: 'settings 配置草稿' })).toHaveValue(/ANTHROPIC_API_KEY.*disk-key/);
+});
+
 test('storage failure preserves an actionable page and retry loads repaired data', async ({ page }) => {
   await page.addInitScript(() => {
     let calls = 0;
