@@ -22,7 +22,7 @@ impl Database {
     pub fn open(path: &Path) -> Result<Self, OpenError> {
         let mut connection = Connection::open(path)?;
         let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 2 {
+        if version > 4 {
             return Err(OpenError::UnsupportedVersion(version));
         }
         connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
@@ -75,6 +75,41 @@ impl Database {
                    data TEXT NOT NULL
                  );
                  PRAGMA user_version = 2;",
+            )?;
+            tx.commit()?;
+        }
+        if version < 3 {
+            let tx = connection.transaction()?;
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS projects (
+                   id TEXT PRIMARY KEY NOT NULL,
+                   name TEXT NOT NULL,
+                   path TEXT UNIQUE,
+                   preferred_tool TEXT,
+                   last_opened INTEGER NOT NULL DEFAULT 0
+                 );
+                 CREATE TABLE IF NOT EXISTS project_tool_models (
+                   project_id TEXT NOT NULL,
+                   tool TEXT NOT NULL,
+                   model TEXT NOT NULL,
+                   PRIMARY KEY(project_id, tool),
+                   FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+                 );
+                 PRAGMA user_version = 3;",
+            )?;
+            tx.commit()?;
+        }
+        if version < 4 {
+            let tx = connection.transaction()?;
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS project_tool_selections (
+                   project_id TEXT NOT NULL,
+                   tool TEXT NOT NULL,
+                   profile_id TEXT NOT NULL,
+                   PRIMARY KEY(project_id, tool),
+                   FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+                 );
+                 PRAGMA user_version = 4;",
             )?;
             tx.commit()?;
         }
@@ -257,7 +292,7 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
-            assert_eq!(version, 2);
+            assert_eq!(version, 4);
             let count: i64 = conn
                 .query_row("SELECT COUNT(*) FROM native_profiles", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;

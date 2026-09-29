@@ -2,20 +2,81 @@ pub mod commands;
 pub mod credentials;
 pub mod database;
 pub mod domain;
+pub mod launch;
 pub mod native;
+pub mod projects;
+pub mod tray;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            tray::show_main(app)
+        }))
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            use tauri::Manager;
+            use tauri::{Listener, Manager};
             // The window must remain available when local storage needs repair.
             app.manage(commands::AppState::default());
+            tray::setup(app);
+            let handle = app.handle().clone();
+            app.listen("cliora:bindings-changed", move |_| {
+                let handle = handle.clone();
+                std::thread::spawn(move || {
+                    let _ = tray::refresh(&handle);
+                });
+            });
+            let handle = app.handle().clone();
+            app.listen("cliora:projects-changed", move |_| {
+                let handle = handle.clone();
+                std::thread::spawn(move || {
+                    let _ = tray::refresh(&handle);
+                });
+            });
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            use tauri::{Emitter, Manager};
+            if window.label() != "main" {
+                return;
+            }
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let status = window.app_handle().state::<tray::TrayState>().status();
+                if status.available {
+                    if let Err(error) = window.hide() {
+                        let _ = window.show();
+                        let _ = window.app_handle().emit(
+                            "cliora:tray-error",
+                            format!("无法将窗口留在托盘，主窗口保持打开：{error}"),
+                        );
+                    }
+                } else {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                    let _ = window.app_handle().emit(
+                        "cliora:tray-error",
+                        status.error.unwrap_or_else(|| {
+                            "托盘宿主不可用；主窗口保持打开，可在设置中完全退出".into()
+                        }),
+                    );
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_bootstrap,
             commands::list_cli_adapters,
+            commands::list_projects,
+            commands::add_project,
+            commands::relink_project,
+            commands::open_project_directory,
+            commands::set_project_tool,
+            commands::set_project_model_override,
+            commands::get_launch_settings,
+            commands::set_preferred_terminal,
+            commands::launch_cli,
+            commands::get_tray_status,
+            commands::quit_app,
             commands::set_registered_managed_tools,
             commands::get_registered_tool_workspace,
             commands::set_registered_custom_cli_path,

@@ -41,6 +41,8 @@ pub struct AdapterDescriptor {
     pub id: &'static str,
     pub name: &'static str,
     pub interface_formats: &'static [&'static str],
+    pub project_model_override: bool,
+    pub yolo_available: bool,
     pub native_config: Facet,
     pub launch: Facet,
     pub resume: Facet,
@@ -48,7 +50,8 @@ pub struct AdapterDescriptor {
     pub history: Facet,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LaunchMode {
     Normal,
     Yolo,
@@ -157,6 +160,15 @@ pub trait CliAdapter: Sync {
     }
     /// Returns arguments only. The caller owns executable selection and process launch.
     fn launch_args(&self, session: Option<&str>, mode: LaunchMode) -> Result<Vec<String>, String>;
+    fn supports_project_model_override(&self) -> bool {
+        false
+    }
+    fn project_model_args(&self, model: Option<&str>) -> Result<Vec<String>, String> {
+        if model.is_some() {
+            return Err("此 CLI 不支持项目启动模型覆盖".into());
+        }
+        Ok(Vec::new())
+    }
     fn install_guidance(&self) -> (&'static str, &'static str);
     fn node_required_when_missing(&self) -> bool {
         true
@@ -193,17 +205,19 @@ pub trait CliAdapter: Sync {
             id: self.id(),
             name: self.name(),
             interface_formats: self.interface_formats(),
+            project_model_override: self.supports_project_model_override(),
+            yolo_available: self.launch_args(None, LaunchMode::Yolo).is_ok(),
             native_config: Facet {
                 state: "available",
                 reason: "已确认 CLI 身份，可编辑受支持的原生文件格式",
             },
             launch: Facet {
-                state: "planned",
-                reason: "启动由后续任务接入",
+                state: "available",
+                reason: "可在外部终端启动",
             },
             resume: Facet {
-                state: "planned",
-                reason: "恢复由后续任务接入",
+                state: "available",
+                reason: "可用原生会话 ID 在外部终端恢复；历史索引后续接入",
             },
             resources: Facet {
                 state: "planned",

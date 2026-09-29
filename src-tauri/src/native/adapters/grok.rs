@@ -190,6 +190,18 @@ impl CliAdapter for Grok {
         }
         Ok(args)
     }
+    fn supports_project_model_override(&self) -> bool {
+        true
+    }
+    fn project_model_args(&self, model: Option<&str>) -> Result<Vec<String>, String> {
+        let Some(model) = model else {
+            return Ok(Vec::new());
+        };
+        if model.trim().is_empty() {
+            return Err("请输入 Grok 项目启动模型".into());
+        }
+        Ok(vec!["-m".into(), model.into()])
+    }
     fn install_guidance(&self) -> (&'static str, &'static str) {
         (
             "https://x.ai/cli",
@@ -222,5 +234,15 @@ mod tests {
         let parsed = crate::native::format::parse(FileKind::Toml, text).unwrap();
         let documents = BTreeMap::from([("settings".into(), parsed)]);
         Grok.validate_documents(Scope::Project, &documents).unwrap();
+    }
+
+    #[test]
+    fn project_model_is_passed_as_launch_argument() {
+        assert!(Grok.supports_project_model_override());
+        assert_eq!(
+            Grok.project_model_args(Some("grok-4.7")).unwrap(),
+            ["-m", "grok-4.7"]
+        );
+        assert!(Grok.project_model_args(Some(" ")).is_err());
     }
 }

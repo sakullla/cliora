@@ -6,6 +6,8 @@ export type AdapterDescriptor = {
   id: string;
   name: string;
   interfaceFormats: InterfaceFormat[];
+  projectModelOverride: boolean;
+  yoloAvailable: boolean;
   nativeConfig: AdapterFacet;
   launch: AdapterFacet;
   resume: AdapterFacet;
