@@ -23,9 +23,20 @@ tasks:
       - 接口格式按原生能力配置并往返保存；供应商模型目录真实请求支持搜索、刷新、缓存、手填、分页及错误状态，不调用推理来冒充目录获取。
       - 临时目录与版本化 fixture 覆盖继承覆盖清除、多配置切换、无关字段保真、非法文本、写入中断、冲突和模型请求竞态。
     test: extend
+  - id: T2A
+    goal: 将五个 CLI 的原生差异抽成独立适配器与可扩展注册表
+    depends_on: [T2]
+    covers: [R2, R3, R4, R6, R23, R25]
+    scope: [src-tauri, src/lib, src/types, tests/adapter, tests/fixtures, README.md]
+    outcomes:
+      - Codex、Claude Code、Grok、Pi、OpenCode 分别在独立模块实现稳定适配契约；共享探测、连接映射、认证和文件应用服务只经注册表调用，既有 ID、配置与绑定不变。
+      - 描述符与版本能力可由前端读取；未知或未注册 ID 的资料保留只读，能力缺失说明原因，不用默认成功掩盖不支持。
+      - 测试专用第六适配器无需修改五工具实现或共享编排即可注册，并覆盖探测、原生配置读写与启动参数编排；文档列明日后接入 Kimi Code 的模块、注册、样本与真实平台验收步骤。
+      - 既有事务、密钥、模型目录、继承与版本门槛回归测试保持通过，新增工具失败不影响五工具；后续托盘、资源和历史能力按同一契约扩展。
+    test: extend
   - id: T3
     goal: 项目外部启动与原生托盘使用同一份成功应用状态
-    depends_on: [T2]
+    depends_on: [T2A]
     covers: [R7, R18, R22, R24]
     scope: [src-tauri, src/features/home, src/features/settings, src/lib, src/types, tests/launch, tests/ui, README.md]
     outcomes:
@@ -67,7 +78,7 @@ tasks:
   - id: T7
     goal: 集成已确认的全部页面并完成可复验的桌面交付候选
     depends_on: [T6]
-    covers: [R1, R2, R3, R4, R5, R6, R7, R8, R9, R10, R11, R12, R13, R14, R15, R16, R17, R18, R22, R23, R24]
+    covers: [R1, R2, R3, R4, R5, R6, R7, R8, R9, R10, R11, R12, R13, R14, R15, R16, R17, R18, R22, R23, R24, R25]
     scope: [src, src-tauri, tests, scripts, package.json, package-lock.json, playwright.config.ts, .github, README.md, docs/verification]
     outcomes:
       - 五页真实功能整合，首页与托盘切换不超过三次点击，原生配置直接可见，完整子页和短弹窗边界符合确认设计。
@@ -86,8 +97,8 @@ delivery_verification:
 ---
 # 执行计划
 
-依据已确认的 02 方案，按可运行应用、原生配置、托盘启动、资料、历史、迁移和集成交付推进。当前仓库只有设计资料，没有可复用产品测试，因此先建立测试基础，随后扩展对应行为验证。所有任务串行依赖以保护公共 IPC、原生事务与页面集成边界；Worker 可由工作流调度，但不得跨任务改动未授权文件。
+依据已确认的 02 方案，按可运行应用、原生配置、独立适配器、托盘启动、资料、历史、迁移和集成交付推进。T1/T2 已有实现和审查历史保持有效；新架构要求由 T2A 在 T3 之前抽取，不用重写已完成的文件事务。所有任务串行依赖以保护公共 IPC、原生事务与页面集成边界；Worker 可由工作流调度，但不得跨任务改动未授权文件。
 
-数据与安全契约以 02 ADR-03/04/07/08/11/12 为唯一方案来源，界面以 ADR-09 和 docs/design/cliora-preview.html 为视觉依据。正式产品不得复制原型的演示反馈充当成功。新增依赖固定到锁文件。R19–R21 为排除边界，不创建运行工作台或代理。
+数据与安全契约以 02 ADR-03/04/07/08/11/12/13 为唯一方案来源，界面以 ADR-09 和 docs/design/cliora-preview.html 为视觉依据。正式产品不得复制原型的演示反馈充当成功。新增依赖固定到锁文件。R19–R21 为排除边界，不创建运行工作台或代理；Kimi Code 是未来接入示例，不在首版五工具支持矩阵。
 
 Windows 是当前可用现场。macOS 14 arm64 与 Ubuntu 24.04 x64 的原生验收证据须来自真实现场；缺失时继续完成本机可验证工作并保留发布阻断，不编造通过记录。
