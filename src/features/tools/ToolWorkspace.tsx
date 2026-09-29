@@ -4,10 +4,9 @@ import { native, nativeAvailable } from '../../lib/native';
 import { sameDraftRequest } from '../../lib/draftGuard';
 import { importedConnection } from '../../lib/nativeDraft';
 import type { DraftRequest } from '../../lib/draftGuard';
-import { CLI_NAMES } from '../../types/domain';
-import type { ApiError, CliId } from '../../types/domain';
-import { emptyProfile } from '../../types/native';
-import type { CommonConfig, Connection, ConnectionCheck, ModelDirectory, NativeInspection, NativePreview, NativeProfile, Scope, ToolWorkspace } from '../../types/native';
+import type { ApiError } from '../../types/domain';
+import type { AdapterDescriptor, Connection, ConnectionCheck, ModelDirectory, NativeInspection, NativePreview, RegisteredCommon, RegisteredProfile, RegisteredToolWorkspace, Scope } from '../../types/native';
+import { authEnvName, uiAdapterFor } from './adapters';
 import styles from './ToolWorkspace.module.css';
 
 type View = 'form' | 'native' | 'merged';
@@ -30,21 +29,25 @@ function connectionShape(value: Connection | null): string {
   return value ? JSON.stringify([value.providerId, value.interfaceFormat, value.baseUrl, value.model, value.authEnvVar]) : '';
 }
 
-export function ToolWorkspacePage({ managedTools, initialTool }: { managedTools: CliId[]; initialTool?: CliId }) {
-  const [tool, setTool] = useState<CliId>(initialTool ?? managedTools[0] ?? 'codex');
+function emptyProfile(tool: string): RegisteredProfile {
+  return { id: '', tool, name: '', version: 0, inheritCommon: false, files: {}, suppressed: {}, connection: null, nativeCredentials: {} };
+}
+
+export function ToolWorkspacePage({ managedTools, initialTool }: { managedTools: AdapterDescriptor[]; initialTool?: string }) {
+  const [tool, setTool] = useState<string>(initialTool ?? managedTools[0]?.id ?? '');
   const [scope, setScope] = useState<Scope>('global');
   const [projectPath, setProjectPath] = useState('');
   const [projectInput, setProjectInput] = useState('');
-  const [workspace, setWorkspace] = useState<ToolWorkspace | null>(null);
+  const [workspace, setWorkspace] = useState<RegisteredToolWorkspace | null>(null);
   const [editor, setEditor] = useState<Editor>('profile');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const draftRevision = useRef(0);
-  const [draft, setDraftState] = useState<NativeProfile | null>(null);
-  const setDraft = (value: SetStateAction<NativeProfile | null>) => {
+  const [draft, setDraftState] = useState<RegisteredProfile | null>(null);
+  const setDraft = (value: SetStateAction<RegisteredProfile | null>) => {
     draftRevision.current++;
     setDraftState(value);
   };
-  const [commonDraft, setCommonDraft] = useState<CommonConfig | null>(null);
+  const [commonDraft, setCommonDraft] = useState<RegisteredCommon | null>(null);
   const [view, setView] = useState<View>('native');
   const [role, setRole] = useState('settings');
   const [preview, setPreview] = useState<NativePreview | null>(null);
@@ -62,7 +65,7 @@ export function ToolWorkspacePage({ managedTools, initialTool }: { managedTools:
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [takeoverId, setTakeoverId] = useState<string | null>(null);
-  const [takeoverProfile, setTakeoverProfile] = useState<NativeProfile | null>(null);
+  const [takeoverProfile, setTakeoverProfile] = useState<RegisteredProfile | null>(null);
   const loadSequence = useRef(0);
   const modelSequence = useRef(0);
   const inspectionSequence = useRef(0);
@@ -73,26 +76,29 @@ export function ToolWorkspacePage({ managedTools, initialTool }: { managedTools:
   const savedDraft = useRef('');
 
   const visibleTools = managedTools;
-  const currentTool = visibleTools.includes(tool) ? tool : visibleTools[0];
+  const currentTool = visibleTools.some((item) => item.id === tool) ? tool : visibleTools[0]?.id;
+  const currentDescriptor = visibleTools.find((item) => item.id === currentTool);
+  const toolName = currentDescriptor?.name ?? currentTool ?? '';
+  const uiAdapter = uiAdapterFor(currentTool ?? '');
   const draftContext = JSON.stringify([currentTool, scope, projectPath, selectedId, editor]);
-  const latestDraft = useRef<DraftRequest<NativeProfile>>({ context: draftContext, revision: draftRevision.current, draft });
+  const latestDraft = useRef<DraftRequest<RegisteredProfile>>({ context: draftContext, revision: draftRevision.current, draft });
   latestDraft.current = { context: draftContext, revision: draftRevision.current, draft };
-  const captureDraft = (): DraftRequest<NativeProfile> => ({ ...latestDraft.current });
-  const stillCurrent = (started: DraftRequest<NativeProfile>) => sameDraftRequest(started, { ...latestDraft.current, revision: draftRevision.current });
+  const captureDraft = (): DraftRequest<RegisteredProfile> => ({ ...latestDraft.current });
+  const stillCurrent = (started: DraftRequest<RegisteredProfile>) => sameDraftRequest(started, { ...latestDraft.current, revision: draftRevision.current });
   const invalidateDraftRequest = () => { draftRevision.current++; };
   const connection = draft?.connection ?? null;
   const fileSignature = JSON.stringify(draft?.files ?? {});
-  const effectiveEnvName = connection?.authEnvVar || (connection?.secretRef && currentTool ? currentTool === 'claude_code' ? 'ANTHROPIC_API_KEY' : `CLIORA_${currentTool.toUpperCase()}_${connection.providerId.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_API_KEY` : null);
+  const effectiveEnvName = authEnvName(uiAdapter, connection, currentTool ?? '');
   const pendingRaw = rawDisk?.context === draftContext ? rawDisk : null;
   const activeRaw = pendingRaw?.role === role ? pendingRaw : null;
   const dirty = (editor === 'profile' ? !!draft && JSON.stringify(draft) !== savedDraft.current : !!commonDraft && JSON.stringify(commonDraft) !== savedDraft.current) || !!pendingRaw && pendingRaw.text !== pendingRaw.original;
 
-  const reload = useCallback(async (nextTool: CliId, nextScope: Scope, nextProject: string, preferredId?: string | null) => {
+  const reload = useCallback(async (nextTool: string, nextScope: Scope, nextProject: string, preferredId?: string | null) => {
     if (!nativeAvailable || (nextScope === 'project' && !nextProject.trim())) { loadSequence.current++; setWorkspace(null); return; }
     const sequence = ++loadSequence.current;
     setLoading(true); setError('');
     try {
-      const result = await native.getToolWorkspace(nextTool, nextScope, nextProject);
+      const result = await native.getRegisteredToolWorkspace(nextTool, nextScope, nextProject);
       if (sequence !== loadSequence.current) return;
       setWorkspace(result);
       setRawDisk(null);
@@ -115,7 +121,7 @@ export function ToolWorkspacePage({ managedTools, initialTool }: { managedTools:
     if (!nativeAvailable || view !== 'merged' || !draft || editor !== 'profile') return;
     const sequence = ++previewSequence.current;
     const timer = window.setTimeout(() => {
-      void native.previewNativeProfile(draft, scope).then((result) => { if (sequence === previewSequence.current) { setPreview(result); setError(''); } }).catch((value) => { if (sequence === previewSequence.current) { setPreview(null); setError(errorText(value)); } });
+      void native.previewRegisteredNativeProfile(draft, scope).then((result) => { if (sequence === previewSequence.current) { setPreview(result); setError(''); } }).catch((value) => { if (sequence === previewSequence.current) { setPreview(null); setError(errorText(value)); } });
     }, 180);
     return () => window.clearTimeout(timer);
   }, [draft, editor, scope, view]);
@@ -147,7 +153,7 @@ export function ToolWorkspacePage({ managedTools, initialTool }: { managedTools:
     if (!draft || !currentTool || !nativeAvailable) { setInspection(null); return; }
     const sequence = ++inspectionSequence.current;
     const timer = window.setTimeout(() => {
-      void native.inspectNativeDraft(currentTool, draft.files).then((result) => { if (sequence === inspectionSequence.current) setInspection(result); }).catch(() => { if (sequence === inspectionSequence.current) setInspection(null); });
+      void native.inspectRegisteredNativeDraft(currentTool, draft.files).then((result) => { if (sequence === inspectionSequence.current) setInspection(result); }).catch(() => { if (sequence === inspectionSequence.current) setInspection(null); });
     }, 180);
     return () => window.clearTimeout(timer);
   }, [currentTool, fileSignature]);
@@ -156,7 +162,7 @@ export function ToolWorkspacePage({ managedTools, initialTool }: { managedTools:
   const availableRoles = workspace?.probe.nativeFiles.filter((item) => !item.sensitive).map((item) => item.role) ?? ['settings'];
   const activeFile = workspace?.probe.nativeFiles.find((item) => item.role === role);
 
-  function selectProfile(profile: NativeProfile) {
+  function selectProfile(profile: RegisteredProfile) {
     if (dirty && !window.confirm('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return;
     setRawDisk(null); setEditor('profile'); setSelectedId(profile.id); setDraft(structuredClone(profile)); savedDraft.current = JSON.stringify(profile);
     setError(''); setNotice(''); setTakeoverId(null);
@@ -182,10 +188,10 @@ export function ToolWorkspacePage({ managedTools, initialTool }: { managedTools:
   async function save(applyAfter: boolean) {
     if (!nativeAvailable || busy) return;
     setBusy(true); setError(''); setNotice('');
-    let savedForTakeover: NativeProfile | null = null;
+    let savedForTakeover: RegisteredProfile | null = null;
     try {
       if (editor === 'common' && commonDraft) {
-        const result = await native.saveCommonConfig(commonDraft, commonDraft.version || null);
+        const result = await native.saveRegisteredCommonConfig(commonDraft, commonDraft.version || null);
         const saved = result.common;
         setCommonDraft(saved); savedDraft.current = JSON.stringify(saved);
         const failed = result.applications.filter((item) => item.status === 'failed');
@@ -196,20 +202,20 @@ export function ToolWorkspacePage({ managedTools, initialTool }: { managedTools:
       } else if (draft && currentTool) {
         let edited = draft;
         if (pendingRaw) {
-          const current = await native.readNativeFileForEdit(currentTool, scope, projectPath, pendingRaw.role);
+          const current = await native.readRegisteredNativeFileForEdit(currentTool, scope, projectPath, pendingRaw.role);
           if (current !== pendingRaw.original) throw new Error('磁盘原生文件在编辑期间已变化；请重新打开原文，原修改尚未写入。');
-          const imported = await native.prepareNativeImport(currentTool, { ...draft.files, [pendingRaw.role]: pendingRaw.text });
+          const imported = await native.prepareRegisteredNativeImport(currentTool, { ...draft.files, [pendingRaw.role]: pendingRaw.text });
           const nativeCredentials = { ...draft.nativeCredentials };
           delete nativeCredentials[pendingRaw.role];
           Object.assign(nativeCredentials, imported.nativeCredentials);
           edited = { ...draft, files: imported.files, connection: imported.inspection.connection, nativeCredentials };
         }
-        const saved = await native.saveNativeProfile(edited, edited.version || null);
+        const saved = await native.saveRegisteredNativeProfile(edited, edited.version || null);
         savedForTakeover = saved;
         setDraft(saved); savedDraft.current = JSON.stringify(saved);
         setSelectedId(saved.id);
         if (applyAfter) {
-          const outcome = await native.applyNativeProfile(currentTool, saved.id, scope, projectPath, false);
+          const outcome = await native.applyRegisteredNativeProfile(currentTool, saved.id, scope, projectPath, false);
           setNotice(outcome.status === 'already_matching' ? '原生文件已与配置一致。' : '原生文件已写入；下次启动时仍受 CLI 的配置优先级和项目信任规则影响。');
         } else setNotice('配置草稿已保存，当前原生文件尚未更改。');
         await reload(currentTool, scope, projectPath, saved.id);
@@ -222,11 +228,11 @@ export function ToolWorkspacePage({ managedTools, initialTool }: { managedTools:
     finally { setBusy(false); }
   }
 
-  async function applySaved(profile: NativeProfile, allowTakeover = false) {
+  async function applySaved(profile: RegisteredProfile, allowTakeover = false) {
     if (!currentTool || busy) return;
     setBusy(true); setError(''); setNotice('');
     try {
-      const outcome = await native.applyNativeProfile(currentTool, profile.id, scope, projectPath, allowTakeover);
+      const outcome = await native.applyRegisteredNativeProfile(currentTool, profile.id, scope, projectPath, allowTakeover);
       setTakeoverId(null);
       setTakeoverProfile(null);
       setNotice(outcome.status === 'already_matching' ? '原生文件已与配置一致。' : '原生文件已写入；下次启动时仍受 CLI 的配置优先级和项目信任规则影响。');
@@ -255,7 +261,7 @@ export function ToolWorkspacePage({ managedTools, initialTool }: { managedTools:
     if (!connection || checkingConnection) return;
     if (allowModelRequest && !window.confirm('这会向供应商发送一条最小模型请求，可能产生费用。继续吗？')) return;
     setCheckingConnection(true); setConnectionCheck(null);
-    try { setConnectionCheck(await native.testProviderConnection(currentTool, connection, allowModelRequest)); }
+    try { setConnectionCheck(await native.testRegisteredProviderConnection(currentTool, connection, allowModelRequest)); }
     catch (value) { setError(errorText(value)); }
     finally { setCheckingConnection(false); }
   }
@@ -263,7 +269,7 @@ export function ToolWorkspacePage({ managedTools, initialTool }: { managedTools:
   async function choosePath() {
     if (!currentTool || busy) return;
     setBusy(true); setError('');
-    try { await native.setCustomCliPath(currentTool, customPath.trim() || null); await reload(currentTool, scope, projectPath, selectedId); setNotice('CLI 路径已保存并重新检测。'); }
+    try { await native.setRegisteredCustomCliPath(currentTool, customPath.trim() || null); await reload(currentTool, scope, projectPath, selectedId); setNotice('CLI 路径已保存并重新检测。'); }
     catch (value) { setError(errorText(value)); }
     finally { setBusy(false); }
   }
@@ -292,7 +298,7 @@ export function ToolWorkspacePage({ managedTools, initialTool }: { managedTools:
     const started = captureDraft();
     const sequence = ++importSequence.current;
     try {
-      const imported = await native.prepareNativeImportFromDisk(currentTool, scope, projectPath, [role], draft.files);
+      const imported = await native.prepareRegisteredNativeImportFromDisk(currentTool, scope, projectPath, [role], draft.files);
       if (sequence !== importSequence.current || !stillCurrent(started)) return;
       const found = imported.inspection;
       const nativeCredentials = { ...draft.nativeCredentials };
@@ -312,9 +318,9 @@ export function ToolWorkspacePage({ managedTools, initialTool }: { managedTools:
     const roles = workspace.snapshots.filter((item) => item.fingerprint && !workspace.probe.nativeFiles.find((file) => file.role === item.role)?.sensitive).map((item) => item.role);
     if (!roles.length) { setError('还没有可读取的原生配置文件。'); return; }
     try {
-      const imported = await native.prepareNativeImportFromDisk(currentTool, scope, projectPath, roles, {});
+      const imported = await native.prepareRegisteredNativeImportFromDisk(currentTool, scope, projectPath, roles, {});
       const primaryRole = roles.includes(role) ? role : roles[0];
-      const text = await native.readNativeFileForEdit(currentTool, scope, projectPath, primaryRole);
+      const text = await native.readRegisteredNativeFileForEdit(currentTool, scope, projectPath, primaryRole);
       if (sequence !== importSequence.current || !stillCurrent(started)) return;
       const next = { ...emptyProfile(currentTool), name: '本机配置', files: imported.files, connection: imported.inspection.connection, nativeCredentials: imported.nativeCredentials };
       setDraft(next); setSelectedId(null); setEditor('profile'); savedDraft.current = '';
@@ -330,7 +336,7 @@ export function ToolWorkspacePage({ managedTools, initialTool }: { managedTools:
     const started = captureDraft();
     const sequence = ++rawSequence.current;
     try {
-      const text = await native.readNativeFileForEdit(currentTool, scope, projectPath, role);
+      const text = await native.readRegisteredNativeFileForEdit(currentTool, scope, projectPath, role);
       if (sequence !== rawSequence.current || !stillCurrent(started)) return;
       setRawDisk({ context: draftContext, role, original: text, text });
       setNotice('已打开完整磁盘原文。本次保存以这里的 JSON/TOML 为准；此前未保存的表单连接值会由原文重新识别。');
@@ -338,11 +344,11 @@ export function ToolWorkspacePage({ managedTools, initialTool }: { managedTools:
   }
 
   async function changeReasoningEffort(value: string) {
-    if (!draft || currentTool !== 'codex') return;
+    if (!draft || !uiAdapter.reasoning) return;
     const started = captureDraft();
     const sequence = ++reasoningSequence.current;
     try {
-      const settings = await native.setCodexReasoningEffort(draft.files.settings ?? '', value || null);
+      const settings = await uiAdapter.reasoning.update(draft.files.settings ?? '', value || null);
       if (sequence !== reasoningSequence.current || !stillCurrent(started)) return;
       setDraft({ ...draft, files: { ...draft.files, settings } });
     } catch (value) { if (sequence === reasoningSequence.current && stillCurrent(started)) setError(errorText(value)); }
@@ -364,21 +370,22 @@ export function ToolWorkspacePage({ managedTools, initialTool }: { managedTools:
 
   return <section className={styles.workspace} aria-label="工具与连接">
     <div className={styles.toolbar}>
-      <div className={styles.toolSwitcher} role="tablist" aria-label="CLI">{visibleTools.map((id) => <button key={id} type="button" role="tab" aria-selected={currentTool === id} className={currentTool === id ? styles.selected : ''} onClick={() => { if (dirty && !window.confirm('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return; invalidateDraftRequest(); setTool(id); }}>{CLI_NAMES[id]}</button>)}</div>
+      <div className={styles.toolSwitcher} role="tablist" aria-label="CLI">{visibleTools.map((item) => <button key={item.id} type="button" role="tab" aria-selected={currentTool === item.id} className={currentTool === item.id ? styles.selected : ''} onClick={() => { if (dirty && !window.confirm('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return; invalidateDraftRequest(); setTool(item.id); }}>{item.name}</button>)}</div>
       <div className={styles.scopeBar}><label>配置范围 <select value={scope} onChange={(event) => { if (dirty && !window.confirm('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return; invalidateDraftRequest(); setScope(event.target.value as Scope); }}><option value="global">全局</option><option value="project">项目</option></select></label>{scope === 'project' && <><input aria-label="项目目录" placeholder="项目目录的完整路径" value={projectInput} onChange={(event) => setProjectInput(event.target.value)} /><button type="button" onClick={() => { if (dirty && !window.confirm('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return; invalidateDraftRequest(); setProjectPath(projectInput.trim()); }}>打开项目</button></>}</div>
     </div>
     {scope === 'project' && !projectPath.trim() && <p className={styles.hint}>填写项目目录并点击打开后，才会读取该项目的原生配置。切换配置范围不会修改启动目录。</p>}
+    {scope === 'project' && workspace?.probe.nativeFiles.find((item) => !item.sensitive && item.reason)?.reason && <p className={styles.hint}>{workspace.probe.nativeFiles.find((item) => !item.sensitive && item.reason)?.reason}。其他原文字段可编辑并保留。</p>}
     {loading && <p className={styles.hint} role="status">正在检测 CLI 与原生文件…</p>}
     {error && <div className={styles.error} role="alert">{error}{takeoverId && (takeoverProfile?.id === takeoverId || workspace?.profiles.some((item) => item.id === takeoverId)) && <button type="button" onClick={() => { const profile = takeoverProfile?.id === takeoverId ? takeoverProfile : workspace?.profiles.find((item) => item.id === takeoverId); if (profile) void applySaved(profile, true); }}>确认接管该字段</button>}</div>}
     {notice && <div className={styles.notice} role="status">{notice}</div>}
     {workspace && <>
       <div className={styles.installBar}>
         <span className={styles.statusDot} data-ok={workspace.probe.nativeWrites.state === 'supported'} />
-        <span><strong>{workspace.probe.selectedPath ? `${CLI_NAMES[currentTool]} ${workspace.probe.installations.find((item) => item.path === workspace.probe.selectedPath)?.version ?? ''}` : `${CLI_NAMES[currentTool]} 未确认安装`}</strong><small>{workspace.probe.nativeWrites.reason}</small></span>
+        <span><strong>{workspace.probe.selectedPath ? `${toolName} ${workspace.probe.installations.find((item) => item.path === workspace.probe.selectedPath)?.version ?? ''}` : `${toolName} 未确认安装`}</strong><small>{workspace.probe.nativeWrites.reason}</small></span>
         <a href={workspace.probe.installUrl} target="_blank" rel="noreferrer">官方安装说明 ↗</a>
       </div>
       <details className={styles.pathControl}><summary>检测路径与升级</summary><div><input aria-label="CLI 可执行文件路径" value={customPath} onChange={(event) => setCustomPath(event.target.value)} placeholder="自定义可执行文件完整路径" /><button type="button" onClick={() => void choosePath()} disabled={busy}>保存并重检</button><button type="button" disabled={loading} onClick={() => currentTool && void reload(currentTool, scope, projectPath, selectedId)}>重新检测</button></div><p>{workspace.probe.upgradeHint}</p>{workspace.probe.installations.map((item) => <p key={item.path}>{item.status === 'available' ? '可用' : '检测失败'} · 来源：{item.source === 'npm_shim' ? '已验证 npm 入口' : item.source === 'claude_native' ? 'Claude 原生安装' : '未能确认'} · {item.path} {item.detail ?? ''}</p>)}{workspace.probe.dependencies.map((item) => <p key={item.name}>{item.name}：{item.status === 'found' ? '已找到' : item.status === 'outdated' ? '版本过旧' : '缺失'} · {item.detail}{item.status !== 'found' && <a href={item.helpUrl} target="_blank" rel="noreferrer"> 安装或更新 ↗</a>}</p>)}{workspace.probe.installCommand && <div><code>{workspace.probe.installCommand}</code><button type="button" onClick={() => void copyGuidance(workspace.probe.installCommand!)}>复制安装命令</button></div>}{workspace.probe.upgradeCommand ? <div><code>{workspace.probe.upgradeCommand}</code><button type="button" onClick={() => void copyGuidance(workspace.probe.upgradeCommand!)}>复制升级命令</button></div> : workspace.probe.selectedPath && <p>安装来源未能可靠确认，请先核对官方安装说明，再用原安装方式升级。</p>}</details>
-      {!!workspace.recoveryNeeded.length && <div className={styles.error}>有 {workspace.recoveryNeeded.length} 项原生文件事务需要恢复。请检查目标文件和本机凭据库后重试。<button type="button" onClick={() => { void native.recoverNativeTransactions().then(() => currentTool && reload(currentTool, scope, projectPath, selectedId)); }}>重试恢复</button></div>}
+      {!!workspace.recoveryNeeded.length && <div className={styles.error}>有 {workspace.recoveryNeeded.length} 项原生文件事务需要恢复。请检查目标文件和本机凭据库后重试。<button type="button" onClick={() => { void native.recoverNativeTransactions().then(() => { if (currentTool) return reload(currentTool, scope, projectPath, selectedId); }); }}>重试恢复</button></div>}
       <div className={styles.columns}>
         <aside className={styles.profileList} aria-label="命名配置"><div className={styles.listHeading}><strong>命名配置</strong><button type="button" onClick={createProfile}>＋ 新建</button></div>
           <button type="button" className={editor === 'common' ? styles.activeProfile : ''} onClick={editCommon}><strong>通用配置</strong><small>供本工具的命名配置继承</small></button>
@@ -395,7 +402,7 @@ export function ToolWorkspacePage({ managedTools, initialTool }: { managedTools:
               <label className={styles.check}><input type="checkbox" checked={draft.inheritCommon} onChange={(event) => setDraft({ ...draft, inheritCommon: event.target.checked })} />继承本工具通用配置</label>
               {Object.values(draft.nativeCredentials ?? {}).some((items) => Object.keys(items).length > 0) && <p className={styles.hint}>原生 API 密钥已存入系统凭据库；未指定的模型与地址继续由 CLI 默认值决定。应用时会写入该 CLI 可直接读取的原生认证字段。</p>}
               <div className={styles.formDivider}><strong>连接与模型</strong><label className={styles.check}><input type="checkbox" checked={!!draft.connection} onChange={(event) => setDraft({ ...draft, connection: event.target.checked ? defaultConnection(workspace.probe.interfaceFormats) : null })} />配置供应商连接</label></div>
-              {(inspection?.providerId || inspection?.model) && <p className={styles.hint}>原生草稿识别到：{inspection.providerId ?? '未知供应商'} · {inspection.model ?? '未指定模型'}{!inspection.connection && (currentTool === 'claude_code' ? '；未指定项沿用 Claude Code 默认值' : '；连接字段不完整，原文仍会保留')}</p>}
+              {(inspection?.providerId || inspection?.model) && <p className={styles.hint}>原生草稿识别到：{inspection.providerId ?? '未知供应商'} · {inspection.model ?? '未指定模型'}{!inspection.connection && (uiAdapter.incompleteConnectionText ?? '；连接字段不完整，原文仍会保留')}</p>}
               {inspection?.connection && connectionShape(inspection.connection) !== connectionShape(connection) && <button type="button" onClick={adoptInspectedConnection}>按原生草稿更新表单连接</button>}
               {connection && <>
                 {!!workspace.probe.providerPresets.length && <div className={styles.modelBar}><span>常用 API 地址</span>{workspace.probe.providerPresets.map((item) => <button key={item.id} type="button" title={`接口依据：${item.sourceUrl}`} onClick={() => applyPreset(item.id, item.baseUrl, item.interfaceFormat)}>{item.label}</button>)}</div>}
@@ -409,7 +416,7 @@ export function ToolWorkspacePage({ managedTools, initialTool }: { managedTools:
                 {effectiveEnvName && !connection.secretRef && <p className={styles.hint}>原生配置引用：<code>{effectiveEnvName}</code>。直接从终端使用时需自行提供该环境变量。</p>}
                 <div className={styles.secretBar}><label>API 密钥（系统凭据库）<input type="password" autoComplete="off" value={newSecret} onChange={(event) => setNewSecret(event.target.value)} placeholder={connection.secretRef ? '已存入系统凭据库' : '可选'} /></label><button type="button" disabled={!newSecret || busy} onClick={() => void saveSecret()}>保存密钥</button></div><p className={styles.hint}>保存并应用后，CLI 会从受保护的原生配置读取密钥；原生文件因此含有必要的明文凭据。项目共享文件不会写入密钥。</p>
               </>}
-              {currentTool === 'codex' && <label>推理强度（Codex 原生）<select value={inspection?.reasoningEffort ?? ''} onChange={(event) => void changeReasoningEffort(event.target.value)}><option value="">跟随原生默认</option><option value="minimal">极低</option><option value="low">低</option><option value="medium">中</option><option value="high">高</option><option value="xhigh">极高</option>{inspection?.reasoningEffort && !['minimal', 'low', 'medium', 'high', 'xhigh'].includes(inspection.reasoningEffort) && <option value={inspection.reasoningEffort}>当前原生值：{inspection.reasoningEffort}</option>}</select></label>}
+              {uiAdapter.reasoning && <label>{uiAdapter.reasoning.label}<select value={inspection?.reasoningEffort ?? ''} onChange={(event) => void changeReasoningEffort(event.target.value)}><option value="">跟随原生默认</option>{uiAdapter.reasoning.choices.map(([id, label]) => <option key={id} value={id}>{label}</option>)}{inspection?.reasoningEffort && !uiAdapter.reasoning.choices.some(([id]) => id === inspection.reasoningEffort) && <option value={inspection.reasoningEffort}>当前原生值：{inspection.reasoningEffort}</option>}</select></label>}
             </div>}
             {view === 'native' && <div className={styles.nativeEditor}>
               <div className={styles.fileTabs}>{availableRoles.map((name) => <button key={name} type="button" className={role === name ? styles.selected : ''} disabled={!!pendingRaw && name !== pendingRaw.role} onClick={() => { rawSequence.current++; setRole(name); }}>{name === 'settings' ? activeFile?.path.split(/[\\/]/).at(-1) ?? 'settings' : name}</button>)}</div>
