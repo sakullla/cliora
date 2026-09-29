@@ -26,6 +26,9 @@ pub fn run() {
             commands::recover_native_transactions,
             commands::set_connection_secret,
             commands::list_provider_models,
+            commands::test_provider_connection,
+            commands::inspect_native_draft,
+            commands::set_codex_reasoning_effort,
             commands::preview_native_profile
         ])
         .run(tauri::generate_context!())

@@ -9,9 +9,13 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use url::Url;
 
-use super::profile::Connection;
+use super::{
+    adapter,
+    profile::{self, Connection},
+};
 use crate::credentials::CredentialStore;
 use crate::database::Database;
+use crate::domain::CliId;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -21,6 +25,187 @@ pub struct ModelDirectory {
     pub fetched_at: Option<u64>,
     pub error: Option<String>,
     pub source: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckStep {
+    pub state: &'static str,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionCheck {
+    pub format: CheckStep,
+    pub connectivity: CheckStep,
+    pub model_request: CheckStep,
+}
+
+fn step(state: &'static str, message: impl Into<String>) -> CheckStep {
+    CheckStep {
+        state,
+        message: message.into(),
+    }
+}
+
+/// A separate, explicitly charged probe. The default path only checks the
+/// chosen wire format and a GET directory request; it never invokes a model.
+pub fn test_connection(
+    tool: CliId,
+    connection: &Connection,
+    credentials: &dyn CredentialStore,
+    allow_model_request: bool,
+) -> ConnectionCheck {
+    let skipped = || step("skipped", "未发送模型请求");
+    if !adapter::interface_formats(tool, true).contains(&connection.interface_format.as_str()) {
+        return ConnectionCheck {
+            format: step("failed", "该 CLI 不支持所选接口格式"),
+            connectivity: step("skipped", "格式检查未通过"),
+            model_request: skipped(),
+        };
+    }
+    let url = match endpoint(connection) {
+        Ok(url) => url,
+        Err(error) => {
+            return ConnectionCheck {
+                format: step("failed", error),
+                connectivity: step("skipped", "地址检查未通过"),
+                model_request: skipped(),
+            }
+        }
+    };
+    let format = step(
+        "passed",
+        "接口格式与地址有效；供应商是否支持此格式仍须实际请求验证",
+    );
+    if connection
+        .secret_ref
+        .as_deref()
+        .is_some_and(|id| !profile::valid_connection_secret_ref(id))
+    {
+        return ConnectionCheck {
+            format,
+            connectivity: step("failed", "连接密钥标识无效"),
+            model_request: skipped(),
+        };
+    }
+    let secret = match &connection.secret_ref {
+        Some(id) => match credentials.get(id) {
+            Ok(value) if !value.is_empty() => Some(value),
+            _ => {
+                return ConnectionCheck {
+                    format,
+                    connectivity: step("failed", "系统凭据库中的密钥不可用"),
+                    model_request: skipped(),
+                }
+            }
+        },
+        None => None,
+    };
+    let client = match Client::builder()
+        .timeout(Duration::from_secs(8))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+    {
+        Ok(client) => client,
+        Err(_) => {
+            return ConnectionCheck {
+                format,
+                connectivity: step("failed", "无法建立 HTTP 客户端"),
+                model_request: skipped(),
+            }
+        }
+    };
+    let authorize = |request: reqwest::blocking::RequestBuilder| match &secret {
+        Some(secret) if connection.interface_format == "anthropic_messages" => request
+            .header("x-api-key", secret)
+            .header("anthropic-version", "2023-06-01"),
+        Some(secret) => request.header(AUTHORIZATION, format!("Bearer {secret}")),
+        None => request,
+    };
+    let connectivity = match authorize(client.get(url.clone())).send() {
+        Ok(response) if response.status().is_success() => step(
+            "passed",
+            format!("模型目录可访问（HTTP {}）", response.status().as_u16()),
+        ),
+        Ok(response) if response.status().as_u16() == 404 => {
+            step("partial", "服务器可达，但没有模型目录；可直接填写模型 ID")
+        }
+        Ok(response) if matches!(response.status().as_u16(), 401 | 403) => {
+            step("failed", "服务器可达，但认证失败")
+        }
+        Ok(response) => step(
+            "partial",
+            format!(
+                "服务器返回 HTTP {}；无法确认模型目录",
+                response.status().as_u16()
+            ),
+        ),
+        Err(error) if error.is_timeout() => step("failed", "连接超时"),
+        Err(_) => step("failed", "无法连接服务器"),
+    };
+    if !allow_model_request {
+        return ConnectionCheck {
+            format,
+            connectivity,
+            model_request: skipped(),
+        };
+    }
+    if connectivity.state == "failed" {
+        return ConnectionCheck {
+            format,
+            connectivity,
+            model_request: step("skipped", "连通性或认证失败，未发送可能计费的请求"),
+        };
+    }
+    if connection.model.trim().is_empty() {
+        return ConnectionCheck {
+            format,
+            connectivity,
+            model_request: step("failed", "请先填写模型 ID"),
+        };
+    }
+    let mut request_url = url;
+    let suffix = match connection.interface_format.as_str() {
+        "openai_completions" => "chat/completions",
+        "openai_responses" => "responses",
+        _ => "messages",
+    };
+    let path = request_url.path().trim_end_matches("models").to_owned() + suffix;
+    request_url.set_path(&path);
+    let body = match connection.interface_format.as_str() {
+        "openai_completions" => {
+            serde_json::json!({"model":connection.model,"messages":[{"role":"user","content":"ping"}],"max_tokens":1})
+        }
+        "openai_responses" => {
+            serde_json::json!({"model":connection.model,"input":"ping","max_output_tokens":1})
+        }
+        _ => {
+            serde_json::json!({"model":connection.model,"messages":[{"role":"user","content":"ping"}],"max_tokens":1})
+        }
+    };
+    let model_request = match authorize(client.post(request_url).json(&body)).send() {
+        Ok(response) if response.status().is_success() => {
+            step("passed", "最小模型请求成功；供应商可能计费用量")
+        }
+        Ok(response) => step(
+            "failed",
+            format!(
+                "模型请求返回 HTTP {}；请检查模型、格式与配额",
+                response.status().as_u16()
+            ),
+        ),
+        Err(error) if error.is_timeout() => {
+            step("failed", "模型请求超时，不能确认供应商是否已计费")
+        }
+        Err(_) => step("failed", "模型请求未完成，不能确认供应商是否已计费"),
+    };
+    ConnectionCheck {
+        format,
+        connectivity,
+        model_request,
+    }
 }
 
 fn cache_key(connection: &Connection) -> String {
@@ -86,6 +271,9 @@ fn endpoint(connection: &Connection) -> Result<Url, String> {
     }
     if !url.path().ends_with("/models") {
         let mut path = url.path().trim_end_matches('/').to_owned();
+        if path.is_empty() && connection.interface_format == "anthropic_messages" {
+            path.push_str("/v1");
+        }
         path.push_str("/models");
         url.set_path(&path);
     }
@@ -97,6 +285,13 @@ fn fetch(
     credentials: &dyn CredentialStore,
 ) -> Result<Vec<String>, String> {
     let mut url = endpoint(connection)?;
+    if connection
+        .secret_ref
+        .as_deref()
+        .is_some_and(|id| !profile::valid_connection_secret_ref(id))
+    {
+        return Err("连接密钥标识无效".into());
+    }
     let secret = match &connection.secret_ref {
         Some(id) => Some(credentials.get(id).map_err(|_| "模型目录凭据不可用")?),
         None => None,
@@ -176,7 +371,7 @@ fn fetch(
         if !seen_cursors.insert(cursor.to_string()) {
             return Err("模型目录分页重复，已停止请求".into());
         }
-        url.query_pairs_mut().append_pair(
+        url.query_pairs_mut().clear().append_pair(
             if connection.interface_format == "anthropic_messages" {
                 "after_id"
             } else {
@@ -271,7 +466,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let server = thread::spawn(move || {
-            for page in 0..2 {
+            for page in 0..3 {
                 let (mut stream, _) = listener.accept().unwrap();
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
                 let mut first = String::new();
@@ -279,6 +474,10 @@ mod tests {
                 assert!(first.starts_with("GET /v1/models"));
                 if page == 1 {
                     assert!(first.contains("after=alpha"));
+                }
+                if page == 2 {
+                    assert!(first.contains("after=beta"));
+                    assert!(!first.contains("after=alpha"));
                 }
                 loop {
                     let mut line = String::new();
@@ -289,8 +488,10 @@ mod tests {
                 }
                 let body = if page == 0 {
                     r#"{"data":[{"id":"alpha"}],"has_more":true,"last_id":"alpha"}"#
+                } else if page == 1 {
+                    r#"{"data":[{"id":"alpha"},{"id":"beta"}],"has_more":true,"last_id":"beta"}"#
                 } else {
-                    r#"{"data":[{"id":"alpha"},{"id":"beta"}],"has_more":false}"#
+                    r#"{"data":[{"id":"gamma"}],"has_more":false}"#
                 };
                 write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
             }
@@ -306,7 +507,7 @@ mod tests {
             auth_env_var: None,
         };
         let result = list_models(&db, &NoCredential, &connection, true, "").unwrap();
-        assert_eq!(result.models, vec!["alpha", "beta"]);
+        assert_eq!(result.models, vec!["alpha", "beta", "gamma"]);
         assert_eq!(
             list_models(&db, &NoCredential, &connection, false, "bet")
                 .unwrap()
@@ -332,6 +533,110 @@ mod tests {
         assert_eq!(result.status, "error");
         assert!(result.models.is_empty());
         assert_eq!(connection.model, "hand-entered");
+    }
+
+    #[test]
+    fn anthropic_root_url_uses_v1_directory_without_double_prefix() {
+        let mut connection = Connection {
+            provider_id: "anthropic".into(),
+            interface_format: "anthropic_messages".into(),
+            base_url: "https://api.anthropic.com".into(),
+            model: "manual".into(),
+            secret_ref: None,
+            auth_env_var: None,
+        };
+        assert_eq!(endpoint(&connection).unwrap().path(), "/v1/models");
+        connection.base_url.push_str("/v1");
+        assert_eq!(endpoint(&connection).unwrap().path(), "/v1/models");
+    }
+
+    #[test]
+    fn connection_check_only_sends_paid_request_after_explicit_opt_in() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            for expected in ["GET /v1/models", "GET /v1/models", "POST /v1/responses"] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                assert!(line.starts_with(expected), "{line}");
+                loop {
+                    line.clear();
+                    reader.read_line(&mut line).unwrap();
+                    if line == "\r\n" {
+                        break;
+                    }
+                }
+                let body = "{}";
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                )
+                .unwrap();
+            }
+        });
+        let connection = Connection {
+            provider_id: "fixture".into(),
+            interface_format: "openai_responses".into(),
+            base_url: format!("http://{address}/v1"),
+            model: "tiny".into(),
+            secret_ref: None,
+            auth_env_var: None,
+        };
+        let free = test_connection(CliId::Codex, &connection, &NoCredential, false);
+        assert_eq!(free.format.state, "passed");
+        assert_eq!(free.connectivity.state, "passed");
+        assert_eq!(free.model_request.state, "skipped");
+        let paid = test_connection(CliId::Codex, &connection, &NoCredential, true);
+        assert_eq!(paid.model_request.state, "passed");
+        server.join().unwrap();
+        let mut incompatible = connection;
+        incompatible.interface_format = "anthropic_messages".into();
+        let rejected = test_connection(CliId::Codex, &incompatible, &NoCredential, true);
+        assert_eq!(rejected.format.state, "failed");
+        assert_eq!(rejected.connectivity.state, "skipped");
+        assert_eq!(rejected.model_request.state, "skipped");
+    }
+
+    #[test]
+    fn failed_auth_blocks_paid_model_probe_and_preserves_separate_result() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert!(line.starts_with("GET /v1/models"));
+            loop {
+                line.clear();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            write!(
+                stream,
+                "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            )
+            .unwrap();
+        });
+        let connection = Connection {
+            provider_id: "fixture".into(),
+            interface_format: "openai_responses".into(),
+            base_url: format!("http://{address}/v1"),
+            model: "tiny".into(),
+            secret_ref: None,
+            auth_env_var: None,
+        };
+        let checked = test_connection(CliId::Codex, &connection, &NoCredential, true);
+        assert_eq!(checked.format.state, "passed");
+        assert_eq!(checked.connectivity.state, "failed");
+        assert_eq!(checked.model_request.state, "skipped");
+        server.join().unwrap();
     }
 
     #[test]
