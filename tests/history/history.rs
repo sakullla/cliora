@@ -1,5 +1,5 @@
 use super::*;
-use crate::native::adapters::{LaunchMode, CODEX};
+use crate::native::adapters::{LaunchMode, CODEX, GROK};
 
 fn fixtures() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/history")
@@ -9,7 +9,29 @@ fn file(name: &str) -> HistorySource {
         path: fixtures().join(name),
         native_id: None,
         fingerprint: "fixture".into(),
+        fingerprint_error: None,
     }
+}
+
+fn indexed_id(db: &Database, source: &Path) -> String {
+    let canonical = source.canonicalize().unwrap();
+    db.with_connection(|conn| {
+        let mut statement = conn
+            .prepare("SELECT id, source_path FROM history_sessions")
+            .map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|error| error.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .find(|(_, path)| Path::new(path).canonicalize().ok().as_ref() == Some(&canonical))
+            .map(|(id, _)| id)
+            .ok_or_else(|| "源尚未建立索引".into())
+    })
+    .unwrap()
 }
 
 #[test]
@@ -74,6 +96,7 @@ fn five_versioned_sources_extract_visible_messages_and_distinct_usage() {
         path: fixtures().join("grok-1.0"),
         native_id: Some("44444444-4444-4444-8444-444444444444".into()),
         fingerprint: "fixture".into(),
+        fingerprint_error: None,
     })
     .unwrap();
     assert_eq!(grok.messages.len(), 2);
@@ -178,6 +201,158 @@ fn refresh_is_stable_updates_deletes_and_keeps_favorites_and_failed_sources() {
     fs::remove_file(source).unwrap();
     refresh(&db, &registry, &home).unwrap();
     assert!(list(&db, &HistoryFilter::default()).unwrap().is_empty());
+}
+
+#[test]
+fn jsonl_fingerprint_failure_isolated_then_recovered_without_losing_old_index() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let root = home.join(".codex/sessions");
+    fs::create_dir_all(&root).unwrap();
+    let failed = root.join("rollout-failed.jsonl");
+    let healthy = root.join("rollout-healthy.jsonl");
+    for path in [&failed, &healthy] {
+        fs::copy(fixtures().join("codex-0.158.jsonl"), path).unwrap();
+    }
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let registry = Registry::with_adapters(vec![&CODEX]).unwrap();
+    refresh(&db, &registry, &home).unwrap();
+    let failed_id = indexed_id(&db, &failed);
+    let healthy_id = indexed_id(&db, &healthy);
+    fs::write(
+        &failed,
+        fs::read_to_string(&failed)
+            .unwrap()
+            .replace("Looks good.", "Failed source changed."),
+    )
+    .unwrap();
+    fs::write(
+        &healthy,
+        fs::read_to_string(&healthy)
+            .unwrap()
+            .replace("Looks good.", "Healthy source changed."),
+    )
+    .unwrap();
+    let discovered = discover_jsonl_with(
+        &root,
+        |path| path.extension().is_some_and(|value| value == "jsonl"),
+        |path| {
+            if path == failed {
+                Err("simulated read failure".into())
+            } else {
+                source_fingerprint(path)
+            }
+        },
+    );
+    let report = scan_adapter_sources(&db, &CODEX, discovered);
+    assert_eq!(
+        (report.source_count, report.failed_count, report.incomplete),
+        (2, 1, true)
+    );
+    assert!(report.detail.contains("simulated read failure"));
+    let old = detail(&db, &failed_id).unwrap();
+    assert!(old.session.stale);
+    assert!(old
+        .messages
+        .iter()
+        .any(|message| message.text == "Looks good."));
+    let updated = detail(&db, &healthy_id).unwrap();
+    assert!(!updated.session.stale);
+    assert!(updated
+        .messages
+        .iter()
+        .any(|message| message.text == "Healthy source changed."));
+    let recovered = refresh(&db, &registry, &home).unwrap();
+    assert_eq!(recovered[0].failed_count, 0);
+    let restored = detail(&db, &failed_id).unwrap();
+    assert!(!restored.session.stale);
+    assert!(restored
+        .messages
+        .iter()
+        .any(|message| message.text == "Failed source changed."));
+}
+
+#[test]
+fn grok_fingerprint_failure_isolated_then_recovered_without_losing_old_index() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let root = home.join(".grok").join("sessions").join("project");
+    let failed = root.join("failed");
+    let healthy = root.join("healthy");
+    for (id, path) in [("failed", &failed), ("healthy", &healthy)] {
+        fs::create_dir_all(path).unwrap();
+        let mut summary: serde_json::Value =
+            serde_json::from_slice(&fs::read(fixtures().join("grok-1.0/summary.json")).unwrap())
+                .unwrap();
+        summary["info"]["id"] = id.into();
+        fs::write(
+            path.join("summary.json"),
+            serde_json::to_vec(&summary).unwrap(),
+        )
+        .unwrap();
+        for name in ["chat_history.jsonl", "usage.json"] {
+            fs::copy(fixtures().join("grok-1.0").join(name), path.join(name)).unwrap();
+        }
+    }
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let registry = Registry::with_adapters(vec![&GROK]).unwrap();
+    let initial = refresh(&db, &registry, &home).unwrap();
+    assert_eq!(initial[0].failed_count, 0, "{initial:?}");
+    assert_eq!(
+        list(&db, &HistoryFilter::default()).unwrap().len(),
+        2,
+        "{initial:?}"
+    );
+    let failed_id = indexed_id(&db, &failed);
+    let healthy_id = indexed_id(&db, &healthy);
+    let failed_chat = failed.join("chat_history.jsonl");
+    let healthy_chat = healthy.join("chat_history.jsonl");
+    fs::write(
+        &failed_chat,
+        fs::read_to_string(&failed_chat)
+            .unwrap()
+            .replace("The project is ready.", "Failed Grok changed."),
+    )
+    .unwrap();
+    fs::write(
+        &healthy_chat,
+        fs::read_to_string(&healthy_chat)
+            .unwrap()
+            .replace("The project is ready.", "Healthy Grok changed."),
+    )
+    .unwrap();
+    let discovered = grok::sources_with_fingerprint(&home, |path| {
+        if path == failed_chat {
+            Err("simulated Grok read failure".into())
+        } else {
+            source_fingerprint(path)
+        }
+    });
+    let report = scan_adapter_sources(&db, &GROK, discovered);
+    assert_eq!(
+        (report.source_count, report.failed_count, report.incomplete),
+        (2, 1, true)
+    );
+    assert!(report.detail.contains("simulated Grok read failure"));
+    let old = detail(&db, &failed_id).unwrap();
+    assert!(old.session.stale);
+    assert!(old
+        .messages
+        .iter()
+        .any(|message| message.text == "The project is ready."));
+    assert!(detail(&db, &healthy_id)
+        .unwrap()
+        .messages
+        .iter()
+        .any(|message| message.text == "Healthy Grok changed."));
+    let recovered = refresh(&db, &registry, &home).unwrap();
+    assert_eq!(recovered[0].failed_count, 0);
+    let restored = detail(&db, &failed_id).unwrap();
+    assert!(!restored.session.stale);
+    assert!(restored
+        .messages
+        .iter()
+        .any(|message| message.text == "Failed Grok changed."));
 }
 
 #[test]

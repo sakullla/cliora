@@ -29,6 +29,7 @@ pub struct HistorySource {
     pub path: PathBuf,
     pub native_id: Option<String>,
     pub fingerprint: String,
+    pub fingerprint_error: Option<String>,
 }
 
 impl HistorySource {
@@ -235,6 +236,14 @@ pub fn discover_jsonl(
     root: &Path,
     accept: impl Fn(&Path) -> bool,
 ) -> Result<Vec<HistorySource>, String> {
+    discover_jsonl_with(root, accept, source_fingerprint)
+}
+
+fn discover_jsonl_with(
+    root: &Path,
+    accept: impl Fn(&Path) -> bool,
+    fingerprint: impl Fn(&Path) -> Result<String, String>,
+) -> Result<Vec<HistorySource>, String> {
     if !root.exists() {
         return Ok(Vec::new());
     }
@@ -254,8 +263,10 @@ pub fn discover_jsonl(
             if file_type.is_dir() && depth < 5 {
                 pending.push((path, depth + 1));
             } else if file_type.is_file() && accept(&path) {
+                let checked = fingerprint(&path);
                 sources.push(HistorySource {
-                    fingerprint: source_fingerprint(&path)?,
+                    fingerprint: checked.as_ref().cloned().unwrap_or_default(),
+                    fingerprint_error: checked.err(),
                     path,
                     native_id: None,
                 });
@@ -443,6 +454,14 @@ fn existing_fingerprint(db: &Database, key: &str) -> Result<Option<(String, bool
 }
 
 fn scan_adapter(db: &Database, adapter: &dyn CliAdapter, home: &Path) -> ScanStatus {
+    scan_adapter_sources(db, adapter, adapter.history_sources(home))
+}
+
+fn scan_adapter_sources(
+    db: &Database,
+    adapter: &dyn CliAdapter,
+    discovered: Result<Vec<HistorySource>, String>,
+) -> ScanStatus {
     let mut report = ScanStatus {
         tool_id: adapter.id().into(),
         scanned_at: now_ms(),
@@ -451,7 +470,7 @@ fn scan_adapter(db: &Database, adapter: &dyn CliAdapter, home: &Path) -> ScanSta
         incomplete: false,
         detail: String::new(),
     };
-    let sources = match adapter.history_sources(home) {
+    let sources = match discovered {
         Ok(sources) => sources,
         Err(error) => {
             report.incomplete = true;
@@ -465,21 +484,26 @@ fn scan_adapter(db: &Database, adapter: &dyn CliAdapter, home: &Path) -> ScanSta
     for source in sources {
         let key = source.key();
         seen.insert(key.clone());
-        let cached = existing_fingerprint(db, &key).ok().flatten();
-        if source.native_id.is_none()
-            && cached
-                .as_ref()
-                .is_some_and(|(fingerprint, stale)| fingerprint == &source.fingerprint && !stale)
-        {
-            continue;
-        }
-        match adapter
-            .parse_history(&source)
-            .and_then(|parsed| store_session(db, adapter, &source, &parsed))
-        {
+        let outcome = if let Some(error) = source.fingerprint_error.as_ref() {
+            Err(format!("{}：{error}", source.path.display()))
+        } else {
+            let cached = existing_fingerprint(db, &key).ok().flatten();
+            if source.native_id.is_none()
+                && cached.as_ref().is_some_and(|(fingerprint, stale)| {
+                    fingerprint == &source.fingerprint && !stale
+                })
+            {
+                continue;
+            }
+            adapter
+                .parse_history(&source)
+                .and_then(|parsed| store_session(db, adapter, &source, &parsed))
+        };
+        match outcome {
             Ok(()) => {}
             Err(error) => {
                 report.failed_count += 1;
+                report.incomplete = true;
                 if report.detail.is_empty() {
                     report.detail = error;
                 }
