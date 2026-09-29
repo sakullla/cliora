@@ -37,6 +37,13 @@ pub struct FilePatch {
     pub force_restrict: bool,
 }
 
+#[derive(Clone, Debug)]
+pub struct TextPatch {
+    pub path: PathBuf,
+    pub baseline: String,
+    pub contents: String,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApplyOutcome {
@@ -695,6 +702,69 @@ where
     let _guard = write_lock().lock().map_err(|_| "原生事务服务暂时不可用")?;
     let integrity = integrity_key(db, credentials)?;
     let prepared = prepare(patches, &integrity)?;
+    apply_prepared(db, credentials, &integrity, prepared, commit)
+}
+
+pub fn apply_text<F>(
+    db: &Database,
+    credentials: &dyn CredentialStore,
+    patches: &[TextPatch],
+    commit: F,
+) -> Result<ApplyOutcome, String>
+where
+    F: FnOnce(&rusqlite::Transaction<'_>) -> Result<(), String>,
+{
+    let _guard = write_lock().lock().map_err(|_| "原生事务服务暂时不可用")?;
+    let integrity = integrity_key(db, credentials)?;
+    let mut seen = HashSet::new();
+    let mut prepared = Vec::new();
+    for patch in patches {
+        if !seen.insert(&patch.path) {
+            return Err("同一事务中出现重复目标文件".into());
+        }
+        let current = read_native(&patch.path)?;
+        if current != patch.baseline {
+            return Err(format!("原生文本已被外部修改：{}", patch.path.display()));
+        }
+        if current == patch.contents {
+            continue;
+        }
+        let existed = patch.path.exists();
+        let old_readonly = if existed {
+            fs::metadata(&patch.path)
+                .map_err(|_| "无法检查原生文件权限")?
+                .permissions()
+                .readonly()
+        } else {
+            false
+        };
+        prepared.push((
+            JournalFile {
+                path: patch.path.clone(),
+                existed,
+                old_hash: keyed_fingerprint(&integrity, current.as_bytes()),
+                new_hash: keyed_fingerprint(&integrity, patch.contents.as_bytes()),
+                backup: None,
+                nonce: None,
+                old_readonly,
+                sensitive: false,
+            },
+            patch.contents.clone(),
+        ));
+    }
+    apply_prepared(db, credentials, &integrity, prepared, commit)
+}
+
+fn apply_prepared<F>(
+    db: &Database,
+    credentials: &dyn CredentialStore,
+    integrity: &[u8; 32],
+    prepared: Vec<(JournalFile, String)>,
+    commit: F,
+) -> Result<ApplyOutcome, String>
+where
+    F: FnOnce(&rusqlite::Transaction<'_>) -> Result<(), String>,
+{
     if prepared.is_empty() {
         return Err("没有需要写入的原生字段".into());
     }

@@ -3,8 +3,10 @@ pub mod credentials;
 pub mod database;
 pub mod domain;
 pub mod launch;
+pub mod library;
 pub mod native;
 pub mod projects;
+pub mod resources;
 pub mod tray;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -64,6 +66,24 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            commands::list_library_items,
+            commands::save_library_item,
+            commands::delete_library_item,
+            commands::list_mcp_definitions,
+            commands::save_mcp_definition,
+            commands::list_native_mcp,
+            commands::preview_mcp_targets,
+            commands::distribute_mcp,
+            commands::preview_rule_targets,
+            commands::apply_rule_targets,
+            commands::list_skill_packages,
+            commands::preview_skill_local,
+            commands::import_skill_local,
+            commands::preview_skill_https_zip,
+            commands::import_skill_https_zip,
+            commands::list_skill_installations,
+            commands::install_skill,
+            commands::remove_skill,
             commands::get_bootstrap,
             commands::list_cli_adapters,
             commands::list_projects,

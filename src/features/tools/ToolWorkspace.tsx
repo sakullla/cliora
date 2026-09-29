@@ -8,6 +8,7 @@ import type { ApiError } from '../../types/domain';
 import type { TrayRepairTarget } from '../../types/launch';
 import type { AdapterDescriptor, Connection, ConnectionCheck, ModelDirectory, NativeInspection, NativePreview, RegisteredCommon, RegisteredProfile, RegisteredToolWorkspace, Scope } from '../../types/native';
 import { authEnvName, uiAdapterFor } from './adapters';
+import { McpWorkspace, SkillsWorkspace } from './ResourceWorkspace';
 import styles from './ToolWorkspace.module.css';
 
 type View = 'form' | 'native' | 'merged';
@@ -52,6 +53,9 @@ export function ToolWorkspacePage({ managedTools, initialTool, repair, onDirtyCh
   };
   const [commonDraft, setCommonDraft] = useState<RegisteredCommon | null>(null);
   const [view, setView] = useState<View>('native');
+  const [resourceView, setResourceView] = useState<'config' | 'mcp' | 'skills'>('config');
+  const [mcpDirty, setMcpDirty] = useState(false);
+  const [skillsDirty, setSkillsDirty] = useState(false);
   const [role, setRole] = useState('settings');
   const [preview, setPreview] = useState<NativePreview | null>(null);
   const [modelDirectory, setModelDirectory] = useState<ModelDirectory | null>(null);
@@ -95,7 +99,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, repair, onDirtyCh
   const pendingRaw = rawDisk?.context === draftContext ? rawDisk : null;
   const activeRaw = pendingRaw?.role === role ? pendingRaw : null;
   const dirty = (editor === 'profile' ? !!draft && JSON.stringify(draft) !== savedDraft.current : !!commonDraft && JSON.stringify(commonDraft) !== savedDraft.current) || !!pendingRaw && pendingRaw.text !== pendingRaw.original;
-  useLayoutEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
+  useLayoutEffect(() => { onDirtyChange?.(dirty || mcpDirty || skillsDirty); }, [dirty, mcpDirty, skillsDirty, onDirtyChange]);
   useEffect(() => () => { onDirtyChange?.(false); }, [onDirtyChange]);
 
   const reload = useCallback(async (nextTool: string, nextScope: Scope, nextProject: string, preferredId?: string | null) => {
@@ -397,6 +401,12 @@ export function ToolWorkspacePage({ managedTools, initialTool, repair, onDirtyCh
       <div className={styles.toolSwitcher} role="tablist" aria-label="CLI">{visibleTools.map((item) => <button key={item.id} type="button" role="tab" aria-selected={currentTool === item.id} className={currentTool === item.id ? styles.selected : ''} onClick={() => { if (dirty && !window.confirm('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return; invalidateDraftRequest(); setTool(item.id); }}>{item.name}</button>)}</div>
       <div className={styles.scopeBar}><label>配置范围 <select value={scope} onChange={(event) => { if (dirty && !window.confirm('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return; invalidateDraftRequest(); setScope(event.target.value as Scope); }}><option value="global">全局</option><option value="project">项目</option></select></label>{scope === 'project' && <><input aria-label="项目目录" placeholder="项目目录的完整路径" value={projectInput} onChange={(event) => setProjectInput(event.target.value)} /><button type="button" onClick={() => { if (dirty && !window.confirm('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return; invalidateDraftRequest(); setProjectPath(projectInput.trim()); }}>打开项目</button></>}</div>
     </div>
+    <div className={styles.views} role="tablist" aria-label="工具内容">
+      <button type="button" role="tab" aria-selected={resourceView === 'config'} className={resourceView === 'config' ? styles.selected : ''} onClick={() => setResourceView('config')}>原生配置</button>
+      <button type="button" role="tab" aria-selected={resourceView === 'mcp'} className={resourceView === 'mcp' ? styles.selected : ''} onClick={() => setResourceView('mcp')}>MCP</button>
+      <button type="button" role="tab" aria-selected={resourceView === 'skills'} className={resourceView === 'skills' ? styles.selected : ''} onClick={() => setResourceView('skills')}>Skills</button>
+    </div>
+    <div hidden={resourceView !== 'config'}>
     {scope === 'project' && !projectPath.trim() && <p className={styles.hint}>填写项目目录并点击打开后，才会读取该项目的原生配置。切换配置范围不会修改启动目录。</p>}
     {scope === 'project' && workspace?.probe.nativeFiles.find((item) => !item.sensitive && item.reason)?.reason && <p className={styles.hint}>{workspace.probe.nativeFiles.find((item) => !item.sensitive && item.reason)?.reason}</p>}
     {loading && <p className={styles.hint} role="status">正在检测 CLI 与原生文件…</p>}
@@ -458,5 +468,8 @@ export function ToolWorkspacePage({ managedTools, initialTool, repair, onDirtyCh
       </div>
       {editor === 'profile' && draft?.id && !dirty && (workspace.binding?.profileId !== draft.id || workspace.binding.profileVersion !== draft.version) && <div className={styles.quickApply}><span>这份配置已保存，但尚未应用到当前范围。</span><button type="button" onClick={() => void applySaved(draft)} disabled={busy || workspace.probe.nativeWrites.state !== 'supported'}>应用这份配置</button></div>}
     </>}
+    </div>
+    <div hidden={resourceView !== 'mcp'}><McpWorkspace toolId={currentTool} scope={scope} projectPath={projectPath} tools={visibleTools} onDirtyChange={setMcpDirty} /></div>
+    <div hidden={resourceView !== 'skills'}><SkillsWorkspace toolId={currentTool} scope={scope} projectPath={projectPath} onDirtyChange={setSkillsDirty} /></div>
   </section>;
 }
