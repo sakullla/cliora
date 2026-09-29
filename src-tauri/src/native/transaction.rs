@@ -32,6 +32,7 @@ pub struct FilePatch {
     pub kind: FileKind,
     pub baseline: String,
     pub changes: Vec<FieldChange>,
+    pub sensitive: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -51,6 +52,8 @@ struct JournalFile {
     backup: Option<String>,
     nonce: Option<String>,
     old_readonly: bool,
+    #[serde(default)]
+    sensitive: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -132,6 +135,7 @@ fn prepare(patches: &[FilePatch]) -> Result<Vec<(JournalFile, String)>, String> 
                 backup: None,
                 nonce: None,
                 old_readonly,
+                sensitive: patch.sensitive,
             },
             output,
         ));
@@ -180,7 +184,49 @@ fn decrypt(key: &[u8; 32], encrypted: &str, nonce: &str) -> Result<Vec<u8>, Stri
         .map_err(|_| "无法解密原生备份".into())
 }
 
-fn write_replacement(path: &Path, contents: &[u8], id: &str) -> Result<(), String> {
+#[cfg(windows)]
+fn restrict_windows_stage(stage: &Path) -> Result<(), String> {
+    use std::process::Command;
+    let system32 =
+        PathBuf::from(std::env::var_os("SystemRoot").ok_or("无法定位 Windows 系统目录")?)
+            .join("System32");
+    let identity = Command::new(system32.join("whoami.exe"))
+        .args(["/user", "/fo", "csv", "/nh"])
+        .output()
+        .map_err(|_| "无法检查当前 Windows 用户身份")?;
+    if !identity.status.success() {
+        return Err("无法检查当前 Windows 用户身份".into());
+    }
+    let output = String::from_utf8(identity.stdout).map_err(|_| "Windows 用户身份编码异常")?;
+    let sid = output
+        .trim()
+        .rsplit(',')
+        .next()
+        .unwrap_or("")
+        .trim_matches('"');
+    if !sid.starts_with("S-1-") || !sid[4..].chars().all(|c| c.is_ascii_digit() || c == '-') {
+        return Err("Windows 用户 SID 无效，拒绝写入原生密钥".into());
+    }
+    let user = format!("*{sid}:F");
+    let status = Command::new(system32.join("icacls.exe"))
+        .arg(stage)
+        .args(["/inheritance:r", "/grant:r"])
+        .arg(&user)
+        .args(["/grant:r", "*S-1-5-18:F"])
+        .output()
+        .map_err(|_| "无法限制原生密钥文件的 Windows ACL")?;
+    if !status.status.success() {
+        return Err("无法限制原生密钥文件的 Windows ACL，未写入密钥".into());
+    }
+    Ok(())
+}
+
+fn write_replacement(
+    path: &Path,
+    contents: &[u8],
+    id: &str,
+    sensitive: bool,
+) -> Result<(), String> {
     let parent = path.parent().ok_or("原生文件缺少父目录")?;
     fs::create_dir_all(parent)
         .map_err(|_| format!("无法创建原生配置目录：{}", parent.display()))?;
@@ -190,6 +236,16 @@ fn write_replacement(path: &Path, contents: &[u8], id: &str) -> Result<(), Strin
     let mut file = options
         .open(&stage)
         .map_err(|_| format!("无法建立临时原生文件：{}", stage.display()))?;
+    #[cfg(windows)]
+    if sensitive {
+        if let Err(error) = restrict_windows_stage(&stage) {
+            drop(file);
+            let _ = fs::remove_file(&stage);
+            return Err(error);
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = sensitive;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -251,7 +307,9 @@ fn restore(
                 _ => Err("原生备份缺失".into()),
             };
             original.and_then(|bytes| {
-                write_replacement(&item.path, &bytes, &Uuid::new_v4().to_string())?;
+                // Older journals predate the sensitive flag. Their encrypted
+                // backup may still contain a native token, so restore privately.
+                write_replacement(&item.path, &bytes, &Uuid::new_v4().to_string(), true)?;
                 if item.old_readonly {
                     let mut permissions = fs::metadata(&item.path)
                         .map_err(|_| "无法读取恢复文件权限")?
@@ -348,7 +406,7 @@ where
             if fingerprint(current.as_bytes()) != item.old_hash {
                 return Err(format!("原生文件写入前发生变化：{}", item.path.display()));
             }
-            write_replacement(&item.path, output.as_bytes(), &id)?;
+            write_replacement(&item.path, output.as_bytes(), &id, item.sensitive)?;
             let written = fs::read(&item.path).map_err(|_| "无法核验原生写入")?;
             if fingerprint(&written) != item.new_hash {
                 return Err("原生写入后校验失败".into());
@@ -476,6 +534,7 @@ mod tests {
                 backup: None,
                 nonce: None,
                 old_readonly: false,
+                sensitive: false,
             }],
         };
         save_journal(&db, &journal, "recovery_needed").unwrap();
@@ -511,6 +570,7 @@ mod tests {
                 path: vec!["model".into()],
                 value: Some(Value::String("new".into())),
             }],
+            sensitive: false,
         };
         let db = Database::open(&temp.path().join("app.db")).unwrap();
         apply(&db, &MemoryStore::default(), &[patch.clone()], |_| Ok(())).unwrap();
@@ -539,6 +599,7 @@ mod tests {
                 path: vec!["model".into()],
                 value: Some(Value::String("new".into())),
             }],
+            sensitive: false,
         };
         assert!(
             apply(&db, &store, &[patch], |_| Err("injected failure".into()))
@@ -583,6 +644,7 @@ mod tests {
                 backup: Some(backup),
                 nonce: Some(nonce),
                 old_readonly: false,
+                sensitive: false,
             }
         };
         let journal = Journal {
@@ -594,7 +656,7 @@ mod tests {
             ],
         };
         save_journal(&db, &journal, "applying").unwrap();
-        write_replacement(&first, b"{\"model\":\"new\"}", &id).unwrap();
+        write_replacement(&first, b"{\"model\":\"new\"}", &id, false).unwrap();
         assert!(recover_pending(&db, &store).unwrap().is_empty());
         assert_eq!(fs::read(&first).unwrap(), b"{\"model\":\"old\"}");
         assert_eq!(fs::read(&second).unwrap(), b"{\"providers\":{}}");
@@ -623,6 +685,7 @@ mod tests {
                 backup: Some(backup),
                 nonce: Some(nonce),
                 old_readonly: false,
+                sensitive: false,
             }],
         };
         save_journal(&db, &journal, "applying").unwrap();
@@ -640,5 +703,54 @@ mod tests {
             Ok(())
         })
         .unwrap();
+    }
+
+    #[test]
+    fn failed_sensitive_commit_restores_old_secret_without_plaintext_journal() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("settings.json");
+        let original = r#"{"env":{"ANTHROPIC_API_KEY":"old-test-key"}}"#;
+        fs::write(&file, original).unwrap();
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        let patch = FilePatch {
+            path: file.clone(),
+            kind: FileKind::Json,
+            baseline: original.into(),
+            sensitive: true,
+            changes: vec![FieldChange {
+                path: vec!["env".into(), "ANTHROPIC_API_KEY".into()],
+                value: Some(Value::String("new-test-key".into())),
+            }],
+        };
+        assert!(apply(&db, &MemoryStore::default(), &[patch], |_| Err(
+            "injected database failure".into()
+        ))
+        .is_err());
+        assert_eq!(fs::read_to_string(&file).unwrap(), original);
+        db.with_connection(|conn| {
+            let data: String = conn
+                .query_row("SELECT data FROM native_transactions", [], |row| row.get(0))
+                .map_err(|e| e.to_string())?;
+            assert!(!data.contains("old-test-key"));
+            assert!(!data.contains("new-test-key"));
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn sensitive_native_file_has_no_inherited_windows_acl_after_write() {
+        use std::process::Command;
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("private.json");
+        write_replacement(&file, b"{\"apiKey\":\"test-only\"}", "acl-test", true).unwrap();
+        let system32 = PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32");
+        let output = Command::new(system32.join("icacls.exe"))
+            .arg(&file)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("(I)"));
     }
 }

@@ -20,8 +20,8 @@ pub struct Connection {
     pub auth_env_var: Option<String>,
 }
 
-/// Name used by native config and by the launcher's child-only environment.
-/// A stored key is never written into a native config file or sent over IPC.
+/// Environment name used by the launcher's child process and by profiles
+/// that explicitly use a native environment reference.
 pub fn auth_env_name(tool: CliId, connection: &Connection) -> Option<String> {
     if let Some(name) = &connection.auth_env_var {
         return Some(name.clone());
@@ -211,6 +211,7 @@ fn reject_plaintext_secrets(value: &serde_json::Value) -> Result<(), String> {
                         | "password"
                         | "secret"
                         | "token"
+                        | "experimental_bearer_token"
                 );
                 if sensitive && env_ref_name(value).is_none() {
                     return Err(format!(

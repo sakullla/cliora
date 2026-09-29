@@ -29,6 +29,8 @@ pub fn run() {
             commands::test_provider_connection,
             commands::inspect_native_draft,
             commands::prepare_native_import,
+            commands::prepare_native_import_from_disk,
+            commands::read_native_file_for_edit,
             commands::set_codex_reasoning_effort,
             commands::preview_native_profile
         ])
