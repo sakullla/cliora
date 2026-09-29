@@ -1,0 +1,11 @@
+{
+  // Pi models.json is JSONC in this version.
+  "providers": {
+    "existing": {
+      "baseUrl": "https://example.test/v1",
+      "api": "openai-responses",
+      "apiKey": "EXISTING_KEY",
+      "models": [{ "id": "one" }]
+    }
+  }
+}

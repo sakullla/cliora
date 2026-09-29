@@ -1,5 +1,6 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import type { ApiError, Bootstrap, CliId, Theme } from '../types/domain';
+import type { ApplyOutcome, CommonConfig, CommonSaveResult, Connection, ModelDirectory, NativePreview, NativeProfile, Scope, ToolWorkspace } from '../types/native';
 
 export const nativeAvailable = isTauri();
 
@@ -32,4 +33,14 @@ export const native = {
   getBootstrap: () => command<Bootstrap>('get_bootstrap'),
   setManagedTools: (managedTools: CliId[]) => command<Bootstrap>('set_managed_tools', { managedTools }),
   setTheme: (theme: Theme) => command<Bootstrap>('set_theme', { theme }),
+  getToolWorkspace: (tool: CliId, scope: Scope, projectPath?: string) => command<ToolWorkspace>('get_tool_workspace', { tool, scope, projectPath: projectPath || null }),
+  setCustomCliPath: (tool: CliId, path: string | null) => command<void>('set_custom_cli_path', { tool, path }),
+  saveNativeProfile: (profile: NativeProfile, expectedVersion: number | null) => command<NativeProfile>('save_native_profile', { profile, expectedVersion }),
+  deleteNativeProfile: (id: string, expectedVersion: number) => command<void>('delete_native_profile', { id, expectedVersion }),
+  saveCommonConfig: (common: CommonConfig, expectedVersion: number | null) => command<CommonSaveResult>('save_common_config', { common, expectedVersion }),
+  applyNativeProfile: (tool: CliId, profileId: string, scope: Scope, projectPath: string | undefined, allowTakeover: boolean) => command<ApplyOutcome>('apply_native_profile', { tool, profileId, scope, projectPath: projectPath || null, allowTakeover }),
+  recoverNativeTransactions: () => command<string[]>('recover_native_transactions'),
+  setConnectionSecret: (secret: string) => command<string>('set_connection_secret', { secret }),
+  listProviderModels: (connection: Connection, force: boolean, query = '') => command<ModelDirectory>('list_provider_models', { connection, force, query }),
+  previewNativeProfile: (profile: NativeProfile, scope: Scope) => command<NativePreview>('preview_native_profile', { profile, scope }),
 };

@@ -1,0 +1,6 @@
+{
+  "model": "opus",
+  "env": { "ANTHROPIC_BASE_URL": "https://example.test" },
+  "permissions": { "allow": ["Read"] },
+  "customUserField": { "leave": true }
+}
