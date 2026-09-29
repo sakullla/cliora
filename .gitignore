@@ -1,13 +1,22 @@
 node_modules/
 dist/
+/.idea/
+.claude/worktrees/
+/.commandcode/
 src-tauri/target/
-src-tauri/gen/schemas/
+src-tauri/gen/
 .vite/
 *.log
 .DS_Store
+Thumbs.db
 *.db
 *.db-shm
 *.db-wal
 *.tsbuildinfo
 playwright-report/
 test-results/
+
+# Keep requirements and design tracked; workflow runtime files are local.
+docs/sakullla-workflow/**/00-state.yaml
+docs/sakullla-workflow/**/task-runs/
+docs/sakullla-workflow/**/evidence/
