@@ -487,6 +487,20 @@ pub fn valid_connection_secret_ref(id: &str) -> bool {
 }
 
 pub fn delete_profile(db: &Database, id: &str, expected_version: u64) -> Result<(), String> {
+    delete_registered_profile(
+        db,
+        &super::adapters::Registry::builtins(),
+        id,
+        expected_version,
+    )
+}
+
+pub fn delete_registered_profile(
+    db: &Database,
+    registry: &super::adapters::Registry,
+    id: &str,
+    expected_version: u64,
+) -> Result<(), String> {
     db.with_connection(|conn| {
         let tx = conn.transaction().map_err(|e| e.to_string())?;
         let bound: i64 = tx
@@ -498,6 +512,18 @@ pub fn delete_profile(db: &Database, id: &str, expected_version: u64) -> Result<
             .map_err(|e| e.to_string())?;
         if bound != 0 {
             return Err("配置仍在使用；请先切换到其他配置或保留原生文件".into());
+        }
+        let tool: Option<String> = tx
+            .query_row(
+                "SELECT tool FROM native_profiles WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let tool = tool.ok_or("配置不存在或版本已变化")?;
+        if registry.get(&tool).is_none() {
+            return Err("未注册的 CLI 适配器，只能只读保留原资料".into());
         }
         let changed = tx
             .execute(
@@ -611,6 +637,40 @@ mod tests {
             CliId::ClaudeCode
         );
         assert_eq!(list_profiles(&db, CliId::Codex).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn deleting_registered_profile_still_checks_version_and_active_binding() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        let saved = save_profile(&db, profile(CliId::Codex, "工作"), None).unwrap();
+        assert!(delete_profile(&db, &saved.id, saved.version + 1)
+            .unwrap_err()
+            .contains("版本已变化"));
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO applied_bindings (scope_key, tool, profile_id, profile_version, managed) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params!["global", "codex", saved.id, saved.version as i64, "{}"],
+            )
+            .map_err(|error| error.to_string())?;
+            Ok(())
+        })
+        .unwrap();
+        assert!(delete_profile(&db, &saved.id, saved.version)
+            .unwrap_err()
+            .contains("仍在使用"));
+        assert_eq!(get_profile(&db, &saved.id).unwrap().version, saved.version);
+        db.with_connection(|conn| {
+            conn.execute(
+                "DELETE FROM applied_bindings WHERE profile_id = ?1",
+                [&saved.id],
+            )
+            .map_err(|error| error.to_string())?;
+            Ok(())
+        })
+        .unwrap();
+        delete_profile(&db, &saved.id, saved.version).unwrap();
+        assert!(get_profile(&db, &saved.id).is_err());
     }
 
     #[test]

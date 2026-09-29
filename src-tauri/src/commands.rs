@@ -1250,6 +1250,9 @@ mod tests {
             Some(1)
         )
         .is_err());
+        assert!(profile::delete_profile(&db, "future-1", 1)
+            .unwrap_err()
+            .contains("未注册的 CLI 适配器"));
         let raw: String = db
             .with_connection(|conn| {
                 conn.query_row(
