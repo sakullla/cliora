@@ -10,7 +10,7 @@ use chacha20poly1305::{
     ChaCha20Poly1305, Key, Nonce,
 };
 use rand::Rng;
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -33,6 +33,8 @@ pub struct FilePatch {
     pub baseline: String,
     pub changes: Vec<FieldChange>,
     pub sensitive: bool,
+    /// Rewrite unchanged sensitive files through the restricted staging path.
+    pub force_restrict: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -67,6 +69,189 @@ pub fn fingerprint(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
+const INTEGRITY_KEY_ID: &str = "native-integrity-key-v1";
+const INTEGRITY_SETTING: &str = "native_integrity_key_v1";
+const DIGEST_PREFIX: &str = "h1:";
+
+fn hmac_digest(key: &[u8; 32], digest: &[u8]) -> String {
+    let mut inner_pad = [0x36_u8; 64];
+    let mut outer_pad = [0x5c_u8; 64];
+    for (index, byte) in key.iter().enumerate() {
+        inner_pad[index] ^= byte;
+        outer_pad[index] ^= byte;
+    }
+    let mut inner = Sha256::new();
+    inner.update(inner_pad);
+    inner.update(digest);
+    let mut outer = Sha256::new();
+    outer.update(outer_pad);
+    outer.update(inner.finalize());
+    format!("{DIGEST_PREFIX}{:x}", outer.finalize())
+}
+
+pub fn keyed_fingerprint(key: &[u8; 32], bytes: &[u8]) -> String {
+    hmac_digest(key, &Sha256::digest(bytes))
+}
+
+fn migrate_digest(value: &mut String, key: &[u8; 32]) -> Result<bool, String> {
+    if value.starts_with(DIGEST_PREFIX) {
+        return Ok(false);
+    }
+    if value.len() != 64 || !value.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("旧原生摘要格式异常；保留原记录并停止写入".into());
+    }
+    let digest = (0..32)
+        .map(|index| u8::from_str_radix(&value[index * 2..index * 2 + 2], 16))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| "旧原生摘要格式异常；保留原记录并停止写入")?;
+    *value = hmac_digest(key, &digest);
+    Ok(true)
+}
+
+fn migrate_managed(value: &mut Value, key: &[u8; 32]) -> Result<bool, String> {
+    match value {
+        Value::Object(map) => {
+            let mut changed = false;
+            if let Some(Value::String(hash)) = map.get_mut("__cliora_secret_sha256") {
+                changed |= migrate_digest(hash, key)?;
+            }
+            for nested in map.values_mut() {
+                changed |= migrate_managed(nested, key)?;
+            }
+            Ok(changed)
+        }
+        Value::Array(items) => {
+            let mut changed = false;
+            for nested in items {
+                changed |= migrate_managed(nested, key)?;
+            }
+            Ok(changed)
+        }
+        _ => Ok(false),
+    }
+}
+
+fn migrate_integrity_records(db: &Database, key: &[u8; 32]) -> Result<(), String> {
+    db.with_connection(|conn| {
+        let tx = conn.transaction().map_err(|_| "无法迁移原生摘要")?;
+        let bindings: Vec<(String, String, String)> = {
+            let mut statement = tx
+                .prepare("SELECT scope_key, tool, managed FROM applied_bindings")
+                .map_err(|_| "无法读取活动配置摘要")?;
+            let rows = statement
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+                .map_err(|_| "无法读取活动配置摘要")?
+                .collect::<Result<_, _>>()
+                .map_err(|_| "无法读取活动配置摘要")?;
+            rows
+        };
+        for (scope, tool, data) in bindings {
+            let mut managed: Value = serde_json::from_str(&data).map_err(|_| "活动配置摘要损坏")?;
+            if migrate_managed(&mut managed, key)? {
+                tx.execute(
+                    "UPDATE applied_bindings SET managed = ?3 WHERE scope_key = ?1 AND tool = ?2",
+                    params![
+                        scope,
+                        tool,
+                        serde_json::to_string(&managed).map_err(|_| "无法迁移活动配置摘要")?
+                    ],
+                )
+                .map_err(|_| "无法迁移活动配置摘要")?;
+            }
+        }
+        let journals: Vec<(String, String)> = {
+            let mut statement = tx
+                .prepare("SELECT id, data FROM native_transactions")
+                .map_err(|_| "无法读取原生事务摘要")?;
+            let rows = statement
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .map_err(|_| "无法读取原生事务摘要")?
+                .collect::<Result<_, _>>()
+                .map_err(|_| "无法读取原生事务摘要")?;
+            rows
+        };
+        for (id, data) in journals {
+            let mut journal: Journal =
+                serde_json::from_str(&data).map_err(|_| "原生事务日志损坏")?;
+            let mut changed = false;
+            for file in &mut journal.files {
+                changed |= migrate_digest(&mut file.old_hash, key)?;
+                changed |= migrate_digest(&mut file.new_hash, key)?;
+            }
+            if changed {
+                tx.execute(
+                    "UPDATE native_transactions SET data = ?2 WHERE id = ?1",
+                    params![
+                        id,
+                        serde_json::to_string(&journal).map_err(|_| "无法迁移原生事务摘要")?
+                    ],
+                )
+                .map_err(|_| "无法迁移原生事务摘要")?;
+            }
+        }
+        tx.commit().map_err(|_| "无法提交原生摘要迁移".into())
+    })
+}
+
+/// Stable, purpose-specific HMAC key; losing it must fail closed instead of
+/// silently accepting a different native configuration as previously managed.
+pub fn integrity_key(db: &Database, credentials: &dyn CredentialStore) -> Result<[u8; 32], String> {
+    static KEY_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    let _guard = KEY_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| "原生摘要服务暂时不可用")?;
+    let registered: bool = db.with_connection(|conn| {
+        conn.query_row(
+            "SELECT value FROM app_settings WHERE key = ?1",
+            [INTEGRITY_SETTING],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map(|value| value.is_some())
+        .map_err(|_| "无法检查原生摘要密钥".into())
+    })?;
+    let encoded = if registered {
+        credentials
+            .get(INTEGRITY_KEY_ID)
+            .map_err(|_| "原生摘要密钥已丢失；请修复系统凭据库，原文件未修改")?
+    } else {
+        let encoded = match credentials.get(INTEGRITY_KEY_ID) {
+            Ok(existing) => existing,
+            Err(_) => {
+                let mut key = [0_u8; 32];
+                rand::rng().fill(&mut key);
+                let encoded = STANDARD.encode(key);
+                credentials
+                    .put(INTEGRITY_KEY_ID, &encoded)
+                    .map_err(|_| "无法保存原生摘要密钥；原文件未修改")?;
+                encoded
+            }
+        };
+        if STANDARD
+            .decode(&encoded)
+            .map_or(true, |bytes| bytes.len() != 32)
+        {
+            return Err("原生摘要密钥格式错误；原文件未修改".into());
+        }
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO app_settings (key, value) VALUES (?1, 'keyring')",
+                [INTEGRITY_SETTING],
+            )
+            .map_err(|_| String::from("无法登记原生摘要密钥"))?;
+            Ok(())
+        })?;
+        encoded
+    };
+    let bytes = STANDARD
+        .decode(encoded)
+        .map_err(|_| "原生摘要密钥格式错误")?;
+    let key: [u8; 32] = bytes.try_into().map_err(|_| "原生摘要密钥长度错误")?;
+    migrate_integrity_records(db, &key)?;
+    Ok(key)
+}
+
 fn write_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
@@ -88,14 +273,17 @@ fn value_at<'a>(root: &'a Value, path: &[String]) -> Option<&'a Value> {
         .try_fold(root, |value, segment| value.get(segment))
 }
 
-fn prepare(patches: &[FilePatch]) -> Result<Vec<(JournalFile, String)>, String> {
+fn prepare(
+    patches: &[FilePatch],
+    integrity: &[u8; 32],
+) -> Result<Vec<(JournalFile, String)>, String> {
     let mut seen = HashSet::new();
     let mut result = Vec::new();
     for patch in patches {
         if !seen.insert(&patch.path) {
             return Err("同一事务中出现重复目标文件".into());
         }
-        if patch.changes.is_empty() {
+        if patch.changes.is_empty() && !patch.force_restrict {
             continue;
         }
         let baseline = format::parse(patch.kind, &patch.baseline)?;
@@ -114,7 +302,7 @@ fn prepare(patches: &[FilePatch]) -> Result<Vec<(JournalFile, String)>, String> 
             }
             output = format::set_path(patch.kind, &output, &change.path, change.value.as_ref())?;
         }
-        if output == current_text {
+        if output == current_text && !patch.force_restrict {
             continue;
         }
         let existed = patch.path.exists();
@@ -130,8 +318,8 @@ fn prepare(patches: &[FilePatch]) -> Result<Vec<(JournalFile, String)>, String> 
             JournalFile {
                 path: patch.path.clone(),
                 existed,
-                old_hash: fingerprint(current_text.as_bytes()),
-                new_hash: fingerprint(output.as_bytes()),
+                old_hash: keyed_fingerprint(integrity, current_text.as_bytes()),
+                new_hash: keyed_fingerprint(integrity, output.as_bytes()),
                 backup: None,
                 nonce: None,
                 old_readonly,
@@ -207,6 +395,16 @@ fn restrict_windows_stage(stage: &Path) -> Result<(), String> {
     if !sid.starts_with("S-1-") || !sid[4..].chars().all(|c| c.is_ascii_digit() || c == '-') {
         return Err("Windows 用户 SID 无效，拒绝写入原生密钥".into());
     }
+    // A newly created stage normally has only inherited entries, but reset
+    // also removes any explicit grants before the inheritance is removed.
+    let reset = Command::new(system32.join("icacls.exe"))
+        .arg(stage)
+        .arg("/reset")
+        .output()
+        .map_err(|_| "无法重设原生密钥文件的 Windows ACL")?;
+    if !reset.status.success() {
+        return Err("无法重设原生密钥文件的 Windows ACL，未写入密钥".into());
+    }
     let user = format!("*{sid}:F");
     let status = Command::new(system32.join("icacls.exe"))
         .arg(stage)
@@ -267,6 +465,7 @@ fn restore(
     db: &Database,
     credentials: &dyn CredentialStore,
     journal: &Journal,
+    integrity: &[u8; 32],
 ) -> Result<(), String> {
     let encoded_key = credentials
         .get(&journal.key_id)
@@ -290,7 +489,7 @@ fn restore(
                 let _ = fs::remove_file(stage);
             }
         }
-        let hash = fingerprint(current.as_bytes());
+        let hash = keyed_fingerprint(integrity, current.as_bytes());
         if hash == item.old_hash {
             continue;
         }
@@ -338,6 +537,18 @@ pub fn recover_pending(
     credentials: &dyn CredentialStore,
 ) -> Result<Vec<String>, String> {
     let _guard = write_lock().lock().map_err(|_| "原生事务服务暂时不可用")?;
+    let has_integrity_records: bool = db.with_connection(|conn| {
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM native_transactions) OR EXISTS(SELECT 1 FROM applied_bindings WHERE managed LIKE '%__cliora_secret_sha256%')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|_| "无法检查原生事务".into())
+    })?;
+    if !has_integrity_records {
+        return Ok(Vec::new());
+    }
+    let integrity = integrity_key(db, credentials)?;
     let pending: Vec<Journal> = db.with_connection(|conn| {
         let mut statement = conn.prepare("SELECT data FROM native_transactions WHERE status IN ('prepared', 'applying', 'recovery_needed')").map_err(|e| e.to_string())?;
         let journals = statement.query_map([], |row| row.get::<_, String>(0)).map_err(|e| e.to_string())?
@@ -346,7 +557,7 @@ pub fn recover_pending(
     })?;
     let mut unresolved = Vec::new();
     for journal in pending {
-        if restore(db, credentials, &journal).is_err() {
+        if restore(db, credentials, &journal, &integrity).is_err() {
             unresolved.push(journal.id);
         }
     }
@@ -363,7 +574,8 @@ where
     F: FnOnce(&rusqlite::Transaction<'_>) -> Result<(), String>,
 {
     let _guard = write_lock().lock().map_err(|_| "原生事务服务暂时不可用")?;
-    let prepared = prepare(patches)?;
+    let integrity = integrity_key(db, credentials)?;
+    let prepared = prepare(patches, &integrity)?;
     if prepared.is_empty() {
         return Err("没有需要写入的原生字段".into());
     }
@@ -384,7 +596,7 @@ where
         let mut item = item.clone();
         if item.existed {
             let bytes = fs::read(&item.path).map_err(|_| "准备备份时无法读取原生文件")?;
-            if fingerprint(&bytes) != item.old_hash {
+            if keyed_fingerprint(&integrity, &bytes) != item.old_hash {
                 return Err("原生文件在准备备份期间发生变化".into());
             }
             let (backup, nonce) = encrypt(&key, &bytes)?;
@@ -403,18 +615,18 @@ where
         set_status(db, &id, "applying")?;
         for (item, output) in &prepared {
             let current = read_native(&item.path)?;
-            if fingerprint(current.as_bytes()) != item.old_hash {
+            if keyed_fingerprint(&integrity, current.as_bytes()) != item.old_hash {
                 return Err(format!("原生文件写入前发生变化：{}", item.path.display()));
             }
             write_replacement(&item.path, output.as_bytes(), &id, item.sensitive)?;
             let written = fs::read(&item.path).map_err(|_| "无法核验原生写入")?;
-            if fingerprint(&written) != item.new_hash {
+            if keyed_fingerprint(&integrity, &written) != item.new_hash {
                 return Err("原生写入后校验失败".into());
             }
         }
         for (item, _) in &prepared {
             let written = fs::read(&item.path).map_err(|_| "提交前无法重读原生文件")?;
-            if fingerprint(&written) != item.new_hash {
+            if keyed_fingerprint(&integrity, &written) != item.new_hash {
                 return Err(format!("提交前发现外部修改：{}", item.path.display()));
             }
         }
@@ -430,7 +642,7 @@ where
         })
     })();
     if let Err(error) = attempt {
-        return match restore(db, credentials, &journal) {
+        return match restore(db, credentials, &journal, &integrity) {
             Ok(()) => Err(error),
             Err(recovery) => Err(format!("{error}；自动恢复未完成：{recovery}")),
         };
@@ -518,6 +730,142 @@ mod tests {
     }
 
     #[test]
+    fn empty_workspace_recovery_does_not_require_or_create_a_keyring_key() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        let store = MemoryStore::default();
+        assert!(recover_pending(&db, &store).unwrap().is_empty());
+        assert!(store.get(INTEGRITY_KEY_ID).is_err());
+    }
+
+    #[test]
+    fn hmac_matches_standard_vector_and_legacy_records_migrate_without_bare_hashes() {
+        let mut vector_key = [0_u8; 32];
+        vector_key[..4].copy_from_slice(b"Jefe");
+        assert_eq!(
+            hmac_digest(&vector_key, b"what do ya want for nothing?"),
+            "h1:5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+        );
+
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        let store = MemoryStore::default();
+        store
+            .put(INTEGRITY_KEY_ID, &STANDARD.encode([7_u8; 32]))
+            .unwrap();
+        let raw_secret_hash = fingerprint(b"short-key");
+        let raw_file_hash = fingerprint(b"{\"apiKey\":\"short-key\"}");
+        db.with_connection(|conn| {
+            let managed = serde_json::json!({"settings": {"/env/ANTHROPIC_API_KEY": {"__cliora_secret_sha256": raw_secret_hash}}});
+            conn.execute("INSERT INTO applied_bindings (scope_key, tool, profile_id, profile_version, managed) VALUES ('global', 'claude_code', 'legacy', 1, ?1)", [managed.to_string()]).map_err(|e| e.to_string())?;
+            let journal = Journal {
+                id: "legacy".into(), key_id: "native-backup-legacy".into(),
+                files: vec![JournalFile {path: temp.path().join("settings.json"), existed: true,
+                    old_hash: raw_file_hash.clone(), new_hash: raw_file_hash.clone(),
+                    backup: None, nonce: None, old_readonly: false, sensitive: true}],
+            };
+            conn.execute("INSERT INTO native_transactions (id, status, data) VALUES ('legacy', 'committed', ?1)", [serde_json::to_string(&journal).unwrap()]).map_err(|e| e.to_string())?;
+            Ok(())
+        }).unwrap();
+        let key = integrity_key(&db, &store).unwrap();
+        assert_eq!(key, [7_u8; 32]);
+        assert_eq!(integrity_key(&db, &store).unwrap(), key);
+        db.with_connection(|conn| {
+            let binding: String = conn
+                .query_row("SELECT managed FROM applied_bindings", [], |row| row.get(0))
+                .map_err(|e| e.to_string())?;
+            let journal: String = conn
+                .query_row("SELECT data FROM native_transactions", [], |row| row.get(0))
+                .map_err(|e| e.to_string())?;
+            assert!(!binding.contains(&raw_secret_hash));
+            assert!(!journal.contains(&raw_file_hash));
+            assert!(binding.contains("h1:"));
+            assert!(journal.contains("h1:"));
+            assert!(!binding.contains("short-key"));
+            assert!(!journal.contains("short-key"));
+            Ok(())
+        })
+        .unwrap();
+        store.delete(INTEGRITY_KEY_ID).unwrap();
+        assert!(integrity_key(&db, &store).unwrap_err().contains("已丢失"));
+    }
+
+    #[test]
+    fn matching_secret_content_still_uses_restricted_transaction() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("settings.json");
+        let text = r#"{"env":{"ANTHROPIC_API_KEY":"short-key"}}"#;
+        fs::write(&path, text).unwrap();
+        #[cfg(windows)]
+        {
+            use std::process::Command;
+            let system32 = PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32");
+            let grant = Command::new(system32.join("icacls.exe"))
+                .arg(&path)
+                .args(["/grant", "*S-1-5-32-545:R"])
+                .output()
+                .unwrap();
+            assert!(grant.status.success());
+            let before = Command::new(system32.join("icacls.exe"))
+                .arg(&path)
+                .args(["/findsid", "*S-1-5-32-545"])
+                .output()
+                .unwrap();
+            assert!(String::from_utf8_lossy(&before.stdout).contains(&path.display().to_string()));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        let store = MemoryStore::default();
+        let patch = FilePatch {
+            path: path.clone(),
+            kind: FileKind::Json,
+            baseline: text.into(),
+            changes: Vec::new(),
+            sensitive: true,
+            force_restrict: true,
+        };
+        let outcome = apply(&db, &store, &[patch], |_| Ok(())).unwrap();
+        assert_eq!(outcome.changed_files, vec![path.display().to_string()]);
+        assert_eq!(fs::read_to_string(&path).unwrap(), text);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o077, 0);
+        }
+        #[cfg(windows)]
+        {
+            use std::process::Command;
+            let system32 = PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32");
+            let output = Command::new(system32.join("icacls.exe"))
+                .arg(&path)
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            assert!(!String::from_utf8_lossy(&output.stdout).contains("(I)"));
+            let users = Command::new(system32.join("icacls.exe"))
+                .arg(&path)
+                .args(["/findsid", "*S-1-5-32-545"])
+                .output()
+                .unwrap();
+            assert!(users.status.success());
+            assert!(!String::from_utf8_lossy(&users.stdout).contains(&path.display().to_string()));
+        }
+        db.with_connection(|conn| {
+            let data: String = conn
+                .query_row("SELECT data FROM native_transactions", [], |row| row.get(0))
+                .map_err(|e| e.to_string())?;
+            assert!(!data.contains(&fingerprint(text.as_bytes())));
+            assert!(data.contains("h1:"));
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
     fn matching_commit_refuses_pending_target_without_changing_binding() {
         let temp = tempfile::tempdir().unwrap();
         let file = temp.path().join("config.toml");
@@ -571,6 +919,7 @@ mod tests {
                 value: Some(Value::String("new".into())),
             }],
             sensitive: false,
+            force_restrict: false,
         };
         let db = Database::open(&temp.path().join("app.db")).unwrap();
         apply(&db, &MemoryStore::default(), &[patch.clone()], |_| Ok(())).unwrap();
@@ -579,7 +928,9 @@ mod tests {
         assert!(output.contains("other = 1"));
         assert!(output.contains("model = \"new\""));
         fs::write(&file, "model = \"external\"\n").unwrap();
-        assert!(prepare(&[patch]).unwrap_err().contains("外部修改"));
+        assert!(prepare(&[patch], &[1_u8; 32])
+            .unwrap_err()
+            .contains("外部修改"));
         assert_eq!(fs::read_to_string(&file).unwrap(), "model = \"external\"\n");
     }
 
@@ -600,6 +951,7 @@ mod tests {
                 value: Some(Value::String("new".into())),
             }],
             sensitive: false,
+            force_restrict: false,
         };
         assert!(
             apply(&db, &store, &[patch], |_| Err("injected failure".into()))
@@ -717,6 +1069,7 @@ mod tests {
             kind: FileKind::Json,
             baseline: original.into(),
             sensitive: true,
+            force_restrict: true,
             changes: vec![FieldChange {
                 path: vec!["env".into(), "ANTHROPIC_API_KEY".into()],
                 value: Some(Value::String("new-test-key".into())),

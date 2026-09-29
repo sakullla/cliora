@@ -81,6 +81,17 @@ fn native_secrets(
     let mut result = NativeSecrets::default();
     if profile.tool == CliId::ClaudeCode {
         let project = scope == Scope::Project;
+        // A profile that uses native login or a different account must also
+        // account for credentials already on disk, even if they were never
+        // managed by this application. Claude reads both project files.
+        for role in if project {
+            &["settings", "local_settings"][..]
+        } else {
+            &["settings"][..]
+        } {
+            result.remove(role, &["env", "ANTHROPIC_API_KEY"]);
+            result.remove(role, &["env", "ANTHROPIC_AUTH_TOKEN"]);
+        }
         let local = profile.native_credentials.get("local_settings");
         for (role, entries) in &profile.native_credentials {
             for (name, id) in entries {
@@ -201,7 +212,7 @@ fn native_secrets(
     Ok(result)
 }
 
-fn managed_value(value: Option<&Value>, marker: Option<&Value>) -> bool {
+fn managed_value(value: Option<&Value>, marker: Option<&Value>, integrity: &[u8; 32]) -> bool {
     match marker {
         Some(Value::Object(map)) if map.get(REMOVED_FIELD) == Some(&Value::Bool(true)) => {
             value.is_none()
@@ -211,7 +222,7 @@ fn managed_value(value: Option<&Value>, marker: Option<&Value>) -> bool {
         {
             value.and_then(Value::as_str).is_some_and(|secret| {
                 map.get(SECRET_HASH).and_then(Value::as_str)
-                    == Some(transaction::fingerprint(secret.as_bytes()).as_str())
+                    == Some(transaction::keyed_fingerprint(integrity, secret.as_bytes()).as_str())
             })
         }
         _ => value == marker,
@@ -591,6 +602,7 @@ pub fn apply_validated(
 ) -> Result<ApplyOutcome, String> {
     let desired = desired_documents(profile, common, scope)?;
     let secrets = native_secrets(profile, scope, credentials)?;
+    let integrity = transaction::integrity_key(db, credentials)?;
     let old = get_binding(db, profile.tool, key)?;
     let mut new_managed = Managed::new();
     for (role, root) in desired {
@@ -602,7 +614,7 @@ pub fn apply_validated(
         for (pointer, secret) in fields {
             new_managed.entry(role.clone()).or_default().insert(
                 pointer.clone(),
-                json!({SECRET_HASH: transaction::fingerprint(secret.as_bytes())}),
+                json!({SECRET_HASH: transaction::keyed_fingerprint(&integrity, secret.as_bytes())}),
             );
         }
     }
@@ -671,7 +683,7 @@ pub fn apply_validated(
                 native_new.as_ref().or(new_value)
             };
             if let Some(old_value) = old_value {
-                if !managed_value(current, Some(old_value)) && current != expected_new {
+                if !managed_value(current, Some(old_value), &integrity) && current != expected_new {
                     return Err(format!("上次管理的字段已被外部修改：{role}{pointer}"));
                 }
             } else if current.is_some() && current != expected_new && !allow_takeover {
@@ -686,22 +698,24 @@ pub fn apply_validated(
                 });
             }
         }
-        if !changes.is_empty() {
+        let sensitive = secrets
+            .values
+            .get(&role)
+            .is_some_and(|fields| !fields.is_empty())
+            || previous_fields.is_some_and(|fields| {
+                fields
+                    .values()
+                    .any(|value| value.get(SECRET_HASH).is_some())
+            })
+            || existing_secret_field(profile.tool, &role, &original);
+        if !changes.is_empty() || (sensitive && file_path.is_file()) {
             patches.push(FilePatch {
                 path: file_path.to_path_buf(),
                 kind,
                 baseline,
                 changes,
-                sensitive: secrets
-                    .values
-                    .get(&role)
-                    .is_some_and(|fields| !fields.is_empty())
-                    || previous_fields.is_some_and(|fields| {
-                        fields
-                            .values()
-                            .any(|value| value.get(SECRET_HASH).is_some())
-                    })
-                    || existing_secret_field(profile.tool, &role, &original),
+                sensitive,
+                force_restrict: sensitive,
             });
         }
     }
@@ -717,6 +731,25 @@ pub fn apply_validated(
         tx.execute("INSERT INTO applied_bindings (scope_key, tool, profile_id, profile_version, managed) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(scope_key, tool) DO UPDATE SET profile_id = excluded.profile_id, profile_version = excluded.profile_version, managed = excluded.managed", params![key, tool_key(profile.tool), profile.id, profile.version as i64, json]).map_err(|e| e.to_string())?;
         Ok(())
     })
+}
+
+fn claude_project_parent_key_conflicts(
+    home: &Path,
+    native_files: &[NativeFile],
+) -> Result<bool, String> {
+    let global_text = transaction::read_native(&home.join(".claude").join("settings.json"))?;
+    let global_root = format::parse(format::FileKind::Json, &global_text)?;
+    if !existing_secret_field(CliId::ClaudeCode, "settings", &global_root) {
+        return Ok(false);
+    }
+    native_files
+        .iter()
+        .filter(|file| matches!(file.role, "settings" | "local_settings"))
+        .try_fold(false, |found, file| {
+            let text = transaction::read_native(Path::new(&file.path))?;
+            let root = format::parse(format::FileKind::Json, &text)?;
+            Ok(found || existing_secret_field(CliId::ClaudeCode, file.role, &root))
+        })
 }
 
 pub fn apply_profile(
@@ -742,6 +775,19 @@ pub fn apply_profile(
     let probe = adapter::probe(tool, custom_path, home, project, scope);
     if probe.native_writes.state != "supported" {
         return Err(probe.native_writes.reason.into());
+    }
+    if tool == CliId::ClaudeCode
+        && scope == Scope::Project
+        && profile
+            .connection
+            .as_ref()
+            .and_then(|item| item.secret_ref.as_ref())
+            .is_none()
+        && profile.native_credentials.is_empty()
+    {
+        if claude_project_parent_key_conflicts(home, &probe.native_files)? {
+            return Err("当前项目的 Claude 密钥清理后会继承用户全局配置中的密钥；请先在全局配置处理认证，再应用此项目方案".into());
+        }
     }
     apply_validated(
         db,
@@ -981,16 +1027,53 @@ mod tests {
                 &settings
             })
             .unwrap();
+            let matching = apply_validated(
+                &db,
+                &store,
+                &profile,
+                None,
+                &files,
+                "global",
+                Scope::Global,
+                false,
+            )
+            .unwrap();
+            assert_eq!(matching.status, "written_for_next_session", "{tool:?}");
+            assert!(
+                matching.changed_files.iter().any(|path| path
+                    == &if tool == CliId::Pi {
+                        models.display().to_string()
+                    } else {
+                        settings.display().to_string()
+                    }),
+                "{tool:?}"
+            );
             assert!(native_text.contains(field), "{tool:?}");
             assert!(native_text.contains(&secret), "{tool:?}");
             let binding =
                 serde_json::to_string(&get_binding(&db, tool, "global").unwrap()).unwrap();
             assert!(!binding.contains(&secret), "{tool:?}");
+            assert!(
+                !binding.contains(&transaction::fingerprint(secret.as_bytes())),
+                "{tool:?}"
+            );
             db.with_connection(|conn| {
-                let data: String = conn
-                    .query_row("SELECT data FROM native_transactions", [], |row| row.get(0))
+                let mut statement = conn
+                    .prepare("SELECT data FROM native_transactions")
                     .map_err(|e| e.to_string())?;
-                assert!(!data.contains(&secret), "{tool:?}");
+                let data: Vec<String> = statement
+                    .query_map([], |row| row.get(0))
+                    .map_err(|e| e.to_string())?
+                    .collect::<Result<_, _>>()
+                    .map_err(|e| e.to_string())?;
+                for journal in data {
+                    assert!(!journal.contains(&secret), "{tool:?}");
+                    assert!(
+                        !journal.contains(&transaction::fingerprint(native_text.as_bytes())),
+                        "{tool:?}"
+                    );
+                    assert!(journal.contains("h1:"), "{tool:?}");
+                }
                 Ok(())
             })
             .unwrap();
@@ -1207,5 +1290,100 @@ mod tests {
             r#"{"env":{"ANTHROPIC_API_KEY":"raw-preview-key"}}"#.into(),
         );
         assert!(preview(&raw, None, Scope::Global).is_err());
+    }
+
+    #[test]
+    fn unmanaged_claude_keys_require_takeover_and_no_key_profile_clears_both_project_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let shared = temp.path().join("settings.json");
+        let local = temp.path().join("settings.local.json");
+        fs::write(
+            &shared,
+            r#"{"env":{"ANTHROPIC_API_KEY":"shared-key"},"permissions":{"defaultMode":"default"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            &local,
+            r#"{"env":{"ANTHROPIC_AUTH_TOKEN":"local-token"},"other":true}"#,
+        )
+        .unwrap();
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        let store = MemoryStore::default();
+        let profile = NativeProfile {
+            id: "native-login".into(),
+            tool: CliId::ClaudeCode,
+            name: "native login".into(),
+            version: 1,
+            inherit_common: false,
+            files: BTreeMap::new(),
+            suppressed: BTreeMap::new(),
+            native_credentials: BTreeMap::new(),
+            connection: None,
+        };
+        let targets = [
+            native_role("settings", &shared, "json"),
+            native_role("local_settings", &local, "json"),
+        ];
+        let before_shared = fs::read_to_string(&shared).unwrap();
+        let before_local = fs::read_to_string(&local).unwrap();
+        assert!(apply_validated(
+            &db,
+            &store,
+            &profile,
+            None,
+            &targets,
+            "project:test",
+            Scope::Project,
+            false
+        )
+        .unwrap_err()
+        .contains("接管"));
+        assert_eq!(fs::read_to_string(&shared).unwrap(), before_shared);
+        assert_eq!(fs::read_to_string(&local).unwrap(), before_local);
+        let outcome = apply_validated(
+            &db,
+            &store,
+            &profile,
+            None,
+            &targets,
+            "project:test",
+            Scope::Project,
+            true,
+        )
+        .unwrap();
+        assert_eq!(outcome.changed_files.len(), 2);
+        let shared_after = fs::read_to_string(&shared).unwrap();
+        let local_after = fs::read_to_string(&local).unwrap();
+        assert!(!shared_after.contains("shared-key"));
+        assert!(!local_after.contains("local-token"));
+        assert!(shared_after.contains("defaultMode"));
+        assert!(local_after.contains("other"));
+        apply_validated(
+            &db,
+            &store,
+            &profile,
+            None,
+            &targets,
+            "project:test",
+            Scope::Project,
+            false,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn project_key_cleanup_reports_inherited_user_key_without_touching_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        fs::create_dir_all(home.join(".claude")).unwrap();
+        let global = home.join(".claude/settings.json");
+        fs::write(&global, r#"{"env":{"ANTHROPIC_API_KEY":"global-key"}}"#).unwrap();
+        let project = temp.path().join("project-settings.json");
+        fs::write(&project, r#"{"env":{"ANTHROPIC_API_KEY":"project-key"}}"#).unwrap();
+        let targets = [native_role("settings", &project, "json")];
+        assert!(claude_project_parent_key_conflicts(&home, &targets).unwrap());
+        assert!(fs::read_to_string(&global).unwrap().contains("global-key"));
+        fs::write(&project, "{}").unwrap();
+        assert!(!claude_project_parent_key_conflicts(&home, &targets).unwrap());
     }
 }
