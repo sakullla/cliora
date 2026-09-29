@@ -537,20 +537,25 @@ pub fn recover_pending(
     credentials: &dyn CredentialStore,
 ) -> Result<Vec<String>, String> {
     let _guard = write_lock().lock().map_err(|_| "原生事务服务暂时不可用")?;
-    let has_integrity_records: bool = db.with_connection(|conn| {
-        conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM native_transactions) OR EXISTS(SELECT 1 FROM applied_bindings WHERE managed LIKE '%__cliora_secret_sha256%')",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|_| "无法检查原生事务".into())
+    let pending_ids: Vec<String> = db.with_connection(|conn| {
+        let mut statement = conn.prepare("SELECT id FROM native_transactions WHERE status IN ('prepared', 'applying', 'recovery_needed') ORDER BY id").map_err(|e| e.to_string())?;
+        let ids = statement.query_map([], |row| row.get::<_, String>(0)).map_err(|e| e.to_string())?
+            .collect::<Result<_, _>>().map_err(|e| e.to_string())?;
+        Ok(ids)
     })?;
-    if !has_integrity_records {
+    if pending_ids.is_empty() {
+        // Committed history has no work to recover. In particular, browsing
+        // native files must remain possible while the keyring is locked.
         return Ok(Vec::new());
     }
-    let integrity = integrity_key(db, credentials)?;
+    let integrity = match integrity_key(db, credentials) {
+        Ok(key) => key,
+        Err(_) => return Ok(pending_ids),
+    };
+    // Legacy unkeyed digests are migrated by integrity_key, so load the
+    // journals after that migration rather than retaining stale copies.
     let pending: Vec<Journal> = db.with_connection(|conn| {
-        let mut statement = conn.prepare("SELECT data FROM native_transactions WHERE status IN ('prepared', 'applying', 'recovery_needed')").map_err(|e| e.to_string())?;
+        let mut statement = conn.prepare("SELECT data FROM native_transactions WHERE status IN ('prepared', 'applying', 'recovery_needed') ORDER BY id").map_err(|e| e.to_string())?;
         let journals = statement.query_map([], |row| row.get::<_, String>(0)).map_err(|e| e.to_string())?
             .map(|row| serde_json::from_str(&row.map_err(|e| e.to_string())?).map_err(|e| format!("原生事务日志损坏：{e}"))).collect();
         journals
@@ -729,6 +734,19 @@ mod tests {
         }
     }
 
+    struct LockedStore;
+    impl CredentialStore for LockedStore {
+        fn put(&self, _id: &str, _secret: &str) -> Result<(), String> {
+            Err("locked".into())
+        }
+        fn get(&self, _id: &str) -> Result<String, String> {
+            Err("locked".into())
+        }
+        fn delete(&self, _id: &str) -> Result<(), String> {
+            Err("locked".into())
+        }
+    }
+
     #[test]
     fn empty_workspace_recovery_does_not_require_or_create_a_keyring_key() {
         let temp = tempfile::tempdir().unwrap();
@@ -736,6 +754,116 @@ mod tests {
         let store = MemoryStore::default();
         assert!(recover_pending(&db, &store).unwrap().is_empty());
         assert!(store.get(INTEGRITY_KEY_ID).is_err());
+    }
+
+    #[test]
+    fn committed_history_does_not_block_reading_when_keyring_is_locked() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        let old_hash = fingerprint(b"low-entropy-old-file");
+        let journal = Journal {
+            id: "committed-history".into(),
+            key_id: "missing".into(),
+            files: vec![JournalFile {
+                path: temp.path().join("old.json"),
+                existed: true,
+                old_hash: old_hash.clone(),
+                new_hash: old_hash.clone(),
+                backup: None,
+                nonce: None,
+                old_readonly: false,
+                sensitive: true,
+            }],
+        };
+        save_journal(&db, &journal, "committed").unwrap();
+        assert!(recover_pending(&db, &LockedStore).unwrap().is_empty());
+        db.with_connection(|conn| {
+            let data: String = conn
+                .query_row(
+                    "SELECT data FROM native_transactions WHERE id = 'committed-history'",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            assert!(data.contains(&old_hash));
+            Ok(())
+        })
+        .unwrap();
+        let store = MemoryStore::default();
+        integrity_key(&db, &store).unwrap();
+        db.with_connection(|conn| {
+            let data: String = conn
+                .query_row(
+                    "SELECT data FROM native_transactions WHERE id = 'committed-history'",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            assert!(!data.contains(&old_hash));
+            assert!(data.contains("h1:"));
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn locked_keyring_reports_pending_id_without_writing_and_later_recovers() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("settings.json");
+        let original = br#"{"model":"old"}"#;
+        let written = br#"{"model":"new"}"#;
+        fs::write(&path, written).unwrap();
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        let store = MemoryStore::default();
+        let integrity = integrity_key(&db, &store).unwrap();
+        let backup_key = [3_u8; 32];
+        store
+            .put("native-backup-pending", &STANDARD.encode(backup_key))
+            .unwrap();
+        let (backup, nonce) = encrypt(&backup_key, original).unwrap();
+        let journal = Journal {
+            id: "pending".into(),
+            key_id: "native-backup-pending".into(),
+            files: vec![JournalFile {
+                path: path.clone(),
+                existed: true,
+                old_hash: keyed_fingerprint(&integrity, original),
+                new_hash: keyed_fingerprint(&integrity, written),
+                backup: Some(backup),
+                nonce: Some(nonce),
+                old_readonly: false,
+                sensitive: false,
+            }],
+        };
+        save_journal(&db, &journal, "applying").unwrap();
+        assert_eq!(recover_pending(&db, &LockedStore).unwrap(), vec!["pending"]);
+        assert_eq!(fs::read(&path).unwrap(), written);
+        db.with_connection(|conn| {
+            let status: String = conn
+                .query_row(
+                    "SELECT status FROM native_transactions WHERE id = 'pending'",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            assert_eq!(status, "applying");
+            Ok(())
+        })
+        .unwrap();
+        assert!(recover_pending(&db, &store).unwrap().is_empty());
+        assert_eq!(fs::read(&path).unwrap(), original);
+        db.with_connection(|conn| {
+            let status: String = conn
+                .query_row(
+                    "SELECT status FROM native_transactions WHERE id = 'pending'",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            assert_eq!(status, "rolled_back");
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
