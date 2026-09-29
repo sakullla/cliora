@@ -15,6 +15,7 @@ use super::transaction::{self, ApplyOutcome, FieldChange, FilePatch};
 use crate::credentials::CredentialStore;
 use crate::database::Database;
 use crate::domain::CliId;
+use crate::history::{HistorySource, ParsedSession};
 use crate::resources::mcp::McpDefinition;
 
 mod claude;
@@ -169,6 +170,18 @@ pub trait CliAdapter: Sync {
     }
     /// Returns arguments only. The caller owns executable selection and process launch.
     fn launch_args(&self, session: Option<&str>, mode: LaunchMode) -> Result<Vec<String>, String>;
+    fn history_sources(&self, _home: &Path) -> Result<Vec<HistorySource>, String> {
+        Ok(Vec::new())
+    }
+    fn parse_history(&self, _source: &HistorySource) -> Result<ParsedSession, String> {
+        Err("此 CLI 尚无已验证的历史格式".into())
+    }
+    fn history_supported(&self) -> bool {
+        false
+    }
+    fn history_resume_version_supported(&self, _version: &str) -> bool {
+        true
+    }
     fn supports_project_model_override(&self) -> bool {
         false
     }
@@ -279,8 +292,16 @@ pub trait CliAdapter: Sync {
                 reason: "原生资源路径由此 CLI 适配器逐项提供",
             },
             history: Facet {
-                state: "planned",
-                reason: "历史能力由后续任务确认",
+                state: if self.history_supported() {
+                    "available"
+                } else {
+                    "unknown"
+                },
+                reason: if self.history_supported() {
+                    "可只读索引已验证的本地会话格式"
+                } else {
+                    "尚无已验证的本地历史格式"
+                },
             },
         }
     }

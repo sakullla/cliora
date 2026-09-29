@@ -4,6 +4,7 @@ import { listen } from '@tauri-apps/api/event';
 import { ManagedTools } from './features/home/ManagedTools';
 import { ProjectLauncher } from './features/home/ProjectLauncher';
 import { LibraryPage } from './features/library/LibraryPage';
+import { RecordsPage } from './features/records/RecordsPage';
 import { TerminalSettings } from './features/settings/TerminalSettings';
 import { ToolWorkspacePage } from './features/tools/ToolWorkspace';
 import { native, nativeAvailable } from './lib/native';
@@ -14,7 +15,6 @@ import type { AdapterCatalog } from './types/native';
 
 type Page = 'home' | 'connections' | 'library' | 'records' | 'settings';
 type SettingsTab = 'general' | 'migration';
-type RecordsTab = 'sessions' | 'usage';
 
 const pages: { id: Page; label: string; glyph: string }[] = [
   { id: 'home', label: '快速开始', glyph: '⌂' },
@@ -52,7 +52,6 @@ export default function App() {
   const [page, setPage] = useState<Page>('home');
   const [tool, setTool] = useState<string>('');
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('general');
-  const [recordsTab, setRecordsTab] = useState<RecordsTab>('sessions');
   const [trayRepair, setTrayRepair] = useState<TrayRepairTarget | null>(null);
   const activePage = useRef<Page>(page);
   activePage.current = page;
@@ -173,7 +172,7 @@ export default function App() {
           {selectedTool ? nativeAvailable ? <ToolWorkspacePage managedTools={visibleDescriptors} initialTool={selectedTool} repair={trayRepair?.page === 'connections' ? trayRepair : null} onDirtyChange={onWorkspaceDirtyChange} /> : <><div className="tool-tabs" role="tablist" aria-label="工具">{visible.map((item) => <button key={item.id} type="button" role="tab" aria-selected={selectedTool === item.id} className={selectedTool === item.id ? 'active' : ''} onClick={() => setTool(item.id)}>{item.name}</button>)}</div><div className="connection-layout"><div className="profile-column"><div className="column-title">{selectedToolName} 配置</div><div className="muted-copy">浏览器预览不读取本机配置</div></div><div className="detail-panel"><div className="detail-header"><div><div className="eyebrow">原生配置</div><h2>{selectedToolName}</h2></div><span className="status-pill">预览</span></div><Empty title="请在桌面应用中编辑原生配置" detail="桌面应用可读取和保存 CLI 的 TOML / JSON 原文。" /></div></div></> : <Empty title="没有管理中的工具" detail="先在设置中勾选需要管理的 CLI。" action={<button className="button primary" type="button" onClick={() => go('settings')}>前往设置</button>} />}
         </>}
         <div hidden={page !== 'library'}><LibraryPage managedTools={visibleDescriptors} active={page === 'library'} /></div>
-        {page === 'records' && <><PageTabs items={[["sessions", "会话"], ["usage", "用量"]]} value={recordsTab} onChange={setRecordsTab} /><Empty title={recordsTab === 'sessions' ? '还没有可查看的会话' : '还没有可统计的用量'} detail={recordsTab === 'sessions' ? '本机 CLI 会话索引接入后，可从这里复制原生恢复命令。' : '仅在读取到真实记录后显示 token 与费用估算。'} /></>}
+        <div hidden={page !== 'records'}><RecordsPage active={page === 'records'} tools={catalog?.registered ?? []} onOpenProjects={() => go('home')} /></div>
         {page === 'settings' && <><PageTabs items={[["general", "常规"], ["migration", "迁移与同步"]]} value={settingsTab} onChange={setSettingsTab} />{settingsTab === 'general' ? <>
           <section className="settings-group"><div className="setting-intro"><h2>管理的 CLI</h2><p>只在首页和工具页显示勾选的工具。关闭管理不会删除已有配置。</p></div>{(nativeAvailable ? catalog?.registered ?? [] : bootstrap.tools).map((item) => <label className="setting-row" key={item.id}><span><strong>{item.name}</strong><small>安装与配置状态在工具页查看</small></span><input type="checkbox" checked={managed.includes(item.id)} disabled={!nativeAvailable || busy} onChange={(event) => updateManaged(item.id, event.target.checked)} /></label>)}{catalog?.preservedUnknown.map((item) => <div className="setting-row" key={item.id}><span><strong>{item.id}</strong><small>未安装适配器，保留 {item.profileCount} 份配置，只读</small></span></div>)}</section>
           <section className="settings-group"><div className="setting-intro"><h2>外观</h2><p>跟随系统，或固定浅色、深色。</p></div><label className="setting-row"><span><strong>主题</strong></span><select aria-label="主题" value={bootstrap.preferences.theme} disabled={busy} onChange={(event) => updateTheme(event.target.value as Theme)}><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select></label></section>

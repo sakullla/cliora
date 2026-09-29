@@ -256,6 +256,24 @@ impl CliAdapter for Grok {
         }
         Ok(vec!["-m".into(), model.into()])
     }
+    fn history_sources(
+        &self,
+        home: &std::path::Path,
+    ) -> Result<Vec<crate::history::HistorySource>, String> {
+        crate::history::grok::sources(home)
+    }
+    fn parse_history(
+        &self,
+        source: &crate::history::HistorySource,
+    ) -> Result<crate::history::ParsedSession, String> {
+        crate::history::grok::parse(source)
+    }
+    fn history_supported(&self) -> bool {
+        true
+    }
+    fn history_resume_version_supported(&self, version: &str) -> bool {
+        version.starts_with("1.")
+    }
     fn install_guidance(&self) -> (&'static str, &'static str) {
         (
             "https://x.ai/cli",
