@@ -1,0 +1,12 @@
+# Grok Build user scope
+[models]
+default = "grok-build"
+
+[model."grok-build"]
+model = "grok-build"
+base_url = "https://api.x.ai/v1"
+api_backend = "responses"
+env_key = "XAI_API_KEY"
+
+[ui]
+compact_mode = false

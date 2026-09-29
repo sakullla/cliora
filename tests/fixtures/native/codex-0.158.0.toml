@@ -1,0 +1,11 @@
+# Existing user comments must survive a managed model edit.
+model = "gpt-6-astra"
+model_provider = "existing"
+
+[model_providers.existing]
+name = "Existing"
+base_url = "https://example.test/v1"
+wire_api = "responses"
+
+[features]
+image_generation = true
