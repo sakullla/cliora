@@ -1,0 +1,218 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { save } from '@tauri-apps/plugin-dialog';
+import { native, nativeAvailable } from '../../lib/native';
+import type { AdapterDescriptor } from '../../types/native';
+import type { Project } from '../../types/launch';
+import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, ScanStatus, UsageSummary } from '../../types/history';
+import styles from './RecordsPage.module.css';
+
+const day = (ms: number | null) => ms === null ? '时间未知' : new Date(ms).toLocaleString();
+const amount = (value: number | null) => value === null ? '未知' : value.toLocaleString();
+const errorText = (error: unknown) => typeof error === 'object' && error !== null && 'message' in error ? String(error.message) : String(error);
+
+export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean; tools: AdapterDescriptor[]; onOpenProjects: () => void }) {
+  const [tab, setTab] = useState<'sessions' | 'usage'>('sessions');
+  const [search, setSearch] = useState('');
+  const [toolId, setToolId] = useState('');
+  const [model, setModel] = useState('');
+  const [projectId, setProjectId] = useState('');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+  const [favoriteOnly, setFavoriteOnly] = useState(false);
+  const [sessions, setSessions] = useState<HistorySession[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [scans, setScans] = useState<ScanStatus[]>([]);
+  const [detail, setDetail] = useState<HistoryDetail | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [usage, setUsage] = useState<UsageSummary | null>(null);
+  const [prices, setPrices] = useState<HistoryPrice[]>([]);
+  const [priceOpen, setPriceOpen] = useState(false);
+  const [priceDraft, setPriceDraft] = useState({ currency: 'USD', input: '', output: '', read: '', write: '', source: '' });
+  const [mode, setMode] = useState<'normal' | 'yolo'>('normal');
+  const [resumeCommand, setResumeCommand] = useState('');
+  const [resumeError, setResumeError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const initialized = useRef(false);
+  const request = useRef(0);
+  const detailRequest = useRef(0);
+  const filter = useMemo<HistoryFilter>(() => ({
+    toolId: toolId || null, model: model.trim() || null, projectId: projectId || null,
+    search: search.trim() || null, fromMs: fromDate ? new Date(`${fromDate}T00:00:00`).getTime() : null,
+    toMs: toDate ? (() => { const next = new Date(`${toDate}T00:00:00`); next.setDate(next.getDate() + 1); return next.getTime(); })() : null,
+    favoriteOnly,
+  }), [toolId, model, projectId, search, fromDate, toDate, favoriteOnly]);
+
+  const load = useCallback(async (current: HistoryFilter) => {
+    if (!nativeAvailable) return;
+    const sequence = ++request.current;
+    try {
+      const [items, summary] = await Promise.all([native.listHistorySessions(current), native.getHistoryUsage(current)]);
+      if (sequence !== request.current) return;
+      setSessions(items); setUsage(summary); setScans(summary.scans); setError('');
+      setSelectedId((old) => old && items.some((item) => item.id === old) ? old : items[0]?.id ?? null);
+    } catch (value) { if (sequence === request.current) setError(errorText(value)); }
+  }, []);
+
+  useEffect(() => {
+    if (!active || !nativeAvailable || initialized.current) return;
+    initialized.current = true;
+    setBusy(true);
+    void Promise.all([native.refreshHistory(), native.listProjects(), native.listHistoryPrices()])
+      .then(([reports, knownProjects, knownPrices]) => { setScans(reports); setProjects(knownProjects); setPrices(knownPrices); return load(filter); })
+      .catch((value) => setError(errorText(value)))
+      .finally(() => setBusy(false));
+  }, [active]);
+
+  useEffect(() => {
+    if (!initialized.current || !active) return;
+    const timer = window.setTimeout(() => { void load(filter); }, 180);
+    return () => window.clearTimeout(timer);
+  }, [filter, active, load]);
+
+  useEffect(() => {
+    if (!selectedId || !nativeAvailable) { setDetail(null); return; }
+    const sequence = ++detailRequest.current;
+    void native.getHistorySession(selectedId).then((value) => { if (sequence === detailRequest.current) setDetail(value); })
+      .catch((value) => { if (sequence === detailRequest.current) setError(errorText(value)); });
+  }, [selectedId]);
+
+  const selected = detail?.session.id === selectedId ? detail : null;
+  const yolo = tools.find((item) => item.id === selected?.session.toolId)?.yoloAvailable ?? false;
+  useEffect(() => { if (!yolo && mode === 'yolo') setMode('normal'); }, [yolo, mode]);
+  useEffect(() => {
+    if (!selected || selected.resumeReason || !nativeAvailable || (mode === 'yolo' && !yolo)) {
+      setResumeCommand(''); setResumeError(selected?.resumeReason ?? ''); return;
+    }
+    let live = true;
+    void native.copyHistoryResumeCommand(selected.session.id, mode).then((text) => { if (live) { setResumeCommand(text); setResumeError(''); } })
+      .catch((value) => { if (live) { setResumeCommand(''); setResumeError(errorText(value)); } });
+    return () => { live = false; };
+  }, [selectedId, selected?.session.updatedAt, selected?.session.projectId, selected?.session.cwd, selected?.resumeReason, mode, yolo]);
+
+  async function refresh() {
+    if (!nativeAvailable) return;
+    setBusy(true); setError(''); setNotice('');
+    try {
+      setScans(await native.refreshHistory());
+      await load(filter);
+      if (selectedId) setDetail(await native.getHistorySession(selectedId).catch(() => null));
+      setNotice('已刷新本机记录。');
+    } catch (value) { setError(errorText(value)); }
+    finally { setBusy(false); }
+  }
+
+  async function favorite() {
+    if (!selected) return;
+    try {
+      await native.setHistoryFavorite(selected.session.id, !selected.session.favorite);
+      setDetail({ ...selected, session: { ...selected.session, favorite: !selected.session.favorite } });
+      await load(filter);
+    } catch (value) { setError(errorText(value)); }
+  }
+
+  async function assignProject(next: string) {
+    if (!selected) return;
+    try {
+      await native.setHistoryProject(selected.session.id, next || null);
+      setDetail(await native.getHistorySession(selected.session.id));
+      await load(filter);
+    } catch (value) { setError(errorText(value)); }
+  }
+
+  async function copy() {
+    if (!resumeCommand) return;
+    try { await navigator.clipboard.writeText(resumeCommand); setNotice('已复制原生恢复命令，粘贴后由终端执行。'); }
+    catch (value) { setError(errorText(value)); }
+  }
+
+  async function resume() {
+    if (!selected || !resumeCommand) return;
+    setBusy(true);
+    try { await native.resumeHistorySession(selected.session.id, mode); setNotice('已请求外部终端恢复会话。'); }
+    catch (value) { setError(errorText(value)); }
+    finally { setBusy(false); }
+  }
+
+  async function exportSession(format: 'markdown' | 'json') {
+    if (!selected) return;
+    try {
+      const destination = await save({ title: '导出会话资料', defaultPath: `cliora-session-${selected.session.nativeId ?? selected.session.id.slice(0, 8)}.${format === 'json' ? 'json' : 'md'}`,
+        filters: [{ name: format === 'json' ? 'JSON' : 'Markdown', extensions: [format === 'json' ? 'json' : 'md'] }] });
+      if (!destination) return;
+      const path = await native.exportHistorySession(selected.session.id, format, destination);
+      setNotice(`已导出到 ${path}`);
+    } catch (value) { setError(errorText(value)); }
+  }
+
+  async function savePrice() {
+    const chosenTool = toolId || selected?.session.toolId;
+    const chosenModel = model.trim() || selected?.session.model;
+    if (!chosenTool || !chosenModel) { setError('先选择工具和模型，再填写价格。'); return; }
+    if (![priceDraft.input, priceDraft.output, priceDraft.read, priceDraft.write].every((value) => value.trim() !== '')) {
+      setError('请填写四项单价；确认为免费的项目可填 0。'); return;
+    }
+    try {
+      const price = await native.saveHistoryPrice({ toolId: chosenTool, model: chosenModel, currency: priceDraft.currency.trim().toUpperCase(),
+        inputPerMillion: Number(priceDraft.input), outputPerMillion: Number(priceDraft.output),
+        cacheReadPerMillion: Number(priceDraft.read), cacheWritePerMillion: Number(priceDraft.write),
+        source: priceDraft.source.trim(), updatedAt: 0 });
+      setPrices((old) => [...old.filter((item) => item.toolId !== price.toolId || item.model !== price.model), price]);
+      setPriceOpen(false); setNotice('估算价格已保存；只影响本机统计。');
+      setUsage(await native.getHistoryUsage(filter));
+    } catch (value) { setError(errorText(value)); }
+  }
+
+  if (!nativeAvailable) return <div className={styles.empty}><h2>本机使用记录</h2><p>在桌面应用中读取原生 CLI 会话。浏览器预览不展示本机历史。</p></div>;
+  return <section className={styles.page} aria-label="使用记录内容">
+    <div className={styles.toolbar}><div className={styles.tabs} role="tablist" aria-label="使用记录类型">
+      <button type="button" role="tab" aria-selected={tab === 'sessions'} onClick={() => setTab('sessions')}>会话</button>
+      <button type="button" role="tab" aria-selected={tab === 'usage'} onClick={() => setTab('usage')}>用量</button>
+    </div><button type="button" className={styles.refresh} disabled={busy} onClick={() => void refresh()}>{busy ? '正在读取…' : '刷新本机记录'}</button></div>
+    <div className={styles.filters}>
+      <label>工具<select aria-label="筛选工具" value={toolId} onChange={(event) => setToolId(event.target.value)}><option value="">全部工具</option>{tools.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
+      <label>项目<select aria-label="筛选项目" value={projectId} onChange={(event) => setProjectId(event.target.value)}><option value="">全部项目</option><option value="__unknown__">未归类</option>{projects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+      <label>模型<input aria-label="筛选模型" value={model} onChange={(event) => setModel(event.target.value)} placeholder="全部模型" /></label>
+      <label>从<input aria-label="开始日期" type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} /></label>
+      <label>到<input aria-label="结束日期" type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} /></label>
+      {tab === 'sessions' && <><label className={styles.search}>搜索<input aria-label="搜索会话" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="标题或正文" /></label><label className={styles.favorite}><input type="checkbox" checked={favoriteOnly} onChange={(event) => setFavoriteOnly(event.target.checked)} />只看收藏</label></>}
+    </div>
+    {error && <div className={styles.error} role="alert">{error}</div>}
+    {notice && <div className={styles.notice} role="status">{notice}</div>}
+    {!!scans.length && <div className={styles.coverage}><strong>本机覆盖</strong>{scans.map((item) => <span key={item.toolId}>{item.toolId} {item.sourceCount} 个来源{item.failedCount ? ` · ${item.failedCount} 个失败` : ''}{item.incomplete ? ' · 扫描不完整' : ''}</span>)}</div>}
+    {tab === 'sessions' ? <div className={styles.columns}>
+      <div className={styles.list} aria-label="会话列表">{sessions.length ? sessions.map((item) => <button type="button" key={item.id} className={selectedId === item.id ? styles.selected : ''} onClick={() => setSelectedId(item.id)}>
+        <strong>{item.favorite ? '★ ' : ''}{item.title}</strong><small>{tools.find((tool) => tool.id === item.toolId)?.name ?? item.toolId} · {day(item.updatedAt)}</small>
+        <small>{item.model ?? '模型未知'}{item.partial ? ' · 部分记录' : ''}{item.stale ? ' · 源暂不可读' : ''}</small>
+      </button>) : <div className={styles.empty}>没有符合条件的会话。可刷新记录或调整筛选。</div>}</div>
+      <div className={styles.detail}>{selected ? <>
+        <div className={styles.detailHead}><div><small>{selected.session.toolId} · {day(selected.session.updatedAt)}</small><h2>{selected.session.title}</h2><p>{selected.session.cwd ?? '项目目录未知'} · {selected.session.model ?? '模型未知'}</p></div><button type="button" onClick={() => void favorite()} aria-label={selected.session.favorite ? '取消收藏' : '收藏会话'}>{selected.session.favorite ? '★ 已收藏' : '☆ 收藏'}</button></div>
+        {(selected.session.partial || selected.session.stale) && <p className={styles.caveat}>原始记录不完整或最近读取失败；仅展示已索引的内容。</p>}
+        <div className={styles.actions}><button type="button" onClick={() => void exportSession('markdown')}>导出 Markdown</button><button type="button" onClick={() => void exportSession('json')}>导出 JSON</button></div>
+        <div className={styles.resume}><div className={styles.detailHead}><strong>继续会话</strong><select aria-label="恢复模式" value={mode} onChange={(event) => setMode(event.target.value as 'normal' | 'yolo')}><option value="normal">普通模式</option>{yolo && <option value="yolo">YOLO 模式</option>}</select></div>
+          {resumeCommand ? <><pre aria-label="原生恢复命令">{resumeCommand}</pre><div className={styles.actions}><button type="button" onClick={() => void copy()}>复制命令</button><button type="button" className={styles.primary} disabled={busy} onClick={() => void resume()}>在外部终端继续</button></div></> : <p>{resumeError || '正在确认原生恢复命令…'}</p>}
+          <label className={styles.projectLink}>关联项目<select aria-label="关联会话项目" value={selected.session.projectId ?? ''} onChange={(event) => void assignProject(event.target.value)}><option value="">使用原会话目录</option>{projects.map((item) => <option key={item.id} value={item.id}>{item.name}{item.available ? '' : ' · 目录失效'}</option>)}</select></label>
+          {selected.resumeReason && <button type="button" onClick={onOpenProjects}>前往最近项目重新关联目录</button>}
+        </div>
+        <div className={styles.messages}>{selected.messages.length ? selected.messages.map((item) => <article key={item.id}><small>{item.role === 'user' ? '你' : '助手'} · {day(item.timestamp)}</small><p>{item.text}</p></article>) : <p>此记录没有可读取的对话正文。</p>}</div>
+      </> : <div className={styles.empty}>选择左侧会话查看详情。</div>}</div>
+    </div> : <div className={styles.usage}>
+      <div className={styles.metrics}><div><small>会话</small><strong>{usage?.sessionCount ?? '—'}</strong></div><div><small>输入 token</small><strong>{amount(usage?.input ?? null)}</strong></div><div><small>输出 token</small><strong>{amount(usage?.output ?? null)}</strong></div><div><small>缓存读取</small><strong>{amount(usage?.cacheRead ?? null)}</strong></div><div><small>缓存写入</small><strong>{amount(usage?.cacheWrite ?? null)}</strong></div><div><small>估算费用</small><strong>{usage?.estimatedCost === null || usage?.estimatedCost === undefined ? '未知' : `${usage.currency ?? ''} ${usage.estimatedCost.toFixed(4)}`}</strong></div></div>
+      <p className={styles.caveat}>仅统计本机可读取的记录；{usage?.usageSessions ?? 0} 个会话有用量，{usage?.unknownUsageSessions ?? 0} 个未知，{usage?.partialSessions ?? 0} 个不完整，{usage?.staleSessions ?? 0} 个源暂不可读。费用为估算，不等于账单。</p>
+      <p className={styles.caveat}>输入与缓存按原生口径分别展示；{usage?.inputIncludesCache === true ? '当前输入值包含缓存 token，不应再叠加缓存。' : usage?.inputIncludesCache === false ? '当前输入值不包含单列的缓存 token。' : '当前记录口径混合或未知，请勿自行相加。'}</p>
+      {!!usage?.priceSources.length && <div className={styles.priceSources}><strong>价格依据</strong>{usage.priceSources.map((source) => <span key={source}>{source}</span>)}</div>}
+      <button type="button" onClick={() => setPriceOpen((old) => !old)}>{priceOpen ? '收起价格设置' : '设置估算价格'}</button>
+      {priceOpen && <div className={styles.priceForm}><p>先在上方选择工具与模型。价格按每 100 万 token 填写，仅用于本机估算。</p>
+        <label>币种<input aria-label="价格币种" value={priceDraft.currency} onChange={(event) => setPriceDraft({ ...priceDraft, currency: event.target.value })} /></label>
+        <label>输入<input aria-label="输入单价" type="number" min="0" value={priceDraft.input} onChange={(event) => setPriceDraft({ ...priceDraft, input: event.target.value })} /></label>
+        <label>输出<input aria-label="输出单价" type="number" min="0" value={priceDraft.output} onChange={(event) => setPriceDraft({ ...priceDraft, output: event.target.value })} /></label>
+        <label>缓存读取<input aria-label="缓存读取单价" type="number" min="0" value={priceDraft.read} onChange={(event) => setPriceDraft({ ...priceDraft, read: event.target.value })} /></label>
+        <label>缓存写入<input aria-label="缓存写入单价" type="number" min="0" value={priceDraft.write} onChange={(event) => setPriceDraft({ ...priceDraft, write: event.target.value })} /></label>
+        <label>来源<input aria-label="价格来源" value={priceDraft.source} onChange={(event) => setPriceDraft({ ...priceDraft, source: event.target.value })} placeholder="官方价格页或手动设置" /></label>
+        <button type="button" className={styles.primary} onClick={() => void savePrice()}>保存价格</button>
+      </div>}
+      {!!prices.length && <div className={styles.savedPrices}><strong>已保存的价格</strong>{prices.map((price) => <p key={`${price.toolId}:${price.model}`}>{price.toolId} / {price.model} · {price.currency} · {price.source} · {day(price.updatedAt)}</p>)}</div>}
+    </div>}
+  </section>;
+}

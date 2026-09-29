@@ -320,6 +320,24 @@ impl CliAdapter for Pi {
             .map(|id| vec!["--session".into(), id.into()])
             .unwrap_or_default())
     }
+    fn history_sources(
+        &self,
+        home: &std::path::Path,
+    ) -> Result<Vec<crate::history::HistorySource>, String> {
+        crate::history::pi::sources(home)
+    }
+    fn parse_history(
+        &self,
+        source: &crate::history::HistorySource,
+    ) -> Result<crate::history::ParsedSession, String> {
+        crate::history::pi::parse(source)
+    }
+    fn history_supported(&self) -> bool {
+        true
+    }
+    fn history_resume_version_supported(&self, version: &str) -> bool {
+        version.starts_with("0.")
+    }
     fn install_guidance(&self) -> (&'static str, &'static str) {
         (
             "https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent",

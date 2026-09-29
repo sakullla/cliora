@@ -267,6 +267,26 @@ pub fn plan_with_stage(
     home: &Path,
     request: LaunchRequest,
 ) -> Result<LaunchPlan, LaunchPlanError> {
+    plan_with_stage_at(db, registry, home, request, None)
+}
+
+pub fn plan_history(
+    db: &Database,
+    registry: &Registry,
+    home: &Path,
+    request: LaunchRequest,
+    cwd: &Path,
+) -> Result<LaunchPlan, LaunchPlanError> {
+    plan_with_stage_at(db, registry, home, request, Some(cwd))
+}
+
+fn plan_with_stage_at(
+    db: &Database,
+    registry: &Registry,
+    home: &Path,
+    request: LaunchRequest,
+    directory_override: Option<&Path>,
+) -> Result<LaunchPlan, LaunchPlanError> {
     let skill_issues = skills::recover_report(db).map_err(|message| {
         LaunchPlanError::new(
             LaunchStage::Skills,
@@ -291,14 +311,14 @@ pub fn plan_with_stage(
                 .map_err(|message| LaunchPlanError::new(LaunchStage::ProjectDirectory, message))?
         }
         None => {
-            let path = home.to_str().ok_or_else(|| {
+            let path = directory_override.unwrap_or(home).to_str().ok_or_else(|| {
                 LaunchPlanError::new(LaunchStage::ProjectDirectory, "用户目录不可识别".into())
             })?;
             projects::checked_directory(path)
                 .map_err(|message| LaunchPlanError::new(LaunchStage::ProjectDirectory, message))?
         }
     };
-    let scope = if project.is_some() {
+    let scope = if project.is_some() || directory_override.is_some() {
         Scope::Project
     } else {
         Scope::Global
@@ -327,7 +347,7 @@ pub fn plan_with_stage(
             .map_err(|message| LaunchPlanError::new(LaunchStage::Tool, message))?
             .as_deref(),
         home,
-        project.as_ref().map(|_| directory.as_path()),
+        (scope == Scope::Project).then_some(directory.as_path()),
         scope,
     )
     .map_err(|message| LaunchPlanError::new(LaunchStage::Tool, message))?;
@@ -348,6 +368,12 @@ pub fn plan_with_stage(
                 "CLI 版本未确认，请在工具页重新检测".into(),
             )
         })?;
+    if request.session_id.is_some() && !adapter.history_resume_version_supported(version) {
+        return Err(LaunchPlanError::new(
+            LaunchStage::Tool,
+            "此 CLI 版本的精确会话恢复命令尚未验证".into(),
+        ));
+    }
     let mut cli_args = adapters::plan_launch(
         registry,
         &request.tool_id,
@@ -385,6 +411,22 @@ fn quote_powershell(value: &str) -> String {
 
 fn quote_shell(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+pub fn native_command(plan: &LaunchPlan) -> Result<String, String> {
+    let directory = plan.directory.to_str().ok_or("项目目录文字编码无法识别")?;
+    let executable = plan.executable.to_str().ok_or("CLI 路径文字编码无法识别")?;
+    if cfg!(windows) {
+        let mut parts = vec![format!("& {}", quote_powershell(executable))];
+        parts.extend(plan.cli_args.iter().map(|arg| quote_powershell(arg)));
+        Ok(format!(
+            "Set-Location -LiteralPath {}; {}",
+            quote_powershell(directory),
+            parts.join(" ")
+        ))
+    } else {
+        shell_script(plan)
+    }
 }
 
 fn shell_script(plan: &LaunchPlan) -> Result<String, String> {

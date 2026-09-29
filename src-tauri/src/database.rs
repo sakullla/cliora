@@ -22,7 +22,7 @@ impl Database {
     pub fn open(path: &Path) -> Result<Self, OpenError> {
         let mut connection = Connection::open(path)?;
         let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 6 {
+        if version > 7 {
             return Err(OpenError::UnsupportedVersion(version));
         }
         connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
@@ -185,6 +185,55 @@ impl Database {
                    status TEXT NOT NULL
                  );
                  PRAGMA user_version = 6;",
+            )?;
+            tx.commit()?;
+        }
+        if version < 7 {
+            let tx = connection.transaction()?;
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS history_sessions (
+                   id TEXT PRIMARY KEY NOT NULL,
+                   tool TEXT NOT NULL,
+                   source_key TEXT NOT NULL UNIQUE,
+                   source_path TEXT NOT NULL,
+                   source_fingerprint TEXT NOT NULL,
+                   native_id TEXT,
+                   title TEXT NOT NULL,
+                   cwd TEXT,
+                   model TEXT,
+                   started_at INTEGER,
+                   updated_at INTEGER,
+                   messages_json TEXT NOT NULL,
+                   usage_json TEXT NOT NULL,
+                   message_count INTEGER NOT NULL,
+                   usage_count INTEGER NOT NULL,
+                   partial INTEGER NOT NULL,
+                   stale INTEGER NOT NULL DEFAULT 0,
+                   favorite INTEGER NOT NULL DEFAULT 0,
+                   project_id TEXT
+                 );
+                 CREATE INDEX IF NOT EXISTS idx_history_tool_time ON history_sessions(tool, updated_at);
+                 CREATE TABLE IF NOT EXISTS history_prices (
+                   tool TEXT NOT NULL,
+                   model TEXT NOT NULL,
+                   currency TEXT NOT NULL,
+                   input_per_million REAL NOT NULL,
+                   output_per_million REAL NOT NULL,
+                   cache_read_per_million REAL NOT NULL,
+                   cache_write_per_million REAL NOT NULL,
+                   source TEXT NOT NULL,
+                   updated_at INTEGER NOT NULL,
+                   PRIMARY KEY(tool, model)
+                 );
+                 CREATE TABLE IF NOT EXISTS history_scan_state (
+                   tool TEXT PRIMARY KEY NOT NULL,
+                   scanned_at INTEGER NOT NULL,
+                   source_count INTEGER NOT NULL,
+                   failed_count INTEGER NOT NULL,
+                   incomplete INTEGER NOT NULL,
+                   detail TEXT NOT NULL
+                 );
+                 PRAGMA user_version = 7;",
             )?;
             tx.commit()?;
         }
@@ -367,11 +416,17 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
-            assert_eq!(version, 6);
+            assert_eq!(version, 7);
             let count: i64 = conn
                 .query_row("SELECT COUNT(*) FROM native_profiles", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
             assert_eq!(count, 0);
+            let history_count: i64 = conn
+                .query_row("SELECT COUNT(*) FROM history_sessions", [], |row| {
+                    row.get(0)
+                })
+                .map_err(|e| e.to_string())?;
+            assert_eq!(history_count, 0);
             Ok(())
         })
         .unwrap();

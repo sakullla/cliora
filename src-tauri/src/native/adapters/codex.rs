@@ -263,6 +263,24 @@ impl CliAdapter for Codex {
         }
         Ok(args)
     }
+    fn history_sources(
+        &self,
+        home: &std::path::Path,
+    ) -> Result<Vec<crate::history::HistorySource>, String> {
+        crate::history::codex::sources(home)
+    }
+    fn parse_history(
+        &self,
+        source: &crate::history::HistorySource,
+    ) -> Result<crate::history::ParsedSession, String> {
+        crate::history::codex::parse(source)
+    }
+    fn history_supported(&self) -> bool {
+        true
+    }
+    fn history_resume_version_supported(&self, version: &str) -> bool {
+        version.starts_with("0.")
+    }
     fn install_guidance(&self) -> (&'static str, &'static str) {
         (
             "https://developers.openai.com/codex/cli",

@@ -373,6 +373,24 @@ impl CliAdapter for Claude {
         }
         Ok(args)
     }
+    fn history_sources(
+        &self,
+        home: &std::path::Path,
+    ) -> Result<Vec<crate::history::HistorySource>, String> {
+        crate::history::claude::sources(home)
+    }
+    fn parse_history(
+        &self,
+        source: &crate::history::HistorySource,
+    ) -> Result<crate::history::ParsedSession, String> {
+        crate::history::claude::parse(source)
+    }
+    fn history_supported(&self) -> bool {
+        true
+    }
+    fn history_resume_version_supported(&self, version: &str) -> bool {
+        version.starts_with("2.")
+    }
     fn install_guidance(&self) -> (&'static str, &'static str) {
         (
             "https://code.claude.com/docs/en/setup",

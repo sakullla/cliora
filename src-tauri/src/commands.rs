@@ -16,7 +16,7 @@ use crate::native::{
     profile::{self, CommonConfig, Connection, NativeProfile, RegisteredCommon, RegisteredProfile},
     transaction::{self, ApplyOutcome},
 };
-use crate::{launch, library, projects, resources};
+use crate::{history, launch, library, projects, resources};
 use std::path::PathBuf;
 
 #[derive(Default)]
@@ -115,6 +115,152 @@ pub(crate) fn native_error(message: String) -> ApiError {
         action: "检查工具版本、原生文件和作用范围后重试；原配置不会自动清空。",
         data_directory: None,
     }
+}
+
+#[tauri::command]
+pub async fn refresh_history(app: AppHandle) -> Result<Vec<history::ScanStatus>, ApiError> {
+    blocking(move || {
+        let home = home()?;
+        app.state::<AppState>().with_database(&app, |db| {
+            history::refresh(db, &adapters::Registry::builtins(), &home).map_err(native_error)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn list_history_sessions(
+    app: AppHandle,
+    filter: history::HistoryFilter,
+) -> Result<Vec<history::HistorySession>, ApiError> {
+    blocking(move || {
+        app.state::<AppState>()
+            .with_database(&app, |db| history::list(db, &filter).map_err(native_error))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn get_history_session(
+    app: AppHandle,
+    id: String,
+) -> Result<history::HistoryDetail, ApiError> {
+    blocking(move || {
+        app.state::<AppState>()
+            .with_database(&app, |db| history::detail(db, &id).map_err(native_error))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn set_history_favorite(
+    app: AppHandle,
+    id: String,
+    favorite: bool,
+) -> Result<(), ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            history::set_favorite(db, &id, favorite).map_err(native_error)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn set_history_project(
+    app: AppHandle,
+    id: String,
+    project_id: Option<String>,
+) -> Result<(), ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            history::set_project(db, &id, project_id.as_deref()).map_err(native_error)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn get_history_usage(
+    app: AppHandle,
+    filter: history::HistoryFilter,
+) -> Result<history::UsageSummary, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            history::usage_summary(db, &filter).map_err(native_error)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn list_history_prices(app: AppHandle) -> Result<Vec<history::HistoryPrice>, ApiError> {
+    blocking(move || {
+        app.state::<AppState>()
+            .with_database(&app, |db| history::prices(db).map_err(native_error))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn save_history_price(
+    app: AppHandle,
+    price: history::HistoryPrice,
+) -> Result<history::HistoryPrice, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            history::save_price(db, &adapters::Registry::builtins(), price).map_err(native_error)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn copy_history_resume_command(
+    app: AppHandle,
+    id: String,
+    mode: adapters::LaunchMode,
+) -> Result<String, ApiError> {
+    blocking(move || {
+        let home = home()?;
+        app.state::<AppState>().with_database(&app, |db| {
+            history::copy_resume_command(db, &adapters::Registry::builtins(), &home, &id, mode)
+                .map_err(native_error)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn resume_history_session(
+    app: AppHandle,
+    id: String,
+    mode: adapters::LaunchMode,
+) -> Result<launch::LaunchResult, ApiError> {
+    blocking(move || {
+        let home = home()?;
+        let plan = app.state::<AppState>().with_database(&app, |db| {
+            history::resume_plan(db, &adapters::Registry::builtins(), &home, &id, mode)
+                .map_err(native_error)
+        })?;
+        launch::spawn(plan).map_err(native_error)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn export_history_session(
+    app: AppHandle,
+    id: String,
+    format: String,
+    destination: String,
+) -> Result<String, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            history::export(db, &id, &format, Path::new(&destination)).map_err(native_error)
+        })
+    })
+    .await
 }
 
 #[tauri::command]

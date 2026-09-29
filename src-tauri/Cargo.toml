@@ -31,6 +31,7 @@ base64 = "0.22"
 chacha20poly1305 = "0.10"
 rand = "0.9"
 dirs = "7"
+chrono = { version = "0.4", features = ["serde"] }
 tauri-plugin-single-instance = "2"
 tauri-plugin-dialog = "2"
 

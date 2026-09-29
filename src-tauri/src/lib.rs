@@ -2,6 +2,7 @@ pub mod commands;
 pub mod credentials;
 pub mod database;
 pub mod domain;
+pub mod history;
 pub mod launch;
 pub mod library;
 pub mod native;
@@ -66,6 +67,17 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            commands::refresh_history,
+            commands::list_history_sessions,
+            commands::get_history_session,
+            commands::set_history_favorite,
+            commands::set_history_project,
+            commands::get_history_usage,
+            commands::list_history_prices,
+            commands::save_history_price,
+            commands::copy_history_resume_command,
+            commands::resume_history_session,
+            commands::export_history_session,
             commands::list_library_items,
             commands::save_library_item,
             commands::delete_library_item,

@@ -4,6 +4,7 @@ import type { AdapterCatalog, ApplyOutcome, CommonConfig, CommonSaveResult, Conn
 import type { LaunchRequest, LaunchResult, LaunchSettings, Project, TerminalId, TrayStatus } from '../types/launch';
 import type { LibraryDraft, LibraryItem, LibraryKind } from '../types/library';
 import type { McpDefinition, McpDraft, McpTargetRequest, McpTargetResult, NativeMcpEntry, RuleTarget, RulePreview, RuleApplyResult, SkillPackage, SkillImportPreview, SkillInstallation, SkillTargetResult, NativeSkillEntry, SkillTargetPreview, SkillRecoveryIssue } from '../types/resources';
+import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, ScanStatus, UsageSummary } from '../types/history';
 
 export const nativeAvailable = isTauri();
 
@@ -33,6 +34,17 @@ async function command<T>(name: string, args?: Record<string, unknown>): Promise
 
 /** Feature modules add named wrappers here; components never invoke arbitrary commands. */
 export const native = {
+  refreshHistory: () => command<ScanStatus[]>('refresh_history'),
+  listHistorySessions: (filter: HistoryFilter) => command<HistorySession[]>('list_history_sessions', { filter }),
+  getHistorySession: (id: string) => command<HistoryDetail>('get_history_session', { id }),
+  setHistoryFavorite: (id: string, favorite: boolean) => command<void>('set_history_favorite', { id, favorite }),
+  setHistoryProject: (id: string, projectId: string | null) => command<void>('set_history_project', { id, projectId }),
+  getHistoryUsage: (filter: HistoryFilter) => command<UsageSummary>('get_history_usage', { filter }),
+  listHistoryPrices: () => command<HistoryPrice[]>('list_history_prices'),
+  saveHistoryPrice: (price: HistoryPrice) => command<HistoryPrice>('save_history_price', { price }),
+  copyHistoryResumeCommand: (id: string, mode: LaunchRequest['mode']) => command<string>('copy_history_resume_command', { id, mode }),
+  resumeHistorySession: (id: string, mode: LaunchRequest['mode']) => command<LaunchResult>('resume_history_session', { id, mode }),
+  exportHistorySession: (id: string, format: 'markdown' | 'json', destination: string) => command<string>('export_history_session', { id, format, destination }),
   listMcpDefinitions: () => command<McpDefinition[]>('list_mcp_definitions'),
   saveMcpDefinition: (draft: McpDraft) => command<McpDefinition>('save_mcp_definition', { draft }),
   listNativeMcp: (target: McpTargetRequest) => command<NativeMcpEntry[]>('list_native_mcp', { target }),
