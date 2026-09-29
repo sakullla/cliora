@@ -733,25 +733,6 @@ pub fn apply_validated(
     })
 }
 
-fn claude_project_parent_key_conflicts(
-    home: &Path,
-    native_files: &[NativeFile],
-) -> Result<bool, String> {
-    let global_text = transaction::read_native(&home.join(".claude").join("settings.json"))?;
-    let global_root = format::parse(format::FileKind::Json, &global_text)?;
-    if !existing_secret_field(CliId::ClaudeCode, "settings", &global_root) {
-        return Ok(false);
-    }
-    native_files
-        .iter()
-        .filter(|file| matches!(file.role, "settings" | "local_settings"))
-        .try_fold(false, |found, file| {
-            let text = transaction::read_native(Path::new(&file.path))?;
-            let root = format::parse(format::FileKind::Json, &text)?;
-            Ok(found || existing_secret_field(CliId::ClaudeCode, file.role, &root))
-        })
-}
-
 pub fn apply_profile(
     db: &Database,
     credentials: &dyn CredentialStore,
@@ -775,19 +756,6 @@ pub fn apply_profile(
     let probe = adapter::probe(tool, custom_path, home, project, scope);
     if probe.native_writes.state != "supported" {
         return Err(probe.native_writes.reason.into());
-    }
-    if tool == CliId::ClaudeCode
-        && scope == Scope::Project
-        && profile
-            .connection
-            .as_ref()
-            .and_then(|item| item.secret_ref.as_ref())
-            .is_none()
-        && profile.native_credentials.is_empty()
-    {
-        if claude_project_parent_key_conflicts(home, &probe.native_files)? {
-            return Err("当前项目的 Claude 密钥清理后会继承用户全局配置中的密钥；请先在全局配置处理认证，再应用此项目方案".into());
-        }
     }
     apply_validated(
         db,
@@ -1372,18 +1340,85 @@ mod tests {
     }
 
     #[test]
-    fn project_key_cleanup_reports_inherited_user_key_without_touching_it() {
+    fn project_key_cleanup_can_inherit_global_fixture_without_touching_it() {
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path().join("home");
         fs::create_dir_all(home.join(".claude")).unwrap();
         let global = home.join(".claude/settings.json");
-        fs::write(&global, r#"{"env":{"ANTHROPIC_API_KEY":"global-key"}}"#).unwrap();
-        let project = temp.path().join("project-settings.json");
-        fs::write(&project, r#"{"env":{"ANTHROPIC_API_KEY":"project-key"}}"#).unwrap();
-        let targets = [native_role("settings", &project, "json")];
-        assert!(claude_project_parent_key_conflicts(&home, &targets).unwrap());
-        assert!(fs::read_to_string(&global).unwrap().contains("global-key"));
-        fs::write(&project, "{}").unwrap();
-        assert!(!claude_project_parent_key_conflicts(&home, &targets).unwrap());
+        let global_fixture =
+            include_str!("../../../tests/fixtures/native/claude-key-only-settings.json");
+        let project_fixture =
+            include_str!("../../../tests/fixtures/native/claude-key-only-local.json");
+        fs::write(&global, global_fixture).unwrap();
+        let project = temp.path().join("project");
+        fs::create_dir_all(project.join(".claude")).unwrap();
+        let shared = project.join(".claude/settings.json");
+        let local = project.join(".claude/settings.local.json");
+        fs::write(&shared, "{}").unwrap();
+        fs::write(&local, project_fixture).unwrap();
+        let executable = temp.path().join(if cfg!(windows) {
+            "claude.ps1"
+        } else {
+            "claude"
+        });
+        fs::write(
+            &executable,
+            if cfg!(windows) {
+                "Write-Output 'claude 2.1.0'\n"
+            } else {
+                "#!/bin/sh\nprintf 'claude 2.1.0\\n'\n"
+            },
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        let store = MemoryStore::default();
+        let profile = NativeProfile {
+            id: String::new(),
+            tool: CliId::ClaudeCode,
+            name: "inherit user login".into(),
+            version: 1,
+            inherit_common: false,
+            files: BTreeMap::new(),
+            suppressed: BTreeMap::new(),
+            native_credentials: BTreeMap::new(),
+            connection: None,
+        };
+        let saved = profile::save_profile(&db, profile, None).unwrap();
+        assert!(apply_profile(
+            &db,
+            &store,
+            CliId::ClaudeCode,
+            &saved.id,
+            Scope::Project,
+            &home,
+            Some(&project),
+            Some(&executable),
+            false
+        )
+        .unwrap_err()
+        .contains("接管"));
+        assert_eq!(fs::read_to_string(&global).unwrap(), global_fixture);
+        assert_eq!(fs::read_to_string(&local).unwrap(), project_fixture);
+        apply_profile(
+            &db,
+            &store,
+            CliId::ClaudeCode,
+            &saved.id,
+            Scope::Project,
+            &home,
+            Some(&project),
+            Some(&executable),
+            true,
+        )
+        .unwrap();
+        assert_eq!(fs::read_to_string(&global).unwrap(), global_fixture);
+        let local_after = fs::read_to_string(&local).unwrap();
+        assert!(!local_after.contains("test-only-project-secret"));
+        assert!(local_after.contains("enabledPlugins"));
     }
 }

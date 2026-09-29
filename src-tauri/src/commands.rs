@@ -225,7 +225,14 @@ pub async fn get_tool_workspace(
             let common = profile::get_common(database, tool).map_err(native_error)?;
             let recovery_needed = transaction::recover_pending(database, &SystemCredentialStore)
                 .map_err(native_error)?;
-            let binding = apply::get_binding(database, tool, &key).map_err(native_error)?;
+            let binding = apply::get_binding(database, tool, &key)
+                .map_err(native_error)?
+                .map(|mut binding| {
+                    // The page only needs identity/version. Legacy secret
+                    // digests may await migration while Keyring is locked.
+                    binding.managed.clear();
+                    binding
+                });
             let snapshots = probe.native_files.iter().map(native_snapshot).collect();
             Ok(ToolWorkspace {
                 probe,
