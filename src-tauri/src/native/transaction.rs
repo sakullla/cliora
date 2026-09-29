@@ -93,12 +93,20 @@ pub fn keyed_fingerprint(key: &[u8; 32], bytes: &[u8]) -> String {
     hmac_digest(key, &Sha256::digest(bytes))
 }
 
-fn migrate_digest(value: &mut String, key: &[u8; 32]) -> Result<bool, String> {
-    if value.starts_with(DIGEST_PREFIX) {
-        return Ok(false);
+fn is_legacy_digest(value: &str) -> Result<bool, String> {
+    let (digest, legacy) = match value.strip_prefix(DIGEST_PREFIX) {
+        Some(digest) => (digest, false),
+        None => (value, true),
+    };
+    if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("原生摘要格式异常；保留原记录并停止写入".into());
     }
-    if value.len() != 64 || !value.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err("旧原生摘要格式异常；保留原记录并停止写入".into());
+    Ok(legacy)
+}
+
+fn migrate_digest(value: &mut String, key: &[u8; 32]) -> Result<bool, String> {
+    if !is_legacy_digest(value)? {
+        return Ok(false);
     }
     let digest = (0..32)
         .map(|index| u8::from_str_radix(&value[index * 2..index * 2 + 2], 16))
@@ -108,12 +116,79 @@ fn migrate_digest(value: &mut String, key: &[u8; 32]) -> Result<bool, String> {
     Ok(true)
 }
 
+fn managed_has_legacy(value: &Value) -> Result<bool, String> {
+    match value {
+        Value::Object(map) => {
+            let mut legacy = match map.get("__cliora_secret_sha256") {
+                Some(Value::String(digest)) => is_legacy_digest(digest)?,
+                Some(_) => return Err("活动配置摘要损坏".into()),
+                None => false,
+            };
+            for nested in map.values() {
+                legacy |= managed_has_legacy(nested)?;
+            }
+            Ok(legacy)
+        }
+        Value::Array(items) => {
+            let mut legacy = false;
+            for nested in items {
+                legacy |= managed_has_legacy(nested)?;
+            }
+            Ok(legacy)
+        }
+        _ => Ok(false),
+    }
+}
+
+fn has_legacy_digests(db: &Database) -> Result<bool, String> {
+    let (bindings, journals): (Vec<String>, Vec<String>) = db.with_connection(|conn| {
+        let bindings = {
+            let mut statement = conn
+                .prepare("SELECT managed FROM applied_bindings")
+                .map_err(|_| "无法读取活动配置摘要")?;
+            let rows = statement
+                .query_map([], |row| row.get(0))
+                .map_err(|_| "无法读取活动配置摘要")?
+                .collect::<Result<_, _>>()
+                .map_err(|_| "无法读取活动配置摘要")?;
+            rows
+        };
+        let journals = {
+            let mut statement = conn
+                .prepare("SELECT data FROM native_transactions")
+                .map_err(|_| "无法读取原生事务摘要")?;
+            let rows = statement
+                .query_map([], |row| row.get(0))
+                .map_err(|_| "无法读取原生事务摘要")?
+                .collect::<Result<_, _>>()
+                .map_err(|_| "无法读取原生事务摘要")?;
+            rows
+        };
+        Ok((bindings, journals))
+    })?;
+    let mut legacy = false;
+    for data in bindings {
+        let managed: Value = serde_json::from_str(&data).map_err(|_| "活动配置摘要损坏")?;
+        legacy |= managed_has_legacy(&managed)?;
+    }
+    for data in journals {
+        let journal: Journal = serde_json::from_str(&data).map_err(|_| "原生事务日志损坏")?;
+        for file in journal.files {
+            legacy |= is_legacy_digest(&file.old_hash)?;
+            legacy |= is_legacy_digest(&file.new_hash)?;
+        }
+    }
+    Ok(legacy)
+}
+
 fn migrate_managed(value: &mut Value, key: &[u8; 32]) -> Result<bool, String> {
     match value {
         Value::Object(map) => {
             let mut changed = false;
-            if let Some(Value::String(hash)) = map.get_mut("__cliora_secret_sha256") {
-                changed |= migrate_digest(hash, key)?;
+            match map.get_mut("__cliora_secret_sha256") {
+                Some(Value::String(hash)) => changed |= migrate_digest(hash, key)?,
+                Some(_) => return Err("活动配置摘要损坏".into()),
+                None => {}
             }
             for nested in map.values_mut() {
                 changed |= migrate_managed(nested, key)?;
@@ -193,28 +268,48 @@ fn migrate_integrity_records(db: &Database, key: &[u8; 32]) -> Result<(), String
     })
 }
 
+enum IntegrityKeyError {
+    CredentialUnavailable(String),
+    Data(String),
+}
+
+impl IntegrityKeyError {
+    fn message(self) -> String {
+        match self {
+            Self::CredentialUnavailable(message) | Self::Data(message) => message,
+        }
+    }
+}
+
 /// Stable, purpose-specific HMAC key; losing it must fail closed instead of
 /// silently accepting a different native configuration as previously managed.
-pub fn integrity_key(db: &Database, credentials: &dyn CredentialStore) -> Result<[u8; 32], String> {
+fn integrity_key_checked(
+    db: &Database,
+    credentials: &dyn CredentialStore,
+) -> Result<[u8; 32], IntegrityKeyError> {
     static KEY_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     let _guard = KEY_LOCK
         .get_or_init(|| Mutex::new(()))
         .lock()
-        .map_err(|_| "原生摘要服务暂时不可用")?;
-    let registered: bool = db.with_connection(|conn| {
-        conn.query_row(
-            "SELECT value FROM app_settings WHERE key = ?1",
-            [INTEGRITY_SETTING],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
-        .map(|value| value.is_some())
-        .map_err(|_| "无法检查原生摘要密钥".into())
-    })?;
+        .map_err(|_| IntegrityKeyError::Data("原生摘要服务暂时不可用".into()))?;
+    let registered: bool = db
+        .with_connection(|conn| {
+            conn.query_row(
+                "SELECT value FROM app_settings WHERE key = ?1",
+                [INTEGRITY_SETTING],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map(|value| value.is_some())
+            .map_err(|_| "无法检查原生摘要密钥".into())
+        })
+        .map_err(IntegrityKeyError::Data)?;
     let encoded = if registered {
-        credentials
-            .get(INTEGRITY_KEY_ID)
-            .map_err(|_| "原生摘要密钥已丢失；请修复系统凭据库，原文件未修改")?
+        credentials.get(INTEGRITY_KEY_ID).map_err(|_| {
+            IntegrityKeyError::CredentialUnavailable(
+                "原生摘要密钥已丢失；请修复系统凭据库，原文件未修改".into(),
+            )
+        })?
     } else {
         let encoded = match credentials.get(INTEGRITY_KEY_ID) {
             Ok(existing) => existing,
@@ -222,9 +317,11 @@ pub fn integrity_key(db: &Database, credentials: &dyn CredentialStore) -> Result
                 let mut key = [0_u8; 32];
                 rand::rng().fill(&mut key);
                 let encoded = STANDARD.encode(key);
-                credentials
-                    .put(INTEGRITY_KEY_ID, &encoded)
-                    .map_err(|_| "无法保存原生摘要密钥；原文件未修改")?;
+                credentials.put(INTEGRITY_KEY_ID, &encoded).map_err(|_| {
+                    IntegrityKeyError::CredentialUnavailable(
+                        "无法保存原生摘要密钥；原文件未修改".into(),
+                    )
+                })?;
                 encoded
             }
         };
@@ -232,7 +329,9 @@ pub fn integrity_key(db: &Database, credentials: &dyn CredentialStore) -> Result
             .decode(&encoded)
             .map_or(true, |bytes| bytes.len() != 32)
         {
-            return Err("原生摘要密钥格式错误；原文件未修改".into());
+            return Err(IntegrityKeyError::Data(
+                "原生摘要密钥格式错误；原文件未修改".into(),
+            ));
         }
         db.with_connection(|conn| {
             conn.execute(
@@ -241,15 +340,22 @@ pub fn integrity_key(db: &Database, credentials: &dyn CredentialStore) -> Result
             )
             .map_err(|_| String::from("无法登记原生摘要密钥"))?;
             Ok(())
-        })?;
+        })
+        .map_err(IntegrityKeyError::Data)?;
         encoded
     };
     let bytes = STANDARD
         .decode(encoded)
-        .map_err(|_| "原生摘要密钥格式错误")?;
-    let key: [u8; 32] = bytes.try_into().map_err(|_| "原生摘要密钥长度错误")?;
-    migrate_integrity_records(db, &key)?;
+        .map_err(|_| IntegrityKeyError::Data("原生摘要密钥格式错误".into()))?;
+    let key: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| IntegrityKeyError::Data("原生摘要密钥长度错误".into()))?;
+    migrate_integrity_records(db, &key).map_err(IntegrityKeyError::Data)?;
     Ok(key)
+}
+
+pub fn integrity_key(db: &Database, credentials: &dyn CredentialStore) -> Result<[u8; 32], String> {
+    integrity_key_checked(db, credentials).map_err(IntegrityKeyError::message)
 }
 
 fn write_lock() -> &'static Mutex<()> {
@@ -544,13 +650,21 @@ pub fn recover_pending(
         Ok(ids)
     })?;
     if pending_ids.is_empty() {
-        // Committed history has no work to recover. In particular, browsing
-        // native files must remain possible while the keyring is locked.
+        // Browsing never needs a key unless older records still contain bare
+        // digests. Migrate those on the next unlocked browse, without making
+        // a locked keyring hide the editor.
+        if has_legacy_digests(db)? {
+            match integrity_key_checked(db, credentials) {
+                Ok(_) | Err(IntegrityKeyError::CredentialUnavailable(_)) => {}
+                Err(error) => return Err(error.message()),
+            }
+        }
         return Ok(Vec::new());
     }
-    let integrity = match integrity_key(db, credentials) {
+    let integrity = match integrity_key_checked(db, credentials) {
         Ok(key) => key,
-        Err(_) => return Ok(pending_ids),
+        Err(IntegrityKeyError::CredentialUnavailable(_)) => return Ok(pending_ids),
+        Err(error) => return Err(error.message()),
     };
     // Legacy unkeyed digests are migrated by integrity_key, so load the
     // journals after that migration rather than retaining stale copies.
@@ -760,7 +874,10 @@ mod tests {
     fn committed_history_does_not_block_reading_when_keyring_is_locked() {
         let temp = tempfile::tempdir().unwrap();
         let db = Database::open(&temp.path().join("app.db")).unwrap();
+        let store = MemoryStore::default();
+        integrity_key(&db, &store).unwrap();
         let old_hash = fingerprint(b"low-entropy-old-file");
+        let secret_hash = fingerprint(b"short-key");
         let journal = Journal {
             id: "committed-history".into(),
             key_id: "missing".into(),
@@ -776,6 +893,11 @@ mod tests {
             }],
         };
         save_journal(&db, &journal, "committed").unwrap();
+        db.with_connection(|conn| {
+            let managed = serde_json::json!({"settings": {"/env/ANTHROPIC_API_KEY": {"__cliora_secret_sha256": secret_hash}}});
+            conn.execute("INSERT INTO applied_bindings (scope_key, tool, profile_id, profile_version, managed) VALUES ('global', 'claude_code', 'legacy', 1, ?1)", [managed.to_string()]).map_err(|e| e.to_string())?;
+            Ok(())
+        }).unwrap();
         assert!(recover_pending(&db, &LockedStore).unwrap().is_empty());
         db.with_connection(|conn| {
             let data: String = conn
@@ -786,11 +908,35 @@ mod tests {
                 )
                 .map_err(|e| e.to_string())?;
             assert!(data.contains(&old_hash));
+            let binding: String = conn
+                .query_row("SELECT managed FROM applied_bindings", [], |row| row.get(0))
+                .map_err(|e| e.to_string())?;
+            assert!(binding.contains(&secret_hash));
             Ok(())
         })
         .unwrap();
-        let store = MemoryStore::default();
-        integrity_key(&db, &store).unwrap();
+        assert!(recover_pending(&db, &store).unwrap().is_empty());
+        let migrated = db
+            .with_connection(|conn| {
+                let data: String = conn
+                    .query_row(
+                        "SELECT data FROM native_transactions WHERE id = 'committed-history'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .map_err(|e| e.to_string())?;
+                let binding: String = conn
+                    .query_row("SELECT managed FROM applied_bindings", [], |row| row.get(0))
+                    .map_err(|e| e.to_string())?;
+                Ok((data, binding))
+            })
+            .unwrap();
+        assert!(!migrated.0.contains(&old_hash));
+        assert!(!migrated.1.contains(&secret_hash));
+        assert!(migrated.0.contains("h1:"));
+        assert!(migrated.1.contains("h1:"));
+        assert!(recover_pending(&db, &store).unwrap().is_empty());
+        assert!(recover_pending(&db, &LockedStore).unwrap().is_empty());
         db.with_connection(|conn| {
             let data: String = conn
                 .query_row(
@@ -799,11 +945,37 @@ mod tests {
                     |row| row.get(0),
                 )
                 .map_err(|e| e.to_string())?;
-            assert!(!data.contains(&old_hash));
-            assert!(data.contains("h1:"));
+            let binding: String = conn
+                .query_row("SELECT managed FROM applied_bindings", [], |row| row.get(0))
+                .map_err(|e| e.to_string())?;
+            assert_eq!((data, binding), migrated);
             Ok(())
         })
         .unwrap();
+    }
+
+    #[test]
+    fn corrupt_committed_digest_is_reported_instead_of_masked_as_locked_keyring() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        let journal = Journal {
+            id: "corrupt-history".into(),
+            key_id: "missing".into(),
+            files: vec![JournalFile {
+                path: temp.path().join("old.json"),
+                existed: true,
+                old_hash: "broken-digest".into(),
+                new_hash: fingerprint(b"next"),
+                backup: None,
+                nonce: None,
+                old_readonly: false,
+                sensitive: true,
+            }],
+        };
+        save_journal(&db, &journal, "committed").unwrap();
+        assert!(recover_pending(&db, &LockedStore)
+            .unwrap_err()
+            .contains("摘要格式异常"));
     }
 
     #[test]
