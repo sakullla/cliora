@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use url::Url;
 
 use super::{
-    adapter,
+    adapters::Registry,
     profile::{self, Connection},
 };
 use crate::credentials::CredentialStore;
@@ -57,8 +57,34 @@ pub fn test_connection(
     credentials: &dyn CredentialStore,
     allow_model_request: bool,
 ) -> ConnectionCheck {
+    test_registered_connection(
+        &Registry::builtins(),
+        tool.stable_id(),
+        connection,
+        credentials,
+        allow_model_request,
+    )
+}
+
+pub fn test_registered_connection(
+    registry: &Registry,
+    tool_id: &str,
+    connection: &Connection,
+    credentials: &dyn CredentialStore,
+    allow_model_request: bool,
+) -> ConnectionCheck {
     let skipped = || step("skipped", "未发送模型请求");
-    if !adapter::interface_formats(tool, true).contains(&connection.interface_format.as_str()) {
+    let Some(adapter) = registry.get(tool_id) else {
+        return ConnectionCheck {
+            format: step("failed", "CLI 适配器未注册"),
+            connectivity: skipped(),
+            model_request: skipped(),
+        };
+    };
+    if !adapter
+        .interface_formats()
+        .contains(&connection.interface_format.as_str())
+    {
         return ConnectionCheck {
             format: step("failed", "该 CLI 不支持所选接口格式"),
             connectivity: step("skipped", "格式检查未通过"),

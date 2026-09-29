@@ -60,7 +60,8 @@ pub fn inject_profile_credentials(
     for role in ["settings", "local_settings"] {
         if let Some(entries) = native_profile.native_credentials.get(role) {
             for (name, id) in entries {
-                if native_profile.tool == CliId::ClaudeCode
+                if super::adapters::known(native_profile.tool)
+                    .imported_connection_overrides_native()
                     && native_profile
                         .connection
                         .as_ref()

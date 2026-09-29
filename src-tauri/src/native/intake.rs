@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 use serde_json::{json, Value};
-use uuid::Uuid;
 
 use super::{
     format::{self, FileKind},
@@ -33,164 +32,36 @@ pub struct NativeImport {
 /// any file text is returned as a savable draft. The original file is untouched.
 pub fn prepare_import(
     tool: CliId,
+    files: BTreeMap<String, String>,
+    credentials: &dyn CredentialStore,
+) -> Result<NativeImport, String> {
+    prepare_registered_import(
+        &super::adapters::Registry::builtins(),
+        tool.stable_id(),
+        files,
+        credentials,
+    )
+}
+
+pub fn prepare_registered_import(
+    registry: &super::adapters::Registry,
+    id: &str,
     mut files: BTreeMap<String, String>,
     credentials: &dyn CredentialStore,
 ) -> Result<NativeImport, String> {
-    let mut found = inspect(tool, &files)?;
+    let adapter = registry
+        .get(id)
+        .ok_or("未注册的 CLI 适配器，不能接入原生配置")?;
+    let mut found = inspect_registered(registry, id, &files)?;
     let mut pending_secrets: Vec<(String, String)> = Vec::new();
     let mut native_credentials: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
-    if matches!(tool, CliId::Codex | CliId::Grok) {
-        let mut text = files.get("settings").cloned().unwrap_or_default();
-        let parsed = format::parse(FileKind::Toml, &text)?;
-        let (collection, field, active) = if tool == CliId::Codex {
-            (
-                "model_providers",
-                "experimental_bearer_token",
-                found.provider_id.as_deref(),
-            )
-        } else {
-            ("model", "api_key", found.model.as_deref())
-        };
-        if let Some(entries) = parsed.get(collection).and_then(Value::as_object) {
-            for (name, entry) in entries {
-                let Some(key) = entry.get(field).and_then(Value::as_str) else {
-                    continue;
-                };
-                if Some(name.as_str()) != active || found.connection.is_none() {
-                    return Err(format!("{collection}.{name}.{field} 含原生密钥，但不是完整的当前连接；请先在 CLI 中选定模型与供应商，原文件未更改"));
-                }
-                if key.is_empty() || key.len() > 16_384 {
-                    return Err("原生 API 密钥为空或过长；原文件未更改".into());
-                }
-                let id = format!("connection-{}", Uuid::new_v4());
-                text = format::set_path(
-                    FileKind::Toml,
-                    &text,
-                    &[collection.into(), name.clone(), field.into()],
-                    None,
-                )?;
-                files.insert("settings".into(), text.clone());
-                found.connection.as_mut().unwrap().secret_ref = Some(id.clone());
-                pending_secrets.push((id, key.to_owned()));
-            }
-        }
-    }
-    if tool == CliId::Pi {
-        let raw = files.get("models").cloned().unwrap_or_default();
-        let models = format::parse(FileKind::Jsonc, &raw)?;
-        if let Some(providers) = models.get("providers").and_then(Value::as_object) {
-            let active = found.provider_id.as_deref();
-            for (name, provider) in providers {
-                let Some(key) = provider.get("apiKey").and_then(Value::as_str) else {
-                    continue;
-                };
-                if pi_env_name(key).is_some() {
-                    continue;
-                }
-                if active != Some(name.as_str()) || found.connection.is_none() {
-                    return Err(format!("Pi 供应商 {name} 含字面 apiKey；请先在原生配置中选择完整的默认供应商与模型，再逐一安全接入。原文件未更改"));
-                }
-                if key.is_empty() || key.len() > 16_384 {
-                    return Err("Pi 原生 apiKey 为空或超过系统凭据库限制；原文件未更改".into());
-                }
-                let id = format!("connection-{}", Uuid::new_v4());
-                let connection = found.connection.as_mut().unwrap();
-                connection.secret_ref = Some(id.clone());
-                let env =
-                    profile::auth_env_name(tool, connection).ok_or("无法确定 Pi 的认证环境变量")?;
-                connection.auth_env_var = Some(env.clone());
-                let replaced = format::set_path(
-                    FileKind::Jsonc,
-                    &raw,
-                    &["providers".into(), name.clone(), "apiKey".into()],
-                    Some(&json!(format!("${{{env}}}"))),
-                )?;
-                files.insert("models".into(), replaced);
-                pending_secrets.push((id, key.to_owned()));
-            }
-        }
-    }
-    if tool == CliId::OpenCode {
-        let raw = files.get("settings").cloned().unwrap_or_default();
-        let settings = format::parse(FileKind::Jsonc, &raw)?;
-        if let Some(providers) = settings.get("provider").and_then(Value::as_object) {
-            for (name, provider) in providers {
-                let Some(key) = provider
-                    .get("options")
-                    .and_then(|value| value.get("apiKey"))
-                    .and_then(Value::as_str)
-                else {
-                    continue;
-                };
-                if key
-                    .strip_prefix("{env:")
-                    .and_then(|tail| tail.strip_suffix('}'))
-                    .is_some_and(profile::valid_env_name)
-                {
-                    continue;
-                }
-                if found.provider_id.as_deref() != Some(name.as_str()) || found.connection.is_none()
-                {
-                    return Err(format!("OpenCode 供应商 {name} 含字面 apiKey；请先选择完整的默认供应商与模型，再逐一安全接入。原文件未更改"));
-                }
-                if key.is_empty() || key.len() > 16_384 {
-                    return Err("原生 apiKey 为空或超过系统凭据库限制；原文件未更改".into());
-                }
-                let id = format!("connection-{}", Uuid::new_v4());
-                let connection = found.connection.as_mut().unwrap();
-                connection.secret_ref = Some(id.clone());
-                let env = profile::auth_env_name(tool, connection)
-                    .ok_or("无法确定 OpenCode 的认证环境变量")?;
-                connection.auth_env_var = Some(env.clone());
-                let replaced = format::set_path(
-                    FileKind::Jsonc,
-                    &raw,
-                    &[
-                        "provider".into(),
-                        name.clone(),
-                        "options".into(),
-                        "apiKey".into(),
-                    ],
-                    Some(&json!(format!("{{env:{env}}}"))),
-                )?;
-                files.insert("settings".into(), replaced);
-                pending_secrets.push((id, key.to_owned()));
-            }
-        }
-    }
-    if tool == CliId::ClaudeCode {
-        for role in ["settings", "local_settings"] {
-            let mut text = files.get(role).cloned().unwrap_or_default();
-            let parsed = format::parse(FileKind::Json, &text)?;
-            for name in ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"] {
-                let Some(key) = string_at(&parsed, &["env", name]) else {
-                    continue;
-                };
-                if key.is_empty() || key.len() > 16_384 {
-                    return Err("原生 API 密钥为空或超过系统凭据库限制；原文件未更改".into());
-                }
-                let id = format!("connection-{}", Uuid::new_v4());
-                text = format::set_path(FileKind::Json, &text, &["env".into(), name.into()], None)?;
-                native_credentials
-                    .entry(role.into())
-                    .or_default()
-                    .insert(name.into(), id.clone());
-                pending_secrets.push((id.clone(), key.to_owned()));
-                // An explicit connection may also use an imported API key for
-                // directory tests; a default-only CLI config stays connection-free.
-                if name == "ANTHROPIC_API_KEY" {
-                    if let Some(connection) = found.connection.as_mut() {
-                        connection.secret_ref = Some(id);
-                        connection.auth_env_var = Some(name.into());
-                    }
-                }
-            }
-            if native_credentials.contains_key(role) {
-                files.insert(role.into(), text);
-            }
-        }
-    }
-    profile::validate_files(tool, &files)
+    adapter.import_literal_secrets(
+        &mut files,
+        &mut found,
+        &mut pending_secrets,
+        &mut native_credentials,
+    )?;
+    profile::validate_registered_files(registry, id, &files)
         .map_err(|error| format!("原生配置不能安全接入：{error}；原文件未更改"))?;
     if let Some(connection) = &found.connection {
         profile::validate_connection(connection)
@@ -216,7 +87,7 @@ pub fn prepare_import(
             connection.auth_env_var.clone(),
         )
     });
-    found = inspect(tool, &files)?;
+    found = inspect_registered(registry, id, &files)?;
     if let (Some(connection), Some((secret_ref, auth_env_var))) =
         (found.connection.as_mut(), imported_auth)
     {
@@ -233,7 +104,7 @@ pub fn prepare_import(
     })
 }
 
-fn pi_env_name(value: &str) -> Option<&str> {
+pub(crate) fn pi_env_name(value: &str) -> Option<&str> {
     let name = value.strip_prefix('$')?;
     let name = name
         .strip_prefix('{')
@@ -242,13 +113,13 @@ fn pi_env_name(value: &str) -> Option<&str> {
     profile::valid_env_name(name).then_some(name)
 }
 
-fn string_at<'a>(root: &'a Value, path: &[&str]) -> Option<&'a str> {
+pub(crate) fn string_at<'a>(root: &'a Value, path: &[&str]) -> Option<&'a str> {
     path.iter()
         .try_fold(root, |value, segment| value.get(*segment))?
         .as_str()
 }
 
-fn api_format(value: &str) -> Option<&'static str> {
+pub(crate) fn api_format(value: &str) -> Option<&'static str> {
     match value {
         "responses" | "openai-responses" | "@ai-sdk/openai" => Some("openai_responses"),
         "chat_completions" | "openai-completions" | "@ai-sdk/openai-compatible" => {
@@ -260,13 +131,28 @@ fn api_format(value: &str) -> Option<&'static str> {
 }
 
 pub fn inspect(tool: CliId, files: &BTreeMap<String, String>) -> Result<NativeInspection, String> {
+    inspect_registered(
+        &super::adapters::Registry::builtins(),
+        tool.stable_id(),
+        files,
+    )
+}
+
+pub fn inspect_registered(
+    registry: &super::adapters::Registry,
+    id: &str,
+    files: &BTreeMap<String, String>,
+) -> Result<NativeInspection, String> {
+    let adapter = registry
+        .get(id)
+        .ok_or("未注册的 CLI 适配器，不能解析原生配置")?;
     let settings = format::parse(
-        profile::file_kind(tool, "settings")?,
+        adapter.file_kind("settings")?,
         files.get("settings").map(String::as_str).unwrap_or(""),
     )?;
-    let local_settings = if tool == CliId::ClaudeCode {
+    let local_settings = if let Ok(kind) = adapter.file_kind("local_settings") {
         format::parse(
-            FileKind::Json,
+            kind,
             files
                 .get("local_settings")
                 .map(String::as_str)
@@ -275,129 +161,18 @@ pub fn inspect(tool: CliId, files: &BTreeMap<String, String>) -> Result<NativeIn
     } else {
         json!({})
     };
-    let models = if tool == CliId::Pi {
-        format::parse(
-            FileKind::Jsonc,
-            files.get("models").map(String::as_str).unwrap_or(""),
-        )?
+    let models = if let Ok(kind) = adapter.file_kind("models") {
+        format::parse(kind, files.get("models").map(String::as_str).unwrap_or(""))?
     } else {
         json!({})
     };
-    let mut provider = None;
-    let mut model = None;
-    let mut base = None;
-    let mut wire = None;
-    let mut env = None;
-    let reasoning_effort = if tool == CliId::Codex {
-        string_at(&settings, &["model_reasoning_effort"]).map(str::to_owned)
-    } else {
-        None
-    };
-    match tool {
-        CliId::Codex => {
-            provider = string_at(&settings, &["model_provider"]).map(str::to_owned);
-            model = string_at(&settings, &["model"]).map(str::to_owned);
-            if let Some(id) = &provider {
-                base =
-                    string_at(&settings, &["model_providers", id, "base_url"]).map(str::to_owned);
-                wire =
-                    string_at(&settings, &["model_providers", id, "wire_api"]).and_then(api_format);
-                env = string_at(&settings, &["model_providers", id, "env_key"]).map(str::to_owned);
-            }
-        }
-        CliId::ClaudeCode => {
-            provider = Some("anthropic".into());
-            model = string_at(&local_settings, &["model"])
-                .or_else(|| string_at(&settings, &["model"]))
-                .map(str::to_owned);
-            base = string_at(&local_settings, &["env", "ANTHROPIC_BASE_URL"])
-                .or_else(|| string_at(&settings, &["env", "ANTHROPIC_BASE_URL"]))
-                .map(str::to_owned);
-            wire = Some("anthropic_messages");
-        }
-        CliId::Grok => {
-            provider = Some("grok".into());
-            model = string_at(&settings, &["models", "default"]).map(str::to_owned);
-            if let Some(id) = &model {
-                base = string_at(&settings, &["model", id, "base_url"]).map(str::to_owned);
-                wire = string_at(&settings, &["model", id, "api_backend"]).and_then(api_format);
-                env = string_at(&settings, &["model", id, "env_key"]).map(str::to_owned);
-            }
-        }
-        CliId::Pi => {
-            provider = string_at(&settings, &["defaultProvider"])
-                .map(str::to_owned)
-                .or_else(|| models.get("providers")?.as_object()?.keys().next().cloned());
-            model = string_at(&settings, &["defaultModel"]).map(str::to_owned);
-            if let Some(id) = &provider {
-                let entry = models.get("providers").and_then(|value| value.get(id));
-                base = entry
-                    .and_then(|value| value.get("baseUrl"))
-                    .and_then(Value::as_str)
-                    .map(str::to_owned);
-                wire = entry
-                    .and_then(|value| value.get("api"))
-                    .and_then(Value::as_str)
-                    .and_then(api_format);
-                // Only Pi's documented $NAME / ${NAME} syntax is a safe reference.
-                env = entry
-                    .and_then(|value| value.get("apiKey"))
-                    .and_then(Value::as_str)
-                    .and_then(pi_env_name)
-                    .map(str::to_owned);
-                if model.is_none() {
-                    model = entry
-                        .and_then(|value| value.get("models"))
-                        .and_then(Value::as_array)
-                        .and_then(|list| list.first())
-                        .and_then(|value| value.get("id"))
-                        .and_then(Value::as_str)
-                        .map(str::to_owned);
-                }
-            }
-        }
-        CliId::OpenCode => {
-            if let Some(full) = string_at(&settings, &["model"]) {
-                if let Some((id, name)) = full.split_once('/') {
-                    provider = Some(id.into());
-                    model = Some(name.into());
-                }
-            }
-            if provider.is_none() {
-                provider = settings
-                    .get("provider")
-                    .and_then(Value::as_object)
-                    .and_then(|items| items.keys().next())
-                    .cloned();
-            }
-            if let Some(id) = &provider {
-                let entry = settings.get("provider").and_then(|value| value.get(id));
-                base = entry
-                    .and_then(|value| value.get("options"))
-                    .and_then(|value| value.get("baseURL"))
-                    .and_then(Value::as_str)
-                    .map(str::to_owned);
-                wire = entry
-                    .and_then(|value| value.get("npm"))
-                    .and_then(Value::as_str)
-                    .and_then(api_format);
-                env = entry
-                    .and_then(|value| value.get("options"))
-                    .and_then(|value| value.get("apiKey"))
-                    .and_then(Value::as_str)
-                    .and_then(|value| value.strip_prefix("{env:"))
-                    .and_then(|value| value.strip_suffix('}'))
-                    .map(str::to_owned);
-                if model.is_none() {
-                    model = entry
-                        .and_then(|value| value.get("models"))
-                        .and_then(Value::as_object)
-                        .and_then(|items| items.keys().next())
-                        .cloned();
-                }
-            }
-        }
-    }
+    let fields = adapter.inspect_values(&settings, &local_settings, &models);
+    let provider = fields.provider;
+    let model = fields.model;
+    let base = fields.base;
+    let wire = fields.wire;
+    let env = fields.env;
+    let reasoning_effort = fields.reasoning_effort;
     let connection = match (&provider, &model, &base, wire) {
         (Some(provider_id), Some(model), Some(base_url), Some(interface_format))
             if !provider_id.is_empty() && !model.is_empty() && !base_url.is_empty() =>

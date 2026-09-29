@@ -1,4 +1,5 @@
 pub mod adapter;
+pub mod adapters;
 pub mod apply;
 pub mod auth;
 pub mod format;

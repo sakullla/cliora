@@ -1,6 +1,23 @@
 import type { CliId } from './domain';
 
 export type Scope = 'global' | 'project';
+export type AdapterFacet = { state: 'available' | 'planned' | 'supported' | 'unsupported'; reason: string };
+export type AdapterDescriptor = {
+  id: string;
+  name: string;
+  interfaceFormats: InterfaceFormat[];
+  nativeConfig: AdapterFacet;
+  launch: AdapterFacet;
+  resume: AdapterFacet;
+  resources: AdapterFacet;
+  history: AdapterFacet;
+};
+export type AdapterCatalog = {
+  registered: AdapterDescriptor[];
+  managedIds: string[];
+  preservedUnknown: { id: string; profileCount: number; readOnly: true; reason: string }[];
+};
+export type PreservedProfile = { id: string; toolId: string; version: number; data: unknown };
 export type InterfaceFormat = 'openai_completions' | 'openai_responses' | 'anthropic_messages';
 
 export type Installation = { path: string; version: string | null; source: string; status: 'available' | 'probe_failed'; detail: string | null };
@@ -9,12 +26,20 @@ export type Capability = { state: 'supported' | 'unknown' | 'unsupported'; reaso
 export type ToolProbe = { tool: CliId; installations: Installation[]; selectedPath: string | null; nativeFiles: NativeFile[]; nativeWrites: Capability; interfaceFormats: InterfaceFormat[]; installUrl: string; upgradeHint: string; dependencies: { name: string; status: 'found' | 'missing' | 'outdated'; detail: string; helpUrl: string }[]; installCommand: string | null; upgradeCommand: string | null; providerPresets: { id: string; label: string; baseUrl: string; interfaceFormat: InterfaceFormat; sourceUrl: string }[] };
 export type Connection = { providerId: string; interfaceFormat: InterfaceFormat | string; baseUrl: string; model: string; secretRef: string | null; authEnvVar: string | null };
 export type NativeProfile = { id: string; tool: CliId; name: string; version: number; inheritCommon: boolean; files: Record<string, string>; suppressed: Record<string, string[]>; connection: Connection | null; nativeCredentials: Record<string, Record<string, string>> };
+export type RegisteredProfile = Omit<NativeProfile, 'tool'> & { tool: string };
 export type CommonConfig = { tool: CliId; version: number; files: Record<string, string> };
+export type RegisteredCommon = Omit<CommonConfig, 'tool'> & { tool: string };
 export type CommonSaveResult = { common: CommonConfig; applications: { scopeKey: string; status: string; detail: string | null }[] };
-export type AppliedBinding = { scopeKey: string; tool: CliId; profileId: string; profileVersion: number; managed: Record<string, Record<string, unknown>> };
+export type RegisteredCommonSaveResult = Omit<CommonSaveResult, 'common'> & { common: RegisteredCommon };
+export type AppliedBinding = { scopeKey: string; tool: string; profileId: string; profileVersion: number; managed: Record<string, Record<string, unknown>> };
 export type NativeSnapshot = { role: string; text: string | null; fingerprint: string | null; error: string | null };
 export type NativePreview = { documents: Record<string, unknown>; sources: Record<string, Record<string, string>> };
 export type ToolWorkspace = { probe: ToolProbe; customPath: string | null; profiles: NativeProfile[]; common: CommonConfig | null; binding: AppliedBinding | null; snapshots: NativeSnapshot[]; recoveryNeeded: string[] };
+export type RegisteredToolWorkspace = Omit<ToolWorkspace, 'probe' | 'profiles' | 'common'> & {
+  probe: Omit<ToolProbe, 'tool'> & { tool: string };
+  profiles: RegisteredProfile[];
+  common: RegisteredCommon | null;
+};
 export type ApplyOutcome = { transactionId: string; changedFiles: string[]; status: 'written_for_next_session' | 'already_matching' };
 export type ModelDirectory = { models: string[]; status: 'ready' | 'empty' | 'stale' | 'error'; fetchedAt: number | null; error: string | null; source: string };
 export type CheckStep = { state: 'passed' | 'partial' | 'failed' | 'skipped'; message: string };

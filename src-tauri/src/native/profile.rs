@@ -23,21 +23,7 @@ pub struct Connection {
 /// Environment name used by the launcher's child process and by profiles
 /// that explicitly use a native environment reference.
 pub fn auth_env_name(tool: CliId, connection: &Connection) -> Option<String> {
-    if let Some(name) = &connection.auth_env_var {
-        return Some(name.clone());
-    }
-    connection.secret_ref.as_ref()?;
-    if tool == CliId::ClaudeCode {
-        return Some("ANTHROPIC_API_KEY".into());
-    }
-    let tool_name = tool_key(tool).to_ascii_uppercase().replace('-', "_");
-    let provider = connection
-        .provider_id
-        .to_ascii_uppercase()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect::<String>();
-    Some(format!("CLIORA_{tool_name}_{provider}_API_KEY"))
+    super::adapters::known(tool).auth_env_name(connection)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -58,12 +44,92 @@ pub struct NativeProfile {
     pub native_credentials: BTreeMap<String, BTreeMap<String, String>>,
 }
 
+/// Open-ID storage shape. Legacy `NativeProfile` remains the five-tool IPC
+/// facade while every registered adapter uses this same persistence shape.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegisteredProfile {
+    pub id: String,
+    pub tool: String,
+    pub name: String,
+    pub version: u64,
+    pub inherit_common: bool,
+    pub files: BTreeMap<String, String>,
+    #[serde(default)]
+    pub suppressed: BTreeMap<String, Vec<String>>,
+    pub connection: Option<Connection>,
+    #[serde(default)]
+    pub native_credentials: BTreeMap<String, BTreeMap<String, String>>,
+}
+
+impl From<NativeProfile> for RegisteredProfile {
+    fn from(profile: NativeProfile) -> Self {
+        Self {
+            id: profile.id,
+            tool: profile.tool.stable_id().into(),
+            name: profile.name,
+            version: profile.version,
+            inherit_common: profile.inherit_common,
+            files: profile.files,
+            suppressed: profile.suppressed,
+            connection: profile.connection,
+            native_credentials: profile.native_credentials,
+        }
+    }
+}
+
+impl TryFrom<RegisteredProfile> for NativeProfile {
+    type Error = String;
+    fn try_from(profile: RegisteredProfile) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: profile.id,
+            tool: CliId::from_stable_id(&profile.tool).ok_or("未注册 CLI 的配置只能只读保留")?,
+            name: profile.name,
+            version: profile.version,
+            inherit_common: profile.inherit_common,
+            files: profile.files,
+            suppressed: profile.suppressed,
+            connection: profile.connection,
+            native_credentials: profile.native_credentials,
+        })
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommonConfig {
     pub tool: CliId,
     pub version: u64,
     pub files: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegisteredCommon {
+    pub tool: String,
+    pub version: u64,
+    pub files: BTreeMap<String, String>,
+}
+
+impl From<CommonConfig> for RegisteredCommon {
+    fn from(common: CommonConfig) -> Self {
+        Self {
+            tool: common.tool.stable_id().into(),
+            version: common.version,
+            files: common.files,
+        }
+    }
+}
+
+impl TryFrom<RegisteredCommon> for CommonConfig {
+    type Error = String;
+    fn try_from(common: RegisteredCommon) -> Result<Self, Self::Error> {
+        Ok(Self {
+            tool: CliId::from_stable_id(&common.tool).ok_or("未注册 CLI 的通用配置只能只读保留")?,
+            version: common.version,
+            files: common.files,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -74,89 +140,39 @@ pub struct EffectiveFile {
     pub source_by_path: BTreeMap<String, String>,
 }
 
-fn tool_key(tool: CliId) -> String {
-    serde_json::to_value(tool)
-        .unwrap()
-        .as_str()
-        .unwrap()
-        .to_string()
-}
-
 pub fn file_kind(tool: CliId, role: &str) -> Result<FileKind, String> {
-    match (tool, role) {
-        (CliId::Codex | CliId::Grok, "settings") => Ok(FileKind::Toml),
-        (CliId::ClaudeCode | CliId::Pi, "settings") => Ok(FileKind::Json),
-        (CliId::ClaudeCode, "local_settings") => Ok(FileKind::Json),
-        (CliId::Pi, "models") => Ok(FileKind::Jsonc),
-        (CliId::OpenCode, "settings") => Ok(FileKind::Jsonc),
-        _ => Err("该工具的原生文件角色不受支持或包含受保护的凭据".into()),
-    }
+    super::adapters::known(tool).file_kind(role)
 }
 
-pub(crate) fn validate_files(tool: CliId, files: &BTreeMap<String, String>) -> Result<(), String> {
+pub fn validate_registered_files(
+    registry: &super::adapters::Registry,
+    id: &str,
+    files: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    let adapter = registry
+        .get(id)
+        .ok_or("未注册的 CLI 适配器，不能保存配置")?;
     for (role, text) in files {
         if text.len() > 2_000_000 {
             return Err("单个配置文件超过 2 MB 限制".into());
         }
-        let parsed = format::parse(file_kind(tool, role)?, text)?;
+        let parsed = format::parse(adapter.file_kind(role)?, text)?;
         if parsed.to_string().len() > 2_000_000 {
             return Err("单个配置文件解析后超过 2 MB 限制".into());
         }
         reject_plaintext_secrets(&parsed)?;
-        if tool == CliId::Pi && role == "models" {
-            if let Some(providers) = parsed
-                .get("providers")
-                .and_then(serde_json::Value::as_object)
-            {
-                for (name, provider) in providers {
-                    if let Some(key) = provider.get("apiKey").and_then(serde_json::Value::as_str) {
-                        let valid = key
-                            .strip_prefix('$')
-                            .and_then(|tail| {
-                                tail.strip_prefix('{')
-                                    .and_then(|value| value.strip_suffix('}'))
-                                    .or(Some(tail))
-                            })
-                            .is_some_and(valid_env_name);
-                        if !valid {
-                            return Err(format!("Pi 供应商 {name} 的 apiKey 须使用 $NAME 或 ${{NAME}} 环境变量引用；请通过安全接入迁移字面密钥"));
-                        }
-                    }
-                }
-            }
-        }
-        if tool == CliId::OpenCode && role == "settings" {
-            if let Some(providers) = parsed
-                .get("provider")
-                .and_then(serde_json::Value::as_object)
-            {
-                for (name, provider) in providers {
-                    if let Some(key) = provider
-                        .get("options")
-                        .and_then(|value| value.get("apiKey"))
-                        .and_then(serde_json::Value::as_str)
-                    {
-                        if !key
-                            .strip_prefix("{env:")
-                            .and_then(|tail| tail.strip_suffix('}'))
-                            .is_some_and(valid_env_name)
-                        {
-                            return Err(format!("OpenCode 供应商 {name} 的 apiKey 须使用 {{env:NAME}}；请通过安全接入迁移字面密钥"));
-                        }
-                    }
-                }
-            }
-        }
-        if tool == CliId::ClaudeCode && matches!(role.as_str(), "settings" | "local_settings") {
-            if let Some(env) = parsed.get("env").and_then(serde_json::Value::as_object) {
-                if env.contains_key("ANTHROPIC_API_KEY") || env.contains_key("ANTHROPIC_AUTH_TOKEN")
-                {
-                    return Err("Claude Code 原生配置中的认证字段不能存入草稿；请通过安全接入迁入系统凭据库".into());
-                }
-            }
-        }
+        adapter.validate_draft(role, &parsed)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn validate_files(tool: CliId, files: &BTreeMap<String, String>) -> Result<(), String> {
+    validate_registered_files(
+        &super::adapters::Registry::builtins(),
+        tool.stable_id(),
+        files,
+    )
 }
 
 pub(crate) fn valid_env_name(name: &str) -> bool {
@@ -232,7 +248,26 @@ pub fn resolve_file(
     common: Option<&CommonConfig>,
     role: &str,
 ) -> Result<EffectiveFile, String> {
-    let kind = file_kind(profile.tool, role)?;
+    let registered = RegisteredProfile::from(profile.clone());
+    let common = common.cloned().map(RegisteredCommon::from);
+    resolve_registered_file(
+        &super::adapters::Registry::builtins(),
+        &registered,
+        common.as_ref(),
+        role,
+    )
+}
+
+pub fn resolve_registered_file(
+    registry: &super::adapters::Registry,
+    profile: &RegisteredProfile,
+    common: Option<&RegisteredCommon>,
+    role: &str,
+) -> Result<EffectiveFile, String> {
+    let kind = registry
+        .get(&profile.tool)
+        .ok_or("未注册的 CLI 适配器，不能解析配置")?
+        .file_kind(role)?;
     let own = format::parse(
         kind,
         profile.files.get(role).map(String::as_str).unwrap_or(""),
@@ -265,12 +300,22 @@ pub fn resolve_file(
 }
 
 pub fn list_profiles(db: &Database, tool: CliId) -> Result<Vec<NativeProfile>, String> {
+    list_registered_profiles(db, tool.stable_id())?
+        .into_iter()
+        .map(NativeProfile::try_from)
+        .collect()
+}
+
+pub fn list_registered_profiles(
+    db: &Database,
+    tool: &str,
+) -> Result<Vec<RegisteredProfile>, String> {
     db.with_connection(|conn| {
         let mut statement = conn
             .prepare("SELECT data FROM native_profiles WHERE tool = ?1 ORDER BY id")
             .map_err(|e| e.to_string())?;
         let rows = statement
-            .query_map([tool_key(tool)], |row| row.get::<_, String>(0))
+            .query_map([tool], |row| row.get::<_, String>(0))
             .map_err(|e| e.to_string())?;
         rows.map(|row| {
             serde_json::from_str(&row.map_err(|e| e.to_string())?)
@@ -281,6 +326,10 @@ pub fn list_profiles(db: &Database, tool: CliId) -> Result<Vec<NativeProfile>, S
 }
 
 pub fn get_profile(db: &Database, id: &str) -> Result<NativeProfile, String> {
+    NativeProfile::try_from(get_registered_profile(db, id)?)
+}
+
+pub fn get_registered_profile(db: &Database, id: &str) -> Result<RegisteredProfile, String> {
     db.with_connection(|conn| {
         let json: Option<String> = conn
             .query_row(
@@ -356,16 +405,22 @@ pub(crate) fn validate_connection(connection: &Connection) -> Result<(), String>
 }
 
 pub(crate) fn validate_native_credentials(profile: &NativeProfile) -> Result<(), String> {
+    validate_registered_native_credentials(
+        &super::adapters::Registry::builtins(),
+        &RegisteredProfile::from(profile.clone()),
+    )
+}
+
+pub fn validate_registered_native_credentials(
+    registry: &super::adapters::Registry,
+    profile: &RegisteredProfile,
+) -> Result<(), String> {
+    let adapter = registry
+        .get(&profile.tool)
+        .ok_or("未注册的 CLI 适配器，不能使用原生凭据")?;
     for (role, credentials) in &profile.native_credentials {
-        if profile.tool != CliId::ClaudeCode
-            || !matches!(role.as_str(), "settings" | "local_settings")
-        {
-            return Err("原生凭据角色不受支持".into());
-        }
         for (name, id) in credentials {
-            if !matches!(name.as_str(), "ANTHROPIC_API_KEY" | "ANTHROPIC_AUTH_TOKEN")
-                || !valid_connection_secret_ref(id)
-            {
+            if !adapter.accepts_native_credential(role, name) || !valid_connection_secret_ref(id) {
                 return Err("原生凭据标识无效，请重新安全接入".into());
             }
         }
@@ -375,17 +430,34 @@ pub(crate) fn validate_native_credentials(profile: &NativeProfile) -> Result<(),
 
 pub fn save_profile(
     db: &Database,
-    mut profile: NativeProfile,
+    profile: NativeProfile,
     expected_version: Option<u64>,
 ) -> Result<NativeProfile, String> {
+    NativeProfile::try_from(save_registered_profile(
+        db,
+        &super::adapters::Registry::builtins(),
+        profile.into(),
+        expected_version,
+    )?)
+}
+
+pub fn save_registered_profile(
+    db: &Database,
+    registry: &super::adapters::Registry,
+    mut profile: RegisteredProfile,
+    expected_version: Option<u64>,
+) -> Result<RegisteredProfile, String> {
+    registry
+        .get(&profile.tool)
+        .ok_or("未注册的 CLI 适配器，不能保存配置")?;
     if profile.name.trim().is_empty() {
         return Err("请输入配置名称".into());
     }
     if profile.name.chars().count() > 100 {
         return Err("配置名称不能超过 100 个字符".into());
     }
-    validate_files(profile.tool, &profile.files)?;
-    validate_native_credentials(&profile)?;
+    validate_registered_files(registry, &profile.tool, &profile.files)?;
+    validate_registered_native_credentials(registry, &profile)?;
     if let Some(connection) = &profile.connection {
         validate_connection(connection)?;
     }
@@ -398,12 +470,12 @@ pub fn save_profile(
         } else {
             let old: Option<(String, i64)> = tx.query_row("SELECT tool, version FROM native_profiles WHERE id = ?1", [&profile.id], |row| Ok((row.get(0)?, row.get(1)?))).optional().map_err(|e| e.to_string())?;
             let (old_tool, current) = old.ok_or("命名配置不存在")?;
-            if old_tool != tool_key(profile.tool) { return Err("不能修改配置所属工具".into()); }
+            if old_tool != profile.tool { return Err("不能修改配置所属工具".into()); }
             if Some(current as u64) != expected_version { return Err("命名配置已由其他操作修改，请重新读取".into()); }
             profile.version = current as u64 + 1;
         }
         let json = serde_json::to_string(&profile).map_err(|e| e.to_string())?;
-        tx.execute("INSERT INTO native_profiles (id, tool, version, data) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(id) DO UPDATE SET version = excluded.version, data = excluded.data", params![profile.id, tool_key(profile.tool), profile.version as i64, json]).map_err(|e| e.to_string())?;
+        tx.execute("INSERT INTO native_profiles (id, tool, version, data) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(id) DO UPDATE SET version = excluded.version, data = excluded.data", params![profile.id, profile.tool, profile.version as i64, json]).map_err(|e| e.to_string())?;
         tx.commit().map_err(|e| e.to_string())?;
         Ok(profile)
     })
@@ -441,11 +513,20 @@ pub fn delete_profile(db: &Database, id: &str, expected_version: u64) -> Result<
 }
 
 pub fn get_common(db: &Database, tool: CliId) -> Result<Option<CommonConfig>, String> {
+    get_registered_common(db, tool.stable_id())?
+        .map(CommonConfig::try_from)
+        .transpose()
+}
+
+pub fn get_registered_common(
+    db: &Database,
+    tool: &str,
+) -> Result<Option<RegisteredCommon>, String> {
     db.with_connection(|conn| {
         let json: Option<String> = conn
             .query_row(
                 "SELECT data FROM common_configs WHERE tool = ?1",
-                [tool_key(tool)],
+                [tool],
                 |row| row.get(0),
             )
             .optional()
@@ -459,17 +540,31 @@ pub fn get_common(db: &Database, tool: CliId) -> Result<Option<CommonConfig>, St
 
 pub fn save_common(
     db: &Database,
-    mut common: CommonConfig,
+    common: CommonConfig,
     expected_version: Option<u64>,
 ) -> Result<CommonConfig, String> {
-    validate_files(common.tool, &common.files)?;
+    CommonConfig::try_from(save_registered_common(
+        db,
+        &super::adapters::Registry::builtins(),
+        common.into(),
+        expected_version,
+    )?)
+}
+
+pub fn save_registered_common(
+    db: &Database,
+    registry: &super::adapters::Registry,
+    mut common: RegisteredCommon,
+    expected_version: Option<u64>,
+) -> Result<RegisteredCommon, String> {
+    validate_registered_files(registry, &common.tool, &common.files)?;
     db.with_connection(|conn| {
         let tx = conn.transaction().map_err(|e| e.to_string())?;
-        let old: Option<i64> = tx.query_row("SELECT version FROM common_configs WHERE tool = ?1", [tool_key(common.tool)], |row| row.get(0)).optional().map_err(|e| e.to_string())?;
+        let old: Option<i64> = tx.query_row("SELECT version FROM common_configs WHERE tool = ?1", [&common.tool], |row| row.get(0)).optional().map_err(|e| e.to_string())?;
         if old.map(|version| version as u64) != expected_version { return Err("通用配置已由其他操作修改，请重新读取".into()); }
         common.version = old.map_or(1, |version| version as u64 + 1);
         let json = serde_json::to_string(&common).map_err(|e| e.to_string())?;
-        tx.execute("INSERT INTO common_configs (tool, version, data) VALUES (?1, ?2, ?3) ON CONFLICT(tool) DO UPDATE SET version = excluded.version, data = excluded.data", params![tool_key(common.tool), common.version as i64, json]).map_err(|e| e.to_string())?;
+        tx.execute("INSERT INTO common_configs (tool, version, data) VALUES (?1, ?2, ?3) ON CONFLICT(tool) DO UPDATE SET version = excluded.version, data = excluded.data", params![common.tool, common.version as i64, json]).map_err(|e| e.to_string())?;
         tx.commit().map_err(|e| e.to_string())?;
         Ok(common)
     })

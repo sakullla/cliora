@@ -1,6 +1,6 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import type { ApiError, Bootstrap, CliId, Theme } from '../types/domain';
-import type { ApplyOutcome, CommonConfig, CommonSaveResult, Connection, ConnectionCheck, ModelDirectory, NativeImport, NativeInspection, NativePreview, NativeProfile, Scope, ToolWorkspace } from '../types/native';
+import type { AdapterCatalog, ApplyOutcome, CommonConfig, CommonSaveResult, Connection, ConnectionCheck, ModelDirectory, NativeImport, NativeInspection, NativePreview, NativeProfile, PreservedProfile, RegisteredCommon, RegisteredCommonSaveResult, RegisteredProfile, RegisteredToolWorkspace, Scope, ToolWorkspace } from '../types/native';
 
 export const nativeAvailable = isTauri();
 
@@ -31,6 +31,19 @@ async function command<T>(name: string, args?: Record<string, unknown>): Promise
 /** Feature modules add named wrappers here; components never invoke arbitrary commands. */
 export const native = {
   getBootstrap: () => command<Bootstrap>('get_bootstrap'),
+  listCliAdapters: () => command<AdapterCatalog>('list_cli_adapters'),
+  setRegisteredManagedTools: (managedIds: string[]) => command<AdapterCatalog>('set_registered_managed_tools', { managedIds }),
+  getRegisteredToolWorkspace: (toolId: string, scope: Scope, projectPath?: string) => command<RegisteredToolWorkspace>('get_registered_tool_workspace', { toolId, scope, projectPath: projectPath || null }),
+  setRegisteredCustomCliPath: (toolId: string, path: string | null) => command<void>('set_registered_custom_cli_path', { toolId, path }),
+  saveRegisteredNativeProfile: (profile: RegisteredProfile, expectedVersion: number | null) => command<RegisteredProfile>('save_registered_native_profile', { profile, expectedVersion }),
+  saveRegisteredCommonConfig: (common: RegisteredCommon, expectedVersion: number | null) => command<RegisteredCommonSaveResult>('save_registered_common_config', { common, expectedVersion }),
+  applyRegisteredNativeProfile: (toolId: string, profileId: string, scope: Scope, projectPath: string | undefined, allowTakeover: boolean) => command<ApplyOutcome>('apply_registered_native_profile', { toolId, profileId, scope, projectPath: projectPath || null, allowTakeover }),
+  inspectRegisteredNativeDraft: (toolId: string, files: Record<string, string>) => command<NativeInspection>('inspect_registered_native_draft', { toolId, files }),
+  prepareRegisteredNativeImport: (toolId: string, files: Record<string, string>) => command<NativeImport>('prepare_registered_native_import', { toolId, files }),
+  prepareRegisteredNativeImportFromDisk: (toolId: string, scope: Scope, projectPath: string, roles: string[], files: Record<string, string>) => command<NativeImport>('prepare_registered_native_import_from_disk', { toolId, scope, projectPath: projectPath || null, roles, files }),
+  readRegisteredNativeFileForEdit: (toolId: string, scope: Scope, projectPath: string, role: string) => command<string>('read_registered_native_file_for_edit', { toolId, scope, projectPath: projectPath || null, role }),
+  previewRegisteredNativeProfile: (profile: RegisteredProfile, scope: Scope) => command<NativePreview>('preview_registered_native_profile', { profile, scope }),
+  listPreservedProfiles: (toolId: string) => command<PreservedProfile[]>('list_preserved_profiles', { toolId }),
   setManagedTools: (managedTools: CliId[]) => command<Bootstrap>('set_managed_tools', { managedTools }),
   setTheme: (theme: Theme) => command<Bootstrap>('set_theme', { theme }),
   getToolWorkspace: (tool: CliId, scope: Scope, projectPath?: string) => command<ToolWorkspace>('get_tool_workspace', { tool, scope, projectPath: projectPath || null }),
@@ -43,6 +56,7 @@ export const native = {
   setConnectionSecret: (secret: string) => command<string>('set_connection_secret', { secret }),
   listProviderModels: (connection: Connection, force: boolean, query = '') => command<ModelDirectory>('list_provider_models', { connection, force, query }),
   testProviderConnection: (tool: CliId, connection: Connection, allowModelRequest: boolean) => command<ConnectionCheck>('test_provider_connection', { tool, connection, allowModelRequest }),
+  testRegisteredProviderConnection: (toolId: string, connection: Connection, allowModelRequest: boolean) => command<ConnectionCheck>('test_registered_provider_connection', { toolId, connection, allowModelRequest }),
   inspectNativeDraft: (tool: CliId, files: Record<string, string>) => command<NativeInspection>('inspect_native_draft', { tool, files }),
   prepareNativeImport: (tool: CliId, files: Record<string, string>) => command<NativeImport>('prepare_native_import', { tool, files }),
   prepareNativeImportFromDisk: (tool: CliId, scope: Scope, projectPath: string, roles: string[], files: Record<string, string>) => command<NativeImport>('prepare_native_import_from_disk', { tool, scope, projectPath: projectPath || null, roles, files }),
