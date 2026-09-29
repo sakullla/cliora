@@ -57,6 +57,29 @@ pub struct SkillTargetResult {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct NativeSkillEntry {
+    pub name: String,
+    pub path: String,
+    pub digest: Option<String>,
+    pub state: &'static str,
+    pub detail: String,
+    pub package_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillTargetPreview {
+    pub path: String,
+    pub status: &'static str,
+    pub detail: String,
+    pub preview_token: Option<String>,
+    pub existing_digest: Option<String>,
+    pub package_digest: String,
+    pub changes: Vec<SkillFileChange>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SkillImportPreview {
     pub name: String,
     pub source: String,
@@ -89,6 +112,52 @@ struct Candidate {
     digest: String,
 }
 
+fn compare_files(
+    old_files: &BTreeMap<String, String>,
+    new_files: &BTreeMap<String, String>,
+) -> Result<Vec<SkillFileChange>, String> {
+    old_files
+        .keys()
+        .chain(new_files.keys())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .filter(|name| old_files.get(*name) != new_files.get(*name))
+        .map(|path| {
+            let decode = |encoded: Option<&String>| {
+                encoded
+                    .map(|value| STANDARD.decode(value).map_err(|_| "Skills 包文件损坏"))
+                    .transpose()
+            };
+            let before = decode(old_files.get(path))?;
+            let after = decode(new_files.get(path))?;
+            let summary =
+                |value: Option<&Vec<u8>>| -> (Option<String>, Option<usize>, Option<String>) {
+                    let size = value.map(Vec::len);
+                    let hash = value.map(|bytes| format!("{:x}", Sha256::digest(bytes)));
+                    let text = value.and_then(|bytes| {
+                        if bytes.len() <= 256 * 1024 && !bytes.contains(&0) {
+                            std::str::from_utf8(bytes).ok().map(str::to_owned)
+                        } else {
+                            None
+                        }
+                    });
+                    (text, size, hash)
+                };
+            let (before, before_size, before_digest) = summary(before.as_ref());
+            let (after, after_size, after_digest) = summary(after.as_ref());
+            Ok(SkillFileChange {
+                path: path.clone(),
+                before,
+                after,
+                before_size,
+                after_size,
+                before_digest,
+                after_digest,
+            })
+        })
+        .collect()
+}
+
 fn preview_candidate(db: &Database, candidate: &Candidate) -> Result<SkillImportPreview, String> {
     let existing: Option<(String, String)> = db.with_connection(|conn| {
         conn.query_row(
@@ -104,52 +173,8 @@ fn preview_candidate(db: &Database, candidate: &Candidate) -> Result<SkillImport
         .map(|(_, text)| serde_json::from_str(text).map_err(|_| "已有 Skills 包内容损坏"))
         .transpose()?
         .unwrap_or_default();
-    let changed_files: Vec<String> = old_files
-        .keys()
-        .chain(candidate.files.keys())
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .filter(|name| old_files.get(*name) != candidate.files.get(*name))
-        .cloned()
-        .collect();
-    let changes = changed_files
-        .iter()
-        .map(|path| {
-            let before = old_files
-                .get(path)
-                .map(|value| STANDARD.decode(value).map_err(|_| "已有 Skills 包文件损坏"))
-                .transpose()?;
-            let after = candidate
-                .files
-                .get(path)
-                .map(|value| STANDARD.decode(value).map_err(|_| "新 Skills 包文件损坏"))
-                .transpose()?;
-            let summary =
-                |value: Option<&Vec<u8>>| -> (Option<String>, Option<usize>, Option<String>) {
-                    let size = value.map(Vec::len);
-                    let hash = value.map(|bytes| format!("{:x}", Sha256::digest(bytes)));
-                    let text = value.and_then(|bytes| {
-                        if bytes.len() <= 256 * 1024 && !bytes.contains(&0) {
-                            std::str::from_utf8(bytes).ok().map(str::to_owned)
-                        } else {
-                            None
-                        }
-                    });
-                    (text, size, hash)
-                };
-            let (before_text, before_size, before_digest) = summary(before.as_ref());
-            let (after_text, after_size, after_digest) = summary(after.as_ref());
-            Ok::<_, String>(SkillFileChange {
-                path: path.clone(),
-                before: before_text,
-                after: after_text,
-                before_size,
-                after_size,
-                before_digest,
-                after_digest,
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let changes = compare_files(&old_files, &candidate.files)?;
+    let changed_files = changes.iter().map(|change| change.path.clone()).collect();
     Ok(SkillImportPreview {
         name: candidate.name.clone(),
         source: candidate.source.clone(),
@@ -212,6 +237,157 @@ fn manifest_info(
 fn lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
+}
+
+#[derive(Debug)]
+struct SkillOperation {
+    id: String,
+    package_id: String,
+    tool: String,
+    scope_key: String,
+    target: PathBuf,
+    stage: PathBuf,
+    backup: PathBuf,
+    old_digest: Option<String>,
+    old_managed_digest: Option<String>,
+    new_digest: Option<String>,
+    removing: bool,
+    status: String,
+}
+
+fn save_operation(db: &Database, operation: &SkillOperation) -> Result<(), String> {
+    db.with_connection(|conn| conn.execute("INSERT INTO skill_operations (id, package_id, tool, scope_key, target_path, stage_path, backup_path, old_digest, old_managed_digest, new_digest, removing, status) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        params![operation.id, operation.package_id, operation.tool, operation.scope_key, operation.target.display().to_string(), operation.stage.display().to_string(), operation.backup.display().to_string(), operation.old_digest, operation.old_managed_digest, operation.new_digest, operation.removing as i64, operation.status])
+        .map(|_| ()).map_err(|error| error.to_string()))
+}
+
+fn clear_operation(db: &Database, id: &str) -> Result<(), String> {
+    db.with_connection(|conn| {
+        conn.execute("DELETE FROM skill_operations WHERE id = ?1", [id])
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    })
+}
+
+fn mark_rollback(db: &Database, op: &SkillOperation) -> Result<(), String> {
+    db.with_connection(|conn| {
+        let tx = conn.transaction().map_err(|error| error.to_string())?;
+        if let Some(digest) = op.old_managed_digest.as_deref() {
+            tx.execute("INSERT INTO skill_installations (package_id, tool, scope_key, target_path, digest) VALUES (?1, ?2, ?3, ?4, ?5)
+                ON CONFLICT(package_id, tool, scope_key) DO UPDATE SET target_path = excluded.target_path, digest = excluded.digest",
+                params![op.package_id, op.tool, op.scope_key, op.target.display().to_string(), digest])
+                .map_err(|error| error.to_string())?;
+        } else {
+            tx.execute("DELETE FROM skill_installations WHERE package_id = ?1 AND tool = ?2 AND scope_key = ?3",
+                params![op.package_id, op.tool, op.scope_key]).map_err(|error| error.to_string())?;
+        }
+        tx.execute("UPDATE skill_operations SET status = 'rollback' WHERE id = ?1", [&op.id])
+            .map_err(|error| error.to_string())?;
+        tx.commit().map_err(|error| error.to_string())
+    })
+}
+
+fn restore_rollback(op: &SkillOperation) -> Result<(), String> {
+    let actual = on_disk(&op.target)?;
+    if op.backup.exists() {
+        let name = op
+            .target
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or("Skills 目录名无效")?;
+        if actual.is_some() || on_disk_as(&op.backup, name)? != op.old_digest {
+            return Err("Skills 备份或目标已变化，保留现场以便恢复".into());
+        }
+        fs::rename(&op.backup, &op.target).map_err(|error| error.to_string())?;
+    } else if actual != op.old_digest {
+        return Err("Skills 旧目录缺失，保留恢复记录".into());
+    }
+    Ok(())
+}
+
+fn recover_locked(db: &Database) -> Result<(), String> {
+    let operations = db.with_connection(|conn| {
+        let mut statement = conn.prepare("SELECT id, package_id, tool, scope_key, target_path, stage_path, backup_path, old_digest, old_managed_digest, new_digest, removing, status FROM skill_operations ORDER BY rowid").map_err(|error| error.to_string())?;
+        let rows = statement.query_map([], |row| Ok(SkillOperation {
+            id: row.get(0)?, package_id: row.get(1)?, tool: row.get(2)?, scope_key: row.get(3)?, target: PathBuf::from(row.get::<_, String>(4)?), stage: PathBuf::from(row.get::<_, String>(5)?), backup: PathBuf::from(row.get::<_, String>(6)?), old_digest: row.get(7)?, old_managed_digest: row.get(8)?, new_digest: row.get(9)?, removing: row.get::<_, i64>(10)? != 0, status: row.get(11)?, }))
+            .map_err(|error| error.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?;
+        Ok(rows)
+    })?;
+    for op in operations {
+        let parent = op.target.parent().ok_or("Skills 恢复路径无效")?;
+        if op.stage.parent() != Some(parent)
+            || op.backup.parent() != Some(parent)
+            || op.stage.file_name().and_then(|v| v.to_str())
+                != Some(format!(".cliora-stage-{}", op.id).as_str())
+            || op.backup.file_name().and_then(|v| v.to_str())
+                != Some(format!(".cliora-backup-{}", op.id).as_str())
+        {
+            return Err("Skills 恢复记录路径不匹配；请检查应用数据".into());
+        }
+        if op.status == "committed" {
+            let actual = on_disk(&op.target)?;
+            if actual == op.new_digest {
+                if op.backup.exists() {
+                    fs::remove_dir_all(&op.backup).map_err(|error| error.to_string())?;
+                }
+            } else if actual.is_none()
+                && !op.removing
+                && (op.backup.exists() || op.old_digest.is_none())
+            {
+                mark_rollback(db, &op)?;
+                restore_rollback(&op)?;
+            } else {
+                return Err(format!(
+                    "Skills {} 在安装后再次变化，保留备份以便检查",
+                    op.target.display()
+                ));
+            }
+        } else if op.status == "rollback" {
+            restore_rollback(&op)?;
+        } else if op.status == "prepared" {
+            if op.backup.exists() {
+                let name = op
+                    .target
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .ok_or("Skills 目录名无效")?;
+                if on_disk_as(&op.backup, name)? != op.old_digest {
+                    return Err("Skills 备份在恢复前被修改，已保留现场".into());
+                }
+                let actual = on_disk(&op.target)?;
+                if actual.is_some() {
+                    if actual != op.new_digest {
+                        return Err("Skills 目录在中断后被外部修改，已保留现场".into());
+                    }
+                    fs::remove_dir_all(&op.target).map_err(|error| error.to_string())?;
+                }
+                fs::rename(&op.backup, &op.target).map_err(|error| error.to_string())?;
+            } else {
+                let actual = on_disk(&op.target)?;
+                if op.old_digest.is_some() && actual != op.old_digest {
+                    return Err("Skills 原目录已变化，无法自动恢复".into());
+                }
+                if op.old_digest.is_none() && actual.is_some() {
+                    if actual != op.new_digest {
+                        return Err("Skills 新目录在中断后被外部修改，已保留现场".into());
+                    }
+                    fs::remove_dir_all(&op.target).map_err(|error| error.to_string())?;
+                }
+            }
+        } else {
+            return Err("Skills 恢复记录状态无效".into());
+        }
+        if op.stage.exists() {
+            fs::remove_dir_all(&op.stage).map_err(|error| error.to_string())?;
+        }
+        clear_operation(db, &op.id)?;
+    }
+    Ok(())
+}
+
+pub fn recover(db: &Database) -> Result<(), String> {
+    let _guard = lock().lock().map_err(|_| "Skills 恢复服务暂时不可用")?;
+    recover_locked(db)
 }
 
 fn timestamp() -> u64 {
@@ -572,6 +748,7 @@ fn zip_candidate(
     })
 }
 pub fn list(db: &Database) -> Result<Vec<SkillPackage>, String> {
+    recover(db)?;
     db.with_connection(|conn| {
         let mut statement = conn.prepare("SELECT id, name, description, source, digest, files_json, updated_at FROM skill_packages ORDER BY name COLLATE NOCASE")
             .map_err(|error| error.to_string())?;
@@ -626,10 +803,159 @@ fn target(
     Ok((root.join(name), key))
 }
 fn on_disk(path: &Path) -> Result<Option<String>, String> {
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or("Skills 目录名无效")?;
+    on_disk_as(path, name)
+}
+fn on_disk_as(path: &Path, name: &str) -> Result<Option<String>, String> {
     if !path.exists() {
         return Ok(None);
     }
-    Ok(Some(snapshot(path)?.4))
+    if !path.is_dir() || path.is_symlink() {
+        return Err("Skills 目录不是普通目录".into());
+    }
+    let mut files = BTreeMap::new();
+    collect(path, path, &mut files, &mut 0)?;
+    manifest_info(&files, name)?;
+    Ok(Some(digest(&files)?))
+}
+
+fn target_token(
+    package: &SkillPackage,
+    tool: &str,
+    scope_key: &str,
+    path: &Path,
+    actual: Option<&str>,
+    managed: Option<&str>,
+) -> Result<String, String> {
+    let bound = serde_json::to_vec(&(
+        package.id.as_str(),
+        package.digest.as_str(),
+        tool,
+        scope_key,
+        path.to_string_lossy(),
+        actual,
+        managed,
+    ))
+    .map_err(|error| error.to_string())?;
+    Ok(format!("{:x}", Sha256::digest(bound)))
+}
+
+pub fn scan_native(
+    db: &Database,
+    registry: &Registry,
+    home: &Path,
+    tool: &str,
+    scope: Scope,
+    project_path: Option<&str>,
+) -> Result<Vec<NativeSkillEntry>, String> {
+    recover(db)?;
+    let (placeholder, scope_key) = target(registry, home, tool, scope, project_path, "scan")?;
+    let root = placeholder.parent().ok_or("Skills 原生目录无效")?;
+    if !root.exists() {
+        return Ok(Vec::new());
+    }
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(root).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') || !entry.path().is_dir() {
+            continue;
+        }
+        if entries.len() >= 128 {
+            return Err("原生 Skills 目录超过 128 个，请缩小管理范围".into());
+        }
+        let path = entry.path();
+        let inspected = snapshot(&path);
+        let (checksum, detail) = match inspected {
+            Ok((_, description, _, _, checksum)) => (Some(checksum), description),
+            Err(error) => (None, error),
+        };
+        let package_id: Option<String> = db.with_connection(|conn| {
+            conn.query_row(
+                "SELECT id FROM skill_packages WHERE name = ?1",
+                [&name],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())
+        })?;
+        let managed: Option<String> = if let Some(id) = package_id.as_deref() {
+            db.with_connection(|conn| conn.query_row("SELECT digest FROM skill_installations WHERE package_id = ?1 AND tool = ?2 AND scope_key = ?3 AND target_path = ?4", params![id, tool, scope_key, path.display().to_string()], |row| row.get(0)).optional().map_err(|error| error.to_string()))?
+        } else {
+            None
+        };
+        let state = if checksum.is_none() {
+            "unreadable"
+        } else if managed.as_deref() == checksum.as_deref() {
+            "managed"
+        } else {
+            "external"
+        };
+        entries.push(NativeSkillEntry {
+            name,
+            path: path.display().to_string(),
+            digest: checksum,
+            state,
+            detail,
+            package_id,
+        });
+    }
+    entries.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(entries)
+}
+
+pub fn preview_target(
+    db: &Database,
+    registry: &Registry,
+    home: &Path,
+    package_id: &str,
+    tool: &str,
+    scope: Scope,
+    project_path: Option<&str>,
+) -> Result<SkillTargetPreview, String> {
+    recover(db)?;
+    let (package, files) = package(db, package_id)?;
+    let (path, scope_key) = target(registry, home, tool, scope, project_path, &package.name)?;
+    let old_files = if path.exists() {
+        snapshot(&path)?.3
+    } else {
+        BTreeMap::new()
+    };
+    let existing_digest = if old_files.is_empty() {
+        None
+    } else {
+        Some(digest(&old_files)?)
+    };
+    let managed: Option<String> = db.with_connection(|conn| conn.query_row("SELECT digest FROM skill_installations WHERE package_id = ?1 AND tool = ?2 AND scope_key = ?3 AND target_path = ?4", params![package_id, tool, scope_key, path.display().to_string()], |row| row.get(0)).optional().map_err(|error| error.to_string()))?;
+    let conflict = existing_digest.is_some() && managed.as_deref() != existing_digest.as_deref();
+    let status = if conflict { "conflict" } else { "ready" };
+    let detail = if conflict {
+        "同名原生 Skills 未受当前包管理，或安装后被外部修改；请比较后确认接管"
+    } else if existing_digest.is_some() {
+        "将更新当前原生 Skills"
+    } else {
+        "将安装到 CLI 原生目录"
+    };
+    let token = target_token(
+        &package,
+        tool,
+        &scope_key,
+        &path,
+        existing_digest.as_deref(),
+        managed.as_deref(),
+    )?;
+    Ok(SkillTargetPreview {
+        path: path.display().to_string(),
+        status,
+        detail: detail.into(),
+        preview_token: Some(token),
+        existing_digest,
+        package_digest: package.digest,
+        changes: compare_files(&old_files, &files)?,
+    })
 }
 pub fn installations(
     db: &Database,
@@ -637,6 +963,7 @@ pub fn installations(
     home: &Path,
     package_id: &str,
 ) -> Result<Vec<SkillInstallation>, String> {
+    recover(db)?;
     let (package, _) = package(db, package_id)?;
     db.with_connection(|conn| {
         let mut statement = conn.prepare("SELECT tool, scope_key, target_path, digest FROM skill_installations WHERE package_id = ?1 ORDER BY tool, scope_key")
@@ -663,6 +990,29 @@ pub fn install(
     scope: Scope,
     project_path: Option<&str>,
 ) -> SkillTargetResult {
+    install_confirmed(
+        db,
+        registry,
+        home,
+        package_id,
+        tool_id,
+        scope,
+        project_path,
+        None,
+        false,
+    )
+}
+pub fn install_confirmed(
+    db: &Database,
+    registry: &Registry,
+    home: &Path,
+    package_id: &str,
+    tool_id: &str,
+    scope: Scope,
+    project_path: Option<&str>,
+    preview_token: Option<&str>,
+    allow_takeover: bool,
+) -> SkillTargetResult {
     operate(
         db,
         registry,
@@ -672,6 +1022,8 @@ pub fn install(
         scope,
         project_path,
         false,
+        preview_token,
+        allow_takeover,
     )
 }
 pub fn remove(
@@ -692,6 +1044,8 @@ pub fn remove(
         scope,
         project_path,
         true,
+        None,
+        false,
     )
 }
 fn operate(
@@ -703,6 +1057,8 @@ fn operate(
     scope: Scope,
     project_path: Option<&str>,
     removing: bool,
+    preview_token: Option<&str>,
+    allow_takeover: bool,
 ) -> SkillTargetResult {
     let mut result = SkillTargetResult {
         tool_id: tool_id.into(),
@@ -714,6 +1070,7 @@ fn operate(
     };
     let attempt = (|| {
         let _guard = lock().lock().map_err(|_| "Skills 写入服务暂时不可用")?;
+        recover_locked(db)?;
         let (package, files) = package(db, package_id)?;
         let (path, key) = target(registry, home, tool_id, scope, project_path, &package.name)?;
         result.path = Some(path.display().to_string());
@@ -722,13 +1079,31 @@ fn operate(
             params![package_id, tool_id, key], |row| Ok((row.get(0)?, row.get(1)?)))
             .optional().map_err(|error| error.to_string()))?;
         let actual = on_disk(&path)?;
+        let expected_token = target_token(
+            &package,
+            tool_id,
+            &key,
+            &path,
+            actual.as_deref(),
+            managed.as_ref().map(|(_, digest)| digest.as_str()),
+        )?;
+        if preview_token.is_some_and(|token| token != expected_token) {
+            return Err("Skills 包、目标或原生目录在预览后变化；请重新预览".into());
+        }
         match (&managed, &actual) {
-            (None, Some(_)) => return Err("目标已有同名 Skills；未覆盖非本应用安装的目录".into()),
+            (None, Some(_))
+                if !allow_takeover || preview_token != Some(expected_token.as_str()) =>
+            {
+                return Err("目标已有同名 Skills；请预览差异并确认接管".into())
+            }
             (Some((old, _)), _) if old != &path.display().to_string() => {
                 return Err("已管理的 Skills 路径已变化，请检查旧目录".into())
             }
-            (Some((_, old)), Some(actual)) if old != actual => {
-                return Err("Skills 目录已被外部修改；未覆盖".into())
+            (Some((_, old)), Some(actual))
+                if old != actual
+                    && (!allow_takeover || preview_token != Some(expected_token.as_str())) =>
+            {
+                return Err("Skills 目录已被外部修改；请预览差异并确认接管".into())
             }
             (Some(_), None) if removing => return Err("Skills 目录已在外部移除".into()),
             _ => {}
@@ -736,7 +1111,12 @@ fn operate(
         if removing && managed.is_none() {
             return Err("此目标没有由 Cliora 安装的 Skills".into());
         }
-        if !removing && actual.as_ref() == Some(&package.digest) {
+        if !removing
+            && managed
+                .as_ref()
+                .is_some_and(|(_, digest)| digest == &package.digest)
+            && actual.as_ref() == Some(&package.digest)
+        {
             return Ok("already_current");
         }
         let parent = path.parent().ok_or("Skills 目标目录无效")?;
@@ -744,8 +1124,34 @@ fn operate(
         let token = Uuid::new_v4();
         let stage = parent.join(format!(".cliora-stage-{token}"));
         let backup = parent.join(format!(".cliora-backup-{token}"));
+        let had_old = actual.is_some();
+        let operation = SkillOperation {
+            id: token.to_string(),
+            package_id: package_id.into(),
+            tool: tool_id.into(),
+            scope_key: key.clone(),
+            target: path.clone(),
+            stage: stage.clone(),
+            backup: backup.clone(),
+            old_digest: actual.clone(),
+            old_managed_digest: managed.as_ref().map(|(_, digest)| digest.clone()),
+            new_digest: if removing {
+                None
+            } else {
+                Some(package.digest.clone())
+            },
+            removing,
+            status: "prepared".into(),
+        };
+        save_operation(db, &operation)?;
         if !removing {
-            fs::create_dir(&stage).map_err(|error| error.to_string())?;
+            if let Err(error) = fs::create_dir(&stage) {
+                let recovery = recover_locked(db);
+                return Err(format!(
+                    "无法准备 Skills：{error}；{}",
+                    recovery.map_or_else(|error| error, |_| "已清理临时目录".into())
+                ));
+            }
             let staged = (|| {
                 for (relative, encoded) in &files {
                     if Path::new(relative)
@@ -766,46 +1172,43 @@ fn operate(
                 Ok::<(), String>(())
             })();
             if let Err(error) = staged {
-                let _ = fs::remove_dir_all(&stage);
-                return Err(error);
+                let recovery = recover_locked(db);
+                return Err(format!(
+                    "{error}；{}",
+                    recovery.map_or_else(|error| error, |_| "已清理临时目录".into())
+                ));
             }
         }
-        let had_old = actual.is_some();
         if had_old {
             if let Err(error) = fs::rename(&path, &backup) {
-                let _ = fs::remove_dir_all(&stage);
+                let _ = recover_locked(db);
                 return Err(format!("无法备份现有 Skills：{error}"));
             }
         }
         if !removing {
             if let Err(error) = fs::rename(&stage, &path) {
-                if had_old {
-                    let _ = fs::rename(&backup, &path);
-                }
-                let _ = fs::remove_dir_all(&stage);
+                let _ = recover_locked(db);
                 return Err(format!("无法安装 Skills：{error}"));
             }
         }
         let saved = db.with_connection(|conn| {
-            if removing { conn.execute("DELETE FROM skill_installations WHERE package_id = ?1 AND tool = ?2 AND scope_key = ?3", params![package_id, tool_id, key]) }
-            else { conn.execute("INSERT INTO skill_installations (package_id, tool, scope_key, target_path, digest) VALUES (?1, ?2, ?3, ?4, ?5)
+            let tx = conn.transaction().map_err(|error| error.to_string())?;
+            if removing { tx.execute("DELETE FROM skill_installations WHERE package_id = ?1 AND tool = ?2 AND scope_key = ?3", params![package_id, tool_id, key]) }
+            else { tx.execute("INSERT INTO skill_installations (package_id, tool, scope_key, target_path, digest) VALUES (?1, ?2, ?3, ?4, ?5)
                 ON CONFLICT(package_id, tool, scope_key) DO UPDATE SET target_path = excluded.target_path, digest = excluded.digest",
                 params![package_id, tool_id, key, path.display().to_string(), package.digest]) }
                 .map_err(|error| error.to_string())?;
-            Ok(())
+            tx.execute("UPDATE skill_operations SET status = 'committed' WHERE id = ?1", [&operation.id]).map_err(|error| error.to_string())?;
+            tx.commit().map_err(|error| error.to_string())
         });
         if let Err(error) = saved {
-            if !removing {
-                let _ = fs::remove_dir_all(&path);
-            }
-            if had_old {
-                let _ = fs::rename(&backup, &path);
-            }
-            return Err(format!("Skills 记录失败，尝试恢复原目录：{error}"));
+            let recovery = recover_locked(db);
+            return Err(format!(
+                "Skills 记录失败：{error}；恢复结果：{}",
+                recovery.map_or_else(|error| error, |_| "已恢复旧目录".into())
+            ));
         }
-        if had_old {
-            let _ = fs::remove_dir_all(backup);
-        }
+        recover_locked(db)?;
         Ok(if removing { "removed" } else { "installed" })
     })();
     match attempt {

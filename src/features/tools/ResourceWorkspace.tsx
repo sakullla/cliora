@@ -2,7 +2,7 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { native } from '../../lib/native';
 import type { AdapterDescriptor, Scope } from '../../types/native';
-import type { McpDefinition, McpDraft, McpTargetRequest, McpTargetResult, NativeMcpEntry, SkillImportPreview, SkillInstallation, SkillPackage, SkillTargetResult } from '../../types/resources';
+import type { McpDefinition, McpDraft, McpTargetRequest, McpTargetResult, NativeMcpEntry, NativeSkillEntry, SkillImportPreview, SkillInstallation, SkillPackage, SkillTargetPreview, SkillTargetResult } from '../../types/resources';
 import styles from './ResourceWorkspace.module.css';
 
 function errorText(error: unknown) {
@@ -46,6 +46,8 @@ export function McpWorkspace({ toolId, scope, projectPath, tools, onDirtyChange 
   useLayoutEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
   useEffect(() => () => { onDirtyChange?.(false); }, [onDirtyChange]);
   const target = useMemo<McpTargetRequest>(() => ({ toolId, scope, projectPath: project, enabled }), [toolId, scope, project, enabled]);
+  useEffect(() => { setPreview(null); }, [toolId, scope, project, enabled]);
+  useEffect(() => { setPreview(null); }, [draft, envText, headerText]);
 
   useEffect(() => {
     void native.listMcpDefinitions().then(setDefinitions).catch((value) => setError(errorText(value)));
@@ -90,6 +92,7 @@ export function McpWorkspace({ toolId, scope, projectPath, tools, onDirtyChange 
   }
   async function inspect(ids = selected) {
     if (!draft.id) { setError('请先保存 MCP 定义。'); return; }
+    if (dirty) { setError('请先保存 MCP 草稿，再预览分发目标。'); return; }
     if (scope === 'project' && !project) { setError('请先在工具页打开项目目录。'); return; }
     setBusy(true); setPreview(null); setResults(null); setError('');
     try { setPreview(await native.previewMcpTargets(draft.id, requests(ids))); }
@@ -97,7 +100,7 @@ export function McpWorkspace({ toolId, scope, projectPath, tools, onDirtyChange 
     finally { setBusy(false); }
   }
   async function distribute() {
-    if (!draft.id || !preview) return;
+    if (!draft.id || !preview || dirty) return;
     const active = preview.filter((item) => item.status === 'ready' || item.status === 'conflict');
     if (!active.length) return;
     const collisions = active.filter((item) => item.status === 'conflict');
@@ -107,7 +110,7 @@ export function McpWorkspace({ toolId, scope, projectPath, tools, onDirtyChange 
     setBusy(true); setError('');
     try {
       const targets = active.map((item): McpTargetRequest => ({ toolId: item.toolId, scope: item.scope,
-        projectPath: item.projectPath, enabled, baselineHash: item.baselineHash, allowReplace: item.status === 'conflict' }));
+        projectPath: item.projectPath, enabled, baselineHash: item.baselineHash, previewToken: item.previewToken, allowReplace: item.status === 'conflict' }));
       setResults(await native.distributeMcp(draft.id, targets));
       setPreview(null);
       const current = await native.listNativeMcp(target).catch(() => []);
@@ -147,7 +150,7 @@ export function McpWorkspace({ toolId, scope, projectPath, tools, onDirtyChange 
         <div className={styles.targetGrid}>{tools.map((item) => <label key={item.id}><input type="checkbox" checked={selected.includes(item.id)} onChange={(event) => { setSelected(event.target.checked ? [...selected, item.id] : selected.filter((id) => id !== item.id)); setPreview(null); }} />{item.name}</label>)}</div>
         <label className={styles.inline}><input type="checkbox" checked={enabled} onChange={(event) => { setEnabled(event.target.checked); setPreview(null); }} />启用 MCP</label>
         <button type="button" disabled={busy || !selected.length} onClick={() => void inspect()}>预览目标</button>
-        {preview && <div className={styles.resultList}>{preview.map((item) => <p key={item.toolId}><strong>{tools.find((tool) => tool.id === item.toolId)?.name ?? item.toolId}</strong> · {item.status === 'conflict' ? '同名冲突' : item.status === 'ready' ? '可写入' : '不可写入'} · {item.path ?? ''} <small>{item.detail}</small></p>)}<button type="button" className={styles.primary} disabled={busy || !preview.some((item) => item.status === 'ready' || item.status === 'conflict')} onClick={() => void distribute()}>确认分发</button></div>}
+        {preview && <div className={styles.resultList}>{preview.map((item) => <div key={item.toolId}><p><strong>{tools.find((tool) => tool.id === item.toolId)?.name ?? item.toolId}</strong> · {item.status === 'conflict' ? '同名冲突' : item.status === 'ready' ? '可写入' : '不可写入'} · {item.path ?? ''} <small>{item.detail}</small></p>{(item.existing !== null || item.proposed !== null) && <details className={styles.fileChange} open={item.status === 'conflict'}><summary>查看当前与写入后的原生条目</summary><div className={styles.fileDiff}><div><strong>当前原生条目</strong><pre>{item.existing === null ? '无' : JSON.stringify(item.existing, null, 2)}</pre></div><div><strong>写入后</strong><pre>{item.proposed === null ? '移除' : JSON.stringify(item.proposed, null, 2)}</pre></div></div></details>}</div>)}<button type="button" className={styles.primary} disabled={busy || !preview.some((item) => item.status === 'ready' || item.status === 'conflict')} onClick={() => void distribute()}>确认分发</button></div>}
         {results && <div className={styles.resultList} role="status">{results.map((item) => <p key={item.toolId}>{item.toolId}：{item.status === 'written' ? '已写入' : item.detail}</p>)}{results.some((item) => item.status === 'failed') && <button type="button" onClick={() => void retryFailed()}>重新预览失败目标</button>}</div>}
       </div>}
       {error && <p className={styles.error} role="alert">{error}</p>}
@@ -158,12 +161,14 @@ export function McpWorkspace({ toolId, scope, projectPath, tools, onDirtyChange 
 
 export function SkillsWorkspace({ toolId, scope, projectPath, onDirtyChange }: { toolId: string; scope: Scope; projectPath: string; onDirtyChange?: (dirty: boolean) => void }) {
   const [packages, setPackages] = useState<SkillPackage[]>([]);
+  const [nativeEntries, setNativeEntries] = useState<NativeSkillEntry[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [installations, setInstallations] = useState<SkillInstallation[]>([]);
   const [url, setUrl] = useState('');
   const [subdirectory, setSubdirectory] = useState('');
   const [pendingImport, setPendingImport] = useState<{ preview: SkillImportPreview; kind: 'local' | 'zip'; source: string; subdirectory: string | null } | null>(null);
   const [dependencyChecked, setDependencyChecked] = useState(false);
+  const [pendingTarget, setPendingTarget] = useState<SkillTargetPreview | null>(null);
   useLayoutEffect(() => { onDirtyChange?.(!!url.trim() || !!subdirectory.trim() || !!pendingImport); }, [url, subdirectory, pendingImport, onDirtyChange]);
   useEffect(() => () => { onDirtyChange?.(false); }, [onDirtyChange]);
   const [busy, setBusy] = useState(false);
@@ -171,6 +176,14 @@ export function SkillsWorkspace({ toolId, scope, projectPath, onDirtyChange }: {
   const [result, setResult] = useState<SkillTargetResult | null>(null);
   const selected = packages.find((item) => item.id === selectedId);
   const project = scope === 'project' ? projectPath || null : null;
+  useEffect(() => { setPendingTarget(null); }, [toolId, scope, project, selectedId]);
+  useEffect(() => {
+    if (!toolId || (scope === 'project' && !project)) { setNativeEntries([]); return; }
+    let live = true;
+    void native.scanNativeSkills(toolId, scope, project).then((entries) => { if (live) setNativeEntries(entries); })
+      .catch((value) => { if (live) setError(errorText(value)); });
+    return () => { live = false; };
+  }, [toolId, scope, project]);
   const installed = installations.find((item) => item.toolId === toolId && item.scope === scope && item.projectPath === project);
   useEffect(() => { void native.listSkillPackages().then((items) => { setPackages(items); setSelectedId((old) => old ?? items[0]?.id ?? null); }).catch((value) => setError(errorText(value))); }, []);
   useEffect(() => {
@@ -223,15 +236,33 @@ export function SkillsWorkspace({ toolId, scope, projectPath, onDirtyChange }: {
     } catch (value) { setError(errorText(value)); }
     finally { setBusy(false); }
   }
+  async function openNative(entry: NativeSkillEntry) {
+    if (entry.state === 'unreadable') { setError(entry.detail); return; }
+    if (entry.packageId) { setSelectedId(entry.packageId); return; }
+    setBusy(true); setError('');
+    try {
+      const preview = await native.previewSkillLocal(entry.path);
+      if (preview.existingDigest && preview.existingDigest !== preview.digest) {
+        setPendingImport({ preview, kind: 'local', source: entry.path, subdirectory: null }); return;
+      }
+      const item = await native.importSkillLocal(entry.path, preview.digest, preview.existingDigest);
+      setPackages(await native.listSkillPackages()); setSelectedId(item.id); setResult(null);
+    } catch (value) { setError(errorText(value)); }
+    finally { setBusy(false); }
+  }
   async function change(remove: boolean) {
     if (!selected) return;
     if (scope === 'project' && !project) { setError('请先在工具页打开项目目录。'); return; }
     if (!remove && selected.compatibility && !dependencyChecked) { setError('请先检查并确认 Skills 的环境依赖要求。'); return; }
     setBusy(true); setError(''); setResult(null);
     try {
-      const outcome = remove ? await native.removeSkill(selected.id, toolId, scope, project) : await native.installSkill(selected.id, toolId, scope, project);
+      if (!remove && !pendingTarget) { setPendingTarget(await native.previewSkillTarget(selected.id, toolId, scope, project)); return; }
+      const outcome = remove ? await native.removeSkill(selected.id, toolId, scope, project)
+        : await native.installSkill(selected.id, toolId, scope, project, pendingTarget?.previewToken ?? null, pendingTarget?.status === 'conflict');
       setResult(outcome);
+      setPendingTarget(null);
       setInstallations(await native.listSkillInstallations(selected.id));
+      setNativeEntries(await native.scanNativeSkills(toolId, scope, project));
     } catch (value) { setError(errorText(value)); }
     finally { setBusy(false); }
   }
@@ -240,6 +271,9 @@ export function SkillsWorkspace({ toolId, scope, projectPath, onDirtyChange }: {
       <div className={styles.listHead}><strong>Skills 包</strong><button type="button" disabled={busy} onClick={() => void local()}>＋ 本地导入</button></div>
       {packages.map((item) => <button type="button" key={item.id} className={selectedId === item.id ? styles.active : ''} onClick={() => { setSelectedId(item.id); setDependencyChecked(false); setResult(null); }}><strong>{item.name}</strong><small>{item.fileCount} 个文件 · {item.description || '完整资源包'}</small></button>)}
       {!packages.length && <p>选择包含 SKILL.md 的目录，或导入 HTTPS ZIP。</p>}
+      <div className={styles.listHead}><strong>当前 CLI 原生 Skills</strong></div>
+      {nativeEntries.map((entry) => <button type="button" key={entry.path} onClick={() => void openNative(entry)}><strong>{entry.name}</strong><small>{entry.state === 'managed' ? '已管理' : entry.state === 'external' ? '原生目录 · 点击查看或导入' : '暂不可读取'} · {entry.detail}</small></button>)}
+      {!nativeEntries.length && <p>当前范围尚无原生 Skills。</p>}
     </aside>
     <div className={styles.panel}>
       <div className={styles.heading}><div><small>原生 Skills</small><h2>{selected?.name ?? '导入 Skills'}</h2></div><span>{scope === 'global' ? '全局' : '项目'}</span></div>
@@ -247,6 +281,10 @@ export function SkillsWorkspace({ toolId, scope, projectPath, onDirtyChange }: {
         {selected.compatibility && <label className={styles.inline}><input type="checkbox" checked={dependencyChecked} onChange={(event) => setDependencyChecked(event.target.checked)} />已检查所需环境：{selected.compatibility}</label>}
         <p className={styles.muted}>当前 {toolId}：{installed?.state === 'current' ? '已安装' : installed?.state === 'update_available' ? '有更新' : installed?.state === 'conflict' ? '原生目录有外部修改' : installed?.state === 'missing' ? '原生目录缺失' : '未安装'}</p>
         <div className={styles.actions}><button type="button" className={styles.primary} disabled={busy || (scope === 'project' && !project)} onClick={() => void change(false)}>{installed?.state === 'update_available' ? '更新到当前 CLI' : '安装到当前 CLI'}</button>{installed && <button type="button" disabled={busy} onClick={() => void change(true)}>移除安装</button>}</div>
+        {pendingTarget && <div className={styles.resultList} role="group" aria-label="Skills 目标预览"><strong>{pendingTarget.status === 'conflict' ? '原生 Skills 内容不同，请确认接管' : '确认安装内容'}</strong><p>{pendingTarget.detail} · {pendingTarget.path}</p>
+          {pendingTarget.changes.map((change) => <details key={change.path} className={styles.fileChange}><summary>{change.path}</summary><div className={styles.fileDiff}><div><strong>当前</strong>{change.before !== null ? <pre>{change.before}</pre> : <small>{change.beforeSize === null ? '不存在' : `${change.beforeSize} 字节 · SHA-256 ${change.beforeDigest}`}</small>}</div><div><strong>安装后</strong>{change.after !== null ? <pre>{change.after}</pre> : <small>{change.afterSize === null ? '删除' : `${change.afterSize} 字节 · SHA-256 ${change.afterDigest}`}</small>}</div></div></details>)}
+          <div className={styles.actions}><button type="button" onClick={() => setPendingTarget(null)}>取消</button><button type="button" className={styles.primary} disabled={busy} onClick={() => void change(false)}>{pendingTarget.status === 'conflict' ? '确认接管并替换' : '确认安装'}</button></div>
+        </div>}
         {!!installations.length && <div className={styles.resultList}><strong>安装位置</strong>{installations.map((item) => <p key={`${item.toolId}:${item.targetPath}`}>{item.toolId} · {item.scope === 'global' ? '全局' : '项目'} · {item.state} <small>{item.targetPath}</small></p>)}</div>}
       </>}
       <div className={styles.distribution}><strong>从 HTTPS ZIP 导入完整资源包</strong><p className={styles.muted}>归档中只有一个 SKILL.md 时自动定位。多包归档填写 Skill 子目录。</p>

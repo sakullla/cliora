@@ -49,7 +49,27 @@ fn target(tool: &str, enabled: bool) -> McpTargetRequest {
         enabled,
         baseline_hash: None,
         allow_replace: false,
+        preview_token: None,
     }
+}
+
+fn previewed(
+    db: &Database,
+    registry: &Registry,
+    home: &Path,
+    id: &str,
+    targets: Vec<McpTargetRequest>,
+) -> Vec<McpTargetRequest> {
+    let preview = preview_targets(db, registry, home, id, targets.clone());
+    targets
+        .into_iter()
+        .zip(preview)
+        .map(|(mut request, inspected)| {
+            request.baseline_hash = inspected.baseline_hash;
+            request.preview_token = inspected.preview_token;
+            request
+        })
+        .collect()
 }
 
 #[test]
@@ -100,6 +120,7 @@ fn per_cli_mcp_writes_preserve_other_fields_and_claude_disable_removes_native_en
     assert_eq!(preview[0].status, "conflict");
     let mut codex_target = target("codex", true);
     codex_target.baseline_hash = preview[0].baseline_hash.clone();
+    codex_target.preview_token = preview[0].preview_token.clone();
     codex_target.allow_replace = true;
     let result = distribute(
         &db,
@@ -109,9 +130,30 @@ fn per_cli_mcp_writes_preserve_other_fields_and_claude_disable_removes_native_en
         &definition.id,
         vec![
             codex_target,
-            target("claude_code", true),
-            target("open_code", true),
-            target("grok", true),
+            previewed(
+                &db,
+                &registry,
+                temp.path(),
+                &definition.id,
+                vec![target("claude_code", true)],
+            )[0]
+            .clone(),
+            previewed(
+                &db,
+                &registry,
+                temp.path(),
+                &definition.id,
+                vec![target("open_code", true)],
+            )[0]
+            .clone(),
+            previewed(
+                &db,
+                &registry,
+                temp.path(),
+                &definition.id,
+                vec![target("grok", true)],
+            )[0]
+            .clone(),
         ],
     );
     assert!(
@@ -145,7 +187,13 @@ fn per_cli_mcp_writes_preserve_other_fields_and_claude_disable_removes_native_en
         &registry,
         temp.path(),
         &definition.id,
-        vec![target("codex", false), target("claude_code", false)],
+        previewed(
+            &db,
+            &registry,
+            temp.path(),
+            &definition.id,
+            vec![target("codex", false), target("claude_code", false)],
+        ),
     );
     assert!(
         disabled.iter().all(|item| item.status == "written"),
@@ -166,7 +214,13 @@ fn per_cli_mcp_writes_preserve_other_fields_and_claude_disable_removes_native_en
             &registry,
             temp.path(),
             &definition.id,
-            vec![target("claude_code", true)]
+            previewed(
+                &db,
+                &registry,
+                temp.path(),
+                &definition.id,
+                vec![target("claude_code", true)]
+            )
         )[0]
         .status,
         "written"
@@ -207,7 +261,13 @@ fn bearer_environment_reference_is_visible_but_literal_token_is_rejected() {
             &registry,
             temp.path(),
             &saved.id,
-            vec![target("grok", true)]
+            previewed(
+                &db,
+                &registry,
+                temp.path(),
+                &saved.id,
+                vec![target("grok", true)]
+            )
         )[0]
         .status,
         "written"
@@ -262,6 +322,7 @@ fn external_same_name_and_later_modification_require_fresh_explicit_replace() {
     let mut confirmed = target("codex", true);
     confirmed.allow_replace = true;
     confirmed.baseline_hash = preview[0].baseline_hash.clone();
+    confirmed.preview_token = preview[0].preview_token.clone();
     std::fs::write(&path, "[mcp_servers.example]\ncommand = 'new-outside'\n").unwrap();
     let stale = distribute(
         &db,
@@ -275,15 +336,15 @@ fn external_same_name_and_later_modification_require_fresh_explicit_replace() {
     assert!(std::fs::read_to_string(&path)
         .unwrap()
         .contains("new-outside"));
-    confirmed.baseline_hash = preview_targets(
+    let fresh = preview_targets(
         &db,
         &registry,
         temp.path(),
         &definition.id,
         vec![target("codex", true)],
-    )[0]
-    .baseline_hash
-    .clone();
+    );
+    confirmed.baseline_hash = fresh[0].baseline_hash.clone();
+    confirmed.preview_token = fresh[0].preview_token.clone();
     assert_eq!(
         distribute(
             &db,
@@ -309,6 +370,101 @@ fn external_same_name_and_later_modification_require_fresh_explicit_replace() {
         .status,
         "failed"
     );
+}
+
+#[test]
+fn preview_is_bound_to_definition_version_scope_and_target_content() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let registry = Registry::builtins();
+    let keys = MemoryStore::default();
+    let definition = sample(&db);
+    let project = temp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let mut request = previewed(
+        &db,
+        &registry,
+        temp.path(),
+        &definition.id,
+        vec![target("codex", true)],
+    )[0]
+    .clone();
+    request.scope = Scope::Project;
+    request.project_path = Some(project.display().to_string());
+    assert_eq!(
+        distribute(
+            &db,
+            &keys,
+            &registry,
+            temp.path(),
+            &definition.id,
+            vec![request]
+        )[0]
+        .status,
+        "failed"
+    );
+    let request = previewed(
+        &db,
+        &registry,
+        temp.path(),
+        &definition.id,
+        vec![target("codex", true)],
+    );
+    save_definition(
+        &db,
+        McpDraft {
+            id: Some(definition.id.clone()),
+            expected_version: Some(definition.version),
+            name: definition.name.clone(),
+            transport: definition.transport,
+            command: "different-command".into(),
+            args: definition.args.clone(),
+            url: definition.url.clone(),
+            env: definition.env.clone(),
+            headers: definition.headers.clone(),
+        },
+    )
+    .unwrap();
+    let rejected = distribute(&db, &keys, &registry, temp.path(), &definition.id, request);
+    assert_eq!(rejected[0].status, "failed");
+    assert!(rejected[0].detail.contains("预览"));
+    assert!(!temp.path().join(".codex/config.toml").exists());
+    let fresh = previewed(
+        &db,
+        &registry,
+        temp.path(),
+        &definition.id,
+        vec![target("codex", true)],
+    );
+    assert_eq!(
+        distribute(&db, &keys, &registry, temp.path(), &definition.id, fresh)[0].status,
+        "written"
+    );
+}
+
+#[test]
+fn preview_compares_native_entries_without_exposing_literal_credentials() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let registry = Registry::builtins();
+    let definition = sample(&db);
+    let path = temp.path().join(".codex/config.toml");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "[mcp_servers.example]\ncommand = 'outside'\n[mcp_servers.example.env]\nAPI_KEY = 'private-token'\n").unwrap();
+    let preview = preview_targets(
+        &db,
+        &registry,
+        temp.path(),
+        &definition.id,
+        vec![target("codex", true)],
+    );
+    assert_eq!(preview[0].status, "conflict");
+    let before = preview[0].existing.as_ref().unwrap();
+    let after = preview[0].proposed.as_ref().unwrap();
+    assert_eq!(before["command"], "outside");
+    assert_eq!(after["command"], "npx");
+    let rendered = serde_json::to_string(&preview[0]).unwrap();
+    assert!(!rendered.contains("private-token"));
 }
 
 #[test]
@@ -350,7 +506,13 @@ fn opencode_v2_probe_writes_nested_servers_and_disabled_flag() {
         &registry,
         temp.path(),
         &definition.id,
-        vec![target("open_code", true)],
+        previewed(
+            &db,
+            &registry,
+            temp.path(),
+            &definition.id,
+            vec![target("open_code", true)],
+        ),
     );
     assert_eq!(first[0].status, "written", "{first:?}");
     let parsed: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
@@ -363,7 +525,13 @@ fn opencode_v2_probe_writes_nested_servers_and_disabled_flag() {
         &registry,
         temp.path(),
         &definition.id,
-        vec![target("open_code", false)],
+        previewed(
+            &db,
+            &registry,
+            temp.path(),
+            &definition.id,
+            vec![target("open_code", false)],
+        ),
     );
     assert_eq!(second[0].status, "written", "{second:?}");
     let parsed: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
@@ -386,7 +554,13 @@ fn one_invalid_target_does_not_prevent_another_and_can_be_retried() {
         &registry,
         temp.path(),
         &definition.id,
-        vec![target("grok", true), target("codex", true)],
+        previewed(
+            &db,
+            &registry,
+            temp.path(),
+            &definition.id,
+            vec![target("grok", true), target("codex", true)],
+        ),
     );
     assert_eq!(result[0].status, "failed");
     assert_eq!(result[1].status, "written");
@@ -398,7 +572,13 @@ fn one_invalid_target_does_not_prevent_another_and_can_be_retried() {
         &registry,
         temp.path(),
         &definition.id,
-        vec![target("grok", true)],
+        previewed(
+            &db,
+            &registry,
+            temp.path(),
+            &definition.id,
+            vec![target("grok", true)],
+        ),
     );
     assert_eq!(retried[0].status, "written");
     assert!(std::fs::read_to_string(&grok_path)

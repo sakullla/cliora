@@ -379,17 +379,40 @@ pub async fn list_skill_installations(
 }
 
 #[tauri::command]
-pub async fn install_skill(
+pub async fn scan_native_skills(
+    app: AppHandle,
+    tool_id: String,
+    scope: Scope,
+    project_path: Option<String>,
+) -> Result<Vec<resources::skills::NativeSkillEntry>, ApiError> {
+    blocking(move || {
+        let home = home()?;
+        let db = app.state::<AppState>().database(&app)?;
+        resources::skills::scan_native(
+            &db,
+            &adapters::Registry::builtins(),
+            &home,
+            &tool_id,
+            scope,
+            project_path.as_deref(),
+        )
+        .map_err(native_error)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn preview_skill_target(
     app: AppHandle,
     package_id: String,
     tool_id: String,
     scope: Scope,
     project_path: Option<String>,
-) -> Result<resources::skills::SkillTargetResult, ApiError> {
+) -> Result<resources::skills::SkillTargetPreview, ApiError> {
     blocking(move || {
         let home = home()?;
         let db = app.state::<AppState>().database(&app)?;
-        Ok(resources::skills::install(
+        resources::skills::preview_target(
             &db,
             &adapters::Registry::builtins(),
             &home,
@@ -397,6 +420,35 @@ pub async fn install_skill(
             &tool_id,
             scope,
             project_path.as_deref(),
+        )
+        .map_err(native_error)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn install_skill(
+    app: AppHandle,
+    package_id: String,
+    tool_id: String,
+    scope: Scope,
+    project_path: Option<String>,
+    preview_token: Option<String>,
+    allow_takeover: bool,
+) -> Result<resources::skills::SkillTargetResult, ApiError> {
+    blocking(move || {
+        let home = home()?;
+        let db = app.state::<AppState>().database(&app)?;
+        Ok(resources::skills::install_confirmed(
+            &db,
+            &adapters::Registry::builtins(),
+            &home,
+            &package_id,
+            &tool_id,
+            scope,
+            project_path.as_deref(),
+            preview_token.as_deref(),
+            allow_takeover,
         ))
     })
     .await
