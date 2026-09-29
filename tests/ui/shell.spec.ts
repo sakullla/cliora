@@ -35,6 +35,9 @@ test('native settings result drives the home list and empty management stays rec
           if (command === 'set_registered_managed_tools') { managed = args.managedIds ?? managed; return catalog(); }
           if (command === 'set_theme') theme = args.theme ?? theme;
           if (command === 'list_cli_adapters') return catalog();
+          if (command === 'list_projects') return [];
+          if (command === 'get_launch_settings') return { selected: 'auto', terminals: [{ id: 'auto', label: '系统默认', available: true }] };
+          if (command === 'get_tray_status') return { available: false, error: null };
           if (command === 'get_registered_tool_workspace') return {
             probe: { selectedPath: null, installations: [], nativeFiles: [], nativeWrites: { state: 'unknown', reason: '尚未安装' } },
             profiles: [], binding: null, snapshots: [], recoveryNeeded: [], common: null, customPath: null,
@@ -45,6 +48,7 @@ test('native settings result drives the home list and empty management stays rec
     });
   });
   await page.goto('/');
+  await expect(page.getByText('正在读取本机设置')).toBeHidden();
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置' }).click();
   for (const name of ['Codex', 'Claude Code', 'Grok', 'Pi', 'OpenCode']) {
     await page.getByRole('checkbox', { name: new RegExp(name) }).uncheck();
@@ -60,6 +64,34 @@ test('native settings result drives the home list and empty management stays rec
   await expect(page.locator('[aria-label="管理中的工具"]')).toContainText('Codex');
 });
 
+test('home resumes with native session ID and explicit normal or YOLO mode', async ({ page }) => {
+  await page.addInitScript(() => {
+    const requests: unknown[] = [];
+    Object.assign(window, {
+      isTauri: true,
+      __launchRequests: requests,
+      __TAURI_INTERNALS__: { invoke: async (command: string, args: { request?: { mode: string } } = {}) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['grok'], theme: 'system' }, tools: [{ id: 'grok', name: 'Grok', installation: 'not_checked', configuration: 'not_checked' }] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'grok', name: 'Grok', interfaceFormats: [], yoloAvailable: true }], managedIds: ['grok'], preservedUnknown: [] };
+        if (command === 'list_projects') return [];
+        if (command === 'get_registered_tool_workspace') return { probe: { selectedPath: null, installations: [], nativeFiles: [], nativeWrites: { state: 'unknown', reason: '' } }, profiles: [], binding: null, snapshots: [], recoveryNeeded: [], common: null, customPath: null };
+        if (command === 'launch_cli') { requests.push(args.request); return { mode: args.request?.mode, status: 'terminal_requested' }; }
+        throw new Error(`Unexpected IPC: ${command}`);
+      } },
+    });
+  });
+  await page.goto('/');
+  await expect(page.getByRole('textbox', { name: '恢复会话 ID' })).toBeVisible();
+  await page.getByRole('textbox', { name: '恢复会话 ID' }).fill('session-中文 1');
+  await page.getByRole('button', { name: '恢复', exact: true }).click();
+  await page.getByRole('button', { name: 'YOLO 恢复' }).click();
+  const requests = await page.evaluate(() => (window as typeof window & { __launchRequests: Array<Record<string, unknown>> }).__launchRequests);
+  expect(requests).toEqual([
+    { toolId: 'grok', projectId: null, sessionId: 'session-中文 1', mode: 'normal' },
+    { toolId: 'grok', projectId: null, sessionId: 'session-中文 1', mode: 'yolo' },
+  ]);
+});
+
 test('home opens Claude Code native JSON editor with full disk text', async ({ page }) => {
   await page.addInitScript(() => {
     const profile = {
@@ -70,6 +102,7 @@ test('home opens Claude Code native JSON editor with full disk text', async ({ p
     Object.assign(window, {
       isTauri: true,
       __TAURI_INTERNALS__: { invoke: async (command: string) => {
+        if (command === 'list_projects') return [];
         if (command === 'get_bootstrap') return {
           preferences: { schema_version: 1, managed_tools: ['claude_code'], theme: 'system' },
           tools: [{ id: 'claude_code', name: 'Claude Code', installation: 'not_checked', configuration: 'not_checked' }],
@@ -109,6 +142,7 @@ test('an existing Claude JSON file opens directly without first creating a named
     Object.assign(window, {
       isTauri: true,
       __TAURI_INTERNALS__: { invoke: async (command: string) => {
+        if (command === 'list_projects') return [];
         if (command === 'get_bootstrap') return {
           preferences: { schema_version: 1, managed_tools: ['claude_code'], theme: 'system' },
           tools: [{ id: 'claude_code', name: 'Claude Code', installation: 'not_checked', configuration: 'not_checked' }],
@@ -150,6 +184,7 @@ test('a newly registered CLI appears without adding tool-specific shell code', a
     Object.assign(window, {
       isTauri: true,
       __TAURI_INTERNALS__: { invoke: async (command: string) => {
+        if (command === 'list_projects') return [];
         if (command === 'get_bootstrap') return {
           preferences: { schema_version: 1, managed_tools: [], theme: 'system' }, tools: [],
         };
@@ -180,6 +215,7 @@ test('storage failure preserves an actionable page and retry loads repaired data
     Object.assign(window, {
       isTauri: true,
       __TAURI_INTERNALS__: { invoke: async (command: string) => {
+        if (command === 'list_projects') return [];
         if (command === 'get_bootstrap') {
           bootstrapAttempts += 1;
           if (bootstrapAttempts <= 2) throw { code: 'storage_unavailable', message: '无法打开本机数据库', action: '先备份原数据库，再检查磁盘和权限；修复后点击重试。', data_directory: 'C:\\Users\\test\\AppData\\Roaming\\Cliora' };

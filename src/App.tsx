@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
+import { listen } from '@tauri-apps/api/event';
 import { ManagedTools } from './features/home/ManagedTools';
+import { ProjectLauncher } from './features/home/ProjectLauncher';
+import { TerminalSettings } from './features/settings/TerminalSettings';
 import { ToolWorkspacePage } from './features/tools/ToolWorkspace';
 import { native, nativeAvailable } from './lib/native';
 import { browserBootstrap } from './types/domain';
@@ -54,6 +57,18 @@ export default function App() {
   useEffect(() => {
     if (!nativeAvailable) return;
     void loadBootstrap();
+  }, []);
+
+  useEffect(() => {
+    if (!nativeAvailable) return;
+    let active = true;
+    let stop: (() => void) | undefined;
+    void listen<string>('cliora:tray-error', (event) => {
+      if (active) setError({ code: 'tray_error', message: event.payload, action: '请检查项目目录、工具配置或外部终端后重试。' });
+    }).then((unlisten) => {
+      if (active) stop = unlisten; else unlisten();
+    }).catch(() => {});
+    return () => { active = false; stop?.(); };
   }, []);
 
   async function loadBootstrap() {
@@ -133,7 +148,7 @@ export default function App() {
         {page === 'home' && <>
           <div className="section-heading"><h2>管理中的工具</h2><button className="text-button" type="button" onClick={() => go('settings')}>调整工具 <span aria-hidden="true">→</span></button></div>
           {visible.length ? nativeAvailable ? <ManagedTools tools={visibleDescriptors} onOpenTool={(id) => { setTool(id); go('connections'); }} /> : <div className="tool-table"><div className="table-head"><span>工具</span><span>当前状态</span><span>操作</span></div>{visible.map((item) => <div className="tool-row" key={item.id}><div className="tool-identity"><span className="tool-icon" aria-hidden="true">{item.name.slice(0, 1)}</span><span><strong>{item.name}</strong><small>浏览器预览</small></span></div><div className="tool-state"><strong>尚未检测</strong><small>请在桌面应用中读取本机配置</small></div><button className="button" type="button" onClick={() => { setTool(item.id); go('connections'); }}>查看工具 <span aria-hidden="true">→</span></button></div>)}</div> : <Empty title="尚未管理工具" detail="可在设置中开启需要管理的 CLI。" action={<button className="button primary" type="button" onClick={() => go('settings')}>前往设置</button>} />}
-          <section className="home-secondary"><div className="section-heading"><h2>最近项目</h2></div><div className="subtle-panel"><strong>还没有本机项目</strong><p>项目映射和外部终端启动接入后，会在这里显示。</p></div></section>
+          {nativeAvailable ? <ProjectLauncher tools={visibleDescriptors} /> : <section className="home-secondary"><div className="section-heading"><h2>最近项目</h2></div><div className="subtle-panel"><strong>桌面应用中管理项目</strong><p>可以关联本机目录，并用选定的 CLI 在外部终端启动。</p></div></section>}
         </>}
         {page === 'connections' && <>
           {selectedTool ? nativeAvailable ? <ToolWorkspacePage managedTools={visibleDescriptors} initialTool={selectedTool} /> : <><div className="tool-tabs" role="tablist" aria-label="工具">{visible.map((item) => <button key={item.id} type="button" role="tab" aria-selected={selectedTool === item.id} className={selectedTool === item.id ? 'active' : ''} onClick={() => setTool(item.id)}>{item.name}</button>)}</div><div className="connection-layout"><div className="profile-column"><div className="column-title">{selectedToolName} 配置</div><div className="muted-copy">浏览器预览不读取本机配置</div></div><div className="detail-panel"><div className="detail-header"><div><div className="eyebrow">原生配置</div><h2>{selectedToolName}</h2></div><span className="status-pill">预览</span></div><Empty title="请在桌面应用中编辑原生配置" detail="桌面应用可读取和保存 CLI 的 TOML / JSON 原文。" /></div></div></> : <Empty title="没有管理中的工具" detail="先在设置中勾选需要管理的 CLI。" action={<button className="button primary" type="button" onClick={() => go('settings')}>前往设置</button>} />}
@@ -143,6 +158,7 @@ export default function App() {
         {page === 'settings' && <><PageTabs items={[["general", "常规"], ["migration", "迁移与同步"]]} value={settingsTab} onChange={setSettingsTab} />{settingsTab === 'general' ? <>
           <section className="settings-group"><div className="setting-intro"><h2>管理的 CLI</h2><p>只在首页和工具页显示勾选的工具。关闭管理不会删除已有配置。</p></div>{(nativeAvailable ? catalog?.registered ?? [] : bootstrap.tools).map((item) => <label className="setting-row" key={item.id}><span><strong>{item.name}</strong><small>安装与配置状态在工具页查看</small></span><input type="checkbox" checked={managed.includes(item.id)} disabled={!nativeAvailable || busy} onChange={(event) => updateManaged(item.id, event.target.checked)} /></label>)}{catalog?.preservedUnknown.map((item) => <div className="setting-row" key={item.id}><span><strong>{item.id}</strong><small>未安装适配器，保留 {item.profileCount} 份配置，只读</small></span></div>)}</section>
           <section className="settings-group"><div className="setting-intro"><h2>外观</h2><p>跟随系统，或固定浅色、深色。</p></div><label className="setting-row"><span><strong>主题</strong></span><select aria-label="主题" value={bootstrap.preferences.theme} disabled={busy} onChange={(event) => updateTheme(event.target.value as Theme)}><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select></label></section>
+          {nativeAvailable && <TerminalSettings />}
         </> : <div className="migration-card"><span className="migration-mark" aria-hidden="true">↗</span><h2>换设备，恢复熟悉的配置</h2><p>加密配置包与 WebDAV 将集中在这里。导入前会预览差异，并重新关联本机目录。</p><div className="migration-actions"><button type="button" className="button" disabled>导出配置包</button><button type="button" className="button" disabled>导入配置包</button><button type="button" className="button" disabled>配置 WebDAV</button></div><small>迁移服务尚未接入；目前不会生成配置包。</small></div>}</>}
       </>}
     </main>

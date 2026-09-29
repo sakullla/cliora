@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { listen } from '@tauri-apps/api/event';
 import { native, nativeAvailable } from '../../lib/native';
 import type { AdapterDescriptor, RegisteredToolWorkspace } from '../../types/native';
 import styles from './ManagedTools.module.css';
@@ -15,15 +16,23 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
 
   useEffect(() => {
     if (!nativeAvailable) return;
-    const current = ++generation.current;
-    for (const tool of tools) {
-      void native.getRegisteredToolWorkspace(tool.id, 'global').then((workspace) => {
-        if (current === generation.current) setStates((old) => ({ ...old, [tool.id]: { workspace, error: null, busy: false } }));
-      }).catch((error) => {
-        if (current === generation.current) setStates((old) => ({ ...old, [tool.id]: { workspace: null, error: message(error), busy: false } }));
-      });
-    }
-    return () => { generation.current++; };
+    let active = true;
+    let unsubscribe: (() => void) | undefined;
+    const refresh = () => {
+      const current = ++generation.current;
+      for (const tool of tools) {
+        void native.getRegisteredToolWorkspace(tool.id, 'global').then((workspace) => {
+          if (active && current === generation.current) setStates((old) => ({ ...old, [tool.id]: { workspace, error: null, busy: false } }));
+        }).catch((error) => {
+          if (active && current === generation.current) setStates((old) => ({ ...old, [tool.id]: { workspace: null, error: message(error), busy: false } }));
+        });
+      }
+    };
+    refresh();
+    void listen('cliora:bindings-changed', refresh).then((stop) => {
+      if (active) unsubscribe = stop; else stop();
+    }).catch(() => {});
+    return () => { active = false; generation.current++; unsubscribe?.(); };
   }, [tools.map((item) => item.id).join('|')]);
 
   async function switchProfile(tool: string, profileId: string) {

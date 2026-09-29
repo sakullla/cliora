@@ -1,6 +1,7 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import type { ApiError, Bootstrap, CliId, Theme } from '../types/domain';
 import type { AdapterCatalog, ApplyOutcome, CommonConfig, CommonSaveResult, Connection, ConnectionCheck, ModelDirectory, NativeImport, NativeInspection, NativePreview, NativeProfile, PreservedProfile, RegisteredCommon, RegisteredCommonSaveResult, RegisteredProfile, RegisteredToolWorkspace, Scope, ToolWorkspace } from '../types/native';
+import type { LaunchRequest, LaunchResult, LaunchSettings, Project, TerminalId, TrayStatus } from '../types/launch';
 
 export const nativeAvailable = isTauri();
 
@@ -31,6 +32,17 @@ async function command<T>(name: string, args?: Record<string, unknown>): Promise
 /** Feature modules add named wrappers here; components never invoke arbitrary commands. */
 export const native = {
   getBootstrap: () => command<Bootstrap>('get_bootstrap'),
+  listProjects: () => command<Project[]>('list_projects'),
+  addProject: (projectPath: string, name?: string, preferredTool?: string) => command<Project>('add_project', { projectPath, name: name || null, preferredTool: preferredTool || null }),
+  relinkProject: (projectId: string, projectPath: string) => command<Project>('relink_project', { projectId, projectPath }),
+  openProjectDirectory: (projectId: string) => command<void>('open_project_directory', { projectId }),
+  setProjectTool: (projectId: string, toolId: string | null) => command<Project>('set_project_tool', { projectId, toolId }),
+  setProjectModelOverride: (projectId: string, toolId: string, model: string | null) => command<Project>('set_project_model_override', { projectId, toolId, model }),
+  getLaunchSettings: () => command<LaunchSettings>('get_launch_settings'),
+  setPreferredTerminal: (terminal: TerminalId) => command<LaunchSettings>('set_preferred_terminal', { terminal }),
+  launchCli: (request: LaunchRequest) => command<LaunchResult>('launch_cli', { request }),
+  getTrayStatus: () => command<TrayStatus>('get_tray_status'),
+  quitApp: () => command<void>('quit_app'),
   listCliAdapters: () => command<AdapterCatalog>('list_cli_adapters'),
   setRegisteredManagedTools: (managedIds: string[]) => command<AdapterCatalog>('set_registered_managed_tools', { managedIds }),
   getRegisteredToolWorkspace: (toolId: string, scope: Scope, projectPath?: string) => command<RegisteredToolWorkspace>('get_registered_tool_workspace', { toolId, scope, projectPath: projectPath || null }),

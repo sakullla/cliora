@@ -13,7 +13,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2.5", features = [] }
 
 [dependencies]
-tauri = { version = "2.10", features = [] }
+tauri = { version = "2.10", features = ["tray-icon"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.40", features = ["bundled"] }
@@ -30,6 +30,8 @@ base64 = "0.22"
 chacha20poly1305 = "0.10"
 rand = "0.9"
 dirs = "7"
+tauri-plugin-single-instance = "2"
+tauri-plugin-dialog = "2"
 
 [dev-dependencies]
 tempfile = "3"

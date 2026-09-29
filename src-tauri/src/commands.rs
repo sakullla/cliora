@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::credentials::{CredentialStore, SystemCredentialStore};
 use crate::database::{Database, OpenError};
@@ -16,6 +16,7 @@ use crate::native::{
     profile::{self, CommonConfig, Connection, NativeProfile, RegisteredCommon, RegisteredProfile},
     transaction::{self, ApplyOutcome},
 };
+use crate::{launch, projects};
 use std::path::PathBuf;
 
 #[derive(Default)]
@@ -89,7 +90,7 @@ impl AppState {
         })
     }
 
-    fn with_database<T>(
+    pub(crate) fn with_database<T>(
         &self,
         app: &AppHandle,
         operation: impl FnOnce(&Database) -> Result<T, ApiError>,
@@ -107,7 +108,7 @@ async fn blocking<T: Send + 'static>(
         .map_err(|_| native_error("后台操作意外中断，请重试".into()))?
 }
 
-fn native_error(message: String) -> ApiError {
+pub(crate) fn native_error(message: String) -> ApiError {
     ApiError {
         code: "native_error",
         message,
@@ -367,9 +368,11 @@ pub fn save_native_profile(
     profile: NativeProfile,
     expected_version: Option<u64>,
 ) -> Result<NativeProfile, ApiError> {
-    state.with_database(&app, |database| {
+    let saved = state.with_database(&app, |database| {
         profile::save_profile(database, profile, expected_version).map_err(native_error)
-    })
+    })?;
+    let _ = app.emit("cliora:bindings-changed", saved.tool.stable_id());
+    Ok(saved)
 }
 
 #[tauri::command]
@@ -381,7 +384,9 @@ pub fn delete_native_profile(
 ) -> Result<(), ApiError> {
     state.with_database(&app, |database| {
         profile::delete_profile(database, &id, expected_version).map_err(native_error)
-    })
+    })?;
+    let _ = app.emit("cliora:bindings-changed", "profiles");
+    Ok(())
 }
 
 #[tauri::command]
@@ -390,7 +395,8 @@ pub async fn save_common_config(
     common: CommonConfig,
     expected_version: Option<u64>,
 ) -> Result<CommonSaveResult, ApiError> {
-    blocking(move || {
+    let notify = app.clone();
+    let result = blocking(move || {
         let state = app.state::<AppState>();
         let home = home()?;
         state.with_database(&app, |database| {
@@ -464,7 +470,9 @@ pub async fn save_common_config(
             })
         })
     })
-    .await
+    .await?;
+    let _ = notify.emit("cliora:bindings-changed", result.common.tool.stable_id());
+    Ok(result)
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -492,24 +500,14 @@ pub async fn apply_native_profile(
     allow_takeover: bool,
 ) -> Result<ApplyOutcome, ApiError> {
     blocking(move || {
-        let state = app.state::<AppState>();
-        let home = home()?;
-        let project = checked_project(scope, project_path)?;
-        state.with_database(&app, |database| {
-            let custom = tool_path(database, tool).map_err(native_error)?;
-            apply::apply_profile(
-                database,
-                &SystemCredentialStore,
-                tool,
-                &profile_id,
-                scope,
-                &home,
-                project.as_deref(),
-                custom.as_deref(),
-                allow_takeover,
-            )
-            .map_err(native_error)
-        })
+        apply_registered_now(
+            &app,
+            tool.stable_id(),
+            &profile_id,
+            scope,
+            project_path,
+            allow_takeover,
+        )
     })
     .await
 }
@@ -747,7 +745,7 @@ pub fn save_registered_native_profile(
     profile: RegisteredProfile,
     expected_version: Option<u64>,
 ) -> Result<RegisteredProfile, ApiError> {
-    state.with_database(&app, |database| {
+    let saved = state.with_database(&app, |database| {
         profile::save_registered_profile(
             database,
             &adapters::Registry::builtins(),
@@ -755,7 +753,9 @@ pub fn save_registered_native_profile(
             expected_version,
         )
         .map_err(native_error)
-    })
+    })?;
+    let _ = app.emit("cliora:bindings-changed", saved.tool.clone());
+    Ok(saved)
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -771,7 +771,8 @@ pub async fn save_registered_common_config(
     common: RegisteredCommon,
     expected_version: Option<u64>,
 ) -> Result<RegisteredCommonSaveResult, ApiError> {
-    blocking(move || {
+    let notify = app.clone();
+    let result = blocking(move || {
         let state = app.state::<AppState>();
         let home = home()?;
         state.with_database(&app, |database| {
@@ -845,7 +846,9 @@ pub async fn save_registered_common_config(
             })
         })
     })
-    .await
+    .await?;
+    let _ = notify.emit("cliora:bindings-changed", result.common.tool.clone());
+    Ok(result)
 }
 
 #[tauri::command]
@@ -858,27 +861,250 @@ pub async fn apply_registered_native_profile(
     allow_takeover: bool,
 ) -> Result<ApplyOutcome, ApiError> {
     blocking(move || {
-        let home = home()?;
-        let project = checked_project(scope, project_path)?;
-        let state = app.state::<AppState>();
-        state.with_database(&app, |database| {
-            let custom = registered_tool_path(database, &tool_id).map_err(native_error)?;
-            apply::apply_registered_profile(
+        apply_registered_now(
+            &app,
+            &tool_id,
+            &profile_id,
+            scope,
+            project_path,
+            allow_takeover,
+        )
+    })
+    .await
+}
+
+pub(crate) fn apply_registered_now(
+    app: &AppHandle,
+    tool_id: &str,
+    profile_id: &str,
+    scope: Scope,
+    project_path: Option<String>,
+    allow_takeover: bool,
+) -> Result<ApplyOutcome, ApiError> {
+    let home = home()?;
+    let project = checked_project(scope, project_path)?;
+    let state = app.state::<AppState>();
+    let result = state.with_database(app, |database| {
+        let custom = registered_tool_path(database, tool_id).map_err(native_error)?;
+        let result = apply::apply_registered_profile(
+            &adapters::Registry::builtins(),
+            database,
+            &SystemCredentialStore,
+            tool_id,
+            profile_id,
+            scope,
+            &home,
+            project.as_deref(),
+            custom.as_deref(),
+            allow_takeover,
+        )
+        .map_err(native_error)?;
+        if let Some(path) = project.as_deref() {
+            if let Err(error) =
+                projects::record_applied_profile(database, path, tool_id, profile_id)
+            {
+                let _ = app.emit(
+                    "cliora:tray-error",
+                    format!("配置已应用，但项目快捷选择未能保存：{error}"),
+                );
+            }
+        }
+        Ok(result)
+    })?;
+    let _ = app.emit("cliora:bindings-changed", tool_id);
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn list_projects(app: AppHandle) -> Result<Vec<projects::Project>, ApiError> {
+    blocking(move || {
+        app.state::<AppState>()
+            .with_database(&app, |db| projects::list(db).map_err(native_error))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn add_project(
+    app: AppHandle,
+    project_path: String,
+    name: Option<String>,
+    preferred_tool: Option<String>,
+) -> Result<projects::Project, ApiError> {
+    let notify = app.clone();
+    let project = blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            projects::add(
+                db,
                 &adapters::Registry::builtins(),
-                database,
-                &SystemCredentialStore,
-                &tool_id,
-                &profile_id,
-                scope,
-                &home,
-                project.as_deref(),
-                custom.as_deref(),
-                allow_takeover,
+                &project_path,
+                name.as_deref(),
+                preferred_tool.as_deref(),
             )
             .map_err(native_error)
         })
     })
+    .await?;
+    let _ = notify.emit("cliora:projects-changed", &project.id);
+    Ok(project)
+}
+
+#[tauri::command]
+pub async fn relink_project(
+    app: AppHandle,
+    project_id: String,
+    project_path: String,
+) -> Result<projects::Project, ApiError> {
+    let notify = app.clone();
+    let project = blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            projects::relink(db, &project_id, &project_path).map_err(native_error)
+        })
+    })
+    .await?;
+    let _ = notify.emit("cliora:projects-changed", &project.id);
+    Ok(project)
+}
+
+#[tauri::command]
+pub async fn open_project_directory(app: AppHandle, project_id: String) -> Result<(), ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            projects::open_directory(db, &project_id).map_err(native_error)
+        })
+    })
     .await
+}
+
+#[tauri::command]
+pub async fn set_project_tool(
+    app: AppHandle,
+    project_id: String,
+    tool_id: Option<String>,
+) -> Result<projects::Project, ApiError> {
+    let notify = app.clone();
+    let project = blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            projects::set_preferred_tool(
+                db,
+                &adapters::Registry::builtins(),
+                &project_id,
+                tool_id.as_deref(),
+            )
+            .map_err(native_error)
+        })
+    })
+    .await?;
+    let _ = notify.emit("cliora:projects-changed", &project.id);
+    Ok(project)
+}
+
+#[tauri::command]
+pub async fn set_project_model_override(
+    app: AppHandle,
+    project_id: String,
+    tool_id: String,
+    model: Option<String>,
+) -> Result<projects::Project, ApiError> {
+    let notify = app.clone();
+    let project = blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            projects::set_model_override(
+                db,
+                &adapters::Registry::builtins(),
+                &project_id,
+                &tool_id,
+                model.as_deref(),
+            )
+            .map_err(native_error)
+        })
+    })
+    .await?;
+    let _ = notify.emit("cliora:projects-changed", &project.id);
+    Ok(project)
+}
+
+#[tauri::command]
+pub async fn get_launch_settings(app: AppHandle) -> Result<launch::LaunchSettings, ApiError> {
+    blocking(move || {
+        app.state::<AppState>()
+            .with_database(&app, |db| launch::settings(db).map_err(native_error))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn set_preferred_terminal(
+    app: AppHandle,
+    terminal: launch::TerminalId,
+) -> Result<launch::LaunchSettings, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            launch::set_terminal(db, terminal).map_err(native_error)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn launch_cli(
+    app: AppHandle,
+    request: launch::LaunchRequest,
+) -> Result<launch::LaunchResult, ApiError> {
+    blocking(move || launch_now(&app, request)).await
+}
+
+#[tauri::command]
+pub fn get_tray_status(app: AppHandle) -> crate::tray::TrayStatus {
+    app.state::<crate::tray::TrayState>().status()
+}
+
+#[tauri::command]
+pub fn quit_app(app: AppHandle) {
+    app.exit(0);
+}
+
+pub(crate) fn launch_now(
+    app: &AppHandle,
+    request: launch::LaunchRequest,
+) -> Result<launch::LaunchResult, ApiError> {
+    let home = home()?;
+    let project_id = request.project_id.clone();
+    if let Some(id) = project_id.as_deref() {
+        let pending = app.state::<AppState>().with_database(app, |db| {
+            let project = projects::get(db, id).map_err(native_error)?;
+            let selected = project.selected_profiles.get(&request.tool_id);
+            Ok(selected
+                .filter(|profile| project.applied_profiles.get(&request.tool_id) != Some(*profile))
+                .map(|profile| (profile.clone(), project.path.clone())))
+        })?;
+        if let Some((profile_id, path)) = pending {
+            apply_registered_now(
+                app,
+                &request.tool_id,
+                &profile_id,
+                Scope::Project,
+                path,
+                false,
+            )?;
+        }
+    }
+    let result = app.state::<AppState>().with_database(app, |db| {
+        let plan = launch::plan(db, &adapters::Registry::builtins(), &home, request)
+            .map_err(native_error)?;
+        let result = launch::spawn(plan).map_err(native_error)?;
+        if let Some(project_id) = &project_id {
+            if let Err(error) = projects::touch(db, project_id) {
+                let _ = app.emit(
+                    "cliora:tray-error",
+                    format!("终端已打开，但最近项目时间未保存：{error}"),
+                );
+            }
+        }
+        Ok(result)
+    })?;
+    let _ = app.emit("cliora:projects-changed", project_id);
+    Ok(result)
 }
 
 #[tauri::command]
@@ -1105,7 +1331,7 @@ pub fn set_registered_managed_tools(
     if managed_ids.iter().any(|id| registry.get(id).is_none()) {
         return Err(native_error("不能管理未注册的 CLI 适配器".into()));
     }
-    state.with_database(&app, |database| {
+    let catalog = state.with_database(&app, |database| {
         database
             .update_preferences(|preferences| {
                 preferences
@@ -1114,7 +1340,9 @@ pub fn set_registered_managed_tools(
             })
             .map_err(storage_error)?;
         adapter_catalog(database)
-    })
+    })?;
+    let _ = app.emit("cliora:bindings-changed", "managed-tools");
+    Ok(catalog)
 }
 
 fn adapter_catalog(database: &Database) -> Result<AdapterCatalog, ApiError> {
@@ -1189,12 +1417,14 @@ pub fn set_managed_tools(
     state: State<'_, AppState>,
     managed_tools: Vec<CliId>,
 ) -> Result<Bootstrap, ApiError> {
-    state.with_database(&app, |database| {
+    let bootstrap = state.with_database(&app, |database| {
         database
             .update_preferences(|preferences| preferences.set_managed(&managed_tools))
             .map(Bootstrap::new)
             .map_err(storage_error)
-    })
+    })?;
+    let _ = app.emit("cliora:bindings-changed", "managed-tools");
+    Ok(bootstrap)
 }
 
 #[tauri::command]
