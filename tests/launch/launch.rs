@@ -61,7 +61,7 @@ fn launch_mode_and_project_model_are_adapter_capabilities() {
 fn missing_project_never_falls_back_to_user_home() {
     let temp = tempfile::tempdir().unwrap();
     let db = Database::open(&temp.path().join("app.db")).unwrap();
-    let result = plan(
+    let result = plan_with_stage(
         &db,
         &Registry::builtins(),
         temp.path(),
@@ -72,7 +72,9 @@ fn missing_project_never_falls_back_to_user_home() {
             mode: LaunchMode::Normal,
         },
     );
-    assert!(result.unwrap_err().contains("项目不存在"));
+    let failure = result.unwrap_err();
+    assert_eq!(failure.stage, LaunchStage::ProjectDirectory);
+    assert!(failure.message.contains("项目不存在"));
 }
 
 #[cfg(windows)]
@@ -109,7 +111,7 @@ fn project_launch_plan_uses_real_probe_and_project_model_without_shell_expansion
         temp.path(),
         LaunchRequest {
             tool_id: "grok".into(),
-            project_id: Some(project.id),
+            project_id: Some(project.id.clone()),
             session_id: Some("session 1".into()),
             mode: LaunchMode::Yolo,
         },
@@ -123,4 +125,27 @@ fn project_launch_plan_uses_real_probe_and_project_model_without_shell_expansion
     let command = terminal_command(&planned).unwrap();
     assert_eq!(command.directory, planned.directory);
     assert!(!format!("{:?}", command.args).contains("API_KEY"));
+
+    db.with_connection(|conn| {
+        conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES ('preferred_terminal', '\"mac_terminal\"')",
+            [],
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(())
+    })
+    .unwrap();
+    let failure = plan_with_stage(
+        &db,
+        &registry,
+        temp.path(),
+        LaunchRequest {
+            tool_id: "grok".into(),
+            project_id: Some(project.id),
+            session_id: None,
+            mode: LaunchMode::Normal,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(failure.stage, LaunchStage::Terminal);
 }

@@ -8,7 +8,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, Tray
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::commands::{self, AppState};
-use crate::launch::LaunchRequest;
+use crate::launch::{LaunchRequest, LaunchStage};
 use crate::native::adapter::Scope;
 use crate::native::adapters::{LaunchMode, Registry};
 use crate::native::{apply, profile};
@@ -69,6 +69,38 @@ impl RepairTarget {
             project_id,
             project_path,
             profile_id,
+        }
+    }
+
+    fn settings() -> Self {
+        Self {
+            page: "settings",
+            tool_id: None,
+            scope: None,
+            project_id: None,
+            project_path: None,
+            profile_id: None,
+        }
+    }
+
+    fn for_launch_failure(tool: &str, project: &str, failure: &commands::LaunchFailure) -> Self {
+        match failure.stage {
+            LaunchStage::ProjectDirectory => Self::project(project.to_owned()),
+            LaunchStage::Configuration => Self::connection(
+                tool.to_owned(),
+                Scope::Project,
+                Some(project.to_owned()),
+                failure.project_path.clone(),
+                failure.profile_id.clone(),
+            ),
+            LaunchStage::Tool => Self::connection(
+                tool.to_owned(),
+                Scope::Project,
+                Some(project.to_owned()),
+                failure.project_path.clone(),
+                None,
+            ),
+            LaunchStage::Terminal => Self::settings(),
         }
     }
 }
@@ -535,15 +567,15 @@ fn on_menu(app: &AppHandle, id: &str) {
         Action::Launch { tool, project } => {
             let app = app.clone();
             std::thread::spawn(move || {
-                let repair = RepairTarget::project(project.clone());
                 let request = LaunchRequest {
-                    tool_id: tool,
-                    project_id: Some(project),
+                    tool_id: tool.clone(),
+                    project_id: Some(project.clone()),
                     session_id: None,
                     mode: LaunchMode::Normal,
                 };
-                if let Err(error) = commands::launch_now(&app, request) {
-                    report_error(&app, error.message, Some(repair));
+                if let Err(failure) = commands::launch_now_with_stage(&app, request) {
+                    let repair = RepairTarget::for_launch_failure(&tool, &project, &failure);
+                    report_error(&app, failure.error.message, Some(repair));
                 } else if let Err(error) = refresh(&app) {
                     report_error(&app, error, None);
                 }
@@ -629,5 +661,53 @@ mod tests {
         assert_eq!(json["projectId"], "project-1");
         assert_eq!(json["projectPath"], "C:\\项目");
         assert_eq!(json["profileId"], "daily");
+    }
+
+    #[test]
+    fn launch_failure_routes_to_the_matching_repair_stage() {
+        let failure = |stage, path: Option<&str>, profile: Option<&str>| commands::LaunchFailure {
+            error: commands::native_error("failed".into()),
+            stage,
+            project_path: path.map(str::to_owned),
+            profile_id: profile.map(str::to_owned),
+        };
+        let project = "project-1";
+        let config = RepairTarget::for_launch_failure(
+            "grok",
+            project,
+            &failure(LaunchStage::Configuration, Some("C:\\项目"), Some("daily")),
+        );
+        let config = serde_json::to_value(config).unwrap();
+        assert_eq!(config["page"], "connections");
+        assert_eq!(config["scope"], "project");
+        assert_eq!(config["projectPath"], "C:\\项目");
+        assert_eq!(config["profileId"], "daily");
+        assert_eq!(config["projectId"], project);
+
+        let directory = serde_json::to_value(RepairTarget::for_launch_failure(
+            "grok",
+            project,
+            &failure(LaunchStage::ProjectDirectory, None, None),
+        ))
+        .unwrap();
+        assert_eq!(directory["page"], "home");
+        assert_eq!(directory["projectId"], project);
+
+        let terminal = serde_json::to_value(RepairTarget::for_launch_failure(
+            "grok",
+            project,
+            &failure(LaunchStage::Terminal, None, None),
+        ))
+        .unwrap();
+        assert_eq!(terminal["page"], "settings");
+
+        let tool = serde_json::to_value(RepairTarget::for_launch_failure(
+            "grok",
+            project,
+            &failure(LaunchStage::Tool, Some("C:\\项目"), None),
+        ))
+        .unwrap();
+        assert_eq!(tool["page"], "connections");
+        assert_eq!(tool["profileId"], serde_json::Value::Null);
     }
 }

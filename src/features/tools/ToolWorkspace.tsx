@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { SetStateAction } from 'react';
 import { native, nativeAvailable } from '../../lib/native';
 import { sameDraftRequest } from '../../lib/draftGuard';
@@ -34,7 +34,7 @@ function emptyProfile(tool: string): RegisteredProfile {
   return { id: '', tool, name: '', version: 0, inheritCommon: false, files: {}, suppressed: {}, connection: null, nativeCredentials: {} };
 }
 
-export function ToolWorkspacePage({ managedTools, initialTool, repair }: { managedTools: AdapterDescriptor[]; initialTool?: string; repair?: TrayRepairTarget | null }) {
+export function ToolWorkspacePage({ managedTools, initialTool, repair, onDirtyChange }: { managedTools: AdapterDescriptor[]; initialTool?: string; repair?: TrayRepairTarget | null; onDirtyChange?: (dirty: boolean) => void }) {
   const [tool, setTool] = useState<string>(repair?.toolId ?? initialTool ?? managedTools[0]?.id ?? '');
   const [scope, setScope] = useState<Scope>(repair?.scope ?? 'global');
   const [projectPath, setProjectPath] = useState(repair?.projectPath ?? '');
@@ -95,6 +95,8 @@ export function ToolWorkspacePage({ managedTools, initialTool, repair }: { manag
   const pendingRaw = rawDisk?.context === draftContext ? rawDisk : null;
   const activeRaw = pendingRaw?.role === role ? pendingRaw : null;
   const dirty = (editor === 'profile' ? !!draft && JSON.stringify(draft) !== savedDraft.current : !!commonDraft && JSON.stringify(commonDraft) !== savedDraft.current) || !!pendingRaw && pendingRaw.text !== pendingRaw.original;
+  useLayoutEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
+  useEffect(() => () => { onDirtyChange?.(false); }, [onDirtyChange]);
 
   const reload = useCallback(async (nextTool: string, nextScope: Scope, nextProject: string, preferredId?: string | null) => {
     if (!nativeAvailable || (nextScope === 'project' && !nextProject.trim())) { loadSequence.current++; setWorkspace(null); return; }

@@ -1064,45 +1064,106 @@ pub fn quit_app(app: AppHandle) {
     app.exit(0);
 }
 
+pub(crate) struct LaunchFailure {
+    pub error: ApiError,
+    pub stage: launch::LaunchStage,
+    pub project_path: Option<String>,
+    pub profile_id: Option<String>,
+}
+
+impl LaunchFailure {
+    fn new(stage: launch::LaunchStage, error: ApiError) -> Self {
+        Self {
+            error,
+            stage,
+            project_path: None,
+            profile_id: None,
+        }
+    }
+}
+
 pub(crate) fn launch_now(
     app: &AppHandle,
     request: launch::LaunchRequest,
 ) -> Result<launch::LaunchResult, ApiError> {
-    let home = home()?;
+    launch_now_with_stage(app, request).map_err(|failure| failure.error)
+}
+
+pub(crate) fn launch_now_with_stage(
+    app: &AppHandle,
+    request: launch::LaunchRequest,
+) -> Result<launch::LaunchResult, LaunchFailure> {
+    use launch::LaunchStage;
+    let home = home().map_err(|error| LaunchFailure::new(LaunchStage::ProjectDirectory, error))?;
     let project_id = request.project_id.clone();
-    if let Some(id) = project_id.as_deref() {
-        let pending = app.state::<AppState>().with_database(app, |db| {
-            let project = projects::get(db, id).map_err(native_error)?;
-            let selected = project.selected_profiles.get(&request.tool_id);
-            Ok(selected
-                .filter(|profile| project.applied_profiles.get(&request.tool_id) != Some(*profile))
-                .map(|profile| (profile.clone(), project.path.clone())))
+    let project = project_id
+        .as_deref()
+        .map(|id| {
+            app.state::<AppState>()
+                .with_database(app, |db| projects::get(db, id).map_err(native_error))
+                .map_err(|error| LaunchFailure::new(LaunchStage::ProjectDirectory, error))
+        })
+        .transpose()?;
+    if let Some(project) = &project {
+        let path = project.path.as_deref().ok_or_else(|| {
+            LaunchFailure::new(
+                LaunchStage::ProjectDirectory,
+                native_error("项目尚未关联本机目录".into()),
+            )
         })?;
-        if let Some((profile_id, path)) = pending {
+        projects::checked_directory(path).map_err(|message| {
+            LaunchFailure::new(LaunchStage::ProjectDirectory, native_error(message))
+        })?;
+        let selected = project.selected_profiles.get(&request.tool_id);
+        let pending = selected
+            .filter(|profile| project.applied_profiles.get(&request.tool_id) != Some(*profile));
+        if let Some(profile_id) = pending {
             apply_registered_now(
                 app,
                 &request.tool_id,
-                &profile_id,
+                profile_id,
                 Scope::Project,
-                path,
+                Some(path.to_owned()),
                 false,
-            )?;
+            )
+            .map_err(|error| LaunchFailure {
+                error,
+                stage: LaunchStage::Configuration,
+                project_path: Some(path.to_owned()),
+                profile_id: Some(profile_id.clone()),
+            })?;
         }
     }
-    let result = app.state::<AppState>().with_database(app, |db| {
-        let plan = launch::plan(db, &adapters::Registry::builtins(), &home, request)
-            .map_err(native_error)?;
-        let result = launch::spawn(plan).map_err(native_error)?;
-        if let Some(project_id) = &project_id {
-            if let Err(error) = projects::touch(db, project_id) {
-                let _ = app.emit(
-                    "cliora:tray-error",
-                    format!("终端已打开，但最近项目时间未保存：{error}"),
-                );
-            }
+    let project_path = project.as_ref().and_then(|item| item.path.clone());
+    let plan = app
+        .state::<AppState>()
+        .with_database(app, |db| {
+            Ok(launch::plan_with_stage(
+                db,
+                &adapters::Registry::builtins(),
+                &home,
+                request,
+            ))
+        })
+        .map_err(|error| LaunchFailure::new(LaunchStage::Tool, error))?
+        .map_err(|failure| LaunchFailure {
+            error: native_error(failure.message),
+            stage: failure.stage,
+            project_path,
+            profile_id: None,
+        })?;
+    let result = launch::spawn(plan)
+        .map_err(|message| LaunchFailure::new(LaunchStage::Terminal, native_error(message)))?;
+    if let Some(project_id) = &project_id {
+        if let Err(error) = app.state::<AppState>().with_database(app, |db| {
+            projects::touch(db, project_id).map_err(native_error)
+        }) {
+            let _ = app.emit(
+                "cliora:tray-error",
+                format!("终端已打开，但最近项目时间未保存：{}", error.message),
+            );
         }
-        Ok(result)
-    })?;
+    }
     let _ = app.emit("cliora:projects-changed", project_id);
     Ok(result)
 }

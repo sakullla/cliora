@@ -174,6 +174,76 @@ test('tray conflict targets the active tool page with project scope and profile'
   await expect(page.getByRole('textbox', { name: '配置名称' })).toHaveValue('未保存的日常配置');
 });
 
+test('tray repair cannot discard unsaved form or native text when leaving the tool page', async ({ page }) => {
+  await page.addInitScript(() => {
+    const callbacks = new Map<number, (event: unknown) => void>();
+    const listeners = new Map<string, number[]>();
+    let nextCallback = 0;
+    const profile = { id: 'daily', tool: 'grok', name: '日常配置', version: 1, inheritCommon: false, files: { config: 'model = "grok"' }, suppressed: {}, nativeCredentials: {}, connection: null };
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
+      __emitRepair: (payload: unknown) => {
+        for (const id of listeners.get('cliora:tray-repair') ?? []) callbacks.get(id)?.({ event: 'cliora:tray-repair', payload });
+      },
+      __TAURI_INTERNALS__: {
+        transformCallback: (callback: (event: unknown) => void) => { const id = ++nextCallback; callbacks.set(id, callback); return id; },
+        invoke: async (command: string, args: { event?: string; handler?: number } = {}) => {
+          if (command === 'plugin:event|listen') { listeners.set(args.event!, [...(listeners.get(args.event!) ?? []), args.handler!]); return nextCallback; }
+          if (command === 'plugin:event|unlisten') return null;
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['grok'], theme: 'system' }, tools: [{ id: 'grok', name: 'Grok', installation: 'not_checked', configuration: 'not_checked' }] };
+          if (command === 'list_cli_adapters') return { registered: [{ id: 'grok', name: 'Grok', interfaceFormats: [] }], managedIds: ['grok'], preservedUnknown: [] };
+          if (command === 'list_projects') return [];
+          if (command === 'get_registered_tool_workspace') return {
+            probe: { selectedPath: 'C:\\tools\\grok.cmd', installations: [], nativeFiles: [{ role: 'config', path: 'C:\\项目\\.grok\\config.toml', format: 'toml', writable: true, reason: null, sensitive: false }], nativeWrites: { state: 'supported', reason: '可编辑原生配置' }, interfaceFormats: [], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '', installCommand: null, upgradeCommand: null },
+            profiles: [profile], common: null, binding: null, snapshots: [], recoveryNeeded: [], customPath: null,
+          };
+          if (command === 'inspect_registered_native_draft') return {};
+          if (command === 'read_registered_native_file_for_edit') return 'model = "on disk"';
+          if (command === 'get_launch_settings') return { selected: 'auto', terminals: [{ id: 'auto', label: '系统默认', available: true }] };
+          if (command === 'get_tray_status') return { available: true, error: null };
+          throw new Error(`Unexpected native command: ${command}`);
+        },
+      },
+    });
+  });
+  const emit = (target: Record<string, unknown>) => page.evaluate((payload) =>
+    (window as typeof window & { __emitRepair: (target: unknown) => void }).__emitRepair(payload), target);
+  await page.goto('/');
+  await page.getByRole('button', { name: '编辑配置 →' }).click();
+  await expect(page.getByRole('heading', { name: '日常配置' })).toBeVisible();
+  await page.getByRole('button', { name: '常用设置' }).click();
+  const name = page.getByRole('textbox', { name: '配置名称' });
+  await name.fill('未保存的表单');
+  page.once('dialog', (dialog) => void dialog.dismiss());
+  await emit({ page: 'home', toolId: null, scope: null, projectId: 'moved-project', projectPath: null, profileId: null });
+  await expect(page.getByRole('heading', { name: '工具与连接', level: 1 })).toBeVisible();
+  await expect(name).toHaveValue('未保存的表单');
+
+  await name.fill('日常配置');
+  await page.getByRole('button', { name: '原生文件' }).click();
+  const nativeText = page.getByRole('textbox', { name: 'config 配置草稿' });
+  await nativeText.fill('model = "edited locally"');
+  page.once('dialog', (dialog) => void dialog.dismiss());
+  await emit({ page: 'settings', toolId: null, scope: null, projectId: null, projectPath: null, profileId: null });
+  await expect(page.getByRole('heading', { name: '工具与连接', level: 1 })).toBeVisible();
+  await expect(nativeText).toHaveValue('model = "edited locally"');
+
+  await nativeText.fill('model = "grok"');
+  await page.getByRole('button', { name: '编辑当前磁盘原文' }).click();
+  await expect(nativeText).toHaveValue('model = "on disk"');
+  await nativeText.fill('model = "unsaved disk edit"');
+  page.once('dialog', (dialog) => void dialog.dismiss());
+  await emit({ page: 'home', toolId: null, scope: null, projectId: 'moved-project', projectPath: null, profileId: null });
+  await expect(page.getByRole('heading', { name: '工具与连接', level: 1 })).toBeVisible();
+  await expect(nativeText).toHaveValue('model = "unsaved disk edit"');
+
+  page.once('dialog', (dialog) => void dialog.accept());
+  await emit({ page: 'settings', toolId: null, scope: null, projectId: null, projectPath: null, profileId: null });
+  await expect(page.getByRole('heading', { name: '设置', level: 1 })).toBeVisible();
+  await expect(page.getByRole('combobox', { name: '启动终端' })).toBeVisible();
+});
+
 test('home opens Claude Code native JSON editor with full disk text', async ({ page }) => {
   await page.addInitScript(() => {
     const profile = {
