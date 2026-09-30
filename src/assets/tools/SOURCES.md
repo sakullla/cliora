@@ -10,7 +10,7 @@ These assets render offline. Product symbols remain in their original colors; cu
   SHA-256: `c3db0dfaf760b702b8490c6cbefe07fd8bfe00db43cae6a0acccf768f44d6179`.
 - `pi.svg`: Official https://pi.dev/logo-auto.svg . Original three-color pixel P and paths retained; renderer scale compensates for the spacious original 800×800 viewBox.
   SHA-256: `abd66e7868b2d24f0f0895f9237ee8a6dcb22337583b0dc54aeb595acecb4d6b`.
-- `opencode.png`: Official https://opencode.ai/favicon-96x96-v3.png linked from https://opencode.ai/brand . Original pixel mark retained.
-  SHA-256: `aa34092540de60c889610edfa3c25316e215f12d88af29cfba530d09aee7265c`.
+- `opencode.svg`: Official https://opencode.ai/favicon-v3.svg, retained unchanged (612 bytes). The original white pixel mark on a dark tile replaces the former PNG and stays clear at small sizes in both themes. Its bytes match the upstream SVG at https://raw.githubusercontent.com/anomalyco/opencode/2fa3363c924c5c3e367b84a87ae478296a0ed59b/packages/ui/src/assets/favicon/favicon-v3.svg . Brand resources: https://opencode.ai/brand .
+  SHA-256: `e29bbe33380ad1c1ada9134b52f229d30e9776d60481512c9d81f2bb6f37def9`.
 
 Declare future icons in the independent `src/features/tools/adapters/<tool>.ts` module using `ToolUiAdapter.icon` (`light`, optional `dark`, `fit`, `tile`, `scale`, and `source`) and register the module in `adapters/index.ts`. All pages use `src/components/ToolIcon.tsx`; tools without metadata, including a newly registered sixth adapter or future Kimi adapter, receive a neutral SVG symbol beside their text name. No network requests are needed for ordinary icon rendering.
