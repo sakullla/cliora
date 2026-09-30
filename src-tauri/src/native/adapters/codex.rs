@@ -63,6 +63,9 @@ impl CliAdapter for Codex {
             Err("Codex 不支持此原生文件角色".into())
         }
     }
+    fn portable_root_fields(&self, role: &str) -> &'static [&'static str] {
+        if role == "settings" { &["model", "model_provider", "model_reasoning_effort", "service_tier", "features", "model_providers", "approval_policy", "sandbox_mode"] } else { &[] }
+    }
     fn mcp_location(
         &self,
         scope: Scope,

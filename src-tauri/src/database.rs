@@ -22,7 +22,7 @@ impl Database {
     pub fn open(path: &Path) -> Result<Self, OpenError> {
         let mut connection = Connection::open(path)?;
         let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 7 {
+        if version > 9 {
             return Err(OpenError::UnsupportedVersion(version));
         }
         connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
@@ -237,6 +237,72 @@ impl Database {
             )?;
             tx.commit()?;
         }
+        if version < 8 {
+            let tx = connection.transaction()?;
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS sync_config (
+                   id INTEGER PRIMARY KEY CHECK(id = 1),
+                   endpoint TEXT NOT NULL,
+                   username TEXT NOT NULL,
+                   auth_secret_id TEXT NOT NULL,
+                   space_secret_id TEXT NOT NULL,
+                   space_id TEXT NOT NULL,
+                   epoch INTEGER NOT NULL,
+                   enabled INTEGER NOT NULL,
+                   last_success INTEGER,
+                   last_error TEXT,
+                   retry_after INTEGER NOT NULL DEFAULT 0,
+                   failure_count INTEGER NOT NULL DEFAULT 0
+                 );
+                 CREATE TABLE IF NOT EXISTS sync_entity_state (
+                   entity_key TEXT PRIMARY KEY NOT NULL,
+                   local_digest TEXT NOT NULL,
+                   heads_json TEXT NOT NULL,
+                   deleted INTEGER NOT NULL DEFAULT 0
+                 );
+                 CREATE TABLE IF NOT EXISTS sync_outbox (
+                   id TEXT PRIMARY KEY NOT NULL,
+                   entity_key TEXT NOT NULL,
+                   object_json TEXT NOT NULL,
+                   created_at INTEGER NOT NULL
+                 );
+                 CREATE TABLE IF NOT EXISTS sync_seen (
+                   id TEXT PRIMARY KEY NOT NULL
+                 );
+                 PRAGMA user_version = 8;",
+            )?;
+            tx.commit()?;
+        }
+        if version < 9 {
+            let tx = connection.transaction()?;
+            for (table, prefix, id_column) in [
+                ("native_profiles", "profile", "id"),
+                ("common_configs", "common", "tool"),
+                ("projects", "project", "id"),
+                ("project_tool_models", "project", "project_id"),
+                ("library_items", "library", "id"),
+                ("mcp_definitions", "mcp", "id"),
+                ("skill_packages", "skill", "id"),
+            ] {
+                for (event, row) in [("INSERT", "NEW"), ("UPDATE", "NEW"), ("DELETE", "OLD")] {
+                    let trigger = format!("CREATE TRIGGER IF NOT EXISTS sync_{table}_{event} AFTER {event} ON {table} BEGIN
+                        INSERT INTO sync_outbox (id,entity_key,object_json,created_at)
+                        VALUES ('{prefix}:' || {row}.{id_column},'{prefix}:' || {row}.{id_column},hex(randomblob(16)),strftime('%s','now'))
+                        ON CONFLICT(id) DO UPDATE SET object_json=excluded.object_json,created_at=excluded.created_at; END;");
+                    tx.execute_batch(&trigger)?;
+                }
+            }
+            for (event,row) in [("INSERT","NEW"),("UPDATE","NEW"),("DELETE","OLD")] {
+                let trigger = format!("CREATE TRIGGER IF NOT EXISTS sync_preferences_{event} AFTER {event} ON app_settings
+                    WHEN {row}.key='preferences' BEGIN
+                    INSERT INTO sync_outbox (id,entity_key,object_json,created_at)
+                    VALUES ('preferences:managed','preferences:managed',hex(randomblob(16)),strftime('%s','now'))
+                    ON CONFLICT(id) DO UPDATE SET object_json=excluded.object_json,created_at=excluded.created_at; END;");
+                tx.execute_batch(&trigger)?;
+            }
+            tx.execute_batch("PRAGMA user_version = 9;")?;
+            tx.commit()?;
+        }
         Ok(Self {
             connection: Mutex::new(connection),
         })
@@ -416,7 +482,7 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
-            assert_eq!(version, 7);
+        assert_eq!(version, 9);
             let count: i64 = conn
                 .query_row("SELECT COUNT(*) FROM native_profiles", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
@@ -427,6 +493,9 @@ mod tests {
                 })
                 .map_err(|e| e.to_string())?;
             assert_eq!(history_count, 0);
+            let sync_count: i64 = conn.query_row("SELECT COUNT(*) FROM sync_outbox", [], |row| row.get(0))
+                .map_err(|error| error.to_string())?;
+            assert_eq!(sync_count, 0);
             Ok(())
         })
         .unwrap();

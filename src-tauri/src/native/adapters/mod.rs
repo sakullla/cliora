@@ -95,6 +95,9 @@ pub trait CliAdapter: Sync {
     ) -> Vec<NativeFile>;
     fn interface_formats(&self) -> &'static [&'static str];
     fn file_kind(&self, role: &str) -> Result<FileKind, String>;
+    /// Top-level native settings that remain meaningful across devices.
+    /// All other native fields stay in the local file and are not packed.
+    fn portable_root_fields(&self, _role: &str) -> &'static [&'static str] { &[] }
     fn auth_env_name(&self, connection: &Connection) -> Option<String> {
         if let Some(name) = &connection.auth_env_var {
             return Some(name.clone());
