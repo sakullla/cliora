@@ -52,7 +52,7 @@ test('new native profile exposes identity, edits with history, migrates pasted c
   await page.getByRole('combobox', { name: '模型', exact: true }).selectOption('new-model');
   expect((await page.evaluate(() => (window as any).__profileCalls)).filter((call: any) => call.command === 'list_provider_models').at(-1).args).toMatchObject({ connection: { secretRef: 'connection-new-model-key' }, force: true });
   await expect(key).toHaveValue('');
-  await page.getByText('更多选项', { exact: true }).click();
+  await page.locator('details[aria-label="配置更多选项"] > summary').click();
   await page.getByRole('checkbox', { name: '继承本工具通用配置' }).check();
   const editor = page.getByRole('textbox', { name: 'settings 配置草稿' });
   await editor.fill('');
@@ -78,7 +78,7 @@ test('new native profile exposes identity, edits with history, migrates pasted c
   await page.reload();
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
   await expect(name).toHaveValue('中文日常配置');
-  await page.getByText('更多选项', { exact: true }).click();
+  await page.locator('details[aria-label="配置更多选项"] > summary').click();
   await expect(editor).not.toContainText('pasted-private-key');
   // The actual app dialog cancels by Escape/button; stale answers cannot
   // discard edits that arrive while the confirmation is pending.
@@ -108,7 +108,7 @@ test('new native profile exposes identity, edits with history, migrates pasted c
   await expect(page.getByRole('heading', { name: '通用配置', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '中文日常配置', exact: false }).click();
   await expect(page.getByRole('heading', { name: '中文日常配置', exact: true })).toBeVisible();
-  await page.locator('details').filter({ has: page.locator(':scope > summary', { hasText: /^更多选项$/ }) }).evaluate((el: HTMLDetailsElement) => { el.open = true; });
+  await page.locator('details[aria-label="配置更多选项"]').evaluate((el: HTMLDetailsElement) => { el.open = true; });
   await expect(page.getByText('高级连接选项', { exact: true })).toBeVisible();
   await page.getByText('高级连接选项', { exact: true }).click();
   await page.getByText('更多诊断', { exact: true }).click();
@@ -357,7 +357,7 @@ test('page navigation and tray repair preserve unsaved form and native text with
   await expect(name).toHaveValue('未保存的表单');
 
   await name.fill('日常配置');
-  await page.getByText('更多选项', { exact: true }).click();
+  await page.locator('details[aria-label="配置更多选项"] > summary').click();
   const nativeText = page.getByRole('textbox', { name: 'config 配置草稿' });
   await nativeText.fill('model = "edited locally"');
   await emit({ page: 'settings', toolId: null, scope: null, projectId: null, projectPath: null, profileId: null });
