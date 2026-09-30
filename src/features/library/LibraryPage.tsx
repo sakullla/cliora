@@ -124,12 +124,12 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
         </article>) : <div className={styles.empty}>没有符合筛选条件的{kind === 'prompt' ? '提示词' : '规则'}。</div>}
       </div>}
       {draft ? <div className={styles.editor}>
-        <button className={styles.back} type="button" onClick={async () => { if (await canReplace()) { setDraft(null); setSavedText(''); } }}>← 返回资料库</button><div className={styles.editorHead}><div><small>{draft.id ? '编辑资料' : '新资料'}</small><h2>{draft.title || (kind === 'prompt' ? '提示词' : '长期规则')}</h2></div><button type="button" onClick={() => void copy(draft.body)} disabled={!draft.body}>复制全文</button></div>
+        <button className={styles.back} type="button" onClick={async () => { if (await canReplace()) { setDraft(null); setSavedText(''); } }}>← 返回资料库</button><div className={styles.editorHead}><div><small>{draft.id ? '编辑资料' : '新资料'}</small><h2>{draft.title || (kind === 'prompt' ? '提示词' : '长期规则')}</h2></div></div>
+        <div className={styles.actions}><span>{dirty ? '草稿尚未保存' : '已保存'}</span><button type="button" onClick={() => void copy(draft.body)} disabled={!draft.body}>复制全文</button>{draft.id && <button type="button" onClick={() => void remove()} disabled={busy}>删除</button>}<button type="button" className={styles.primary} disabled={busy || !draft.title.trim()} onClick={() => void save()}>保存</button></div>
         <div className={styles.fields}><label>标题<input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="简短清楚的名称" /></label>
           <label>分类<input value={draft.category} onChange={(event) => setDraft({ ...draft, category: event.target.value })} placeholder="例如：开发" /></label>
           <label>关联项目<select value={draft.projectId ?? ''} onChange={(event) => setDraft({ ...draft, projectId: event.target.value || null })}><option value="">全局</option>{projects.map((project) => <option value={project.id} key={project.id}>{project.name}</option>)}</select></label></div>
         <label className={styles.body}>完整正文<CodeEditor key={draft.id ?? 'new'} label="资料正文" format="markdown" value={draft.body} onChange={(body) => setDraft({ ...draft, body })} placeholder={kind === 'prompt' ? '写下可复制使用的提示词…' : '写下要保存或应用到 CLI 的规则…'} /></label>
-        <div className={styles.actions}><span>{dirty ? '草稿尚未保存' : '已保存'}</span>{draft.id && <button type="button" onClick={() => void remove()} disabled={busy}>删除</button>}<button type="button" className={styles.primary} disabled={busy || !draft.title.trim()} onClick={() => void save()}>保存</button></div>
         {kind === 'rule' && draft.id && draft.expectedVersion !== null && !dirty && <RuleDistribution key={`${draft.id}:${draft.expectedVersion}`} rule={{ ...draft, id: draft.id, version: draft.expectedVersion, updatedAt: 0 }} tools={managedTools} projects={projects} />}
       </div> : null}
     </div>
