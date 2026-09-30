@@ -2245,7 +2245,7 @@ mod tests {
     fn unknown_profiles_are_explicitly_readable_but_never_writable_as_known_tool() {
         let temp = tempfile::tempdir().unwrap();
         let db = Database::open(&temp.path().join("unknown.db")).unwrap();
-        let original = r#"{"id":"future-1","tool":"future_cli","name":"保留方案","version":1,"files":{"settings":"custom = true"}}"#;
+        let original = r#"{"id":"future-1","tool":"future_cli","name":"保留方案","version":1,"inheritCommon":false,"files":{"settings":"custom = true"}}"#;
         db.with_connection(|conn| {
             conn.execute(
                 "INSERT INTO native_profiles (id, tool, version, data) VALUES (?1, ?2, 1, ?3)",
@@ -2277,9 +2277,8 @@ mod tests {
             Some(1)
         )
         .is_err());
-        assert!(profile::delete_profile(&db, "future-1", 1, "")
-            .unwrap_err()
-            .contains("未注册的 CLI 适配器"));
+        let delete_error = profile::delete_profile(&db, "future-1", 1, "").unwrap_err();
+        assert!(delete_error.contains("未注册的 CLI 适配器"), "{delete_error}");
         let raw: String = db
             .with_connection(|conn| {
                 conn.query_row(

@@ -1,8 +1,13 @@
+Command: npm run tauri build -- --no-bundle
+Exit code: 0 (formal Delivery run)
+Source: docs/sakullla-workflow/2026-09-29-cli-tool-manager/evidence/verification/sha256-b15cb85345f1e79e9926858776fb3d300cf9f12917061922303e0af65af7993c.json
+Built source candidate: eec5fb3b52c5fdc4a695ed5216d44ef527f2c601
+
+STDOUT (original stream)
+
 > cliora@0.1.0 tauri
 > tauri build --no-bundle
 
-        Info Looking up installed tauri packages to check mismatched versions...
-     Running beforeBuildCommand `npm run build`
 
 > cliora@0.1.0 build
 > tsc -b && vite build
@@ -15,9 +20,13 @@ computing gzip size...
 dist/index.html                   0.45 kB │ gzip:   0.30 kB
 dist/assets/grok-BuodbWaG.svg     9.75 kB │ gzip:   3.30 kB
 dist/assets/index-BeQ3_NCM.css   52.99 kB │ gzip:   9.38 kB
-dist/assets/index-_R3PHdPm.js   362.86 kB │ gzip: 109.84 kB
+dist/assets/index-UoUX6PBj.js   362.90 kB │ gzip: 109.44 kB
 
-✓ built in 293ms
+✓ built in 287ms
+
+STDERR (original stream)
+        Info Looking up installed tauri packages to check mismatched versions...
+     Running beforeBuildCommand `npm run build`
    Compiling cliora v0.1.0 (C:\Users\12976\project\cliora\src-tauri)
 warning: linker stdout: 正在创建库 C:\Users\12976\project\cliora\src-tauri\target\release\deps\cliora_lib.dll.lib 和对象 C:\Users\12976\project\cliora\src-tauri\target\release\deps\cliora_lib.dll.exp
   |
@@ -29,5 +38,5 @@ warning: linker stdout: 正在创建库 C:\Users\12976\project\cliora\src-tauri\
   = note: `#[warn(linker_messages)]` on by default
 
 warning: `cliora` (bin "cliora") generated 1 warning
-    Finished `release` profile [optimized] target(s) in 1m 29s
+    Finished `release` profile [optimized] target(s) in 1m 30s
        Built application at: C:\Users\12976\project\cliora\src-tauri\target\release\cliora.exe
