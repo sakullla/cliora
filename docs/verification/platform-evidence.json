@@ -635,7 +635,7 @@
   "platformCandidates": {
     "windows": {
       "path": "docs/verification/windows-candidate.json",
-      "sha256": "416f29ffc21918f39da7c83fda8d12c586bf632527411faae562bf45c1552146"
+      "sha256": "11c0be0c7ab65b0c4168a85bce65d6a72f94803907b08f6517969e861ec8ef12"
     },
     "macos": null,
     "linux": null
