@@ -67,6 +67,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   const [resourceView, setResourceView] = useState<'config' | 'mcp' | 'skills'>(repair?.resourceView ?? 'config');
   const [mcpDirty, setMcpDirty] = useState(false);
   const [skillsDirty, setSkillsDirty] = useState(false);
+  const [resourceEpoch, setResourceEpoch] = useState(0);
   const [role, setRole] = useState('settings');
   const [preview, setPreview] = useState<NativePreview | null>(null);
   const [modelDirectory, setModelDirectory] = useState<ModelDirectory | null>(null);
@@ -167,14 +168,37 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   }, [currentTool, scope, projectPath]);
   useEffect(() => { if (active && currentTool) void reload(currentTool, scope, projectPath, preferredProfileId); }, [currentTool, scope, projectPath, preferredProfileId, reload]);
 
+  async function discardUnsavedDrafts() {
+    invalidateDraftRequest();
+    setRawDisk(null);
+    setNewSecret('');
+    setRevealedSecret(null);
+    setNotice('');
+    setMcpDirty(false);
+    setSkillsDirty(false);
+    setResourceEpoch((value) => value + 1);
+    if (currentTool) {
+      await reload(currentTool, scope, projectPath, selectedId);
+      return;
+    }
+    setDraft(null);
+    setCommonDraft(null);
+    setSelectedId(null);
+    setEditor('profile');
+    savedDraft.current = '';
+  }
+
   useEffect(() => {
     if (!openSequence || appliedOpenSequence.current === openSequence) return;
     appliedOpenSequence.current = openSequence;
     let live = true;
     void (async () => {
-      if ((dirty || mcpDirty || skillsDirty) && !await confirmChange('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return;
+      const hadUnsaved = dirty || mcpDirty || skillsDirty;
+      if (hadUnsaved && !await confirmChange('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return;
       if (!live) return;
-      invalidateDraftRequest();
+      if (hadUnsaved) await discardUnsavedDrafts();
+      else invalidateDraftRequest();
+      if (!live) return;
       if (initialTool) setTool(initialTool);
       setResourceView('config');
       setNotice('');
@@ -295,7 +319,9 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
 
   async function switchResourceView(next: 'config' | 'mcp' | 'skills') {
     if (next === resourceView) return;
-    if ((dirty || mcpDirty || skillsDirty) && !await confirmChange('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return;
+    const hadUnsaved = dirty || mcpDirty || skillsDirty;
+    if (hadUnsaved && !await confirmChange('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return;
+    if (hadUnsaved) await discardUnsavedDrafts();
     setResourceView(next);
   }
 
@@ -662,7 +688,10 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     {modelDirectory && <p className={styles.hint} role="status">{modelDirectory.status === 'ready' ? '已获取 ' + modelDirectory.models.length + ' 个模型' : modelDirectory.status === 'empty' ? '目录为空，可手动输入模型。' : modelDirectory.status === 'stale' ? '显示旧目录：' + modelDirectory.error : modelDirectory.error}{modelDirectory.fetchedAt ? ' · 更新于 ' + new Date(modelDirectory.fetchedAt * 1000).toLocaleString() : ''}</p>}
   </> : null;
 
+  const pathControl = workspace ? <details className={styles.pathControl}><summary><span className={styles.statusDot} data-ok={workspace.probe.nativeWrites.state === 'supported'} /><strong>{workspace.probe.selectedPath ? `${toolName} ${workspace.probe.installations.find((item) => item.path === workspace.probe.selectedPath)?.version ?? ''}` : `${toolName} 未确认安装`}</strong><span>{workspace.probe.nativeWrites.reason}</span><span className={styles.diagnosticLabel}>检测路径与升级</span></summary><p><a href={workspace.probe.installUrl} target="_blank" rel="noreferrer">官方安装说明 ↗</a></p><div><input aria-label="CLI 可执行文件路径" value={customPath} onChange={(event) => setCustomPath(event.target.value)} placeholder="自定义可执行文件完整路径" /><button type="button" onClick={() => void choosePath()} disabled={busy}>保存并重检</button><button type="button" disabled={loading} onClick={() => currentTool && void reload(currentTool, scope, projectPath, selectedId)}>重新检测</button></div><p>{workspace.probe.upgradeHint}</p>{workspace.probe.installations.map((item) => <p key={item.path}>{item.status === 'available' ? '可用' : '检测失败'} · 来源：{item.source === 'npm_shim' ? '已验证 npm 入口' : item.source === 'claude_native' ? 'Claude 原生安装' : '未能确认'} · {item.path} {item.detail ?? ''}</p>)}{workspace.probe.dependencies.map((item) => <p key={item.name}>{item.name}：{item.status === 'found' ? '已找到' : item.status === 'outdated' ? '版本过旧' : '缺失'} · {item.detail}{item.status !== 'found' && <a href={item.helpUrl} target="_blank" rel="noreferrer"> 安装或更新 ↗</a>}</p>)}{workspace.probe.installCommand && <div><code>{workspace.probe.installCommand}</code><button type="button" onClick={() => void copyGuidance(workspace.probe.installCommand!)}>复制安装命令</button></div>}{workspace.probe.upgradeCommand ? <div><code>{workspace.probe.upgradeCommand}</code><button type="button" onClick={() => void copyGuidance(workspace.probe.upgradeCommand!)}>复制升级命令</button></div> : workspace.probe.selectedPath && <p>安装来源未能可靠确认，请先核对官方安装说明，再用原安装方式升级。</p>}</details> : null;
+
   const moreOptions = workspace ? <details className={styles.moreOptions}><summary>更多选项</summary>
+    {pathControl}
     {editor === 'profile' && draft && <label className={styles.check}><input type="checkbox" checked={draft.inheritCommon} onChange={event => setDraft({ ...draft, inheritCommon: event.target.checked })} />继承本工具通用配置</label>}
     {editor === 'profile' && connection && <details className={styles.connectionAdvanced}><summary>高级连接选项</summary>
       {!!workspace.probe.providerPresets.length && <div className={styles.modelBar}><span>官方接口预设</span>{workspace.probe.providerPresets.map(item => <button key={item.id} type="button" title={item.sourceUrl} onClick={() => applyPreset(item.id, item.baseUrl, item.interfaceFormat)}>{item.label}</button>)}</div>}
@@ -676,9 +705,9 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
       {uiAdapter.reasoning && <label>{uiAdapter.reasoning.label}<select value={inspection?.reasoningEffort ?? ''} onChange={event => void changeReasoningEffort(event.target.value)}><option value="">跟随原生默认</option>{uiAdapter.reasoning.choices.map(([id, label]) => <option key={id} value={id}>{label}</option>)}{inspection?.reasoningEffort && !uiAdapter.reasoning.choices.some(([id]) => id === inspection.reasoningEffort) && <option value={inspection.reasoningEffort}>当前原生值：{inspection.reasoningEffort}</option>}</select></label>}
       {inspection?.connection && connectionShape(inspection.connection) !== connectionShape(connection) && <button type="button" onClick={adoptInspectedConnection}>使用原生配置中的连接</button>}
     </details>}
-    {(editor === 'profile') && <>
+    {(editor === 'profile' && draft) && <>
       <div className={styles.moreSection}><strong>原生文本</strong>{nativeEditor()}</div>
-      {draft && <div className={styles.merged}><button type="button" className={styles.previewButton} onClick={() => setView(view === 'merged' ? 'form' : 'merged')}>{view === 'merged' ? '隐藏合并结果' : '查看合并结果'}</button>{view === 'merged' && <><p>只读结构化预览：通用配置、命名配置和连接设置合并；CLI 仍可能受到环境变量、项目信任和更高优先级原生设置影响。</p><CodeEditor format="json" label="合并配置预览" readOnly value={preview ? JSON.stringify(preview.documents[role] ?? {}, null, 2) : ''} placeholder="等待有效配置…" />{preview && <details><summary>查看字段来源</summary><pre>{Object.entries(preview.sources[role] ?? {}).map(([path, source]) => `${path} ← ${source}`).join('\n') || '没有覆盖字段'}</pre></details>}</>}</div>}
+      <div className={styles.merged}><button type="button" className={styles.previewButton} onClick={() => setView(view === 'merged' ? 'form' : 'merged')}>{view === 'merged' ? '隐藏合并结果' : '查看合并结果'}</button>{view === 'merged' && <><p>只读结构化预览：通用配置、命名配置和连接设置合并；CLI 仍可能受到环境变量、项目信任和更高优先级原生设置影响。</p><CodeEditor format="json" label="合并配置预览" readOnly value={preview ? JSON.stringify(preview.documents[role] ?? {}, null, 2) : ''} placeholder="等待有效配置…" />{preview && <details><summary>查看字段来源</summary><pre>{Object.entries(preview.sources[role] ?? {}).map(([path, source]) => `${path} ← ${source}`).join('\n') || '没有覆盖字段'}</pre></details>}</>}</div>
     </>}
     {editor !== 'common' && <button type="button" onClick={() => void editCommon()}>通用配置</button>}
     {editor === 'native' && <details className={styles.backupHistory} onToggle={event => { if (event.currentTarget.open) void loadBackups(); }}><summary>修改记录</summary>{backups.length ? <select aria-label="选择修改记录" value={backupPreview?.transactionId ?? ''} onChange={event => { if (event.target.value) void inspectBackup(event.target.value); else setBackupPreview(null); }}><option value="">选择记录…</option>{backups.map((item, index) => <option key={item.transactionId} value={item.transactionId}>最近第 {index + 1} 次修改 · {item.path.split(/[\\/]/).pop()}</option>)}</select> : <p>此文件还没有可恢复的修改备份。</p>}{backupPreview && <><div className="file-conflict-columns"><div><strong>当前文件</strong><CodeEditor label="恢复前当前文件" readOnly compact format={activeFile?.format ?? 'text'} value={backupPreview.current} /></div><div><strong>修改前的备份</strong><CodeEditor label="修改前文件备份" readOnly compact format={activeFile?.format ?? 'text'} value={backupPreview.original} /></div></div><button type="button" disabled={busy} onClick={() => void restoreBackup()}>恢复此备份</button></>}</details>}
@@ -703,12 +732,12 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     {applyComparison && <section className="file-conflict" aria-label="配置应用冲突"><strong>比较当前文件与本次配置</strong>{applyComparison.files.map(file=><div className="file-conflict-columns" key={file.role}><div><strong>当前文件</strong><CodeEditor label={`当前 ${file.role} 文件`} readOnly compact format={file.format} value={file.current}/></div><div><strong>本次配置字段</strong><CodeEditor label={`本次 ${file.role} 配置`} readOnly compact format="json" value={JSON.stringify(file.proposed,null,2)}/></div></div>)}<div className="file-conflict-actions"><button type="button" onClick={()=>setApplyComparison(null)}>保留当前文件</button><button type="button" disabled={busy} onClick={()=>void resolveApplication()}>使用本次配置</button></div></section>}
     {notice && <div className={styles.notice} role="status">{notice}</div>}
     {workspace && !(scope === 'project' && !projectPath.trim()) && <>
-      <details className={styles.pathControl}><summary><span className={styles.statusDot} data-ok={workspace.probe.nativeWrites.state === 'supported'} /><strong>{workspace.probe.selectedPath ? `${toolName} ${workspace.probe.installations.find((item) => item.path === workspace.probe.selectedPath)?.version ?? ''}` : `${toolName} 未确认安装`}</strong><span>{workspace.probe.nativeWrites.reason}</span><span className={styles.diagnosticLabel}>检测路径与升级</span></summary><p><a href={workspace.probe.installUrl} target="_blank" rel="noreferrer">官方安装说明 ↗</a></p><div><input aria-label="CLI 可执行文件路径" value={customPath} onChange={(event) => setCustomPath(event.target.value)} placeholder="自定义可执行文件完整路径" /><button type="button" onClick={() => void choosePath()} disabled={busy}>保存并重检</button><button type="button" disabled={loading} onClick={() => currentTool && void reload(currentTool, scope, projectPath, selectedId)}>重新检测</button></div><p>{workspace.probe.upgradeHint}</p>{workspace.probe.installations.map((item) => <p key={item.path}>{item.status === 'available' ? '可用' : '检测失败'} · 来源：{item.source === 'npm_shim' ? '已验证 npm 入口' : item.source === 'claude_native' ? 'Claude 原生安装' : '未能确认'} · {item.path} {item.detail ?? ''}</p>)}{workspace.probe.dependencies.map((item) => <p key={item.name}>{item.name}：{item.status === 'found' ? '已找到' : item.status === 'outdated' ? '版本过旧' : '缺失'} · {item.detail}{item.status !== 'found' && <a href={item.helpUrl} target="_blank" rel="noreferrer"> 安装或更新 ↗</a>}</p>)}{workspace.probe.installCommand && <div><code>{workspace.probe.installCommand}</code><button type="button" onClick={() => void copyGuidance(workspace.probe.installCommand!)}>复制安装命令</button></div>}{workspace.probe.upgradeCommand ? <div><code>{workspace.probe.upgradeCommand}</code><button type="button" onClick={() => void copyGuidance(workspace.probe.upgradeCommand!)}>复制升级命令</button></div> : workspace.probe.selectedPath && <p>安装来源未能可靠确认，请先核对官方安装说明，再用原安装方式升级。</p>}</details>
       {!!workspace.recoveryNeeded.length && <div className={styles.error}>有 {workspace.recoveryNeeded.length} 项原生文件事务需要恢复。请检查目标文件和本机凭据库后重试。<button type="button" onClick={() => { void native.recoverNativeTransactions().then(() => { if (currentTool) return reload(currentTool, scope, projectPath, selectedId); }); }}>重试恢复</button></div>}
       {configEmpty ? <div className={styles.taskEmpty}>
         <button type="button" className={styles.primary} disabled={busy} onClick={() => void createProfile()}>新建配置</button>
         <p>按下后填写名称、API 地址、密钥和模型，再保存并给这个工具使用。</p>
         <button type="button" className={styles.secondaryLink} disabled={busy || !hasCurrentNative} onClick={() => void openCurrentFile()}>直接修改正在使用的文件</button>
+        {moreOptions}
       </div> : <div className={styles.columns}>
         <aside className={styles.profileList} aria-label="配置列表">
           <div className={styles.listHeading}><strong>配置</strong><button type="button" onClick={() => void createProfile()}>＋ 新建</button></div>
@@ -739,7 +768,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
       {editor === 'profile' && draft?.id && !dirty && (workspace.binding?.profileId !== draft.id || workspace.binding.profileVersion !== draft.version) && <div className={styles.quickApply}><span>这份配置已保存，但尚未应用到当前范围。</span><button type="button" onClick={() => void applySaved(draft)} disabled={busy || workspace.probe.nativeWrites.state !== 'supported'}>应用这份配置</button></div>}
     </>}
     </div>
-    <div hidden={resourceView !== 'mcp'}><McpWorkspace key={JSON.stringify([currentTool, scope, projectPath])} toolId={currentTool} scope={scope} projectPath={projectPath} tools={visibleTools} onDirtyChange={setMcpDirty} /></div>
-    <div hidden={resourceView !== 'skills'}><SkillsWorkspace key={JSON.stringify([currentTool, scope, projectPath])} toolId={currentTool} scope={scope} projectPath={projectPath} onDirtyChange={setSkillsDirty} /></div>
+    <div hidden={resourceView !== 'mcp'}><McpWorkspace key={JSON.stringify([currentTool, scope, projectPath, resourceEpoch])} toolId={currentTool} scope={scope} projectPath={projectPath} tools={visibleTools} onDirtyChange={setMcpDirty} /></div>
+    <div hidden={resourceView !== 'skills'}><SkillsWorkspace key={JSON.stringify([currentTool, scope, projectPath, resourceEpoch])} toolId={currentTool} scope={scope} projectPath={projectPath} onDirtyChange={setSkillsDirty} /></div>
   </section>;
 }
