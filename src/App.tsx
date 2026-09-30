@@ -6,6 +6,7 @@ import { ProjectLauncher } from './features/home/ProjectLauncher';
 import { LibraryPage } from './features/library/LibraryPage';
 import { RecordsPage } from './features/records/RecordsPage';
 import { TerminalSettings } from './features/settings/TerminalSettings';
+import { MigrationSettings } from './features/settings/MigrationSettings';
 import { ToolWorkspacePage } from './features/tools/ToolWorkspace';
 import { native, nativeAvailable } from './lib/native';
 import { browserBootstrap } from './types/domain';
@@ -105,6 +106,15 @@ export default function App() {
     }
   }
 
+  async function refreshAfterImport() {
+    if (!nativeAvailable) return;
+    try {
+      const [nextBootstrap, nextCatalog] = await Promise.all([native.getBootstrap(), native.listCliAdapters()]);
+      setBootstrap(nextBootstrap);
+      setCatalog(nextCatalog);
+    } catch (value) { setError(value as ApiError); }
+  }
+
   useEffect(() => {
     const mode = bootstrap.preferences.theme;
     const apply = () => { document.documentElement.dataset.theme = mode === 'system' ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : mode; };
@@ -173,11 +183,13 @@ export default function App() {
         </>}
         <div hidden={page !== 'library'}><LibraryPage managedTools={visibleDescriptors} active={page === 'library'} /></div>
         <div hidden={page !== 'records'}><RecordsPage active={page === 'records'} tools={catalog?.registered ?? []} onOpenProjects={() => go('home')} /></div>
-        {page === 'settings' && <><PageTabs items={[["general", "常规"], ["migration", "迁移与同步"]]} value={settingsTab} onChange={setSettingsTab} />{settingsTab === 'general' ? <>
+        {page === 'settings' && <PageTabs items={[["general", "常规"], ["migration", "迁移与同步"]]} value={settingsTab} onChange={setSettingsTab} />}
+        {page === 'settings' && settingsTab === 'general' && <>
           <section className="settings-group"><div className="setting-intro"><h2>管理的 CLI</h2><p>只在首页和工具页显示勾选的工具。关闭管理不会删除已有配置。</p></div>{(nativeAvailable ? catalog?.registered ?? [] : bootstrap.tools).map((item) => <label className="setting-row" key={item.id}><span><strong>{item.name}</strong><small>安装与配置状态在工具页查看</small></span><input type="checkbox" checked={managed.includes(item.id)} disabled={!nativeAvailable || busy} onChange={(event) => updateManaged(item.id, event.target.checked)} /></label>)}{catalog?.preservedUnknown.map((item) => <div className="setting-row" key={item.id}><span><strong>{item.id}</strong><small>未安装适配器，保留 {item.profileCount} 份配置，只读</small></span></div>)}</section>
           <section className="settings-group"><div className="setting-intro"><h2>外观</h2><p>跟随系统，或固定浅色、深色。</p></div><label className="setting-row"><span><strong>主题</strong></span><select aria-label="主题" value={bootstrap.preferences.theme} disabled={busy} onChange={(event) => updateTheme(event.target.value as Theme)}><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select></label></section>
           {nativeAvailable && <TerminalSettings />}
-        </> : <div className="migration-card"><span className="migration-mark" aria-hidden="true">↗</span><h2>换设备，恢复熟悉的配置</h2><p>加密配置包与 WebDAV 将集中在这里。导入前会预览差异，并重新关联本机目录。</p><div className="migration-actions"><button type="button" className="button" disabled>导出配置包</button><button type="button" className="button" disabled>导入配置包</button><button type="button" className="button" disabled>配置 WebDAV</button></div><small>迁移服务尚未接入；目前不会生成配置包。</small></div>}</>}
+        </>}
+        <div hidden={page !== 'settings' || settingsTab !== 'migration'}><MigrationSettings active={page === 'settings' && settingsTab === 'migration'} onImported={() => void refreshAfterImport()} /></div>
       </>}
     </main>
   </div>;

@@ -80,6 +80,9 @@ impl CliAdapter for Grok {
             Err("Grok 不支持此原生文件角色".into())
         }
     }
+    fn portable_root_fields(&self, role: &str) -> &'static [&'static str] {
+        if role == "settings" { &["model", "permissions", "plugins", "mcp_servers"] } else { &[] }
+    }
     fn mcp_location(
         &self,
         scope: Scope,

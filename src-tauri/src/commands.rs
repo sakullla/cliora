@@ -16,12 +16,128 @@ use crate::native::{
     profile::{self, CommonConfig, Connection, NativeProfile, RegisteredCommon, RegisteredProfile},
     transaction::{self, ApplyOutcome},
 };
-use crate::{history, launch, library, projects, resources};
+use crate::{history, launch, library, portable, projects, resources};
 use std::path::PathBuf;
 
 #[derive(Default)]
 pub struct AppState {
     database: Mutex<Option<Arc<Database>>>,
+    portable_draft: Mutex<Option<portable::ImportDraft>>,
+}
+
+#[tauri::command]
+pub async fn list_portable_items(app: AppHandle) -> Result<Vec<portable::ImportItem>, ApiError> {
+    let db = app.state::<AppState>().database(&app)?;
+    blocking(move || {
+        let snapshot = portable::collect_snapshot(&db, &SystemCredentialStore, &adapters::Registry::builtins()).map_err(native_error)?;
+        Ok(snapshot.entities.iter().map(|entity| portable::ImportItem {
+            key: entity.key(), kind: entity.kind().into(), label: entity.label(),
+            status: "available", pending_fields: entity.pending_fields(),
+        }).collect())
+    }).await
+}
+
+#[tauri::command]
+pub async fn export_portable_bundle(app: AppHandle, destination: String, password: String,
+    selected: Vec<String>) -> Result<usize, ApiError> {
+    let db = app.state::<AppState>().database(&app)?;
+    blocking(move || {
+        let keys = selected.into_iter().collect();
+        portable::export_bundle(&db, &SystemCredentialStore, &adapters::Registry::builtins(),
+            &password, Some(&keys), Path::new(&destination)).map_err(native_error)
+    }).await
+}
+
+#[tauri::command]
+pub async fn preview_portable_bundle(app: AppHandle, source: String, password: String)
+    -> Result<portable::ImportPreview, ApiError> {
+    let db = app.state::<AppState>().database(&app)?;
+    let draft = blocking(move || {
+        let snapshot = portable::unlock_bundle(Path::new(&source), &password).map_err(native_error)?;
+        portable::preview_import(&db, &SystemCredentialStore, &adapters::Registry::builtins(), snapshot).map_err(native_error)
+    }).await?;
+    let preview = portable::preview_dto(&draft);
+    *app.state::<AppState>().portable_draft.lock().map_err(|_| native_error("迁移预览暂不可用".into()))? = Some(draft);
+    Ok(preview)
+}
+
+#[tauri::command]
+pub async fn apply_portable_bundle(app: AppHandle, preview_id: String, selected: Vec<String>)
+    -> Result<usize, ApiError> {
+    let db = app.state::<AppState>().database(&app)?;
+    let app_state = app.state::<AppState>();
+    let draft = {
+        let mut guard = app_state.portable_draft.lock()
+            .map_err(|_| native_error("迁移预览暂不可用".into()))?;
+        if guard.as_ref().is_none_or(|draft| draft.id != preview_id) {
+            return Err(native_error("导入预览已失效，请重新解锁".into()));
+        }
+        guard.take().ok_or_else(|| native_error("导入预览已失效，请重新解锁".into()))?
+    };
+    let retry = draft.clone();
+    let result = blocking(move || {
+        portable::apply_import(&db, &SystemCredentialStore, &adapters::Registry::builtins(),
+            &draft, &selected.into_iter().collect()).map_err(native_error)
+    }).await;
+    if result.is_err() {
+        let mut guard = app_state.portable_draft.lock()
+            .map_err(|_| native_error("迁移预览暂不可用".into()))?;
+        if guard.is_none() { *guard = Some(retry); }
+    }
+    result
+}
+
+#[tauri::command]
+pub fn cancel_portable_preview(state: State<'_, AppState>) -> Result<(), ApiError> {
+    state.portable_draft.lock().map_err(|_| native_error("迁移预览暂不可用".into()))?.take();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_webdav_status(app: AppHandle) -> Result<portable::sync::SyncStatus, ApiError> {
+    let db = app.state::<AppState>().database(&app)?;
+    portable::sync::status(&db).map_err(native_error)
+}
+
+#[tauri::command]
+pub async fn configure_webdav(app: AppHandle, setup: portable::sync::SyncSetup)
+    -> Result<portable::sync::SyncStatus, ApiError> {
+    let db = app.state::<AppState>().database(&app)?;
+    blocking(move || portable::sync::configure(&db, &SystemCredentialStore, setup).map_err(native_error)).await
+}
+
+#[tauri::command]
+pub fn set_webdav_enabled(app: AppHandle, enabled: bool) -> Result<portable::sync::SyncStatus, ApiError> {
+    let db = app.state::<AppState>().database(&app)?;
+    portable::sync::set_enabled(&db, enabled).map_err(native_error)
+}
+
+#[tauri::command]
+pub async fn sync_webdav_now(app: AppHandle) -> Result<portable::sync::SyncStatus, ApiError> {
+    let db = app.state::<AppState>().database(&app)?;
+    blocking(move || portable::sync::run(&db, &SystemCredentialStore, &adapters::Registry::builtins(), false).map_err(native_error)).await
+}
+
+#[tauri::command]
+pub async fn resolve_webdav_conflict(app: AppHandle, key: String, chosen_version_id: Option<String>)
+    -> Result<portable::sync::SyncStatus, ApiError> {
+    let db = app.state::<AppState>().database(&app)?;
+    blocking(move || portable::sync::resolve(&db, &SystemCredentialStore, &adapters::Registry::builtins(),
+        &key, chosen_version_id.as_deref()).map_err(native_error)).await
+}
+
+#[tauri::command]
+pub async fn preview_webdav_conflict(app: AppHandle, key: String)
+    -> Result<portable::sync::ConflictPreview, ApiError> {
+    let db = app.state::<AppState>().database(&app)?;
+    blocking(move || portable::sync::preview_conflict(&db,&SystemCredentialStore,
+        &adapters::Registry::builtins(),&key).map_err(native_error)).await
+}
+
+pub fn sync_background_tick(app: &AppHandle) -> Result<(), ApiError> {
+    let db = app.state::<AppState>().database(app)?;
+    portable::sync::run(&db, &SystemCredentialStore, &adapters::Registry::builtins(), true)
+        .map(|_| ()).map_err(native_error)
 }
 
 #[derive(Clone, Debug, Serialize)]

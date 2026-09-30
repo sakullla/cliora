@@ -75,6 +75,9 @@ impl CliAdapter for OpenCode {
             Err("OpenCode 不支持此原生文件角色".into())
         }
     }
+    fn portable_root_fields(&self, role: &str) -> &'static [&'static str] {
+        if role == "settings" { &["model", "provider", "agent", "permission", "mcp"] } else { &[] }
+    }
     fn mcp_location(
         &self,
         scope: Scope,

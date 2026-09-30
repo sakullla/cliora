@@ -5,6 +5,7 @@ import type { LaunchRequest, LaunchResult, LaunchSettings, Project, TerminalId, 
 import type { LibraryDraft, LibraryItem, LibraryKind } from '../types/library';
 import type { McpDefinition, McpDraft, McpTargetRequest, McpTargetResult, NativeMcpEntry, RuleTarget, RulePreview, RuleApplyResult, SkillPackage, SkillImportPreview, SkillInstallation, SkillTargetResult, NativeSkillEntry, SkillTargetPreview, SkillRecoveryIssue } from '../types/resources';
 import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, ScanStatus, UsageSummary } from '../types/history';
+import type { ConflictPreview, PortableItem, PortablePreview, SyncStatus, WebdavSetup } from '../types/portable';
 
 export const nativeAvailable = isTauri();
 
@@ -34,6 +35,17 @@ async function command<T>(name: string, args?: Record<string, unknown>): Promise
 
 /** Feature modules add named wrappers here; components never invoke arbitrary commands. */
 export const native = {
+  listPortableItems: () => command<PortableItem[]>('list_portable_items'),
+  exportPortableBundle: (destination: string, password: string, selected: string[]) => command<number>('export_portable_bundle', { destination, password, selected }),
+  previewPortableBundle: (source: string, password: string) => command<PortablePreview>('preview_portable_bundle', { source, password }),
+  applyPortableBundle: (previewId: string, selected: string[]) => command<number>('apply_portable_bundle', { previewId, selected }),
+  cancelPortablePreview: () => command<void>('cancel_portable_preview'),
+  getWebdavStatus: () => command<SyncStatus>('get_webdav_status'),
+  configureWebdav: (setup: WebdavSetup) => command<SyncStatus>('configure_webdav', { setup }),
+  setWebdavEnabled: (enabled: boolean) => command<SyncStatus>('set_webdav_enabled', { enabled }),
+  syncWebdavNow: () => command<SyncStatus>('sync_webdav_now'),
+  resolveWebdavConflict: (key: string, chosenVersionId: string | null) => command<SyncStatus>('resolve_webdav_conflict', { key, chosenVersionId }),
+  previewWebdavConflict: (key: string) => command<ConflictPreview>('preview_webdav_conflict', { key }),
   refreshHistory: () => command<ScanStatus[]>('refresh_history'),
   listHistorySessions: (filter: HistoryFilter) => command<HistorySession[]>('list_history_sessions', { filter }),
   getHistorySession: (id: string) => command<HistoryDetail>('get_history_session', { id }),

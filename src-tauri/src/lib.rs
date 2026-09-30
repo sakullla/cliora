@@ -6,6 +6,7 @@ pub mod history;
 pub mod launch;
 pub mod library;
 pub mod native;
+pub mod portable;
 pub mod projects;
 pub mod resources;
 pub mod tray;
@@ -22,6 +23,11 @@ pub fn run() {
             // The window must remain available when local storage needs repair.
             app.manage(commands::AppState::default());
             tray::setup(app);
+            let sync_handle = app.handle().clone();
+            std::thread::spawn(move || loop {
+                let _ = commands::sync_background_tick(&sync_handle);
+                std::thread::sleep(std::time::Duration::from_secs(60));
+            });
             let handle = app.handle().clone();
             app.listen("cliora:bindings-changed", move |_| {
                 let handle = handle.clone();
@@ -67,6 +73,17 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            commands::list_portable_items,
+            commands::export_portable_bundle,
+            commands::preview_portable_bundle,
+            commands::apply_portable_bundle,
+            commands::cancel_portable_preview,
+            commands::get_webdav_status,
+            commands::configure_webdav,
+            commands::set_webdav_enabled,
+            commands::sync_webdav_now,
+            commands::resolve_webdav_conflict,
+            commands::preview_webdav_conflict,
             commands::refresh_history,
             commands::list_history_sessions,
             commands::get_history_session,
