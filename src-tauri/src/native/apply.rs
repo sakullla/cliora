@@ -483,6 +483,7 @@ pub fn apply_registered_validated(
     }
     if patches.is_empty() {
         return transaction::commit_matching(db, &matching_baselines, |tx| {
+            check_apply_snapshot(tx, profile, common)?;
             let json = serde_json::to_string(&new_managed).map_err(|e| e.to_string())?;
             tx.execute("INSERT INTO applied_bindings (scope_key, tool, profile_id, profile_version, managed) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(scope_key, tool) DO UPDATE SET profile_id = excluded.profile_id, profile_version = excluded.profile_version, managed = excluded.managed", params![key, profile.tool, profile.id, profile.version as i64, json]).map_err(|e| e.to_string())?;
             Ok(())
@@ -496,11 +497,44 @@ pub fn apply_registered_validated(
         credentials,
         &patches,
         |tx| {
+            check_apply_snapshot(tx, profile, common)?;
             let json = serde_json::to_string(&new_managed).map_err(|e| e.to_string())?;
             tx.execute("INSERT INTO applied_bindings (scope_key, tool, profile_id, profile_version, managed) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(scope_key, tool) DO UPDATE SET profile_id = excluded.profile_id, profile_version = excluded.profile_version, managed = excluded.managed", params![key, profile.tool, profile.id, profile.version as i64, json]).map_err(|e| e.to_string())?;
             Ok(())
         },
     )
+}
+
+/// The snapshot can become stale during probe, credential reads or file preparation.
+/// Check it in the same transaction that commits the binding so imports cannot erase
+/// pending state between this check and the commit. A rejected file write rolls back.
+fn check_apply_snapshot(
+    tx: &rusqlite::Transaction<'_>,
+    profile: &RegisteredProfile,
+    common: Option<&RegisteredCommon>,
+) -> Result<(), String> {
+    let current: Option<String> = tx.query_row(
+        "SELECT data FROM native_profiles WHERE id=?1", [&profile.id], |row| row.get(0),
+    ).optional().map_err(|error| error.to_string())?;
+    let current: Option<RegisteredProfile> = current.as_deref().map(serde_json::from_str)
+        .transpose().map_err(|_| "命名配置格式无法识别")?;
+    let unchanged = current.as_ref().map(serde_json::to_value).transpose().map_err(|error| error.to_string())?
+        == Some(serde_json::to_value(profile).map_err(|error| error.to_string())?);
+    if !unchanged {
+        return Err("配置资料在应用期间已变化，请重新读取后应用".into());
+    }
+    if profile.inherit_common {
+        let current: Option<String> = tx.query_row(
+            "SELECT data FROM common_configs WHERE tool=?1", [&profile.tool], |row| row.get(0),
+        ).optional().map_err(|error| error.to_string())?;
+        let current: Option<RegisteredCommon> = current.as_deref().map(serde_json::from_str)
+            .transpose().map_err(|_| "通用配置格式无法识别")?;
+        if current.as_ref().map(serde_json::to_value).transpose().map_err(|error| error.to_string())?
+            != common.map(serde_json::to_value).transpose().map_err(|error| error.to_string())? {
+            return Err("配置资料在应用期间已变化，请重新读取后应用".into());
+        }
+    }
+    Ok(())
 }
 
 pub fn apply_profile(
@@ -619,6 +653,162 @@ mod tests {
         }
     }
 
+    // File/credential fixtures now also represent the persisted application snapshot.
+    fn apply_fixture(
+        db: &Database, store: &dyn CredentialStore, snapshot: &NativeProfile,
+        common: Option<&profile::CommonConfig>, files: &[NativeFile], key: &str,
+        scope: Scope, allow_takeover: bool,
+    ) -> Result<ApplyOutcome, String> {
+        db.with_connection(|conn| {
+            conn.execute("INSERT INTO native_profiles (id,tool,version,data) VALUES (?1,?2,?3,?4)
+                ON CONFLICT(id) DO UPDATE SET data=excluded.data,version=excluded.version",
+                params![snapshot.id,snapshot.tool.stable_id(),snapshot.version as i64,serde_json::to_string(snapshot).unwrap()]).unwrap();
+            if let Some(common) = common {
+                conn.execute("INSERT INTO common_configs (tool,version,data) VALUES (?1,?2,?3)
+                    ON CONFLICT(tool) DO UPDATE SET data=excluded.data,version=excluded.version",
+                    params![common.tool.stable_id(),common.version as i64,serde_json::to_string(common).unwrap()]).unwrap();
+            }
+            Ok(())
+        })?;
+        super::apply_validated(db, store, snapshot, common, files, key, scope, allow_takeover)
+    }
+
+    fn probe_import_interleave(common_only: bool, writes: bool) {
+        use crate::native::adapters::Registry;
+        use crate::portable::{self, PortablePayload};
+        use std::thread;
+        use std::time::{Duration, Instant};
+
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let project = temp.path().join("project");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&project).unwrap();
+        let executable = temp.path().join(if cfg!(windows) { "codex.ps1" } else { "codex" });
+        fs::write(&executable, if cfg!(windows) { "Write-Output 'codex-cli 0.114.0'\n" } else { "#!/bin/sh\necho 'codex-cli 0.114.0'\n" }).unwrap();
+        #[cfg(unix)] {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        let store = MemoryStore::default();
+        let registry = Registry::builtins();
+        let mut named = profile("", "initial");
+        named.name = "Work".into();
+        named.inherit_common = true;
+        named.files.clear();
+        let mut named = profile::save_profile(&db, named, None).unwrap();
+        let mut common = profile::save_common(&db, profile::CommonConfig {
+            tool: CliId::Codex, version: 0, revision: String::new(),
+            files: BTreeMap::from([("settings".into(), "model = \"initial\"\n".into())]),
+        }, None).unwrap();
+        apply_profile(&db, &store, CliId::Codex, &named.id, Scope::Project, &home, Some(&project), Some(&executable), false).unwrap();
+        let native = project.join(".codex/config.toml");
+        let before = fs::read(&native).unwrap();
+        if writes {
+            if common_only {
+                common.files.insert("settings".into(), "model = \"captured\"\n".into());
+                common = profile::save_common(&db, common.clone(), Some(common.version)).unwrap();
+            } else {
+                named.files.insert("settings".into(), "model = \"captured\"\n".into());
+                named = profile::save_profile(&db, named.clone(), Some(named.version)).unwrap();
+            }
+        }
+        let captured_profile_revision = named.revision.clone();
+        let captured_common_revision = common.revision.clone();
+        let captured_version = named.version;
+        let mut incoming = portable::collect_snapshot(&db, &store, &registry).unwrap();
+        incoming.entities.retain(|entity| entity.kind() == if common_only { "common" } else { "profile" });
+        match &mut incoming.entities[0].payload {
+            PortablePayload::Common(value) => { value.files.insert("settings".into(), "model = \"incoming\"\n".into()); },
+            PortablePayload::Profile(value) => { value.profile.files.insert("settings".into(), "model = \"incoming\"\n".into()); },
+            _ => panic!("unexpected payload"),
+        }
+        let import = portable::preview_import(&db, &store, &registry, incoming).unwrap();
+        let selected = import.items.iter().map(|item| item.key.clone()).collect();
+        let ready = temp.path().join("probe-ready");
+        let release = temp.path().join("probe-release");
+        let quote = |path: &Path| format!("'{}'", path.display().to_string().replace('\'', if cfg!(windows) { "''" } else { "'\\''" }));
+        let script = if cfg!(windows) {
+            format!("Set-Content -LiteralPath {} -Value ready\nwhile (!(Test-Path -LiteralPath {})) {{ Start-Sleep -Milliseconds 5 }}\nWrite-Output 'codex-cli 0.114.0'\n", quote(&ready), quote(&release))
+        } else {
+            format!("#!/bin/sh\nprintf ready > {}\nwhile [ ! -f {} ]; do sleep 0.01; done\necho 'codex-cli 0.114.0'\n", quote(&ready), quote(&release))
+        };
+        fs::write(&executable, script).unwrap();
+        let result = thread::scope(|scope| {
+            let applying = scope.spawn(|| apply_profile(&db, &store, CliId::Codex, &named.id, Scope::Project, &home, Some(&project), Some(&executable), false));
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while !ready.exists() && Instant::now() < deadline { thread::sleep(Duration::from_millis(5)); }
+            let reached_probe = ready.exists();
+            if reached_probe { portable::apply_import(&db, &store, &registry, &import, &selected).unwrap(); }
+            fs::write(&release, "release").unwrap();
+            let result = applying.join().unwrap();
+            assert!(reached_probe, "application did not reach the controlled CLI probe");
+            result
+        });
+        assert!(result.unwrap_err().contains("配置资料在应用期间已变化"));
+        assert_eq!(fs::read(&native).unwrap(), before);
+        let current_profile = profile::get_profile(&db, &named.id).unwrap();
+        assert_eq!(current_profile.version, captured_version);
+        if common_only {
+            assert_eq!(current_profile.revision, captured_profile_revision);
+            assert_ne!(profile::get_common(&db, CliId::Codex).unwrap().unwrap().revision, captured_common_revision);
+        } else { assert_ne!(current_profile.revision, captured_profile_revision); }
+        db.with_connection(|conn| {
+            let binding: i64 = conn.query_row("SELECT profile_version FROM applied_bindings WHERE profile_id=?1", [&named.id], |row| row.get(0)).unwrap();
+            assert_eq!(binding, -1, "old apply must preserve the incoming pending marker");
+            let rolled_back: i64 = conn.query_row("SELECT count(*) FROM native_transactions WHERE status='rolled_back'", [], |row| row.get(0)).unwrap();
+            assert_eq!(rolled_back, i64::from(writes), "writing branch must restore its native transaction");
+            Ok(())
+        }).unwrap();
+        // Explicit application of the newly read snapshot succeeds after the rejected old one.
+        apply_profile(&db, &store, CliId::Codex, &named.id, Scope::Project, &home, Some(&project), Some(&executable), false).unwrap();
+        assert!(fs::read_to_string(&native).unwrap().contains("incoming"));
+        assert_eq!(get_binding(&db, CliId::Codex, &scope_key(Scope::Project, Some(&project)).unwrap()).unwrap().unwrap().profile_version, current_profile.version);
+    }
+
+    #[test]
+    fn common_import_during_probe_rejects_already_matching_binding() { probe_import_interleave(true, false); }
+    #[test]
+    fn common_import_during_probe_rolls_back_written_files() { probe_import_interleave(true, true); }
+    #[test]
+    fn same_version_profile_import_during_probe_rejects_already_matching_binding() { probe_import_interleave(false, false); }
+    #[test]
+    fn same_version_profile_import_during_probe_rolls_back_written_files() { probe_import_interleave(false, true); }
+
+    #[test]
+    fn snapshot_guard_checks_content_and_existence_and_ignores_uninherited_common() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        let store = MemoryStore::default();
+        let named = profile("snapshot", "base");
+        apply_fixture(&db, &store, &named, None, &[native(&temp.path().join("config.toml"))], "global", Scope::Global, false).unwrap();
+        let captured = RegisteredProfile::from(named);
+        let check = |profile: &RegisteredProfile, common: Option<&RegisteredCommon>| db.with_connection(|conn| {
+            let tx = conn.transaction().map_err(|error| error.to_string())?;
+            check_apply_snapshot(&tx, profile, common)
+        });
+        db.with_connection(|conn| { conn.execute("INSERT INTO common_configs (tool,version,data) VALUES ('codex',1,?1)", [serde_json::to_string(&RegisteredCommon { tool: "codex".into(), version: 1, revision: "one".into(), files: BTreeMap::new() }).unwrap()]).unwrap(); Ok(()) }).unwrap();
+        assert!(check(&captured, None).is_ok(), "uninherited Common cannot invalidate the snapshot");
+        let mut changed = captured.clone();
+        changed.files.insert("settings".into(), "model = \"changed-without-revision\"\n".into());
+        db.with_connection(|conn| { conn.execute("UPDATE native_profiles SET data=?1 WHERE id=?2", params![serde_json::to_string(&changed).unwrap(), captured.id]).unwrap(); Ok(()) }).unwrap();
+        assert!(check(&captured, None).is_err());
+        db.with_connection(|conn| { conn.execute("DELETE FROM native_profiles WHERE id=?1", [&captured.id]).unwrap(); Ok(()) }).unwrap();
+        assert!(check(&captured, None).is_err());
+        changed = captured.clone(); changed.inherit_common = true;
+        db.with_connection(|conn| { conn.execute("INSERT INTO native_profiles (id,tool,version,data) VALUES (?1,'codex',1,?2)", params![changed.id, serde_json::to_string(&changed).unwrap()]).unwrap(); Ok(()) }).unwrap();
+        assert!(check(&changed, None).is_err(), "a newly created Common is a change from absence");
+        let common = profile::get_registered_common(&db, "codex").unwrap().unwrap();
+        assert!(check(&changed, Some(&common)).is_ok());
+        let mut changed_common = common.clone(); changed_common.files.insert("settings".into(), "model = \"changed-without-revision\"\n".into());
+        db.with_connection(|conn| { conn.execute("UPDATE common_configs SET data=?1 WHERE tool='codex'", [serde_json::to_string(&changed_common).unwrap()]).unwrap(); Ok(()) }).unwrap();
+        assert!(check(&changed, Some(&common)).is_err());
+        db.with_connection(|conn| { conn.execute("DELETE FROM common_configs WHERE tool='codex'", []).unwrap(); Ok(()) }).unwrap();
+        assert!(check(&changed, Some(&common)).is_err(), "deleted Common is a change in existence");
+        assert!(check(&changed, None).is_ok());
+    }
+
     #[test]
     fn switching_named_profiles_removes_only_old_managed_keys() {
         let temp = tempfile::tempdir().unwrap();
@@ -627,7 +817,7 @@ mod tests {
         let db = Database::open(&temp.path().join("app.db")).unwrap();
         let store = MemoryStore::default();
         let first = profile("first", "a");
-        apply_validated(
+        apply_fixture(
             &db,
             &store,
             &first,
@@ -639,7 +829,7 @@ mod tests {
         )
         .unwrap();
         let second = profile("second", "b");
-        apply_validated(
+        apply_fixture(
             &db,
             &store,
             &second,
@@ -662,7 +852,7 @@ mod tests {
             "second"
         );
         fs::write(&path, text.replace("model = \"b\"", "model = \"external\"")).unwrap();
-        assert!(apply_validated(
+        assert!(apply_fixture(
             &db,
             &store,
             &first,
@@ -778,7 +968,7 @@ mod tests {
                 files.push(native_role("models", &models, "jsonc"));
             }
             let profile = secret_profile(tool, "first", "demo", id);
-            apply_validated(
+            apply_fixture(
                 &db,
                 &store,
                 &profile,
@@ -795,7 +985,7 @@ mod tests {
                 &settings
             })
             .unwrap();
-            let matching = apply_validated(
+            let matching = apply_fixture(
                 &db,
                 &store,
                 &profile,
@@ -865,7 +1055,7 @@ mod tests {
                 "connection-00000000-0000-4000-8000-000000000001".into(),
             )]),
         );
-        apply_validated(
+        apply_fixture(
             &db,
             &store,
             &profile,
@@ -896,7 +1086,7 @@ mod tests {
         let first = secret_profile(CliId::Codex, "first", "old_provider", first_id);
         let second = secret_profile(CliId::Codex, "second", "new_provider", second_id);
         let target = [native_role("settings", &file, "toml")];
-        apply_validated(
+        apply_fixture(
             &db,
             &store,
             &first,
@@ -909,7 +1099,7 @@ mod tests {
         .unwrap();
         let first_text = fs::read_to_string(&file).unwrap();
         assert!(first_text.contains("old-test-key"));
-        apply_validated(
+        apply_fixture(
             &db,
             &store,
             &second,
@@ -935,7 +1125,7 @@ mod tests {
             second_text.replace("new-test-key", "external-test-key"),
         )
         .unwrap();
-        assert!(apply_validated(
+        assert!(apply_fixture(
             &db,
             &store,
             &first,
@@ -991,7 +1181,7 @@ mod tests {
             native_role("settings", &shared, "json"),
             native_role("local_settings", &local, "json"),
         ];
-        assert!(apply_validated(
+        assert!(apply_fixture(
             &db,
             &store,
             &profile,
@@ -1004,7 +1194,7 @@ mod tests {
         .unwrap_err()
         .contains("接管"));
         assert_eq!(fs::read_to_string(&shared).unwrap(), source);
-        apply_validated(
+        apply_fixture(
             &db,
             &store,
             &profile,
@@ -1034,7 +1224,7 @@ mod tests {
         store.put(id, "token-test-value").unwrap();
         let mut profile = secret_profile(CliId::ClaudeCode, "token", "anthropic", id);
         profile.connection.as_mut().unwrap().auth_env_var = Some("ANTHROPIC_AUTH_TOKEN".into());
-        apply_validated(
+        apply_fixture(
             &db,
             &store,
             &profile,
@@ -1101,7 +1291,7 @@ mod tests {
         ];
         let before_shared = fs::read_to_string(&shared).unwrap();
         let before_local = fs::read_to_string(&local).unwrap();
-        assert!(apply_validated(
+        assert!(apply_fixture(
             &db,
             &store,
             &profile,
@@ -1115,7 +1305,7 @@ mod tests {
         .contains("接管"));
         assert_eq!(fs::read_to_string(&shared).unwrap(), before_shared);
         assert_eq!(fs::read_to_string(&local).unwrap(), before_local);
-        let outcome = apply_validated(
+        let outcome = apply_fixture(
             &db,
             &store,
             &profile,
@@ -1133,7 +1323,7 @@ mod tests {
         assert!(!local_after.contains("local-token"));
         assert!(shared_after.contains("defaultMode"));
         assert!(local_after.contains("other"));
-        apply_validated(
+        apply_fixture(
             &db,
             &store,
             &profile,
