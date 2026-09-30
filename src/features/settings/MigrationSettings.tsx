@@ -13,7 +13,7 @@ const KIND: Record<string, string> = {
 };
 
 export function MigrationSettings({ active, onImported }: { active: boolean; onImported?: () => void }) {
-  const [operation, setOperation] = useState<'export' | 'import' | null>(null);
+  const [operation, setOperation] = useState<'export' | 'import' | 'webdav' | null>(null);
   const [items, setItems] = useState<PortableItem[]>([]);
   const [exportSelected, setExportSelected] = useState<string[]>([]);
   const [exportPassword, setExportPassword] = useState('');
@@ -37,6 +37,10 @@ export function MigrationSettings({ active, onImported }: { active: boolean; onI
     }).catch((reason: { message?: string }) => { if (alive) setError(reason.message ?? '无法读取可迁移资料'); });
     return () => { alive = false; };
   }, [active]);
+
+  function setWebdavEditing(editing: boolean) {
+    setOperation((current) => editing ? 'webdav' : current === 'webdav' ? null : current);
+  }
 
   function toggle(key: string, values: string[], update: (next: string[]) => void) {
     update(values.includes(key) ? values.filter((value) => value !== key) : [...values, key]);
@@ -144,6 +148,6 @@ export function MigrationSettings({ active, onImported }: { active: boolean; onI
           <button type="button" className="button primary" disabled={busy || !importSelected.length} onClick={() => void applyPreview()}>确认恢复 {importSelected.length} 项</button></div>
       </>}
     </section>
-    <WebdavSettings active={active} />
+    <WebdavSettings active={active} editing={operation === 'webdav'} onEdit={setWebdavEditing} />
   </div>;
 }

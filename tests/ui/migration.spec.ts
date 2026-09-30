@@ -118,7 +118,7 @@ test('migration previews conflicts, keeps choices, cancels, and separates native
           conflicts: [{ key: 'library:one', label: '常用规则', localPresent: true, localDigest: 'a', remoteVersions: 2, remoteDeleted: false,
             versions: [{ id: 'remote-1', digest: 'b', deleted: false }, { id: 'remote-2', digest: 'c', deleted: false }] }] };
         if (command === 'preview_webdav_conflict') return { key: 'library:one', localSummary: '本机规则正文',
-          versions: [{ id: 'remote-1', summary: '远端规则正文 A', deleted: false }, { id: 'remote-2', summary: '远端规则正文 B', deleted: false }] };
+          versions: [{ id: 'remote-1', summary: '远端规则正文 A', deleted: false }, { id: 'remote-2', summary: '远端规则正文 B', deleted: false }, { id: 'remote-deleted', summary: '远端已删除这项资料', deleted: true }] };
         if (command === 'resolve_webdav_conflict') return { configured: true, enabled: true, endpoint: 'https://dav.example.test/cliora/', lastSuccess: 1, lastError: null, retryAfter: null, uploaded: 0, downloaded: 0, conflicts: [] };
         throw new Error(`Unexpected IPC: ${command}`);
       } },
@@ -128,10 +128,61 @@ test('migration previews conflicts, keeps choices, cancels, and separates native
   const nav = page.getByRole('navigation', { name: '页面' });
   await nav.getByRole('button', { name: '设置' }).click();
   await page.getByRole('tab', { name: '迁移与同步' }).click();
+  const overview = page.getByRole('heading', { name: '让熟悉的工作方式，跟你一起走' });
+  const exportPassword = page.getByPlaceholder('至少 12 位', { exact: true });
+  const importPassword = page.getByPlaceholder('输入导出时的口令', { exact: true });
+  const webdavEndpoint = page.locator('input[placeholder="https://dav.example.com/cliora/"]');
+  await expect(overview).toBeVisible();
+  await expect(page.getByText('尚未连接')).toBeVisible();
+  await expect(exportPassword).toHaveCount(1);
+  await expect(importPassword).toHaveCount(1);
+  await expect(webdavEndpoint).toHaveCount(1);
+  await expect(exportPassword).toBeHidden();
+  await expect(importPassword).toBeHidden();
+  await expect(webdavEndpoint).toBeHidden();
+
+  await page.getByRole('button', { name: '导出加密配置包', exact: true }).click();
+  await expect(overview).toBeVisible();
+  await expect(page.getByText('尚未连接')).toBeVisible();
+  await expect(exportPassword).toBeVisible();
+  await expect(importPassword).toBeHidden();
+  await expect(webdavEndpoint).toBeHidden();
+
+  await page.getByRole('button', { name: '从配置包恢复', exact: true }).click();
+  await expect(importPassword).toBeVisible();
+  await expect(exportPassword).toBeHidden();
+  await expect(webdavEndpoint).toBeHidden();
+
+  await page.getByRole('button', { name: '配置 WebDAV', exact: true }).click();
+  await expect(overview).toBeVisible();
+  await expect(page.getByText('尚未连接')).toBeVisible();
+  await expect(webdavEndpoint).toBeVisible();
+  await expect(exportPassword).toBeHidden();
+  await expect(importPassword).toBeHidden();
+  await webdavEndpoint.fill('https://draft.example/cliora/');
+  await page.getByLabel('用户名').fill('draft-user');
+  await page.getByRole('button', { name: '导出加密配置包', exact: true }).click();
+  await expect(webdavEndpoint).toBeHidden();
+  await expect(webdavEndpoint).toHaveCount(1);
+  await expect(exportPassword).toBeVisible();
+  await page.getByRole('button', { name: '配置 WebDAV', exact: true }).click();
+  await expect(webdavEndpoint).toHaveValue('https://draft.example/cliora/');
+  await expect(page.getByLabel('用户名')).toHaveValue('draft-user');
+  await page.getByRole('button', { name: '收起操作' }).click();
+  await expect(overview).toBeVisible();
+  await expect(exportPassword).toBeHidden();
+  await expect(importPassword).toBeHidden();
+  await expect(webdavEndpoint).toBeHidden();
+
   if (!await page.getByPlaceholder('输入导出时的口令').isVisible()) await page.getByRole('button', { name: '从配置包恢复', exact: true }).click();
   await page.getByPlaceholder('输入导出时的口令').fill('correct-password');
   await page.getByRole('button', { name: '选择配置包并预览' }).click();
   await expect(page.getByText('待关联：项目本机目录')).toBeVisible();
+  await expect(page.getByRole('button', { name: '确认恢复 1 项' })).toBeVisible();
+  await page.getByRole('button', { name: '导出加密配置包', exact: true }).click();
+  await expect(page.getByRole('button', { name: '确认恢复 1 项' })).toBeHidden();
+  await expect(page.getByPlaceholder('至少 12 位', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '从配置包恢复', exact: true }).click();
   await expect(page.getByRole('button', { name: '确认恢复 1 项' })).toBeVisible();
   await nav.getByRole('button', { name: '快速开始' }).click();
   await nav.getByRole('button', { name: '设置' }).click();
@@ -150,6 +201,7 @@ test('migration previews conflicts, keeps choices, cancels, and separates native
   await page.getByRole('button', { name: '选择目录' }).click();
   await page.getByLabel('恢复后应用到本机（codex）').selectOption('new');
   await page.getByRole('button', { name: '确认恢复 2 项' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
   const applies = (await page.evaluate(() => (window as typeof window & { __migrationCalls: Array<{ command: string; args: Record<string, unknown> }> }).__migrationCalls))
     .filter((call) => call.command === 'apply_portable_bundle');
   expect(applies).toHaveLength(1);
@@ -164,6 +216,7 @@ test('migration previews conflicts, keeps choices, cancels, and separates native
   await page.getByRole('checkbox', { name: /工作配置.*与本机不同/ }).check();
   await page.getByLabel('恢复后应用到本机（codex）').selectOption('global');
   await page.getByRole('button', { name: '确认恢复 2 项' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page.getByText(/已恢复 2 项资料。工作配置 · 全局：失败，本机文件冲突/)).toBeVisible();
   await expect(page.getByRole('button', { name: '确认恢复 2 项' })).toHaveCount(0);
 
@@ -173,9 +226,29 @@ test('migration previews conflicts, keeps choices, cancels, and separates native
   await page.getByLabel('WebDAV 密码').fill('correct-password');
   await page.getByRole('button', { name: '验证并保存' }).click();
   await expect(page.getByText('待处理的同步冲突')).toBeVisible();
+  await expect(page.getByRole('button', { name: '立即同步' })).toBeVisible();
+  await expect(page.locator('input[placeholder="https://dav.example.com/cliora/"]')).toBeHidden();
+  await page.getByRole('button', { name: '修改连接或凭据' }).click();
+  await expect(page.locator('input[placeholder="https://dav.example.com/cliora/"]')).toBeVisible();
+  await expect(page.getByRole('button', { name: '立即同步' })).toBeVisible();
+  await expect(page.getByPlaceholder('输入导出时的口令', { exact: true })).toBeHidden();
+  await expect(page.getByPlaceholder('至少 12 位', { exact: true })).toBeHidden();
+  await page.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(page.locator('input[placeholder="https://dav.example.com/cliora/"]')).toBeHidden();
+  await expect(page.getByRole('button', { name: '立即同步' })).toBeVisible();
   await page.getByRole('button', { name: '查看内容并选择' }).click();
   await expect(page.getByText('本机规则正文')).toBeVisible();
   await expect(page.getByText('远端规则正文 A')).toBeVisible();
+  await page.getByRole('button', { name: '接受删除' }).click();
+  const deletion = page.getByRole('dialog');
+  await expect(deletion).toHaveCount(1);
+  await expect(deletion.getByRole('heading', { name: '接受远端删除？' })).toBeVisible();
+  await expect(deletion.getByRole('button', { name: '取消', exact: true })).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(deletion).toHaveCount(0);
+  await expect(page.getByText('远端已删除这项资料')).toBeVisible();
+  expect((await page.evaluate(() => (window as typeof window & { __migrationCalls: Array<{ command: string }> }).__migrationCalls))
+    .filter((call) => call.command === 'resolve_webdav_conflict')).toHaveLength(0);
   await page.getByRole('button', { name: '保留本机' }).click();
   await expect(page.getByText('冲突已处理，其他资料保持不变。')).toBeVisible();
 });
