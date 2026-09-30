@@ -496,6 +496,11 @@ test('a newly registered CLI appears without adding tool-specific shell code', a
   await expect(page.locator('[aria-label="管理中的工具"]')).toContainText('Kimi Code');
   await page.getByRole('button', { name: '编辑配置 →' }).click();
   await expect(page.getByRole('tab', { name: 'Kimi Code' })).toBeVisible();
+  const writeBlock = page.getByRole('alert', { name: '原生写入不可用' });
+  await expect(writeBlock).toContainText('未发现 CLI');
+  await expect(writeBlock.getByRole('button', { name: '重新检测' })).toBeVisible();
+  await expect(page.locator('details[aria-label="配置更多选项"]')).not.toHaveAttribute('open');
+  await expect(page.getByRole('button', { name: '新建配置' })).toBeVisible();
 });
 
 test('storage failure preserves an actionable page and retry loads repaired data', async ({ page }) => {
