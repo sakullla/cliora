@@ -236,7 +236,7 @@ export function McpWorkspace({ toolId, scope, projectPath, tools, onDirtyChange 
       <label className={styles.inline}><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} />这个工具会使用它</label>
       <p className={styles.muted}>{enabled ? '这个工具会使用它。启用不表示服务器进程已经启动或功能已经调用。' : '已停用。定义仍保留，这个工具当前不会使用它。'}</p>
       {currentConflict && <div className={styles.resultList} role="group" aria-label="MCP 写入冲突"><strong>当前同名条目与读取时不同，请比较后选择</strong>{currentConflict.items.map(item => <div className={styles.fileDiff} key={item.toolId}><CodeEditor compact label="当前 MCP" format="json" readOnly value={JSON.stringify(item.existing, null, 2)} /><CodeEditor compact label="本次 MCP 修改" format="json" readOnly value={JSON.stringify(item.proposed, null, 2)} /></div>)}<div className={styles.actions}><button type="button" onClick={() => setCurrentConflict(null)}>保留当前文件</button><button type="button" disabled={busy} onClick={() => { setBusy(true); void applyItems(currentConflict.id, currentConflict.items, true).catch(value => setError(errorText(value))).finally(() => setBusy(false)); }}>使用本次修改</button></div></div>}
-      <details className={styles.distribution}><summary>更多选项</summary>
+      <details className={styles.distribution} aria-label="MCP 更多选项"><summary>更多选项</summary>
         <div className={styles.actions}><button type="button" disabled={busy || !draft.name.trim()} onClick={() => void save(true)}>只保存到资料库</button></div>
         {draft.id && <>
           <div className={styles.heading}><div><strong>分发到其他 CLI</strong><p>每个目标独立写入。已有同名原生条目会先显示冲突。</p></div></div>
@@ -473,7 +473,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, onDirtyChange }: {
         </div>}
         {!!installations.length && <div className={styles.resultList}><strong>安装位置</strong>{installations.map((item) => <p key={`${item.toolId}:${item.targetPath}`}>{item.toolId} · {item.scope === 'global' ? '全局' : '项目'} · {item.state} <small>{item.targetPath}</small></p>)}</div>}
       </>}
-      <details className={styles.distribution}><summary>更多选项</summary>
+      <details className={styles.distribution} aria-label="Skill 更多选项"><summary>更多选项</summary>
         <div className={styles.actions}><button type="button" disabled={busy} onClick={() => { setAdding(true); setLibraryOnly(true); }}>仅导入到资料库</button></div>
         <label>从 HTTPS 地址导入 ZIP<input aria-label="归档地址" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://example.com/skill.zip" /></label>
         <button type="button" disabled={busy || !url.trim()} onClick={() => void archive(url.trim(), false, undefined, false)}>导入地址</button>

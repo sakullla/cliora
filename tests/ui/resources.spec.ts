@@ -1,6 +1,10 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
-async function mockResources(page: import('@playwright/test').Page) {
+async function openMcpMoreOptions(page: Page) {
+  await page.locator('details[aria-label="MCP 更多选项"] > summary').click();
+}
+
+async function mockResources(page: Page) {
   await page.addInitScript(() => {
     const library: Array<Record<string, unknown>> = [];
     const definitions: Array<Record<string, unknown>> = [];
@@ -130,7 +134,7 @@ test('CLI context resets native MCP drafts, rejects stale reads, and keeps heade
   await page.getByRole('dialog').getByRole('button', { name: '取消', exact: true }).click();
   await expect(page.getByRole('tab', { name: 'Claude Code', exact: true })).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByRole('textbox', { name: '名称', exact: true })).toHaveValue('shared-native');
-  await page.locator('details').filter({ hasText: '更多选项' }).locator('summary').click();
+  await openMcpMoreOptions(page);
   await page.getByRole('button', { name: '只保存到资料库' }).click();
   await page.getByRole('tab', { name: 'Codex', exact: true }).click();
   await expect(page.getByRole('textbox', { name: '名称', exact: true })).toHaveValue('');
@@ -151,7 +155,7 @@ test('tool page previews and distributes MCP with per-target result', async ({ p
   await page.getByRole('button', { name: '添加 MCP', exact: true }).click();
   await page.getByRole('textbox', { name: '名称' }).fill('filesystem');
   await page.getByRole('textbox', { name: '命令' }).fill('npx');
-  await page.locator('details').filter({ hasText: '更多选项' }).locator('summary').click();
+  await openMcpMoreOptions(page);
   await page.getByRole('button', { name: '只保存到资料库' }).click();
   await page.getByText('分发到其他 CLI',{exact:true}).click();
   await page.getByRole('checkbox', { name: 'Codex' }).check();
@@ -178,7 +182,7 @@ test('MCP replacement shows both native entries and can be canceled', async ({ p
   await page.getByRole('button', { name: '添加 MCP', exact: true }).click();
   await page.getByRole('textbox', { name: '名称' }).fill('filesystem');
   await page.getByRole('textbox', { name: '命令' }).fill('npx');
-  await page.locator('details').filter({ hasText: '更多选项' }).locator('summary').click();
+  await openMcpMoreOptions(page);
   await page.getByRole('button', { name: '只保存到资料库' }).click();
   await page.getByText('分发到其他 CLI',{exact:true}).click();
   await page.getByRole('checkbox', { name: 'Codex' }).check();
@@ -203,7 +207,7 @@ test('an unfinished MCP preview cannot return after switching scope or distribut
   await page.getByRole('button', { name: '添加 MCP', exact: true }).click();
   await page.getByRole('textbox', { name: '名称' }).fill('filesystem');
   await page.getByRole('textbox', { name: '命令' }).fill('npx');
-  await page.locator('details').filter({ hasText: '更多选项' }).locator('summary').click();
+  await openMcpMoreOptions(page);
   await page.getByRole('button', { name: '只保存到资料库' }).click();
   await page.getByText('分发到其他 CLI',{exact:true}).click();
   await page.getByRole('checkbox', { name: 'Codex' }).check();
@@ -219,7 +223,7 @@ test('an unfinished MCP preview cannot return after switching scope or distribut
   });
   await expect(page.getByRole('button', { name: '确认分发' })).toHaveCount(0);
   await page.getByRole('button', { name: /filesystem.*npx/ }).click();
-  await page.locator('details').filter({ hasText: '更多选项' }).locator('summary').click();
+  await openMcpMoreOptions(page);
   await page.getByText('分发到其他 CLI',{exact:true}).click();
   await page.getByRole('checkbox', { name: 'Codex' }).check();
   await page.getByRole('button', { name: '分发所选工具' }).click();
@@ -364,7 +368,7 @@ test('tool completion actions precede long forms without new confirmations', asy
     remove.evaluate((element) => getComputedStyle(element).backgroundColor),
   ]);
   expect(primaryBackground).not.toBe(secondaryBackground);
-  await page.getByText('更多选项', { exact: true }).first().click();
+  await page.locator('details[aria-label="配置更多选项"] > summary').click();
   await page.getByText('高级连接选项', { exact: true }).click();
   const paid = page.getByRole('button', { name: '发送最小请求（可能计费）', exact: true });
   await expect(paid).toHaveCount(0);
@@ -408,7 +412,7 @@ test('tool completion actions precede long forms without new confirmations', asy
   await page.getByRole('tab', { name: '添加 Skill', exact: true }).click();
   const install = page.getByRole('button', { name: '安装到当前范围', exact: true });
   await expectPrecedes(install, page.getByRole('checkbox', { name: '启用 Skill', exact: true }));
-  await expectPrecedes(install, page.getByText('更多选项', { exact: true }).last());
+  await expectPrecedes(install, page.locator('details[aria-label="Skill 更多选项"] > summary'));
   await page.getByRole('tab', { name: '添加 MCP', exact: true }).click();
   await expect(page.getByRole('textbox', { name: '名称', exact: true })).toHaveValue('keep-me');
   await page.getByRole('tab', { name: '配置这个工具', exact: true }).click();
