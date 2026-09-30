@@ -307,3 +307,100 @@ test('local ZIP import is available without a URL, selects a complete Skill, and
   await expect(page.getByRole('heading', { name: 'alpha', exact: true })).toBeVisible();
   expect(await page.evaluate(() => (window as any).__resourceWrites)).toEqual([{ command: 'import_skill_local_zip', args: { source: 'C:/fixtures/skills.zip', subdirectory: 'bundle/alpha', expectedNew: 'new-bundle', expectedExisting: 'old-bundle' } }]);
 });
+
+async function expectPrecedes(earlier: import('@playwright/test').Locator, later: import('@playwright/test').Locator) {
+  await expect(earlier).toBeVisible();
+  await expect(later).toBeVisible();
+  const follows = await earlier.evaluate((node, other) => other instanceof Node && (node.compareDocumentPosition(other) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0, await later.elementHandle());
+  expect(follows).toBe(true);
+  const [top, bottom] = await Promise.all([earlier.boundingBox(), later.boundingBox()]);
+  expect(top && bottom && top.y < bottom.y).toBe(true);
+}
+
+test('tool completion actions precede long forms without new confirmations', async ({ page }) => {
+  await mockResources(page);
+  await page.addInitScript(() => {
+    const profile = { id: 'profile-1', tool: 'codex', name: '日常', version: 1, revision: 'rev', inheritCommon: false, files: { config: 'model = "gpt"\n' }, suppressed: {}, connection: { providerId: 'openai', interfaceFormat: 'openai_responses', baseUrl: 'https://example.invalid/v1', model: 'gpt', secretRef: null, authEnvVar: null }, nativeCredentials: {} };
+    const internals = (window as any).__TAURI_INTERNALS__;
+    const original = internals.invoke;
+    internals.invoke = async (command: string, args: any) => {
+      if (command === 'get_registered_tool_workspace') return {
+        probe: { selectedPath: 'C:/codex.exe', installations: [], nativeFiles: [{ role: 'config', path: 'C:/config.toml', format: 'toml', writable: true, sensitive: false, reason: null }], nativeWrites: { state: 'supported', reason: '可写入', evidence: '' }, interfaceFormats: ['openai_responses'], providerPresets: [], dependencies: [], installUrl: 'https://example.invalid', upgradeHint: '', installCommand: null, upgradeCommand: null },
+        profiles: [structuredClone(profile)], common: null, binding: null, snapshots: [], recoveryNeeded: ['tx-1'], customPath: null,
+      };
+      if (command === 'read_registered_native_file_for_edit') return 'model = "gpt"\n';
+      if (command === 'inspect_registered_native_draft') return {};
+      if (command === 'prepare_registered_native_import') return { files: args.files, inspection: { connection: null, providerId: null, model: null, reasoningEffort: null }, migratedSecret: false, nativeCredentials: {} };
+      if (command === 'save_registered_native_profile') return { ...args.profile, id: args.profile.id || 'profile-1', version: (args.expectedVersion ?? 0) + 1, revision: 'saved' };
+      if (command === 'apply_registered_native_profile') throw { message: '请确认接管外部修改' };
+      if (command === 'compare_registered_application') return { profile, common: null, files: [{ role: 'config', format: 'toml', current: 'old', proposed: { model: 'gpt' } }] };
+      if (command === 'save_registered_native_file') return { transactionId: 'tx', changedFiles: [], status: 'written_for_next_session' };
+      if (command === 'list_skill_packages') return [{ id: 'skill-1', name: 'sample', description: 'Sample', compatibility: 'node', source: 'local', digest: 'new', fileCount: 1, updatedAt: 1 }];
+      return original(command, args);
+    };
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  const saveAndUse = page.getByRole('button', { name: '保存并使用', exact: true });
+  const remove = page.getByRole('button', { name: '删除', exact: true });
+  await expect(page.getByRole('button', { name: '重试恢复', exact: true })).toBeVisible();
+  await expectPrecedes(saveAndUse, page.getByRole('textbox', { name: '配置名称', exact: true }));
+  await expectPrecedes(saveAndUse, page.getByRole('textbox', { name: 'config 配置草稿', exact: true }));
+  await page.getByRole('button', { name: '常用设置', exact: true }).click();
+  await expectPrecedes(saveAndUse, page.getByRole('textbox', { name: 'API 地址', exact: true }));
+  await expectPrecedes(saveAndUse, page.getByRole('textbox', { name: 'API 密钥', exact: true }));
+  await expect(saveAndUse).toHaveClass(/primary/);
+  await expect(remove).not.toHaveClass(/primary/);
+  const [primaryBackground, secondaryBackground] = await Promise.all([
+    saveAndUse.evaluate((element) => getComputedStyle(element).backgroundColor),
+    remove.evaluate((element) => getComputedStyle(element).backgroundColor),
+  ]);
+  expect(primaryBackground).not.toBe(secondaryBackground);
+  await page.getByText('高级连接选项', { exact: true }).click();
+  const paid = page.getByRole('button', { name: '发送最小请求（可能计费）', exact: true });
+  await expect(paid).toHaveCount(0);
+  await page.getByText('更多诊断', { exact: true }).click();
+  await paid.click();
+  const confirmation = page.getByRole('dialog');
+  await expect(confirmation).toHaveCount(1);
+  await expect(confirmation).toHaveAccessibleName('发送可能计费的请求？');
+  await expect(confirmation.getByRole('button', { name: '取消', exact: true })).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(confirmation).toHaveCount(0);
+  await page.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByRole('status').filter({ hasText: '配置已保存' })).toBeVisible();
+  await saveAndUse.click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  const conflict = page.getByRole('region', { name: '配置应用冲突' });
+  await expect(conflict).toBeVisible();
+  await expect(conflict.getByRole('button', { name: '使用本次配置', exact: true })).toBeVisible();
+  await expect(page.getByRole('tab', { name: '原生配置', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await remove.click();
+  await expect(confirmation).toHaveCount(1);
+  await expect(confirmation).toHaveAccessibleName('删除配置');
+  await expect(confirmation.getByRole('button', { name: '取消', exact: true })).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(confirmation).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: '日常', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '当前配置', exact: true }).click();
+  await expectPrecedes(page.getByRole('button', { name: '保存', exact: true }), page.getByRole('textbox', { name: 'config 配置草稿', exact: true }));
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  await expect(conflict).toHaveCount(0);
+  const saveMcp = page.getByRole('button', { name: '保存到当前 CLI', exact: true });
+  await expectPrecedes(saveMcp, page.getByRole('textbox', { name: '名称', exact: true }));
+  await expectPrecedes(saveMcp, page.getByRole('textbox', { name: '命令', exact: true }));
+  await page.getByRole('textbox', { name: '名称', exact: true }).fill('keep-me');
+  await page.getByRole('tab', { name: 'Skills', exact: true }).click();
+  const install = page.getByRole('button', { name: '安装到当前 CLI', exact: true });
+  await expectPrecedes(install, page.getByRole('checkbox', { name: '启用 Skill', exact: true }));
+  await expectPrecedes(install, page.getByText('从 HTTPS 地址导入 ZIP', { exact: true }));
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  await expect(page.getByRole('textbox', { name: '名称', exact: true })).toHaveValue('keep-me');
+  await page.getByRole('textbox', { name: '命令', exact: true }).fill('npx');
+  await saveMcp.click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByRole('status').filter({ hasText: '已保存到当前 CLI' })).toBeVisible();
+  await page.getByRole('tab', { name: '原生配置', exact: true }).click();
+  await expect(conflict).toBeVisible();
+});
