@@ -585,3 +585,99 @@ test('custom tool icons persist across reload, preserve theme and management, an
   await expect(logo).toHaveAttribute('src', defaultSource!);
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
 });
+
+test('wide home shows tool status beside a project launch without a new confirmation', async ({ page }) => {
+  await page.addInitScript(() => {
+    let theme = 'light';
+    const profile = { id: 'daily', tool: 'codex', name: '日常', version: 1, inheritCommon: false, files: { settings: '{}' }, suppressed: {}, nativeCredentials: {}, connection: null };
+    const workspace = () => ({
+      probe: { selectedPath: 'C:/codex.cmd', installations: [{ path: 'C:/codex.cmd', version: '1.2.3', status: 'available' }], nativeFiles: [{ role: 'settings', path: 'C:/codex/config.toml', format: 'toml', writable: true, sensitive: false }], nativeWrites: { state: 'supported', reason: '可编辑原生配置' }, interfaceFormats: [], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '' },
+      profiles: [profile], common: null, binding: null, snapshots: [{ role: 'settings', fingerprint: 'present', text: null, error: null }], recoveryNeeded: [], customPath: null,
+    });
+    window.confirm = () => { throw new Error('System confirmation must not be called'); };
+    Object.assign(window, { isTauri: true, __homeCalls: [], __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
+      (window as any).__homeCalls.push({ command, args });
+      if (command.startsWith('plugin:dialog|')) throw new Error('Confirmation must stay inside the app');
+      if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+      if (command === 'get_bootstrap' || command === 'set_theme') { if (command === 'set_theme') theme = args.theme; return { preferences: { schema_version: 1, managed_tools: ['codex'], theme }, tools: [{ id: 'codex', name: 'Codex' }] }; }
+      if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], yoloAvailable: true }], managedIds: ['codex'], preservedUnknown: [] };
+      if (command === 'list_projects') return [{ id: 'desk', name: '栖点', path: 'C:/Projects/cliora', available: true, preferredTool: 'codex', lastOpened: 1, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {} }];
+      if (command === 'get_registered_tool_workspace') return workspace();
+      if (command === 'apply_registered_native_profile') return { status: 'applied' };
+      if (command === 'launch_cli') return { mode: args.request.mode, status: 'terminal_requested' };
+      if (command === 'get_launch_settings') return { selected: 'auto', terminals: [{ id: 'auto', label: '系统默认', available: true }] };
+      if (command === 'get_tray_status') return { available: false, error: null };
+      throw new Error(`Unexpected IPC: ${command}`);
+    } } });
+  });
+
+  async function expectWideBand() {
+    await expect.poll(() => page.locator('main').evaluate((el) => el.scrollTop)).toBe(0);
+    const status = page.getByText('原生配置已存在 · 供应商 / 模型未知', { exact: true });
+    const launch = page.getByRole('region', { name: '项目与启动' }).getByRole('button', { name: '启动', exact: true });
+    await expect(status).toBeInViewport({ ratio: 1 });
+    await expect(launch).toBeInViewport({ ratio: 1 });
+    const placed = await page.evaluate(() => {
+      const tools = document.querySelector('.home-tools')!.getBoundingClientRect();
+      const projects = document.querySelector('[aria-label="项目与启动"]')!.getBoundingClientRect();
+      const columns = getComputedStyle(document.querySelector('.home-band')!).gridTemplateColumns.split(' ').filter(Boolean);
+      return { columns: columns.length, projectsBesideTools: projects.x > tools.x + 80 && projects.y < tools.y + tools.height };
+    });
+    expect(placed.columns).toBe(2);
+    expect(placed.projectsBesideTools).toBe(true);
+  }
+
+  await page.setViewportSize({ width: 1360, height: 1000 });
+  await page.goto('/');
+  await expectWideBand();
+  await page.setViewportSize({ width: 900, height: 1000 });
+  await expectWideBand();
+
+  const config = page.getByRole('combobox', { name: 'Codex 全局配置' });
+  await config.selectOption('daily');
+  await expect.poll(() => page.evaluate(() => (window as any).__homeCalls.some((call: { command: string }) => call.command === 'apply_registered_native_profile'))).toBe(true);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  const launch = page.getByRole('region', { name: '项目与启动' }).getByRole('button', { name: '启动', exact: true });
+  await expect(launch).toBeEnabled();
+  await launch.click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => (window as any).__homeCalls.some((call: { command: string }) => call.command === 'launch_cli'))).toBe(true);
+
+  await launch.evaluate((element: HTMLElement) => {
+    element.blur();
+    element.focus({ focusVisible: true });
+  });
+  await expect.poll(() => launch.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return `${style.outlineStyle} ${style.outlineWidth}`;
+  })).toBe('solid 2px');
+
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
+  const theme = page.getByRole('combobox', { name: '主题' });
+  await expect(theme.locator('option')).toHaveText(['跟随系统', '浅色', '深色']);
+  await theme.selectOption('dark');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始' }).click();
+  await expectWideBand();
+  await page.setViewportSize({ width: 1360, height: 1000 });
+  await expectWideBand();
+
+  await page.setViewportSize({ width: 640, height: 760 });
+  const narrow = await page.evaluate(() => {
+    const tools = document.querySelector('.home-tools')!.getBoundingClientRect();
+    const projects = document.querySelector('[aria-label="项目与启动"]')!.getBoundingClientRect();
+    const start = [...document.querySelectorAll('[aria-label="项目与启动"] button')].find((button) => button.textContent?.trim() === '启动')!.getBoundingClientRect();
+    const options = [...document.querySelectorAll('[aria-label="项目与启动"] summary')].find((item) => item.textContent?.includes('项目选项'))!.getBoundingClientRect();
+    const columns = getComputedStyle(document.querySelector('.home-band')!).gridTemplateColumns.split(' ').filter(Boolean);
+    return { columns: columns.length, stacked: projects.y > tools.y + tools.height - 1, launchBeforeOptions: start.y < options.y };
+  });
+  expect(narrow.columns).toBe(1);
+  expect(narrow.stacked).toBe(true);
+  expect(narrow.launchBeforeOptions).toBe(true);
+  for (const name of ['快速开始', '工具与连接', '资料库', '使用记录', '设置']) {
+    const button = page.getByRole('navigation', { name: '页面' }).getByRole('button', { name, exact: true });
+    await expect(button).toBeInViewport();
+    expect(await button.evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize))).toBeGreaterThanOrEqual(12);
+  }
+});
