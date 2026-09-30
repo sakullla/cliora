@@ -104,7 +104,7 @@ impl CliAdapter for Pi {
     }
     fn portable_root_fields(&self, role: &str) -> &'static [&'static str] {
         match role {
-            "settings" => &["defaultProvider", "defaultModel", "thinkingLevel", "models"],
+            "settings" => &["defaultProvider", "defaultModel", "defaultThinkingLevel", "models"],
             "models" => &["providers"],
             _ => &[],
         }
@@ -179,6 +179,30 @@ impl CliAdapter for Pi {
             ("settings".into(), settings),
             ("models".into(), models),
         ]))
+    }
+    fn connection_documents_for_existing(&self, connection: &Connection, scope: Scope, existing: &BTreeMap<String, Value>) -> Result<BTreeMap<String, Value>, String> {
+        let mut docs = self.connection_documents(connection,scope)?;
+        if let Some(models) = docs.get_mut("models") {
+            let old = existing.get("models").and_then(|root| root.get("providers")).and_then(|root| root.get(&connection.provider_id)).and_then(|root| root.get("models")).and_then(Value::as_array).cloned().unwrap_or_default();
+            let mut values = old;
+            if !values.iter().any(|item| item.get("id").and_then(Value::as_str) == Some(connection.model.as_str())) { values.push(json!({"id":connection.model})); }
+            set_json(models,&["providers",&connection.provider_id,"models"],json!(values));
+        }
+        Ok(docs)
+    }
+    fn preserve_native_fields(&self, role: &str, original: &Value, fields: &mut BTreeMap<String, Value>, profile: &RegisteredProfile) -> Result<(), String> {
+        if role != "models" { return Ok(()); }
+        let Some(connection) = &profile.connection else { return Ok(()); };
+        let pointer = format!("/providers/{}/models",connection.provider_id.replace('~',"~0").replace('/',"~1"));
+        let Some(next) = fields.get_mut(&pointer).and_then(Value::as_array_mut) else { return Ok(()); };
+        if let Some(old) = original.pointer(&pointer).and_then(Value::as_array) {
+            for item in old {
+                if let Some(found) = next.iter_mut().find(|value| value.get("id") == item.get("id")) {
+                    if let (Some(current),Some(changes)) = (item.as_object(),found.as_object()) { let mut merged=current.clone(); merged.extend(changes.clone()); *found=Value::Object(merged); }
+                } else { next.push(item.clone()); }
+            }
+        }
+        Ok(())
     }
     fn write_connection_secret(
         &self,
@@ -319,6 +343,8 @@ impl CliAdapter for Pi {
             Ok(())
         }
     }
+    fn login_args(&self) -> Option<Vec<String>> { Some(vec![]) }
+    fn login_hint(&self) -> &'static str { "Pi 打开后输入 /login，选择供应商并登录。" }
     fn launch_args(&self, session: Option<&str>, mode: LaunchMode) -> Result<Vec<String>, String> {
         if matches!(mode, LaunchMode::Yolo) {
             return Err("Pi 尚无已验证的 YOLO 启动参数".into());
@@ -338,6 +364,12 @@ impl CliAdapter for Pi {
         source: &crate::history::HistorySource,
     ) -> Result<crate::history::ParsedSession, String> {
         crate::history::pi::parse(source)
+    }
+    fn history_sources_controlled(&self, home: &std::path::Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<crate::history::HistorySource>, String> {
+        crate::history::pi::sources_controlled(home, cancelled)
+    }
+    fn parse_history_controlled(&self, source: &crate::history::HistorySource, cancelled: &dyn Fn() -> bool) -> Result<crate::history::ParsedSession, String> {
+        crate::history::pi::parse_controlled(source, cancelled)
     }
     fn history_supported(&self) -> bool {
         true

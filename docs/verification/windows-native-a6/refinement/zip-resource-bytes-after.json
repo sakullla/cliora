@@ -1,0 +1,1 @@
+{"kind": "isolated-local-ZIP-resource-bytes", "result": "passed", "checks": [{"package": "native-zip-check", "files": 3, "allResourceBytesPreserved": true}, {"package": "native-zip-beta", "files": 2, "allResourceBytesPreserved": true}]}

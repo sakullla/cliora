@@ -4,24 +4,32 @@ use std::path::Path;
 use serde_json::Value;
 
 use super::{
-    discover_jsonl, read_jsonl, text_content, timestamp, valid_native_id, HistorySource,
+    discover_jsonl_controlled, read_jsonl_controlled, text_content, timestamp, valid_native_id, HistorySource,
     ParsedSession, UsageEvent,
 };
 
 pub fn sources(home: &Path) -> Result<Vec<HistorySource>, String> {
-    discover_jsonl(&home.join(".claude/projects"), |path| {
+    sources_controlled(home, &|| false)
+}
+
+pub fn sources_controlled(home: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<HistorySource>, String> {
+    discover_jsonl_controlled(&home.join(".claude/projects"), |path| {
         path.extension().is_some_and(|value| value == "jsonl")
             && !path
                 .components()
                 .any(|part| part.as_os_str() == "subagents")
-    })
+    }, cancelled)
 }
 
 pub fn parse(source: &HistorySource) -> Result<ParsedSession, String> {
+    parse_controlled(source, &|| false)
+}
+
+pub fn parse_controlled(source: &HistorySource, cancelled: &dyn Fn() -> bool) -> Result<ParsedSession, String> {
     let mut session = ParsedSession::new();
     let mut events = BTreeMap::<String, UsageEvent>::new();
     let mut seen = std::collections::HashSet::new();
-    let partial = read_jsonl(source, |line, row| {
+    let partial = read_jsonl_controlled(source, cancelled, |line, row| {
         let kind = row.get("type").and_then(Value::as_str).unwrap_or("");
         if kind != "user" && kind != "assistant" {
             return;

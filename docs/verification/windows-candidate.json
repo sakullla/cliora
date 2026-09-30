@@ -2,35 +2,55 @@
   "kind": "windows-desktop-build",
   "command": "npm run tauri build -- --no-bundle",
   "exitCode": 0,
-  "recordedAt": "2026-09-30T04:53:08.419Z",
+  "recordedAt": "2026-09-30T11:42:10.7507192Z",
   "host": "Windows 11 Pro 10.0.26200",
   "architecture": "X64",
+  "platform": "windows",
+  "system": "Microsoft Windows 11 专业版 10.0.26200",
+  "identifier": "com.cliora.desktop",
   "candidate": {
-    "path": "src-tauri/target/verification/cliora-windows-x64-30c4d43d371889b3e0cc2d754cb49284433faf16a0380a31789670406f163a52.exe",
-    "sizeBytes": 24456192,
-    "sha256": "30c4d43d371889b3e0cc2d754cb49284433faf16a0380a31789670406f163a52",
+    "path": "src-tauri/target/verification/cliora-a6-final-production-windows-x64-9d3922b1f7b5cbee4c49f5d0c820acefe6c1834c3cabb6d67d6d2d8478427dcc.exe",
+    "sizeBytes": 25832960,
+    "sha256": "9d3922b1f7b5cbee4c49f5d0c820acefe6c1834c3cabb6d67d6d2d8478427dcc",
     "peMachine": "0x8664",
-    "lastModifiedAt": "2026-09-30T04:45:49.069Z",
+    "lastModifiedAt": "2026-09-30T11:42:10.290237Z",
     "copiedFrom": {
       "path": "src-tauri/target/release/cliora.exe",
-      "sha256": "30c4d43d371889b3e0cc2d754cb49284433faf16a0380a31789670406f163a52",
-      "lastModifiedAt": "2026-09-30T04:45:49.069Z"
-    },
-    "sourceCheckpoint": "0f640f925098f386544016a87b0365bf19d56e25"
+      "sha256": "9d3922b1f7b5cbee4c49f5d0c820acefe6c1834c3cabb6d67d6d2d8478427dcc",
+      "atBuildFinishedAt": "2026-09-30T11:42:10.7507192Z",
+      "note": "Hash and copy source were recorded by the successful build; a later isolated release build overwrites release/cliora.exe, not this stable copy."
+    }
+  },
+  "sourceWorktree": {
+    "path": "docs/verification/windows-native-a6/final/source-worktree.json",
+    "sha256": "cf9d402ab99a708fa758e921d7dc13a3a7a204e9713e23ca1a50507c9efc2c26"
+  },
+  "buildRecord": {
+    "path": "docs/verification/windows-native-a6/final/production-build.json",
+    "sha256": "e931a70abef0d4da615de363723346588919fb30eb0f9f4b13500a94f5d669df"
   },
   "buildOutput": {
     "path": "docs/verification/build-windows-output.txt",
-    "sha256": "4afe96d050af457c2969d8f0d2ca99b5a15b8b0fc5c84c90fa1562b252665a09",
+    "sha256": "be67c069538102c8d9d056b9b0ef0e4c83e094d8cfee6a4c675b1b60861cfccd",
     "source": {
-      "path": "docs/sakullla-workflow/2026-09-29-cli-tool-manager/evidence/verification/sha256-42639c1cfa688268be4bb21526e729688bf1b5344ffde66fdf045912b42da477.json",
-      "candidateRef": "0f640f925098f386544016a87b0365bf19d56e25"
+      "record": {
+        "path": "docs/verification/windows-native-a6/final/production-build.json",
+        "sha256": "e931a70abef0d4da615de363723346588919fb30eb0f9f4b13500a94f5d669df"
+      },
+      "stdout": {
+        "path": "docs/verification/windows-native-a6/final/production-stdout.txt",
+        "sha256": "86b02cba71bca9adc7e0f07188d879c101b7f15033b7d5acf87b7df9b6370529"
+      },
+      "stderr": {
+        "path": "docs/verification/windows-native-a6/final/production-stderr.txt",
+        "sha256": "63da9375212e881acad2c494d6ee80a05731c784f0742f1fae67dc40e5d3678e"
+      },
+      "performedBy": "Worker/Owner development build; not a formal Delivery verification"
     }
   },
-  "limits": "Unsigned no-bundle candidate retained at a content-addressed verification path from the successful formal Delivery desktop run. Later release builds do not overwrite this copy. A new hidden process was observed for five seconds, then only its PID was closed. Native CLI, tray, installation and platform acceptance remain unverified.",
-  "platform": "windows",
-  "system": "Microsoft Windows 11 专业版 10.0.26200",
   "startupCheck": {
     "path": "docs/verification/windows-startup.json",
-    "sha256": "638aa048ddc406689e557e028071b5a46798268be888c7b854b2881c18387791"
-  }
+    "sha256": "e6cfbc93de194ea3e1322f75f3043ecc274c060608c88fb1d34c2d0c9bd47d01"
+  },
+  "limits": "Unsigned no-bundle Windows x64 stable candidate built from the recorded uncommitted worktree input, source unchanged. Ordinary candidate not started to protect existing user drafts. Same-source isolated identifier/hash has separate partial real UI/fixture/terminal evidence; native CLI configuration acceptance, real session resume, complete tray lifecycle, installation and 15 platform combinations remain unverified."
 }

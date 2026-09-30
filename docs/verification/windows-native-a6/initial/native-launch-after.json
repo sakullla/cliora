@@ -1,0 +1,126 @@
+{
+  "kind": "native-windows-launch-verification",
+  "method": "on-device",
+  "recordedAt": "2026-09-30T06:34:44.830Z",
+  "candidate": "C:\\Users\\12976\\project\\cliora\\src-tauri\\target\\verification\\cliora-windows-x64-6274f53ccb165cf880be2a4f1175f6f7d34b30ae81e2f83c3e64725c065778f0.exe",
+  "sha256": "6274f53ccb165cf880be2a4f1175f6f7d34b30ae81e2f83c3e64725c065778f0",
+  "checks": [
+    {
+      "name": "native-open-directory-dialog",
+      "result": "passed",
+      "dialog": {
+        "pid": 54812,
+        "title": "选择启动工作目录",
+        "controls": [
+          {
+            "handle": 25432240,
+            "class": "Edit",
+            "id": 1152,
+            "label": "[edit content omitted]"
+          },
+          {
+            "handle": 19861628,
+            "class": "Button",
+            "id": 1,
+            "label": "选择文件夹"
+          },
+          {
+            "handle": 45745832,
+            "class": "Button",
+            "id": 2,
+            "label": "取消"
+          }
+        ]
+      }
+    },
+    {
+      "name": "managed-tools-folder-picker",
+      "result": "passed",
+      "cwd": "C:\\Users\\12976\\AppData\\Local\\Temp\\cliora-native-verification\\fixtures\\启动验证 空格 O'Neil;目录",
+      "args": [],
+      "visibleExternalTerminal": true,
+      "fixture": true,
+      "log": "C:\\Users\\12976\\AppData\\Local\\Temp\\cliora-native-verification\\fixtures\\launch-1790750091182.json"
+    },
+    {
+      "name": "home-yolo-new-session",
+      "result": "passed",
+      "cwd": "C:\\Users\\12976\\AppData\\Local\\Temp\\cliora-native-verification\\fixtures\\启动验证 空格 O'Neil;目录",
+      "args": [
+        "--yolo"
+      ],
+      "visibleExternalTerminal": true,
+      "fixture": true,
+      "log": "C:\\Users\\12976\\AppData\\Local\\Temp\\cliora-native-verification\\fixtures\\launch-1790750094372.json"
+    },
+    {
+      "name": "home-resume-original-directory-overrides-picked-folder",
+      "result": "passed",
+      "cwd": "C:\\Users\\12976\\project\\self-workflow",
+      "args": [
+        "resume",
+        "01a0f0b4-99f4-7d30-ac60-b1cd0159da75"
+      ],
+      "visibleExternalTerminal": true,
+      "fixture": true,
+      "log": "C:\\Users\\12976\\AppData\\Local\\Temp\\cliora-native-verification\\fixtures\\launch-1790750097174.json"
+    },
+    {
+      "name": "home-yolo-resume-original-directory",
+      "result": "passed",
+      "cwd": "C:\\Users\\12976\\project\\self-workflow",
+      "args": [
+        "--yolo",
+        "resume",
+        "01a0f0b4-99f4-7d30-ac60-b1cd0159da75"
+      ],
+      "visibleExternalTerminal": true,
+      "fixture": true,
+      "log": "C:\\Users\\12976\\AppData\\Local\\Temp\\cliora-native-verification\\fixtures\\launch-1790750099272.json"
+    },
+    {
+      "name": "records-native-resume-original-directory",
+      "result": "passed",
+      "cwd": "C:\\Users\\12976\\project\\self-workflow",
+      "args": [
+        "resume",
+        "01a0f0b4-99f4-7d30-ac60-b1cd0159da75"
+      ],
+      "visibleExternalTerminal": true,
+      "fixture": true,
+      "log": "C:\\Users\\12976\\AppData\\Local\\Temp\\cliora-native-verification\\fixtures\\launch-1790750106503.json"
+    },
+    {
+      "name": "records-yolo-resume-original-directory",
+      "result": "passed",
+      "cwd": "C:\\Users\\12976\\project\\self-workflow",
+      "args": [
+        "--yolo",
+        "resume",
+        "01a0f0b4-99f4-7d30-ac60-b1cd0159da75"
+      ],
+      "visibleExternalTerminal": true,
+      "fixture": true,
+      "log": "C:\\Users\\12976\\AppData\\Local\\Temp\\cliora-native-verification\\fixtures\\launch-1790750109504.json"
+    },
+    {
+      "name": "powershell-special-character-folder",
+      "result": "passed",
+      "cwd": "C:\\Users\\12976\\AppData\\Local\\Temp\\cliora-native-verification\\fixtures\\启动验证 空格 O'Neil;目录",
+      "args": [],
+      "visibleExternalTerminal": true,
+      "fixture": true,
+      "log": "C:\\Users\\12976\\AppData\\Local\\Temp\\cliora-native-verification\\fixtures\\launch-1790750112210.json"
+    },
+    {
+      "name": "restore-user-cli-path-and-terminal",
+      "result": "passed"
+    }
+  ],
+  "limits": [
+    "Real Windows Terminal and PowerShell plus real UI/IPC launch pipeline; CLI invocation is a harmless installed-version shim that records cwd and arguments, without contacting any provider.",
+    "Original indexed session metadata is used; no real CLI session is resumed or global CLI configuration applied."
+  ],
+  "result": "passed",
+  "elapsedMs": 27830
+}

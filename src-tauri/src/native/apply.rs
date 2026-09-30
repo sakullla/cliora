@@ -72,12 +72,17 @@ pub(crate) fn read_secret(id: &str, credentials: &dyn CredentialStore) -> Result
     Ok(secret)
 }
 
+#[cfg(test)]
 fn native_secrets(
     registry: &super::adapters::Registry,
     profile: &RegisteredProfile,
     scope: Scope,
     credentials: &dyn CredentialStore,
 ) -> Result<NativeSecrets, String> {
+    let documents = desired_registered_documents(registry,profile,None,scope)?;
+    native_secrets_for_documents(registry,profile,scope,credentials,&documents)
+}
+fn native_secrets_for_documents(registry: &super::adapters::Registry, profile: &RegisteredProfile, scope: Scope, credentials: &dyn CredentialStore, documents: &BTreeMap<String, Value>) -> Result<NativeSecrets, String> {
     let adapter = registry
         .get(&profile.tool)
         .ok_or("未注册的 CLI 适配器，不能应用")?;
@@ -92,7 +97,7 @@ fn native_secrets(
     }
     let mut result = NativeSecrets::default();
     adapter.restore_imported_secrets(profile, scope, credentials, &mut result)?;
-    adapter.write_connection_secret(profile, scope, credentials, &mut result)?;
+    adapter.write_connection_secret_for_documents(profile, scope, credentials, &mut result, documents)?;
     Ok(result)
 }
 
@@ -186,7 +191,7 @@ fn connection_documents(
     super::adapters::known(tool).connection_documents(connection, scope)
 }
 
-fn scope_key(scope: Scope, project: Option<&Path>) -> Result<String, String> {
+pub(crate) fn scope_key(scope: Scope, project: Option<&Path>) -> Result<String, String> {
     match scope {
         Scope::Global => Ok("global".into()),
         Scope::Project => {
@@ -265,7 +270,7 @@ pub fn desired_registered_documents(
         result.insert(role, effective.contents);
     }
     if let Some(connection) = &profile.connection {
-        for (role, overlay) in adapter.connection_documents(connection, scope)? {
+        for (role, overlay) in adapter.connection_documents_for_existing(connection, scope, &result)? {
             let existing = result.entry(role).or_insert_with(|| json!({}));
             let (merged, _) = format::resolve(existing, &overlay, &[])?;
             *existing = merged;
@@ -359,11 +364,19 @@ pub fn apply_registered_validated(
     scope: Scope,
     allow_takeover: bool,
 ) -> Result<ApplyOutcome, String> {
+    apply_registered_validated_compared(registry,db,credentials,profile,common,native_files,key,scope,allow_takeover,None)
+}
+
+fn apply_registered_validated_compared(
+    registry: &super::adapters::Registry, db: &Database, credentials: &dyn CredentialStore,
+    profile: &RegisteredProfile, common: Option<&RegisteredCommon>, native_files: &[NativeFile],
+    key: &str, scope: Scope, allow_takeover: bool, comparison: Option<&BTreeMap<String,String>>,
+) -> Result<ApplyOutcome,String> {
     let adapter = registry
         .get(&profile.tool)
         .ok_or("未注册的 CLI 适配器，不能应用")?;
     let desired = desired_registered_documents(registry, profile, common, scope)?;
-    let secrets = native_secrets(registry, profile, scope, credentials)?;
+    let secrets = native_secrets_for_documents(registry, profile, scope, credentials, &desired)?;
     let integrity = transaction::integrity_key(db, credentials)?;
     let old = get_registered_binding(db, &profile.tool, key)?;
     let mut new_managed = Managed::new();
@@ -412,8 +425,12 @@ pub fn apply_registered_validated(
         };
         let file_path = Path::new(&native.path);
         let baseline = transaction::read_native(file_path)?;
+        if comparison.is_some_and(|files|files.get(&role)!=Some(&baseline)) {
+            return Err("原生文件在比较后又发生变化，请重新比较；未覆盖任何文件".into());
+        }
         matching_baselines.push((file_path.to_path_buf(), baseline.clone()));
         let original = format::parse(kind, &baseline)?;
+        if let Some(fields) = new_managed.get_mut(&role) { adapter.preserve_native_fields(&role, &original, fields, profile)?; }
         let next_fields = new_managed.get(&role);
         let previous_fields = old_managed.and_then(|managed| managed.get(&role));
         let pointers: BTreeSet<_> = next_fields
@@ -445,7 +462,7 @@ pub fn apply_registered_validated(
                 native_new.as_ref().or(new_value)
             };
             if let Some(old_value) = old_value {
-                if !managed_value(current, Some(old_value), &integrity) && current != expected_new {
+                if comparison.is_none() && !managed_value(current, Some(old_value), &integrity) && current != expected_new {
                     return Err(format!("上次管理的字段已被外部修改：{role}{pointer}"));
                 }
             } else if current.is_some() && current != expected_new && !allow_takeover {
@@ -503,6 +520,50 @@ pub fn apply_registered_validated(
             Ok(())
         },
     )
+}
+
+#[derive(Clone,Debug,Serialize,Deserialize)]
+#[serde(rename_all="camelCase")]
+pub struct ApplyComparisonFile { pub role:String, pub format:String, pub current:String, pub proposed:Value }
+#[derive(Clone,Debug,Serialize,Deserialize)]
+#[serde(rename_all="camelCase")]
+pub struct ApplyComparison { pub profile:RegisteredProfile, pub common:Option<RegisteredCommon>, pub files:Vec<ApplyComparisonFile> }
+
+fn comparison_files(native:&[NativeFile],documents:&BTreeMap<String,Value>,required:&BTreeSet<String>)->Result<Vec<ApplyComparisonFile>,String> {
+    // Authentication cleanup may touch another declared config file even when it
+    // has no document overlay. Capture its actual bytes, including missing files.
+    // Dedicated native identity/credential files stay outside this editor.
+    let roles:BTreeSet<_>=required.iter().cloned().chain(native.iter().filter(|file|file.writable && !file.sensitive).map(|file|file.role.to_owned())).collect();
+    let mut files=Vec::new();
+    for role in roles {
+        let file=native.iter().find(|file|file.role==role && !file.sensitive).ok_or("当前范围的原生文件不可编辑")?;
+        files.push(ApplyComparisonFile{role:role.clone(),format:file.format.into(),current:transaction::read_native(Path::new(&file.path))?,proposed:documents.get(&role).cloned().unwrap_or_else(||json!({}))});
+    }
+    Ok(files)
+}
+
+pub fn compare_registered_application(registry:&super::adapters::Registry,db:&Database,home:&Path,scope:Scope,project:Option<&Path>,profile_id:&str)->Result<ApplyComparison,String> {
+    let profile=profile::get_registered_profile(db,profile_id)?;
+    let common=profile::get_registered_common(db,&profile.tool)?;
+    let adapter=registry.get(&profile.tool).ok_or("未注册的 CLI")?;
+    let documents=desired_registered_documents(registry,&profile,common.as_ref(),scope)?;
+    let previous=get_registered_binding(db,&profile.tool,&scope_key(scope,project)?)?;
+    let roles:BTreeSet<_>=documents.keys().chain(previous.iter().flat_map(|binding|binding.managed.keys())).cloned().collect();
+    let native=adapter.native_files(scope,home,project,true);
+    let files=comparison_files(&native,&documents,&roles)?;
+    Ok(ApplyComparison{profile,common,files})
+}
+
+pub fn apply_compared_application(registry:&super::adapters::Registry,db:&Database,credentials:&dyn CredentialStore,comparison:&ApplyComparison,home:&Path,scope:Scope,project:Option<&Path>,custom:Option<&Path>)->Result<ApplyOutcome,String> {
+    let profile=profile::get_registered_profile(db,&comparison.profile.id)?;
+    let common=profile::get_registered_common(db,&profile.tool)?;
+    if serde_json::to_value(&profile).unwrap()!=serde_json::to_value(&comparison.profile).unwrap() || profile.inherit_common && serde_json::to_value(&common).unwrap()!=serde_json::to_value(&comparison.common).unwrap() {return Err("配置资料在比较后变化，请重新比较".into());}
+    if let Some(connection)=&profile.connection {auth::verify_stored_credential(connection,credentials)?;}
+    let probe=adapter::probe_registered(registry,&profile.tool,custom,home,project,scope)?;
+    if probe.native_writes.state!="supported" {return Err(probe.native_writes.reason.into());}
+    let mut baselines=BTreeMap::new();
+    for file in &comparison.files {if file.current.len()>1024*1024 || baselines.insert(file.role.clone(),file.current.clone()).is_some(){return Err("比较文件无效".into());}}
+    apply_registered_validated_compared(registry,db,credentials,&profile,common.as_ref(),&probe.native_files,&scope_key(scope,project)?,scope,true,Some(&baselines))
 }
 
 /// The snapshot can become stale during probe, credential reads or file preparation.
@@ -871,6 +932,17 @@ mod tests {
                 .profile_id,
             "second"
         );
+        let registry=crate::native::adapters::Registry::builtins();
+        let registered=RegisteredProfile::from(first.clone());
+        let compared=fs::read_to_string(&path).unwrap();
+        let baselines=BTreeMap::from([("settings".into(),compared.clone())]);
+        fs::write(&path,compared.replace("external","changed again")).unwrap();
+        assert!(apply_registered_validated_compared(&registry,&db,&store,&registered,None,&[native(&path)],"global",Scope::Global,true,Some(&baselines)).unwrap_err().contains("比较后"));
+        assert!(fs::read_to_string(&path).unwrap().contains("changed again"));
+        fs::write(&path,&compared).unwrap();
+        apply_registered_validated_compared(&registry,&db,&store,&registered,None,&[native(&path)],"global",Scope::Global,true,Some(&baselines)).unwrap();
+        let chosen=fs::read_to_string(&path).unwrap();
+        assert!(chosen.contains("model = \"a\""));assert!(chosen.contains("unrelated = 7"));
     }
 
     #[test]
@@ -901,6 +973,64 @@ mod tests {
             "@ai-sdk/openai"
         );
         assert!(connection_documents(CliId::Codex, &connection, Scope::Project).is_err());
+        let registry=crate::native::adapters::Registry::builtins();
+        let existing=BTreeMap::from([("models".into(),json!({"providers":{"demo":{"models":[{"id":"m1","contextWindow":123,"cost":{"input":2}},{"id":"other","name":"Keep"}]}}}))]);
+        let preserved=registry.get("pi").unwrap().connection_documents_for_existing(&connection,Scope::Global,&existing).unwrap();
+        assert_eq!(preserved["models"]["providers"]["demo"]["models"],existing["models"]["providers"]["demo"]["models"]);
+        let mut grok_connection=connection.clone();grok_connection.model="request-id".into();
+        let existing=BTreeMap::from([("settings".into(),json!({"models":{"default":"friendly-alias"},"model":{"friendly-alias":{"model":"request-id","name":"Visible name","api_backend":"chat"}}}))]);
+        let mapped=registry.get("grok").unwrap().connection_documents_for_existing(&grok_connection,Scope::Global,&existing).unwrap();
+        assert_eq!(mapped["settings"]["models"]["default"],"friendly-alias");
+        assert_eq!(mapped["settings"]["model"]["friendly-alias"]["model"],"request-id");
+        assert_eq!(mapped["settings"]["model"]["friendly-alias"]["name"],"Visible name");
+    }
+
+    #[test]
+    fn claude_default_model_context_change_survives_save_apply_and_native_read() {
+        let temp=tempfile::tempdir().unwrap(); let db=Database::open(&temp.path().join("app.db")).unwrap();
+        let store=MemoryStore::default(); let path=temp.path().join("settings.json");
+        let mut named=secret_profile(CliId::ClaudeCode,"context-change","anthropic","");
+        named.connection.as_mut().unwrap().secret_ref=None;
+        named.connection.as_mut().unwrap().model="request-model[1m]".into();
+        named.files.insert("settings".into(),json!({"env":{"ANTHROPIC_MODEL":"request-model[1M]","ANTHROPIC_DEFAULT_SONNET_MODEL":"sonnet-id[1m]","ANTHROPIC_DEFAULT_SONNET_MODEL_NAME":"Sonnet display","CLAUDE_CODE_SUBAGENT_MODEL":"subagent-id","UNRELATED":"keep"},"extra":{"keep":true}}).to_string());
+        apply_fixture(&db,&store,&named,None,&[native_role("settings",&path,"json")],"global",Scope::Global,false).unwrap();
+        let first:Value=serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(first["env"]["ANTHROPIC_MODEL"],"request-model[1m]");
+        named.connection.as_mut().unwrap().model="request-model".into();
+        let mut draft:Value=serde_json::from_str(&named.files["settings"]).unwrap();
+        draft["env"]["ANTHROPIC_MODEL"]=json!("request-model");named.files.insert("settings".into(),draft.to_string());
+        named=profile::save_profile(&db,named.clone(),Some(named.version)).unwrap();
+        apply_fixture(&db,&store,&named,None,&[native_role("settings",&path,"json")],"global",Scope::Global,false).unwrap();
+        let second:Value=serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(second["env"]["ANTHROPIC_MODEL"],"request-model");
+        assert_eq!(second["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"],"sonnet-id[1m]");
+        assert_eq!(second["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL_NAME"],"Sonnet display");
+        assert_eq!(second["env"]["CLAUDE_CODE_SUBAGENT_MODEL"],"subagent-id");
+        assert_eq!(second["env"]["UNRELATED"],"keep");assert_eq!(second["extra"]["keep"],true);
+
+        let registry=crate::native::adapters::Registry::builtins();
+        let project=temp.path().join("项目 O'Neil;目录");fs::create_dir_all(project.join(".claude")).unwrap();
+        let project_settings=project.join(".claude/settings.json");let local=project.join(".claude/settings.local.json");
+        fs::write(&project_settings,json!({"env":{"ANTHROPIC_MODEL":"different[1M]"},"unrelated":7}).to_string()).unwrap();
+        let native=registry.get("claude_code").unwrap().native_files(Scope::Project,temp.path(),Some(&project),true);
+        let key=scope_key(Scope::Project,Some(&project)).unwrap();
+        for has_local in [false,true] {
+            if has_local {fs::write(&local,json!({"env":{"ANTHROPIC_API_KEY":"test-only-old-key"},"permissions":{"defaultMode":"default"}}).to_string()).unwrap();}
+            let comparison=compare_registered_application(&registry,&db,temp.path(),Scope::Project,Some(&project),&named.id).unwrap();
+            let registered=RegisteredProfile::from(named.clone());
+            let baselines:BTreeMap<_,_>=comparison.files.iter().map(|file|(file.role.clone(),file.current.clone())).collect();
+            assert_eq!(baselines.get("local_settings").unwrap(),&transaction::read_native(&local).unwrap());
+            let mut incomplete=baselines.clone();incomplete.remove("local_settings");
+            assert!(apply_registered_validated_compared(&registry,&db,&store,&registered,None,&native,&key,Scope::Project,true,Some(&incomplete)).unwrap_err().contains("比较后"));
+            fs::write(&local,"{\"external\":true}").unwrap();
+            assert!(apply_registered_validated_compared(&registry,&db,&store,&registered,None,&native,&key,Scope::Project,true,Some(&baselines)).unwrap_err().contains("比较后"));
+            assert_eq!(fs::read_to_string(&local).unwrap(),"{\"external\":true}");
+            if has_local {fs::write(&local,&baselines["local_settings"]).unwrap();} else {fs::remove_file(&local).unwrap();}
+            apply_registered_validated_compared(&registry,&db,&store,&registered,None,&native,&key,Scope::Project,true,Some(&baselines)).unwrap();
+            let result:Value=serde_json::from_str(&fs::read_to_string(&project_settings).unwrap()).unwrap();
+            assert_eq!(result["env"]["ANTHROPIC_MODEL"],"request-model");assert_eq!(result["unrelated"],7);
+            if has_local {let result:Value=serde_json::from_str(&fs::read_to_string(&local).unwrap()).unwrap();assert!(result["env"].get("ANTHROPIC_API_KEY").is_none());assert_eq!(result["permissions"]["defaultMode"],"default");}
+        }
     }
 
     fn secret_profile(tool: CliId, name: &str, provider: &str, id: &str) -> NativeProfile {
@@ -979,23 +1109,20 @@ mod tests {
                 false,
             )
             .unwrap();
+            let registry=crate::native::adapters::Registry::builtins();
+            let registered=RegisteredProfile::from(profile.clone());
+            let documents=desired_registered_documents(&registry,&registered,None,Scope::Global).unwrap();
+            let mut declared=files.clone();let mut identity=native_role("auth",&temp.path().join("identity.json"),"json");identity.sensitive=true;declared.push(identity);
+            let comparison=comparison_files(&declared,&documents,&documents.keys().cloned().collect()).unwrap();
+            assert!(!comparison.iter().any(|file|file.role=="auth"));
+            let baselines=comparison.into_iter().map(|file|(file.role,file.current)).collect();
             let native_text = fs::read_to_string(if tool == CliId::Pi {
                 &models
             } else {
                 &settings
             })
             .unwrap();
-            let matching = apply_fixture(
-                &db,
-                &store,
-                &profile,
-                None,
-                &files,
-                "global",
-                Scope::Global,
-                false,
-            )
-            .unwrap();
+            let matching = apply_registered_validated_compared(&registry,&db,&store,&registered,None,&files,"global",Scope::Global,true,Some(&baselines)).unwrap();
             assert_eq!(matching.status, "written_for_next_session", "{tool:?}");
             assert!(
                 matching.changed_files.iter().any(|path| path

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::{Connection, OpenFlags};
 use serde_json::Value;
 
-use super::{text_content, valid_native_id, HistorySource, ParsedSession, UsageEvent, MAX_SOURCES};
+use super::{check_cancelled, text_content, valid_native_id, HistorySource, ParsedSession, UsageEvent, MAX_SOURCES};
 
 fn database(home: &Path) -> PathBuf {
     let base = std::env::var_os("XDG_DATA_HOME")
@@ -21,6 +21,11 @@ fn open(path: &Path) -> Result<Connection, String> {
 }
 
 pub fn sources(home: &Path) -> Result<Vec<HistorySource>, String> {
+    sources_controlled(home, &|| false)
+}
+
+pub fn sources_controlled(home: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<HistorySource>, String> {
+    check_cancelled(cancelled)?;
     let path = database(home);
     if !path.exists() {
         return Ok(Vec::new());
@@ -36,6 +41,7 @@ pub fn sources(home: &Path) -> Result<Vec<HistorySource>, String> {
         .map_err(|error| error.to_string())?;
     let mut result = Vec::new();
     for row in rows {
+        check_cancelled(cancelled)?;
         let (id, updated) = row.map_err(|error| error.to_string())?;
         if !valid_native_id(&id) {
             continue;
@@ -58,6 +64,11 @@ fn token(value: &Value, key: &str) -> Option<u64> {
 }
 
 pub fn parse(source: &HistorySource) -> Result<ParsedSession, String> {
+    parse_controlled(source, &|| false)
+}
+
+pub fn parse_controlled(source: &HistorySource, cancelled: &dyn Fn() -> bool) -> Result<ParsedSession, String> {
+    check_cancelled(cancelled)?;
     let id = source.native_id.as_deref().ok_or("OpenCode 会话 ID 缺失")?;
     let db = open(&source.path)?;
     let (title, cwd, started, updated, version, fallback_model): (String, Option<String>, Option<i64>, Option<i64>, Option<String>, Option<String>) = db.query_row(
@@ -90,6 +101,7 @@ pub fn parse(source: &HistorySource) -> Result<ParsedSession, String> {
         })
         .map_err(|error| error.to_string())?;
     for (index, row) in rows.enumerate() {
+        check_cancelled(cancelled)?;
         if index >= 3000 {
             session.partial = true;
             break;
@@ -141,6 +153,7 @@ pub fn parse(source: &HistorySource) -> Result<ParsedSession, String> {
         })
         .map_err(|error| error.to_string())?;
     for (index, row) in rows.enumerate() {
+        check_cancelled(cancelled)?;
         if index >= 4000 {
             session.partial = true;
             break;
@@ -163,5 +176,6 @@ pub fn parse(source: &HistorySource) -> Result<ParsedSession, String> {
             );
         }
     }
+    check_cancelled(cancelled)?;
     session.finish(source)
 }

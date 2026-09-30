@@ -1,0 +1,262 @@
+{
+  "kind": "native-simplified-ui-verification",
+  "method": "on-device",
+  "identifier": "dev.cliora.verification.a6",
+  "candidateSha256": "95969f2ee3f81ff5ab62b33da5efab3364f9fce1681ad8e84307bf7737912ff0",
+  "recordedAt": "2026-09-30T07:40:29.334Z",
+  "checks": [
+    {
+      "name": "native-codemirror-layout",
+      "label": "empty new native file",
+      "editor": {
+        "rect": {
+          "x": 414.3333435058594,
+          "y": 466,
+          "width": 683.3333740234375,
+          "height": 210,
+          "bottom": 676,
+          "right": 1097.6667175292969
+        },
+        "position": "relative"
+      },
+      "scroller": {
+        "rect": {
+          "x": 414.3333435058594,
+          "y": 466,
+          "width": 683.3333740234375,
+          "height": 210,
+          "bottom": 676,
+          "right": 1097.6667175292969
+        },
+        "display": "flex",
+        "position": "relative"
+      },
+      "line": {
+        "x": 443,
+        "y": 478,
+        "width": 646.6666870117188,
+        "height": 19.791667938232422,
+        "bottom": 497.7916679382324,
+        "right": 1089.6666870117188
+      },
+      "cursor": {
+        "x": 448.3958435058594,
+        "y": 481.3333435058594,
+        "width": 0.6666666865348816,
+        "height": 12,
+        "bottom": 493.3333435058594,
+        "right": 449.06251019239426
+      },
+      "layers": [
+        {
+          "class": "cm-layer cm-layer-above cm-cursorLayer",
+          "position": "absolute",
+          "rect": {
+            "x": 414.3333435058594,
+            "y": 466,
+            "width": 0,
+            "height": 0,
+            "bottom": 466,
+            "right": 414.3333435058594
+          }
+        },
+        {
+          "class": "cm-layer cm-selectionLayer",
+          "position": "absolute",
+          "rect": {
+            "x": 414.3333435058594,
+            "y": 466,
+            "width": 0,
+            "height": 0,
+            "bottom": 466,
+            "right": 414.3333435058594
+          }
+        }
+      ],
+      "styleNonceAnchorPresent": true,
+      "dynamicStyles": [
+        {
+          "id": "",
+          "noncePresent": true,
+          "sheetPresent": true,
+          "rules": 78,
+          "hasCodeMirrorBaseRules": true
+        },
+        {
+          "id": "cliora-editor-nonce",
+          "noncePresent": true,
+          "sheetPresent": true,
+          "rules": 0,
+          "hasCodeMirrorBaseRules": false
+        }
+      ],
+      "documentOverflow": false
+    },
+    {
+      "name": "native-codemirror-layout",
+      "label": "multiline TOML",
+      "editor": {
+        "rect": {
+          "x": 414.3333435058594,
+          "y": 466,
+          "width": 683.3333740234375,
+          "height": 210,
+          "bottom": 676,
+          "right": 1097.6667175292969
+        },
+        "position": "relative"
+      },
+      "scroller": {
+        "rect": {
+          "x": 414.3333435058594,
+          "y": 466,
+          "width": 683.3333740234375,
+          "height": 210,
+          "bottom": 676,
+          "right": 1097.6667175292969
+        },
+        "display": "flex",
+        "position": "relative"
+      },
+      "line": {
+        "x": 443,
+        "y": 478,
+        "width": 646.6666870117188,
+        "height": 19.791667938232422,
+        "bottom": 497.7916679382324,
+        "right": 1089.6666870117188
+      },
+      "cursor": {
+        "x": 448.3958435058594,
+        "y": 481.3333435058594,
+        "width": 0.6666666865348816,
+        "height": 12,
+        "bottom": 493.3333435058594,
+        "right": 449.06251019239426
+      },
+      "layers": [
+        {
+          "class": "cm-layer cm-layer-above cm-cursorLayer",
+          "position": "absolute",
+          "rect": {
+            "x": 414.3333435058594,
+            "y": 466,
+            "width": 0,
+            "height": 0,
+            "bottom": 466,
+            "right": 414.3333435058594
+          }
+        },
+        {
+          "class": "cm-layer cm-selectionLayer",
+          "position": "absolute",
+          "rect": {
+            "x": 414.3333435058594,
+            "y": 466,
+            "width": 0,
+            "height": 0,
+            "bottom": 466,
+            "right": 414.3333435058594
+          }
+        }
+      ],
+      "styleNonceAnchorPresent": true,
+      "dynamicStyles": [
+        {
+          "id": "",
+          "noncePresent": true,
+          "sheetPresent": true,
+          "rules": 78,
+          "hasCodeMirrorBaseRules": true
+        },
+        {
+          "id": "cliora-editor-nonce",
+          "noncePresent": true,
+          "sheetPresent": true,
+          "rules": 0,
+          "hasCodeMirrorBaseRules": false
+        }
+      ],
+      "documentOverflow": false
+    },
+    {
+      "name": "authenticated-native-provider-models",
+      "result": "passed",
+      "models": 107,
+      "secretSavedThroughPrimaryAction": true,
+      "endpoint": "https://cpa.sakullla.cyou/v1/models"
+    },
+    {
+      "name": "saved-key-reopen-authenticates",
+      "result": "passed",
+      "options": 109
+    },
+    {
+      "name": "pi-primary-models-and-file-tabs",
+      "result": "passed",
+      "defaultRole": "models",
+      "metadataRequired": false
+    },
+    {
+      "name": "native-local-ZIP-picker-single-complete-bundle",
+      "result": "passed",
+      "files": 3
+    },
+    {
+      "name": "native-local-ZIP-multiple-skill-select",
+      "result": "passed",
+      "onlyChosenImported": true
+    },
+    {
+      "name": "project-dropdown-direct-native-save",
+      "result": "passed",
+      "projectName": "本机验证项目",
+      "noRequiredProfileName": true,
+      "noImplicitNamedProfile": true,
+      "preservesExistingField": true
+    }
+  ],
+  "screenshots": [
+    {
+      "name": "new-profile-compact-real-models",
+      "path": "C:\\Users\\12976\\AppData\\Local\\Temp\\cliora-native-verification\\new-profile-compact-real-models.png"
+    },
+    {
+      "name": "pi-direct-current-config",
+      "path": "C:\\Users\\12976\\AppData\\Local\\Temp\\cliora-native-verification\\pi-direct-current-config.png"
+    },
+    {
+      "name": "simplified-native-check-failed",
+      "path": "C:\\Users\\12976\\AppData\\Local\\Temp\\cliora-native-verification\\simplified-native-check-failed.png"
+    },
+    {
+      "name": "skills-local-zip-complete",
+      "path": "C:\\Users\\12976\\AppData\\Local\\Temp\\cliora-native-verification\\skills-local-zip-complete.png"
+    },
+    {
+      "name": "simplified-native-check-failed",
+      "path": "C:\\Users\\12976\\AppData\\Local\\Temp\\cliora-native-verification\\simplified-native-check-failed.png"
+    },
+    {
+      "name": "simplified-native-check-failed",
+      "path": "C:\\Users\\12976\\AppData\\Local\\Temp\\cliora-native-verification\\simplified-native-check-failed.png"
+    },
+    {
+      "name": "simplified-native-check-failed",
+      "path": "C:\\Users\\12976\\AppData\\Local\\Temp\\cliora-native-verification\\simplified-native-check-failed.png"
+    }
+  ],
+  "limits": [
+    "Production code in separately identified native build; isolated SQLite app data; user production process untouched.",
+    "Real user global files only read; direct writes limited to named Temp project fixture.",
+    "Provider verification uses only GET models; no billed model invocation."
+  ],
+  "harnessCorrection": "Project dropdown uses backend canonical directory, including Windows extended path prefix; use returned Project.path.",
+  "result": "failed",
+  "error": "AssertionError [ERR_ASSERTION]: Initial native CSP allows editor base styles\n\n1 !== 0\n",
+  "credentialCleanup": {
+    "kind": "owned-verification-credential-cleanup",
+    "deleted": 0,
+    "references": 0
+  }
+}

@@ -377,4 +377,20 @@ fn sixth_adapter_uses_the_same_probe_native_transaction_and_launch_orchestration
         None
     )
     .is_err());
+    // Direct file editing also uses the open adapter contract, complete native
+    // text, and the transaction boundary without creating a profile.
+    let target = home.join(".sixth/settings.json");
+    let original = "{\n  \"model\": \"old\",\n  \"untouched\": true\n}\n";
+    let external = original.replace("true", "false");
+    std::fs::write(&target, &external).unwrap();
+    let edited = original.replace("old", "direct");
+    save_registered_text(&registry, "sixth_fixture", "settings", Scope::Global, home, None, "1.0.0", &db, &credentials, original, &edited).unwrap();
+    let actual = std::fs::read_to_string(&target).unwrap();
+    assert!(actual.contains("direct") && actual.contains("false"));
+    assert!(crate::native::apply::get_registered_binding(&db, "sixth_fixture", "global").unwrap().is_none());
+    assert_eq!(crate::native::profile::list_registered_profiles(&db, "sixth_fixture").unwrap().len(), 1);
+    assert!(save_registered_text(&registry, "sixth_fixture", "settings", Scope::Global, home, None, "1.0.0", &db, &credentials, original, &original.replace("old", "conflict")).is_err());
+    assert!(save_registered_text(&registry, "sixth_fixture", "settings", Scope::Global, home, None, "1.0.0", &db, &credentials, &actual, "invalid json").is_err());
+    assert!(save_registered_text(&registry, "sixth_fixture", "settings", Scope::Global, home, None, "", &db, &credentials, &actual, &actual).is_err());
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), actual);
 }

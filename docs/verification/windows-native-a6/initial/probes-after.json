@@ -1,0 +1,133 @@
+{
+  "native": true,
+  "probes": [
+    {
+      "toolId": "codex",
+      "installations": [
+        {
+          "version": "0.159.2",
+          "status": "available"
+        },
+        {
+          "version": "0.159.2",
+          "status": "available"
+        },
+        {
+          "version": null,
+          "status": "probe_failed"
+        }
+      ],
+      "roles": [
+        {
+          "role": "settings",
+          "format": "toml"
+        }
+      ],
+      "profileCount": 0
+    },
+    {
+      "toolId": "claude_code",
+      "installations": [
+        {
+          "version": "2.1.284",
+          "status": "available"
+        },
+        {
+          "version": "2.1.284",
+          "status": "available"
+        },
+        {
+          "version": null,
+          "status": "probe_failed"
+        }
+      ],
+      "roles": [
+        {
+          "role": "settings",
+          "format": "json"
+        }
+      ],
+      "profileCount": 0
+    },
+    {
+      "toolId": "grok",
+      "installations": [
+        {
+          "version": "1.0.44",
+          "status": "available"
+        },
+        {
+          "version": "1.0.44",
+          "status": "available"
+        },
+        {
+          "version": null,
+          "status": "probe_failed"
+        }
+      ],
+      "roles": [
+        {
+          "role": "settings",
+          "format": "toml"
+        }
+      ],
+      "profileCount": 0
+    },
+    {
+      "toolId": "pi",
+      "installations": [
+        {
+          "version": "0.99.1",
+          "status": "available"
+        },
+        {
+          "version": "0.99.1",
+          "status": "available"
+        },
+        {
+          "version": null,
+          "status": "probe_failed"
+        }
+      ],
+      "roles": [
+        {
+          "role": "settings",
+          "format": "json"
+        },
+        {
+          "role": "models",
+          "format": "jsonc"
+        },
+        {
+          "role": "auth",
+          "format": "json"
+        }
+      ],
+      "profileCount": 0
+    },
+    {
+      "toolId": "open_code",
+      "installations": [
+        {
+          "version": "1.18.33",
+          "status": "available"
+        },
+        {
+          "version": "1.18.33",
+          "status": "available"
+        },
+        {
+          "version": null,
+          "status": "probe_failed"
+        }
+      ],
+      "roles": [
+        {
+          "role": "settings",
+          "format": "json"
+        }
+      ],
+      "profileCount": 0
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+    "kind":  "isolated",
+    "command":  "npm run tauri build -- --no-bundle --config C:\\Users\\12976\\AppData\\Local\\Temp\\cliora-a6-final-isolated-tauri.json",
+    "startedAt":  "2026-09-30T10:53:43.1048555Z",
+    "finishedAt":  "2026-09-30T10:55:25.8106831Z",
+    "exitCode":  0,
+    "sourceUnchanged":  true,
+    "sourceWorktree":  {
+                           "sha256":  "725dcef481fb9c654d85360d0b281f34b4218690776fa3de35e7d17061bb34f5",
+                           "path":  "C:\\Users\\12976\\AppData\\Local\\Temp\\cliora-a6-final-isolated-build\\source-worktree.json"
+                       },
+    "logs":  {
+                 "stderr":  "C:\\Users\\12976\\AppData\\Local\\Temp\\cliora-a6-final-isolated-build\\stderr.txt",
+                 "stdout":  "C:\\Users\\12976\\AppData\\Local\\Temp\\cliora-a6-final-isolated-build\\stdout.txt"
+             },
+    "identifier":  "dev.cliora.verification.a6final",
+    "configOverride":  {
+                           "sha256":  "6c819fb5db02ca625e1ece0d968959f9c46324f135662b90918d93f8bde9f06c",
+                           "path":  "C:\\Users\\12976\\AppData\\Local\\Temp\\cliora-a6-final-isolated-tauri.json"
+                       },
+    "candidate":  {
+                      "path":  "C:\\Users\\12976\\project\\cliora\\src-tauri\\target\\verification\\cliora-a6-final-isolated-windows-x64-866dce0bd2f086614e662688ff40dd130e4199150aab19c742d98d144ff8e69f.exe",
+                      "sha256":  "866dce0bd2f086614e662688ff40dd130e4199150aab19c742d98d144ff8e69f",
+                      "copiedFrom":  "C:\\Users\\12976\\project\\cliora\\src-tauri\\target\\release\\cliora.exe",
+                      "sizeBytes":  25945088,
+                      "peMachine":  "0x8664"
+                  }
+}

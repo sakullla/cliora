@@ -1,0 +1,2 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.59s
+     Running unittests src\lib.rs (src-tauri\target\debug\deps\cliora_lib-829d8961cb7e40b5.exe)

@@ -200,15 +200,16 @@ pub fn test_registered_connection(
     };
     let path = request_url.path().trim_end_matches("models").to_owned() + suffix;
     request_url.set_path(&path);
+    let request_model = adapter.request_model_id(&connection.model);
     let body = match connection.interface_format.as_str() {
         "openai_completions" => {
-            serde_json::json!({"model":connection.model,"messages":[{"role":"user","content":"Reply OK"}],"max_tokens":16})
+            serde_json::json!({"model":request_model,"messages":[{"role":"user","content":"Reply OK"}],"max_tokens":16})
         }
         "openai_responses" => {
-            serde_json::json!({"model":connection.model,"input":"Reply OK","max_output_tokens":16})
+            serde_json::json!({"model":request_model,"input":"Reply OK","max_output_tokens":16})
         }
         _ => {
-            serde_json::json!({"model":connection.model,"messages":[{"role":"user","content":"Reply OK"}],"max_tokens":16})
+            serde_json::json!({"model":request_model,"messages":[{"role":"user","content":"Reply OK"}],"max_tokens":16})
         }
     };
     let model_request = match authorize(client.post(request_url).json(&body)).send() {
@@ -404,7 +405,7 @@ fn fetch(
         let status = response.status();
         if !status.is_success() {
             return Err(match status.as_u16() {
-                401 | 403 => "模型目录认证失败，请检查 API 密钥".into(),
+                401 | 403 => format!("模型目录返回 HTTP {}（{}）。请确认 API 地址、认证方式与所用密钥", status.as_u16(), if secret.is_none() { "未提供密钥" } else if connection.interface_format == "anthropic_messages" { "x-api-key 认证" } else { "Bearer 认证" }),
                 404 => "供应商没有在该地址提供模型目录，可直接填写模型 ID".into(),
                 429 => "模型目录请求受到频率限制，请稍后刷新".into(),
                 300..=399 => "模型目录发生跳转，出于凭据安全没有继续请求".into(),
@@ -421,6 +422,7 @@ fn fetch(
         }
         let body: serde_json::Value =
             serde_json::from_slice(&bytes).map_err(|_| "模型目录响应不是有效 JSON")?;
+        if body.get("success").and_then(serde_json::Value::as_bool) == Some(false) { return Err("供应商返回业务失败；该地址未提供可用模型目录，可手动填写模型".into()); }
         let data = body
             .get("data")
             .and_then(serde_json::Value::as_array)

@@ -1,0 +1,14 @@
+{
+  "kind": "native-records-and-window-layout-verification",
+  "candidateSha256": "3d1d8c5eaa8408cdd3bed684006c243fc1961d6108a5a0b585bb02fef7ae580b",
+  "identifier": "dev.cliora.verification.a6final",
+  "recordedAt": "2026-09-30T10:12:34.509Z",
+  "checks": [],
+  "limits": [
+    "Real native window resized through Win32 at 1160/900/720 logical pixels.",
+    "History reads actual user files; evidence stores counts/timings only, not conversation content.",
+    "Full private history screenshots are omitted."
+  ],
+  "result": "failed",
+  "error": "AssertionError [ERR_ASSERTION]: History refresh completed or stopped instead of permanent loader"
+}

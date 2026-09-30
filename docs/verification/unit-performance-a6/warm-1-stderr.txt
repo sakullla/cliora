@@ -1,0 +1,7 @@
+warning: linker stdout: 正在创建库 C:\Users\12976\project\cliora\src-tauri\target\debug\deps\cliora_lib-829d8961cb7e40b5.lib 和对象 C:\Users\12976\project\cliora\src-tauri\target\debug\deps\cliora_lib-829d8961cb7e40b5.exp
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `cliora` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.61s
+     Running unittests src\lib.rs (src-tauri\target\debug\deps\cliora_lib-829d8961cb7e40b5.exe)

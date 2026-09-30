@@ -1,0 +1,976 @@
+{
+  "kind": "native-records-and-window-layout-verification",
+  "candidateSha256": "185849811117743d3ba60315b7578a31ea168137cf5cb4e34af911cd0479f2c9",
+  "identifier": "dev.cliora.verification.a6final",
+  "recordedAt": "2026-09-30T11:57:57.275Z",
+  "checks": [
+    {
+      "name": "history-cached-first-background-progress-model-totals",
+      "result": "passed",
+      "foregroundReadyMs": 198.1,
+      "scanWaitMs": 23009.6,
+      "cachedSessions": 796,
+      "modelGroups": 7,
+      "listMs": 467.3,
+      "usageMs": 323.2,
+      "selectionPreserved": true,
+      "scanCompletedOrStopped": true,
+      "stopRequested": false,
+      "stopMs": null
+    },
+    {
+      "name": "native-scan-cancel-keeps-cache",
+      "result": "passed",
+      "nativeStopMs": 49.8,
+      "phaseAtRequest": "codex",
+      "cachedSessionsRetained": true
+    },
+    {
+      "name": "single-native-page-scroll-owner",
+      "page": "快速开始",
+      "theme": "light",
+      "width": 1160,
+      "height": 780,
+      "result": "passed",
+      "geometry": {
+        "viewport": {
+          "width": 1160,
+          "height": 780
+        },
+        "document": {
+          "width": 1160,
+          "height": 780,
+          "scrollWidth": 1160,
+          "scrollHeight": 780
+        },
+        "shell": {
+          "x": 0,
+          "y": 0,
+          "width": 1160,
+          "height": 780
+        },
+        "main": {
+          "overflowY": "auto",
+          "clientHeight": 780,
+          "scrollHeight": 780
+        }
+      }
+    },
+    {
+      "name": "single-native-page-scroll-owner",
+      "page": "工具与连接",
+      "theme": "light",
+      "width": 1160,
+      "height": 780,
+      "result": "passed",
+      "geometry": {
+        "viewport": {
+          "width": 1160,
+          "height": 780
+        },
+        "document": {
+          "width": 1160,
+          "height": 780,
+          "scrollWidth": 1160,
+          "scrollHeight": 780
+        },
+        "shell": {
+          "x": 0,
+          "y": 0,
+          "width": 1160,
+          "height": 780
+        },
+        "main": {
+          "overflowY": "auto",
+          "clientHeight": 780,
+          "scrollHeight": 1123
+        }
+      }
+    },
+    {
+      "name": "single-native-page-scroll-owner",
+      "page": "资料库",
+      "theme": "light",
+      "width": 1160,
+      "height": 780,
+      "result": "passed",
+      "geometry": {
+        "viewport": {
+          "width": 1160,
+          "height": 780
+        },
+        "document": {
+          "width": 1160,
+          "height": 780,
+          "scrollWidth": 1160,
+          "scrollHeight": 780
+        },
+        "shell": {
+          "x": 0,
+          "y": 0,
+          "width": 1160,
+          "height": 780
+        },
+        "main": {
+          "overflowY": "auto",
+          "clientHeight": 780,
+          "scrollHeight": 822
+        }
+      }
+    },
+    {
+      "name": "single-native-page-scroll-owner",
+      "page": "使用记录",
+      "theme": "light",
+      "width": 1160,
+      "height": 780,
+      "result": "passed",
+      "geometry": {
+        "viewport": {
+          "width": 1160,
+          "height": 780
+        },
+        "document": {
+          "width": 1160,
+          "height": 780,
+          "scrollWidth": 1160,
+          "scrollHeight": 780
+        },
+        "shell": {
+          "x": 0,
+          "y": 0,
+          "width": 1160,
+          "height": 780
+        },
+        "main": {
+          "overflowY": "auto",
+          "clientHeight": 780,
+          "scrollHeight": 1323
+        }
+      }
+    },
+    {
+      "name": "single-native-page-scroll-owner",
+      "page": "设置",
+      "theme": "light",
+      "width": 1160,
+      "height": 780,
+      "result": "passed",
+      "geometry": {
+        "viewport": {
+          "width": 1160,
+          "height": 780
+        },
+        "document": {
+          "width": 1160,
+          "height": 780,
+          "scrollWidth": 1160,
+          "scrollHeight": 780
+        },
+        "shell": {
+          "x": 0,
+          "y": 0,
+          "width": 1160,
+          "height": 780
+        },
+        "main": {
+          "overflowY": "auto",
+          "clientHeight": 780,
+          "scrollHeight": 837
+        }
+      }
+    },
+    {
+      "name": "single-native-page-scroll-owner",
+      "page": "快速开始",
+      "theme": "dark",
+      "width": 1160,
+      "height": 780,
+      "result": "passed",
+      "geometry": {
+        "viewport": {
+          "width": 1160,
+          "height": 780
+        },
+        "document": {
+          "width": 1160,
+          "height": 780,
+          "scrollWidth": 1160,
+          "scrollHeight": 780
+        },
+        "shell": {
+          "x": 0,
+          "y": 0,
+          "width": 1160,
+          "height": 780
+        },
+        "main": {
+          "overflowY": "auto",
+          "clientHeight": 780,
+          "scrollHeight": 780
+        }
+      }
+    },
+    {
+      "name": "single-native-page-scroll-owner",
+      "page": "工具与连接",
+      "theme": "dark",
+      "width": 1160,
+      "height": 780,
+      "result": "passed",
+      "geometry": {
+        "viewport": {
+          "width": 1160,
+          "height": 780
+        },
+        "document": {
+          "width": 1160,
+          "height": 780,
+          "scrollWidth": 1160,
+          "scrollHeight": 780
+        },
+        "shell": {
+          "x": 0,
+          "y": 0,
+          "width": 1160,
+          "height": 780
+        },
+        "main": {
+          "overflowY": "auto",
+          "clientHeight": 780,
+          "scrollHeight": 1123
+        }
+      }
+    },
+    {
+      "name": "single-native-page-scroll-owner",
+      "page": "资料库",
+      "theme": "dark",
+      "width": 1160,
+      "height": 780,
+      "result": "passed",
+      "geometry": {
+        "viewport": {
+          "width": 1160,
+          "height": 780
+        },
+        "document": {
+          "width": 1160,
+          "height": 780,
+          "scrollWidth": 1160,
+          "scrollHeight": 780
+        },
+        "shell": {
+          "x": 0,
+          "y": 0,
+          "width": 1160,
+          "height": 780
+        },
+        "main": {
+          "overflowY": "auto",
+          "clientHeight": 780,
+          "scrollHeight": 822
+        }
+      }
+    },
+    {
+      "name": "single-native-page-scroll-owner",
+      "page": "使用记录",
+      "theme": "dark",
+      "width": 1160,
+      "height": 780,
+      "result": "passed",
+      "geometry": {
+        "viewport": {
+          "width": 1160,
+          "height": 780
+        },
+        "document": {
+          "width": 1160,
+          "height": 780,
+          "scrollWidth": 1160,
+          "scrollHeight": 780
+        },
+        "shell": {
+          "x": 0,
+          "y": 0,
+          "width": 1160,
+          "height": 780
+        },
+        "main": {
+          "overflowY": "auto",
+          "clientHeight": 780,
+          "scrollHeight": 1323
+        }
+      }
+    },
+    {
+      "name": "single-native-page-scroll-owner",
+      "page": "设置",
+      "theme": "dark",
+      "width": 1160,
+      "height": 780,
+      "result": "passed",
+      "geometry": {
+        "viewport": {
+          "width": 1160,
+          "height": 780
+        },
+        "document": {
+          "width": 1160,
+          "height": 780,
+          "scrollWidth": 1160,
+          "scrollHeight": 780
+        },
+        "shell": {
+          "x": 0,
+          "y": 0,
+          "width": 1160,
+          "height": 780
+        },
+        "main": {
+          "overflowY": "auto",
+          "clientHeight": 780,
+          "scrollHeight": 837
+        }
+      }
+    },
+    {
+      "name": "single-native-page-scroll-owner",
+      "page": "快速开始",
+      "theme": "light",
+      "width": 900,
+      "height": 650,
+      "result": "passed",
+      "geometry": {
+        "viewport": {
+          "width": 900,
+          "height": 650
+        },
+        "document": {
+          "width": 900,
+          "height": 650,
+          "scrollWidth": 900,
+          "scrollHeight": 650
+        },
+        "shell": {
+          "x": 0,
+          "y": 0,
+          "width": 900,
+          "height": 650
+        },
+        "main": {
+          "overflowY": "auto",
+          "clientHeight": 650,
+          "scrollHeight": 726
+        }
+      }
+    },
+    {
+      "name": "single-native-page-scroll-owner",
+      "page": "工具与连接",
+      "theme": "light",
+      "width": 900,
+      "height": 650,
+      "result": "passed",
+      "geometry": {
+        "viewport": {
+          "width": 900,
+          "height": 650
+        },
+        "document": {
+          "width": 900,
+          "height": 650,
+          "scrollWidth": 900,
+          "scrollHeight": 650
+        },
+        "shell": {
+          "x": 0,
+          "y": 0,
+          "width": 900,
+          "height": 650
+        },
+        "main": {
+          "overflowY": "auto",
+          "clientHeight": 650,
+          "scrollHeight": 1109
+        }
+      }
+    },
+    {
+      "name": "single-native-page-scroll-owner",
+      "page": "资料库",
+      "theme": "light",
+      "width": 900,
+      "height": 650,
+      "result": "passed",
+      "geometry": {
+        "viewport": {
+          "width": 900,
+          "height": 650
+        },
+        "document": {
+          "width": 900,
+          "height": 650,
+          "scrollWidth": 900,
+          "scrollHeight": 650
+        },
+        "shell": {
+          "x": 0,
+          "y": 0,
+          "width": 900,
+          "height": 650
+        },
+        "main": {
+          "overflowY": "auto",
+          "clientHeight": 650,
+          "scrollHeight": 808
+        }
+      }
+    },
+    {
+      "name": "single-native-page-scroll-owner",
+      "page": "使用记录",
+      "theme": "light",
+      "width": 900,
+      "height": 650,
+      "result": "passed",
+      "geometry": {
+        "viewport": {
+          "width": 900,
+          "height": 650
+        },
+        "document": {
+          "width": 900,
+          "height": 650,
+          "scrollWidth": 900,
+          "scrollHeight": 650
+        },
+        "shell": {
+          "x": 0,
+          "y": 0,
+          "width": 900,
+          "height": 650
+        },
+        "main": {
+          "overflowY": "auto",
+          "clientHeight": 650,
+          "scrollHeight": 1326
+        }
+      }
+    },
+    {
+      "name": "single-native-page-scroll-owner",
+      "page": "设置",
+      "theme": "light",
+      "width": 900,
+      "height": 650,
+      "result": "passed",
+      "geometry": {
+        "viewport": {
+          "width": 900,
+          "height": 650
+        },
+        "document": {
+          "width": 900,
+          "height": 650,
+          "scrollWidth": 900,
+          "scrollHeight": 650
+        },
+        "shell": {
+          "x": 0,
+          "y": 0,
+          "width": 900,
+          "height": 650
+        },
+        "main": {
+          "overflowY": "auto",
+          "clientHeight": 650,
+          "scrollHeight": 823
+        }
+      }
+    },
+    {
+      "name": "single-native-page-scroll-owner",
+      "page": "快速开始",
+      "theme": "dark",
+      "width": 900,
+      "height": 650,
+      "result": "passed",
+      "geometry": {
+        "viewport": {
+          "width": 900,
+          "height": 650
+        },
+        "document": {
+          "width": 900,
+          "height": 650,
+          "scrollWidth": 900,
+          "scrollHeight": 650
+        },
+        "shell": {
+          "x": 0,
+          "y": 0,
+          "width": 900,
+          "height": 650
+        },
+        "main": {
+          "overflowY": "auto",
+          "clientHeight": 650,
+          "scrollHeight": 726
+        }
+      }
+    },
+    {
+      "name": "single-native-page-scroll-owner",
+      "page": "工具与连接",
+      "theme": "dark",
+      "width": 900,
+      "height": 650,
+      "result": "passed",
+      "geometry": {
+        "viewport": {
+          "width": 900,
+          "height": 650
+        },
+        "document": {
+          "width": 900,
+          "height": 650,
+          "scrollWidth": 900,
+          "scrollHeight": 650
+        },
+        "shell": {
+          "x": 0,
+          "y": 0,
+          "width": 900,
+          "height": 650
+        },
+        "main": {
+          "overflowY": "auto",
+          "clientHeight": 650,
+          "scrollHeight": 1109
+        }
+      }
+    },
+    {
+      "name": "single-native-page-scroll-owner",
+      "page": "资料库",
+      "theme": "dark",
+      "width": 900,
+      "height": 650,
+      "result": "passed",
+      "geometry": {
+        "viewport": {
+          "width": 900,
+          "height": 650
+        },
+        "document": {
+          "width": 900,
+          "height": 650,
+          "scrollWidth": 900,
+          "scrollHeight": 650
+        },
+        "shell": {
+          "x": 0,
+          "y": 0,
+          "width": 900,
+          "height": 650
+        },
+        "main": {
+          "overflowY": "auto",
+          "clientHeight": 650,
+          "scrollHeight": 808
+        }
+      }
+    },
+    {
+      "name": "single-native-page-scroll-owner",
+      "page": "使用记录",
+      "theme": "dark",
+      "width": 900,
+      "height": 650,
+      "result": "passed",
+      "geometry": {
+        "viewport": {
+          "width": 900,
+          "height": 650
+        },
+        "document": {
+          "width": 900,
+          "height": 650,
+          "scrollWidth": 900,
+          "scrollHeight": 650
+        },
+        "shell": {
+          "x": 0,
+          "y": 0,
+          "width": 900,
+          "height": 650
+        },
+        "main": {
+          "overflowY": "auto",
+          "clientHeight": 650,
+          "scrollHeight": 1326
+        }
+      }
+    },
+    {
+      "name": "single-native-page-scroll-owner",
+      "page": "设置",
+      "theme": "dark",
+      "width": 900,
+      "height": 650,
+      "result": "passed",
+      "geometry": {
+        "viewport": {
+          "width": 900,
+          "height": 650
+        },
+        "document": {
+          "width": 900,
+          "height": 650,
+          "scrollWidth": 900,
+          "scrollHeight": 650
+        },
+        "shell": {
+          "x": 0,
+          "y": 0,
+          "width": 900,
+          "height": 650
+        },
+        "main": {
+          "overflowY": "auto",
+          "clientHeight": 650,
+          "scrollHeight": 823
+        }
+      }
+    },
+    {
+      "name": "single-native-page-scroll-owner",
+      "page": "快速开始",
+      "theme": "light",
+      "width": 720,
+      "height": 560,
+      "result": "passed",
+      "geometry": {
+        "viewport": {
+          "width": 720,
+          "height": 560
+        },
+        "document": {
+          "width": 720,
+          "height": 560,
+          "scrollWidth": 720,
+          "scrollHeight": 560
+        },
+        "shell": {
+          "x": 0,
+          "y": 0,
+          "width": 720,
+          "height": 560
+        },
+        "main": {
+          "overflowY": "auto",
+          "clientHeight": 560,
+          "scrollHeight": 726
+        }
+      }
+    },
+    {
+      "name": "single-native-page-scroll-owner",
+      "page": "工具与连接",
+      "theme": "light",
+      "width": 720,
+      "height": 560,
+      "result": "passed",
+      "geometry": {
+        "viewport": {
+          "width": 720,
+          "height": 560
+        },
+        "document": {
+          "width": 720,
+          "height": 560,
+          "scrollWidth": 720,
+          "scrollHeight": 560
+        },
+        "shell": {
+          "x": 0,
+          "y": 0,
+          "width": 720,
+          "height": 560
+        },
+        "main": {
+          "overflowY": "auto",
+          "clientHeight": 560,
+          "scrollHeight": 1261
+        }
+      }
+    },
+    {
+      "name": "single-native-page-scroll-owner",
+      "page": "资料库",
+      "theme": "light",
+      "width": 720,
+      "height": 560,
+      "result": "passed",
+      "geometry": {
+        "viewport": {
+          "width": 720,
+          "height": 560
+        },
+        "document": {
+          "width": 720,
+          "height": 560,
+          "scrollWidth": 720,
+          "scrollHeight": 560
+        },
+        "shell": {
+          "x": 0,
+          "y": 0,
+          "width": 720,
+          "height": 560
+        },
+        "main": {
+          "overflowY": "auto",
+          "clientHeight": 560,
+          "scrollHeight": 808
+        }
+      }
+    },
+    {
+      "name": "single-native-page-scroll-owner",
+      "page": "使用记录",
+      "theme": "light",
+      "width": 720,
+      "height": 560,
+      "result": "passed",
+      "geometry": {
+        "viewport": {
+          "width": 720,
+          "height": 560
+        },
+        "document": {
+          "width": 720,
+          "height": 560,
+          "scrollWidth": 720,
+          "scrollHeight": 560
+        },
+        "shell": {
+          "x": 0,
+          "y": 0,
+          "width": 720,
+          "height": 560
+        },
+        "main": {
+          "overflowY": "auto",
+          "clientHeight": 550,
+          "scrollHeight": 1425
+        }
+      }
+    },
+    {
+      "name": "single-native-page-scroll-owner",
+      "page": "设置",
+      "theme": "light",
+      "width": 720,
+      "height": 560,
+      "result": "passed",
+      "geometry": {
+        "viewport": {
+          "width": 720,
+          "height": 560
+        },
+        "document": {
+          "width": 720,
+          "height": 560,
+          "scrollWidth": 720,
+          "scrollHeight": 560
+        },
+        "shell": {
+          "x": 0,
+          "y": 0,
+          "width": 720,
+          "height": 560
+        },
+        "main": {
+          "overflowY": "auto",
+          "clientHeight": 560,
+          "scrollHeight": 857
+        }
+      }
+    },
+    {
+      "name": "single-native-page-scroll-owner",
+      "page": "快速开始",
+      "theme": "dark",
+      "width": 720,
+      "height": 560,
+      "result": "passed",
+      "geometry": {
+        "viewport": {
+          "width": 720,
+          "height": 560
+        },
+        "document": {
+          "width": 720,
+          "height": 560,
+          "scrollWidth": 720,
+          "scrollHeight": 560
+        },
+        "shell": {
+          "x": 0,
+          "y": 0,
+          "width": 720,
+          "height": 560
+        },
+        "main": {
+          "overflowY": "auto",
+          "clientHeight": 560,
+          "scrollHeight": 726
+        }
+      }
+    },
+    {
+      "name": "single-native-page-scroll-owner",
+      "page": "工具与连接",
+      "theme": "dark",
+      "width": 720,
+      "height": 560,
+      "result": "passed",
+      "geometry": {
+        "viewport": {
+          "width": 720,
+          "height": 560
+        },
+        "document": {
+          "width": 720,
+          "height": 560,
+          "scrollWidth": 720,
+          "scrollHeight": 560
+        },
+        "shell": {
+          "x": 0,
+          "y": 0,
+          "width": 720,
+          "height": 560
+        },
+        "main": {
+          "overflowY": "auto",
+          "clientHeight": 560,
+          "scrollHeight": 1261
+        }
+      }
+    },
+    {
+      "name": "single-native-page-scroll-owner",
+      "page": "资料库",
+      "theme": "dark",
+      "width": 720,
+      "height": 560,
+      "result": "passed",
+      "geometry": {
+        "viewport": {
+          "width": 720,
+          "height": 560
+        },
+        "document": {
+          "width": 720,
+          "height": 560,
+          "scrollWidth": 720,
+          "scrollHeight": 560
+        },
+        "shell": {
+          "x": 0,
+          "y": 0,
+          "width": 720,
+          "height": 560
+        },
+        "main": {
+          "overflowY": "auto",
+          "clientHeight": 560,
+          "scrollHeight": 808
+        }
+      }
+    },
+    {
+      "name": "single-native-page-scroll-owner",
+      "page": "使用记录",
+      "theme": "dark",
+      "width": 720,
+      "height": 560,
+      "result": "passed",
+      "geometry": {
+        "viewport": {
+          "width": 720,
+          "height": 560
+        },
+        "document": {
+          "width": 720,
+          "height": 560,
+          "scrollWidth": 720,
+          "scrollHeight": 560
+        },
+        "shell": {
+          "x": 0,
+          "y": 0,
+          "width": 720,
+          "height": 560
+        },
+        "main": {
+          "overflowY": "auto",
+          "clientHeight": 550,
+          "scrollHeight": 1425
+        }
+      }
+    },
+    {
+      "name": "single-native-page-scroll-owner",
+      "page": "设置",
+      "theme": "dark",
+      "width": 720,
+      "height": 560,
+      "result": "passed",
+      "geometry": {
+        "viewport": {
+          "width": 720,
+          "height": 560
+        },
+        "document": {
+          "width": 720,
+          "height": 560,
+          "scrollWidth": 720,
+          "scrollHeight": 560
+        },
+        "shell": {
+          "x": 0,
+          "y": 0,
+          "width": 720,
+          "height": 560
+        },
+        "main": {
+          "overflowY": "auto",
+          "clientHeight": 560,
+          "scrollHeight": 857
+        }
+      }
+    }
+  ],
+  "limits": [
+    "Real native window resized through Win32 at 1160/900/720 logical pixels.",
+    "History reads actual user files; evidence stores counts/timings only, not conversation content.",
+    "Full private history screenshots are omitted."
+  ],
+  "scanObservation": {
+    "completed": true,
+    "stopRequested": false,
+    "stopMs": null,
+    "lastProgress": {
+      "running": false,
+      "toolId": "open_code",
+      "completedSources": 339,
+      "totalSources": 339
+    }
+  },
+  "result": "passed"
+}

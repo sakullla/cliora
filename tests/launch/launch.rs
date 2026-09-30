@@ -21,6 +21,16 @@ fn sample(terminal: TerminalId) -> LaunchPlan {
 fn terminal_plans_quote_unicode_spaces_and_shell_metacharacters_as_data() {
     let ps = terminal_command(&sample(TerminalId::PowerShell)).unwrap();
     let command = ps.args.last().unwrap();
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(command)
+        .unwrap();
+    let command = String::from_utf16(
+        &bytes
+            .chunks_exact(2)
+            .map(|v| u16::from_le_bytes([v[0], v[1]]))
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
     assert!(command.contains("Set-Location -LiteralPath 'C:/用户/我的 project [one]'"));
     assert!(command.contains("& 'C:/Program Files/工具''s cli/grok.ps1'"));
     assert!(command.contains("'会话 ''1'''"));
@@ -36,6 +46,8 @@ fn terminal_plans_quote_unicode_spaces_and_shell_metacharacters_as_data() {
 fn launch_mode_and_project_model_are_adapter_capabilities() {
     let registry = Registry::builtins();
     let grok = registry.get("grok").unwrap();
+    assert!(grok.supports_project_model_override());
+    assert!(grok.project_model_args(Some(" ")).is_err());
     let mut grok_args = adapters::plan_launch(
         &registry,
         "grok",
@@ -69,6 +81,7 @@ fn missing_project_never_falls_back_to_user_home() {
             tool_id: "grok".into(),
             project_id: Some("missing-project".into()),
             session_id: None,
+            directory: None,
             mode: LaunchMode::Normal,
         },
     );
@@ -100,6 +113,7 @@ fn launch_recovers_interrupted_skills_before_tool_probe_without_opening_tools_pa
             tool_id: "unregistered".into(),
             project_id: None,
             session_id: None,
+            directory: None,
             mode: LaunchMode::Normal,
         },
     );
@@ -155,6 +169,7 @@ fn damaged_claude_skill_backup_blocks_claude_but_not_grok_launch() {
             tool_id: "grok".into(),
             project_id: None,
             session_id: None,
+            directory: None,
             mode: LaunchMode::Normal,
         },
     )
@@ -168,6 +183,7 @@ fn damaged_claude_skill_backup_blocks_claude_but_not_grok_launch() {
             tool_id: "claude_code".into(),
             project_id: None,
             session_id: None,
+            directory: None,
             mode: LaunchMode::Normal,
         },
     )
@@ -234,6 +250,7 @@ fn damaged_project_skill_backup_only_blocks_that_project() {
         tool_id: "grok".into(),
         project_id,
         session_id: None,
+        directory: None,
         mode: LaunchMode::Normal,
     };
     assert_eq!(
@@ -293,6 +310,7 @@ fn project_launch_plan_uses_real_probe_and_project_model_without_shell_expansion
             tool_id: "grok".into(),
             project_id: Some(project.id.clone()),
             session_id: Some("session 1".into()),
+            directory: None,
             mode: LaunchMode::Yolo,
         },
     )
@@ -303,7 +321,10 @@ fn project_launch_plan_uses_real_probe_and_project_model_without_shell_expansion
         ["--resume", "session 1", "--yolo", "-m", "grok-4.7"]
     );
     let command = terminal_command(&planned).unwrap();
-    assert_eq!(command.directory, planned.directory);
+    assert_eq!(
+        command.directory,
+        PathBuf::from(terminal_path(&planned.directory).unwrap())
+    );
     assert!(!format!("{:?}", command.args).contains("API_KEY"));
 
     db.with_connection(|conn| {
@@ -323,6 +344,7 @@ fn project_launch_plan_uses_real_probe_and_project_model_without_shell_expansion
             tool_id: "grok".into(),
             project_id: Some(project.id),
             session_id: None,
+            directory: None,
             mode: LaunchMode::Normal,
         },
     )

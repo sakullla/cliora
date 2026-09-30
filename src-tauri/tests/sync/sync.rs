@@ -235,12 +235,11 @@ fn setup(server: &Server) -> SyncSetup {
     }
 }
 
-static SYNC_TESTS: Mutex<()> = Mutex::new(());
+
 
 #[test]
 fn fresh_device_receives_non_default_preferences_and_common_changes_without_sync_churn() {
     use crate::native::profile::{self, RegisteredCommon, RegisteredProfile};
-    let _serial = SYNC_TESTS.lock().unwrap();
     let server = Server::new();
     let temp = tempfile::tempdir().unwrap();
     let a = database(&temp.path().join("a"));
@@ -292,6 +291,12 @@ fn fresh_device_receives_non_default_preferences_and_common_changes_without_sync
 fn sync_only_acknowledges_the_change_it_observed() {
     let temp = tempfile::tempdir().unwrap();
     let db = database(temp.path());
+    let lock = fixture_sync_lock(&db).unwrap();
+    let guard = lock.lock().unwrap();
+    assert!(run(&db, &MemoryCredentials::default(), &Registry::builtins(), false).unwrap_err().contains("同步正在进行"));
+    let other = database(&temp.path().join("independent-device"));
+    assert!(!run(&other, &MemoryCredentials::default(), &Registry::builtins(), false).unwrap_err().contains("同步正在进行"));
+    drop(guard);
     put_library(&db, "first");
     let observed = outbox_tokens(&db).unwrap();
     put_library(&db, "second");
@@ -306,7 +311,6 @@ fn sync_only_acknowledges_the_change_it_observed() {
 
 #[test]
 fn offline_device_receives_multiple_consecutive_remote_versions() {
-    let _serial = SYNC_TESTS.lock().unwrap();
     let server = Server::new();
     let temp = tempfile::tempdir().unwrap();
     let a = database(&temp.path().join("a"));
@@ -330,7 +334,6 @@ fn offline_device_receives_multiple_consecutive_remote_versions() {
 
 #[test]
 fn connection_password_rotation_rewraps_space_for_a_fresh_device() {
-    let _serial = SYNC_TESTS.lock().unwrap();
     let server = Server::new();
     let temp = tempfile::tempdir().unwrap();
     let a = database(&temp.path().join("a"));
@@ -375,7 +378,6 @@ fn connection_password_rotation_rewraps_space_for_a_fresh_device() {
 
 #[test]
 fn interrupted_password_rotation_keeps_the_old_device_usable() {
-    let _serial = SYNC_TESTS.lock().unwrap();
     let server = Server::new();
     let temp = tempfile::tempdir().unwrap();
     let db = database(temp.path());
@@ -432,7 +434,6 @@ fn interrupted_password_rotation_keeps_the_old_device_usable() {
 
 #[test]
 fn rotation_finalize_failure_keeps_current_credentials_and_allows_safe_retry() {
-    let _serial = SYNC_TESTS.lock().unwrap();
     let server = Server::new();
     let temp = tempfile::tempdir().unwrap();
     let db = database(temp.path());
@@ -516,7 +517,6 @@ fn inbound_snapshot_cannot_replace_an_edit_made_while_remote_was_read() {
 
 #[test]
 fn two_devices_merge_independent_changes_preserve_conflicts_and_fail_closed() {
-    let _serial = SYNC_TESTS.lock().unwrap();
     let server = Server::new();
     let temp = tempfile::tempdir().unwrap();
     let a = database(&temp.path().join("a"));

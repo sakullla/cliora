@@ -228,6 +228,11 @@ pub fn save_definition(db: &Database, draft: McpDraft) -> Result<McpDefinition, 
     Ok(definition)
 }
 
+pub fn managed_enabled(db: &Database, definition_id: &str, target: &McpTargetRequest) -> Result<Option<bool>,String> {
+    let key=match target.scope { Scope::Global=>"global".into(), Scope::Project=>format!("project:{}",projects::checked_directory(target.project_path.as_deref().ok_or("请选择项目目录")?)?.display()) };
+    db.with_connection(|conn|conn.query_row("SELECT enabled FROM mcp_targets WHERE definition_id=?1 AND tool=?2 AND scope_key=?3",params![definition_id,target.tool_id,key],|row|row.get(0)).optional().map_err(|e|e.to_string()))
+}
+
 fn target_location(
     db: &Database,
     registry: &Registry,

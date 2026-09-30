@@ -1,5 +1,136 @@
 import { expect, test } from '@playwright/test';
 
+test('new native profile exposes identity, edits with history, migrates pasted credentials, and reopens after save', async ({ page }) => {
+  await page.addInitScript(() => {
+    const profiles = JSON.parse(localStorage.getItem('native-profile-flow') ?? '[]');
+    const projects = [{ id: 'confirmation-project', name: '确认项目', path: 'C:/fixture/project', available: true, preferredTool: 'claude_code', lastOpened: 1, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {} }];
+    window.confirm = () => { throw new Error('System/browser confirmation must not be called'); };
+    Object.assign(window, { isTauri: true, __profileCalls: [], __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
+      (window as any).__profileCalls.push({ command, args });
+      if (command.startsWith('plugin:dialog|')) throw new Error('Confirmation must stay inside the app');
+      if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['claude_code'], theme: 'system' }, tools: [{ id: 'claude_code', name: 'Claude Code' }] };
+      if (command === 'list_cli_adapters') return { registered: [{ id: 'claude_code', name: 'Claude Code', interfaceFormats: [] }], managedIds: ['claude_code'], preservedUnknown: [] };
+      if (command === 'list_projects') return structuredClone(projects);
+      if (command === 'remove_project') { projects.splice(0, projects.length); return null; }
+      if (command === 'test_registered_provider_connection') return { format: { state: 'passed', message: 'fixture format' }, connectivity: { state: 'passed', message: 'fixture connection' }, modelRequest: { state: 'passed', message: 'fixture request; no network' } };
+      if (['list_mcp_definitions', 'list_native_mcp', 'list_skill_packages', 'scan_native_skills', 'list_skill_recovery_issues'].includes(command)) return [];
+      if (command === 'get_registered_tool_workspace') return { probe: { selectedPath: 'C:/claude.ps1', installations: [], nativeFiles: [{ role: 'settings', path: 'C:/settings.json', format: 'json', writable: true, sensitive: false }], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: [], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '' }, profiles: structuredClone(profiles), common: null, binding: null, snapshots: [], recoveryNeeded: [], customPath: null };
+      if (command === 'set_connection_secret') return args.secret === 'first-model-key' ? 'connection-first-model-key' : 'connection-new-model-key';
+      if (command === 'list_provider_models') return { models: [args.connection.secretRef === 'connection-new-model-key' ? 'new-model' : 'first-model'], status: 'ready', source: 'provider_directory' };
+      if (command === 'inspect_registered_native_draft') return {};
+      if (command === 'preview_registered_native_profile') return { documents: { settings: JSON.parse(args.profile.files.settings) }, sources: {} };
+      if (command === 'prepare_registered_native_import') {
+        const value = JSON.parse(args.files.settings); const migratedSecret = !!value.env?.ANTHROPIC_API_KEY;
+        if (migratedSecret) delete value.env.ANTHROPIC_API_KEY;
+        return { files: { settings: JSON.stringify(value) }, inspection: { connection: null }, migratedSecret, nativeCredentials: migratedSecret ? { settings: { '/env/ANTHROPIC_API_KEY': 'system-secret-ref' } } : {} };
+      }
+      if (command === 'save_registered_native_profile') {
+        if (args.profile.files.settings.includes('pasted-private-key')) throw { message: 'credential must be migrated before save' };
+        const saved = { ...args.profile, id: args.profile.id || 'created-profile', version: 1, revision: 'saved-revision' };
+        profiles.splice(0, profiles.length, saved); localStorage.setItem('native-profile-flow', JSON.stringify(profiles)); return saved;
+      }
+      throw new Error(`Unexpected IPC: ${command}`);
+    } } });
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('button', { name: '＋ 新建', exact: true }).click();
+  const name = page.getByRole('textbox', { name: '配置名称' });
+  await expect(name).toBeVisible();
+  await expect(name).toHaveValue('新配置');
+  await name.fill('');
+  await page.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(name).toBeFocused();
+  await name.fill('中文日常配置');
+  await page.getByRole('textbox', { name: 'API 地址', exact: true }).fill('https://fixture.invalid/v1');
+  const key = page.getByLabel('API 密钥', {exact:true});
+  await key.fill('first-model-key');
+  await page.getByRole('button', { name: '获取模型', exact: true }).click();
+  await page.getByRole('combobox', { name: '模型', exact: true }).selectOption('first-model');
+  await key.fill('new-model-key');
+  await page.getByRole('button', { name: '获取模型', exact: true }).click();
+  await page.getByRole('combobox', { name: '模型', exact: true }).selectOption('new-model');
+  expect((await page.evaluate(() => (window as any).__profileCalls)).filter((call: any) => call.command === 'list_provider_models').at(-1).args).toMatchObject({ connection: { secretRef: 'connection-new-model-key' }, force: true });
+  await expect(key).toHaveValue('');
+  await page.getByText('高级 / 原生配置', { exact: true }).click();
+  await page.getByRole('checkbox', { name: '继承本工具通用配置' }).check();
+  const editor = page.getByRole('textbox', { name: 'settings 配置草稿' });
+  await editor.fill('');
+  await editor.focus();
+  await expect.poll(() => editor.locator('..').locator('.cm-cursor').evaluateAll(elements => {
+    const placeholder = document.querySelector('.cm-placeholder')?.getBoundingClientRect();
+    const cursor = elements[0]?.getBoundingClientRect();
+    return !!placeholder && !!cursor && Math.abs(cursor.left - placeholder.left) < 3 && Math.abs(cursor.top - placeholder.top) < 4;
+  })).toBe(true);
+  const source = '{\n "env": {"ANTHROPIC_API_KEY": "pasted-private-key"},\n "model": "claude-sonnet"\n}';
+  await editor.fill(source);
+  await expect(editor.locator('.code-string')).not.toHaveCount(0);
+  await editor.press('Control+End'); await editor.press('Enter'); await editor.press('Tab');
+  await expect(editor).toContainText('  ');
+  await editor.press('Control+z'); await editor.fill(source);
+  await page.getByRole('button', { name: '查看合并结果', exact: true }).click();
+  await expect(name).toBeVisible();
+  await expect(page.getByRole('textbox', { name: '合并配置预览' })).toHaveAttribute('aria-readonly', 'true');
+  await page.getByRole('button', { name: '返回配置', exact: true }).click();
+  await page.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '中文日常配置', exact: true })).toBeVisible();
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('native-profile-flow')!)[0])).toMatchObject({ inheritCommon: true, nativeCredentials: { settings: { '/env/ANTHROPIC_API_KEY': 'system-secret-ref' } } });
+  await page.reload();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await expect(name).toHaveValue('中文日常配置');
+  await expect(editor).not.toContainText('pasted-private-key');
+  // The actual app dialog cancels by Escape/button; stale answers cannot
+  // discard edits that arrive while the confirmation is pending.
+  await name.fill('保留这个草稿');
+  const commonButton = page.getByRole('button', { name: '通用配置', exact: true });
+  const confirmation = page.getByRole('dialog');
+  await commonButton.click();
+  await expect(confirmation).toHaveAccessibleName('放弃未保存修改？');
+  await expect(confirmation.getByRole('button', { name: '取消', exact: true })).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(confirmation).toHaveCount(0);
+  await expect(commonButton).toBeFocused();
+  await expect(name).toHaveValue('保留这个草稿');
+  await commonButton.click();
+  await expect(confirmation).toBeVisible();
+  // Model an edit arriving from an in-flight update; modal focus correctly
+  // prevents the user from interacting with the covered editor.
+  await name.evaluate(element => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(element, '确认期间继续修改');
+    element.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await confirmation.getByRole('button', { name: '放弃修改', exact: true }).click();
+  await expect(name).toHaveValue('确认期间继续修改');
+  await commonButton.click();
+  await confirmation.getByRole('button', { name: '放弃修改', exact: true }).click();
+  await expect(name).toBeHidden();
+  await expect(page.getByRole('heading', { name: '通用配置', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '中文日常配置', exact: false }).click();
+  await page.getByRole('button', { name: '常用设置', exact: true }).click();
+  await page.getByText('高级连接选项', { exact: true }).click();
+  await page.getByText('更多诊断', { exact: true }).click();
+  const paid = page.getByRole('button', { name: '发送最小请求（可能计费）', exact: true });
+  await paid.click();
+  await confirmation.getByRole('button', { name: '取消', exact: true }).click();
+  expect((await page.evaluate(() => (window as any).__profileCalls)).filter((call: any) => call.command === 'test_registered_provider_connection')).toHaveLength(0);
+  await paid.click();
+  await confirmation.getByRole('button', { name: '发送请求', exact: true }).click();
+  await expect.poll(async () => (await page.evaluate(() => (window as any).__profileCalls)).filter((call: any) => call.command === 'test_registered_provider_connection').length).toBe(1);
+  expect((await page.evaluate(() => (window as any).__profileCalls)).find((call: any) => call.command === 'test_registered_provider_connection').args.allowModelRequest).toBe(true);
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始' }).click();
+  await page.getByText('项目选项', { exact: true }).click();
+  await page.getByRole('button', { name: '移除项目', exact: true }).click();
+  await confirmation.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(page.getByText('确认项目', { exact: true })).toBeVisible();
+  expect((await page.evaluate(() => (window as any).__profileCalls)).filter((call: any) => call.command === 'remove_project')).toHaveLength(0);
+  await page.getByRole('button', { name: '移除项目', exact: true }).click();
+  await confirmation.getByRole('button', { name: '移除项目', exact: true }).click();
+  await expect(page.getByText('确认项目', { exact: true })).toBeHidden();
+  expect((await page.evaluate(() => (window as any).__profileCalls)).filter((call: any) => call.command === 'remove_project')).toHaveLength(1);
+  const dimensions = await page.evaluate(() => ({ html: [document.documentElement.scrollHeight, document.documentElement.clientHeight], body: [document.body.scrollHeight, document.body.clientHeight] }));
+  expect(dimensions.html[0]).toBe(dimensions.html[1]); expect(dimensions.body[0]).toBe(dimensions.body[1]);
+});
+
 test('five full pages are navigable and browser mode never implies native data', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByRole('status')).toContainText('浏览器预览');
@@ -88,8 +219,8 @@ test('home resumes with native session ID and explicit normal or YOLO mode', asy
   await page.getByRole('button', { name: 'YOLO 恢复' }).click();
   const requests = await page.evaluate(() => (window as typeof window & { __launchRequests: Array<Record<string, unknown>> }).__launchRequests);
   expect(requests).toEqual([
-    { toolId: 'grok', projectId: null, sessionId: 'session-中文 1', mode: 'normal' },
-    { toolId: 'grok', projectId: null, sessionId: 'session-中文 1', mode: 'yolo' },
+    { toolId: 'grok', projectId: null, sessionId: 'session-中文 1', mode: 'normal', directory: null },
+    { toolId: 'grok', projectId: null, sessionId: 'session-中文 1', mode: 'yolo', directory: null },
   ]);
 });
 
@@ -164,21 +295,21 @@ test('tray conflict targets the active tool page with project scope and profile'
   await expect(page.getByRole('heading', { name: '工具与连接', level: 1 })).toBeVisible();
   await page.evaluate(() => (window as typeof window & { __emitRepair: (target: unknown) => void }).__emitRepair({ page: 'connections', toolId: 'grok', scope: 'project', projectId: 'project-1', projectPath: 'C:\\项目', profileId: 'daily' }));
   await expect(page.getByRole('combobox', { name: '配置范围' })).toHaveValue('project');
-  await expect(page.getByRole('textbox', { name: '项目目录' })).toHaveValue('C:\\项目');
+  await expect(page.getByRole('combobox', { name: '配置项目' })).toHaveValue('C:\\项目');
   await expect(page.getByRole('heading', { name: '日常配置' })).toBeVisible();
   await expect.poll(() => page.evaluate(() => (window as typeof window & { __workspaceRequests: Array<Record<string, unknown>> }).__workspaceRequests.some((item) => item.toolId === 'grok' && item.scope === 'project' && item.projectPath === 'C:\\项目'))).toBe(true);
   await page.evaluate(() => (window as typeof window & { __emitRepair: (target: unknown) => void }).__emitRepair({ page: 'connections', toolId: 'grok', scope: 'project', projectId: 'project-1', projectPath: 'C:\\项目', profileId: 'daily', resourceView: 'skills' }));
   await expect(page.getByRole('tab', { name: 'Skills' })).toHaveAttribute('aria-selected', 'true');
   await page.getByRole('tab', { name: '原生配置' }).click();
-  await page.getByRole('button', { name: '常用设置' }).click();
+  await page.getByRole('button', { name: '常用设置', exact: true }).click();
   await page.getByRole('textbox', { name: '配置名称' }).fill('未保存的日常配置');
-  page.once('dialog', (dialog) => void dialog.dismiss());
   await page.evaluate(() => (window as typeof window & { __emitRepair: (target: unknown) => void }).__emitRepair({ page: 'connections', toolId: 'grok', scope: 'global', projectId: null, projectPath: null, profileId: 'daily' }));
+  await page.getByRole('dialog').getByRole('button', { name: '取消', exact: true }).click();
   await expect(page.getByRole('combobox', { name: '配置范围' })).toHaveValue('project');
   await expect(page.getByRole('textbox', { name: '配置名称' })).toHaveValue('未保存的日常配置');
 });
 
-test('tray repair cannot discard unsaved form or native text when leaving the tool page', async ({ page }) => {
+test('page navigation and tray repair preserve unsaved form and native text without discarding drafts', async ({ page }) => {
   await page.addInitScript(() => {
     const callbacks = new Map<number, (event: unknown) => void>();
     const listeners = new Map<string, number[]>();
@@ -216,33 +347,32 @@ test('tray repair cannot discard unsaved form or native text when leaving the to
   await page.goto('/');
   await page.getByRole('button', { name: '编辑配置 →' }).click();
   await expect(page.getByRole('heading', { name: '日常配置' })).toBeVisible();
-  await page.getByRole('button', { name: '常用设置' }).click();
+  await page.getByRole('button', { name: '常用设置', exact: true }).click();
   const name = page.getByRole('textbox', { name: '配置名称' });
   await name.fill('未保存的表单');
-  page.once('dialog', (dialog) => void dialog.dismiss());
   await emit({ page: 'home', toolId: null, scope: null, projectId: 'moved-project', projectPath: null, profileId: null });
-  await expect(page.getByRole('heading', { name: '工具与连接', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '快速开始', level: 1 })).toBeVisible();
+  await page.getByRole('navigation', {name:'页面'}).getByRole('button',{name:'工具与连接'}).click();
   await expect(name).toHaveValue('未保存的表单');
 
   await name.fill('日常配置');
-  await page.getByRole('button', { name: '原生文件' }).click();
+  await page.getByRole('button', {name:'原生文件',exact:true}).click();
   const nativeText = page.getByRole('textbox', { name: 'config 配置草稿' });
   await nativeText.fill('model = "edited locally"');
-  page.once('dialog', (dialog) => void dialog.dismiss());
   await emit({ page: 'settings', toolId: null, scope: null, projectId: null, projectPath: null, profileId: null });
-  await expect(page.getByRole('heading', { name: '工具与连接', level: 1 })).toBeVisible();
-  await expect(nativeText).toHaveValue('model = "edited locally"');
+  await expect(page.getByRole('heading', {name:'设置',level:1})).toBeVisible();
+  await page.getByRole('navigation', {name:'页面'}).getByRole('button',{name:'工具与连接'}).click();
+  await expect(nativeText).toHaveText('model = "edited locally"');
 
   await nativeText.fill('model = "grok"');
-  await page.getByRole('button', { name: '编辑当前磁盘原文' }).click();
-  await expect(nativeText).toHaveValue('model = "on disk"');
+  await page.getByRole('button', { name: '当前配置', exact: true }).click();
+  await expect(nativeText).toHaveText('model = "on disk"');
   await nativeText.fill('model = "unsaved disk edit"');
-  page.once('dialog', (dialog) => void dialog.dismiss());
   await emit({ page: 'home', toolId: null, scope: null, projectId: 'moved-project', projectPath: null, profileId: null });
-  await expect(page.getByRole('heading', { name: '工具与连接', level: 1 })).toBeVisible();
-  await expect(nativeText).toHaveValue('model = "unsaved disk edit"');
+  await expect(page.getByRole('heading', {name:'快速开始',level:1})).toBeVisible();
+  await page.getByRole('navigation', {name:'页面'}).getByRole('button',{name:'工具与连接'}).click();
+  await expect(nativeText).toHaveText('model = "unsaved disk edit"');
 
-  page.once('dialog', (dialog) => void dialog.accept());
   await emit({ page: 'settings', toolId: null, scope: null, projectId: null, projectPath: null, profileId: null });
   await expect(page.getByRole('heading', { name: '设置', level: 1 })).toBeVisible();
   await expect(page.getByRole('combobox', { name: '启动终端' })).toBeVisible();
@@ -289,8 +419,8 @@ test('home opens Claude Code native JSON editor with full disk text', async ({ p
   await page.goto('/');
   await page.getByRole('button', { name: '编辑配置 →' }).click();
   await expect(page.getByRole('heading', { name: '工具与连接', level: 1 })).toBeVisible();
-  await page.getByRole('button', { name: '编辑当前磁盘原文' }).click();
-  await expect(page.getByRole('textbox', { name: 'settings 配置草稿' })).toHaveValue(/ANTHROPIC_API_KEY.*disk-key/);
+  await page.getByRole('button', { name: '当前配置', exact: true }).click();
+  await expect(page.getByRole('textbox', { name: 'settings 配置草稿' })).toHaveText(/ANTHROPIC_API_KEY.*disk-key/);
 });
 
 test('an existing Claude JSON file opens directly without first creating a named profile', async ({ page }) => {
@@ -331,8 +461,8 @@ test('an existing Claude JSON file opens directly without first creating a named
   });
   await page.goto('/');
   await page.getByRole('button', { name: '编辑配置 →' }).click();
-  await page.getByRole('button', { name: '编辑当前原生配置' }).click();
-  await expect(page.getByRole('textbox', { name: 'settings 配置草稿' })).toHaveValue(/ANTHROPIC_API_KEY.*disk-key/);
+  await page.getByRole('button', { name: '当前配置', exact: true }).click();
+  await expect(page.getByRole('textbox', { name: 'settings 配置草稿' })).toHaveText(/ANTHROPIC_API_KEY.*disk-key/);
 });
 
 test('a newly registered CLI appears without adding tool-specific shell code', async ({ page }) => {
@@ -424,6 +554,7 @@ test('custom tool icons persist across reload, preserve theme and management, an
       if (command === 'get_registered_tool_workspace') return { probe: { selectedPath: 'C:/codex.cmd', installations: [], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: [], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '' }, profiles: [], common: null, binding: null, snapshots: [], recoveryNeeded: [], customPath: null };
       if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
       if (command === 'get_tray_status') return { available: false, error: null };
+      if (command === 'plugin:dialog|open') return 'C:/chosen project';
       if (command === 'launch_cli') return { mode: args.request.mode, status: 'terminal_requested' };
       throw new Error(`Unexpected IPC: ${command}`);
     } } });
@@ -434,7 +565,7 @@ test('custom tool icons persist across reload, preserve theme and management, an
   await expect(logo).toBeVisible();
   const defaultSource = await logo.getAttribute('src');
   await page.getByRole('button', { name: '启动', exact: true }).click();
-  expect((await page.evaluate(() => (window as any).__iconCalls)).find((call: any) => call.command === 'launch_cli').args.request).toMatchObject({ mode: 'normal', sessionId: null, projectId: null });
+  expect((await page.evaluate(() => (window as any).__iconCalls)).find((call: any) => call.command === 'launch_cli').args.request).toMatchObject({ mode: 'normal', sessionId: null, projectId: null, directory: 'C:/chosen project' });
   await nav.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByText('自定义工具图标', { exact: true }).click();
   const base64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aR2kAAAAASUVORK5CYII=';

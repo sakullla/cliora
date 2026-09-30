@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { native, nativeAvailable } from '../../lib/native';
+import { confirmAction } from '../../lib/confirm';
 import type { ConflictPreview, SyncStatus, WebdavSetup } from '../../types/portable';
 import styles from './MigrationSettings.module.css';
 
@@ -11,6 +12,9 @@ export function WebdavSettings({ active }: { active: boolean }) {
   const [previews, setPreviews] = useState<Record<string, ConflictPreview>>({});
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
+  const latest = useRef(''); latest.current = JSON.stringify([status, previews, active]);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
   useEffect(() => {
     if (!active || !nativeAvailable) return;
@@ -59,7 +63,8 @@ export function WebdavSettings({ active }: { active: boolean }) {
 
   async function resolve(key: string, versionId: string | null, deleted: boolean) {
     if (busy) return;
-    if (versionId && !window.confirm(deleted ? '接受远端删除？此项本机资料会删除。' : '用这个远端版本替换本机资料？活动 CLI 配置不会自动切换。')) return;
+    const started = latest.current;
+    if (versionId && !await confirmAction(deleted ? '此项本机资料会删除。' : '用这个远端版本替换本机资料？活动 CLI 配置不会自动切换。', () => mounted.current && latest.current === started, { title: deleted ? '接受远端删除？' : '使用远端版本？', confirmLabel: deleted ? '删除本机资料' : '替换本机资料', destructive: deleted })) return;
     setBusy(true); setError(''); setMessage('');
     try { setStatus(await native.resolveWebdavConflict(key, versionId));
       setPreviews((old) => { const next = { ...old }; delete next[key]; return next; });

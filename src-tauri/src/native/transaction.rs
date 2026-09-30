@@ -42,6 +42,7 @@ pub struct TextPatch {
     pub path: PathBuf,
     pub baseline: String,
     pub contents: String,
+    pub sensitive: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -365,9 +366,23 @@ pub fn integrity_key(db: &Database, credentials: &dyn CredentialStore) -> Result
     integrity_key_checked(db, credentials).map_err(IntegrityKeyError::message)
 }
 
+#[cfg(not(test))]
 fn write_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
+}
+
+// Independent fixture databases model separate application/device processes.
+// Preserve serialization on each database, without serializing unrelated native
+// files and their real Windows ACL checks across the entire test executable.
+#[cfg(test)]
+fn fixture_write_lock(db: &Database) -> Result<std::sync::Arc<Mutex<()>>, String> {
+    use std::sync::{Arc, Weak};
+    static LOCKS: Mutex<std::collections::BTreeMap<String, Weak<Mutex<()>>>> = Mutex::new(std::collections::BTreeMap::new());
+    let path=db.with_connection(|conn|conn.path().map(str::to_owned).ok_or_else(||"原生事务测试需要独立数据库路径".into()))?;
+    let mut locks=LOCKS.lock().map_err(|_|"原生事务测试锁不可用")?;
+    if let Some(lock)=locks.get(&path).and_then(Weak::upgrade){return Ok(lock);}
+    let lock=Arc::new(Mutex::new(()));locks.insert(path,Arc::downgrade(&lock));Ok(lock)
 }
 
 pub fn read_native(path: &Path) -> Result<String, String> {
@@ -487,11 +502,10 @@ fn decrypt(key: &[u8; 32], encrypted: &str, nonce: &str) -> Result<Vec<u8>, Stri
 
 #[cfg(windows)]
 fn restrict_windows_stage(stage: &Path) -> Result<(), String> {
-    use std::process::Command;
     let system32 =
         PathBuf::from(std::env::var_os("SystemRoot").ok_or("无法定位 Windows 系统目录")?)
             .join("System32");
-    let identity = Command::new(system32.join("whoami.exe"))
+    let identity = crate::background_process::command(system32.join("whoami.exe"))
         .args(["/user", "/fo", "csv", "/nh"])
         .output()
         .map_err(|_| "无法检查当前 Windows 用户身份")?;
@@ -510,7 +524,7 @@ fn restrict_windows_stage(stage: &Path) -> Result<(), String> {
     }
     // A newly created stage normally has only inherited entries, but reset
     // also removes any explicit grants before the inheritance is removed.
-    let reset = Command::new(system32.join("icacls.exe"))
+    let reset = crate::background_process::command(system32.join("icacls.exe"))
         .arg(stage)
         .arg("/reset")
         .output()
@@ -519,7 +533,7 @@ fn restrict_windows_stage(stage: &Path) -> Result<(), String> {
         return Err("无法重设原生密钥文件的 Windows ACL，未写入密钥".into());
     }
     let user = format!("*{sid}:F");
-    let status = Command::new(system32.join("icacls.exe"))
+    let status = crate::background_process::command(system32.join("icacls.exe"))
         .arg(stage)
         .args(["/inheritance:r", "/grant:r"])
         .arg(&user)
@@ -645,10 +659,62 @@ fn restore(
     set_status(db, &journal.id, "rolled_back")
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupRecord { pub transaction_id: String, pub path: String }
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupPreview { pub transaction_id: String, pub current: String, pub original: String }
+
+pub fn recent_backups(db: &Database, target: &Path) -> Result<Vec<BackupRecord>, String> {
+    db.with_connection(|conn| {
+        let mut query = conn.prepare("SELECT id,data FROM native_transactions WHERE status='committed' ORDER BY rowid DESC").map_err(|e| e.to_string())?;
+        let rows = query.query_map([], |row| Ok((row.get::<_,String>(0)?, row.get::<_,String>(1)?))).map_err(|e| e.to_string())?;
+        let mut records = Vec::new();
+        for row in rows {
+            let (id, data) = row.map_err(|e| e.to_string())?;
+            let journal: Journal = serde_json::from_str(&data).map_err(|_| "原生修改记录损坏")?;
+            if journal.id != id { return Err("原生修改记录标识不一致".into()); }
+            if journal.files.iter().any(|item| item.path == target && item.existed && item.backup.is_some()) {
+                records.push(BackupRecord {transaction_id:id, path:target.display().to_string()});
+                if records.len() == 20 { break; }
+            }
+        }
+        Ok(records)
+    })
+}
+
+pub fn preview_backup(db: &Database, credentials: &dyn CredentialStore, target: &Path, id: &str) -> Result<BackupPreview, String> {
+    let data: String = db.with_connection(|conn| conn.query_row("SELECT data FROM native_transactions WHERE id=?1 AND status='committed'", [id], |row| row.get(0)).map_err(|_| "找不到可恢复的修改记录".into()))?;
+    let journal: Journal = serde_json::from_str(&data).map_err(|_| "原生修改记录损坏")?;
+    if journal.id != id || journal.key_id != format!("native-backup-{id}") { return Err("原生修改记录标识不一致".into()); }
+    let file = journal.files.iter().find(|item| item.path == target && item.existed).ok_or("此记录没有当前文件的备份")?;
+    let encoded = credentials.get(&journal.key_id)?;
+    let key: [u8;32] = STANDARD.decode(encoded).map_err(|_| "备份密钥无效")?.try_into().map_err(|_| "备份密钥长度无效")?;
+    let bytes = decrypt(&key, file.backup.as_deref().ok_or("此记录没有文件备份")?, file.nonce.as_deref().ok_or("备份标识缺失")?)?;
+    let integrity = integrity_key(db, credentials)?;
+    if keyed_fingerprint(&integrity, &bytes) != file.old_hash { return Err("备份内容摘要不一致，停止恢复".into()); }
+    let original = String::from_utf8(bytes).map_err(|_| "备份不是 UTF-8 文本")?;
+    Ok(BackupPreview {transaction_id:id.into(),current:read_native(target)?,original})
+}
+
+/// The preview baseline is rechecked under the native write lock; restoration itself gets a new encrypted backup.
+pub fn restore_backup<F>(db: &Database, credentials: &dyn CredentialStore, target: &Path, id: &str, expected_current: &str, commit: F) -> Result<ApplyOutcome, String>
+where F: FnOnce(&rusqlite::Transaction<'_>) -> Result<(), String> {
+    let preview = preview_backup(db, credentials, target, id)?;
+    if preview.current != expected_current { return Err("文件在比较后又被修改，请重新查看差异".into()); }
+    apply_text(db, credentials, &[TextPatch {path:target.into(), baseline:expected_current.into(), contents:preview.original, sensitive:true}], commit)
+}
+
 pub fn recover_pending(
     db: &Database,
     credentials: &dyn CredentialStore,
 ) -> Result<Vec<String>, String> {
+    #[cfg(test)]
+    let fixture_lock=fixture_write_lock(db)?;
+    #[cfg(test)]
+    let _guard=fixture_lock.lock().map_err(|_| "原生事务服务暂时不可用")?;
+    #[cfg(not(test))]
     let _guard = write_lock().lock().map_err(|_| "原生事务服务暂时不可用")?;
     let pending_ids: Vec<String> = db.with_connection(|conn| {
         let mut statement = conn.prepare("SELECT id FROM native_transactions WHERE status IN ('prepared', 'applying', 'recovery_needed') ORDER BY id").map_err(|e| e.to_string())?;
@@ -699,10 +765,15 @@ pub fn apply<F>(
 where
     F: FnOnce(&rusqlite::Transaction<'_>) -> Result<(), String>,
 {
+    #[cfg(test)]
+    let fixture_lock=fixture_write_lock(db)?;
+    #[cfg(test)]
+    let _guard=fixture_lock.lock().map_err(|_| "原生事务服务暂时不可用")?;
+    #[cfg(not(test))]
     let _guard = write_lock().lock().map_err(|_| "原生事务服务暂时不可用")?;
     let integrity = integrity_key(db, credentials)?;
     let prepared = prepare(patches, &integrity)?;
-    apply_prepared(db, credentials, &integrity, prepared, commit)
+    apply_prepared(db, credentials, &integrity, prepared, |tx,_| commit(tx))
 }
 
 pub fn apply_text<F>(
@@ -714,6 +785,15 @@ pub fn apply_text<F>(
 where
     F: FnOnce(&rusqlite::Transaction<'_>) -> Result<(), String>,
 {
+    apply_text_with_id(db,credentials,patches,|tx,_| commit(tx))
+}
+pub fn apply_text_with_id<F>(db: &Database, credentials: &dyn CredentialStore, patches: &[TextPatch], commit: F) -> Result<ApplyOutcome,String>
+where F: FnOnce(&rusqlite::Transaction<'_>, &str) -> Result<(),String> {
+    #[cfg(test)]
+    let fixture_lock=fixture_write_lock(db)?;
+    #[cfg(test)]
+    let _guard=fixture_lock.lock().map_err(|_| "原生事务服务暂时不可用")?;
+    #[cfg(not(test))]
     let _guard = write_lock().lock().map_err(|_| "原生事务服务暂时不可用")?;
     let integrity = integrity_key(db, credentials)?;
     let mut seen = HashSet::new();
@@ -747,7 +827,7 @@ where
                 backup: None,
                 nonce: None,
                 old_readonly,
-                sensitive: false,
+                sensitive: patch.sensitive,
             },
             patch.contents.clone(),
         ));
@@ -763,7 +843,7 @@ fn apply_prepared<F>(
     commit: F,
 ) -> Result<ApplyOutcome, String>
 where
-    F: FnOnce(&rusqlite::Transaction<'_>) -> Result<(), String>,
+    F: FnOnce(&rusqlite::Transaction<'_>, &str) -> Result<(), String>,
 {
     if prepared.is_empty() {
         return Err("没有需要写入的原生字段".into());
@@ -821,7 +901,7 @@ where
         }
         db.with_connection(|conn| {
             let tx = conn.transaction().map_err(|e| e.to_string())?;
-            commit(&tx)?;
+            commit(&tx, &id)?;
             tx.execute(
                 "UPDATE native_transactions SET status = 'committed' WHERE id = ?1",
                 [&id],
@@ -869,6 +949,11 @@ pub fn commit_matching<F>(
 where
     F: FnOnce(&rusqlite::Transaction<'_>) -> Result<(), String>,
 {
+    #[cfg(test)]
+    let fixture_lock=fixture_write_lock(db)?;
+    #[cfg(test)]
+    let _guard=fixture_lock.lock().map_err(|_| "原生事务服务暂时不可用")?;
+    #[cfg(not(test))]
     let _guard = write_lock().lock().map_err(|_| "原生事务服务暂时不可用")?;
     let targets: Vec<_> = baselines.iter().map(|(path, _)| path.clone()).collect();
     if pending_target_collision(db, &targets)? {

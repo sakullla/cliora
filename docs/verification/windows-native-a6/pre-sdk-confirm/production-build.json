@@ -1,0 +1,23 @@
+{
+    "kind":  "production",
+    "command":  "npm run tauri build -- --no-bundle",
+    "startedAt":  "2026-09-30T10:51:17.8196204Z",
+    "finishedAt":  "2026-09-30T10:53:11.1553294Z",
+    "exitCode":  0,
+    "sourceUnchanged":  true,
+    "sourceWorktree":  {
+                           "sha256":  "725dcef481fb9c654d85360d0b281f34b4218690776fa3de35e7d17061bb34f5",
+                           "path":  "C:\\Users\\12976\\AppData\\Local\\Temp\\cliora-a6-final-production-build\\source-worktree.json"
+                       },
+    "logs":  {
+                 "stderr":  "C:\\Users\\12976\\AppData\\Local\\Temp\\cliora-a6-final-production-build\\stderr.txt",
+                 "stdout":  "C:\\Users\\12976\\AppData\\Local\\Temp\\cliora-a6-final-production-build\\stdout.txt"
+             },
+    "candidate":  {
+                      "path":  "C:\\Users\\12976\\project\\cliora\\src-tauri\\target\\verification\\cliora-a6-final-production-windows-x64-c0fcff170f86ff811c3467ef7e9d61a47f55cdeaa91a97830f32dfdb29716894.exe",
+                      "sha256":  "c0fcff170f86ff811c3467ef7e9d61a47f55cdeaa91a97830f32dfdb29716894",
+                      "copiedFrom":  "C:\\Users\\12976\\project\\cliora\\src-tauri\\target\\release\\cliora.exe",
+                      "sizeBytes":  25945088,
+                      "peMachine":  "0x8664"
+                  }
+}

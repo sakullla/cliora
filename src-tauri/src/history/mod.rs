@@ -202,6 +202,15 @@ pub fn valid_native_id(id: &str) -> bool {
 }
 
 pub fn source_fingerprint(path: &Path) -> Result<String, String> {
+    source_fingerprint_controlled(path, &|| false)
+}
+
+pub fn check_cancelled(cancelled: &dyn Fn() -> bool) -> Result<(), String> {
+    if cancelled() { Err("扫描已取消，原索引已保留".into()) } else { Ok(()) }
+}
+
+pub fn source_fingerprint_controlled(path: &Path, cancelled: &dyn Fn() -> bool) -> Result<String, String> {
+    check_cancelled(cancelled)?;
     let metadata = fs::symlink_metadata(path).map_err(|error| error.to_string())?;
     if metadata.file_type().is_symlink() {
         return Err("会话源为符号链接，已跳过".into());
@@ -212,24 +221,37 @@ pub fn source_fingerprint(path: &Path) -> Result<String, String> {
         .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
         .map(|value| value.as_nanos())
         .unwrap_or(0);
-    if metadata.is_file() && metadata.len() <= MAX_SOURCE_BYTES {
-        let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
-        let mut digest = Sha256::new();
-        let mut buffer = [0u8; 64 * 1024];
-        loop {
-            let count = file.read(&mut buffer).map_err(|error| error.to_string())?;
-            if count == 0 {
-                break;
-            }
-            digest.update(&buffer[..count]);
+    // History caching uses metadata, including change-time so a same-size edit
+    // with a restored mtime is still re-indexed. Native write/CAS hashes are separate.
+    let changed = source_change_time(path, &metadata, cancelled)?;
+    Ok(format!("m3:{}:{modified}:{changed}", metadata.len()))
+}
+
+fn source_change_time(path: &Path, metadata: &fs::Metadata, cancelled: &dyn Fn() -> bool) -> Result<String, String> {
+    #[cfg(windows)] {
+        use std::os::windows::io::AsRawHandle;
+        #[repr(C)] struct BasicInfo { creation:i64, accessed:i64, written:i64, changed:i64, attributes:u32 }
+        #[link(name="kernel32")] unsafe extern "system" {
+            fn GetFileInformationByHandleEx(handle:*mut std::ffi::c_void, class:i32, info:*mut std::ffi::c_void, size:u32) -> i32;
         }
-        return Ok(format!(
-            "{}:{modified}:{:x}",
-            metadata.len(),
-            digest.finalize()
-        ));
+        let file = fs::File::open(path).map_err(|e| e.to_string())?;
+        let mut info = BasicInfo {creation:0,accessed:0,written:0,changed:0,attributes:0};
+        if unsafe { GetFileInformationByHandleEx(file.as_raw_handle(), 0, (&mut info as *mut BasicInfo).cast(), std::mem::size_of::<BasicInfo>() as u32) } != 0 {
+            return Ok(info.changed.to_string());
+        }
     }
-    Ok(format!("{}:{modified}:oversize", metadata.len()))
+    #[cfg(unix)] {
+        use std::os::unix::fs::MetadataExt;
+        return Ok(format!("{}:{}",metadata.ctime(),metadata.ctime_nsec()));
+    }
+    // Fail over to content hashing when the filesystem cannot report change-time.
+    #[allow(unreachable_code)] {
+        let _ = metadata;
+        let mut file = fs::File::open(path).map_err(|e| e.to_string())?;
+        let mut digest = Sha256::new(); let mut buffer = [0u8;64*1024];
+        loop { check_cancelled(cancelled)?; let count = file.read(&mut buffer).map_err(|e| e.to_string())?; if count == 0 {break;} digest.update(&buffer[..count]); }
+        Ok(format!("{:x}",digest.finalize()))
+    }
 }
 
 pub fn discover_jsonl(
@@ -239,11 +261,20 @@ pub fn discover_jsonl(
     discover_jsonl_with(root, accept, source_fingerprint)
 }
 
+pub fn discover_jsonl_controlled(root: &Path, accept: impl Fn(&Path) -> bool, cancelled: &dyn Fn() -> bool) -> Result<Vec<HistorySource>, String> {
+    discover_jsonl_with_control(root, accept, |path| source_fingerprint_controlled(path, cancelled), cancelled)
+}
+
 fn discover_jsonl_with(
     root: &Path,
     accept: impl Fn(&Path) -> bool,
     fingerprint: impl Fn(&Path) -> Result<String, String>,
 ) -> Result<Vec<HistorySource>, String> {
+    discover_jsonl_with_control(root, accept, fingerprint, &|| false)
+}
+
+fn discover_jsonl_with_control(root: &Path, accept: impl Fn(&Path) -> bool, fingerprint: impl Fn(&Path) -> Result<String, String>, cancelled: &dyn Fn() -> bool) -> Result<Vec<HistorySource>, String> {
+    check_cancelled(cancelled)?;
     if !root.exists() {
         return Ok(Vec::new());
     }
@@ -253,7 +284,9 @@ fn discover_jsonl_with(
     let mut pending = vec![(root.to_path_buf(), 0usize)];
     let mut sources = Vec::new();
     while let Some((directory, depth)) = pending.pop() {
+        check_cancelled(cancelled)?;
         for entry in fs::read_dir(&directory).map_err(|error| error.to_string())? {
+            check_cancelled(cancelled)?;
             let entry = entry.map_err(|error| error.to_string())?;
             let file_type = entry.file_type().map_err(|error| error.to_string())?;
             if file_type.is_symlink() {
@@ -264,6 +297,7 @@ fn discover_jsonl_with(
                 pending.push((path, depth + 1));
             } else if file_type.is_file() && accept(&path) {
                 let checked = fingerprint(&path);
+                check_cancelled(cancelled)?;
                 sources.push(HistorySource {
                     fingerprint: checked.as_ref().cloned().unwrap_or_default(),
                     fingerprint_error: checked.err(),
@@ -281,8 +315,13 @@ fn discover_jsonl_with(
 
 pub fn read_jsonl(
     source: &HistorySource,
-    mut consume: impl FnMut(usize, Value),
+    consume: impl FnMut(usize, Value),
 ) -> Result<bool, String> {
+    read_jsonl_controlled(source, &|| false, consume)
+}
+
+pub fn read_jsonl_controlled(source: &HistorySource, cancelled: &dyn Fn() -> bool, mut consume: impl FnMut(usize, Value)) -> Result<bool, String> {
+    check_cancelled(cancelled)?;
     let size = fs::metadata(&source.path)
         .map_err(|error| error.to_string())?
         .len();
@@ -292,6 +331,7 @@ pub fn read_jsonl(
     let file = fs::File::open(&source.path).map_err(|error| error.to_string())?;
     let mut partial = false;
     for (index, line) in BufReader::new(file).lines().enumerate() {
+        check_cancelled(cancelled)?;
         if index > 30_000 {
             partial = true;
             break;
@@ -306,6 +346,7 @@ pub fn read_jsonl(
             Err(_) => partial = true,
         }
     }
+    check_cancelled(cancelled)?;
     Ok(partial)
 }
 
@@ -395,6 +436,23 @@ pub struct UsageSummary {
     pub currency: Option<String>,
     pub price_sources: Vec<String>,
     pub scans: Vec<ScanStatus>,
+    pub models: Vec<String>,
+    pub by_model: Vec<ModelUsage>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelUsage {
+    pub tool_id: String,
+    pub model: Option<String>,
+    pub session_count: usize,
+    pub unknown_usage_sessions: usize,
+    pub input: Option<u64>,
+    pub output: Option<u64>,
+    pub cache_read: Option<u64>,
+    pub cache_write: Option<u64>,
+    pub estimated_cost: Option<f64>,
+    pub currency: Option<String>,
 }
 
 fn now_ms() -> i64 {
@@ -453,15 +511,15 @@ fn existing_fingerprint(db: &Database, key: &str) -> Result<Option<(String, bool
     })
 }
 
-fn scan_adapter(db: &Database, adapter: &dyn CliAdapter, home: &Path) -> ScanStatus {
-    scan_adapter_sources(db, adapter, adapter.history_sources(home))
-}
-
 fn scan_adapter_sources(
     db: &Database,
     adapter: &dyn CliAdapter,
     discovered: Result<Vec<HistorySource>, String>,
 ) -> ScanStatus {
+    scan_adapter_sources_controlled(db, adapter, discovered, &|| false)
+}
+
+fn scan_adapter_sources_controlled(db: &Database, adapter: &dyn CliAdapter, discovered: Result<Vec<HistorySource>, String>, cancelled: &impl Fn() -> bool) -> ScanStatus {
     let mut report = ScanStatus {
         tool_id: adapter.id().into(),
         scanned_at: now_ms(),
@@ -481,24 +539,26 @@ fn scan_adapter_sources(
     };
     report.source_count = sources.len();
     let mut seen = HashSet::new();
-    for source in sources {
+    for (index, source) in sources.into_iter().enumerate() {
+        if cancelled() { report.incomplete = true; report.detail = "扫描已取消，原索引已保留".into(); return report; }
+        set_scan_progress(true, adapter.id(), index + 1, report.source_count);
         let key = source.key();
         seen.insert(key.clone());
         let outcome = if let Some(error) = source.fingerprint_error.as_ref() {
             Err(format!("{}：{error}", source.path.display()))
         } else {
             let cached = existing_fingerprint(db, &key).ok().flatten();
-            if source.native_id.is_none()
+            if source.fingerprint != "0" && !source.fingerprint.is_empty()
                 && cached.as_ref().is_some_and(|(fingerprint, stale)| {
-                    fingerprint == &source.fingerprint && !stale
+                    !stale && history_fingerprints_match(fingerprint, &source.fingerprint)
                 })
             {
                 continue;
             }
-            adapter
-                .parse_history(&source)
-                .and_then(|parsed| store_session(db, adapter, &source, &parsed))
+            adapter.parse_history_controlled(&source, cancelled)
+                .and_then(|parsed| { check_cancelled(cancelled)?; store_session(db, adapter, &source, &parsed) })
         };
+        if cancelled() { report.incomplete = true; report.detail = "扫描已取消，原索引已保留".into(); return report; }
         match outcome {
             Ok(()) => {}
             Err(error) => {
@@ -518,7 +578,9 @@ fn scan_adapter_sources(
             }
         }
     }
+    if cancelled() { report.incomplete = true; report.detail = "扫描已取消，原索引已保留".into(); return report; }
     if let Err(error) = db.with_connection(|conn| {
+        let transaction = conn.unchecked_transaction().map_err(|error| error.to_string())?;
         let mut statement = conn
             .prepare("SELECT source_key FROM history_sessions WHERE tool = ?1")
             .map_err(|error| error.to_string())?;
@@ -528,12 +590,15 @@ fn scan_adapter_sources(
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| error.to_string())?;
         for key in keys {
+            check_cancelled(cancelled)?;
             if !seen.contains(&key) {
                 conn.execute("DELETE FROM history_sessions WHERE source_key = ?1", [key])
                     .map_err(|error| error.to_string())?;
             }
         }
-        Ok(())
+        drop(statement);
+        check_cancelled(cancelled)?;
+        transaction.commit().map_err(|error| error.to_string())
     }) {
         report.incomplete = true;
         report.detail = error;
@@ -541,7 +606,24 @@ fn scan_adapter_sources(
     report
 }
 
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanProgress { pub running: bool, pub tool_id: String, pub completed_sources: usize, pub total_sources: usize }
+static SCAN_PROGRESS: std::sync::OnceLock<std::sync::Mutex<ScanProgress>> = std::sync::OnceLock::new();
+fn set_scan_progress(running: bool, tool: &str, completed: usize, total: usize) {
+    if let Ok(mut value) = SCAN_PROGRESS.get_or_init(Default::default).lock() { *value = ScanProgress {running,tool_id:tool.into(),completed_sources:completed,total_sources:total}; }
+}
+pub fn scan_progress() -> ScanProgress { SCAN_PROGRESS.get_or_init(Default::default).lock().map(|value| value.clone()).unwrap_or_default() }
+fn history_fingerprints_match(cached: &str, current: &str) -> bool {
+    cached == current
+}
 pub fn refresh(db: &Database, registry: &Registry, home: &Path) -> Result<Vec<ScanStatus>, String> {
+    refresh_controlled(db, registry, home, &|| false)
+}
+pub fn refresh_controlled(db: &Database, registry: &Registry, home: &Path, cancelled: &impl Fn() -> bool) -> Result<Vec<ScanStatus>, String> {
+    struct Finish;
+    impl Drop for Finish { fn drop(&mut self) { let state = scan_progress(); set_scan_progress(false, &state.tool_id, state.completed_sources, state.total_sources); } }
+    let _finish = Finish;
     let mut reports = Vec::new();
     for descriptor in registry.descriptors() {
         let Some(adapter) = registry.get(descriptor.id) else {
@@ -550,7 +632,10 @@ pub fn refresh(db: &Database, registry: &Registry, home: &Path) -> Result<Vec<Sc
         if !adapter.history_supported() {
             continue;
         }
-        let report = scan_adapter(db, adapter, home);
+        if cancelled() { return Err("扫描已取消".into()); }
+        set_scan_progress(true, adapter.id(), 0, 0);
+        let report = scan_adapter_sources_controlled(db, adapter, adapter.history_sources_controlled(home, cancelled), cancelled);
+        if cancelled() { return Err("扫描已取消".into()); }
         db.with_connection(|conn| conn.execute(
             "INSERT INTO history_scan_state (tool,scanned_at,source_count,failed_count,incomplete,detail) VALUES (?1,?2,?3,?4,?5,?6)
              ON CONFLICT(tool) DO UPDATE SET scanned_at=excluded.scanned_at, source_count=excluded.source_count,
@@ -631,8 +716,7 @@ fn query_sessions(
         for row in rows {
             let (session,text) = row.map_err(|error| error.to_string())?;
             let usage: Vec<UsageEvent> = serde_json::from_str(&text).map_err(|_| "会话用量缓存损坏")?;
-            if filter.model.as_deref().is_some_and(|model| session.model.as_deref() != Some(model)
-                && !usage.iter().any(|event| event.model.as_deref() == Some(model))) { continue; }
+            if filter.model.as_deref().is_some_and(|model| if model == "__unknown__" { session.model.is_some() && !usage.iter().any(|event| event.model.is_none()) } else { session.model.as_deref() != Some(model) && !usage.iter().any(|event| event.model.as_deref() == Some(model)) }) { continue; }
             result.push((session,usage));
         }
         Ok(result)
@@ -671,11 +755,7 @@ pub fn detail(db: &Database, id: &str) -> Result<HistoryDetail, String> {
         .transpose()?
         .flatten()
         .flatten();
-    let resume_path = if session.0.project_id.is_some() {
-        linked_path.as_deref()
-    } else {
-        session.0.cwd.as_deref()
-    };
+    let resume_path = session.0.cwd.as_deref().or(linked_path.as_deref());
     let reason = if session.0.native_id.is_none() {
         Some("原始记录没有可验证的恢复 ID".into())
     } else if resume_path.is_none_or(|cwd| !Path::new(cwd).is_dir()) {
@@ -794,11 +874,36 @@ fn sum_known(current: &mut Option<u64>, value: Option<u64>) {
 }
 
 pub fn usage_summary(db: &Database, filter: &HistoryFilter) -> Result<UsageSummary, String> {
+    let price_map: BTreeMap<(String, String), HistoryPrice> = prices(db)?.into_iter()
+        .map(|price| ((price.tool_id.clone(), price.model.clone()), price)).collect();
     let rows = query_sessions(db, filter, false)?;
-    let price_map: BTreeMap<(String, String), HistoryPrice> = prices(db)?
-        .into_iter()
-        .map(|price| ((price.tool_id.clone(), price.model.clone()), price))
-        .collect();
+    let mut result = summarize_rows(&rows, &price_map, filter, scans(db)?);
+    let mut catalog_filter = filter.clone();
+    catalog_filter.model = None;
+    let catalog_rows = query_sessions(db, &catalog_filter, false)?;
+    result.models = catalog_rows.iter().flat_map(|(session, events)| session.model.iter().chain(events.iter().filter_map(|event| event.model.as_ref())))
+        .cloned().collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+    let mut groups: BTreeMap<(String, Option<String>), Vec<(HistorySession, Vec<UsageEvent>)>> = BTreeMap::new();
+    for (session, events) in &rows {
+        let mut event_groups: BTreeMap<Option<String>, Vec<UsageEvent>> = BTreeMap::new();
+        for event in events { event_groups.entry(event.model.clone()).or_default().push(event.clone()); }
+        if events.is_empty() { event_groups.insert(session.model.clone(), Vec::new()); }
+        for (model, events) in event_groups {
+            if filter.model.as_deref().is_some_and(|selected| if selected == "__unknown__" { model.is_some() } else { model.as_deref() != Some(selected) }) { continue; }
+            groups.entry((session.tool_id.clone(), model)).or_default().push((session.clone(), events));
+        }
+    }
+    for ((tool_id, model), rows) in groups {
+        let summary = summarize_rows(&rows, &price_map, filter, Vec::new());
+        if summary.session_count == 0 { continue; }
+        result.by_model.push(ModelUsage {tool_id, model, session_count:summary.session_count,
+            unknown_usage_sessions:summary.unknown_usage_sessions, input:summary.input, output:summary.output,
+            cache_read:summary.cache_read, cache_write:summary.cache_write, estimated_cost:summary.estimated_cost, currency:summary.currency});
+    }
+    Ok(result)
+}
+
+fn summarize_rows(rows: &[(HistorySession, Vec<UsageEvent>)], price_map: &BTreeMap<(String, String), HistoryPrice>, filter: &HistoryFilter, scans: Vec<ScanStatus>) -> UsageSummary {
     let mut result = UsageSummary {
         session_count: 0,
         usage_sessions: 0,
@@ -813,7 +918,7 @@ pub fn usage_summary(db: &Database, filter: &HistoryFilter) -> Result<UsageSumma
         estimated_cost: Some(0.0),
         currency: None,
         price_sources: Vec::new(),
-        scans: scans(db)?,
+        scans, models: Vec::new(), by_model: Vec::new(),
     };
     let mut seen_events = HashSet::new();
     let mut semantics: Option<bool> = None;
@@ -831,7 +936,7 @@ pub fn usage_summary(db: &Database, filter: &HistoryFilter) -> Result<UsageSumma
                 filter
                     .model
                     .as_deref()
-                    .is_none_or(|model| event.model.as_deref() == Some(model))
+                    .is_none_or(|model| if model == "__unknown__" { event.model.is_none() } else { event.model.as_deref() == Some(model) })
                     && ((filter.from_ms.is_none() && filter.to_ms.is_none())
                         || in_range(event.timestamp))
             })
@@ -932,7 +1037,21 @@ pub fn usage_summary(db: &Database, filter: &HistoryFilter) -> Result<UsageSumma
     if result.usage_sessions == 0 || result.unknown_usage_sessions > 0 {
         result.estimated_cost = None;
     }
-    Ok(result)
+    result
+}
+
+pub fn native_session_directory(db: &Database, tool: &str, native_id: &str) -> Result<Option<PathBuf>, String> {
+    let id: Option<String> = db.with_connection(|conn| conn.query_row(
+        "SELECT id FROM history_sessions WHERE tool = ?1 AND native_id = ?2 ORDER BY updated_at DESC LIMIT 1",
+        params![tool, native_id], |row| row.get(0),
+    ).optional().map_err(|error| error.to_string()))?;
+    let Some(id) = id else { return Ok(None); };
+    let detail = detail(db, &id)?;
+    if let Some(reason) = detail.resume_reason { return Err(reason); }
+    if let Some(cwd) = detail.session.cwd { return Ok(Some(PathBuf::from(cwd))); }
+    let project_id = detail.session.project_id.ok_or("原会话没有工作目录")?;
+    let project = crate::projects::get(db, &project_id)?;
+    project.path.map(PathBuf::from).map(Some).ok_or_else(|| "原会话没有工作目录".into())
 }
 
 pub fn resume_plan(
@@ -953,7 +1072,7 @@ pub fn resume_plan(
     if detail.session.cwd.is_none() && detail.session.project_id.is_none() {
         return Err("原会话没有项目目录".into());
     }
-    let cwd = detail.session.cwd.as_deref().map(Path::new).unwrap_or(home);
+    let cwd = native_session_directory(db, &detail.session.tool_id, &native_id)?.ok_or("原会话没有工作目录")?;
     crate::launch::plan_history(
         db,
         registry,
@@ -962,9 +1081,10 @@ pub fn resume_plan(
             tool_id: detail.session.tool_id,
             project_id: detail.session.project_id,
             session_id: Some(native_id),
+            directory: None,
             mode,
         },
-        cwd,
+        &cwd,
     )
     .map_err(|error| error.message)
 }

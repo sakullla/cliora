@@ -1,0 +1,25 @@
+{
+  "kind": "native-records-and-window-layout-verification",
+  "candidateSha256": "866dce0bd2f086614e662688ff40dd130e4199150aab19c742d98d144ff8e69f",
+  "identifier": "dev.cliora.verification.a6final",
+  "recordedAt": "2026-09-30T11:01:29.871Z",
+  "checks": [],
+  "limits": [
+    "Real native window resized through Win32 at 1160/900/720 logical pixels.",
+    "History reads actual user files; evidence stores counts/timings only, not conversation content.",
+    "Full private history screenshots are omitted."
+  ],
+  "scanObservation": {
+    "completed": true,
+    "stopRequested": false,
+    "stopMs": null,
+    "lastProgress": {
+      "running": false,
+      "toolId": "open_code",
+      "completedSources": 339,
+      "totalSources": 339
+    }
+  },
+  "result": "failed",
+  "error": "Error: page.evaluate: invalid args `filter` for command `list_history_sessions`: missing field `favoriteOnly`"
+}

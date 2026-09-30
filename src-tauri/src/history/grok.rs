@@ -4,7 +4,7 @@ use std::path::Path;
 use serde_json::Value;
 
 use super::{
-    read_jsonl, source_fingerprint, text_content, timestamp, valid_native_id, HistorySource,
+    check_cancelled, read_jsonl_controlled, source_fingerprint, source_fingerprint_controlled, text_content, timestamp, valid_native_id, HistorySource,
     ParsedSession, UsageEvent, MAX_SOURCES,
 };
 
@@ -12,16 +12,26 @@ pub fn sources(home: &Path) -> Result<Vec<HistorySource>, String> {
     sources_with_fingerprint(home, source_fingerprint)
 }
 
+pub fn sources_controlled(home: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<HistorySource>, String> {
+    sources_with_control(home, |path| source_fingerprint_controlled(path, cancelled), cancelled)
+}
+
 pub(super) fn sources_with_fingerprint(
     home: &Path,
     fingerprint: impl Fn(&Path) -> Result<String, String>,
 ) -> Result<Vec<HistorySource>, String> {
+    sources_with_control(home, fingerprint, &|| false)
+}
+
+fn sources_with_control(home: &Path, fingerprint: impl Fn(&Path) -> Result<String, String>, cancelled: &dyn Fn() -> bool) -> Result<Vec<HistorySource>, String> {
+    check_cancelled(cancelled)?;
     let root = home.join(".grok/sessions");
     if !root.exists() {
         return Ok(Vec::new());
     }
     let mut result = Vec::new();
     for project in fs::read_dir(&root).map_err(|error| error.to_string())? {
+        check_cancelled(cancelled)?;
         let project = project.map_err(|error| error.to_string())?;
         if !project
             .file_type()
@@ -31,6 +41,7 @@ pub(super) fn sources_with_fingerprint(
             continue;
         }
         for session in fs::read_dir(project.path()).map_err(|error| error.to_string())? {
+            check_cancelled(cancelled)?;
             let session = session.map_err(|error| error.to_string())?;
             if !session
                 .file_type()
@@ -47,6 +58,7 @@ pub(super) fn sources_with_fingerprint(
             let checked = ["summary.json", "chat_history.jsonl", "usage.json"]
                 .iter()
                 .map(|name| {
+                    check_cancelled(cancelled)?;
                     let file = path.join(name);
                     if file.exists() {
                         fingerprint(&file)
@@ -55,6 +67,7 @@ pub(super) fn sources_with_fingerprint(
                     }
                 })
                 .collect::<Result<Vec<_>, _>>();
+            check_cancelled(cancelled)?;
             let native_id = path
                 .file_name()
                 .and_then(|value| value.to_str())
@@ -91,6 +104,11 @@ fn token(value: &Value, key: &str) -> Option<u64> {
 }
 
 pub fn parse(source: &HistorySource) -> Result<ParsedSession, String> {
+    parse_controlled(source, &|| false)
+}
+
+pub fn parse_controlled(source: &HistorySource, cancelled: &dyn Fn() -> bool) -> Result<ParsedSession, String> {
+    check_cancelled(cancelled)?;
     let summary = read_json(&source.path.join("summary.json"))?;
     let mut session = ParsedSession::new();
     session.native_id = summary
@@ -129,7 +147,7 @@ pub fn parse(source: &HistorySource) -> Result<ParsedSession, String> {
             fingerprint: String::new(),
             fingerprint_error: None,
         };
-        match read_jsonl(&chat_source, |line, row| {
+        match read_jsonl_controlled(&chat_source, cancelled, |line, row| {
             let role = row.get("type").and_then(Value::as_str).unwrap_or("");
             if role == "user" || role == "assistant" {
                 let text = row.get("content").map(text_content).unwrap_or_default();
@@ -148,6 +166,7 @@ pub fn parse(source: &HistorySource) -> Result<ParsedSession, String> {
         session.partial = true;
     }
     let usage_path = source.path.join("usage.json");
+    check_cancelled(cancelled)?;
     if usage_path.is_file() {
         match read_json(&usage_path) {
             Ok(usage) => {
@@ -158,6 +177,7 @@ pub fn parse(source: &HistorySource) -> Result<ParsedSession, String> {
                     .filter(|turns| !turns.is_empty());
                 if let Some(turns) = turns {
                     for (index, turn) in turns.iter().enumerate() {
+                        check_cancelled(cancelled)?;
                         let time = turn.get("endedAt").and_then(timestamp);
                         let turn_id = turn
                             .get("turnNumber")
@@ -169,6 +189,7 @@ pub fn parse(source: &HistorySource) -> Result<ParsedSession, String> {
                             .filter(|models| !models.is_empty())
                         {
                             for (model, values) in models {
+                                check_cancelled(cancelled)?;
                                 session.usage.push(UsageEvent {
                                     id: format!("{}:turn-{turn_id}:{model}", source.key()),
                                     model: Some(model.clone()),
@@ -203,6 +224,7 @@ pub fn parse(source: &HistorySource) -> Result<ParsedSession, String> {
                     .filter(|models| !models.is_empty())
                 {
                     for (model, values) in models {
+                        check_cancelled(cancelled)?;
                         session.usage.push(UsageEvent {
                             id: format!("{}:model-{model}", source.key()),
                             model: Some(model.clone()),
@@ -230,5 +252,6 @@ pub fn parse(source: &HistorySource) -> Result<ParsedSession, String> {
             Err(_) => session.partial = true,
         }
     }
+    check_cancelled(cancelled)?;
     session.finish(source)
 }

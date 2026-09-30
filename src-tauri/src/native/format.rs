@@ -123,6 +123,11 @@ fn toml_item(value: &Value) -> Result<Item, String> {
         }
         Value::Number(v) => toml_edit::value(v.as_f64().ok_or("无效数字")?),
         Value::Array(items) => {
+            if !items.is_empty() && items.iter().all(Value::is_object) {
+                let mut array=toml_edit::ArrayOfTables::new();
+                for item in items { array.push(toml_item(item)?.as_table().cloned().ok_or("TOML 表数组无效")?); }
+                return Ok(Item::ArrayOfTables(array));
+            }
             let mut array = toml_edit::Array::new();
             for item in items {
                 let converted = toml_item(item)?;
@@ -220,6 +225,44 @@ pub fn set_path(
     }
 }
 
+/// Rebase independent text edits without rewriting comments or formatting.
+/// Overlapping text or same-field changes remain explicit conflicts.
+pub fn merge_edits(kind: FileKind, original: &str, edited: &str, current: &str) -> Result<String, String> {
+    let before = parse(kind, original)?;
+    let own = parse(kind, edited)?;
+    let disk = parse(kind, current)?;
+    if current == original || current == edited { return Ok(edited.into()); }
+    if edited == original { return Ok(current.into()); }
+    fn check(base: Option<&Value>, own: Option<&Value>, disk: Option<&Value>, path: &str) -> Result<(), String> {
+        if base == own { return Ok(()); }
+        if let (Some(Value::Object(a)), Some(Value::Object(b)), Some(Value::Object(c))) = (base, own, disk) {
+            for key in a.keys().chain(b.keys()).collect::<std::collections::BTreeSet<_>>() {
+                check(a.get(key), b.get(key), c.get(key), &format!("{path}/{key}"))?;
+            }
+            return Ok(());
+        }
+        if disk != base && disk != own { return Err(format!("配置字段 {path} 已被外部修改；你的编辑已保留，未覆盖原文件")); }
+        Ok(())
+    }
+    check(Some(&before), Some(&own), Some(&disk), "")?;
+    let base: Vec<_> = original.split_inclusive('\n').collect();
+    fn region<'a>(base: &[&str], changed: &'a str) -> (usize, usize, Vec<&'a str>) {
+        let lines: Vec<_> = changed.split_inclusive('\n').collect();
+        let start = base.iter().zip(&lines).take_while(|(a,b)| a == b).count();
+        let suffix = base[start..].iter().rev().zip(lines[start..].iter().rev()).take_while(|(a,b)| a == b).count();
+        (start, base.len() - suffix, lines[start..lines.len()-suffix].to_vec())
+    }
+    let mut changes = [region(&base, edited), region(&base, current)];
+    changes.sort_by_key(|change| change.0);
+    let (a,b) = (&changes[0], &changes[1]);
+    if a.1 > b.0 || a.0 == b.0 {
+        return Err("配置同一段内容已被外部修改；你的编辑已保留，未覆盖原文件".into());
+    }
+    let merged = [base[..a.0].concat(), a.2.concat(), base[a.1..b.0].concat(), b.2.concat(), base[b.1..].concat()].concat();
+    parse(kind, &merged)?;
+    Ok(merged)
+}
+
 /// Objects merge by field, arrays and scalars replace. `suppressed` removes inherited fields.
 pub fn resolve(
     common: &Value,
@@ -287,6 +330,30 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn concurrent_edits_merge_separate_fields_and_preserve_native_comments() {
+        let original = "# retain comment\nmodel = \"old\"\n\n[ui]\ncompact = false\n";
+        let edited = original.replace("\"old\"", "\"new\"");
+        let current = original.replace("false", "true");
+        let merged = merge_edits(FileKind::Toml, original, &edited, &current).unwrap();
+        assert!(merged.contains("# retain comment"));
+        assert_eq!(parse(FileKind::Toml, &merged).unwrap(), json!({"model":"new","ui":{"compact":true}}));
+        let original = "{\n // user comment\n \"model\": \"old\",\n \"flag\": false\n}\n";
+        let merged = merge_edits(FileKind::Jsonc, original, &original.replace("old", "new"), &original.replace("false", "true")).unwrap();
+        assert!(merged.contains("// user comment"));
+        assert_eq!(parse(FileKind::Jsonc, &merged).unwrap(), json!({"model":"new","flag":true}));
+    }
+
+    #[test]
+    fn concurrent_overlapping_or_invalid_edits_never_overwrite_either_side() {
+        let original = "{\"model\":\"old\",\"flag\":false}";
+        assert!(merge_edits(FileKind::Json, original, &original.replace("old", "mine"), &original.replace("old", "theirs")).unwrap_err().contains("model"));
+        assert!(merge_edits(FileKind::Json, original, &original.replace("old", "mine"), &original.replace("false", "true")).is_err(), "same-line text changes remain conservatively unresolved");
+        assert!(merge_edits(FileKind::Json, original, "{", original).is_err());
+        assert!(merge_edits(FileKind::Json, original, "{\"a\":1,\"a\":2}", original).is_err());
+        assert_eq!(merge_edits(FileKind::Json, original, original, &original.replace("old", "theirs")).unwrap(), original.replace("old", "theirs"));
+    }
+
+    #[test]
     fn jsonc_edit_preserves_comments_and_other_provider() {
         let text = "{\n  // keep me\n  \"provider\": { \"other\": {\"model\": \"old\"} },\n  \"mcp\": {\"a\": 1}\n}";
         let output = set_path(
@@ -323,10 +390,6 @@ mod tests {
         let (merged, source) = resolve(&common, &own, &["/model".into()]).unwrap();
         assert_eq!(merged, json!({"flag":false,"count":0,"name":"","items":[]}));
         assert_eq!(source.get("/flag").map(String::as_str), Some("命名配置"));
-    }
-
-    #[test]
-    fn suppression_does_not_remove_explicit_named_override() {
         let (merged, _) = resolve(
             &json!({"model":"base"}),
             &json!({"model":"own"}),

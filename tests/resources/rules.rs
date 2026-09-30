@@ -77,5 +77,25 @@ fn rule_preview_requires_fresh_confirm_and_preserves_external_edit() {
         vec![refreshed[0].target.clone()],
     );
     assert_eq!(applied[0].status, "written");
-    assert_eq!(std::fs::read_to_string(path).unwrap(), "new rule");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "new rule");
+    let target=refreshed[0].target.clone();
+    set_enabled(&db,&credential,&registry,temp.path(),&target,false).unwrap();
+    assert!(!enabled(&db,&registry,temp.path(),&target).unwrap());
+    set_enabled(&db,&credential,&registry,temp.path(),&target,false).unwrap();
+    std::fs::write(&path,"external while disabled").unwrap();
+    assert!(set_enabled(&db,&credential,&registry,temp.path(),&target,true).is_err());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(),"external while disabled");
+    std::fs::write(&path,"").unwrap();
+    set_enabled(&db,&credential,&registry,temp.path(),&target,true).unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(),"new rule");
+    assert!(save_current(&db,&credential,&registry,temp.path(),&target,"old rule","ours").is_err());
+    save_current(&db,&credential,&registry,temp.path(),&target,"new rule","direct edited").unwrap();
+    let native_path=std::path::PathBuf::from(read_current(&registry,temp.path(),&target).unwrap().path);
+    let backups=transaction::recent_backups(&db,&native_path).unwrap();
+    let id=&backups[0].transaction_id;
+    let diff=transaction::preview_backup(&db,&credential,&native_path,id).unwrap();
+    assert_eq!(diff.original,"new rule");
+    assert!(transaction::restore_backup(&db,&credential,&native_path,id,"stale baseline",|_|Ok(())).is_err());
+    transaction::restore_backup(&db,&credential,&native_path,id,"direct edited",|_|Ok(())).unwrap();
+    assert_eq!(std::fs::read_to_string(path).unwrap(),"new rule");
 }

@@ -182,6 +182,21 @@ pub fn add(
     get(db, &id)
 }
 
+pub fn rename(db: &Database, id: &str, name: &str) -> Result<Project, String> {
+    let name = name.trim(); if name.is_empty() || name.chars().count() > 120 { return Err("项目名称须为 1–120 个字符".into()); }
+    db.with_connection(|conn| conn.execute("UPDATE projects SET name=?2 WHERE id=?1", params![id,name]).map(|_| ()).map_err(|e| e.to_string()))?;
+    get(db,id)
+}
+pub fn remove(db: &Database, id: &str) -> Result<(), String> {
+    get(db,id)?;
+    db.with_connection(|conn| {
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        tx.execute("UPDATE history_sessions SET project_id=NULL WHERE project_id=?1", [id]).map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM projects WHERE id=?1", [id]).map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())
+    })
+}
+
 pub fn relink(db: &Database, id: &str, path: &str) -> Result<Project, String> {
     let path = directory_text(&checked_directory(path)?)?;
     db.with_connection(|conn| {

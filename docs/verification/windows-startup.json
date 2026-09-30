@@ -1,13 +1,56 @@
 {
-  "command": "Start-Process src-tauri/target/verification/cliora-windows-x64-30c4d43d371889b3e0cc2d754cb49284433faf16a0380a31789670406f163a52.exe -WindowStyle Hidden",
-  "candidatePath": "src-tauri/target/verification/cliora-windows-x64-30c4d43d371889b3e0cc2d754cb49284433faf16a0380a31789670406f163a52.exe",
-  "candidateSha256": "30c4d43d371889b3e0cc2d754cb49284433faf16a0380a31789670406f163a52",
-  "recordedAt": "2026-09-30T04:53:00.0139872Z",
-  "startedAt": "2026-09-30T04:52:53.3544150Z",
-  "pid": 45300,
-  "aliveAfterSeconds": 5,
-  "hasExited": false,
-  "windowTitle": "栖点 · Cliora",
+  "kind": "windows-startup-and-partial-ui",
+  "recordedAt": "2026-09-30T11:51:05.233Z",
+  "candidatePath": "src-tauri/target/verification/cliora-a6-final-production-windows-x64-9d3922b1f7b5cbee4c49f5d0c820acefe6c1834c3cabb6d67d6d2d8478427dcc.exe",
+  "candidateSha256": "9d3922b1f7b5cbee4c49f5d0c820acefe6c1834c3cabb6d67d6d2d8478427dcc",
+  "identifier": "com.cliora.desktop",
+  "startupObserved": false,
   "nativeBehaviorsAccepted": false,
-  "stoppedOwnedProcess": true
+  "reason": "Ordinary candidate retained build-only: existing user windows and unsaved drafts were left untouched.",
+  "isolatedUiCheck": {
+    "identifier": "dev.cliora.verification.a6final",
+    "candidate": {
+      "path": "src-tauri/target/verification/cliora-a6-final-isolated-windows-x64-185849811117743d3ba60315b7578a31ea168137cf5cb4e34af911cd0479f2c9.exe",
+      "sha256": "185849811117743d3ba60315b7578a31ea168137cf5cb4e34af911cd0479f2c9",
+      "sizeBytes": 25832960
+    },
+    "buildRecord": {
+      "path": "docs/verification/windows-native-a6/final/isolated-build.json",
+      "sha256": "4de3e7cbdb8ea5eaaf7639b75a545b36fe80d7e69fcc948cef9ade3757c77a75"
+    },
+    "configOverride": {
+      "path": "docs/verification/windows-native-a6/final/isolated-config-override.json",
+      "sha256": "6c819fb5db02ca625e1ece0d968959f9c46324f135662b90918d93f8bde9f06c"
+    },
+    "sourceWorktree": {
+      "path": "docs/verification/windows-native-a6/final/source-worktree.json",
+      "sha256": "cf9d402ab99a708fa758e921d7dc13a3a7a204e9713e23ca1a50507c9efc2c26"
+    },
+    "processRecord": {
+      "path": "docs/verification/windows-native-a6/final/process.json",
+      "sha256": "f220f125a7f91a711ef35e6edbf9ea193b9a0700fe03b63c4fb69aca91a16fe8"
+    },
+    "startedAt": "2026-09-30T11:50:54.1185409Z",
+    "pidAtObservation": 20340,
+    "checks": [
+      {
+        "path": "docs/verification/windows-native-a6/final/native-final-product-after.json",
+        "sha256": "3080daa02c03ef9672f3656287e036bd44ae7188f71cfd17a08be70f8d7edfc1"
+      },
+      {
+        "path": "docs/verification/windows-native-a6/final/native-final-records-layout-after.json",
+        "sha256": "29553818b04b5fc46ee462536da8de2a3ee06e2f04aea3c6972d8ca53e55f4ec"
+      },
+      {
+        "path": "docs/verification/windows-native-a6/final/native-final-color-after.json",
+        "sha256": "cf1858c6e5290883fa495a35bf5f54bedf101c205bd8cf4c5a9185601394f7ce"
+      }
+    ],
+    "nativeBehaviorsAccepted": false,
+    "limits": "Real Windows UI, SQLite/keyring, owned fixture writes, cached native history and harmless terminal pipelines only; different identifier and EXE hash. Process data describes the historical observation, not current liveness. No real supplier session or billed inference.",
+    "processCleanup": {
+      "path": "docs/verification/windows-native-a6/final/process-cleanup.json",
+      "sha256": "343a6edf1a2b26402f829eb758822ca79cf863570a42cbe40591a2010a474500"
+    }
+  }
 }

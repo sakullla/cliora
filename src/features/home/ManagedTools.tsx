@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
+import { open } from '@tauri-apps/plugin-dialog';
 import { native, nativeAvailable } from '../../lib/native';
-import type { AdapterDescriptor, RegisteredToolWorkspace } from '../../types/native';
+import type { AdapterDescriptor, NativeInspection, RegisteredToolWorkspace } from '../../types/native';
 import { ToolIcon } from '../../components/ToolIcon';
 import styles from './ManagedTools.module.css';
 
-type Loaded = { workspace: RegisteredToolWorkspace | null; error: string | null; busy: boolean };
+type Loaded = { workspace: RegisteredToolWorkspace | null; inspection?: NativeInspection | null; error: string | null; busy: boolean };
 
 function message(value: unknown): string {
   return value && typeof value === 'object' && 'message' in value ? String(value.message) : '操作失败，请重试';
@@ -22,8 +23,10 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
     const refresh = () => {
       const current = ++generation.current;
       for (const tool of tools) {
-        void native.getRegisteredToolWorkspace(tool.id, 'global').then((workspace) => {
-          if (active && current === generation.current) setStates((old) => ({ ...old, [tool.id]: { workspace, error: null, busy: false } }));
+        void native.getRegisteredToolWorkspace(tool.id, 'global').then(async (workspace) => {
+          const files = Object.fromEntries(workspace.snapshots.filter(item => item.text !== null && !workspace.probe.nativeFiles.find(file => file.role === item.role)?.sensitive).map(item => [item.role, item.text!]));
+          const inspection = Object.keys(files).length ? await native.inspectRegisteredNativeDraft(tool.id, files).catch(() => null) : null;
+          if (active && current === generation.current) setStates((old) => ({ ...old, [tool.id]: { workspace, inspection, error: null, busy: false } }));
         }).catch((error) => {
           if (active && current === generation.current) setStates((old) => ({ ...old, [tool.id]: { workspace: null, error: message(error), busy: false } }));
         });
@@ -40,7 +43,10 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
     const previous = states[toolId];
     if (!previous || previous.busy) return;
     setStates((old) => ({ ...old, [toolId]: { ...previous, busy: true, error: null } }));
-    try { await native.launchCli({ toolId, projectId: null, sessionId: null, mode: 'normal' }); }
+    try {
+      const directory = await open({ directory: true, multiple: false, title: '选择启动工作目录' });
+      if (typeof directory === 'string') await native.launchCli({ toolId, projectId: null, sessionId: null, mode: 'normal', directory });
+    }
     catch (error) { setStates((old) => ({ ...old, [toolId]: { ...previous, busy: false, error: message(error) } })); return; }
     setStates((old) => ({ ...old, [toolId]: { ...previous, busy: false } }));
   }
@@ -67,11 +73,13 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
       const workspace = loaded?.workspace;
       const selected = workspace?.profiles.find((item) => item.id === workspace.binding?.profileId);
       const appliedCurrent = !!selected && workspace?.binding?.profileVersion === selected.version;
+      const nativeExists = workspace?.snapshots.some(item => item.fingerprint !== null);
+      const nativeInfo = [loaded?.inspection?.providerId, loaded?.inspection?.model].filter(Boolean).join(" · ");
       const installed = !!workspace?.probe.selectedPath;
       const writable = workspace?.probe.nativeWrites.state === 'supported';
       return <div className={styles.row} key={tool.id}>
         <div className={styles.name}><ToolIcon toolId={tool.id} /><span><strong>{tool.name}</strong><small>{loaded?.error ? '检测失败' : workspace ? installed ? workspace.probe.installations.find((item) => item.path === workspace.probe.selectedPath)?.version ?? '已安装' : '未确认安装' : '正在检测'}</small></span></div>
-        <div className={styles.current}>{workspace?.profiles.length && writable ? <select aria-label={`${tool.name} 全局配置`} value={appliedCurrent ? selected.id : ''} disabled={loaded?.busy} onChange={(event) => void switchProfile(tool.id, event.target.value)}><option value="">{selected && !appliedCurrent ? `${selected.name} · 有未应用修改` : '选择配置'}</option>{workspace.profiles.map((item) => <option key={item.id} value={item.id}>{item.name}{item.connection?.model ? ` · ${item.connection.model}` : ''}</option>)}</select> : <span>{!workspace ? '尚未检测' : !workspace.profiles.length ? '尚未配置' : workspace.probe.nativeWrites.state !== 'supported' ? '原生写入不可用' : '选择配置'}</span>}<small>{loaded?.error ?? (appliedCurrent ? '已写入原生文件 · 下次启动读取' : selected ? '已保存的修改尚未应用；请在工具页应用' : workspace?.probe.nativeWrites.reason ?? '等待检测')}</small></div>
+        <div className={styles.current}>{workspace?.profiles.length && writable ? <select aria-label={`${tool.name} 全局配置`} value={appliedCurrent ? selected.id : ''} disabled={loaded?.busy} onChange={(event) => void switchProfile(tool.id, event.target.value)}><option value="">{selected && !appliedCurrent ? `${selected.name} · 有未应用修改` : nativeExists ? '当前原生配置' : '选择配置'}</option>{workspace.profiles.map((item) => <option key={item.id} value={item.id}>{item.name}{item.connection?.model ? ` · ${item.connection.model}` : ''}</option>)}</select> : <span>{!workspace ? '尚未检测' : !workspace.profiles.length ? nativeExists ? '当前原生配置' : '尚未配置' : workspace.probe.nativeWrites.state !== 'supported' ? '原生写入不可用' : '选择配置'}</span>}<small>{loaded?.error ?? (nativeExists && !selected ? nativeInfo || '原生配置已存在 · 供应商 / 模型未知' : appliedCurrent ? '已写入原生文件 · 下次启动读取' : selected ? '已保存的修改尚未应用；请在工具页应用' : workspace?.probe.nativeWrites.reason ?? '等待检测')}</small></div>
         <div className={styles.rowActions}><button type="button" className={styles.launch} disabled={!installed || loaded?.busy} onClick={() => void launchTool(tool.id)}>启动</button><button type="button" onClick={() => onOpenTool(tool.id)}>编辑配置 →</button></div>
       </div>;
     })}

@@ -1,0 +1,20 @@
+{
+  "kind": "native-history-read-timing",
+  "candidateSha256": "95969f2ee3f81ff5ab62b33da5efab3364f9fce1681ad8e84307bf7737912ff0",
+  "method": "real IPC reads only; no navigation, scanning or content output",
+  "recordedAt": "2026-09-30T07:55:04.269Z",
+  "checks": [
+    {
+      "command": "list_history_sessions",
+      "elapsedMs": 125,
+      "result": "passed",
+      "count": 792
+    },
+    {
+      "command": "get_history_usage",
+      "elapsedMs": 263,
+      "result": "passed",
+      "usageSessions": 779
+    }
+  ]
+}

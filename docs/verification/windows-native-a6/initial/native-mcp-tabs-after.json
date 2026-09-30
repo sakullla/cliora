@@ -1,0 +1,54 @@
+{
+  "kind": "native-windows-mcp-tab-verification",
+  "candidate": "C:\\Users\\12976\\project\\cliora\\src-tauri\\target\\verification\\cliora-windows-x64-6274f53ccb165cf880be2a4f1175f6f7d34b30ae81e2f83c3e64725c065778f0.exe",
+  "sha256": "6274f53ccb165cf880be2a4f1175f6f7d34b30ae81e2f83c3e64725c065778f0",
+  "checks": [
+    {
+      "name": "current-cli-native-mcp-context",
+      "toolId": "codex",
+      "nativeEntries": 1,
+      "unavailableReason": null,
+      "selectedEntryReflectsNativeSource": true,
+      "previousEntryCleared": true
+    },
+    {
+      "name": "current-cli-native-mcp-context",
+      "toolId": "claude_code",
+      "nativeEntries": 1,
+      "unavailableReason": null,
+      "selectedEntryReflectsNativeSource": true,
+      "previousEntryCleared": true
+    },
+    {
+      "name": "current-cli-native-mcp-context",
+      "toolId": "grok",
+      "nativeEntries": 0,
+      "unavailableReason": null,
+      "selectedEntryReflectsNativeSource": false,
+      "previousEntryCleared": true
+    },
+    {
+      "name": "current-cli-native-mcp-context",
+      "toolId": "pi",
+      "nativeEntries": 0,
+      "unavailableReason": "此 CLI 的 MCP 配置版本尚未确认；请先确认安装或保留可识别的原生配置",
+      "selectedEntryReflectsNativeSource": false,
+      "previousEntryCleared": true
+    },
+    {
+      "name": "current-cli-native-mcp-context",
+      "toolId": "open_code",
+      "nativeEntries": 0,
+      "unavailableReason": null,
+      "selectedEntryReflectsNativeSource": false,
+      "previousEntryCleared": true
+    },
+    {
+      "name": "global-config-files-unchanged",
+      "filesCompared": 7,
+      "result": "passed"
+    }
+  ],
+  "recordedAt": "2026-09-30T06:40:57.375Z",
+  "result": "passed"
+}

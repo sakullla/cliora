@@ -2,6 +2,14 @@ use super::*;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+fn fixture_registry() -> Registry {
+    Registry::builtins()
+        .with_fixture_installation("codex", "0.158.0")
+        .with_fixture_installation("claude_code", "2.1.284")
+        .with_fixture_installation("grok", "1.0.41")
+        .with_fixture_installation("open_code", "1.18.33")
+}
+
 #[derive(Default)]
 struct MemoryStore(Mutex<HashMap<String, String>>);
 impl CredentialStore for MemoryStore {
@@ -74,7 +82,7 @@ fn previewed(
 
 #[test]
 fn unsupported_pi_mcp_is_reported_without_creating_a_fake_native_file() {
-    let registry = Registry::builtins();
+    let registry = fixture_registry();
     let home = tempfile::tempdir().unwrap();
     let db = Database::open(&home.path().join("cliora.db")).unwrap();
     let definition = sample(&db);
@@ -94,7 +102,7 @@ fn per_cli_mcp_writes_preserve_other_fields_and_claude_disable_removes_native_en
     let temp = tempfile::tempdir().unwrap();
     let db = Database::open(&temp.path().join("cliora.db")).unwrap();
     let keys = MemoryStore::default();
-    let registry = Registry::builtins();
+    let registry = fixture_registry();
     let codex_path = temp.path().join(".codex/config.toml");
     std::fs::create_dir_all(codex_path.parent().unwrap()).unwrap();
     std::fs::write(
@@ -207,6 +215,7 @@ fn per_cli_mcp_writes_preserve_other_fields_and_claude_disable_removes_native_en
             .unwrap()
             .is_empty()
     );
+    assert_eq!(managed_enabled(&db,&definition.id,&target("claude_code",true)).unwrap(),Some(false));
     assert_eq!(
         distribute(
             &db,
@@ -231,6 +240,7 @@ fn per_cli_mcp_writes_preserve_other_fields_and_claude_disable_removes_native_en
             .len(),
         1
     );
+    assert_eq!(managed_enabled(&db,&definition.id,&target("claude_code",true)).unwrap(),Some(true));
 }
 
 #[test]
@@ -253,7 +263,7 @@ fn bearer_environment_reference_is_visible_but_literal_token_is_rejected() {
     )
     .unwrap();
     let keys = MemoryStore::default();
-    let registry = Registry::builtins();
+    let registry = fixture_registry();
     assert_eq!(
         distribute(
             &db,
@@ -297,7 +307,7 @@ fn external_same_name_and_later_modification_require_fresh_explicit_replace() {
     let temp = tempfile::tempdir().unwrap();
     let db = Database::open(&temp.path().join("cliora.db")).unwrap();
     let keys = MemoryStore::default();
-    let registry = Registry::builtins();
+    let registry = fixture_registry();
     let definition = sample(&db);
     let path = temp.path().join(".codex/config.toml");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -376,7 +386,7 @@ fn external_same_name_and_later_modification_require_fresh_explicit_replace() {
 fn preview_is_bound_to_definition_version_scope_and_target_content() {
     let temp = tempfile::tempdir().unwrap();
     let db = Database::open(&temp.path().join("cliora.db")).unwrap();
-    let registry = Registry::builtins();
+    let registry = fixture_registry();
     let keys = MemoryStore::default();
     let definition = sample(&db);
     let project = temp.path().join("project");
@@ -446,7 +456,7 @@ fn preview_is_bound_to_definition_version_scope_and_target_content() {
 fn preview_compares_native_entries_without_exposing_literal_credentials() {
     let temp = tempfile::tempdir().unwrap();
     let db = Database::open(&temp.path().join("cliora.db")).unwrap();
-    let registry = Registry::builtins();
+    let registry = fixture_registry();
     let definition = sample(&db);
     let path = temp.path().join(".codex/config.toml");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -471,31 +481,8 @@ fn preview_compares_native_entries_without_exposing_literal_credentials() {
 fn opencode_v2_probe_writes_nested_servers_and_disabled_flag() {
     let temp = tempfile::tempdir().unwrap();
     let db = Database::open(&temp.path().join("cliora.db")).unwrap();
-    let registry = Registry::builtins();
+    let registry = fixture_registry().with_fixture_installation("open_code", "2.1.0");
     let keys = MemoryStore::default();
-    #[cfg(windows)]
-    let executable = temp.path().join("opencode.ps1");
-    #[cfg(not(windows))]
-    let executable = temp.path().join("opencode");
-    #[cfg(windows)]
-    std::fs::write(&executable, "Write-Output 'opencode 2.1.0'\n").unwrap();
-    #[cfg(not(windows))]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::write(&executable, "#!/bin/sh\necho 'opencode 2.1.0'\n").unwrap();
-        let mut mode = std::fs::metadata(&executable).unwrap().permissions();
-        mode.set_mode(0o755);
-        std::fs::set_permissions(&executable, mode).unwrap();
-    }
-    db.with_connection(|conn| {
-        conn.execute(
-            "INSERT INTO installation_choices (tool, path) VALUES ('open_code', ?1)",
-            [executable.display().to_string()],
-        )
-        .map_err(|error| error.to_string())?;
-        Ok(())
-    })
-    .unwrap();
     let path = temp.path().join(".config/opencode/opencode.json");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, "{\"mcp\":{\"timeout\":{\"startup\":45000}}}").unwrap();
@@ -543,7 +530,7 @@ fn one_invalid_target_does_not_prevent_another_and_can_be_retried() {
     let temp = tempfile::tempdir().unwrap();
     let db = Database::open(&temp.path().join("cliora.db")).unwrap();
     let keys = MemoryStore::default();
-    let registry = Registry::builtins();
+    let registry = fixture_registry();
     let grok_path = temp.path().join(".grok/config.toml");
     std::fs::create_dir_all(grok_path.parent().unwrap()).unwrap();
     std::fs::write(&grok_path, "[broken\n").unwrap();

@@ -17,6 +17,7 @@ use crate::native::{
     transaction::{self, ApplyOutcome},
 };
 use crate::{history, launch, library, portable, projects, resources};
+use crate::resources::rules;
 use std::path::PathBuf;
 
 #[derive(Default)]
@@ -317,12 +318,21 @@ pub(crate) fn native_error(message: String) -> ApiError {
     }
 }
 
+static HISTORY_REFRESH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static HISTORY_REFRESH_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+#[tauri::command]
+pub fn cancel_history_refresh() { HISTORY_REFRESH_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst); }
+#[tauri::command]
+pub fn get_history_scan_progress() -> history::ScanProgress { history::scan_progress() }
+
 #[tauri::command]
 pub async fn refresh_history(app: AppHandle) -> Result<Vec<history::ScanStatus>, ApiError> {
+    let generation = HISTORY_REFRESH_GENERATION.load(std::sync::atomic::Ordering::SeqCst);
     blocking(move || {
+        let _guard = HISTORY_REFRESH_LOCK.try_lock().map_err(|_| native_error("扫描已在后台进行".into()))?;
         let home = home()?;
         app.state::<AppState>().with_database(&app, |db| {
-            history::refresh(db, &adapters::Registry::builtins(), &home).map_err(native_error)
+            history::refresh_controlled(db, &adapters::Registry::builtins(), &home, &|| HISTORY_REFRESH_GENERATION.load(std::sync::atomic::Ordering::SeqCst) != generation).map_err(native_error)
         })
     })
     .await
@@ -544,6 +554,11 @@ pub async fn list_native_mcp(
 }
 
 #[tauri::command]
+pub async fn get_managed_mcp_enabled(app: AppHandle, definition_id: String, target: resources::mcp::McpTargetRequest) -> Result<Option<bool>,ApiError> {
+    blocking(move || {let db=app.state::<AppState>().database(&app)?;resources::mcp::managed_enabled(&db,&definition_id,&target).map_err(native_error)}).await
+}
+
+#[tauri::command]
 pub async fn preview_mcp_targets(
     app: AppHandle,
     definition_id: String,
@@ -670,6 +685,21 @@ pub async fn import_skill_local(
         })
     })
     .await
+}
+
+#[tauri::command]
+pub async fn list_skill_zip_entries(source: String, local: bool) -> Result<Vec<String>, ApiError> {
+    blocking(move || resources::skills::list_zip_entries(&source, local).map_err(native_error)).await
+}
+
+#[tauri::command]
+pub async fn preview_skill_local_zip(app: AppHandle, source: String, subdirectory: Option<String>) -> Result<resources::skills::SkillImportPreview, ApiError> {
+    blocking(move || app.state::<AppState>().with_database(&app, |db| resources::skills::preview_local_zip(db, &source, subdirectory.as_deref()).map_err(native_error))).await
+}
+
+#[tauri::command]
+pub async fn import_skill_local_zip(app: AppHandle, source: String, subdirectory: Option<String>, expected_new: Option<String>, expected_existing: Option<String>) -> Result<resources::skills::SkillPackage, ApiError> {
+    blocking(move || app.state::<AppState>().with_database(&app, |db| resources::skills::import_local_zip(db, &source, subdirectory.as_deref(), expected_new.as_deref(), expected_existing.as_deref()).map_err(native_error))).await
 }
 
 #[tauri::command]
@@ -1258,6 +1288,54 @@ pub async fn set_connection_secret(secret: String) -> Result<String, ApiError> {
     .await
 }
 
+/// Explicit user action; only app-managed API-key IDs are readable here, never OAuth or backup credentials.
+#[tauri::command]
+pub async fn get_skill_enabled(app: AppHandle, package_id: String, tool_id: String, scope: Scope, project_path: Option<String>) -> Result<bool,ApiError> {
+    blocking(move || app.state::<AppState>().with_database(&app, |db| resources::skills::enabled(db,&adapters::Registry::builtins(),&home()?,&package_id,&tool_id,scope,project_path.as_deref()).map_err(native_error))).await
+}
+#[tauri::command]
+pub async fn set_skill_enabled(app: AppHandle, package_id: String, tool_id: String, scope: Scope, project_path: Option<String>, enabled: bool) -> Result<(),ApiError> {
+    blocking(move || app.state::<AppState>().with_database(&app, |db| resources::skills::set_enabled(db,&SystemCredentialStore,&adapters::Registry::builtins(),&home()?,&package_id,&tool_id,scope,project_path.as_deref(),enabled).map_err(native_error))).await
+}
+#[tauri::command]
+pub async fn get_native_rule_enabled(app: AppHandle, target: rules::RuleTarget) -> Result<bool,ApiError> {
+    blocking(move || app.state::<AppState>().with_database(&app, |db| rules::enabled(db,&adapters::Registry::builtins(),&home()?,&target).map_err(native_error))).await
+}
+#[tauri::command]
+pub async fn set_native_rule_enabled(app: AppHandle, target: rules::RuleTarget, enabled: bool) -> Result<(),ApiError> {
+    blocking(move || app.state::<AppState>().with_database(&app, |db| rules::set_enabled(db,&SystemCredentialStore,&adapters::Registry::builtins(),&home()?,&target,enabled).map_err(native_error))).await
+}
+
+#[tauri::command]
+pub async fn read_native_rule(target: rules::RuleTarget) -> Result<rules::NativeRule, ApiError> {
+    blocking(move || rules::read_current(&adapters::Registry::builtins(), &home()?, &target).map_err(native_error)).await
+}
+
+#[tauri::command]
+pub async fn save_native_rule(app: AppHandle, target: rules::RuleTarget, original: String, edited: String) -> Result<transaction::ApplyOutcome, ApiError> {
+    blocking(move || app.state::<AppState>().with_database(&app, |db| rules::save_current(db, &SystemCredentialStore, &adapters::Registry::builtins(), &home()?, &target, &original, &edited).map_err(native_error))).await
+}
+
+#[tauri::command]
+pub async fn launch_cli_login(app: AppHandle, tool_id: String) -> Result<launch::LaunchResult, ApiError> {
+    blocking(move || {
+        let home = home()?;
+        app.state::<AppState>().with_database(&app, |db| {
+            let custom = registered_tool_path(db, &tool_id).map_err(native_error)?;
+            let plan = launch::login_plan(db, &adapters::Registry::builtins(), &home, &tool_id, custom.as_deref()).map_err(native_error)?;
+            launch::spawn(plan).map_err(native_error)
+        })
+    }).await
+}
+
+#[tauri::command]
+pub async fn get_connection_secret(secret_ref: String) -> Result<String, ApiError> {
+    blocking(move || {
+        if !profile::valid_connection_secret_ref(&secret_ref) { return Err(native_error("不是本应用保存的 API 密钥".into())); }
+        SystemCredentialStore.get(&secret_ref).map_err(native_error)
+    }).await
+}
+
 #[tauri::command]
 pub async fn list_provider_models(
     app: AppHandle,
@@ -1593,6 +1671,24 @@ pub async fn apply_registered_native_profile(
     .await
 }
 
+#[tauri::command]
+pub async fn compare_registered_application(app:AppHandle,profile_id:String,scope:Scope,project_path:Option<String>)->Result<apply::ApplyComparison,ApiError> {
+    blocking(move || {let home=home()?;let project=checked_project(scope,project_path)?;let db=app.state::<AppState>().database(&app)?;
+        apply::compare_registered_application(&adapters::Registry::builtins(),&db,&home,scope,project.as_deref(),&profile_id).map_err(native_error)}).await
+}
+#[tauri::command]
+pub async fn apply_compared_application(app:AppHandle,comparison:apply::ApplyComparison,scope:Scope,project_path:Option<String>)->Result<ApplyOutcome,ApiError> {
+    blocking(move || {let home=home()?;let project=checked_project(scope,project_path)?;let state=app.state::<AppState>();
+        let result=state.with_database(&app,|db| {
+            let custom=registered_tool_path(db,&comparison.profile.tool).map_err(native_error)?;
+            let result=apply::apply_compared_application(&adapters::Registry::builtins(),db,&SystemCredentialStore,&comparison,&home,scope,project.as_deref(),custom.as_deref()).map_err(native_error)?;
+            if let Some(path)=project.as_deref(){if let Err(error)=projects::record_applied_profile(db,path,&comparison.profile.tool,&comparison.profile.id){let _=app.emit("cliora:tray-error",format!("配置已应用，但项目快捷选择未能保存：{error}"));}}
+            Ok(result)
+        })?;
+        let _=app.emit("cliora:bindings-changed",&comparison.profile.tool);Ok(result)
+    }).await
+}
+
 pub(crate) fn apply_registered_now(
     app: &AppHandle,
     tool_id: &str,
@@ -1667,6 +1763,19 @@ pub async fn add_project(
     .await?;
     let _ = notify.emit("cliora:projects-changed", &project.id);
     Ok(project)
+}
+
+#[tauri::command]
+pub async fn rename_project(app: AppHandle, project_id: String, name: String) -> Result<projects::Project, ApiError> {
+    let notify = app.clone();
+    let result = blocking(move || app.state::<AppState>().with_database(&app, |db| portable::with_change_notification(db, || notify_portable_changed(&app), || projects::rename(db,&project_id,&name).map_err(native_error)))).await?;
+    let _ = notify.emit("cliora:projects-changed", &result.id); Ok(result)
+}
+#[tauri::command]
+pub async fn remove_project(app: AppHandle, project_id: String) -> Result<(), ApiError> {
+    let notify = app.clone();
+    blocking(move || app.state::<AppState>().with_database(&app, |db| portable::with_change_notification(db, || notify_portable_changed(&app), || projects::remove(db,&project_id).map_err(native_error)))).await?;
+    let _ = notify.emit("cliora:projects-changed", "removed"); Ok(())
 }
 
 #[tauri::command]
@@ -2079,6 +2188,72 @@ pub async fn read_registered_native_file_for_edit(
         })
     })
     .await
+}
+
+fn backup_target(registry: &adapters::Registry, tool_id: &str, scope: Scope, home: &Path, project: Option<&Path>, role: &str) -> Result<std::path::PathBuf, ApiError> {
+    let adapter = registry.get(tool_id).ok_or_else(|| native_error("未注册的 CLI 适配器".into()))?;
+    let file = adapter.native_files(scope, home, project, true).into_iter().find(|file| file.role == role && file.writable && !file.sensitive).ok_or_else(|| native_error("当前角色不允许恢复".into()))?;
+    Ok(std::path::PathBuf::from(file.path))
+}
+
+#[tauri::command]
+pub async fn list_native_backups(app: AppHandle, tool_id: String, scope: Scope, project_path: Option<String>, role: String) -> Result<Vec<transaction::BackupRecord>, ApiError> {
+    blocking(move || {
+        let home = home()?; let project = checked_project(scope, project_path)?;
+        let path = backup_target(&adapters::Registry::builtins(), &tool_id, scope, &home, project.as_deref(), &role)?;
+        app.state::<AppState>().with_database(&app, |db| transaction::recent_backups(db, &path).map_err(native_error))
+    }).await
+}
+
+#[tauri::command]
+pub async fn preview_native_backup(app: AppHandle, tool_id: String, scope: Scope, project_path: Option<String>, role: String, transaction_id: String) -> Result<transaction::BackupPreview, ApiError> {
+    blocking(move || {
+        let home = home()?; let project = checked_project(scope, project_path)?;
+        let path = backup_target(&adapters::Registry::builtins(), &tool_id, scope, &home, project.as_deref(), &role)?;
+        app.state::<AppState>().with_database(&app, |db| transaction::preview_backup(db, &SystemCredentialStore, &path, &transaction_id).map_err(native_error))
+    }).await
+}
+
+#[tauri::command]
+pub async fn restore_native_backup(app: AppHandle, tool_id: String, scope: Scope, project_path: Option<String>, role: String, transaction_id: String, current: String) -> Result<transaction::ApplyOutcome, ApiError> {
+    blocking(move || {
+        let home = home()?; let project = checked_project(scope, project_path)?;
+        let registry = adapters::Registry::builtins();
+        let path = backup_target(&registry, &tool_id, scope, &home, project.as_deref(), &role)?;
+        app.state::<AppState>().with_database(&app, |db| {
+            let custom = registered_tool_path(db, &tool_id).map_err(native_error)?;
+            let probe = adapter::probe_registered(&registry, &tool_id, custom.as_deref(), &home, project.as_deref(), scope).map_err(native_error)?;
+            if probe.native_writes.state != "supported" { return Err(native_error(probe.native_writes.reason.into())); }
+            let scope_key = apply::scope_key(scope, project.as_deref()).map_err(native_error)?;
+            transaction::restore_backup(db, &SystemCredentialStore, &path, &transaction_id, &current, |tx| {
+                tx.execute("DELETE FROM applied_bindings WHERE tool=?1 AND scope_key=?2", rusqlite::params![tool_id, scope_key]).map(|_| ()).map_err(|e| e.to_string())
+            }).map_err(native_error)
+        })
+    }).await
+}
+
+#[tauri::command]
+pub async fn save_registered_native_file(app: AppHandle, tool_id: String, scope: Scope, project_path: Option<String>, role: String, original: String, edited: String) -> Result<crate::native::transaction::ApplyOutcome, ApiError> {
+    blocking(move || {
+        let home = home()?;
+        let project = checked_project(scope, project_path)?;
+        app.state::<AppState>().with_database(&app, |db| {
+            let registry = adapters::Registry::builtins();
+            let custom = registered_tool_path(db, &tool_id).map_err(native_error)?;
+            let probe = adapter::probe_registered(&registry, &tool_id, custom.as_deref(), &home, project.as_deref(), scope).map_err(native_error)?;
+            if probe.native_writes.state != "supported" { return Err(native_error(probe.native_writes.reason.into())); }
+            let version = probe.installations.iter().find(|item| Some(&item.path) == probe.selected_path.as_ref()).and_then(|item| item.version.as_deref()).ok_or_else(|| native_error("未确认 CLI 版本".into()))?;
+            adapters::save_registered_text(&registry, &tool_id, &role, scope, &home, project.as_deref(), version, db, &SystemCredentialStore, &original, &edited).map_err(native_error)
+        })
+    }).await
+}
+
+#[tauri::command]
+pub fn merge_registered_native_edits(tool_id: String, role: String, original: String, edited: String, current: String) -> Result<String, ApiError> {
+    let registry = adapters::Registry::builtins();
+    let adapter = registry.get(&tool_id).ok_or_else(|| native_error("未注册的 CLI 适配器".into()))?;
+    let kind = adapter.file_kind(&role).map_err(native_error)?;
+    crate::native::format::merge_edits(kind, &original, &edited, &current).map_err(native_error)
 }
 
 #[tauri::command]

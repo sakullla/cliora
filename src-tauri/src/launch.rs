@@ -2,6 +2,7 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use base64::Engine;
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
@@ -79,6 +80,8 @@ pub struct LaunchRequest {
     pub tool_id: String,
     pub project_id: Option<String>,
     pub session_id: Option<String>,
+    #[serde(default)]
+    pub directory: Option<String>,
     pub mode: LaunchMode,
 }
 
@@ -267,7 +270,27 @@ pub fn plan_with_stage(
     home: &Path,
     request: LaunchRequest,
 ) -> Result<LaunchPlan, LaunchPlanError> {
-    plan_with_stage_at(db, registry, home, request, None)
+    let original = request
+        .session_id
+        .as_deref()
+        .map(|id| {
+            crate::history::native_session_directory(db, &request.tool_id, id)
+                .map_err(|message| LaunchPlanError::new(LaunchStage::ProjectDirectory, message))
+        })
+        .transpose()?
+        .flatten();
+    if request.session_id.is_some()
+        && original.is_none()
+        && request.directory.is_none()
+        && request.project_id.is_none()
+    {
+        return Err(LaunchPlanError::new(
+            LaunchStage::ProjectDirectory,
+            "未找到此会话的原工作目录，请刷新会话索引，或明确选择工作目录。".into(),
+        ));
+    }
+    let directory = original.or_else(|| request.directory.as_ref().map(PathBuf::from));
+    plan_with_stage_at(db, registry, home, request, directory.as_deref())
 }
 
 pub fn plan_history(
@@ -302,15 +325,22 @@ fn plan_with_stage_at(
         .map(|id| projects::get(db, id))
         .transpose()
         .map_err(|message| LaunchPlanError::new(LaunchStage::ProjectDirectory, message))?;
-    let directory = match project.as_ref() {
-        Some(project) => {
+    let directory = match (directory_override, project.as_ref()) {
+        (Some(path), _) => projects::checked_directory(path.to_str().ok_or_else(|| {
+            LaunchPlanError::new(
+                LaunchStage::ProjectDirectory,
+                "工作目录文字编码无法识别".into(),
+            )
+        })?)
+        .map_err(|message| LaunchPlanError::new(LaunchStage::ProjectDirectory, message))?,
+        (None, Some(project)) => {
             let path = project.path.as_deref().ok_or_else(|| {
                 LaunchPlanError::new(LaunchStage::ProjectDirectory, "项目尚未关联本机目录".into())
             })?;
             projects::checked_directory(path)
                 .map_err(|message| LaunchPlanError::new(LaunchStage::ProjectDirectory, message))?
         }
-        None => {
+        (None, None) => {
             let path = directory_override.unwrap_or(home).to_str().ok_or_else(|| {
                 LaunchPlanError::new(LaunchStage::ProjectDirectory, "用户目录不可识别".into())
             })?;
@@ -405,6 +435,16 @@ fn plan_with_stage_at(
     })
 }
 
+/// Native login does not apply named profiles or modify the original OAuth files.
+pub fn login_plan(db: &Database, registry: &Registry, home: &Path, tool: &str, custom: Option<&Path>) -> Result<LaunchPlan, String> {
+    let adapter = registry.get(tool).ok_or("此 CLI 尚无注册适配器")?;
+    let cli_args = adapter.login_args().ok_or("此 CLI 没有原生交互登录入口，请配置 API 连接")?;
+    let probe = adapter::probe_registered(registry, tool, custom, home, None, Scope::Global)?;
+    let selected = probe.selected_path.ok_or("未找到可验证的 CLI，先安装或重新检测")?;
+    Ok(LaunchPlan {tool_id:tool.into(),project_id:None,mode:LaunchMode::Normal,executable:PathBuf::from(selected),cli_args,
+        directory:projects::checked_directory(&home.display().to_string())?,terminal:selected_terminal(db)?})
+}
+
 fn quote_powershell(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
@@ -413,20 +453,44 @@ fn quote_shell(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
+// Extended-length paths remain useful for file IO; shells and terminal brokers expect DOS/UNC paths.
+fn terminal_path(path: &Path) -> Result<String, String> {
+    let text = path.to_str().ok_or("路径文字编码无法识别")?;
+    #[cfg(windows)]
+    {
+        if let Some(rest) = text.strip_prefix("\\\\?\\UNC\\") {
+            return Ok(format!("\\\\{rest}"));
+        }
+        if let Some(rest) = text.strip_prefix("\\\\?\\") {
+            return Ok(rest.to_owned());
+        }
+    }
+    Ok(text.to_owned())
+}
+
+fn encoded_powershell(script: &str) -> String {
+    let bytes: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
 pub fn native_command(plan: &LaunchPlan) -> Result<String, String> {
-    let directory = plan.directory.to_str().ok_or("项目目录文字编码无法识别")?;
-    let executable = plan.executable.to_str().ok_or("CLI 路径文字编码无法识别")?;
     if cfg!(windows) {
-        let mut parts = vec![format!("& {}", quote_powershell(executable))];
-        parts.extend(plan.cli_args.iter().map(|arg| quote_powershell(arg)));
-        Ok(format!(
-            "Set-Location -LiteralPath {}; {}",
-            quote_powershell(directory),
-            parts.join(" ")
-        ))
+        powershell_script(plan)
     } else {
         shell_script(plan)
     }
+}
+
+fn powershell_script(plan: &LaunchPlan) -> Result<String, String> {
+    let directory = terminal_path(&plan.directory)?;
+    let executable = terminal_path(&plan.executable)?;
+    let mut parts = vec![format!("& {}", quote_powershell(&executable))];
+    parts.extend(plan.cli_args.iter().map(|arg| quote_powershell(arg)));
+    Ok(format!(
+        "Set-Location -LiteralPath {}; {}",
+        quote_powershell(&directory),
+        parts.join(" ")
+    ))
 }
 
 fn shell_script(plan: &LaunchPlan) -> Result<String, String> {
@@ -441,31 +505,30 @@ fn shell_script(plan: &LaunchPlan) -> Result<String, String> {
     ))
 }
 
+fn inherited_noninteractive_color() -> bool { env::var("TERM").as_deref()==Ok("dumb") && env::var("NO_COLOR").as_deref()==Ok("1") }
+fn interactive_powershell_script(plan: &LaunchPlan) -> Result<String,String> {
+    let inherited=if inherited_noninteractive_color() {"$true"} else {"$false"};
+    Ok(format!("if ($env:TERM -eq 'dumb' -or {inherited}) {{ if ($env:NO_COLOR -eq '1') {{ Remove-Item Env:NO_COLOR -ErrorAction SilentlyContinue }}; if ($env:TERM -eq 'dumb') {{ Remove-Item Env:TERM -ErrorAction SilentlyContinue }} }}; {}",powershell_script(plan)?))
+}
+fn interactive_shell_script(plan: &LaunchPlan) -> Result<String,String> {
+    let prefix=if inherited_noninteractive_color() {"unset TERM NO_COLOR; "} else {"if [ \"${TERM-}\" = dumb ]; then unset TERM; if [ \"${NO_COLOR-}\" = 1 ]; then unset NO_COLOR; fi; fi; "};
+    Ok(format!("{prefix}{}",shell_script(plan)?))
+}
+
 pub fn terminal_command(plan: &LaunchPlan) -> Result<TerminalCommand, String> {
-    let directory = plan.directory.to_str().ok_or("项目目录文字编码无法识别")?;
-    let executable = plan.executable.to_str().ok_or("CLI 路径文字编码无法识别")?;
-    let powershell = || {
-        let mut parts = vec![format!("& {}", quote_powershell(executable))];
-        parts.extend(plan.cli_args.iter().map(|arg| quote_powershell(arg)));
-        format!(
-            "Set-Location -LiteralPath {}; {}",
-            quote_powershell(directory),
-            parts.join(" ")
-        )
-    };
+    let directory = terminal_path(&plan.directory)?;
+    let powershell = || interactive_powershell_script(plan).map(|script| encoded_powershell(&script));
     let (program, args) = match plan.terminal {
         TerminalId::WindowsTerminal => (
             "wt.exe",
             vec![
-                "-d".into(),
-                directory.into(),
                 "powershell.exe".into(),
                 "-NoProfile".into(),
                 "-NoExit".into(),
                 "-ExecutionPolicy".into(),
                 "Bypass".into(),
-                "-Command".into(),
-                powershell(),
+                "-EncodedCommand".into(),
+                powershell()?,
             ],
         ),
         TerminalId::PowerShell => (
@@ -475,12 +538,12 @@ pub fn terminal_command(plan: &LaunchPlan) -> Result<TerminalCommand, String> {
                 "-NoExit".into(),
                 "-ExecutionPolicy".into(),
                 "Bypass".into(),
-                "-Command".into(),
-                powershell(),
+                "-EncodedCommand".into(),
+                powershell()?,
             ],
         ),
         TerminalId::MacTerminal => {
-            let script = shell_script(plan)?;
+            let script = interactive_shell_script(plan)?;
             let script = script.replace('\\', "\\\\").replace('"', "\\\"");
             (
                 "osascript",
@@ -499,35 +562,61 @@ pub fn terminal_command(plan: &LaunchPlan) -> Result<TerminalCommand, String> {
                 "--".into(),
                 "sh".into(),
                 "-lc".into(),
-                shell_script(plan)?,
+                interactive_shell_script(plan)?,
             ],
         ),
         TerminalId::Konsole => (
             "konsole",
             vec![
                 "--workdir".into(),
-                directory.into(),
+                directory.clone(),
                 "-e".into(),
                 "sh".into(),
                 "-lc".into(),
-                shell_script(plan)?,
+                interactive_shell_script(plan)?,
             ],
         ),
         TerminalId::Xterm => (
             "xterm",
-            vec!["-e".into(), "sh".into(), "-lc".into(), shell_script(plan)?],
+            vec!["-e".into(), "sh".into(), "-lc".into(), interactive_shell_script(plan)?],
         ),
         TerminalId::Auto => return Err("请先选择可用的终端".into()),
     };
     Ok(TerminalCommand {
         program,
         args,
-        directory: plan.directory.clone(),
+        directory: PathBuf::from(directory),
     })
+}
+
+#[cfg(windows)]
+fn spawn_console(terminal: &TerminalCommand) -> Result<(),String> {
+    use windows_sys::Win32::{Foundation::CloseHandle,System::Threading::{CreateProcessW,PROCESS_INFORMATION,STARTUPINFOW,CREATE_NEW_CONSOLE}};
+    let executable=env::var_os("SystemRoot").map(PathBuf::from).ok_or("找不到 Windows 系统目录")?
+        .join("System32/WindowsPowerShell/v1.0/powershell.exe");
+    if !executable.is_file() {return Err("找不到系统 PowerShell，请选择 Windows Terminal".into());}
+    // EncodedCommand and the fixed PowerShell flags contain no quoting-sensitive characters.
+    if terminal.args.iter().any(|arg|arg.chars().any(|ch|ch.is_whitespace() || ch=='"' || ch=='\0')) {return Err("PowerShell 启动参数无效".into());}
+    let wide=|text:&str|text.encode_utf16().chain(std::iter::once(0)).collect::<Vec<_>>();
+    let application=wide(&terminal_path(&executable)?);
+    let mut line=wide(&format!("\"{}\" {}",terminal_path(&executable)?,terminal.args.join(" ")));
+    let directory=wide(&terminal_path(&terminal.directory)?);
+    let mut startup:STARTUPINFOW=unsafe{std::mem::zeroed()};startup.cb=std::mem::size_of::<STARTUPINFOW>() as u32;
+    let mut process:PROCESS_INFORMATION=unsafe{std::mem::zeroed()};
+    // No STARTF_USESTDHANDLES: Windows initializes the new console's real input/output handles.
+    let created=unsafe{CreateProcessW(application.as_ptr(),line.as_mut_ptr(),std::ptr::null(),std::ptr::null(),0,CREATE_NEW_CONSOLE,std::ptr::null(),directory.as_ptr(),&startup,&mut process)};
+    if created==0 {return Err(format!("无法打开 PowerShell：{}",std::io::Error::last_os_error()));}
+    unsafe {CloseHandle(process.hThread);CloseHandle(process.hProcess);}
+    Ok(())
 }
 
 pub fn spawn(plan: LaunchPlan) -> Result<LaunchResult, String> {
     let terminal = terminal_command(&plan)?;
+    #[cfg(windows)]
+    if plan.terminal==TerminalId::PowerShell {
+        spawn_console(&terminal)?;
+        return Ok(LaunchResult {tool_id:plan.tool_id,project_id:plan.project_id,mode:plan.mode,terminal:plan.terminal,status:"terminal_requested"});
+    }
     let mut command = Command::new(terminal.program);
     command
         .args(&terminal.args)
@@ -540,6 +629,7 @@ pub fn spawn(plan: LaunchPlan) -> Result<LaunchResult, String> {
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x0000_0010 | 0x0000_0200); // CREATE_NEW_CONSOLE | CREATE_NEW_PROCESS_GROUP
     }
+    if env::var("TERM").as_deref()==Ok("dumb") { command.env_remove("TERM"); if env::var("NO_COLOR").as_deref()==Ok("1") {command.env_remove("NO_COLOR");} }
     command
         .spawn()
         .map_err(|error| format!("无法打开所选终端，请在设置中更换后重试：{error}"))?;
