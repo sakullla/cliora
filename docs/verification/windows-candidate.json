@@ -2,20 +2,29 @@
   "kind": "windows-desktop-build",
   "command": "npm run tauri build -- --no-bundle",
   "exitCode": 0,
-  "recordedAt": "2026-09-30T02:53:17.449Z",
+  "recordedAt": "2026-09-30T04:30:10.388Z",
   "host": "Windows 11 Pro 10.0.26200",
   "architecture": "X64",
   "candidate": {
     "path": "src-tauri/target/release/cliora.exe",
     "sizeBytes": 24456192,
-    "sha256": "088c4da1d84724dd69845857b208ccc02b86de66f8e25a90c77a17580190466c",
-    "peMachine": "0x8664"
+    "sha256": "4beb361a71b38bb3c77154857993703d2ef00229232641d62bf05db0beb034d0",
+    "peMachine": "0x8664",
+    "lastModifiedAt": "2026-09-30T04:17:40.971Z"
   },
   "buildOutput": {
     "path": "docs/verification/build-windows-output.txt",
-    "sha256": "ca674eea12a0e302f7d701d808fed010785fe7df20005be4cda87906ec210790"
+    "sha256": "43885c5c8c7d9008598ef1b926bdd953b1343861d8607142794576c609fbd6ec",
+    "source": {
+      "path": "docs/sakullla-workflow/2026-09-29-cli-tool-manager/evidence/verification/sha256-b15cb85345f1e79e9926858776fb3d300cf9f12917061922303e0af65af7993c.json",
+      "candidateRef": "eec5fb3b52c5fdc4a695ed5216d44ef527f2c601"
+    }
   },
-  "limits": "Unsigned no-bundle candidate. Startup survived five seconds; native CLI, tray and platform acceptance remain unverified.",
+  "limits": "Unsigned no-bundle candidate from the successful formal Delivery desktop run; only cfg(test) fixture changes followed. A new hidden process was observed for five seconds, then only its PID was closed. Native CLI, tray, installation and platform acceptance remain unverified.",
   "platform": "windows",
-  "system": "Microsoft Windows 11 专业版 10.0.26200"
+  "system": "Microsoft Windows 11 专业版 10.0.26200",
+  "startupCheck": {
+    "path": "docs/verification/windows-startup.json",
+    "sha256": "7a119e557cd45ca0eeb95ac85512b6c72cd925de7b01104cf6a3c1592f1d73cb"
+  }
 }

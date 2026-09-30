@@ -1,8 +1,12 @@
 {
   "command": "Start-Process src-tauri/target/release/cliora.exe -WindowStyle Hidden",
-  "pid": 37156,
+  "candidateSha256": "4beb361a71b38bb3c77154857993703d2ef00229232641d62bf05db0beb034d0",
+  "recordedAt": "2026-09-30T04:32:05.9275252Z",
+  "startedAt": "2026-09-30T04:32:00.7864345Z",
+  "pid": 22664,
   "aliveAfterSeconds": 5,
   "hasExited": false,
   "windowTitle": "栖点 · Cliora",
-  "nativeBehaviorsAccepted": false
+  "nativeBehaviorsAccepted": false,
+  "stoppedOwnedProcess": true
 }
