@@ -4,7 +4,7 @@
   "exitCode": 0,
   "recordedAt": "2026-09-30T02:53:17.449Z",
   "host": "Windows 11 Pro 10.0.26200",
-  "architecture": "AMD64",
+  "architecture": "X64",
   "candidate": {
     "path": "src-tauri/target/release/cliora.exe",
     "sizeBytes": 24456192,
@@ -13,7 +13,9 @@
   },
   "buildOutput": {
     "path": "docs/verification/build-windows-output.txt",
-    "sha256": "76f833e38b9136e33c23383b0b5af8f1c169f6582b2b0ed088fd4b8c728b9a5d"
+    "sha256": "ca674eea12a0e302f7d701d808fed010785fe7df20005be4cda87906ec210790"
   },
-  "limits": "Unsigned no-bundle candidate. Startup survived five seconds; native CLI, tray and platform acceptance remain unverified."
+  "limits": "Unsigned no-bundle candidate. Startup survived five seconds; native CLI, tray and platform acceptance remain unverified.",
+  "platform": "windows",
+  "system": "Microsoft Windows 11 专业版 10.0.26200"
 }

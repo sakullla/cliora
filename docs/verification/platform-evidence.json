@@ -631,5 +631,13 @@
         }
       }
     }
-  ]
+  ],
+  "platformCandidates": {
+    "windows": {
+      "path": "docs/verification/windows-candidate.json",
+      "sha256": "e7b1c03620eef96c39d97a69cc4d4a0ac5c417ac5cbf67bad3291306ec55c3c7"
+    },
+    "macos": null,
+    "linux": null
+  }
 }
