@@ -218,7 +218,7 @@ pub fn get_registered_binding(
     db.with_connection(|conn| {
         let row: Option<(String, i64, String)> = conn.query_row("SELECT profile_id, profile_version, managed FROM applied_bindings WHERE scope_key = ?1 AND tool = ?2", params![key, tool], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).optional().map_err(|e| e.to_string())?;
         row.map(|(profile_id, profile_version, managed)| {
-            Ok(AppliedBinding { scope_key: key.into(), tool: tool.into(), profile_id, profile_version: profile_version as u64, managed: serde_json::from_str(&managed).map_err(|_| "活动配置记录损坏")? })
+            Ok(AppliedBinding { scope_key: key.into(), tool: tool.into(), profile_id, profile_version: profile_version.max(0) as u64, managed: serde_json::from_str(&managed).map_err(|_| "活动配置记录损坏")? })
         }).transpose()
     })
 }

@@ -5,7 +5,7 @@ import styles from './MigrationSettings.module.css';
 
 export function WebdavSettings({ active }: { active: boolean }) {
   const [status, setStatus] = useState<SyncStatus | null>(null);
-  const [setup, setSetup] = useState<WebdavSetup>({ endpoint: '', username: '', authPassword: '', encryptionPassword: '', enabled: true });
+  const [setup, setSetup] = useState<WebdavSetup>({ endpoint: '', username: '', authPassword: '', encryptionPassword: '', previousEncryptionPassword: '', enabled: true });
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [previews, setPreviews] = useState<Record<string, ConflictPreview>>({});
@@ -29,7 +29,7 @@ export function WebdavSettings({ active }: { active: boolean }) {
     try {
       const next = await native.configureWebdav(setup);
       setStatus(next); setEditing(false);
-      setSetup({ endpoint: next.endpoint ?? '', username: '', authPassword: '', encryptionPassword: '', enabled: next.enabled });
+      setSetup({ endpoint: next.endpoint ?? '', username: '', authPassword: '', encryptionPassword: '', previousEncryptionPassword: '', enabled: next.enabled });
       setMessage('连接已验证，凭据保存在本机系统凭据服务中。');
       if (next.enabled) setStatus(await native.syncWebdavNow());
     } catch (reason) { setError((reason as { message?: string }).message ?? 'WebDAV 配置失败'); }
@@ -89,7 +89,7 @@ export function WebdavSettings({ active }: { active: boolean }) {
       <label>WebDAV 目录地址<input type="url" value={setup.endpoint} placeholder="https://dav.example.com/cliora/" onChange={(event) => setSetup({ ...setup, endpoint: event.target.value })} /></label>
       <label>用户名<input value={setup.username} autoComplete="username" onChange={(event) => setSetup({ ...setup, username: event.target.value })} /></label>
       <label>WebDAV 密码<input type="password" value={setup.authPassword} autoComplete="new-password" placeholder="建议使用至少 12 位的应用专用密码" onChange={(event) => setSetup({ ...setup, authPassword: event.target.value })} /></label>
-      <details className={styles.advanced}><summary>连接密码与加密口令不同？</summary><label>原同步加密口令<input type="password" value={setup.encryptionPassword} autoComplete="off" placeholder="仅在凭据变更或跨设备沿用旧口令时填写" onChange={(event) => setSetup({ ...setup, encryptionPassword: event.target.value })} /></label></details>
+      <details className={styles.advanced}><summary>单独设置加密口令</summary><label>新的独立加密口令<input type="password" value={setup.encryptionPassword} autoComplete="new-password" placeholder="留空则使用 WebDAV 密码" onChange={(event) => setSetup({ ...setup, encryptionPassword: event.target.value })} /></label><label>旧加密口令<input type="password" value={setup.previousEncryptionPassword} autoComplete="off" placeholder="换设备且旧口令与连接密码不同时填写" onChange={(event) => setSetup({ ...setup, previousEncryptionPassword: event.target.value })} /></label></details>
       <small>默认用连接密码解锁远端加密空间，并在本机系统凭据服务保存。掌握服务器连接密码的一方可能解锁资料；请使用独立、安全的 WebDAV 账号或应用专用密码。</small>
       <div className={styles.action}><button type="button" className="button primary" disabled={!nativeAvailable || busy || !setup.endpoint || !setup.username || !setup.authPassword || (setup.authPassword.length < 12 && setup.encryptionPassword.length < 12)} onClick={() => void configure()}>验证并保存</button>
         {status?.configured && <button type="button" className="button" disabled={busy} onClick={() => setEditing(false)}>取消</button>}</div>

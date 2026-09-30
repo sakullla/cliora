@@ -1,10 +1,17 @@
 export interface PortableItem {
   key: string;
   kind: string;
+  toolId?: string | null;
   label: string;
   status: 'available' | 'new' | 'same' | 'conflict';
   pendingFields: string[];
+  localPreview?: string | null;
+  incomingPreview?: string;
 }
+
+export interface PortableApplyTarget { profileId: string; projectId: string | null }
+export interface PortableProjectLink { projectId: string; path: string }
+export interface PortableImportReport { imported: number; targets: { label: string; status: 'linked' | 'applied' | 'failed'; detail: string | null }[] }
 
 export interface PortablePreview {
   previewId: string;
@@ -17,6 +24,7 @@ export interface WebdavSetup {
   username: string;
   authPassword: string;
   encryptionPassword: string;
+  previousEncryptionPassword: string;
   enabled: boolean;
 }
 

@@ -49,6 +49,8 @@ pub struct SyncSetup {
     pub username: String,
     pub auth_password: String,
     pub encryption_password: String,
+    #[serde(default)]
+    pub previous_encryption_password: String,
     pub enabled: bool,
 }
 
@@ -120,6 +122,8 @@ struct Manifest {
     schema_version: u32,
     space_id: String,
     heads: BTreeMap<String, Vec<Version>>,
+    #[serde(default)]
+    history: BTreeMap<String, Vec<Version>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -322,6 +326,7 @@ fn validate_manifest(manifest: &Manifest, space_id: &str) -> Result<(), String> 
     if manifest.schema_version != 1
         || manifest.space_id != space_id
         || manifest.heads.len() > 10_000
+        || manifest.history.len() > 10_000
     {
         return Err("同步清单版本、空间或数量不受支持".into());
     }
@@ -330,7 +335,10 @@ fn validate_manifest(manifest: &Manifest, space_id: &str) -> Result<(), String> 
             return Err("同步清单实体无效".into());
         }
         let mut ids = BTreeSet::new();
-        for head in heads {
+        for head in heads
+            .iter()
+            .chain(manifest.history.get(key).into_iter().flatten())
+        {
             if Uuid::parse_str(&head.id).is_err()
                 || head.parents.len() > MAX_HEADS
                 || head.digest.len() != 64
@@ -342,7 +350,40 @@ fn validate_manifest(manifest: &Manifest, space_id: &str) -> Result<(), String> 
             }
         }
     }
+    if manifest
+        .history
+        .keys()
+        .any(|key| !manifest.heads.contains_key(key))
+        || manifest.history.values().map(Vec::len).sum::<usize>() > 100_000
+    {
+        return Err("同步清单版本历史无效".into());
+    }
     Ok(())
+}
+
+fn descends_from(manifest: &Manifest, key: &str, head: &Version, ancestor: &str) -> bool {
+    let versions: BTreeMap<_, _> = manifest
+        .history
+        .get(key)
+        .into_iter()
+        .flatten()
+        .chain(manifest.heads.get(key).into_iter().flatten())
+        .map(|version| (version.id.as_str(), version))
+        .collect();
+    let mut pending = vec![head.id.as_str()];
+    let mut visited = BTreeSet::new();
+    while let Some(id) = pending.pop() {
+        if id == ancestor {
+            return true;
+        }
+        if !visited.insert(id) {
+            continue;
+        }
+        if let Some(version) = versions.get(id) {
+            pending.extend(version.parents.iter().map(String::as_str));
+        }
+    }
+    false
 }
 
 fn read_space(dav: &Dav, password: &str) -> Result<Option<(String, [u8; 32])>, String> {
@@ -401,6 +442,15 @@ fn read_config(db: &Database) -> Result<Option<SyncConfig>, String> {
 
 pub fn status(db: &Database) -> Result<SyncStatus, String> {
     let config = read_config(db)?;
+    let pending_rotation: Option<String> = db.with_connection(|conn| {
+        conn.query_row(
+            "SELECT value FROM app_settings WHERE key='sync_rotation_pending'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())
+    })?;
     let pending_changes: usize = db.with_connection(|conn| {
         conn.query_row("SELECT count(*) FROM sync_outbox", [], |row| {
             row.get::<_, i64>(0)
@@ -427,7 +477,10 @@ pub fn status(db: &Database) -> Result<SyncStatus, String> {
         enabled: config.as_ref().is_some_and(|item| item.enabled),
         endpoint: config.as_ref().map(|item| item.endpoint.clone()),
         last_success: config.as_ref().and_then(|item| item.last_success),
-        last_error: config.as_ref().and_then(|item| item.last_error.clone()),
+        last_error: config
+            .as_ref()
+            .and_then(|item| item.last_error.clone())
+            .or(pending_rotation),
         retry_after: config.as_ref().map(|item| item.retry_after),
         uploaded: 0,
         downloaded: 0,
@@ -450,18 +503,72 @@ pub fn configure(
     }
     let dav = Dav::new(url.clone(), &setup.username, &setup.auth_password)?;
     let old = read_config(db)?;
-    let encryption_password = if !setup.encryption_password.is_empty() {
-        setup.encryption_password.clone()
-    } else if let Some(existing) = old.as_ref().filter(|item| item.endpoint == url.as_str()) {
-        store.get(&existing.space_secret_id)?
-    } else {
+    let encryption_password = if setup.encryption_password.is_empty() {
         setup.auth_password.clone()
+    } else {
+        setup.encryption_password.clone()
     };
     if encryption_password.len() < 12 {
         return Err("WebDAV 密码至少 12 位，或设置独立加密口令".into());
     }
-    let (space_id, key, created_space) = match read_space(&dav, &encryption_password)? {
-        Some((space_id, key)) => (space_id, key, false),
+    let previous_password = if !setup.previous_encryption_password.is_empty() {
+        Some(setup.previous_encryption_password.clone())
+    } else if let Some(existing) = old.as_ref().filter(|item| item.endpoint == url.as_str()) {
+        Some(store.get(&existing.space_secret_id)?)
+    } else {
+        None
+    };
+    let mut finalize_rotation = false;
+    let (space_id, key, created_space) = match dav.read("space.cliora")? {
+        Some((old_bytes, etag)) => {
+            let opened = previous_password
+                .as_deref()
+                .and_then(|password| crypto::open_sync_space(password, &old_bytes).ok())
+                .or_else(|| crypto::open_sync_space(&encryption_password, &old_bytes).ok())
+                .ok_or("同步空间无法用当前或旧加密口令解锁；本机连接保持不变")?;
+            let (space_id, key) = opened;
+            if old.as_ref().is_some_and(|existing| {
+                existing.endpoint == url.as_str() && existing.space_id != space_id
+            }) {
+                return Err("远端同步空间已更换；本机连接保持不变".into());
+            }
+            read_manifest(&dav, &space_id, &key)?.ok_or("远端同步清单缺失；请先恢复远端备份")?;
+            test_connection(&dav)?;
+            if crypto::open_primary_sync_space(&encryption_password, &old_bytes).is_err() {
+                let etag = etag.ok_or("WebDAV 未返回同步空间 ETag，无法安全轮换口令")?;
+                if etag.starts_with("W/") {
+                    return Err("WebDAV 返回弱 ETag，无法安全轮换口令".into());
+                }
+                let next = crypto::stage_sync_space_rotation(
+                    &space_id,
+                    &key,
+                    &encryption_password,
+                    &old_bytes,
+                )?;
+                let verified = crypto::open_sync_space(&encryption_password, &next)?;
+                if verified != (space_id.clone(), key) {
+                    return Err("新同步口令验证失败".into());
+                }
+                if !dav.put("space.cliora", next, Some(&etag))? {
+                    return Err("同步空间在口令轮换期间变化；本机连接保持不变".into());
+                }
+                let readback = dav
+                    .read("space.cliora")?
+                    .ok_or("轮换后同步空间无法读取；旧本机凭据已保留")?;
+                if crypto::open_primary_sync_space(&encryption_password, &readback.0)?
+                    != (space_id.clone(), key)
+                {
+                    return Err("轮换后同步空间验证失败；旧本机凭据已保留".into());
+                }
+                finalize_rotation = true;
+            } else if old
+                .as_ref()
+                .is_some_and(|existing| existing.endpoint == url.as_str())
+            {
+                finalize_rotation = crypto::sync_space_has_previous(&old_bytes)?;
+            }
+            (space_id, key, false)
+        }
         None => {
             if dav.read("manifest.cliora")?.is_some() {
                 return Err(
@@ -486,13 +593,16 @@ pub fn configure(
                 schema_version: 1,
                 space_id: space_id.clone(),
                 heads: BTreeMap::new(),
+                history: BTreeMap::new(),
             };
             if !save_manifest(&dav, &manifest, &key, None)? {
                 return Err("远端同步空间刚被其他设备建立，请重新连接".into());
             }
         }
     }
-    test_connection(&dav)?;
+    if created_space {
+        test_connection(&dav)?;
+    }
     let auth_id = format!("sync-auth-{}", Uuid::new_v4());
     let space_secret_id = format!("sync-space-{}", Uuid::new_v4());
     store.put(&auth_id, &setup.auth_password)?;
@@ -514,6 +624,14 @@ pub fn configure(
             last_error=NULL,retry_after=0,failure_count=0",
             params![url.as_str(),setup.username,auth_id,space_secret_id,space_id,setup.enabled as i64])
             .map_err(|error| error.to_string())?;
+        if finalize_rotation {
+            tx.execute("INSERT INTO app_settings (key,value) VALUES ('sync_rotation_pending',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                ["口令轮换待完成：请重新验证并保存连接以移除旧包装"])
+                .map_err(|error| error.to_string())?;
+        } else {
+            tx.execute("DELETE FROM app_settings WHERE key='sync_rotation_pending'", [])
+                .map_err(|error| error.to_string())?;
+        }
         tx.commit().map_err(|error| error.to_string())
     });
     if let Err(error) = result {
@@ -521,9 +639,70 @@ pub fn configure(
         let _ = store.delete(&space_secret_id);
         return Err(error);
     }
+    // Once committed, the current credentials work with either staged or finalized space headers.
     if let Some(old) = old {
         let _ = store.delete(&old.auth_secret_id);
         let _ = store.delete(&old.space_secret_id);
+    }
+    if finalize_rotation {
+        let finish = (|| -> Result<(), String> {
+            let (bytes, etag) = dav
+                .read("space.cliora")?
+                .ok_or("口令轮换待完成：远端空间无法读取")?;
+            if crypto::open_primary_sync_space(&encryption_password, &bytes)?
+                != (space_id.clone(), key)
+            {
+                return Err("口令轮换待完成：新口令无法验证远端空间".into());
+            }
+            let etag = etag.ok_or("口令轮换待完成：WebDAV 未返回 ETag")?;
+            if etag.starts_with("W/") {
+                return Err("WebDAV 返回弱 ETag，无法安全完成口令轮换".into());
+            }
+            if !dav.put(
+                "space.cliora",
+                crypto::finish_sync_space_rotation(&bytes)?,
+                Some(&etag),
+            )? {
+                return Err("口令轮换待完成：远端空间已变化，请重试；旧与新口令仍可恢复".into());
+            }
+            let final_bytes = dav
+                .read("space.cliora")?
+                .ok_or("口令轮换后远端空间不可读取，请重试")?
+                .0;
+            if crypto::open_primary_sync_space(&encryption_password, &final_bytes)?
+                != (space_id.clone(), key)
+            {
+                return Err("口令轮换后新口令验证失败，请重试".into());
+            }
+            Ok(())
+        })();
+        if let Err(error) = finish {
+            let message =
+                format!("口令轮换待完成：{error}；本机新凭据已保存，请重新验证并保存连接");
+            let _ = db.with_connection(|conn| {
+                let tx = conn.transaction().map_err(|error| error.to_string())?;
+                tx.execute(
+                    "UPDATE sync_config SET last_error=?1 WHERE id=1",
+                    [&message],
+                )
+                .map_err(|error| error.to_string())?;
+                tx.execute(
+                    "UPDATE app_settings SET value=?1 WHERE key='sync_rotation_pending'",
+                    [&message],
+                )
+                .map_err(|error| error.to_string())?;
+                tx.commit().map_err(|error| error.to_string())
+            });
+            return Err(message);
+        }
+        db.with_connection(|conn| {
+            conn.execute(
+                "DELETE FROM app_settings WHERE key='sync_rotation_pending'",
+                [],
+            )
+            .map_err(|error| error.to_string())?;
+            Ok(())
+        })?;
     }
     status(db)
 }
@@ -651,10 +830,29 @@ fn write_version(
     Ok(())
 }
 
-fn delete_local(db: &Database, entity_key: &str) -> Result<(), String> {
+fn delete_local(
+    db: &Database,
+    store: &dyn CredentialStore,
+    registry: &Registry,
+    entity_key: &str,
+    expected_digest: &str,
+) -> Result<(), String> {
     let (kind, id) = entity_key.split_once(':').ok_or("同步实体标识无效")?;
     db.with_connection(|conn| {
         let tx = conn.transaction().map_err(|error| error.to_string())?;
+        let current = super::collect_snapshot_on(&tx, store, registry)?
+            .entities
+            .into_iter()
+            .find(|entity| entity.key() == entity_key);
+        if current
+            .as_ref()
+            .map(PortableEntity::digest)
+            .transpose()?
+            .unwrap_or_default()
+            != expected_digest
+        {
+            return Err("本机资料已变化，请重新同步后处理冲突".into());
+        }
         match kind {
             "preferences" => {
                 tx.execute("DELETE FROM app_settings WHERE key='preferences'", [])
@@ -733,6 +931,7 @@ fn apply_remote(
     space_id: &str,
     entity_key: &str,
     head: &Version,
+    expected_digest: &str,
 ) -> Result<(), String> {
     apply_entity(
         db,
@@ -740,6 +939,7 @@ fn apply_remote(
         registry,
         entity_key,
         read_version(dav, key, space_id, entity_key, head)?,
+        expected_digest,
     )
 }
 
@@ -749,6 +949,7 @@ fn apply_entity(
     registry: &Registry,
     entity_key: &str,
     entity: Option<PortableEntity>,
+    expected_digest: &str,
 ) -> Result<(), String> {
     match entity {
         Some(entity) => {
@@ -761,6 +962,15 @@ fn apply_entity(
                     entities: vec![entity],
                 },
             )?;
+            if draft
+                .baseline
+                .get(entity_key)
+                .and_then(|digest| digest.as_deref())
+                .unwrap_or("")
+                != expected_digest
+            {
+                return Err("本机资料已变化，请重新同步后处理冲突".into());
+            }
             apply_import(
                 db,
                 store,
@@ -769,8 +979,43 @@ fn apply_entity(
                 &BTreeSet::from([entity_key.to_owned()]),
             )?;
         }
-        None => delete_local(db, entity_key)?,
+        None => delete_local(db, store, registry, entity_key, expected_digest)?,
     }
+    Ok(())
+}
+
+fn record_local_race(
+    db: &Database,
+    store: &dyn CredentialStore,
+    registry: &Registry,
+    status: &mut SyncStatus,
+    entity_key: &str,
+    head: &Version,
+) -> Result<(), String> {
+    let current = collect_snapshot(db, store, registry)?
+        .entities
+        .into_iter()
+        .find(|entity| entity.key() == entity_key);
+    status.conflicts.push(SyncConflict {
+        key: entity_key.into(),
+        label: current
+            .as_ref()
+            .map(PortableEntity::label)
+            .unwrap_or_else(|| "本机资料".into()),
+        local_present: current.is_some(),
+        local_digest: current
+            .as_ref()
+            .map(PortableEntity::digest)
+            .transpose()?
+            .unwrap_or_default(),
+        remote_versions: 1,
+        remote_deleted: head.deleted,
+        versions: vec![SyncConflictVersion {
+            id: head.id.clone(),
+            digest: head.digest.clone(),
+            deleted: head.deleted,
+        }],
+    });
     Ok(())
 }
 
@@ -935,7 +1180,7 @@ fn run_once(
             state.heads.iter().all(|id| {
                 remote
                     .first()
-                    .is_some_and(|head| head.id == *id || head.parents.contains(id))
+                    .is_some_and(|head| descends_from(&manifest, &entity_key, head, id))
             })
         });
         if !local_changed && remote.len() == 1 && remote_changed && safe_remote_lineage {
@@ -943,7 +1188,7 @@ fn run_once(
                 .get(&(entity_key.clone(), remote[0].id.clone()))
                 .cloned();
             let outcome = if let Some(entity) = inbound {
-                apply_entity(db, store, registry, &entity_key, entity)
+                apply_entity(db, store, registry, &entity_key, entity, &current_digest)
             } else {
                 apply_remote(
                     db,
@@ -954,6 +1199,7 @@ fn run_once(
                     &manifest.space_id,
                     &entity_key,
                     &remote[0],
+                    &current_digest,
                 )
             };
             match outcome {
@@ -971,15 +1217,19 @@ fn run_once(
                 Err(error)
                     if remote[0].deleted
                         && (error.contains("活动配置") || error.contains("仍关联")) => {}
+                Err(error) if error.starts_with("本机资料已变化") => {
+                    record_local_race(db, store, registry, &mut status, &entity_key, &remote[0])?;
+                    continue;
+                }
                 Err(error) => return Err(error),
             }
         }
         if known.is_none() && current.is_none() && remote.len() == 1 {
-            if let Some(entity) = verified
+            let incoming = if let Some(entity) = verified
                 .get(&(entity_key.clone(), remote[0].id.clone()))
                 .cloned()
             {
-                apply_entity(db, store, registry, &entity_key, entity)?;
+                apply_entity(db, store, registry, &entity_key, entity, &current_digest)
             } else {
                 apply_remote(
                     db,
@@ -990,7 +1240,15 @@ fn run_once(
                     &manifest.space_id,
                     &entity_key,
                     &remote[0],
-                )?;
+                    &current_digest,
+                )
+            };
+            if let Err(error) = incoming {
+                if error.starts_with("本机资料已变化") {
+                    record_local_race(db, store, registry, &mut status, &entity_key, &remote[0])?;
+                    continue;
+                }
+                return Err(error);
             }
             save_state(
                 db,
@@ -1024,7 +1282,17 @@ fn run_once(
                 current.cloned(),
             )?;
             let heads = manifest.heads.entry(entity_key.clone()).or_default();
+            let previous = heads.clone();
             merge_head(heads, version.clone())?;
+            let removed: Vec<_> = previous
+                .into_iter()
+                .filter(|old| !heads.iter().any(|head| head.id == old.id))
+                .collect();
+            manifest
+                .history
+                .entry(entity_key.clone())
+                .or_default()
+                .extend(removed);
             pending_states.push((
                 entity_key.clone(),
                 current_digest.clone(),
@@ -1111,7 +1379,7 @@ pub fn run(
             } else {
                 previous_success
             };
-            result.last_error = None;
+            result.last_error = status(db)?.last_error;
             result.retry_after = Some(0);
             Ok(result)
         }
@@ -1168,7 +1436,6 @@ pub fn resolve(
     if previewed_ids != current_ids {
         return Err("远端冲突版本已变化，请重新同步".into());
     }
-    let known = local_states(db)?.remove(entity_key);
     let pending_tokens = outbox_tokens(db)?;
     let local = collect_snapshot(db, store, registry)?
         .entities
@@ -1179,9 +1446,7 @@ pub fn resolve(
         .map(PortableEntity::digest)
         .transpose()?
         .unwrap_or_default();
-    if known.as_ref().is_some_and(|state| state.digest != digest)
-        || previewed.local_digest != digest
-    {
+    if previewed.local_digest != digest {
         return Err("本机资料已变化，请重新同步后处理冲突".into());
     }
     let chosen = if let Some(id) = chosen_version_id {
@@ -1254,6 +1519,11 @@ pub fn resolve(
         chosen.clone(),
     )?;
     manifest
+        .history
+        .entry(entity_key.into())
+        .or_default()
+        .extend(heads);
+    manifest
         .heads
         .insert(entity_key.into(), vec![version.clone()]);
     if !save_manifest(&dav, &manifest, &key, Some(&etag))? {
@@ -1269,6 +1539,7 @@ pub fn resolve(
             &config.space_id,
             entity_key,
             &version,
+            &digest,
         )?;
     }
     save_state(

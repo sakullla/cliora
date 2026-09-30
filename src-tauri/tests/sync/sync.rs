@@ -32,6 +32,8 @@ impl CredentialStore for MemoryCredentials {
 struct ServerState {
     files: BTreeMap<String, (Vec<u8>, u32)>,
     fail_manifest_write: bool,
+    fail_space_write: bool,
+    fail_space_finalization: bool,
     fail_auth: bool,
 }
 
@@ -143,7 +145,17 @@ fn serve(mut stream: TcpStream, shared: &Arc<Mutex<ServerState>>) {
             .map(|(bytes, version)| (200, bytes.clone(), Some(format!("\"{version}\""))))
             .unwrap_or((404, Vec::new(), None))
     } else if method == "PUT" {
-        if state.fail_manifest_write && path.ends_with("manifest.cliora") {
+        if state.fail_manifest_write && path.ends_with("manifest.cliora")
+            || state.fail_space_write
+                && path.ends_with("space.cliora")
+                && headers.contains_key("if-match")
+            || state.fail_space_finalization
+                && path.ends_with("space.cliora")
+                && headers.contains_key("if-match")
+                && serde_json::from_slice::<serde_json::Value>(&body)
+                    .ok()
+                    .is_some_and(|space| space["previous"].as_array().is_some_and(Vec::is_empty))
+        {
             (503, Vec::new(), None)
         } else {
             let existing = state.files.get(path).map(|(_, version)| *version);
@@ -218,9 +230,12 @@ fn setup(server: &Server) -> SyncSetup {
         username: "user".into(),
         auth_password: "secret-passphrase".into(),
         encryption_password: String::new(),
+        previous_encryption_password: String::new(),
         enabled: true,
     }
 }
+
+static SYNC_TESTS: Mutex<()> = Mutex::new(());
 
 #[test]
 fn sync_only_acknowledges_the_change_it_observed() {
@@ -239,7 +254,218 @@ fn sync_only_acknowledges_the_change_it_observed() {
 }
 
 #[test]
+fn offline_device_receives_multiple_consecutive_remote_versions() {
+    let _serial = SYNC_TESTS.lock().unwrap();
+    let server = Server::new();
+    let temp = tempfile::tempdir().unwrap();
+    let a = database(&temp.path().join("a"));
+    let b = database(&temp.path().join("b"));
+    let credentials = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    put_library(&a, "v1");
+    configure(&a, &credentials, setup(&server)).unwrap();
+    run(&a, &credentials, &registry, false).unwrap();
+    configure(&b, &credentials, setup(&server)).unwrap();
+    run(&b, &credentials, &registry, false).unwrap();
+    assert_eq!(body(&b).as_deref(), Some("v1"));
+    put_library(&a, "v2");
+    run(&a, &credentials, &registry, false).unwrap();
+    put_library(&a, "v3");
+    run(&a, &credentials, &registry, false).unwrap();
+    let status = run(&b, &credentials, &registry, false).unwrap();
+    assert!(status.conflicts.is_empty());
+    assert_eq!(body(&b).as_deref(), Some("v3"));
+}
+
+#[test]
+fn connection_password_rotation_rewraps_space_for_a_fresh_device() {
+    let _serial = SYNC_TESTS.lock().unwrap();
+    let server = Server::new();
+    let temp = tempfile::tempdir().unwrap();
+    let a = database(&temp.path().join("a"));
+    let b = database(&temp.path().join("b"));
+    let credentials = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    put_library(&a, "before-rotation");
+    configure(&a, &credentials, setup(&server)).unwrap();
+    run(&a, &credentials, &registry, false).unwrap();
+    let mut rotated = setup(&server);
+    rotated.auth_password = "new-connection-password".into();
+    configure(&a, &credentials, rotated.clone()).unwrap();
+    let bytes = server.state.lock().unwrap().files["/dav/space.cliora"]
+        .0
+        .clone();
+    assert!(crypto::open_sync_space("secret-passphrase", &bytes).is_err());
+    assert!(crypto::open_sync_space("new-connection-password", &bytes).is_ok());
+    configure(&b, &credentials, rotated.clone()).unwrap();
+    run(&b, &credentials, &registry, false).unwrap();
+    assert_eq!(body(&b).as_deref(), Some("before-rotation"));
+    server.state.lock().unwrap().fail_space_write = true;
+    let before_failed_rotation = server.state.lock().unwrap().files["/dav/space.cliora"]
+        .0
+        .clone();
+    let mut failed = rotated.clone();
+    failed.auth_password = "another-connection-password".into();
+    assert!(configure(&a, &credentials, failed.clone()).is_err());
+    assert_eq!(
+        server.state.lock().unwrap().files["/dav/space.cliora"].0,
+        before_failed_rotation
+    );
+    server.state.lock().unwrap().fail_space_write = false;
+    server.state.lock().unwrap().fail_auth = true;
+    assert!(configure(&a, &credentials, failed).is_err());
+    assert_eq!(
+        read_config(&a).unwrap().unwrap().space_id,
+        read_config(&b).unwrap().unwrap().space_id
+    );
+    server.state.lock().unwrap().fail_auth = false;
+    assert!(run(&a, &credentials, &registry, false).is_ok());
+}
+
+#[test]
+fn interrupted_password_rotation_keeps_the_old_device_usable() {
+    let _serial = SYNC_TESTS.lock().unwrap();
+    let server = Server::new();
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(temp.path());
+    let credentials = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    put_library(&db, "saved");
+    configure(&db, &credentials, setup(&server)).unwrap();
+    run(&db, &credentials, &registry, false).unwrap();
+    db.with_connection(|conn| {
+        conn.execute_batch("CREATE TABLE rotation_commit_parent (id INTEGER PRIMARY KEY);
+            CREATE TABLE rotation_commit_guard (parent_id INTEGER REFERENCES rotation_commit_parent(id) DEFERRABLE INITIALLY DEFERRED);
+            CREATE TRIGGER block_rotation AFTER UPDATE ON sync_config BEGIN INSERT INTO rotation_commit_guard VALUES (1); END;")
+            .map_err(|error| error.to_string())
+    }).unwrap();
+    let mut changed = setup(&server);
+    changed.auth_password = "rotated-password-123".into();
+    let before = read_config(&db).unwrap().unwrap();
+    let secrets_before = credentials.0.lock().unwrap().clone();
+    assert!(configure(&db, &credentials, changed.clone())
+        .unwrap_err()
+        .contains("FOREIGN KEY constraint failed"));
+    let after = read_config(&db).unwrap().unwrap();
+    assert_eq!(after.auth_secret_id, before.auth_secret_id);
+    assert_eq!(after.space_secret_id, before.space_secret_id);
+    assert_eq!(*credentials.0.lock().unwrap(), secrets_before);
+    db.with_connection(|conn| {
+        let count: i64 = conn
+            .query_row("SELECT count(*) FROM rotation_commit_guard", [], |row| {
+                row.get(0)
+            })
+            .map_err(|error| error.to_string())?;
+        assert_eq!(count, 0);
+        Ok(())
+    })
+    .unwrap();
+    let staged = server.state.lock().unwrap().files["/dav/space.cliora"]
+        .0
+        .clone();
+    assert!(crypto::open_sync_space("secret-passphrase", &staged).is_ok());
+    assert!(crypto::open_sync_space("rotated-password-123", &staged).is_ok());
+    db.with_connection(|conn| {
+        conn.execute_batch("DROP TRIGGER block_rotation;")
+            .map_err(|error| error.to_string())
+    })
+    .unwrap();
+    assert!(run(&db, &credentials, &registry, false).is_ok());
+    configure(&db, &credentials, changed).unwrap();
+    let final_bytes = server.state.lock().unwrap().files["/dav/space.cliora"]
+        .0
+        .clone();
+    assert!(crypto::open_sync_space("secret-passphrase", &final_bytes).is_err());
+    assert!(crypto::open_sync_space("rotated-password-123", &final_bytes).is_ok());
+}
+
+#[test]
+fn rotation_finalize_failure_keeps_current_credentials_and_allows_safe_retry() {
+    let _serial = SYNC_TESTS.lock().unwrap();
+    let server = Server::new();
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(temp.path());
+    let credentials = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    put_library(&db, "preserved");
+    configure(&db, &credentials, setup(&server)).unwrap();
+    run(&db, &credentials, &registry, false).unwrap();
+    server.state.lock().unwrap().fail_space_finalization = true;
+    let mut changed = setup(&server);
+    changed.auth_password = "rotated-password-123".into();
+    let failure = configure(&db, &credentials, changed.clone()).unwrap_err();
+    assert!(failure.starts_with("口令轮换待完成"), "{failure}");
+    assert_eq!(
+        status(&db).unwrap().last_error.as_deref(),
+        Some(failure.as_str())
+    );
+    let current = read_config(&db).unwrap().unwrap();
+    assert_eq!(
+        credentials.get(&current.space_secret_id).unwrap(),
+        changed.auth_password
+    );
+    assert_eq!(credentials.0.lock().unwrap().len(), 2);
+    let staged = server.state.lock().unwrap().files["/dav/space.cliora"]
+        .0
+        .clone();
+    assert!(crypto::open_sync_space("secret-passphrase", &staged).is_ok());
+    assert!(crypto::open_sync_space("rotated-password-123", &staged).is_ok());
+    let synced = run(&db, &credentials, &registry, false).unwrap();
+    assert_eq!(synced.last_error.as_deref(), Some(failure.as_str()));
+    assert_eq!(body(&db).as_deref(), Some("preserved"));
+    assert_eq!(
+        status(&db).unwrap().last_error.as_deref(),
+        Some(failure.as_str())
+    );
+    server.state.lock().unwrap().fail_space_finalization = false;
+    // Retrying with the old wrapper must not strip the only wrapper this device can use.
+    configure(&db, &credentials, setup(&server)).unwrap();
+    assert!(status(&db).unwrap().last_error.is_none());
+    let recovered = server.state.lock().unwrap().files["/dav/space.cliora"]
+        .0
+        .clone();
+    assert!(crypto::open_sync_space("secret-passphrase", &recovered).is_ok());
+    assert!(crypto::open_sync_space("rotated-password-123", &recovered).is_err());
+    configure(&db, &credentials, changed).unwrap();
+    assert!(run(&db, &credentials, &registry, false).is_ok());
+    assert_eq!(body(&db).as_deref(), Some("preserved"));
+}
+
+#[test]
+fn inbound_snapshot_cannot_replace_an_edit_made_while_remote_was_read() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(temp.path());
+    let credentials = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    put_library(&db, "before-network-read");
+    let mut remote = collect_snapshot(&db, &credentials, &registry)
+        .unwrap()
+        .entities
+        .into_iter()
+        .find(|entity| entity.key() == "library:library-1")
+        .unwrap();
+    let expected = remote.digest().unwrap();
+    let PortablePayload::Library(item) = &mut remote.payload else {
+        panic!("library expected")
+    };
+    item.body = "remote".into();
+    put_library(&db, "edited-during-network-read");
+    assert!(apply_entity(
+        &db,
+        &credentials,
+        &registry,
+        "library:library-1",
+        Some(remote),
+        &expected
+    )
+    .unwrap_err()
+    .contains("本机资料已变化"));
+    assert_eq!(body(&db).as_deref(), Some("edited-during-network-read"));
+}
+
+#[test]
 fn two_devices_merge_independent_changes_preserve_conflicts_and_fail_closed() {
+    let _serial = SYNC_TESTS.lock().unwrap();
     let server = Server::new();
     let temp = tempfile::tempdir().unwrap();
     let a = database(&temp.path().join("a"));
@@ -362,6 +588,7 @@ fn two_devices_merge_independent_changes_preserve_conflicts_and_fail_closed() {
         schema_version: 1,
         space_id: config.space_id.clone(),
         heads: BTreeMap::new(),
+        history: BTreeMap::new(),
     };
     let bytes = crypto::seal_sync(
         &key,

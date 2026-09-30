@@ -33,6 +33,8 @@ pub async fn list_portable_items(app: AppHandle) -> Result<Vec<portable::ImportI
         Ok(snapshot.entities.iter().map(|entity| portable::ImportItem {
             key: entity.key(), kind: entity.kind().into(), label: entity.label(),
             status: "available", pending_fields: entity.pending_fields(),
+            tool_id: match &entity.payload { portable::PortablePayload::Profile(value) => Some(value.profile.tool.clone()), _ => None },
+            local_preview: None, incoming_preview: String::new(),
         }).collect())
     }).await
 }
@@ -61,9 +63,26 @@ pub async fn preview_portable_bundle(app: AppHandle, source: String, password: S
     Ok(preview)
 }
 
+#[derive(Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportProjectLink { pub project_id: String, pub path: String }
+
+#[derive(Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportApplyTarget { pub profile_id: String, pub project_id: Option<String> }
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportTargetResult { pub label: String, pub status: &'static str, pub detail: Option<String> }
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportReport { pub imported: usize, pub targets: Vec<ImportTargetResult> }
+
 #[tauri::command]
-pub async fn apply_portable_bundle(app: AppHandle, preview_id: String, selected: Vec<String>)
-    -> Result<usize, ApiError> {
+pub async fn apply_portable_bundle(app: AppHandle, preview_id: String, selected: Vec<String>,
+    project_links: Vec<ImportProjectLink>, apply_targets: Vec<ImportApplyTarget>)
+    -> Result<ImportReport, ApiError> {
     let db = app.state::<AppState>().database(&app)?;
     let app_state = app.state::<AppState>();
     let draft = {
@@ -75,9 +94,63 @@ pub async fn apply_portable_bundle(app: AppHandle, preview_id: String, selected:
         guard.take().ok_or_else(|| native_error("导入预览已失效，请重新解锁".into()))?
     };
     let retry = draft.clone();
+    let selected: std::collections::BTreeSet<String> = selected.into_iter().collect();
+    for link in &project_links {
+        if !selected.contains(&format!("project:{}", link.project_id)) {
+            *app_state.portable_draft.lock().map_err(|_| native_error("迁移预览暂不可用".into()))? = Some(retry.clone());
+            return Err(native_error("请先选择要关联目录的项目资料".into()));
+        }
+    }
+    let mut occupied_targets = std::collections::BTreeSet::new();
+    for target in &apply_targets {
+        if !selected.contains(&format!("profile:{}", target.profile_id)) ||
+            !draft.snapshot.entities.iter().any(|entity| entity.key() == format!("profile:{}", target.profile_id)) {
+            *app_state.portable_draft.lock().map_err(|_| native_error("迁移预览暂不可用".into()))? = Some(retry.clone());
+            return Err(native_error("应用目标不属于这次选择的命名配置".into()));
+        }
+        let tool = draft.snapshot.entities.iter().find_map(|entity| {
+            if entity.key() != format!("profile:{}", target.profile_id) { return None; }
+            match &entity.payload { portable::PortablePayload::Profile(value) => Some(value.profile.tool.clone()), _ => None }
+        }).ok_or_else(|| native_error("应用配置不可用".into()))?;
+        if !occupied_targets.insert((tool, target.project_id.clone())) {
+            *app_state.portable_draft.lock().map_err(|_| native_error("迁移预览暂不可用".into()))? = Some(retry.clone());
+            return Err(native_error("同一工具与范围只能选择一份配置应用".into()));
+        }
+    }
+    let apply_app = app.clone();
     let result = blocking(move || {
-        portable::apply_import(&db, &SystemCredentialStore, &adapters::Registry::builtins(),
-            &draft, &selected.into_iter().collect()).map_err(native_error)
+        let imported = portable::apply_import(&db, &SystemCredentialStore, &adapters::Registry::builtins(),
+            &draft, &selected).map_err(native_error)?;
+        let mut results = Vec::new();
+        for link in project_links {
+            let result = projects::relink(&db, &link.project_id, &link.path);
+            results.push(ImportTargetResult {
+                label: format!("项目目录 {}", link.project_id),
+                status: if result.is_ok() { "linked" } else { "failed" },
+                detail: result.err(),
+            });
+        }
+        for target in apply_targets {
+            let Some(portable::PortableEntity { payload: portable::PortablePayload::Profile(profile), .. }) =
+                draft.snapshot.entities.iter().find(|entity| entity.key() == format!("profile:{}", target.profile_id)) else { continue };
+            let project = target.project_id.as_ref().map(|id| projects::get(&db, id));
+            let scope = if project.is_some() { Scope::Project } else { Scope::Global };
+            let project_path = project.as_ref().and_then(|result| result.as_ref().ok()).and_then(|project| project.path.clone());
+            let label = format!("{} · {}", profile.profile.name, target.project_id.as_deref().unwrap_or("全局"));
+            let outcome = if project.as_ref().is_some_and(Result::is_err) {
+                Err(native_error("应用项目不存在，请重新预览".into()))
+            } else if scope == Scope::Project && project_path.is_none() {
+                Err(native_error("项目目录待关联，请在本次预览选择本机目录".into()))
+            } else {
+                apply_registered_now(&apply_app, &profile.profile.tool, &target.profile_id, scope, project_path, false)
+            };
+            results.push(ImportTargetResult {
+                label,
+                status: if outcome.is_ok() { "applied" } else { "failed" },
+                detail: outcome.err().map(|error| error.message),
+            });
+        }
+        Ok(ImportReport { imported, targets: results })
     }).await;
     if result.is_err() {
         let mut guard = app_state.portable_draft.lock()

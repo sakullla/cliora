@@ -5,7 +5,7 @@ import type { LaunchRequest, LaunchResult, LaunchSettings, Project, TerminalId, 
 import type { LibraryDraft, LibraryItem, LibraryKind } from '../types/library';
 import type { McpDefinition, McpDraft, McpTargetRequest, McpTargetResult, NativeMcpEntry, RuleTarget, RulePreview, RuleApplyResult, SkillPackage, SkillImportPreview, SkillInstallation, SkillTargetResult, NativeSkillEntry, SkillTargetPreview, SkillRecoveryIssue } from '../types/resources';
 import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, ScanStatus, UsageSummary } from '../types/history';
-import type { ConflictPreview, PortableItem, PortablePreview, SyncStatus, WebdavSetup } from '../types/portable';
+import type { ConflictPreview, PortableApplyTarget, PortableImportReport, PortableItem, PortablePreview, PortableProjectLink, SyncStatus, WebdavSetup } from '../types/portable';
 
 export const nativeAvailable = isTauri();
 
@@ -38,7 +38,7 @@ export const native = {
   listPortableItems: () => command<PortableItem[]>('list_portable_items'),
   exportPortableBundle: (destination: string, password: string, selected: string[]) => command<number>('export_portable_bundle', { destination, password, selected }),
   previewPortableBundle: (source: string, password: string) => command<PortablePreview>('preview_portable_bundle', { source, password }),
-  applyPortableBundle: (previewId: string, selected: string[]) => command<number>('apply_portable_bundle', { previewId, selected }),
+  applyPortableBundle: (previewId: string, selected: string[], projectLinks: PortableProjectLink[], applyTargets: PortableApplyTarget[]) => command<PortableImportReport>('apply_portable_bundle', { previewId, selected, projectLinks, applyTargets }),
   cancelPortablePreview: () => command<void>('cancel_portable_preview'),
   getWebdavStatus: () => command<SyncStatus>('get_webdav_status'),
   configureWebdav: (setup: WebdavSetup) => command<SyncStatus>('configure_webdav', { setup }),
