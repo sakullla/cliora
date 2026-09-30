@@ -199,8 +199,9 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
     </div><button type="button" className={styles.refresh} disabled={scanning} onClick={() => void refresh()}>刷新本机记录</button></div>
     {(scanning || filterLoading) && <p className={styles.caveat} role="status">{scanning ? `后台扫描 ${tools.find(item => item.id === scanProgress?.toolId)?.name ?? scanProgress?.toolId ?? ''} ${scanProgress?.totalSources ? `${scanProgress.completedSources} / ${scanProgress.totalSources}` : '正在发现文件'}` : '正在筛选已缓存记录…'}{scanning && <button type="button" onClick={() => void cancelScan()}>停止扫描</button>}</p>}
     <div className={styles.filters}>
-      {tab === 'sessions' && <><label className={styles.search}>搜索<input aria-label="搜索会话" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="标题或正文" /></label><label className={styles.favorite}><input type="checkbox" checked={favoriteOnly} onChange={(event) => setFavoriteOnly(event.target.checked)} />只看收藏</label></>}
+      {tab === 'sessions' && <label className={styles.search}>搜索<input aria-label="搜索会话" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="标题或正文" /></label>}
       <label>工具<select aria-label="筛选工具" value={toolId} onChange={(event) => setToolId(event.target.value)}><option value="">全部工具</option>{tools.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
+      {tab === 'sessions' && <label className={styles.favorite}><input type="checkbox" checked={favoriteOnly} onChange={(event) => setFavoriteOnly(event.target.checked)} />只看收藏</label>}
     </div>
     <details className={styles.moreFilters}><summary>更多筛选{[projectId, model, fromDate, toDate].filter(Boolean).length ? ` · ${[projectId, model, fromDate, toDate].filter(Boolean).length} 项已启用` : ''}</summary><div className={styles.filters}>
       <label>项目<select aria-label="筛选项目" value={projectId} onChange={(event) => setProjectId(event.target.value)}><option value="">全部项目</option><option value="__unknown__">未归类</option>{projects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
