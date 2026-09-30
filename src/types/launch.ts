@@ -14,6 +14,7 @@ export type Project = {
   modelOverrides: Record<string, string>;
   selectedProfiles: Record<string, string>;
   appliedProfiles: Record<string, string>;
+  reapplyProfiles: Record<string, string>;
 };
 
 export type LaunchRequest = { toolId: string; projectId: string | null; sessionId: string | null; mode: LaunchMode };

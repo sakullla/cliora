@@ -33,6 +33,8 @@ pub struct NativeProfile {
     pub tool: CliId,
     pub name: String,
     pub version: u64,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub revision: String,
     pub inherit_common: bool,
     pub files: BTreeMap<String, String>,
     #[serde(default)]
@@ -53,6 +55,8 @@ pub struct RegisteredProfile {
     pub tool: String,
     pub name: String,
     pub version: u64,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub revision: String,
     pub inherit_common: bool,
     pub files: BTreeMap<String, String>,
     #[serde(default)]
@@ -69,6 +73,7 @@ impl From<NativeProfile> for RegisteredProfile {
             tool: profile.tool.stable_id().into(),
             name: profile.name,
             version: profile.version,
+            revision: profile.revision,
             inherit_common: profile.inherit_common,
             files: profile.files,
             suppressed: profile.suppressed,
@@ -86,6 +91,7 @@ impl TryFrom<RegisteredProfile> for NativeProfile {
             tool: CliId::from_stable_id(&profile.tool).ok_or("未注册 CLI 的配置只能只读保留")?,
             name: profile.name,
             version: profile.version,
+            revision: profile.revision,
             inherit_common: profile.inherit_common,
             files: profile.files,
             suppressed: profile.suppressed,
@@ -100,6 +106,8 @@ impl TryFrom<RegisteredProfile> for NativeProfile {
 pub struct CommonConfig {
     pub tool: CliId,
     pub version: u64,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub revision: String,
     pub files: BTreeMap<String, String>,
 }
 
@@ -108,6 +116,8 @@ pub struct CommonConfig {
 pub struct RegisteredCommon {
     pub tool: String,
     pub version: u64,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub revision: String,
     pub files: BTreeMap<String, String>,
 }
 
@@ -116,6 +126,7 @@ impl From<CommonConfig> for RegisteredCommon {
         Self {
             tool: common.tool.stable_id().into(),
             version: common.version,
+            revision: common.revision,
             files: common.files,
         }
     }
@@ -127,6 +138,7 @@ impl TryFrom<RegisteredCommon> for CommonConfig {
         Ok(Self {
             tool: CliId::from_stable_id(&common.tool).ok_or("未注册 CLI 的通用配置只能只读保留")?,
             version: common.version,
+            revision: common.revision,
             files: common.files,
         })
     }
@@ -468,12 +480,14 @@ pub fn save_registered_profile(
             profile.id = Uuid::new_v4().to_string();
             profile.version = 1;
         } else {
-            let old: Option<(String, i64)> = tx.query_row("SELECT tool, version FROM native_profiles WHERE id = ?1", [&profile.id], |row| Ok((row.get(0)?, row.get(1)?))).optional().map_err(|e| e.to_string())?;
-            let (old_tool, current) = old.ok_or("命名配置不存在")?;
+            let old: Option<(String, i64, String)> = tx.query_row("SELECT tool, version, data FROM native_profiles WHERE id = ?1", [&profile.id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).optional().map_err(|e| e.to_string())?;
+            let (old_tool, current, data) = old.ok_or("命名配置不存在")?;
+            let old: RegisteredProfile = serde_json::from_str(&data).map_err(|e| e.to_string())?;
             if old_tool != profile.tool { return Err("不能修改配置所属工具".into()); }
-            if Some(current as u64) != expected_version { return Err("命名配置已由其他操作修改，请重新读取".into()); }
+            if Some(current as u64) != expected_version || old.revision != profile.revision { return Err("命名配置已由其他操作修改，请重新读取".into()); }
             profile.version = current as u64 + 1;
         }
+        profile.revision = Uuid::new_v4().to_string();
         let json = serde_json::to_string(&profile).map_err(|e| e.to_string())?;
         tx.execute("INSERT INTO native_profiles (id, tool, version, data) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(id) DO UPDATE SET version = excluded.version, data = excluded.data", params![profile.id, profile.tool, profile.version as i64, json]).map_err(|e| e.to_string())?;
         tx.commit().map_err(|e| e.to_string())?;
@@ -486,12 +500,13 @@ pub fn valid_connection_secret_ref(id: &str) -> bool {
         .is_some_and(|uuid| Uuid::parse_str(uuid).is_ok())
 }
 
-pub fn delete_profile(db: &Database, id: &str, expected_version: u64) -> Result<(), String> {
+pub fn delete_profile(db: &Database, id: &str, expected_version: u64, expected_revision: &str) -> Result<(), String> {
     delete_registered_profile(
         db,
         &super::adapters::Registry::builtins(),
         id,
         expected_version,
+        expected_revision,
     )
 }
 
@@ -500,6 +515,7 @@ pub fn delete_registered_profile(
     registry: &super::adapters::Registry,
     id: &str,
     expected_version: u64,
+    expected_revision: &str,
 ) -> Result<(), String> {
     db.with_connection(|conn| {
         let tx = conn.transaction().map_err(|e| e.to_string())?;
@@ -513,17 +529,21 @@ pub fn delete_registered_profile(
         if bound != 0 {
             return Err("配置仍在使用；请先切换到其他配置或保留原生文件".into());
         }
-        let tool: Option<String> = tx
+        let data: Option<String> = tx
             .query_row(
-                "SELECT tool FROM native_profiles WHERE id = ?1",
+                "SELECT data FROM native_profiles WHERE id = ?1",
                 [id],
                 |row| row.get(0),
             )
             .optional()
             .map_err(|e| e.to_string())?;
-        let tool = tool.ok_or("配置不存在或版本已变化")?;
-        if registry.get(&tool).is_none() {
+        let data = data.ok_or("配置不存在或版本已变化")?;
+        let profile: RegisteredProfile = serde_json::from_str(&data).map_err(|e| e.to_string())?;
+        if registry.get(&profile.tool).is_none() {
             return Err("未注册的 CLI 适配器，只能只读保留原资料".into());
+        }
+        if profile.revision != expected_revision {
+            return Err("配置不存在或版本已变化，请重新读取".into());
         }
         let changed = tx
             .execute(
@@ -586,14 +606,30 @@ pub fn save_registered_common(
     validate_registered_files(registry, &common.tool, &common.files)?;
     db.with_connection(|conn| {
         let tx = conn.transaction().map_err(|e| e.to_string())?;
-        let old: Option<i64> = tx.query_row("SELECT version FROM common_configs WHERE tool = ?1", [&common.tool], |row| row.get(0)).optional().map_err(|e| e.to_string())?;
-        if old.map(|version| version as u64) != expected_version { return Err("通用配置已由其他操作修改，请重新读取".into()); }
-        common.version = old.map_or(1, |version| version as u64 + 1);
+        let old: Option<(i64, String)> = tx.query_row("SELECT version,data FROM common_configs WHERE tool = ?1", [&common.tool], |row| Ok((row.get(0)?, row.get(1)?))).optional().map_err(|e| e.to_string())?;
+        let old_revision = old.as_ref().map(|(_, data)| serde_json::from_str::<RegisteredCommon>(data).map(|value| value.revision)).transpose().map_err(|e| e.to_string())?;
+        if old.as_ref().map(|(version, _)| *version as u64) != expected_version || old_revision.as_deref().unwrap_or("") != common.revision { return Err("通用配置已由其他操作修改，请重新读取".into()); }
+        common.version = old.map_or(1, |(version, _)| version as u64 + 1);
+        common.revision = Uuid::new_v4().to_string();
         let json = serde_json::to_string(&common).map_err(|e| e.to_string())?;
         tx.execute("INSERT INTO common_configs (tool, version, data) VALUES (?1, ?2, ?3) ON CONFLICT(tool) DO UPDATE SET version = excluded.version, data = excluded.data", params![common.tool, common.version as i64, json]).map_err(|e| e.to_string())?;
         tx.commit().map_err(|e| e.to_string())?;
         Ok(common)
     })
+}
+
+/// Incoming Common changes retain native files and invalidate only inheriting bindings.
+pub(crate) fn invalidate_common_bindings(conn: &rusqlite::Connection, tool: &str) -> Result<(), String> {
+    let mut statement = conn.prepare("SELECT id,data FROM native_profiles WHERE tool=?1").map_err(|e| e.to_string())?;
+    let rows = statement.query_map([tool], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))).map_err(|e| e.to_string())?;
+    for row in rows {
+        let (id, data) = row.map_err(|e| e.to_string())?;
+        let profile: RegisteredProfile = serde_json::from_str(&data).map_err(|e| e.to_string())?;
+        if profile.inherit_common {
+            conn.execute("UPDATE applied_bindings SET profile_version=-1 WHERE profile_id=?1", [id]).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -602,6 +638,7 @@ mod tests {
 
     fn profile(tool: CliId, name: &str) -> NativeProfile {
         NativeProfile {
+            revision: String::new(),
             id: String::new(),
             tool,
             name: name.into(),
@@ -644,7 +681,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let db = Database::open(&temp.path().join("app.db")).unwrap();
         let saved = save_profile(&db, profile(CliId::Codex, "工作"), None).unwrap();
-        assert!(delete_profile(&db, &saved.id, saved.version + 1)
+        assert!(delete_profile(&db, &saved.id, saved.version + 1, &saved.revision)
             .unwrap_err()
             .contains("版本已变化"));
         db.with_connection(|conn| {
@@ -656,7 +693,7 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        assert!(delete_profile(&db, &saved.id, saved.version)
+        assert!(delete_profile(&db, &saved.id, saved.version, &saved.revision)
             .unwrap_err()
             .contains("仍在使用"));
         assert_eq!(get_profile(&db, &saved.id).unwrap().version, saved.version);
@@ -669,7 +706,7 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        delete_profile(&db, &saved.id, saved.version).unwrap();
+        delete_profile(&db, &saved.id, saved.version, &saved.revision).unwrap();
         assert!(get_profile(&db, &saved.id).is_err());
     }
 
@@ -681,7 +718,8 @@ mod tests {
             "settings".into(),
             "model = \"own\"\nsuppress_unstable_features_warning = false\n".into(),
         );
-        let common = CommonConfig { tool: CliId::Codex, version: 1, files: BTreeMap::from([("settings".into(), "model = \"base\"\nservice_tier = \"default\"\nsuppress_unstable_features_warning = true\n".into())]) };
+        let common = CommonConfig {
+            revision: String::new(), tool: CliId::Codex, version: 1, files: BTreeMap::from([("settings".into(), "model = \"base\"\nservice_tier = \"default\"\nsuppress_unstable_features_warning = true\n".into())]) };
         let effective = resolve_file(&named, Some(&common), "settings").unwrap();
         assert_eq!(effective.contents["model"], "own");
         assert_eq!(effective.contents["service_tier"], "default");
@@ -717,7 +755,7 @@ mod tests {
             );
             let saved = save_profile(&db, item.clone(), None).unwrap();
             assert!(saved.files["models"].contains(reference));
-            delete_profile(&db, &saved.id, saved.version).unwrap();
+            delete_profile(&db, &saved.id, saved.version, &saved.revision).unwrap();
         }
         assert_eq!(env_ref_name("MY_KEY"), None);
     }

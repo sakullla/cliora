@@ -875,6 +875,7 @@ fn delete_local(
             "common" => {
                 tx.execute("DELETE FROM common_configs WHERE tool=?1", [id])
                     .map_err(|error| error.to_string())?;
+                crate::native::profile::invalidate_common_bindings(&tx, id)?;
             }
             "project" => {
                 let local_path: Option<String> = tx
@@ -1122,22 +1123,11 @@ fn run_once(
             }
         }
     }
-    let mut local: BTreeMap<String, PortableEntity> = snapshot
+    let local: BTreeMap<String, PortableEntity> = snapshot
         .entities
         .into_iter()
         .map(|item| (item.key(), item))
         .collect();
-    let has_preferences: bool = db.with_connection(|conn| {
-        conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM app_settings WHERE key='preferences')",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|error| error.to_string())
-    })?;
-    if !has_preferences {
-        local.remove("preferences:managed");
-    }
     let states = local_states(db)?;
     let mut all_keys: BTreeSet<String> = local.keys().cloned().collect();
     all_keys.extend(states.keys().cloned());

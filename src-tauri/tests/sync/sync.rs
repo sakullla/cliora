@@ -238,6 +238,57 @@ fn setup(server: &Server) -> SyncSetup {
 static SYNC_TESTS: Mutex<()> = Mutex::new(());
 
 #[test]
+fn fresh_device_receives_non_default_preferences_and_common_changes_without_sync_churn() {
+    use crate::native::profile::{self, RegisteredCommon, RegisteredProfile};
+    let _serial = SYNC_TESTS.lock().unwrap();
+    let server = Server::new();
+    let temp = tempfile::tempdir().unwrap();
+    let a = database(&temp.path().join("a"));
+    let b = database(&temp.path().join("b"));
+    let credentials = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    a.update_preferences(|value| { value.theme = crate::domain::Theme::Dark; value.set_managed(&[crate::domain::CliId::Pi]); }).unwrap();
+    let common = profile::save_registered_common(&a, &registry, RegisteredCommon {
+        tool: "codex".into(), version: 0, revision: String::new(), files: BTreeMap::from([("settings".into(), "model = \"first\"".into())]),
+    }, None).unwrap();
+    let named = profile::save_registered_profile(&a, &registry, RegisteredProfile {
+        id: String::new(), tool: "codex".into(), name: "Work".into(), version: 0, revision: String::new(),
+        inherit_common: true, files: BTreeMap::new(), suppressed: BTreeMap::new(), connection: None, native_credentials: BTreeMap::new(),
+    }, None).unwrap();
+    configure(&a, &credentials, setup(&server)).unwrap();
+    run(&a, &credentials, &registry, false).unwrap();
+    configure(&b, &credentials, setup(&server)).unwrap();
+    let received = run(&b, &credentials, &registry, false).unwrap();
+    assert!(received.conflicts.is_empty());
+    assert!(received.last_success.is_some());
+    assert_eq!(b.preferences().unwrap().theme, crate::domain::Theme::Dark);
+    assert_eq!(b.preferences().unwrap().managed_tools, vec![crate::domain::CliId::Pi]);
+    let stale_common = profile::get_registered_common(&b, "codex").unwrap().unwrap();
+    b.with_connection(|conn| {
+        conn.execute("INSERT INTO applied_bindings (scope_key,tool,profile_id,profile_version,managed) VALUES ('global','codex',?1,1,'{}')", [&named.id]).unwrap();
+        Ok(())
+    }).unwrap();
+    let mut updated = common.clone();
+    updated.files.insert("settings".into(), "model = \"second\"".into());
+    profile::save_registered_common(&a, &registry, updated, Some(common.version)).unwrap();
+    run(&a, &credentials, &registry, false).unwrap();
+    run(&b, &credentials, &registry, false).unwrap();
+    assert_eq!(crate::native::apply::get_registered_binding(&b, "codex", "global").unwrap().unwrap().profile_version, 0);
+    assert!(profile::save_registered_common(&b, &registry, stale_common.clone(), Some(stale_common.version)).is_err());
+    let remote_before = server.state.lock().unwrap().files["/dav/manifest.cliora"].clone();
+    run(&b, &credentials, &registry, false).unwrap();
+    run(&a, &credentials, &registry, false).unwrap();
+    assert_eq!(server.state.lock().unwrap().files["/dav/manifest.cliora"], remote_before);
+    a.with_connection(|conn| { conn.execute("DELETE FROM common_configs WHERE tool='codex'", []).unwrap(); Ok(()) }).unwrap();
+    b.with_connection(|conn| { conn.execute("UPDATE applied_bindings SET profile_version=1", []).unwrap(); Ok(()) }).unwrap();
+    run(&a, &credentials, &registry, false).unwrap();
+    assert!(run(&b, &credentials, &registry, false).unwrap().conflicts.is_empty());
+    assert!(profile::get_registered_common(&b, "codex").unwrap().is_none());
+    assert_eq!(crate::native::apply::get_registered_binding(&b, "codex", "global").unwrap().unwrap().profile_version, 0);
+    assert!(profile::save_registered_common(&b, &registry, stale_common.clone(), Some(stale_common.version)).is_err());
+}
+
+#[test]
 fn sync_only_acknowledges_the_change_it_observed() {
     let temp = tempfile::tempdir().unwrap();
     let db = database(temp.path());

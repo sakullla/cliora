@@ -213,6 +213,7 @@ fn sixth_adapter_uses_the_same_probe_native_transaction_and_launch_orchestration
         &db,
         &registry,
         crate::native::profile::RegisteredCommon {
+            revision: String::new(),
             tool: "sixth_fixture".into(),
             version: 0,
             files: BTreeMap::from([("settings".into(), "{\"inherited\":true}".into())]),
@@ -233,6 +234,7 @@ fn sixth_adapter_uses_the_same_probe_native_transaction_and_launch_orchestration
         &db,
         &registry,
         RegisteredProfile {
+            revision: String::new(),
             id: String::new(),
             tool: "sixth_fixture".into(),
             name: "fixture profile".into(),
@@ -361,6 +363,7 @@ fn sixth_adapter_uses_the_same_probe_native_transaction_and_launch_orchestration
         &db,
         &registry,
         RegisteredProfile {
+            revision: String::new(),
             id: String::new(),
             tool: "unregistered".into(),
             name: "blocked".into(),

@@ -289,6 +289,7 @@ mod tests {
         let saved = profile::save_profile(
             &db,
             profile::NativeProfile {
+                revision: String::new(),
                 id: String::new(),
                 tool: CliId::ClaudeCode,
                 name: "默认配置".into(),
@@ -363,6 +364,7 @@ mod tests {
         assert!(profile::save_profile(
             &raw_db,
             profile::NativeProfile {
+                revision: String::new(),
                 id: String::new(),
                 tool: CliId::ClaudeCode,
                 name: "raw".into(),
@@ -377,6 +379,7 @@ mod tests {
         )
         .is_err());
         let profile = profile::NativeProfile {
+            revision: String::new(),
             id: String::new(),
             tool: CliId::ClaudeCode,
             name: "项目".into(),
@@ -450,6 +453,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let db = crate::database::Database::open(&temp.path().join("app.db")).unwrap();
         let profile = profile::NativeProfile {
+            revision: String::new(),
             id: String::new(),
             tool: CliId::Pi,
             name: "接入".into(),
@@ -622,6 +626,7 @@ mod tests {
         let mut edited = connection;
         edited.model = "new-model".into();
         let profile = profile::NativeProfile {
+            revision: String::new(),
             id: String::new(),
             tool: CliId::Codex,
             name: "接入".into(),

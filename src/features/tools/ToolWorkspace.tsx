@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { SetStateAction } from 'react';
+import { listen } from '@tauri-apps/api/event';
 import { native, nativeAvailable } from '../../lib/native';
 import { sameDraftRequest } from '../../lib/draftGuard';
 import { importedConnection } from '../../lib/nativeDraft';
@@ -98,7 +99,9 @@ export function ToolWorkspacePage({ managedTools, initialTool, repair, onDirtyCh
   const effectiveEnvName = authEnvName(uiAdapter, connection, currentTool ?? '');
   const pendingRaw = rawDisk?.context === draftContext ? rawDisk : null;
   const activeRaw = pendingRaw?.role === role ? pendingRaw : null;
-  const dirty = (editor === 'profile' ? !!draft && JSON.stringify(draft) !== savedDraft.current : !!commonDraft && JSON.stringify(commonDraft) !== savedDraft.current) || !!pendingRaw && pendingRaw.text !== pendingRaw.original;
+  const dirty = (editor === 'profile' ? !!draft && JSON.stringify(draft) !== savedDraft.current : !!commonDraft && JSON.stringify(commonDraft) !== savedDraft.current) || !!pendingRaw && pendingRaw.text !== pendingRaw.original || !!newSecret;
+  const refreshState = useRef({ currentTool, scope, projectPath, selectedId, editor, dirty, busy, mcpDirty, skillsDirty });
+  refreshState.current = { currentTool, scope, projectPath, selectedId, editor, dirty, busy, mcpDirty, skillsDirty };
   useLayoutEffect(() => { onDirtyChange?.(dirty || mcpDirty || skillsDirty); }, [dirty, mcpDirty, skillsDirty, onDirtyChange]);
   useEffect(() => () => { onDirtyChange?.(false); }, [onDirtyChange]);
 
@@ -125,6 +128,36 @@ export function ToolWorkspacePage({ managedTools, initialTool, repair, onDirtyCh
   }, []);
 
   useEffect(() => { if (currentTool) void reload(currentTool, scope, projectPath, preferredProfileId); }, [currentTool, scope, projectPath, preferredProfileId, reload]);
+
+  useEffect(() => {
+    if (!nativeAvailable) return;
+    let active = true;
+    let stop: (() => void) | undefined;
+    void listen('cliora:portable-changed', () => {
+      const started = refreshState.current;
+      if (!started.currentTool || started.scope === 'project' && !started.projectPath.trim()) return;
+      const sequence = ++loadSequence.current;
+      void native.getRegisteredToolWorkspace(started.currentTool, started.scope, started.projectPath).then((result) => {
+        if (!active || sequence !== loadSequence.current) return;
+        const current = refreshState.current;
+        if (current.currentTool !== started.currentTool || current.scope !== started.scope || current.projectPath !== started.projectPath) return;
+        setWorkspace(result);
+        setLoading(false);
+        if (current.dirty || current.busy || current.mcpDirty || current.skillsDirty) {
+          setNotice('已收到资料更新；当前未保存草稿已保留，保存时会检查资料是否变化。');
+          return;
+        }
+        const common = result.common ? structuredClone(result.common) : { tool: started.currentTool!, version: 0, files: {} };
+        setCommonDraft(common);
+        if (current.editor === 'common') { savedDraft.current = JSON.stringify(common); return; }
+        const next = result.profiles.find((item) => item.id === current.selectedId) ?? result.profiles.find((item) => item.id === result.binding?.profileId) ?? result.profiles[0] ?? null;
+        setSelectedId(next?.id ?? null);
+        setDraft(next ? structuredClone(next) : null);
+        savedDraft.current = next ? JSON.stringify(next) : '';
+      }).catch((value) => { if (active && sequence === loadSequence.current) { setLoading(false); setError(errorText(value)); } });
+    }).then((unlisten) => { if (active) stop = unlisten; else unlisten(); }).catch(() => {});
+    return () => { active = false; stop?.(); };
+  }, []);
 
   useEffect(() => {
     if (!repair || repair.page !== 'connections' || appliedRepair.current === repair.sequence || !repair.toolId) return;
@@ -388,7 +421,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, repair, onDirtyCh
     if (!window.confirm(`删除命名配置“${draft.name}”？已经写入的原生文件不会自动删除。`)) return;
     setBusy(true); setError('');
     try {
-      await native.deleteNativeProfile(draft.id, draft.version);
+      await native.deleteNativeProfile(draft.id, draft.version, draft.revision ?? '');
       await reload(currentTool, scope, projectPath);
       setNotice('命名配置已删除，原生文件保持原样。');
     } catch (value) { setError(errorText(value)); }

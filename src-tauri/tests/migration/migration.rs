@@ -37,6 +37,7 @@ fn encrypted_bundle_restores_on_fresh_device_without_identity_or_paths_and_is_id
         .put("connection-original", "private-api-key")
         .unwrap();
     let profile = RegisteredProfile {
+        revision: String::new(),
         id: "profile-1".into(),
         tool: "codex".into(),
         name: "Work".into(),
@@ -191,6 +192,7 @@ fn same_version_profile_import_shows_content_and_marks_native_binding_pending() 
     let credentials = MemoryCredentials::default();
     let registry = Registry::builtins();
     let profile = RegisteredProfile {
+        revision: String::new(),
         id: "profile-1".into(),
         tool: "codex".into(),
         name: "local".into(),
@@ -321,6 +323,7 @@ fn import_rechecks_digest_inside_the_write_transaction() {
         id: "secret-profile".into(),
         payload: PortablePayload::Profile(PortableProfile {
             profile: RegisteredProfile {
+                revision: String::new(),
                 id: "secret-profile".into(),
                 tool: "codex".into(),
                 name: "Secret profile".into(),
@@ -402,4 +405,159 @@ fn adapter_native_whitelist_keeps_model_settings_but_drops_device_login_and_inli
     assert!(pi["models"].contains("baseUrl"));
     assert!(!pi["models"].contains("never-inline"));
     assert!(pending.iter().any(|field| field.contains("apiKey")));
+}
+
+#[test]
+fn absent_preferences_are_new_and_actual_edits_after_preview_are_protected() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(temp.path());
+    let credentials = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    assert!(collect_snapshot(&db, &credentials, &registry).unwrap().entities.is_empty());
+    let incoming = PortableSnapshot { schema_version: 1, entities: vec![PortableEntity {
+        id: "managed".into(), payload: PortablePayload::Preferences(PortablePreferences {
+            managed_tools: vec!["pi".into()], theme: "dark".into(),
+        }),
+    }] };
+    let draft = preview_import(&db, &credentials, &registry, incoming.clone()).unwrap();
+    assert_eq!(draft.items[0].status, "new");
+    assert_eq!(draft.baseline["preferences:managed"], None);
+    db.update_preferences(|preferences| preferences.theme = crate::domain::Theme::Light).unwrap();
+    assert!(apply_import(&db, &credentials, &registry, &draft, &BTreeSet::from(["preferences:managed".into()])).unwrap_err().starts_with("本机资料已变化"));
+    assert_eq!(db.preferences().unwrap().theme, crate::domain::Theme::Light);
+    let draft = preview_import(&db, &credentials, &registry, incoming).unwrap();
+    apply_import(&db, &credentials, &registry, &draft, &BTreeSet::from(["preferences:managed".into()])).unwrap();
+    assert_eq!(db.preferences().unwrap().theme, crate::domain::Theme::Dark);
+}
+
+#[test]
+fn same_portable_version_replaces_local_revision_and_rejects_stale_saves_and_deletes() {
+    use crate::native::profile::{self, RegisteredCommon};
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(temp.path());
+    let credentials = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    let old_profile = profile::save_registered_profile(&db, &registry, RegisteredProfile {
+        id: String::new(), tool: "codex".into(), name: "local".into(), version: 0, revision: String::new(),
+        inherit_common: true, files: BTreeMap::new(), suppressed: BTreeMap::new(), connection: None, native_credentials: BTreeMap::new(),
+    }, None).unwrap();
+    let old_common = profile::save_registered_common(&db, &registry, RegisteredCommon {
+        tool: "codex".into(), version: 0, revision: String::new(), files: BTreeMap::from([("settings".into(), "model = \"local\"".into())]),
+    }, None).unwrap();
+    let mut snapshot = collect_snapshot(&db, &credentials, &registry).unwrap();
+    let json = serde_json::to_string(&snapshot).unwrap();
+    assert!(!json.contains(&old_profile.revision));
+    assert!(!json.contains(&old_common.revision));
+    for entity in &mut snapshot.entities {
+        match &mut entity.payload {
+            PortablePayload::Profile(value) => value.profile.name = "remote".into(),
+            PortablePayload::Common(value) => value.files.insert("settings".into(), "model = \"remote\"\n".into()).map(|_| ()).unwrap_or(()),
+            _ => {},
+        }
+    }
+    let draft = preview_import(&db, &credentials, &registry, snapshot.clone()).unwrap();
+    let keys = draft.items.iter().map(|item| item.key.clone()).collect();
+    assert_eq!(apply_import(&db, &credentials, &registry, &draft, &keys).unwrap(), 2);
+    let new_profile = profile::get_registered_profile(&db, &old_profile.id).unwrap();
+    let new_common = profile::get_registered_common(&db, "codex").unwrap().unwrap();
+    assert_eq!(new_profile.version, old_profile.version);
+    assert_ne!(new_profile.revision, old_profile.revision);
+    assert_eq!(new_common.version, old_common.version);
+    assert_ne!(new_common.revision, old_common.revision);
+    assert!(profile::save_registered_profile(&db, &registry, old_profile.clone(), Some(old_profile.version)).unwrap_err().contains("其他操作修改"));
+    assert!(profile::delete_registered_profile(&db, &registry, &old_profile.id, old_profile.version, &old_profile.revision).unwrap_err().contains("版本已变化"));
+    assert!(profile::save_registered_common(&db, &registry, old_common.clone(), Some(old_common.version)).unwrap_err().contains("其他操作修改"));
+    let again = preview_import(&db, &credentials, &registry, snapshot).unwrap();
+    assert_eq!(apply_import(&db, &credentials, &registry, &again, &keys).unwrap(), 0);
+    assert_eq!(profile::get_registered_profile(&db, &old_profile.id).unwrap().revision, new_profile.revision);
+    assert_eq!(profile::get_registered_common(&db, "codex").unwrap().unwrap().revision, new_common.revision);
+    profile::save_registered_common(&db, &registry, new_common.clone(), Some(new_common.version)).unwrap();
+    profile::delete_registered_profile(&db, &registry, &new_profile.id, new_profile.version, &new_profile.revision).unwrap();
+}
+
+#[test]
+fn common_only_import_marks_inheriting_bindings_pending_and_notifies_partial_success() {
+    use crate::native::profile::{self, RegisteredCommon};
+    use std::cell::Cell;
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(temp.path());
+    let credentials = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    for inherit in [true, false] {
+        let profile = profile::save_registered_profile(&db, &registry, RegisteredProfile {
+            id: String::new(), tool: "codex".into(), name: inherit.to_string(), version: 0, revision: String::new(),
+            inherit_common: inherit, files: BTreeMap::new(), suppressed: BTreeMap::new(), connection: None, native_credentials: BTreeMap::new(),
+        }, None).unwrap();
+        db.with_connection(|conn| {
+            for scope in ["global", "project:local"] {
+                conn.execute("INSERT INTO applied_bindings (scope_key,tool,profile_id,profile_version,managed) VALUES (?1,?2,?3,1,'{}')",
+                    params![format!("{scope}-{inherit}"), "codex", profile.id]).unwrap();
+            }
+            Ok(())
+        }).unwrap();
+    }
+    let common = PortableEntity { id: "codex".into(), payload: PortablePayload::Common(RegisteredCommon {
+        tool: "codex".into(), version: 1, revision: String::new(), files: BTreeMap::from([("settings".into(), "model = \"remote\"\n".into())]),
+    }) };
+    let draft = preview_import(&db, &credentials, &registry, PortableSnapshot { schema_version: 1, entities: vec![common] }).unwrap();
+    let events = Cell::new(0);
+    let result: Result<(), &str> = with_change_notification(&db, || events.set(events.get()+1), || {
+        apply_import(&db, &credentials, &registry, &draft, &BTreeSet::from(["common:codex".into()])).unwrap();
+        Err("later target failed")
+    });
+    assert!(result.is_err());
+    assert_eq!(events.get(), 1);
+    db.with_connection(|conn| {
+        for inherit in [true, false] {
+            let version: i64 = conn.query_row("SELECT profile_version FROM applied_bindings WHERE scope_key=?1", [format!("global-{inherit}")], |row| row.get(0)).unwrap();
+            assert_eq!(version, if inherit { -1 } else { 1 });
+        }
+        Ok(())
+    }).unwrap();
+    let again = preview_import(&db, &credentials, &registry, draft.snapshot).unwrap();
+    with_change_notification(&db, || events.set(events.get()+1), || apply_import(&db, &credentials, &registry, &again, &BTreeSet::from(["common:codex".into()]))).unwrap();
+    assert_eq!(events.get(), 1);
+    let _: Result<(), &str> = with_change_notification(&db, || events.set(events.get()+1), || Err("no changes"));
+    assert_eq!(events.get(), 1);
+}
+
+#[test]
+fn incoming_content_never_becomes_automatic_project_directory_recovery() {
+    use crate::projects;
+    use crate::native::profile;
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(temp.path());
+    let credentials = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    let directory = temp.path().join("project");
+    let moved = temp.path().join("moved");
+    fs::create_dir(&directory).unwrap();
+    let project = projects::add(&db, &registry, directory.to_str().unwrap(), None, Some("codex")).unwrap();
+    let profile = profile::save_registered_profile(&db, &registry, RegisteredProfile {
+        id: String::new(), tool: "codex".into(), name: "Work".into(), version: 0, revision: String::new(),
+        inherit_common: false, files: BTreeMap::new(), suppressed: BTreeMap::new(), connection: None, native_credentials: BTreeMap::new(),
+    }, None).unwrap();
+    projects::record_applied_profile(&db, &directory, "codex", &profile.id).unwrap();
+    db.with_connection(|conn| {
+        conn.execute("INSERT INTO applied_bindings (scope_key,tool,profile_id,profile_version,managed) VALUES (?1,'codex',?2,1,'{}')", params![format!("project:{}", project.path.as_ref().unwrap()), profile.id]).unwrap();
+        Ok(())
+    }).unwrap();
+    let native_file = directory.join("config.toml");
+    fs::write(&native_file, "model = \"already-applied\"").unwrap();
+    let mut snapshot = collect_snapshot(&db, &credentials, &registry).unwrap();
+    snapshot.entities.retain(|entity| entity.kind() == "profile");
+    let PortablePayload::Profile(value) = &mut snapshot.entities[0].payload else { panic!() };
+    value.profile.files.insert("settings".into(), "model = \"remote\"\n".into());
+    let draft = preview_import(&db, &credentials, &registry, snapshot).unwrap();
+    apply_import(&db, &credentials, &registry, &draft, &BTreeSet::from([format!("profile:{}", profile.id)])).unwrap();
+    let received = projects::get(&db, &project.id).unwrap();
+    assert!(received.applied_profiles.is_empty());
+    assert!(received.reapply_profiles.is_empty());
+    assert_eq!(fs::read_to_string(&native_file).unwrap(), "model = \"already-applied\"");
+    fs::rename(&directory, &moved).unwrap();
+    let moved_project = projects::relink(&db, &project.id, moved.to_str().unwrap()).unwrap();
+    assert!(moved_project.reapply_profiles.is_empty());
+    // After explicit content acceptance, ordinary directory recovery retains its behavior.
+    db.with_connection(|conn| { conn.execute("UPDATE applied_bindings SET profile_version=1", []).unwrap(); Ok(()) }).unwrap();
+    assert_eq!(projects::get(&db, &project.id).unwrap().reapply_profiles["codex"], profile.id);
 }

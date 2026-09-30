@@ -21,6 +21,7 @@ pub struct Project {
     pub model_overrides: BTreeMap<String, String>,
     pub selected_profiles: BTreeMap<String, String>,
     pub applied_profiles: BTreeMap<String, String>,
+    pub reapply_profiles: BTreeMap<String, String>,
 }
 
 fn timestamp() -> u64 {
@@ -104,6 +105,19 @@ pub fn list(db: &Database) -> Result<Vec<Project>, String> {
                 None => BTreeMap::new(),
             };
             let available = path.as_ref().is_some_and(|value| Path::new(value).is_dir());
+            let mut reapply_profiles = BTreeMap::new();
+            if let Some(path) = &path {
+                for (tool, profile) in &selected_profiles {
+                    // A binding at these files keeps its old applied content even if new
+                    // database content is pending. Only directory recovery may auto-apply.
+                    let directory_recovery: bool = conn.query_row(
+                        "SELECT NOT EXISTS(SELECT 1 FROM applied_bindings WHERE scope_key=?1 AND tool=?2)
+                         AND NOT EXISTS(SELECT 1 FROM applied_bindings WHERE profile_id=?3 AND profile_version<0)",
+                        params![format!("project:{path}"), tool, profile], |row| row.get(0),
+                    ).map_err(|error| error.to_string())?;
+                    if directory_recovery { reapply_profiles.insert(tool.clone(), profile.clone()); }
+                }
+            }
             projects.push(Project {
                 id,
                 name,
@@ -114,6 +128,7 @@ pub fn list(db: &Database) -> Result<Vec<Project>, String> {
                 model_overrides,
                 selected_profiles,
                 applied_profiles,
+                reapply_profiles,
             });
         }
         Ok(projects)
