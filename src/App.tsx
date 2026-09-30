@@ -32,7 +32,7 @@ const pages: { id: Page; label: string; glyph: 'home' | 'connections' | 'library
 function titleFor(page: Page): [string, string] {
   switch (page) {
     case 'home': return ['快速开始', '选择工具与项目，开始使用。'];
-    case 'connections': return ['工具与连接', '按工具查看原生配置与连接。'];
+    case 'connections': return ['工具与连接', '为当前工具完成配置、MCP 和 Skill。'];
     case 'library': return ['资料库', '统一保存常用提示词与规则。'];
     case 'records': return ['使用记录', '查看本机会话与用量。'];
     case 'settings': return ['设置', '只保留日常需要的选项。'];
@@ -57,6 +57,7 @@ export default function App() {
   const [page, setPage] = useState<Page>('home');
   const [connectionsVisited, setConnectionsVisited] = useState(false);
   const [tool, setTool] = useState<string>('');
+  const [toolOpenSequence, setToolOpenSequence] = useState(0);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('general');
   const [trayRepair, setTrayRepair] = useState<TrayRepairTarget | null>(null);
   const activePage = useRef<Page>(page);
@@ -198,12 +199,12 @@ export default function App() {
         {page === 'home' && <div className="home-band">
           <section className="home-tools">
             <div className="section-heading"><h2>管理中的工具</h2><button className="text-button" type="button" onClick={() => go('settings')}>调整工具 <span aria-hidden="true">→</span></button></div>
-            {visible.length ? nativeAvailable ? <ManagedTools tools={visibleDescriptors} onOpenTool={(id) => { setTool(id); go('connections'); }} /> : <div className="tool-table"><div className="table-head"><span>工具</span><span>当前状态</span><span>操作</span></div>{visible.map((item) => <div className="tool-row" key={item.id}><div className="tool-identity"><span className="tool-icon" aria-hidden="true"><ToolIcon toolId={item.id} /></span><span><strong>{item.name}</strong><small>浏览器预览</small></span></div><div className="tool-state"><strong>尚未检测</strong><small>请在桌面应用中读取本机配置</small></div><button className="button" type="button" onClick={() => { setTool(item.id); go('connections'); }}>查看工具 <span aria-hidden="true">→</span></button></div>)}</div> : <Empty title="尚未管理工具" detail="可在设置中开启需要管理的 CLI。" action={<button className="button primary" type="button" onClick={() => go('settings')}>前往设置</button>} />}
+            {visible.length ? nativeAvailable ? <ManagedTools tools={visibleDescriptors} onOpenTool={(id) => { setTool(id); setToolOpenSequence((value) => value + 1); go('connections'); }} /> : <div className="tool-table"><div className="table-head"><span>工具</span><span>当前状态</span><span>操作</span></div>{visible.map((item) => <div className="tool-row" key={item.id}><div className="tool-identity"><span className="tool-icon" aria-hidden="true"><ToolIcon toolId={item.id} /></span><span><strong>{item.name}</strong><small>浏览器预览</small></span></div><div className="tool-state"><strong>尚未检测</strong><small>请在桌面应用中读取本机配置</small></div><button className="button" type="button" onClick={() => { setTool(item.id); go('connections'); }}>查看工具 <span aria-hidden="true">→</span></button></div>)}</div> : <Empty title="尚未管理工具" detail="可在设置中开启需要管理的 CLI。" action={<button className="button primary" type="button" onClick={() => go('settings')}>前往设置</button>} />}
           </section>
           {nativeAvailable ? <ProjectLauncher tools={visibleDescriptors} repair={trayRepair?.page === 'home' ? trayRepair : null} /> : <section className="home-secondary"><div className="section-heading"><h2>最近项目</h2></div><div className="subtle-panel"><strong>桌面应用中管理项目</strong><p>可以关联本机目录，并用选定的 CLI 在外部终端启动。</p></div></section>}
         </div>}
         {(page === 'connections' || connectionsVisited) && <div hidden={page !== 'connections'}>
-          {selectedTool ? nativeAvailable ? <ToolWorkspacePage managedTools={visibleDescriptors} initialTool={selectedTool} active={page === 'connections'} repair={trayRepair?.page === 'connections' ? trayRepair : null} onDirtyChange={onWorkspaceDirtyChange} /> : <><div className="tool-tabs" role="tablist" aria-label="工具">{visible.map((item) => <button key={item.id} type="button" role="tab" aria-selected={selectedTool === item.id} className={selectedTool === item.id ? 'active' : ''} onClick={() => setTool(item.id)}>{item.name}</button>)}</div><div className="connection-layout"><div className="profile-column"><div className="column-title">{selectedToolName} 配置</div><div className="muted-copy">浏览器预览不读取本机配置</div></div><div className="detail-panel"><div className="detail-header"><div><div className="eyebrow">原生配置</div><h2>{selectedToolName}</h2></div><span className="status-pill">预览</span></div><Empty title="请在桌面应用中编辑原生配置" detail="桌面应用可读取和保存 CLI 的 TOML / JSON 原文。" /></div></div></> : <Empty title="没有管理中的工具" detail="先在设置中勾选需要管理的 CLI。" action={<button className="button primary" type="button" onClick={() => go('settings')}>前往设置</button>} />}
+          {selectedTool ? nativeAvailable ? <ToolWorkspacePage managedTools={visibleDescriptors} initialTool={selectedTool} openSequence={toolOpenSequence} active={page === 'connections'} repair={trayRepair?.page === 'connections' ? trayRepair : null} onDirtyChange={onWorkspaceDirtyChange} /> : <><div className="tool-tabs" role="tablist" aria-label="工具">{visible.map((item) => <button key={item.id} type="button" role="tab" aria-selected={selectedTool === item.id} className={selectedTool === item.id ? 'active' : ''} onClick={() => setTool(item.id)}>{item.name}</button>)}</div><div className="connection-layout"><div className="profile-column"><div className="column-title">{selectedToolName} 配置</div><div className="muted-copy">浏览器预览不读取本机配置</div></div><div className="detail-panel"><div className="detail-header"><div><div className="eyebrow">配置这个工具</div><h2>{selectedToolName}</h2></div><span className="status-pill">预览</span></div><Empty title="请在桌面应用中编辑原生配置" detail="桌面应用可读取和保存 CLI 的 TOML / JSON 原文。" /></div></div></> : <Empty title="没有管理中的工具" detail="先在设置中勾选需要管理的 CLI。" action={<button className="button primary" type="button" onClick={() => go('settings')}>前往设置</button>} />}
         </div>}
         <div hidden={page !== 'library'}><LibraryPage managedTools={visibleDescriptors} active={page === 'library'} /></div>
         <div hidden={page !== 'records'}><RecordsPage active={page === 'records'} tools={catalog?.registered ?? []} onOpenProjects={() => go('home')} /></div>

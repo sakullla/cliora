@@ -34,12 +34,12 @@ test('new native profile exposes identity, edits with history, migrates pasted c
   });
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
-  await page.getByRole('button', { name: '＋ 新建', exact: true }).click();
+  await page.getByRole('button', { name: '新建配置', exact: true }).click();
   const name = page.getByRole('textbox', { name: '配置名称' });
   await expect(name).toBeVisible();
   await expect(name).toHaveValue('新配置');
   await name.fill('');
-  await page.getByRole('button', { name: '保存', exact: true }).click();
+  await page.getByRole('button', { name: '仅保存', exact: true }).click();
   await expect(name).toBeFocused();
   await name.fill('中文日常配置');
   await page.getByRole('textbox', { name: 'API 地址', exact: true }).fill('https://fixture.invalid/v1');
@@ -52,7 +52,7 @@ test('new native profile exposes identity, edits with history, migrates pasted c
   await page.getByRole('combobox', { name: '模型', exact: true }).selectOption('new-model');
   expect((await page.evaluate(() => (window as any).__profileCalls)).filter((call: any) => call.command === 'list_provider_models').at(-1).args).toMatchObject({ connection: { secretRef: 'connection-new-model-key' }, force: true });
   await expect(key).toHaveValue('');
-  await page.getByText('高级 / 原生配置', { exact: true }).click();
+  await page.getByText('更多选项', { exact: true }).click();
   await page.getByRole('checkbox', { name: '继承本工具通用配置' }).check();
   const editor = page.getByRole('textbox', { name: 'settings 配置草稿' });
   await editor.fill('');
@@ -71,13 +71,14 @@ test('new native profile exposes identity, edits with history, migrates pasted c
   await page.getByRole('button', { name: '查看合并结果', exact: true }).click();
   await expect(name).toBeVisible();
   await expect(page.getByRole('textbox', { name: '合并配置预览' })).toHaveAttribute('aria-readonly', 'true');
-  await page.getByRole('button', { name: '返回配置', exact: true }).click();
-  await page.getByRole('button', { name: '保存', exact: true }).click();
+  await page.getByRole('button', { name: '隐藏合并结果', exact: true }).click();
+  await page.getByRole('button', { name: '仅保存', exact: true }).click();
   await expect(page.getByRole('heading', { name: '中文日常配置', exact: true })).toBeVisible();
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('native-profile-flow')!)[0])).toMatchObject({ inheritCommon: true, nativeCredentials: { settings: { '/env/ANTHROPIC_API_KEY': 'system-secret-ref' } } });
   await page.reload();
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
   await expect(name).toHaveValue('中文日常配置');
+  await page.getByText('更多选项', { exact: true }).click();
   await expect(editor).not.toContainText('pasted-private-key');
   // The actual app dialog cancels by Escape/button; stale answers cannot
   // discard edits that arrive while the confirmation is pending.
@@ -106,7 +107,9 @@ test('new native profile exposes identity, edits with history, migrates pasted c
   await expect(name).toBeHidden();
   await expect(page.getByRole('heading', { name: '通用配置', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '中文日常配置', exact: false }).click();
-  await page.getByRole('button', { name: '常用设置', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '中文日常配置', exact: true })).toBeVisible();
+  await page.locator('details').filter({ has: page.locator(':scope > summary', { hasText: /^更多选项$/ }) }).evaluate((el: HTMLDetailsElement) => { el.open = true; });
+  await expect(page.getByText('高级连接选项', { exact: true })).toBeVisible();
   await page.getByText('高级连接选项', { exact: true }).click();
   await page.getByText('更多诊断', { exact: true }).click();
   const paid = page.getByRole('button', { name: '发送最小请求（可能计费）', exact: true });
@@ -299,9 +302,8 @@ test('tray conflict targets the active tool page with project scope and profile'
   await expect(page.getByRole('heading', { name: '日常配置' })).toBeVisible();
   await expect.poll(() => page.evaluate(() => (window as typeof window & { __workspaceRequests: Array<Record<string, unknown>> }).__workspaceRequests.some((item) => item.toolId === 'grok' && item.scope === 'project' && item.projectPath === 'C:\\项目'))).toBe(true);
   await page.evaluate(() => (window as typeof window & { __emitRepair: (target: unknown) => void }).__emitRepair({ page: 'connections', toolId: 'grok', scope: 'project', projectId: 'project-1', projectPath: 'C:\\项目', profileId: 'daily', resourceView: 'skills' }));
-  await expect(page.getByRole('tab', { name: 'Skills' })).toHaveAttribute('aria-selected', 'true');
-  await page.getByRole('tab', { name: '原生配置' }).click();
-  await page.getByRole('button', { name: '常用设置', exact: true }).click();
+  await expect(page.getByRole('tab', { name: '添加 Skill' })).toHaveAttribute('aria-selected', 'true');
+  await page.getByRole('tab', { name: '配置这个工具' }).click();
   await page.getByRole('textbox', { name: '配置名称' }).fill('未保存的日常配置');
   await page.evaluate(() => (window as typeof window & { __emitRepair: (target: unknown) => void }).__emitRepair({ page: 'connections', toolId: 'grok', scope: 'global', projectId: null, projectPath: null, profileId: 'daily' }));
   await page.getByRole('dialog').getByRole('button', { name: '取消', exact: true }).click();
@@ -347,7 +349,6 @@ test('page navigation and tray repair preserve unsaved form and native text with
   await page.goto('/');
   await page.getByRole('button', { name: '编辑配置 →' }).click();
   await expect(page.getByRole('heading', { name: '日常配置' })).toBeVisible();
-  await page.getByRole('button', { name: '常用设置', exact: true }).click();
   const name = page.getByRole('textbox', { name: '配置名称' });
   await name.fill('未保存的表单');
   await emit({ page: 'home', toolId: null, scope: null, projectId: 'moved-project', projectPath: null, profileId: null });
@@ -356,7 +357,7 @@ test('page navigation and tray repair preserve unsaved form and native text with
   await expect(name).toHaveValue('未保存的表单');
 
   await name.fill('日常配置');
-  await page.getByRole('button', {name:'原生文件',exact:true}).click();
+  await page.getByText('更多选项', { exact: true }).click();
   const nativeText = page.getByRole('textbox', { name: 'config 配置草稿' });
   await nativeText.fill('model = "edited locally"');
   await emit({ page: 'settings', toolId: null, scope: null, projectId: null, projectPath: null, profileId: null });
@@ -365,13 +366,15 @@ test('page navigation and tray repair preserve unsaved form and native text with
   await expect(nativeText).toHaveText('model = "edited locally"');
 
   await nativeText.fill('model = "grok"');
-  await page.getByRole('button', { name: '当前配置', exact: true }).click();
-  await expect(nativeText).toHaveText('model = "on disk"');
-  await nativeText.fill('model = "unsaved disk edit"');
+  await page.getByRole('button', { name: '正在使用的文件', exact: true }).click();
+  const abandon = page.getByRole('dialog').getByRole('button', { name: '放弃修改', exact: true });
+  if (await abandon.isVisible().catch(() => false)) await abandon.click();
+  await expect(page.getByRole('textbox', { name: 'config 配置草稿' })).toHaveText('model = "on disk"', { timeout: 10000 });
+  await page.getByRole('textbox', { name: 'config 配置草稿' }).fill('model = "unsaved disk edit"');
   await emit({ page: 'home', toolId: null, scope: null, projectId: 'moved-project', projectPath: null, profileId: null });
   await expect(page.getByRole('heading', {name:'快速开始',level:1})).toBeVisible();
   await page.getByRole('navigation', {name:'页面'}).getByRole('button',{name:'工具与连接'}).click();
-  await expect(nativeText).toHaveText('model = "unsaved disk edit"');
+  await expect(page.getByRole('textbox', { name: 'config 配置草稿' })).toHaveText('model = "unsaved disk edit"');
 
   await emit({ page: 'settings', toolId: null, scope: null, projectId: null, projectPath: null, profileId: null });
   await expect(page.getByRole('heading', { name: '设置', level: 1 })).toBeVisible();
@@ -419,7 +422,7 @@ test('home opens Claude Code native JSON editor with full disk text', async ({ p
   await page.goto('/');
   await page.getByRole('button', { name: '编辑配置 →' }).click();
   await expect(page.getByRole('heading', { name: '工具与连接', level: 1 })).toBeVisible();
-  await page.getByRole('button', { name: '当前配置', exact: true }).click();
+  await page.getByRole('button', { name: '正在使用的文件', exact: true }).click();
   await expect(page.getByRole('textbox', { name: 'settings 配置草稿' })).toHaveText(/ANTHROPIC_API_KEY.*disk-key/);
 });
 
@@ -461,7 +464,7 @@ test('an existing Claude JSON file opens directly without first creating a named
   });
   await page.goto('/');
   await page.getByRole('button', { name: '编辑配置 →' }).click();
-  await page.getByRole('button', { name: '当前配置', exact: true }).click();
+  await page.getByRole('button', { name: '直接修改正在使用的文件', exact: true }).click();
   await expect(page.getByRole('textbox', { name: 'settings 配置草稿' })).toHaveText(/ANTHROPIC_API_KEY.*disk-key/);
 });
 
