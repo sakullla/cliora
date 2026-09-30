@@ -181,10 +181,8 @@ fn applied_label(
     if profile.version == binding.profile_version {
         profile.name.clone()
     } else {
-        format!(
-            "{} · 有未应用修改（已应用 v{}）",
-            profile.name, binding.profile_version
-        )
+        if binding.profile_version == 0 { format!("{} · 导入内容待应用", profile.name) }
+        else { format!("{} · 有未应用修改（已应用 v{}）", profile.name, binding.profile_version) }
     }
 }
 
@@ -197,7 +195,8 @@ fn profile_state_label(
         let status = if binding.profile_version == profile.version {
             String::new()
         } else {
-            format!(" · 有未应用修改（已应用 v{}）", binding.profile_version)
+            if binding.profile_version == 0 { " · 导入内容待应用".into() }
+            else { format!(" · 有未应用修改（已应用 v{}）", binding.profile_version) }
         };
         format!("✓ {}{}", profile.name, status)
     } else if pending {

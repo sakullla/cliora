@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Component, Path};
 
 use base64::{engine::general_purpose::STANDARD, Engine};
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -144,9 +144,12 @@ pub struct PortableSnapshot {
 pub struct ImportItem {
     pub key: String,
     pub kind: String,
+    pub tool_id: Option<String>,
     pub label: String,
     pub status: &'static str,
     pub pending_fields: Vec<String>,
+    pub local_preview: Option<String>,
+    pub incoming_preview: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -345,22 +348,79 @@ pub fn collect_snapshot(
     store: &dyn CredentialStore,
     registry: &Registry,
 ) -> Result<PortableSnapshot, String> {
-    let (preferences, profiles, commons, projects, models, library, mcp, skills) = db.with_connection(|conn| {
-        let preferences: Option<String> = conn.query_row("SELECT value FROM app_settings WHERE key = 'preferences'", [], |row| row.get(0))
-            .optional().map_err(|error| error.to_string())?;
-        let profiles = read_rows(conn, "SELECT data FROM native_profiles ORDER BY id", |row| row.get::<_, String>(0))?;
-        let commons = read_rows(conn, "SELECT data FROM common_configs ORDER BY tool", |row| row.get::<_, String>(0))?;
-        let projects = read_rows(conn, "SELECT id,name FROM projects ORDER BY id", |row| Ok((row.get::<_, String>(0)?,row.get::<_, String>(1)?)))?;
-        let models = read_rows(conn, "SELECT project_id,tool,model FROM project_tool_models ORDER BY project_id,tool", |row|
-            Ok((row.get::<_, String>(0)?,row.get::<_, String>(1)?,row.get::<_, String>(2)?)))?;
+    db.with_connection(|conn| collect_snapshot_on(conn, store, registry))
+}
+
+fn collect_snapshot_on(
+    conn: &Connection,
+    store: &dyn CredentialStore,
+    registry: &Registry,
+) -> Result<PortableSnapshot, String> {
+    let (preferences, profiles, commons, projects, models, library, mcp, skills) = {
+        let preferences: Option<String> = conn
+            .query_row(
+                "SELECT value FROM app_settings WHERE key = 'preferences'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?;
+        let profiles = read_rows(
+            conn,
+            "SELECT data FROM native_profiles ORDER BY id",
+            |row| row.get::<_, String>(0),
+        )?;
+        let commons = read_rows(
+            conn,
+            "SELECT data FROM common_configs ORDER BY tool",
+            |row| row.get::<_, String>(0),
+        )?;
+        let projects = read_rows(conn, "SELECT id,name FROM projects ORDER BY id", |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let models = read_rows(
+            conn,
+            "SELECT project_id,tool,model FROM project_tool_models ORDER BY project_id,tool",
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )?;
         let library = read_rows(conn, "SELECT id,kind,title,body,category,project_id,version,updated_at FROM library_items ORDER BY id", |row|
             Ok((row.get::<_, String>(0)?,row.get::<_, String>(1)?,row.get::<_, String>(2)?,row.get::<_, String>(3)?,
                 row.get::<_, String>(4)?,row.get::<_, Option<String>>(5)?,row.get::<_, i64>(6)?,row.get::<_, i64>(7)?)))?;
-        let mcp = read_rows(conn, "SELECT data_json FROM mcp_definitions ORDER BY id", |row| row.get::<_, String>(0))?;
-        let skills = read_rows(conn, "SELECT id,name,description,digest,files_json FROM skill_packages ORDER BY id", |row|
-            Ok((row.get::<_, String>(0)?,row.get::<_, String>(1)?,row.get::<_, String>(2)?,row.get::<_, String>(3)?,row.get::<_, String>(4)?)))?;
-        Ok((preferences,profiles,commons,projects,models,library,mcp,skills))
-    })?;
+        let mcp = read_rows(
+            conn,
+            "SELECT data_json FROM mcp_definitions ORDER BY id",
+            |row| row.get::<_, String>(0),
+        )?;
+        let skills = read_rows(
+            conn,
+            "SELECT id,name,description,digest,files_json FROM skill_packages ORDER BY id",
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            },
+        )?;
+        Ok::<_, String>((
+            preferences,
+            profiles,
+            commons,
+            projects,
+            models,
+            library,
+            mcp,
+            skills,
+        ))
+    }?;
     let mut entities = Vec::new();
     let preferences: Value = preferences.as_deref().map(serde_json::from_str).transpose().map_err(|_| "管理偏好格式错误")?
         .unwrap_or_else(|| serde_json::json!({"managed_tools":["codex","claude_code","grok","pi","open_code"],"theme":"system"}));
@@ -641,9 +701,15 @@ pub fn preview_import(
         items.push(ImportItem {
             key,
             kind: entity.kind().into(),
+            tool_id: match &entity.payload {
+                PortablePayload::Profile(value) => Some(value.profile.tool.clone()),
+                _ => None,
+            },
             label: entity.label(),
             status,
             pending_fields: entity.pending_fields(),
+            local_preview: local.get(&entity.key()).map(preview_content).transpose()?,
+            incoming_preview: preview_content(entity)?,
         });
     }
     Ok(ImportDraft {
@@ -670,6 +736,42 @@ fn credential_id() -> String {
     format!("connection-{}", Uuid::new_v4())
 }
 
+fn preview_content(entity: &PortableEntity) -> Result<String, String> {
+    let mut safe = entity.clone();
+    if let PortablePayload::Profile(profile) = &mut safe.payload {
+        if profile.connection_secret.is_some() {
+            profile.connection_secret = Some("<已设置，内容隐藏>".into());
+        }
+        for values in profile.native_secrets.values_mut() {
+            for secret in values.values_mut() {
+                *secret = "<已设置，内容隐藏>".into();
+            }
+        }
+    }
+    if let PortablePayload::Skill(skill) = &mut safe.payload {
+        for encoded in skill.files.values_mut() {
+            let bytes = STANDARD
+                .decode(encoded.as_bytes())
+                .map_err(|_| "Skill 资源编码损坏")?;
+            *encoded = match std::str::from_utf8(&bytes) {
+                Ok(text) => text.chars().take(8_000).collect(),
+                Err(_) => format!(
+                    "<二进制资源，{} 字节，SHA-256 {:x}>",
+                    bytes.len(),
+                    Sha256::digest(&bytes)
+                ),
+            };
+        }
+    }
+    let text = serde_json::to_string_pretty(&safe.payload)
+        .map_err(|_| "无法生成导入差异预览".to_string())?;
+    let mut preview: String = text.chars().take(16_000).collect();
+    if preview.len() < text.len() {
+        preview.push_str("\n… 内容过长，预览已截断");
+    }
+    Ok(preview)
+}
+
 pub fn apply_import(
     db: &Database,
     store: &dyn CredentialStore,
@@ -679,18 +781,6 @@ pub fn apply_import(
 ) -> Result<usize, String> {
     if selected.iter().any(|key| !draft.baseline.contains_key(key)) {
         return Err("导入选择含未知资料".into());
-    }
-    let local = collect_snapshot(db, store, registry)?;
-    let local: BTreeMap<_, _> = local
-        .entities
-        .into_iter()
-        .map(|entity| (entity.key(), entity))
-        .collect();
-    for key in selected {
-        let current = local.get(key).map(PortableEntity::digest).transpose()?;
-        if draft.baseline.get(key) != Some(&current) {
-            return Err("本机资料已变化，请重新预览导入".into());
-        }
     }
     let mut imported = 0;
     let mut created_secrets: Vec<String> = Vec::new();
@@ -739,6 +829,17 @@ pub fn apply_import(
     }
     let result = db.with_connection(|conn| {
         let tx = conn.transaction().map_err(|error| error.to_string())?;
+        let current: BTreeMap<_, _> = collect_snapshot_on(&tx, store, registry)?
+            .entities
+            .into_iter()
+            .map(|entity| (entity.key(), entity))
+            .collect();
+        for key in selected {
+            let digest = current.get(key).map(PortableEntity::digest).transpose()?;
+            if draft.baseline.get(key) != Some(&digest) {
+                return Err("本机资料已变化，请重新预览导入".into());
+            }
+        }
         for entity in &prepared {
             match &entity.payload {
                 PortablePayload::Preferences(value) => {
@@ -761,6 +862,9 @@ pub fn apply_import(
                     let profile = &value.profile;
                     tx.execute("INSERT INTO native_profiles (id,tool,version,data) VALUES (?1,?2,?3,?4) ON CONFLICT(id) DO UPDATE SET version=excluded.version,data=excluded.data",
                         params![profile.id,profile.tool,profile.version as i64,serde_json::to_string(profile).map_err(|error| error.to_string())?]).map_err(|error| error.to_string())?;
+                    // The old native file remains in place until an explicit application succeeds.
+                    tx.execute("UPDATE applied_bindings SET profile_version=-1 WHERE profile_id=?1", [&profile.id])
+                        .map_err(|error| error.to_string())?;
                 }
                 PortablePayload::Library(value) => {
                     let kind = match value.kind { crate::library::LibraryKind::Prompt => "prompt", crate::library::LibraryKind::Rule => "rule" };

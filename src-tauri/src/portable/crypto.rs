@@ -207,6 +207,16 @@ struct SyncSpace {
     salt: String,
     nonce: String,
     wrapped_key: String,
+    #[serde(default)]
+    previous: Vec<WrappedSpaceKey>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WrappedSpaceKey {
+    salt: String,
+    nonce: String,
+    wrapped_key: String,
 }
 
 fn sync_wrapping_key(password: &str, salt: &[u8; 16]) -> Result<[u8; 32], String> {
@@ -225,6 +235,15 @@ fn sync_wrapping_key(password: &str, salt: &[u8; 16]) -> Result<[u8; 32], String
 pub fn make_sync_space(password: &str) -> Result<(String, [u8; 32], Vec<u8>), String> {
     let space_id = uuid::Uuid::new_v4().to_string();
     let key = random::<32>();
+    let bytes = rewrap_sync_space(&space_id, &key, password)?;
+    Ok((space_id, key, bytes))
+}
+
+pub fn rewrap_sync_space(
+    space_id: &str,
+    key: &[u8; 32],
+    password: &str,
+) -> Result<Vec<u8>, String> {
     let salt = random::<16>();
     let nonce = random::<24>();
     let wrap_key = sync_wrapping_key(password, &salt)?;
@@ -233,7 +252,7 @@ pub fn make_sync_space(password: &str) -> Result<(String, [u8; 32], Vec<u8>), St
         .encrypt(
             XNonce::from_slice(&nonce),
             Payload {
-                msg: &key,
+                msg: key,
                 aad: aad.as_bytes(),
             },
         )
@@ -241,13 +260,50 @@ pub fn make_sync_space(password: &str) -> Result<(String, [u8; 32], Vec<u8>), St
     let bytes = serde_json::to_vec(&SyncSpace {
         magic: "cliora-sync-space".into(),
         version: 1,
-        space_id: space_id.clone(),
+        space_id: space_id.to_owned(),
         salt: STANDARD.encode(salt),
         nonce: STANDARD.encode(nonce),
         wrapped_key: STANDARD.encode(wrapped),
+        previous: Vec::new(),
     })
     .map_err(|_| "无法生成同步空间".to_string())?;
-    Ok((space_id, key, bytes))
+    Ok(bytes)
+}
+
+pub fn stage_sync_space_rotation(
+    space_id: &str,
+    key: &[u8; 32],
+    password: &str,
+    old_bytes: &[u8],
+) -> Result<Vec<u8>, String> {
+    let old: SyncSpace = serde_json::from_slice(old_bytes).map_err(|_| "同步空间头损坏")?;
+    if old.space_id != space_id {
+        return Err("同步空间标识已变化".into());
+    }
+    let mut next: SyncSpace = serde_json::from_slice(&rewrap_sync_space(space_id, key, password)?)
+        .map_err(|_| "无法生成同步空间头")?;
+    next.previous.push(WrappedSpaceKey {
+        salt: old.salt,
+        nonce: old.nonce,
+        wrapped_key: old.wrapped_key,
+    });
+    next.previous.extend(old.previous.into_iter().take(1));
+    serde_json::to_vec(&next).map_err(|_| "无法生成轮换中的同步空间".into())
+}
+
+pub fn sync_space_has_previous(bytes: &[u8]) -> Result<bool, String> {
+    let space: SyncSpace = serde_json::from_slice(bytes).map_err(|_| "同步空间头损坏")?;
+    Ok(!space.previous.is_empty())
+}
+
+pub fn finish_sync_space_rotation(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    let mut space: SyncSpace = serde_json::from_slice(bytes).map_err(|_| "同步空间头损坏")?;
+    space.previous.clear();
+    serde_json::to_vec(&space).map_err(|_| "无法结束同步空间口令轮换".into())
+}
+
+pub fn open_primary_sync_space(password: &str, bytes: &[u8]) -> Result<(String, [u8; 32]), String> {
+    open_sync_space(password, &finish_sync_space_rotation(bytes)?)
 }
 
 pub fn open_sync_space(password: &str, bytes: &[u8]) -> Result<(String, [u8; 32]), String> {
@@ -262,31 +318,37 @@ pub fn open_sync_space(password: &str, bytes: &[u8]) -> Result<(String, [u8; 32]
     {
         return Err("同步空间版本不受支持".into());
     }
-    let salt = decode::<16>(&space.salt)?;
-    let nonce = decode::<24>(&space.nonce)?;
-    let wrapped = STANDARD
-        .decode(&space.wrapped_key)
-        .map_err(|_| "同步空间密钥损坏".to_string())?;
-    if wrapped.len() != 48 {
-        return Err("同步空间密钥长度无效".into());
-    }
-    let wrap_key = sync_wrapping_key(password, &salt)?;
     let aad = format!("cliora-sync-space-v1:{}", space.space_id);
-    let data_key = XChaCha20Poly1305::new(Key::from_slice(&wrap_key))
-        .decrypt(
+    let wraps = std::iter::once(WrappedSpaceKey {
+        salt: space.salt,
+        nonce: space.nonce,
+        wrapped_key: space.wrapped_key,
+    })
+    .chain(space.previous.into_iter());
+    for wrapped in wraps.take(3) {
+        let salt = decode::<16>(&wrapped.salt)?;
+        let nonce = decode::<24>(&wrapped.nonce)?;
+        let ciphertext = STANDARD
+            .decode(&wrapped.wrapped_key)
+            .map_err(|_| "同步空间密钥损坏")?;
+        if ciphertext.len() != 48 {
+            return Err("同步空间密钥长度无效".into());
+        }
+        let wrap_key = sync_wrapping_key(password, &salt)?;
+        if let Ok(data_key) = XChaCha20Poly1305::new(Key::from_slice(&wrap_key)).decrypt(
             XNonce::from_slice(&nonce),
             Payload {
-                msg: &wrapped,
+                msg: &ciphertext,
                 aad: aad.as_bytes(),
             },
-        )
-        .map_err(|_| "同步加密口令错误或空间头损坏".to_string())?;
-    Ok((
-        space.space_id,
-        data_key
-            .try_into()
-            .map_err(|_| "同步空间密钥长度无效".to_string())?,
-    ))
+        ) {
+            return Ok((
+                space.space_id,
+                data_key.try_into().map_err(|_| "同步空间密钥长度无效")?,
+            ));
+        }
+    }
+    Err("同步加密口令错误或空间头损坏".into())
 }
 
 pub fn seal_sync(key: &[u8; 32], space_id: &str, plaintext: &[u8]) -> Result<Vec<u8>, String> {
