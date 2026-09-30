@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { native, nativeAvailable } from '../../lib/native';
 import type { AdapterDescriptor, RegisteredToolWorkspace } from '../../types/native';
+import { ToolIcon } from '../../components/ToolIcon';
 import styles from './ManagedTools.module.css';
 
 type Loaded = { workspace: RegisteredToolWorkspace | null; error: string | null; busy: boolean };
@@ -35,6 +36,15 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
     return () => { active = false; generation.current++; unsubscribe?.(); };
   }, [tools.map((item) => item.id).join('|')]);
 
+  async function launchTool(toolId: string) {
+    const previous = states[toolId];
+    if (!previous || previous.busy) return;
+    setStates((old) => ({ ...old, [toolId]: { ...previous, busy: true, error: null } }));
+    try { await native.launchCli({ toolId, projectId: null, sessionId: null, mode: 'normal' }); }
+    catch (error) { setStates((old) => ({ ...old, [toolId]: { ...previous, busy: false, error: message(error) } })); return; }
+    setStates((old) => ({ ...old, [toolId]: { ...previous, busy: false } }));
+  }
+
   async function switchProfile(tool: string, profileId: string) {
     if (!profileId) return;
     const previous = states[tool];
@@ -60,9 +70,9 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
       const installed = !!workspace?.probe.selectedPath;
       const writable = workspace?.probe.nativeWrites.state === 'supported';
       return <div className={styles.row} key={tool.id}>
-        <div className={styles.name}><span className={styles.icon}>{tool.name.slice(0, 1)}</span><span><strong>{tool.name}</strong><small>{loaded?.error ? '检测失败' : workspace ? installed ? workspace.probe.installations.find((item) => item.path === workspace.probe.selectedPath)?.version ?? '已安装' : '未确认安装' : '正在检测'}</small></span></div>
+        <div className={styles.name}><ToolIcon toolId={tool.id} /><span><strong>{tool.name}</strong><small>{loaded?.error ? '检测失败' : workspace ? installed ? workspace.probe.installations.find((item) => item.path === workspace.probe.selectedPath)?.version ?? '已安装' : '未确认安装' : '正在检测'}</small></span></div>
         <div className={styles.current}>{workspace?.profiles.length && writable ? <select aria-label={`${tool.name} 全局配置`} value={appliedCurrent ? selected.id : ''} disabled={loaded?.busy} onChange={(event) => void switchProfile(tool.id, event.target.value)}><option value="">{selected && !appliedCurrent ? `${selected.name} · 有未应用修改` : '选择配置'}</option>{workspace.profiles.map((item) => <option key={item.id} value={item.id}>{item.name}{item.connection?.model ? ` · ${item.connection.model}` : ''}</option>)}</select> : <span>{!workspace ? '尚未检测' : !workspace.profiles.length ? '尚未配置' : workspace.probe.nativeWrites.state !== 'supported' ? '原生写入不可用' : '选择配置'}</span>}<small>{loaded?.error ?? (appliedCurrent ? '已写入原生文件 · 下次启动读取' : selected ? '已保存的修改尚未应用；请在工具页应用' : workspace?.probe.nativeWrites.reason ?? '等待检测')}</small></div>
-        <button type="button" onClick={() => onOpenTool(tool.id)}>编辑配置 →</button>
+        <div className={styles.rowActions}><button type="button" className={styles.launch} disabled={!installed || loaded?.busy} onClick={() => void launchTool(tool.id)}>启动</button><button type="button" onClick={() => onOpenTool(tool.id)}>编辑配置 →</button></div>
       </div>;
     })}
   </div>;

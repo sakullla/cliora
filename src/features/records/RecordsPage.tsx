@@ -4,6 +4,7 @@ import { native, nativeAvailable } from '../../lib/native';
 import type { AdapterDescriptor } from '../../types/native';
 import type { Project } from '../../types/launch';
 import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, ScanStatus, UsageSummary } from '../../types/history';
+import { ToolIcon } from '../../components/ToolIcon';
 import styles from './RecordsPage.module.css';
 
 const day = (ms: number | null) => ms === null ? '时间未知' : new Date(ms).toLocaleString();
@@ -178,28 +179,29 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
       <button type="button" role="tab" aria-selected={tab === 'usage'} onClick={() => setTab('usage')}>用量</button>
     </div><button type="button" className={styles.refresh} disabled={busy} onClick={() => void refresh()}>{busy ? '正在读取…' : '刷新本机记录'}</button></div>
     <div className={styles.filters}>
+      {tab === 'sessions' && <><label className={styles.search}>搜索<input aria-label="搜索会话" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="标题或正文" /></label><label className={styles.favorite}><input type="checkbox" checked={favoriteOnly} onChange={(event) => setFavoriteOnly(event.target.checked)} />只看收藏</label></>}
       <label>工具<select aria-label="筛选工具" value={toolId} onChange={(event) => setToolId(event.target.value)}><option value="">全部工具</option>{tools.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
+    </div>
+    <details className={styles.moreFilters}><summary>更多筛选{[projectId, model, fromDate, toDate].filter(Boolean).length ? ` · ${[projectId, model, fromDate, toDate].filter(Boolean).length} 项已启用` : ''}</summary><div className={styles.filters}>
       <label>项目<select aria-label="筛选项目" value={projectId} onChange={(event) => setProjectId(event.target.value)}><option value="">全部项目</option><option value="__unknown__">未归类</option>{projects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
       <label>模型<input aria-label="筛选模型" value={model} onChange={(event) => setModel(event.target.value)} placeholder="全部模型" /></label>
       <label>从<input aria-label="开始日期" type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} /></label>
       <label>到<input aria-label="结束日期" type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} /></label>
-      {tab === 'sessions' && <><label className={styles.search}>搜索<input aria-label="搜索会话" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="标题或正文" /></label><label className={styles.favorite}><input type="checkbox" checked={favoriteOnly} onChange={(event) => setFavoriteOnly(event.target.checked)} />只看收藏</label></>}
-    </div>
+<button type="button" onClick={() => { setProjectId(''); setModel(''); setFromDate(''); setToDate(''); }}>清除更多筛选</button></div></details>
     {error && <div className={styles.error} role="alert">{error}</div>}
     {notice && <div className={styles.notice} role="status">{notice}</div>}
-    {!!scans.length && <div className={styles.coverage}><strong>本机覆盖</strong>{scans.map((item) => <span key={item.toolId}>{item.toolId} {item.sourceCount} 个来源{item.failedCount ? ` · ${item.failedCount} 个失败` : ''}{item.incomplete ? ' · 扫描不完整' : ''}</span>)}</div>}
+    {!!scans.length && <details className={styles.coverage}><summary>本机覆盖 · {scans.reduce((total, item) => total + item.sourceCount, 0)} 个来源{scans.some((item) => item.failedCount || item.incomplete) ? ' · 有失败或扫描不完整' : ''}</summary>{scans.map((item) => <span key={item.toolId}>{item.toolId} {item.sourceCount} 个来源{item.failedCount ? ` · ${item.failedCount} 个失败` : ''}{item.incomplete ? ' · 扫描不完整' : ''}</span>)}</details>}
     {tab === 'sessions' ? <div className={styles.columns}>
       <div className={styles.list} aria-label="会话列表">{sessions.length ? sessions.map((item) => <button type="button" key={item.id} className={selectedId === item.id ? styles.selected : ''} onClick={() => setSelectedId(item.id)}>
-        <strong>{item.favorite ? '★ ' : ''}{item.title}</strong><small>{tools.find((tool) => tool.id === item.toolId)?.name ?? item.toolId} · {day(item.updatedAt)}</small>
+        <span className={styles.sessionTitle}><ToolIcon toolId={item.toolId} size={22} /><strong>{item.favorite ? '★ ' : ''}{item.title}</strong></span><small>{tools.find((tool) => tool.id === item.toolId)?.name ?? item.toolId} · {day(item.updatedAt)}</small>
         <small>{item.model ?? '模型未知'}{item.partial ? ' · 部分记录' : ''}{item.stale ? ' · 源暂不可读' : ''}</small>
       </button>) : <div className={styles.empty}>没有符合条件的会话。可刷新记录或调整筛选。</div>}</div>
       <div className={styles.detail}>{selected ? <>
-        <div className={styles.detailHead}><div><small>{selected.session.toolId} · {day(selected.session.updatedAt)}</small><h2>{selected.session.title}</h2><p>{selected.session.cwd ?? '项目目录未知'} · {selected.session.model ?? '模型未知'}</p></div><button type="button" onClick={() => void favorite()} aria-label={selected.session.favorite ? '取消收藏' : '收藏会话'}>{selected.session.favorite ? '★ 已收藏' : '☆ 收藏'}</button></div>
+        <div className={styles.detailHead}><div><small className={styles.detailIdentity}><ToolIcon toolId={selected.session.toolId} size={22} />{tools.find((tool) => tool.id === selected.session.toolId)?.name ?? selected.session.toolId} · {day(selected.session.updatedAt)}</small><h2>{selected.session.title}</h2><p>{selected.session.cwd ?? '项目目录未知'} · {selected.session.model ?? '模型未知'}</p></div><button type="button" onClick={() => void favorite()} aria-label={selected.session.favorite ? '取消收藏' : '收藏会话'}>{selected.session.favorite ? '★ 已收藏' : '☆ 收藏'}</button></div>
         {(selected.session.partial || selected.session.stale) && <p className={styles.caveat}>原始记录不完整或最近读取失败；仅展示已索引的内容。</p>}
-        <div className={styles.actions}><button type="button" onClick={() => void exportSession('markdown')}>导出 Markdown</button><button type="button" onClick={() => void exportSession('json')}>导出 JSON</button></div>
         <div className={styles.resume}><div className={styles.detailHead}><strong>继续会话</strong><select aria-label="恢复模式" value={mode} onChange={(event) => setMode(event.target.value as 'normal' | 'yolo')}><option value="normal">普通模式</option>{yolo && <option value="yolo">YOLO 模式</option>}</select></div>
           {readyCommand ? <><pre aria-label="原生恢复命令">{readyCommand}</pre><div className={styles.actions}><button type="button" onClick={() => void copy()}>复制命令</button><button type="button" className={styles.primary} disabled={busy} onClick={() => void resume()}>在外部终端继续</button></div></> : <p>{shownResumeError || '正在确认原生恢复命令…'}</p>}
-          <label className={styles.projectLink}>关联项目<select aria-label="关联会话项目" value={selected.session.projectId ?? ''} onChange={(event) => void assignProject(event.target.value)}><option value="">使用原会话目录</option>{projects.map((item) => <option key={item.id} value={item.id}>{item.name}{item.available ? '' : ' · 目录失效'}</option>)}</select></label>
+          <details className={styles.moreActions}><summary>导出与项目关联</summary><div className={styles.actions}><button type="button" onClick={() => void exportSession('markdown')}>导出 Markdown</button><button type="button" onClick={() => void exportSession('json')}>导出 JSON</button></div><label className={styles.projectLink}>关联项目<select aria-label="关联会话项目" value={selected.session.projectId ?? ''} onChange={(event) => void assignProject(event.target.value)}><option value="">使用原会话目录</option>{projects.map((item) => <option key={item.id} value={item.id}>{item.name}{item.available ? '' : ' · 目录失效'}</option>)}</select></label></details>
           {selected.resumeReason && <button type="button" onClick={onOpenProjects}>前往最近项目重新关联目录</button>}
         </div>
         <div className={styles.messages}>{selected.messages.length ? selected.messages.map((item) => <article key={item.id}><small>{item.role === 'user' ? '你' : '助手'} · {day(item.timestamp)}</small><p>{item.text}</p></article>) : <p>此记录没有可读取的对话正文。</p>}</div>

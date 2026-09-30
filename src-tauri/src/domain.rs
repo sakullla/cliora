@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Identifiers are stable across installs, migrations and IPC. The presentation names can change.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -59,6 +60,7 @@ pub struct Preferences {
     pub schema_version: u32,
     pub managed_tools: Vec<CliId>,
     pub theme: Theme,
+    pub tool_icons: BTreeMap<String, String>,
     /// Future/absent adapters remain in the saved setting without entering
     /// the current five-tool UI or being silently dropped by another update.
     unknown_managed_tools: Vec<String>,
@@ -69,6 +71,8 @@ struct PreferencesWire {
     schema_version: u32,
     managed_tools: Vec<String>,
     theme: Theme,
+    #[serde(default)]
+    tool_icons: BTreeMap<String, String>,
 }
 
 impl From<PreferencesWire> for Preferences {
@@ -88,6 +92,7 @@ impl From<PreferencesWire> for Preferences {
             schema_version: wire.schema_version,
             managed_tools,
             theme: wire.theme,
+            tool_icons: wire.tool_icons,
             unknown_managed_tools,
         }
     }
@@ -105,6 +110,7 @@ impl From<Preferences> for PreferencesWire {
             schema_version: preferences.schema_version,
             managed_tools,
             theme: preferences.theme,
+            tool_icons: preferences.tool_icons,
         }
     }
 }
@@ -115,6 +121,7 @@ impl Default for Preferences {
             schema_version: 1,
             managed_tools: CliId::ALL.to_vec(),
             theme: Theme::System,
+            tool_icons: BTreeMap::new(),
             unknown_managed_tools: Vec::new(),
         }
     }
@@ -189,9 +196,42 @@ impl Bootstrap {
     }
 }
 
+/// Portable raster content only: device paths and remote image URLs never enter preferences.
+pub fn valid_icon_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 100 && id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
+}
+
+pub fn valid_tool_icons(icons: &BTreeMap<String, String>) -> bool {
+    use base64::Engine;
+    icons.len() <= 100 && icons.iter().all(|(id, data)| {
+        valid_icon_id(id) && data.len() <= 180_000
+        && ["data:image/png;base64,", "data:image/jpeg;base64,", "data:image/webp;base64,"].iter().any(|prefix| {
+            data.strip_prefix(prefix).and_then(|value| base64::engine::general_purpose::STANDARD.decode(value).ok()).is_some_and(|bytes| {
+                bytes.len() <= 128 * 1024 && match *prefix {
+                    "data:image/png;base64," => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+                    "data:image/jpeg;base64," => bytes.starts_with(&[0xff, 0xd8, 0xff]),
+                    _ => bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP"),
+                }
+            })
+        })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn icon_preferences_accept_portable_rasters_and_reject_device_paths_and_invalid_content() {
+        let png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aR2kAAAAASUVORK5CYII=";
+        assert!(valid_tool_icons(&BTreeMap::from([("sixth_cli".into(), png.into())])));
+        for value in ["C:/icons/icon.png", "https://example.com/logo.png", "data:image/svg+xml;base64,PHN2Zz4=", "data:image/png;base64,bm90LWFuLWltYWdl"] {
+            assert!(!valid_tool_icons(&BTreeMap::from([("codex".into(), value.into())])));
+        }
+        assert!(!valid_tool_icons(&BTreeMap::from([("../tool".into(), png.into())])));
+        let old: Preferences = serde_json::from_str(r#"{"schema_version":1,"managed_tools":["codex"],"theme":"system"}"#).unwrap();
+        assert!(old.tool_icons.is_empty());
+    }
 
     #[test]
     fn registered_management_can_select_future_adapter_and_preserve_absent_one() {

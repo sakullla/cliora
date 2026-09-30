@@ -106,21 +106,21 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
     </div>
     {error && <div className={styles.error} role="alert">{error}</div>}
     {notice && <div className={styles.notice} role="status">{notice}</div>}
-    <div className={styles.layout}>
-      <div className={styles.list} aria-label={`${kind === 'prompt' ? '提示词' : '规则'}列表`}>
-        {shown.length ? shown.map((item) => <button type="button" key={item.id} className={draft?.id === item.id ? styles.active : ''} onClick={() => choose(item)}>
-          <strong>{item.title}</strong><span>{item.category || '未分类'} · {item.projectId ? projects.find((project) => project.id === item.projectId)?.name ?? '原项目' : '全局'}</span><small>{item.body.slice(0, 110) || '正文为空'}</small>
-        </button>) : <div className={styles.empty}>没有符合筛选条件的{kind === 'prompt' ? '提示词' : '规则'}。</div>}
-      </div>
+    <div className={draft ? styles.editLayout : styles.layout}>
+      {!draft && <div className={styles.list} aria-label={`${kind === 'prompt' ? '提示词' : '规则'}列表`}>
+        {shown.length ? shown.map((item) => <article className={styles.card} key={item.id}>
+          <small>{item.category || '未分类'} · {item.projectId ? projects.find((project) => project.id === item.projectId)?.name ?? '原项目' : '全局'}</small><button className={styles.cardTitle} type="button" onClick={() => choose(item)}>{item.title}</button><p>{item.body.slice(0, 160) || '正文为空'}</p><div className={styles.cardActions}><button type="button" onClick={() => void copy(item.body)} disabled={!item.body}>复制全文</button><button type="button" onClick={() => choose(item)}>编辑{kind === 'rule' ? '与分发' : ''} →</button></div>
+        </article>) : <div className={styles.empty}>没有符合筛选条件的{kind === 'prompt' ? '提示词' : '规则'}。</div>}
+      </div>}
       {draft ? <div className={styles.editor}>
-        <div className={styles.editorHead}><div><small>{draft.id ? '编辑资料' : '新资料'}</small><h2>{draft.title || (kind === 'prompt' ? '提示词' : '长期规则')}</h2></div><button type="button" onClick={() => void copy(draft.body)} disabled={!draft.body}>复制全文</button></div>
+        <button className={styles.back} type="button" onClick={() => { if (canReplace()) { setDraft(null); setSavedText(''); } }}>← 返回资料库</button><div className={styles.editorHead}><div><small>{draft.id ? '编辑资料' : '新资料'}</small><h2>{draft.title || (kind === 'prompt' ? '提示词' : '长期规则')}</h2></div><button type="button" onClick={() => void copy(draft.body)} disabled={!draft.body}>复制全文</button></div>
         <div className={styles.fields}><label>标题<input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="简短清楚的名称" /></label>
           <label>分类<input value={draft.category} onChange={(event) => setDraft({ ...draft, category: event.target.value })} placeholder="例如：开发" /></label>
           <label>关联项目<select value={draft.projectId ?? ''} onChange={(event) => setDraft({ ...draft, projectId: event.target.value || null })}><option value="">全局</option>{projects.map((project) => <option value={project.id} key={project.id}>{project.name}</option>)}</select></label></div>
         <label className={styles.body}>完整正文<textarea aria-label="资料正文" value={draft.body} onChange={(event) => setDraft({ ...draft, body: event.target.value })} placeholder={kind === 'prompt' ? '写下可复制使用的提示词…' : '写下要保存或应用到 CLI 的规则…'} /></label>
         <div className={styles.actions}><span>{dirty ? '草稿尚未保存' : '已保存'}</span>{draft.id && <button type="button" onClick={() => void remove()} disabled={busy}>删除</button>}<button type="button" className={styles.primary} disabled={busy || !draft.title.trim()} onClick={() => void save()}>保存</button></div>
         {kind === 'rule' && draft.id && draft.expectedVersion !== null && !dirty && <RuleDistribution key={`${draft.id}:${draft.expectedVersion}`} rule={{ ...draft, id: draft.id, version: draft.expectedVersion, updatedAt: 0 }} tools={managedTools} projects={projects} />}
-      </div> : <div className={styles.empty}>选择一条资料，或新建一条。</div>}
+      </div> : null}
     </div>
   </section>;
 }

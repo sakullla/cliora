@@ -57,6 +57,7 @@ test('records keep search, show native resume command and only launch on request
   await expect(page.getByLabel('原生恢复命令')).not.toContainText("'--yolo'");
   await page.getByRole('combobox', { name: '恢复模式' }).selectOption('yolo');
   await expect(page.getByLabel('原生恢复命令')).toContainText("'--yolo'");
+  await page.getByText('导出与项目关联', { exact: true }).click();
   await page.getByRole('combobox', { name: '关联会话项目' }).selectOption('project-new');
   await expect(page.getByLabel('原生恢复命令')).toContainText('C:\\new-project');
   await page.getByRole('button', { name: '复制命令' }).click();

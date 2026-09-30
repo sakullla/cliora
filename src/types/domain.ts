@@ -6,6 +6,7 @@ export type Preferences = {
   schema_version: number;
   managed_tools: CliId[];
   theme: Theme;
+  tool_icons?: Record<string, string>;
 };
 
 export type ToolSummary = {
@@ -38,7 +39,7 @@ export const CLI_NAMES: Record<CliId, string> = {
 
 export function browserBootstrap(): Bootstrap {
   return {
-    preferences: { schema_version: 1, managed_tools: [...CLI_IDS], theme: 'system' },
+    preferences: { schema_version: 1, managed_tools: [...CLI_IDS], theme: 'system', tool_icons: {} },
     tools: CLI_IDS.map((id) => ({
       id,
       name: CLI_NAMES[id],

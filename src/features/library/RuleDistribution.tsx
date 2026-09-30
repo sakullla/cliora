@@ -4,6 +4,7 @@ import type { Project } from '../../types/launch';
 import type { LibraryItem } from '../../types/library';
 import type { AdapterDescriptor, Scope } from '../../types/native';
 import type { RuleApplyResult, RulePreview, RuleTarget } from '../../types/resources';
+import { ToolIcon } from '../../components/ToolIcon';
 import styles from './RuleDistribution.module.css';
 
 function text(error: unknown) {
@@ -48,7 +49,7 @@ export function RuleDistribution({ rule, tools, projects }: { rule: LibraryItem;
       <label>范围<select value={scope} onChange={(event) => { setScope(event.target.value as Scope); clear(); }}><option value="global">全局</option><option value="project">项目</option></select></label>
       {scope === 'project' && <label>项目<select value={projectId} onChange={(event) => { setProjectId(event.target.value); clear(); }}><option value="">选择项目</option>{projects.map((item) => <option key={item.id} value={item.id}>{item.name}{item.available ? '' : ' · 目录失效'}</option>)}</select></label>}
     </div>
-    <div className={styles.ruleTools}>{tools.map((tool) => <label key={tool.id}><input type="checkbox" checked={selected.includes(tool.id)} onChange={(event) => { setSelected(event.target.checked ? [...selected, tool.id] : selected.filter((item) => item !== tool.id)); clear(); }} />{tool.name}</label>)}</div>
+    <div className={styles.ruleTools}>{tools.map((tool) => <label key={tool.id}><input type="checkbox" checked={selected.includes(tool.id)} onChange={(event) => { setSelected(event.target.checked ? [...selected, tool.id] : selected.filter((item) => item !== tool.id)); clear(); }} /><ToolIcon toolId={tool.id} size={22} />{tool.name}</label>)}</div>
     {error && <p className={styles.error} role="alert">{error}</p>}
     {preview && <div className={styles.previewList}>
       {preview.map((item) => <div key={item.target.toolId} className={styles.previewItem}>

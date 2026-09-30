@@ -28,6 +28,8 @@ const MAX_ENTITIES: usize = 10_000;
 pub struct PortablePreferences {
     pub managed_tools: Vec<String>,
     pub theme: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tool_icons: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -440,6 +442,7 @@ fn collect_snapshot_on(
                 .filter_map(Value::as_str)
                 .map(str::to_owned)
                 .collect(),
+            tool_icons: serde_json::from_value(preferences.get("tool_icons").cloned().unwrap_or_else(|| serde_json::json!({}))).map_err(|_| "图标偏好格式错误")?,
             theme: preferences
                 .get("theme")
                 .and_then(Value::as_str)
@@ -614,7 +617,8 @@ pub fn validate_snapshot(snapshot: &PortableSnapshot) -> Result<(), String> {
         match &entity.payload {
             PortablePayload::Preferences(value)
                 if entity.id == "managed"
-                    && matches!(value.theme.as_str(), "system" | "light" | "dark") => {}
+                    && matches!(value.theme.as_str(), "system" | "light" | "dark")
+                    && crate::domain::valid_tool_icons(&value.tool_icons) => {}
             PortablePayload::Profile(value)
                 if value.profile.id == entity.id
                     && value
@@ -855,7 +859,7 @@ pub fn apply_import(
         for entity in &prepared {
             match &entity.payload {
                 PortablePayload::Preferences(value) => {
-                    let json = serde_json::json!({"schema_version":1,"managed_tools":value.managed_tools,"theme":value.theme}).to_string();
+                    let json = serde_json::json!({"schema_version":1,"managed_tools":value.managed_tools,"theme":value.theme,"tool_icons":value.tool_icons}).to_string();
                     tx.execute("INSERT INTO app_settings (key,value) VALUES ('preferences',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[json]).map_err(|error| error.to_string())?;
                 }
                 PortablePayload::Project(value) => {

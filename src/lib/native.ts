@@ -104,6 +104,7 @@ export const native = {
   previewRegisteredNativeProfile: (profile: RegisteredProfile, scope: Scope) => command<NativePreview>('preview_registered_native_profile', { profile, scope }),
   listPreservedProfiles: (toolId: string) => command<PreservedProfile[]>('list_preserved_profiles', { toolId }),
   setManagedTools: (managedTools: CliId[]) => command<Bootstrap>('set_managed_tools', { managedTools }),
+  setToolIcon: (toolId: string, dataUrl: string | null) => command<Bootstrap>('set_tool_icon', { toolId, dataUrl }),
   setTheme: (theme: Theme) => command<Bootstrap>('set_theme', { theme }),
   getToolWorkspace: (tool: CliId, scope: Scope, projectPath?: string) => command<ToolWorkspace>('get_tool_workspace', { tool, scope, projectPath: projectPath || null }),
   setCustomCliPath: (tool: CliId, path: string | null) => command<void>('set_custom_cli_path', { tool, path }),

@@ -60,3 +60,50 @@ Each supported CLI has one module in `src-tauri/src/native/adapters/`: `codex.rs
 To add Kimi Code later, first collect official install, version, native configuration, credential, launch/resume, and platform references for the exact supported releases. Add a sanitized versioned native fixture and a separate `kimi.rs` implementation; register its stable ID in `Registry::builtins`. The string-ID `RegisteredProfile` and `RegisteredCommon` storage, `registered_*` IPC commands, descriptor catalog, managed-ID setting, and apply services accept that registration without changing the five built-in adapters or shared backend orchestration. The current tool and home components consume the descriptor catalog, so a newly registered tool appears in management and tool navigation without a shared page-level tool-ID branch. The test-only sixth adapter at `tests/adapter/sixth.rs` demonstrates shared probe, native read/import, inherited common and named profile storage, connection overlay, transactional application/binding, and launch-argument planning through that open registry path. Kimi Code is not currently implemented or claimed supported.
 
 Design reference: [interactive preview](docs/design/cliora-preview.html). The preview contains example data. The application deliberately starts with no example sessions, projects, profiles, or usage figures.
+
+
+## Integrated UI and tool appearance
+
+The five pages use the confirmed sage theme and shared SVG navigation. Home exposes direct normal launch and applied configuration selection; project options, session-ID restore and explicit YOLO are available from small disclosures. Native TOML/JSON editing opens directly with save/apply actions above the text. Library browsing uses copyable cards and an inline editor; records keep search, tool and favorites first, with advanced filters, export and project mapping available inline. Migration starts with an overview and reveals one export/import operation; WebDAV configuration remains reachable from its summary.
+
+Default tool icons are declared by each independent frontend adapter and rendered by one shared `ToolIcon`. Official Codex product and Claude vector symbols are included; [asset sources and content hashes](src/assets/tools/SOURCES.md) identify each bundled asset. Settings → General → Custom tool icons accepts PNG, JPEG or WebP up to 128 KB and can restore defaults. Image content, rather than its original device path, is stored in SQLite preferences and travels with the encrypted preference entity and WebDAV sync. Theme and managed-tool changes retain overrides; older preference snapshots with no icon field still import and retain their canonical digest. Unregistered tool icon entries are preserved, and tools without an icon declaration show a neutral symbol.
+
+Populated visual captures use synthetic native-IPC fixtures; they do not represent local projects or platform acceptance. `docs/verification/ui/` contains the five pages plus native/form configuration, MCP, Skills, sessions, usage and migration operations in light/dark themes at 1360, 900 and 640 px. Reproduce them with a Vite server and the capture script:
+
+```powershell
+npm run dev -- --port 14736
+# In another terminal:
+node scripts/capture-ui.mjs
+# Optional alternative preview server:
+$env:CLIORA_PREVIEW_URL = 'http://127.0.0.1:1420'
+node scripts/capture-ui.mjs
+```
+
+## Windows desktop candidate and installation
+
+The current development host is Windows 11 Pro 10.0.26200, AMD64. Install the repository's Node/Rust dependencies and Tauri Windows prerequisites (Microsoft C++ Build Tools and WebView2), then build the standalone candidate:
+
+```powershell
+npm ci
+npm run tauri build -- --no-bundle
+.\src-tauri\target\release\cliora.exe
+```
+
+The executable is a production, unsigned candidate using the installed WebView2 runtime. `docs/verification/windows-candidate.json` records its PE architecture, size, SHA-256, exact build command and exit code; `build-windows-output.txt` contains the captured output. The initial startup observation in `windows-startup.json` records a process alive after five seconds and its window title. This startup check does not accept native CLI or tray behavior.
+
+To produce a Windows installer on the Windows build host, select its platform target explicitly:
+
+```powershell
+npm run tauri build -- --bundles nsis
+# Installer output: src-tauri/target/release/bundle/nsis/
+```
+
+The NSIS installer has not been built or installed in this development pass. Run it from that output folder when produced. Cliora stores application data in Tauri's per-user data directory; moving the executable does not move or erase that data. Use Settings → Migration & Sync to transfer encrypted configuration/appearance content, then link project directories on the destination device.
+
+## Platform acceptance evidence
+
+`node scripts/collect-cli-discovery.mjs` records bounded, actual Windows `--version` output and system architecture without touching native configs. The discovery currently records Codex 0.159.2, Claude Code 2.1.284, Grok 1.0.44, Pi 0.99.1 and OpenCode 1.18.33. These are discovery results, not behavioral acceptance. Re-running discovery updates its content hash; update the matrix reference deliberately when adopting that new observation.
+
+`node scripts/verify-platform-evidence.mjs` is a read-only release gate over `docs/verification/platform-evidence.json`. Exit 0 means all 15 tool/platform combinations have complete accepted cases; exit 2 means structurally valid evidence still has unaccepted combinations; exit 1 means invalid/missing/changed evidence. At present it reports **0/15 accepted**. Windows native configuration, terminal resume, tray, resources, history and migration/sync field checks remain unverified; macOS and Linux have no on-device evidence.
+
+Each passed case requires repository-relative evidence with a matching SHA-256 and an observation JSON containing `kind: native-platform-observation`, `method: on-device`, matching platform/tool/system/architecture/CLI version, the case name, observation time, candidate SHA-256, reproduction steps, observed behavior and hashed actual log/screenshot/trace attachments. The six case names are `native_config`, `launch_resume`, `tray`, `resources_rules`, `history_usage` and `migration_sync`. Each unverified/failed case carries a reason. Version/help output, mocked browser screenshots and cross-compilation do not meet that contract. Keep absent evidence unverified; do not replace it with a success placeholder.

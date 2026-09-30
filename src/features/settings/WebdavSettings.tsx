@@ -85,14 +85,14 @@ export function WebdavSettings({ active }: { active: boolean }) {
         <button className="button" type="button" disabled={busy} onClick={() => void toggleEnabled()}>{status.enabled ? '暂停同步' : '启用同步'}</button></div>
       <div className={styles.action}><button className="button primary" type="button" disabled={busy} onClick={() => void syncNow()}>{busy ? '正在同步…' : '立即同步'}</button>
         <button className="button" type="button" disabled={busy} onClick={() => setEditing(true)}>修改连接或凭据</button></div>
-    </> : <div className={styles.webdavForm}>
+    </> : !editing ? <div className="setting-row"><span><strong>尚未连接</strong><small>配置一次，在多台设备间同步加密资料</small></span><button className="button" type="button" onClick={() => setEditing(true)}>配置 WebDAV</button></div> : <div className={styles.webdavForm}>
       <label>WebDAV 目录地址<input type="url" value={setup.endpoint} placeholder="https://dav.example.com/cliora/" onChange={(event) => setSetup({ ...setup, endpoint: event.target.value })} /></label>
       <label>用户名<input value={setup.username} autoComplete="username" onChange={(event) => setSetup({ ...setup, username: event.target.value })} /></label>
       <label>WebDAV 密码<input type="password" value={setup.authPassword} autoComplete="new-password" placeholder="建议使用至少 12 位的应用专用密码" onChange={(event) => setSetup({ ...setup, authPassword: event.target.value })} /></label>
       <details className={styles.advanced}><summary>单独设置加密口令</summary><label>新的独立加密口令<input type="password" value={setup.encryptionPassword} autoComplete="new-password" placeholder="留空则使用 WebDAV 密码" onChange={(event) => setSetup({ ...setup, encryptionPassword: event.target.value })} /></label><label>旧加密口令<input type="password" value={setup.previousEncryptionPassword} autoComplete="off" placeholder="换设备且旧口令与连接密码不同时填写" onChange={(event) => setSetup({ ...setup, previousEncryptionPassword: event.target.value })} /></label></details>
       <small>默认用连接密码解锁远端加密空间，并在本机系统凭据服务保存。掌握服务器连接密码的一方可能解锁资料；请使用独立、安全的 WebDAV 账号或应用专用密码。</small>
       <div className={styles.action}><button type="button" className="button primary" disabled={!nativeAvailable || busy || !setup.endpoint || !setup.username || !setup.authPassword || (setup.authPassword.length < 12 && setup.encryptionPassword.length < 12)} onClick={() => void configure()}>验证并保存</button>
-        {status?.configured && <button type="button" className="button" disabled={busy} onClick={() => setEditing(false)}>取消</button>}</div>
+        <button type="button" className="button" disabled={busy} onClick={() => setEditing(false)}>取消</button></div>
     </div>}
     {!!status?.conflicts.length && <div className={styles.conflicts}><h3>待处理的同步冲突</h3><p>同一项在不同设备上有改动，或一边删除。版本均保留在远端，选择要继续使用的内容。</p>
       {status.conflicts.map((conflict) => <div className={styles.conflict} key={conflict.key}><strong>{conflict.label}</strong><small>{conflict.key} · {conflict.remoteVersions} 个远端版本</small>
