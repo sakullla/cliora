@@ -12,6 +12,15 @@ function message(value: unknown): string {
   return value && typeof value === 'object' && 'message' in value ? String(value.message) : '操作失败，请重试';
 }
 
+function profileClosedLabel(name: string, connection: { providerId?: string | null; model?: string | null } | null | undefined): string {
+  const provider = connection?.providerId?.trim();
+  const model = connection?.model?.trim();
+  if (provider && model) return `${name} · ${provider} · ${model}`;
+  if (provider) return `${name} · ${provider} · 模型未知`;
+  if (model) return `${name} · 供应商未知 · ${model}`;
+  return `${name} · 供应商 / 模型未知`;
+}
+
 export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]; onOpenTool: (toolId: string) => void }) {
   const [states, setStates] = useState<Record<string, Loaded>>({});
   const generation = useRef(0);
@@ -79,7 +88,7 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
       const writable = workspace?.probe.nativeWrites.state === 'supported';
       return <div className={styles.row} key={tool.id}>
         <div className={styles.name}><ToolIcon toolId={tool.id} /><span><strong>{tool.name}</strong><small>{loaded?.error ? '检测失败' : workspace ? installed ? workspace.probe.installations.find((item) => item.path === workspace.probe.selectedPath)?.version ?? '已安装' : '未确认安装' : '正在检测'}</small></span></div>
-        <div className={styles.current}>{workspace?.profiles.length && writable ? <select aria-label={`${tool.name} 全局配置`} value={appliedCurrent ? selected.id : ''} disabled={loaded?.busy} onChange={(event) => void switchProfile(tool.id, event.target.value)}><option value="">{selected && !appliedCurrent ? `${selected.name} · 有未应用修改` : nativeExists ? '当前原生配置' : '选择配置'}</option>{workspace.profiles.map((item) => <option key={item.id} value={item.id}>{item.name}{item.connection?.model ? ` · ${item.connection.model}` : ''}</option>)}</select> : <span>{!workspace ? '尚未检测' : !workspace.profiles.length ? nativeExists ? '当前原生配置' : '尚未配置' : workspace.probe.nativeWrites.state !== 'supported' ? '原生写入不可用' : '选择配置'}</span>}<small>{loaded?.error ?? (nativeExists && !selected ? nativeInfo || '原生配置已存在 · 供应商 / 模型未知' : appliedCurrent ? '已写入原生文件 · 下次启动读取' : selected ? '已保存的修改尚未应用；请在工具页应用' : workspace?.probe.nativeWrites.reason ?? '等待检测')}</small></div>
+        <div className={styles.current}>{workspace?.profiles.length && writable ? <select aria-label={`${tool.name} 全局配置`} value={appliedCurrent ? selected.id : ''} disabled={loaded?.busy} onChange={(event) => void switchProfile(tool.id, event.target.value)}><option value="">{selected && !appliedCurrent ? `${selected.name} · 有未应用修改` : nativeExists ? '当前原生配置' : '选择配置'}</option>{workspace.profiles.map((item) => <option key={item.id} value={item.id}>{profileClosedLabel(item.name, item.connection)}</option>)}</select> : <span>{!workspace ? '尚未检测' : !workspace.profiles.length ? nativeExists ? '当前原生配置' : '尚未配置' : workspace.probe.nativeWrites.state !== 'supported' ? '原生写入不可用' : '选择配置'}</span>}<small>{loaded?.error ?? (nativeExists && !selected ? nativeInfo || '原生配置已存在 · 供应商 / 模型未知' : appliedCurrent ? '已写入原生文件 · 下次启动读取' : selected ? '已保存的修改尚未应用；请在工具页应用' : workspace?.probe.nativeWrites.reason ?? '等待检测')}</small></div>
         <div className={styles.rowActions}><button type="button" className={styles.launch} disabled={!installed || loaded?.busy} onClick={() => void launchTool(tool.id)}>启动</button><button type="button" onClick={() => onOpenTool(tool.id)}>编辑配置 →</button></div>
       </div>;
     })}
