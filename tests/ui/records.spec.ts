@@ -43,7 +43,31 @@ test('records keep search, show native resume command and only launch on request
   const navigation = page.getByRole('navigation', { name: '页面' });
   await navigation.getByRole('button', { name: '使用记录' }).click();
   await expect(page.getByRole('button', { name: /Review change/ })).toBeVisible();
+  const filterOrder = await page.evaluate(() => {
+    const search = document.querySelector('[aria-label="搜索会话"]')?.closest('label');
+    const tool = document.querySelector('[aria-label="筛选工具"]')?.closest('label');
+    const favorite = [...document.querySelectorAll('label')].find((label) => label.textContent?.includes('只看收藏'));
+    if (!search || !tool || !favorite) return null;
+    const items = [search, tool, favorite];
+    const documentOrder = items.every((item, index) => index === 0 || Boolean(items[index - 1].compareDocumentPosition(item) & Node.DOCUMENT_POSITION_FOLLOWING));
+    const boxes = items.map((item) => item.getBoundingClientRect());
+    const visualOrder = boxes.every((box, index) => {
+      if (index === 0) return true;
+      const previous = boxes[index - 1];
+      return Math.abs(box.top - previous.top) < 8 ? box.left >= previous.left : box.top >= previous.top;
+    });
+    return { documentOrder, visualOrder, orders: items.map((item) => getComputedStyle(item).order) };
+  });
+  expect(filterOrder).toEqual({ documentOrder: true, visualOrder: true, orders: ['0', '0', '0'] });
   await expect(page.getByLabel('原生恢复命令')).toContainText("'resume' '1111-2222'");
+  const resumeOutside = page.getByRole('button', { name: '在外部终端继续' });
+  await expect(resumeOutside).toBeVisible();
+  await expect(resumeOutside).toHaveClass(/primary/);
+  const exportDetails = page.locator('details').filter({ has: page.getByText('导出与项目关联', { exact: true }) });
+  await expect(exportDetails).toHaveCount(1);
+  await expect(exportDetails).not.toHaveAttribute('open');
+  await expect(exportDetails.getByRole('button', { name: '导出 Markdown' })).toBeHidden();
+  expect(await resumeOutside.evaluate((button) => button.closest('details')?.querySelector('summary')?.textContent?.includes('导出与项目关联') ?? false)).toBe(false);
   await page.evaluate(() => { (window as typeof window & { __recordControl: { delayYolo: boolean } }).__recordControl.delayYolo = true; });
   await page.getByRole('combobox', { name: '恢复模式' }).selectOption('yolo');
   await expect(page.getByLabel('原生恢复命令')).toHaveCount(0);
