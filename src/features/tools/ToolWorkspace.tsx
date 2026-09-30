@@ -690,6 +690,14 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
 
   const pathControl = workspace ? <details className={styles.pathControl}><summary><span className={styles.statusDot} data-ok={workspace.probe.nativeWrites.state === 'supported'} /><strong>{workspace.probe.selectedPath ? `${toolName} ${workspace.probe.installations.find((item) => item.path === workspace.probe.selectedPath)?.version ?? ''}` : `${toolName} 未确认安装`}</strong><span>{workspace.probe.nativeWrites.reason}</span><span className={styles.diagnosticLabel}>检测路径与升级</span></summary><p><a href={workspace.probe.installUrl} target="_blank" rel="noreferrer">官方安装说明 ↗</a></p><div><input aria-label="CLI 可执行文件路径" value={customPath} onChange={(event) => setCustomPath(event.target.value)} placeholder="自定义可执行文件完整路径" /><button type="button" onClick={() => void choosePath()} disabled={busy}>保存并重检</button><button type="button" disabled={loading} onClick={() => currentTool && void reload(currentTool, scope, projectPath, selectedId)}>重新检测</button></div><p>{workspace.probe.upgradeHint}</p>{workspace.probe.installations.map((item) => <p key={item.path}>{item.status === 'available' ? '可用' : '检测失败'} · 来源：{item.source === 'npm_shim' ? '已验证 npm 入口' : item.source === 'claude_native' ? 'Claude 原生安装' : '未能确认'} · {item.path} {item.detail ?? ''}</p>)}{workspace.probe.dependencies.map((item) => <p key={item.name}>{item.name}：{item.status === 'found' ? '已找到' : item.status === 'outdated' ? '版本过旧' : '缺失'} · {item.detail}{item.status !== 'found' && <a href={item.helpUrl} target="_blank" rel="noreferrer"> 安装或更新 ↗</a>}</p>)}{workspace.probe.installCommand && <div><code>{workspace.probe.installCommand}</code><button type="button" onClick={() => void copyGuidance(workspace.probe.installCommand!)}>复制安装命令</button></div>}{workspace.probe.upgradeCommand ? <div><code>{workspace.probe.upgradeCommand}</code><button type="button" onClick={() => void copyGuidance(workspace.probe.upgradeCommand!)}>复制升级命令</button></div> : workspace.probe.selectedPath && <p>安装来源未能可靠确认，请先核对官方安装说明，再用原安装方式升级。</p>}</details> : null;
 
+  const writeUnavailable = workspace && workspace.probe.nativeWrites.state !== 'supported' ? <div className={styles.error} role="alert" aria-label="原生写入不可用">
+    <p>{workspace.probe.nativeWrites.reason || `${toolName} 当前无法写入原生配置。`}</p>
+    <p>保存并应用前需要先解决安装或写入问题。路径与升级细节仍在更多选项中。</p>
+    {workspace.probe.installUrl ? <a href={workspace.probe.installUrl} target="_blank" rel="noreferrer">官方安装说明 ↗</a> : null}
+    {workspace.probe.installCommand ? <button type="button" onClick={() => void copyGuidance(workspace.probe.installCommand!)}>复制安装命令</button> : null}
+    <button type="button" disabled={loading} onClick={() => currentTool && void reload(currentTool, scope, projectPath, selectedId)}>重新检测</button>
+  </div> : null;
+
   const moreOptions = workspace ? <details className={styles.moreOptions} aria-label="配置更多选项"><summary>更多选项</summary>
     {pathControl}
     {editor === 'profile' && draft && <label className={styles.check}><input type="checkbox" checked={draft.inheritCommon} onChange={event => setDraft({ ...draft, inheritCommon: event.target.checked })} />继承本工具通用配置</label>}
@@ -733,6 +741,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     {notice && <div className={styles.notice} role="status">{notice}</div>}
     {workspace && !(scope === 'project' && !projectPath.trim()) && <>
       {!!workspace.recoveryNeeded.length && <div className={styles.error}>有 {workspace.recoveryNeeded.length} 项原生文件事务需要恢复。请检查目标文件和本机凭据库后重试。<button type="button" onClick={() => { void native.recoverNativeTransactions().then(() => { if (currentTool) return reload(currentTool, scope, projectPath, selectedId); }); }}>重试恢复</button></div>}
+      {writeUnavailable}
       {configEmpty ? <div className={styles.taskEmpty}>
         <button type="button" className={styles.primary} disabled={busy} onClick={() => void createProfile()}>新建配置</button>
         <p>按下后填写名称、API 地址、密钥和模型，再保存并给这个工具使用。</p>
