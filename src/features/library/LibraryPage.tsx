@@ -1,8 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { CodeEditor } from '../../components/CodeEditor';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { native, nativeAvailable } from '../../lib/native';
+import { confirmAction, type ConfirmationOptions } from '../../lib/confirm';
 import type { Project } from '../../types/launch';
 import type { LibraryDraft, LibraryItem, LibraryKind } from '../../types/library';
 import type { AdapterDescriptor } from '../../types/native';
+import { NativeRuleEditor } from './NativeRuleEditor';
 import { RuleDistribution } from './RuleDistribution';
 import styles from './LibraryPage.module.css';
 
@@ -31,6 +34,13 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const dirty = !!draft && JSON.stringify(draft) !== savedText;
+  const latest = useRef(''); latest.current = JSON.stringify([kind, draft, active]);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  async function confirmCurrent(message: string, options: ConfirmationOptions = { title: '放弃未保存修改？', confirmLabel: '放弃修改' }) {
+    const started = latest.current;
+    return confirmAction(message, () => mounted.current && latest.current === started, options);
+  }
 
   useEffect(() => {
     if (!nativeAvailable || !active) return;
@@ -48,19 +58,19 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
   const shown = items.filter((item) => (projectFilter === '*' || (projectFilter === 'global' ? !item.projectId : item.projectId === projectFilter))
     && (categoryFilter === '*' || item.category === categoryFilter));
 
-  function canReplace() { return !dirty || window.confirm('当前资料草稿尚未保存，切换会丢失修改。继续吗？'); }
-  function choose(item: LibraryItem) {
-    if (!canReplace()) return;
+  async function canReplace() { return !dirty || confirmCurrent('当前资料草稿尚未保存，切换会丢失修改。继续吗？'); }
+  async function choose(item: LibraryItem) {
+    if (!await canReplace()) return;
     const next = edit(item);
     setDraft(next); setSavedText(JSON.stringify(next)); setError(''); setNotice('');
   }
-  function start(kind: LibraryKind) {
-    if (!canReplace()) return;
+  async function start(kind: LibraryKind) {
+    if (!await canReplace()) return;
     const next = empty(kind);
     setDraft(next); setSavedText(JSON.stringify(next)); setError(''); setNotice('');
   }
-  function switchKind(next: LibraryKind) {
-    if (next === kind || !canReplace()) return;
+  async function switchKind(next: LibraryKind) {
+    if (next === kind || !await canReplace()) return;
     setKind(next); setDraft(null); setSavedText(''); setCategoryFilter('*'); setNotice(''); setError('');
   }
   async function refresh(nextKind = kind) { setItems(await native.listLibraryItems(nextKind, null, search)); }
@@ -77,7 +87,7 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
     finally { setBusy(false); }
   }
   async function remove() {
-    if (!draft?.id || draft.expectedVersion === null || busy || !window.confirm(`删除“${draft.title}”？`)) return;
+    if (!draft?.id || draft.expectedVersion === null || busy || !await confirmCurrent(`删除“${draft.title}”？`, { title: '删除资料', confirmLabel: '删除资料', destructive: true })) return;
     setBusy(true); setError('');
     try {
       await native.deleteLibraryItem(draft.id, draft.expectedVersion);
@@ -99,6 +109,7 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
       </div>
       <button type="button" className={styles.primary} onClick={() => start(kind)}>＋ 新建{kind === 'prompt' ? '提示词' : '规则'}</button>
     </div>
+    {kind === 'rule' && <NativeRuleEditor tools={managedTools} projects={projects} />}
     <div className={styles.filters}>
       <input aria-label="搜索资料" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索标题、正文或分类" />
       <select aria-label="项目筛选" value={projectFilter} onChange={(event) => setProjectFilter(event.target.value)}><option value="*">所有项目</option><option value="global">全局资料</option>{projects.map((project) => <option value={project.id} key={project.id}>{project.name}</option>)}</select>
@@ -113,11 +124,11 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
         </article>) : <div className={styles.empty}>没有符合筛选条件的{kind === 'prompt' ? '提示词' : '规则'}。</div>}
       </div>}
       {draft ? <div className={styles.editor}>
-        <button className={styles.back} type="button" onClick={() => { if (canReplace()) { setDraft(null); setSavedText(''); } }}>← 返回资料库</button><div className={styles.editorHead}><div><small>{draft.id ? '编辑资料' : '新资料'}</small><h2>{draft.title || (kind === 'prompt' ? '提示词' : '长期规则')}</h2></div><button type="button" onClick={() => void copy(draft.body)} disabled={!draft.body}>复制全文</button></div>
+        <button className={styles.back} type="button" onClick={async () => { if (await canReplace()) { setDraft(null); setSavedText(''); } }}>← 返回资料库</button><div className={styles.editorHead}><div><small>{draft.id ? '编辑资料' : '新资料'}</small><h2>{draft.title || (kind === 'prompt' ? '提示词' : '长期规则')}</h2></div><button type="button" onClick={() => void copy(draft.body)} disabled={!draft.body}>复制全文</button></div>
         <div className={styles.fields}><label>标题<input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="简短清楚的名称" /></label>
           <label>分类<input value={draft.category} onChange={(event) => setDraft({ ...draft, category: event.target.value })} placeholder="例如：开发" /></label>
           <label>关联项目<select value={draft.projectId ?? ''} onChange={(event) => setDraft({ ...draft, projectId: event.target.value || null })}><option value="">全局</option>{projects.map((project) => <option value={project.id} key={project.id}>{project.name}</option>)}</select></label></div>
-        <label className={styles.body}>完整正文<textarea aria-label="资料正文" value={draft.body} onChange={(event) => setDraft({ ...draft, body: event.target.value })} placeholder={kind === 'prompt' ? '写下可复制使用的提示词…' : '写下要保存或应用到 CLI 的规则…'} /></label>
+        <label className={styles.body}>完整正文<CodeEditor key={draft.id ?? 'new'} label="资料正文" format="markdown" value={draft.body} onChange={(body) => setDraft({ ...draft, body })} placeholder={kind === 'prompt' ? '写下可复制使用的提示词…' : '写下要保存或应用到 CLI 的规则…'} /></label>
         <div className={styles.actions}><span>{dirty ? '草稿尚未保存' : '已保存'}</span>{draft.id && <button type="button" onClick={() => void remove()} disabled={busy}>删除</button>}<button type="button" className={styles.primary} disabled={busy || !draft.title.trim()} onClick={() => void save()}>保存</button></div>
         {kind === 'rule' && draft.id && draft.expectedVersion !== null && !dirty && <RuleDistribution key={`${draft.id}:${draft.expectedVersion}`} rule={{ ...draft, id: draft.id, version: draft.expectedVersion, updatedAt: 0 }} tools={managedTools} projects={projects} />}
       </div> : null}

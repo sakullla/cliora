@@ -374,7 +374,7 @@ fn recover_locked_report(db: &Database) -> Result<Vec<SkillRecoveryIssue>, Strin
         let attempt = (|| {
             let parent = op.target.parent().ok_or("Skills 恢复路径无效")?;
             if op.stage.parent() != Some(parent)
-                || op.backup.parent() != Some(parent)
+                || (op.backup.parent() != Some(parent) && op.backup.parent() != parent.parent().map(|base| base.join(".cliora-disabled-skills")).as_deref())
                 || op.stage.file_name().and_then(|v| v.to_str())
                     != Some(format!(".cliora-stage-{}", op.id).as_str())
                 || op.backup.file_name().and_then(|v| v.to_str())
@@ -382,7 +382,16 @@ fn recover_locked_report(db: &Database) -> Result<Vec<SkillRecoveryIssue>, Strin
             {
                 return Err("Skills 恢复记录路径不匹配；请检查应用数据".into());
             }
-            if op.status == "committed" {
+            if op.status == "disabled" {
+                let actual=on_disk(&op.target)?;
+                if op.backup.exists() { verify_backup(&op)?; }
+                else if actual==op.old_digest {
+                    db.with_connection(|conn| { let tx=conn.transaction().map_err(|e| e.to_string())?;
+                        tx.execute("INSERT INTO skill_installations(package_id,tool,scope_key,target_path,digest) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(package_id,tool,scope_key) DO UPDATE SET target_path=excluded.target_path,digest=excluded.digest",params![op.package_id,op.tool,op.scope_key,op.target.display().to_string(),op.old_digest]).map_err(|e| e.to_string())?;
+                        tx.execute("DELETE FROM skill_operations WHERE id=?1",[&op.id]).map_err(|e| e.to_string())?;tx.commit().map_err(|e| e.to_string()) })?;
+                } else {return Err("Skills 停用存档缺失，保留恢复记录".into());}
+                return Ok(());
+            } else if op.status == "committed" {
                 let actual = on_disk(&op.target)?;
                 if actual == op.new_digest {
                     if op.backup.exists() {
@@ -591,6 +600,9 @@ fn save_candidate(
 ) -> Result<SkillPackage, String> {
     let _guard = lock().lock().map_err(|_| "Skills 写入服务暂时不可用")?;
     let preview = preview_candidate(db, &candidate)?;
+    if expected_new.is_some_and(|expected| expected != candidate.digest) || expected_existing.is_some() && expected_existing != preview.existing_digest.as_deref() {
+        return Err("Skills 来源或同名包在预览后变化，请重新比较".into());
+    }
     if preview.existing_digest.as_deref() != Some(&candidate.digest)
         && preview.existing_digest.is_some()
         && (expected_new != Some(candidate.digest.as_str())
@@ -667,6 +679,32 @@ fn download_zip(source: &str) -> Result<Vec<u8>, String> {
     }
     Ok(bytes)
 }
+
+fn read_zip(source: &str) -> Result<Vec<u8>, String> {
+    let file = std::fs::File::open(source).map_err(|_| "无法打开本地 ZIP 文件")?;
+    if !file.metadata().map_err(|_| "无法读取 ZIP 文件信息")?.is_file() {
+        return Err("请选择 ZIP 文件".into());
+    }
+    let mut bytes = Vec::new();
+    file.take((MAX_BYTES + 1) as u64).read_to_end(&mut bytes).map_err(|_| "无法读取 ZIP 文件")?;
+    if bytes.len() > MAX_BYTES { return Err("Skills ZIP 文件超过 12 MiB".into()); }
+    Ok(bytes)
+}
+
+pub fn list_zip_entries(source: &str, local: bool) -> Result<Vec<String>, String> {
+    let files = zip_files(if local { read_zip(source)? } else { download_zip(source)? })?;
+    let roots = zip_roots(&files);
+    if roots.is_empty() { return Err("归档中没有 SKILL.md，请选择完整的 Skills 包".into()); }
+    Ok(roots)
+}
+
+pub fn preview_local_zip(db: &Database, source: &str, subdirectory: Option<&str>) -> Result<SkillImportPreview, String> {
+    preview_candidate(db, &zip_candidate(source, subdirectory, read_zip(source)?)?)
+}
+
+pub fn import_local_zip(db: &Database, source: &str, subdirectory: Option<&str>, expected_new: Option<&str>, expected_existing: Option<&str>) -> Result<SkillPackage, String> {
+    save_candidate(db, zip_candidate(source, subdirectory, read_zip(source)?)?, expected_new, expected_existing)
+}
 pub fn preview_https_zip(
     db: &Database,
     source: &str,
@@ -705,6 +743,26 @@ fn zip_candidate(
     subdirectory: Option<&str>,
     bytes: Vec<u8>,
 ) -> Result<Candidate, String> {
+    let archive_files = zip_files(bytes)?;
+    let prefix = if let Some(chosen) = subdirectory.filter(|value| !value.trim().is_empty()) {
+        let chosen = chosen.trim_matches('/');
+        if Path::new(chosen).components().any(|part| !matches!(part, std::path::Component::Normal(_))) {
+            return Err("Skills 子目录路径无效".into());
+        }
+        chosen.to_owned()
+    } else {
+        let candidates = zip_roots(&archive_files);
+        if candidates.len() != 1 { return Err("归档中找到零个或多个 SKILL.md；请选择 Skills 包".into()); }
+        candidates[0].clone()
+    };
+    candidate_from_zip_files(source, prefix, archive_files)
+}
+
+fn zip_roots(files: &BTreeMap<String, Vec<u8>>) -> Vec<String> {
+    files.keys().filter_map(|path| path.strip_suffix("/SKILL.md").or_else(|| (path == "SKILL.md").then_some(""))).map(str::to_owned).collect()
+}
+
+fn zip_files(bytes: Vec<u8>) -> Result<BTreeMap<String, Vec<u8>>, String> {
     let mut archive =
         zip::ZipArchive::new(Cursor::new(bytes)).map_err(|_| "来源不是可读取的 ZIP 归档")?;
     if archive.len() > MAX_FILES * 4 {
@@ -748,33 +806,10 @@ fn zip_candidate(
             return Err("ZIP 包含重复文件路径".into());
         }
     }
-    let prefix = if let Some(chosen) = subdirectory.filter(|value| !value.trim().is_empty()) {
-        let chosen = chosen.trim_matches('/');
-        if Path::new(chosen)
-            .components()
-            .any(|part| !matches!(part, std::path::Component::Normal(_)))
-        {
-            return Err("Skills 子目录路径无效".into());
-        }
-        chosen.to_owned()
-    } else {
-        let candidates: Vec<_> = archive_files
-            .keys()
-            .filter_map(|path| {
-                path.strip_suffix("/SKILL.md").or_else(|| {
-                    if path == "SKILL.md" {
-                        Some("")
-                    } else {
-                        None
-                    }
-                })
-            })
-            .collect();
-        if candidates.len() != 1 {
-            return Err("归档中找到零个或多个 SKILL.md；请指定 Skills 子目录".into());
-        }
-        candidates[0].to_owned()
-    };
+    Ok(archive_files)
+}
+
+fn candidate_from_zip_files(source: &str, prefix: String, archive_files: BTreeMap<String, Vec<u8>>) -> Result<Candidate, String> {
     let name = prefix
         .rsplit('/')
         .next()
@@ -1039,21 +1074,80 @@ pub fn installations(
     let _ = recover_report(db)?;
     let (package, _) = package(db, package_id)?;
     db.with_connection(|conn| {
-        let mut statement = conn.prepare("SELECT tool, scope_key, target_path, digest FROM skill_installations WHERE package_id = ?1 ORDER BY tool, scope_key")
+        let mut statement = conn.prepare("SELECT tool,scope_key,target_path,digest,0 FROM skill_installations WHERE package_id=?1 UNION ALL SELECT tool,scope_key,target_path,old_digest,1 FROM skill_operations WHERE package_id=?1 AND status='disabled' ORDER BY tool,scope_key")
             .map_err(|error| error.to_string())?;
-        let records = statement.query_map([package_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?)))
+        let records = statement.query_map([package_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?, row.get::<_, bool>(4)?)))
             .map_err(|error| error.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?;
-        Ok(records.into_iter().map(|(tool_id, scope_key, target_path, checksum)| {
+        Ok(records.into_iter().map(|(tool_id, scope_key, target_path, checksum, disabled)| {
             let scope = if scope_key == "global" { Scope::Global } else { Scope::Project };
             let project_path = scope_key.strip_prefix("project:").map(str::to_owned);
             let expected = target(registry, home, &tool_id, scope, project_path.as_deref(), &package.name);
-            let state = if expected.as_ref().is_ok_and(|(path, _)| path.to_string_lossy() == target_path) {
+            let state = if disabled { "disabled" } else if expected.as_ref().is_ok_and(|(path, _)| path.to_string_lossy() == target_path) {
                 match on_disk(Path::new(&target_path)) { Ok(Some(actual)) if actual == checksum => if checksum == package.digest { "current" } else { "update_available" }, Ok(None) => "missing", _ => "conflict" }
             } else { "unavailable" };
             SkillInstallation { package_id: package_id.into(), tool_id, scope, project_path, target_path, digest: checksum, state }
         }).collect())
     })
 }
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
+struct SkillOverrideRecord { previous: Option<serde_json::Value>, disabled: serde_json::Value }
+fn switch_pointer(field: &[String]) -> String { format!("/{}",field.iter().map(|part| part.replace('~',"~0").replace('/',"~1")).collect::<Vec<_>>().join("/")) }
+pub fn enabled(db: &Database, registry: &Registry, home: &Path, package_id: &str, tool: &str, scope: Scope, project_path: Option<&str>) -> Result<bool,String> {
+    let (package,_)=package(db,package_id)?; let (path,_)=target(registry,home,tool,scope,project_path,&package.name)?;
+    if !path.exists() { return Ok(false); }
+    let adapter=registry.get(tool).ok_or("未注册的 CLI")?;
+    let project=project_path.map(Path::new);
+    if let Some(location)=adapter.skill_switch_location(scope,home,project,&package.name) {
+        let text=crate::native::transaction::read_native(&location.path)?; let root=crate::native::format::parse(location.kind,&text)?;
+        return Ok(adapter.skill_switch_enabled(root.pointer(&switch_pointer(&location.field)).unwrap_or(&serde_json::Value::Null),&path));
+    }
+    Ok(true)
+}
+pub fn set_enabled(db: &Database, credentials: &dyn crate::credentials::CredentialStore, registry: &Registry, home: &Path, package_id: &str, tool: &str, scope: Scope, project_path: Option<&str>, enabled: bool) -> Result<(),String> {
+    let (package,_)=package(db,package_id)?; let (path,key)=target(registry,home,tool,scope,project_path,&package.name)?;
+    let adapter=registry.get(tool).ok_or("未注册的 CLI")?;
+    if let Some(location)=adapter.skill_switch_location(scope,home,project_path.map(Path::new),&package.name) {
+        if !path.is_dir() { return Err("请先安装此 Skill".into()); }
+        let baseline=crate::native::transaction::read_native(&location.path)?;
+        let root=crate::native::format::parse(location.kind,&baseline)?;
+        let pointer=switch_pointer(&location.field); let current=root.pointer(&pointer).cloned();
+        let record_key=format!("native_skill_switch:{tool}:{key}:{package_id}");
+        let old:Option<String>=db.with_connection(|conn| conn.query_row("SELECT value FROM app_settings WHERE key=?1",[&record_key],|row| row.get(0)).optional().map_err(|e| e.to_string()))?;
+        let record:Option<SkillOverrideRecord>=old.as_deref().map(serde_json::from_str).transpose().map_err(|_| "Skills 开关记录损坏")?;
+        let current_value=current.as_ref().unwrap_or(&serde_json::Value::Null);
+        let snapshot=adapter.skill_switch_snapshot(current_value,&path);
+        if let Some(record)=&record {
+            if snapshot.as_ref()!=Some(&record.disabled) {return Err("Skills 设置已在其他地方修改，请保留原文件并重新查看".into());}
+            if !enabled { return Ok(()); }
+        }
+        let desired=if enabled { if let Some(record)=&record { adapter.skill_switch_restore(current_value,record.previous.as_ref(),&path) } else {Some(adapter.skill_switch_value(current_value,true,&path))} }
+            else {Some(adapter.skill_switch_value(current.as_ref().unwrap_or(&serde_json::Value::Null),false,&path))};
+        let contents=crate::native::format::set_path(location.kind,&baseline,&location.field,desired.as_ref())?;
+        if contents==baseline {return Ok(());}
+        let record_data=serde_json::to_string(&SkillOverrideRecord {previous:snapshot,disabled:adapter.skill_switch_snapshot(desired.as_ref().unwrap_or(&serde_json::Value::Null),&path).unwrap_or(serde_json::Value::Null)}).map_err(|e| e.to_string())?;
+        crate::native::transaction::apply_text(db,credentials,&[crate::native::transaction::TextPatch{path:location.path,baseline,contents,sensitive:true}],|tx| {
+            if enabled {tx.execute("DELETE FROM app_settings WHERE key=?1",[&record_key])} else {tx.execute("INSERT INTO app_settings(key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![record_key,record_data])}.map(|_|()).map_err(|e| e.to_string())
+        })?;
+        return Ok(());
+    }
+    if enabled { enable_archived(db,registry,home,package_id,tool,scope,project_path) } else {
+        let result=operate(db,registry,home,package_id,tool,scope,project_path,true,None,false,true);
+        if result.status=="failed" {Err(result.detail)} else {Ok(())}
+    }
+}
+fn enable_archived(db: &Database, registry: &Registry, home: &Path, package_id: &str, tool: &str, scope: Scope, project_path: Option<&str>) -> Result<(),String> {
+    let _guard=lock().lock().map_err(|_| "Skills 写入服务暂时不可用")?;
+    let (package,_)=package(db,package_id)?; let (path,key)=target(registry,home,tool,scope,project_path,&package.name)?;
+    let op:Option<(String,String,String)>=db.with_connection(|conn| conn.query_row("SELECT id,backup_path,old_digest FROM skill_operations WHERE package_id=?1 AND tool=?2 AND scope_key=?3 AND status='disabled' ORDER BY rowid DESC LIMIT 1",params![package_id,tool,key],|row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).optional().map_err(|e| e.to_string()))?;
+    let Some((id,backup,digest))=op else {return Err("没有可恢复的停用包，请先安装".into());};
+    let archive=path.parent().and_then(Path::parent).ok_or("Skills 路径无效")?.join(".cliora-disabled-skills").join(format!(".cliora-backup-{id}"));
+    if Path::new(&backup)!=archive || on_disk_as(&archive,&package.name)?!=Some(digest.clone()) {return Err("Skills 存档已变化，停止启用".into());}
+    if path.exists() {return Err("Skills 目录已被外部创建，保留双方内容并停止启用".into());}
+    fs::rename(archive,&path).map_err(|e| e.to_string())?;
+    // If interrupted here, the disabled journal recognizes the exact restored digest and completes the database update.
+    recover_locked_report(db)?.first().map_or(Ok(()),|issue| Err(issue.message()))
+}
+
 pub fn install(
     db: &Database,
     registry: &Registry,
@@ -1097,6 +1191,7 @@ pub fn install_confirmed(
         false,
         preview_token,
         allow_takeover,
+        false,
     )
 }
 pub fn remove(
@@ -1119,6 +1214,7 @@ pub fn remove(
         true,
         None,
         false,
+        false,
     )
 }
 fn operate(
@@ -1132,6 +1228,7 @@ fn operate(
     removing: bool,
     preview_token: Option<&str>,
     allow_takeover: bool,
+    disabling: bool,
 ) -> SkillTargetResult {
     let mut result = SkillTargetResult {
         tool_id: tool_id.into(),
@@ -1184,7 +1281,7 @@ fn operate(
             (Some(_), None) if removing => return Err("Skills 目录已在外部移除".into()),
             _ => {}
         }
-        if removing && managed.is_none() {
+        if removing && managed.is_none() && !(disabling && actual.as_ref()==Some(&package.digest)) {
             return Err("此目标没有由 Cliora 安装的 Skills".into());
         }
         if !removing
@@ -1199,7 +1296,8 @@ fn operate(
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         let token = Uuid::new_v4();
         let stage = parent.join(format!(".cliora-stage-{token}"));
-        let backup = parent.join(format!(".cliora-backup-{token}"));
+        let backup = if disabling { parent.parent().ok_or("Skills 存档路径无效")?.join(".cliora-disabled-skills").join(format!(".cliora-backup-{token}")) } else { parent.join(format!(".cliora-backup-{token}")) };
+        if disabling { fs::create_dir_all(backup.parent().unwrap()).map_err(|e| e.to_string())?; }
         let had_old = actual.is_some();
         let operation = SkillOperation {
             id: token.to_string(),
@@ -1274,7 +1372,7 @@ fn operate(
                 ON CONFLICT(package_id, tool, scope_key) DO UPDATE SET target_path = excluded.target_path, digest = excluded.digest",
                 params![package_id, tool_id, key, path.display().to_string(), package.digest]) }
                 .map_err(|error| error.to_string())?;
-            tx.execute("UPDATE skill_operations SET status = 'committed' WHERE id = ?1", [&operation.id]).map_err(|error| error.to_string())?;
+            tx.execute("UPDATE skill_operations SET status = ?2 WHERE id = ?1", params![operation.id,if disabling {"disabled"} else {"committed"}]).map_err(|error| error.to_string())?;
             tx.commit().map_err(|error| error.to_string())
         });
         if let Err(error) = saved {

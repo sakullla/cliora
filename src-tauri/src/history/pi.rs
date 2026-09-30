@@ -3,14 +3,18 @@ use std::path::Path;
 use serde_json::Value;
 
 use super::{
-    discover_jsonl, read_jsonl, text_content, timestamp, valid_native_id, HistorySource,
+    discover_jsonl_controlled, read_jsonl_controlled, text_content, timestamp, valid_native_id, HistorySource,
     ParsedSession, UsageEvent,
 };
 
 pub fn sources(home: &Path) -> Result<Vec<HistorySource>, String> {
-    discover_jsonl(&home.join(".pi/agent/sessions"), |path| {
+    sources_controlled(home, &|| false)
+}
+
+pub fn sources_controlled(home: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<HistorySource>, String> {
+    discover_jsonl_controlled(&home.join(".pi/agent/sessions"), |path| {
         path.extension().is_some_and(|value| value == "jsonl")
-    })
+    }, cancelled)
 }
 
 fn usage_event(
@@ -32,9 +36,13 @@ fn usage_event(
 }
 
 pub fn parse(source: &HistorySource) -> Result<ParsedSession, String> {
+    parse_controlled(source, &|| false)
+}
+
+pub fn parse_controlled(source: &HistorySource, cancelled: &dyn Fn() -> bool) -> Result<ParsedSession, String> {
     let mut session = ParsedSession::new();
     let mut model: Option<String> = None;
-    let partial = read_jsonl(source, |line, row| {
+    let partial = read_jsonl_controlled(source, cancelled, |line, row| {
         let time = row.get("timestamp").and_then(timestamp);
         match row.get("type").and_then(Value::as_str) {
             Some("session") => {

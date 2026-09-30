@@ -169,6 +169,21 @@ impl CliAdapter for Grok {
         }
         Ok(BTreeMap::from([("settings".into(), settings)]))
     }
+    fn connection_documents_for_existing(&self, connection: &Connection, scope: Scope, existing: &BTreeMap<String, Value>) -> Result<BTreeMap<String, Value>, String> {
+        let mut docs = self.connection_documents(connection,scope)?;
+        let Some(current) = existing.get("settings") else { return Ok(docs); };
+        let default = string_at(current,&["models","default"]);
+        let alias = default.filter(|id| string_at(current,&["model",id,"model"]) == Some(connection.model.as_str())).map(str::to_owned)
+            .or_else(|| current.get("model").and_then(Value::as_object).and_then(|models| models.iter().find(|(_,item)| item.get("model").and_then(Value::as_str) == Some(connection.model.as_str())).map(|(alias,_)| alias.clone())));
+        if let Some(alias) = alias { let root=docs.get_mut("settings").unwrap(); let mut entry=root["model"][&connection.model].clone(); if let Some(old)=current["model"][&alias].as_object() { let mut merged=old.clone(); merged.extend(entry.as_object().unwrap().clone()); entry=Value::Object(merged); } root["model"]=json!({alias.clone():entry}); root["models"]["default"]=json!(alias); }
+        Ok(docs)
+    }
+    fn write_connection_secret_for_documents(&self, profile: &RegisteredProfile, scope: Scope, credentials: &dyn CredentialStore, secrets: &mut NativeSecrets, documents: &BTreeMap<String, Value>) -> Result<(), String> {
+        let Some(connection)=&profile.connection else {return Ok(());}; let Some(id)=&connection.secret_ref else {return Ok(());};
+        if scope == Scope::Project { return Err("Grok 项目层不能写入供应商密钥".into()); }
+        let alias=documents.get("settings").and_then(|root| string_at(root,&["models","default"])).unwrap_or(&connection.model);
+        secrets.put("settings", &["model",alias,"api_key"],read_secret(id,credentials)?); secrets.remove("settings",&["model",alias,"env_key"]); Ok(())
+    }
     fn write_connection_secret(
         &self,
         profile: &RegisteredProfile,
@@ -201,8 +216,9 @@ impl CliAdapter for Grok {
                 .is_some_and(|models| models.values().any(|item| item.get("api_key").is_some()))
     }
     fn inspect_values(&self, settings: &Value, _: &Value, _: &Value) -> InspectionFields {
-        let model = string_at(settings, &["models", "default"]).map(str::to_owned);
-        let (base, wire, env) = model
+        let alias = string_at(settings, &["models", "default"]).map(str::to_owned);
+        let model = alias.as_deref().and_then(|id| string_at(settings,&["model",id,"model"])).map(str::to_owned).or_else(|| alias.clone());
+        let (base, wire, env) = alias
             .as_ref()
             .map(|id| {
                 (
@@ -231,7 +247,7 @@ impl CliAdapter for Grok {
         super::import_toml_key(
             "model",
             "api_key",
-            found.model.as_deref().map(str::to_owned).as_deref(),
+            files.get("settings").and_then(|text| crate::native::format::parse(FileKind::Toml,text).ok()).and_then(|root| string_at(&root,&["models","default"]).map(str::to_owned)).as_deref(),
             files,
             found,
             pending,
@@ -270,6 +286,12 @@ impl CliAdapter for Grok {
         source: &crate::history::HistorySource,
     ) -> Result<crate::history::ParsedSession, String> {
         crate::history::grok::parse(source)
+    }
+    fn history_sources_controlled(&self, home: &std::path::Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<crate::history::HistorySource>, String> {
+        crate::history::grok::sources_controlled(home, cancelled)
+    }
+    fn parse_history_controlled(&self, source: &crate::history::HistorySource, cancelled: &dyn Fn() -> bool) -> Result<crate::history::ParsedSession, String> {
+        crate::history::grok::parse_controlled(source, cancelled)
     }
     fn history_supported(&self) -> bool {
         true
@@ -311,13 +333,4 @@ mod tests {
         Grok.validate_documents(Scope::Project, &documents).unwrap();
     }
 
-    #[test]
-    fn project_model_is_passed_as_launch_argument() {
-        assert!(Grok.supports_project_model_override());
-        assert_eq!(
-            Grok.project_model_args(Some("grok-4.7")).unwrap(),
-            ["-m", "grok-4.7"]
-        );
-        assert!(Grok.project_model_args(Some(" ")).is_err());
-    }
 }

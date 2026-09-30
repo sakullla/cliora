@@ -1,6 +1,61 @@
 use super::*;
 
 #[test]
+fn skill_switches_restore_each_native_policy_and_complete_archived_package() {
+    use crate::credentials::CredentialStore;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    #[derive(Default)] struct Store(Mutex<HashMap<String,String>>);
+    impl CredentialStore for Store {
+        fn put(&self,key:&str,value:&str)->Result<(),String>{self.0.lock().unwrap().insert(key.into(),value.into());Ok(())}
+        fn get(&self,key:&str)->Result<String,String>{self.0.lock().unwrap().get(key).cloned().ok_or("missing".into())}
+        fn delete(&self,key:&str)->Result<(),String>{self.0.lock().unwrap().remove(key);Ok(())}
+    }
+    let temp=tempfile::tempdir().unwrap();
+    let db=Database::open(&temp.path().join("app.db")).unwrap();
+    let store=Store::default(); let registry=Registry::builtins(); let home=temp.path().join("home");
+    let mut packages=Vec::new();
+    for name in ["alpha","beta"] {
+        let source=temp.path().join(name); fs::create_dir_all(source.join("references")).unwrap();
+        fs::write(source.join("SKILL.md"),format!("---\nname: {name}\ndescription: Test\n---\n")).unwrap();
+        fs::write(source.join("references/原始.txt"),"原始完整资源").unwrap();
+        let package=import_local(&db,source.to_str().unwrap(),None,None).unwrap();
+        for tool in ["codex","claude_code","open_code","pi"] { let result=install(&db,&registry,&home,&package.id,tool,Scope::Global,None); assert_eq!(result.status,"installed","{tool}: {}",result.detail); }
+        packages.push(package);
+    }
+    let codex=registry.get("codex").unwrap();
+    let config=codex.skill_switch_location(Scope::Global,&home,None,"alpha").unwrap().path;
+    fs::create_dir_all(config.parent().unwrap()).unwrap();
+    let alpha=home.join(".agents/skills/alpha/SKILL.md").display().to_string();
+    let initial=serde_json::json!({"skills":{"config":[{"path":alpha,"enabled":true,"extra":"preserve"},{"path":"not-a-real-other/SKILL.md","enabled":false}]}});
+    fs::write(&config,toml::to_string(&initial).unwrap()).unwrap();
+    for package in &packages { set_enabled(&db,&store,&registry,&home,&package.id,"codex",Scope::Global,None,false).unwrap(); }
+    // Repeated disable keeps the first policy, and enabling A leaves B disabled.
+    set_enabled(&db,&store,&registry,&home,&packages[0].id,"codex",Scope::Global,None,false).unwrap();
+    set_enabled(&db,&store,&registry,&home,&packages[0].id,"codex",Scope::Global,None,true).unwrap();
+    assert!(enabled(&db,&registry,&home,&packages[0].id,"codex",Scope::Global,None).unwrap());
+    assert!(!enabled(&db,&registry,&home,&packages[1].id,"codex",Scope::Global,None).unwrap());
+    set_enabled(&db,&store,&registry,&home,&packages[1].id,"codex",Scope::Global,None,true).unwrap();
+    let restored=crate::native::format::parse(crate::native::format::FileKind::Toml,&fs::read_to_string(&config).unwrap()).unwrap();
+    assert_eq!(restored,initial);
+    let missing=temp.path().join("nonexistent-target");
+    let unrelated=serde_json::json!([{"path":"another-missing/SKILL.md","enabled":false}]);
+    assert!(codex.skill_switch_enabled(&unrelated,&missing),"failed canonicalization cannot match unrelated paths");
+    assert_eq!(codex.skill_switch_value(&unrelated,false,&missing).as_array().unwrap().len(),2);
+    for tool in ["claude_code","open_code","pi"] {
+        let package=&packages[0];
+        let path=target(&registry,&home,tool,Scope::Global,None,&package.name).unwrap().0;
+        set_enabled(&db,&store,&registry,&home,&package.id,tool,Scope::Global,None,false).unwrap();
+        assert!(!enabled(&db,&registry,&home,&package.id,tool,Scope::Global,None).unwrap());
+        if tool=="pi" {assert!(!path.exists()); assert_eq!(installations(&db,&registry,&home,&package.id).unwrap().iter().find(|item|item.tool_id==tool).unwrap().state,"disabled");}
+        else {assert_eq!(fs::read_to_string(path.join("references/原始.txt")).unwrap(),"原始完整资源");}
+        set_enabled(&db,&store,&registry,&home,&package.id,tool,Scope::Global,None,true).unwrap();
+        assert!(enabled(&db,&registry,&home,&package.id,tool,Scope::Global,None).unwrap());
+        assert_eq!(fs::read_to_string(path.join("references/原始.txt")).unwrap(),"原始完整资源");
+    }
+}
+
+#[test]
 fn complete_package_install_update_and_external_conflict() {
     let temp = tempfile::tempdir().unwrap();
     let db = Database::open(&temp.path().join("cliora.db")).unwrap();
@@ -513,6 +568,18 @@ fn zip_import_keeps_bundle_and_requires_explicit_subdirectory_when_ambiguous() {
         .write_all(b"---\nname: beta\ndescription: Beta\n---\n")
         .unwrap();
     let bytes = writer.finish().unwrap().into_inner();
+    let local_zip = temp.path().join("archive.zip");
+    fs::write(&local_zip, &bytes).unwrap();
+    let local_source = local_zip.to_str().unwrap();
+    let local_db = Database::open(&temp.path().join("local.db")).unwrap();
+    assert_eq!(list_zip_entries(local_source, true).unwrap(), vec!["repo-main/skills/alpha", "repo-main/skills/beta"]);
+    assert!(preview_local_zip(&local_db, local_source, None).is_err());
+    let preview = preview_local_zip(&local_db, local_source, Some("repo-main/skills/beta")).unwrap();
+    assert_eq!(preview.file_count, 1);
+    assert!(import_local_zip(&local_db, local_source, Some("repo-main/skills/alpha"), Some(&preview.digest), preview.existing_digest.as_deref()).is_err());
+    let local_package = import_local_zip(&local_db, local_source, Some("repo-main/skills/alpha"), None, None).unwrap();
+    assert_eq!(local_package.file_count, 2);
+    assert!(preview_local_zip(&db, local_source, Some("../../outside")).is_err());
     assert!(import_zip_bytes(&db, "https://example.com/archive.zip", None, bytes.clone()).is_err());
     let package = import_zip_bytes(
         &db,

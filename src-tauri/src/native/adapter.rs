@@ -1,7 +1,7 @@
 use std::env;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -157,7 +157,7 @@ fn node_version() -> Option<(u32, u32, u32)> {
     if !on_path("node") {
         return None;
     }
-    let mut child = Command::new("node")
+    let mut child = crate::background_process::command("node")
         .arg("--version")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -291,7 +291,7 @@ fn run_version(path: &Path, adapter: &dyn CliAdapter) -> Installation {
             .and_then(|v| v.to_str())
             .is_some_and(|v| v.eq_ignore_ascii_case("ps1"))
     {
-        let mut cmd = Command::new("powershell.exe");
+        let mut cmd = crate::background_process::command("powershell.exe");
         cmd.args([
             "-NoProfile",
             "-NonInteractive",
@@ -302,7 +302,7 @@ fn run_version(path: &Path, adapter: &dyn CliAdapter) -> Installation {
         .arg(path);
         cmd
     } else {
-        Command::new(path)
+        crate::background_process::command(path)
     };
     let spawned = command
         .arg("--version")
@@ -439,6 +439,9 @@ pub fn probe_registered(
         paths.retain(|candidate| candidate != path);
         paths.insert(0, path.to_path_buf());
     }
+    #[cfg(test)]
+    let installations = registry.fixture_installations.get(id).cloned().unwrap_or_else(|| paths.into_iter().map(|path| run_version(&path, adapter)).collect::<Vec<_>>());
+    #[cfg(not(test))]
     let installations: Vec<_> = paths
         .into_iter()
         .map(|path| run_version(&path, adapter))

@@ -45,6 +45,9 @@ pub struct McpLocation {
     pub child: Option<&'static str>,
 }
 
+#[derive(Clone, Debug)]
+pub struct SkillSwitchLocation { pub path: PathBuf, pub kind: FileKind, pub field: Vec<String> }
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AdapterDescriptor {
@@ -58,7 +61,12 @@ pub struct AdapterDescriptor {
     pub resume: Facet,
     pub resources: Facet,
     pub history: Facet,
+    pub login: Option<LoginCapability>,
 }
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoginCapability { pub hint: &'static str }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -117,6 +125,14 @@ pub trait CliAdapter: Sync {
         connection: &Connection,
         scope: Scope,
     ) -> Result<BTreeMap<String, Value>, String>;
+    fn connection_documents_for_existing(&self, connection: &Connection, scope: Scope, _existing: &BTreeMap<String, Value>) -> Result<BTreeMap<String, Value>, String> {
+        self.connection_documents(connection,scope)
+    }
+    fn preserve_native_fields(&self, _role: &str, _original: &Value, _fields: &mut BTreeMap<String, Value>, _profile: &RegisteredProfile) -> Result<(), String> { Ok(()) }
+    fn write_connection_secret_for_documents(&self, profile: &RegisteredProfile, scope: Scope, credentials: &dyn CredentialStore, secrets: &mut NativeSecrets, _documents: &BTreeMap<String, Value>) -> Result<(), String> {
+        self.write_connection_secret(profile,scope,credentials,secrets)
+    }
+    fn request_model_id(&self, model: &str) -> String { model.into() }
     fn write_connection_secret(
         &self,
         profile: &RegisteredProfile,
@@ -172,12 +188,26 @@ pub trait CliAdapter: Sync {
         Ok(())
     }
     /// Returns arguments only. The caller owns executable selection and process launch.
+    fn login_args(&self) -> Option<Vec<String>> { None }
+    fn login_hint(&self) -> &'static str { "" }
     fn launch_args(&self, session: Option<&str>, mode: LaunchMode) -> Result<Vec<String>, String>;
     fn history_sources(&self, _home: &Path) -> Result<Vec<HistorySource>, String> {
         Ok(Vec::new())
     }
     fn parse_history(&self, _source: &HistorySource) -> Result<ParsedSession, String> {
         Err("此 CLI 尚无已验证的历史格式".into())
+    }
+    fn history_sources_controlled(&self, home: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<HistorySource>, String> {
+        crate::history::check_cancelled(cancelled)?;
+        let sources = self.history_sources(home)?;
+        crate::history::check_cancelled(cancelled)?;
+        Ok(sources)
+    }
+    fn parse_history_controlled(&self, source: &HistorySource, cancelled: &dyn Fn() -> bool) -> Result<ParsedSession, String> {
+        crate::history::check_cancelled(cancelled)?;
+        let parsed = self.parse_history(source)?;
+        crate::history::check_cancelled(cancelled)?;
+        Ok(parsed)
     }
     fn history_supported(&self) -> bool {
         false
@@ -193,6 +223,15 @@ pub trait CliAdapter: Sync {
             return Err("此 CLI 不支持项目启动模型覆盖".into());
         }
         Ok(Vec::new())
+    }
+    fn skill_switch_location(&self, _scope: Scope, _home: &Path, _project: Option<&Path>, _name: &str) -> Option<SkillSwitchLocation> { None }
+    fn skill_switch_value(&self, _current: &Value, _enabled: bool, _skill_path: &Path) -> Value { Value::Null }
+    fn skill_switch_enabled(&self, _current: &Value, _skill_path: &Path) -> bool { true }
+    fn skill_switch_snapshot(&self, current: &Value, _skill_path: &Path) -> Option<Value> {
+        (!current.is_null()).then(|| current.clone())
+    }
+    fn skill_switch_restore(&self, _current: &Value, previous: Option<&Value>, _skill_path: &Path) -> Option<Value> {
+        previous.cloned()
     }
     fn mcp_location(
         &self,
@@ -274,6 +313,7 @@ pub trait CliAdapter: Sync {
     fn descriptor(&self) -> AdapterDescriptor {
         AdapterDescriptor {
             id: self.id(),
+            login: self.login_args().map(|_| LoginCapability {hint:self.login_hint()}),
             name: self.name(),
             interface_formats: self.interface_formats(),
             project_model_override: self.supports_project_model_override(),
@@ -329,12 +369,16 @@ pub struct AdapterCatalog {
 
 pub struct Registry {
     entries: Vec<&'static dyn CliAdapter>,
+    #[cfg(test)]
+    pub(crate) fixture_installations: BTreeMap<String, Vec<super::adapter::Installation>>,
 }
 
 impl Registry {
     pub fn builtins() -> Self {
         Self {
             entries: vec![&CODEX, &CLAUDE, &GROK, &PI, &OPENCODE],
+            #[cfg(test)]
+            fixture_installations: BTreeMap::new(),
         }
     }
 
@@ -345,7 +389,16 @@ impl Registry {
                 return Err("CLI 适配器 ID 为空或重复".into());
             }
         }
-        Ok(Self { entries })
+        Ok(Self { entries, #[cfg(test)] fixture_installations: BTreeMap::new() })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_fixture_installation(mut self, id: &str, version: &str) -> Self {
+        assert!(self.get(id).is_some(), "fixture must reference a registered adapter");
+        self.fixture_installations.insert(id.into(), vec![super::adapter::Installation {
+            path: format!("fixture-cli/{id}"), version: Some(version.into()), source: "test_fixture", status: "available", detail: None,
+        }]);
+        self
     }
 
     pub fn get(&self, id: &str) -> Option<&'static dyn CliAdapter> {
@@ -572,6 +625,35 @@ where
         force_restrict: false,
     };
     commit_registered_patches(registry, id, &files, db, credentials, &[patch], commit)
+}
+
+/// Edit a declared native file without creating a named profile. Preserve its
+/// complete text and use the same journal/CAS/recovery boundary as other writes.
+pub fn save_registered_text(registry: &Registry, id: &str, role: &str, scope: Scope, home: &Path, project: Option<&Path>, version: &str, db: &Database, credentials: &dyn CredentialStore, original: &str, edited: &str) -> Result<ApplyOutcome, String> {
+    let adapter = registry.get(id).ok_or("未注册的 CLI 适配器，不能写入原生配置")?;
+    if version.trim().is_empty() || adapter.explicitly_incompatible_native_version(version) {
+        return Err("此 CLI 版本尚未确认身份或明确不兼容原生写入".into());
+    }
+    adapter.validate_role_scope(role, scope)?;
+    let files = adapter.native_files(scope, home, project, true);
+    let file = files.iter().find(|file| file.role == role).ok_or("此范围没有指定的原生文件")?;
+    if !file.writable || file.sensitive { return Err("此原生文件不可编辑".into()); }
+    let path = PathBuf::from(&file.path);
+    let current = transaction::read_native(&path)?;
+    let kind = adapter.file_kind(role)?;
+    let contents = if current == original { edited.to_owned() } else { super::format::merge_edits(kind, original, edited, &current)? };
+    let parsed = super::format::parse(kind, &contents)?;
+    adapter.validate_draft(role, &parsed)?;
+    adapter.validate_documents(scope, &BTreeMap::from([(role.to_owned(), parsed)]))?;
+    // Direct edits retain native text; no profile owns credential references.
+    // Never invoke the credential-writing import pipeline here. The transaction
+    // encrypts backups and restricts the replacement file's permissions instead.
+    let scope_key = super::apply::scope_key(scope, project)?;
+    transaction::apply_text(db, credentials, &[transaction::TextPatch { path, baseline: current, contents, sensitive: true }], |tx| {
+        // A deliberate manual edit ends automatic application of the old profile.
+        tx.execute("DELETE FROM applied_bindings WHERE scope_key = ?1 AND tool = ?2", rusqlite::params![scope_key, id]).map_err(|_| "无法保存当前配置状态")?;
+        Ok(())
+    })
 }
 
 #[cfg(test)]

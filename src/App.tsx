@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { Icon } from './components/Icon';
+import { ConfirmationHost } from './components/ConfirmationHost';
 import { ToolIcon, ToolIconsContext } from './components/ToolIcon';
 import { ToolIconSettings } from './features/settings/ToolIconSettings';
 import { ManagedTools } from './features/home/ManagedTools';
@@ -54,6 +55,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
   const [page, setPage] = useState<Page>('home');
+  const [connectionsVisited, setConnectionsVisited] = useState(false);
   const [tool, setTool] = useState<string>('');
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('general');
   const [trayRepair, setTrayRepair] = useState<TrayRepairTarget | null>(null);
@@ -66,10 +68,8 @@ export default function App() {
     workspaceDirty.current = dirty;
     if (!dirty && pendingCatalog.current) { setCatalog(pendingCatalog.current); pendingCatalog.current = null; }
   }, []);
-  const canLeave = useCallback((next: Page) => {
-    return activePage.current !== 'connections' || next === 'connections' || !workspaceDirty.current
-      || window.confirm('当前工具配置草稿尚未保存，离开页面会丢失这些修改。继续吗？');
-  }, []);
+  const canLeave = useCallback((_next: Page) => true, []);
+  useEffect(() => { if (page === 'connections') setConnectionsVisited(true); }, [page]);
 
   useEffect(() => {
     if (!nativeAvailable) return;
@@ -91,7 +91,6 @@ export default function App() {
     void listen<Omit<TrayRepairTarget, 'sequence'>>('cliora:tray-repair', (event) => {
       if (!active || !['home', 'connections', 'settings'].includes(event.payload.page) || !canLeave(event.payload.page)) return;
       setTrayRepair((old) => ({ ...event.payload, sequence: (old?.sequence ?? 0) + 1 }));
-      if (event.payload.page === 'connections' && event.payload.toolId) setTool(event.payload.toolId);
       if (event.payload.page === 'settings') setSettingsTab('general');
       setPage(event.payload.page);
     }).then((unlisten) => {
@@ -201,9 +200,9 @@ export default function App() {
           {visible.length ? nativeAvailable ? <ManagedTools tools={visibleDescriptors} onOpenTool={(id) => { setTool(id); go('connections'); }} /> : <div className="tool-table"><div className="table-head"><span>工具</span><span>当前状态</span><span>操作</span></div>{visible.map((item) => <div className="tool-row" key={item.id}><div className="tool-identity"><span className="tool-icon" aria-hidden="true"><ToolIcon toolId={item.id} /></span><span><strong>{item.name}</strong><small>浏览器预览</small></span></div><div className="tool-state"><strong>尚未检测</strong><small>请在桌面应用中读取本机配置</small></div><button className="button" type="button" onClick={() => { setTool(item.id); go('connections'); }}>查看工具 <span aria-hidden="true">→</span></button></div>)}</div> : <Empty title="尚未管理工具" detail="可在设置中开启需要管理的 CLI。" action={<button className="button primary" type="button" onClick={() => go('settings')}>前往设置</button>} />}
           {nativeAvailable ? <ProjectLauncher tools={visibleDescriptors} repair={trayRepair?.page === 'home' ? trayRepair : null} /> : <section className="home-secondary"><div className="section-heading"><h2>最近项目</h2></div><div className="subtle-panel"><strong>桌面应用中管理项目</strong><p>可以关联本机目录，并用选定的 CLI 在外部终端启动。</p></div></section>}
         </>}
-        {page === 'connections' && <>
-          {selectedTool ? nativeAvailable ? <ToolWorkspacePage managedTools={visibleDescriptors} initialTool={selectedTool} repair={trayRepair?.page === 'connections' ? trayRepair : null} onDirtyChange={onWorkspaceDirtyChange} /> : <><div className="tool-tabs" role="tablist" aria-label="工具">{visible.map((item) => <button key={item.id} type="button" role="tab" aria-selected={selectedTool === item.id} className={selectedTool === item.id ? 'active' : ''} onClick={() => setTool(item.id)}>{item.name}</button>)}</div><div className="connection-layout"><div className="profile-column"><div className="column-title">{selectedToolName} 配置</div><div className="muted-copy">浏览器预览不读取本机配置</div></div><div className="detail-panel"><div className="detail-header"><div><div className="eyebrow">原生配置</div><h2>{selectedToolName}</h2></div><span className="status-pill">预览</span></div><Empty title="请在桌面应用中编辑原生配置" detail="桌面应用可读取和保存 CLI 的 TOML / JSON 原文。" /></div></div></> : <Empty title="没有管理中的工具" detail="先在设置中勾选需要管理的 CLI。" action={<button className="button primary" type="button" onClick={() => go('settings')}>前往设置</button>} />}
-        </>}
+        {(page === 'connections' || connectionsVisited) && <div hidden={page !== 'connections'}>
+          {selectedTool ? nativeAvailable ? <ToolWorkspacePage managedTools={visibleDescriptors} initialTool={selectedTool} active={page === 'connections'} repair={trayRepair?.page === 'connections' ? trayRepair : null} onDirtyChange={onWorkspaceDirtyChange} /> : <><div className="tool-tabs" role="tablist" aria-label="工具">{visible.map((item) => <button key={item.id} type="button" role="tab" aria-selected={selectedTool === item.id} className={selectedTool === item.id ? 'active' : ''} onClick={() => setTool(item.id)}>{item.name}</button>)}</div><div className="connection-layout"><div className="profile-column"><div className="column-title">{selectedToolName} 配置</div><div className="muted-copy">浏览器预览不读取本机配置</div></div><div className="detail-panel"><div className="detail-header"><div><div className="eyebrow">原生配置</div><h2>{selectedToolName}</h2></div><span className="status-pill">预览</span></div><Empty title="请在桌面应用中编辑原生配置" detail="桌面应用可读取和保存 CLI 的 TOML / JSON 原文。" /></div></div></> : <Empty title="没有管理中的工具" detail="先在设置中勾选需要管理的 CLI。" action={<button className="button primary" type="button" onClick={() => go('settings')}>前往设置</button>} />}
+        </div>}
         <div hidden={page !== 'library'}><LibraryPage managedTools={visibleDescriptors} active={page === 'library'} /></div>
         <div hidden={page !== 'records'}><RecordsPage active={page === 'records'} tools={catalog?.registered ?? []} onOpenProjects={() => go('home')} /></div>
         {page === 'settings' && <PageTabs items={[["general", "常规"], ["migration", "迁移与同步"]]} value={settingsTab} onChange={setSettingsTab} />}
@@ -216,5 +215,5 @@ export default function App() {
         <div hidden={page !== 'settings' || settingsTab !== 'migration'}><MigrationSettings active={page === 'settings' && settingsTab === 'migration'} onImported={() => void refreshAfterImport()} /></div>
       </>}
     </main>
-  </div></ToolIconsContext>;
+  </div><ConfirmationHost /></ToolIconsContext>;
 }

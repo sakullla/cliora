@@ -18,6 +18,23 @@ use crate::resources::mcp::{self, McpDefinition, McpTransport};
 
 pub struct Codex;
 
+fn skill_path_matches(item: &Value, skill_path: &Path) -> bool {
+    let Some(raw) = item.get("path").and_then(Value::as_str) else { return false; };
+    let expected = skill_path.join("SKILL.md");
+    match (Path::new(raw).canonicalize(), expected.canonicalize()) {
+        (Ok(actual), Ok(expected)) => actual == expected,
+        _ => {
+            let normalize = |path: &Path| {
+                let raw = path.to_string_lossy().replace('\\', "/");
+                let raw = raw.strip_prefix("//?/UNC/").map(|p| format!("//{p}"))
+                    .unwrap_or_else(|| raw.strip_prefix("//?/").unwrap_or(&raw).to_owned());
+                if cfg!(windows) { raw.to_lowercase() } else { raw }
+            };
+            normalize(Path::new(raw)) == normalize(&expected)
+        }
+    }
+}
+
 impl CliAdapter for Codex {
     fn id(&self) -> &'static str {
         "codex"
@@ -65,6 +82,28 @@ impl CliAdapter for Codex {
     }
     fn portable_root_fields(&self, role: &str) -> &'static [&'static str] {
         if role == "settings" { &["model", "model_provider", "model_reasoning_effort", "service_tier", "features", "model_providers", "approval_policy", "sandbox_mode"] } else { &[] }
+    }
+    fn skill_switch_location(&self, _: Scope, home: &Path, _: Option<&Path>, _: &str) -> Option<super::SkillSwitchLocation> {
+        let file=self.native_files(Scope::Global,home,None,true).into_iter().find(|file| file.role=="settings")?;
+        Some(super::SkillSwitchLocation{path:file.path.into(),kind:FileKind::Toml,field:vec!["skills".into(),"config".into()]})
+    }
+    fn skill_switch_value(&self, current: &Value, enabled: bool, skill_path: &Path) -> Value {
+        let mut entries=current.as_array().cloned().unwrap_or_default(); let path=skill_path.join("SKILL.md");
+        if let Some(item)=entries.iter_mut().find(|item| skill_path_matches(item,skill_path)) { item["enabled"]=json!(enabled); } else {entries.push(json!({"path":path.display().to_string(),"enabled":enabled}));}
+        json!(entries)
+    }
+    fn skill_switch_enabled(&self, current: &Value, skill_path: &Path) -> bool {
+        !current.as_array().is_some_and(|items| items.iter().any(|item| skill_path_matches(item,skill_path) && item.get("enabled")==Some(&json!(false))))
+    }
+    fn skill_switch_snapshot(&self, current: &Value, skill_path: &Path) -> Option<Value> {
+        current.as_array()?.iter().find(|item| skill_path_matches(item,skill_path)).cloned()
+    }
+    fn skill_switch_restore(&self, current: &Value, previous: Option<&Value>, skill_path: &Path) -> Option<Value> {
+        let mut entries = current.as_array().cloned().unwrap_or_default();
+        if let Some(index) = entries.iter().position(|item| skill_path_matches(item,skill_path)) {
+            if let Some(previous) = previous { entries[index] = previous.clone(); } else { entries.remove(index); }
+        } else if let Some(previous) = previous { entries.push(previous.clone()); }
+        (!entries.is_empty()).then(|| json!(entries))
     }
     fn mcp_location(
         &self,
@@ -256,6 +295,8 @@ impl CliAdapter for Codex {
         }
         Ok(())
     }
+    fn login_args(&self) -> Option<Vec<String>> { Some(vec!["login".into()]) }
+    fn login_hint(&self) -> &'static str { "在终端完成 Codex 原生登录。" }
     fn launch_args(&self, session: Option<&str>, mode: LaunchMode) -> Result<Vec<String>, String> {
         let mut args = Vec::new();
         if matches!(mode, LaunchMode::Yolo) {
@@ -277,6 +318,12 @@ impl CliAdapter for Codex {
         source: &crate::history::HistorySource,
     ) -> Result<crate::history::ParsedSession, String> {
         crate::history::codex::parse(source)
+    }
+    fn history_sources_controlled(&self, home: &std::path::Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<crate::history::HistorySource>, String> {
+        crate::history::codex::sources_controlled(home, cancelled)
+    }
+    fn parse_history_controlled(&self, source: &crate::history::HistorySource, cancelled: &dyn Fn() -> bool) -> Result<crate::history::ParsedSession, String> {
+        crate::history::codex::parse_controlled(source, cancelled)
     }
     fn history_supported(&self) -> bool {
         true

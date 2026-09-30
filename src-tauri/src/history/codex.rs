@@ -3,18 +3,22 @@ use std::path::Path;
 use serde_json::Value;
 
 use super::{
-    at, discover_jsonl, read_jsonl, text_content, timestamp, valid_native_id, HistorySource,
+    at, discover_jsonl_controlled, read_jsonl_controlled, text_content, timestamp, valid_native_id, HistorySource,
     ParsedSession, UsageEvent,
 };
 
 pub fn sources(home: &Path) -> Result<Vec<HistorySource>, String> {
-    discover_jsonl(&home.join(".codex/sessions"), |path| {
+    sources_controlled(home, &|| false)
+}
+
+pub fn sources_controlled(home: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<HistorySource>, String> {
+    discover_jsonl_controlled(&home.join(".codex/sessions"), |path| {
         path.extension().is_some_and(|value| value == "jsonl")
             && path
                 .file_name()
                 .and_then(|value| value.to_str())
                 .is_some_and(|value| value.starts_with("rollout-"))
-    })
+    }, cancelled)
 }
 
 fn count(value: &Value, key: &str) -> Option<u64> {
@@ -22,10 +26,14 @@ fn count(value: &Value, key: &str) -> Option<u64> {
 }
 
 pub fn parse(source: &HistorySource) -> Result<ParsedSession, String> {
+    parse_controlled(source, &|| false)
+}
+
+pub fn parse_controlled(source: &HistorySource, cancelled: &dyn Fn() -> bool) -> Result<ParsedSession, String> {
     let mut session = ParsedSession::new();
     let mut totals: Option<(u64, u64, u64, u64)> = None;
     let mut model: Option<String> = None;
-    let partial = read_jsonl(source, |line, row| {
+    let partial = read_jsonl_controlled(source, cancelled, |line, row| {
         let time = row.get("timestamp").and_then(timestamp);
         let payload = row.get("payload").unwrap_or(&Value::Null);
         match row.get("type").and_then(Value::as_str) {

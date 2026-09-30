@@ -78,6 +78,13 @@ impl CliAdapter for OpenCode {
     fn portable_root_fields(&self, role: &str) -> &'static [&'static str] {
         if role == "settings" { &["model", "provider", "agent", "permission", "mcp"] } else { &[] }
     }
+    fn skill_switch_location(&self, scope: Scope, home: &Path, project: Option<&Path>, name: &str) -> Option<super::SkillSwitchLocation> {
+        let file=self.native_files(scope,home,project,true).into_iter().find(|file| file.role=="settings")?;
+        let kind=FileKind::for_name(&file.path).ok()?;
+        Some(super::SkillSwitchLocation{path:file.path.into(),kind,field:vec!["permission".into(), "skill".into(),name.into()]})
+    }
+    fn skill_switch_value(&self, _: &Value, enabled: bool, _: &Path) -> Value { json!(if enabled {"allow"} else {"deny"}) }
+    fn skill_switch_enabled(&self, current: &Value, _: &Path) -> bool { current.as_str()!=Some("deny") }
     fn mcp_location(
         &self,
         scope: Scope,
@@ -423,6 +430,8 @@ impl CliAdapter for OpenCode {
         }
         Ok(())
     }
+    fn login_args(&self) -> Option<Vec<String>> { Some(vec!["auth".into(), "login".into()]) }
+    fn login_hint(&self) -> &'static str { "在终端选择供应商并完成原生登录。" }
     fn launch_args(&self, session: Option<&str>, mode: LaunchMode) -> Result<Vec<String>, String> {
         let mut args = Vec::new();
         if let Some(id) = session {
@@ -444,6 +453,12 @@ impl CliAdapter for OpenCode {
         source: &crate::history::HistorySource,
     ) -> Result<crate::history::ParsedSession, String> {
         crate::history::opencode::parse(source)
+    }
+    fn history_sources_controlled(&self, home: &std::path::Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<crate::history::HistorySource>, String> {
+        crate::history::opencode::sources_controlled(home, cancelled)
+    }
+    fn parse_history_controlled(&self, source: &crate::history::HistorySource, cancelled: &dyn Fn() -> bool) -> Result<crate::history::ParsedSession, String> {
+        crate::history::opencode::parse_controlled(source, cancelled)
     }
     fn history_supported(&self) -> bool {
         true

@@ -40,6 +40,7 @@ test('portable notifications refresh applied state and preferences while preserv
             profiles: [profile], common, binding: { profileId: 'p1', profileVersion: applied }, customPath: null, snapshots: [], recoveryNeeded: [],
           });
           if (command === 'inspect_registered_native_draft') return {};
+          if (command === 'prepare_registered_native_import') return { files: args.files, inspection: { connection: null }, migratedSecret: false, nativeCredentials: {} };
           if (command === 'save_registered_native_profile') {
             if ((args.profile as typeof profile).revision !== profile.revision) throw { message: '命名配置已由其他操作修改，请重新读取' };
             return args.profile;
@@ -63,21 +64,21 @@ test('portable notifications refresh applied state and preferences while preserv
   await expect(page.getByLabel('管理中的工具').locator('img').first()).toHaveAttribute('src', /^data:image\/png;base64,/);
   await page.getByRole('button', { name: '编辑配置 →' }).click();
   const draft = page.getByRole('textbox', { name: 'settings 配置草稿' });
-  await expect(draft).toHaveValue('model = "remote-clean"');
-  page.on('dialog', (dialog) => void dialog.accept());
-  await page.getByRole('button', { name: /通用配置.*供本工具/ }).click();
-  await expect(draft).toHaveValue('model = "base"');
+  await expect(draft).toHaveText('model = "remote-clean"');
+  await page.getByRole('button', { name: '通用配置', exact: true }).click();
+  await expect(draft).toHaveText('model = "base"');
   await draft.fill('model = "unsaved-common"');
   await receive('common');
-  await expect(draft).toHaveValue('model = "unsaved-common"');
+  await expect(draft).toHaveText('model = "unsaved-common"');
   await page.getByRole('button', { name: '保存', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('通用配置已由其他操作修改');
   await page.getByRole('button', { name: /工作配置.*有未应用的修改/ }).click();
-  await expect(draft).toHaveValue('model = "remote-clean"');
+  await page.getByRole('dialog').getByRole('button', { name: '放弃修改', exact: true }).click();
+  await expect(draft).toHaveText('model = "remote-clean"');
   await draft.fill('model = "unsaved-profile"');
   await receive('profile');
   await expect(page.getByText('已收到资料更新；当前未保存草稿已保留，保存时会检查资料是否变化。')).toBeVisible();
-  await expect(draft).toHaveValue('model = "unsaved-profile"');
+  await expect(draft).toHaveText('model = "unsaved-profile"');
   await page.getByRole('button', { name: '保存', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('命名配置已由其他操作修改');
   const saves = await page.evaluate(() => (window as typeof window & { __portableCalls: Array<{ command: string; args: Record<string, unknown> }> }).__portableCalls.filter((call) => call.command.startsWith('save_registered')));

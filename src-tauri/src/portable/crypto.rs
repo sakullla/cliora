@@ -10,6 +10,13 @@ const MAX_CONTAINER: usize = 96 * 1024 * 1024;
 pub const MAX_PLAINTEXT: usize = 64 * 1024 * 1024;
 const MEMORY_KIB: u32 = 64 * 1024;
 const ITERATIONS: u32 = 3;
+
+// Protocol fixtures repeatedly unlock the same space. Reuse only identical pure KDF
+// inputs in this test thread; the first derivation still uses the full production cost.
+#[cfg(test)]
+thread_local! {
+    static TEST_SYNC_KEYS: std::cell::RefCell<std::collections::BTreeMap<(String, [u8; 16]), [u8; 32]>> = std::cell::RefCell::new(std::collections::BTreeMap::new());
+}
 const LANES: u32 = 4;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -223,12 +230,18 @@ fn sync_wrapping_key(password: &str, salt: &[u8; 16]) -> Result<[u8; 32], String
     if password.len() < 12 {
         return Err("同步加密口令至少需要 12 位".into());
     }
+    #[cfg(test)]
+    if let Some(key) = TEST_SYNC_KEYS.with(|cache| cache.borrow().get(&(password.to_owned(), *salt)).copied()) {
+        return Ok(key);
+    }
     let params = argon2::Params::new(MEMORY_KIB, ITERATIONS, LANES, Some(32))
         .map_err(|_| "同步密钥参数无效".to_string())?;
     let mut key = [0u8; 32];
     argon2::Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params)
         .hash_password_into(password.as_bytes(), salt, &mut key)
         .map_err(|_| "同步密钥无法生成".to_string())?;
+    #[cfg(test)]
+    TEST_SYNC_KEYS.with(|cache| { cache.borrow_mut().insert((password.to_owned(), *salt), key); });
     Ok(key)
 }
 

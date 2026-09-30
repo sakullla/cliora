@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+use rusqlite::{params, OptionalExtension};
 
 use crate::credentials::CredentialStore;
 use crate::database::Database;
@@ -57,6 +58,43 @@ fn path_for(
     adapter
         .rule_path(target.scope, home, project.as_deref())
         .ok_or_else(|| "此 CLI 在当前范围没有已确认的原生规则文件".into())
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeRule { pub path: String, pub text: String, pub fingerprint: String }
+
+pub fn read_current(registry: &Registry, home: &Path, target: &RuleTarget) -> Result<NativeRule, String> {
+    let path = path_for(registry, home, target)?;
+    let text = transaction::read_native(&path)?;
+    Ok(NativeRule {path:path.display().to_string(), fingerprint:transaction::fingerprint(text.as_bytes()), text})
+}
+
+pub fn save_current(db: &Database, credentials: &dyn CredentialStore, registry: &Registry, home: &Path, target: &RuleTarget, original: &str, edited: &str) -> Result<transaction::ApplyOutcome, String> {
+    if edited.len() > 1024 * 1024 { return Err("规则内容超过 1 MiB".into()); }
+    let path = path_for(registry, home, target)?;
+    transaction::apply_text(db, credentials, &[TextPatch {path, baseline:original.into(),contents:edited.into(),sensitive:false}], |_| Ok(()))
+}
+
+pub fn enabled(_db: &Database, registry: &Registry, home: &Path, target: &RuleTarget) -> Result<bool,String> {
+    let file=read_current(registry,home,target)?;
+    Ok(!file.text.is_empty())
+}
+pub fn set_enabled(db: &Database, credentials: &dyn CredentialStore, registry: &Registry, home: &Path, target: &RuleTarget, enabled: bool) -> Result<(),String> {
+    let path=path_for(registry,home,target)?; let current=transaction::read_native(&path)?;
+    let key=format!("native_rule_switch:{}:{}",target.tool_id,path.display());
+    let record:Option<String>=db.with_connection(|conn| conn.query_row("SELECT value FROM app_settings WHERE key=?1",[&key],|row| row.get(0)).optional().map_err(|e| e.to_string()))?;
+    if enabled {
+        let id=record.ok_or("没有由本应用停用的规则备份，请编辑当前规则")?;
+        if !current.is_empty() { return Err("规则已被外部修改，请在编辑器比较后选择，未覆盖当前内容".into()); }
+        transaction::restore_backup(db,credentials,&path,&id,&current,|tx| tx.execute("DELETE FROM app_settings WHERE key=?1",[&key]).map(|_|()).map_err(|e| e.to_string()))?;
+    } else {
+        if current.is_empty() {return Ok(());}
+        transaction::apply_text_with_id(db,credentials,&[TextPatch{path,baseline:current,contents:String::new(),sensitive:true}],|tx,id| {
+            tx.execute("INSERT INTO app_settings(key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![key,id]).map(|_|()).map_err(|e| e.to_string())
+        })?;
+    }
+    Ok(())
 }
 
 pub fn preview(
@@ -163,6 +201,7 @@ pub fn apply(
                         path,
                         baseline: existing,
                         contents: rule.body.clone(),
+                        sensitive: false,
                     }],
                     |_| Ok(()),
                 )?;

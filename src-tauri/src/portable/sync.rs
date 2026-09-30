@@ -23,7 +23,22 @@ use crate::native::adapters::Registry;
 
 const MAX_REMOTE: usize = 96 * 1024 * 1024;
 const MAX_HEADS: usize = 8;
+#[cfg(not(test))]
 static SYNC_LOCK: Mutex<()> = Mutex::new(());
+
+// Each fixture database represents a separate application/device. Keep calls on
+// that device serialized without making independent protocol fixtures wait for it.
+#[cfg(test)]
+fn fixture_sync_lock(db: &Database) -> Result<std::sync::Arc<Mutex<()>>, String> {
+    use std::sync::{Arc, Weak};
+    static LOCKS: Mutex<BTreeMap<String, Weak<Mutex<()>>>> = Mutex::new(BTreeMap::new());
+    let path = db.with_connection(|conn| conn.path().map(str::to_owned).ok_or_else(|| "同步测试需要独立数据库路径".into()))?;
+    let mut locks = LOCKS.lock().unwrap();
+    if let Some(lock) = locks.get(&path).and_then(Weak::upgrade) { return Ok(lock); }
+    let lock = Arc::new(Mutex::new(()));
+    locks.insert(path, Arc::downgrade(&lock));
+    Ok(lock)
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -494,6 +509,11 @@ pub fn configure(
     store: &dyn CredentialStore,
     setup: SyncSetup,
 ) -> Result<SyncStatus, String> {
+    #[cfg(test)]
+    let fixture_lock = fixture_sync_lock(db)?;
+    #[cfg(test)]
+    let _guard = fixture_lock.try_lock().map_err(|_| "同步正在进行，请稍后修改配置".to_string())?;
+    #[cfg(not(test))]
     let _guard = SYNC_LOCK
         .try_lock()
         .map_err(|_| "同步正在进行，请稍后修改配置".to_string())?;
@@ -1343,6 +1363,11 @@ pub fn run(
     registry: &Registry,
     background: bool,
 ) -> Result<SyncStatus, String> {
+    #[cfg(test)]
+    let fixture_lock = fixture_sync_lock(db)?;
+    #[cfg(test)]
+    let _guard = fixture_lock.try_lock().map_err(|_| "同步正在进行，请稍后查看".to_string())?;
+    #[cfg(not(test))]
     let _guard = SYNC_LOCK
         .try_lock()
         .map_err(|_| "同步正在进行，请稍后查看".to_string())?;
@@ -1393,6 +1418,11 @@ pub fn resolve(
     entity_key: &str,
     chosen_version_id: Option<&str>,
 ) -> Result<SyncStatus, String> {
+    #[cfg(test)]
+    let fixture_lock = fixture_sync_lock(db)?;
+    #[cfg(test)]
+    let _guard = fixture_lock.try_lock().map_err(|_| "同步正在进行，请稍后处理冲突".to_string())?;
+    #[cfg(not(test))]
     let _guard = SYNC_LOCK
         .try_lock()
         .map_err(|_| "同步正在进行，请稍后处理冲突".to_string())?;

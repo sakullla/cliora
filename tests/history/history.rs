@@ -233,6 +233,34 @@ fn jsonl_fingerprint_failure_isolated_then_recovered_without_losing_old_index() 
             .replace("Looks good.", "Healthy source changed."),
     )
     .unwrap();
+    // Stop during discovery, rather than waiting until the whole directory has
+    // been fingerprinted. An incomplete discovery must not delete old entries.
+    let stop = std::cell::Cell::new(false);
+    let discovered = discover_jsonl_with_control(&root, |_| true, |path| {
+        let fingerprint = source_fingerprint(path);
+        stop.set(true);
+        fingerprint
+    }, &|| stop.get());
+    assert!(discovered.as_ref().unwrap_err().contains("已取消"));
+    let cancelled = scan_adapter_sources_controlled(&db, &CODEX, discovered, &|| stop.get());
+    assert!(cancelled.incomplete);
+    assert_eq!(list(&db, &HistoryFilter::default()).unwrap().len(), 2);
+    // Cancel after the first parsed JSONL row. Neither a partial replacement
+    // nor a stale marker may be written, and the unseen second entry remains.
+    let calls = std::cell::Cell::new(0);
+    let cancelled = scan_adapter_sources_controlled(&db, &CODEX, CODEX.history_sources(&home), &|| {
+        calls.set(calls.get() + 1);
+        calls.get() > 3
+    });
+    assert!(calls.get() > 3);
+    assert!(cancelled.incomplete && cancelled.detail.contains("已取消"));
+    assert_eq!(cancelled.failed_count, 0);
+    for id in [&failed_id, &healthy_id] {
+        let original = detail(&db, id).unwrap();
+        assert!(!original.session.stale);
+        assert!(original.messages.iter().any(|item| item.text == "Looks good."));
+    }
+    assert_eq!(list(&db, &HistoryFilter::default()).unwrap().len(), 2);
     let discovered = discover_jsonl_with(
         &root,
         |path| path.extension().is_some_and(|value| value == "jsonl"),
@@ -426,6 +454,21 @@ fn unknown_only_usage_is_not_zero_and_mixed_usage_is_a_known_subtotal() {
     assert_eq!(mixed.unknown_usage_sessions, 1);
     assert_eq!(mixed.input, Some(150));
     assert_eq!(mixed.estimated_cost, None);
+    assert!(mixed.by_model.iter().any(|row|row.model.is_none() && row.unknown_usage_sessions==1 && row.input.is_none()));
+    let events=vec![
+        UsageEvent{id:"request-a".into(),model:Some("model-a".into()),timestamp:Some(1790668801000),input:Some(10),output:Some(2),cache_read:Some(0),cache_write:Some(0),input_includes_cache:true},
+        UsageEvent{id:"request-b".into(),model:Some("model-b".into()),timestamp:Some(1790668802000),input:Some(30),output:Some(5),cache_read:Some(0),cache_write:Some(0),input_includes_cache:true},
+    ];
+    db.with_connection(|conn|conn.execute("UPDATE history_sessions SET usage_json=?1 WHERE usage_count>0",[serde_json::to_string(&events).unwrap()]).map(|_|()).map_err(|e|e.to_string())).unwrap();
+    let grouped=usage_summary(&db,&HistoryFilter::default()).unwrap();
+    for (model,input) in [("model-a",10),("model-b",30)] {
+        let row=grouped.by_model.iter().find(|row|row.model.as_deref()==Some(model)).unwrap();
+        assert_eq!(row.session_count,1);assert_eq!(row.input,Some(input));
+        let selected=usage_summary(&db,&HistoryFilter{model:Some(model.into()),..Default::default()}).unwrap();
+        assert_eq!(selected.input,Some(input));assert_eq!(selected.by_model.len(),1);
+    }
+    let unknown=usage_summary(&db,&HistoryFilter{model:Some("__unknown__".into()),..Default::default()}).unwrap();
+    assert_eq!(unknown.session_count,1);assert_eq!(unknown.input,None);
 }
 
 #[test]
@@ -592,7 +635,7 @@ fn exports_are_separate_read_only_files_and_resume_arguments_are_native() {
 
 #[cfg(windows)]
 #[test]
-fn copied_resume_command_uses_indexed_id_and_relinked_project_directory() {
+fn copied_and_direct_resume_use_original_directory_after_project_relink() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     let source = home.join(".grok/sessions/project/44444444-4444-4444-8444-444444444444");
@@ -641,7 +684,7 @@ fn copied_resume_command_uses_indexed_id_and_relinked_project_directory() {
     assert!(first.contains("'--resume' '44444444-4444-4444-8444-444444444444'"));
     assert!(first.contains(&format!(
         "'{}'",
-        original_dir.canonicalize().unwrap().display()
+        original_dir.display()
     )));
     let project = crate::projects::add(
         &db,
@@ -653,13 +696,11 @@ fn copied_resume_command_uses_indexed_id_and_relinked_project_directory() {
     .unwrap();
     set_project(&db, &id, Some(&project.id)).unwrap();
     let next = copy_resume_command(&db, &registry, &home, &id, LaunchMode::Yolo).unwrap();
-    assert!(next.contains(&format!(
-        "'{}'",
-        relinked_dir.canonicalize().unwrap().display()
-    )));
+    assert!(next.contains(&format!("'{}'", original_dir.display())));
     assert!(next.contains("'--yolo'"));
-    assert!(!next.contains(&format!(
-        "'{}'",
-        original_dir.canonicalize().unwrap().display()
-    )));
+    assert!(!next.contains(&format!("'{}'", relinked_dir.display())));
+    let direct = crate::launch::plan(&db, &registry, &home, crate::launch::LaunchRequest {
+        tool_id: "grok".into(), project_id: None, session_id: Some("44444444-4444-4444-8444-444444444444".into()), directory: Some(relinked_dir.display().to_string()), mode: LaunchMode::Normal,
+    }).unwrap();
+    assert_eq!(direct.directory, original_dir.canonicalize().unwrap());
 }

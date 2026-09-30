@@ -85,6 +85,13 @@ impl CliAdapter for Claude {
     fn portable_root_fields(&self, role: &str) -> &'static [&'static str] {
         if role == "settings" { &["model", "env", "permissions", "alwaysThinkingEnabled"] } else { &[] }
     }
+    fn skill_switch_location(&self, scope: Scope, home: &Path, project: Option<&Path>, name: &str) -> Option<super::SkillSwitchLocation> {
+        let file=self.native_files(scope,home,project,true).into_iter().find(|file| file.role=="settings")?;
+        let kind=FileKind::for_name(&file.path).ok()?;
+        Some(super::SkillSwitchLocation{path:file.path.into(),kind,field:vec!["skillOverrides".into(),name.into()]})
+    }
+    fn skill_switch_value(&self, _: &Value, enabled: bool, _: &Path) -> Value { json!(if enabled {"on"} else {"off"}) }
+    fn skill_switch_enabled(&self, current: &Value, _: &Path) -> bool { current.as_str()!=Some("off") }
     fn mcp_location(
         &self,
         scope: Scope,
@@ -170,6 +177,7 @@ impl CliAdapter for Claude {
         }
         let mut settings = json!({});
         set_json(&mut settings, &["model"], json!(connection.model));
+        set_json(&mut settings, &["env","ANTHROPIC_MODEL"], json!(connection.model));
         set_json(
             &mut settings,
             &["env", "ANTHROPIC_BASE_URL"],
@@ -240,7 +248,9 @@ impl CliAdapter for Claude {
     ) -> InspectionFields {
         InspectionFields {
             provider: Some("anthropic".into()),
-            model: string_at(local_settings, &["model"])
+            model: string_at(local_settings, &["env","ANTHROPIC_MODEL"])
+                .or_else(|| string_at(settings, &["env","ANTHROPIC_MODEL"]))
+                .or_else(|| string_at(local_settings, &["model"]))
                 .or_else(|| string_at(settings, &["model"]))
                 .map(str::to_owned),
             base: string_at(local_settings, &["env", "ANTHROPIC_BASE_URL"])
@@ -366,6 +376,9 @@ impl CliAdapter for Claude {
         }
         Ok(())
     }
+    fn request_model_id(&self, model: &str) -> String { if model.to_ascii_lowercase().ends_with("[1m]") { model[..model.len()-4].into() } else { model.into() } }
+    fn login_args(&self) -> Option<Vec<String>> { Some(vec!["auth".into(), "login".into()]) }
+    fn login_hint(&self) -> &'static str { "在终端完成 Claude Code 原生登录。" }
     fn launch_args(&self, session: Option<&str>, mode: LaunchMode) -> Result<Vec<String>, String> {
         let mut args = Vec::new();
         if let Some(id) = session {
@@ -387,6 +400,12 @@ impl CliAdapter for Claude {
         source: &crate::history::HistorySource,
     ) -> Result<crate::history::ParsedSession, String> {
         crate::history::claude::parse(source)
+    }
+    fn history_sources_controlled(&self, home: &std::path::Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<crate::history::HistorySource>, String> {
+        crate::history::claude::sources_controlled(home, cancelled)
+    }
+    fn parse_history_controlled(&self, source: &crate::history::HistorySource, cancelled: &dyn Fn() -> bool) -> Result<crate::history::ParsedSession, String> {
+        crate::history::claude::parse_controlled(source, cancelled)
     }
     fn history_supported(&self) -> bool {
         true

@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { native } from '../../lib/native';
+import { confirmAction } from '../../lib/confirm';
 import type { Project } from '../../types/launch';
 import type { LibraryItem } from '../../types/library';
 import type { AdapterDescriptor, Scope } from '../../types/native';
@@ -20,6 +21,9 @@ export function RuleDistribution({ rule, tools, projects }: { rule: LibraryItem;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const project = projects.find((item) => item.id === projectId);
+  const latest = useRef(''); latest.current = JSON.stringify([rule, scope, project, selected, preview]);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
   function target(toolId: string): RuleTarget {
     return { toolId, scope, projectPath: scope === 'project' ? project?.path ?? null : null };
@@ -36,7 +40,8 @@ export function RuleDistribution({ rule, tools, projects }: { rule: LibraryItem;
   async function apply() {
     if (!preview) return;
     const ready = preview.filter((item) => item.status === 'ready' && item.changed);
-    if (!ready.length || !window.confirm(`确认覆盖 ${ready.length} 个目标的原生规则文件？下方已展示每个文件的完整前后内容。`)) return;
+    const started = latest.current;
+    if (!ready.length || !await confirmAction(`将覆盖 ${ready.length} 个目标的规则文件。已展示每个文件的前后内容。`, () => mounted.current && latest.current === started, { title: '应用规则', confirmLabel: '覆盖并应用' })) return;
     setBusy(true); setError('');
     try { setResults(await native.applyRuleTargets(rule.id, rule.version, ready.map((item) => item.target))); setPreview(null); }
     catch (value) { setError(text(value)); }

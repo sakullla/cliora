@@ -220,18 +220,16 @@ fn recent_action(project_id: &str, tool: Option<&str>, available: bool) -> Actio
 
 fn simple_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
     let menu = Menu::new(app).map_err(|error| error.to_string())?;
-    let root = Submenu::new(app, "栖点", true).map_err(|error| error.to_string())?;
-    root.append(
+    menu.append(
         &MenuItem::with_id(app, "show", "显示栖点", true, None::<&str>)
             .map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
-    root.append(
+    menu.append(
         &MenuItem::with_id(app, "quit", "完全退出", true, None::<&str>)
             .map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
-    menu.append(&root).map_err(|error| error.to_string())?;
     Ok(menu)
 }
 
@@ -325,8 +323,7 @@ pub fn refresh(app: &AppHandle) -> Result<(), String> {
     let mut actions = HashMap::new();
     let mut counter = 0;
     let generation = state.generation.fetch_add(1, Ordering::Relaxed) + 1;
-    let root = Submenu::new(app, "栖点", true).map_err(|error| error.to_string())?;
-    root.append(&register_action(
+    menu.append(&register_action(
         app,
         &mut actions,
         &mut counter,
@@ -336,7 +333,6 @@ pub fn refresh(app: &AppHandle) -> Result<(), String> {
         true,
     )?)
     .map_err(|error| error.to_string())?;
-    menu.append(&root).map_err(|error| error.to_string())?;
 
     let registry = Registry::builtins();
     let data = app
@@ -472,8 +468,7 @@ pub fn refresh(app: &AppHandle) -> Result<(), String> {
     }
     menu.append(&recent_menu)
         .map_err(|error| error.to_string())?;
-    let exit = Submenu::new(app, "窗口与退出", true).map_err(|error| error.to_string())?;
-    exit.append(&register_action(
+    menu.append(&register_action(
         app,
         &mut actions,
         &mut counter,
@@ -483,7 +478,6 @@ pub fn refresh(app: &AppHandle) -> Result<(), String> {
         true,
     )?)
     .map_err(|error| error.to_string())?;
-    menu.append(&exit).map_err(|error| error.to_string())?;
     let icon = state
         .icon
         .lock()
@@ -585,6 +579,7 @@ fn on_menu(app: &AppHandle, id: &str) {
                     tool_id: tool.clone(),
                     project_id: Some(project.clone()),
                     session_id: None,
+            directory: None,
                     mode: LaunchMode::Normal,
                 };
                 if let Err(failure) = commands::launch_now_with_stage(&app, request) {

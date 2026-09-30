@@ -36,5 +36,19 @@ argon2 = "0.5"
 tauri-plugin-single-instance = "2"
 tauri-plugin-dialog = "2"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading"] }
+
 [dev-dependencies]
 tempfile = "3"
+
+# Keep the real 64 MiB / 3-pass KDF in tests; optimize only its CPU-bound dependencies.
+[profile.test.package.argon2]
+opt-level = 3
+
+[profile.test.package.blake2]
+opt-level = 3
+
+# Optimize the test executable's generic crypto/JSON code without rebuilding every dependency.
+[profile.test.package.cliora]
+opt-level = 1
