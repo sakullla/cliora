@@ -2219,6 +2219,24 @@ pub fn set_theme(
     })
 }
 
+#[tauri::command]
+pub fn set_tool_icon(app: AppHandle, state: State<'_, AppState>, tool_id: String, data_url: Option<String>) -> Result<Bootstrap, ApiError> {
+    let candidate = data_url.clone().map(|data| std::collections::BTreeMap::from([(tool_id.clone(), data)])).unwrap_or_default();
+    if !crate::domain::valid_icon_id(&tool_id) || !crate::domain::valid_tool_icons(&candidate) {
+        return Err(storage_error("请选择不超过 128 KB 的 PNG、JPEG 或 WebP 图标".into()));
+    }
+    state.with_database(&app, |database| {
+        let current = database.preferences().map_err(storage_error)?;
+        if data_url.is_some() && !current.tool_icons.contains_key(&tool_id) && current.tool_icons.len() >= 100 {
+            return Err(storage_error("最多保存 100 个工具图标".into()));
+        }
+        database.update_preferences(|preferences| {
+            if let Some(data) = data_url { preferences.tool_icons.insert(tool_id, data); }
+            else { preferences.tool_icons.remove(&tool_id); }
+        }).map(Bootstrap::new).map_err(storage_error)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,11 +1,17 @@
 import type { Connection } from '../../../types/native';
 import { claudeUiAdapter } from './claude';
 import { codexUiAdapter } from './codex';
+import { grokUiAdapter } from './grok';
+import { piUiAdapter } from './pi';
+import { opencodeUiAdapter } from './opencode';
 import type { ToolUiAdapter } from './contract';
 
 const specialized = new Map<string, ToolUiAdapter>([
   [claudeUiAdapter.id, claudeUiAdapter],
   [codexUiAdapter.id, codexUiAdapter],
+  [grokUiAdapter.id, grokUiAdapter],
+  [piUiAdapter.id, piUiAdapter],
+  [opencodeUiAdapter.id, opencodeUiAdapter],
 ]);
 
 export function uiAdapterFor(id: string): ToolUiAdapter {

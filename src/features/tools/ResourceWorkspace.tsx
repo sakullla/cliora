@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { native } from '../../lib/native';
 import type { AdapterDescriptor, Scope } from '../../types/native';
 import type { McpDefinition, McpDraft, McpTargetRequest, McpTargetResult, NativeMcpEntry, NativeSkillEntry, SkillImportPreview, SkillInstallation, SkillPackage, SkillRecoveryIssue, SkillTargetPreview, SkillTargetResult } from '../../types/resources';
+import { ToolIcon } from '../../components/ToolIcon';
 import styles from './ResourceWorkspace.module.css';
 
 function errorText(error: unknown) {
@@ -165,7 +166,7 @@ export function McpWorkspace({ toolId, scope, projectPath, tools, onDirtyChange 
       <div className={styles.actions}><button type="button" className={styles.primary} disabled={busy || !draft.name.trim()} onClick={() => void save()}>保存定义</button></div>
       {draft.id && <div className={styles.distribution}>
         <div className={styles.heading}><div><strong>分发到 CLI</strong><p>每个目标独立写入。已有同名原生条目会先显示冲突。</p></div></div>
-        <div className={styles.targetGrid}>{tools.map((item) => <label key={item.id}><input type="checkbox" checked={selected.includes(item.id)} onChange={(event) => { setSelected(event.target.checked ? [...selected, item.id] : selected.filter((id) => id !== item.id)); setPreview(null); }} />{item.name}</label>)}</div>
+        <div className={styles.targetGrid}>{tools.map((item) => <label key={item.id}><input type="checkbox" checked={selected.includes(item.id)} onChange={(event) => { setSelected(event.target.checked ? [...selected, item.id] : selected.filter((id) => id !== item.id)); setPreview(null); }} /><ToolIcon toolId={item.id} size={22} />{item.name}</label>)}</div>
         <label className={styles.inline}><input type="checkbox" checked={enabled} onChange={(event) => { setEnabled(event.target.checked); setPreview(null); }} />启用 MCP</label>
         <button type="button" disabled={busy || previewBusy || !selected.length} onClick={() => void inspect()}>预览目标</button>
         {preview && <div className={styles.resultList}>{preview.map((item) => <div key={item.toolId}><p><strong>{tools.find((tool) => tool.id === item.toolId)?.name ?? item.toolId}</strong> · {item.status === 'conflict' ? '同名冲突' : item.status === 'ready' ? '可写入' : '不可写入'} · {item.path ?? ''} <small>{item.detail}</small></p>{(item.existing !== null || item.proposed !== null) && <details className={styles.fileChange} open={item.status === 'conflict'}><summary>查看当前与写入后的原生条目</summary><div className={styles.fileDiff}><div><strong>当前原生条目</strong><pre>{item.existing === null ? '无' : JSON.stringify(item.existing, null, 2)}</pre></div><div><strong>写入后</strong><pre>{item.proposed === null ? '移除' : JSON.stringify(item.proposed, null, 2)}</pre></div></div></details>}</div>)}<button type="button" className={styles.primary} disabled={busy || !preview.some((item) => item.status === 'ready' || item.status === 'conflict')} onClick={() => void distribute()}>确认分发</button></div>}

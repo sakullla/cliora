@@ -1,0 +1,8 @@
+{
+  "command": "Start-Process src-tauri/target/release/cliora.exe -WindowStyle Hidden",
+  "pid": 37156,
+  "aliveAfterSeconds": 5,
+  "hasExited": false,
+  "windowTitle": "栖点 · Cliora",
+  "nativeBehaviorsAccepted": false
+}

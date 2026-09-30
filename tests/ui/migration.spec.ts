@@ -8,6 +8,7 @@ test('portable notifications refresh applied state and preferences while preserv
     let next = 0;
     let managed = ['codex'];
     let theme = 'system';
+    let tool_icons = {};
     let profile = { id: 'p1', tool: 'codex', name: '工作配置', version: 2, revision: 'local-profile', inheritCommon: true, files: { settings: 'model = "local"' }, suppressed: {}, nativeCredentials: {}, connection: null };
     let common = { tool: 'codex', version: 2, revision: 'local-common', files: { settings: 'model = "base"' } };
     let applied = 2;
@@ -16,7 +17,7 @@ test('portable notifications refresh applied state and preferences while preserv
       isTauri: true,
       __portableCalls: calls,
       __receivePortable: (kind: string) => {
-        applied = 0; theme = 'dark';
+        applied = 0; theme = 'dark'; tool_icons = { codex: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aR2kAAAAASUVORK5CYII=' };
         if (kind === 'clean') profile = { ...profile, revision: 'remote-clean', files: { settings: 'model = "remote-clean"' } };
         if (kind === 'profile') { profile = { ...profile, revision: 'remote-profile', files: { settings: 'model = "remote-profile"' } }; managed = []; }
         if (kind === 'common') common = { ...common, revision: 'remote-common', files: { settings: 'model = "remote-common"' } };
@@ -29,7 +30,7 @@ test('portable notifications refresh applied state and preferences while preserv
           calls.push({ command, args });
           if (command === 'plugin:event|listen') { const event = String(args.event); listeners.set(event, [...(listeners.get(event) ?? []), Number(args.handler)]); return args.handler; }
           if (command === 'plugin:event|unlisten') { const event = String(args.event); listeners.set(event, (listeners.get(event) ?? []).filter((id) => id !== args.eventId)); return null; }
-          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: managed, theme }, tools: [{ id: 'codex', name: 'Codex' }] };
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: managed, theme, tool_icons }, tools: [{ id: 'codex', name: 'Codex' }] };
           if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], nativeConfig: { state: 'available' }, resources: { state: 'available' } }], managedIds: managed, preservedUnknown: [] };
           if (command === 'list_projects') return [];
           if (command === 'get_tray_status') return { available: true, error: null };
@@ -59,6 +60,7 @@ test('portable notifications refresh applied state and preferences while preserv
   await receive('clean');
   await expect(page.getByText('已保存的修改尚未应用；请在工具页应用')).toBeVisible();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await expect(page.getByLabel('管理中的工具').locator('img').first()).toHaveAttribute('src', /^data:image\/png;base64,/);
   await page.getByRole('button', { name: '编辑配置 →' }).click();
   const draft = page.getByRole('textbox', { name: 'settings 配置草稿' });
   await expect(draft).toHaveValue('model = "remote-clean"');
@@ -125,6 +127,7 @@ test('migration previews conflicts, keeps choices, cancels, and separates native
   const nav = page.getByRole('navigation', { name: '页面' });
   await nav.getByRole('button', { name: '设置' }).click();
   await page.getByRole('tab', { name: '迁移与同步' }).click();
+  if (!await page.getByPlaceholder('输入导出时的口令').isVisible()) await page.getByRole('button', { name: '从配置包恢复', exact: true }).click();
   await page.getByPlaceholder('输入导出时的口令').fill('correct-password');
   await page.getByRole('button', { name: '选择配置包并预览' }).click();
   await expect(page.getByText('待关联：项目本机目录')).toBeVisible();
@@ -136,6 +139,7 @@ test('migration previews conflicts, keeps choices, cancels, and separates native
   await page.getByRole('button', { name: '取消', exact: true }).click();
   expect((await page.evaluate(() => (window as typeof window & { __migrationCalls: Array<{ command: string }> }).__migrationCalls))
     .filter((call) => call.command === 'apply_portable_bundle')).toHaveLength(0);
+  if (!await page.getByPlaceholder('输入导出时的口令').isVisible()) await page.getByRole('button', { name: '从配置包恢复', exact: true }).click();
   await page.getByPlaceholder('输入导出时的口令').fill('correct-password');
   await page.getByRole('button', { name: '选择配置包并预览' }).click();
   await page.getByRole('checkbox', { name: /工作配置.*与本机不同/ }).check();
@@ -153,6 +157,7 @@ test('migration previews conflicts, keeps choices, cancels, and separates native
   expect(applies[0].args.applyTargets).toEqual([{ profileId: 'p1', projectId: 'new' }]);
   await expect(page.getByText(/工作配置 · new：已应用/)).toBeVisible();
 
+  if (!await page.getByPlaceholder('输入导出时的口令').isVisible()) await page.getByRole('button', { name: '从配置包恢复', exact: true }).click();
   await page.getByPlaceholder('输入导出时的口令').fill('correct-password');
   await page.getByRole('button', { name: '选择配置包并预览' }).click();
   await page.getByRole('checkbox', { name: /工作配置.*与本机不同/ }).check();
@@ -161,6 +166,7 @@ test('migration previews conflicts, keeps choices, cancels, and separates native
   await expect(page.getByText(/已恢复 2 项资料。工作配置 · 全局：失败，本机文件冲突/)).toBeVisible();
   await expect(page.getByRole('button', { name: '确认恢复 2 项' })).toHaveCount(0);
 
+  await page.getByRole('button', { name: '配置 WebDAV', exact: true }).click();
   await page.getByLabel('WebDAV 目录地址').fill('https://dav.example.test/cliora/');
   await page.getByLabel('用户名').fill('example');
   await page.getByLabel('WebDAV 密码').fill('correct-password');

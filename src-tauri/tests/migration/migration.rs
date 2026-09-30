@@ -173,7 +173,7 @@ fn encrypted_bundle_restores_on_fresh_device_without_identity_or_paths_and_is_id
 fn portable_snapshot_rejects_duplicate_entities() {
     let entity = PortableEntity {
         id: "managed".into(),
-        payload: PortablePayload::Preferences(PortablePreferences {
+        payload: PortablePayload::Preferences(PortablePreferences { tool_icons: Default::default(),
             managed_tools: vec!["codex".into()],
             theme: "system".into(),
         }),
@@ -415,7 +415,7 @@ fn absent_preferences_are_new_and_actual_edits_after_preview_are_protected() {
     let registry = Registry::builtins();
     assert!(collect_snapshot(&db, &credentials, &registry).unwrap().entities.is_empty());
     let incoming = PortableSnapshot { schema_version: 1, entities: vec![PortableEntity {
-        id: "managed".into(), payload: PortablePayload::Preferences(PortablePreferences {
+        id: "managed".into(), payload: PortablePayload::Preferences(PortablePreferences { tool_icons: Default::default(),
             managed_tools: vec!["pi".into()], theme: "dark".into(),
         }),
     }] };
@@ -560,4 +560,32 @@ fn incoming_content_never_becomes_automatic_project_directory_recovery() {
     // After explicit content acceptance, ordinary directory recovery retains its behavior.
     db.with_connection(|conn| { conn.execute("UPDATE applied_bindings SET profile_version=1", []).unwrap(); Ok(()) }).unwrap();
     assert_eq!(projects::get(&db, &project.id).unwrap().reapply_profiles["codex"], profile.id);
+}
+
+#[test]
+fn tool_icons_roundtrip_encryption_and_participate_in_import_cas_without_device_paths() {
+    let old = tempfile::tempdir().unwrap();
+    let fresh = tempfile::tempdir().unwrap();
+    let db = database(old.path());
+    let destination = database(fresh.path());
+    let credentials = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    let png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aR2kAAAAASUVORK5CYII=";
+    db.update_preferences(|p| { p.tool_icons.insert("future_cli".into(), png.into()); p.theme = crate::domain::Theme::Dark; }).unwrap();
+    let selected = BTreeSet::from(["preferences:managed".into()]);
+    let bytes = old.path().join("icons.cliora");
+    export_bundle(&db, &credentials, &registry, "correct-password", Some(&selected), &bytes).unwrap();
+    let snapshot = unlock_bundle(&bytes, "correct-password").unwrap();
+    let draft = preview_import(&destination, &credentials, &registry, snapshot).unwrap();
+    apply_import(&destination, &credentials, &registry, &draft, &selected).unwrap();
+    assert_eq!(destination.preferences().unwrap().tool_icons["future_cli"], png);
+    assert_eq!(destination.preferences().unwrap().theme, crate::domain::Theme::Dark);
+    let again = preview_import(&destination, &credentials, &registry, unlock_bundle(&bytes, "correct-password").unwrap()).unwrap();
+    assert_eq!(again.items[0].status, "same");
+    destination.update_preferences(|p| { p.tool_icons.remove("future_cli"); }).unwrap();
+    assert!(apply_import(&destination, &credentials, &registry, &again, &selected).unwrap_err().contains("本机资料已变化"));
+    // Older packages omit icon fields; an empty map preserves their canonical digest.
+    let old: PortablePreferences = serde_json::from_str(r#"{"managedTools":["codex"],"theme":"light"}"#).unwrap();
+    assert!(old.tool_icons.is_empty());
+    assert!(!serde_json::to_string(&old).unwrap().contains("toolIcons"));
 }

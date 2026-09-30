@@ -81,6 +81,7 @@ test('home resumes with native session ID and explicit normal or YOLO mode', asy
     });
   });
   await page.goto('/');
+  await page.getByText('恢复已有会话 · YOLO 启动', { exact: true }).click();
   await expect(page.getByRole('textbox', { name: '恢复会话 ID' })).toBeVisible();
   await page.getByRole('textbox', { name: '恢复会话 ID' }).fill('session-中文 1');
   await page.getByRole('button', { name: '恢复', exact: true }).click();
@@ -400,4 +401,56 @@ test('storage failure preserves an actionable page and retry loads repaired data
   await page.getByRole('button', { name: '重试读取' }).click();
   await expect(page.getByRole('checkbox', { name: /Codex/ })).toBeVisible();
   await expect(page.getByRole('alert')).toHaveCount(0);
+});
+
+
+test('custom tool icons persist across reload, preserve theme and management, and reset across pages', async ({ page }) => {
+  await page.addInitScript(() => {
+    const read = () => JSON.parse(localStorage.getItem('icon-preferences') ?? '{"schema_version":1,"managed_tools":["codex"],"theme":"dark","tool_icons":{}}');
+    const bootstrap = () => ({ preferences: read(), tools: [{ id: 'codex', name: 'Codex' }] });
+    Object.assign(window, { isTauri: true, __iconCalls: [], __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
+      (window as any).__iconCalls.push({ command, args });
+      if (command === 'get_bootstrap') return bootstrap();
+      if (command === 'set_tool_icon' || command === 'set_theme') {
+        const next = read();
+        if (command === 'set_theme') next.theme = args.theme;
+        else if (args.dataUrl) next.tool_icons[args.toolId] = args.dataUrl;
+        else delete next.tool_icons[args.toolId];
+        localStorage.setItem('icon-preferences', JSON.stringify(next));
+        return bootstrap();
+      }
+      if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [] }], managedIds: read().managed_tools, preservedUnknown: [] };
+      if (command === 'list_projects' || command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_skill_recovery_issues' || command === 'scan_native_skills' || command === 'list_native_mcp') return [];
+      if (command === 'get_registered_tool_workspace') return { probe: { selectedPath: 'C:/codex.cmd', installations: [], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: [], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '' }, profiles: [], common: null, binding: null, snapshots: [], recoveryNeeded: [], customPath: null };
+      if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
+      if (command === 'get_tray_status') return { available: false, error: null };
+      if (command === 'launch_cli') return { mode: args.request.mode, status: 'terminal_requested' };
+      throw new Error(`Unexpected IPC: ${command}`);
+    } } });
+  });
+  await page.goto('/');
+  const nav = page.getByRole('navigation', { name: '页面' });
+  const logo = page.getByLabel('管理中的工具').locator('img').first();
+  await expect(logo).toBeVisible();
+  const defaultSource = await logo.getAttribute('src');
+  await page.getByRole('button', { name: '启动', exact: true }).click();
+  expect((await page.evaluate(() => (window as any).__iconCalls)).find((call: any) => call.command === 'launch_cli').args.request).toMatchObject({ mode: 'normal', sessionId: null, projectId: null });
+  await nav.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByText('自定义工具图标', { exact: true }).click();
+  const base64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aR2kAAAAASUVORK5CYII=';
+  await page.getByLabel('Codex 自定义图标').setInputFiles({ name: 'custom.png', mimeType: 'image/png', buffer: Buffer.from(base64, 'base64') });
+  await expect(page.locator('.managed-checks img')).toHaveAttribute('src', `data:image/png;base64,${base64}`);
+  await page.getByLabel('主题', { exact: true }).selectOption('light');
+  await nav.getByRole('button', { name: '工具与连接' }).click();
+  await expect(page.getByRole('tablist', { name: 'CLI' }).locator('img')).toHaveAttribute('src', `data:image/png;base64,${base64}`);
+  await page.reload();
+  await expect(logo).toHaveAttribute('src', `data:image/png;base64,${base64}`);
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await nav.getByRole('button', { name: '设置', exact: true }).click();
+  await expect(page.getByRole('checkbox', { name: 'Codex', exact: true })).toBeChecked();
+  await page.getByText('自定义工具图标', { exact: true }).click();
+  await page.getByRole('button', { name: '恢复默认', exact: true }).click();
+  await nav.getByRole('button', { name: '快速开始' }).click();
+  await expect(logo).toHaveAttribute('src', defaultSource!);
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
 });

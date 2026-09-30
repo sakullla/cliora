@@ -1,0 +1,48 @@
+{
+  "kind": "cli-version-discovery",
+  "recordedAt": "2026-09-30T02:47:52.352Z",
+  "host": {
+    "Caption": "Microsoft Windows 11 专业版",
+    "Version": "10.0.26200",
+    "OSArchitecture": "64 位"
+  },
+  "architecture": "X64",
+  "observations": [
+    {
+      "tool": "codex",
+      "version": "0.159.2",
+      "command": "codex --version",
+      "exitCode": 0,
+      "stdout": "codex-cli 0.159.2"
+    },
+    {
+      "tool": "claude_code",
+      "version": "2.1.284",
+      "command": "claude --version",
+      "exitCode": 0,
+      "stdout": "2.1.284 (Claude Code)"
+    },
+    {
+      "tool": "grok",
+      "version": "1.0.44",
+      "command": "grok --version",
+      "exitCode": 0,
+      "stdout": "grok 1.0.44 (5b807183dd79)"
+    },
+    {
+      "tool": "pi",
+      "version": "0.99.1",
+      "command": "pi --version",
+      "exitCode": 0,
+      "stdout": "0.99.1"
+    },
+    {
+      "tool": "open_code",
+      "version": "1.18.33",
+      "command": "opencode --version",
+      "exitCode": 0,
+      "stdout": "1.18.33"
+    }
+  ],
+  "limits": "Version output only. Native apply, launch/resume, tray, resources, history and portable restore on actual platforms have not been observed by this script."
+}

@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { listen } from '@tauri-apps/api/event';
+import { Icon } from './components/Icon';
+import { ToolIcon, ToolIconsContext } from './components/ToolIcon';
+import { ToolIconSettings } from './features/settings/ToolIconSettings';
 import { ManagedTools } from './features/home/ManagedTools';
 import { ProjectLauncher } from './features/home/ProjectLauncher';
 import { LibraryPage } from './features/library/LibraryPage';
@@ -17,12 +20,12 @@ import type { AdapterCatalog } from './types/native';
 type Page = 'home' | 'connections' | 'library' | 'records' | 'settings';
 type SettingsTab = 'general' | 'migration';
 
-const pages: { id: Page; label: string; glyph: string }[] = [
-  { id: 'home', label: '快速开始', glyph: '⌂' },
-  { id: 'connections', label: '工具与连接', glyph: '◫' },
-  { id: 'library', label: '资料库', glyph: '▤' },
-  { id: 'records', label: '使用记录', glyph: '◷' },
-  { id: 'settings', label: '设置', glyph: '⚙' },
+const pages: { id: Page; label: string; glyph: 'home' | 'connections' | 'library' | 'records' | 'settings' }[] = [
+  { id: 'home', label: '快速开始', glyph: 'home' },
+  { id: 'connections', label: '工具与连接', glyph: 'connections' },
+  { id: 'library', label: '资料库', glyph: 'library' },
+  { id: 'records', label: '使用记录', glyph: 'records' },
+  { id: 'settings', label: '设置', glyph: 'settings' },
 ];
 
 function titleFor(page: Page): [string, string] {
@@ -36,7 +39,7 @@ function titleFor(page: Page): [string, string] {
 }
 
 function Empty({ title, detail, action }: { title: string; detail: string; action?: ReactNode }) {
-  return <div className="empty-state"><div className="empty-symbol" aria-hidden="true">✧</div><h2>{title}</h2><p>{detail}</p>{action}</div>;
+  return <div className="empty-state"><div className="empty-symbol" aria-hidden="true"><Icon name="leaf" size={22} /></div><h2>{title}</h2><p>{detail}</p>{action}</div>;
 }
 
 function PageTabs<T extends string>({ items, value, onChange }: { items: [T, string][]; value: T; onChange: (value: T) => void }) {
@@ -170,13 +173,20 @@ export default function App() {
     finally { setBusy(false); }
   }
 
-  return <div className="shell">
+  async function updateIcon(toolId: string, dataUrl: string | null) {
+    if (!nativeAvailable || busy) return;
+    setBusy(true); setError(null);
+    try { setBootstrap(await native.setToolIcon(toolId, dataUrl)); }
+    catch (value) { setError(value as ApiError); }
+    finally { setBusy(false); }
+  }
+
+  return <ToolIconsContext value={bootstrap.preferences.tool_icons ?? {}}><div className="shell">
     <aside className="sidebar" aria-label="主导航">
-      <div className="brand"><span className="brandmark" aria-hidden="true">栖</span><span><strong>栖点</strong><small>CLIORA</small></span></div>
+      <div className="brand"><span className="brandmark" aria-hidden="true"><Icon name="leaf" size={24} /></span><span><strong>栖点</strong><small>CLIORA</small></span></div>
       <nav className="nav" aria-label="页面">
-        {pages.map((item, index) => <button key={item.id} type="button" className={page === item.id ? 'active' : ''} aria-current={page === item.id ? 'page' : undefined} onClick={() => go(item.id)}>
-          <span className="nav-glyph" aria-hidden="true">{item.glyph}</span>{item.label}
-          {index === 3 && <span className="nav-divider" />}
+        {pages.map((item) => <button key={item.id} type="button" className={page === item.id ? 'active' : ''} aria-current={page === item.id ? 'page' : undefined} onClick={() => go(item.id)}>
+          <span className="nav-glyph" aria-hidden="true"><Icon name={item.glyph} /></span>{item.label}
         </button>)}
       </nav>
       <div className="sidebar-foot"><span className="status-dot" /> 本机资料</div>
@@ -184,11 +194,11 @@ export default function App() {
     <main className="content" id="main">
       {!nativeAvailable && <div className="environment-banner" role="status">浏览器预览：原生配置、持久保存和系统凭据仅在桌面应用中可用。</div>}
       {error && <div className="error-banner" role="alert"><div className="error-copy"><strong>{error.message}</strong><span>{error.action}</span>{error.data_directory && <code>{error.data_directory}</code>}</div>{loaded && <button type="button" onClick={() => setError(null)} aria-label="关闭错误提示">×</button>}</div>}
-      <header className="page-head"><div><div className="eyebrow">CLIORA · LOCAL WORKSPACE</div><h1 tabIndex={-1}>{title[0]}</h1><p>{title[1]}</p></div>{page === 'home' && <span className="quiet-chip">仅在本机</span>}</header>
+      <header className="page-head"><div><h1 tabIndex={-1}>{title[0]}</h1><p>{title[1]}</p></div>{page === 'home' && <span className="quiet-chip">仅在本机</span>}</header>
       {loading ? <Empty title="正在读取本机设置" detail="请稍候。" /> : !loaded ? <Empty title="暂时无法读取本机资料" detail="原数据仍保留。请按上方提示处理后重试。" action={<button className="button primary" type="button" onClick={loadBootstrap}>重试读取</button>} /> : <>
         {page === 'home' && <>
           <div className="section-heading"><h2>管理中的工具</h2><button className="text-button" type="button" onClick={() => go('settings')}>调整工具 <span aria-hidden="true">→</span></button></div>
-          {visible.length ? nativeAvailable ? <ManagedTools tools={visibleDescriptors} onOpenTool={(id) => { setTool(id); go('connections'); }} /> : <div className="tool-table"><div className="table-head"><span>工具</span><span>当前状态</span><span>操作</span></div>{visible.map((item) => <div className="tool-row" key={item.id}><div className="tool-identity"><span className="tool-icon" aria-hidden="true">{item.name.slice(0, 1)}</span><span><strong>{item.name}</strong><small>浏览器预览</small></span></div><div className="tool-state"><strong>尚未检测</strong><small>请在桌面应用中读取本机配置</small></div><button className="button" type="button" onClick={() => { setTool(item.id); go('connections'); }}>查看工具 <span aria-hidden="true">→</span></button></div>)}</div> : <Empty title="尚未管理工具" detail="可在设置中开启需要管理的 CLI。" action={<button className="button primary" type="button" onClick={() => go('settings')}>前往设置</button>} />}
+          {visible.length ? nativeAvailable ? <ManagedTools tools={visibleDescriptors} onOpenTool={(id) => { setTool(id); go('connections'); }} /> : <div className="tool-table"><div className="table-head"><span>工具</span><span>当前状态</span><span>操作</span></div>{visible.map((item) => <div className="tool-row" key={item.id}><div className="tool-identity"><span className="tool-icon" aria-hidden="true"><ToolIcon toolId={item.id} /></span><span><strong>{item.name}</strong><small>浏览器预览</small></span></div><div className="tool-state"><strong>尚未检测</strong><small>请在桌面应用中读取本机配置</small></div><button className="button" type="button" onClick={() => { setTool(item.id); go('connections'); }}>查看工具 <span aria-hidden="true">→</span></button></div>)}</div> : <Empty title="尚未管理工具" detail="可在设置中开启需要管理的 CLI。" action={<button className="button primary" type="button" onClick={() => go('settings')}>前往设置</button>} />}
           {nativeAvailable ? <ProjectLauncher tools={visibleDescriptors} repair={trayRepair?.page === 'home' ? trayRepair : null} /> : <section className="home-secondary"><div className="section-heading"><h2>最近项目</h2></div><div className="subtle-panel"><strong>桌面应用中管理项目</strong><p>可以关联本机目录，并用选定的 CLI 在外部终端启动。</p></div></section>}
         </>}
         {page === 'connections' && <>
@@ -198,12 +208,13 @@ export default function App() {
         <div hidden={page !== 'records'}><RecordsPage active={page === 'records'} tools={catalog?.registered ?? []} onOpenProjects={() => go('home')} /></div>
         {page === 'settings' && <PageTabs items={[["general", "常规"], ["migration", "迁移与同步"]]} value={settingsTab} onChange={setSettingsTab} />}
         {page === 'settings' && settingsTab === 'general' && <>
-          <section className="settings-group"><div className="setting-intro"><h2>管理的 CLI</h2><p>只在首页和工具页显示勾选的工具。关闭管理不会删除已有配置。</p></div>{(nativeAvailable ? catalog?.registered ?? [] : bootstrap.tools).map((item) => <label className="setting-row" key={item.id}><span><strong>{item.name}</strong><small>安装与配置状态在工具页查看</small></span><input type="checkbox" checked={managed.includes(item.id)} disabled={!nativeAvailable || busy} onChange={(event) => updateManaged(item.id, event.target.checked)} /></label>)}{catalog?.preservedUnknown.map((item) => <div className="setting-row" key={item.id}><span><strong>{item.id}</strong><small>未安装适配器，保留 {item.profileCount} 份配置，只读</small></span></div>)}</section>
+          <section className="settings-group"><div className="setting-intro"><h2>管理的 CLI</h2><p>只在首页和工具页显示勾选的工具。关闭管理不会删除已有配置。</p></div><div className="managed-checks">{(nativeAvailable ? catalog?.registered ?? [] : bootstrap.tools).map((item) => <label key={item.id}><input type="checkbox" checked={managed.includes(item.id)} disabled={!nativeAvailable || busy} onChange={(event) => updateManaged(item.id, event.target.checked)} /><ToolIcon toolId={item.id} size={24} /><span>{item.name}</span></label>)}</div><ToolIconSettings tools={nativeAvailable ? catalog?.registered ?? [] : bootstrap.tools} icons={bootstrap.preferences.tool_icons ?? {}} busy={busy} onChange={updateIcon} onError={(message) => setError({ code: 'icon_error', message, action: '请重新选择图片。' })} />{catalog?.preservedUnknown.map((item) => <div className="setting-row" key={item.id}><span><strong>{item.id}</strong><small>未安装适配器，保留 {item.profileCount} 份配置，只读</small></span></div>)}</section>
           <section className="settings-group"><div className="setting-intro"><h2>外观</h2><p>跟随系统，或固定浅色、深色。</p></div><label className="setting-row"><span><strong>主题</strong></span><select aria-label="主题" value={bootstrap.preferences.theme} disabled={busy} onChange={(event) => updateTheme(event.target.value as Theme)}><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select></label></section>
           {nativeAvailable && <TerminalSettings />}
+          <div className="setting-row migration-entry"><span><strong>换设备与备份</strong><small>导出加密配置包，或通过 WebDAV 同步</small></span><button className="button" type="button" onClick={() => setSettingsTab('migration')}>迁移与同步 →</button></div>
         </>}
         <div hidden={page !== 'settings' || settingsTab !== 'migration'}><MigrationSettings active={page === 'settings' && settingsTab === 'migration'} onImported={() => void refreshAfterImport()} /></div>
       </>}
     </main>
-  </div>;
+  </div></ToolIconsContext>;
 }

@@ -3,6 +3,7 @@ import { open, save } from '@tauri-apps/plugin-dialog';
 import { native, nativeAvailable } from '../../lib/native';
 import type { PortableItem, PortablePreview } from '../../types/portable';
 import type { Project } from '../../types/launch';
+import { Icon } from '../../components/Icon';
 import styles from './MigrationSettings.module.css';
 import { WebdavSettings } from './WebdavSettings';
 
@@ -12,6 +13,7 @@ const KIND: Record<string, string> = {
 };
 
 export function MigrationSettings({ active, onImported }: { active: boolean; onImported?: () => void }) {
+  const [operation, setOperation] = useState<'export' | 'import' | null>(null);
   const [items, setItems] = useState<PortableItem[]>([]);
   const [exportSelected, setExportSelected] = useState<string[]>([]);
   const [exportPassword, setExportPassword] = useState('');
@@ -111,7 +113,8 @@ export function MigrationSettings({ active, onImported }: { active: boolean; onI
   return <div className={styles.page}>
     {error && <div className={styles.error} role="alert">{error}</div>}
     {message && <div className={styles.message} role="status">{message}</div>}
-    <section className="settings-group">
+    <section className="migration-card"><div className="migration-mark"><Icon name="migration" size={24} /></div><h2>让熟悉的工作方式，跟你一起走</h2><p>备份配置、API 密钥和资料，在另一台设备恢复。加密保护内容，本机登录与使用记录留在本机。</p><div className="migration-actions"><button className="button primary" type="button" onClick={() => setOperation('export')}>导出加密配置包</button><button className="button" type="button" onClick={() => setOperation('import')}>从配置包恢复</button>{operation && <button className="text-button" type="button" onClick={() => setOperation(null)}>收起操作</button>}</div><small>项目目录在新设备重新关联，活动配置由你决定。</small></section>
+    <section className="settings-group" hidden={operation !== 'export'}>
       <div className="setting-intro"><h2>导出加密配置包</h2><p>选好要带走的资料，设置一个至少 12 位的口令。API 密钥包含在加密包内；本机登录、会话和使用记录不包含。</p></div>
       <div className={styles.list} aria-label="选择导出资料">
         {items.map((item) => <label className={styles.item} key={item.key}><input type="checkbox" checked={exportSelected.includes(item.key)}
@@ -122,7 +125,7 @@ export function MigrationSettings({ active, onImported }: { active: boolean; onI
       <div className={styles.action}><label>配置包口令 <input type="password" value={exportPassword} autoComplete="new-password" placeholder="至少 12 位" onChange={(event) => setExportPassword(event.target.value)} /></label>
         <button type="button" className="button primary" disabled={!nativeAvailable || busy || exportPassword.length < 12 || !exportSelected.length} onClick={() => void exportBundle()}>导出配置包</button></div>
     </section>
-    <section className="settings-group">
+    <section className="settings-group" hidden={operation !== 'import'}>
       <div className="setting-intro"><h2>从配置包恢复</h2><p>先解锁并预览。新资料默认选中；与本机不同的资料由你逐项决定是否替换。</p></div>
       {!preview ? <div className={styles.action}><label>配置包口令 <input type="password" value={importPassword} autoComplete="current-password" placeholder="输入导出时的口令" onChange={(event) => setImportPassword(event.target.value)} /></label>
         <button type="button" className="button" disabled={!nativeAvailable || busy || !importPassword} onClick={() => void importBundle()}>选择配置包并预览</button></div> : <>

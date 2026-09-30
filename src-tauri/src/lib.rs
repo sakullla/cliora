@@ -143,6 +143,7 @@ pub fn run() {
             commands::list_preserved_profiles,
             commands::set_managed_tools,
             commands::set_theme,
+            commands::set_tool_icon,
             commands::get_tool_workspace,
             commands::set_custom_cli_path,
             commands::save_native_profile,

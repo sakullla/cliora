@@ -83,7 +83,7 @@ test('library keeps search and unsaved body across page navigation', async ({ pa
   await page.getByRole('textbox', { name: '标题' }).fill('部署检查');
   await page.getByRole('textbox', { name: '资料正文' }).fill('检查服务健康状态');
   await page.getByRole('button', { name: '保存', exact: true }).click();
-  await expect(page.getByRole('button', { name: /部署检查/ })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '部署检查', exact: true })).toBeVisible();
   await page.getByRole('textbox', { name: '搜索资料' }).fill('部署');
   await page.getByRole('textbox', { name: '资料正文' }).fill('尚未保存的修改');
   await navigation.getByRole('button', { name: '快速开始' }).click();

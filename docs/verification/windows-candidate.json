@@ -1,0 +1,19 @@
+{
+  "kind": "windows-desktop-build",
+  "command": "npm run tauri build -- --no-bundle",
+  "exitCode": 0,
+  "recordedAt": "2026-09-30T02:53:17.449Z",
+  "host": "Windows 11 Pro 10.0.26200",
+  "architecture": "AMD64",
+  "candidate": {
+    "path": "src-tauri/target/release/cliora.exe",
+    "sizeBytes": 24456192,
+    "sha256": "088c4da1d84724dd69845857b208ccc02b86de66f8e25a90c77a17580190466c",
+    "peMachine": "0x8664"
+  },
+  "buildOutput": {
+    "path": "docs/verification/build-windows-output.txt",
+    "sha256": "76f833e38b9136e33c23383b0b5af8f1c169f6582b2b0ed088fd4b8c728b9a5d"
+  },
+  "limits": "Unsigned no-bundle candidate. Startup survived five seconds; native CLI, tray and platform acceptance remain unverified."
+}

@@ -369,6 +369,27 @@ mod tests {
     use crate::domain::{CliId, Theme};
 
     #[test]
+    fn portable_tool_icons_survive_restart_theme_management_and_reset() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("icons.db");
+        let image = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aR2kAAAAASUVORK5CYII=";
+        let db = Database::open(&path).unwrap();
+        assert!(db.preferences().unwrap().tool_icons.is_empty());
+        db.update_preferences(|p| { p.tool_icons.insert("future_cli".into(), image.into()); }).unwrap();
+        db.update_preferences(|p| p.theme = Theme::Dark).unwrap();
+        db.update_preferences(|p| p.set_managed(&[CliId::Pi])).unwrap();
+        drop(db);
+        let db = Database::open(&path).unwrap();
+        let saved = db.preferences().unwrap();
+        assert_eq!(saved.tool_icons["future_cli"], image);
+        assert_eq!(saved.theme, Theme::Dark);
+        assert_eq!(saved.managed_tools, [CliId::Pi]);
+        db.update_preferences(|p| { p.tool_icons.remove("future_cli"); }).unwrap();
+        assert!(db.preferences().unwrap().tool_icons.is_empty());
+        assert_eq!(db.preferences().unwrap().theme, Theme::Dark);
+    }
+
+    #[test]
     fn unknown_managed_id_survives_bootstrap_and_settings_update() {
         let temp = tempfile::tempdir().unwrap();
         let db = Database::open(&temp.path().join("prefs.db")).unwrap();
