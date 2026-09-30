@@ -79,9 +79,10 @@ tasks:
     goal: 集成已确认的全部页面并完成可复验的桌面交付候选
     depends_on: [T6]
     covers: [R1, R2, R3, R4, R5, R6, R7, R8, R9, R10, R11, R12, R13, R14, R15, R16, R17, R18, R22, R23, R24, R25]
-    scope: [src, src-tauri, tests, scripts, package.json, package-lock.json, playwright.config.ts, .github, README.md, docs/verification]
+    scope: [src, src-tauri, tests, scripts, package.json, package-lock.json, playwright.config.ts, .github, .gitattributes, README.md, docs/design, docs/verification]
     outcomes:
       - 五页真实功能整合，首页与托盘切换不超过三次点击，原生配置直接可见，完整子页和短弹窗边界符合确认设计。
+      - 工具默认图标由独立适配器声明，Codex、Claude、OpenCode 使用可核验官方 SVG；OpenCode 替换原 PNG 并检查浅深主题及小尺寸，保留已有自定义图标与迁移能力。原设计资料和 .gitattributes 的任务归属纳入同一集成交付范围，不制造无意义改动。
       - 类型检查、领域故障测试、浏览器交互和生产构建通过，Windows 桌面候选可运行并提供构建安装说明。
       - 发布验证记录真实系统架构 CLI 版本与原生行为；三平台十五组合和托盘现场缺失时明确保持未验收，不用浏览器或交叉编译冒充通过。
     test: extend
