@@ -596,6 +596,7 @@ mod tests {
     }
     fn profile(name: &str, model: &str) -> NativeProfile {
         NativeProfile {
+            revision: String::new(),
             id: name.into(),
             tool: CliId::Codex,
             name: name.into(),
@@ -714,6 +715,7 @@ mod tests {
 
     fn secret_profile(tool: CliId, name: &str, provider: &str, id: &str) -> NativeProfile {
         NativeProfile {
+            revision: String::new(),
             id: name.into(),
             tool,
             name: name.into(),
@@ -974,6 +976,7 @@ mod tests {
         )
         .unwrap();
         let profile = NativeProfile {
+            revision: String::new(),
             id: "imported".into(),
             tool: CliId::ClaudeCode,
             name: "imported".into(),
@@ -1081,6 +1084,7 @@ mod tests {
         let db = Database::open(&temp.path().join("app.db")).unwrap();
         let store = MemoryStore::default();
         let profile = NativeProfile {
+            revision: String::new(),
             id: "native-login".into(),
             tool: CliId::ClaudeCode,
             name: "native login".into(),
@@ -1181,6 +1185,7 @@ mod tests {
         let db = Database::open(&temp.path().join("app.db")).unwrap();
         let store = MemoryStore::default();
         let profile = NativeProfile {
+            revision: String::new(),
             id: String::new(),
             tool: CliId::ClaudeCode,
             name: "inherit user login".into(),

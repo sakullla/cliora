@@ -57,7 +57,12 @@ export default function App() {
   const activePage = useRef<Page>(page);
   activePage.current = page;
   const workspaceDirty = useRef(false);
-  const onWorkspaceDirtyChange = useCallback((dirty: boolean) => { workspaceDirty.current = dirty; }, []);
+  const pendingCatalog = useRef<AdapterCatalog | null>(null);
+  const refreshSequence = useRef(0);
+  const onWorkspaceDirtyChange = useCallback((dirty: boolean) => {
+    workspaceDirty.current = dirty;
+    if (!dirty && pendingCatalog.current) { setCatalog(pendingCatalog.current); pendingCatalog.current = null; }
+  }, []);
   const canLeave = useCallback((next: Page) => {
     return activePage.current !== 'connections' || next === 'connections' || !workspaceDirty.current
       || window.confirm('当前工具配置草稿尚未保存，离开页面会丢失这些修改。继续吗？');
@@ -75,6 +80,9 @@ export default function App() {
     void listen<string>('cliora:tray-error', (event) => {
       if (active) setError({ code: 'tray_error', message: event.payload, action: '请检查项目目录、工具配置或外部终端后重试。' });
     }).then((unlisten) => {
+      if (active) stops.push(unlisten); else unlisten();
+    }).catch(() => {});
+    void listen('cliora:portable-changed', () => { if (active) void refreshAfterImport(); }).then((unlisten) => {
       if (active) stops.push(unlisten); else unlisten();
     }).catch(() => {});
     void listen<Omit<TrayRepairTarget, 'sequence'>>('cliora:tray-repair', (event) => {
@@ -108,10 +116,15 @@ export default function App() {
 
   async function refreshAfterImport() {
     if (!nativeAvailable) return;
+    const sequence = ++refreshSequence.current;
     try {
       const [nextBootstrap, nextCatalog] = await Promise.all([native.getBootstrap(), native.listCliAdapters()]);
+      if (sequence !== refreshSequence.current) return;
       setBootstrap(nextBootstrap);
-      setCatalog(nextCatalog);
+      if (workspaceDirty.current) {
+        pendingCatalog.current = nextCatalog;
+        setCatalog((current) => current ? { ...nextCatalog, managedIds: current.managedIds } : nextCatalog);
+      } else { pendingCatalog.current = null; setCatalog(nextCatalog); }
     } catch (value) { setError(value as ApiError); }
   }
 

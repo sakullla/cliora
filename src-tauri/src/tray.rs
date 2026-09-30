@@ -605,6 +605,7 @@ mod tests {
 
     fn saved_profile(version: u64) -> profile::RegisteredProfile {
         profile::RegisteredProfile {
+            revision: String::new(),
             id: "daily".into(),
             tool: "grok".into(),
             name: "日常".into(),

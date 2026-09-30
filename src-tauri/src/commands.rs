@@ -119,6 +119,7 @@ pub async fn apply_portable_bundle(app: AppHandle, preview_id: String, selected:
     }
     let apply_app = app.clone();
     let result = blocking(move || {
+        portable::with_change_notification(&db, || notify_portable_changed(&apply_app), || {
         let imported = portable::apply_import(&db, &SystemCredentialStore, &adapters::Registry::builtins(),
             &draft, &selected).map_err(native_error)?;
         let mut results = Vec::new();
@@ -151,6 +152,7 @@ pub async fn apply_portable_bundle(app: AppHandle, preview_id: String, selected:
             });
         }
         Ok(ImportReport { imported, targets: results })
+        })
     }).await;
     if result.is_err() {
         let mut guard = app_state.portable_draft.lock()
@@ -188,15 +190,17 @@ pub fn set_webdav_enabled(app: AppHandle, enabled: bool) -> Result<portable::syn
 #[tauri::command]
 pub async fn sync_webdav_now(app: AppHandle) -> Result<portable::sync::SyncStatus, ApiError> {
     let db = app.state::<AppState>().database(&app)?;
-    blocking(move || portable::sync::run(&db, &SystemCredentialStore, &adapters::Registry::builtins(), false).map_err(native_error)).await
+    blocking(move || portable::with_change_notification(&db, || notify_portable_changed(&app), ||
+        portable::sync::run(&db, &SystemCredentialStore, &adapters::Registry::builtins(), false).map_err(native_error))).await
 }
 
 #[tauri::command]
 pub async fn resolve_webdav_conflict(app: AppHandle, key: String, chosen_version_id: Option<String>)
     -> Result<portable::sync::SyncStatus, ApiError> {
     let db = app.state::<AppState>().database(&app)?;
-    blocking(move || portable::sync::resolve(&db, &SystemCredentialStore, &adapters::Registry::builtins(),
-        &key, chosen_version_id.as_deref()).map_err(native_error)).await
+    blocking(move || portable::with_change_notification(&db, || notify_portable_changed(&app), ||
+        portable::sync::resolve(&db, &SystemCredentialStore, &adapters::Registry::builtins(),
+        &key, chosen_version_id.as_deref()).map_err(native_error))).await
 }
 
 #[tauri::command]
@@ -209,8 +213,15 @@ pub async fn preview_webdav_conflict(app: AppHandle, key: String)
 
 pub fn sync_background_tick(app: &AppHandle) -> Result<(), ApiError> {
     let db = app.state::<AppState>().database(app)?;
-    portable::sync::run(&db, &SystemCredentialStore, &adapters::Registry::builtins(), true)
-        .map(|_| ()).map_err(native_error)
+    portable::with_change_notification(&db, || notify_portable_changed(app), ||
+        portable::sync::run(&db, &SystemCredentialStore, &adapters::Registry::builtins(), true)
+        .map(|_| ()).map_err(native_error))
+}
+
+fn notify_portable_changed(app: &AppHandle) {
+    let _ = app.emit("cliora:portable-changed", ());
+    let _ = app.emit("cliora:bindings-changed", "portable");
+    let _ = app.emit("cliora:projects-changed", "portable");
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1089,9 +1100,10 @@ pub fn delete_native_profile(
     state: State<'_, AppState>,
     id: String,
     expected_version: u64,
+    expected_revision: String,
 ) -> Result<(), ApiError> {
     state.with_database(&app, |database| {
-        profile::delete_profile(database, &id, expected_version).map_err(native_error)
+        profile::delete_profile(database, &id, expected_version, &expected_revision).map_err(native_error)
     })?;
     let _ = app.emit("cliora:bindings-changed", "profiles");
     Ok(())
@@ -1822,10 +1834,7 @@ pub(crate) fn launch_now_with_stage(
         projects::checked_directory(path).map_err(|message| {
             LaunchFailure::new(LaunchStage::ProjectDirectory, native_error(message))
         })?;
-        let selected = project.selected_profiles.get(&request.tool_id);
-        let pending = selected
-            .filter(|profile| project.applied_profiles.get(&request.tool_id) != Some(*profile));
-        if let Some(profile_id) = pending {
+        if let Some(profile_id) = project.reapply_profiles.get(&request.tool_id) {
             apply_registered_now(
                 app,
                 &request.tool_id,
@@ -2236,6 +2245,7 @@ mod tests {
             &db,
             &adapters::Registry::builtins(),
             profile::RegisteredProfile {
+                revision: String::new(),
                 id: "future-1".into(),
                 tool: "future_cli".into(),
                 name: "write denied".into(),
@@ -2249,7 +2259,7 @@ mod tests {
             Some(1)
         )
         .is_err());
-        assert!(profile::delete_profile(&db, "future-1", 1)
+        assert!(profile::delete_profile(&db, "future-1", 1, "")
             .unwrap_err()
             .contains("未注册的 CLI 适配器"));
         let raw: String = db

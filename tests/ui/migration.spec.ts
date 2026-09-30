@@ -1,5 +1,88 @@
 import { expect, test } from '@playwright/test';
 
+test('portable notifications refresh applied state and preferences while preserving stale profile and common drafts', async ({ page }) => {
+  await page.addInitScript(() => {
+    const callbacks = new Map<number, (event: unknown) => void>();
+    const listeners = new Map<string, number[]>();
+    const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
+    let next = 0;
+    let managed = ['codex'];
+    let theme = 'system';
+    let profile = { id: 'p1', tool: 'codex', name: '工作配置', version: 2, revision: 'local-profile', inheritCommon: true, files: { settings: 'model = "local"' }, suppressed: {}, nativeCredentials: {}, connection: null };
+    let common = { tool: 'codex', version: 2, revision: 'local-common', files: { settings: 'model = "base"' } };
+    let applied = 2;
+    const emit = (event: string) => { for (const id of listeners.get(event) ?? []) callbacks.get(id)?.({ event, payload: null }); };
+    Object.assign(window, {
+      isTauri: true,
+      __portableCalls: calls,
+      __receivePortable: (kind: string) => {
+        applied = 0; theme = 'dark';
+        if (kind === 'clean') profile = { ...profile, revision: 'remote-clean', files: { settings: 'model = "remote-clean"' } };
+        if (kind === 'profile') { profile = { ...profile, revision: 'remote-profile', files: { settings: 'model = "remote-profile"' } }; managed = []; }
+        if (kind === 'common') common = { ...common, revision: 'remote-common', files: { settings: 'model = "remote-common"' } };
+        for (const event of ['cliora:portable-changed', 'cliora:bindings-changed', 'cliora:projects-changed']) emit(event);
+      },
+      __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} },
+      __TAURI_INTERNALS__: {
+        transformCallback: (callback: (event: unknown) => void) => { callbacks.set(++next, callback); return next; },
+        invoke: async (command: string, args: Record<string, unknown> = {}) => {
+          calls.push({ command, args });
+          if (command === 'plugin:event|listen') { const event = String(args.event); listeners.set(event, [...(listeners.get(event) ?? []), Number(args.handler)]); return args.handler; }
+          if (command === 'plugin:event|unlisten') { const event = String(args.event); listeners.set(event, (listeners.get(event) ?? []).filter((id) => id !== args.eventId)); return null; }
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: managed, theme }, tools: [{ id: 'codex', name: 'Codex' }] };
+          if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], nativeConfig: { state: 'available' }, resources: { state: 'available' } }], managedIds: managed, preservedUnknown: [] };
+          if (command === 'list_projects') return [];
+          if (command === 'get_tray_status') return { available: true, error: null };
+          if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
+          if (command === 'get_registered_tool_workspace') return structuredClone({
+            probe: { selectedPath: 'C:/codex.exe', installations: [], nativeFiles: [{ role: 'settings', path: 'C:/config.toml', format: 'toml', writable: true, sensitive: false }], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: [], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '' },
+            profiles: [profile], common, binding: { profileId: 'p1', profileVersion: applied }, customPath: null, snapshots: [], recoveryNeeded: [],
+          });
+          if (command === 'inspect_registered_native_draft') return {};
+          if (command === 'save_registered_native_profile') {
+            if ((args.profile as typeof profile).revision !== profile.revision) throw { message: '命名配置已由其他操作修改，请重新读取' };
+            return args.profile;
+          }
+          if (command === 'save_registered_common_config') {
+            if ((args.common as typeof common).revision !== common.revision) throw { message: '通用配置已由其他操作修改，请重新读取' };
+            return { common: args.common, applications: [] };
+          }
+          if (command === 'list_mcp_definitions' || command === 'list_skill_packages') return [];
+          throw new Error(`Unexpected IPC: ${command}`);
+        },
+      },
+    });
+  });
+  await page.goto('/');
+  await expect(page.getByText('已写入原生文件 · 下次启动读取')).toBeVisible();
+  const receive = (kind: string) => page.evaluate((value) => (window as typeof window & { __receivePortable: (kind: string) => void }).__receivePortable(value), kind);
+  await receive('clean');
+  await expect(page.getByText('已保存的修改尚未应用；请在工具页应用')).toBeVisible();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await page.getByRole('button', { name: '编辑配置 →' }).click();
+  const draft = page.getByRole('textbox', { name: 'settings 配置草稿' });
+  await expect(draft).toHaveValue('model = "remote-clean"');
+  page.on('dialog', (dialog) => void dialog.accept());
+  await page.getByRole('button', { name: /通用配置.*供本工具/ }).click();
+  await expect(draft).toHaveValue('model = "base"');
+  await draft.fill('model = "unsaved-common"');
+  await receive('common');
+  await expect(draft).toHaveValue('model = "unsaved-common"');
+  await page.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('通用配置已由其他操作修改');
+  await page.getByRole('button', { name: /工作配置.*有未应用的修改/ }).click();
+  await expect(draft).toHaveValue('model = "remote-clean"');
+  await draft.fill('model = "unsaved-profile"');
+  await receive('profile');
+  await expect(page.getByText('已收到资料更新；当前未保存草稿已保留，保存时会检查资料是否变化。')).toBeVisible();
+  await expect(draft).toHaveValue('model = "unsaved-profile"');
+  await page.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('命名配置已由其他操作修改');
+  const saves = await page.evaluate(() => (window as typeof window & { __portableCalls: Array<{ command: string; args: Record<string, unknown> }> }).__portableCalls.filter((call) => call.command.startsWith('save_registered')));
+  expect(saves[0].args.common).toMatchObject({ version: 2, revision: 'local-common', files: { settings: 'model = "unsaved-common"' } });
+  expect(saves[1].args.profile).toMatchObject({ version: 2, revision: 'remote-clean', files: { settings: 'model = "unsaved-profile"' } });
+});
+
 test('migration previews conflicts, keeps choices, cancels, and separates native failures from imported data', async ({ page }) => {
   await page.addInitScript(() => {
     const calls: Array<{ command: string; args: Record<string, unknown> }> = [];

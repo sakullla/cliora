@@ -102,7 +102,11 @@ impl PortableEntity {
     pub fn digest(&self) -> Result<String, String> {
         let mut normalized = self.clone();
         match &mut normalized.payload {
-            PortablePayload::Profile(value) => value.pending_fields.clear(),
+            PortablePayload::Profile(value) => {
+                value.pending_fields.clear();
+                value.profile.revision.clear();
+            }
+            PortablePayload::Common(value) => value.revision.clear(),
             PortablePayload::Mcp(value) => value.pending_fields.clear(),
             PortablePayload::Skill(value) => value.pending_fields.clear(),
             _ => {}
@@ -422,8 +426,9 @@ fn collect_snapshot_on(
         ))
     }?;
     let mut entities = Vec::new();
-    let preferences: Value = preferences.as_deref().map(serde_json::from_str).transpose().map_err(|_| "管理偏好格式错误")?
-        .unwrap_or_else(|| serde_json::json!({"managed_tools":["codex","claude_code","grok","pi","open_code"],"theme":"system"}));
+    // Defaults are a view fallback, not a persisted portable entity or a CAS baseline.
+    if let Some(preferences) = preferences {
+    let preferences: Value = serde_json::from_str(&preferences).map_err(|_| "管理偏好格式错误")?;
     entities.push(PortableEntity {
         id: "managed".into(),
         payload: PortablePayload::Preferences(PortablePreferences {
@@ -442,9 +447,11 @@ fn collect_snapshot_on(
                 .into(),
         }),
     });
+    }
     for text in profiles {
         let mut profile: RegisteredProfile =
             serde_json::from_str(&text).map_err(|_| "命名配置格式错误")?;
+        profile.revision.clear();
         let (files, mut pending_fields) = portable_files(registry, &profile.tool, &profile.files)?;
         profile.files = files;
         let connection_secret = if let Some(connection) = profile.connection.as_mut() {
@@ -489,6 +496,7 @@ fn collect_snapshot_on(
     for text in commons {
         let mut common: RegisteredCommon =
             serde_json::from_str(&text).map_err(|_| "通用配置格式错误")?;
+        common.revision.clear();
         common.files = portable_files(registry, &common.tool, &common.files)?.0;
         entities.push(PortableEntity {
             id: common.tool.clone(),
@@ -792,7 +800,11 @@ pub fn apply_import(
             continue;
         }
         let mut entity = entity.clone();
+        if let PortablePayload::Common(common) = &mut entity.payload {
+            common.revision = Uuid::new_v4().to_string();
+        }
         if let PortablePayload::Profile(portable) = &mut entity.payload {
+            portable.profile.revision = Uuid::new_v4().to_string();
             if let Some(secret) = portable.connection_secret.as_ref() {
                 let id = credential_id();
                 if let Err(error) = store.put(&id, secret) {
@@ -857,6 +869,7 @@ pub fn apply_import(
                 PortablePayload::Common(value) => {
                     tx.execute("INSERT INTO common_configs (tool,version,data) VALUES (?1,?2,?3) ON CONFLICT(tool) DO UPDATE SET version=excluded.version,data=excluded.data",
                         params![value.tool,value.version as i64,serde_json::to_string(value).map_err(|error| error.to_string())?]).map_err(|error| error.to_string())?;
+                    crate::native::profile::invalidate_common_bindings(&tx, &value.tool)?;
                 }
                 PortablePayload::Profile(value) => {
                     let profile = &value.profile;
@@ -897,6 +910,40 @@ pub fn apply_import(
     }
     imported += prepared.len();
     Ok(imported)
+}
+
+/// Observe committed portable rows without reading secrets. Metadata-only syncs emit nothing;
+/// committed rows still notify consumers when a later target or network operation fails.
+pub fn with_change_notification<T, E>(db: &Database, notify: impl FnOnce(), action: impl FnOnce() -> Result<T, E>) -> Result<T, E> {
+    fn fingerprint(db: &Database) -> Result<Vec<u8>, String> {
+        db.with_connection(|conn| {
+            let mut digest = Sha256::new();
+            for sql in [
+                "SELECT value FROM app_settings WHERE key='preferences'",
+                "SELECT data FROM native_profiles ORDER BY id",
+                "SELECT data FROM common_configs ORDER BY tool",
+                "SELECT json_array(id,name,path,preferred_tool) FROM projects ORDER BY id",
+                "SELECT json_array(project_id,tool,model) FROM project_tool_models ORDER BY project_id,tool",
+                "SELECT json_array(id,kind,title,body,category,project_id,version,updated_at) FROM library_items ORDER BY id",
+                "SELECT data_json FROM mcp_definitions ORDER BY id",
+                "SELECT json_array(id,name,description,digest,files_json) FROM skill_packages ORDER BY id",
+            ] {
+                digest.update(sql.as_bytes());
+                for row in read_rows(conn, sql, |row| row.get::<_, String>(0))? {
+                    digest.update((row.len() as u64).to_le_bytes());
+                    digest.update(row.as_bytes());
+                }
+            }
+            Ok(digest.finalize().to_vec())
+        })
+    }
+    let before = fingerprint(db);
+    let result = action();
+    // If observation itself failed, refresh conservatively to expose any committed changes.
+    if before.is_err() || match fingerprint(db) { Ok(after) => before.as_ref().ok() != Some(&after), Err(_) => true } {
+        notify();
+    }
+    result
 }
 
 #[cfg(test)]

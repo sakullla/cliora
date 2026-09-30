@@ -177,6 +177,7 @@ mod tests {
             (local.into(), "local-key".into()),
         ]));
         let item = NativeProfile {
+            revision: String::new(),
             id: String::new(),
             tool: CliId::ClaudeCode,
             name: "本机".into(),
