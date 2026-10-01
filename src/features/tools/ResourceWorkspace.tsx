@@ -53,6 +53,11 @@ export function McpWorkspace({ toolId, scope, projectPath, onDirtyChange }: { to
   const latestForm = useRef(''); latestForm.current = JSON.stringify([draft, envText, headerText, enabled]);
   const mounted = useRef(true);
   useEffect(() => { mounted.current=true;return () => { mounted.current=false; }; },[]);
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(''), 5000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
   const previewContext = JSON.stringify([draft, envText, headerText, toolId, scope, project, enabled]);
   const previewEpochRef = useRef({ context: previewContext, epoch: 0 });
   if (previewEpochRef.current.context !== previewContext) {
@@ -206,9 +211,9 @@ export function McpWorkspace({ toolId, scope, projectPath, onDirtyChange }: { to
       <label className={styles.inline}><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} />启用</label>
       {!(draft.id || nativeOrigin) && <label className={styles.inline}><input type="checkbox" checked={syncLibrary} onChange={(event) => setSyncLibrary(event.target.checked)} />快速同步<small className={styles.fieldHint}>同时放进资料库。分发到其他 CLI 请到资料库。</small></label>}
       {currentConflict && <div className={styles.resultList} role="group" aria-label="MCP 写入冲突"><strong>当前同名条目与读取时不同，请比较后选择</strong>{currentConflict.items.map(item => <div className={styles.fileDiff} key={item.toolId}><CodeEditor compact label="当前 MCP" format="json" readOnly value={JSON.stringify(item.existing, null, 2)} /><CodeEditor compact label="本次 MCP 修改" format="json" readOnly value={JSON.stringify(item.proposed, null, 2)} /></div>)}<div className={styles.actions}><button type="button" onClick={() => setCurrentConflict(null)}>保留当前文件</button><button type="button" disabled={busy} onClick={() => { setBusy(true); void applyItems(currentConflict.id, currentConflict.items, true).then(ok => { if (ok) leaveComposer(); }).catch(value => setError(errorText(value))).finally(() => setBusy(false)); }}>使用本次修改</button></div></div>}
-      <div className="dialog-footer">{(draft.id || nativeOrigin) && <button type="button" disabled={busy} onClick={() => void removeSaved()}>从当前工具移除</button>}<span className="dialog-footer-gap" /><button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint} disabled={busy || !draft.name.trim() || (scope === 'project' && !project)} onClick={() => void save()}>{draft.id || nativeOrigin ? '保存' : '添加'}</button></div>
       {error && <p className={styles.error} role="alert">{error}</p>}
       {notice && <p className={styles.notice} role="status">{notice}</p>}
+      <div className="dialog-footer">{(draft.id || nativeOrigin) && <button type="button" disabled={busy} onClick={() => void removeSaved()}>从当前工具移除</button>}<span className="dialog-footer-gap" /><button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint} disabled={busy || !draft.name.trim() || (scope === 'project' && !project)} onClick={() => void save()}>{draft.id || nativeOrigin ? '保存' : '添加'}</button></div>
     </div>
     </GuideDialog>
   </div>
@@ -236,6 +241,11 @@ export function SkillsWorkspace({ toolId, scope, projectPath, onDirtyChange }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<SkillTargetResult | null>(null);
+  useEffect(() => {
+    if (!result || result.status === 'failed') return;
+    const timer = window.setTimeout(() => setResult(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [result]);
   const selected = packages.find((item) => item.id === selectedId);
   const project = scope === 'project' ? projectPath || null : null;
   const visibleIssues = recoveryIssues.filter((issue) => issue.toolId === toolId);
@@ -405,6 +415,12 @@ export function SkillsWorkspace({ toolId, scope, projectPath, onDirtyChange }: {
 
   const recovery = !!visibleIssues.length && <div className={styles.error} role="alert"><strong>Skills 安装需要检查</strong><p>相关 CLI 启动会暂停。异常备份已保留；检查目录后可重新尝试恢复。</p>{visibleIssues.map((issue) => <div key={issue.operationId} className={styles.fileChange}><strong>{issue.scope === 'global' ? '全局' : `项目 ${issue.projectPath ?? ''}`}</strong><p>{issue.detail}</p><p>目标：{issue.targetPath}</p><p>备份：{issue.backupPath}</p><button type="button" onClick={() => void navigator.clipboard.writeText(issue.backupPath).catch((value) => setError(errorText(value)))}>复制备份路径</button></div>)}<button type="button" onClick={() => void checkRecovery()}>重新检查恢复状态</button></div>;
   const outcome = result && (result.status === 'failed' ? result.detail : result.detail === '已放进资料库' ? '已放进资料库。分发请到资料库。' : result.status === 'removed' ? `已从当前工具移除：${result.path ?? ''}` : `已安装到当前工具：${result.path ?? ''}`);
+  const installState: { label: string; tone: 'on' | 'warn' | undefined } = installed?.state === 'current' ? { label: '已安装', tone: 'on' }
+    : installed?.state === 'update_available' ? { label: '有更新', tone: 'warn' }
+    : installed?.state === 'conflict' ? { label: '原生目录有外部修改', tone: 'warn' }
+    : installed?.state === 'disabled' ? { label: '已停用 · 内容已保留', tone: undefined }
+    : installed?.state === 'missing' ? { label: '原生目录缺失', tone: 'warn' }
+    : { label: '未安装', tone: undefined };
 
   if (empty) {
     return <div className={styles.taskEmpty}>
@@ -438,11 +454,13 @@ export function SkillsWorkspace({ toolId, scope, projectPath, onDirtyChange }: {
         <label className={styles.urlField}>ZIP 地址<span className={styles.urlRow}><input aria-label="归档地址" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://example.com/skill.zip" /><button type="button" disabled={busy || !url.trim()} onClick={() => void archive(url.trim(), false)}>导入地址</button></span></label>
       </>}
       {external && !adding && <div className={styles.addChooser}><p className={styles.muted}>这是当前工具上已有的目录。放进资料库后，再到资料库分发。</p><button type="button" className={styles.primary} disabled={busy} onClick={() => void syncExternal()}>放进资料库</button></div>}
+      {outcome && <p role="status" className={result?.status === 'failed' ? styles.error : styles.notice}>{outcome}</p>}
+      {error && <p className={styles.error} role="alert">{error}</p>}
       {selected && !adding && <>
         <p className={styles.muted}>{selected.description || '完整 Skills 包'} · {selected.fileCount} 个文件</p><details className={styles.source}><summary title={displayPath(selected.source)}>来源 · {shortPath(selected.source)}</summary><p>{displayPath(selected.source)}</p></details>
         {selected.compatibility && <label className={styles.inline}><input type="checkbox" checked={dependencyChecked} onChange={(event) => setDependencyChecked(event.target.checked)} />已检查所需环境：{selected.compatibility}</label>}
         <label className={styles.inline}><input type="checkbox" aria-label="启用 Skill" checked={skillEnabled} disabled={busy || !installed && !nativeEntries.some(item=>item.name===selected.name) && !skillEnabled} onChange={event => void toggleSkill(event.target.checked)} />{skillEnabled ? '这个工具会使用它' : '已停用'}</label>
-        <p className={styles.muted}>{skillEnabled ? '启用不表示进程已启动。' : '已停用，内容仍保留在当前范围。'} 当前状态：{installed?.state === 'current' ? '已安装' : installed?.state === 'update_available' ? '有更新' : installed?.state === 'conflict' ? '原生目录有外部修改' : installed?.state === 'disabled' ? '已停用 · 内容已保留' : installed?.state === 'missing' ? '原生目录缺失' : '未安装'}</p>
+        <p className={styles.muted}><span className={styles.state} data-on={installState.tone === 'on' || undefined} data-warn={installState.tone === 'warn' || undefined}>{installState.label}</span>{skillEnabled ? '启用不表示进程已启动。' : '已停用，内容仍保留在当前范围。'}</p>
         {pendingTarget && <div className={styles.resultList} role="group" aria-label="Skills 目标预览"><strong>{pendingTarget.status === 'conflict' ? '原生 Skills 内容不同，请确认接管' : '确认安装内容'}</strong><p>{pendingTarget.detail} · {pendingTarget.path}</p>
           {pendingTarget.changes.map((change) => <details key={change.path} className={styles.fileChange}><summary>{change.path}</summary><div className={styles.fileDiff}><div><strong>当前</strong>{change.before !== null ? <pre>{change.before}</pre> : <small>{change.beforeSize === null ? '不存在' : `${change.beforeSize} 字节 · SHA-256 ${change.beforeDigest}`}</small>}</div><div><strong>安装后</strong>{change.after !== null ? <pre>{change.after}</pre> : <small>{change.afterSize === null ? '删除' : `${change.afterSize} 字节 · SHA-256 ${change.afterDigest}`}</small>}</div></div></details>)}
           <div className={styles.actions}><button type="button" onClick={() => setPendingTarget(null)}>取消</button><button type="button" className={styles.primary} disabled={busy} onClick={() => void change(false)}>{pendingTarget.status === 'conflict' ? '确认接管并替换' : '确认安装'}</button></div>
@@ -465,8 +483,6 @@ export function SkillsWorkspace({ toolId, scope, projectPath, onDirtyChange }: {
         </details>)}
         <div className={styles.actions}><button type="button" onClick={() => setPendingImport(null)}>取消，保留现有包</button><button type="button" className={styles.primary} disabled={busy} onClick={() => void confirmImport()}>{pendingImport.installAfter ? '确认并安装到当前工具' : '确认放入资料库'}</button></div>
       </div>}
-      {outcome && <p role="status" className={result?.status === 'failed' ? styles.error : styles.notice}>{outcome}</p>}
-      {error && <p className={styles.error} role="alert">{error}</p>}
     </div>
     </GuideDialog>
   </div>
