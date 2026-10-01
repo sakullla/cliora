@@ -196,8 +196,11 @@ export function ProjectLauncher({ tools, repair }: { tools: AdapterDescriptor[];
     const text = (resultMode: string) => `已向外部终端发送${resumeId?.trim() ? '恢复' : '启动'}${resultMode === 'yolo' ? ' YOLO' : ''}请求。`;
     try {
       const result = await native.launchCli({ toolId, projectId, sessionId: resumeId?.trim() || null, mode, directory: projectId ? null : launchDirectory.trim() || null });
-      if (surface === 'dialog') showDialogFeedback(text(result.mode));
-      else showPageFeedback(text(result.mode));
+      const message = text(result.mode);
+      if (surface === 'dialog') {
+        showDialogFeedback(message);
+        setFeedback(message);
+      } else showPageFeedback(message);
       await refresh();
     } catch (value) { if (surface === 'dialog') showDialogError(value); else showPageError(value); }
     finally { setBusy(''); }

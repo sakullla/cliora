@@ -2,7 +2,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 
 async function install(page: Page, seed: Record<string, boolean> = {}) {
   await page.addInitScript((initial: Record<string, boolean>) => {
-    const control = { copyFails: false, launchFails: false, terminalFails: false, ruleSaveFails: false, resumeFails: false, projectsFail: false, withProject: false, renameFails: false, portableFails: false, settingsLoadFails: false, usageFails: false, librarySaveFails: false, ...initial };
+    const control = { copyFails: false, launchFails: false, terminalFails: false, ruleSaveFails: false, resumeFails: false, projectsFail: false, withProject: false, renameFails: false, portableFails: false, settingsLoadFails: false, usageFails: false, librarySaveFails: false, libraryListFails: false, lastLibraryVersion: null as number | null, ...initial };
     const library = [{ id: 'prompt-1', kind: 'prompt', title: '发布检查', body: '请核对发布说明', category: '写作', projectId: null, version: 1, updatedAt: 1 }];
     let theme = 'light';
     let rule = '原规则';
@@ -34,12 +34,16 @@ async function install(page: Page, seed: Record<string, boolean> = {}) {
         if (command === 'set_preferred_terminal') { if (control.terminalFails) throw new Error('终端不可用'); return { ...launchSettings(), selected: args.terminal }; }
         if (command === 'get_tray_status') return { available: true, error: null };
         if (command === 'get_registered_tool_workspace') return workspace;
-        if (command === 'list_library_items') return library.filter((item) => item.kind === args.kind && (!args.search || `${item.title}${item.body}${item.category}`.includes(args.search)));
+        if (command === 'list_library_items') {
+          if (control.libraryListFails) throw { message: '资料列表读取失败', action: '可调整搜索，或点击上方的新建。' };
+          return library.filter((item) => item.kind === args.kind && (!args.search || `${item.title}${item.body}${item.category}`.includes(args.search)));
+        }
         if (command === 'read_native_rule') return { text: rule, path: 'C:/rules/AGENTS.md', fingerprint: 'fp' };
         if (command === 'save_native_rule') { if (control.ruleSaveFails) throw new Error('磁盘拒绝写入'); rule = args.edited; return { status: 'applied' }; }
         if (command === 'save_library_item') {
           if (control.librarySaveFails) throw { message: '资料没有写入', action: '可修改后再次点击保存。' };
           const draft = args.draft ?? {};
+          control.lastLibraryVersion = typeof draft.expectedVersion === 'number' ? draft.expectedVersion : null;
           return { id: draft.id ?? 'prompt-new', kind: draft.kind, title: draft.title, body: draft.body, category: draft.category, projectId: draft.projectId ?? null, version: (draft.expectedVersion ?? 0) + 1, updatedAt: 2 };
         }
         if (command === 'list_portable_items') {
@@ -310,4 +314,52 @@ test('saved price stays visible when the following usage read fails', async ({ p
   await expect(records.getByText('估算价格已保存；只影响本机统计。')).toBeVisible();
   await expect(records.getByRole('alert')).toContainText('用量读取失败');
   await expect(records.getByRole('alert')).toContainText('可点击刷新本机记录或调整筛选');
+});
+
+test('dialog launch success stays with the list failure after the dialog closes', async ({ page }) => {
+  await install(page, { withProject: true });
+  await page.goto('/');
+  const region = page.getByRole('region', { name: '项目与启动' });
+  await region.getByRole('button', { name: '修改' }).click();
+  const dialog = page.getByRole('dialog');
+  await page.evaluate(() => { (window as unknown as { __statusCopy: { projectsFail: boolean } }).__statusCopy.projectsFail = true; });
+  await dialog.getByRole('button', { name: 'YOLO' }).click();
+  const pageStatus = region.locator(':scope > [role="status"]');
+  const pageAlert = region.locator(':scope > [role="alert"]');
+  await expect(pageStatus).toContainText('已向外部终端发送启动 YOLO请求');
+  await expect(pageAlert).toContainText('项目列表读取失败');
+  await expect(dialog.getByRole('status')).toContainText('已向外部终端发送启动 YOLO请求');
+  await dialog.getByRole('button', { name: '关闭' }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(pageStatus).toContainText('已向外部终端发送启动 YOLO请求');
+  await expect(pageAlert).toContainText('项目列表读取失败');
+});
+
+test('saved library item stays visible when the following list read fails', async ({ page }) => {
+  await install(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
+  const library = page.getByRole('region', { name: '资料库内容' });
+  await library.getByRole('button', { name: '修改' }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('标题').fill('发布检查已更新');
+  await page.evaluate(() => { (window as unknown as { __statusCopy: { libraryListFails: boolean } }).__statusCopy.libraryListFails = true; });
+  await dialog.getByRole('button', { name: '保存' }).click();
+  await expect(dialog.getByRole('status')).toContainText('已保存在本机资料库');
+  const dialogAlert = dialog.getByRole('alert');
+  await expect(dialogAlert).toContainText('资料列表读取失败');
+  await expect(dialogAlert).toContainText('关闭');
+  await expect(dialogAlert).not.toContainText('搜索');
+  await expect(dialogAlert).not.toContainText('新建');
+  await dialog.getByRole('button', { name: '关闭' }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(library.getByRole('status')).toContainText('已保存在本机资料库');
+  const alert = library.getByRole('alert');
+  await expect(alert).toContainText('资料列表读取失败');
+  await expect(alert).not.toContainText('搜索');
+  await expect(alert).not.toContainText('新建');
+  await expect(library.getByRole('button', { name: '发布检查已更新', exact: true })).toBeVisible();
+  await library.getByRole('button', { name: '修改' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '保存' }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __statusCopy: { lastLibraryVersion: number | null } }).__statusCopy.lastLibraryVersion)).toBe(2);
 });
