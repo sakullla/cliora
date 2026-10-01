@@ -7,7 +7,21 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
 import { verifyPlatformEvidence } from '../../scripts/verify-platform-evidence.mjs';
-const base=JSON.parse(fs.readFileSync(new URL('../../docs/verification/platform-evidence.json',import.meta.url),'utf8'));
+
+// Synthetic matrix fixture. Real on-device evidence stays in the untracked docs/verification directory and is not required here.
+const platforms=['windows','macos','linux'];
+const tools=['codex','claude_code','grok','pi','open_code'];
+const caseNames=['native_config','launch_resume','tray','resources_rules','history_usage','migration_sync'];
+const discoveryBytes=Buffer.from(`${JSON.stringify({kind:'cli-version-discovery',recordedAt:'2026-09-30T00:00:00Z',observations:[{tool:'codex',version:'0.0.0',command:'codex --version',exitCode:0,stdout:'codex 0.0.0'}]})}\n`);
+const base={
+ schemaVersion:1,
+ platformCandidates:{windows:null,macos:null,linux:null},
+ combinations:platforms.flatMap((platform)=>tools.map((tool)=>({
+  platform,tool,system:'fixture-host',architecture:'x64',cliVersion:'0.0.0',status:'unverified',
+  discovery:platform==='windows'&&tool==='codex'?{path:'docs/verification/fixture-discovery.json',sha256:createHash('sha256').update(discoveryBytes).digest('hex')}:null,
+  cases:Object.fromEntries(caseNames.map((name)=>[name,{status:'unverified',reason:'Synthetic fixture has not been observed on device.'}])),
+ }))),
+};
 const script=new URL('../../scripts/verify-platform-evidence.mjs',import.meta.url);
 function gate(change){
  const fixture=structuredClone(base);change(fixture);
@@ -17,14 +31,25 @@ function gate(change){
   return spawnSync(process.execPath,[fileURLToPath(script),file],{encoding:'utf8'});
  }finally{fs.rmSync(temporary,{recursive:true,force:true});}
 }
+function withDiscoveryEvidence(run){
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'cliora-evidence-'));
+ try{
+  const target=path.join(root,'docs/verification/fixture-discovery.json');
+  fs.mkdirSync(path.dirname(target),{recursive:true});fs.writeFileSync(target,discoveryBytes);
+  return run(root);
+ }finally{fs.rmSync(root,{recursive:true,force:true});}
+}
 test('unobserved fifteen combinations remain unaccepted with a distinct gate result',()=>{
- const result=gate(()=>{});assert.equal(result.status,2);assert.match(result.stdout,/Accepted 0\/15/);
+ const result=gate((matrix)=>{for(const row of matrix.combinations)row.discovery=null;});assert.equal(result.status,2);assert.match(result.stdout,/Accepted 0\/15/);
 });
 test('a discovery-only combination cannot be marked accepted',()=>{
- const result=gate(matrix=>matrix.combinations[0].status='accepted');assert.equal(result.status,1);assert.match(result.stderr,/incomplete cases/);
+ const result=gate(matrix=>{matrix.combinations[0].discovery=null;matrix.combinations[0].status='accepted';});assert.equal(result.status,1);assert.match(result.stderr,/incomplete cases/);
 });
 test('changed discovery output is rejected by its content hash',()=>{
- const result=gate(matrix=>matrix.combinations[0].discovery.sha256='0'.repeat(64));assert.equal(result.status,1);assert.match(result.stderr,/changed evidence/);
+ withDiscoveryEvidence((root)=>{
+  const matrix=structuredClone(base);matrix.combinations[0].discovery.sha256='0'.repeat(64);
+  assert.throws(()=>verifyPlatformEvidence(matrix,root),/changed evidence/);
+ });
 });
 test('version output cannot be submitted as native behavioral evidence',()=>{
  linkedFixture(({matrix,root,reports,saveReport})=>{
