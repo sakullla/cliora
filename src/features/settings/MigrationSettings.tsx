@@ -126,7 +126,7 @@ export function MigrationSettings({ active, onImported }: { active: boolean; onI
         {items.map((item) => <label className={styles.item} key={item.key}><input type="checkbox" checked={exportSelected.includes(item.key)}
           onChange={() => toggle(item.key, exportSelected, setExportSelected)} disabled={busy} />
           <span><strong>{item.label}</strong><small>{KIND[item.kind] ?? item.kind}{item.pendingFields.length ? ' · 含换设备后待关联内容' : ''}</small></span></label>)}
-        {!items.length && <p className={styles.empty}>当前没有可迁移的资料。</p>}
+        {!items.length && <p className={styles.empty}>当前没有可带走的资料。请先在快速开始、工具与连接或资料库中产生配置或资料。</p>}
       </div>
       <div className={styles.action}><label>配置包口令 <input type="password" value={exportPassword} autoComplete="new-password" placeholder="至少 12 位" onChange={(event) => setExportPassword(event.target.value)} /></label>
         <button type="button" className="button primary" disabled={!nativeAvailable || busy || exportPassword.length < 12 || !exportSelected.length} onClick={() => void exportBundle()}>导出配置包</button></div>

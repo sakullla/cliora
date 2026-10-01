@@ -35,6 +35,9 @@ export function ProjectLauncher({ tools, repair }: { tools: AdapterDescriptor[];
   const latestProjects = useRef(projects); latestProjects.current = projects;
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  function showError(value: unknown) { setFeedback(''); setError(errorText(value)); }
+  function showFeedback(text: string) { setError(''); setFeedback(text); }
+  function begin(id: string) { setBusy(id); setError(''); setFeedback(''); }
 
   useEffect(() => {
     if (!repair?.projectId || focusedRepair.current === repair.sequence) return;
@@ -62,7 +65,7 @@ export function ProjectLauncher({ tools, repair }: { tools: AdapterDescriptor[];
       if (!Array.isArray(result)) throw new Error('项目数据格式无效，请重新读取');
       setProjects(result);
     }
-    catch (value) { setError(errorText(value)); }
+    catch (value) { showError(value); }
   }
 
   useEffect(() => {
@@ -92,86 +95,85 @@ export function ProjectLauncher({ tools, repair }: { tools: AdapterDescriptor[];
 
   async function remove(project: Project) {
     if (!await confirmAction(`从 Cliora 移除“${project.name}”？磁盘文件保留。`, () => mounted.current && latestProjects.current.some(item => item.id === project.id && JSON.stringify(item) === JSON.stringify(project)), { title: '移除项目', confirmLabel: '移除项目', destructive: true })) return;
-    setBusy(project.id); setError('');
+    begin(project.id);
     try { await native.removeProject(project.id); await refresh(); }
-    catch (value) { setError(errorText(value)); } finally { setBusy(''); }
+    catch (value) { showError(value); } finally { setBusy(''); }
   }
   async function rename(project: Project) {
-    setBusy(project.id); setError('');
+    begin(project.id);
     try { await native.renameProject(project.id, names[project.id] ?? project.name); await refresh(); }
-    catch (value) { setError(errorText(value)); } finally { setBusy(''); }
+    catch (value) { showError(value); } finally { setBusy(''); }
   }
   async function chooseDirectory(project?: Project) {
-    setError('');
     try {
       const picked = await open({ directory: true, multiple: false, title: project ? '重新关联项目目录' : '选择项目目录' });
       if (typeof picked !== 'string') return;
-      if (!project) { setBusy('add'); await native.addProject(picked, undefined, defaultTool || undefined); await refresh(); return; }
-      setBusy(project.id);
+      if (!project) { begin('add'); await native.addProject(picked, undefined, defaultTool || undefined); await refresh(); return; }
+      begin(project.id);
       const updated = await native.relinkProject(project.id, picked);
       setProjects((old) => old.map((item) => item.id === project.id ? updated : item));
-    } catch (value) { setError(errorText(value)); }
+    } catch (value) { showError(value); }
     finally { setBusy(''); }
   }
 
   async function updateTool(project: Project, toolId: string) {
-    setBusy(project.id); setError('');
+    begin(project.id);
     try {
       const updated = await native.setProjectTool(project.id, toolId || null);
       setProjects((old) => old.map((item) => item.id === project.id ? updated : item));
-    } catch (value) { setError(errorText(value)); }
+    } catch (value) { showError(value); }
     finally { setBusy(''); }
   }
 
   async function saveModel(project: Project, toolId: string) {
     const key = `${project.id}:${toolId}`;
     const model = (modelEdits[key] ?? project.modelOverrides[toolId] ?? '').trim();
-    setBusy(project.id); setError('');
+    begin(project.id);
     try {
       const updated = await native.setProjectModelOverride(project.id, toolId, model || null);
       setProjects((old) => old.map((item) => item.id === project.id ? updated : item));
-      setFeedback(model ? '项目模型已保存；下次启动时通过 CLI 参数选择。' : '已清除项目模型覆盖。');
-    } catch (value) { setError(errorText(value)); }
+      showFeedback(model ? '项目模型已保存；下次启动时通过 CLI 参数选择。' : '已清除项目模型覆盖。');
+    } catch (value) { showError(value); }
     finally { setBusy(''); }
   }
 
   async function relinkProject(project: Project) {
     const next = relink[project.id]?.trim();
     if (!next) return;
-    setBusy(project.id); setError('');
+    begin(project.id);
     try {
       const updated = await native.relinkProject(project.id, next);
       setProjects((old) => old.map((item) => item.id === project.id ? updated : item));
       setRelink((old) => ({ ...old, [project.id]: '' }));
-    } catch (value) { setError(errorText(value)); }
+    } catch (value) { showError(value); }
     finally { setBusy(''); }
   }
 
   async function openProject(project: Project) {
-    setError('');
+    setError(''); setFeedback('');
     try { await native.openProjectDirectory(project.id); }
-    catch (value) { setError(errorText(value)); }
+    catch (value) { showError(value); }
   }
 
   async function applySelected(project: Project, toolId: string) {
     const profileId = project.selectedProfiles[toolId];
     if (!profileId || !project.path) return;
-    setBusy(project.id); setError(''); setFeedback('');
+    begin(project.id);
     try {
       await native.applyRegisteredNativeProfile(toolId, profileId, 'project', project.path, false);
       await refresh();
-      setFeedback('项目配置已写入原生文件；新会话将读取该配置。');
-    } catch (value) { setError(errorText(value)); }
+      showFeedback('项目配置已写入原生文件；新会话将读取该配置。');
+    } catch (value) { showError(value); }
     finally { setBusy(''); }
   }
 
   async function launch(toolId: string, projectId: string | null, mode: 'normal' | 'yolo', resumeId?: string) {
-    setBusy(projectId ?? 'global'); setError(''); setFeedback('');
+    begin(projectId ?? 'global');
     try {
       const result = await native.launchCli({ toolId, projectId, sessionId: resumeId?.trim() || null, mode, directory: projectId ? null : launchDirectory.trim() || null });
-      setFeedback(`已向外部终端发送${resumeId?.trim() ? '恢复' : '启动'}${result.mode === 'yolo' ? ' YOLO' : ''}请求。`);
+      showFeedback(`已向外部终端发送${resumeId?.trim() ? '恢复' : '启动'}${result.mode === 'yolo' ? ' YOLO' : ''}请求。`);
       await refresh();
-    } catch (value) { setError(errorText(value)); }
+    } catch (value) { showError(value); }
     finally { setBusy(''); }
   }
 
@@ -184,7 +186,7 @@ export function ProjectLauncher({ tools, repair }: { tools: AdapterDescriptor[];
       <div><strong>直接启动</strong><span>{directMode === 'yolo' ? '默认 YOLO 模式；旁边仍可改用普通模式。' : '默认普通模式；YOLO 会按 CLI 原生参数跳过审批。'}</span></div>
       <select aria-label="直接启动的工具" value={defaultTool} onChange={(event) => setGlobalTool(event.target.value)}>{managed.map((tool) => <option value={tool.id} key={tool.id}>{tool.name}</option>)}</select>
       <input aria-label="恢复会话 ID" value={sessionId} placeholder="会话 ID（可选）" onChange={(event) => setSessionId(event.target.value)} />
-      <div className={styles.launchDirectory}><input aria-label="启动工作目录" value={launchDirectory} placeholder="工作目录（恢复时使用原会话目录）" onChange={(event) => setLaunchDirectory(event.target.value)} /><button type="button" className={styles.secondary} disabled={!!busy} onClick={() => { void open({ directory: true, multiple: false, title: '选择启动工作目录' }).then((picked) => { if (typeof picked === 'string') setLaunchDirectory(picked); }).catch((value) => setError(errorText(value))); }}>选目录</button></div>
+      <div className={styles.launchDirectory}><input aria-label="启动工作目录" value={launchDirectory} placeholder="工作目录（恢复时使用原会话目录）" onChange={(event) => setLaunchDirectory(event.target.value)} /><button type="button" className={styles.secondary} disabled={!!busy} onClick={() => { void open({ directory: true, multiple: false, title: '选择启动工作目录' }).then((picked) => { if (typeof picked === 'string') setLaunchDirectory(picked); }).catch((value) => showError(value)); }}>选目录</button></div>
       <div className={styles.actions}><button type="button" disabled={!!busy} onClick={() => void launch(defaultTool, null, directMode, sessionId)}>{sessionId.trim() ? '恢复' : '启动'}</button>{directMode === 'yolo' ? <button type="button" className={styles.secondary} disabled={!!busy} onClick={() => void launch(defaultTool, null, 'normal', sessionId)}>{sessionId.trim() ? '普通恢复' : '普通'}</button> : <button type="button" className={styles.secondary} disabled={!!busy || !directTool?.yoloAvailable} title={directTool?.yoloAvailable ? '按此 CLI 的原生参数跳过审批' : '此 CLI 未提供已确认的 YOLO 参数'} onClick={() => void launch(defaultTool, null, 'yolo', sessionId)}>{sessionId.trim() ? 'YOLO 恢复' : 'YOLO'}</button>}</div>
     </div></details>}
     <div className={styles.heading}><strong>最近项目</strong><button type="button" className={styles.secondary} disabled={!!busy} onClick={() => void chooseDirectory()}>＋ 添加项目</button></div>

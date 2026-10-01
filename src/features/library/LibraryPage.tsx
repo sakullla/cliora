@@ -52,15 +52,18 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
     return confirmAction(message, () => mounted.current && latest.current === started, options);
   }
 
+  function showError(text: string) { setNotice(''); setError(text); }
+  function showNotice(text: string) { setError(''); setNotice(text); }
+
   useEffect(() => {
     if (!nativeAvailable || !active) return;
-    void native.listProjects().then(setProjects).catch((value) => setError(message(value)));
+    void native.listProjects().then(setProjects).catch((value) => showError(message(value)));
   }, [active]);
   useEffect(() => {
     if (!nativeAvailable || !active) return;
     let live = true;
     void native.listLibraryItems(kind, null, search).then((result) => { if (live) setItems(result); })
-      .catch((value) => { if (live) setError(message(value)); });
+      .catch((value) => { if (live) showError(message(value)); });
     return () => { live = false; };
   }, [active, kind, search]);
 
@@ -92,22 +95,23 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
       const next = edit(saved);
       setDraft(next); setSavedText(JSON.stringify(next));
       await refresh();
-      setNotice('已保存在本机资料库。');
-    } catch (value) { setError(message(value)); }
+      showNotice('已保存在本机资料库。');
+    } catch (value) { showError(message(value)); }
     finally { setBusy(false); }
   }
   async function remove() {
     if (!draft?.id || draft.expectedVersion === null || busy || !await confirmCurrent(`删除“${draft.title}”？`, { title: '删除资料', confirmLabel: '删除资料', destructive: true })) return;
-    setBusy(true); setError('');
+    setBusy(true); setError(''); setNotice('');
     try {
       await native.deleteLibraryItem(draft.id, draft.expectedVersion);
-      setDraft(null); setSavedText(''); await refresh(); setNotice('已删除。');
-    } catch (value) { setError(message(value)); }
+      setDraft(null); setSavedText(''); await refresh(); showNotice('已删除。');
+    } catch (value) { showError(message(value)); }
     finally { setBusy(false); }
   }
   async function copy(text: string) {
-    try { await navigator.clipboard.writeText(text); setNotice('完整正文已复制。'); setError(''); }
-    catch { setError('复制失败，请检查剪贴板权限。'); }
+    setNotice(''); setError('');
+    try { await navigator.clipboard.writeText(text); showNotice('完整正文已复制，可以粘贴使用。'); }
+    catch { showError('复制失败，正文仍在页面上，可以手动选择。'); }
   }
   function addTag(raw: string) {
     if (!draft) return;
@@ -142,7 +146,7 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
       <div className={styles.list} aria-label={`${kind === 'prompt' ? '提示词' : '规则'}列表`}>
         {shown.length ? shown.map((item) => <article className={styles.card} key={item.id}>
           <small>{tagsOf(item.category).join(' · ') || '无标签'} · {item.projectId ? projects.find((project) => project.id === item.projectId)?.name ?? '原项目' : '全局'}</small><button className={styles.cardTitle} type="button" onClick={() => choose(item)}>{item.title}</button><p>{item.body.slice(0, 160) || '正文为空'}</p><div className={styles.cardActions}><button type="button" onClick={() => void copy(item.body)} disabled={!item.body}>复制全文</button><button type="button" onClick={() => choose(item)}>修改</button></div>
-        </article>) : <div className={styles.empty}>没有符合筛选条件的{kind === 'prompt' ? '提示词' : '规则'}。</div>}
+        </article>) : <div className={styles.empty}>筛选结果为空，没有符合条件的{kind === 'prompt' ? '提示词' : '规则'}。请使用上方的「新建」。</div>}
       </div>
     </div>
     <GuideDialog open={!!draft} title={draft?.id ? `修改${kind === 'prompt' ? '提示词' : '规则'}` : `新建${kind === 'prompt' ? '提示词' : '规则'}`} hint="填写标题和正文，然后保存。规则还可以继续分发到 CLI。" onClose={() => { void (async () => { if (await canReplace()) { setDraft(null); setSavedText(''); } })(); }}>
