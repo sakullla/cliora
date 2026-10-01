@@ -779,9 +779,9 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
       {!!workspace?.recoveryNeeded.length && <div className={styles.error}>有 {workspace.recoveryNeeded.length} 项原生文件事务需要恢复。请检查目标文件和本机凭据库后重试。<button type="button" onClick={() => { void native.recoverNativeTransactions().then(() => { if (currentTool) return reload(currentTool, scope, projectPath, selectedId); }); }}>重试恢复</button></div>}
       {writeUnavailable}
       {workspace && workspace.profiles.length ? <div className={styles.profileList} aria-label="配置列表">
-          <div className={styles.listHeading}><strong>配置</strong><span className={styles.listActions}><button type="button" onClick={() => void editCommon()}>通用配置</button><button type="button" onClick={() => void createProfile()}>新建配置</button></span></div>
-          <div className={styles.profileRow}><span><strong>正在使用的文件</strong><small>保存即写入该文件</small></span><button type="button" onClick={() => void openCurrentFile()}>修改</button></div>
-          {workspace.profiles.map((item) => <div className={styles.profileRow} key={item.id}><span><strong>{item.name}</strong><small>{profileStatus(item)}</small></span><button type="button" onClick={() => void selectProfile(item)}>修改</button></div>)}
+          <div className={styles.listHeading}><strong>配置</strong><span className={styles.listActions}><button type="button" onClick={() => void editCommon()}>通用配置</button><button type="button" className={styles.primary} onClick={() => void createProfile()}>新建配置</button></span></div>
+          <div className={styles.profileRow} data-kind="native"><span><strong>正在使用的文件</strong><small>保存即写入该文件</small></span><button type="button" onClick={() => void openCurrentFile()}>修改</button></div>
+          {workspace.profiles.map((item) => { const status = profileStatus(item); return <div className={styles.profileRow} key={item.id}><span><strong>{item.name}</strong><small className={styles.badge} data-tone={status === '正在使用' ? 'ok' : status === '已保存' ? undefined : 'warn'}>{status}</small></span><button type="button" onClick={() => void selectProfile(item)}>修改</button></div>; })}
         </div> : <div className={styles.taskEmpty}>
         <button type="button" className={styles.primary} disabled={busy || !currentTool} onClick={() => void createProfile()}>新建配置</button>
         <button type="button" className={styles.secondary} disabled={busy || !currentTool} onClick={() => void editCommon()}>通用配置</button>

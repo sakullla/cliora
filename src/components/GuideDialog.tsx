@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, type ReactNode } from 'react';
+import { Icon } from './Icon';
 
 export function GuideDialog({ open, title, hint, onClose, children }: { open: boolean; title: string; hint?: string; onClose: () => void; children: ReactNode }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -14,7 +15,7 @@ export function GuideDialog({ open, title, hint, onClose, children }: { open: bo
   return <dialog ref={dialog} className="guide-dialog" aria-labelledby="guide-dialog-title" onCancel={(event) => { event.preventDefault(); onClose(); }}>
     <div className="guide-dialog-head">
       <div><h2 id="guide-dialog-title">{title}</h2>{hint && <p>{hint}</p>}</div>
-      <button type="button" className="guide-dialog-close" onClick={onClose} aria-label="关闭">×</button>
+      <button type="button" className="guide-dialog-close" onClick={onClose} aria-label="关闭" title="关闭（Esc）"><Icon name="close" size={16} /></button>
     </div>
     <div className="guide-dialog-body">{children}</div>
   </dialog>;

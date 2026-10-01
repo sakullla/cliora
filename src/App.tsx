@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Icon } from './components/Icon';
+import type { IconName } from './components/Icon';
 import { ConfirmationHost } from './components/ConfirmationHost';
 import { ToolIcon, ToolIconsContext } from './components/ToolIcon';
 import { ToolIconSettings } from './features/settings/ToolIconSettings';
@@ -21,7 +23,7 @@ import type { AdapterCatalog } from './types/native';
 type Page = 'home' | 'connections' | 'library' | 'records' | 'settings';
 type SettingsTab = 'general' | 'migration';
 
-const pages: { id: Page; label: string; glyph: 'home' | 'connections' | 'library' | 'records' | 'settings' }[] = [
+const pages: { id: Page; label: string; glyph: IconName }[] = [
   { id: 'home', label: '快速开始', glyph: 'home' },
   { id: 'connections', label: '工具与连接', glyph: 'connections' },
   { id: 'library', label: '资料库', glyph: 'library' },
@@ -29,22 +31,37 @@ const pages: { id: Page; label: string; glyph: 'home' | 'connections' | 'library
   { id: 'settings', label: '设置', glyph: 'settings' },
 ];
 
+const themes: { id: Theme; label: string; glyph: IconName }[] = [
+  { id: 'system', label: '跟随系统主题', glyph: 'monitor' },
+  { id: 'light', label: '浅色主题', glyph: 'sun' },
+  { id: 'dark', label: '深色主题', glyph: 'moon' },
+];
+
+const shortcutKey = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl';
+
 function titleFor(page: Page): [string, string] {
   switch (page) {
-    case 'home': return ['快速开始', '选择工具与项目，开始使用。'];
-    case 'connections': return ['工具与连接', ''];
+    case 'home': return ['快速开始', '选择工具与项目，一键在外部终端启动。'];
+    case 'connections': return ['工具与连接', '管理每个 CLI 的配置、MCP 与 Skill。'];
     case 'library': return ['资料库', '统一保存常用提示词与规则。'];
     case 'records': return ['使用记录', '查看本机会话与用量。'];
     case 'settings': return ['设置', '只保留日常需要的选项。'];
   }
 }
 
-function Empty({ title, detail, action }: { title: string; detail: string; action?: ReactNode }) {
-  return <div className="empty-state"><div className="empty-symbol" aria-hidden="true"><Icon name="leaf" size={22} /></div><h2>{title}</h2><p>{detail}</p>{action}</div>;
+function Empty({ title, detail, action, icon = 'leaf' }: { title: string; detail: string; action?: ReactNode; icon?: IconName }) {
+  return <div className="empty-state"><div className="empty-symbol" aria-hidden="true"><Icon name={icon} size={22} /></div><h2>{title}</h2><p>{detail}</p>{action}</div>;
+}
+
+function LoadingSkeleton() {
+  return <div className="skeleton-page" aria-busy="true">
+    <p className="muted-copy">正在读取本机设置</p>
+    <div className="skeleton-row"><div className="skeleton-page"><div className="skeleton-block" /><div className="skeleton-block" /><div className="skeleton-block" /></div><div className="skeleton-block tall" /></div>
+  </div>;
 }
 
 function PageTabs<T extends string>({ items, value, onChange }: { items: [T, string][]; value: T; onChange: (value: T) => void }) {
-  return <div className="tabs" role="tablist">{items.map(([id, text]) => <button key={id} type="button" role="tab" aria-selected={value === id} className={value === id ? 'active' : ''} onClick={() => onChange(id)}>{text}</button>)}</div>;
+  return <div className="tabs" role="tablist" aria-label="设置分类">{items.map(([id, text]) => <button key={id} type="button" role="tab" aria-selected={value === id} className={value === id ? 'active' : ''} onClick={() => onChange(id)}>{text}</button>)}</div>;
 }
 
 export default function App() {
@@ -133,12 +150,26 @@ export default function App() {
 
   useEffect(() => {
     const mode = bootstrap.preferences.theme;
+    if (nativeAvailable) { try { void getCurrentWindow().setTheme(mode === 'system' ? null : mode).catch(() => {}); } catch { void 0; } }
     const apply = () => { document.documentElement.dataset.theme = mode === 'system' ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : mode; };
     apply();
     const media = matchMedia('(prefers-color-scheme: dark)');
     media.addEventListener('change', apply);
     return () => media.removeEventListener('change', apply);
   }, [bootstrap.preferences.theme]);
+
+  const goRef = useRef<(next: Page) => void>(() => {});
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
+      const index = Number(event.key) - 1;
+      if (!Number.isInteger(index) || index < 0 || index >= pages.length || document.querySelector('dialog[open]')) return;
+      event.preventDefault();
+      goRef.current(pages[index].id);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   const managed: string[] = nativeAvailable ? catalog?.managedIds ?? [] : bootstrap.preferences.managed_tools;
   const visible = (nativeAvailable ? catalog?.registered ?? [] : bootstrap.tools).filter((item) => managed.includes(item.id));
@@ -154,6 +185,7 @@ export default function App() {
     document.querySelector('main')?.scrollTo({ top: 0 });
     requestAnimationFrame(() => document.querySelector<HTMLElement>('h1')?.focus());
   }
+  goRef.current = go;
 
   async function updateManaged(id: string, checked: boolean) {
     if (!nativeAvailable || busy) return;
@@ -183,19 +215,22 @@ export default function App() {
 
   return <ToolIconsContext value={bootstrap.preferences.tool_icons ?? {}}><div className="shell">
     <aside className="sidebar" aria-label="主导航">
-      <div className="brand"><span className="brandmark" aria-hidden="true"><Icon name="leaf" size={24} /></span><span><strong>栖点</strong><small>CLIORA</small></span></div>
+      <div className="brand"><span className="brandmark" aria-hidden="true"><Icon name="leaf" size={20} strokeWidth={1.9} /></span><span><strong>栖点</strong><small>CLIORA</small></span></div>
       <nav className="nav" aria-label="页面">
-        {pages.map((item) => <button key={item.id} type="button" className={page === item.id ? 'active' : ''} aria-current={page === item.id ? 'page' : undefined} onClick={() => go(item.id)}>
-          <span className="nav-glyph" aria-hidden="true"><Icon name={item.glyph} /></span>{item.label}
+        {pages.map((item, index) => <button key={item.id} type="button" className={page === item.id ? 'active' : ''} aria-current={page === item.id ? 'page' : undefined} aria-keyshortcuts={`${shortcutKey === '⌘' ? 'Meta' : 'Control'}+${index + 1}`} title={`${item.label}（${shortcutKey}+${index + 1}）`} onClick={() => go(item.id)}>
+          <span className="nav-glyph" aria-hidden="true"><Icon name={item.glyph} /></span>{item.label}<kbd className="nav-kbd" aria-hidden="true">{shortcutKey === '⌘' ? '⌘' : '^'}{index + 1}</kbd>
         </button>)}
       </nav>
-      <div className="sidebar-foot"><span className="status-dot" /> 本机资料</div>
+      <div className="sidebar-foot">
+        <div className="theme-switch" role="group" aria-label="切换主题">{themes.map((item) => <button key={item.id} type="button" aria-label={item.label} title={item.label} aria-pressed={bootstrap.preferences.theme === item.id} disabled={busy} onClick={() => { if (bootstrap.preferences.theme !== item.id) void updateTheme(item.id); }}><Icon name={item.glyph} size={14} /></button>)}</div>
+        <div className="sidebar-status"><span className="status-dot" data-tone={nativeAvailable ? undefined : 'preview'} />{nativeAvailable ? '本机资料 · 仅存于此设备' : '浏览器预览'}</div>
+      </div>
     </aside>
-    <main className="content" id="main">
-      {!nativeAvailable && <div className="environment-banner" role="status">浏览器预览：原生配置、持久保存和系统凭据仅在桌面应用中可用。</div>}
-      {error && <div className="error-banner" role="alert"><div className="error-copy"><strong>{error.message}</strong><span>{error.action}</span>{error.data_directory && <code>{error.data_directory}</code>}</div>{loaded && <button type="button" onClick={() => setError(null)} aria-label="关闭错误提示">×</button>}</div>}
-      <header className="page-head"><div><h1 tabIndex={-1}>{title[0]}</h1>{page !== 'home' && title[1] && <p>{title[1]}</p>}</div></header>
-      {loading ? <Empty title="正在读取本机设置" detail="请稍候。" /> : !loaded ? <Empty title="暂时无法读取本机资料" detail="原数据仍保留。请按上方提示处理后重试。" action={<button className="button primary" type="button" onClick={loadBootstrap}>重试读取</button>} /> : <>
+    <main className="content" id="main"><div className="content-inner">
+      {!nativeAvailable && <div className="environment-banner" role="status"><span className="banner-icon"><Icon name="info" size={16} /></span><span>浏览器预览：原生配置、持久保存和系统凭据仅在桌面应用中可用。</span></div>}
+      {error && <div className="error-banner" role="alert"><span className="banner-icon"><Icon name="alert" size={16} /></span><div className="error-copy"><strong>{error.message}</strong><span>{error.action}</span>{error.data_directory && <code>{error.data_directory}</code>}</div>{loaded && <button type="button" onClick={() => setError(null)} aria-label="关闭错误提示"><Icon name="close" size={14} /></button>}</div>}
+      <header className="page-head"><div><h1 tabIndex={-1}>{title[0]}</h1>{title[1] && <p>{title[1]}</p>}</div></header>
+      {loading ? <LoadingSkeleton /> : !loaded ? <Empty icon="alert" title="暂时无法读取本机资料" detail="原数据仍保留。请按上方提示处理后重试。" action={<button className="button primary" type="button" onClick={loadBootstrap}>重试读取</button>} /> : <>
         {page === 'home' && <div className="home-band">
           <section className="home-tools">
             <div className="section-heading"><h2>管理中的工具</h2><button className="text-button" type="button" onClick={() => go('settings')}>调整工具 <span aria-hidden="true">→</span></button></div>
@@ -217,6 +252,6 @@ export default function App() {
         </>}
         <div hidden={page !== 'settings' || settingsTab !== 'migration'}><MigrationSettings active={page === 'settings' && settingsTab === 'migration'} onImported={() => void refreshAfterImport()} /></div>
       </>}
-    </main>
+    </div></main>
   </div><ConfirmationHost /></ToolIconsContext>;
 }

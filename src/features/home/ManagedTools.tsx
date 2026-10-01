@@ -93,7 +93,7 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
       const launchMode = preferredLaunchMode(launchSettings, 'cli', !!tool.yoloAvailable);
       const switchTitle = !workspace ? undefined : !writable ? workspace.probe.nativeWrites.reason || '当前不能写入这个工具的配置' : '点一下即切换，下次启动会读取这份配置';
       return <div className={styles.row} key={tool.id}>
-        <div className={styles.name}><ToolIcon toolId={tool.id} /><span><strong>{tool.name}</strong><small>{loaded?.error ? '检测失败' : workspace ? installed ? workspace.probe.installations.find((item) => item.path === workspace.probe.selectedPath)?.version ?? '已安装' : '未确认安装' : '正在检测'}</small></span></div>
+        <div className={styles.name}><ToolIcon toolId={tool.id} size={34} /><span><strong>{tool.name}</strong><small className={styles.status} data-state={loaded?.error ? 'error' : !workspace ? 'loading' : installed ? 'ok' : 'warn'}>{loaded?.error ? '检测失败' : workspace ? installed ? workspace.probe.installations.find((item) => item.path === workspace.probe.selectedPath)?.version ?? '已安装' : '未确认安装' : '正在检测'}</small></span></div>
         <div className={styles.switch}>
           {loaded?.error ? <small>{loaded.error}</small>
             : !workspace ? (nativeAvailable ? <small>正在读取配置</small> : null)
