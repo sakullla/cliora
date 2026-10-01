@@ -1,4 +1,73 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
+
+const pageNames = ['快速开始', '工具与连接', '资料库', '使用记录', '设置'] as const;
+
+async function expectNoHorizontalScroll(page: Page) {
+  await expect.poll(async () => page.evaluate(() => {
+    const root = document.documentElement;
+    const main = document.querySelector('main.content');
+    const docOverflow = root.scrollWidth - window.innerWidth;
+    const mainOverflow = main ? main.scrollWidth - main.clientWidth : 0;
+    if (docOverflow <= 0 && mainOverflow <= 0) return '';
+    const mainRect = main?.getBoundingClientRect();
+    const wide = main ? [...main.querySelectorAll<HTMLElement>('*')].flatMap((el) => {
+      const rect = el.getBoundingClientRect();
+      if (!mainRect || rect.width < 2 || (rect.right <= mainRect.right + 1 && rect.left >= mainRect.left - 1)) return [];
+      const cls = [...el.classList].slice(0, 2).join('.');
+      return [`${el.tagName.toLowerCase()}${cls ? `.${cls}` : ''} ${Math.round(rect.left)}..${Math.round(rect.right)}`];
+    }).slice(0, 8) : [];
+    return `doc ${docOverflow} main ${mainOverflow} ${wide.join(' | ')}`;
+  })).toBe('');
+}
+
+async function expectFullyInFirstScreen(page: Page, locator: Locator) {
+  await expect(locator).toBeVisible();
+  const box = await locator.boundingBox();
+  const viewport = page.viewportSize();
+  expect(box).not.toBeNull();
+  expect(box!.y).toBeGreaterThanOrEqual(0);
+  expect(box!.y + box!.height).toBeLessThanOrEqual((viewport?.height ?? 0) + 1);
+  await expect.poll(() => page.locator('main.content').evaluate((el) => el.scrollTop)).toBe(0);
+}
+
+async function installDesktop(page: Page) {
+  await page.addInitScript(() => {
+    const names: Record<string, string> = { codex: 'Codex', claude_code: 'Claude Code', grok: 'Grok', pi: 'Pi', open_code: 'OpenCode' };
+    const tools = Object.entries(names).map(([id, name]) => ({ id, name, installation: 'not_checked', configuration: 'not_checked' }));
+    const workspace = () => ({
+      probe: {
+        selectedPath: null, installations: [], nativeFiles: [], nativeWrites: { state: 'unknown', reason: '尚未安装' },
+        interfaceFormats: [], installUrl: '', upgradeHint: '', dependencies: [], installCommand: null, upgradeCommand: null, providerPresets: [],
+      },
+      profiles: [], binding: null, snapshots: [], recoveryNeeded: [], common: null, customPath: null,
+    });
+    const usage = () => ({
+      sessionCount: 0, usageSessions: 0, unknownUsageSessions: 0, partialSessions: 0, staleSessions: 0,
+      input: null, output: null, cacheRead: null, cacheWrite: null, inputIncludesCache: null,
+      estimatedCost: null, currency: null, priceSources: [], scans: [], models: [], byModel: [],
+    });
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string) => {
+          if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: Object.keys(names), theme: 'system' }, tools };
+          if (command === 'list_cli_adapters') return {
+            registered: Object.entries(names).map(([id, name]) => ({ id, name, interfaceFormats: [], nativeConfig: { state: 'available', reason: '' }, launch: { state: 'planned', reason: '' }, resume: { state: 'planned', reason: '' }, resources: { state: 'planned', reason: '' }, history: { state: 'planned', reason: '' } })),
+            managedIds: Object.keys(names), preservedUnknown: [],
+          };
+          if (command === 'get_registered_tool_workspace') return workspace();
+          if (command === 'list_projects' || command === 'list_library_items' || command === 'list_history_sessions' || command === 'list_history_prices' || command === 'refresh_history' || command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_skill_recovery_issues' || command === 'scan_native_skills' || command === 'list_native_mcp' || command === 'list_portable_items') return [];
+          if (command === 'get_history_usage') return usage();
+          if (command === 'get_launch_settings') return { selected: 'auto', terminals: [{ id: 'auto', label: '系统默认', available: true }], cliMode: 'normal', projectMode: 'normal' };
+          if (command === 'get_tray_status') return { available: false, error: null };
+          if (command === 'get_history_scan_progress') return { running: false, toolId: '', completedSources: 0, totalSources: 0 };
+          if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return () => {};
+          return null;
+        },
+      },
+    });
+  });
+}
 
 test('five full pages are navigable and browser mode never implies native data', async ({ page }) => {
   await page.goto('/');
@@ -273,5 +342,71 @@ test('home switches the active configuration from the tool row', async ({ page }
   await expect(group.getByRole('radio', { name: '日常' })).toHaveAttribute('aria-checked', 'false');
   const calls = await page.evaluate(() => (window as unknown as { __switchCalls: Array<Record<string, unknown>> }).__switchCalls);
   expect(calls[0]).toMatchObject({ toolId: 'codex', profileId: 'work', scope: 'global', allowTakeover: false });
+});
+
+test('browser preview keeps five pages reachable at 640 and does not scroll sideways', async ({ page }) => {
+  await page.setViewportSize({ width: 640, height: 768 });
+  await page.goto('/');
+  const nav = page.getByRole('navigation', { name: '页面' });
+  const status = page.locator('.sidebar-status');
+  await expect(status).toBeVisible();
+  await expect(status).toHaveText('浏览器预览');
+  await expect(status).not.toContainText('本机资料');
+  const statusBox = await status.boundingBox();
+  expect(statusBox).not.toBeNull();
+  expect(statusBox!.x).toBeGreaterThanOrEqual(0);
+  expect(statusBox!.x + statusBox!.width).toBeLessThanOrEqual(640 + 1);
+  for (const name of pageNames) {
+    const button = nav.getByRole('button', { name });
+    await expect(button).toBeVisible();
+    const box = await button.boundingBox();
+    expect(box?.width ?? 0).toBeGreaterThan(36);
+    await button.click();
+    await expect(page.getByRole('heading', { name, level: 1 })).toBeVisible();
+    await expect(status).toBeVisible();
+  }
+  for (const width of [1360, 900, 640]) {
+    await page.setViewportSize({ width, height: 768 });
+    for (const name of pageNames) {
+      await nav.getByRole('button', { name }).click();
+      await expect(page.getByRole('heading', { name, level: 1 })).toBeVisible();
+      await expectNoHorizontalScroll(page);
+    }
+  }
+});
+
+test('desktop shell keeps on-device copy, first-screen actions, and no sideways scroll', async ({ page }) => {
+  await installDesktop(page);
+  await page.setViewportSize({ width: 1360, height: 768 });
+  await page.goto('/');
+  await expect(page.getByText('正在读取本机设置')).toBeHidden();
+  const status = page.locator('.sidebar-status');
+  await expect(status).toBeVisible();
+  await expect(status).toHaveText('本机资料 · 仅存于此设备');
+  const nav = page.getByRole('navigation', { name: '页面' });
+  await nav.getByRole('button', { name: '设置' }).click();
+  await expectFullyInFirstScreen(page, page.getByRole('heading', { name: '管理的 CLI' }));
+  await nav.getByRole('button', { name: '资料库' }).click();
+  await expectFullyInFirstScreen(page, page.getByRole('button', { name: /新建/ }));
+  await nav.getByRole('button', { name: '使用记录' }).click();
+  const search = page.getByRole('textbox', { name: '搜索会话' });
+  const sessions = page.getByRole('tab', { name: '会话' });
+  await expect(search.or(sessions).first()).toBeVisible();
+  if (await search.isVisible()) await expectFullyInFirstScreen(page, search);
+  else await expectFullyInFirstScreen(page, sessions);
+  for (const width of [1360, 900, 640]) {
+    await page.setViewportSize({ width, height: width === 640 ? 760 : 768 });
+    for (const name of pageNames) {
+      const button = nav.getByRole('button', { name });
+      await button.click();
+      await expect(page.getByRole('heading', { name, level: 1 })).toBeVisible();
+      await expect(status).toHaveText('本机资料 · 仅存于此设备');
+      await expectNoHorizontalScroll(page);
+    }
+  }
+  await expect(status).toHaveText('本机资料 · 仅存于此设备');
+  const narrowBox = await status.boundingBox();
+  expect(narrowBox).not.toBeNull();
+  expect(narrowBox!.x + narrowBox!.width).toBeLessThanOrEqual(640 + 1);
 });
 
