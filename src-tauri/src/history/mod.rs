@@ -434,6 +434,7 @@ pub struct UsageSummary {
     pub cache_write: Option<u64>,
     pub input_includes_cache: Option<bool>,
     pub estimated_cost: Option<f64>,
+    pub cost_partial: bool,
     pub currency: Option<String>,
     pub price_sources: Vec<String>,
     pub scans: Vec<ScanStatus>,
@@ -453,6 +454,7 @@ pub struct ModelUsage {
     pub cache_read: Option<u64>,
     pub cache_write: Option<u64>,
     pub estimated_cost: Option<f64>,
+    pub cost_partial: bool,
     pub currency: Option<String>,
 }
 
@@ -885,8 +887,34 @@ pub fn save_price(
     Ok(price)
 }
 
-fn sum_known(current: &mut Option<u64>, value: Option<u64>) {
-    *current = current.and_then(|old| value.and_then(|value| old.checked_add(value)));
+/// A missing number on one event must not erase the subtotal from every other event.
+fn add_reported(total: &mut Option<u64>, seen: &mut bool, value: Option<u64>) {
+    let Some(value) = value else { return };
+    *seen = true;
+    *total = total.and_then(|old| old.checked_add(value));
+}
+
+fn model_label(model: Option<String>) -> Option<String> {
+    let model = model?;
+    let label = crate::history::opencode::model_id(model.trim());
+    (!label.is_empty()).then_some(label)
+}
+
+/// Claude Code writes `<synthetic>` on local command and placeholder rows. Those are not model calls.
+fn billable_usage_model(model: Option<&str>) -> bool {
+    model != Some("<synthetic>")
+}
+
+/// Prompt tokens actually consumed. Claude, Pi, and OpenCode store cache beside input;
+/// Codex and Grok already fold cache into input.
+fn prompt_tokens(event: &UsageEvent) -> Option<u64> {
+    let input = event.input?;
+    if event.input_includes_cache {
+        return Some(input);
+    }
+    input
+        .checked_add(event.cache_read.unwrap_or(0))?
+        .checked_add(event.cache_write.unwrap_or(0))
 }
 
 pub fn usage_summary(db: &Database, filter: &HistoryFilter) -> Result<UsageSummary, String> {
@@ -897,13 +925,26 @@ pub fn usage_summary(db: &Database, filter: &HistoryFilter) -> Result<UsageSumma
     let mut catalog_filter = filter.clone();
     catalog_filter.model = None;
     let catalog_rows = query_sessions(db, &catalog_filter, false)?;
-    result.models = catalog_rows.iter().flat_map(|(session, events)| session.model.iter().chain(events.iter().filter_map(|event| event.model.as_ref())))
-        .cloned().collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+    result.models = catalog_rows.iter().flat_map(|(session, events)| session.model.clone().into_iter().chain(events.iter().filter_map(|event| event.model.clone())))
+        .filter_map(|model| model_label(Some(model)).filter(|model| billable_usage_model(Some(model))))
+        .collect::<std::collections::BTreeSet<_>>().into_iter().collect();
     let mut groups: BTreeMap<(String, Option<String>), Vec<(HistorySession, Vec<UsageEvent>)>> = BTreeMap::new();
     for (session, events) in &rows {
         let mut event_groups: BTreeMap<Option<String>, Vec<UsageEvent>> = BTreeMap::new();
-        for event in events { event_groups.entry(event.model.clone()).or_default().push(event.clone()); }
-        if events.is_empty() { event_groups.insert(session.model.clone(), Vec::new()); }
+        for event in events {
+            let model = model_label(event.model.clone());
+            if billable_usage_model(model.as_deref()) {
+                let mut stored = event.clone();
+                stored.model = model.clone();
+                event_groups.entry(model).or_default().push(stored);
+            }
+        }
+        if event_groups.is_empty() {
+            let model = model_label(session.model.clone());
+            if billable_usage_model(model.as_deref()) {
+                event_groups.insert(model, Vec::new());
+            }
+        }
         for (model, events) in event_groups {
             if filter.model.as_deref().is_some_and(|selected| if selected == "__unknown__" { model.is_some() } else { model.as_deref() != Some(selected) }) { continue; }
             groups.entry((session.tool_id.clone(), model)).or_default().push((session.clone(), events));
@@ -911,15 +952,17 @@ pub fn usage_summary(db: &Database, filter: &HistoryFilter) -> Result<UsageSumma
     }
     for ((tool_id, model), rows) in groups {
         let summary = summarize_rows(&rows, &price_map, filter, Vec::new());
-        if summary.session_count == 0 { continue; }
+        if summary.usage_sessions == 0 { continue; }
         result.by_model.push(ModelUsage {tool_id, model, session_count:summary.session_count,
             unknown_usage_sessions:summary.unknown_usage_sessions, input:summary.input, output:summary.output,
-            cache_read:summary.cache_read, cache_write:summary.cache_write, estimated_cost:summary.estimated_cost, currency:summary.currency});
+            cache_read:summary.cache_read, cache_write:summary.cache_write, estimated_cost:summary.estimated_cost, cost_partial:summary.cost_partial, currency:summary.currency});
     }
     Ok(result)
 }
 
 fn summarize_rows(rows: &[(HistorySession, Vec<UsageEvent>)], price_map: &BTreeMap<(String, String), HistoryPrice>, filter: &HistoryFilter, scans: Vec<ScanStatus>) -> UsageSummary {
+    let mut saw_price = false;
+    let mut cost_gap = false;
     let mut result = UsageSummary {
         session_count: 0,
         usage_sessions: 0,
@@ -932,18 +975,23 @@ fn summarize_rows(rows: &[(HistorySession, Vec<UsageEvent>)], price_map: &BTreeM
         cache_write: Some(0),
         input_includes_cache: None,
         estimated_cost: Some(0.0),
+        cost_partial: false,
         currency: None,
         price_sources: Vec::new(),
         scans, models: Vec::new(), by_model: Vec::new(),
     };
     let mut seen_events = HashSet::new();
-    let mut semantics: Option<bool> = None;
-    let mut mixed_semantics = false;
+    let mut folded_input = false;
+    let mut saw_input = false;
+    let mut saw_output = false;
+    let mut saw_read = false;
+    let mut saw_write = false;
     for (session, events) in rows {
         let selected: Vec<_> = events
             .iter()
             .filter(|event| {
-                filter
+                billable_usage_model(event.model.as_deref())
+                    && filter
                     .model
                     .as_deref()
                     .is_none_or(|model| if model == "__unknown__" { event.model.is_none() } else { event.model.as_deref() == Some(model) })
@@ -970,20 +1018,23 @@ fn summarize_rows(rows: &[(HistorySession, Vec<UsageEvent>)], price_map: &BTreeM
             if !seen_events.insert((session.tool_id.clone(), event.id.clone())) {
                 continue;
             }
-            sum_known(&mut result.input, event.input);
-            sum_known(&mut result.output, event.output);
-            sum_known(&mut result.cache_read, event.cache_read);
-            sum_known(&mut result.cache_write, event.cache_write);
-            if semantics.is_some_and(|same| same != event.input_includes_cache) {
-                mixed_semantics = true;
+            let input = prompt_tokens(event);
+            if input.is_some() {
+                folded_input = true;
             }
-            semantics.get_or_insert(event.input_includes_cache);
-            let price = event
-                .model
-                .as_ref()
-                .and_then(|model| price_map.get(&(session.tool_id.clone(), model.clone())));
-            let Some(price) = price else {
-                result.estimated_cost = None;
+            add_reported(&mut result.input, &mut saw_input, input);
+            add_reported(&mut result.output, &mut saw_output, event.output);
+            add_reported(&mut result.cache_read, &mut saw_read, event.cache_read);
+            add_reported(&mut result.cache_write, &mut saw_write, event.cache_write);
+            let priced = event.model.as_ref().and_then(|model| {
+                price_map
+                    .get(&(session.tool_id.clone(), model.clone()))
+                    .cloned()
+                    .map(|price| (price, false))
+                    .or_else(|| published_rate(&session.tool_id, model).map(|price| (price, true)))
+            });
+            let Some((price, long_context)) = priced else {
+                cost_gap = true;
                 continue;
             };
             if result
@@ -995,17 +1046,22 @@ fn summarize_rows(rows: &[(HistorySession, Vec<UsageEvent>)], price_map: &BTreeM
                 result.currency = None;
                 continue;
             }
-            result.currency = Some(price.currency.clone());
-            let Some((input, output, read, write)) = event
-                .input
-                .zip(event.output)
-                .zip(event.cache_read)
-                .zip(event.cache_write)
-                .map(|(((a, b), c), d)| (a, b, c, d))
-            else {
-                result.estimated_cost = None;
+            let (Some(input), Some(output)) = (event.input, event.output) else {
+                cost_gap = true;
                 continue;
             };
+            let read = event.cache_read.unwrap_or(0);
+            let write = event.cache_write.unwrap_or(0);
+            let mut input_rate = price.input_per_million;
+            let mut read_rate = price.cache_read_per_million;
+            let mut write_rate = price.cache_write_per_million;
+            let mut output_rate = price.output_per_million;
+            if long_context && prompt_tokens(event).unwrap_or(input) > 272_000 {
+                input_rate *= 2.0;
+                read_rate *= 2.0;
+                write_rate *= 2.0;
+                output_rate *= 1.5;
+            }
             let Some(uncached) = (if event.input_includes_cache {
                 input
                     .checked_sub(read)
@@ -1013,39 +1069,74 @@ fn summarize_rows(rows: &[(HistorySession, Vec<UsageEvent>)], price_map: &BTreeM
             } else {
                 Some(input)
             }) else {
-                result.estimated_cost = None;
+                cost_gap = true;
                 continue;
             };
+            result.currency = Some(price.currency.clone());
+            saw_price = true;
             if let Some(cost) = &mut result.estimated_cost {
-                *cost += (uncached as f64 * price.input_per_million
-                    + output as f64 * price.output_per_million
-                    + read as f64 * price.cache_read_per_million
-                    + write as f64 * price.cache_write_per_million)
+                *cost += (uncached as f64 * input_rate
+                    + output as f64 * output_rate
+                    + read as f64 * read_rate
+                    + write as f64 * write_rate)
                     / 1_000_000.0;
             }
-            let updated = DateTime::<Utc>::from_timestamp_millis(price.updated_at)
-                .map(|time| time.to_rfc3339())
-                .unwrap_or_else(|| "更新时间未知".into());
-            let label = format!(
-                "{} / {} · {} · {}",
-                price.tool_id, price.model, price.source, updated
-            );
+            let updated = if price.updated_at == 0 {
+                String::new()
+            } else {
+                DateTime::<Utc>::from_timestamp_millis(price.updated_at)
+                    .map(|time| time.to_rfc3339())
+                    .unwrap_or_else(|| "更新时间未知".into())
+            };
+            let label = if updated.is_empty() {
+                format!("{} / {} · {}", price.tool_id, price.model, price.source)
+            } else {
+                format!(
+                    "{} / {} · {} · {}",
+                    price.tool_id, price.model, price.source, updated
+                )
+            };
             if !result.price_sources.contains(&label) {
                 result.price_sources.push(label);
             }
         }
     }
-    result.input_includes_cache = if mixed_semantics { None } else { semantics };
-    if result.usage_sessions == 0 {
-        result.input = None;
-        result.output = None;
-        result.cache_read = None;
-        result.cache_write = None;
-    }
-    if result.usage_sessions == 0 || result.unknown_usage_sessions > 0 {
+    result.input_includes_cache = if folded_input { Some(true) } else { None };
+    if result.usage_sessions == 0 || !saw_input { result.input = None; }
+    if result.usage_sessions == 0 || !saw_output { result.output = None; }
+    if result.usage_sessions == 0 || !saw_read { result.cache_read = None; }
+    if result.usage_sessions == 0 || !saw_write { result.cache_write = None; }
+    if result.usage_sessions == 0 || !saw_price {
         result.estimated_cost = None;
+        result.currency = None;
     }
+    result.cost_partial = result.estimated_cost.is_some() && (cost_gap || result.unknown_usage_sessions > 0);
     result
+}
+
+/// Short-context public rates, per million tokens: input, cached input, cache write, output.
+/// Requests above 272K input tokens use 2x input-side rates and 1.5x output.
+fn published_rate(tool_id: &str, model: &str) -> Option<HistoryPrice> {
+    let (input, cached, write, output, source) = match model {
+        "gpt-6-astra" => (10.0, 1.0, 12.5, 50.0, "OpenAI 公开价"),
+        "gpt-6.1-sol" => (2.0, 0.10, 2.5, 10.0, "OpenAI 公开价"),
+        "gpt-6-luna" => (0.10, 0.01, 0.125, 0.50, "OpenAI 公开价"),
+        "gpt-5.6-sol" => (4.0, 0.40, 5.0, 20.0, "OpenAI 公开价"),
+        "gpt-5.6-cyber" => (12.5, 1.25, 15.625, 75.0, "OpenAI 公开价"),
+        "big-pickle" => (0.0, 0.0, 0.0, 0.0, "OpenCode 公开价"),
+        _ => return None,
+    };
+    Some(HistoryPrice {
+        tool_id: tool_id.to_owned(),
+        model: model.to_owned(),
+        currency: "USD".into(),
+        input_per_million: input,
+        output_per_million: output,
+        cache_read_per_million: cached,
+        cache_write_per_million: write,
+        source: source.into(),
+        updated_at: 0,
+    })
 }
 
 pub fn native_session_directory(db: &Database, tool: &str, native_id: &str) -> Result<Option<PathBuf>, String> {
@@ -1090,6 +1181,7 @@ pub fn resume_plan(
             project_id: detail.session.project_id,
             session_id: Some(native_id),
             directory: None,
+            initial_prompt: None,
             mode,
         },
         &cwd,

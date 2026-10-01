@@ -168,13 +168,12 @@ impl CliAdapter for OpenCode {
     ) -> Result<Option<Value>, String> {
         let mut map = match definition.transport {
             McpTransport::Stdio => {
+                let (command, args) = mcp::stdio_command(&definition.command, &definition.args);
                 let mut map = mcp::stdio_doc_with_env(definition, existing, "environment");
                 map.remove("args");
                 map.insert(
                     "command".into(),
-                    json!(std::iter::once(&definition.command)
-                        .chain(definition.args.iter())
-                        .collect::<Vec<_>>()),
+                    json!(std::iter::once(command).chain(args).collect::<Vec<_>>()),
                 );
                 map.insert("type".into(), json!("local"));
                 map

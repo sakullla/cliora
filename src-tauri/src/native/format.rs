@@ -163,6 +163,26 @@ fn prune_empty_tables(table: &mut Table, path: &[String]) {
     }
 }
 
+/// Render a document in the native file format so previews match what the CLI reads.
+pub fn render(kind: FileKind, value: &Value) -> Result<String, String> {
+    if !value.is_object() {
+        return Err("配置顶层必须是对象".into());
+    }
+    match kind {
+        FileKind::Toml => {
+            let mut doc = DocumentMut::new();
+            let Value::Object(items) = value else { unreachable!() };
+            for (name, item) in items {
+                doc.insert(name, toml_item(item)?);
+            }
+            Ok(doc.to_string())
+        }
+        FileKind::Json | FileKind::Jsonc => {
+            serde_json::to_string_pretty(value).map_err(|error| error.to_string())
+        }
+    }
+}
+
 pub fn set_path(
     kind: FileKind,
     text: &str,
@@ -351,6 +371,24 @@ fn merge_into(target: &mut Value, own: &Value, path: &str, sources: &mut BTreeMa
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn toml_documents_render_as_toml_and_json_documents_stay_json() {
+        let value = json!({
+            "model": "gpt-6.1-sol",
+            "features": { "context_management": { "experimental_mode": true }, "image_generation": true }
+        });
+        let toml = render(FileKind::Toml, &value).unwrap();
+        assert!(toml.contains("model = \"gpt-6.1-sol\""));
+        assert!(toml.contains("[features]"));
+        assert!(toml.contains("image_generation = true"));
+        assert!(toml.contains("[features.context_management]"));
+        assert!(!toml.contains('{'));
+        assert_eq!(parse(FileKind::Toml, &toml).unwrap(), value);
+        let json = render(FileKind::Json, &value).unwrap();
+        assert!(json.contains("\"model\""));
+        assert_eq!(parse(FileKind::Json, &json).unwrap(), value);
+    }
 
     #[test]
     fn concurrent_edits_merge_separate_fields_and_preserve_native_comments() {

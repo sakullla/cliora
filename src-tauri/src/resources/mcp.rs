@@ -31,6 +31,8 @@ pub struct McpDefinition {
     pub url: String,
     pub env: BTreeMap<String, String>,
     pub headers: BTreeMap<String, String>,
+    #[serde(default = "default_in_library")]
+    pub in_library: bool,
     pub version: u64,
 }
 
@@ -45,7 +47,13 @@ pub struct McpDraft {
     pub url: String,
     pub env: BTreeMap<String, String>,
     pub headers: BTreeMap<String, String>,
+    #[serde(default = "default_in_library")]
+    pub in_library: bool,
     pub expected_version: Option<u64>,
+}
+
+fn default_in_library() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -203,15 +211,20 @@ pub fn save_definition(db: &Database, draft: McpDraft) -> Result<McpDefinition, 
     }
     let id = draft.id.unwrap_or_else(|| Uuid::new_v4().to_string());
     let version = draft.expected_version.map_or(1, |old| old + 1);
+    let (command, args) = match draft.transport {
+        McpTransport::Stdio => stdio_command(&draft.command, &draft.args),
+        McpTransport::Http => (draft.command.trim().into(), draft.args.clone()),
+    };
     let definition = McpDefinition {
         id: id.clone(),
         name: draft.name.trim().into(),
         transport: draft.transport,
-        command: draft.command.trim().into(),
-        args: draft.args,
+        command,
+        args,
         url: draft.url.trim().into(),
         env: draft.env,
         headers: draft.headers,
+        in_library: draft.in_library,
         version,
     };
     let data = serde_json::to_string(&definition).map_err(|error| error.to_string())?;
@@ -266,6 +279,32 @@ pub fn remove_native(
             params![tool, scope_key, name_owned]).map(|_| ()).map_err(|error| error.to_string())
     })?;
     Ok(())
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpPlacement {
+    pub definition_id: String,
+    pub tool_id: String,
+    pub scope: Scope,
+    pub project_path: Option<String>,
+    pub enabled: bool,
+}
+
+pub fn list_placements(db: &Database) -> Result<Vec<McpPlacement>, String> {
+    db.with_connection(|conn| {
+        let mut statement = conn.prepare("SELECT definition_id, tool, scope_key, enabled FROM mcp_targets ORDER BY tool, scope_key").map_err(|error| error.to_string())?;
+        let rows = statement.query_map([], |row| {
+            let scope_key: String = row.get(2)?;
+            let (scope, project_path) = if let Some(path) = scope_key.strip_prefix("project:") {
+                (Scope::Project, Some(path.to_string()))
+            } else {
+                (Scope::Global, None)
+            };
+            Ok(McpPlacement { definition_id: row.get(0)?, tool_id: row.get(1)?, scope, project_path, enabled: row.get::<_, i64>(3)? != 0 })
+        }).map_err(|error| error.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())
+    })
 }
 
 pub fn managed_enabled(db: &Database, definition_id: &str, target: &McpTargetRequest) -> Result<Option<bool>,String> {
@@ -630,6 +669,52 @@ fn protected_values(existing: Option<&Value>, field: &str) -> serde_json::Map<St
         .unwrap_or_default()
 }
 
+/// Grok and Codex execute `command` and pass `args` separately. A pasted line such as
+/// `npx -y chrome-devtools-mcp@latest` is one token to them and the process never starts.
+pub fn stdio_command(command: &str, args: &[String]) -> (String, Vec<String>) {
+    let args: Vec<String> = args
+        .iter()
+        .map(|arg| arg.trim().to_owned())
+        .filter(|arg| !arg.is_empty())
+        .collect();
+    if !args.is_empty() {
+        return (command.trim().to_owned(), args);
+    }
+    let (program, rest) = split_command_line(command.trim());
+    if program.is_empty() {
+        (command.trim().to_owned(), Vec::new())
+    } else {
+        (program, rest)
+    }
+}
+
+fn split_command_line(input: &str) -> (String, Vec<String>) {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut quote = None;
+    for ch in input.chars() {
+        match quote {
+            Some(mark) if ch == mark => quote = None,
+            Some(_) => current.push(ch),
+            None if ch == '"' || ch == '\'' => quote = Some(ch),
+            None if ch.is_whitespace() => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+            }
+            None => current.push(ch),
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    let mut tokens = tokens.into_iter();
+    (
+        tokens.next().unwrap_or_default(),
+        tokens.collect(),
+    )
+}
+
 pub fn stdio_doc_with_env(
     definition: &McpDefinition,
     existing: Option<&Value>,
@@ -644,8 +729,9 @@ pub fn stdio_doc_with_env(
     map.remove("http_headers");
     map.remove("env");
     map.remove("environment");
-    map.insert("command".into(), Value::String(definition.command.clone()));
-    map.insert("args".into(), serde_json::json!(definition.args));
+    let (command, args) = stdio_command(&definition.command, &definition.args);
+    map.insert("command".into(), Value::String(command));
+    map.insert("args".into(), serde_json::json!(args));
     let mut env = protected_values(existing, field);
     for (key, value) in &definition.env {
         env.insert(key.clone(), Value::String(value.clone()));

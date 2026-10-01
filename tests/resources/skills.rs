@@ -1,6 +1,41 @@
 use super::*;
 
 #[test]
+fn a_linked_skill_directory_is_read_from_its_target() {
+    let temp = tempfile::tempdir().unwrap();
+    let real = temp.path().join("source").join("linkup-automation");
+    fs::create_dir_all(&real).unwrap();
+    fs::write(real.join("SKILL.md"), "---\nname: linkup-automation\ndescription: hello there\n---\n").unwrap();
+    let link = temp.path().join("linkup-automation");
+    #[cfg(windows)]
+    let linked = std::os::windows::fs::symlink_dir(&real, &link);
+    #[cfg(not(windows))]
+    let linked = std::os::unix::fs::symlink(&real, &link);
+    if linked.is_err() { return; }
+    let (name, description, _, _, digest) = snapshot(&link).unwrap();
+    assert_eq!(name, "linkup-automation");
+    assert_eq!(description, "hello there");
+    assert!(!digest.is_empty());
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let registry = Registry::builtins();
+    let package = import_local(&db, real.to_str().unwrap(), None, None).unwrap();
+    let home = temp.path().join("home");
+    let linked = home.join(".claude/skills");
+    fs::create_dir_all(&linked).unwrap();
+    let destination = linked.join("linkup-automation");
+    #[cfg(windows)]
+    let placed = std::os::windows::fs::symlink_dir(&real, &destination);
+    #[cfg(not(windows))]
+    let placed = std::os::unix::fs::symlink(&real, &destination);
+    if placed.is_err() { return; }
+    let preview = preview_target(&db, &registry, &home, &package.id, "claude_code", Scope::Global, None).unwrap();
+    assert_eq!(preview.status, "ready");
+    let result = install(&db, &registry, &home, &package.id, "claude_code", Scope::Global, None);
+    assert_eq!(result.status, "already_current");
+    assert!(destination.is_symlink());
+}
+
+#[test]
 fn skill_switches_restore_each_native_policy_and_complete_archived_package() {
     use crate::credentials::CredentialStore;
     use std::collections::HashMap;

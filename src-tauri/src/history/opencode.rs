@@ -64,6 +64,46 @@ fn token(value: &Value, key: &str) -> Option<u64> {
     usage::field(value, key)
 }
 
+/// Newer OpenCode stores the selected model as `{"id","providerID"}` on the session row.
+/// Assistant messages still use `modelID`. Both should display as the model id.
+pub(super) fn model_id(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        if let Some(id) = value
+            .get("id")
+            .or_else(|| value.get("modelID"))
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+        {
+            return id.to_owned();
+        }
+    }
+    trimmed.to_owned()
+}
+
+fn message_model(message: &Value) -> Option<String> {
+    message
+        .get("modelID")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+        .or_else(|| {
+            message.get("model").and_then(|model| {
+                model
+                    .as_str()
+                    .map(model_id)
+                    .or_else(|| {
+                        model
+                            .get("modelID")
+                            .or_else(|| model.get("id"))
+                            .and_then(Value::as_str)
+                            .filter(|id| !id.is_empty())
+                            .map(str::to_owned)
+                    })
+            })
+        })
+}
+
 pub fn parse(source: &HistorySource) -> Result<ParsedSession, String> {
     parse_controlled(source, &|| false)
 }
@@ -88,7 +128,7 @@ pub fn parse_controlled(source: &HistorySource, cancelled: &dyn Fn() -> bool) ->
     session.cwd = cwd;
     session.started_at = started;
     session.updated_at = updated;
-    session.model = fallback_model;
+    session.model = fallback_model.as_deref().map(model_id).filter(|id| !id.is_empty());
     let mut roles = std::collections::HashMap::<String, (String, Option<i64>)>::new();
     let mut statement = db.prepare("SELECT id, data, time_created FROM message WHERE session_id = ?1 ORDER BY time_created, id LIMIT 3001")
         .map_err(|error| error.to_string())?;
@@ -119,10 +159,7 @@ pub fn parse_controlled(source: &HistorySource, cancelled: &dyn Fn() -> bool) ->
             .to_owned();
         roles.insert(message_id.clone(), (role.clone(), time));
         if role == "assistant" {
-            let model = message
-                .get("modelID")
-                .and_then(Value::as_str)
-                .map(str::to_owned);
+            let model = message_model(&message);
             if model.is_some() {
                 session.model = model.clone();
             }

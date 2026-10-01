@@ -578,8 +578,8 @@ fn summary_cache_key(id: &str, custom_path: Option<&Path>, scope: Scope, project
 }
 
 #[cfg(not(test))]
-fn cached_summary(key: &str) -> Option<ToolProbe> {
-    let cache = summary_cache().lock().unwrap_or_else(|error| error.into_inner());
+fn cached_probe(cache: &Mutex<HashMap<String, SummaryCacheEntry>>, key: &str) -> Option<ToolProbe> {
+    let cache = cache.lock().unwrap_or_else(|error| error.into_inner());
     let entry = cache.get(key)?;
     let ttl = if entry.probe.selected_path.is_some() {
         Duration::from_secs(60)
@@ -590,10 +590,16 @@ fn cached_summary(key: &str) -> Option<ToolProbe> {
 }
 
 #[cfg(not(test))]
-fn store_summary(key: String, probe: &ToolProbe) {
-    let mut cache = summary_cache().lock().unwrap_or_else(|error| error.into_inner());
+fn store_probe(cache: &Mutex<HashMap<String, SummaryCacheEntry>>, key: String, probe: &ToolProbe) {
+    let mut cache = cache.lock().unwrap_or_else(|error| error.into_inner());
     cache.retain(|_, entry| entry.at.elapsed() < Duration::from_secs(60));
     cache.insert(key, SummaryCacheEntry { at: Instant::now(), probe: probe.clone() });
+}
+
+#[cfg(not(test))]
+fn installation_cache() -> &'static Mutex<HashMap<String, SummaryCacheEntry>> {
+    static CACHE: std::sync::LazyLock<Mutex<HashMap<String, SummaryCacheEntry>>> = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+    &CACHE
 }
 
 pub fn probe_registered_summary(
@@ -607,12 +613,39 @@ pub fn probe_registered_summary(
     #[cfg(not(test))]
     let key = summary_cache_key(id, custom_path, scope, project);
     #[cfg(not(test))]
-    if let Some(probe) = cached_summary(&key) {
+    if let Some(probe) = cached_probe(summary_cache(), &key) {
         return Ok(probe);
     }
     let probe = finish_probe(registry, id, custom_path, home, project, scope, true)?;
     #[cfg(not(test))]
-    store_summary(key, &probe);
+    store_probe(summary_cache(), key, &probe);
+    Ok(probe)
+}
+
+/// Full installation probe, reused for a short time so switching CLIs does not
+/// start every version command again. `fresh` replaces the cached result.
+pub fn probe_registered_cached(
+    registry: &Registry,
+    id: &str,
+    custom_path: Option<&Path>,
+    home: &Path,
+    project: Option<&Path>,
+    scope: Scope,
+    fresh: bool,
+) -> Result<ToolProbe, String> {
+    #[cfg(test)]
+    let _ = fresh;
+    #[cfg(not(test))]
+    let key = summary_cache_key(id, custom_path, scope, project);
+    #[cfg(not(test))]
+    if !fresh {
+        if let Some(probe) = cached_probe(installation_cache(), &key) {
+            return Ok(probe);
+        }
+    }
+    let probe = probe_registered(registry, id, custom_path, home, project, scope)?;
+    #[cfg(not(test))]
+    store_probe(installation_cache(), key, &probe);
     Ok(probe)
 }
 

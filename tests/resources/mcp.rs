@@ -43,6 +43,7 @@ fn sample(db: &Database) -> McpDefinition {
             url: String::new(),
             env: BTreeMap::from([("API_KEY".into(), "${EXAMPLE_KEY}".into())]),
             headers: BTreeMap::new(),
+            in_library: true,
             expected_version: None,
         },
     )
@@ -81,20 +82,70 @@ fn previewed(
 }
 
 #[test]
-fn unsupported_pi_mcp_is_reported_without_creating_a_fake_native_file() {
+fn pi_native_mcp_writes_mcp_json_and_keeps_a_disabled_entry() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let keys = MemoryStore::default();
     let registry = fixture_registry();
-    let home = tempfile::tempdir().unwrap();
-    let db = Database::open(&home.path().join("cliora.db")).unwrap();
+    let user_file = temp.path().join(".pi/agent/mcp.json");
+    std::fs::create_dir_all(user_file.parent().unwrap()).unwrap();
+    std::fs::write(&user_file, "{\"theme\":\"quiet\",\"mcpServers\":{\"other\":{\"command\":\"echo\",\"args\":[]}}}").unwrap();
     let definition = sample(&db);
-    let preview = preview_targets(
+    let preview = preview_targets(&db, &registry, temp.path(), &definition.id, vec![target("pi", true)]);
+    assert_eq!(preview[0].status, "ready", "{preview:?}");
+    let preview_path = std::path::PathBuf::from(preview[0].path.clone().unwrap());
+    assert_eq!(preview_path, user_file, "Pi 全局 MCP 应写到 ~/.pi/agent/mcp.json");
+    let written = distribute(
         &db,
+        &keys,
         &registry,
-        home.path(),
+        temp.path(),
         &definition.id,
-        vec![target("pi", true)],
+        previewed(&db, &registry, temp.path(), &definition.id, vec![target("pi", true)]),
     );
-    assert_eq!(preview[0].status, "unsupported");
-    assert!(preview[0].path.is_none());
+    assert_eq!(written[0].status, "written", "{written:?}");
+    let text = std::fs::read_to_string(&user_file).unwrap();
+    assert!(text.contains("\"mcpServers\""));
+    assert!(text.contains("\"other\""));
+    assert!(text.contains("\"theme\""));
+    assert!(text.contains("\"command\": \"npx\""));
+    assert!(text.contains("\"type\": \"stdio\""));
+    assert!(text.contains("\"enabled\": true"));
+    let listed = list_native(&db, &registry, temp.path(), &target("pi", true)).unwrap();
+    let example = listed.iter().find(|entry| entry.name == "example").unwrap();
+    assert!(example.enabled);
+    assert_eq!(example.command, "npx");
+    assert!(listed.iter().any(|entry| entry.name == "other"));
+
+    let project = temp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let mut project_target = target("pi", true);
+    project_target.scope = Scope::Project;
+    project_target.project_path = Some(project.display().to_string());
+    let project_written = distribute(
+        &db,
+        &keys,
+        &registry,
+        temp.path(),
+        &definition.id,
+        previewed(&db, &registry, temp.path(), &definition.id, vec![project_target]),
+    );
+    assert_eq!(project_written[0].status, "written", "{project_written:?}");
+    assert!(std::fs::read_to_string(project.join(".pi/mcp.json")).unwrap().contains("\"mcpServers\""));
+
+    let disabled = distribute(
+        &db,
+        &keys,
+        &registry,
+        temp.path(),
+        &definition.id,
+        previewed(&db, &registry, temp.path(), &definition.id, vec![target("pi", false)]),
+    );
+    assert_eq!(disabled[0].status, "written", "{disabled:?}");
+    let after = std::fs::read_to_string(&user_file).unwrap();
+    assert!(after.contains("\"enabled\": false"));
+    assert!(after.contains("\"example\""));
+    assert!(!list_native(&db, &registry, temp.path(), &target("pi", true)).unwrap().iter().find(|entry| entry.name == "example").unwrap().enabled);
 }
 
 #[test]
@@ -258,6 +309,7 @@ fn bearer_environment_reference_is_visible_but_literal_token_is_rejected() {
             url: "https://example.com/mcp".into(),
             env: BTreeMap::new(),
             headers: BTreeMap::from([("Authorization".into(), "Bearer ${API_TOKEN}".into())]),
+            in_library: true,
             expected_version: None,
         },
     )
@@ -296,6 +348,7 @@ fn bearer_environment_reference_is_visible_but_literal_token_is_rejected() {
             url: "https://example.com/mcp".into(),
             env: BTreeMap::new(),
             headers: BTreeMap::from([("Authorization".into(), "Bearer plaintext".into())]),
+            in_library: true,
             expected_version: None,
         },
     );
@@ -432,6 +485,7 @@ fn preview_is_bound_to_definition_version_scope_and_target_content() {
             url: definition.url.clone(),
             env: definition.env.clone(),
             headers: definition.headers.clone(),
+            in_library: true,
         },
     )
     .unwrap();
@@ -592,4 +646,36 @@ fn deleting_a_definition_checks_version_and_native_removal_keeps_other_entries()
     assert!(!text.contains("[mcp_servers.example]"));
     assert!(text.contains("[mcp_servers.other]"));
     assert!(text.contains("gpt-6"));
+}
+
+#[test]
+fn pasted_stdio_command_line_is_split_before_a_client_spawns_it() {
+    let (command, args) = stdio_command("npx -y chrome-devtools-mcp@latest", &[]);
+    assert_eq!(command, "npx");
+    assert_eq!(args, ["-y", "chrome-devtools-mcp@latest"]);
+    let (command, args) = stdio_command(r#""C:\Program Files\nodejs\npx.cmd" -y pkg"#, &[]);
+    assert_eq!(command, r"C:\Program Files\nodejs\npx.cmd");
+    assert_eq!(args, ["-y", "pkg"]);
+    let (command, args) = stdio_command("npx", &["-y".into(), "pkg".into()]);
+    assert_eq!((command.as_str(), args), ("npx", vec!["-y".into(), "pkg".into()]));
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let saved = save_definition(
+        &db,
+        McpDraft {
+            id: None,
+            name: "chrome-devtools-mcp".into(),
+            transport: McpTransport::Stdio,
+            command: "npx -y chrome-devtools-mcp@latest".into(),
+            args: vec![],
+            url: String::new(),
+            env: BTreeMap::new(),
+            headers: BTreeMap::new(),
+            in_library: true,
+            expected_version: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(saved.command, "npx");
+    assert_eq!(saved.args, ["-y", "chrome-devtools-mcp@latest"]);
 }

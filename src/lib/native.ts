@@ -3,7 +3,7 @@ import type { ApiError, Bootstrap, CliId, Theme } from '../types/domain';
 import type { AdapterCatalog, ApplyComparison, ApplyOutcome, CommonConfig, CommonSaveResult, Connection, ConnectionCheck, ModelDirectory, NativeImport, NativeInspection, NativePreview, NativeProfile, PreservedProfile, RegisteredCommon, RegisteredCommonSaveResult, RegisteredProfile, RegisteredToolWorkspace, Scope, ToolWorkspace } from '../types/native';
 import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, TerminalId, TrayStatus } from '../types/launch';
 import type { LibraryDraft, LibraryItem, LibraryKind } from '../types/library';
-import type { McpDefinition, McpDraft, McpTargetRequest, McpTargetResult, NativeMcpEntry, RuleTarget, RulePreview, RuleApplyResult, SkillPackage, SkillImportPreview, SkillInstallation, SkillTargetResult, NativeSkillEntry, SkillTargetPreview, SkillRecoveryIssue } from '../types/resources';
+import type { McpDefinition, McpDraft, McpPlacement, McpTargetRequest, McpTargetResult, NativeMcpEntry, RuleTarget, RulePreview, RuleApplyResult, RulePlacement, RuleClientSelection, RuleSyncResult, SkillPackage, SkillImportPreview, SkillInstallation, SkillTargetResult, NativeSkillEntry, SkillTargetPreview, SkillRecoveryIssue } from '../types/resources';
 import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, ScanStatus, UsageSummary } from '../types/history';
 import type { ConflictPreview, PortableApplyTarget, PortableImportReport, PortableItem, PortablePreview, PortableProjectLink, SyncStatus, WebdavSetup } from '../types/portable';
 
@@ -60,6 +60,7 @@ export const native = {
   resumeHistorySession: (id: string, mode: LaunchRequest['mode']) => command<LaunchResult>('resume_history_session', { id, mode }),
   exportHistorySession: (id: string, format: 'markdown' | 'json', destination: string) => command<string>('export_history_session', { id, format, destination }),
   listMcpDefinitions: () => command<McpDefinition[]>('list_mcp_definitions'),
+  listMcpPlacements: () => command<McpPlacement[]>('list_mcp_placements'),
   saveMcpDefinition: (draft: McpDraft) => command<McpDefinition>('save_mcp_definition', { draft }),
   deleteMcpDefinition: (id: string, expectedVersion: number) => command<void>('delete_mcp_definition', { id, expectedVersion }),
   removeNativeMcp: (target: McpTargetRequest, name: string) => command<void>('remove_native_mcp', { target, name }),
@@ -69,7 +70,10 @@ export const native = {
   distributeMcp: (definitionId: string, targets: McpTargetRequest[]) => command<McpTargetResult[]>('distribute_mcp', { definitionId, targets }),
   previewRuleTargets: (ruleId: string, targets: RuleTarget[]) => command<RulePreview[]>('preview_rule_targets', { ruleId, targets }),
   applyRuleTargets: (ruleId: string, expectedVersion: number, targets: RuleTarget[]) => command<RuleApplyResult[]>('apply_rule_targets', { ruleId, expectedVersion, targets }),
+  listRulePlacements: () => command<RulePlacement[]>('list_rule_placements'),
+  syncRuleClients: (ruleId: string, expectedVersion: number, selection: RuleClientSelection) => command<RuleSyncResult[]>('sync_rule_clients', { ruleId, expectedVersion, selection }),
   listSkillPackages: () => command<SkillPackage[]>('list_skill_packages'),
+  setSkillInLibrary: (id: string, inLibrary: boolean) => command<void>('set_skill_in_library', { id, inLibrary }),
   previewSkillLocal: (source: string) => command<SkillImportPreview>('preview_skill_local', { source }),
   importSkillLocal: (source: string, expectedNew: string | null, expectedExisting: string | null) => command<SkillPackage>('import_skill_local', { source, expectedNew, expectedExisting }),
   previewSkillHttpsZip: (source: string, subdirectory: string | null) => command<SkillImportPreview>('preview_skill_https_zip', { source, subdirectory }),
@@ -100,12 +104,13 @@ export const native = {
   setPreferredTerminal: (terminal: TerminalId) => command<LaunchSettings>('set_preferred_terminal', { terminal }),
   setDefaultLaunchMode: (target: 'cli' | 'project', mode: LaunchMode) => command<LaunchSettings>('set_default_launch_mode', { target, mode }),
   launchCli: (request: LaunchRequest) => command<LaunchResult>('launch_cli', { request }),
+  cliLatestVersion: (toolId: string) => command<string>('cli_latest_version', { toolId }),
   maintainRegisteredCli: (toolId: string, action: 'install' | 'upgrade' | 'install_native' | 'uninstall_npm', source?: string) => command<void>('maintain_registered_cli', { toolId, action, source: source ?? null }),
   getTrayStatus: () => command<TrayStatus>('get_tray_status'),
   quitApp: () => command<void>('quit_app'),
   listCliAdapters: () => command<AdapterCatalog>('list_cli_adapters'),
   setRegisteredManagedTools: (managedIds: string[]) => command<AdapterCatalog>('set_registered_managed_tools', { managedIds }),
-  getRegisteredToolWorkspace: (toolId: string, scope: Scope, projectPath?: string, summary = false) => command<RegisteredToolWorkspace>('get_registered_tool_workspace', { toolId, scope, projectPath: projectPath || null, summary }),
+  getRegisteredToolWorkspace: (toolId: string, scope: Scope, projectPath?: string, summary = false, fresh = false) => command<RegisteredToolWorkspace>('get_registered_tool_workspace', { toolId, scope, projectPath: projectPath || null, summary, fresh }),
   setRegisteredCustomCliPath: (toolId: string, path: string | null) => command<void>('set_registered_custom_cli_path', { toolId, path }),
   saveRegisteredNativeProfile: (profile: RegisteredProfile, expectedVersion: number | null) => command<RegisteredProfile>('save_registered_native_profile', { profile, expectedVersion }),
   saveRegisteredCommonConfig: (common: RegisteredCommon, expectedVersion: number | null) => command<RegisteredCommonSaveResult>('save_registered_common_config', { common, expectedVersion }),
@@ -116,7 +121,7 @@ export const native = {
   prepareRegisteredNativeImport: (toolId: string, files: Record<string, string>) => command<NativeImport>('prepare_registered_native_import', { toolId, files }),
   prepareRegisteredNativeImportFromDisk: (toolId: string, scope: Scope, projectPath: string, roles: string[], files: Record<string, string>) => command<NativeImport>('prepare_registered_native_import_from_disk', { toolId, scope, projectPath: projectPath || null, roles, files }),
   readRegisteredNativeFileForEdit: (toolId: string, scope: Scope, projectPath: string, role: string) => command<string>('read_registered_native_file_for_edit', { toolId, scope, projectPath: projectPath || null, role }),
-  listNativeBackups: (toolId: string, scope: Scope, projectPath: string, role: string) => command<{ transactionId: string; path: string }[]>('list_native_backups', { toolId, scope, projectPath: projectPath || null, role }),
+  listNativeBackups: (toolId: string, scope: Scope, projectPath: string, role: string) => command<{ transactionId: string; path: string; createdAt: number }[]>('list_native_backups', { toolId, scope, projectPath: projectPath || null, role }),
   previewNativeBackup: (toolId: string, scope: Scope, projectPath: string, role: string, transactionId: string) => command<{ transactionId: string; current: string; original: string }>('preview_native_backup', { toolId, scope, projectPath: projectPath || null, role, transactionId }),
   restoreNativeBackup: (toolId: string, scope: Scope, projectPath: string, role: string, transactionId: string, current: string) => command<ApplyOutcome>('restore_native_backup', { toolId, scope, projectPath: projectPath || null, role, transactionId, current }),
   saveRegisteredNativeFile: (toolId: string, scope: Scope, projectPath: string, role: string, original: string, edited: string) => command<ApplyOutcome>('save_registered_native_file', { toolId, scope, projectPath: projectPath || null, role, original, edited }),

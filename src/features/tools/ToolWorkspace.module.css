@@ -113,6 +113,13 @@
 .pathControl > div input { flex: 1 1 260px; min-width: 0; }
 .pathControl code { min-width: 0; padding: 5px 8px; overflow-wrap: anywhere; }
 .pathControl p { line-height: 1.6; overflow-wrap: anywhere; }
+.pathControl > .release { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 4px 14px 0; }
+.release div { display: grid; gap: 2px; min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.release span { color: var(--text-3); font-size: 11px; font-weight: 560; }
+.release strong { color: var(--text); font-size: 15px; font-weight: 650; }
+.release small { min-width: 0; overflow: hidden; color: var(--text-2); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.release div[data-state="behind"] { border-color: var(--accent-line); background: var(--accent-soft); }
+.release div[data-state="current"] strong { color: var(--accent); }
 .pathControl > .installRow { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; column-gap: 10px; align-items: center; min-height: 28px; margin: 8px 14px; }
 .installRow strong { color: var(--text); font-weight: 620; }
 .installRow em { color: var(--accent); font-style: normal; font-weight: 560; }
@@ -205,8 +212,8 @@
 .moreSection { display: grid; gap: 8px; }
 .moreSection > strong { color: var(--text); font-size: 12.5px; font-weight: 600; }
 
-.connectionAdvanced, .backupHistory { padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
-.connectionAdvanced > summary, .backupHistory > summary { color: var(--text); font-weight: 560; }
+.connectionAdvanced { padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
+.connectionAdvanced > summary { color: var(--text); font-weight: 560; }
 .connectionAdvanced[open] { display: grid; gap: 12px; }
 .connectionAdvanced[open] > summary { margin-bottom: 2px; }
 .modelBar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
@@ -236,10 +243,16 @@
 .merged pre { margin: 8px 0 0; padding: 10px; border-radius: var(--radius-sm); background: var(--surface-2); font-size: 11.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .previewButton { color: var(--accent); }
 
-.backupHistory[open] > summary { margin-bottom: 10px; }
-.backupHistory > select { width: 100%; margin-bottom: 12px; }
-.backupHistory > button { margin-top: 12px; }
-.backupHistory p { color: var(--text-2); }
+.history { display: grid; grid-template-columns: 148px minmax(0, 1fr); gap: 12px; height: min(480px, calc(100dvh - 240px)); min-height: 280px; }
+.historyList { margin: 0; padding: 4px; overflow: auto; list-style: none; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
+.historyList button { display: flex; justify-content: flex-start; width: 100%; min-height: 32px; padding: 0 8px; border: 0; border-radius: var(--radius-sm); background: transparent; box-shadow: none; color: var(--text); font-size: 12.5px; font-weight: 450; text-align: left; white-space: nowrap; }
+.historyList button:hover:not(:disabled) { border-color: transparent; background: var(--surface-3); transform: none; }
+.historyList button[aria-pressed='true'] { background: var(--surface); color: var(--accent); font-weight: 650; }
+.historyPreview { min-width: 0; min-height: 0; }
+.historyPreview :global(.code-editor) { height: 100%; }
+.historyPreview :global(.code-editor) .cm-editor,
+.historyPreview :global(.code-editor) .cm-scroller { height: 100%; min-height: 0; max-height: none; }
+.historyEmpty { margin: 0; color: var(--text-2); }
 
 /* Sticky dialog footer */
 :global(.guide-dialog-body):has(> .editor > .actions) { padding-bottom: 0; }
@@ -269,6 +282,7 @@
   .views { flex: none; }
   .views button { white-space: normal; text-align: left; line-height: 1.3; }
   .pathControl > summary > span:not(.statusDot):not(.diagnosticLabel) { flex-basis: 100%; order: 5; }
+  .pathControl > .release { grid-template-columns: 1fr; }
   .pathControl > summary::before { order: 3; }
   .modelPicker { flex-wrap: wrap; }
   .modelPicker label { min-width: 180px; }
@@ -277,4 +291,8 @@
   .roleRow > .check, .roleSlot { grid-column: 2; grid-row: 2; justify-content: flex-start; }
   .roleName { grid-row: 3; }
   .listHeading { flex-wrap: wrap; }
+  .history { grid-template-columns: 1fr; grid-template-rows: auto minmax(160px, 1fr); }
+  .historyList { display: flex; max-height: 72px; }
+  .historyList li { flex: none; }
+  .historyList button { width: auto; }
 }

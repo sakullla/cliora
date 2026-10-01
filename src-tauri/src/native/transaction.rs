@@ -3,6 +3,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 use chacha20poly1305::{
@@ -71,6 +72,17 @@ struct Journal {
     id: String,
     key_id: String,
     files: Vec<JournalFile>,
+    #[serde(default)]
+    created_at: i64,
+}
+
+const RECENT_BACKUP_LIMIT: usize = 20;
+
+fn backup_created_at() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
 }
 
 pub fn fingerprint(bytes: &[u8]) -> String {
@@ -661,7 +673,7 @@ fn restore(
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BackupRecord { pub transaction_id: String, pub path: String }
+pub struct BackupRecord { pub transaction_id: String, pub path: String, pub created_at: i64 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupPreview { pub transaction_id: String, pub current: String, pub original: String }
@@ -676,8 +688,8 @@ pub fn recent_backups(db: &Database, target: &Path) -> Result<Vec<BackupRecord>,
             let journal: Journal = serde_json::from_str(&data).map_err(|_| "原生修改记录损坏")?;
             if journal.id != id { return Err("原生修改记录标识不一致".into()); }
             if journal.files.iter().any(|item| item.path == target && item.existed && item.backup.is_some()) {
-                records.push(BackupRecord {transaction_id:id, path:target.display().to_string()});
-                if records.len() == 20 { break; }
+                records.push(BackupRecord {transaction_id:id, path:target.display().to_string(), created_at: journal.created_at});
+                if records.len() == RECENT_BACKUP_LIMIT { break; }
             }
         }
         Ok(records)
@@ -878,6 +890,7 @@ where
         id: id.clone(),
         key_id,
         files,
+        created_at: backup_created_at(),
     };
     save_journal(db, &journal, "prepared")?;
     let attempt = (|| {
@@ -1017,6 +1030,44 @@ mod tests {
     }
 
     #[test]
+    fn recent_backups_keep_only_the_latest_twenty() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        let target = temp.path().join("config.toml");
+        for index in 0..21 {
+            let journal = Journal {
+                id: format!("backup-{index}"),
+                key_id: format!("native-backup-backup-{index}"),
+                files: vec![JournalFile {
+                    path: target.clone(),
+                    existed: true,
+                    old_hash: "h".into(),
+                    new_hash: "h".into(),
+                    backup: Some("cipher".into()),
+                    nonce: Some("n".into()),
+                    old_readonly: false,
+                    sensitive: false,
+                }],
+                created_at: 1_700_000_000_000 + index,
+            };
+            db.with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO native_transactions (id, status, data) VALUES (?1, 'committed', ?2)",
+                    params![journal.id, serde_json::to_string(&journal).unwrap()],
+                )
+                .map_err(|error| error.to_string())?;
+                Ok(())
+            })
+            .unwrap();
+        }
+        let records = recent_backups(&db, &target).unwrap();
+        assert_eq!(records.len(), 20);
+        assert_eq!(records[0].transaction_id, "backup-20");
+        assert_eq!(records[0].created_at, 1_700_000_000_000 + 20);
+        assert_eq!(records[19].transaction_id, "backup-1");
+    }
+
+    #[test]
     fn empty_workspace_recovery_does_not_require_or_create_a_keyring_key() {
         let temp = tempfile::tempdir().unwrap();
         let db = Database::open(&temp.path().join("app.db")).unwrap();
@@ -1036,6 +1087,7 @@ mod tests {
         let journal = Journal {
             id: "committed-history".into(),
             key_id: "missing".into(),
+            created_at: 0,
             files: vec![JournalFile {
                 path: temp.path().join("old.json"),
                 existed: true,
@@ -1116,6 +1168,7 @@ mod tests {
         let journal = Journal {
             id: "corrupt-history".into(),
             key_id: "missing".into(),
+            created_at: 0,
             files: vec![JournalFile {
                 path: temp.path().join("old.json"),
                 existed: true,
@@ -1151,6 +1204,7 @@ mod tests {
         let journal = Journal {
             id: "pending".into(),
             key_id: "native-backup-pending".into(),
+            created_at: 0,
             files: vec![JournalFile {
                 path: path.clone(),
                 existed: true,
@@ -1214,7 +1268,7 @@ mod tests {
             let managed = serde_json::json!({"settings": {"/env/ANTHROPIC_API_KEY": {"__cliora_secret_sha256": raw_secret_hash}}});
             conn.execute("INSERT INTO applied_bindings (scope_key, tool, profile_id, profile_version, managed) VALUES ('global', 'claude_code', 'legacy', 1, ?1)", [managed.to_string()]).map_err(|e| e.to_string())?;
             let journal = Journal {
-                id: "legacy".into(), key_id: "native-backup-legacy".into(),
+                id: "legacy".into(), key_id: "native-backup-legacy".into(), created_at: 0,
                 files: vec![JournalFile {path: temp.path().join("settings.json"), existed: true,
                     old_hash: raw_file_hash.clone(), new_hash: raw_file_hash.clone(),
                     backup: None, nonce: None, old_readonly: false, sensitive: true}],
@@ -1329,6 +1383,7 @@ mod tests {
         let journal = Journal {
             id: "pending".into(),
             key_id: "missing".into(),
+            created_at: 0,
             files: vec![JournalFile {
                 path: file.clone(),
                 existed: true,
@@ -1461,6 +1516,7 @@ mod tests {
                 make_file(&first, b"{\"model\":\"new\"}"),
                 make_file(&second, b"{\"providers\":{\"x\":{}}}"),
             ],
+            created_at: 0,
         };
         save_journal(&db, &journal, "applying").unwrap();
         write_replacement(&first, b"{\"model\":\"new\"}", &id, false).unwrap();
@@ -1494,6 +1550,7 @@ mod tests {
                 old_readonly: false,
                 sensitive: false,
             }],
+            created_at: 0,
         };
         save_journal(&db, &journal, "applying").unwrap();
         fs::write(&file, b"model = \"external\"\n").unwrap();

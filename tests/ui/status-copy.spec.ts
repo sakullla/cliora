@@ -40,11 +40,16 @@ async function install(page: Page, seed: Record<string, boolean> = {}) {
         }
         if (command === 'read_native_rule') return { text: rule, path: 'C:/rules/AGENTS.md', fingerprint: 'fp' };
         if (command === 'save_native_rule') { if (control.ruleSaveFails) throw new Error('磁盘拒绝写入'); rule = args.edited; return { status: 'applied' }; }
+        if (command === 'list_rule_placements') return [];
+        if (command === 'sync_rule_clients') { if (control.ruleSaveFails) throw new Error('磁盘拒绝写入'); return [{ toolId: 'codex', path: 'C:/rules/AGENTS.md', status: 'written', detail: '已写入拼接后的规则', existing: '', proposed: '' }]; }
         if (command === 'save_library_item') {
           if (control.librarySaveFails) throw { message: '资料没有写入', action: '可修改后再次点击保存。' };
           const draft = args.draft ?? {};
           control.lastLibraryVersion = typeof draft.expectedVersion === 'number' ? draft.expectedVersion : null;
-          return { id: draft.id ?? 'prompt-new', kind: draft.kind, title: draft.title, body: draft.body, category: draft.category, projectId: draft.projectId ?? null, version: (draft.expectedVersion ?? 0) + 1, updatedAt: 2 };
+          const saved = { id: draft.id ?? 'prompt-new', kind: draft.kind, title: draft.title, body: draft.body, category: draft.category, projectId: draft.projectId ?? null, version: (draft.expectedVersion ?? 0) + 1, updatedAt: 2 };
+          const index = library.findIndex((item) => item.id === saved.id);
+          if (index < 0) library.push(saved); else library[index] = saved;
+          return saved;
         }
         if (command === 'list_portable_items') {
           if (control.portableFails) throw { message: '迁移列表读取失败', action: '可先离开再回到迁移与同步重新读取。' };
@@ -206,26 +211,26 @@ test('native rule save failure is an alert and success stays a status', async ({
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
   await page.getByRole('tab', { name: '长期规则' }).click();
-  await page.getByRole('button', { name: '修改当前 CLI 规则' }).click();
+  await page.getByRole('button', { name: '＋ 新建规则' }).click();
   const dialog = page.getByRole('dialog');
-  const editor = dialog.getByRole('textbox', { name: '当前原生规则' });
-  await expect(editor).toBeVisible();
-  await editor.click();
-  await page.keyboard.type('新增');
+  await dialog.getByLabel('标题').fill('一条规则');
+  await dialog.getByRole('button', { name: '保存' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  const library = page.getByRole('region', { name: '资料库内容' });
+  const icon = library.getByRole('button', { name: 'Codex · 未写入' });
   await page.evaluate(() => { (window as unknown as { __statusCopy: { ruleSaveFails: boolean } }).__statusCopy.ruleSaveFails = true; });
-  await dialog.getByRole('button', { name: '保存规则' }).click();
-  const alert = dialog.getByRole('alert');
+  await icon.click();
+  const alert = library.getByRole('alert');
   await expect(alert).toContainText('规则保存失败');
-  await expect(alert).toContainText('可以修改后再次点击保存规则');
-  await expect(dialog.getByRole('status')).toHaveCount(0);
+  await expect(alert).toContainText('可以再次点击该 CLI 图标');
+  await expect(library.getByRole('status')).toHaveCount(0);
   const color = await dangerColor(alert);
   expect(color.same).toBe(true);
   expect(color.fixed).toBe(false);
   await page.evaluate(() => { (window as unknown as { __statusCopy: { ruleSaveFails: boolean } }).__statusCopy.ruleSaveFails = false; });
-  await dialog.getByRole('button', { name: '保存规则' }).click();
-  await expect(page.getByRole('dialog')).toHaveCount(0);
-  await expect(page.getByText('规则已保存。')).toBeVisible();
-  await expect(page.getByRole('alert')).toHaveCount(0);
+  await icon.click();
+  await expect(library.getByText('已写入 Codex。')).toBeVisible();
+  await expect(library.getByRole('alert')).toHaveCount(0);
 });
 
 test('export list failure stays in the dialog and is not an empty list', async ({ page }) => {

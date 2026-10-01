@@ -99,3 +99,38 @@ fn rule_preview_requires_fresh_confirm_and_preserves_external_edit() {
     transaction::restore_backup(&db,&credential,&native_path,id,"direct edited",|_|Ok(())).unwrap();
     assert_eq!(std::fs::read_to_string(path).unwrap(),"new rule");
 }
+
+#[test]
+fn selected_rules_are_concatenated_and_an_external_file_is_kept() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("test.db")).unwrap();
+    let credential = MemoryStore(Mutex::new(HashMap::new()));
+    let registry = Registry::builtins();
+    let project = temp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let first = library::save(&db, library::LibraryDraft { id: None, kind: LibraryKind::Rule, title: "测试".into(), body: "先跑测试。".into(), category: String::new(), project_id: None, expected_version: None }).unwrap();
+    let second = library::save(&db, library::LibraryDraft { id: None, kind: LibraryKind::Rule, title: "格式".into(), body: "使用 rustfmt。".into(), category: String::new(), project_id: None, expected_version: None }).unwrap();
+    let selection = |id: &str, allow_replace| RuleClientSelection { tool_ids: vec![id.into()], scope: Scope::Project, project_path: Some(project.display().to_string()), allow_replace };
+    let written = sync_clients(&db, &credential, &registry, temp.path(), &first.id, first.version, selection("codex", false)).unwrap();
+    assert_eq!(written[0].status, "written");
+    sync_clients(&db, &credential, &registry, temp.path(), &second.id, second.version, selection("codex", false)).unwrap();
+    let path = project.join("AGENTS.md");
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.find("# 测试").unwrap() < text.find("# 格式").unwrap());
+    assert!(text.contains("先跑测试。"));
+    assert!(text.contains("使用 rustfmt。"));
+    std::fs::write(&path, "外部改过\n").unwrap();
+    let blocked = sync_clients(&db, &credential, &registry, temp.path(), &first.id, first.version, selection("codex", false)).unwrap();
+    assert_eq!(blocked[0].status, "conflict");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "外部改过\n");
+    let replaced = sync_clients(&db, &credential, &registry, temp.path(), &first.id, first.version, selection("codex", true)).unwrap();
+    assert_eq!(replaced[0].status, "written");
+    let restored = std::fs::read_to_string(&path).unwrap();
+    assert!(restored.contains("# 测试"));
+    assert!(restored.contains("# 格式"));
+    let removed = sync_clients(&db, &credential, &registry, temp.path(), &first.id, first.version, RuleClientSelection { tool_ids: vec![], scope: Scope::Project, project_path: Some(project.display().to_string()), allow_replace: false }).unwrap();
+    assert_eq!(removed[0].status, "written");
+    let left = std::fs::read_to_string(&path).unwrap();
+    assert!(!left.contains("# 测试"));
+    assert!(left.contains("# 格式"));
+}

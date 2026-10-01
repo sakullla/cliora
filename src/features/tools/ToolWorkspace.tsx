@@ -37,12 +37,40 @@ function defaultConnection(formats: string[]): Connection {
   return { providerId: '', interfaceFormat: formats[0] ?? 'openai_responses', baseUrl: '', model: '', secretRef: null, authEnvVar: null };
 }
 
+function formatBackupTime(createdAt: number, index: number): string {
+  if (createdAt) return new Date(createdAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return index === 0 ? '最近一次' : `往前 ${index} 次`;
+}
+
 function formatLabel(value: string): string {
   return ({ openai_completions: 'Chat Completions', openai_responses: 'Responses', anthropic_messages: 'Anthropic Messages' } as Record<string, string>)[value] ?? value;
 }
 
 function connectionShape(value: Connection | null): string {
   return value ? JSON.stringify([value.providerId, value.interfaceFormat, value.baseUrl, value.model, value.authEnvVar]) : '';
+}
+
+function workspaceKey(toolId: string, scope: Scope, projectPath: string) {
+  return `${toolId}\0${scope}\0${projectPath}`;
+}
+
+const rememberedWorkspaces = new Map<string, RegisteredToolWorkspace>();
+const workspaceRequests = new Map<string, Promise<RegisteredToolWorkspace>>();
+
+function requestWorkspace(toolId: string, scope: Scope, projectPath: string, fresh: boolean) {
+  const key = workspaceKey(toolId, scope, projectPath);
+  if (!fresh) {
+    const pending = workspaceRequests.get(key);
+    if (pending) return pending;
+  }
+  const request = native.getRegisteredToolWorkspace(toolId, scope, projectPath, false, fresh).then((result) => {
+    rememberedWorkspaces.set(key, result);
+    return result;
+  }).finally(() => {
+    if (workspaceRequests.get(key) === request) workspaceRequests.delete(key);
+  });
+  if (!fresh) workspaceRequests.set(key, request);
+  return request;
 }
 
 function emptyProfile(tool: string): RegisteredProfile {
@@ -91,8 +119,9 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [fileConflict, setFileConflict] = useState<{ context: string; current: string } | null>(null);
-  const [backups, setBackups] = useState<{ transactionId: string; path: string }[]>([]);
+  const [backups, setBackups] = useState<{ transactionId: string; path: string; createdAt: number }[]>([]);
   const [backupPreview, setBackupPreview] = useState<{ transactionId: string; current: string; original: string } | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [applyComparison, setApplyComparison] = useState<ApplyComparison | null>(null);
   const [copiedPath, setCopiedPath] = useState('');
   const copiedTimer = useRef(0);
@@ -117,6 +146,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   }, []);
 
   const visibleTools = managedTools;
+  const prefetchIds = visibleTools.map((item) => item.id).join('\0');
   const currentTool = visibleTools.some((item) => item.id === tool) ? tool : visibleTools[0]?.id;
   useEffect(()=>setApplyComparison(null),[currentTool,scope,projectPath]);
   const currentDescriptor = visibleTools.find((item) => item.id === currentTool);
@@ -142,6 +172,23 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   const latestConfirmation = useRef(confirmationContext); latestConfirmation.current = confirmationContext;
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  useEffect(() => {
+    const refresh = () => {
+      const state = refreshState.current;
+      if (!state.currentTool || state.dirty || state.busy || state.mcpDirty || state.skillsDirty) return;
+      void native.getRegisteredToolWorkspace(state.currentTool, state.scope, state.projectPath, false, true).then((result) => {
+        if (!mounted.current) return;
+        const now = refreshState.current;
+        if (now.dirty || now.busy || now.currentTool !== state.currentTool) return;
+        const key = workspaceKey(state.currentTool, state.scope, state.projectPath);
+        const previous = rememberedWorkspaces.get(key);
+        if (previous) rememberedWorkspaces.set(key, { ...previous, probe: result.probe });
+        setWorkspace((current) => current ? { ...current, probe: result.probe } : current);
+      }).catch(() => undefined);
+    };
+    window.addEventListener('focus', refresh);
+    return () => window.removeEventListener('focus', refresh);
+  }, []);
   async function confirmChange(message: string, options: ConfirmationOptions = { title: '放弃未保存修改？', confirmLabel: '放弃修改' }) {
     const started = captureDraft();
     const context = latestConfirmation.current;
@@ -149,17 +196,20 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   }
   async function closeGuide() {
     if ((dirty || mcpDirty || skillsDirty) && !await confirmChange('当前草稿尚未保存，关闭后会丢失这些修改。继续吗？')) return;
+    setHistoryOpen(false); setBackupPreview(null);
     setGuide(false);
   }
   useLayoutEffect(() => { onDirtyChange?.(dirty || mcpDirty || skillsDirty); }, [dirty, mcpDirty, skillsDirty, onDirtyChange]);
   useEffect(() => () => { onDirtyChange?.(false); }, [onDirtyChange]);
 
-  const reload = useCallback(async (nextTool: string, nextScope: Scope, nextProject: string, preferredId?: string | null) => {
+  const reload = useCallback(async (nextTool: string, nextScope: Scope, nextProject: string, preferredId?: string | null, fresh = false) => {
     if (!nativeAvailable || (nextScope === 'project' && !nextProject.trim())) { loadSequence.current++; setWorkspace(null); return; }
     const sequence = ++loadSequence.current;
-    setLoading(true); setError('');
+    const cached = fresh ? undefined : rememberedWorkspaces.get(workspaceKey(nextTool, nextScope, nextProject));
+    if (!cached) setLoading(true);
+    setError('');
     try {
-      const result = await native.getRegisteredToolWorkspace(nextTool, nextScope, nextProject);
+      const result = await requestWorkspace(nextTool, nextScope, nextProject, fresh);
       if (sequence !== loadSequence.current) return;
       const editing = editRef.current;
       const openAfterLoad = pendingGuide.current;
@@ -185,11 +235,41 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
 
   useLayoutEffect(() => {
     loadSequence.current++; invalidateDraftRequest(); inspectionSequence.current++;
-    setFileConflict(null); setBackups([]); setBackupPreview(null); setWorkspace(null); setDraft(null); setCommonDraft(null); setSelectedId(null); setRawDisk(null);
+    setFileConflict(null); setBackups([]); setBackupPreview(null); setHistoryOpen(false); setRawDisk(null);
     setGuide(false);
-    setNotice(''); setError(''); setInspection(null); setNewSecret(''); setProfileQuery(''); savedDraft.current = '';
+    setNotice(''); setError(''); setInspection(null); setNewSecret(''); setProfileQuery('');
+    const cached = currentTool && (scope !== 'project' || projectPath.trim()) ? rememberedWorkspaces.get(workspaceKey(currentTool, scope, projectPath)) : undefined;
+    if (cached && currentTool) {
+      setWorkspace(cached);
+      setCustomPath(cached.customPath ?? '');
+      setEditor('profile');
+      const next = cached.profiles.find((item) => item.id === preferredProfileId) ?? cached.profiles.find((item) => item.id === cached.binding?.profileId) ?? cached.profiles[0] ?? null;
+      setSelectedId(next?.id ?? null);
+      setDraft(next ? structuredClone(next) : null);
+      savedDraft.current = next ? JSON.stringify(next) : '';
+      setCommonDraft(cached.common ? structuredClone(cached.common) : { tool: currentTool, version: 0, files: {} });
+      setRole(cached.probe.nativeFiles.find(item => !item.sensitive && item.role === uiAdapterFor(currentTool).primaryRole)?.role ?? cached.probe.nativeFiles.find((item) => !item.sensitive)?.role ?? 'settings');
+      setLoading(false);
+    } else {
+      setWorkspace(null); setDraft(null); setCommonDraft(null); setSelectedId(null); savedDraft.current = '';
+      setLoading(!!currentTool && (scope !== 'project' || !!projectPath.trim()));
+    }
   }, [currentTool, scope, projectPath]);
   useEffect(() => { if (active && currentTool) void reload(currentTool, scope, projectPath, preferredProfileId); }, [active, currentTool, scope, projectPath, preferredProfileId, reload]);
+  useEffect(() => {
+    if (!active || !currentTool || !nativeAvailable || (scope === 'project' && !projectPath.trim())) return;
+    const others = prefetchIds.split('\0').filter((id) => id && id !== currentTool);
+    let cancel = false;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        for (const id of others) {
+          if (cancel || rememberedWorkspaces.has(workspaceKey(id, scope, projectPath))) continue;
+          try { await requestWorkspace(id, scope, projectPath, false); } catch { /* the click still loads this CLI and shows its error */ }
+        }
+      })();
+    }, 300);
+    return () => { cancel = true; window.clearTimeout(timer); };
+  }, [active, currentTool, scope, projectPath, prefetchIds]);
 
   async function discardUnsavedDrafts() {
     invalidateDraftRequest();
@@ -571,7 +651,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   async function choosePath() {
     if (!currentTool || busy) return;
     setBusy(true); setError('');
-    try { await native.setRegisteredCustomCliPath(currentTool, customPath.trim() || null); await reload(currentTool, scope, projectPath, selectedId); setNotice('CLI 路径已保存并重新检测。'); }
+    try { await native.setRegisteredCustomCliPath(currentTool, customPath.trim() || null); await reload(currentTool, scope, projectPath, selectedId); setNotice('CLI 路径已保存。'); }
     catch (value) { setError(errorText(value)); }
     finally { setBusy(false); }
   }
@@ -597,7 +677,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     setBusy(true); setError('');
     try {
       await native.maintainRegisteredCli(currentTool, action, source);
-      setNotice('已在终端开始。完成后点重新检测。');
+      setNotice('已在终端开始。回到这里后会重新读取版本。');
     } catch (value) { setError(errorText(value)); }
     finally { setBusy(false); }
   }
@@ -716,11 +796,19 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     if (workspace?.binding?.profileId === item.id) return workspace.binding.profileVersion === item.version ? '正在使用' : '已保存，尚未应用';
     return '已保存';
   };
-  async function loadBackups() {
+  async function openHistory() {
     if (!currentTool) return;
     const context = draftContext;
-    try { const rows = await native.listNativeBackups(currentTool, scope, projectPath, role); if (latestDraft.current.context === context) setBackups(rows); }
-    catch (value) { if (latestDraft.current.context === context) setError(errorText(value)); }
+    setHistoryOpen(true); setBackupPreview(null); setError('');
+    try {
+      const rows = await native.listNativeBackups(currentTool, scope, projectPath, role);
+      if (latestDraft.current.context !== context) return;
+      setBackups(rows);
+      if (rows[0]) {
+        const result = await native.previewNativeBackup(currentTool, scope, projectPath, role, rows[0].transactionId);
+        if (latestDraft.current.context === context) setBackupPreview(result);
+      }
+    } catch (value) { if (latestDraft.current.context === context) setError(errorText(value)); }
   }
   async function inspectBackup(id: string) {
     if (!currentTool) return;
@@ -733,10 +821,12 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     const started = captureDraft();
     if (dirty && !await confirmChange('恢复前放弃当前未保存修改？')) return;
     if (!stillCurrent(started)) return;
+    if (!await confirmChange('用这条记录替换当前文件。现在的内容会先留下一份备份。', { title: '恢复这个版本？', confirmLabel: '恢复' })) return;
+    if (!stillCurrent(started)) return;
     setBusy(true); setError('');
     try {
       await native.restoreNativeBackup(currentTool, scope, projectPath, role, backupPreview.transactionId, backupPreview.current);
-      if (stillCurrent(started)) { setBackupPreview(null); await openCurrentFile(role, true); setNotice('已恢复此文件。'); }
+      if (stillCurrent(started)) { setHistoryOpen(false); setBackupPreview(null); await openCurrentFile(role, true); setNotice('已恢复此文件。'); }
     } catch (value) { if (stillCurrent(started)) setError(errorText(value)); }
     finally { setBusy(false); }
   }
@@ -769,7 +859,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     </div>}
   </> : null;
 
-  const pathControl = workspace ? <InstallPanel toolName={toolName} probe={workspace.probe} customPath={customPath} busy={busy} loading={loading} onCustomPath={setCustomPath} onSavePath={() => void choosePath()} onRecheck={() => currentTool && void reload(currentTool, scope, projectPath, selectedId)} onMaintain={(action, source) => void maintain(action, source)} onUsePath={(path) => void useInstallation(path)} /> : null;
+  const pathControl = workspace ? <InstallPanel key={currentTool ?? 'cli'} toolName={toolName} probe={workspace.probe} customPath={customPath} busy={busy} loading={loading} onCustomPath={setCustomPath} onSavePath={() => void choosePath()} onMaintain={(action, source) => void maintain(action, source)} onUsePath={(path) => void useInstallation(path)} /> : null;
 
   const writeUnavailable = workspace && workspace.probe.nativeWrites.state === 'unsupported' ? <div className={`${styles.error} ${styles.writeUnavailable}`} role="alert" aria-label="原生写入不可用">
     <p>{workspace.probe.nativeWrites.reason}</p>
@@ -790,10 +880,9 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     </details>}
     {(editor === 'profile' && draft) && <>
       <div className={styles.moreSection}><strong>原生文本</strong>{nativeEditor()}</div>
-      <div className={styles.merged}><button type="button" className={styles.previewButton} onClick={() => setView(view === 'merged' ? 'form' : 'merged')}>{view === 'merged' ? '隐藏合并结果' : '查看合并结果'}</button>{view === 'merged' && <><p>只读结构化预览：通用配置、命名配置和连接设置合并；CLI 仍可能受到环境变量、项目信任和更高优先级原生设置影响。</p><CodeEditor format="json" label="合并配置预览" readOnly value={preview ? JSON.stringify(preview.documents[role] ?? {}, null, 2) : ''} placeholder="等待有效配置…" />{preview && <details><summary>查看字段来源</summary><pre>{Object.entries(preview.sources[role] ?? {}).map(([path, source]) => `${path} ← ${source}`).join('\n') || '没有覆盖字段'}</pre></details>}</>}</div>
+      <div className={styles.merged}><button type="button" className={styles.previewButton} onClick={() => setView(view === 'merged' ? 'form' : 'merged')}>{view === 'merged' ? '隐藏合并结果' : '查看合并结果'}</button>{view === 'merged' && <><p>只读结构化预览：通用配置、命名配置和连接设置合并；CLI 仍可能受到环境变量、项目信任和更高优先级原生设置影响。</p><CodeEditor format={activeFile?.format ?? 'json'} label="合并配置预览" readOnly value={preview?.rendered?.[role] ?? ''} placeholder="等待有效配置…" />{preview && <details><summary>查看字段来源</summary><pre>{Object.entries(preview.sources[role] ?? {}).map(([path, source]) => `${path} ← ${source}`).join('\n') || '没有覆盖字段'}</pre></details>}</>}</div>
     </>}
     {editor !== 'common' && <button type="button" className={styles.secondary} onClick={() => void editCommon()}>通用配置</button>}
-    {editor === 'native' && <details className={styles.backupHistory} onToggle={event => { if (event.currentTarget.open) void loadBackups(); }}><summary>修改记录</summary>{backups.length ? <select aria-label="选择修改记录" value={backupPreview?.transactionId ?? ''} onChange={event => { if (event.target.value) void inspectBackup(event.target.value); else setBackupPreview(null); }}><option value="">选择记录…</option>{backups.map((item, index) => <option key={item.transactionId} value={item.transactionId}>最近第 {index + 1} 次修改 · {item.path.split(/[\\/]/).pop()}</option>)}</select> : <p>此文件还没有可恢复的修改备份。</p>}{backupPreview && <><div className="file-conflict-columns"><div><strong>当前文件</strong><CodeEditor label="恢复前当前文件" readOnly compact format={activeFile?.format ?? 'text'} value={backupPreview.current} /></div><div><strong>修改前的备份</strong><CodeEditor label="修改前文件备份" readOnly compact format={activeFile?.format ?? 'text'} value={backupPreview.original} /></div></div><button type="button" disabled={busy} onClick={() => void restoreBackup()}>恢复此备份</button></>}</details>}
   </details> : null;
 
   return <section className={styles.workspace} aria-label="工具与连接">
@@ -814,7 +903,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     {loading && <p className={styles.hint} role="status">正在读取配置…</p>}
     {error && <div className={styles.error} role="alert">{error}</div>}
     <GuideDialog open={!!applyComparison} title="比较当前文件与本次配置" hint="原生文件里已有不同内容。可以保留现有文件，或改用这次保存的配置。" onClose={() => setApplyComparison(null)}>
-      {applyComparison && <div className="file-conflict" aria-label="配置应用冲突">{applyComparison.files.map(file=><div className="file-conflict-columns" key={file.role}><div><strong>当前文件</strong><CodeEditor label={`当前 ${file.role} 文件`} readOnly compact format={file.format} value={file.current}/></div><div><strong>本次配置字段</strong><CodeEditor label={`本次 ${file.role} 配置`} readOnly compact format="json" value={JSON.stringify(file.proposed,null,2)}/></div></div>)}<div className="file-conflict-actions"><button type="button" onClick={()=>setApplyComparison(null)}>保留当前文件</button><button type="button" disabled={busy} onClick={()=>void resolveApplication()}>使用本次配置</button></div></div>}
+      {applyComparison && <div className="file-conflict" aria-label="配置应用冲突">{applyComparison.files.map(file=><div className="file-conflict-columns" key={file.role}><div><strong>当前文件</strong><CodeEditor label={`当前 ${file.role} 文件`} readOnly compact format={file.format} value={file.current}/></div><div><strong>本次配置</strong><CodeEditor label={`本次 ${file.role} 配置`} readOnly compact format={file.format} value={file.proposedText ?? ''}/></div></div>)}<div className="file-conflict-actions"><button type="button" onClick={()=>setApplyComparison(null)}>保留当前文件</button><button type="button" disabled={busy} onClick={()=>void resolveApplication()}>使用本次配置</button></div></div>}
     </GuideDialog>
     {notice && <div className={styles.notice} role="status">{notice}</div>}
     {(scope !== 'project' || !!projectPath.trim()) && <>
@@ -831,25 +920,34 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
         <button type="button" className={styles.secondary} disabled={busy || !currentTool} onClick={() => void editCommon()}>通用配置</button>
         <button type="button" className={styles.secondary} disabled={busy || !hasCurrentNative} onClick={() => void openCurrentFile()}>修改正在使用的文件</button>
       </div>}
-      <GuideDialog open={guide && (editor !== 'profile' || !!draft)} title={editor === 'native' ? '修改正在使用的文件' : editor === 'common' ? '修改通用配置' : draft?.id ? '修改配置' : '新建配置'} onClose={() => void closeGuide()}>
+      <GuideDialog open={guide && (editor !== 'profile' || !!draft)} title={historyOpen && editor === 'native' ? '修改记录' : editor === 'native' ? '修改正在使用的文件' : editor === 'common' ? '修改通用配置' : draft?.id ? '修改配置' : '新建配置'} hint={historyOpen && editor === 'native' ? '最多 20 次。选一条查看当时的文件，确认后才会写回。' : undefined} onClose={() => void closeGuide()}>
         <div className={styles.editor}>
+            {historyOpen && editor === 'native' ? <div className={styles.history}>{backups.length ? <ul className={styles.historyList} aria-label="修改记录">{backups.map((item, index) => <li key={item.transactionId}><button type="button" aria-pressed={backupPreview?.transactionId === item.transactionId} disabled={busy} onClick={() => void inspectBackup(item.transactionId)}>{formatBackupTime(item.createdAt, index)}</button></li>)}</ul> : <p className={styles.historyEmpty}>还没有可恢复的修改。</p>}{backups.length > 0 && <div className={styles.historyPreview}><CodeEditor label="当时的文件" readOnly format={activeFile?.format ?? 'text'} value={backupPreview?.original ?? ''} placeholder={backupPreview ? '' : '正在读取…'} /></div>}</div> : <>
             {editor === 'profile' && draft && <div className={styles.form}>{connectionForm}</div>}
             {(editor === 'native' || editor === 'common') && nativeEditor()}
             {fileConflict?.context === draftContext && pendingRaw && <FileConflict current={fileConflict.current} edited={pendingRaw.text} format={activeFile?.format ?? 'text'} busy={busy} onKeep={() => { setRawDisk({ ...pendingRaw, original:fileConflict.current, text:fileConflict.current }); setFileConflict(null); setError(''); }} onUse={() => { setRawDisk({ ...pendingRaw, original:fileConflict.current }); setFileConflict(null); setError(''); setNotice('已保留本次修改，点击保存写入。'); }} />}
             {moreOptions}
+            </>}
             <div className={styles.actions}>
+              {historyOpen && editor === 'native' ? <>
+                <button type="button" disabled={busy} onClick={() => { setHistoryOpen(false); setBackupPreview(null); }}>返回编辑</button>
+                <span />
+                <button type="button" className={styles.primary} disabled={busy || !backupPreview} onClick={() => void restoreBackup()}>恢复这个版本</button>
+              </> : <>
               {editor === 'profile' && draft?.id && <><button type="button" disabled={busy} onClick={() => void duplicateProfile()}>复制</button><button type="button" disabled={busy} onClick={() => void deleteCurrent()}>删除</button></>}
               {currentDescriptor?.login && <button type="button" disabled={busy} title={currentDescriptor.login.hint} onClick={() => void login()}>登录</button>}
+              {editor === 'native' && <button type="button" disabled={busy} onClick={() => void openHistory()}>修改记录</button>}
               {editor === 'native' && hasCurrentNative && <button type="button" disabled={busy} onClick={() => void importCurrentNative(false, true)}>复制为配置</button>}
               <span>{dirty ? '未保存' : ''}</span>
               <button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint} disabled={busy || !nativeAvailable || (editor === 'native' && workspace?.probe.nativeWrites.state !== 'supported')} onClick={() => void save(editor === 'profile' && workspace?.probe.nativeWrites.state === 'supported')}>保存</button>
+              </>}
             </div>
         </div>
       </GuideDialog>
       {editor === 'profile' && draft?.id && workspace && !dirty && (workspace.binding?.profileId !== draft.id || workspace.binding.profileVersion !== draft.version) && <div className={styles.quickApply}><span>这份配置已保存，但尚未应用到当前范围。</span><button type="button" onClick={() => void applySaved(draft)} disabled={busy || enablingId !== null || workspace.probe.nativeWrites.state !== 'supported'}>启用</button></div>}
     </>}
     </div>
-    <div hidden={resourceView !== 'mcp'}><McpWorkspace key={JSON.stringify([currentTool, scope, projectPath, resourceEpoch])} toolId={currentTool} scope={scope} projectPath={projectPath} tools={visibleTools} onDirtyChange={setMcpDirty} /></div>
-    <div hidden={resourceView !== 'skills'}><SkillsWorkspace key={JSON.stringify([currentTool, scope, projectPath, resourceEpoch])} toolId={currentTool} scope={scope} projectPath={projectPath} onDirtyChange={setSkillsDirty} /></div>
+    {resourceView === 'mcp' && currentTool && <McpWorkspace key={JSON.stringify([currentTool, scope, projectPath, resourceEpoch])} toolId={currentTool} scope={scope} projectPath={projectPath} onDirtyChange={setMcpDirty} />}
+    {resourceView === 'skills' && currentTool && <SkillsWorkspace key={JSON.stringify([currentTool, scope, projectPath, resourceEpoch])} toolId={currentTool} scope={scope} projectPath={projectPath} onDirtyChange={setSkillsDirty} />}
   </section>;
 }

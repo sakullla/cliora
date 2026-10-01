@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { createPortal } from 'react-dom';
 import { save } from '@tauri-apps/plugin-dialog';
 import { native, nativeAvailable } from '../../lib/native';
 import type { AdapterDescriptor } from '../../types/native';
@@ -22,6 +23,69 @@ function Metric({ label, value, hint }: { label: string; value: number | null; h
 }
 function Amount({ value, title }: { value: number | null; title?: string }) {
   return <span title={title ?? (value === null || value < 1000 ? undefined : value.toLocaleString())}>{compact(value)}</span>;
+}
+function FilterSelect({ label, value, options, onChange }: { label: string; value: string; options: { value: string; label: string }[]; onChange: (value: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [active, setActive] = useState(0);
+  const [box, setBox] = useState<{ top: number; left: number; width: number; maxHeight: number } | null>(null);
+  const anchor = useRef<HTMLButtonElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+  const listId = useId();
+  const current = options.find((item) => item.value === value)?.label ?? '全部';
+  const showSearch = options.length > 8;
+  const matches = options.filter((item) => item.label.toLowerCase().includes(query.trim().toLowerCase()));
+  useLayoutEffect(() => {
+    if (!open || !anchor.current) return;
+    const place = () => {
+      const rect = anchor.current?.getBoundingClientRect();
+      if (!rect) return;
+      const width = Math.max(rect.width, 220);
+      const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+      const below = window.innerHeight - rect.bottom - 12;
+      setBox({ top: rect.bottom + 4, left, width, maxHeight: Math.max(160, Math.min(280, below)) });
+    };
+    place();
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    return () => { window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true); };
+  }, [open]);
+  useEffect(() => { setActive(0); }, [query, open]);
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (anchor.current?.contains(target) || panel.current?.contains(target)) return;
+      setOpen(false); setQuery('');
+    };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [open]);
+  useEffect(() => {
+    if (!open || !panel.current) return;
+    const node = panel.current.querySelector<HTMLElement>('[data-active="true"]');
+    if (!node) return;
+    node.scrollIntoView({ block: 'nearest' });
+  }, [open, active, query]);
+  function choose(next: string) { onChange(next); setOpen(false); setQuery(''); }
+  function onKey(event: KeyboardEvent<HTMLElement>) {
+    if (event.key === 'ArrowDown') { event.preventDefault(); setActive((index) => Math.min(index + 1, Math.max(matches.length - 1, 0))); return; }
+    if (event.key === 'ArrowUp') { event.preventDefault(); setActive((index) => Math.max(index - 1, 0)); return; }
+    if (event.key === 'Enter' && matches[active]) { event.preventDefault(); choose(matches[active].value); return; }
+    if (event.key === 'Escape') { event.preventDefault(); setOpen(false); setQuery(''); }
+  }
+  return <label className={styles.filterSelect}>
+    <span>{label.replace(/^筛选/, '')}</span>
+    <button ref={anchor} type="button" className={styles.filterTrigger} aria-label={label} aria-haspopup="listbox" aria-expanded={open} aria-controls={listId} onClick={() => setOpen((item) => !item)} onKeyDown={(event) => { if (!open && (event.key === 'ArrowDown' || event.key === 'Enter')) { event.preventDefault(); setOpen(true); return; } if (open) onKey(event); }}>
+      <span>{current}</span>
+    </button>
+    {open && box && createPortal(<div ref={panel} className={styles.filterMenu} style={{ top: box.top, left: box.left, width: box.width }} onKeyDown={onKey}>
+      {showSearch && <input aria-label={`搜索${label}`} placeholder="输入名称" value={query} autoFocus onChange={(event) => setQuery(event.target.value)} onKeyDown={onKey} />}
+      <div className={styles.filterList} id={listId} role="listbox" aria-label={label} style={{ maxHeight: box.maxHeight - (showSearch ? 44 : 0) }}>
+        {matches.length ? matches.map((item, index) => <button key={item.value || 'all'} type="button" role="option" aria-selected={item.value === value} data-active={index === active || undefined} onMouseEnter={() => setActive(index)} onClick={() => choose(item.value)}>{item.label}</button>) : <p>没有匹配项</p>}
+      </div>
+    </div>, document.body)}
+  </label>;
 }
 function formatFailure(error: unknown, objectText: string, nextText: string): string {
   const fallback = `${objectText}。${nextText}`;
@@ -310,7 +374,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
     {(scanning || filterLoading) && <p className={styles.caveat} role="status">{scanning ? `后台扫描 ${tools.find(item => item.id === scanProgress?.toolId)?.name ?? scanProgress?.toolId ?? ''} ${scanProgress?.totalSources ? `${scanProgress.completedSources} / ${scanProgress.totalSources}` : '正在发现文件'}` : '正在筛选已缓存记录…'}{scanning && <span className={styles.progress} aria-hidden="true"><span style={scanProgress?.totalSources ? { width: `${Math.min(100, (scanProgress.completedSources / scanProgress.totalSources) * 100)}%` } : undefined} data-indeterminate={!scanProgress?.totalSources || undefined} /></span>}{scanning && <button type="button" onClick={() => void cancelScan()}>停止扫描</button>}</p>}
     <div className={styles.filters}>
       {tab === 'sessions' && <label className={styles.search}>搜索<input aria-label="搜索会话" data-page-search title={searchShortcutHint} value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape' && search) { event.preventDefault(); setSearch(''); } }} placeholder="标题或正文" /></label>}
-      <label>工具<select aria-label="筛选工具" value={toolId} onChange={(event) => setToolId(event.target.value)}><option value="">全部工具</option>{tools.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
+      <FilterSelect label="筛选工具" value={toolId} options={[{ value: '', label: '全部工具' }, ...tools.map((item) => ({ value: item.id, label: item.name }))]} onChange={setToolId} />
       {tab === 'sessions' && <label className={styles.favorite}><input type="checkbox" checked={favoriteOnly} onChange={(event) => setFavoriteOnly(event.target.checked)} />只看收藏</label>}
     </div>
     <div className={styles.range} role="group" aria-label="时间范围">{rangePresets.map((item) => <button type="button" key={item.id} aria-pressed={rangeKey === item.id} onClick={() => { setRangeKey(item.id); if (item.id === 'custom' && !customFrom && !customTo) { const today = isoDay(new Date()); setCustomFrom(today); setCustomTo(today); } }}>{item.label}</button>)}</div>
@@ -320,8 +384,8 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
     </div>}
     {tab === 'usage' ? <p className={styles.rangeSummary}>{rangeSummary(dates.from, dates.to)}</p> : rangeCaption(dates.from, dates.to) && <p className={styles.rangeSummary}>{rangeCaption(dates.from, dates.to)}</p>}
     <details className={styles.moreFilters}><summary>更多筛选{[projectId, model].filter(Boolean).length ? ` · ${[projectId, model].filter(Boolean).length} 项已启用` : ''}</summary><div className={styles.filters}>
-      <label>项目<select aria-label="筛选项目" value={projectId} onChange={(event) => setProjectId(event.target.value)}><option value="">全部项目</option><option value="__unknown__">未归类</option>{projects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-      <label>模型<select aria-label="筛选模型" value={model} onChange={(event) => setModel(event.target.value)}><option value="">全部模型</option><option value="__unknown__">模型未知</option>{(usage?.models ?? []).map(value => <option key={value} value={value}>{value}</option>)}</select></label>
+      <FilterSelect label="筛选项目" value={projectId} options={[{ value: '', label: '全部项目' }, { value: '__unknown__', label: '未归类' }, ...projects.map((item) => ({ value: item.id, label: item.name }))]} onChange={setProjectId} />
+      <FilterSelect label="筛选模型" value={model} options={[{ value: '', label: '全部模型' }, { value: '__unknown__', label: '模型未知' }, ...(usage?.models ?? []).map((item) => ({ value: item, label: item }))]} onChange={setModel} />
 <button type="button" onClick={() => { setProjectId(''); setModel(''); }}>清除更多筛选</button></div></details>
     {error && <div className={styles.error} role="alert">{error}</div>}
     {notice && <div className={styles.notice} role="status">{notice}</div>}
@@ -344,9 +408,9 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
         <div className={styles.transcript} aria-label="会话正文"><div className={styles.messages}>{selected.messages.length ? selected.messages.map((item) => <article key={item.id} data-role={item.role}><small>{item.role === 'user' ? '你' : '助手'} · {day(item.timestamp)}</small><p>{item.text}</p></article>) : <p>此记录没有可读取的对话正文。</p>}</div></div>
       </> : <div className={styles.empty}>选择左侧会话查看详情。</div>}</div>
     </div> : <div className={styles.usage}>
-      <div className={styles.metrics}><div><small>会话</small><strong>{usage?.sessionCount ?? '—'}</strong></div><Metric label={`输入 token${partialTotals ? ' · 已知小计' : ''}`} value={usage?.input ?? null} /><Metric label={`输出 token${partialTotals ? ' · 已知小计' : ''}`} value={usage?.output ?? null} /><Metric label={`缓存读取${partialTotals ? ' · 已知小计' : ''}`} value={usage?.cacheRead ?? null} /><Metric label={`缓存写入${partialTotals ? ' · 已知小计' : ''}`} value={usage?.cacheWrite ?? null} /><div><small>估算费用</small><strong>{usage?.estimatedCost === null || usage?.estimatedCost === undefined ? '未知' : `${usage.currency ?? ''} ${usage.estimatedCost.toFixed(4)}`}</strong></div></div>
-      <p className={styles.caveat}>仅统计本机可读取的记录；{usage?.usageSessions ?? 0} 个会话有用量，{usage?.unknownUsageSessions ?? 0} 个未知，{usage?.partialSessions ?? 0} 个不完整，{usage?.staleSessions ?? 0} 个源暂不可读。{partialTotals ? '显示的是已知小计，实际总量未知。' : ''}费用为估算，不等于账单。</p>
-      <p className={styles.caveat}>输入与缓存按原生口径分别展示；{usage?.inputIncludesCache === true ? '当前输入值包含缓存 token，不应再叠加缓存。' : usage?.inputIncludesCache === false ? '当前输入值不包含单列的缓存 token。' : '当前记录口径混合或未知，请勿自行相加。'}</p>
+      <div className={styles.metrics}><div><small>会话</small><strong>{usage?.sessionCount ?? '—'}</strong></div><Metric label={`输入 token${partialTotals ? ' · 已知小计' : ''}`} value={usage?.input ?? null} /><Metric label={`输出 token${partialTotals ? ' · 已知小计' : ''}`} value={usage?.output ?? null} /><Metric label={`缓存读取${partialTotals ? ' · 已知小计' : ''}`} value={usage?.cacheRead ?? null} /><Metric label={`缓存写入${partialTotals ? ' · 已知小计' : ''}`} value={usage?.cacheWrite ?? null} /><div><small>估算费用{usage?.costPartial ? ' · 已知小计' : ''}</small><strong>{usage?.estimatedCost === null || usage?.estimatedCost === undefined ? '未知' : `${usage.currency ?? ''} ${usage.estimatedCost.toFixed(4)}`}</strong></div></div>
+      <p className={styles.caveat}>仅统计本机可读取的记录；{usage?.usageSessions ?? 0} 个会话有用量，{usage?.unknownUsageSessions ?? 0} 个未知，{usage?.partialSessions ?? 0} 个不完整，{usage?.staleSessions ?? 0} 个源暂不可读。{partialTotals || usage?.costPartial ? '显示的是已知小计，实际总量未知。' : ''}没有手填价格时，能对上公开价的模型按公开价估算。费用为估算，不等于账单。</p>
+      <p className={styles.caveat}>{usage?.inputIncludesCache === true ? '输入已包含缓存读取和缓存写入。缓存两列是其中的明细，不要再加一次。' : '这次没有可计入的输入。'}</p>
       {!!usage?.priceSources.length && <div className={styles.priceSources}><strong>价格依据</strong>{usage.priceSources.map((source) => <span key={source}>{source}</span>)}</div>}
       {!!usage?.byModel?.length && <div className={styles.modelTable}><table aria-label="按模型用量明细"><thead><tr><th>工具 / 模型</th><th>会话</th><th>输入</th><th>输出</th><th>缓存读 / 写</th><th>估算费用</th></tr></thead><tbody>{usage.byModel.map(row => <tr key={JSON.stringify([row.toolId, row.model])}><td><button type="button" onClick={() => { setPriceTool(row.toolId); setPriceModel(row.model ?? ''); setPriceError(''); setPriceOpen(true); }}>{tools.find(item => item.id === row.toolId)?.name ?? row.toolId}<br /><strong>{row.model ?? '模型未知'}</strong></button></td><td>{row.sessionCount}{row.unknownUsageSessions ? ` · ${row.unknownUsageSessions} 用量未知` : ''}</td><td><Amount value={row.input} /></td><td><Amount value={row.output} /></td><td><Amount value={row.cacheRead} /> / <Amount value={row.cacheWrite} /></td><td>{row.estimatedCost === null ? '未知' : `${row.currency ?? ''} ${row.estimatedCost.toFixed(4)}`}</td></tr>)}</tbody></table></div>}
       <button type="button" onClick={() => { setPriceError(''); setPriceOpen(true); }}>设置估算价格</button>
@@ -363,7 +427,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
         <label>缓存写入<input aria-label="缓存写入单价" type="number" min="0" value={priceDraft.write} onChange={(event) => setPriceDraft({ ...priceDraft, write: event.target.value })} /></label>
         <label>来源<input aria-label="价格来源" value={priceDraft.source} onChange={(event) => setPriceDraft({ ...priceDraft, source: event.target.value })} placeholder="官方价格页或手动设置" /></label>
         {priceError && <p className={styles.error} role="alert">{priceError}</p>}
-        <button type="button" className={styles.primary} data-dialog-save onClick={() => void savePrice()}>保存价格</button>
+        <div className="dialog-footer"><button type="button" className={styles.primary} data-dialog-save onClick={() => void savePrice()}>保存价格</button></div>
       </div>
     </GuideDialog>
   </section>;

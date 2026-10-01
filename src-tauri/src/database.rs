@@ -22,7 +22,7 @@ impl Database {
     pub fn open(path: &Path) -> Result<Self, OpenError> {
         let mut connection = Connection::open(path)?;
         let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 9 {
+        if version > 11 {
             return Err(OpenError::UnsupportedVersion(version));
         }
         connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
@@ -303,6 +303,35 @@ impl Database {
             tx.execute_batch("PRAGMA user_version = 9;")?;
             tx.commit()?;
         }
+        if version < 10 {
+            let tx = connection.transaction()?;
+            tx.execute_batch(
+                "ALTER TABLE skill_packages ADD COLUMN in_library INTEGER NOT NULL DEFAULT 1;
+                 PRAGMA user_version = 10;",
+            )?;
+            tx.commit()?;
+        }
+        if version < 11 {
+            let tx = connection.transaction()?;
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS rule_placements (
+                   rule_id TEXT NOT NULL,
+                   tool TEXT NOT NULL,
+                   scope_key TEXT NOT NULL,
+                   position INTEGER NOT NULL,
+                   PRIMARY KEY(rule_id, tool, scope_key),
+                   FOREIGN KEY(rule_id) REFERENCES library_items(id) ON DELETE CASCADE
+                 );
+                 CREATE TABLE IF NOT EXISTS rule_files (
+                   tool TEXT NOT NULL,
+                   scope_key TEXT NOT NULL,
+                   managed_hash TEXT NOT NULL,
+                   PRIMARY KEY(tool, scope_key)
+                 );
+                 PRAGMA user_version = 11;",
+            )?;
+            tx.commit()?;
+        }
         Ok(Self {
             connection: Mutex::new(connection),
         })
@@ -503,7 +532,7 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
-        assert_eq!(version, 9);
+        assert_eq!(version, 11);
             let count: i64 = conn
                 .query_row("SELECT COUNT(*) FROM native_profiles", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;

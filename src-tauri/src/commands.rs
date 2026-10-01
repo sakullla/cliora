@@ -508,6 +508,15 @@ pub async fn delete_library_item(
 ) -> Result<(), ApiError> {
     blocking(move || {
         app.state::<AppState>().with_database(&app, |db| {
+            resources::rules::release_rule(
+                db,
+                &SystemCredentialStore,
+                &adapters::Registry::builtins(),
+                &home()?,
+                &id,
+                expected_version,
+            )
+            .map_err(native_error)?;
             library::delete(db, &id, expected_version).map_err(native_error)
         })
     })
@@ -565,6 +574,11 @@ pub async fn list_native_mcp(
             .map_err(native_error)
     })
     .await
+}
+
+#[tauri::command]
+pub async fn list_mcp_placements(app: AppHandle) -> Result<Vec<resources::mcp::McpPlacement>, ApiError> {
+    blocking(move || app.state::<AppState>().with_database(&app, |db| resources::mcp::list_placements(db).map_err(native_error))).await
 }
 
 #[tauri::command]
@@ -634,6 +648,40 @@ pub async fn preview_rule_targets(
 }
 
 #[tauri::command]
+pub async fn list_rule_placements(app: AppHandle) -> Result<Vec<resources::rules::RulePlacement>, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            resources::rules::list_placements(db, &adapters::Registry::builtins(), &home()?).map_err(native_error)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn sync_rule_clients(
+    app: AppHandle,
+    rule_id: String,
+    expected_version: u64,
+    selection: resources::rules::RuleClientSelection,
+) -> Result<Vec<resources::rules::RuleSyncResult>, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            resources::rules::sync_clients(
+                db,
+                &SystemCredentialStore,
+                &adapters::Registry::builtins(),
+                &home()?,
+                &rule_id,
+                expected_version,
+                selection,
+            )
+            .map_err(native_error)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn apply_rule_targets(
     app: AppHandle,
     rule_id: String,
@@ -654,6 +702,11 @@ pub async fn apply_rule_targets(
         ))
     })
     .await
+}
+
+#[tauri::command]
+pub async fn set_skill_in_library(app: AppHandle, id: String, in_library: bool) -> Result<(), ApiError> {
+    blocking(move || app.state::<AppState>().with_database(&app, |db| resources::skills::set_in_library(db, &id, in_library).map_err(native_error))).await
 }
 
 #[tauri::command]
@@ -1000,8 +1053,10 @@ pub async fn get_registered_tool_workspace(
     scope: Scope,
     project_path: Option<String>,
     summary: Option<bool>,
+    fresh: Option<bool>,
 ) -> Result<RegisteredToolWorkspace, ApiError> {
     let summary = summary.unwrap_or(false);
+    let fresh = fresh.unwrap_or(false);
     blocking(move || {
         let home = home()?;
         let project = checked_project(scope, project_path)?;
@@ -1024,13 +1079,14 @@ pub async fn get_registered_tool_workspace(
                     scope,
                 )
             } else {
-                adapter::probe_registered(
+                adapter::probe_registered_cached(
                     &registry,
                     &tool_id,
                     custom.as_deref(),
                     &home,
                     project.as_deref(),
                     scope,
+                    fresh,
                 )
             }
             .map_err(native_error)?;
@@ -1937,6 +1993,41 @@ pub async fn set_default_launch_mode(
         let _ = crate::tray::refresh(&tray);
     });
     Ok(settings)
+}
+
+fn npm_latest_version(package: &str) -> Result<String, String> {
+    let url = format!("https://registry.npmjs.org/{package}/latest");
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .redirect(reqwest::redirect::Policy::limited(3))
+        .build()
+        .map_err(|_| "暂时查不到最新版本".to_string())?;
+    let response = client
+        .get(&url)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .send()
+        .map_err(|_| "暂时查不到最新版本".to_string())?;
+    if !response.status().is_success() {
+        return Err("暂时查不到最新版本".into());
+    }
+    let body: serde_json::Value = response.json().map_err(|_| "暂时查不到最新版本".to_string())?;
+    body.get("version")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| "暂时查不到最新版本".into())
+}
+
+#[tauri::command]
+pub async fn cli_latest_version(tool_id: String) -> Result<String, ApiError> {
+    blocking(move || {
+        let adapter = adapters::Registry::builtins()
+            .get(&tool_id)
+            .ok_or_else(|| native_error("此 CLI 适配器未注册".into()))?;
+        npm_latest_version(adapter.npm_package()).map_err(native_error)
+    })
+    .await
 }
 
 #[tauri::command]

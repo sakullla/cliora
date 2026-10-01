@@ -581,7 +581,22 @@ label.setting-row:hover { background: var(--surface-2); }
 .guide-dialog-close { flex: none; width: 30px; min-height: 30px; margin: -3px -6px 0 auto; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-2); box-shadow: none; }
 .guide-dialog-close:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
 .guide-dialog-body { flex: 1; min-height: 0; padding: 16px 20px 20px; overflow: auto; max-height: calc(100dvh - 140px); }
-.guide-dialog-body .actions, .guide-dialog-body .leadActions { position: sticky; bottom: 0; background: var(--surface); padding-top: 10px; }
+.dialog-footer {
+  position: sticky;
+  bottom: -20px;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: 12px -20px -20px;
+  padding: 12px 20px 16px;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+.dialog-footer > .dialog-footer-gap { flex: 1; min-width: 8px; }
+details:not([open]) > :not(summary) { display: none !important; }
 
 .confirmation-dialog { width: min(440px, calc(100vw - 40px)); padding: 22px 22px 18px; overflow: auto; }
 .confirmation-head { display: flex; align-items: flex-start; gap: 12px; }
