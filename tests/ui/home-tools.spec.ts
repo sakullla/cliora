@@ -56,6 +56,8 @@ async function installHome(page: Page, detect = false) {
         }
         if (command === 'apply_registered_native_profile') {
           (window as unknown as { __applyCalls: unknown[] }).__applyCalls.push(args);
+          const forced = (window as unknown as { __applyError?: string }).__applyError;
+          if (forced) throw { message: forced };
           const profileId = args.profileId;
           const finish = () => { applied.codex = profileId; return { applications: [] }; };
           if (holdApply) {
@@ -63,6 +65,14 @@ async function installHome(page: Page, detect = false) {
             return new Promise((resolve, reject) => applies.push({ resolve: () => resolve(finish()), reject }));
           }
           return finish();
+        }
+        if (command === 'compare_registered_application') return (window as unknown as { __compareResult: unknown }).__compareResult;
+        if (command === 'apply_compared_application') {
+          const comparison = (args as unknown as { comparison?: { profile?: { id?: string } } }).comparison;
+          applied.codex = comparison?.profile?.id ?? applied.codex;
+          const calls = ((window as unknown as { __comparedCalls?: unknown[] }).__comparedCalls ??= []);
+          calls.push(args);
+          return { status: 'written_for_next_session' };
         }
         if (command === 'plugin:window|set_theme') return null;
         throw new Error(`Unexpected IPC: ${command}`);
@@ -186,7 +196,7 @@ test('applying a profile reports the native write, and failure keeps the previou
   const alert = tools.getByRole('alert');
   await expect(alert).toContainText('Codex');
   await expect(alert).toContainText('未切换');
-  await expect(alert).toContainText('画面仍是原来的选中项');
+  await expect(alert).toContainText('写入被拒绝');
   await oneLine(alert);
   await expect(tools.getByRole('status')).toHaveCount(0);
   await expect(tools).not.toContainText('已写入原生文件');
@@ -204,6 +214,36 @@ test('applying a profile reports the native write, and failure keeps the previou
     { toolId: 'codex', profileId: 'daily', scope: 'global', allowTakeover: false },
     { toolId: 'codex', profileId: 'daily', scope: 'global', allowTakeover: false },
   ]);
+});
+
+test('a home switch that differs from the file opens the comparison', async ({ page }) => {
+  await installHome(page);
+  await page.setViewportSize({ width: 1360, height: 768 });
+  await page.goto('/');
+  await page.evaluate(() => {
+    const state = window as unknown as { __applyError: string; __compareResult: unknown; __comparedCalls: unknown[] };
+    state.__applyError = '原生文件已有不同的字段值：settings；请确认接管';
+    state.__compareResult = {
+      profile: { id: 'work', tool: 'codex', name: '工作', version: 1, inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection: { model: 'gpt-5-codex' } },
+      common: null,
+      files: [{ role: 'settings', format: 'toml', current: 'model = "old"', proposed: { model: 'new' }, proposedText: 'model = "new"\n' }],
+    };
+    state.__comparedCalls = [];
+  });
+  const tools = page.getByLabel('管理中的工具');
+  await tools.getByRole('radio', { name: '工作' }).click();
+  const dialog = page.getByRole('dialog', { name: '比较当前文件与本次配置' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText('model = "old"')).toBeVisible();
+  await expect(dialog.getByText('model = "new"')).toBeVisible();
+  await expect(tools.getByRole('alert')).toHaveCount(0);
+  await expect(tools.getByRole('radio', { name: '日常' })).toHaveAttribute('aria-checked', 'true');
+  await dialog.getByRole('button', { name: '使用本次配置' }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(tools.getByRole('status')).toHaveText('Codex 已写入原生文件，下次启动读取。');
+  await expect(tools.getByRole('radio', { name: '工作' })).toHaveAttribute('aria-checked', 'true');
+  const compared = await page.evaluate(() => (window as unknown as { __comparedCalls: unknown[] }).__comparedCalls);
+  expect(compared).toHaveLength(1);
 });
 
 test('detection failure names the tool and points at edit or reread', async ({ page }) => {

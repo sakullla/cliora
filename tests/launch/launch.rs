@@ -90,6 +90,7 @@ fn missing_project_never_falls_back_to_user_home() {
             project_id: Some("missing-project".into()),
             session_id: None,
             directory: None,
+            initial_prompt: None,
             mode: LaunchMode::Normal,
         },
     );
@@ -122,6 +123,7 @@ fn launch_recovers_interrupted_skills_before_tool_probe_without_opening_tools_pa
             project_id: None,
             session_id: None,
             directory: None,
+            initial_prompt: None,
             mode: LaunchMode::Normal,
         },
     );
@@ -178,6 +180,7 @@ fn damaged_claude_skill_backup_blocks_claude_but_not_grok_launch() {
             project_id: None,
             session_id: None,
             directory: None,
+            initial_prompt: None,
             mode: LaunchMode::Normal,
         },
     )
@@ -192,6 +195,7 @@ fn damaged_claude_skill_backup_blocks_claude_but_not_grok_launch() {
             project_id: None,
             session_id: None,
             directory: None,
+            initial_prompt: None,
             mode: LaunchMode::Normal,
         },
     )
@@ -259,6 +263,7 @@ fn damaged_project_skill_backup_only_blocks_that_project() {
         project_id,
         session_id: None,
         directory: None,
+            initial_prompt: None,
         mode: LaunchMode::Normal,
     };
     assert_eq!(
@@ -319,6 +324,7 @@ fn project_launch_plan_uses_real_probe_and_project_model_without_shell_expansion
             project_id: Some(project.id.clone()),
             session_id: Some("session 1".into()),
             directory: None,
+            initial_prompt: None,
             mode: LaunchMode::Yolo,
         },
     )
@@ -353,6 +359,7 @@ fn project_launch_plan_uses_real_probe_and_project_model_without_shell_expansion
             project_id: Some(project.id),
             session_id: None,
             directory: None,
+            initial_prompt: None,
             mode: LaunchMode::Normal,
         },
     )

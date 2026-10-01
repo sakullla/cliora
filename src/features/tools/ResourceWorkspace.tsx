@@ -3,10 +3,9 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { native } from '../../lib/native';
 import { confirmAction } from '../../lib/confirm';
-import type { AdapterDescriptor, Scope } from '../../types/native';
+import type { Scope } from '../../types/native';
 import type { McpDefinition, McpDraft, McpTargetRequest, McpTargetResult, NativeMcpEntry, NativeSkillEntry, SkillImportPreview, SkillInstallation, SkillPackage, SkillRecoveryIssue, SkillTargetPreview, SkillTargetResult } from '../../types/resources';
 import { displayPath, shortPath } from '../../lib/paths';
-import { ToolIcon } from '../../components/ToolIcon';
 import { GuideDialog } from '../../components/GuideDialog';
 import { saveShortcutHint } from '../../lib/shortcut';
 import styles from './ResourceWorkspace.module.css';
@@ -15,10 +14,10 @@ function errorText(error: unknown) {
   return error && typeof error === 'object' && 'message' in error ? String(error.message) : '操作失败，请重试';
 }
 function blank(): McpDraft {
-  return { id: null, name: '', transport: 'stdio', command: '', args: [], url: '', env: {}, headers: {}, expectedVersion: null };
+  return { id: null, name: '', transport: 'stdio', command: '', args: [], url: '', env: {}, headers: {}, inLibrary: false, expectedVersion: null };
 }
 function draftOf(item: McpDefinition): McpDraft {
-  return { id: item.id, name: item.name, transport: item.transport, command: item.command, args: item.args, url: item.url, env: item.env, headers: item.headers, expectedVersion: item.version };
+  return { id: item.id, name: item.name, transport: item.transport, command: item.command, args: item.args, url: item.url, env: item.env, headers: item.headers, inLibrary: item.inLibrary !== false, expectedVersion: item.version };
 }
 function lines(value: Record<string, string>): string {
   return Object.entries(value).map(([key, item]) => `${key}=${item}`).join('\n');
@@ -33,42 +32,35 @@ function parseLines(value: string): Record<string, string> {
   return output;
 }
 
-export function McpWorkspace({ toolId, scope, projectPath, tools, onDirtyChange }: { toolId: string; scope: Scope; projectPath: string; tools: AdapterDescriptor[]; onDirtyChange?: (dirty: boolean) => void }) {
+export function McpWorkspace({ toolId, scope, projectPath, onDirtyChange }: { toolId: string; scope: Scope; projectPath: string; onDirtyChange?: (dirty: boolean) => void }) {
   const [definitions, setDefinitions] = useState<McpDefinition[]>([]);
   const [draft, setDraft] = useState<McpDraft>(blank);
   const [envText, setEnvText] = useState('');
   const [headerText, setHeaderText] = useState('');
   const [savedFingerprint, setSavedFingerprint] = useState(JSON.stringify([blank(), '', '',true]));
   const [nativeEntries, setNativeEntries] = useState<NativeMcpEntry[]>([]);
-  const [selected, setSelected] = useState<string[]>([]);
-  const [previewState, setPreview] = useState<{ context: string; epoch: number; items: McpTargetResult[] } | null>(null);
-  const [results, setResults] = useState<McpTargetResult[] | null>(null);
   const [enabled, setEnabled] = useState(true);
   const [nativeOrigin, setNativeOrigin] = useState<NativeMcpEntry | null>(null);
   const [currentConflict, setCurrentConflict] = useState<{ id: string; items: McpTargetResult[] } | null>(null);
   const [busy, setBusy] = useState(false);
-  const [previewBusy, setPreviewBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [capabilityBlocked, setCapabilityBlocked] = useState('');
   const [composing, setComposing] = useState(false);
+  const [syncLibrary, setSyncLibrary] = useState(false);
   const project = scope === 'project' ? projectPath || null : null;
   const dirty = JSON.stringify([draft, envText, headerText,enabled]) !== savedFingerprint;
   const latestForm = useRef(''); latestForm.current = JSON.stringify([draft, envText, headerText, enabled]);
   const mounted = useRef(true);
   useEffect(() => { mounted.current=true;return () => { mounted.current=false; }; },[]);
-  const previewContext = JSON.stringify([draft, envText, headerText, toolId, scope, project, enabled, selected]);
+  const previewContext = JSON.stringify([draft, envText, headerText, toolId, scope, project, enabled]);
   const previewEpochRef = useRef({ context: previewContext, epoch: 0 });
   if (previewEpochRef.current.context !== previewContext) {
     previewEpochRef.current = { context: previewContext, epoch: previewEpochRef.current.epoch + 1 };
   }
-  const previewRequestRef = useRef(0);
-  const preview = previewState?.context === previewContext && previewState.epoch === previewEpochRef.current.epoch ? previewState.items : null;
   useLayoutEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
   useEffect(() => () => { onDirtyChange?.(false); }, [onDirtyChange]);
   const target = useMemo<McpTargetRequest>(() => ({ toolId, scope, projectPath: project, enabled }), [toolId, scope, project, enabled]);
-  useEffect(() => { setPreview(null); setPreviewBusy(false); }, [toolId, scope, project, enabled, selected]);
-  useEffect(() => { setPreview(null); setPreviewBusy(false); }, [draft, envText, headerText]);
 
   useEffect(() => {
     void native.listMcpDefinitions().then(setDefinitions).catch((value) => setError(errorText(value)));
@@ -82,7 +74,7 @@ export function McpWorkspace({ toolId, scope, projectPath, tools, onDirtyChange 
     return () => { live = false; };
   }, [target, toolId, scope, project]);
 
-  const empty = !definitions.length && !nativeEntries.length && !composing && !draft.id && !nativeOrigin;
+  const empty = !nativeEntries.length && !composing && !draft.id && !nativeOrigin;
 
   function select(item: McpDefinition, nextEnabled = true) {
     const next = draftOf(item);
@@ -90,16 +82,7 @@ export function McpWorkspace({ toolId, scope, projectPath, tools, onDirtyChange 
     setDraft(next); setEnvText(lines(item.env)); setHeaderText(lines(item.headers));
     setEnabled(nextEnabled);setSavedFingerprint(JSON.stringify([next, lines(item.env), lines(item.headers),nextEnabled]));
     latestForm.current=JSON.stringify([next,lines(item.env),lines(item.headers),nextEnabled]);
-    setPreview(null); setResults(null); setError('');
-  }
-  async function selectDefinition(item: McpDefinition) {
-    if (!await canReplace()) return;
-    const started=latestForm.current;setBusy(true);setError('');
-    try {
-      const current=nativeEntries.find(entry=>entry.name===item.name);
-      const nextEnabled=current?.enabled ?? await native.getManagedMcpEnabled(item.id,target) ?? true;
-      if (mounted.current && started===latestForm.current) select(item,nextEnabled);
-    } catch (value) {setError(errorText(value));} finally {setBusy(false);}
+    setError('');
   }
   async function canReplace() {
     const started = previewEpochRef.current;
@@ -110,112 +93,73 @@ export function McpWorkspace({ toolId, scope, projectPath, tools, onDirtyChange 
     setNativeOrigin(item); setCurrentConflict(null); setComposing(true);
     const found = definitions.find((definition) => definition.name === item.name);
     const next: McpDraft = { id: found?.id ?? null, name: item.name, transport: item.transport, command: item.command, args: item.args, url: item.url,
-      env: item.env, headers: item.headers, expectedVersion: found?.version ?? null };
+      env: item.env, headers: item.headers, inLibrary: found?.inLibrary === true, expectedVersion: found?.version ?? null };
     setSavedFingerprint(JSON.stringify([next, lines(item.env), lines(item.headers),item.enabled]));
     setDraft(next);
-    setEnvText(lines(item.env)); setHeaderText(lines(item.headers)); setEnabled(item.enabled); setPreview(null);
-    setNotice(item.protectedValues ? '原生条目有受保护凭据值未导入；保存前请改用环境变量引用。' : found ? '已读取当前工具上的条目；保存会更新同名定义。' : '已读取当前工具上的条目，保存后可分发。');
+    setEnvText(lines(item.env)); setHeaderText(lines(item.headers)); setEnabled(item.enabled);
+    setNotice(item.protectedValues ? '原生条目有受保护凭据值未导入；保存前请改用环境变量引用。' : '已读取当前工具上的条目。保存只更新这个 CLI。');
   }
   async function startNew() {
     if (!await canReplace()) return;
-    setDraft(blank()); setEnvText(''); setHeaderText(''); setEnabled(true); setNativeOrigin(null); setCurrentConflict(null);
-    setSavedFingerprint(JSON.stringify([blank(), '', '', true])); setPreview(null); setComposing(true); setNotice(''); setError('');
+    setDraft(blank()); setEnvText(''); setHeaderText(''); setEnabled(true); setNativeOrigin(null); setCurrentConflict(null); setSyncLibrary(false);
+    setSavedFingerprint(JSON.stringify([blank(), '', '', true])); setComposing(true); setNotice(''); setError('');
   }
   async function closeCompose() {
     if (!await canReplace()) return;
     const next = blank();
     setDraft(next); setEnvText(''); setHeaderText(''); setEnabled(true); setNativeOrigin(null); setCurrentConflict(null);
-    setSavedFingerprint(JSON.stringify([next, '', '', true])); setPreview(null); setComposing(false); setNotice(''); setError('');
+    setSavedFingerprint(JSON.stringify([next, '', '', true])); setComposing(false); setNotice(''); setError('');
   }
   function leaveComposer() {
     const next = blank();
     setDraft(next); setEnvText(''); setHeaderText(''); setEnabled(true); setNativeOrigin(null); setCurrentConflict(null);
-    setSavedFingerprint(JSON.stringify([next, '', '', true])); setPreview(null); setResults(null); setComposing(false);
+    setSavedFingerprint(JSON.stringify([next, '', '', true])); setComposing(false);
   }
   async function applyItems(id: string, items: McpTargetResult[], replace: boolean) {
     const targets = items.filter(item => item.status === 'ready' || item.status === 'conflict').map((item): McpTargetRequest => ({ toolId: item.toolId, scope: item.scope,
       projectPath: item.projectPath, enabled, baselineHash: item.baselineHash, previewToken: item.previewToken, allowReplace: replace && item.status === 'conflict' }));
     const outcome = await native.distributeMcp(id, targets);
-    setResults(outcome); setNativeEntries(await native.listNativeMcp(target)); setCurrentConflict(null);
+    setNativeEntries(await native.listNativeMcp(target)); setCurrentConflict(null);
     const written = outcome.every(item => item.status === 'written');
-    setNotice(written ? '已保存并在当前工具使用。' : '部分写入失败，可重试。');
+    setNotice(written ? '已写入当前工具。' : '部分写入失败，可重试。');
     return written;
   }
-  async function save(libraryOnly = false) {
-    if (scope === 'project' && !project && !libraryOnly) { setError('请选择项目。'); return; }
+  async function save() {
+    if (scope === 'project' && !project) { setError('请选择项目。'); return; }
     const origin = nativeOrigin; const started = latestForm.current;
+    const editing = !!(draft.id || nativeOrigin);
+    const linked = definitions.find((item) => item.id === draft.id) ?? definitions.find((item) => item.name === draft.name.trim());
+    const inLibrary = editing ? linked?.inLibrary !== false : syncLibrary || linked?.inLibrary === true;
     setBusy(true); setError(''); setNotice('');
     try {
-      const saved = await native.saveMcpDefinition({ ...draft, env: parseLines(envText), headers: parseLines(headerText) });
+      const saved = await native.saveMcpDefinition({ ...draft, id: linked?.id ?? draft.id, expectedVersion: linked?.version ?? draft.expectedVersion, inLibrary, env: parseLines(envText), headers: parseLines(headerText) });
       setDefinitions(await native.listMcpDefinitions());
-      if (!mounted.current || started !== latestForm.current) { setNotice('定义已保存，继续编辑的修改已保留。'); return; }
+      if (!mounted.current || started !== latestForm.current) { setNotice('已写入当前工具前，表单又有改动，请再保存一次。'); return; }
       select(saved,enabled);
-      if (libraryOnly) { setNotice('已保存在资料库。'); leaveComposer(); return; }
       const savedForm=JSON.stringify([draftOf(saved),lines(saved.env),lines(saved.headers),enabled]);
       const items = await native.previewMcpTargets(saved.id, [target]);
       const fresh = origin ? await native.listNativeMcp(target) : [];
       if (!mounted.current || savedForm!==latestForm.current) {setNotice('定义已保存，继续编辑的修改已保留，尚未写入当前工具。');return;}
       const sameOrigin = !!origin && JSON.stringify(fresh.find(item => item.name === origin.name)) === JSON.stringify(origin);
       if (items.some(item => item.status === 'conflict') && !sameOrigin) { setCurrentConflict({ id: saved.id, items }); return; }
-      if (!items.some(item => item.status === 'ready' || item.status === 'conflict')) { setResults(items); setError(items.map(item => item.detail).join('；')); return; }
+      if (!items.some(item => item.status === 'ready' || item.status === 'conflict')) { setError(items.map(item => item.detail).join('；')); return; }
       if (await applyItems(saved.id, items, sameOrigin)) leaveComposer();
-    } catch (value) { setError(errorText(value)); }
-    finally { setBusy(false); }
-  }
-  function requests(ids = selected): McpTargetRequest[] {
-    return ids.map((id) => ({ toolId: id, scope, projectPath: project, enabled }));
-  }
-  async function inspect(ids = selected) {
-    if (!draft.id) { setError('请先保存 MCP。'); return; }
-    if (dirty) { setError('请先保存草稿，再预览分发目标。'); return; }
-    if (scope === 'project' && !project) { setError('请先在工具页打开项目目录。'); return; }
-    const context = previewContext;
-    const epoch = previewEpochRef.current.epoch;
-    const request = ++previewRequestRef.current;
-    setPreviewBusy(true); setPreview(null); setResults(null); setError('');
-    try {
-      const items = await native.previewMcpTargets(draft.id, requests(ids));
-      if (mounted.current && request === previewRequestRef.current && epoch === previewEpochRef.current.epoch && context === previewEpochRef.current.context) {
-        if (items.some(item=>item.status==='conflict')) {setPreview({ context, epoch, items });}
-        else { await applyItems(draft.id,items,false); }
-      }
-    } catch (value) {
-      if (request === previewRequestRef.current && epoch === previewEpochRef.current.epoch) setError(errorText(value));
-    } finally {
-      if (request === previewRequestRef.current && epoch === previewEpochRef.current.epoch) setPreviewBusy(false);
-    }
-  }
-  async function distribute() {
-    if (!draft.id || !preview || dirty) return;
-    const active = preview.filter((item) => item.status === 'ready' || item.status === 'conflict');
-    if (!active.length) return;
-    const collisions = active.filter((item) => item.status === 'conflict');
-    const started = previewEpochRef.current;
-    if (collisions.length && !await confirmAction(`将向 ${active.length} 个 CLI 分发“${draft.name}”，其中 ${collisions.length} 个同名原生条目会被替换。`, () => mounted.current && started === previewEpochRef.current, { title: '替换同名 MCP？', confirmLabel: '替换并分发' })) return;
-    setBusy(true); setError('');
-    try {
-      const targets = active.map((item): McpTargetRequest => ({ toolId: item.toolId, scope: item.scope,
-        projectPath: item.projectPath, enabled, baselineHash: item.baselineHash, previewToken: item.previewToken, allowReplace: item.status === 'conflict' }));
-      setResults(await native.distributeMcp(draft.id, targets));
-      setPreview(null);
-      const current = await native.listNativeMcp(target).catch(() => []);
-      setNativeEntries(current);
     } catch (value) { setError(errorText(value)); }
     finally { setBusy(false); }
   }
   async function removeSaved() {
     const onTool = !!nativeOrigin || nativeEntries.some((entry) => entry.name === draft.name);
-    const inLibrary = !!draft.id && draft.expectedVersion !== null;
+    const inLibrary = definitions.find((item) => item.id === draft.id)?.inLibrary === true;
     if (!onTool && !inLibrary) return;
     const name = draft.name || nativeOrigin?.name || '这个 MCP';
-    const message = onTool && inLibrary
-      ? `删除「${name}」？会从当前工具移除，并删除资料库中的定义。其他 CLI 上的同名条目会保留。`
-      : onTool ? `从当前工具移除「${name}」？资料库中的定义会保留。` : `从资料库删除「${name}」？已写入 CLI 的条目不会一起删除。`;
+    const message = inLibrary
+      ? `从当前工具移除「${name}」？资料库里的定义会保留，其他 CLI 不受影响。`
+      : `从当前工具移除「${name}」？`;
     if (!await confirmAction(message, () => mounted.current, { title: '删除 MCP', confirmLabel: '删除', destructive: true })) return;
     setBusy(true); setError('');
     try {
       if (onTool) await native.removeNativeMcp({ ...target, enabled }, name);
-      if (inLibrary && draft.id && draft.expectedVersion !== null) await native.deleteMcpDefinition(draft.id, draft.expectedVersion);
+      if (!inLibrary && draft.id && draft.expectedVersion !== null) await native.deleteMcpDefinition(draft.id, draft.expectedVersion);
       if (mounted.current) {
         setDefinitions(await native.listMcpDefinitions());
         setNativeEntries(await native.listNativeMcp(target).catch(() => []));
@@ -225,10 +169,6 @@ export function McpWorkspace({ toolId, scope, projectPath, tools, onDirtyChange 
     } catch (value) { if (mounted.current) setError(errorText(value)); }
     finally { if (mounted.current) setBusy(false); }
   }
-  async function retryFailed() {
-    const failed = results?.filter((item) => item.status === 'failed').map((item) => item.toolId) ?? [];
-    if (failed.length) await inspect(failed);
-  }
 
   if (capabilityBlocked) {
     return <div className={styles.taskEmpty}><p className={styles.error} role="alert">{capabilityBlocked}</p><p className={styles.muted}>当前工具不能添加可提交的 MCP，请查看上方原因。</p></div>;
@@ -236,8 +176,9 @@ export function McpWorkspace({ toolId, scope, projectPath, tools, onDirtyChange 
 
   if (empty) {
     return <div className={styles.taskEmpty}>
+      {notice && <p className={styles.notice} role="status">{notice}</p>}
       <button type="button" className={styles.primary} disabled={busy || (scope === 'project' && !project)} onClick={() => void startNew()}>添加 MCP</button>
-      <p>按下后填写名称，以及本机启动命令或网址；保存后会出现在当前工具列表中。</p>
+      <p>添加后只写进当前这个 CLI。要给其他 CLI 用，勾选快速同步，再到资料库分发。</p>
       {scope === 'project' && !project && <p className={styles.muted}>请先选择项目目录。</p>}
     </div>;
   }
@@ -246,55 +187,26 @@ export function McpWorkspace({ toolId, scope, projectPath, tools, onDirtyChange 
     {!composing && notice && <p className={styles.notice} role="status">{notice}</p>}
     <div className={styles.layout}>
     <aside className={styles.list}>
-      <div className={styles.listHead}><strong>资料库 · {definitions.length}</strong><button type="button" className={styles.primary} disabled={busy || (scope === 'project' && !project)} onClick={() => void startNew()}>＋ 新建</button></div>
-      {definitions.map((item) => { const onTool = nativeEntries.some((entry) => entry.name === item.name); return <button key={item.id} type="button" title="点击修改" disabled={busy} className={draft.id === item.id ? styles.active : ''} onClick={() => void selectDefinition(item)}><strong>{item.name}<span className={styles.state} data-on={onTool || undefined}>{onTool ? '已在当前工具' : '仅资料库'}</span></strong><small className={styles.mono}>{item.transport === 'http' ? item.url : item.command || '已保存定义'}</small></button>; })}
-      {!definitions.length && <p>资料库还没有 MCP。新建后可以选择只保存在这里，或写入当前工具。</p>}
-      <div className={styles.listHead}><strong>当前工具 · {nativeEntries.length}</strong></div>
+      <div className={styles.listHead}><strong>当前生效 · {nativeEntries.length}</strong><button type="button" className={styles.primary} disabled={busy || (scope === 'project' && !project)} onClick={() => void startNew()}>添加</button></div>
       {nativeEntries.map((item) => <button key={`native-${item.name}`} type="button" title="点击修改" onClick={() => void importNative(item)}><strong>{item.name}<span className={styles.state} data-on={item.enabled || undefined}>{item.enabled ? '已启用' : '已停用'}</span></strong><small className={styles.mono}>{(item.transport === 'http' ? item.url : [item.command, ...item.args].join(' ')) || item.transport}{item.protectedValues ? ' · 凭据已隐藏' : ''}</small></button>)}
-      {!nativeEntries.length && <p>当前工具还没有 MCP。保存资料库中的条目后会写到这里。</p>}
+      {!nativeEntries.length && <p>这个 CLI 上还没有生效的 MCP。</p>}
     </aside>
-    <GuideDialog open={composing} title={draft.id || nativeOrigin ? '修改 MCP' : '新建 MCP'} hint="先写名称，再选本机命令或网址。需要时再展开更多设置。" onClose={() => void closeCompose()}>
+    <GuideDialog open={composing} title={draft.id || nativeOrigin ? '修改 MCP' : '添加 MCP'} hint="写入当前这个 CLI。远程服务用 HTTP，本机进程用 stdio。SSE 不单独保存。" onClose={() => void closeCompose()}>
     <div className={styles.panel}>
-      <div className={styles.heading}><div><small>{draft.id || nativeOrigin ? 'MCP' : '新 MCP'}</small><h2>{draft.name || '新 MCP'}</h2></div></div>
-      <div className={styles.actions}>{(draft.id || nativeOrigin) && <button type="button" disabled={busy} onClick={() => void removeSaved()}>删除</button>}<button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint} disabled={busy || !draft.name.trim() || (scope === 'project' && !project)} onClick={() => void save()}>保存</button></div>
-      <div className={styles.fields}>
-        <label>名称<small className={styles.fieldHint}>保存后出现在当前工具列表中</small><input aria-label="名称" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="例如 filesystem" /></label>
-        <label>连接方式<select aria-label="连接方式" value={draft.transport} onChange={(event) => setDraft({ ...draft, transport: event.target.value as 'stdio' | 'http' })}><option value="stdio">stdio</option><option value="http">http</option></select></label>
-      </div>
-      {draft.transport === 'stdio' ? (
-        <label>启动命令<small className={styles.fieldHint}>例如 npx 或本机可执行文件路径</small><input aria-label="命令" value={draft.command} onChange={(event) => setDraft({ ...draft, command: event.target.value })} placeholder="npx @modelcontextprotocol/server-filesystem" /></label>
-      ) : (
-        <label>网址<small className={styles.fieldHint}>MCP 服务的 HTTP 地址</small><input aria-label="网址" value={draft.url} onChange={(event) => setDraft({ ...draft, url: event.target.value })} placeholder="https://example.com/mcp" /></label>
-      )}
-      <details className={styles.distribution}><summary>需要更多设置</summary>
-        {draft.transport === 'stdio' ? <>
-          <label>参数，每行一项<textarea rows={3} value={draft.args.join('\n')} onChange={(event) => setDraft({ ...draft, args: event.target.value.split('\n').filter(Boolean) })} /></label>
-          <label>环境变量，每行 KEY=value<small className={styles.fieldHint}>密钥请写环境变量引用，不要填原文</small><textarea rows={3} value={envText} onChange={(event) => setEnvText(event.target.value)} placeholder="API_TOKEN=${API_TOKEN}" /></label>
-        </> : (
-          <label>请求头，每行 KEY=value<small className={styles.fieldHint}>密钥请写环境变量引用，不要填原文</small><textarea rows={3} value={headerText} onChange={(event) => setHeaderText(event.target.value)} placeholder="Authorization=Bearer ${API_TOKEN}" /></label>
-        )}
-      </details>
+      <label>MCP 服务器名称<input aria-label="名称" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="例如 chrome-devtools" /></label>
+      <div className={styles.typeField}><span>MCP 服务器类型</span><div className={styles.typeSwitch} role="radiogroup" aria-label="连接方式">{([['http', 'HTTP'], ['stdio', 'stdio']] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={draft.transport === value} onClick={() => setDraft({ ...draft, transport: value })}>{label}</button>)}</div></div>
+      {draft.transport === 'stdio' ? <>
+        <label>命令<input aria-label="命令" value={draft.command} onChange={(event) => setDraft({ ...draft, command: event.target.value })} placeholder="npx" /></label>
+        <label>参数，每行一项<textarea rows={3} value={draft.args.join('\n')} onChange={(event) => setDraft({ ...draft, args: event.target.value.split('\n').filter(Boolean) })} placeholder={'-y\nchrome-devtools-mcp@latest'} /></label>
+        <label>环境变量<textarea rows={4} value={envText} onChange={(event) => setEnvText(event.target.value)} placeholder={'KEY=value\nAPI_TOKEN=${API_TOKEN}'} /></label>
+      </> : <>
+        <label>URL<input aria-label="网址" value={draft.url} onChange={(event) => setDraft({ ...draft, url: event.target.value })} placeholder="https://example.com/mcp" /></label>
+        <label>请求头<textarea rows={4} value={headerText} onChange={(event) => setHeaderText(event.target.value)} placeholder="Authorization=Bearer ${API_TOKEN}" /></label>
+      </>}
       <label className={styles.inline}><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} />启用</label>
+      {!(draft.id || nativeOrigin) && <label className={styles.inline}><input type="checkbox" checked={syncLibrary} onChange={(event) => setSyncLibrary(event.target.checked)} />快速同步<small className={styles.fieldHint}>同时放进资料库。分发到其他 CLI 请到资料库。</small></label>}
       {currentConflict && <div className={styles.resultList} role="group" aria-label="MCP 写入冲突"><strong>当前同名条目与读取时不同，请比较后选择</strong>{currentConflict.items.map(item => <div className={styles.fileDiff} key={item.toolId}><CodeEditor compact label="当前 MCP" format="json" readOnly value={JSON.stringify(item.existing, null, 2)} /><CodeEditor compact label="本次 MCP 修改" format="json" readOnly value={JSON.stringify(item.proposed, null, 2)} /></div>)}<div className={styles.actions}><button type="button" onClick={() => setCurrentConflict(null)}>保留当前文件</button><button type="button" disabled={busy} onClick={() => { setBusy(true); void applyItems(currentConflict.id, currentConflict.items, true).then(ok => { if (ok) leaveComposer(); }).catch(value => setError(errorText(value))).finally(() => setBusy(false)); }}>使用本次修改</button></div></div>}
-      <details className={styles.distribution} aria-label="MCP 更多选项"><summary>更多选项</summary>
-        <div className={styles.actions}><button type="button" disabled={busy || !draft.name.trim()} onClick={() => void save(true)}>只保存到资料库</button></div>
-        {draft.id && <>
-          <div className={styles.heading}><div><strong>分发到其他 CLI</strong><p>每个目标独立写入。已有同名原生条目会先显示冲突。</p></div></div>
-          <div className={styles.targetGrid}>{tools.map((item) => <label key={item.id}><input type="checkbox" checked={selected.includes(item.id)} onChange={(event) => { setSelected(event.target.checked ? [...selected, item.id] : selected.filter((id) => id !== item.id)); setPreview(null); }} /><ToolIcon toolId={item.id} size={22} />{item.name}</label>)}</div>
-          <button type="button" disabled={busy || previewBusy || !selected.length} onClick={() => void inspect()}>分发所选工具</button>
-          {preview && <div className={styles.resultList}>
-            {preview.map((item) => <div key={item.toolId}>
-              <p><strong>{tools.find((tool) => tool.id === item.toolId)?.name ?? item.toolId}</strong> · {item.status === 'conflict' ? '同名冲突' : item.status === 'ready' ? '可写入' : '不可写入'} · {item.path ?? ''} <small>{item.detail}</small></p>
-              {(item.existing !== null || item.proposed !== null) && <details className={styles.fileChange} open={item.status === 'conflict'}><summary>查看当前与写入后的原生条目</summary><div className={styles.fileDiff}><div><strong>当前原生条目</strong><CodeEditor compact label="当前 MCP 原生条目" format="json" readOnly value={item.existing === null ? 'null' : JSON.stringify(item.existing, null, 2)} /></div><div><strong>写入后</strong><CodeEditor compact label="写入后 MCP 条目" format="json" readOnly value={item.proposed === null ? 'null' : JSON.stringify(item.proposed, null, 2)} /></div></div></details>}
-            </div>)}
-            <button type="button" className={styles.primary} disabled={busy || !preview.some((item) => item.status === 'ready' || item.status === 'conflict')} onClick={() => void distribute()}>确认分发</button>
-          </div>}
-          {results && <div className={styles.resultList} role="status">
-            {results.map((item) => <p key={item.toolId}>{item.toolId}：{item.status === 'written' ? '已写入' : item.detail}</p>)}
-            {results.some((item) => item.status === 'failed') && <button type="button" onClick={() => void retryFailed()}>重新预览失败目标</button>}
-          </div>}
-        </>}
-      </details>
+      <div className="dialog-footer">{(draft.id || nativeOrigin) && <button type="button" disabled={busy} onClick={() => void removeSaved()}>从当前工具移除</button>}<span className="dialog-footer-gap" /><button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint} disabled={busy || !draft.name.trim() || (scope === 'project' && !project)} onClick={() => void save()}>{draft.id || nativeOrigin ? '保存' : '添加'}</button></div>
       {error && <p className={styles.error} role="alert">{error}</p>}
       {notice && <p className={styles.notice} role="status">{notice}</p>}
     </div>
@@ -317,7 +229,8 @@ export function SkillsWorkspace({ toolId, scope, projectPath, onDirtyChange }: {
   const [pendingTarget, setPendingTarget] = useState<SkillTargetPreview | null>(null);
   const [adding, setAdding] = useState(false);
   const [guide, setGuide] = useState(false);
-  const [libraryOnly, setLibraryOnly] = useState(false);
+  const [syncLibrary, setSyncLibrary] = useState(false);
+  const [external, setExternal] = useState<NativeSkillEntry | null>(null);
   useLayoutEffect(() => { onDirtyChange?.(!!url.trim() || !!archiveSelection || !!pendingImport || adding); }, [url, archiveSelection, pendingImport, adding, onDirtyChange]);
   useEffect(() => () => { onDirtyChange?.(false); }, [onDirtyChange]);
   const [busy, setBusy] = useState(false);
@@ -326,7 +239,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, onDirtyChange }: {
   const selected = packages.find((item) => item.id === selectedId);
   const project = scope === 'project' ? projectPath || null : null;
   const visibleIssues = recoveryIssues.filter((issue) => issue.toolId === toolId);
-  const empty = !packages.length && !nativeEntries.length && !adding && !pendingImport && !archiveSelection;
+  const empty = !nativeEntries.length && !adding && !guide && !pendingImport && !archiveSelection;
   useEffect(() => { setPendingTarget(null); }, [toolId, scope, project, selectedId]);
   useEffect(() => {
     let live = true;
@@ -342,7 +255,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, onDirtyChange }: {
     return () => { live = false; };
   }, [toolId, scope, project]);
   const installed = installations.find((item) => item.toolId === toolId && item.scope === scope && item.projectPath === project);
-  useEffect(() => { void native.listSkillPackages().then((items) => { setPackages(items); setSelectedId((old) => old ?? items[0]?.id ?? null); }).catch((value) => setError(errorText(value))); }, []);
+  useEffect(() => { void native.listSkillPackages().then(setPackages).catch((value) => setError(errorText(value))); }, []);
   useEffect(() => {
     if (!selectedId) return;
     let live = true;
@@ -367,6 +280,12 @@ export function SkillsWorkspace({ toolId, scope, projectPath, onDirtyChange }: {
     if (outcome.status !== 'failed') { setGuide(false); setAdding(false); }
   }
 
+  async function place(item: SkillPackage, existed: boolean) {
+    if (syncLibrary) await native.setSkillInLibrary(item.id, true);
+    else if (!existed) await native.setSkillInLibrary(item.id, false);
+    await finishImported(item, true);
+  }
+
   async function finishImported(item: SkillPackage, installAfter: boolean) {
     setPackages(await native.listSkillPackages());
     setSelectedId(item.id);
@@ -376,21 +295,21 @@ export function SkillsWorkspace({ toolId, scope, projectPath, onDirtyChange }: {
     else setGuide(false);
   }
 
-  async function local(installAfter = !libraryOnly) {
+  async function local() {
     try {
       const source = await open({ directory: true, multiple: false, title: '选择包含 SKILL.md 的目录' });
       if (typeof source !== 'string') return;
       setBusy(true); setError('');
       const preview = await native.previewSkillLocal(source);
       if (preview.existingDigest && preview.existingDigest !== preview.digest) {
-        setPendingImport({ preview, kind: 'local', source, subdirectory: null, installAfter }); return;
+        setPendingImport({ preview, kind: 'local', source, subdirectory: null, installAfter: true }); return;
       }
       const item = await native.importSkillLocal(source, preview.digest, preview.existingDigest);
-      await finishImported(item, installAfter);
+      await place(item, !!preview.existingDigest);
     } catch (value) { setError(errorText(value)); }
     finally { setBusy(false); }
   }
-  async function archive(source: string, localZip: boolean, chosen?: string, installAfter = !libraryOnly) {
+  async function archive(source: string, localZip: boolean, chosen?: string) {
     setBusy(true); setError('');
     try {
       let child = chosen ?? null;
@@ -401,19 +320,19 @@ export function SkillsWorkspace({ toolId, scope, projectPath, onDirtyChange }: {
       }
       const preview = localZip ? await native.previewSkillLocalZip(source, child) : await native.previewSkillHttpsZip(source, child);
       if (preview.existingDigest && preview.existingDigest !== preview.digest) {
-        setPendingImport({ preview, kind: localZip ? 'local_zip' : 'zip', source, subdirectory: child, installAfter }); setArchiveSelection(null); return;
+        setPendingImport({ preview, kind: localZip ? 'local_zip' : 'zip', source, subdirectory: child, installAfter: true }); setArchiveSelection(null); return;
       }
       const item = localZip ? await native.importSkillLocalZip(source, child, preview.digest, preview.existingDigest) : await native.importSkillHttpsZip(source, child, preview.digest, preview.existingDigest);
-      await finishImported(item, installAfter);
+      await place(item, !!preview.existingDigest);
       if (!localZip) setUrl('');
       setArchiveSelection(null);
     } catch (value) { setError(errorText(value)); }
     finally { setBusy(false); }
   }
-  async function localZip(installAfter = !libraryOnly) {
+  async function localZip() {
     try {
       const source = await open({ directory: false, multiple: false, title: '选择 Skills ZIP 文件', filters: [{ name: 'ZIP', extensions: ['zip'] }] });
-      if (typeof source === 'string') await archive(source, true, undefined, installAfter);
+      if (typeof source === 'string') await archive(source, true);
     } catch (value) { setError(errorText(value)); }
   }
   async function confirmImport() {
@@ -427,37 +346,30 @@ export function SkillsWorkspace({ toolId, scope, projectPath, onDirtyChange }: {
         : await native.importSkillHttpsZip(source, subdirectory, preview.digest, preview.existingDigest);
       setPendingImport(null);
       if (kind === 'zip') setUrl('');
-      await finishImported(item, installAfter);
+      if (installAfter) await place(item, !!preview.existingDigest);
+      else { await native.setSkillInLibrary(item.id, true); setGuide(false); setExternal(null); setResult({ toolId, scope, projectPath: project, path: item.name, status: 'installed', detail: '已放进资料库' }); }
     } catch (value) { setError(errorText(value)); }
     finally { setBusy(false); }
   }
   async function openNative(entry: NativeSkillEntry) {
     if (entry.state === 'unreadable') { setError(entry.detail); return; }
-    if (entry.packageId) { setSelectedId(entry.packageId); setAdding(false); setGuide(true); return; }
-    setBusy(true); setError('');
-    try {
-      const preview = await native.previewSkillLocal(entry.path);
-      if (preview.existingDigest && preview.existingDigest !== preview.digest) {
-        setPendingImport({ preview, kind: 'local', source: entry.path, subdirectory: null, installAfter: true }); setGuide(true); return;
-      }
-      const item = await native.importSkillLocal(entry.path, preview.digest, preview.existingDigest);
-      await finishImported(item, true);
-    } catch (value) { setError(errorText(value)); }
-    finally { setBusy(false); }
+    setAdding(false);
+    setExternal(entry.packageId ? null : entry);
+    setSelectedId(entry.packageId);
+    setGuide(true);
   }
-  async function deletePackage() {
-    if (!selected || busy) return;
-    const item = selected;
-    const placed = installations.some((entry) => entry.packageId === item.id);
-    const message = placed ? `删除「${item.name}」？会从资料库移除，并卸下已安装到工具的副本。` : `从资料库删除「${item.name}」？`;
-    if (!await confirmAction(message, () => true, { title: '删除 Skill', confirmLabel: '删除', destructive: true })) return;
+  async function syncExternal() {
+    if (!external) return;
     setBusy(true); setError('');
     try {
-      await native.deleteSkillPackage(item.id);
-      setPackages(await native.listSkillPackages());
-      setNativeEntries(await native.scanNativeSkills(toolId, scope, project));
-      setSelectedId(null); setGuide(false); setAdding(false); setPendingTarget(null);
-      setResult({ toolId, scope, projectPath: project, path: item.name, status: 'removed', detail: '已从资料库删除' });
+      const preview = await native.previewSkillLocal(external.path);
+      if (preview.existingDigest && preview.existingDigest !== preview.digest) {
+        setPendingImport({ preview, kind: 'local', source: external.path, subdirectory: null, installAfter: false }); return;
+      }
+      const item = await native.importSkillLocal(external.path, preview.digest, preview.existingDigest);
+      await native.setSkillInLibrary(item.id, true);
+      setResult({ toolId, scope, projectPath: project, path: item.name, status: 'installed', detail: '已放进资料库' });
+      setGuide(false); setExternal(null);
     } catch (value) { setError(errorText(value)); }
     finally { setBusy(false); }
   }
@@ -492,12 +404,14 @@ export function SkillsWorkspace({ toolId, scope, projectPath, onDirtyChange }: {
   }
 
   const recovery = !!visibleIssues.length && <div className={styles.error} role="alert"><strong>Skills 安装需要检查</strong><p>相关 CLI 启动会暂停。异常备份已保留；检查目录后可重新尝试恢复。</p>{visibleIssues.map((issue) => <div key={issue.operationId} className={styles.fileChange}><strong>{issue.scope === 'global' ? '全局' : `项目 ${issue.projectPath ?? ''}`}</strong><p>{issue.detail}</p><p>目标：{issue.targetPath}</p><p>备份：{issue.backupPath}</p><button type="button" onClick={() => void navigator.clipboard.writeText(issue.backupPath).catch((value) => setError(errorText(value)))}>复制备份路径</button></div>)}<button type="button" onClick={() => void checkRecovery()}>重新检查恢复状态</button></div>;
+  const outcome = result && (result.status === 'failed' ? result.detail : result.detail === '已放进资料库' ? '已放进资料库。分发请到资料库。' : result.status === 'removed' ? `已从当前工具移除：${result.path ?? ''}` : `已安装到当前工具：${result.path ?? ''}`);
 
   if (empty) {
     return <div className={styles.taskEmpty}>
       {recovery}
-      <button type="button" className={styles.primary} disabled={busy || (scope === 'project' && !project)} onClick={() => { setAdding(true); setLibraryOnly(false); setGuide(true); }}>添加 Skill</button>
-      <p>完成后会安装到当前工具的当前范围。</p>
+      {outcome && <p role="status" className={result?.status === 'failed' ? styles.error : styles.notice}>{outcome}</p>}
+      <button type="button" className={styles.primary} disabled={busy || (scope === 'project' && !project)} onClick={() => { setAdding(true); setSyncLibrary(false); setExternal(null); setGuide(true); }}>添加 Skill</button>
+      <p>添加后只装进当前这个 CLI。勾选快速同步后，可以在资料库里分发。</p>
       {scope === 'project' && !project && <p className={styles.muted}>请先选择项目目录。</p>}
       {error && <p className={styles.error} role="alert">{error}</p>}
     </div>;
@@ -505,28 +419,26 @@ export function SkillsWorkspace({ toolId, scope, projectPath, onDirtyChange }: {
 
   return <>
     {recovery}
-    {!guide && result && <p role="status" className={result.status === 'failed' ? styles.error : styles.notice}>{result.status === 'failed' ? result.detail : `${result.status === 'removed' ? '已移除' : '已安装'}：${result.path}`}</p>}
+    {!guide && outcome && <p role="status" className={result?.status === 'failed' ? styles.error : styles.notice}>{outcome}</p>}
     <div className={styles.layout}>
     <aside className={styles.list}>
-      <div className={styles.listHead}><strong>资料库中的 Skill · {packages.length}</strong><button type="button" className={styles.primary} disabled={busy || (scope === 'project' && !project)} onClick={() => { setAdding(true); setLibraryOnly(false); setGuide(true); }}>添加 Skill</button></div>
-      {packages.map((item) => <button type="button" key={item.id} title="点击安装、停用或移除" className={selectedId === item.id ? styles.active : ''} onClick={() => { setSelectedId(item.id); setDependencyChecked(false); setResult(null); setAdding(false); setGuide(true); }}><strong>{item.name}</strong><small>{item.fileCount} 个文件 · {item.description || '完整资源包'}</small></button>)}
-      {!packages.length && <p>添加包含 SKILL.md 的文件夹或本机 ZIP。</p>}
-      <div className={styles.listHead}><strong>当前范围已安装 · {nativeEntries.length}</strong></div>
-      {nativeEntries.map((entry) => <button type="button" key={entry.path} title={entry.path} onClick={() => void openNative(entry)}><strong>{entry.name}<span className={styles.state} data-on={entry.state === 'managed' || undefined} data-warn={entry.state === 'unreadable' || undefined}>{entry.state === 'managed' ? '已安装' : entry.state === 'external' ? '本机目录' : '暂不可读取'}</span></strong><small className={styles.mono}>{displayPath(entry.path)}</small></button>)}
-      {!nativeEntries.length && <p>当前范围尚未安装 Skill。</p>}
+      <div className={styles.listHead}><strong>当前生效 · {nativeEntries.length}</strong><button type="button" className={styles.primary} disabled={busy || (scope === 'project' && !project)} onClick={() => { setAdding(true); setSyncLibrary(false); setExternal(null); setGuide(true); }}>添加</button></div>
+      {nativeEntries.map((entry) => <button type="button" key={entry.path} title={entry.state === 'unreadable' ? entry.detail : entry.path} onClick={() => void openNative(entry)}><strong>{entry.name}<span className={styles.state} data-on={entry.state === 'managed' || undefined} data-warn={entry.state === 'unreadable' || undefined}>{entry.state === 'managed' ? '已安装' : entry.state === 'external' ? '本机目录' : '暂不可读取'}</span></strong><small className={styles.mono}>{displayPath(entry.path)}</small></button>)}
+      {!nativeEntries.length && <p>这个 CLI 上还没有生效的 Skill。</p>}
     </aside>
-    <GuideDialog open={guide} title={adding ? '添加 Skill' : '修改 Skill'} hint={adding ? '选择文件夹或本机 ZIP。确认后会安装到当前工具。' : '安装、停用或移除都在这里完成。'} onClose={() => { setGuide(false); setAdding(false); setLibraryOnly(false); setArchiveSelection(null); setPendingImport(null); }}>
+    <GuideDialog open={guide} title={adding ? '添加 Skill' : '当前 Skill'} hint={adding ? '装进当前这个 CLI。快速同步会同时放进资料库。' : '这里只改当前这个 CLI 上已经生效的 Skill。'} onClose={() => { setGuide(false); setAdding(false); setSyncLibrary(false); setExternal(null); setArchiveSelection(null); setPendingImport(null); }}>
     <div className={styles.panel}>
-      <div className={styles.heading}><div><small>{adding ? '添加 Skill' : 'Skill'}</small><h2>{adding ? '选择来源' : selected?.name ?? 'Skill'}</h2></div></div>
-      {adding && <div className={styles.addChooser}>
-        <p className={styles.muted}>{libraryOnly ? '仅导入到资料库，不会安装到当前工具。' : '选择文件夹或本机 ZIP；确认后会安装到当前工具的当前范围。'}</p>
-        <div className={styles.actions}>
-          <button type="button" disabled={busy} onClick={() => void local(!libraryOnly)}>选择文件夹</button>
-          <button type="button" disabled={busy} onClick={() => void localZip(!libraryOnly)}>导入 ZIP 文件</button>
-          <button type="button" disabled={busy} onClick={() => { setAdding(false); setLibraryOnly(false); }}>取消</button>
+      {!adding && <div className={styles.heading}><div><small>Skill</small><h2>{selected?.name ?? 'Skill'}</h2></div></div>}
+      {adding && <>
+        <label className={styles.inline}><input type="checkbox" checked={syncLibrary} onChange={(event) => setSyncLibrary(event.target.checked)} />快速同步<small className={styles.fieldHint}>同时放进资料库。分发到其他 CLI 请到资料库。</small></label>
+        <div className={styles.sources}>
+          <button type="button" aria-label="选择文件夹" disabled={busy} onClick={() => void local()}><strong>选择文件夹</strong><span>目录里要有 SKILL.md</span></button>
+          <button type="button" aria-label="导入 ZIP 文件" disabled={busy} onClick={() => void localZip()}><strong>导入 ZIP 文件</strong><span>本机上的 .zip</span></button>
         </div>
-      </div>}
-      {selected && !adding && <><div className={styles.actions}><button type="button" className={styles.primary} disabled={busy || (scope === 'project' && !project)} onClick={() => void change(false)}>{installed?.state === 'update_available' ? '更新到当前范围' : '安装到当前范围'}</button>{installed && <button type="button" disabled={busy} onClick={() => void change(true)}>移除安装</button>}<button type="button" disabled={busy} onClick={() => void deletePackage()}>删除</button></div>
+        <label className={styles.urlField}>ZIP 地址<span className={styles.urlRow}><input aria-label="归档地址" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://example.com/skill.zip" /><button type="button" disabled={busy || !url.trim()} onClick={() => void archive(url.trim(), false)}>导入地址</button></span></label>
+      </>}
+      {external && !adding && <div className={styles.addChooser}><p className={styles.muted}>这是当前工具上已有的目录。放进资料库后，再到资料库分发。</p><button type="button" className={styles.primary} disabled={busy} onClick={() => void syncExternal()}>放进资料库</button></div>}
+      {selected && !adding && <>
         <p className={styles.muted}>{selected.description || '完整 Skills 包'} · {selected.fileCount} 个文件</p><details className={styles.source}><summary title={displayPath(selected.source)}>来源 · {shortPath(selected.source)}</summary><p>{displayPath(selected.source)}</p></details>
         {selected.compatibility && <label className={styles.inline}><input type="checkbox" checked={dependencyChecked} onChange={(event) => setDependencyChecked(event.target.checked)} />已检查所需环境：{selected.compatibility}</label>}
         <label className={styles.inline}><input type="checkbox" aria-label="启用 Skill" checked={skillEnabled} disabled={busy || !installed && !nativeEntries.some(item=>item.name===selected.name) && !skillEnabled} onChange={event => void toggleSkill(event.target.checked)} />{skillEnabled ? '这个工具会使用它' : '已停用'}</label>
@@ -535,16 +447,12 @@ export function SkillsWorkspace({ toolId, scope, projectPath, onDirtyChange }: {
           {pendingTarget.changes.map((change) => <details key={change.path} className={styles.fileChange}><summary>{change.path}</summary><div className={styles.fileDiff}><div><strong>当前</strong>{change.before !== null ? <pre>{change.before}</pre> : <small>{change.beforeSize === null ? '不存在' : `${change.beforeSize} 字节 · SHA-256 ${change.beforeDigest}`}</small>}</div><div><strong>安装后</strong>{change.after !== null ? <pre>{change.after}</pre> : <small>{change.afterSize === null ? '删除' : `${change.afterSize} 字节 · SHA-256 ${change.afterDigest}`}</small>}</div></div></details>)}
           <div className={styles.actions}><button type="button" onClick={() => setPendingTarget(null)}>取消</button><button type="button" className={styles.primary} disabled={busy} onClick={() => void change(false)}>{pendingTarget.status === 'conflict' ? '确认接管并替换' : '确认安装'}</button></div>
         </div>}
-        {!!installations.length && <div className={styles.resultList}><strong>安装位置</strong>{installations.map((item) => <p key={`${item.toolId}:${item.targetPath}`}>{item.toolId} · {item.scope === 'global' ? '全局' : '项目'} · {item.state} <small>{item.targetPath}</small></p>)}</div>}
+        <div className="dialog-footer">{installed && <button type="button" disabled={busy} onClick={() => void change(true)}>从当前工具移除</button>}<span className="dialog-footer-gap" />{installed?.state === 'update_available' && <button type="button" className={styles.primary} disabled={busy || (scope === 'project' && !project)} onClick={() => void change(false)}>更新到当前范围</button>}</div>
       </>}
-      <details className={styles.distribution} aria-label="Skill 更多选项"><summary>更多选项</summary>
-        <div className={styles.actions}><button type="button" disabled={busy} onClick={() => { setAdding(true); setLibraryOnly(true); setGuide(true); }}>仅导入到资料库</button></div>
-        <label>从 HTTPS 地址导入 ZIP<input aria-label="归档地址" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://example.com/skill.zip" /></label>
-        <button type="button" disabled={busy || !url.trim()} onClick={() => void archive(url.trim(), false, undefined, false)}>导入地址</button>
-      </details>
-      {archiveSelection && <div className={styles.distribution}><label>选择归档中的 Skill<select aria-label="归档中的 Skill" value={archiveSelection.chosen ?? '__choose__'} onChange={event => setArchiveSelection({ ...archiveSelection, chosen: event.target.value === '__choose__' ? null : event.target.value })}><option value="__choose__">选择 Skill…</option>{archiveSelection.entries.map(entry => <option key={entry} value={entry}>{entry || '归档根目录'}</option>)}</select></label><div className={styles.actions}><button type="button" onClick={() => setArchiveSelection(null)}>取消</button><button type="button" disabled={busy || archiveSelection.chosen === null} onClick={() => void archive(archiveSelection.source, archiveSelection.local, archiveSelection.chosen ?? undefined, !libraryOnly)}>导入所选 Skill</button></div></div>}
+      {archiveSelection && <div className={styles.distribution}><label>选择归档中的 Skill<select aria-label="归档中的 Skill" value={archiveSelection.chosen ?? '__choose__'} onChange={event => setArchiveSelection({ ...archiveSelection, chosen: event.target.value === '__choose__' ? null : event.target.value })}><option value="__choose__">选择 Skill…</option>{archiveSelection.entries.map(entry => <option key={entry} value={entry}>{entry || '归档根目录'}</option>)}</select></label><div className={styles.actions}><button type="button" onClick={() => setArchiveSelection(null)}>取消</button><button type="button" disabled={busy || archiveSelection.chosen === null} onClick={() => void archive(archiveSelection.source, archiveSelection.local, archiveSelection.chosen ?? undefined)}>导入所选 Skill</button></div></div>}
       {pendingImport && <div className={styles.resultList} role="group" aria-label="Skills 同名更新预览">
-        <strong>同名包“{pendingImport.preview.name}”已有不同内容</strong>
+        <strong>同名 Skill「{pendingImport.preview.name}」内容不同</strong>
+        <p>{pendingImport.installAfter ? '确认后会替换这一份，并安装到当前这个 CLI。' : '确认后只放进资料库，不改当前工具上的文件。'}</p>
         <p>来源：{pendingImport.preview.source} · {pendingImport.preview.fileCount} 个文件</p>
         {pendingImport.preview.compatibility && <p>环境依赖：{pendingImport.preview.compatibility}</p>}
         <p>以下文件将新增、变更或删除。文本显示前后内容；二进制及超过 256 KiB 的文件显示大小与 SHA-256。</p>
@@ -555,9 +463,9 @@ export function SkillsWorkspace({ toolId, scope, projectPath, onDirtyChange }: {
             <div><strong>导入后</strong>{change.after !== null ? <pre>{change.after}</pre> : <small>{change.afterSize === null ? '删除' : `${change.afterSize} 字节 · SHA-256 ${change.afterDigest}`}</small>}</div>
           </div>
         </details>)}
-        <div className={styles.actions}><button type="button" onClick={() => setPendingImport(null)}>取消，保留现有包</button><button type="button" className={styles.primary} disabled={busy} onClick={() => void confirmImport()}>确认更新资料库包</button></div>
+        <div className={styles.actions}><button type="button" onClick={() => setPendingImport(null)}>取消，保留现有包</button><button type="button" className={styles.primary} disabled={busy} onClick={() => void confirmImport()}>{pendingImport.installAfter ? '确认并安装到当前工具' : '确认放入资料库'}</button></div>
       </div>}
-      {result && <p role="status" className={result.status === 'failed' ? styles.error : styles.notice}>{result.status === 'failed' ? result.detail : `${result.status === 'removed' ? '已移除' : '已安装'}：${result.path}`}</p>}
+      {outcome && <p role="status" className={result?.status === 'failed' ? styles.error : styles.notice}>{outcome}</p>}
       {error && <p className={styles.error} role="alert">{error}</p>}
     </div>
     </GuideDialog>

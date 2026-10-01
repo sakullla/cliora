@@ -4,13 +4,13 @@ import { native, nativeAvailable } from '../../lib/native';
 import { confirmAction, type ConfirmationOptions } from '../../lib/confirm';
 import type { Project } from '../../types/launch';
 import type { LibraryDraft, LibraryItem, LibraryKind } from '../../types/library';
-import type { AdapterDescriptor } from '../../types/native';
+import type { AdapterDescriptor, Scope } from '../../types/native';
+import type { RulePlacement } from '../../types/resources';
 import { LibraryResources } from './LibraryResources';
-import { NativeRuleEditor } from './NativeRuleEditor';
-import { RuleDistribution } from './RuleDistribution';
 import { GuideDialog } from '../../components/GuideDialog';
 import { Icon } from '../../components/Icon';
 import { saveShortcutHint, searchShortcutHint } from '../../lib/shortcut';
+import { ScopeMarks, samePath, scopeLabel } from './CliMarks';
 import styles from './LibraryPage.module.css';
 
 const copiedText = '完整正文已复制，可以粘贴使用。';
@@ -82,6 +82,13 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
   const [dialogNotice, setDialogNotice] = useState('');
   const [tagText, setTagText] = useState('');
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [rulePlacements, setRulePlacements] = useState<RulePlacement[]>([]);
+  const [launchItem, setLaunchItem] = useState<LibraryItem | null>(null);
+  const [launchTool, setLaunchTool] = useState('');
+  const [launchProject, setLaunchProject] = useState('');
+  const [launchText, setLaunchText] = useState('');
+  const [launchError, setLaunchError] = useState('');
+  const [launchBusy, setLaunchBusy] = useState(false);
   useEffect(() => {
     if (!copiedId) return;
     const timer = window.setTimeout(() => setCopiedId(null), 1800);
@@ -105,6 +112,7 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
   useEffect(() => {
     if (!nativeAvailable || !active) return;
     void native.listProjects().then(setProjects).catch((value) => showError(formatFailure(value, '项目列表读取失败', '可先打开其他页面，再回到资料库重新读取。')));
+    void native.listRulePlacements().then((rows) => setRulePlacements(Array.isArray(rows) ? rows : [])).catch(() => setRulePlacements([]));
   }, [active]);
   useEffect(() => {
     if (!nativeAvailable || !active) return;
@@ -155,10 +163,79 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
         setDialogError(failure);
         return;
       }
+      if (saved.kind === 'rule' && rulePlacements.some((item) => item.ruleId === saved.id)) {
+        const ids = rulePlacements.filter((item) => item.ruleId === saved.id && item.scope === 'global').map((item) => item.toolId);
+        const distributed = await distributeRule(saved.id, saved.version, ids, false);
+        if (!distributed) { setDraft(next); setSavedText(JSON.stringify(next)); return; }
+        setDraft(null); setSavedText(''); clearDialogResult();
+        showNotice('规则已保存。');
+        return;
+      }
       setDraft(null); setSavedText(''); clearDialogResult();
       showNotice('已保存在本机资料库。');
     } catch (value) { showDialogError(formatFailure(value, '资料保存失败', '可修改后再次点击保存。')); }
     finally { setBusy(false); }
+  }
+  function ruleFailure(value: unknown) {
+    const raw = value && typeof value === 'object' && 'message' in value ? String(value.message) : '写入没有完成';
+    const detail = raw.trim().replace(/[。！？\s]+$/, '') || '写入没有完成';
+    return `规则保存失败：${detail}。可以修改后再次点击保存并分发。`;
+  }
+  async function distributeRule(id: string, version: number, toolIds: string[], allowReplace: boolean) {
+    try {
+      const synced = await native.syncRuleClients(id, version, { toolIds, scope: 'global', projectPath: null, allowReplace });
+      const rows = Array.isArray(synced) ? synced : [];
+      if (!allowReplace && rows.some((item) => item.status === 'conflict')) {
+        const started = latest.current;
+        if (!await confirmAction('规则文件已有外部修改。确认后用拼接结果替换。', () => mounted.current && latest.current === started, { title: '替换规则文件？', confirmLabel: '替换并写入' })) {
+          showDialogNotice('正文已保存。规则文件保持原样。');
+          return false;
+        }
+        return distributeRule(id, version, toolIds, true);
+      }
+      const failed = rows.find((item) => item.status === 'failed');
+      if (failed) { showDialogError(ruleFailure({ message: failed.detail })); return false; }
+      const listed = await native.listRulePlacements().catch(() => rulePlacements);
+      setRulePlacements(Array.isArray(listed) ? listed : []);
+      return true;
+    } catch (value) { showDialogError(ruleFailure(value)); return false; }
+  }
+  async function toggleRule(item: LibraryItem, toolId: string, scope: Scope, projectPath: string | null) {
+    if (busy) return;
+    const current = rulePlacements.filter((place) => place.ruleId === item.id && place.scope === scope && (scope === 'global' || samePath(place.projectPath, projectPath))).map((place) => place.toolId);
+    const next = current.includes(toolId) ? current.filter((id) => id !== toolId) : [...current, toolId];
+    const toolName = managedTools.find((tool) => tool.id === toolId)?.name ?? toolId;
+    const where = scope === 'project' ? `${scopeLabel(scope, projectPath, projects)} 的 ` : '';
+    setBusy(true); setError(''); setNotice('');
+    try {
+      let rows = await native.syncRuleClients(item.id, item.version, { toolIds: next, scope, projectPath, allowReplace: false });
+      rows = Array.isArray(rows) ? rows : [];
+      if (rows.some((row) => row.status === 'conflict')) {
+        const started = latest.current;
+        if (!await confirmAction(`「${item.title}」要写入的 ${toolName} 规则文件已有外部修改。确认后用拼接结果替换。`, () => mounted.current && latest.current === started, { title: '替换规则文件？', confirmLabel: '替换并写入' })) return;
+        rows = await native.syncRuleClients(item.id, item.version, { toolIds: next, scope, projectPath, allowReplace: true });
+        rows = Array.isArray(rows) ? rows : [];
+      }
+      const failed = rows.find((row) => row.status === 'failed');
+      if (failed) { showError(ruleFailure({ message: failed.detail }).replace('可以修改后再次点击保存并分发', '可以再次点击该 CLI 图标')); return; }
+      const listed = await native.listRulePlacements().catch(() => rulePlacements);
+      setRulePlacements(Array.isArray(listed) ? listed : []);
+      showNotice(next.includes(toolId) ? `已写入 ${where}${toolName}。` : `已从 ${where}${toolName} 移除。`);
+    } catch (value) { showError(ruleFailure(value).replace('可以修改后再次点击保存并分发', '可以再次点击该 CLI 图标')); }
+    finally { setBusy(false); }
+  }
+  function openLaunch(item: LibraryItem) {
+    setLaunchItem(item); setLaunchText(item.body); setLaunchTool(managedTools[0]?.id ?? ''); setLaunchProject(item.projectId ?? projects.find((project) => project.available)?.id ?? ''); setLaunchError('');
+  }
+  async function startSession() {
+    if (!launchItem || !launchTool || launchBusy) return;
+    setLaunchBusy(true); setLaunchError('');
+    try {
+      await native.launchCli({ toolId: launchTool, projectId: launchProject || null, sessionId: null, mode: 'normal', initialPrompt: launchText });
+      setLaunchItem(null);
+      showNotice('已请求外部终端启动会话。');
+    } catch (value) { setLaunchError(formatFailure(value, '会话没有启动', '可以修改提示词后再次点击启动。')); }
+    finally { setLaunchBusy(false); }
   }
   async function remove() {
     if (!draft?.id || draft.expectedVersion === null || busy || !await confirmCurrent(`删除“${draft.title}”？`, { title: '删除资料', confirmLabel: '删除资料', destructive: true })) return;
@@ -211,8 +288,7 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
       </div>
       {(section === 'prompt' || section === 'rule') && <button type="button" className={styles.primary} onClick={() => start(kind)}>＋ 新建{kind === 'prompt' ? '提示词' : '规则'}</button>}
     </div>
-    {section === 'rule' && <NativeRuleEditor tools={managedTools} projects={projects} />}
-    {(section === 'mcp' || section === 'skill') && <LibraryResources section={section} active={active} tools={managedTools} />}
+    {(section === 'mcp' || section === 'skill') && <LibraryResources section={section} active={active} tools={managedTools} projects={projects} />}
     {(section === 'prompt' || section === 'rule') && <>
     <div className={styles.filters}>
       <input aria-label="搜索资料" data-page-search title={searchShortcutHint} value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape' && search) { event.preventDefault(); setSearch(''); } }} placeholder="搜索标题、正文或标签" />
@@ -224,18 +300,28 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
     <div className={styles.layout}>
       <div className={styles.list} aria-label={`${kind === 'prompt' ? '提示词' : '规则'}列表`}>
         {shown.length ? shown.map((item) => <article className={styles.card} key={item.id}>
-          <small>{tagsOf(item.category).join(' · ') || '无标签'} · {item.projectId ? projects.find((project) => project.id === item.projectId)?.name ?? '原项目' : '全局'}</small><button className={styles.cardTitle} type="button" onClick={() => choose(item)}>{item.title}</button><p>{item.body.slice(0, 160) || '正文为空'}</p><div className={styles.cardActions}>{copiedId === item.id && notice === copiedText
-          ? <button type="button" aria-label="复制全文" data-copied="true" onClick={() => void copy(item.body, 'page', item.id)}><Icon name="check" size={13} strokeWidth={2.2} />已复制</button>
-          : <button type="button" onClick={() => void copy(item.body, 'page', item.id)} disabled={!item.body}>复制全文</button>}<button type="button" onClick={() => choose(item)}>修改</button></div>
+          <small>{[tagsOf(item.category).join(' · ') || '无标签', item.projectId ? projects.find((project) => project.id === item.projectId)?.name ?? '原项目' : ''].filter(Boolean).join(' · ')}</small>
+          <button className={styles.cardTitle} type="button" onClick={() => choose(item)}>{item.title}</button>
+          <p>{item.body.slice(0, 160) || '正文为空'}</p>
+          <div className={styles.cardBar}>
+            {kind === 'rule' ? <ScopeMarks label={`${item.title} 的 CLI`} tools={managedTools} places={rulePlacements.filter((entry) => entry.ruleId === item.id)} projects={projects} busy={busy} onToggle={(toolId, scope, projectPath) => void toggleRule(item, toolId, scope, projectPath)} mark={(place) => {
+              if (!place) return { pressed: false, state: 'off', status: '未写入' };
+              if (place.state === 'current') return { pressed: true, state: 'current', status: '已生效' };
+              if (place.state === 'unavailable') return { pressed: true, state: 'unavailable', status: '未生效' };
+              return { pressed: true, state: 'drifted', status: '文件已变化' };
+            }} /> : <span />}
+            <div className={styles.cardActions}>{copiedId === item.id && notice === copiedText
+              ? <button type="button" aria-label="复制全文" data-copied="true" onClick={() => void copy(item.body, 'page', item.id)}><Icon name="check" size={13} strokeWidth={2.2} />已复制</button>
+              : <button type="button" onClick={() => void copy(item.body, 'page', item.id)} disabled={!item.body}>复制全文</button>}{kind === 'prompt' && <button type="button" onClick={() => openLaunch(item)} disabled={!item.body}>启动会话</button>}<button type="button" onClick={() => choose(item)}>修改</button></div>
+          </div>
         </article>) : !items.length && !search.trim()
-          ? <div className={styles.empty}><strong>还没有{kind === 'prompt' ? '提示词' : '规则'}</strong>{kind === 'prompt' ? '把常用的提示词存在这里，需要时一键复制。' : '保存长期使用的规则，之后可以分发到各个 CLI。'}<button type="button" className={styles.primary} onClick={() => start(kind)}>＋ 新建第一条{kind === 'prompt' ? '提示词' : '规则'}</button></div>
+          ? <div className={styles.empty}><strong>还没有{kind === 'prompt' ? '提示词' : '规则'}</strong>{kind === 'prompt' ? '把常用的提示词存在这里。保存后可以选择 CLI，直接开一场会话。' : '保存后，在卡片上点 CLI 图标即可写入。彩色表示已经生效，灰色表示还没写入。'}<button type="button" className={styles.primary} onClick={() => start(kind)}>＋ 新建第一条{kind === 'prompt' ? '提示词' : '规则'}</button></div>
           : <div className={styles.empty}>筛选结果为空，没有符合条件的{kind === 'prompt' ? '提示词' : '规则'}。请使用上方的「新建」。</div>}
       </div>
     </div>
-    <GuideDialog open={!!draft} title={draft?.id ? `修改${kind === 'prompt' ? '提示词' : '规则'}` : `新建${kind === 'prompt' ? '提示词' : '规则'}`} hint="填写标题和正文，然后保存。规则还可以继续分发到 CLI。" onClose={() => { void (async () => { if (await canReplace()) { setDraft(null); setSavedText(''); clearDialogResult(); } })(); }}>
+    <GuideDialog open={!!draft} title={draft?.id ? `修改${kind === 'prompt' ? '提示词' : '规则'}` : `新建${kind === 'prompt' ? '提示词' : '规则'}`} hint={kind === 'rule' ? '填写标题和正文。分发到哪些 CLI，保存后回到列表点图标。' : '填写标题和正文，然后保存。'} onClose={() => { void (async () => { if (await canReplace()) { setDraft(null); setSavedText(''); clearDialogResult(); } })(); }}>
       {draft && <div className={styles.editor}>
         <div className={styles.editorHead}><div><small>{draft.id ? '编辑资料' : '新资料'}</small><h2>{draft.title || (kind === 'prompt' ? '提示词' : '长期规则')}</h2></div></div>
-        <div className={styles.actions}><span>{dirty ? '草稿尚未保存' : '已保存'}</span><button type="button" onClick={() => void copy(draft.body, 'dialog')} disabled={!draft.body}>复制全文</button>{draft.id && <button type="button" onClick={() => void remove()} disabled={busy}>删除</button>}<button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint} disabled={busy || !draft.title.trim()} onClick={() => void save()}>保存</button></div>
         {dialogError && <div className={styles.error} role="alert">{dialogError}</div>}
         {dialogNotice && <div className={styles.notice} role="status">{dialogNotice}</div>}
         <div className={styles.fields}>
@@ -250,7 +336,18 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
           </div>
         </div>
         <label className={styles.body}>完整正文<CodeEditor key={draft.id ?? 'new'} label="资料正文" format="markdown" value={draft.body} onChange={(body) => setDraft({ ...draft, body })} placeholder={kind === 'prompt' ? '写下可复制使用的提示词…' : '写下要保存或应用到 CLI 的规则…'} /></label>
-        {kind === 'rule' && draft.id && draft.expectedVersion !== null && !dirty && <RuleDistribution key={`${draft.id}:${draft.expectedVersion}`} rule={{ ...draft, id: draft.id, version: draft.expectedVersion, updatedAt: 0 }} tools={managedTools} projects={projects} />}
+        <div className="dialog-footer"><span>{dirty ? '草稿尚未保存' : '已保存'}</span><span className="dialog-footer-gap" /><button type="button" onClick={() => void copy(draft.body, 'dialog')} disabled={!draft.body}>复制全文</button>{draft.id && <button type="button" onClick={() => void remove()} disabled={busy}>删除</button>}<button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint} disabled={busy || !draft.title.trim()} onClick={() => void save()}>保存</button></div>
+      </div>}
+    </GuideDialog>
+    <GuideDialog open={!!launchItem} title="用这条提示词启动" hint="选择 CLI 和项目。提示词会作为第一条消息发出，启动前可以改。" onClose={() => { if (!launchBusy) setLaunchItem(null); }}>
+      {launchItem && <div className={styles.editor}>
+        {launchError && <div className={styles.error} role="alert">{launchError}</div>}
+        <div className={styles.fields}>
+          <label>CLI<select aria-label="启动 CLI" value={launchTool} onChange={(event) => setLaunchTool(event.target.value)}>{managedTools.map((tool) => <option key={tool.id} value={tool.id}>{tool.name}</option>)}{!managedTools.length && <option value="">还没有可启动的 CLI</option>}</select></label>
+          <label>项目<select aria-label="启动项目" value={launchProject} onChange={(event) => setLaunchProject(event.target.value)}><option value="">不指定项目</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}{project.available ? '' : ' · 目录失效'}</option>)}</select></label>
+        </div>
+        <label className={styles.body}>第一条消息<textarea aria-label="启动提示词" rows={8} value={launchText} onChange={(event) => setLaunchText(event.target.value)} /></label>
+        <div className="dialog-footer"><span className="dialog-footer-gap" /><button type="button" onClick={() => setLaunchItem(null)} disabled={launchBusy}>取消</button><button type="button" className={styles.primary} disabled={launchBusy || !launchTool || !launchText.trim()} onClick={() => void startSession()}>在外部终端启动</button></div>
       </div>}
     </GuideDialog>
     </>}

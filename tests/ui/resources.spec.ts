@@ -1,13 +1,10 @@
 import { expect, test, type Page } from '@playwright/test';
 
-async function openMcpMoreOptions(page: Page) {
-  await page.locator('details[aria-label="MCP 更多选项"] > summary').click();
-}
-
 async function mockResources(page: Page) {
   await page.addInitScript(() => {
     const library: Array<Record<string, unknown>> = [];
     const definitions: Array<Record<string, unknown>> = [];
+    const placements: Array<Record<string, unknown>> = [];
     const skillPackages: Array<Record<string, unknown>> = [];
     const nativeSkills: Array<Record<string, unknown>> = [];
     const skillIssues: Array<Record<string, unknown>> = [];
@@ -20,6 +17,8 @@ async function mockResources(page: Page) {
       __resourceSkillPackages: skillPackages,
       __resourceNativeSkills: nativeSkills,
       __resourceSkillIssues: skillIssues,
+      __resourceMcpDefinitions: definitions,
+      __resourceMcpPlacements: placements,
       __resourceMcpConflict: false,
       __resourceDeferMcpPreview: false,
       __resourcePendingPreviews: pendingPreviews,
@@ -46,6 +45,7 @@ async function mockResources(page: Page) {
           profiles: [], common: null, binding: null, snapshots: [], recoveryNeeded: [], customPath: null,
         };
         if (command === 'list_mcp_definitions') return definitions;
+        if (command === 'list_mcp_placements') return placements;
         if (command === 'get_managed_mcp_enabled') return managed[`${args.definitionId}:${args.target.toolId}:${args.target.scope}:${args.target.projectPath}`] ?? null;
         if (command === 'save_mcp_definition') {
           const item = { ...args.draft, id: args.draft.id ?? 'mcp-1', version: (args.draft.expectedVersion ?? 0) + 1 };
@@ -59,7 +59,12 @@ async function mockResources(page: Page) {
           definitions.splice(index, 1);
           return null;
         }
-        if (command === 'remove_native_mcp') return null;
+        if (command === 'remove_native_mcp') {
+          const index = placements.findIndex((item) => item.toolId === args.target.toolId && item.scope === args.target.scope && item.projectPath === (args.target.projectPath ?? null));
+          if (index >= 0) placements.splice(index, 1);
+          writes.push({ command, args });
+          return null;
+        }
         if (command === 'delete_skill_package') {
           const index = skillPackages.findIndex((item) => item.id === args.packageId);
           if (index >= 0) skillPackages.splice(index, 1);
@@ -75,9 +80,19 @@ async function mockResources(page: Page) {
           return response;
         }
         if (command === 'distribute_mcp') {
-          for(const target of args.targets) managed[`${args.definitionId}:${target.toolId}:${target.scope}:${target.projectPath}`]=target.enabled;
+          for (const target of args.targets) {
+            managed[`${args.definitionId}:${target.toolId}:${target.scope}:${target.projectPath}`] = target.enabled;
+            const row = { definitionId: args.definitionId, toolId: target.toolId, scope: target.scope, projectPath: target.projectPath ?? null, enabled: target.enabled };
+            const index = placements.findIndex((item) => item.definitionId === row.definitionId && item.toolId === row.toolId && item.scope === row.scope && item.projectPath === row.projectPath);
+            if (index < 0) placements.push(row); else placements[index] = row;
+          }
           writes.push(args);
           return args.targets.map((target: Record<string, unknown>) => ({ ...target, status: 'written', detail: 'committed', path: '/tmp/config.toml', baselineHash: 'hash-empty' }));
+        }
+        if (command === 'set_skill_in_library') {
+          const found = skillPackages.find((item) => item.id === args.id);
+          if (found) found.inLibrary = args.inLibrary;
+          return null;
         }
         if (command === 'list_skill_packages') return skillPackages;
         if (command === 'list_skill_installations') return [];
@@ -94,66 +109,76 @@ async function mockResources(page: Page) {
   });
 }
 
+async function startLibraryMcp(page: Page) {
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  await page.getByRole('button', { name: '＋ 新建 MCP', exact: true }).click();
+  await page.getByRole('textbox', { name: '名称' }).fill('filesystem');
+  await page.getByRole('textbox', { name: '命令' }).fill('npx');
+}
+
 test('MCP replacement shows both native entries and can be canceled', async ({ page }) => {
   await mockResources(page);
   await page.goto('/');
   await page.evaluate(() => { (window as typeof window & { __resourceMcpConflict: boolean }).__resourceMcpConflict = true; });
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
-  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
-  await page.getByRole('button', { name: '添加 MCP', exact: true }).click();
-  await page.getByRole('textbox', { name: '名称' }).fill('filesystem');
-  await page.getByRole('textbox', { name: '命令' }).fill('npx');
-  await openMcpMoreOptions(page);
-  await page.getByRole('button', { name: '只保存到资料库' }).click();
-  await expect(page.getByRole('dialog')).toHaveCount(0);
-  await page.getByRole('button', { name: /filesystem/ }).click();
-  await openMcpMoreOptions(page);
-  await page.getByText('分发到其他 CLI',{exact:true}).click();
+  await startLibraryMcp(page);
   await page.getByRole('checkbox', { name: 'Codex' }).check();
-  await page.getByRole('button', { name: '分发所选工具' }).click();
+  await page.getByRole('button', { name: '保存并分发' }).click();
   await expect(page.getByText('old-command')).toBeVisible();
   await expect(page.getByText('"npx"')).toBeVisible();
-  await page.getByRole('button', { name: '确认分发' }).click();
-  await page.getByRole('dialog').getByRole('button', { name: '取消', exact: true }).click();
+  await page.getByRole('button', { name: '保留当前文件' }).click();
   let writes = await page.evaluate(() => (window as typeof window & { __resourceWrites: unknown[] }).__resourceWrites);
   expect(writes).toHaveLength(0);
-  await page.getByRole('button', { name: '确认分发' }).click();
-  await page.getByRole('dialog').getByRole('button', { name: '替换并分发', exact: true }).click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await expect(page.getByText('old-command')).toHaveCount(0);
+  await page.getByRole('button', { name: '保存并分发' }).click();
+  await page.getByRole('button', { name: '替换并分发', exact: true }).click();
   writes = await page.evaluate(() => (window as typeof window & { __resourceWrites: unknown[] }).__resourceWrites);
   expect(writes).toEqual([expect.objectContaining({ targets: [expect.objectContaining({ allowReplace: true, previewToken: 'bound-token' })] })]);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByRole('status').filter({ hasText: '已写入 Codex。' })).toBeVisible();
+  await page.getByRole('button', { name: '修改' }).click();
+  await expect(page.getByRole('checkbox', { name: 'Codex' })).toBeChecked();
+});
+
+test('editing an MCP starts from the CLIs already written and unchecking removes one', async ({ page }) => {
+  await mockResources(page);
+  await page.goto('/');
+  await page.evaluate(() => {
+    const state = window as typeof window & { __resourceMcpDefinitions: Array<Record<string, unknown>>; __resourceMcpPlacements: Array<Record<string, unknown>> };
+    state.__resourceMcpDefinitions.push({ id: 'mcp-1', name: 'filesystem', transport: 'stdio', command: 'npx', args: [], url: '', env: {}, headers: {}, inLibrary: true, version: 1 });
+    state.__resourceMcpPlacements.push({ definitionId: 'mcp-1', toolId: 'codex', scope: 'global', projectPath: null, enabled: true });
+  });
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  await page.getByRole('button', { name: '修改' }).click();
+  await expect(page.getByRole('checkbox', { name: 'Codex' })).toBeChecked();
+  await page.getByRole('checkbox', { name: 'Codex' }).uncheck();
+  await page.getByRole('button', { name: '保存并分发' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByRole('status').filter({ hasText: '已从 Codex 移除。' })).toBeVisible();
+  const writes = await page.evaluate(() => (window as typeof window & { __resourceWrites: Array<Record<string, unknown>> }).__resourceWrites);
+  expect(writes).toEqual([expect.objectContaining({ command: 'remove_native_mcp' })]);
 });
 
 test('an unfinished MCP preview cannot return after switching scope or distribute to the old scope', async ({ page }) => {
   await mockResources(page);
   await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
-  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
-  await page.getByRole('button', { name: '添加 MCP', exact: true }).click();
-  await page.getByRole('textbox', { name: '名称' }).fill('filesystem');
-  await page.getByRole('textbox', { name: '命令' }).fill('npx');
-  await openMcpMoreOptions(page);
-  await page.getByRole('button', { name: '只保存到资料库' }).click();
-  await expect(page.getByRole('dialog')).toHaveCount(0);
-  await page.getByRole('button', { name: /filesystem/ }).click();
-  await openMcpMoreOptions(page);
-  await page.getByText('分发到其他 CLI',{exact:true}).click();
+  await startLibraryMcp(page);
   await page.getByRole('checkbox', { name: 'Codex' }).check();
   await page.evaluate(() => { (window as typeof window & { __resourceDeferMcpPreview: boolean }).__resourceDeferMcpPreview = true; });
-  await page.getByRole('button', { name: '分发所选工具' }).click();
+  await page.getByRole('button', { name: '保存并分发' }).click();
   await expect.poll(() => page.evaluate(() => (window as typeof window & { __resourcePendingPreviews: unknown[] }).__resourcePendingPreviews.length)).toBe(1);
-  await page.getByLabel('配置范围').selectOption('project');
-  await page.getByRole('combobox', { name: '配置项目' }).selectOption('/tmp/second-project');
+  await page.getByRole('combobox', { name: '分发范围' }).selectOption('project');
   await page.evaluate(() => {
     const state = window as typeof window & { __resourceDeferMcpPreview: boolean; __resourcePendingPreviews: Array<() => void> };
     state.__resourceDeferMcpPreview = false;
     state.__resourcePendingPreviews.shift()?.();
   });
-  await expect(page.getByRole('button', { name: '确认分发' })).toHaveCount(0);
-  await page.getByRole('button', { name: /filesystem.*npx/ }).click();
-  await openMcpMoreOptions(page);
-  await page.getByText('分发到其他 CLI',{exact:true}).click();
+  await expect(page.getByRole('button', { name: '替换并分发', exact: true })).toHaveCount(0);
+  await page.getByRole('combobox', { name: '分发项目' }).selectOption('second-project');
   await page.getByRole('checkbox', { name: 'Codex' }).check();
-  await page.getByRole('button', { name: '分发所选工具' }).click();
+  await page.getByRole('button', { name: '保存并分发' }).click();
   const writes = await page.evaluate(() => (window as typeof window & { __resourceWrites: Array<{ targets: Array<Record<string, unknown>> }> }).__resourceWrites);
   expect(writes).toHaveLength(1);
   expect(writes[0].targets[0]).toEqual(expect.objectContaining({ scope: 'project', projectPath: '/tmp/second-project' }));
@@ -179,12 +204,16 @@ test('local ZIP import is available without a URL, selects a complete Skill, and
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
   await page.getByRole('tab', { name: 'Skill', exact: true }).click();
   await page.getByRole('button', { name: '添加 Skill', exact: true }).click();
+  const sync = page.getByRole('checkbox', { name: '快速同步' });
+  await expect(sync).toBeVisible();
+  const box = await sync.boundingBox();
+  expect(box && box.width < box.height * 4).toBe(true);
   await expect(page.getByRole('button', { name: '导入 ZIP 文件', exact: true })).toBeEnabled();
   await page.getByRole('button', { name: '导入 ZIP 文件', exact: true }).click();
   await page.getByRole('combobox', { name: '归档中的 Skill' }).selectOption('bundle/alpha');
   await page.getByRole('button', { name: '导入所选 Skill' }).click();
   expect(await page.evaluate(() => (window as any).__resourceWrites)).toHaveLength(0);
-  await page.getByRole('button', { name: '确认更新资料库包' }).click();
+  await page.getByRole('button', { name: '确认并安装到当前工具' }).click();
   await expect(page.getByRole('heading', { name: 'alpha', exact: true })).toBeVisible();
   expect(await page.evaluate(() => (window as any).__resourceWrites)).toEqual([{ command: 'import_skill_local_zip', args: { source: 'C:/fixtures/skills.zip', subdirectory: 'bundle/alpha', expectedNew: 'new-bundle', expectedExisting: 'old-bundle' } }]);
 });
@@ -195,14 +224,12 @@ test('MCP and Skill libraries are managed from the library page', async ({ page 
   await page.evaluate(() => {
     (window as unknown as { __resourceSkillPackages: Array<Record<string, unknown>> }).__resourceSkillPackages.push({ id: 'alpha-id', name: 'alpha', description: 'Complete package', fileCount: 3, digest: 'new-bundle', source: 'local', compatibility: null });
   });
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
-  await page.getByRole('button', { name: '添加 MCP', exact: true }).click();
+  await page.getByRole('button', { name: '＋ 新建 MCP', exact: true }).click();
   await page.getByRole('textbox', { name: '名称' }).fill('filesystem');
   await page.getByRole('textbox', { name: '命令' }).fill('npx');
-  await openMcpMoreOptions(page);
-  await page.getByRole('button', { name: '只保存到资料库' }).click();
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '保存', exact: true }).click();
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
   await expect(page.getByRole('button', { name: 'filesystem' })).toBeVisible();
   await page.getByRole('button', { name: '修改' }).click();
@@ -211,7 +238,7 @@ test('MCP and Skill libraries are managed from the library page', async ({ page 
   const library = page.getByRole('region', { name: '资料库内容' });
   await library.getByRole('tab', { name: 'Skill', exact: true }).click();
   await expect(library.getByText('alpha')).toBeVisible();
-  await expect(library.getByText('尚未安装到工具')).toBeVisible();
+  await expect(library.getByRole('button', { name: 'Codex · 未安装' })).toBeVisible();
   await library.getByRole('button', { name: '删除' }).click();
   await page.getByRole('button', { name: '删除', exact: true }).last().click();
   await expect(library.getByText('还没有 Skill')).toBeVisible();
@@ -229,9 +256,9 @@ test('saving an MCP closes the dialog and leaves the success on the page', async
   await page.getByRole('button', { name: '添加 MCP', exact: true }).click();
   await page.getByRole('textbox', { name: '名称' }).fill('filesystem');
   await page.getByRole('textbox', { name: '命令' }).fill('npx');
-  await page.getByRole('dialog').getByRole('button', { name: '保存', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '添加', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
-  await expect(page.getByRole('status').filter({ hasText: '已保存并在当前工具使用。' })).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: '已写入当前工具。' })).toBeVisible();
 });
 
 test('an MCP write conflict stays in the dialog', async ({ page }) => {
@@ -243,9 +270,9 @@ test('an MCP write conflict stays in the dialog', async ({ page }) => {
   await page.getByRole('button', { name: '添加 MCP', exact: true }).click();
   await page.getByRole('textbox', { name: '名称' }).fill('filesystem');
   await page.getByRole('textbox', { name: '命令' }).fill('npx');
-  await page.getByRole('dialog').getByRole('button', { name: '保存', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '添加', exact: true }).click();
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByText('当前同名条目与读取时不同，请比较后选择')).toBeVisible();
-  await expect(dialog.getByRole('status').filter({ hasText: '已保存并在当前工具使用。' })).toHaveCount(0);
+  await expect(dialog.getByRole('status').filter({ hasText: '已写入当前工具。' })).toHaveCount(0);
 });
 

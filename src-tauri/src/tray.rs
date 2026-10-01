@@ -591,7 +591,8 @@ fn on_menu(app: &AppHandle, id: &str) {
                     tool_id: tool.clone(),
                     project_id: Some(project.clone()),
                     session_id: None,
-            directory: None,
+                    directory: None,
+                    initial_prompt: None,
                     mode,
                 };
                 if let Err(failure) = commands::launch_now_with_stage(&app, request) {

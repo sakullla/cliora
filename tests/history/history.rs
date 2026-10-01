@@ -530,8 +530,9 @@ fn unknown_only_usage_is_not_zero_and_mixed_usage_is_a_known_subtotal() {
     assert_eq!(mixed.usage_sessions, 1);
     assert_eq!(mixed.unknown_usage_sessions, 1);
     assert_eq!(mixed.input, Some(150));
-    assert_eq!(mixed.estimated_cost, None);
-    assert!(mixed.by_model.iter().any(|row|row.model.is_none() && row.unknown_usage_sessions==1 && row.input.is_none()));
+    assert!(mixed.estimated_cost.is_some());
+    assert!(mixed.cost_partial);
+    assert!(mixed.by_model.iter().all(|row| row.unknown_usage_sessions < row.session_count));
     let events=vec![
         UsageEvent{id:"request-a".into(),model:Some("model-a".into()),timestamp:Some(1790668801000),input:Some(10),output:Some(2),cache_read:Some(0),cache_write:Some(0),input_includes_cache:true},
         UsageEvent{id:"request-b".into(),model:Some("model-b".into()),timestamp:Some(1790668802000),input:Some(30),output:Some(5),cache_read:Some(0),cache_write:Some(0),input_includes_cache:true},
@@ -572,7 +573,8 @@ fn usage_dates_and_manual_price_keep_cache_out_of_double_counting() {
     let unknown = usage_summary(&db, &filter).unwrap();
     assert_eq!(unknown.input, Some(150));
     assert_eq!(unknown.cache_read, Some(60));
-    assert_eq!(unknown.estimated_cost, None);
+    assert!(unknown.estimated_cost.is_some());
+    assert!(unknown.price_sources.iter().any(|source| source.contains("OpenAI 公开价")));
     save_price(
         &db,
         &registry,
@@ -623,6 +625,39 @@ fn usage_dates_and_manual_price_keep_cache_out_of_double_counting() {
     let updated_only = usage_summary(&db, &filter).unwrap();
     assert_eq!(updated_only.session_count, 0);
     assert_eq!(updated_only.input, None);
+}
+
+#[test]
+fn claude_synthetic_placeholder_is_omitted_from_usage_models() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let root = home.join(".codex/sessions");
+    fs::create_dir_all(&root).unwrap();
+    fs::copy(fixtures().join("codex-0.158.jsonl"), root.join("rollout-synthetic.jsonl")).unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let registry = Registry::with_adapters(vec![&CODEX]).unwrap();
+    refresh(&db, &registry, &home).unwrap();
+    let events = vec![
+        UsageEvent { id: "placeholder".into(), model: Some("<synthetic>".into()), timestamp: Some(1790668801000), input: Some(0), output: Some(0), cache_read: Some(0), cache_write: Some(0), input_includes_cache: false },
+        UsageEvent { id: "real".into(), model: Some("glm-5.3".into()), timestamp: Some(1790668802000), input: Some(10), output: Some(2), cache_read: Some(0), cache_write: Some(0), input_includes_cache: true },
+    ];
+    db.with_connection(|conn| conn.execute("UPDATE history_sessions SET model = '<synthetic>', usage_json = ?1, usage_count = 2", [serde_json::to_string(&events).unwrap()]).map(|_| ()).map_err(|error| error.to_string())).unwrap();
+    let summary = usage_summary(&db, &HistoryFilter::default()).unwrap();
+    assert!(summary.models.iter().all(|model| model != "<synthetic>"));
+    assert!(summary.by_model.iter().all(|row| row.model.as_deref() != Some("<synthetic>")));
+    let real = summary.by_model.iter().find(|row| row.model.as_deref() == Some("glm-5.3")).unwrap();
+    assert_eq!(real.input, Some(10));
+    assert_eq!(summary.input, Some(10));
+    let gap = vec![
+        UsageEvent { id: "known".into(), model: Some("glm-5.3".into()), timestamp: Some(1790668802000), input: Some(4), output: Some(1), cache_read: Some(9), cache_write: Some(2), input_includes_cache: false },
+        UsageEvent { id: "blank".into(), model: Some("glm-5.3".into()), timestamp: Some(1790668803000), input: Some(0), output: Some(0), cache_read: None, cache_write: None, input_includes_cache: false },
+    ];
+    db.with_connection(|conn| conn.execute("UPDATE history_sessions SET model = '{\"id\":\"big-pickle\",\"providerID\":\"opencode\"}', usage_json = ?1", [serde_json::to_string(&gap).unwrap()]).map(|_| ()).map_err(|error| error.to_string())).unwrap();
+    let kept = usage_summary(&db, &HistoryFilter::default()).unwrap();
+    assert_eq!(kept.cache_read, Some(9));
+    assert_eq!(kept.cache_write, Some(2));
+    assert!(kept.models.iter().any(|model| model == "big-pickle"));
+    assert!(kept.models.iter().all(|model| !model.starts_with('{')));
 }
 
 #[test]
@@ -799,7 +834,7 @@ fn copied_and_direct_resume_use_original_directory_after_project_relink() {
     assert!(next.contains("'--yolo'"));
     assert!(!next.contains(&format!("'{}'", relinked_dir.display())));
     let direct = crate::launch::plan(&db, &registry, &home, crate::launch::LaunchRequest {
-        tool_id: "grok".into(), project_id: None, session_id: Some("44444444-4444-4444-8444-444444444444".into()), directory: Some(relinked_dir.display().to_string()), mode: LaunchMode::Normal,
+        tool_id: "grok".into(), project_id: None, session_id: Some("44444444-4444-4444-8444-444444444444".into()), directory: Some(relinked_dir.display().to_string()), initial_prompt: None, mode: LaunchMode::Normal,
     }).unwrap();
     assert_eq!(direct.directory, original_dir.canonicalize().unwrap());
 }

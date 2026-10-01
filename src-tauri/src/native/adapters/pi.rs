@@ -4,8 +4,8 @@ use std::env;
 use std::path::Path;
 
 use super::{
-    file, project_root, CliAdapter, InspectionFields, LaunchMode, NativeCredentialRefs,
-    PendingSecrets,
+    file, project_root, CliAdapter, InspectionFields, LaunchMode, McpLocation,
+    NativeCredentialRefs, PendingSecrets,
 };
 use crate::credentials::CredentialStore;
 use crate::native::adapter::{NativeFile, Scope};
@@ -14,6 +14,7 @@ use crate::native::format::FileKind;
 use crate::native::intake::NativeInspection;
 use crate::native::intake::{api_format, pi_env_name, string_at};
 use crate::native::profile::{self, Connection, RegisteredProfile};
+use crate::resources::mcp::{self, McpDefinition, McpTransport};
 
 pub struct Pi;
 
@@ -136,6 +137,38 @@ impl CliAdapter for Pi {
                 .join("AGENTS.md"),
             Scope::Project => project?.join("AGENTS.md"),
         })
+    }
+    fn mcp_location(
+        &self,
+        scope: Scope,
+        home: &Path,
+        project: Option<&Path>,
+    ) -> Option<McpLocation> {
+        let path = match scope {
+            Scope::Global => env::var_os("PI_CODING_AGENT_DIR")
+                .map(Into::into)
+                .unwrap_or_else(|| home.join(".pi/agent"))
+                .join("mcp.json"),
+            Scope::Project => project?.join(".pi/mcp.json"),
+        };
+        Some(McpLocation { path, kind: FileKind::Json, root: "mcpServers", child: None })
+    }
+    fn mcp_document(
+        &self,
+        definition: &McpDefinition,
+        enabled: bool,
+        existing: Option<&Value>,
+    ) -> Result<Option<Value>, String> {
+        // Pi reads ~/.pi/agent/mcp.json and .pi/mcp.json. type is optional;
+        // command selects stdio and url selects streamable HTTP. enabled: false
+        // keeps the entry without connecting. SSE is rejected.
+        let mut map = match definition.transport {
+            McpTransport::Stdio => mcp::stdio_doc(definition, existing),
+            McpTransport::Http => mcp::http_doc(definition, existing, "headers"),
+        };
+        map.insert("type".into(), json!(if definition.transport == McpTransport::Http { "http" } else { "stdio" }));
+        map.insert("enabled".into(), json!(enabled));
+        Ok(Some(Value::Object(map)))
     }
     fn connection_documents(
         &self,

@@ -92,6 +92,8 @@ pub struct LaunchRequest {
     pub session_id: Option<String>,
     #[serde(default)]
     pub directory: Option<String>,
+    #[serde(default)]
+    pub initial_prompt: Option<String>,
     pub mode: LaunchMode,
 }
 
@@ -475,6 +477,12 @@ fn plan_with_stage_at(
                 .project_model_args(model)
                 .map_err(|message| LaunchPlanError::new(LaunchStage::Tool, message))?,
         );
+    }
+    if let Some(prompt) = request.initial_prompt.as_deref().map(str::trim).filter(|text| !text.is_empty()) {
+        if prompt.chars().count() > 20_000 {
+            return Err(LaunchPlanError::new(LaunchStage::Tool, "提示词过长，请先缩短后再启动。".into()));
+        }
+        cli_args.push(prompt.to_owned());
     }
     Ok(LaunchPlan {
         tool_id: request.tool_id,

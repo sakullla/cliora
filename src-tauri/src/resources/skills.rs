@@ -30,6 +30,7 @@ pub struct SkillPackage {
     pub digest: String,
     pub file_count: usize,
     pub updated_at: u64,
+    pub in_library: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -532,6 +533,19 @@ fn collect(
     }
     Ok(())
 }
+fn resolved_skill_dir(path: &Path) -> Result<PathBuf, String> {
+    if path.is_symlink() {
+        let target = fs::canonicalize(path).map_err(|_| "Skills 链接目标不存在".to_string())?;
+        if !target.is_dir() {
+            return Err("Skills 链接目标不是普通目录".into());
+        }
+        return Ok(target);
+    }
+    if path.is_dir() {
+        return Ok(path.to_path_buf());
+    }
+    Err("请选择普通 Skills 目录".into())
+}
 fn snapshot(
     path: &Path,
 ) -> Result<
@@ -544,9 +558,6 @@ fn snapshot(
     ),
     String,
 > {
-    if !path.is_dir() || path.is_symlink() {
-        return Err("请选择普通 Skills 目录".into());
-    }
     let name = path
         .file_name()
         .and_then(|value| value.to_str())
@@ -555,8 +566,9 @@ fn snapshot(
     if !safe_name(&name) {
         return Err("Skills 目录名需使用小写字母、数字和单个连字符".into());
     }
+    let root = resolved_skill_dir(path)?;
     let mut files = BTreeMap::new();
-    collect(path, path, &mut files, &mut 0)?;
+    collect(&root, &root, &mut files, &mut 0)?;
     let (description, compatibility) = manifest_info(&files, &name)?;
     let checksum = digest(&files)?;
     Ok((name, description, compatibility, files, checksum))
@@ -639,7 +651,12 @@ fn save_candidate(
         if changed != 1 { return Err("同名 Skills 包在预览后变化，请重新比较".into()); }
         Ok(())
     })?;
-    Ok(SkillPackage {
+        let in_library = db.with_connection(|conn| {
+            conn.query_row("SELECT in_library FROM skill_packages WHERE id = ?1", [&id], |row| row.get::<_, i64>(0))
+                .map(|value| value != 0)
+                .map_err(|error| error.to_string())
+        })?;
+        Ok(SkillPackage {
         id,
         name,
         description,
@@ -647,6 +664,7 @@ fn save_candidate(
         source,
         digest: checksum,
         file_count: files.len(),
+        in_library,
         updated_at,
     })
 }
@@ -852,10 +870,19 @@ fn candidate_from_zip_files(source: &str, prefix: String, archive_files: BTreeMa
         digest: checksum,
     })
 }
+pub fn set_in_library(db: &Database, id: &str, in_library: bool) -> Result<(), String> {
+    db.with_connection(|conn| {
+        let changed = conn.execute("UPDATE skill_packages SET in_library = ?2 WHERE id = ?1", params![id, i64::from(in_library)])
+            .map_err(|error| error.to_string())?;
+        if changed != 1 { return Err("Skill 包不存在".into()); }
+        Ok(())
+    })
+}
+
 pub fn list(db: &Database) -> Result<Vec<SkillPackage>, String> {
     let _ = recover_report(db)?;
     db.with_connection(|conn| {
-        let mut statement = conn.prepare("SELECT id, name, description, source, digest, files_json, updated_at FROM skill_packages ORDER BY name COLLATE NOCASE")
+        let mut statement = conn.prepare("SELECT id, name, description, source, digest, files_json, updated_at, in_library FROM skill_packages ORDER BY name COLLATE NOCASE")
             .map_err(|error| error.to_string())?;
         let rows = statement.query_map([], |row| {
             let json: String = row.get(5)?;
@@ -863,22 +890,22 @@ pub fn list(db: &Database) -> Result<Vec<SkillPackage>, String> {
             let name: String = row.get(1)?;
             let compatibility = serde_json::from_str::<BTreeMap<String, String>>(&json).ok()
                 .and_then(|files| manifest_info(&files, &name).ok()).and_then(|(_, compatibility)| compatibility);
-            Ok(SkillPackage { id: row.get(0)?, name, description: row.get(2)?, compatibility, source: row.get(3)?, digest: row.get(4)?, file_count, updated_at: row.get::<_, i64>(6)?.max(0) as u64 })
+            Ok(SkillPackage { id: row.get(0)?, name, description: row.get(2)?, compatibility, source: row.get(3)?, digest: row.get(4)?, file_count, updated_at: row.get::<_, i64>(6)?.max(0) as u64, in_library: row.get::<_, i64>(7)? != 0 })
         }).map_err(|error| error.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?;
         Ok(rows)
     })
 }
 fn package(db: &Database, id: &str) -> Result<(SkillPackage, BTreeMap<String, String>), String> {
     db.with_connection(|conn| {
-        let row: Option<(String, String, String, String, String, String, i64)> = conn.query_row(
-            "SELECT id, name, description, source, digest, files_json, updated_at FROM skill_packages WHERE id = ?1", [id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)))
+        let row: Option<(String, String, String, String, String, String, i64, i64)> = conn.query_row(
+            "SELECT id, name, description, source, digest, files_json, updated_at, in_library FROM skill_packages WHERE id = ?1", [id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?)))
             .optional().map_err(|error| error.to_string())?;
-        let (id, name, description, source, checksum, json, updated_at) = row.ok_or("Skills 包不存在")?;
+        let (id, name, description, source, checksum, json, updated_at, in_library) = row.ok_or("Skills 包不存在")?;
         let files: BTreeMap<String, String> = serde_json::from_str(&json).map_err(|_| "Skills 包内容损坏")?;
         if digest(&files)? != checksum || !files.contains_key("SKILL.md") { return Err("Skills 包完整性校验失败".into()); }
         let (_, compatibility) = manifest_info(&files, &name)?;
-        let package = SkillPackage { id, name, description, compatibility, source, digest: checksum, file_count: files.len(), updated_at: updated_at.max(0) as u64 };
+        let package = SkillPackage { id, name, description, compatibility, source, digest: checksum, file_count: files.len(), updated_at: updated_at.max(0) as u64, in_library: in_library != 0 };
         Ok((package, files))
     })
 }
@@ -918,11 +945,9 @@ fn on_disk_as(path: &Path, name: &str) -> Result<Option<String>, String> {
     if !path.exists() {
         return Ok(None);
     }
-    if !path.is_dir() || path.is_symlink() {
-        return Err("Skills 目录不是普通目录".into());
-    }
+    let root = resolved_skill_dir(path).map_err(|_| "Skills 目录不是普通目录".to_string())?;
     let mut files = BTreeMap::new();
-    collect(path, path, &mut files, &mut 0)?;
+    collect(&root, &root, &mut files, &mut 0)?;
     manifest_info(&files, name)?;
     Ok(Some(digest(&files)?))
 }
@@ -1038,9 +1063,12 @@ pub fn preview_target(
         Some(digest(&old_files)?)
     };
     let managed: Option<String> = db.with_connection(|conn| conn.query_row("SELECT digest FROM skill_installations WHERE package_id = ?1 AND tool = ?2 AND scope_key = ?3 AND target_path = ?4", params![package_id, tool, scope_key, path.display().to_string()], |row| row.get(0)).optional().map_err(|error| error.to_string()))?;
-    let conflict = existing_digest.is_some() && managed.as_deref() != existing_digest.as_deref();
+    let same = existing_digest.as_deref() == Some(package.digest.as_str());
+    let conflict = existing_digest.is_some() && !same && managed.as_deref() != existing_digest.as_deref();
     let status = if conflict { "conflict" } else { "ready" };
-    let detail = if conflict {
+    let detail = if same {
+        "目录里已经是这份 Skills"
+    } else if conflict {
         "同名原生 Skills 未受当前包管理，或安装后被外部修改；请比较后确认接管"
     } else if existing_digest.is_some() {
         "将更新当前原生 Skills"
@@ -1280,6 +1308,16 @@ fn operate(
         )?;
         if preview_token.is_some_and(|token| token != expected_token) {
             return Err("Skills 包、目标或原生目录在预览后变化；请重新预览".into());
+        }
+        if !removing && actual.as_deref() == Some(package.digest.as_str()) {
+            db.with_connection(|conn| {
+                conn.execute("INSERT INTO skill_installations (package_id, tool, scope_key, target_path, digest) VALUES (?1, ?2, ?3, ?4, ?5)
+                    ON CONFLICT(package_id, tool, scope_key) DO UPDATE SET target_path = excluded.target_path, digest = excluded.digest",
+                    params![package_id, tool_id, key, path.display().to_string(), package.digest])
+                    .map_err(|error| error.to_string())?;
+                Ok(())
+            })?;
+            return Ok("already_current");
         }
         match (&managed, &actual) {
             (None, Some(_))

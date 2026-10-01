@@ -25,7 +25,10 @@ test('new configuration dialog has one save action', async ({ page }) => {
   await expect(page.getByText('安装与更新')).toBeVisible();
   await page.getByText('安装与更新').click();
   await expect(page.getByRole('link', { name: '官方安装说明 ↗' })).toBeVisible();
-  await expect(page.getByRole('button', { name: '重新检测' })).toBeVisible();
+  await expect(page.getByText('当前 1.0.0')).toBeVisible();
+  await expect(page.getByRole('button', { name: '重新检测' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '安装原生' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '更新', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: '新建配置' }).click();
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByRole('heading', { name: '新建配置' })).toHaveCount(1);
@@ -52,6 +55,7 @@ test('install panel updates the active source and can switch to the native CLI',
         if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
         if (command === 'get_tray_status') return { available: false, error: null };
         if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+        if (command === 'cli_latest_version') return '0.200.0';
         if (command === 'maintain_registered_cli') { (window as unknown as { __maintainCalls: unknown[] }).__maintainCalls.push(args); return null; }
         if (command === 'set_registered_custom_cli_path') { (window as unknown as { __pathCalls: unknown[] }).__pathCalls.push(args); return null; }
         if (command === 'get_registered_tool_workspace') return {
@@ -82,6 +86,9 @@ test('install panel updates the active source and can switch to the native CLI',
   await page.getByText('指定路径').click();
   await expect(page.getByRole('textbox', { name: 'CLI 可执行文件路径' })).toBeVisible();
   await expect(page.getByText('npm 缺失')).toBeVisible();
+  await expect(page.getByText('最新 0.200.0')).toBeVisible();
+  await expect(page.getByRole('button', { name: '安装原生' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '重新检测' })).toHaveCount(0);
   await page.getByRole('button', { name: '更新 npm', exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: '更新', exact: true }).click();
   await page.getByRole('button', { name: '使用', exact: true }).click();
@@ -239,7 +246,7 @@ test('enabling a saved profile opens a comparison when the native file differs',
           profiles: [saved], common: null, binding: null, snapshots: [], recoveryNeeded: [], customPath: null,
         };
         if (command === 'apply_registered_native_profile') throw '原生文件已有不同的字段值：config；请确认接管';
-        if (command === 'compare_registered_application') return { profile: saved, common: null, files: [{ role: 'config', format: 'toml', current: 'model = "old"', proposed: { model: 'new' } }] };
+        if (command === 'compare_registered_application') return { profile: saved, common: null, files: [{ role: 'config', format: 'toml', current: 'model = "old"', proposed: { model: 'new' }, proposedText: 'model = "new"\n' }] };
         return null;
       } },
     });
@@ -249,6 +256,8 @@ test('enabling a saved profile opens a comparison when the native file differs',
   await page.locator('[data-profile-id="saved-1"]').getByRole('button', { name: '启用' }).click();
   const comparison = page.getByRole('dialog', { name: '比较当前文件与本次配置' });
   await expect(comparison).toBeVisible();
+  await expect(comparison.getByText('model = "old"')).toBeVisible();
+  await expect(comparison.getByText('model = "new"')).toBeVisible();
   await expect(comparison.getByRole('button', { name: '保留当前文件' })).toBeVisible();
   await expect(comparison.getByRole('button', { name: '使用本次配置' })).toBeVisible();
   await expect(page.locator('[data-profile-id="saved-1"]').getByText('正在使用')).toHaveCount(0);
@@ -418,4 +427,49 @@ test('a long configuration list can be searched without growing the page', async
   await expect(group.getByRole('listitem')).toHaveCount(1);
   await group.getByRole('button', { name: '启用' }).click();
   await expect(group.getByText('正在使用')).toBeVisible();
+});
+
+test('native file history replaces the editor instead of stacking a diff', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_INTERNALS__: { invoke: async (command: string, args?: { transactionId?: string }) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: ['openai_responses'] }], managedIds: ['codex'], preservedUnknown: [] };
+        if (command === 'list_projects' || command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_skill_recovery_issues' || command === 'scan_native_skills' || command === 'list_native_mcp') return [];
+        if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
+        if (command === 'get_tray_status') return { available: false, error: null };
+        if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+        if (command === 'get_registered_tool_workspace') return {
+          probe: { selectedPath: 'C:/codex.cmd', installations: [{ path: 'C:/codex.cmd', version: '0.159.2', status: 'available' }], nativeFiles: [{ role: 'config', path: 'C:\\Users\\12976\\.codex\\config.toml', format: 'toml', writable: true, reason: null, sensitive: false }], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: ['openai_responses'], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '' },
+          profiles: [], common: null, binding: null, snapshots: [{ role: 'config', fingerprint: 'abc' }], recoveryNeeded: [], customPath: null,
+        };
+        if (command === 'read_registered_native_file_for_edit') return 'model = "now"\n';
+        if (command === 'list_native_backups') return [
+          { transactionId: 'newer', path: 'C:\\Users\\12976\\.codex\\config.toml', createdAt: 0 },
+          { transactionId: 'older', path: 'C:\\Users\\12976\\.codex\\config.toml', createdAt: 0 },
+        ];
+        if (command === 'preview_native_backup') return { transactionId: args?.transactionId, current: 'model = "now"\n', original: args?.transactionId === 'older' ? 'model = "older"\n' : 'model = "old"\n' };
+        return null;
+      } },
+    });
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('button', { name: '修改正在使用的文件' }).click();
+  const dialog = page.getByRole('dialog', { name: '修改正在使用的文件' });
+  await dialog.getByRole('button', { name: '修改记录' }).click();
+  const history = page.getByRole('dialog', { name: '修改记录' });
+  const list = history.getByRole('list', { name: '修改记录' });
+  await expect(list.getByRole('button')).toHaveCount(2);
+  await expect(list.getByRole('button', { name: '最近一次', pressed: true })).toBeVisible();
+  await expect(history.getByRole('textbox', { name: '当时的文件' })).toContainText('model = "old"');
+  await expect(history.getByText('当前文件')).toHaveCount(0);
+  await list.getByRole('button', { name: '往前 1 次' }).click();
+  await expect(history.getByRole('textbox', { name: '当时的文件' })).toContainText('model = "older"');
+  await history.getByRole('button', { name: '恢复这个版本' }).click();
+  await expect(page.getByRole('dialog', { name: '恢复这个版本？' })).toBeVisible();
+  await page.getByRole('button', { name: '取消' }).click();
+  await history.getByRole('button', { name: '返回编辑' }).click();
+  await expect(page.getByRole('dialog', { name: '修改正在使用的文件' })).toBeVisible();
 });

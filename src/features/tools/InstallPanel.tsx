@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react';
+import { native } from '../../lib/native';
 import type { ToolProbe } from '../../types/native';
 import styles from './ToolWorkspace.module.css';
 
@@ -15,7 +17,28 @@ function isNative(source: string) {
   return source === 'native' || source === 'claude_native';
 }
 
-export function InstallPanel({ toolName, probe, customPath, busy, loading, onCustomPath, onSavePath, onRecheck, onMaintain, onUsePath }: {
+function versionParts(value: string) {
+  return value.trim().replace(/^v/i, '').split('-')[0].split('.').map((part) => {
+    const number = Number.parseInt(part, 10);
+    return Number.isFinite(number) ? number : 0;
+  });
+}
+
+/** Negative when current is older than latest. */
+const latestVersions = new Map<string, string>();
+
+function compareVersions(current: string, latest: string) {
+  const left = versionParts(current);
+  const right = versionParts(latest);
+  const length = Math.max(left.length, right.length);
+  for (let index = 0; index < length; index += 1) {
+    const delta = (left[index] ?? 0) - (right[index] ?? 0);
+    if (delta) return delta;
+  }
+  return 0;
+}
+
+export function InstallPanel({ toolName, probe, customPath, busy, loading, onCustomPath, onSavePath, onMaintain, onUsePath }: {
   toolName: string;
   probe: Omit<ToolProbe, 'tool'> & { tool: string };
   customPath: string;
@@ -23,7 +46,6 @@ export function InstallPanel({ toolName, probe, customPath, busy, loading, onCus
   loading: boolean;
   onCustomPath: (value: string) => void;
   onSavePath: () => void;
-  onRecheck: () => void;
   onMaintain: (action: 'install' | 'upgrade' | 'install_native' | 'uninstall_npm', source?: string) => void;
   onUsePath: (path: string) => void;
 }) {
@@ -34,14 +56,53 @@ export function InstallPanel({ toolName, probe, customPath, busy, loading, onCus
   const hasNative = available.some(item => isNative(item.source));
   const multiple = Boolean(probe.nativeInstallCommand && probe.npmInstallCommand);
   const problems = probe.dependencies.filter(item => item.status !== 'found');
-  const version = selected?.version ? ` ${selected.version}` : '';
+  const versionKey = `${probe.tool}:${selected?.version ?? ''}`;
+  const [latest, setLatest] = useState<{ state: 'loading' | 'ready' | 'unknown'; version: string }>(() => {
+    const remembered = latestVersions.get(versionKey);
+    return remembered ? { state: 'ready', version: remembered } : { state: 'loading', version: '' };
+  });
+  useEffect(() => {
+    const remembered = latestVersions.get(versionKey);
+    if (remembered) { setLatest({ state: 'ready', version: remembered }); return; }
+    let live = true;
+    setLatest({ state: 'loading', version: '' });
+    void native.cliLatestVersion(probe.tool).then((version) => {
+      if (!live) return;
+      const text = typeof version === 'string' ? version.trim() : '';
+      if (text) latestVersions.set(versionKey, text);
+      setLatest(text ? { state: 'ready', version: text } : { state: 'unknown', version: '' });
+    }).catch(() => { if (live) setLatest({ state: 'unknown', version: '' }); });
+    return () => { live = false; };
+  }, [probe.tool, versionKey]);
+  const currentVersion = selected?.version?.trim() ?? '';
+  const behind = Boolean(selected && currentVersion && latest.state === 'ready' && compareVersions(currentVersion, latest.version) < 0);
+  const current = !selected || latest.state !== 'ready' || !currentVersion ? false : compareVersions(currentVersion, latest.version) >= 0;
   const updateLabel = multiple ? (selected && isNative(selected.source) ? '更新原生' : '更新 npm') : '更新';
+  const summary = !selected
+    ? '未安装'
+    : latest.state === 'ready'
+      ? (behind ? `当前 ${currentVersion} · 最新 ${latest.version}` : `当前 ${currentVersion} · 已是最新`)
+      : latest.state === 'loading'
+        ? `当前 ${currentVersion || '未知版本'} · 正在查看最新版本`
+        : `当前 ${currentVersion || '未知版本'} · 暂时查不到最新版本`;
   return <details className={styles.pathControl}>
-    <summary><span className={styles.statusDot} data-ok={probe.nativeWrites.state === 'supported'} /><strong>{selected ? `${toolName}${version}` : `${toolName} 未安装`}</strong><span>{probe.nativeWrites.reason}</span><span className={styles.diagnosticLabel}>安装与更新</span></summary>
-    {available.map(item => <div className={styles.installRow} key={item.path}>
+    <summary><span className={styles.statusDot} data-ok={probe.nativeWrites.state === 'supported'} /><strong>{toolName}</strong><span>{selected || probe.nativeWrites.state === 'supported' ? summary : probe.nativeWrites.reason}</span><span className={styles.diagnosticLabel}>安装与更新</span></summary>
+    {selected && <div className={styles.release}>
+      <div>
+        <span>当前版本</span>
+        <strong>{currentVersion || '未知'}</strong>
+        <small>{sourceLabel(selected.source)} · {fileName(selected.path)}</small>
+      </div>
+      <div data-state={behind ? 'behind' : current ? 'current' : undefined}>
+        <span>最新版本</span>
+        <strong>{latest.state === 'ready' ? latest.version : latest.state === 'loading' ? '…' : '查不到'}</strong>
+        <small>{behind ? `可以更新到 ${latest.version}` : current ? '已是最新版本' : latest.state === 'loading' ? '正在查询 npm 公开版本' : '暂时查不到公开版本'}</small>
+      </div>
+    </div>}
+    {available.filter(item => item.path !== selected?.path).map(item => <div className={styles.installRow} key={item.path}>
       <strong>{sourceLabel(item.source)}</strong>
       <span title={item.path}>{item.version ?? '未知版本'} · {fileName(item.path)}</span>
-      {item.path === selected?.path ? <em>正在使用</em> : <button type="button" disabled={busy} title="之后栖点启动使用这个文件" onClick={() => onUsePath(item.path)}>使用</button>}
+      <button type="button" disabled={busy} title="之后栖点启动使用这个文件" onClick={() => onUsePath(item.path)}>使用</button>
     </div>)}
     {failed.map(item => <p className={styles.installFail} key={item.path} title={item.detail ?? item.path}>未能运行 · {fileName(item.path)}</p>)}
     {hasNpm && hasNative && <p className={styles.installNote}>两份都在。选择栖点启动用的那一份。</p>}
@@ -49,13 +110,10 @@ export function InstallPanel({ toolName, probe, customPath, busy, loading, onCus
     <div className={styles.installActions}>
       {!selected && multiple && <>
         <button type="button" disabled={busy} onClick={() => onMaintain('install_native', 'native')}>安装原生</button>
-        <button type="button" disabled={busy} onClick={() => onMaintain('install', 'npm_shim')}>安装 npm</button>
+        <button type="button" className={styles.primary} disabled={busy} onClick={() => onMaintain('install', 'npm_shim')}>安装 npm</button>
       </>}
       {!selected && !multiple && probe.installCommand && <button type="button" className={styles.primary} disabled={busy} onClick={() => onMaintain('install')}>安装</button>}
-      {selected && probe.upgradeCommand && <button type="button" className={styles.primary} disabled={busy} onClick={() => onMaintain('upgrade', selected.source)}>{updateLabel}</button>}
-      {selected && multiple && !hasNative && <button type="button" disabled={busy} onClick={() => onMaintain('install_native', 'native')}>安装原生</button>}
-      {selected && multiple && !hasNpm && <button type="button" disabled={busy} onClick={() => onMaintain('install', 'npm_shim')}>安装 npm</button>}
-      <button type="button" disabled={loading} onClick={onRecheck}>重新检测</button>
+      {behind && probe.upgradeCommand && <button type="button" className={styles.primary} disabled={busy || loading} onClick={() => onMaintain('upgrade', selected?.source)}>{updateLabel}</button>}
       {probe.installUrl && <a href={probe.installUrl} target="_blank" rel="noreferrer">官方安装说明 ↗</a>}
     </div>
     <details className={styles.pathCustom}><summary>指定路径</summary><div><input aria-label="CLI 可执行文件路径" value={customPath} onChange={event => onCustomPath(event.target.value)} placeholder="可执行文件完整路径" /><button type="button" disabled={busy} onClick={onSavePath}>保存并重检</button></div></details>

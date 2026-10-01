@@ -5,7 +5,9 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { native, nativeAvailable } from '../../lib/native';
 import type { LaunchSettings } from '../../types/launch';
 import { preferredLaunchMode } from '../../types/launch';
-import type { AdapterDescriptor, RegisteredToolWorkspace } from '../../types/native';
+import type { AdapterDescriptor, ApplyComparison, RegisteredToolWorkspace } from '../../types/native';
+import { CodeEditor } from '../../components/CodeEditor';
+import { GuideDialog } from '../../components/GuideDialog';
 import { Icon } from '../../components/Icon';
 import { ToolIcon } from '../../components/ToolIcon';
 import styles from './ManagedTools.module.css';
@@ -168,6 +170,8 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
     return workspace ? [[tool.id, { workspace, error: null, busy: false, activity: null, notice: null }]] : [];
   })));
   const [launchSettings, setLaunchSettings] = useState<LaunchSettings | null>(null);
+  const [conflict, setConflict] = useState<{ toolId: string; toolName: string; profileName: string; comparison: ApplyComparison } | null>(null);
+  const [conflictError, setConflictError] = useState('');
   const generation = useRef(0);
   const acting = useRef(new Set<string>());
 
@@ -240,11 +244,48 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
         return { ...old, [toolId]: { ...current, busy: false, activity: null, error: null, notice: lineNotice('ok', `${toolName} 已写入原生文件，下次启动读取。`), workspace } };
       });
     } catch (error) {
-      const text = `${toolName} 未切换，画面仍是原来的选中项。可重新选择配置。`;
       const detail = message(error);
-      setStates((old) => ({ ...old, [toolId]: settle(previous, { tone: 'error', text, title: detail === '操作失败，请重试' ? text : `${text} ${detail}` }) }));
+      const profile = previous.workspace?.profiles.find((item) => item.id === profileId);
+      if (profile && (detail.includes('请确认接管') || detail.includes('外部修改'))) {
+        try {
+          const comparison = await native.compareRegisteredApplication(profileId, 'global', '');
+          setConflict({ toolId, toolName, profileName: profile.name, comparison });
+          setConflictError('');
+          setStates((old) => ({ ...old, [toolId]: settle(previous, null) }));
+          return;
+        } catch (compareError) {
+          const reason = message(compareError);
+          const text = `${toolName} 未能比较当前文件。${reason}`;
+          setStates((old) => ({ ...old, [toolId]: settle(previous, { tone: 'error', text, title: text }) }));
+          return;
+        }
+      }
+      const text = `${toolName} 未切换：${detail}`;
+      setStates((old) => ({ ...old, [toolId]: settle(previous, { tone: 'error', text, title: text }) }));
     } finally {
       acting.current.delete(toolId);
+    }
+  }
+
+  async function useComparedFile() {
+    if (!conflict) return;
+    const { toolId, toolName, comparison } = conflict;
+    const previous = states[toolId];
+    setConflictError('');
+    try {
+      await native.applyComparedApplication(comparison, 'global', '');
+      setConflict(null);
+      setStates((old) => {
+        const current = old[toolId];
+        if (!current?.workspace) return old;
+        const version = current.workspace.profiles.find((item) => item.id === comparison.profile.id)?.version ?? comparison.profile.version;
+        const workspace = { ...current.workspace, binding: { scopeKey: 'global', tool: toolId, profileId: comparison.profile.id, profileVersion: version, managed: {} } };
+        rememberedHome.set(toolId, workspace);
+        return { ...old, [toolId]: { ...current, busy: false, activity: null, error: null, notice: lineNotice('ok', `${toolName} 已写入原生文件，下次启动读取。`), workspace } };
+      });
+    } catch (error) {
+      setConflictError(message(error));
+      if (previous) setStates((old) => ({ ...old, [toolId]: settle(previous, null) }));
     }
   }
 
@@ -278,5 +319,8 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
         {line && <div className={styles.note} data-tone={line.tone} role={line.tone === 'error' ? 'alert' : 'status'} title={line.title}>{line.text}</div>}
       </div>;
     })}
+    <GuideDialog open={!!conflict} title="比较当前文件与本次配置" hint={conflict ? `${conflict.toolName} 的文件和「${conflict.profileName}」不一致。可以保留现有文件，或改用这份配置。` : undefined} onClose={() => { setConflict(null); setConflictError(''); }}>
+      {conflict && <div className="file-conflict" aria-label="配置应用冲突">{conflict.comparison.files.map((file) => <div className="file-conflict-columns" key={file.role}><div><strong>当前文件</strong><CodeEditor label={`当前 ${file.role} 文件`} readOnly compact format={file.format} value={file.current} /></div><div><strong>本次配置</strong><CodeEditor label={`本次 ${file.role} 配置`} readOnly compact format={file.format} value={file.proposedText ?? ''} /></div></div>)}{conflictError && <p role="alert">{conflictError}</p>}<div className="file-conflict-actions"><button type="button" onClick={() => { setConflict(null); setConflictError(''); }}>保留当前文件</button><button type="button" onClick={() => void useComparedFile()}>使用本次配置</button></div></div>}
+    </GuideDialog>
   </div>;
 }

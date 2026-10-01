@@ -132,6 +132,7 @@ pub struct AppliedBinding {
 #[serde(rename_all = "camelCase")]
 pub struct NativePreview {
     pub documents: BTreeMap<String, Value>,
+    pub rendered: BTreeMap<String, String>,
     pub sources: BTreeMap<String, BTreeMap<String, String>>,
 }
 
@@ -328,7 +329,13 @@ pub fn preview_registered(
             }
         }
     }
-    Ok(NativePreview { documents, sources })
+    let adapter = registry.get(&profile.tool).ok_or("未注册的 CLI 适配器")?;
+    let mut rendered = BTreeMap::new();
+    for (role, document) in &documents {
+        let kind = adapter.file_kind(role).unwrap_or(format::FileKind::Json);
+        rendered.insert(role.clone(), format::render(kind, document)?);
+    }
+    Ok(NativePreview { documents, rendered, sources })
 }
 
 pub fn apply_validated(
@@ -527,7 +534,7 @@ fn apply_registered_validated_compared(
 
 #[derive(Clone,Debug,Serialize,Deserialize)]
 #[serde(rename_all="camelCase")]
-pub struct ApplyComparisonFile { pub role:String, pub format:String, pub current:String, pub proposed:Value }
+pub struct ApplyComparisonFile { pub role:String, pub format:String, pub current:String, pub proposed:Value, pub proposed_text:String }
 #[derive(Clone,Debug,Serialize,Deserialize)]
 #[serde(rename_all="camelCase")]
 pub struct ApplyComparison { pub profile:RegisteredProfile, pub common:Option<RegisteredCommon>, pub files:Vec<ApplyComparisonFile> }
@@ -540,7 +547,14 @@ fn comparison_files(native:&[NativeFile],documents:&BTreeMap<String,Value>,requi
     let mut files=Vec::new();
     for role in roles {
         let file=native.iter().find(|file|file.role==role && !file.sensitive).ok_or("当前范围的原生文件不可编辑")?;
-        files.push(ApplyComparisonFile{role:role.clone(),format:file.format.into(),current:transaction::read_native(Path::new(&file.path))?,proposed:documents.get(&role).cloned().unwrap_or_else(||json!({}))});
+        let proposed = documents.get(&role).cloned().unwrap_or_else(|| json!({}));
+        let kind = match file.format {
+            "toml" => format::FileKind::Toml,
+            "jsonc" => format::FileKind::Jsonc,
+            _ => format::FileKind::Json,
+        };
+        let proposed_text = format::render(kind, &proposed)?;
+        files.push(ApplyComparisonFile { role: role.clone(), format: file.format.into(), current: transaction::read_native(Path::new(&file.path))?, proposed, proposed_text });
     }
     Ok(files)
 }
