@@ -1,7 +1,0 @@
-{
-  "command": "npm run test:unit:all",
-  "startedAt": "2026-09-30T09:45:03.003Z",
-  "finishedAt": "2026-09-30T09:45:18.297Z",
-  "exitCode": 0,
-  "wallSeconds": 15.291472899999999
-}
