@@ -45,7 +45,9 @@ test('library category is edited and filtered as tags', async ({ page }) => {
   await dialog.getByRole('button', { name: '保存' }).click();
   await expect(dialog).toHaveCount(0);
   await expect(page.getByRole('button', { name: '发布检查' })).toBeVisible();
-  await expect(page.getByText('文档 · 全局')).toBeVisible();
+  const savedCard = page.getByRole('article').filter({ has: page.getByRole('button', { name: '发布检查', exact: true }) });
+  await expect(savedCard.getByText('文档', { exact: true })).toBeVisible();
+  await expect(savedCard.getByRole('group', { name: '发布检查 的 CLI · 全局', exact: true })).toBeVisible();
   await page.getByLabel('标签筛选').selectOption('写作');
   await expect(page.getByRole('button', { name: '已有规则' })).toBeVisible();
   await expect(page.getByRole('button', { name: '发布检查' })).toHaveCount(0);
