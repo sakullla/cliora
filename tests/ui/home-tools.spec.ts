@@ -246,6 +246,44 @@ test('a home switch that differs from the file opens the comparison', async ({ p
   expect(compared).toHaveLength(1);
 });
 
+test('a project tool is searched and switched from the card', async ({ page }) => {
+  await page.addInitScript(() => {
+    const names: Record<string, string> = { codex: 'Codex', claude_code: 'Claude Code', grok: 'Grok', pi: 'Pi', open_code: 'OpenCode' };
+    const ids = Object.keys(names);
+    let preferred = 'codex';
+    const project = () => ({ id: 'demo', name: 'Demo', path: 'C:/demo', available: true, preferredTool: preferred, lastOpened: 1, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {} });
+    Object.assign(window, {
+      isTauri: true,
+      __toolCalls: [] as unknown[],
+      __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ids, theme: 'system' }, tools: ids.map((id) => ({ id, name: names[id] })) };
+        if (command === 'list_cli_adapters') return { registered: ids.map((id) => ({ id, name: names[id], interfaceFormats: [], yoloAvailable: true })), managedIds: ids, preservedUnknown: [] };
+        if (command === 'list_projects') return [project()];
+        if (command === 'get_registered_tool_workspace') return { probe: { selectedPath: `C:/${args.toolId}.cmd`, installations: [{ path: `C:/${args.toolId}.cmd`, version: '1.0.0', status: 'available' }], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' } }, profiles: [], binding: null, snapshots: [], recoveryNeeded: [], common: null, customPath: null };
+        if (command === 'get_launch_settings') return { selected: 'auto', terminals: [], cliMode: 'normal', projectMode: 'normal' };
+        if (command === 'get_tray_status') return { available: false, error: null };
+        if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+        if (command === 'set_project_tool') { preferred = args.toolId; (window as unknown as { __toolCalls: unknown[] }).__toolCalls.push(args); return project(); }
+        return null;
+      } },
+    });
+  });
+  await page.goto('/');
+  const projects = page.getByRole('region', { name: '项目与启动' });
+  const trigger = projects.getByRole('button', { name: 'Demo 的工具' });
+  await expect(trigger).toContainText('Codex');
+  await trigger.click();
+  const list = page.getByRole('listbox', { name: 'Demo 的工具' });
+  await expect(list.getByRole('option')).toHaveCount(6);
+  const search = page.getByLabel('搜索工具');
+  await expect(search).toBeFocused();
+  await search.fill('gr');
+  await expect(list.getByRole('option')).toHaveCount(1);
+  await list.getByRole('option', { name: 'Grok' }).click();
+  await expect(trigger).toContainText('Grok');
+  expect(await page.evaluate(() => (window as unknown as { __toolCalls: unknown[] }).__toolCalls)).toEqual([{ projectId: 'demo', toolId: 'grok' }]);
+});
+
 test('detection failure names the tool and points at edit or reread', async ({ page }) => {
   await installHome(page, true);
   await page.setViewportSize({ width: 1360, height: 768 });
@@ -372,7 +410,13 @@ test('a short profile menu switches by step buttons and shows the model', async 
   await menu.click();
   const list = page.getByRole('listbox', { name: '切换Codex的配置' });
   await expect(list.getByRole('option')).toHaveCount(6);
-  await expect(page.getByLabel('搜索配置')).toHaveCount(0);
+  const search = page.getByLabel('搜索配置');
+  await expect(search).toBeFocused();
+  await search.fill('deep');
+  await expect(list.getByRole('option')).toHaveCount(1);
+  await expect(list.getByRole('option', { name: 'DeepSeek' })).toBeVisible();
+  await search.fill('');
+  await expect(list.getByRole('option')).toHaveCount(6);
   const option = list.getByRole('option', { name: 'DeepSeek' });
   await expect(option).toContainText('deepseek-flash');
   const optionStacked = await option.evaluate((element) => {
@@ -381,7 +425,9 @@ test('a short profile menu switches by step buttons and shows the model', async 
     return !!name && !!model && model.top >= name.bottom - 1;
   });
   expect(optionStacked).toBe(true);
-  await expect(list).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('listbox')).toHaveCount(0);
+  await menu.click();
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Enter');
   await expect(page.getByRole('listbox')).toHaveCount(0);

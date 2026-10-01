@@ -1,0 +1,93 @@
+.select { min-width: 0; width: 100%; }
+
+.trigger {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: var(--control-h);
+  justify-content: flex-start;
+  padding: 0 30px 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background-color: var(--surface);
+  background-image: var(--chevron);
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  box-shadow: none;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 450;
+  text-align: left;
+}
+.trigger:hover:not(:disabled) { border-color: var(--text-3); background-color: var(--surface-2); }
+.trigger[data-open="true"] { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
+.trigger[data-empty="true"] .triggerCopy > span { color: var(--text-2); }
+.trigger:disabled { opacity: .5; }
+.triggerCopy { display: grid; min-width: 0; max-width: 100%; line-height: 1.2; }
+.triggerCopy > span,
+.triggerCopy > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.triggerCopy > small { color: var(--text-2); font-size: 11px; font-weight: 450; }
+
+.trigger[data-variant="accent"] {
+  min-height: 36px;
+  padding: 4px 28px 4px 10px;
+  border-color: var(--accent-line);
+  background-color: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12.5px;
+  font-weight: 640;
+}
+.trigger[data-variant="accent"]:hover:not(:disabled) { border-color: var(--accent); background-color: var(--accent-soft); color: var(--accent); }
+.trigger[data-variant="accent"][data-empty="true"],
+.trigger[data-variant="accent"][data-empty="true"]:hover:not(:disabled) { border-color: var(--line-strong); background-color: var(--surface); color: var(--text-2); font-weight: 560; }
+.trigger[data-variant="accent"] .triggerCopy > small { color: var(--accent); font-weight: 450; opacity: .85; }
+
+.panel {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+  outline: none;
+}
+.panel > input { width: 100%; background-color: var(--surface-2); }
+.panel > input:focus { box-shadow: none; }
+
+.list { display: grid; align-content: start; gap: 2px; min-height: 0; overflow: auto; }
+.list > button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  justify-content: stretch;
+  gap: 8px;
+  min-height: 40px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 500;
+  text-align: left;
+}
+.optionCopy { display: grid; min-width: 0; }
+.optionCopy > strong,
+.optionCopy > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.optionCopy > strong { font-weight: 600; }
+.optionCopy > small { color: var(--text-3); font-size: 11.5px; font-weight: 450; }
+.optionMarks { display: inline-flex; align-items: center; gap: 6px; }
+.optionMarks > em { color: var(--warning); font-size: 11px; font-style: normal; font-weight: 560; }
+.optionMarks svg { flex: none; color: var(--accent); }
+.list > button:hover:not(:disabled),
+.list > button[data-active="true"] { background: var(--surface-3); }
+.list > button[aria-selected="true"],
+.list > button[aria-selected="true"]:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent); }
+.list > button[aria-selected="true"] small { color: var(--accent); }
+.list > button:disabled { opacity: .5; }
+.list > p { margin: 0; padding: 8px; color: var(--text-3); font-size: 12px; }

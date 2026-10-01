@@ -1,5 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { createPortal } from 'react-dom';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import { native, nativeAvailable } from '../../lib/native';
@@ -7,8 +6,9 @@ import type { LaunchSettings } from '../../types/launch';
 import { preferredLaunchMode } from '../../types/launch';
 import type { AdapterDescriptor, ApplyComparison, RegisteredToolWorkspace } from '../../types/native';
 import { CodeEditor } from '../../components/CodeEditor';
+import { FilterSelect } from '../../components/FilterSelect';
+import type { FilterSelectOption } from '../../components/FilterSelect';
 import { GuideDialog } from '../../components/GuideDialog';
-import { Icon } from '../../components/Icon';
 import { ToolIcon } from '../../components/ToolIcon';
 import styles from './ManagedTools.module.css';
 
@@ -17,6 +17,7 @@ type Activity = 'launch' | 'apply' | null;
 type Loaded = { workspace: RegisteredToolWorkspace | null; error: string | null; busy: boolean; activity: Activity; notice: Notice | null };
 
 const rememberedHome = new Map<string, RegisteredToolWorkspace>();
+let lastLaunchDirectory = '';
 
 function message(value: unknown): string {
   return value && typeof value === 'object' && 'message' in value ? String(value.message) : '操作失败，请重试';
@@ -52,116 +53,26 @@ function ProfileMenu({ label, profiles, selected, appliedCurrent, disabled, titl
   title?: string;
   onSwitch: (profileId: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState('');
-  const [active, setActive] = useState(0);
-  const [box, setBox] = useState<{ top?: number; bottom?: number; left: number; width: number; maxHeight: number } | null>(null);
-  const anchor = useRef<HTMLDivElement>(null);
-  const panel = useRef<HTMLDivElement>(null);
-  const listId = useId();
-  const showSearch = profiles.length > 8;
-  const matches = profiles.filter((item) => profileLabel(item.name, item.connection).toLowerCase().includes(query.trim().toLowerCase()));
-  const selectedModel = selected?.connection?.model?.trim() ?? '';
+  const options: FilterSelectOption[] = profiles.map((item) => ({ value: item.id, label: item.name, detail: item.connection?.model?.trim() || undefined, note: item.id === selected?.id && !appliedCurrent ? '有未应用修改' : undefined }));
   const selectedIndex = profiles.findIndex((item) => item.id === selected?.id);
-
-  useLayoutEffect(() => {
-    if (!open || !anchor.current) return;
-    const place = () => {
-      const rect = anchor.current?.getBoundingClientRect();
-      if (!rect) return;
-      const width = Math.min(Math.max(rect.width, 280), window.innerWidth - 16);
-      const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
-      const below = window.innerHeight - rect.bottom - 12;
-      const above = rect.top - 12;
-      const upward = below < 220 && above > below;
-      setBox({ left, width, maxHeight: Math.max(180, Math.min(320, upward ? above : below)), top: upward ? undefined : rect.bottom + 4, bottom: upward ? window.innerHeight - rect.top + 4 : undefined });
-    };
-    place();
-    window.addEventListener('resize', place);
-    window.addEventListener('scroll', place, true);
-    return () => { window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true); };
-  }, [open]);
-
-  useEffect(() => { if (disabled) setOpen(false); }, [disabled]);
-  useEffect(() => {
-    if (!open) return;
-    setActive(Math.max(0, profiles.findIndex((item) => item.id === selected?.id)));
-  }, [open]);
-  useEffect(() => { setActive(0); }, [query]);
-  useEffect(() => {
-    if (!open) return;
-    const close = (event: MouseEvent) => {
-      const target = event.target as Node;
-      if (anchor.current?.contains(target) || panel.current?.contains(target)) return;
-      setOpen(false);
-      setQuery('');
-    };
-    document.addEventListener('mousedown', close);
-    return () => document.removeEventListener('mousedown', close);
-  }, [open]);
-  useEffect(() => {
-    if (!open || showSearch) return;
-    panel.current?.focus();
-  }, [open, showSearch, box]);
-  useEffect(() => {
-    if (!open || !panel.current) return;
-    const node = panel.current.querySelector<HTMLElement>('[data-active="true"]');
-    const list = node?.parentElement;
-    if (!node || !list) return;
-    const top = node.offsetTop;
-    const bottom = top + node.offsetHeight;
-    if (top < list.scrollTop) list.scrollTop = top;
-    else if (bottom > list.scrollTop + list.clientHeight) list.scrollTop = bottom - list.clientHeight;
-  }, [open, active, query]);
-
-  function choose(item: SwitchableProfile) {
-    setOpen(false);
-    setQuery('');
-    if (item.id !== selected?.id || !appliedCurrent) onSwitch(item.id);
-  }
 
   function move(direction: -1 | 1) {
     if (disabled || profiles.length < 2) return;
     const index = selectedIndex < 0 ? 0 : selectedIndex;
     const next = profiles[(index + direction + profiles.length) % profiles.length];
-    if (next) choose(next);
-  }
-
-  function onMenuKey(event: KeyboardEvent<HTMLElement>) {
-    if (event.key === 'ArrowDown') { event.preventDefault(); setActive((index) => Math.min(index + 1, Math.max(matches.length - 1, 0))); return; }
-    if (event.key === 'ArrowUp') { event.preventDefault(); setActive((index) => Math.max(index - 1, 0)); return; }
-    if (event.key === 'Enter' && matches[active]) { event.preventDefault(); choose(matches[active]); return; }
-    if (event.key === 'Escape') { event.preventDefault(); setOpen(false); setQuery(''); }
+    if (next && (next.id !== selected?.id || !appliedCurrent)) onSwitch(next.id);
   }
 
   function onTriggerKey(event: KeyboardEvent<HTMLButtonElement>) {
     if (event.key === 'ArrowLeft') { event.preventDefault(); move(-1); return; }
     if (event.key === 'ArrowRight') { event.preventDefault(); move(1); return; }
-    if (event.key === 'ArrowDown' && !open) { event.preventDefault(); setOpen(true); }
   }
 
-  return <>
-    <div ref={anchor} className={styles.switcher}>
-      <button type="button" className={styles.step} aria-label="上一个配置" disabled={disabled || profiles.length < 2} title="切换到上一个配置" onClick={() => move(-1)}><StepGlyph direction="left" /></button>
-      <button type="button" className={styles.menuTrigger} data-empty={!selected || undefined} data-open={open || undefined} aria-label={label} aria-haspopup="listbox" aria-expanded={open} aria-controls={listId} disabled={disabled} title={title ?? (selected ? profileLabel(selected.name, selected.connection) : undefined)} onClick={() => setOpen((value) => !value)} onKeyDown={onTriggerKey}>
-        <span className={styles.switchCopy}><span>{selected?.name ?? '选择要使用的配置'}</span>{selectedModel && <small>{selectedModel}</small>}</span>
-      </button>
-      <button type="button" className={styles.step} aria-label="下一个配置" disabled={disabled || profiles.length < 2} title="切换到下一个配置" onClick={() => move(1)}><StepGlyph direction="right" /></button>
-    </div>
-    {open && box && createPortal(<div ref={panel} className={styles.menu} role="listbox" id={listId} aria-label={label} tabIndex={-1} style={{ top: box.top, bottom: box.bottom, left: box.left, width: box.width }} onKeyDown={showSearch ? undefined : onMenuKey}>
-      {showSearch && <input aria-label="搜索配置" placeholder="输入配置名称" value={query} autoFocus onChange={(event) => setQuery(event.target.value)} onKeyDown={onMenuKey} />}
-      <div className={styles.menuList} style={{ maxHeight: Math.max(140, box.maxHeight - (showSearch ? 52 : 8)) }}>
-        {matches.length ? matches.map((item, index) => {
-          const model = item.connection?.model?.trim();
-          const current = item.id === selected?.id;
-          return <button key={item.id} type="button" role="option" aria-selected={current} data-active={index === active || undefined} title={profileLabel(item.name, item.connection)} onMouseEnter={() => setActive(index)} onClick={() => choose(item)}>
-            <span><strong>{item.name}</strong>{model && <small>{model}</small>}</span>
-            <span className={styles.menuMarks}>{current && !appliedCurrent && <em>有未应用修改</em>}{current && <Icon name="check" size={14} />}</span>
-          </button>;
-        }) : <p>没有匹配的配置</p>}
-      </div>
-    </div>, document.body)}
-  </>;
+  return <div className={styles.switcher}>
+    <button type="button" className={styles.step} aria-label="上一个配置" disabled={disabled || profiles.length < 2} title="切换到上一个配置" onClick={() => move(-1)}><StepGlyph direction="left" /></button>
+    <FilterSelect className={styles.switchSelect} label={label} value={selected?.id ?? ''} options={options} placeholder="选择要使用的配置" disabled={disabled} title={title} variant="accent" searchLabel="搜索配置" searchPlaceholder="输入配置名称" onChange={(value) => { if (value !== selected?.id || !appliedCurrent) onSwitch(value); }} onTriggerKeyDown={onTriggerKey} />
+    <button type="button" className={styles.step} aria-label="下一个配置" disabled={disabled || profiles.length < 2} title="切换到下一个配置" onClick={() => move(1)}><StepGlyph direction="right" /></button>
+  </div>;
 }
 
 export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]; onOpenTool: (toolId: string) => void }) {
@@ -212,11 +123,12 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
     const toolName = tools.find((item) => item.id === toolId)?.name ?? toolId;
     setStates((old) => ({ ...old, [toolId]: { ...previous, busy: true, activity: 'launch', error: null, notice: null } }));
     try {
-      const directory = await open({ directory: true, multiple: false, title: '选择启动工作目录' });
+      const directory = await open({ directory: true, multiple: false, title: '选择启动工作目录', defaultPath: lastLaunchDirectory || undefined });
       if (typeof directory !== 'string') {
         setStates((old) => ({ ...old, [toolId]: settle(previous, null) }));
         return;
       }
+      lastLaunchDirectory = directory;
       await native.launchCli({ toolId, projectId: null, sessionId: null, mode: preferredLaunchMode(launchSettings, 'cli', !!tools.find((item) => item.id === toolId)?.yoloAvailable), directory });
       setStates((old) => ({ ...old, [toolId]: settle(previous, lineNotice('ok', `${toolName} 已向外部终端发出请求。`)) }));
     } catch (error) {
@@ -310,12 +222,12 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
         <div className={styles.name}><ToolIcon toolId={tool.id} size={34} /><span><strong>{tool.name}</strong><small className={styles.status} data-state={loaded?.error ? 'error' : !workspace ? 'loading' : installed ? 'ok' : 'warn'}>{loaded?.error ? '检测失败' : workspace ? installed ? workspace.probe.installations.find((item) => item.path === workspace.probe.selectedPath)?.version ?? '已安装' : '未确认安装' : '正在检测'}</small></span></div>
         <div className={styles.switch}>
           {loaded?.error ? null
-            : !workspace ? (nativeAvailable ? <small>正在读取配置</small> : null)
+            : !workspace ? (nativeAvailable ? <><span className="sr-only">正在读取配置</span><span className={styles.loadingBar} aria-hidden="true" /></> : null)
             : profiles.length > 4 ? <ProfileMenu label={`切换${tool.name}的配置`} profiles={profiles} selected={selected} appliedCurrent={appliedCurrent} disabled={!!loaded?.busy || !writable} title={switchTitle} onSwitch={(profileId) => void switchProfile(tool.id, profileId)} />
             : profiles.length ? <div role="radiogroup" aria-label={`切换${tool.name}的配置`} title={switchTitle}>{profiles.map((item) => <button key={item.id} type="button" role="radio" aria-checked={item.id === selected?.id} className={item.id === selected?.id ? styles.activeConfig : ''} disabled={loaded?.busy || !writable} title={profileLabel(item.name, item.connection)} onClick={() => { if (item.id !== selected?.id || !appliedCurrent) void switchProfile(tool.id, item.id); }}>{item.name}</button>)}</div>
             : <button type="button" className={styles.addConfig} onClick={() => onOpenTool(tool.id)}>新建配置</button>}
         </div>
-        <div className={styles.rowActions}><button type="button" className={styles.launch} disabled={!installed || loaded?.busy} aria-busy={loaded?.activity === 'launch' || undefined} title={launchMode === 'yolo' ? '按此 CLI 的原生参数跳过审批' : launchSettings?.cliMode === 'yolo' ? '此 CLI 未提供已确认的 YOLO 参数，将用普通模式启动' : undefined} onClick={() => void launchTool(tool.id)}>{loaded?.activity === 'launch' ? '正在启动' : '启动'}</button><button type="button" onClick={() => onOpenTool(tool.id)}>编辑配置 →</button></div>
+        <div className={styles.rowActions}><button type="button" className={styles.launch} disabled={!installed || loaded?.busy} aria-busy={loaded?.activity === 'launch' || undefined} title={!installed && workspace ? '尚未确认安装，可在“工具与连接”中检查' : launchMode === 'yolo' ? '按此 CLI 的原生参数跳过审批' : launchSettings?.cliMode === 'yolo' ? '此 CLI 未提供已确认的 YOLO 参数，将用普通模式启动' : undefined} onClick={() => void launchTool(tool.id)}>{loaded?.activity === 'launch' ? '正在启动' : '启动'}</button><button type="button" onClick={() => onOpenTool(tool.id)}>编辑配置 →</button></div>
         {line && <div className={styles.note} data-tone={line.tone} role={line.tone === 'error' ? 'alert' : 'status'} title={line.title}>{line.text}</div>}
       </div>;
     })}

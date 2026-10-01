@@ -332,7 +332,8 @@ pub async fn refresh_history(app: AppHandle) -> Result<Vec<history::ScanStatus>,
         let _guard = HISTORY_REFRESH_LOCK.try_lock().map_err(|_| native_error("扫描已在后台进行".into()))?;
         let home = home()?;
         app.state::<AppState>().with_database(&app, |db| {
-            history::refresh_controlled(db, &adapters::Registry::builtins(), &home, &|| HISTORY_REFRESH_GENERATION.load(std::sync::atomic::Ordering::SeqCst) != generation).map_err(native_error)
+            let managed = db.preferences().map_err(native_error)?.managed_tools;
+            history::refresh_controlled(db, &adapters::Registry::builtins(), &home, &managed, &|| HISTORY_REFRESH_GENERATION.load(std::sync::atomic::Ordering::SeqCst) != generation).map_err(native_error)
         })
     })
     .await
