@@ -49,6 +49,14 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
   const scanRequest = useRef(0);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  function showError(value: unknown) {
+    setNotice('');
+    setError(typeof value === 'string' ? value : errorText(value));
+  }
+  function showNotice(text: string) {
+    setError('');
+    setNotice(text);
+  }
   const initialized = useRef(false);
   const request = useRef(0);
   const detailRequest = useRef(0);
@@ -61,15 +69,19 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
 
   const filterRef = useRef(filter); filterRef.current = filter;
   const load = useCallback(async (current: HistoryFilter) => {
-    if (!nativeAvailable) return;
+    if (!nativeAvailable) return false;
     const sequence = ++request.current;
     const key = JSON.stringify(current); setFilterLoading(true);
     try {
       const [items, summary] = await Promise.all([native.listHistorySessions(current), native.getHistoryUsage(current)]);
-      if (sequence !== request.current || key !== JSON.stringify(filterRef.current)) return;
+      if (sequence !== request.current || key !== JSON.stringify(filterRef.current)) return false;
       setSessions(items); setUsage(summary); setScans(summary.scans); setError('');
       setSelectedId((old) => old && items.some((item) => item.id === old) ? old : items[0]?.id ?? null);
-    } catch (value) { if (sequence === request.current && key === JSON.stringify(filterRef.current)) setError(errorText(value)); }
+      return true;
+    } catch (value) {
+      if (sequence === request.current && key === JSON.stringify(filterRef.current)) showError(value);
+      return false;
+    }
     finally { if (sequence === request.current) setFilterLoading(false); }
   }, []);
 
@@ -79,7 +91,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
     void load(filter);
     void Promise.all([native.listProjects(), native.listHistoryPrices()])
       .then(([knownProjects, knownPrices]) => { setProjects(knownProjects); setPrices(knownPrices); })
-      .catch(value => setError(errorText(value)));
+      .catch(value => showError(value));
     void refresh();
   }, [active]);
 
@@ -93,7 +105,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
     if (!selectedId || !nativeAvailable) { setDetail(null); return; }
     const sequence = ++detailRequest.current;
     void native.getHistorySession(selectedId).then((value) => { if (sequence === detailRequest.current) setDetail(value); })
-      .catch((value) => { if (sequence === detailRequest.current) setError(errorText(value)); });
+      .catch((value) => { if (sequence === detailRequest.current) showError(value); });
   }, [selectedId]);
 
   const selected = detail?.session.id === selectedId ? detail : null;
@@ -124,17 +136,21 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
   }, [scanning, active]);
   async function refresh() {
     if (!nativeAvailable || scanning) return;
-    const sequence = ++scanRequest.current; setScanning(true); setNotice('');
+    const sequence = ++scanRequest.current; setScanning(true); setNotice(''); setError('');
     try {
       const reports = await native.refreshHistory();
       if (sequence !== scanRequest.current) return;
-      setScans(reports); await load(filterRef.current); setNotice('已刷新本机记录。');
-    } catch (value) { if (sequence === scanRequest.current) setError(errorText(value)); }
+      setScans(reports);
+      const loaded = await load(filterRef.current);
+      if (sequence !== scanRequest.current || !loaded) return;
+      showNotice('已刷新本机记录。');
+    } catch (value) { if (sequence === scanRequest.current) showError(value); }
     finally { if (sequence === scanRequest.current) { setScanning(false); setScanProgress(null); } }
   }
   async function cancelScan() {
-    scanRequest.current++; setScanning(false); setScanProgress(null); setNotice('已请求停止扫描，现有记录保留。');
-    try { await native.cancelHistoryRefresh(); } catch (value) { setError(errorText(value)); }
+    scanRequest.current++; setScanning(false); setScanProgress(null); setNotice(''); setError('');
+    try { await native.cancelHistoryRefresh(); showNotice('已请求停止扫描，现有记录保留。'); }
+    catch (value) { showError(value); }
   }
 
   async function favorite() {
@@ -143,7 +159,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
       await native.setHistoryFavorite(selected.session.id, !selected.session.favorite);
       setDetail({ ...selected, session: { ...selected.session, favorite: !selected.session.favorite } });
       await load(filter);
-    } catch (value) { setError(errorText(value)); }
+    } catch (value) { showError(value); }
   }
 
   async function assignProject(next: string) {
@@ -152,20 +168,21 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
       await native.setHistoryProject(selected.session.id, next || null);
       setDetail(await native.getHistorySession(selected.session.id));
       await load(filter);
-    } catch (value) { setError(errorText(value)); }
+    } catch (value) { showError(value); }
   }
 
   async function copy() {
     if (!readyCommand) return;
-    try { await navigator.clipboard.writeText(readyCommand); setNotice('已复制原生恢复命令，粘贴后由终端执行。'); }
-    catch (value) { setError(errorText(value)); }
+    setNotice(''); setError('');
+    try { await navigator.clipboard.writeText(readyCommand); showNotice('已复制原生恢复命令，粘贴后由终端执行。'); }
+    catch { showError('复制失败，恢复命令仍在页面上，可以手动选择。'); }
   }
 
   async function resume() {
     if (!selected || !readyCommand) return;
-    setBusy(true);
-    try { await native.resumeHistorySession(selected.session.id, mode); setNotice('已请求外部终端恢复会话。'); }
-    catch (value) { setError(errorText(value)); }
+    setBusy(true); setNotice(''); setError('');
+    try { await native.resumeHistorySession(selected.session.id, mode); showNotice('已请求外部终端恢复会话。'); }
+    catch (value) { showError(value); }
     finally { setBusy(false); }
   }
 
@@ -175,27 +192,29 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
       const destination = await save({ title: '导出会话资料', defaultPath: `cliora-session-${selected.session.nativeId ?? selected.session.id.slice(0, 8)}.${format === 'json' ? 'json' : 'md'}`,
         filters: [{ name: format === 'json' ? 'JSON' : 'Markdown', extensions: [format === 'json' ? 'json' : 'md'] }] });
       if (!destination) return;
+      setNotice(''); setError('');
       const path = await native.exportHistorySession(selected.session.id, format, destination);
-      setNotice(`已导出到 ${path}`);
-    } catch (value) { setError(errorText(value)); }
+      showNotice(`已导出到 ${path}`);
+    } catch (value) { showError(value); }
   }
 
   async function savePrice() {
     const chosenTool = priceTool;
     const chosenModel = priceModel.trim();
-    if (!chosenTool || !chosenModel) { setError('先选择工具和模型，再填写价格。'); return; }
+    if (!chosenTool || !chosenModel) { showError('先选择工具和模型，再填写价格。'); return; }
     if (![priceDraft.input, priceDraft.output, priceDraft.read, priceDraft.write].every((value) => value.trim() !== '')) {
-      setError('请填写四项单价；确认为免费的项目可填 0。'); return;
+      showError('请填写四项单价；确认为免费的项目可填 0。'); return;
     }
+    setNotice(''); setError('');
     try {
       const price = await native.saveHistoryPrice({ toolId: chosenTool, model: chosenModel, currency: priceDraft.currency.trim().toUpperCase(),
         inputPerMillion: Number(priceDraft.input), outputPerMillion: Number(priceDraft.output),
         cacheReadPerMillion: Number(priceDraft.read), cacheWritePerMillion: Number(priceDraft.write),
         source: priceDraft.source.trim(), updatedAt: 0 });
       setPrices((old) => [...old.filter((item) => item.toolId !== price.toolId || item.model !== price.model), price]);
-      setPriceOpen(false); setNotice('估算价格已保存；只影响本机统计。');
+      setPriceOpen(false); showNotice('估算价格已保存；只影响本机统计。');
       setUsage(await native.getHistoryUsage(filter));
-    } catch (value) { setError(errorText(value)); }
+    } catch (value) { showError(value); }
   }
 
   if (!nativeAvailable) return <div className={styles.empty}><h2>本机使用记录</h2><p>在桌面应用中读取原生 CLI 会话。浏览器预览不展示本机历史。</p></div>;
