@@ -6,7 +6,7 @@
 .secondary { background: var(--surface); }
 
 /* Tool switcher: segmented control */
-.toolbar { display: grid; width: 100%; }
+.toolbar { display: grid; width: 100%; container-type: inline-size; }
 .toolSwitcher {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
@@ -35,6 +35,13 @@
 }
 .toolSwitcher button:hover { color: var(--text); background: color-mix(in srgb, var(--surface) 55%, transparent); }
 .toolSwitcher .selected, .toolSwitcher .selected:hover { background: var(--surface); color: var(--text); font-weight: 640; box-shadow: var(--shadow-sm); }
+@container (max-width: 640px) {
+  .toolSwitcher { display: flex; }
+  .toolSwitcher button { flex: 1 0 auto; gap: 6px; padding: 0 9px; }
+}
+@container (max-width: 470px) {
+  .toolSwitcher button:not(.selected) { flex: 0 0 auto; gap: 0; padding: 0 10px; font-size: 0; }
+}
 
 /* Task tabs + scope */
 .taskBar { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 10px 20px; border-bottom: 1px solid var(--line); }
@@ -106,16 +113,34 @@
 .pathControl > div input { flex: 1 1 260px; min-width: 0; }
 .pathControl code { min-width: 0; padding: 5px 8px; overflow-wrap: anywhere; }
 .pathControl p { line-height: 1.6; overflow-wrap: anywhere; }
+.pathControl > .installRow { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; column-gap: 10px; align-items: center; min-height: 28px; margin: 8px 14px; }
+.installRow strong { color: var(--text); font-weight: 620; }
+.installRow em { color: var(--accent); font-style: normal; font-weight: 560; }
+.installRow span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pathControl > .installNote { margin: 2px 14px 0; }
+.pathControl > .installFail { margin: 2px 14px 0; color: var(--warning); }
+.pathControl > .installActions { gap: 8px; margin-top: 12px; }
+.pathCustom > summary { min-height: 28px; padding: 0; color: var(--text-2); }
+.pathCustom > summary::before { margin-right: 6px; }
+.pathCustom > div { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+.pathCustom > div input { flex: 1 1 220px; min-width: 0; }
 
 /* Profile list */
 .profileList { overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-xs); }
 .listHeading { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 52px; padding: 8px 12px 8px 16px; background: var(--surface-2); border-bottom: 1px solid var(--line); }
 .listHeading > strong { font-size: 13px; font-weight: 650; }
 .listActions { display: flex; gap: 6px; }
-.profileRow { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 58px; padding: 10px 12px 10px 16px; border-top: 1px solid var(--line); transition: background-color var(--fast) var(--ease); }
+.profileRow { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 58px; padding: 0 12px 0 0; border-top: 1px solid var(--line); transition: background-color var(--fast) var(--ease); }
 .listHeading + .profileRow { border-top: 0; }
 .profileRow:hover { background: var(--surface-2); }
-.profileRow > span { display: grid; gap: 3px; min-width: 0; justify-items: start; }
+.profileRow[data-active="true"] { background: color-mix(in srgb, var(--accent) 7%, var(--surface)); }
+.profileRow[data-active="true"]:hover { background: color-mix(in srgb, var(--accent) 11%, var(--surface)); }
+.profileRow > span:not(.profileActions) { display: grid; flex: 1; gap: 3px; min-width: 0; justify-items: start; padding: 10px 0 10px 16px; }
+.profileActions { display: flex; flex: none; align-items: center; gap: 6px; }
+.profileFilter { display: block; padding: 8px 12px; border-top: 1px solid var(--line); }
+.profileFilter input { width: 100%; }
+.profileScroll { max-height: 406px; overflow: auto; }
+.profileEmpty { margin: 0; padding: 14px 16px; border-top: 1px solid var(--line); color: var(--text-3); font-size: 12.5px; }
 .profileRow strong { overflow: hidden; font-size: 13.5px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .profileRow small { overflow: hidden; color: var(--text-2); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .profileRow[data-kind="native"] strong::before { content: ''; display: inline-block; width: 12px; height: 12px; margin-right: 7px; vertical-align: -1px; background: var(--text-3); -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5'/%3E%3C/svg%3E") center / contain no-repeat; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5'/%3E%3C/svg%3E") center / contain no-repeat; }
@@ -144,7 +169,7 @@
 
 .editor { display: grid; gap: 14px; min-width: 0; }
 
-.form { display: grid; gap: 12px; max-width: 680px; }
+.form { display: grid; gap: 12px; }
 .form label, .connectionAdvanced label, .formGrid label { display: grid; gap: 6px; min-width: 0; color: var(--text-2); font-size: 12px; font-weight: 560; }
 .form label > input:not([type=checkbox]), .form label > select, .connectionAdvanced label > input:not([type=checkbox]), .connectionAdvanced label > select, .formGrid input, .formGrid select { width: 100%; min-width: 0; color: var(--text); font-weight: 400; }
 .form label > small { color: var(--warning); font-weight: 400; }
@@ -155,13 +180,6 @@
 .modelPicker { display: flex; align-items: flex-end; gap: 6px; }
 .modelPicker label { flex: 1; min-width: 0; }
 .modelPicker > button { min-height: var(--control-h); }
-
-.modelSearch { font-size: 12.5px; color: var(--text-2); }
-.modelSearch > input { width: 100%; margin: 8px 0; }
-.modelSearch > div { display: grid; max-height: 220px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); }
-.modelSearch > div > button { justify-content: flex-start; min-height: 32px; padding: 0 10px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; box-shadow: none; font-family: var(--font-mono); font-size: 12px; font-weight: 400; }
-.modelSearch > div > button:last-child { border-bottom: 0; }
-.modelSearch > div > button:hover { background: var(--accent-soft); color: var(--accent); }
 
 .check { display: flex !important; align-items: center; gap: 8px !important; color: var(--text) !important; font-size: 12.5px !important; font-weight: 500 !important; cursor: pointer; }
 
@@ -187,8 +205,8 @@
 .moreSection { display: grid; gap: 8px; }
 .moreSection > strong { color: var(--text); font-size: 12.5px; font-weight: 600; }
 
-.connectionAdvanced, .roleMapping, .backupHistory { padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
-.connectionAdvanced > summary, .roleMapping > summary, .backupHistory > summary { color: var(--text); font-weight: 560; }
+.connectionAdvanced, .backupHistory { padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
+.connectionAdvanced > summary, .backupHistory > summary { color: var(--text); font-weight: 560; }
 .connectionAdvanced[open] { display: grid; gap: 12px; }
 .connectionAdvanced[open] > summary { margin-bottom: 2px; }
 .modelBar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
@@ -201,10 +219,16 @@
 .diagnosticResult { padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); overflow-wrap: anywhere; }
 .diagnosticResult p { margin: 8px 0 0; font-size: 12px; line-height: 1.6; }
 
-.roleMapping[open] > summary { margin-bottom: 12px; }
-.roleFields { display: grid; grid-template-columns: 96px minmax(0, 1fr); align-items: center; gap: 10px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
-.roleFields > strong { color: var(--text); font-size: 12.5px; }
-.roleFields > label, .roleFields > input { grid-column: 2; }
+.roleMapping { display: grid; gap: 0; padding: 4px 12px 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
+.roleHeading { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 40px; }
+.roleHeading > strong { color: var(--text); font-size: 12.5px; font-weight: 600; }
+.roleHeading > button { flex: none; }
+.roleRow { display: grid; grid-template-columns: 72px minmax(0, 1fr) 48px; column-gap: 8px; row-gap: 6px; align-items: start; padding: 10px 0; border-top: 1px solid var(--line); }
+.roleRow > strong { grid-column: 1; grid-row: 1; padding-top: 7px; color: var(--text); font-size: 12.5px; font-weight: 560; }
+.roleRow > :nth-child(2) { grid-column: 2; grid-row: 1; min-width: 0; }
+.roleRow > .check, .roleSlot { grid-column: 3; grid-row: 1; min-height: var(--control-h); align-items: center; justify-content: flex-end; white-space: nowrap; }
+.roleSlot { display: block; }
+.roleName { grid-column: 2; grid-row: 2; width: 100%; min-width: 0; color: var(--text); font-weight: 400; }
 
 .merged { display: grid; gap: 8px; justify-items: start; }
 .merged > p { color: var(--text-2); font-size: 12px; line-height: 1.6; }
@@ -244,12 +268,13 @@
   .scopeBar { justify-content: flex-start; }
   .views { flex: none; }
   .views button { white-space: normal; text-align: left; line-height: 1.3; }
-  .toolSwitcher { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: minmax(112px, 1fr); }
   .pathControl > summary > span:not(.statusDot):not(.diagnosticLabel) { flex-basis: 100%; order: 5; }
   .pathControl > summary::before { order: 3; }
   .modelPicker { flex-wrap: wrap; }
   .modelPicker label { min-width: 180px; }
-  .roleFields { grid-template-columns: 1fr; }
-  .roleFields > label, .roleFields > input { grid-column: 1; }
+  .roleHeading { align-items: flex-start; flex-direction: column; gap: 0; min-height: 0; padding-top: 8px; }
+  .roleRow { grid-template-columns: 72px minmax(0, 1fr); }
+  .roleRow > .check, .roleSlot { grid-column: 2; grid-row: 2; justify-content: flex-start; }
+  .roleName { grid-row: 3; }
   .listHeading { flex-wrap: wrap; }
 }

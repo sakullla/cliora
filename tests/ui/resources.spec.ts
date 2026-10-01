@@ -53,6 +53,18 @@ async function mockResources(page: Page) {
           if (index < 0) definitions.push(item); else definitions[index] = item;
           return item;
         }
+        if (command === 'delete_mcp_definition') {
+          const index = definitions.findIndex((item) => item.id === args.id && item.version === args.expectedVersion);
+          if (index < 0) throw new Error('MCP 定义已被修改或不存在，请重新读取');
+          definitions.splice(index, 1);
+          return null;
+        }
+        if (command === 'remove_native_mcp') return null;
+        if (command === 'delete_skill_package') {
+          const index = skillPackages.findIndex((item) => item.id === args.packageId);
+          if (index >= 0) skillPackages.splice(index, 1);
+          return null;
+        }
         if (command === 'list_native_mcp') return [];
         if (command === 'preview_mcp_targets') {
           const response = args.targets.map((target: Record<string, unknown>) =>
@@ -87,12 +99,15 @@ test('MCP replacement shows both native entries and can be canceled', async ({ p
   await page.goto('/');
   await page.evaluate(() => { (window as typeof window & { __resourceMcpConflict: boolean }).__resourceMcpConflict = true; });
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
-  await page.getByRole('tab', { name: '添加 MCP' }).click();
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
   await page.getByRole('button', { name: '添加 MCP', exact: true }).click();
   await page.getByRole('textbox', { name: '名称' }).fill('filesystem');
   await page.getByRole('textbox', { name: '命令' }).fill('npx');
   await openMcpMoreOptions(page);
   await page.getByRole('button', { name: '只保存到资料库' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await page.getByRole('button', { name: /filesystem/ }).click();
+  await openMcpMoreOptions(page);
   await page.getByText('分发到其他 CLI',{exact:true}).click();
   await page.getByRole('checkbox', { name: 'Codex' }).check();
   await page.getByRole('button', { name: '分发所选工具' }).click();
@@ -112,12 +127,15 @@ test('an unfinished MCP preview cannot return after switching scope or distribut
   await mockResources(page);
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
-  await page.getByRole('tab', { name: '添加 MCP' }).click();
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
   await page.getByRole('button', { name: '添加 MCP', exact: true }).click();
   await page.getByRole('textbox', { name: '名称' }).fill('filesystem');
   await page.getByRole('textbox', { name: '命令' }).fill('npx');
   await openMcpMoreOptions(page);
   await page.getByRole('button', { name: '只保存到资料库' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await page.getByRole('button', { name: /filesystem/ }).click();
+  await openMcpMoreOptions(page);
   await page.getByText('分发到其他 CLI',{exact:true}).click();
   await page.getByRole('checkbox', { name: 'Codex' }).check();
   await page.evaluate(() => { (window as typeof window & { __resourceDeferMcpPreview: boolean }).__resourceDeferMcpPreview = true; });
@@ -159,7 +177,7 @@ test('local ZIP import is available without a URL, selects a complete Skill, and
   });
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
-  await page.getByRole('tab', { name: '添加 Skill', exact: true }).click();
+  await page.getByRole('tab', { name: 'Skill', exact: true }).click();
   await page.getByRole('button', { name: '添加 Skill', exact: true }).click();
   await expect(page.getByRole('button', { name: '导入 ZIP 文件', exact: true })).toBeEnabled();
   await page.getByRole('button', { name: '导入 ZIP 文件', exact: true }).click();
@@ -169,5 +187,65 @@ test('local ZIP import is available without a URL, selects a complete Skill, and
   await page.getByRole('button', { name: '确认更新资料库包' }).click();
   await expect(page.getByRole('heading', { name: 'alpha', exact: true })).toBeVisible();
   expect(await page.evaluate(() => (window as any).__resourceWrites)).toEqual([{ command: 'import_skill_local_zip', args: { source: 'C:/fixtures/skills.zip', subdirectory: 'bundle/alpha', expectedNew: 'new-bundle', expectedExisting: 'old-bundle' } }]);
+});
+
+test('MCP and Skill libraries are managed from the library page', async ({ page }) => {
+  await mockResources(page);
+  await page.goto('/');
+  await page.evaluate(() => {
+    (window as unknown as { __resourceSkillPackages: Array<Record<string, unknown>> }).__resourceSkillPackages.push({ id: 'alpha-id', name: 'alpha', description: 'Complete package', fileCount: 3, digest: 'new-bundle', source: 'local', compatibility: null });
+  });
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  await page.getByRole('button', { name: '添加 MCP', exact: true }).click();
+  await page.getByRole('textbox', { name: '名称' }).fill('filesystem');
+  await page.getByRole('textbox', { name: '命令' }).fill('npx');
+  await openMcpMoreOptions(page);
+  await page.getByRole('button', { name: '只保存到资料库' }).click();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'filesystem' })).toBeVisible();
+  await page.getByRole('button', { name: '修改' }).click();
+  await expect(page.getByRole('dialog').getByRole('textbox', { name: '命令' })).toHaveValue('npx');
+  await page.getByRole('dialog').getByRole('button', { name: '关闭' }).click();
+  const library = page.getByRole('region', { name: '资料库内容' });
+  await library.getByRole('tab', { name: 'Skill', exact: true }).click();
+  await expect(library.getByText('alpha')).toBeVisible();
+  await expect(library.getByText('尚未安装到工具')).toBeVisible();
+  await library.getByRole('button', { name: '删除' }).click();
+  await page.getByRole('button', { name: '删除', exact: true }).last().click();
+  await expect(library.getByText('还没有 Skill')).toBeVisible();
+  await library.getByRole('tab', { name: 'MCP', exact: true }).click();
+  await library.getByRole('button', { name: '删除' }).click();
+  await page.getByRole('button', { name: '删除', exact: true }).last().click();
+  await expect(library.getByText('还没有 MCP')).toBeVisible();
+});
+
+test('saving an MCP closes the dialog and leaves the success on the page', async ({ page }) => {
+  await mockResources(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  await page.getByRole('button', { name: '添加 MCP', exact: true }).click();
+  await page.getByRole('textbox', { name: '名称' }).fill('filesystem');
+  await page.getByRole('textbox', { name: '命令' }).fill('npx');
+  await page.getByRole('dialog').getByRole('button', { name: '保存', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByRole('status').filter({ hasText: '已保存并在当前工具使用。' })).toBeVisible();
+});
+
+test('an MCP write conflict stays in the dialog', async ({ page }) => {
+  await mockResources(page);
+  await page.goto('/');
+  await page.evaluate(() => { (window as typeof window & { __resourceMcpConflict: boolean }).__resourceMcpConflict = true; });
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  await page.getByRole('button', { name: '添加 MCP', exact: true }).click();
+  await page.getByRole('textbox', { name: '名称' }).fill('filesystem');
+  await page.getByRole('textbox', { name: '命令' }).fill('npx');
+  await page.getByRole('dialog').getByRole('button', { name: '保存', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByText('当前同名条目与读取时不同，请比较后选择')).toBeVisible();
+  await expect(dialog.getByRole('status').filter({ hasText: '已保存并在当前工具使用。' })).toHaveCount(0);
 });
 

@@ -43,9 +43,6 @@ test('library category is edited and filtered as tags', async ({ page }) => {
   await expect(dialog.getByRole('button', { name: '开发 ×' })).toHaveCount(0);
   await dialog.getByLabel('标题').fill('发布检查');
   await dialog.getByRole('button', { name: '保存' }).click();
-  await expect(dialog.getByRole('heading', { name: '修改规则' })).toBeVisible();
-  await expect(dialog.getByRole('button', { name: '文档 ×' })).toBeVisible();
-  await dialog.getByRole('button', { name: '关闭' }).click();
   await expect(dialog).toHaveCount(0);
   await expect(page.getByRole('button', { name: '发布检查' })).toBeVisible();
   await expect(page.getByText('文档 · 全局')).toBeVisible();

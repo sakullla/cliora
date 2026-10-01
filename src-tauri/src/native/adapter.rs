@@ -1,7 +1,11 @@
+#[cfg(not(test))]
+use std::collections::HashMap;
 use std::env;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+#[cfg(not(test))]
+use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -72,6 +76,8 @@ pub struct ToolProbe {
     pub dependencies: Vec<Dependency>,
     pub install_command: Option<String>,
     pub upgrade_command: Option<String>,
+    pub native_install_command: Option<String>,
+    pub npm_install_command: Option<String>,
     pub provider_presets: Vec<ProviderPreset>,
 }
 
@@ -125,7 +131,7 @@ fn source_of(path: &Path, adapter: &dyn CliAdapter) -> &'static str {
         }
     }
     if adapter.recognizes_native_install_path(path) {
-        return "claude_native";
+        return "native";
     }
     "unknown"
 }
@@ -232,6 +238,53 @@ fn dependencies(adapter: &dyn CliAdapter, source: &str, no_candidates: bool) -> 
     result
 }
 
+#[cfg(test)]
+fn shim_key(path: &str) -> Option<(String, String)> {
+    let path = Path::new(path);
+    Some((
+        path.parent()?.to_string_lossy().replace('\\', "/").to_ascii_lowercase(),
+        path.file_stem()?.to_string_lossy().to_ascii_lowercase(),
+    ))
+}
+
+#[cfg(test)]
+fn shim_rank(item: &Installation) -> u8 {
+    let ext = Path::new(&item.path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let ext_rank = match ext.as_str() {
+        "exe" => 0,
+        "cmd" => 1,
+        "ps1" => 2,
+        _ => 3,
+    };
+    if item.status == "available" { ext_rank } else { 10 + ext_rank }
+}
+
+#[cfg(test)]
+fn collapse_sibling_shims(items: Vec<Installation>) -> Vec<Installation> {
+    if !cfg!(windows) {
+        return items;
+    }
+    let mut kept = Vec::new();
+    for item in items {
+        let Some(key) = shim_key(&item.path) else {
+            kept.push(item);
+            continue;
+        };
+        if let Some(existing) = kept.iter_mut().find(|old| shim_key(&old.path) == Some(key.clone())) {
+            if shim_rank(&item) < shim_rank(existing) {
+                *existing = item;
+            }
+            continue;
+        }
+        kept.push(item);
+    }
+    kept
+}
+
 fn install_command(adapter: &dyn CliAdapter) -> Option<String> {
     adapter.install_command()
 }
@@ -250,8 +303,10 @@ pub enum Scope {
 fn candidates(adapter: &dyn CliAdapter) -> Vec<PathBuf> {
     let name = adapter.command();
     let mut paths = Vec::new();
+    // Windows npm publishes name, name.cmd and name.ps1 together. The extensionless file is a
+    // Unix shim and fails as a Win32 image (os error 193), so it is not a separate installation.
     let suffixes: &[&str] = if cfg!(windows) {
-        &[".exe", ".ps1", ".cmd", ""]
+        &[".exe", ".cmd", ".ps1"]
     } else {
         &[""]
     };
@@ -423,6 +478,144 @@ pub fn interface_formats(tool: CliId, known: bool) -> Vec<&'static str> {
     }
 }
 
+fn probe_path_rank(path: &Path) -> u8 {
+    match path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "exe" => 0,
+        "cmd" => 1,
+        "ps1" => 2,
+        _ => 3,
+    }
+}
+
+fn path_group_key(path: &Path) -> Option<(String, String)> {
+    Some((
+        path.parent()?.to_string_lossy().replace('\\', "/").to_ascii_lowercase(),
+        path.file_stem()?.to_string_lossy().to_ascii_lowercase(),
+    ))
+}
+
+/// Windows npm publishes the same command as `.exe`, `.cmd` and `.ps1`. Running all three
+/// starts the CLI two extra times. Keep one group per directory and try the fastest file first.
+fn group_probe_paths(paths: Vec<PathBuf>) -> Vec<Vec<PathBuf>> {
+    if !cfg!(windows) {
+        return paths.into_iter().map(|path| vec![path]).collect();
+    }
+    let mut groups: Vec<Vec<PathBuf>> = Vec::new();
+    let mut keys: Vec<Option<(String, String)>> = Vec::new();
+    for path in paths {
+        let key = path_group_key(&path);
+        if key.is_some() {
+            if let Some(index) = keys.iter().position(|old| old == &key) {
+                groups[index].push(path);
+                continue;
+            }
+        }
+        keys.push(key);
+        groups.push(vec![path]);
+    }
+    for group in &mut groups {
+        group.sort_by_key(|path| probe_path_rank(path));
+    }
+    groups
+}
+
+fn probe_group(paths: Vec<PathBuf>, adapter: &dyn CliAdapter) -> Installation {
+    let mut fallback = None;
+    for path in paths {
+        let item = run_version(&path, adapter);
+        if item.status == "available" {
+            return item;
+        }
+        if fallback.is_none() {
+            fallback = Some(item);
+        }
+    }
+    fallback.expect("版本探测分组不会是空的")
+}
+
+fn probe_installations(paths: Vec<PathBuf>, adapter: &dyn CliAdapter, stop_at_first: bool) -> Vec<Installation> {
+    let mut installations = Vec::new();
+    for group in group_probe_paths(paths) {
+        let item = probe_group(group, adapter);
+        let found = item.status == "available";
+        installations.push(item);
+        if stop_at_first && found {
+            break;
+        }
+    }
+    installations
+}
+
+#[cfg(not(test))]
+struct SummaryCacheEntry {
+    at: Instant,
+    probe: ToolProbe,
+}
+
+#[cfg(not(test))]
+fn summary_cache() -> &'static Mutex<HashMap<String, SummaryCacheEntry>> {
+    static CACHE: std::sync::LazyLock<Mutex<HashMap<String, SummaryCacheEntry>>> = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+    &CACHE
+}
+
+#[cfg(not(test))]
+fn summary_cache_key(id: &str, custom_path: Option<&Path>, scope: Scope, project: Option<&Path>) -> String {
+    format!(
+        "{id}|{}|{}|{}",
+        custom_path.map(|path| path.to_string_lossy().to_string()).unwrap_or_default(),
+        match scope {
+            Scope::Global => "global",
+            Scope::Project => "project",
+        },
+        project.map(|path| path.to_string_lossy().to_string()).unwrap_or_default(),
+    )
+}
+
+#[cfg(not(test))]
+fn cached_summary(key: &str) -> Option<ToolProbe> {
+    let cache = summary_cache().lock().unwrap_or_else(|error| error.into_inner());
+    let entry = cache.get(key)?;
+    let ttl = if entry.probe.selected_path.is_some() {
+        Duration::from_secs(60)
+    } else {
+        Duration::from_secs(8)
+    };
+    (entry.at.elapsed() < ttl).then(|| entry.probe.clone())
+}
+
+#[cfg(not(test))]
+fn store_summary(key: String, probe: &ToolProbe) {
+    let mut cache = summary_cache().lock().unwrap_or_else(|error| error.into_inner());
+    cache.retain(|_, entry| entry.at.elapsed() < Duration::from_secs(60));
+    cache.insert(key, SummaryCacheEntry { at: Instant::now(), probe: probe.clone() });
+}
+
+pub fn probe_registered_summary(
+    registry: &Registry,
+    id: &str,
+    custom_path: Option<&Path>,
+    home: &Path,
+    project: Option<&Path>,
+    scope: Scope,
+) -> Result<ToolProbe, String> {
+    #[cfg(not(test))]
+    let key = summary_cache_key(id, custom_path, scope, project);
+    #[cfg(not(test))]
+    if let Some(probe) = cached_summary(&key) {
+        return Ok(probe);
+    }
+    let probe = finish_probe(registry, id, custom_path, home, project, scope, true)?;
+    #[cfg(not(test))]
+    store_summary(key, &probe);
+    Ok(probe)
+}
+
 pub fn probe_registered(
     registry: &Registry,
     id: &str,
@@ -430,6 +623,18 @@ pub fn probe_registered(
     home: &Path,
     project: Option<&Path>,
     scope: Scope,
+) -> Result<ToolProbe, String> {
+    finish_probe(registry, id, custom_path, home, project, scope, false)
+}
+
+fn finish_probe(
+    registry: &Registry,
+    id: &str,
+    custom_path: Option<&Path>,
+    home: &Path,
+    project: Option<&Path>,
+    scope: Scope,
+    stop_at_first: bool,
 ) -> Result<ToolProbe, String> {
     let adapter = registry
         .get(id)
@@ -439,13 +644,20 @@ pub fn probe_registered(
         paths.retain(|candidate| candidate != path);
         paths.insert(0, path.to_path_buf());
     }
-    #[cfg(test)]
-    let installations = registry.fixture_installations.get(id).cloned().unwrap_or_else(|| paths.into_iter().map(|path| run_version(&path, adapter)).collect::<Vec<_>>());
-    #[cfg(not(test))]
-    let installations: Vec<_> = paths
-        .into_iter()
-        .map(|path| run_version(&path, adapter))
-        .collect();
+    let installations = {
+        #[cfg(test)]
+        {
+            if let Some(fixture) = registry.fixture_installations.get(id).cloned() {
+                collapse_sibling_shims(fixture)
+            } else {
+                probe_installations(paths, adapter, stop_at_first)
+            }
+        }
+        #[cfg(not(test))]
+        {
+            probe_installations(paths, adapter, stop_at_first)
+        }
+    };
     let selected = installations.iter().find(|item| item.status == "available");
     let writable = selected
         .and_then(|item| item.version.as_deref())
@@ -472,6 +684,7 @@ pub fn probe_registered(
     let (install_url, upgrade_hint) = adapter.install_guidance();
     let source = selected.map(|item| item.source).unwrap_or("unknown");
     let no_candidates = installations.is_empty();
+    let runnable = selected.is_some();
     Ok(ToolProbe {
         tool: id.to_owned(),
         selected_path: selected.map(|item| item.path.clone()),
@@ -486,12 +699,14 @@ pub fn probe_registered(
         install_url,
         upgrade_hint,
         dependencies: dependencies(adapter, source, no_candidates),
-        install_command: if no_candidates {
-            install_command(adapter)
-        } else {
+        install_command: if runnable {
             None
+        } else {
+            install_command(adapter)
         },
         upgrade_command: upgrade_command(adapter, source),
+        native_install_command: adapter.native_install_command(),
+        npm_install_command: adapter.npm_install_command(),
         provider_presets: provider_presets(adapter, writable),
     })
 }
@@ -586,6 +801,22 @@ mod tests {
     }
 
     #[test]
+    fn version_probe_groups_sibling_shims_and_keeps_other_directories() {
+        let command = PathBuf::from("C:/npm/codex.cmd");
+        let script = PathBuf::from("C:/npm/codex.ps1");
+        let executable = PathBuf::from("C:/npm/codex.exe");
+        let other = PathBuf::from("D:/native/codex.exe");
+        let grouped = group_probe_paths(vec![command.clone(), script.clone(), executable.clone(), other.clone()]);
+        if cfg!(windows) {
+            assert_eq!(grouped.len(), 2);
+            assert_eq!(grouped[0], vec![executable, command, script]);
+            assert_eq!(grouped[1], vec![other]);
+        } else {
+            assert_eq!(grouped.len(), 4);
+        }
+    }
+
+    #[test]
     fn npm_source_requires_package_evidence_and_unknown_source_gets_no_upgrade_command() {
         let temp = tempfile::tempdir().unwrap();
         let shim = temp.path().join("grok.ps1");
@@ -631,6 +862,68 @@ mod tests {
         assert_eq!(
             node_dependency_status(adapters::known(CliId::Pi), Some((22, 19, 0))),
             "found"
+        );
+    }
+
+    #[test]
+    fn windows_npm_shims_collapse_to_the_runnable_file_and_native_stays_separate() {
+        let failed = Installation {
+            path: r"C:\Users\me\AppData\Roaming\npm\codex".into(),
+            version: None,
+            source: "unknown",
+            status: "probe_failed",
+            detail: Some("os error 193".into()),
+        };
+        let cmd = Installation {
+            path: r"C:\Users\me\AppData\Roaming\npm\codex.cmd".into(),
+            version: Some("0.159.3".into()),
+            source: "npm_shim",
+            status: "available",
+            detail: None,
+        };
+        let ps1 = Installation {
+            path: r"C:\Users\me\AppData\Roaming\npm\codex.ps1".into(),
+            version: Some("0.159.3".into()),
+            source: "npm_shim",
+            status: "available",
+            detail: None,
+        };
+        let native = Installation {
+            path: r"C:\Users\me\AppData\Local\Programs\OpenAI\Codex\bin\codex.exe".into(),
+            version: Some("0.160.0".into()),
+            source: "native",
+            status: "available",
+            detail: None,
+        };
+        let collapsed = collapse_sibling_shims(vec![failed, ps1, cmd.clone(), native.clone()]);
+        if cfg!(windows) {
+            assert_eq!(collapsed.len(), 2);
+            assert_eq!(collapsed[0].path, cmd.path);
+            assert_eq!(collapsed[1].path, native.path);
+        } else {
+            assert_eq!(collapsed.len(), 4);
+        }
+        let codex = adapters::known(CliId::Codex);
+        assert!(codex.recognizes_native_install_path(Path::new(&native.path)));
+        assert!(!codex.recognizes_native_install_path(Path::new(&cmd.path)));
+        let install = codex.install_command().unwrap();
+        assert!(install.contains(if cfg!(windows) { "install.ps1" } else { "install.sh" }));
+        assert_eq!(
+            codex.upgrade_command("npm_shim").as_deref(),
+            Some("npm install -g @openai/codex@latest")
+        );
+        assert_eq!(codex.upgrade_command("native"), codex.native_install_command());
+        assert_eq!(
+            codex.npm_install_command().as_deref(),
+            Some("npm install -g @openai/codex")
+        );
+        assert_eq!(
+            codex.npm_uninstall_command().as_deref(),
+            Some("npm uninstall -g @openai/codex")
+        );
+        assert_eq!(
+            adapters::known(CliId::ClaudeCode).npm_uninstall_command().as_deref(),
+            Some("npm uninstall -g @anthropic-ai/claude-code")
         );
     }
 

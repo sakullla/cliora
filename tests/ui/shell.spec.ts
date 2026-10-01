@@ -126,7 +126,7 @@ test('native settings result drives the home list and empty management stays rec
   await expect(page.getByText('尚未管理工具')).toBeVisible();
   await page.getByRole('button', { name: '前往设置' }).click();
   await page.getByRole('checkbox', { name: /Codex/ }).check();
-  await page.getByRole('combobox', { name: '主题' }).selectOption('dark');
+  await page.getByRole('radiogroup', { name: '主题' }).getByRole('radio', { name: '深色' }).click();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始' }).click();
   await expect(page.getByRole('button', { name: '编辑配置 →' })).toHaveCount(1);
@@ -293,7 +293,7 @@ test('custom tool icons persist across reload, preserve theme and management, an
   const base64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aR2kAAAAASUVORK5CYII=';
   await page.getByLabel('Codex 自定义图标').setInputFiles({ name: 'custom.png', mimeType: 'image/png', buffer: Buffer.from(base64, 'base64') });
   await expect(page.locator('.managed-checks img')).toHaveAttribute('src', `data:image/png;base64,${base64}`);
-  await page.getByLabel('主题', { exact: true }).selectOption('light');
+  await page.getByRole('radiogroup', { name: '主题' }).getByRole('radio', { name: '浅色' }).click();
   await nav.getByRole('button', { name: '工具与连接' }).click();
   await expect(page.getByRole('tablist', { name: 'CLI' }).locator('img')).toHaveAttribute('src', `data:image/png;base64,${base64}`);
   await page.reload();
@@ -387,7 +387,7 @@ test('desktop shell keeps on-device copy, first-screen actions, and no sideways 
   await nav.getByRole('button', { name: '设置' }).click();
   await expectFullyInFirstScreen(page, page.getByRole('heading', { name: '管理的 CLI' }));
   await nav.getByRole('button', { name: '资料库' }).click();
-  await expectFullyInFirstScreen(page, page.getByRole('button', { name: /新建/ }));
+  await expectFullyInFirstScreen(page, page.getByRole('button', { name: '＋ 新建提示词', exact: true }));
   await nav.getByRole('button', { name: '使用记录' }).click();
   const search = page.getByRole('textbox', { name: '搜索会话' });
   const sessions = page.getByRole('tab', { name: '会话' });

@@ -309,6 +309,9 @@ impl CliAdapter for Grok {
         false
     }
     fn install_command(&self) -> Option<String> {
+        self.native_install_command()
+    }
+    fn native_install_command(&self) -> Option<String> {
         Some(
             if cfg!(windows) {
                 "irm https://x.ai/cli/install.ps1 | iex"
@@ -317,6 +320,13 @@ impl CliAdapter for Grok {
             }
             .into(),
         )
+    }
+    fn upgrade_command(&self, source: &str) -> Option<String> {
+        match source {
+            "npm_shim" => Some(format!("npm install -g {}@latest", self.npm_package())),
+            "native" => self.native_install_command(),
+            _ => None,
+        }
     }
 }
 

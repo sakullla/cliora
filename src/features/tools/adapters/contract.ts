@@ -15,7 +15,7 @@ export type ModelMappingControl = {
   roles: readonly { id: string; label: string; displayName: boolean; longContext: boolean }[];
   read: (text: string) => Record<string, ModelRoleValue>;
   update: (text: string, role: string, value: ModelRoleValue) => Promise<string>;
-  useModelForAll: (text: string, model: string) => Promise<string>;
+  useModelForAll: (text: string, model: string, longContext?: boolean) => Promise<string>;
 };
 export type ToolUiAdapter = {
   id: string;

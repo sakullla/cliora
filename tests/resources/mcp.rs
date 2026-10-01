@@ -572,3 +572,24 @@ fn one_invalid_target_does_not_prevent_another_and_can_be_retried() {
         .unwrap()
         .contains("compact_mode = true"));
 }
+
+#[test]
+fn deleting_a_definition_checks_version_and_native_removal_keeps_other_entries() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let saved = sample(&db);
+    assert!(delete_definition(&db, &saved.id, 0).is_err());
+    delete_definition(&db, &saved.id, saved.version).unwrap();
+    assert!(get_definition(&db, &saved.id).is_err());
+
+    let registry = fixture_registry();
+    let keys = MemoryStore::default();
+    let codex_path = temp.path().join(".codex/config.toml");
+    std::fs::create_dir_all(codex_path.parent().unwrap()).unwrap();
+    std::fs::write(&codex_path, "model = 'gpt-6'\n[mcp_servers.example]\ncommand = 'old'\n[mcp_servers.other]\ncommand = 'stay'\n").unwrap();
+    remove_native(&db, &keys, &registry, temp.path(), &target("codex", true), "example").unwrap();
+    let text = std::fs::read_to_string(&codex_path).unwrap();
+    assert!(!text.contains("[mcp_servers.example]"));
+    assert!(text.contains("[mcp_servers.other]"));
+    assert!(text.contains("gpt-6"));
+}

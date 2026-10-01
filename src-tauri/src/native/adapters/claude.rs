@@ -185,6 +185,50 @@ impl CliAdapter for Claude {
         );
         Ok(BTreeMap::from([("settings".into(), settings)]))
     }
+    fn connection_documents_for_existing(
+        &self,
+        connection: &Connection,
+        scope: Scope,
+        existing: &BTreeMap<String, Value>,
+    ) -> Result<BTreeMap<String, Value>, String> {
+        let mut docs = self.connection_documents(connection, scope)?;
+        let existing_settings = existing.get("settings").cloned().unwrap_or_else(|| json!({}));
+        if let Some(options) = catalog_options(connection, &existing_settings) {
+            set_json(
+                docs.get_mut("settings").expect("Claude settings document"),
+                &["modelPicker", "options"],
+                Value::Array(options),
+            );
+        }
+        Ok(docs)
+    }
+    fn preserve_native_fields(
+        &self,
+        role: &str,
+        original: &Value,
+        fields: &mut BTreeMap<String, Value>,
+        _: &RegisteredProfile,
+    ) -> Result<(), String> {
+        if role != "settings" {
+            return Ok(());
+        }
+        let Some(ours) = fields.get("/modelPicker/options").cloned() else {
+            return Ok(());
+        };
+        let Some(native_rows) = original
+            .get("modelPicker")
+            .and_then(|picker| picker.get("options"))
+            .and_then(Value::as_array)
+        else {
+            return Ok(());
+        };
+        let empty = Vec::new();
+        fields.insert(
+            "/modelPicker/options".into(),
+            Value::Array(merge_catalog_rows(native_rows, ours.as_array().unwrap_or(&empty))),
+        );
+        Ok(())
+    }
     fn write_connection_secret(
         &self,
         profile: &RegisteredProfile,
@@ -435,6 +479,9 @@ impl CliAdapter for Claude {
             .contains("/.local/bin/claude")
     }
     fn install_command(&self) -> Option<String> {
+        self.native_install_command()
+    }
+    fn native_install_command(&self) -> Option<String> {
         Some(
             if cfg!(windows) {
                 "irm https://claude.ai/install.ps1 | iex"
@@ -447,11 +494,234 @@ impl CliAdapter for Claude {
     fn upgrade_command(&self, source: &str) -> Option<String> {
         match source {
             "npm_shim" => Some(format!("npm install -g {}@latest", self.npm_package())),
-            "claude_native" => Some("claude update".into()),
+            "native" => Some("claude update".into()),
             _ => None,
         }
     }
     fn anthropic_base_url(&self) -> &'static str {
         "https://api.anthropic.com"
+    }
+}
+
+const CATALOG_ROLES: &[(&str, &str)] = &[
+    ("ANTHROPIC_DEFAULT_SONNET_MODEL", "claude-sonnet-4-6"),
+    ("ANTHROPIC_DEFAULT_OPUS_MODEL", "claude-opus-4-8"),
+    ("ANTHROPIC_DEFAULT_FABLE_MODEL", "claude-fable-5"),
+    ("ANTHROPIC_DEFAULT_HAIKU_MODEL", "claude-haiku-4-5"),
+    ("CLAUDE_CODE_SUBAGENT_MODEL", "claude-sonnet-4-6"),
+];
+
+fn strip_context_suffix(model: &str) -> &str {
+    let mut id = model.trim();
+    while id.len() >= 4 && id[id.len() - 4..].eq_ignore_ascii_case("[1m]") {
+        id = &id[..id.len() - 4];
+    }
+    id.trim()
+}
+
+fn needs_catalog_row(model: &str) -> bool {
+    let id = strip_context_suffix(model).to_ascii_lowercase();
+    if id.is_empty() {
+        return false;
+    }
+    if matches!(
+        id.as_str(),
+        "sonnet" | "opus" | "haiku" | "fable" | "best" | "default" | "opusplan"
+    ) {
+        return false;
+    }
+    !id.starts_with("claude-")
+}
+
+fn row_model(row: &Value) -> Option<&str> {
+    row.get("model").and_then(Value::as_str).map(str::trim)
+}
+
+fn has_behavior(row: &Value) -> bool {
+    row.get("behavesAs")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty())
+}
+
+fn upsert_catalog_row(options: &mut Vec<Value>, model: &str, behaves_as: &str, label: Option<&str>) -> bool {
+    let mut changed = false;
+    let mut ids = Vec::new();
+    let raw = model.trim();
+    if !raw.is_empty() {
+        ids.push(raw);
+    }
+    let base = strip_context_suffix(raw);
+    if !base.is_empty() && !base.eq_ignore_ascii_case(raw) {
+        ids.push(base);
+    }
+    for id in ids {
+        if !needs_catalog_row(id) {
+            continue;
+        }
+        if let Some(row) = options.iter_mut().find(|row| {
+            row_model(row).is_some_and(|current| current.eq_ignore_ascii_case(id))
+        }) {
+            if !has_behavior(row) {
+                row.as_object_mut()
+                    .expect("model picker row")
+                    .insert("behavesAs".into(), json!(behaves_as));
+                changed = true;
+            }
+            continue;
+        }
+        let mut row = json!({ "model": id, "behavesAs": behaves_as });
+        if let Some(name) = label.map(str::trim).filter(|name| !name.is_empty()) {
+            row.as_object_mut()
+                .expect("model picker row")
+                .insert("label".into(), json!(name));
+        }
+        options.push(row);
+        changed = true;
+    }
+    changed
+}
+
+fn catalog_options(connection: &Connection, settings: &Value) -> Option<Vec<Value>> {
+    let mut options = settings
+        .get("modelPicker")
+        .and_then(|picker| picker.get("options"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut changed = upsert_catalog_row(&mut options, &connection.model, "claude-sonnet-4-6", None);
+    if let Some(env) = settings.get("env").and_then(Value::as_object) {
+        for (key, behaves_as) in CATALOG_ROLES {
+            let Some(model) = env.get(*key).and_then(Value::as_str) else {
+                continue;
+            };
+            let name_key = format!("{key}_NAME");
+            let label = env.get(&name_key).and_then(Value::as_str);
+            changed |= upsert_catalog_row(&mut options, model, behaves_as, label);
+        }
+    }
+    changed.then_some(options)
+}
+
+fn merge_catalog_rows(native_rows: &[Value], ours: &[Value]) -> Vec<Value> {
+    let mut merged = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for row in native_rows {
+        let Some(id) = row_model(row) else {
+            continue;
+        };
+        let key = id.to_ascii_lowercase();
+        if key.is_empty() || !seen.insert(key) {
+            continue;
+        }
+        merged.push(row.clone());
+    }
+    for row in ours {
+        let Some(id) = row_model(row) else {
+            continue;
+        };
+        let key = id.to_ascii_lowercase();
+        if let Some(existing) = merged.iter_mut().find(|item| {
+            row_model(item).is_some_and(|current| current.eq_ignore_ascii_case(id))
+        }) {
+            if !has_behavior(existing) {
+                if let Some(behaves_as) = row.get("behavesAs") {
+                    existing
+                        .as_object_mut()
+                        .expect("model picker row")
+                        .insert("behavesAs".into(), behaves_as.clone());
+                }
+            }
+            continue;
+        }
+        if seen.insert(key) {
+            merged.push(row.clone());
+        }
+    }
+    merged
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn connection(model: &str) -> Connection {
+        Connection {
+            provider_id: "zhipu".into(),
+            interface_format: "anthropic_messages".into(),
+            base_url: "https://open.bigmodel.cn/api/anthropic".into(),
+            model: model.into(),
+            secret_ref: None,
+            auth_env_var: None,
+        }
+    }
+
+    #[test]
+    fn unknown_model_is_mapped_without_changing_the_request_id() {
+        let existing = BTreeMap::from([(
+            "settings".into(),
+            json!({
+                "env": {
+                    "ANTHROPIC_DEFAULT_OPUS_MODEL": "opus-gateway",
+                    "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME": "Opus 网关",
+                    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-4-5",
+                    "ANTHROPIC_DEFAULT_SONNET_MODEL": "sonnet"
+                },
+                "modelPicker": {
+                    "options": [{ "model": "kept-by-user", "label": "自有", "behavesAs": "claude-opus-4-8" }],
+                    "replaceBuiltInOptions": true
+                }
+            }),
+        )]);
+        let docs = Claude
+            .connection_documents_for_existing(&connection("glm-5.3"), Scope::Global, &existing)
+            .unwrap();
+        assert_eq!(docs["settings"]["model"], "glm-5.3");
+        assert_eq!(docs["settings"]["env"]["ANTHROPIC_MODEL"], "glm-5.3");
+        let options = docs["settings"]["modelPicker"]["options"].as_array().unwrap();
+        assert_eq!(options[0]["model"], "kept-by-user");
+        assert_eq!(options[0]["behavesAs"], "claude-opus-4-8");
+        assert!(options.iter().any(|row| row["model"] == "glm-5.3" && row["behavesAs"] == "claude-sonnet-4-6"));
+        assert!(options.iter().any(|row| row["model"] == "opus-gateway" && row["behavesAs"] == "claude-opus-4-8" && row["label"] == "Opus 网关"));
+        assert!(!options.iter().any(|row| row["model"] == "claude-haiku-4-5" || row["model"] == "sonnet"));
+        assert!(docs["settings"]["modelPicker"].get("replaceBuiltInOptions").is_none());
+    }
+
+    #[test]
+    fn known_claude_model_does_not_add_a_catalog_row() {
+        let docs = Claude
+            .connection_documents_for_existing(&connection("claude-sonnet-5[1m]"), Scope::Global, &BTreeMap::new())
+            .unwrap();
+        assert!(docs["settings"].get("modelPicker").is_none());
+        let docs = Claude
+            .connection_documents_for_existing(&connection("glm-5.3[1m]"), Scope::Global, &BTreeMap::new())
+            .unwrap();
+        let models: Vec<_> = docs["settings"]["modelPicker"]["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["model"].as_str().unwrap())
+            .collect();
+        assert_eq!(models, vec!["glm-5.3[1m]", "glm-5.3"]);
+    }
+
+    #[test]
+    fn native_catalog_rows_stay_when_a_new_model_is_mapped() {
+        let original = json!({
+            "modelPicker": {
+                "options": [
+                    { "model": "kept-by-user", "label": "自有" },
+                    { "model": "glm-5.3", "label": "已有" }
+                ]
+            }
+        });
+        let merged = merge_catalog_rows(
+            original["modelPicker"]["options"].as_array().unwrap(),
+            &[json!({ "model": "glm-5.3", "behavesAs": "claude-sonnet-4-6" }), json!({ "model": "new-gateway", "behavesAs": "claude-sonnet-4-6" })],
+        );
+        assert_eq!(merged[0]["model"], "kept-by-user");
+        assert!(merged[0].get("behavesAs").is_none());
+        assert_eq!(merged[1]["label"], "已有");
+        assert_eq!(merged[1]["behavesAs"], "claude-sonnet-4-6");
+        assert_eq!(merged[2]["model"], "new-gateway");
     }
 }

@@ -12,6 +12,14 @@ label.item, .item:has(input) { cursor: pointer; }
 .action { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; padding: 16px 20px; border-top: 1px solid var(--line); background: var(--surface-2); }
 .action label { display: grid; flex: 1; gap: 6px; min-width: 220px; color: var(--text-2); font-size: 12px; font-weight: 560; }
 .action input { width: 100%; font-weight: 400; }
+.listBar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 20px; color: var(--text-2); font-size: 12px; line-height: 1.55; }
+.listBar strong { margin-right: 8px; color: var(--text); font-size: 13px; font-weight: 620; }
+.listBar > button { flex: none; }
+.secret { display: flex; gap: 6px; min-width: 0; }
+.secret input { flex: 1; min-width: 0; }
+.secret > button { flex: none; min-height: var(--control-h); }
+.passwordHint { flex-basis: 100%; margin-top: -4px; color: var(--text-3); font-size: 11.5px; font-weight: 400; }
+.passwordHint[data-ok] { color: var(--success); }
 .hint { flex: 1; color: var(--text-2); font-size: 12.5px; }
 .empty { padding: 16px 20px; color: var(--text-2); font-size: 12.5px; }
 

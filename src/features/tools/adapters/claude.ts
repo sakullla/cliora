@@ -30,9 +30,9 @@ const modelMapping: ModelMappingControl = {
     if (role.displayName) { if (value.name.trim()) env[role.key+'_NAME'] = value.name.trim(); else delete env[role.key+'_NAME']; }
     return JSON.stringify({ ...parsed,env },null,2);
   },
-  async useModelForAll(text, model) {
+  async useModelForAll(text, model, longContext = false) {
     const values = this.read(text); let next = text;
-    for (const role of roles) next = await this.update(next,role.id,{...values[role.id],model,name:values[role.id]?.name ?? '',longContext:values[role.id]?.longContext ?? false} satisfies ModelRoleValue);
+    for (const role of roles) next = await this.update(next, role.id, { model, name: values[role.id]?.name ?? '', longContext: role.longContext && longContext } satisfies ModelRoleValue);
     return next;
   },
 };

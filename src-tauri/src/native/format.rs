@@ -145,6 +145,24 @@ fn toml_item(value: &Value) -> Result<Item, String> {
     })
 }
 
+fn prune_empty_tables(table: &mut Table, path: &[String]) {
+    if path.is_empty() {
+        return;
+    }
+    if path.len() > 1 {
+        if let Some(child) = table.get_mut(&path[0]).and_then(Item::as_table_mut) {
+            prune_empty_tables(child, &path[1..]);
+        }
+    }
+    if table
+        .get(&path[0])
+        .and_then(Item::as_table)
+        .is_some_and(Table::is_empty)
+    {
+        table.remove(&path[0]);
+    }
+}
+
 pub fn set_path(
     kind: FileKind,
     text: &str,
@@ -172,24 +190,29 @@ pub fn set_path(
             } else {
                 text.parse().map_err(|e| format!("TOML 格式错误：{e}"))?
             };
-            let mut table = doc.as_table_mut();
-            for part in &path[..path.len() - 1] {
-                if !table.contains_key(part) {
-                    table.insert(part, Item::Table(Table::new()));
+            {
+                let mut table = doc.as_table_mut();
+                for part in &path[..path.len() - 1] {
+                    if !table.contains_key(part) {
+                        table.insert(part, Item::Table(Table::new()));
+                    }
+                    table = table
+                        .get_mut(part)
+                        .and_then(Item::as_table_mut)
+                        .ok_or("配置路径不是 TOML 表")?;
                 }
-                table = table
-                    .get_mut(part)
-                    .and_then(Item::as_table_mut)
-                    .ok_or("配置路径不是 TOML 表")?;
+                let key = path.last().unwrap();
+                match value {
+                    Some(value) => {
+                        table.insert(key, toml_item(value)?);
+                    }
+                    None => {
+                        table.remove(key);
+                    }
+                }
             }
-            let key = path.last().unwrap();
-            match value {
-                Some(value) => {
-                    table.insert(key, toml_item(value)?);
-                }
-                None => {
-                    table.remove(key);
-                }
+            if value.is_none() {
+                prune_empty_tables(doc.as_table_mut(), &path[..path.len() - 1]);
             }
             let output = doc.to_string();
             parse(kind, &output)?;

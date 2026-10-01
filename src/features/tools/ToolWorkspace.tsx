@@ -12,12 +12,15 @@ import type { ApiError } from '../../types/domain';
 import type { Project, TrayRepairTarget } from '../../types/launch';
 import type { AdapterDescriptor, ApplyComparison, Connection, ConnectionCheck, ModelDirectory, NativeInspection, NativePreview, RegisteredCommon, RegisteredProfile, RegisteredToolWorkspace, Scope } from '../../types/native';
 import { authEnvName, uiAdapterFor } from './adapters';
+import { InstallPanel } from './InstallPanel';
+import { ModelCombobox } from './ModelCombobox';
 import { McpWorkspace, SkillsWorkspace } from './ResourceWorkspace';
 import { ToolIcon } from '../../components/ToolIcon';
 import { FileConflict } from '../../components/FileConflict';
 import { GuideDialog } from '../../components/GuideDialog';
 import { displayPath } from '../../lib/paths';
 import { writeClipboard } from '../../lib/clipboard';
+import { saveShortcutHint } from '../../lib/shortcut';
 import { CodeEditor } from '../../components/CodeEditor';
 import styles from './ToolWorkspace.module.css';
 
@@ -58,6 +61,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   const [workspace, setWorkspace] = useState<RegisteredToolWorkspace | null>(null);
   const [editor, setEditor] = useState<Editor>('profile');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [profileQuery, setProfileQuery] = useState('');
   const draftRevision = useRef(0);
   const [draft, setDraftState] = useState<RegisteredProfile | null>(null);
   const setDraft = (value: SetStateAction<RegisteredProfile | null>) => {
@@ -74,9 +78,6 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   const [preview, setPreview] = useState<NativePreview | null>(null);
   const [modelDirectory, setModelDirectory] = useState<ModelDirectory | null>(null);
   const [modelLoading, setModelLoading] = useState(false);
-  const [manualModel, setManualModel] = useState(false);
-  const [modelSearch, setModelSearch] = useState('');
-  const [manualRoles, setManualRoles] = useState<string[]>([]);
   const [connectionCheck, setConnectionCheck] = useState<ConnectionCheck | null>(null);
   const [inspection, setInspection] = useState<NativeInspection | null>(null);
   const [checkingConnection, setCheckingConnection] = useState(false);
@@ -86,6 +87,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   const [customPath, setCustomPath] = useState('');
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [enablingId, setEnablingId] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [fileConflict, setFileConflict] = useState<{ context: string; current: string } | null>(null);
@@ -99,6 +101,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   const editRef = useRef({ guide: false, editor: 'profile' as Editor, draft: null as RegisteredProfile | null, loaded: false });
   const loadSequence = useRef(0);
   const modelSequence = useRef(0);
+  const modelWrite = useRef(0);
   const modelSource = useRef('');
   const inspectionSequence = useRef(0);
   const importSequence = useRef(0);
@@ -184,7 +187,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     loadSequence.current++; invalidateDraftRequest(); inspectionSequence.current++;
     setFileConflict(null); setBackups([]); setBackupPreview(null); setWorkspace(null); setDraft(null); setCommonDraft(null); setSelectedId(null); setRawDisk(null);
     setGuide(false);
-    setNotice(''); setError(''); setInspection(null); setNewSecret(''); savedDraft.current = '';
+    setNotice(''); setError(''); setInspection(null); setNewSecret(''); setProfileQuery(''); savedDraft.current = '';
   }, [currentTool, scope, projectPath]);
   useEffect(() => { if (active && currentTool) void reload(currentTool, scope, projectPath, preferredProfileId); }, [active, currentTool, scope, projectPath, preferredProfileId, reload]);
 
@@ -364,7 +367,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     const preset = workspace?.probe.providerPresets[0];
     next.connection = { ...defaultConnection(workspace?.probe.interfaceFormats ?? []), providerId: preset?.id ?? 'my-provider', baseUrl: preset?.baseUrl ?? '', interfaceFormat: preset?.interfaceFormat ?? workspace?.probe.interfaceFormats[0] ?? 'openai_responses' };
     setRawDisk(null); setEditor('profile'); setSelectedId(null); setDraft(next); savedDraft.current = JSON.stringify(next);
-    setView('form'); setManualModel(false); setNewSecret(''); setError(''); setNotice(''); setApplyComparison(null); setGuide(true);
+    setView('form'); setNewSecret(''); setError(''); setNotice(''); setApplyComparison(null); setGuide(true);
   }
 
   async function editCommon() {
@@ -392,7 +395,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
         setRawDisk({ ...pendingRaw, original: text, text });
         const updated = await native.getRegisteredToolWorkspace(currentTool, scope, projectPath);
         if (!stillCurrent(started)) return;
-        setWorkspace(updated); setNotice('已保存到正在使用的文件。');
+        setWorkspace(updated); setNotice('已保存到正在使用的文件。'); setGuide(false);
       } else if (editor === 'common' && commonDraft) {
         const result = await native.saveRegisteredCommonConfig(commonDraft, commonDraft.version || null);
         if (!stillCurrent(started)) { setNotice('原通用草稿已保存；当前编辑内容已保留。'); return; }
@@ -402,7 +405,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
         setNotice(failed.length ? `通用配置已保存；${failed.length} 个活动范围未能应用，请检查并重试。` : `通用配置已保存；${result.applications.length} 个活动范围已检查并应用。`);
         if (currentTool) await reload(currentTool, scope, projectPath, selectedId);
         setEditor('common');
-        setCommonDraft(saved); savedDraft.current = JSON.stringify(saved);
+        setCommonDraft(saved); savedDraft.current = JSON.stringify(saved); setGuide(false);
       } else if (draft && currentTool) {
         let files = draft.files;
         if (pendingRaw) {
@@ -424,13 +427,18 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
         const saved = await native.saveRegisteredNativeProfile(edited, edited.version || null);
         savedForTakeover = saved;
         if (!stillCurrent(started)) { setNotice('原草稿已保存；当前继续编辑的内容已保留。'); return; }
-        if (applyAfter) {
+        const activeId = workspace?.binding?.profileId;
+        const activeName = workspace?.profiles.find((item) => item.id === activeId)?.name;
+        if (applyAfter && saved.id === activeId) {
           await native.applyRegisteredNativeProfile(currentTool, saved.id, scope, projectPath, false);
           if (!stillCurrent(started)) return;
           setNotice('已保存。');
-        } else setNotice('已保存。当前无法写入这个工具。');
+        } else if (applyAfter && activeName) setNotice(`已保存。当前仍使用「${activeName}」。`);
+        else if (applyAfter) setNotice('已保存。点启用后，下次启动会读取这份配置。');
+        else setNotice('已保存。当前无法写入这个工具。');
         setNewSecret(''); setDraft(saved); savedDraft.current = JSON.stringify(saved); setSelectedId(saved.id);
         await reload(currentTool, scope, projectPath, saved.id);
+        setGuide(false);
       }
     } catch (value) {
       if (!stillCurrent(started)) return;
@@ -448,33 +456,38 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
 
   async function compareApplication(profile:RegisteredProfile) {
     const started=captureDraft();
-    try {const result=await native.compareRegisteredApplication(profile.id,scope,projectPath);if (stillCurrent(started)) setApplyComparison(result);}
+    try {
+      const result=await native.compareRegisteredApplication(profile.id,scope,projectPath);
+      if (stillCurrent(started)) { setApplyComparison(result); setError(''); setGuide(false); }
+    }
     catch(value){if(stillCurrent(started))setError(errorText(value));}
   }
   async function resolveApplication() {
     if (!applyComparison || busy) return;
     const started=captureDraft();setBusy(true);setError('');
-    try {await native.applyComparedApplication(applyComparison,scope,projectPath);if(stillCurrent(started)){setApplyComparison(null);setNotice('已使用此配置，下次启动生效。');await reload(applyComparison.profile.tool,scope,projectPath,applyComparison.profile.id);}}
+    try {await native.applyComparedApplication(applyComparison,scope,projectPath);if(stillCurrent(started)){setApplyComparison(null);setNotice('');await reload(applyComparison.profile.tool,scope,projectPath,applyComparison.profile.id);}}
     catch(value){if(stillCurrent(started))setError(errorText(value));}
     finally{setBusy(false);}
   }
   async function applySaved(profile: RegisteredProfile, allowTakeover = false) {
-    if (!currentTool || busy) return;
-    const started=captureDraft();
-    setBusy(true); setError(''); setNotice('');
+    if (!currentTool || busy || enablingId) return;
+    const started = captureDraft();
+    const previousBinding = workspace?.binding ?? null;
+    setEnablingId(profile.id); setError('');
+    setWorkspace((current) => current ? { ...current, binding: { scopeKey: current.binding?.scopeKey ?? (scope === 'project' ? `project:${projectPath}` : 'global'), tool: currentTool, profileId: profile.id, profileVersion: profile.version, managed: {} } } : current);
     try {
-      const outcome = await native.applyRegisteredNativeProfile(currentTool, profile.id, scope, projectPath, allowTakeover);
-      if (!stillCurrent(started)) {setNotice('所选配置已应用，继续编辑的内容已保留。');return;}
+      await native.applyRegisteredNativeProfile(currentTool, profile.id, scope, projectPath, allowTakeover);
+      if (!stillCurrent(started)) { setNotice('所选配置已应用，继续编辑的内容已保留。'); return; }
       setApplyComparison(null);
-      
-      setNotice(outcome.status === 'already_matching' ? '原生文件已与配置一致。' : '已使用此配置，下次启动生效。');
-      await reload(currentTool, scope, projectPath, profile.id);
+      setNotice('');
     } catch (value) {
+      setWorkspace((current) => current ? { ...current, binding: previousBinding } : current);
+      setNotice('');
       if (!stillCurrent(started)) return;
       const message = errorText(value);
       setError(message);
       if (message.includes('请确认接管') || message.includes('外部修改')) await compareApplication(profile);
-    } finally { setBusy(false); }
+    } finally { setEnablingId(null); }
   }
 
   async function connectionWithSecret(source: Connection | null, started: DraftRequest<RegisteredProfile>): Promise<Connection | null> {
@@ -563,10 +576,32 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     finally { setBusy(false); }
   }
 
-  async function copyGuidance(command: string) {
-    try { await navigator.clipboard.writeText(command); setNotice('命令已复制。请在终端执行，完成后点击“重新检测”。'); }
-    catch { setError('复制失败，请手动选择命令文本复制。'); }
+  async function useInstallation(path: string) {
+    if (!currentTool || busy) return;
+    setBusy(true); setError('');
+    try {
+      await native.setRegisteredCustomCliPath(currentTool, path);
+      setCustomPath(path);
+      await reload(currentTool, scope, projectPath, selectedId);
+      setNotice('已改用这个安装。');
+    } catch (value) { setError(errorText(value)); }
+    finally { setBusy(false); }
   }
+
+  async function maintain(action: 'install' | 'upgrade' | 'install_native' | 'uninstall_npm', source?: string) {
+    if (!currentTool || busy) return;
+    const channel = source === 'npm_shim' ? 'npm' : source === 'native' || action === 'install_native' ? '原生' : '';
+    const label = action === 'uninstall_npm' ? '卸载' : action === 'upgrade' ? '更新' : '安装';
+    const message = action === 'uninstall_npm' ? '将在外部终端卸载 npm 全局包。' : channel ? `将在外部终端${label} ${channel} 版。` : `将在外部终端运行官方${label}命令。`;
+    if (!await confirmChange(message, { title: `开始${label}？`, confirmLabel: label })) return;
+    setBusy(true); setError('');
+    try {
+      await native.maintainRegisteredCli(currentTool, action, source);
+      setNotice('已在终端开始。完成后点重新检测。');
+    } catch (value) { setError(errorText(value)); }
+    finally { setBusy(false); }
+  }
+
   async function copyDisplayedPath(path: string) {
     const value = displayPath(path);
     const copied = await writeClipboard(value);
@@ -628,6 +663,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
 
   async function updateModel(model: string, longContext = primaryModel.longContext) {
     if (!draft || !connection) return;
+    const sequence = ++modelWrite.current;
     const value = {model,name:'',longContext};
     const mapping=uiAdapter.modelMapping;
     const nextConnection={...connection,model:mapping?.encodeModel?.(value) ?? model};
@@ -635,17 +671,18 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     const started=captureDraft();
     try {
       const text=await mapping.update(draft.files[mapping.fileRole] ?? '',mapping.primaryRole,value);
-      if (stillCurrent(started)) setDraft({...draft,connection:nextConnection,files:{...draft.files,[mapping.fileRole]:text}});
-    } catch (value) { if (stillCurrent(started)) setError(errorText(value)); }
+      if (sequence === modelWrite.current && stillCurrent(started)) setDraft({...draft,connection:nextConnection,files:{...draft.files,[mapping.fileRole]:text}});
+    } catch (value) { if (sequence === modelWrite.current && stillCurrent(started)) setError(errorText(value)); }
   }
   async function updateRoleModel(id: string, value: ModelRoleValue, all = false) {
     if (!draft || !uiAdapter.modelMapping) return;
+    const sequence = ++modelWrite.current;
     const started = captureDraft();
     try {
       const fileRole=uiAdapter.modelMapping.fileRole;
-      const text = all ? await uiAdapter.modelMapping.useModelForAll(draft.files[fileRole] ?? '', primaryModel.model) : await uiAdapter.modelMapping.update(draft.files[fileRole] ?? '', id, value);
-      if (stillCurrent(started)) setDraft({ ...draft, files:{ ...draft.files,[fileRole]:text },connection: !all && id===uiAdapter.modelMapping.primaryRole && connection ? {...connection,model:uiAdapter.modelMapping.encodeModel?.(value) ?? value.model} : draft.connection });
-    } catch (value) { if (stillCurrent(started)) setError(errorText(value)); }
+      const text = all ? await uiAdapter.modelMapping.useModelForAll(draft.files[fileRole] ?? '', primaryModel.model, primaryModel.longContext) : await uiAdapter.modelMapping.update(draft.files[fileRole] ?? '', id, value);
+      if (sequence === modelWrite.current && stillCurrent(started)) setDraft({ ...draft, files:{ ...draft.files,[fileRole]:text },connection: !all && id===uiAdapter.modelMapping.primaryRole && connection ? {...connection,model:uiAdapter.modelMapping.encodeModel?.(value) ?? value.model} : draft.connection });
+    } catch (value) { if (sequence === modelWrite.current && stillCurrent(started)) setError(errorText(value)); }
   }
 
   async function changeReasoningEffort(value: string) {
@@ -715,22 +752,27 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     <label>名称<input name="profile-name" aria-label="配置名称" value={draft.name} onChange={event => setDraft({ ...draft, name: event.target.value })} /></label>
     <label>API 地址<input aria-label="API 地址" value={connection.baseUrl} onChange={event => setDraft({ ...draft, connection: { ...connection, baseUrl: event.target.value } })} placeholder="https://api.example.com/v1" /></label>
     <label>API 密钥<div className={styles.secretField}><input aria-label="API 密钥" type={revealedSecret !== null ? "text" : "password"} autoComplete="off" value={revealedSecret ?? newSecret} onChange={event => { invalidateDraftRequest(); setNewSecret(event.target.value); modelSequence.current++; setModelDirectory(null); setModelLoading(false); }} placeholder={connection.secretRef ? '已保存' : 'sk-…'} /><button type="button" disabled={!newSecret && !connection.secretRef} onClick={() => void showSecret()}>{revealedSecret !== null ? '隐藏' : '显示'}</button></div></label>
-    <div className={styles.modelPicker}><label>模型<select aria-label="模型" value={manualModel ? '__manual__' : primaryModel.model} onChange={event => { if (event.target.value === '__manual__') setManualModel(true); else { setManualModel(false); updateModel(event.target.value); } }}><option value="">选择模型…</option>{modelOptions.map(model => <option key={model} value={model}>{model}</option>)}<option value="__manual__">手动输入模型</option></select></label><button type="button" disabled={busy || modelLoading || !connection.baseUrl.trim()} onClick={() => void fetchModels()}>{modelLoading ? '获取中…' : '获取模型'}</button></div>
-    {!!modelOptions.length && <details className={styles.modelSearch} data-model-search><summary>搜索模型</summary><input aria-label="搜索模型" value={modelSearch} onChange={event => setModelSearch(event.target.value)} placeholder="输入模型名称" /><div>{modelOptions.filter(value => value.toLowerCase().includes(modelSearch.toLowerCase())).map(value => <button key={value} type="button" onClick={() => { setManualModel(false); updateModel(value); document.querySelector<HTMLDetailsElement>('details[data-model-search]')?.removeAttribute('open'); }}>{value}</button>)}</div></details>}
-    {uiAdapter.modelMapping?.primaryRole && <label className={styles.check}><input type="checkbox" checked={primaryModel.longContext} onChange={event => updateModel(primaryModel.model,event.target.checked)} />1M 上下文</label>}
-    {manualModel && <label>模型 ID<input aria-label="手动模型 ID" value={primaryModel.model} onChange={event => updateModel(event.target.value)} placeholder="供应商的模型 ID" /><small>手动模型尚未验证</small></label>}
+    <div className={styles.modelPicker}><label>模型<ModelCombobox label="模型" value={primaryModel.model} placeholder="选择或输入模型" options={modelOptions} onChange={model => void updateModel(model)} /></label><button type="button" disabled={busy || modelLoading || !connection.baseUrl.trim()} onClick={() => void fetchModels()}>{modelLoading ? '获取中…' : '获取模型'}</button></div>
     {modelDirectory && <p className={styles.hint} role="status">{modelDirectory.status === 'ready' ? '已获取 ' + modelDirectory.models.length + ' 个模型' : modelDirectory.status === 'empty' ? '目录为空，可手动输入模型。' : modelDirectory.status === 'stale' ? '显示旧目录：' + modelDirectory.error : modelDirectory.error}{modelDirectory.fetchedAt ? ' · 更新于 ' + new Date(modelDirectory.fetchedAt * 1000).toLocaleString() : ''}</p>}
+    {uiAdapter.modelMapping?.primaryRole && <label className={styles.check}><input type="checkbox" checked={primaryModel.longContext} onChange={event => updateModel(primaryModel.model,event.target.checked)} />1M 上下文</label>}
+    {!!uiAdapter.modelMapping && <div className={styles.roleMapping}>
+      <div className={styles.roleHeading}><strong>其他角色</strong><button type="button" className="text-button" disabled={!primaryModel.model} onClick={() => void updateRoleModel('', { model: '', name: '', longContext: false }, true)}>所有角色使用当前模型</button></div>
+      {uiAdapter.modelMapping.roles.filter(item => item.id !== uiAdapter.modelMapping?.primaryRole).map(item => {
+        const value = roleModels[item.id] ?? { model: '', name: '', longContext: false };
+        return <div key={item.id} className={styles.roleRow}>
+          <strong>{item.label}</strong>
+          <ModelCombobox label={`${item.label} 请求模型`} value={value.model} placeholder="跟随默认，或直接输入" options={[...new Set([...(value.model ? [value.model] : []), ...modelOptions])]} onChange={model => void updateRoleModel(item.id, { ...value, model })} />
+          {item.longContext ? <label className={styles.check}><input type="checkbox" aria-label={`${item.label} 1M 上下文`} checked={value.longContext} disabled={!value.model} onChange={event => void updateRoleModel(item.id, { ...value, longContext: event.target.checked })} />1M</label> : <span className={styles.roleSlot} />}
+          {item.displayName && <input className={styles.roleName} aria-label={`${item.label} 显示名称`} placeholder="显示名称，可选" value={value.name} onChange={event => void updateRoleModel(item.id, { ...value, name: event.target.value })} />}
+        </div>;
+      })}
+    </div>}
   </> : null;
 
-  const pathControl = workspace ? <details className={styles.pathControl}><summary><span className={styles.statusDot} data-ok={workspace.probe.nativeWrites.state === 'supported'} /><strong>{workspace.probe.selectedPath ? `${toolName} ${workspace.probe.installations.find((item) => item.path === workspace.probe.selectedPath)?.version ?? ''}` : `${toolName} 未确认安装`}</strong><span>{workspace.probe.nativeWrites.reason}</span><span className={styles.diagnosticLabel}>安装与更新</span></summary><p><a href={workspace.probe.installUrl} target="_blank" rel="noreferrer">官方安装说明 ↗</a></p><div><input aria-label="CLI 可执行文件路径" value={customPath} onChange={(event) => setCustomPath(event.target.value)} placeholder="自定义可执行文件完整路径" /><button type="button" onClick={() => void choosePath()} disabled={busy}>保存并重检</button><button type="button" disabled={loading} onClick={() => currentTool && void reload(currentTool, scope, projectPath, selectedId)}>重新检测</button></div><p>{workspace.probe.upgradeHint}</p>{workspace.probe.installations.map((item) => <p key={item.path}>{item.status === 'available' ? '可用' : '检测失败'} · 来源：{item.source === 'npm_shim' ? '已验证 npm 入口' : item.source === 'claude_native' ? 'Claude 原生安装' : '未能确认'} · {item.path} {item.detail ?? ''}</p>)}{workspace.probe.dependencies.map((item) => <p key={item.name}>{item.name}：{item.status === 'found' ? '已找到' : item.status === 'outdated' ? '版本过旧' : '缺失'} · {item.detail}{item.status !== 'found' && <a href={item.helpUrl} target="_blank" rel="noreferrer"> 安装或更新 ↗</a>}</p>)}{workspace.probe.installCommand && <div><code>{workspace.probe.installCommand}</code><button type="button" onClick={() => void copyGuidance(workspace.probe.installCommand!)}>复制安装命令</button></div>}{workspace.probe.upgradeCommand ? <div><code>{workspace.probe.upgradeCommand}</code><button type="button" onClick={() => void copyGuidance(workspace.probe.upgradeCommand!)}>复制升级命令</button></div> : workspace.probe.selectedPath && <p>安装来源未能可靠确认，请先核对官方安装说明，再用原安装方式升级。</p>}</details> : null;
+  const pathControl = workspace ? <InstallPanel toolName={toolName} probe={workspace.probe} customPath={customPath} busy={busy} loading={loading} onCustomPath={setCustomPath} onSavePath={() => void choosePath()} onRecheck={() => currentTool && void reload(currentTool, scope, projectPath, selectedId)} onMaintain={(action, source) => void maintain(action, source)} onUsePath={(path) => void useInstallation(path)} /> : null;
 
-  const writeUnavailable = workspace && workspace.probe.nativeWrites.state !== 'supported' ? <div className={`${styles.error} ${styles.writeUnavailable}`} role="alert" aria-label="原生写入不可用">
-    <p>{workspace.probe.nativeWrites.reason || `${toolName} 当前无法写入原生配置。`}</p>
-    <div className={styles.writeActions}>
-      {workspace.probe.installUrl ? <a href={workspace.probe.installUrl} target="_blank" rel="noreferrer">官方安装说明 ↗</a> : null}
-      {workspace.probe.installCommand ? <button type="button" onClick={() => void copyGuidance(workspace.probe.installCommand!)}>复制安装命令</button> : null}
-      <button type="button" disabled={loading} onClick={() => currentTool && void reload(currentTool, scope, projectPath, selectedId)}>重新检测</button>
-    </div>
+  const writeUnavailable = workspace && workspace.probe.nativeWrites.state === 'unsupported' ? <div className={`${styles.error} ${styles.writeUnavailable}`} role="alert" aria-label="原生写入不可用">
+    <p>{workspace.probe.nativeWrites.reason}</p>
   </div> : null;
 
   const moreOptions = workspace ? <details className={styles.moreOptions} aria-label="配置更多选项"><summary>更多选项</summary>
@@ -743,7 +785,6 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
       <div className={styles.diagnosticActions}><button type="button" disabled={checkingConnection || !!newSecret} onClick={() => void checkConnection(false)}>检查连接</button><details><summary>更多诊断</summary><button type="button" disabled={checkingConnection || !!newSecret} onClick={() => void checkConnection(true)}>发送最小请求（可能计费）</button></details></div>
       {newSecret && <p className={styles.hint}>先获取模型或保存配置，再进行连接诊断。</p>}
       {connectionCheck && <details className={styles.diagnosticResult}><summary>连接诊断 · {connectionCheck.connectivity.state === 'failed' ? '未通过' : connectionCheck.connectivity.state === 'passed' ? '已连接' : '部分完成'}</summary><p>{connectionCheck.format.message}</p><p>{connectionCheck.connectivity.message}</p><p>{connectionCheck.modelRequest.message}</p></details>}
-      {uiAdapter.modelMapping && <details className={styles.roleMapping}><summary>模型角色映射</summary><button type="button" disabled={!connection?.model} onClick={() => void updateRoleModel('', {model:'',name:'',longContext:false}, true)}>所有角色使用当前模型</button>{uiAdapter.modelMapping.roles.map(item => { const value = roleModels[item.id] ?? {model:'',name:'',longContext:false}; return <div key={item.id} className={styles.roleFields}><strong>{item.label}</strong>{item.displayName && <label>显示名称<input aria-label={`${item.label} 显示名称`} value={value.name} onChange={event => void updateRoleModel(item.id,{...value,name:event.target.value})} /></label>}<label>请求模型<select aria-label={`${item.label} 请求模型`} value={manualRoles.includes(item.id) ? '__manual__' : value.model} onChange={event => { if (event.target.value === '__manual__') setManualRoles([...manualRoles,item.id]); else { setManualRoles(manualRoles.filter(id => id !== item.id)); void updateRoleModel(item.id,{...value,model:event.target.value}); } }}><option value="">跟随 CLI 默认</option>{[...new Set([...(value.model ? [value.model] : []),...modelOptions])].map(model => <option value={model} key={model}>{model}</option>)}<option value="__manual__">手动输入模型</option></select></label>{manualRoles.includes(item.id) && <input aria-label={`${item.label} 手动模型`} value={value.model} onChange={event => void updateRoleModel(item.id,{...value,model:event.target.value})} />}{item.longContext && <label className={styles.check}><input type="checkbox" checked={value.longContext} onChange={event => void updateRoleModel(item.id,{...value,longContext:event.target.checked})} />1M 上下文</label>}</div>; })}</details>}
       {uiAdapter.reasoning && <label>{uiAdapter.reasoning.label}<select value={inspection?.reasoningEffort ?? ''} onChange={event => void changeReasoningEffort(event.target.value)}><option value="">跟随原生默认</option>{uiAdapter.reasoning.choices.map(([id, label]) => <option key={id} value={id}>{label}</option>)}{inspection?.reasoningEffort && !uiAdapter.reasoning.choices.some(([id]) => id === inspection.reasoningEffort) && <option value={inspection.reasoningEffort}>当前原生值：{inspection.reasoningEffort}</option>}</select></label>}
       {inspection?.connection && connectionShape(inspection.connection) !== connectionShape(connection) && <button type="button" onClick={adoptInspectedConnection}>使用原生配置中的连接</button>}
     </details>}
@@ -757,13 +798,13 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
 
   return <section className={styles.workspace} aria-label="工具与连接">
     <div className={styles.toolbar}>
-      <div className={styles.toolSwitcher} role="tablist" aria-label="CLI">{visibleTools.map((item) => <button key={item.id} type="button" role="tab" aria-selected={currentTool === item.id} className={currentTool === item.id ? styles.selected : ''} onClick={async () => { if (currentTool === item.id) return; if ((dirty || mcpDirty || skillsDirty) && !await confirmChange('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return; invalidateDraftRequest(); setTool(item.id); }}><ToolIcon toolId={item.id} size={23} />{item.name}</button>)}</div>
+      <div className={styles.toolSwitcher} role="tablist" aria-label="CLI">{visibleTools.map((item) => <button key={item.id} type="button" role="tab" aria-selected={currentTool === item.id} title={item.name} className={currentTool === item.id ? styles.selected : ''} onClick={async () => { if (currentTool === item.id) return; if ((dirty || mcpDirty || skillsDirty) && !await confirmChange('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return; invalidateDraftRequest(); setTool(item.id); }}><ToolIcon toolId={item.id} size={23} />{item.name}</button>)}</div>
     </div>
     <div className={styles.taskBar}>
       <div className={styles.views} role="tablist" aria-label="当前任务">
         <button type="button" role="tab" aria-selected={resourceView === 'config'} className={resourceView === 'config' ? styles.selected : ''} onClick={() => void switchResourceView('config')}>配置</button>
-        <button type="button" role="tab" aria-selected={resourceView === 'mcp'} className={resourceView === 'mcp' ? styles.selected : ''} onClick={() => void switchResourceView('mcp')}>添加 MCP</button>
-        <button type="button" role="tab" aria-selected={resourceView === 'skills'} className={resourceView === 'skills' ? styles.selected : ''} onClick={() => void switchResourceView('skills')}>添加 Skill</button>
+        <button type="button" role="tab" aria-selected={resourceView === 'mcp'} className={resourceView === 'mcp' ? styles.selected : ''} onClick={() => void switchResourceView('mcp')}>MCP</button>
+        <button type="button" role="tab" aria-selected={resourceView === 'skills'} className={resourceView === 'skills' ? styles.selected : ''} onClick={() => void switchResourceView('skills')}>Skill</button>
       </div>
       <div className={styles.scopeBar}><label>配置范围 <select value={scope} onChange={async (event) => { const value = event.target.value as Scope; if ((dirty || mcpDirty || skillsDirty) && !await confirmChange('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return; invalidateDraftRequest(); setScope(value); }}><option value="global">全局</option><option value="project">项目</option></select></label>{scope === 'project' && <><select aria-label="配置项目" title={projectPath || '选择已有项目'} value={projectPath} onChange={event => switchProject(event.target.value)}><option value="">选择项目…</option>{projects.map(project => <option key={project.id} value={project.path ?? project.id} disabled={!project.available || !project.path} title={project.path ?? ''}>{project.name}{project.available ? '' : ' · 目录不可用'}</option>)}{projectPath && !projects.some(project => project.path === projectPath) && <option value={projectPath}>{projectPath.split(/[\\/]/).filter(Boolean).at(-1) || projectPath}</option>}</select><button type="button" disabled={choosingProject || busy} onClick={() => void chooseProjectFolder()}>选择文件夹</button></>}</div>
     </div>
@@ -772,7 +813,9 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     {scope === 'project' && workspace?.probe.nativeFiles.find((item) => !item.sensitive && item.reason)?.reason && <p className={styles.hint}>{workspace.probe.nativeFiles.find((item) => !item.sensitive && item.reason)?.reason}</p>}
     {loading && <p className={styles.hint} role="status">正在读取配置…</p>}
     {error && <div className={styles.error} role="alert">{error}</div>}
-    {applyComparison && <section className="file-conflict" aria-label="配置应用冲突"><strong>比较当前文件与本次配置</strong>{applyComparison.files.map(file=><div className="file-conflict-columns" key={file.role}><div><strong>当前文件</strong><CodeEditor label={`当前 ${file.role} 文件`} readOnly compact format={file.format} value={file.current}/></div><div><strong>本次配置字段</strong><CodeEditor label={`本次 ${file.role} 配置`} readOnly compact format="json" value={JSON.stringify(file.proposed,null,2)}/></div></div>)}<div className="file-conflict-actions"><button type="button" onClick={()=>setApplyComparison(null)}>保留当前文件</button><button type="button" disabled={busy} onClick={()=>void resolveApplication()}>使用本次配置</button></div></section>}
+    <GuideDialog open={!!applyComparison} title="比较当前文件与本次配置" hint="原生文件里已有不同内容。可以保留现有文件，或改用这次保存的配置。" onClose={() => setApplyComparison(null)}>
+      {applyComparison && <div className="file-conflict" aria-label="配置应用冲突">{applyComparison.files.map(file=><div className="file-conflict-columns" key={file.role}><div><strong>当前文件</strong><CodeEditor label={`当前 ${file.role} 文件`} readOnly compact format={file.format} value={file.current}/></div><div><strong>本次配置字段</strong><CodeEditor label={`本次 ${file.role} 配置`} readOnly compact format="json" value={JSON.stringify(file.proposed,null,2)}/></div></div>)}<div className="file-conflict-actions"><button type="button" onClick={()=>setApplyComparison(null)}>保留当前文件</button><button type="button" disabled={busy} onClick={()=>void resolveApplication()}>使用本次配置</button></div></div>}
+    </GuideDialog>
     {notice && <div className={styles.notice} role="status">{notice}</div>}
     {(scope !== 'project' || !!projectPath.trim()) && <>
       {pathControl}
@@ -781,7 +824,8 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
       {workspace && workspace.profiles.length ? <div className={styles.profileList} aria-label="配置列表">
           <div className={styles.listHeading}><strong>配置</strong><span className={styles.listActions}><button type="button" onClick={() => void editCommon()}>通用配置</button><button type="button" className={styles.primary} onClick={() => void createProfile()}>新建配置</button></span></div>
           <div className={styles.profileRow} data-kind="native"><span><strong>正在使用的文件</strong><small>保存即写入该文件</small></span><button type="button" onClick={() => void openCurrentFile()}>修改</button></div>
-          {workspace.profiles.map((item) => { const status = profileStatus(item); return <div className={styles.profileRow} key={item.id}><span><strong>{item.name}</strong><small className={styles.badge} data-tone={status === '正在使用' ? 'ok' : status === '已保存' ? undefined : 'warn'}>{status}</small></span><button type="button" onClick={() => void selectProfile(item)}>修改</button></div>; })}
+          {workspace.profiles.length > 6 && <label className={styles.profileFilter}><input aria-label="搜索配置" placeholder="搜索配置" value={profileQuery} onChange={event => setProfileQuery(event.target.value)} /></label>}
+          <div role="list" aria-label="配置项" className={workspace.profiles.length > 6 ? styles.profileScroll : undefined}>{workspace.profiles.filter(item => item.name.toLowerCase().includes(profileQuery.trim().toLowerCase())).map((item) => { const status = profileStatus(item); const current = status === '正在使用'; const writable = workspace.probe.nativeWrites.state === 'supported'; return <div className={styles.profileRow} role="listitem" data-profile-id={item.id} data-active={current || undefined} key={item.id}><span><strong>{item.name}</strong><small className={styles.badge} data-tone={status === '正在使用' ? 'ok' : status === '已保存' ? undefined : 'warn'}>{status}</small></span><span className={styles.profileActions}>{!current && <button type="button" disabled={busy || enablingId !== null || !writable} title={writable ? '写入原生文件，下次启动读取这份配置' : workspace.probe.nativeWrites.reason || '当前不能写入这个工具的配置'} onClick={() => void applySaved(item)}>{enablingId === item.id ? '启用中' : '启用'}</button>}<button type="button" onClick={() => void selectProfile(item)}>修改</button></span></div>; })}{profileQuery.trim() && !workspace.profiles.some(item => item.name.toLowerCase().includes(profileQuery.trim().toLowerCase())) && <p className={styles.profileEmpty}>没有匹配的配置</p>}</div>
         </div> : <div className={styles.taskEmpty}>
         <button type="button" className={styles.primary} disabled={busy || !currentTool} onClick={() => void createProfile()}>新建配置</button>
         <button type="button" className={styles.secondary} disabled={busy || !currentTool} onClick={() => void editCommon()}>通用配置</button>
@@ -798,11 +842,11 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
               {currentDescriptor?.login && <button type="button" disabled={busy} title={currentDescriptor.login.hint} onClick={() => void login()}>登录</button>}
               {editor === 'native' && hasCurrentNative && <button type="button" disabled={busy} onClick={() => void importCurrentNative(false, true)}>复制为配置</button>}
               <span>{dirty ? '未保存' : ''}</span>
-              <button type="button" className={styles.primary} disabled={busy || !nativeAvailable || (editor === 'native' && workspace?.probe.nativeWrites.state !== 'supported')} onClick={() => void save(editor === 'profile' && workspace?.probe.nativeWrites.state === 'supported')}>保存</button>
+              <button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint} disabled={busy || !nativeAvailable || (editor === 'native' && workspace?.probe.nativeWrites.state !== 'supported')} onClick={() => void save(editor === 'profile' && workspace?.probe.nativeWrites.state === 'supported')}>保存</button>
             </div>
         </div>
       </GuideDialog>
-      {editor === 'profile' && draft?.id && workspace && !dirty && (workspace.binding?.profileId !== draft.id || workspace.binding.profileVersion !== draft.version) && <div className={styles.quickApply}><span>这份配置已保存，但尚未应用到当前范围。</span><button type="button" onClick={() => void applySaved(draft)} disabled={busy || workspace.probe.nativeWrites.state !== 'supported'}>应用这份配置</button></div>}
+      {editor === 'profile' && draft?.id && workspace && !dirty && (workspace.binding?.profileId !== draft.id || workspace.binding.profileVersion !== draft.version) && <div className={styles.quickApply}><span>这份配置已保存，但尚未应用到当前范围。</span><button type="button" onClick={() => void applySaved(draft)} disabled={busy || enablingId !== null || workspace.probe.nativeWrites.state !== 'supported'}>启用</button></div>}
     </>}
     </div>
     <div hidden={resourceView !== 'mcp'}><McpWorkspace key={JSON.stringify([currentTool, scope, projectPath, resourceEpoch])} toolId={currentTool} scope={scope} projectPath={projectPath} tools={visibleTools} onDirtyChange={setMcpDirty} /></div>

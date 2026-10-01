@@ -18,6 +18,16 @@ use crate::resources::mcp::{self, McpDefinition, McpTransport};
 
 pub struct Codex;
 
+const RESERVED_MODEL_PROVIDERS: &[&str] = &["openai", "ollama", "lmstudio"];
+
+fn model_provider_id(id: &str) -> String {
+    if RESERVED_MODEL_PROVIDERS.contains(&id) {
+        format!("{id}-custom")
+    } else {
+        id.to_owned()
+    }
+}
+
 fn skill_path_matches(item: &Value, skill_path: &Path) -> bool {
     let Some(raw) = item.get("path").and_then(Value::as_str) else { return false; };
     let expected = skill_path.join("SKILL.md");
@@ -173,7 +183,8 @@ impl CliAdapter for Codex {
             return Err("Codex 此版本只支持 Responses 供应商接口".into());
         }
         let mut settings = json!({});
-        let provider = connection.provider_id.as_str();
+        let provider_id = model_provider_id(&connection.provider_id);
+        let provider = provider_id.as_str();
         set_json(&mut settings, &["model"], json!(connection.model));
         set_json(&mut settings, &["model_provider"], json!(provider));
         set_json(
@@ -216,18 +227,20 @@ impl CliAdapter for Codex {
         if scope == Scope::Project {
             return Err("Codex 项目层不能写入供应商密钥；请使用全局配置".into());
         }
+        let provider_id = model_provider_id(&connection.provider_id);
+        let provider = provider_id.as_str();
         secrets.put(
             "settings",
             &[
                 "model_providers",
-                &connection.provider_id,
+                provider,
                 "experimental_bearer_token",
             ],
             read_secret(id, credentials)?,
         );
         secrets.remove(
             "settings",
-            &["model_providers", &connection.provider_id, "env_key"],
+            &["model_providers", provider, "env_key"],
         );
         Ok(())
     }
@@ -279,6 +292,40 @@ impl CliAdapter for Codex {
             found,
             pending,
         )
+    }
+    fn normalize_applied_document(&self, role: &str, document: &mut Value) {
+        if role != "settings" {
+            return;
+        }
+        let Some(root) = document.as_object_mut() else {
+            return;
+        };
+        let renamed = {
+            let Some(providers) = root.get_mut("model_providers").and_then(Value::as_object_mut) else {
+                return;
+            };
+            let mut renamed = Vec::new();
+            for reserved in RESERVED_MODEL_PROVIDERS {
+                if !providers.contains_key(*reserved) {
+                    continue;
+                }
+                let custom = format!("{reserved}-custom");
+                let entry = providers.remove(*reserved).unwrap();
+                if !providers.contains_key(&custom) {
+                    providers.insert(custom.clone(), entry);
+                }
+                renamed.push((*reserved, custom));
+            }
+            renamed
+        };
+        if let Some(current) = root.get("model_provider").and_then(Value::as_str).map(str::to_owned) {
+            if let Some((_, custom)) = renamed.iter().find(|(reserved, _)| *reserved == current) {
+                root.insert("model_provider".into(), json!(custom));
+            }
+        }
+        if root.get("model_providers").and_then(Value::as_object).is_some_and(|providers| providers.is_empty()) {
+            root.remove("model_providers");
+        }
     }
     fn validate_documents(
         &self,
@@ -334,7 +381,31 @@ impl CliAdapter for Codex {
     fn install_guidance(&self) -> (&'static str, &'static str) {
         (
             "https://developers.openai.com/codex/cli",
-            "按官方文档更新 Codex CLI；使用原安装来源升级。",
+            "原生安装用官方安装脚本更新；npm 安装用 npm 更新。不要同时留两份。",
         )
+    }
+    fn recognizes_native_install_path(&self, path: &Path) -> bool {
+        let value = path.to_string_lossy().replace('\\', "/").to_ascii_lowercase();
+        value.contains("/programs/openai/codex/") || value.contains("/.local/bin/codex")
+    }
+    fn install_command(&self) -> Option<String> {
+        self.native_install_command()
+    }
+    fn native_install_command(&self) -> Option<String> {
+        Some(
+            if cfg!(windows) {
+                "irm https://chatgpt.com/codex/install.ps1 | iex"
+            } else {
+                "curl -fsSL https://chatgpt.com/codex/install.sh | sh"
+            }
+            .into(),
+        )
+    }
+    fn upgrade_command(&self, source: &str) -> Option<String> {
+        match source {
+            "npm_shim" => Some(format!("npm install -g {}@latest", self.npm_package())),
+            "native" => self.native_install_command(),
+            _ => None,
+        }
     }
 }

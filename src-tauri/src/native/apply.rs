@@ -276,6 +276,9 @@ pub fn desired_registered_documents(
             *existing = merged;
         }
     }
+    for (role, document) in &mut result {
+        adapter.normalize_applied_document(role, document);
+    }
     adapter.validate_documents(scope, &result)?;
     Ok(result)
 }
@@ -973,6 +976,13 @@ mod tests {
             "@ai-sdk/openai"
         );
         assert!(connection_documents(CliId::Codex, &connection, Scope::Project).is_err());
+        let mut reserved = connection.clone();
+        reserved.provider_id = "openai".into();
+        let codex = connection_documents(CliId::Codex, &reserved, Scope::Global).unwrap();
+        assert!(codex["settings"].get("model_providers").unwrap().get("openai").is_none());
+        assert_eq!(codex["settings"]["model_provider"], "openai-custom");
+        assert_eq!(codex["settings"]["model_providers"]["openai-custom"]["base_url"], "https://example.test/v1");
+        assert_eq!(codex["settings"]["model_providers"]["openai-custom"]["wire_api"], "responses");
         let registry=crate::native::adapters::Registry::builtins();
         let existing=BTreeMap::from([("models".into(),json!({"providers":{"demo":{"models":[{"id":"m1","contextWindow":123,"cost":{"input":2}},{"id":"other","name":"Keep"}]}}}))]);
         let preserved=registry.get("pi").unwrap().connection_documents_for_existing(&connection,Scope::Global,&existing).unwrap();
@@ -983,6 +993,56 @@ mod tests {
         assert_eq!(mapped["settings"]["models"]["default"],"friendly-alias");
         assert_eq!(mapped["settings"]["model"]["friendly-alias"]["model"],"request-id");
         assert_eq!(mapped["settings"]["model"]["friendly-alias"]["name"],"Visible name");
+    }
+
+    #[test]
+    fn codex_reserved_provider_is_renamed_and_the_old_table_is_removed() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        let store = MemoryStore::default();
+        let path = temp.path().join("config.toml");
+        let mut named = secret_profile(CliId::Codex, "openai-provider", "openai", "");
+        named.connection.as_mut().unwrap().secret_ref = None;
+        named.files.insert(
+            "settings".into(),
+            "unrelated = 7\nmodel_provider = \"openai\"\n[model_providers.openai]\nname = \"openai\"\nbase_url = \"https://example.test/v1\"\nwire_api = \"responses\"\n".into(),
+        );
+        let previous = json!({
+            "settings": {
+                "/model": "model-a",
+                "/model_provider": "openai",
+                "/model_providers/openai/name": "openai",
+                "/model_providers/openai/base_url": "https://example.test/v1",
+                "/model_providers/openai/wire_api": "responses"
+            }
+        });
+        fs::write(
+            &path,
+            "unrelated = 7\nmodel = \"model-a\"\nmodel_provider = \"openai\"\n\n[model_providers.openai]\nname = \"openai\"\nbase_url = \"https://example.test/v1\"\nwire_api = \"responses\"\n",
+        )
+        .unwrap();
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO native_profiles (id,tool,version,data) VALUES (?1,?2,?3,?4)",
+                params![named.id, named.tool.stable_id(), named.version as i64, serde_json::to_string(&named).unwrap()],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO applied_bindings (scope_key, tool, profile_id, profile_version, managed) VALUES (?1,?2,?3,?4,?5)",
+                params!["global", "codex", named.id, named.version as i64, previous.to_string()],
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+        apply_fixture(&db, &store, &named, None, &[native(&path)], "global", Scope::Global, false).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        let parsed = format::parse(format::FileKind::Toml, &text).unwrap();
+        assert_eq!(parsed["model_provider"], "openai-custom");
+        assert!(parsed["model_providers"].get("openai").is_none());
+        assert_eq!(parsed["model_providers"]["openai-custom"]["base_url"], "https://example.test/v1");
+        assert_eq!(parsed["unrelated"], 7);
+        assert!(!text.contains("model_providers.openai]") && !text.contains("[model_providers.openai]"));
     }
 
     #[test]
