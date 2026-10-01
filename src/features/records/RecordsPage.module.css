@@ -26,17 +26,6 @@
 /* Filters */
 .filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
 .filters label, .priceForm label, .projectLink, .filterSelect { display: grid; gap: 5px; min-width: 160px; color: var(--text-2); font-size: 12px; font-weight: 560; }
-.filterTrigger { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-height: var(--control-h); padding: 0 10px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font-weight: 450; text-align: left; }
-.filterTrigger > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.filterTrigger::after { content: ''; flex: none; width: 10px; height: 10px; background: var(--text-3); -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") center / contain no-repeat; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") center / contain no-repeat; }
-.filterTrigger[aria-expanded="true"] { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
-.filterMenu { position: fixed; z-index: 40; display: grid; gap: 6px; padding: 6px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-md); }
-.filterMenu input { width: 100%; }
-.filterList { display: grid; align-content: start; gap: 2px; overflow: auto; }
-.filterList > button { display: flex; align-items: center; min-height: 32px; padding: 0 8px; border: 0; border-radius: var(--radius-sm); background: transparent; box-shadow: none; color: var(--text); font-size: 12.5px; font-weight: 450; text-align: left; }
-.filterList > button:hover, .filterList > button[data-active="true"] { background: var(--surface-3); }
-.filterList > button[aria-selected="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
-.filterList > p { margin: 0; padding: 8px; color: var(--text-3); font-size: 12px; }
 .filters input:not([type=checkbox]), .filters select, .priceForm input, .projectLink select { width: 100%; color: var(--text); font-weight: 400; }
 .filters .search { flex: 1 1 220px; }
 .filters .favorite { display: flex; align-items: center; gap: 8px; min-width: auto; min-height: var(--control-h); color: var(--text); font-size: 12.5px; font-weight: 500; white-space: nowrap; cursor: pointer; }

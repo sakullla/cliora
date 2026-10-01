@@ -1,5 +1,38 @@
 import { expect, test } from '@playwright/test';
 
+test('records only lists managed CLIs and scopes session reads to them', async ({ page }) => {
+  await page.addInitScript(() => {
+    const filters: Array<Record<string, unknown>> = [];
+    Object.assign(window, {
+      isTauri: true,
+      __historyFilters: filters,
+      __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['claude_code'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }, { id: 'claude_code', name: 'Claude Code' }] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', yoloAvailable: true }, { id: 'claude_code', name: 'Claude Code', yoloAvailable: true }], managedIds: ['claude_code'], preservedUnknown: [] };
+        if (command === 'list_projects' || command === 'list_history_prices' || command === 'refresh_history') return [];
+        if (command === 'list_history_sessions') { filters.push(args.filter); return []; }
+        if (command === 'get_history_usage') return { sessionCount: 0, usageSessions: 0, unknownUsageSessions: 0, partialSessions: 0, staleSessions: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, inputIncludesCache: null, estimatedCost: null, currency: null, priceSources: [], models: [], byModel: [], scans: [] };
+        if (command === 'get_history_scan_progress') return { running: false, toolId: '', completedSources: 0, totalSources: 0 };
+        if (command === 'get_tray_status') return { available: false, error: null };
+        if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+        return null;
+      } },
+    });
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
+  await page.getByLabel('筛选工具').click();
+  const list = page.getByRole('listbox', { name: '筛选工具' });
+  await expect(list.getByRole('option')).toHaveCount(2);
+  await expect(list.getByRole('option', { name: 'Claude Code' })).toBeVisible();
+  await expect(list.getByRole('option', { name: 'Codex' })).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect.poll(() => page.evaluate(() => {
+    const filters = (window as typeof window & { __historyFilters: Array<{ tools?: string[] }> }).__historyFilters;
+    return filters.length > 0 && JSON.stringify(filters[filters.length - 1].tools) === JSON.stringify(['claude_code']);
+  })).toBe(true);
+});
+
 test('records keep search, show native resume command and only launch on request', async ({ page }) => {
   await page.addInitScript(() => {
     const records: Array<Record<string, any>> = [

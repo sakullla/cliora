@@ -11,6 +11,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::database::Database;
+use crate::domain::CliId;
 use crate::native::adapters::{CliAdapter, Registry};
 
 pub mod claude;
@@ -404,6 +405,7 @@ pub struct HistoryFilter {
     pub from_ms: Option<i64>,
     pub to_ms: Option<i64>,
     pub favorite_only: bool,
+    pub tools: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -621,9 +623,9 @@ fn history_fingerprints_match(cached: &str, current: &str) -> bool {
     cached == current
 }
 pub fn refresh(db: &Database, registry: &Registry, home: &Path) -> Result<Vec<ScanStatus>, String> {
-    refresh_controlled(db, registry, home, &|| false)
+    refresh_controlled(db, registry, home, &CliId::ALL, &|| false)
 }
-pub fn refresh_controlled(db: &Database, registry: &Registry, home: &Path, cancelled: &impl Fn() -> bool) -> Result<Vec<ScanStatus>, String> {
+pub fn refresh_controlled(db: &Database, registry: &Registry, home: &Path, managed: &[CliId], cancelled: &impl Fn() -> bool) -> Result<Vec<ScanStatus>, String> {
     struct Finish;
     impl Drop for Finish { fn drop(&mut self) { let state = scan_progress(); set_scan_progress(false, &state.tool_id, state.completed_sources, state.total_sources); } }
     let _finish = Finish;
@@ -632,6 +634,9 @@ pub fn refresh_controlled(db: &Database, registry: &Registry, home: &Path, cance
         let Some(adapter) = registry.get(descriptor.id) else {
             continue;
         };
+        if !managed.iter().any(|tool| tool.stable_id() == descriptor.id) {
+            continue;
+        }
         if !adapter.history_supported() {
             continue;
         }
@@ -703,16 +708,24 @@ fn query_sessions(
     } else {
         (None, None)
     };
+    let tools: Vec<&String> = filter.tools.as_ref().map(|list| list.iter().filter(|tool| !tool.is_empty()).collect()).unwrap_or_default();
     db.with_connection(|conn| {
-        let mut statement = conn.prepare(
+        let mut sql = String::from(
             "SELECT id,tool,native_id,title,cwd,model,project_id,started_at,updated_at,favorite,partial,stale,message_count,usage_count,usage_json
              FROM history_sessions WHERE (?1 IS NULL OR tool = ?1)
              AND (?2 IS NULL OR project_id = ?2 OR (?2 = '__unknown__' AND project_id IS NULL))
              AND (?3 IS NULL OR title LIKE ?3 ESCAPE '\\' OR messages_json LIKE ?3 ESCAPE '\\')
              AND (?4 IS NULL OR updated_at >= ?4) AND (?5 IS NULL OR updated_at < ?5)
-             AND (?6 = 0 OR favorite = 1) ORDER BY favorite DESC, updated_at DESC, id")
-            .map_err(|error| error.to_string())?;
-        let rows = statement.query_map(params![filter.tool_id,filter.project_id,search,from,to,filter.favorite_only as i64], |row| {
+             AND (?6 = 0 OR favorite = 1)");
+        if !tools.is_empty() {
+            let placeholders = (0..tools.len()).map(|index| format!("?{}", index + 7)).collect::<Vec<_>>().join(",");
+            sql.push_str(&format!(" AND tool IN ({placeholders})"));
+        }
+        sql.push_str(" ORDER BY favorite DESC, updated_at DESC, id");
+        let mut statement = conn.prepare(&sql).map_err(|error| error.to_string())?;
+        let mut values: Vec<&dyn rusqlite::ToSql> = vec![&filter.tool_id, &filter.project_id, &search, &from, &to, &filter.favorite_only];
+        for tool in &tools { values.push(*tool); }
+        let rows = statement.query_map(rusqlite::params_from_iter(values), |row| {
             Ok((row_session(row)?,row.get::<_,String>(14)?))
         }).map_err(|error| error.to_string())?;
         let mut result = Vec::new();

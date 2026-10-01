@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { createPortal } from 'react-dom';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { save } from '@tauri-apps/plugin-dialog';
 import { native, nativeAvailable } from '../../lib/native';
 import type { AdapterDescriptor } from '../../types/native';
 import type { Project } from '../../types/launch';
 import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, ScanStatus, UsageSummary } from '../../types/history';
 import { displayPath } from '../../lib/paths';
+import { FilterSelect } from '../../components/FilterSelect';
 import { GuideDialog } from '../../components/GuideDialog';
 import { ToolIcon } from '../../components/ToolIcon';
 import { Icon } from '../../components/Icon';
@@ -23,69 +23,6 @@ function Metric({ label, value, hint }: { label: string; value: number | null; h
 }
 function Amount({ value, title }: { value: number | null; title?: string }) {
   return <span title={title ?? (value === null || value < 1000 ? undefined : value.toLocaleString())}>{compact(value)}</span>;
-}
-function FilterSelect({ label, value, options, onChange }: { label: string; value: string; options: { value: string; label: string }[]; onChange: (value: string) => void }) {
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState('');
-  const [active, setActive] = useState(0);
-  const [box, setBox] = useState<{ top: number; left: number; width: number; maxHeight: number } | null>(null);
-  const anchor = useRef<HTMLButtonElement>(null);
-  const panel = useRef<HTMLDivElement>(null);
-  const listId = useId();
-  const current = options.find((item) => item.value === value)?.label ?? '全部';
-  const showSearch = options.length > 8;
-  const matches = options.filter((item) => item.label.toLowerCase().includes(query.trim().toLowerCase()));
-  useLayoutEffect(() => {
-    if (!open || !anchor.current) return;
-    const place = () => {
-      const rect = anchor.current?.getBoundingClientRect();
-      if (!rect) return;
-      const width = Math.max(rect.width, 220);
-      const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
-      const below = window.innerHeight - rect.bottom - 12;
-      setBox({ top: rect.bottom + 4, left, width, maxHeight: Math.max(160, Math.min(280, below)) });
-    };
-    place();
-    window.addEventListener('resize', place);
-    window.addEventListener('scroll', place, true);
-    return () => { window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true); };
-  }, [open]);
-  useEffect(() => { setActive(0); }, [query, open]);
-  useEffect(() => {
-    if (!open) return;
-    const close = (event: MouseEvent) => {
-      const target = event.target as Node;
-      if (anchor.current?.contains(target) || panel.current?.contains(target)) return;
-      setOpen(false); setQuery('');
-    };
-    document.addEventListener('mousedown', close);
-    return () => document.removeEventListener('mousedown', close);
-  }, [open]);
-  useEffect(() => {
-    if (!open || !panel.current) return;
-    const node = panel.current.querySelector<HTMLElement>('[data-active="true"]');
-    if (!node) return;
-    node.scrollIntoView({ block: 'nearest' });
-  }, [open, active, query]);
-  function choose(next: string) { onChange(next); setOpen(false); setQuery(''); }
-  function onKey(event: KeyboardEvent<HTMLElement>) {
-    if (event.key === 'ArrowDown') { event.preventDefault(); setActive((index) => Math.min(index + 1, Math.max(matches.length - 1, 0))); return; }
-    if (event.key === 'ArrowUp') { event.preventDefault(); setActive((index) => Math.max(index - 1, 0)); return; }
-    if (event.key === 'Enter' && matches[active]) { event.preventDefault(); choose(matches[active].value); return; }
-    if (event.key === 'Escape') { event.preventDefault(); setOpen(false); setQuery(''); }
-  }
-  return <label className={styles.filterSelect}>
-    <span>{label.replace(/^筛选/, '')}</span>
-    <button ref={anchor} type="button" className={styles.filterTrigger} aria-label={label} aria-haspopup="listbox" aria-expanded={open} aria-controls={listId} onClick={() => setOpen((item) => !item)} onKeyDown={(event) => { if (!open && (event.key === 'ArrowDown' || event.key === 'Enter')) { event.preventDefault(); setOpen(true); return; } if (open) onKey(event); }}>
-      <span>{current}</span>
-    </button>
-    {open && box && createPortal(<div ref={panel} className={styles.filterMenu} style={{ top: box.top, left: box.left, width: box.width }} onKeyDown={onKey}>
-      {showSearch && <input aria-label={`搜索${label}`} placeholder="输入名称" value={query} autoFocus onChange={(event) => setQuery(event.target.value)} onKeyDown={onKey} />}
-      <div className={styles.filterList} id={listId} role="listbox" aria-label={label} style={{ maxHeight: box.maxHeight - (showSearch ? 44 : 0) }}>
-        {matches.length ? matches.map((item, index) => <button key={item.value || 'all'} type="button" role="option" aria-selected={item.value === value} data-active={index === active || undefined} onMouseEnter={() => setActive(index)} onClick={() => choose(item.value)}>{item.label}</button>) : <p>没有匹配项</p>}
-      </div>
-    </div>, document.body)}
-  </label>;
 }
 function formatFailure(error: unknown, objectText: string, nextText: string): string {
   const fallback = `${objectText}。${nextText}`;
@@ -207,12 +144,13 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
   const request = useRef(0);
   const detailRequest = useRef(0);
   const dates = useMemo(() => rangeDates(rangeKey, customFrom, customTo), [rangeKey, customFrom, customTo]);
+  const toolKey = tools.map((item) => item.id).join('|');
   const filter = useMemo<HistoryFilter>(() => ({
     toolId: toolId || null, model: model.trim() || null, projectId: projectId || null,
     search: search.trim() || null, fromMs: dates.from ? new Date(`${dates.from}T00:00:00`).getTime() : null,
     toMs: dates.to ? (() => { const next = new Date(`${dates.to}T00:00:00`); next.setDate(next.getDate() + 1); return next.getTime(); })() : null,
-    favoriteOnly,
-  }), [toolId, model, projectId, search, dates, favoriteOnly]);
+    favoriteOnly, tools: toolKey ? toolKey.split('|') : null,
+  }), [toolId, model, projectId, search, dates, favoriteOnly, toolKey]);
 
   const filterRef = useRef(filter); filterRef.current = filter;
   const load = useCallback(async (current: HistoryFilter) => {
@@ -374,7 +312,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
     {(scanning || filterLoading) && <p className={styles.caveat} role="status">{scanning ? `后台扫描 ${tools.find(item => item.id === scanProgress?.toolId)?.name ?? scanProgress?.toolId ?? ''} ${scanProgress?.totalSources ? `${scanProgress.completedSources} / ${scanProgress.totalSources}` : '正在发现文件'}` : '正在筛选已缓存记录…'}{scanning && <span className={styles.progress} aria-hidden="true"><span style={scanProgress?.totalSources ? { width: `${Math.min(100, (scanProgress.completedSources / scanProgress.totalSources) * 100)}%` } : undefined} data-indeterminate={!scanProgress?.totalSources || undefined} /></span>}{scanning && <button type="button" onClick={() => void cancelScan()}>停止扫描</button>}</p>}
     <div className={styles.filters}>
       {tab === 'sessions' && <label className={styles.search}>搜索<input aria-label="搜索会话" data-page-search title={searchShortcutHint} value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape' && search) { event.preventDefault(); setSearch(''); } }} placeholder="标题或正文" /></label>}
-      <FilterSelect label="筛选工具" value={toolId} options={[{ value: '', label: '全部工具' }, ...tools.map((item) => ({ value: item.id, label: item.name }))]} onChange={setToolId} />
+      <label className={styles.filterSelect}><span>工具</span><FilterSelect label="筛选工具" value={toolId} options={[{ value: '', label: '全部工具' }, ...tools.map((item) => ({ value: item.id, label: item.name }))]} onChange={setToolId} /></label>
       {tab === 'sessions' && <label className={styles.favorite}><input type="checkbox" checked={favoriteOnly} onChange={(event) => setFavoriteOnly(event.target.checked)} />只看收藏</label>}
     </div>
     <div className={styles.range} role="group" aria-label="时间范围">{rangePresets.map((item) => <button type="button" key={item.id} aria-pressed={rangeKey === item.id} onClick={() => { setRangeKey(item.id); if (item.id === 'custom' && !customFrom && !customTo) { const today = isoDay(new Date()); setCustomFrom(today); setCustomTo(today); } }}>{item.label}</button>)}</div>
@@ -384,8 +322,8 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
     </div>}
     {tab === 'usage' ? <p className={styles.rangeSummary}>{rangeSummary(dates.from, dates.to)}</p> : rangeCaption(dates.from, dates.to) && <p className={styles.rangeSummary}>{rangeCaption(dates.from, dates.to)}</p>}
     <details className={styles.moreFilters}><summary>更多筛选{[projectId, model].filter(Boolean).length ? ` · ${[projectId, model].filter(Boolean).length} 项已启用` : ''}</summary><div className={styles.filters}>
-      <FilterSelect label="筛选项目" value={projectId} options={[{ value: '', label: '全部项目' }, { value: '__unknown__', label: '未归类' }, ...projects.map((item) => ({ value: item.id, label: item.name }))]} onChange={setProjectId} />
-      <FilterSelect label="筛选模型" value={model} options={[{ value: '', label: '全部模型' }, { value: '__unknown__', label: '模型未知' }, ...(usage?.models ?? []).map((item) => ({ value: item, label: item }))]} onChange={setModel} />
+      <label className={styles.filterSelect}><span>项目</span><FilterSelect label="筛选项目" value={projectId} options={[{ value: '', label: '全部项目' }, { value: '__unknown__', label: '未归类' }, ...projects.map((item) => ({ value: item.id, label: item.name }))]} onChange={setProjectId} /></label>
+      <label className={styles.filterSelect}><span>模型</span><FilterSelect label="筛选模型" value={model} options={[{ value: '', label: '全部模型' }, { value: '__unknown__', label: '模型未知' }, ...(usage?.models ?? []).map((item) => ({ value: item, label: item }))]} onChange={setModel} /></label>
 <button type="button" onClick={() => { setProjectId(''); setModel(''); }}>清除更多筛选</button></div></details>
     {error && <div className={styles.error} role="alert">{error}</div>}
     {notice && <div className={styles.notice} role="status">{notice}</div>}

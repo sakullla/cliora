@@ -7,6 +7,8 @@ import type { LaunchSettings, Project, TrayRepairTarget } from '../../types/laun
 import { preferredLaunchMode } from '../../types/launch';
 import type { AdapterDescriptor } from '../../types/native';
 import { displayPath, shortPath } from '../../lib/paths';
+import { FilterSelect } from '../../components/FilterSelect';
+import { Icon } from '../../components/Icon';
 import { ToolIcon } from '../../components/ToolIcon';
 import { GuideDialog } from '../../components/GuideDialog';
 import styles from './ProjectLauncher.module.css';
@@ -51,7 +53,7 @@ export function ProjectLauncher({ tools, repair }: { tools: AdapterDescriptor[];
   const [modelEdits, setModelEdits] = useState<Record<string, string>>({});
   const [editingId, setEditingId] = useState<string | null>(null);
   const repairDirectoryInput = useRef<HTMLInputElement>(null);
-  const repairToolSelect = useRef<HTMLSelectElement>(null);
+  const repairToolSelect = useRef<HTMLButtonElement>(null);
   const repairCard = useRef<HTMLDivElement>(null);
   const focusedRepair = useRef(0);
   const latestProjects = useRef(projects); latestProjects.current = projects;
@@ -136,7 +138,7 @@ export function ProjectLauncher({ tools, repair }: { tools: AdapterDescriptor[];
     try {
       const picked = await open({ directory: true, multiple: false, title: project ? '重新关联项目目录' : '选择项目目录' });
       if (typeof picked !== 'string') return;
-      if (!project) { begin('add'); await native.addProject(picked, undefined, defaultTool || undefined); await refresh(); return; }
+      if (!project) { begin('add'); await native.addProject(picked, undefined, defaultTool || undefined); await refresh(); showPageFeedback('项目已添加，可立即启动。'); return; }
       begin(project.id);
       const updated = await native.relinkProject(project.id, picked);
       setProjects((old) => old.map((item) => item.id === project.id ? updated : item));
@@ -218,13 +220,13 @@ export function ProjectLauncher({ tools, repair }: { tools: AdapterDescriptor[];
     {!managed.length && <p className={styles.note}>先在设置中启用 CLI；已有项目仍可查看和重新关联。</p>}
     {!!managed.length && <details className={styles.quick}><summary>直接启动或恢复会话</summary><div className={styles.quickContent}>
       <div><strong>直接启动</strong><span>{directMode === 'yolo' ? '默认 YOLO 模式；旁边仍可改用普通模式。' : '默认普通模式；YOLO 会按 CLI 原生参数跳过审批。'}</span></div>
-      <select aria-label="直接启动的工具" value={defaultTool} onChange={(event) => setGlobalTool(event.target.value)}>{managed.map((tool) => <option value={tool.id} key={tool.id}>{tool.name}</option>)}</select>
+      <FilterSelect className={styles.quickTool} label="直接启动的工具" value={defaultTool} options={managed.map((tool) => ({ value: tool.id, label: tool.name }))} placeholder="选择工具" searchLabel="搜索工具" onChange={setGlobalTool} />
       <input aria-label="恢复会话 ID" value={sessionId} placeholder="会话 ID（可选）" onChange={(event) => setSessionId(event.target.value)} />
       <div className={styles.launchDirectory}><input aria-label="启动工作目录" value={launchDirectory} placeholder="工作目录（恢复时使用原会话目录）" onChange={(event) => setLaunchDirectory(event.target.value)} /><button type="button" className={styles.secondary} disabled={!!busy} onClick={() => { void open({ directory: true, multiple: false, title: '选择启动工作目录' }).then((picked) => { if (typeof picked === 'string') setLaunchDirectory(picked); }).catch((value) => showPageError(value)); }}>选目录</button></div>
       <div className={styles.actions}><button type="button" disabled={!!busy} onClick={() => void launch(defaultTool, null, directMode, sessionId)}>{sessionId.trim() ? '恢复' : '启动'}</button>{directMode === 'yolo' ? <button type="button" className={styles.secondary} disabled={!!busy} onClick={() => void launch(defaultTool, null, 'normal', sessionId)}>{sessionId.trim() ? '普通恢复' : '普通'}</button> : <button type="button" className={styles.secondary} disabled={!!busy || !directTool?.yoloAvailable} title={directTool?.yoloAvailable ? '按此 CLI 的原生参数跳过审批' : '此 CLI 未提供已确认的 YOLO 参数'} onClick={() => void launch(defaultTool, null, 'yolo', sessionId)}>{sessionId.trim() ? 'YOLO 恢复' : 'YOLO'}</button>}</div>
     </div></details>}
     <div className={styles.heading}><strong>最近项目</strong><button type="button" className={styles.secondary} disabled={!!busy} onClick={() => void chooseDirectory()}>＋ 添加项目</button></div>
-    <div className={styles.projectGrid}>
+    {projects.length ? <div className={styles.projectGrid}>
     {projects.map((project) => {
       const toolId = managed.some((tool) => tool.id === project.preferredTool) ? project.preferredTool! : '';
       const descriptor = managed.find((tool) => tool.id === toolId);
@@ -233,7 +235,7 @@ export function ProjectLauncher({ tools, repair }: { tools: AdapterDescriptor[];
       const projectMode = preferredLaunchMode(launchSettings, 'project', !!descriptor?.yoloAvailable);
       return <div ref={repair?.projectId === project.id ? repairCard : undefined} tabIndex={repair?.projectId === project.id ? -1 : undefined} className={`${styles.project} ${repair?.projectId === project.id ? styles.repair : ''}`} key={project.id}>
         <div className={styles.identity}><div className={styles.projectTitle}><ToolIcon toolId={toolId} size={26} /><strong>{project.name}</strong></div><span title={project.path ? displayPath(project.path) : ''}>{project.path ? shortPath(project.path) : '尚未关联目录'}</span></div>
-        <div className={styles.controls}><select ref={repair?.projectId === project.id ? repairToolSelect : undefined} aria-label={`${project.name} 的工具`} value={toolId} disabled={busy === project.id || !managed.length} onChange={(event) => void updateTool(project, event.target.value)}><option value="">选择工具</option>{managed.map((tool) => <option key={tool.id} value={tool.id}>{tool.name}</option>)}</select><div className={styles.actions}><button type="button" disabled={!!busy || !project.available || !toolId} title={projectMode === 'yolo' ? '按此 CLI 的原生参数跳过审批' : launchSettings?.projectMode === 'yolo' ? '此 CLI 未提供已确认的 YOLO 参数，将用普通模式启动' : undefined} onClick={() => void launch(toolId, project.id, projectMode)}>启动</button><button type="button" className={styles.secondary} onClick={() => setEditingId(project.id)}>修改</button></div></div>
+        <div className={styles.controls}><FilterSelect className={styles.toolSelect} label={`${project.name} 的工具`} value={toolId} options={[{ value: '', label: '选择工具' }, ...managed.map((tool) => ({ value: tool.id, label: tool.name }))]} placeholder="选择工具" disabled={busy === project.id || !managed.length} searchLabel="搜索工具" onChange={(value) => void updateTool(project, value)} triggerRef={repair?.projectId === project.id ? repairToolSelect : undefined} /><div className={styles.actions}><button type="button" disabled={!!busy || !project.available || !toolId} title={!project.available ? '目录不可用，请先重新关联' : projectMode === 'yolo' ? '按此 CLI 的原生参数跳过审批' : launchSettings?.projectMode === 'yolo' ? '此 CLI 未提供已确认的 YOLO 参数，将用普通模式启动' : undefined} onClick={() => void launch(toolId, project.id, projectMode)}>启动</button><button type="button" className={styles.iconAction} aria-label={`打开${project.name}的目录`} title="在文件管理器中打开" disabled={!!busy || !project.available} onClick={() => void openProject(project)}><Icon name="folder" size={15} /></button><button type="button" className={styles.secondary} onClick={() => setEditingId(project.id)}>修改</button></div></div>
         {!toolId && <div className={styles.hint}>此项目原来选择的工具未纳入管理。选择一个工具即可继续启动。</div>}
         {pendingProfile && <div className={styles.extra}><span>{project.reapplyProfiles?.[toolId] ? '目录已重新关联，启动时会恢复所选配置' : '此项目配置有待应用内容；普通启动保留已应用的原生文件'}</span><button type="button" className={styles.secondary} disabled={!!busy || !project.available} onClick={() => void applySelected(project, toolId)}>应用配置</button></div>}
         <GuideDialog open={editingId === project.id} title={`修改${project.name}`} hint="可以改名称、目录、模型和这次启动方式。启动按钮仍在卡片上。" onClose={() => { setEditingId(null); setDialogError(''); setDialogFeedback(''); }}>
@@ -248,7 +250,7 @@ export function ProjectLauncher({ tools, repair }: { tools: AdapterDescriptor[];
         </GuideDialog>
       </div>;
     })}
-    </div>
+    </div> : <div className={styles.emptyProjects}><strong>还没有项目</strong><span>添加一个本机目录，之后就能用所选 CLI 一键在外部终端启动。</span><button type="button" disabled={!!busy} onClick={() => void chooseDirectory()}>添加项目</button></div>}
 
   </section>;
 }
