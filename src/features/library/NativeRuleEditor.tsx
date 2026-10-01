@@ -62,15 +62,15 @@ export function NativeRuleEditor({ tools, projects }: { tools: AdapterDescriptor
     catch(value){if(latest.current.context===started)setMessage(errorText(value));}finally{setBusy(false);}
   }
   return <>
-    <button type="button" className="button" onClick={() => setOpen(true)}>修改当前 CLI 规则</button>
+    <button type="button" className="button native-rule-open" onClick={() => setOpen(true)}>修改当前 CLI 规则</button>
     <GuideDialog open={open} title="修改当前 CLI 规则" hint="选择工具和范围，改完后保存。保存会写入这个 CLI 正在读取的规则文件。" onClose={() => { void change(() => setOpen(false)); }}>
     <div className="native-rule-editor">
     <div className="native-rule-controls"><label>工具<select aria-label="规则工具" value={tool} onChange={event => { const value = event.target.value; void change(() => setTool(value)); }}>{tools.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
       <label>范围<select aria-label="规则范围" value={scope} onChange={event => { const value = event.target.value as Scope; void change(() => setScope(value)); }}><option value="global">全局</option><option value="project">项目</option></select></label>
       {scope === 'project' && <label>项目<select aria-label="规则项目" value={project} onChange={event => { const value = event.target.value; void change(() => setProject(value)); }}><option value="">选择项目…</option>{projects.filter(item => item.available && item.path).map(item => <option key={item.id} value={item.path!}>{item.name}</option>)}</select></label>}</div>
-    {loaded && <><label className="native-rule-enabled"><input type="checkbox" checked={enabled} disabled={busy} onChange={event => void toggle(event.target.checked)} />启用规则</label><p title={loaded.path}>{loaded.path.split(/[\\/]/).pop()}</p><CodeEditor label="当前原生规则" value={text} onChange={setText} format="markdown" /><button type="button" disabled={busy || !dirty} onClick={() => void save()}>保存规则</button></>}
+    {loaded && <><label className="native-rule-enabled"><input type="checkbox" checked={enabled} disabled={busy} onChange={event => void toggle(event.target.checked)} />启用规则</label><p className="native-rule-path" title={loaded.path}><strong>{loaded.path.split(/[\\/]/).pop()}</strong><small>{loaded.path}</small></p><CodeEditor label="当前原生规则" value={text} onChange={setText} format="markdown" /><div className="native-rule-actions"><span>{dirty ? '未保存' : ''}</span><button type="button" className="button primary" disabled={busy || !dirty} onClick={() => void save()}>保存规则</button></div></>}
     {conflict !== null && <FileConflict current={conflict} edited={text} format="markdown" busy={busy} onKeep={() => { setLoaded(old => old ? { ...old, text: conflict } : old); setText(conflict); setConflict(null); }} onUse={() => void save(conflict)} />}
-    {message && <p role="status">{message}</p>}
+    {message && <p className="native-rule-message" role="status">{message}</p>}
     </div>
     </GuideDialog>
   </>;
