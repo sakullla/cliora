@@ -1,3 +1,0 @@
-   Compiling cliora v0.1.0 (C:\Users\12976\project\cliora\src-tauri)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.80s
-     Running unittests src\lib.rs (src-tauri\target\debug\deps\cliora_lib-829d8961cb7e40b5.exe)
