@@ -17,7 +17,7 @@ function isNative(source: string) {
 
 export function InstallPanel({ toolName, probe, customPath, busy, loading, onCustomPath, onSavePath, onRecheck, onMaintain, onUsePath }: {
   toolName: string;
-  probe: ToolProbe;
+  probe: Omit<ToolProbe, 'tool'> & { tool: string };
   customPath: string;
   busy: boolean;
   loading: boolean;
