@@ -9,7 +9,9 @@ import { CodeEditor } from '../../components/CodeEditor';
 import { FilterSelect } from '../../components/FilterSelect';
 import type { FilterSelectOption } from '../../components/FilterSelect';
 import { GuideDialog } from '../../components/GuideDialog';
+import { Icon } from '../../components/Icon';
 import { ToolIcon } from '../../components/ToolIcon';
+import { displayPath } from '../../lib/paths';
 import styles from './ManagedTools.module.css';
 
 type Notice = { tone: 'ok' | 'error' | 'pending'; text: string; title: string };
@@ -17,6 +19,7 @@ type Activity = 'launch' | 'apply' | null;
 type Loaded = { workspace: RegisteredToolWorkspace | null; error: string | null; busy: boolean; activity: Activity; notice: Notice | null };
 
 const rememberedHome = new Map<string, RegisteredToolWorkspace>();
+const launchDirectories = new Map<string, string>();
 let lastLaunchDirectory = '';
 
 function message(value: unknown): string {
@@ -85,6 +88,27 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
   const [conflictError, setConflictError] = useState('');
   const generation = useRef(0);
   const acting = useRef(new Set<string>());
+  const noticeTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+
+  useEffect(() => {
+    const timers = noticeTimers.current;
+    return () => { timers.forEach((timer) => clearTimeout(timer)); timers.clear(); };
+  }, []);
+
+  function clearNoticeLater(toolId: string, notice: Notice) {
+    const timers = noticeTimers.current;
+    const old = timers.get(toolId);
+    if (old) clearTimeout(old);
+    if (notice.tone !== 'ok') { timers.delete(toolId); return; }
+    timers.set(toolId, setTimeout(() => {
+      timers.delete(toolId);
+      setStates((old) => {
+        const current = old[toolId];
+        if (!current || current.notice !== notice) return old;
+        return { ...old, [toolId]: { ...current, notice: null } };
+      });
+    }, 5000));
+  }
 
   useEffect(() => {
     if (!nativeAvailable) return;
@@ -116,21 +140,29 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
     return () => { active = false; generation.current++; unsubscribe?.(); };
   }, [tools.map((item) => item.id).join('|')]);
 
-  async function launchTool(toolId: string) {
+  async function launchTool(toolId: string, pickDirectory = false) {
     const previous = states[toolId];
     if (!previous || previous.busy || acting.current.has(toolId)) return;
     acting.current.add(toolId);
     const toolName = tools.find((item) => item.id === toolId)?.name ?? toolId;
     setStates((old) => ({ ...old, [toolId]: { ...previous, busy: true, activity: 'launch', error: null, notice: null } }));
     try {
-      const directory = await open({ directory: true, multiple: false, title: '选择启动工作目录', defaultPath: lastLaunchDirectory || undefined });
-      if (typeof directory !== 'string') {
-        setStates((old) => ({ ...old, [toolId]: settle(previous, null) }));
-        return;
+      const remembered = launchDirectories.get(toolId);
+      let directory = pickDirectory ? undefined : remembered;
+      if (!directory) {
+        const picked = await open({ directory: true, multiple: false, title: '选择启动工作目录', defaultPath: remembered || lastLaunchDirectory || undefined });
+        if (typeof picked !== 'string') {
+          setStates((old) => ({ ...old, [toolId]: settle(previous, null) }));
+          return;
+        }
+        directory = picked;
+        launchDirectories.set(toolId, picked);
+        lastLaunchDirectory = picked;
       }
-      lastLaunchDirectory = directory;
       await native.launchCli({ toolId, projectId: null, sessionId: null, mode: preferredLaunchMode(launchSettings, 'cli', !!tools.find((item) => item.id === toolId)?.yoloAvailable), directory });
-      setStates((old) => ({ ...old, [toolId]: settle(previous, lineNotice('ok', `${toolName} 已向外部终端发出请求。`)) }));
+      const notice = lineNotice('ok', `${toolName} 已向外部终端发出请求。`);
+      setStates((old) => ({ ...old, [toolId]: settle(previous, notice) }));
+      clearNoticeLater(toolId, notice);
     } catch (error) {
       setStates((old) => ({ ...old, [toolId]: settle(previous, lineNotice('error', `${toolName} 启动失败。可再次启动或编辑配置。`, message(error))) }));
     } finally {
@@ -147,14 +179,16 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
     setStates((old) => ({ ...old, [toolId]: { ...previous, busy: true, activity: 'apply', error: null, notice: null } }));
     try {
       await native.applyRegisteredNativeProfile(toolId, profileId, 'global', undefined, false);
+      const notice = lineNotice('ok', `${toolName} 已写入原生文件，下次启动读取。`);
       setStates((old) => {
         const current = old[toolId];
         if (!current?.workspace) return old;
         const version = current.workspace.profiles.find((item) => item.id === profileId)?.version ?? current.workspace.binding?.profileVersion ?? 0;
         const workspace = { ...current.workspace, binding: { scopeKey: 'global', tool: toolId, profileId, profileVersion: version, managed: {} } };
         rememberedHome.set(toolId, workspace);
-        return { ...old, [toolId]: { ...current, busy: false, activity: null, error: null, notice: lineNotice('ok', `${toolName} 已写入原生文件，下次启动读取。`), workspace } };
+        return { ...old, [toolId]: { ...current, busy: false, activity: null, error: null, notice, workspace } };
       });
+      clearNoticeLater(toolId, notice);
     } catch (error) {
       const detail = message(error);
       const profile = previous.workspace?.profiles.find((item) => item.id === profileId);
@@ -187,14 +221,16 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
     try {
       await native.applyComparedApplication(comparison, 'global', '');
       setConflict(null);
+      const notice = lineNotice('ok', `${toolName} 已写入原生文件，下次启动读取。`);
       setStates((old) => {
         const current = old[toolId];
         if (!current?.workspace) return old;
         const version = current.workspace.profiles.find((item) => item.id === comparison.profile.id)?.version ?? comparison.profile.version;
         const workspace = { ...current.workspace, binding: { scopeKey: 'global', tool: toolId, profileId: comparison.profile.id, profileVersion: version, managed: {} } };
         rememberedHome.set(toolId, workspace);
-        return { ...old, [toolId]: { ...current, busy: false, activity: null, error: null, notice: lineNotice('ok', `${toolName} 已写入原生文件，下次启动读取。`), workspace } };
+        return { ...old, [toolId]: { ...current, busy: false, activity: null, error: null, notice, workspace } };
       });
+      clearNoticeLater(toolId, notice);
     } catch (error) {
       setConflictError(message(error));
       if (previous) setStates((old) => ({ ...old, [toolId]: settle(previous, null) }));
@@ -212,7 +248,10 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
       const installed = !!workspace?.probe.selectedPath;
       const writable = workspace?.probe.nativeWrites.state === 'supported';
       const launchMode = preferredLaunchMode(launchSettings, 'cli', !!tool.yoloAvailable);
+      const rememberedDir = launchDirectories.get(tool.id);
       const switchTitle = !workspace ? undefined : !writable ? workspace.probe.nativeWrites.reason || '当前不能写入这个工具的配置' : '点一下即切换，下次启动会读取这份配置';
+      const launchTitle = !installed && workspace ? '尚未确认安装，可在“工具与连接”中检查'
+        : [rememberedDir ? `在 ${displayPath(rememberedDir)} 启动` : '', launchMode === 'yolo' ? '按此 CLI 的原生参数跳过审批' : launchSettings?.cliMode === 'yolo' ? '此 CLI 未提供已确认的 YOLO 参数，将用普通模式启动' : ''].filter(Boolean).join('；') || undefined;
       const line = loaded?.error
         ? lineNotice('error', `${tool.name} 检测失败。可编辑配置或重新进入本页重新读取。`, loaded.error)
         : loaded?.activity === 'apply'
@@ -227,7 +266,7 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
             : profiles.length ? <div role="radiogroup" aria-label={`切换${tool.name}的配置`} title={switchTitle}>{profiles.map((item) => <button key={item.id} type="button" role="radio" aria-checked={item.id === selected?.id} className={item.id === selected?.id ? styles.activeConfig : ''} disabled={loaded?.busy || !writable} title={profileLabel(item.name, item.connection)} onClick={() => { if (item.id !== selected?.id || !appliedCurrent) void switchProfile(tool.id, item.id); }}>{item.name}</button>)}</div>
             : <button type="button" className={styles.addConfig} onClick={() => onOpenTool(tool.id)}>新建配置</button>}
         </div>
-        <div className={styles.rowActions}><button type="button" className={styles.launch} disabled={!installed || loaded?.busy} aria-busy={loaded?.activity === 'launch' || undefined} title={!installed && workspace ? '尚未确认安装，可在“工具与连接”中检查' : launchMode === 'yolo' ? '按此 CLI 的原生参数跳过审批' : launchSettings?.cliMode === 'yolo' ? '此 CLI 未提供已确认的 YOLO 参数，将用普通模式启动' : undefined} onClick={() => void launchTool(tool.id)}>{loaded?.activity === 'launch' ? '正在启动' : '启动'}</button><button type="button" onClick={() => onOpenTool(tool.id)}>编辑配置 →</button></div>
+        <div className={styles.rowActions}><button type="button" className={styles.iconAction} aria-label={`选择${tool.name}的启动目录`} title="选择本次启动的工作目录" disabled={!installed || loaded?.busy} onClick={() => void launchTool(tool.id, true)}><Icon name="folder" size={15} /></button><button type="button" className={styles.launch} disabled={!installed || loaded?.busy} aria-busy={loaded?.activity === 'launch' || undefined} title={launchTitle} onClick={() => void launchTool(tool.id)}>{loaded?.activity === 'launch' ? '正在启动' : '启动'}</button><button type="button" onClick={() => onOpenTool(tool.id)}>编辑配置 →</button></div>
         {line && <div className={styles.note} data-tone={line.tone} role={line.tone === 'error' ? 'alert' : 'status'} title={line.title}>{line.text}</div>}
       </div>;
     })}

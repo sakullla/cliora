@@ -144,9 +144,6 @@ test('launch failure names the tool and replaces the previous success', async ({
   await expect(tools.getByRole('status')).toHaveText('Codex 已向外部终端发出请求。');
   await page.evaluate(() => (window as unknown as { __failNextLaunch: () => void }).__failNextLaunch());
   await tools.getByRole('button', { name: '启动', exact: true }).click();
-  await expect(tools.getByRole('status')).toHaveCount(0);
-  await expect(tools.getByRole('button', { name: '正在启动', exact: true })).toBeDisabled();
-  await page.evaluate(() => (window as unknown as { __resolveDialog: (value: string | null) => void }).__resolveDialog('C:/work'));
   const alert = tools.getByRole('alert');
   await expect(alert).toContainText('Codex');
   await expect(alert).toContainText('启动失败');
@@ -159,6 +156,30 @@ test('launch failure names the tool and replaces the previous success', async ({
   await expect(tools).not.toContainText('检测失败');
   await expect(tools.getByRole('button', { name: '启动', exact: true })).toBeEnabled();
   await expect(tools.getByRole('button', { name: '编辑配置 →' })).toBeEnabled();
+});
+
+test('the launch directory is remembered, and the folder button picks another', async ({ page }) => {
+  await installHome(page);
+  await page.goto('/');
+  const tools = page.getByLabel('管理中的工具');
+  const launch = tools.getByRole('button', { name: '启动', exact: true });
+  await launch.click();
+  await page.evaluate(() => (window as unknown as { __resolveDialog: (value: string | null) => void }).__resolveDialog('C:/work'));
+  await expect(tools.getByRole('status')).toHaveText('Codex 已向外部终端发出请求。');
+
+  await launch.click();
+  await expect(tools.getByRole('status')).toHaveText('Codex 已向外部终端发出请求。');
+  expect(await page.evaluate(() => (window as unknown as { __launchRequests: Array<Record<string, unknown>> }).__launchRequests)).toEqual([
+    { toolId: 'codex', projectId: null, sessionId: null, mode: 'normal', directory: 'C:/work' },
+    { toolId: 'codex', projectId: null, sessionId: null, mode: 'normal', directory: 'C:/work' },
+  ]);
+
+  await tools.getByRole('button', { name: '选择Codex的启动目录' }).click();
+  await page.evaluate(() => (window as unknown as { __resolveDialog: (value: string | null) => void }).__resolveDialog('D:/else'));
+  await expect(tools.getByRole('status')).toHaveText('Codex 已向外部终端发出请求。');
+  const requests = await page.evaluate(() => (window as unknown as { __launchRequests: Array<Record<string, unknown>> }).__launchRequests);
+  expect(requests).toHaveLength(3);
+  expect(requests[2]).toEqual({ toolId: 'codex', projectId: null, sessionId: null, mode: 'normal', directory: 'D:/else' });
 });
 
 test('applying a profile reports the native write, and failure keeps the previous selection', async ({ page }) => {

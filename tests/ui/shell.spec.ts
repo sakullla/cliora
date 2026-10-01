@@ -207,7 +207,7 @@ test('home resumes with native session ID and explicit normal or YOLO mode', asy
     });
   });
   await page.goto('/');
-  await page.getByText('直接启动或恢复会话', { exact: true }).click();
+  await page.getByText('恢复指定会话', { exact: true }).click();
   await expect(page.getByRole('textbox', { name: '恢复会话 ID' })).toBeVisible();
   await page.getByRole('textbox', { name: '恢复会话 ID' }).fill('session-中文 1');
   await page.getByRole('button', { name: '恢复', exact: true }).click();

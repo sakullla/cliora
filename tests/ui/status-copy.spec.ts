@@ -152,10 +152,9 @@ test('terminal errors stay readable in light and dark and can be chosen again', 
 });
 
 test('project launch success and failure replace each other', async ({ page }) => {
-  await install(page);
+  await install(page, { withProject: true });
   await page.goto('/');
   const region = page.getByRole('region', { name: '项目与启动' });
-  await region.getByText('直接启动或恢复会话').click();
   await region.getByRole('button', { name: '启动', exact: true }).click();
   await expect(region.getByRole('status')).toContainText('已向外部终端发送启动请求');
   await expect(region.getByRole('status')).not.toContainText('已登录');
