@@ -17,7 +17,29 @@ function Metric({ label, value }: { label: string; value: number | null }) {
 function Amount({ value }: { value: number | null }) {
   return <span title={value === null || value < 1000 ? undefined : value.toLocaleString()}>{compact(value)}</span>;
 }
-const errorText = (error: unknown) => typeof error === 'object' && error !== null && 'message' in error ? String(error.message) : String(error);
+function formatFailure(error: unknown, objectText: string, nextText: string): string {
+  const fallback = `${objectText}。${nextText}`;
+  if (typeof error === 'string') {
+    const text = error.trim();
+    return !text || text.replace(/[。！？，,\s]/g, '') === '操作失败请重试' ? fallback : text;
+  }
+  if (!error || typeof error !== 'object') return fallback;
+  const value = error as { message?: unknown; action?: unknown };
+  const raw = 'message' in value && value.message != null ? String(value.message).trim() : '';
+  const action = typeof value.action === 'string' ? value.action.trim() : '';
+  if (!raw || raw.replace(/[。！？，,\s]/g, '') === '操作失败请重试' || /^操作失败[。！]?$/.test(raw)) {
+    const next = action && !/^请重试[。！]?$/.test(action) ? action : nextText;
+    const step = /[。！？]$/.test(next) ? next : `${next}。`;
+    return `${objectText}。${step}`;
+  }
+  const detail = raw.replace(/[。！？\s]+$/, '');
+  const next = action || nextText;
+  const bare = next.replace(/[。！？\s]+$/, '');
+  if (!bare || detail.includes(bare)) return /[。！？]$/.test(raw) ? raw : `${detail}。`;
+  return `${detail}。${/[。！？]$/.test(next) ? next : `${next}。`}`;
+}
+const recordNext = '可点击刷新本机记录或调整筛选。';
+const errorText = (error: unknown) => formatFailure(error, '使用记录操作失败', recordNext);
 
 export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean; tools: AdapterDescriptor[]; onOpenProjects: () => void }) {
   const [tab, setTab] = useState<'sessions' | 'usage'>('sessions');
@@ -49,13 +71,20 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
   const scanRequest = useRef(0);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const protectSave = useRef(false);
   function showError(value: unknown) {
+    protectSave.current = false;
     setNotice('');
     setError(typeof value === 'string' ? value : errorText(value));
   }
-  function showNotice(text: string) {
+  function showReadError(value: unknown) {
+    if (!protectSave.current) setNotice('');
+    setError(typeof value === 'string' ? value : formatFailure(value, '使用记录读取失败', recordNext));
+  }
+  function showNotice(text: string, protect = false) {
     setError('');
     setNotice(text);
+    protectSave.current = protect;
   }
   const initialized = useRef(false);
   const request = useRef(0);
@@ -79,7 +108,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
       setSelectedId((old) => old && items.some((item) => item.id === old) ? old : items[0]?.id ?? null);
       return true;
     } catch (value) {
-      if (sequence === request.current && key === JSON.stringify(filterRef.current)) showError(value);
+      if (sequence === request.current && key === JSON.stringify(filterRef.current)) showReadError(value);
       return false;
     }
     finally { if (sequence === request.current) setFilterLoading(false); }
@@ -91,7 +120,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
     void load(filter);
     void Promise.all([native.listProjects(), native.listHistoryPrices()])
       .then(([knownProjects, knownPrices]) => { setProjects(knownProjects); setPrices(knownPrices); })
-      .catch(value => showError(value));
+      .catch(value => showReadError(value));
     void refresh();
   }, [active]);
 
@@ -105,7 +134,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
     if (!selectedId || !nativeAvailable) { setDetail(null); return; }
     const sequence = ++detailRequest.current;
     void native.getHistorySession(selectedId).then((value) => { if (sequence === detailRequest.current) setDetail(value); })
-      .catch((value) => { if (sequence === detailRequest.current) showError(value); });
+      .catch((value) => { if (sequence === detailRequest.current) showReadError(value); });
   }, [selectedId]);
 
   const selected = detail?.session.id === selectedId ? detail : null;
@@ -136,7 +165,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
   }, [scanning, active]);
   async function refresh() {
     if (!nativeAvailable || scanning) return;
-    const sequence = ++scanRequest.current; setScanning(true); setNotice(''); setError('');
+    const sequence = ++scanRequest.current; setScanning(true); protectSave.current = false; setNotice(''); setError('');
     try {
       const reports = await native.refreshHistory();
       if (sequence !== scanRequest.current) return;
@@ -148,7 +177,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
     finally { if (sequence === scanRequest.current) { setScanning(false); setScanProgress(null); } }
   }
   async function cancelScan() {
-    scanRequest.current++; setScanning(false); setScanProgress(null); setNotice(''); setError('');
+    scanRequest.current++; setScanning(false); setScanProgress(null); protectSave.current = false; setNotice(''); setError('');
     try { await native.cancelHistoryRefresh(); showNotice('已请求停止扫描，现有记录保留。'); }
     catch (value) { showError(value); }
   }
@@ -173,14 +202,14 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
 
   async function copy() {
     if (!readyCommand) return;
-    setNotice(''); setError('');
+    protectSave.current = false; setNotice(''); setError('');
     try { await navigator.clipboard.writeText(readyCommand); showNotice('已复制原生恢复命令，粘贴后由终端执行。'); }
     catch { showError('复制失败，恢复命令仍在页面上，可以手动选择。'); }
   }
 
   async function resume() {
     if (!selected || !readyCommand) return;
-    setBusy(true); setNotice(''); setError('');
+    setBusy(true); protectSave.current = false; setNotice(''); setError('');
     try { await native.resumeHistorySession(selected.session.id, mode); showNotice('已请求外部终端恢复会话。'); }
     catch (value) { showError(value); }
     finally { setBusy(false); }
@@ -192,7 +221,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
       const destination = await save({ title: '导出会话资料', defaultPath: `cliora-session-${selected.session.nativeId ?? selected.session.id.slice(0, 8)}.${format === 'json' ? 'json' : 'md'}`,
         filters: [{ name: format === 'json' ? 'JSON' : 'Markdown', extensions: [format === 'json' ? 'json' : 'md'] }] });
       if (!destination) return;
-      setNotice(''); setError('');
+      protectSave.current = false; setNotice(''); setError('');
       const path = await native.exportHistorySession(selected.session.id, format, destination);
       showNotice(`已导出到 ${path}`);
     } catch (value) { showError(value); }
@@ -205,15 +234,16 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
     if (![priceDraft.input, priceDraft.output, priceDraft.read, priceDraft.write].every((value) => value.trim() !== '')) {
       showError('请填写四项单价；确认为免费的项目可填 0。'); return;
     }
-    setNotice(''); setError('');
+    protectSave.current = false; setNotice(''); setError('');
     try {
       const price = await native.saveHistoryPrice({ toolId: chosenTool, model: chosenModel, currency: priceDraft.currency.trim().toUpperCase(),
         inputPerMillion: Number(priceDraft.input), outputPerMillion: Number(priceDraft.output),
         cacheReadPerMillion: Number(priceDraft.read), cacheWritePerMillion: Number(priceDraft.write),
         source: priceDraft.source.trim(), updatedAt: 0 });
       setPrices((old) => [...old.filter((item) => item.toolId !== price.toolId || item.model !== price.model), price]);
-      setPriceOpen(false); showNotice('估算价格已保存；只影响本机统计。');
-      setUsage(await native.getHistoryUsage(filter));
+      setPriceOpen(false); showNotice('估算价格已保存；只影响本机统计。', true);
+      try { setUsage(await native.getHistoryUsage(filter)); }
+      catch (value) { showReadError(value); }
     } catch (value) { showError(value); }
   }
 
