@@ -136,6 +136,7 @@ pub fn run() {
             commands::set_project_model_override,
             commands::get_launch_settings,
             commands::set_preferred_terminal,
+            commands::set_default_launch_mode,
             commands::launch_cli,
             commands::get_tray_status,
             commands::quit_app,

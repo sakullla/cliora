@@ -32,7 +32,7 @@ const pages: { id: Page; label: string; glyph: 'home' | 'connections' | 'library
 function titleFor(page: Page): [string, string] {
   switch (page) {
     case 'home': return ['快速开始', '选择工具与项目，开始使用。'];
-    case 'connections': return ['工具与连接', '为当前工具完成配置、MCP 和 Skill。'];
+    case 'connections': return ['工具与连接', ''];
     case 'library': return ['资料库', '统一保存常用提示词与规则。'];
     case 'records': return ['使用记录', '查看本机会话与用量。'];
     case 'settings': return ['设置', '只保留日常需要的选项。'];
@@ -194,7 +194,7 @@ export default function App() {
     <main className="content" id="main">
       {!nativeAvailable && <div className="environment-banner" role="status">浏览器预览：原生配置、持久保存和系统凭据仅在桌面应用中可用。</div>}
       {error && <div className="error-banner" role="alert"><div className="error-copy"><strong>{error.message}</strong><span>{error.action}</span>{error.data_directory && <code>{error.data_directory}</code>}</div>{loaded && <button type="button" onClick={() => setError(null)} aria-label="关闭错误提示">×</button>}</div>}
-      <header className="page-head"><div><h1 tabIndex={-1}>{title[0]}</h1><p>{title[1]}</p></div>{page === 'home' && <span className="quiet-chip">仅在本机</span>}</header>
+      <header className="page-head"><div><h1 tabIndex={-1}>{title[0]}</h1>{page !== 'home' && title[1] && <p>{title[1]}</p>}</div></header>
       {loading ? <Empty title="正在读取本机设置" detail="请稍候。" /> : !loaded ? <Empty title="暂时无法读取本机资料" detail="原数据仍保留。请按上方提示处理后重试。" action={<button className="button primary" type="button" onClick={loadBootstrap}>重试读取</button>} /> : <>
         {page === 'home' && <div className="home-band">
           <section className="home-tools">
@@ -204,7 +204,7 @@ export default function App() {
           {nativeAvailable ? <ProjectLauncher tools={visibleDescriptors} repair={trayRepair?.page === 'home' ? trayRepair : null} /> : <section className="home-secondary"><div className="section-heading"><h2>最近项目</h2></div><div className="subtle-panel"><strong>桌面应用中管理项目</strong><p>可以关联本机目录，并用选定的 CLI 在外部终端启动。</p></div></section>}
         </div>}
         {(page === 'connections' || connectionsVisited) && <div hidden={page !== 'connections'}>
-          {selectedTool ? nativeAvailable ? <ToolWorkspacePage managedTools={visibleDescriptors} initialTool={selectedTool} openSequence={toolOpenSequence} active={page === 'connections'} repair={trayRepair?.page === 'connections' ? trayRepair : null} onDirtyChange={onWorkspaceDirtyChange} /> : <><div className="tool-tabs" role="tablist" aria-label="工具">{visible.map((item) => <button key={item.id} type="button" role="tab" aria-selected={selectedTool === item.id} className={selectedTool === item.id ? 'active' : ''} onClick={() => setTool(item.id)}>{item.name}</button>)}</div><div className="connection-layout"><div className="profile-column"><div className="column-title">{selectedToolName} 配置</div><div className="muted-copy">浏览器预览不读取本机配置</div></div><div className="detail-panel"><div className="detail-header"><div><div className="eyebrow">配置这个工具</div><h2>{selectedToolName}</h2></div><span className="status-pill">预览</span></div><Empty title="请在桌面应用中编辑原生配置" detail="桌面应用可读取和保存 CLI 的 TOML / JSON 原文。" /></div></div></> : <Empty title="没有管理中的工具" detail="先在设置中勾选需要管理的 CLI。" action={<button className="button primary" type="button" onClick={() => go('settings')}>前往设置</button>} />}
+          {selectedTool ? nativeAvailable ? <ToolWorkspacePage managedTools={visibleDescriptors} initialTool={selectedTool} openSequence={toolOpenSequence} active={page === 'connections'} repair={trayRepair?.page === 'connections' ? trayRepair : null} onDirtyChange={onWorkspaceDirtyChange} /> : <><div className="tool-tabs" role="tablist" aria-label="工具">{visible.map((item) => <button key={item.id} type="button" role="tab" aria-selected={selectedTool === item.id} className={selectedTool === item.id ? 'active' : ''} onClick={() => setTool(item.id)}>{item.name}</button>)}</div><div className="connection-layout"><div className="profile-column"><div className="column-title">{selectedToolName} 配置</div><div className="muted-copy">浏览器预览不读取本机配置</div></div><div className="detail-panel"><div className="detail-header"><div><div className="eyebrow">配置</div><h2>{selectedToolName}</h2></div><span className="status-pill">预览</span></div><Empty title="请在桌面应用中编辑原生配置" detail="桌面应用可读取和保存 CLI 的 TOML / JSON 原文。" /></div></div></> : <Empty title="没有管理中的工具" detail="先在设置中勾选需要管理的 CLI。" action={<button className="button primary" type="button" onClick={() => go('settings')}>前往设置</button>} />}
         </div>}
         <div hidden={page !== 'library'}><LibraryPage managedTools={visibleDescriptors} active={page === 'library'} /></div>
         <div hidden={page !== 'records'}><RecordsPage active={page === 'records'} tools={catalog?.registered ?? []} onOpenProjects={() => go('home')} /></div>

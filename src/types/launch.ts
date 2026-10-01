@@ -2,7 +2,12 @@ export type LaunchMode = 'normal' | 'yolo';
 export type TerminalId = 'auto' | 'windows_terminal' | 'power_shell' | 'mac_terminal' | 'gnome_terminal' | 'konsole' | 'xterm';
 
 export type TerminalOption = { id: TerminalId; label: string; available: boolean };
-export type LaunchSettings = { selected: TerminalId; terminals: TerminalOption[] };
+export type LaunchSettings = { selected: TerminalId; terminals: TerminalOption[]; cliMode?: LaunchMode; projectMode?: LaunchMode };
+
+export function preferredLaunchMode(settings: LaunchSettings | null, target: 'cli' | 'project', yoloAvailable: boolean): LaunchMode {
+  const preferred = target === 'cli' ? settings?.cliMode : settings?.projectMode;
+  return preferred === 'yolo' && yoloAvailable ? 'yolo' : 'normal';
+}
 
 export type Project = {
   id: string;
