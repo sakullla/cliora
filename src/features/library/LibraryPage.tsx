@@ -7,6 +7,7 @@ import type { LibraryDraft, LibraryItem, LibraryKind } from '../../types/library
 import type { AdapterDescriptor } from '../../types/native';
 import { NativeRuleEditor } from './NativeRuleEditor';
 import { RuleDistribution } from './RuleDistribution';
+import { GuideDialog } from '../../components/GuideDialog';
 import styles from './LibraryPage.module.css';
 
 function message(error: unknown) {
@@ -15,6 +16,14 @@ function message(error: unknown) {
 
 function empty(kind: LibraryKind): LibraryDraft {
   return { id: null, kind, title: '', body: '', category: '', projectId: null, expectedVersion: null };
+}
+
+function tagsOf(category: string): string[] {
+  return [...new Set(category.split(/[,，、]/).map((item) => item.trim()).filter(Boolean))];
+}
+
+function categoryOf(tags: string[]): string {
+  return tags.join(',');
 }
 
 function edit(item: LibraryItem): LibraryDraft {
@@ -33,6 +42,7 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [tagText, setTagText] = useState('');
   const dirty = !!draft && JSON.stringify(draft) !== savedText;
   const latest = useRef(''); latest.current = JSON.stringify([kind, draft, active]);
   const mounted = useRef(true);
@@ -54,20 +64,20 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
     return () => { live = false; };
   }, [active, kind, search]);
 
-  const categories = useMemo(() => Array.from(new Set(items.map((item) => item.category).filter(Boolean))).sort(), [items]);
+  const categories = useMemo(() => Array.from(new Set(items.flatMap((item) => tagsOf(item.category)))).sort(), [items]);
   const shown = items.filter((item) => (projectFilter === '*' || (projectFilter === 'global' ? !item.projectId : item.projectId === projectFilter))
-    && (categoryFilter === '*' || item.category === categoryFilter));
+    && (categoryFilter === '*' || tagsOf(item.category).includes(categoryFilter)));
 
   async function canReplace() { return !dirty || confirmCurrent('当前资料草稿尚未保存，切换会丢失修改。继续吗？'); }
   async function choose(item: LibraryItem) {
     if (!await canReplace()) return;
     const next = edit(item);
-    setDraft(next); setSavedText(JSON.stringify(next)); setError(''); setNotice('');
+    setDraft(next); setSavedText(JSON.stringify(next)); setTagText(''); setError(''); setNotice('');
   }
   async function start(kind: LibraryKind) {
     if (!await canReplace()) return;
     const next = empty(kind);
-    setDraft(next); setSavedText(JSON.stringify(next)); setError(''); setNotice('');
+    setDraft(next); setSavedText(JSON.stringify(next)); setTagText(''); setError(''); setNotice('');
   }
   async function switchKind(next: LibraryKind) {
     if (next === kind || !await canReplace()) return;
@@ -99,6 +109,17 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
     try { await navigator.clipboard.writeText(text); setNotice('完整正文已复制。'); setError(''); }
     catch { setError('复制失败，请检查剪贴板权限。'); }
   }
+  function addTag(raw: string) {
+    if (!draft) return;
+    const next = raw.trim();
+    if (!next) return;
+    const tags = tagsOf(draft.category);
+    if (tags.includes(next)) { setTagText(''); return; }
+    const category = categoryOf([...tags, next]);
+    if (category.length > 80) return;
+    setDraft({ ...draft, category });
+    setTagText('');
+  }
 
   if (!nativeAvailable) return <div className={styles.empty}>资料库仅在桌面应用中读取和保存。</div>;
   return <section className={styles.page} aria-label="资料库内容">
@@ -111,27 +132,37 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
     </div>
     {kind === 'rule' && <NativeRuleEditor tools={managedTools} projects={projects} />}
     <div className={styles.filters}>
-      <input aria-label="搜索资料" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索标题、正文或分类" />
+      <input aria-label="搜索资料" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索标题、正文或标签" />
       <select aria-label="项目筛选" value={projectFilter} onChange={(event) => setProjectFilter(event.target.value)}><option value="*">所有项目</option><option value="global">全局资料</option>{projects.map((project) => <option value={project.id} key={project.id}>{project.name}</option>)}</select>
-      <select aria-label="分类筛选" value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}><option value="*">所有分类</option>{categories.map((category) => <option value={category} key={category}>{category}</option>)}</select>
+      <select aria-label="标签筛选" value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}><option value="*">所有标签</option>{categories.map((category) => <option value={category} key={category}>{category}</option>)}</select>
     </div>
     {error && <div className={styles.error} role="alert">{error}</div>}
     {notice && <div className={styles.notice} role="status">{notice}</div>}
-    <div className={draft ? styles.editLayout : styles.layout}>
-      {!draft && <div className={styles.list} aria-label={`${kind === 'prompt' ? '提示词' : '规则'}列表`}>
+    <div className={styles.layout}>
+      <div className={styles.list} aria-label={`${kind === 'prompt' ? '提示词' : '规则'}列表`}>
         {shown.length ? shown.map((item) => <article className={styles.card} key={item.id}>
-          <small>{item.category || '未分类'} · {item.projectId ? projects.find((project) => project.id === item.projectId)?.name ?? '原项目' : '全局'}</small><button className={styles.cardTitle} type="button" onClick={() => choose(item)}>{item.title}</button><p>{item.body.slice(0, 160) || '正文为空'}</p><div className={styles.cardActions}><button type="button" onClick={() => void copy(item.body)} disabled={!item.body}>复制全文</button><button type="button" onClick={() => choose(item)}>编辑{kind === 'rule' ? '与分发' : ''} →</button></div>
+          <small>{tagsOf(item.category).join(' · ') || '无标签'} · {item.projectId ? projects.find((project) => project.id === item.projectId)?.name ?? '原项目' : '全局'}</small><button className={styles.cardTitle} type="button" onClick={() => choose(item)}>{item.title}</button><p>{item.body.slice(0, 160) || '正文为空'}</p><div className={styles.cardActions}><button type="button" onClick={() => void copy(item.body)} disabled={!item.body}>复制全文</button><button type="button" onClick={() => choose(item)}>修改</button></div>
         </article>) : <div className={styles.empty}>没有符合筛选条件的{kind === 'prompt' ? '提示词' : '规则'}。</div>}
-      </div>}
-      {draft ? <div className={styles.editor}>
-        <button className={styles.back} type="button" onClick={async () => { if (await canReplace()) { setDraft(null); setSavedText(''); } }}>← 返回资料库</button><div className={styles.editorHead}><div><small>{draft.id ? '编辑资料' : '新资料'}</small><h2>{draft.title || (kind === 'prompt' ? '提示词' : '长期规则')}</h2></div></div>
+      </div>
+    </div>
+    <GuideDialog open={!!draft} title={draft?.id ? `修改${kind === 'prompt' ? '提示词' : '规则'}` : `新建${kind === 'prompt' ? '提示词' : '规则'}`} hint="填写标题和正文，然后保存。规则还可以继续分发到 CLI。" onClose={() => { void (async () => { if (await canReplace()) { setDraft(null); setSavedText(''); } })(); }}>
+      {draft && <div className={styles.editor}>
+        <div className={styles.editorHead}><div><small>{draft.id ? '编辑资料' : '新资料'}</small><h2>{draft.title || (kind === 'prompt' ? '提示词' : '长期规则')}</h2></div></div>
         <div className={styles.actions}><span>{dirty ? '草稿尚未保存' : '已保存'}</span><button type="button" onClick={() => void copy(draft.body)} disabled={!draft.body}>复制全文</button>{draft.id && <button type="button" onClick={() => void remove()} disabled={busy}>删除</button>}<button type="button" className={styles.primary} disabled={busy || !draft.title.trim()} onClick={() => void save()}>保存</button></div>
-        <div className={styles.fields}><label>标题<input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="简短清楚的名称" /></label>
-          <label>分类<input value={draft.category} onChange={(event) => setDraft({ ...draft, category: event.target.value })} placeholder="例如：开发" /></label>
-          <label>关联项目<select value={draft.projectId ?? ''} onChange={(event) => setDraft({ ...draft, projectId: event.target.value || null })}><option value="">全局</option>{projects.map((project) => <option value={project.id} key={project.id}>{project.name}</option>)}</select></label></div>
+        <div className={styles.fields}>
+          <label>标题<input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="名称" /></label>
+          <label>关联项目<select value={draft.projectId ?? ''} onChange={(event) => setDraft({ ...draft, projectId: event.target.value || null })}><option value="">全局</option>{projects.map((project) => <option value={project.id} key={project.id}>{project.name}</option>)}</select></label>
+          <div className={styles.tags}>标签
+            <div className={styles.tagList}>
+              {tagsOf(draft.category).map((tag) => <button type="button" key={tag} onClick={() => setDraft({ ...draft, category: categoryOf(tagsOf(draft.category).filter((item) => item !== tag)) })}>{tag} ×</button>)}
+              <input aria-label="添加标签" value={tagText} placeholder="输入后回车" onChange={(event) => setTagText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addTag(tagText); } }} />
+            </div>
+            {!!categories.filter((tag) => !tagsOf(draft.category).includes(tag)).length && <div className={styles.tagSuggestions}>{categories.filter((tag) => !tagsOf(draft.category).includes(tag)).map((tag) => <button type="button" key={tag} onClick={() => addTag(tag)}>{tag}</button>)}</div>}
+          </div>
+        </div>
         <label className={styles.body}>完整正文<CodeEditor key={draft.id ?? 'new'} label="资料正文" format="markdown" value={draft.body} onChange={(body) => setDraft({ ...draft, body })} placeholder={kind === 'prompt' ? '写下可复制使用的提示词…' : '写下要保存或应用到 CLI 的规则…'} /></label>
         {kind === 'rule' && draft.id && draft.expectedVersion !== null && !dirty && <RuleDistribution key={`${draft.id}:${draft.expectedVersion}`} rule={{ ...draft, id: draft.id, version: draft.expectedVersion, updatedAt: 0 }} tools={managedTools} projects={projects} />}
-      </div> : null}
-    </div>
+      </div>}
+    </GuideDialog>
   </section>;
 }

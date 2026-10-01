@@ -72,6 +72,16 @@ pub struct TerminalOption {
 pub struct LaunchSettings {
     pub selected: TerminalId,
     pub terminals: Vec<TerminalOption>,
+    pub cli_mode: LaunchMode,
+    pub project_mode: LaunchMode,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+struct DefaultLaunchModes {
+    #[serde(default)]
+    cli: LaunchMode,
+    #[serde(default)]
+    project: LaunchMode,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -191,11 +201,54 @@ pub fn terminal_preference(db: &Database) -> Result<TerminalId, String> {
     })
 }
 
+pub(crate) fn saved_launch_modes(db: &Database) -> Result<(LaunchMode, LaunchMode), String> {
+    let stored: Option<String> = db.with_connection(|conn| {
+        conn.query_row(
+            "SELECT value FROM app_settings WHERE key = 'default_launch_modes'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())
+    })?;
+    let modes = match stored {
+        None => DefaultLaunchModes { cli: LaunchMode::Normal, project: LaunchMode::Normal },
+        Some(text) => serde_json::from_str(&text).map_err(|_| "默认启动模式格式无法识别")?,
+    };
+    Ok((modes.cli, modes.project))
+}
+
 pub fn settings(db: &Database) -> Result<LaunchSettings, String> {
+    let (cli_mode, project_mode) = saved_launch_modes(db)?;
     Ok(LaunchSettings {
         selected: terminal_preference(db)?,
         terminals: terminal_options(),
+        cli_mode,
+        project_mode,
     })
+}
+
+pub fn set_default_mode(db: &Database, target: &str, mode: LaunchMode) -> Result<LaunchSettings, String> {
+    if target != "cli" && target != "project" {
+        return Err("启动默认范围无效".into());
+    }
+    let (cli, project) = saved_launch_modes(db)?;
+    let modes = match target {
+        "cli" => DefaultLaunchModes { cli: mode, project },
+        "project" => DefaultLaunchModes { cli, project: mode },
+        _ => unreachable!(),
+    };
+    let value = serde_json::to_string(&modes).map_err(|error| error.to_string())?;
+    db.with_connection(|conn| {
+        conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES ('default_launch_modes', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![value],
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(())
+    })?;
+    settings(db)
 }
 
 pub fn set_terminal(db: &Database, terminal: TerminalId) -> Result<LaunchSettings, String> {

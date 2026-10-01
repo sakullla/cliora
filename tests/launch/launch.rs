@@ -351,3 +351,30 @@ fn project_launch_plan_uses_real_probe_and_project_model_without_shell_expansion
     .unwrap_err();
     assert_eq!(failure.stage, LaunchStage::Terminal);
 }
+
+#[test]
+fn default_launch_modes_start_normal_and_save_cli_and_project_separately() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("app.db")).unwrap();
+    let initial = settings(&db).unwrap();
+    assert_eq!(initial.cli_mode, LaunchMode::Normal);
+    assert_eq!(initial.project_mode, LaunchMode::Normal);
+    let cli = set_default_mode(&db, "cli", LaunchMode::Yolo).unwrap();
+    assert_eq!(cli.cli_mode, LaunchMode::Yolo);
+    assert_eq!(cli.project_mode, LaunchMode::Normal);
+    let both = set_default_mode(&db, "project", LaunchMode::Yolo).unwrap();
+    assert_eq!(both.cli_mode, LaunchMode::Yolo);
+    assert_eq!(both.project_mode, LaunchMode::Yolo);
+    assert!(set_default_mode(&db, "tray", LaunchMode::Yolo).is_err());
+    db.with_connection(|conn| {
+        conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES ('default_launch_modes', '\"nope\"')
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [],
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(())
+    })
+    .unwrap();
+    assert!(settings(&db).unwrap_err().contains("默认启动模式格式无法识别"));
+}

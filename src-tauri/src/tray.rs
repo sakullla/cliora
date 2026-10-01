@@ -8,7 +8,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, Tray
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::commands::{self, AppState};
-use crate::launch::{LaunchRequest, LaunchStage};
+use crate::launch::{self, LaunchRequest, LaunchStage};
 use crate::native::adapter::Scope;
 use crate::native::adapters::{LaunchMode, Registry};
 use crate::native::{apply, profile};
@@ -26,6 +26,7 @@ enum Action {
     Launch {
         tool: String,
         project: String,
+        mode: LaunchMode,
     },
     RepairProject {
         project: String,
@@ -206,11 +207,12 @@ fn profile_state_label(
     }
 }
 
-fn recent_action(project_id: &str, tool: Option<&str>, available: bool) -> Action {
+fn recent_action(project_id: &str, tool: Option<&str>, available: bool, mode: LaunchMode) -> Action {
     match (available, tool) {
         (true, Some(tool)) => Action::Launch {
             tool: tool.to_owned(),
             project: project_id.to_owned(),
+            mode,
         },
         _ => Action::RepairProject {
             project: project_id.to_owned(),
@@ -352,6 +354,7 @@ pub fn refresh(app: &AppHandle) -> Result<(), String> {
                     .cloned(),
             );
             let recent = projects::list(db).map_err(commands::native_error)?;
+            let (_, project_mode) = launch::saved_launch_modes(db).map_err(commands::native_error)?;
             let mut tools = Vec::new();
             for id in managed {
                 let Some(adapter) = registry.get(&id) else {
@@ -363,10 +366,10 @@ pub fn refresh(app: &AppHandle) -> Result<(), String> {
                     .map_err(commands::native_error)?;
                 tools.push((id, adapter.name().to_owned(), profiles, global));
             }
-            Ok((tools, recent))
+            Ok((tools, recent, project_mode))
         })
         .map_err(|error| error.message)?;
-    let (tools, recent) = data;
+    let (tools, recent, project_mode) = data;
     for (tool, name, profiles, global) in &tools {
         let submenu = Submenu::new(app, name, true).map_err(|error| error.to_string())?;
         let global_name = applied_label(profiles, global.as_ref());
@@ -434,13 +437,18 @@ pub fn refresh(app: &AppHandle) -> Result<(), String> {
         }
         menu.append(&submenu).map_err(|error| error.to_string())?;
     }
-    let recent_menu = Submenu::new(app, "最近项目 · 普通启动", !recent.is_empty())
+    let recent_title = if project_mode == LaunchMode::Yolo { "最近项目 · YOLO 启动" } else { "最近项目 · 普通启动" };
+    let recent_menu = Submenu::new(app, recent_title, !recent.is_empty())
         .map_err(|error| error.to_string())?;
     for project in recent.iter().take(8) {
         let tool = project
             .preferred_tool
             .as_ref()
             .filter(|id| tools.iter().any(|entry| &entry.0 == *id));
+        let yolo = tool.is_some_and(|id| {
+            registry.get(id).is_some_and(|adapter| adapter.launch_args(None, LaunchMode::Yolo).is_ok())
+        });
+        let mode = if project_mode == LaunchMode::Yolo && yolo { LaunchMode::Yolo } else { LaunchMode::Normal };
         let label = if !project.available {
             format!("{} · 目录需重关联 · 点击修复", project.name)
         } else if tool.is_none() {
@@ -451,9 +459,13 @@ pub fn refresh(app: &AppHandle) -> Result<(), String> {
                 .find(|entry| &entry.0 == tool.unwrap())
                 .map(|entry| entry.1.as_str())
                 .unwrap_or("");
-            format!("{} · {}", project.name, name)
+            if project_mode == LaunchMode::Yolo && mode == LaunchMode::Normal {
+                format!("{} · {} · 普通模式", project.name, name)
+            } else {
+                format!("{} · {}", project.name, name)
+            }
         };
-        let action = recent_action(&project.id, tool.map(String::as_str), project.available);
+        let action = recent_action(&project.id, tool.map(String::as_str), project.available, mode);
         recent_menu
             .append(&register_action(
                 app,
@@ -572,7 +584,7 @@ fn on_menu(app: &AppHandle, id: &str) {
                 }
             });
         }
-        Action::Launch { tool, project } => {
+        Action::Launch { tool, project, mode } => {
             let app = app.clone();
             std::thread::spawn(move || {
                 let request = LaunchRequest {
@@ -580,7 +592,7 @@ fn on_menu(app: &AppHandle, id: &str) {
                     project_id: Some(project.clone()),
                     session_id: None,
             directory: None,
-                    mode: LaunchMode::Normal,
+                    mode,
                 };
                 if let Err(failure) = commands::launch_now_with_stage(&app, request) {
                     let repair = RepairTarget::for_launch_failure(&tool, &project, &failure);
@@ -649,13 +661,13 @@ mod tests {
     #[test]
     fn invalid_recent_project_opens_repair_instead_of_disabled_launch() {
         assert!(
-            matches!(recent_action("project-1", Some("grok"), false), Action::RepairProject { project } if project == "project-1")
+            matches!(recent_action("project-1", Some("grok"), false, LaunchMode::Normal), Action::RepairProject { project } if project == "project-1")
         );
         assert!(
-            matches!(recent_action("project-1", None, true), Action::RepairProject { project } if project == "project-1")
+            matches!(recent_action("project-1", None, true, LaunchMode::Yolo), Action::RepairProject { project } if project == "project-1")
         );
         assert!(
-            matches!(recent_action("project-1", Some("grok"), true), Action::Launch { tool, project } if tool == "grok" && project == "project-1")
+            matches!(recent_action("project-1", Some("grok"), true, LaunchMode::Yolo), Action::Launch { tool, project, mode } if tool == "grok" && project == "project-1" && mode == LaunchMode::Yolo)
         );
         let target = RepairTarget::connection(
             "grok".into(),

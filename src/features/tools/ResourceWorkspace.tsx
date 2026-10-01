@@ -7,6 +7,7 @@ import type { AdapterDescriptor, Scope } from '../../types/native';
 import type { McpDefinition, McpDraft, McpTargetRequest, McpTargetResult, NativeMcpEntry, NativeSkillEntry, SkillImportPreview, SkillInstallation, SkillPackage, SkillRecoveryIssue, SkillTargetPreview, SkillTargetResult } from '../../types/resources';
 import { displayPath, shortPath } from '../../lib/paths';
 import { ToolIcon } from '../../components/ToolIcon';
+import { GuideDialog } from '../../components/GuideDialog';
 import styles from './ResourceWorkspace.module.css';
 
 function errorText(error: unknown) {
@@ -120,6 +121,12 @@ export function McpWorkspace({ toolId, scope, projectPath, tools, onDirtyChange 
     setDraft(blank()); setEnvText(''); setHeaderText(''); setEnabled(true); setNativeOrigin(null); setCurrentConflict(null);
     setSavedFingerprint(JSON.stringify([blank(), '', '', true])); setPreview(null); setComposing(true); setNotice(''); setError('');
   }
+  async function closeCompose() {
+    if (!await canReplace()) return;
+    const next = blank();
+    setDraft(next); setEnvText(''); setHeaderText(''); setEnabled(true); setNativeOrigin(null); setCurrentConflict(null);
+    setSavedFingerprint(JSON.stringify([next, '', '', true])); setPreview(null); setComposing(false); setNotice(''); setError('');
+  }
   async function applyItems(id: string, items: McpTargetResult[], replace: boolean) {
     const targets = items.filter(item => item.status === 'ready' || item.status === 'conflict').map((item): McpTargetRequest => ({ toolId: item.toolId, scope: item.scope,
       projectPath: item.projectPath, enabled, baselineHash: item.baselineHash, previewToken: item.previewToken, allowReplace: replace && item.status === 'conflict' }));
@@ -213,12 +220,13 @@ export function McpWorkspace({ toolId, scope, projectPath, tools, onDirtyChange 
       {libraryOnlyNames.map((item) => <button key={item.id} type="button" disabled={busy} className={draft.id === item.id ? styles.active : ''} onClick={() => void selectDefinition(item)}><strong>{item.name}</strong><small>{item.transport === 'http' ? item.url : item.command || '已保存定义'}</small></button>)}
       {!nativeEntries.length && !libraryOnlyNames.length && <p>还没有 MCP。点击新建开始添加。</p>}
     </aside>
+    <GuideDialog open={composing} title={draft.id || nativeOrigin ? '修改 MCP' : '新建 MCP'} hint="先写名称，再选本机命令或网址。需要时再展开更多设置。" onClose={() => void closeCompose()}>
     <div className={styles.panel}>
       <div className={styles.heading}><div><small>添加 MCP</small><h2>{draft.name || '新 MCP'}</h2></div></div>
-      <div className={styles.actions}><button type="button" className={styles.primary} disabled={busy || !draft.name.trim() || (scope === 'project' && !project)} onClick={() => void save()}>保存并在当前工具使用</button></div>
+      <div className={styles.actions}><button type="button" className={styles.primary} disabled={busy || !draft.name.trim() || (scope === 'project' && !project)} onClick={() => void save()}>保存</button></div>
       <div className={styles.fields}>
         <label>名称<small className={styles.fieldHint}>保存后出现在当前工具列表中</small><input aria-label="名称" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="例如 filesystem" /></label>
-        <label>连接方式<small className={styles.fieldHint}>本机命令在这台电脑启动；网址则通过网络连接</small><select aria-label="连接方式" value={draft.transport} onChange={(event) => setDraft({ ...draft, transport: event.target.value as 'stdio' | 'http' })}><option value="stdio">在这台电脑上运行</option><option value="http">通过网址连接</option></select></label>
+        <label>连接方式<select aria-label="连接方式" value={draft.transport} onChange={(event) => setDraft({ ...draft, transport: event.target.value as 'stdio' | 'http' })}><option value="stdio">stdio</option><option value="http">http</option></select></label>
       </div>
       {draft.transport === 'stdio' ? (
         <label>启动命令<small className={styles.fieldHint}>例如 npx 或本机可执行文件路径</small><input aria-label="命令" value={draft.command} onChange={(event) => setDraft({ ...draft, command: event.target.value })} placeholder="npx @modelcontextprotocol/server-filesystem" /></label>
@@ -233,8 +241,7 @@ export function McpWorkspace({ toolId, scope, projectPath, tools, onDirtyChange 
           <label>请求头，每行 KEY=value<small className={styles.fieldHint}>密钥请写环境变量引用，不要填原文</small><textarea rows={3} value={headerText} onChange={(event) => setHeaderText(event.target.value)} placeholder="Authorization=Bearer ${API_TOKEN}" /></label>
         )}
       </details>
-      <label className={styles.inline}><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} />这个工具会使用它</label>
-      <p className={styles.muted}>{enabled ? '这个工具会使用它。启用不表示服务器进程已经启动或功能已经调用。' : '已停用。定义仍保留，这个工具当前不会使用它。'}</p>
+      <label className={styles.inline}><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} />启用</label>
       {currentConflict && <div className={styles.resultList} role="group" aria-label="MCP 写入冲突"><strong>当前同名条目与读取时不同，请比较后选择</strong>{currentConflict.items.map(item => <div className={styles.fileDiff} key={item.toolId}><CodeEditor compact label="当前 MCP" format="json" readOnly value={JSON.stringify(item.existing, null, 2)} /><CodeEditor compact label="本次 MCP 修改" format="json" readOnly value={JSON.stringify(item.proposed, null, 2)} /></div>)}<div className={styles.actions}><button type="button" onClick={() => setCurrentConflict(null)}>保留当前文件</button><button type="button" disabled={busy} onClick={() => { setBusy(true); void applyItems(currentConflict.id, currentConflict.items, true).catch(value => setError(errorText(value))).finally(() => setBusy(false)); }}>使用本次修改</button></div></div>}
       <details className={styles.distribution} aria-label="MCP 更多选项"><summary>更多选项</summary>
         <div className={styles.actions}><button type="button" disabled={busy || !draft.name.trim()} onClick={() => void save(true)}>只保存到资料库</button></div>
@@ -258,6 +265,7 @@ export function McpWorkspace({ toolId, scope, projectPath, tools, onDirtyChange 
       {error && <p className={styles.error} role="alert">{error}</p>}
       {notice && <p className={styles.notice} role="status">{notice}</p>}
     </div>
+    </GuideDialog>
   </div>;
 }
 
@@ -274,6 +282,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, onDirtyChange }: {
   const [skillEnabled, setSkillEnabled] = useState(false);
   const [pendingTarget, setPendingTarget] = useState<SkillTargetPreview | null>(null);
   const [adding, setAdding] = useState(false);
+  const [guide, setGuide] = useState(false);
   const [libraryOnly, setLibraryOnly] = useState(false);
   useLayoutEffect(() => { onDirtyChange?.(!!url.trim() || !!archiveSelection || !!pendingImport || adding); }, [url, archiveSelection, pendingImport, adding, onDirtyChange]);
   useEffect(() => () => { onDirtyChange?.(false); }, [onDirtyChange]);
@@ -388,12 +397,12 @@ export function SkillsWorkspace({ toolId, scope, projectPath, onDirtyChange }: {
   }
   async function openNative(entry: NativeSkillEntry) {
     if (entry.state === 'unreadable') { setError(entry.detail); return; }
-    if (entry.packageId) { setSelectedId(entry.packageId); return; }
+    if (entry.packageId) { setSelectedId(entry.packageId); setAdding(false); setGuide(true); return; }
     setBusy(true); setError('');
     try {
       const preview = await native.previewSkillLocal(entry.path);
       if (preview.existingDigest && preview.existingDigest !== preview.digest) {
-        setPendingImport({ preview, kind: 'local', source: entry.path, subdirectory: null, installAfter: true }); return;
+        setPendingImport({ preview, kind: 'local', source: entry.path, subdirectory: null, installAfter: true }); setGuide(true); return;
       }
       const item = await native.importSkillLocal(entry.path, preview.digest, preview.existingDigest);
       await finishImported(item, true);
@@ -434,26 +443,28 @@ export function SkillsWorkspace({ toolId, scope, projectPath, onDirtyChange }: {
   if (empty) {
     return <div className={styles.taskEmpty}>
       {recovery}
-      <button type="button" className={styles.primary} disabled={busy || (scope === 'project' && !project)} onClick={() => { setAdding(true); setLibraryOnly(false); }}>添加 Skill</button>
+      <button type="button" className={styles.primary} disabled={busy || (scope === 'project' && !project)} onClick={() => { setAdding(true); setLibraryOnly(false); setGuide(true); }}>添加 Skill</button>
       <p>完成后会安装到当前工具的当前范围。</p>
       {scope === 'project' && !project && <p className={styles.muted}>请先选择项目目录。</p>}
       {error && <p className={styles.error} role="alert">{error}</p>}
     </div>;
   }
 
-  return <div className={styles.layout}>
+  return <>
+    {recovery}
+    <div className={styles.layout}>
     <aside className={styles.list}>
       <div className={styles.listHead}><strong>Skill</strong></div>
-      <div className={styles.actions}><button type="button" className={styles.primary} disabled={busy || (scope === 'project' && !project)} onClick={() => { setAdding(true); setLibraryOnly(false); }}>添加 Skill</button></div>
-      {packages.map((item) => <button type="button" key={item.id} className={selectedId === item.id ? styles.active : ''} onClick={() => { setSelectedId(item.id); setDependencyChecked(false); setResult(null); setAdding(false); }}><strong>{item.name}</strong><small>{item.fileCount} 个文件 · {item.description || '完整资源包'}</small></button>)}
+      <div className={styles.actions}><button type="button" className={styles.primary} disabled={busy || (scope === 'project' && !project)} onClick={() => { setAdding(true); setLibraryOnly(false); setGuide(true); }}>添加 Skill</button></div>
+      {packages.map((item) => <button type="button" key={item.id} className={selectedId === item.id ? styles.active : ''} onClick={() => { setSelectedId(item.id); setDependencyChecked(false); setResult(null); setAdding(false); setGuide(true); }}><strong>{item.name}</strong><small>{item.fileCount} 个文件 · {item.description || '完整资源包'}</small></button>)}
       {!packages.length && <p>添加包含 SKILL.md 的文件夹或本机 ZIP。</p>}
       <div className={styles.listHead}><strong>当前范围</strong></div>
       {nativeEntries.map((entry) => <button type="button" key={entry.path} onClick={() => void openNative(entry)}><strong>{entry.name}</strong><small>{entry.state === 'managed' ? '已安装' : entry.state === 'external' ? '本机目录' : '暂不可读取'}</small></button>)}
       {!nativeEntries.length && <p>当前范围尚未安装 Skill。</p>}
     </aside>
+    <GuideDialog open={guide} title={adding ? '添加 Skill' : '修改 Skill'} hint={adding ? '选择文件夹或本机 ZIP。确认后会安装到当前工具。' : '安装、停用或移除都在这里完成。'} onClose={() => { setGuide(false); setAdding(false); setLibraryOnly(false); setArchiveSelection(null); setPendingImport(null); }}>
     <div className={styles.panel}>
       <div className={styles.heading}><div><small>添加 Skill</small><h2>{adding ? '选择来源' : selected?.name ?? 'Skill'}</h2></div></div>
-      {recovery}
       {adding && <div className={styles.addChooser}>
         <p className={styles.muted}>{libraryOnly ? '仅导入到资料库，不会安装到当前工具。' : '选择文件夹或本机 ZIP；确认后会安装到当前工具的当前范围。'}</p>
         <div className={styles.actions}>
@@ -474,7 +485,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, onDirtyChange }: {
         {!!installations.length && <div className={styles.resultList}><strong>安装位置</strong>{installations.map((item) => <p key={`${item.toolId}:${item.targetPath}`}>{item.toolId} · {item.scope === 'global' ? '全局' : '项目'} · {item.state} <small>{item.targetPath}</small></p>)}</div>}
       </>}
       <details className={styles.distribution} aria-label="Skill 更多选项"><summary>更多选项</summary>
-        <div className={styles.actions}><button type="button" disabled={busy} onClick={() => { setAdding(true); setLibraryOnly(true); }}>仅导入到资料库</button></div>
+        <div className={styles.actions}><button type="button" disabled={busy} onClick={() => { setAdding(true); setLibraryOnly(true); setGuide(true); }}>仅导入到资料库</button></div>
         <label>从 HTTPS 地址导入 ZIP<input aria-label="归档地址" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://example.com/skill.zip" /></label>
         <button type="button" disabled={busy || !url.trim()} onClick={() => void archive(url.trim(), false, undefined, false)}>导入地址</button>
       </details>
@@ -496,5 +507,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, onDirtyChange }: {
       {result && <p role="status" className={result.status === 'failed' ? styles.error : styles.notice}>{result.status === 'failed' ? result.detail : `${result.status === 'removed' ? '已移除' : '已安装'}：${result.path}`}</p>}
       {error && <p className={styles.error} role="alert">{error}</p>}
     </div>
-  </div>;
+    </GuideDialog>
+  </div>
+  </>;
 }

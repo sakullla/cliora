@@ -1,12 +1,14 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import { native, nativeAvailable } from '../../lib/native';
 import { confirmAction } from '../../lib/confirm';
-import type { Project, TrayRepairTarget } from '../../types/launch';
+import type { LaunchSettings, Project, TrayRepairTarget } from '../../types/launch';
+import { preferredLaunchMode } from '../../types/launch';
 import type { AdapterDescriptor } from '../../types/native';
 import { displayPath, shortPath } from '../../lib/paths';
 import { ToolIcon } from '../../components/ToolIcon';
+import { GuideDialog } from '../../components/GuideDialog';
 import styles from './ProjectLauncher.module.css';
 
 function errorText(error: unknown): string {
@@ -22,8 +24,10 @@ export function ProjectLauncher({ tools, repair }: { tools: AdapterDescriptor[];
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [feedback, setFeedback] = useState('');
+  const [launchSettings, setLaunchSettings] = useState<LaunchSettings | null>(null);
   const [relink, setRelink] = useState<Record<string, string>>({});
   const [modelEdits, setModelEdits] = useState<Record<string, string>>({});
+  const [editingId, setEditingId] = useState<string | null>(null);
   const repairDirectoryInput = useRef<HTMLInputElement>(null);
   const repairToolSelect = useRef<HTMLSelectElement>(null);
   const repairCard = useRef<HTMLDivElement>(null);
@@ -35,12 +39,21 @@ export function ProjectLauncher({ tools, repair }: { tools: AdapterDescriptor[];
   useEffect(() => {
     if (!repair?.projectId || focusedRepair.current === repair.sequence) return;
     const project = projects.find((item) => item.id === repair.projectId);
-    if (!project || !repairCard.current) return;
-    const target = project.available ? repairToolSelect.current : repairDirectoryInput.current;
-    repairCard.current.scrollIntoView({ block: 'center' });
-    if (target && !target.disabled) target.focus(); else repairCard.current.focus();
-    focusedRepair.current = repair.sequence;
+    if (!project) return;
+    if (!project.available) setEditingId(project.id);
+    repairCard.current?.scrollIntoView({ block: 'center' });
+    if (project.available) {
+      const target = repairToolSelect.current;
+      if (target && !target.disabled) target.focus(); else repairCard.current?.focus();
+      focusedRepair.current = repair.sequence;
+    }
   }, [repair?.sequence, projects]);
+  useLayoutEffect(() => {
+    if (!repair?.projectId || editingId !== repair.projectId || focusedRepair.current === repair.sequence) return;
+    const target = repairDirectoryInput.current;
+    if (target && !target.disabled) target.focus();
+    focusedRepair.current = repair.sequence;
+  }, [editingId, repair?.projectId, repair?.sequence]);
 
   async function refresh() {
     if (!nativeAvailable) return;
@@ -51,6 +64,13 @@ export function ProjectLauncher({ tools, repair }: { tools: AdapterDescriptor[];
     }
     catch (value) { setError(errorText(value)); }
   }
+
+  useEffect(() => {
+    if (!nativeAvailable) return;
+    let active = true;
+    void native.getLaunchSettings().then((value) => { if (active) setLaunchSettings(value); }).catch(() => {});
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     if (!nativeAvailable) return;
@@ -67,6 +87,8 @@ export function ProjectLauncher({ tools, repair }: { tools: AdapterDescriptor[];
 
   const managed = tools.filter((tool) => !!tool.id);
   const defaultTool = managed.some((tool) => tool.id === globalTool) ? globalTool : managed[0]?.id ?? '';
+  const directTool = managed.find((tool) => tool.id === defaultTool);
+  const directMode = preferredLaunchMode(launchSettings, 'cli', !!directTool?.yoloAvailable);
 
   async function remove(project: Project) {
     if (!await confirmAction(`从 Cliora 移除“${project.name}”？磁盘文件保留。`, () => mounted.current && latestProjects.current.some(item => item.id === project.id && JSON.stringify(item) === JSON.stringify(project)), { title: '移除项目', confirmLabel: '移除项目', destructive: true })) return;
@@ -158,12 +180,12 @@ export function ProjectLauncher({ tools, repair }: { tools: AdapterDescriptor[];
     {error && <div className={styles.error} role="alert">{error}</div>}
     {feedback && <div className={styles.feedback} role="status">{feedback}</div>}
     {!managed.length && <p className={styles.note}>先在设置中启用 CLI；已有项目仍可查看和重新关联。</p>}
-    {!!managed.length && <details className={styles.quick}><summary>恢复已有会话 · YOLO 启动</summary><div className={styles.quickContent}>
-      <div><strong>直接启动</strong><span>默认普通模式；YOLO 会按 CLI 原生参数跳过审批。</span></div>
+    {!!managed.length && <details className={styles.quick}><summary>直接启动或恢复会话</summary><div className={styles.quickContent}>
+      <div><strong>直接启动</strong><span>{directMode === 'yolo' ? '默认 YOLO 模式；旁边仍可改用普通模式。' : '默认普通模式；YOLO 会按 CLI 原生参数跳过审批。'}</span></div>
       <select aria-label="直接启动的工具" value={defaultTool} onChange={(event) => setGlobalTool(event.target.value)}>{managed.map((tool) => <option value={tool.id} key={tool.id}>{tool.name}</option>)}</select>
       <input aria-label="恢复会话 ID" value={sessionId} placeholder="会话 ID（可选）" onChange={(event) => setSessionId(event.target.value)} />
       <div className={styles.launchDirectory}><input aria-label="启动工作目录" value={launchDirectory} placeholder="工作目录（恢复时使用原会话目录）" onChange={(event) => setLaunchDirectory(event.target.value)} /><button type="button" className={styles.secondary} disabled={!!busy} onClick={() => { void open({ directory: true, multiple: false, title: '选择启动工作目录' }).then((picked) => { if (typeof picked === 'string') setLaunchDirectory(picked); }).catch((value) => setError(errorText(value))); }}>选目录</button></div>
-      <div className={styles.actions}><button type="button" disabled={!!busy} onClick={() => void launch(defaultTool, null, 'normal', sessionId)}>{sessionId.trim() ? '恢复' : '启动'}</button><button type="button" className={styles.secondary} disabled={!!busy || !managed.find((tool) => tool.id === defaultTool)?.yoloAvailable} title={managed.find((tool) => tool.id === defaultTool)?.yoloAvailable ? '按此 CLI 的原生参数跳过审批' : '此 CLI 未提供已确认的 YOLO 参数'} onClick={() => void launch(defaultTool, null, 'yolo', sessionId)}>{sessionId.trim() ? 'YOLO 恢复' : 'YOLO'}</button></div>
+      <div className={styles.actions}><button type="button" disabled={!!busy} onClick={() => void launch(defaultTool, null, directMode, sessionId)}>{sessionId.trim() ? '恢复' : '启动'}</button>{directMode === 'yolo' ? <button type="button" className={styles.secondary} disabled={!!busy} onClick={() => void launch(defaultTool, null, 'normal', sessionId)}>{sessionId.trim() ? '普通恢复' : '普通'}</button> : <button type="button" className={styles.secondary} disabled={!!busy || !directTool?.yoloAvailable} title={directTool?.yoloAvailable ? '按此 CLI 的原生参数跳过审批' : '此 CLI 未提供已确认的 YOLO 参数'} onClick={() => void launch(defaultTool, null, 'yolo', sessionId)}>{sessionId.trim() ? 'YOLO 恢复' : 'YOLO'}</button>}</div>
     </div></details>}
     <div className={styles.heading}><strong>最近项目</strong><button type="button" className={styles.secondary} disabled={!!busy} onClick={() => void chooseDirectory()}>＋ 添加项目</button></div>
     <div className={styles.projectGrid}>
@@ -172,18 +194,23 @@ export function ProjectLauncher({ tools, repair }: { tools: AdapterDescriptor[];
       const descriptor = managed.find((tool) => tool.id === toolId);
       const modelKey = `${project.id}:${toolId}`;
       const pendingProfile = !!project.selectedProfiles[toolId] && project.selectedProfiles[toolId] !== project.appliedProfiles[toolId];
+      const projectMode = preferredLaunchMode(launchSettings, 'project', !!descriptor?.yoloAvailable);
       return <div ref={repair?.projectId === project.id ? repairCard : undefined} tabIndex={repair?.projectId === project.id ? -1 : undefined} className={`${styles.project} ${repair?.projectId === project.id ? styles.repair : ''}`} key={project.id}>
         <div className={styles.identity}><div className={styles.projectTitle}><ToolIcon toolId={toolId} size={26} /><strong>{project.name}</strong></div><span title={project.path ? displayPath(project.path) : ''}>{project.path ? shortPath(project.path) : '尚未关联目录'}</span></div>
-        <div className={styles.controls}><select ref={repair?.projectId === project.id ? repairToolSelect : undefined} aria-label={`${project.name} 的工具`} value={toolId} disabled={busy === project.id || !managed.length} onChange={(event) => void updateTool(project, event.target.value)}><option value="">选择工具</option>{managed.map((tool) => <option key={tool.id} value={tool.id}>{tool.name}</option>)}</select><div className={styles.actions}><button type="button" disabled={!!busy || !project.available || !toolId} onClick={() => void launch(toolId, project.id, 'normal')}>启动</button></div></div>
+        <div className={styles.controls}><select ref={repair?.projectId === project.id ? repairToolSelect : undefined} aria-label={`${project.name} 的工具`} value={toolId} disabled={busy === project.id || !managed.length} onChange={(event) => void updateTool(project, event.target.value)}><option value="">选择工具</option>{managed.map((tool) => <option key={tool.id} value={tool.id}>{tool.name}</option>)}</select><div className={styles.actions}><button type="button" disabled={!!busy || !project.available || !toolId} title={projectMode === 'yolo' ? '按此 CLI 的原生参数跳过审批' : launchSettings?.projectMode === 'yolo' ? '此 CLI 未提供已确认的 YOLO 参数，将用普通模式启动' : undefined} onClick={() => void launch(toolId, project.id, projectMode)}>启动</button><button type="button" className={styles.secondary} onClick={() => setEditingId(project.id)}>修改</button></div></div>
         {!toolId && <div className={styles.hint}>此项目原来选择的工具未纳入管理。选择一个工具即可继续启动。</div>}
         {pendingProfile && <div className={styles.extra}><span>{project.reapplyProfiles?.[toolId] ? '目录已重新关联，启动时会恢复所选配置' : '此项目配置有待应用内容；普通启动保留已应用的原生文件'}</span><button type="button" className={styles.secondary} disabled={!!busy || !project.available} onClick={() => void applySelected(project, toolId)}>应用配置</button></div>}
-        <details className={styles.projectMore} open={!project.available || repair?.projectId === project.id || undefined}><summary>项目选项{project.modelOverrides[toolId] ? ' · 已设置模型' : ''}</summary><div className={styles.extra}><button type="button" className={styles.secondary} disabled={!!busy || !project.available || !toolId || !descriptor?.yoloAvailable} title={descriptor?.yoloAvailable ? '按此 CLI 的原生参数跳过审批' : '此 CLI 未提供已确认的 YOLO 参数'} onClick={() => void launch(toolId, project.id, 'yolo')}>YOLO</button></div>{project.path && <div className={styles.projectPath}><small>{displayPath(project.path)}</small><button type="button" className={styles.secondary} onClick={() => void navigator.clipboard.writeText(displayPath(project.path!))}>复制路径</button></div>}<div className={styles.extra}><label>项目名称<input aria-label={`${project.name} 项目名称`} value={names[project.id] ?? project.name} onChange={event => setNames({ ...names,[project.id]:event.target.value })} /></label><button type="button" disabled={!!busy || !names[project.id]?.trim()} onClick={() => void rename(project)}>保存名称</button><button type="button" className={styles.secondary} disabled={!!busy} onClick={() => void remove(project)}>移除项目</button></div><button type="button" className={styles.secondary} disabled={!!busy || !project.available} onClick={() => void openProject(project)}>打开目录</button>
-        {descriptor?.projectModelOverride && <div className={styles.extra}><label>项目模型 <input aria-label={`${project.name} 项目模型`} value={modelEdits[modelKey] ?? project.modelOverrides[toolId] ?? ''} placeholder="留空则使用原生默认模型" onChange={(event) => setModelEdits((old) => ({ ...old, [modelKey]: event.target.value }))} /></label><button type="button" disabled={busy === project.id} onClick={() => void saveModel(project, toolId)}>保存</button></div>}
-        <div className={styles.extra}><span>{project.available ? '重新关联目录' : '目录已移动，请重新关联'}</span><button type="button" className={styles.secondary} disabled={busy === project.id} onClick={() => void chooseDirectory(project)}>选目录</button><input ref={repair?.projectId === project.id ? repairDirectoryInput : undefined} aria-label={`${project.name} 新目录`} value={relink[project.id] ?? ''} placeholder="或粘贴新的本机目录路径" onChange={(event) => setRelink((old) => ({ ...old, [project.id]: event.target.value }))} /><button type="button" disabled={busy === project.id || !relink[project.id]?.trim()} onClick={() => void relinkProject(project)}>关联</button></div></details>
+        <GuideDialog open={editingId === project.id} title={`修改${project.name}`} hint="可以改名称、目录、模型和这次启动方式。启动按钮仍在卡片上。" onClose={() => setEditingId(null)}>
+          <div className={styles.extra}>{projectMode === 'yolo' ? <button type="button" className={styles.secondary} disabled={!!busy || !project.available || !toolId} onClick={() => void launch(toolId, project.id, 'normal')}>普通</button> : <button type="button" className={styles.secondary} disabled={!!busy || !project.available || !toolId || !descriptor?.yoloAvailable} title={descriptor?.yoloAvailable ? '按此 CLI 的原生参数跳过审批' : '此 CLI 未提供已确认的 YOLO 参数'} onClick={() => void launch(toolId, project.id, 'yolo')}>YOLO</button>}</div>
+          {project.path && <div className={styles.projectPath}><small>{displayPath(project.path)}</small><button type="button" className={styles.secondary} onClick={() => void navigator.clipboard.writeText(displayPath(project.path!))}>复制路径</button></div>}
+          <div className={styles.extra}><label>项目名称<input aria-label={`${project.name} 项目名称`} value={names[project.id] ?? project.name} onChange={event => setNames({ ...names,[project.id]:event.target.value })} /></label><button type="button" disabled={!!busy || !names[project.id]?.trim()} onClick={() => void rename(project)}>保存名称</button><button type="button" className={styles.secondary} disabled={!!busy} onClick={() => void remove(project)}>移除项目</button></div>
+          <button type="button" className={styles.secondary} disabled={!!busy || !project.available} onClick={() => void openProject(project)}>打开目录</button>
+          {descriptor?.projectModelOverride && <div className={styles.extra}><label>项目模型 <input aria-label={`${project.name} 项目模型`} value={modelEdits[modelKey] ?? project.modelOverrides[toolId] ?? ''} placeholder="留空则使用原生默认模型" onChange={(event) => setModelEdits((old) => ({ ...old, [modelKey]: event.target.value }))} /></label><button type="button" disabled={busy === project.id} onClick={() => void saveModel(project, toolId)}>保存</button></div>}
+          <div className={styles.extra}><span>{project.available ? '重新关联目录' : '目录已移动，请重新关联'}</span><button type="button" className={styles.secondary} disabled={busy === project.id} onClick={() => void chooseDirectory(project)}>选目录</button><input ref={repair?.projectId === project.id ? repairDirectoryInput : undefined} aria-label={`${project.name} 新目录`} value={relink[project.id] ?? ''} placeholder="或粘贴新的本机目录路径" onChange={(event) => setRelink((old) => ({ ...old, [project.id]: event.target.value }))} /><button type="button" disabled={busy === project.id || !relink[project.id]?.trim()} onClick={() => void relinkProject(project)}>关联</button></div>
+        </GuideDialog>
       </div>;
     })}
     </div>
-    {!projects.length && <p className={styles.note}>关联常用项目，即可在对应目录打开 CLI。</p>}
 
   </section>;
 }

@@ -68,9 +68,10 @@ pub struct AdapterDescriptor {
 #[serde(rename_all = "camelCase")]
 pub struct LoginCapability { pub hint: &'static str }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LaunchMode {
+    #[default]
     Normal,
     Yolo,
 }

@@ -1876,6 +1876,25 @@ pub async fn set_preferred_terminal(
 }
 
 #[tauri::command]
+pub async fn set_default_launch_mode(
+    app: AppHandle,
+    target: String,
+    mode: adapters::LaunchMode,
+) -> Result<launch::LaunchSettings, ApiError> {
+    let tray = app.clone();
+    let settings = blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            launch::set_default_mode(db, &target, mode).map_err(native_error)
+        })
+    })
+    .await?;
+    std::thread::spawn(move || {
+        let _ = crate::tray::refresh(&tray);
+    });
+    Ok(settings)
+}
+
+#[tauri::command]
 pub async fn launch_cli(
     app: AppHandle,
     request: launch::LaunchRequest,
