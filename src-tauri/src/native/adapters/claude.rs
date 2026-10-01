@@ -17,6 +17,21 @@ use crate::resources::mcp::{self, McpDefinition, McpTransport};
 
 pub struct Claude;
 
+// Injected by a running Claude Code into its subprocesses; a fresh terminal session
+// must not inherit them (CLAUDE_CODE_CHILD_SESSION disables transcript saving).
+const SESSION_ENV_MARKERS: &[&str] = &[
+    "CLAUDECODE",
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_SESSION_ATTENDED",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_CODE_SHELL_LAUNCHER_SCRIPT",
+    "CLAUDE_CODE_EXECPATH",
+    "CLAUDE_PID",
+];
+
 impl CliAdapter for Claude {
     fn id(&self) -> &'static str {
         "claude_code"
@@ -423,6 +438,7 @@ impl CliAdapter for Claude {
     fn request_model_id(&self, model: &str) -> String { if model.to_ascii_lowercase().ends_with("[1m]") { model[..model.len()-4].into() } else { model.into() } }
     fn login_args(&self) -> Option<Vec<String>> { Some(vec!["auth".into(), "login".into()]) }
     fn login_hint(&self) -> &'static str { "在终端完成 Claude Code 原生登录。" }
+    fn session_env_markers(&self) -> &'static [&'static str] { SESSION_ENV_MARKERS }
     fn launch_args(&self, session: Option<&str>, mode: LaunchMode) -> Result<Vec<String>, String> {
         let mut args = Vec::new();
         if let Some(id) = session {

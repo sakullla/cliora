@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { open as pickPath } from '@tauri-apps/plugin-dialog';
 import { GuideDialog } from '../../components/GuideDialog';
+import { Icon } from '../../components/Icon';
 import { ScopeMarks, samePath, scopeLabel } from './CliMarks';
 import { ToolIcon } from '../../components/ToolIcon';
 import { confirmAction } from '../../lib/confirm';
 import { native } from '../../lib/native';
-import { saveShortcutHint } from '../../lib/shortcut';
+import { saveShortcutHint, searchShortcutHint } from '../../lib/shortcut';
 import type { Project } from '../../types/launch';
 import type { AdapterDescriptor, Scope } from '../../types/native';
 import type { McpDefinition, McpDraft, McpPlacement, McpTargetRequest, SkillImportPreview, SkillInstallation, SkillPackage } from '../../types/resources';
@@ -67,6 +68,8 @@ export function LibraryResources({ section, active, tools, projects }: { section
   const [skillTarget, setSkillTarget] = useState<SkillPackage | null>(null);
   const [skillSeed, setSkillSeed] = useState<string[]>([]);
   const [installTools, setInstallTools] = useState<string[]>([]);
+  const [search, setSearch] = useState('');
+  useEffect(() => { setSearch(''); }, [section]);
 
   useEffect(() => {
     if (!active) return;
@@ -287,18 +290,30 @@ export function LibraryResources({ section, active, tools, projects }: { section
     finally { setBusy(false); }
   }
 
-  const libraryDefinitions = definitions.filter((item) => item.inLibrary !== false);
-  const libraryPackages = packages.filter((item) => item.inLibrary !== false);
+  const needle = search.trim().toLowerCase();
+  const libraryDefinitions = definitions.filter((item) => item.inLibrary !== false)
+    .filter((item) => !needle || `${item.name} ${item.command} ${item.args.join(' ')} ${item.url ?? ''}`.toLowerCase().includes(needle));
+  const libraryPackages = packages.filter((item) => item.inLibrary !== false)
+    .filter((item) => !needle || `${item.name} ${item.description ?? ''}`.toLowerCase().includes(needle));
 
   if (section === 'skill') {
     return <div className={styles.layout}>
-      <div className={styles.toolbar}><button type="button" className={styles.primary} style={{ marginLeft: 'auto' }} disabled={busy} onClick={() => { setDialogError(''); setSkillOpen(true); }}>添加 Skill</button></div>
+      <div className={styles.filters}>
+        <div className={styles.searchBox}>
+          <Icon name="search" size={14} />
+          <input aria-label="搜索资料" data-page-search title={searchShortcutHint} value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape' && search) { event.preventDefault(); setSearch(''); } }} placeholder="搜索名称或描述" />
+        </div>
+        <button type="button" className={styles.primary} disabled={busy} onClick={() => { setDialogError(''); setSkillOpen(true); }}>添加 Skill</button>
+      </div>
       {error && <div className={styles.error} role="alert">{error}</div>}
       {notice && <div className={styles.notice} role="status">{notice}</div>}
       <div className={styles.list} aria-label="Skill 列表">
         {libraryPackages.length ? libraryPackages.map((item) => {
           return <article className={styles.card} key={item.id}>
-            <strong>{item.name}</strong>
+            <div className={styles.cardHead}>
+              <button className={styles.cardTitle} type="button" onClick={() => { setSkillSeed([]); setSkillTarget(item); }}>{item.name}</button>
+              <span className={styles.badge}>{item.fileCount} 个文件</span>
+            </div>
             <p>{item.description || '完整资源包'}</p>
             <div className={styles.cardBar}>
               <ScopeMarks label={`${item.name} 的 CLI`} tools={tools} places={installations.filter((entry) => entry.packageId === item.id)} projects={projects} busy={busy} onToggle={(toolId, scope, projectPath) => void toggleSkill(item, toolId, scope, projectPath)} mark={(place) => {
@@ -310,7 +325,9 @@ export function LibraryResources({ section, active, tools, projects }: { section
               <div className={styles.cardActions}><button type="button" disabled={busy} onClick={() => void removePackage(item)}>删除</button><button type="button" disabled={busy} onClick={() => { setSkillSeed([]); setSkillTarget(item); }}>修改</button></div>
             </div>
           </article>;
-        }) : <div className={styles.empty}><strong>还没有 Skill</strong>先放进资料库。导入时可以同时安装到 CLI。<button type="button" className={styles.primary} disabled={busy} onClick={() => { setDialogError(''); setSkillOpen(true); }}>添加 Skill</button></div>}
+        }) : needle
+          ? <div className={styles.empty}><Icon name="search" size={28} strokeWidth={1.3} />没有匹配「{search.trim()}」的 Skill。</div>
+          : <div className={styles.empty}><Icon name="sparkle" size={28} strokeWidth={1.3} /><strong>还没有 Skill</strong>先放进资料库。导入时可以同时安装到 CLI。<button type="button" className={styles.primary} disabled={busy} onClick={() => { setDialogError(''); setSkillOpen(true); }}>添加 Skill</button></div>}
       </div>
       <GuideDialog open={skillOpen} title="添加 Skill" hint="先放进资料库。勾选 CLI 后，导入完成会直接安装。" onClose={closeSkill}>
         <div className={styles.skillAdd}>
@@ -323,8 +340,8 @@ export function LibraryResources({ section, active, tools, projects }: { section
             <section className={styles.skillSection}>
               <h3>从哪里导入</h3>
               <div className={styles.sources}>
-                <button type="button" aria-label="选择文件夹" disabled={busy} onClick={() => void addFolder()}><strong>选择文件夹</strong><span>目录里要有 SKILL.md</span></button>
-                <button type="button" aria-label="导入 ZIP 文件" disabled={busy} onClick={() => void addZip()}><strong>导入 ZIP 文件</strong><span>本机上的 .zip</span></button>
+                <button type="button" aria-label="选择文件夹" disabled={busy} onClick={() => void addFolder()}><Icon name="folder" size={17} /><strong>选择文件夹</strong><span>目录里要有 SKILL.md</span></button>
+                <button type="button" aria-label="导入 ZIP 文件" disabled={busy} onClick={() => void addZip()}><Icon name="archive" size={17} /><strong>导入 ZIP 文件</strong><span>本机上的 .zip</span></button>
               </div>
               <label>ZIP 地址<span className={styles.urlRow}><input aria-label="归档地址" value={skillUrl} onChange={(event) => setSkillUrl(event.target.value)} placeholder="https://example.com/skill.zip" /><button type="button" disabled={busy || !skillUrl.trim()} onClick={() => void addArchive(skillUrl.trim(), false)}>导入地址</button></span></label>
             </section>
@@ -349,14 +366,23 @@ export function LibraryResources({ section, active, tools, projects }: { section
   }
 
   return <div className={styles.layout}>
-    <div className={styles.toolbar}><button type="button" className={styles.primary} style={{ marginLeft: 'auto' }} onClick={() => editMcp()}>＋ 新建 MCP</button></div>
+    <div className={styles.filters}>
+      <div className={styles.searchBox}>
+        <Icon name="search" size={14} />
+        <input aria-label="搜索资料" data-page-search title={searchShortcutHint} value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape' && search) { event.preventDefault(); setSearch(''); } }} placeholder="搜索名称、命令或网址" />
+      </div>
+      <button type="button" className={styles.primary} onClick={() => editMcp()}>＋ 新建 MCP</button>
+    </div>
     {error && <div className={styles.error} role="alert">{error}</div>}
     {notice && <div className={styles.notice} role="status">{notice}</div>}
     <div className={styles.list} aria-label="MCP 列表">
       {libraryDefinitions.length ? libraryDefinitions.map((item) => {
         return <article className={styles.card} key={item.id}>
-          <button className={styles.cardTitle} type="button" onClick={() => editMcp(item)}>{item.name}</button>
-          <p>{item.transport === 'http' ? item.url || '未填写网址' : [item.command, ...item.args].filter(Boolean).join(' ') || '未填写命令'}</p>
+          <div className={styles.cardHead}>
+            <button className={styles.cardTitle} type="button" onClick={() => editMcp(item)}>{item.name}</button>
+            <span className={styles.badge} data-accent={item.transport === 'http' || undefined}>{item.transport === 'http' ? 'HTTP' : 'stdio'}</span>
+          </div>
+          <p className={styles.mono}>{item.transport === 'http' ? item.url || '未填写网址' : [item.command, ...item.args].filter(Boolean).join(' ') || '未填写命令'}</p>
           <div className={styles.cardBar}>
             <ScopeMarks label={`${item.name} 的 CLI`} tools={tools} places={placements.filter((entry) => entry.definitionId === item.id)} projects={projects} busy={busy} onToggle={(toolId, scope, projectPath) => void toggleMcp(item, toolId, scope, projectPath)} mark={(place) => {
               if (!place) return { pressed: false, state: 'off', status: '未写入' };
@@ -366,7 +392,9 @@ export function LibraryResources({ section, active, tools, projects }: { section
             <div className={styles.cardActions}><button type="button" disabled={busy} onClick={() => void remove(item)}>删除</button><button type="button" onClick={() => editMcp(item)}>修改</button></div>
           </div>
         </article>;
-      }) : <div className={styles.empty}><strong>还没有 MCP</strong>新建时填写连接方式，并勾选要写入的 CLI。<button type="button" className={styles.primary} onClick={() => editMcp()}>＋ 新建第一个 MCP</button></div>}
+      }) : needle
+        ? <div className={styles.empty}><Icon name="search" size={28} strokeWidth={1.3} />没有匹配「{search.trim()}」的 MCP。</div>
+        : <div className={styles.empty}><Icon name="connections" size={28} strokeWidth={1.3} /><strong>还没有 MCP</strong>新建时填写连接方式，并勾选要写入的 CLI。<button type="button" className={styles.primary} onClick={() => editMcp()}>＋ 新建第一个 MCP</button></div>}
     </div>
     <GuideDialog open={!!draft} title={draft?.id ? '修改 MCP' : '新建 MCP'} hint="名称、HTTP 或 stdio。已经写入的 CLI 会预先勾上。同名冲突留在这个窗口里比较，替换完成后回到列表。" onClose={() => { setDraft(null); setConflict(false); }}>
       {draft && <>

@@ -14,6 +14,7 @@ fn sample(terminal: TerminalId) -> LaunchPlan {
         ],
         directory: PathBuf::from("C:/用户/我的 project [one]"),
         terminal,
+        session_markers: &[],
     }
 }
 
@@ -37,9 +38,27 @@ fn terminal_plans_quote_unicode_spaces_and_shell_metacharacters_as_data() {
     assert!(command.contains("'模型 A'"));
     assert!(command.contains("Remove-Item Env:NO_COLOR"));
     assert!(command.contains("$env:TERM -eq 'dumb'"));
+    assert!(!command.contains("CLAUDE_CODE_CHILD_SESSION"));
     let shell = terminal_command(&sample(TerminalId::GnomeTerminal)).unwrap();
     let command = shell.args.last().unwrap();
     assert!(command.contains("unset NO_COLOR"));
+    assert!(!command.contains("CLAUDE_CODE_CHILD_SESSION"));
+    let registry = Registry::builtins();
+    let markers = registry.get("claude_code").unwrap().session_env_markers();
+    assert!(markers.contains(&"CLAUDE_CODE_CHILD_SESSION"));
+    let mut claude = sample(TerminalId::PowerShell);
+    claude.tool_id = "claude_code".into();
+    claude.session_markers = markers;
+    let claude_ps = terminal_command(&claude).unwrap();
+    let bytes = base64::engine::general_purpose::STANDARD.decode(claude_ps.args.last().unwrap()).unwrap();
+    let decoded = String::from_utf16(&bytes.chunks_exact(2).map(|value| u16::from_le_bytes([value[0], value[1]])).collect::<Vec<_>>()).unwrap();
+    assert!(decoded.contains("'CLAUDE_CODE_CHILD_SESSION'"));
+    assert!(decoded.contains("Remove-Item -LiteralPath \"Env:$name\""));
+    assert_eq!(claude_ps.session_markers, markers);
+    let mut claude_sh = sample(TerminalId::GnomeTerminal);
+    claude_sh.session_markers = markers;
+    let claude_shell = terminal_command(&claude_sh).unwrap();
+    assert!(claude_shell.args.last().unwrap().contains("unset CLAUDECODE CLAUDE_CODE_CHILD_SESSION"));
     let maintenance = shell_terminal(TerminalId::PowerShell, Path::new("C:/Users/me"), "irm https://chatgpt.com/codex/install.ps1 | iex").unwrap();
     let encoded = maintenance.args.last().unwrap();
     let bytes = base64::engine::general_purpose::STANDARD.decode(encoded).unwrap();

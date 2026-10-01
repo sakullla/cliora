@@ -1,8 +1,13 @@
 import { createContext, useContext, useState } from 'react';
 import { uiAdapterFor } from '../features/tools/adapters';
+import type { FilterSelectOption } from './FilterSelect';
 import { Icon } from './Icon';
 
 export const ToolIconsContext = createContext<Record<string, string>>({});
+
+export function toolOptions(tools: Array<{ id: string; name: string }>, size = 16): FilterSelectOption[] {
+  return tools.map((tool) => ({ value: tool.id, label: tool.name, icon: <ToolIcon toolId={tool.id} size={size} /> }));
+}
 
 /** Adapter declarations and portable user overrides share a single renderer. */
 export function ToolIcon({ toolId, size = 30 }: { toolId: string; size?: number }) {

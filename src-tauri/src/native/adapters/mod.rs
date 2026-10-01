@@ -136,6 +136,9 @@ pub trait CliAdapter: Sync {
         self.write_connection_secret(profile,scope,credentials,secrets)
     }
     fn request_model_id(&self, model: &str) -> String { model.into() }
+    /// Env vars a running instance of this CLI injects into child processes to mark
+    /// nested sessions; a fresh terminal launch must not inherit them.
+    fn session_env_markers(&self) -> &'static [&'static str] { &[] }
     fn write_connection_secret(
         &self,
         profile: &RegisteredProfile,

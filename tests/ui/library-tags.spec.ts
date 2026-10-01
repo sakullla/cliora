@@ -29,7 +29,9 @@ test('library category is edited and filtered as tags', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
   await page.getByRole('tab', { name: '长期规则' }).click();
-  await expect(page.getByText('开发 · 写作')).toBeVisible();
+  const firstCard = page.getByRole('article').filter({ has: page.getByRole('button', { name: '已有规则', exact: true }) });
+  await expect(firstCard.getByText('开发', { exact: true })).toBeVisible();
+  await expect(firstCard.getByText('写作', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '＋ 新建规则' }).click();
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByLabel('标题')).toBeVisible();
@@ -48,7 +50,8 @@ test('library category is edited and filtered as tags', async ({ page }) => {
   const savedCard = page.getByRole('article').filter({ has: page.getByRole('button', { name: '发布检查', exact: true }) });
   await expect(savedCard.getByText('文档', { exact: true })).toBeVisible();
   await expect(savedCard.getByRole('group', { name: '发布检查 的 CLI · 全局', exact: true })).toBeVisible();
-  await page.getByLabel('标签筛选').selectOption('写作');
+  await page.getByRole('button', { name: '标签筛选' }).click();
+  await page.getByRole('option', { name: '写作' }).click();
   await expect(page.getByRole('button', { name: '已有规则' })).toBeVisible();
   await expect(page.getByRole('button', { name: '发布检查' })).toHaveCount(0);
 });

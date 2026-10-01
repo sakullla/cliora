@@ -7,8 +7,11 @@ import type { LibraryDraft, LibraryItem, LibraryKind } from '../../types/library
 import type { AdapterDescriptor, Scope } from '../../types/native';
 import type { RulePlacement } from '../../types/resources';
 import { LibraryResources } from './LibraryResources';
+import { FilterSelect } from '../../components/FilterSelect';
 import { GuideDialog } from '../../components/GuideDialog';
+import { toolOptions } from '../../components/ToolIcon';
 import { Icon } from '../../components/Icon';
+import { shortPath } from '../../lib/paths';
 import { saveShortcutHint, searchShortcutHint } from '../../lib/shortcut';
 import { ScopeMarks, samePath, scopeLabel } from './CliMarks';
 import styles from './LibraryPage.module.css';
@@ -55,6 +58,14 @@ function tagsOf(category: string): string[] {
   return [...new Set(category.split(/[,，、]/).map((item) => item.trim()).filter(Boolean))];
 }
 
+function fullTime(value: number) {
+  return new Date(value * 1000).toLocaleString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function shortTime(value: number) {
+  return new Date(value * 1000).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
 function categoryOf(tags: string[]): string {
   return tags.join(',');
 }
@@ -72,6 +83,8 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
   const [projectFilter, setProjectFilter] = useState('*');
   const [categoryFilter, setCategoryFilter] = useState('*');
   const [items, setItems] = useState<LibraryItem[]>([]);
+  const [counts, setCounts] = useState<Partial<Record<LibraryKind, number>>>({});
+  const [countStamp, setCountStamp] = useState(0);
   const [projects, setProjects] = useState<Project[]>([]);
   const [draft, setDraft] = useState<LibraryDraft | null>(null);
   const [savedText, setSavedText] = useState('');
@@ -117,6 +130,14 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
   useEffect(() => {
     if (!nativeAvailable || !active) return;
     let live = true;
+    void Promise.all([native.listLibraryItems('prompt', null, ''), native.listLibraryItems('rule', null, '')])
+      .then(([prompts, rules]) => { if (live) setCounts({ prompt: prompts.length, rule: rules.length }); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [active, countStamp]);
+  useEffect(() => {
+    if (!nativeAvailable || !active) return;
+    let live = true;
     void native.listLibraryItems(kind, null, search).then((result) => { if (live) setItems(result); })
       .catch((value) => { if (live) showError(formatFailure(value, '资料列表读取失败', libraryNext)); });
     return () => { live = false; };
@@ -151,6 +172,7 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
     setBusy(true); clearDialogResult();
     try {
       const saved = await native.saveLibraryItem(draft);
+      setCountStamp((value) => value + 1);
       const next = edit(saved);
       setDraft(next); setSavedText(JSON.stringify(next));
       try { await refresh(); }
@@ -242,6 +264,7 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
     setBusy(true); clearDialogResult();
     try {
       await native.deleteLibraryItem(draft.id, draft.expectedVersion);
+      setCountStamp((value) => value + 1);
       setDraft(null); setSavedText('');
       try { await refresh(); }
       catch (value) {
@@ -281,8 +304,8 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
   return <section className={styles.page} aria-label="资料库内容">
     <div className={styles.toolbar}>
       <div className={styles.tabs} role="tablist" aria-label="资料类型">
-        <button type="button" role="tab" aria-selected={section === 'prompt'} onClick={() => void openSection('prompt')}>提示词</button>
-        <button type="button" role="tab" aria-selected={section === 'rule'} onClick={() => void openSection('rule')}>长期规则</button>
+        <button type="button" role="tab" aria-selected={section === 'prompt'} onClick={() => void openSection('prompt')}>提示词{counts.prompt != null && <span className={styles.tabCount} aria-hidden="true">{counts.prompt}</span>}</button>
+        <button type="button" role="tab" aria-selected={section === 'rule'} onClick={() => void openSection('rule')}>长期规则{counts.rule != null && <span className={styles.tabCount} aria-hidden="true">{counts.rule}</span>}</button>
         <button type="button" role="tab" aria-selected={section === 'mcp'} onClick={() => void openSection('mcp')}>MCP</button>
         <button type="button" role="tab" aria-selected={section === 'skill'} onClick={() => void openSection('skill')}>Skill</button>
       </div>
@@ -291,16 +314,30 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
     {(section === 'mcp' || section === 'skill') && <LibraryResources section={section} active={active} tools={managedTools} projects={projects} />}
     {(section === 'prompt' || section === 'rule') && <>
     <div className={styles.filters}>
-      <input aria-label="搜索资料" data-page-search title={searchShortcutHint} value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape' && search) { event.preventDefault(); setSearch(''); } }} placeholder="搜索标题、正文或标签" />
-      <select aria-label="项目筛选" value={projectFilter} onChange={(event) => setProjectFilter(event.target.value)}><option value="*">所有项目</option><option value="global">全局资料</option>{projects.map((project) => <option value={project.id} key={project.id}>{project.name}</option>)}</select>
-      <select aria-label="标签筛选" value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}><option value="*">所有标签</option>{categories.map((category) => <option value={category} key={category}>{category}</option>)}</select>
+      <div className={styles.searchBox}>
+        <Icon name="search" size={14} />
+        <input aria-label="搜索资料" data-page-search title={searchShortcutHint} value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape' && search) { event.preventDefault(); setSearch(''); } }} placeholder="搜索标题、正文或标签" />
+      </div>
+      <FilterSelect className={styles.filterPick} label="项目筛选" value={projectFilter} options={[
+        { value: '*', label: '所有项目' },
+        { value: 'global', label: '全局资料' },
+        ...projects.map((project) => ({ value: project.id, label: project.name, detail: project.path ? shortPath(project.path) : undefined, note: project.available ? undefined : '目录失效' })),
+      ]} searchLabel="搜索项目" onChange={setProjectFilter} />
+      <FilterSelect className={styles.filterPick} label="标签筛选" value={categoryFilter} options={[
+        { value: '*', label: '所有标签' },
+        ...categories.map((category) => ({ value: category, label: category })),
+      ]} searchLabel="搜索标签" onChange={setCategoryFilter} />
     </div>
     {error && <div className={styles.error} role="alert">{error}</div>}
     {notice && <div className={styles.notice} role="status">{notice}</div>}
     <div className={styles.layout}>
       <div className={styles.list} aria-label={`${kind === 'prompt' ? '提示词' : '规则'}列表`}>
         {shown.length ? shown.map((item) => <article className={styles.card} key={item.id}>
-          <small>{[tagsOf(item.category).join(' · ') || '无标签', item.projectId ? projects.find((project) => project.id === item.projectId)?.name ?? '原项目' : ''].filter(Boolean).join(' · ')}</small>
+          <small className={styles.cardMeta}>
+            {tagsOf(item.category).length ? tagsOf(item.category).map((tag) => <em className={styles.tagChip} key={tag}>{tag}</em>) : <em className={styles.tagChip} data-muted="true">无标签</em>}
+            {item.projectId && <span className={styles.cardProject}>{projects.find((project) => project.id === item.projectId)?.name ?? '原项目'}</span>}
+            {!!item.updatedAt && <span className={styles.cardTime} title={fullTime(item.updatedAt)}><Icon name="clock" size={11} />{shortTime(item.updatedAt)}</span>}
+          </small>
           <button className={styles.cardTitle} type="button" onClick={() => choose(item)}>{item.title}</button>
           <p>{item.body.slice(0, 160) || '正文为空'}</p>
           <div className={styles.cardBar}>
@@ -315,8 +352,8 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
               : <button type="button" onClick={() => void copy(item.body, 'page', item.id)} disabled={!item.body}>复制全文</button>}{kind === 'prompt' && <button type="button" onClick={() => openLaunch(item)} disabled={!item.body}>启动会话</button>}<button type="button" onClick={() => choose(item)}>修改</button></div>
           </div>
         </article>) : !items.length && !search.trim()
-          ? <div className={styles.empty}><strong>还没有{kind === 'prompt' ? '提示词' : '规则'}</strong>{kind === 'prompt' ? '把常用的提示词存在这里。保存后可以选择 CLI，直接开一场会话。' : '保存后，在卡片上点 CLI 图标即可写入。彩色表示已经生效，灰色表示还没写入。'}<button type="button" className={styles.primary} onClick={() => start(kind)}>＋ 新建第一条{kind === 'prompt' ? '提示词' : '规则'}</button></div>
-          : <div className={styles.empty}>筛选结果为空，没有符合条件的{kind === 'prompt' ? '提示词' : '规则'}。请使用上方的「新建」。</div>}
+          ? <div className={styles.empty}><Icon name="library" size={28} strokeWidth={1.3} /><strong>还没有{kind === 'prompt' ? '提示词' : '规则'}</strong>{kind === 'prompt' ? '把常用的提示词存在这里。保存后可以选择 CLI，直接开一场会话。' : '保存后，在卡片上点 CLI 图标即可写入。彩色表示已经生效，灰色表示还没写入。'}<button type="button" className={styles.primary} onClick={() => start(kind)}>＋ 新建第一条{kind === 'prompt' ? '提示词' : '规则'}</button></div>
+          : <div className={styles.empty}><Icon name="search" size={28} strokeWidth={1.3} />筛选结果为空，没有符合条件的{kind === 'prompt' ? '提示词' : '规则'}。请使用上方的「新建」。</div>}
       </div>
     </div>
     <GuideDialog open={!!draft} title={draft?.id ? `修改${kind === 'prompt' ? '提示词' : '规则'}` : `新建${kind === 'prompt' ? '提示词' : '规则'}`} hint={kind === 'rule' ? '填写标题和正文。分发到哪些 CLI，保存后回到列表点图标。' : '填写标题和正文，然后保存。'} onClose={() => { void (async () => { if (await canReplace()) { setDraft(null); setSavedText(''); clearDialogResult(); } })(); }}>
@@ -325,8 +362,8 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
         {dialogError && <div className={styles.error} role="alert">{dialogError}</div>}
         {dialogNotice && <div className={styles.notice} role="status">{dialogNotice}</div>}
         <div className={styles.fields}>
-          <label>标题<input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="名称" /></label>
-          <label>关联项目<select value={draft.projectId ?? ''} onChange={(event) => setDraft({ ...draft, projectId: event.target.value || null })}><option value="">全局</option>{projects.map((project) => <option value={project.id} key={project.id}>{project.name}</option>)}</select></label>
+          <label>标题<input autoFocus={!draft.id} value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="名称" /></label>
+          <label>关联项目<FilterSelect label="关联项目" value={draft.projectId ?? ''} options={[{ value: '', label: '全局' }, ...projects.map((project) => ({ value: project.id, label: project.name, detail: project.path ? shortPath(project.path) : undefined, note: project.available ? undefined : '目录失效' }))]} searchLabel="搜索项目" onChange={(value) => setDraft({ ...draft, projectId: value || null })} /></label>
           <div className={styles.tags}>标签
             <div className={styles.tagList}>
               {tagsOf(draft.category).map((tag) => <button type="button" key={tag} onClick={() => setDraft({ ...draft, category: categoryOf(tagsOf(draft.category).filter((item) => item !== tag)) })}>{tag} ×</button>)}
@@ -335,16 +372,16 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
             {!!categories.filter((tag) => !tagsOf(draft.category).includes(tag)).length && <div className={styles.tagSuggestions}>{categories.filter((tag) => !tagsOf(draft.category).includes(tag)).map((tag) => <button type="button" key={tag} onClick={() => addTag(tag)}>{tag}</button>)}</div>}
           </div>
         </div>
-        <label className={styles.body}>完整正文<CodeEditor key={draft.id ?? 'new'} label="资料正文" format="markdown" value={draft.body} onChange={(body) => setDraft({ ...draft, body })} placeholder={kind === 'prompt' ? '写下可复制使用的提示词…' : '写下要保存或应用到 CLI 的规则…'} /></label>
-        <div className="dialog-footer"><span>{dirty ? '草稿尚未保存' : '已保存'}</span><span className="dialog-footer-gap" /><button type="button" onClick={() => void copy(draft.body, 'dialog')} disabled={!draft.body}>复制全文</button>{draft.id && <button type="button" onClick={() => void remove()} disabled={busy}>删除</button>}<button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint} disabled={busy || !draft.title.trim()} onClick={() => void save()}>保存</button></div>
+        <label className={styles.body}><span className={styles.bodyHead}>完整正文<span className={styles.charCount}>{draft.body.length} 字</span></span><CodeEditor key={draft.id ?? 'new'} label="资料正文" format="markdown" value={draft.body} onChange={(body) => setDraft({ ...draft, body })} placeholder={kind === 'prompt' ? '写下可复制使用的提示词…' : '写下要保存或应用到 CLI 的规则…'} /></label>
+        <div className="dialog-footer"><span className={styles.saveState} data-dirty={dirty || undefined}>{dirty ? '草稿尚未保存' : '已保存'}</span><span className="dialog-footer-gap" /><button type="button" onClick={() => void copy(draft.body, 'dialog')} disabled={!draft.body}>复制全文</button>{draft.id && <button type="button" onClick={() => void remove()} disabled={busy}>删除</button>}<button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint} disabled={busy || !draft.title.trim()} onClick={() => void save()}>保存</button></div>
       </div>}
     </GuideDialog>
     <GuideDialog open={!!launchItem} title="用这条提示词启动" hint="选择 CLI 和项目。提示词会作为第一条消息发出，启动前可以改。" onClose={() => { if (!launchBusy) setLaunchItem(null); }}>
       {launchItem && <div className={styles.editor}>
         {launchError && <div className={styles.error} role="alert">{launchError}</div>}
         <div className={styles.fields}>
-          <label>CLI<select aria-label="启动 CLI" value={launchTool} onChange={(event) => setLaunchTool(event.target.value)}>{managedTools.map((tool) => <option key={tool.id} value={tool.id}>{tool.name}</option>)}{!managedTools.length && <option value="">还没有可启动的 CLI</option>}</select></label>
-          <label>项目<select aria-label="启动项目" value={launchProject} onChange={(event) => setLaunchProject(event.target.value)}><option value="">不指定项目</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}{project.available ? '' : ' · 目录失效'}</option>)}</select></label>
+          <label>CLI<FilterSelect label="启动 CLI" value={launchTool} options={toolOptions(managedTools)} placeholder="还没有可启动的 CLI" disabled={!managedTools.length} searchLabel="搜索 CLI" onChange={setLaunchTool} /></label>
+          <label>项目<FilterSelect label="启动项目" value={launchProject} options={[{ value: '', label: '不指定项目' }, ...projects.map((project) => ({ value: project.id, label: project.name, detail: project.path ? shortPath(project.path) : undefined, note: project.available ? undefined : '目录失效' }))]} searchLabel="搜索项目" onChange={setLaunchProject} /></label>
         </div>
         <label className={styles.body}>第一条消息<textarea aria-label="启动提示词" rows={8} value={launchText} onChange={(event) => setLaunchText(event.target.value)} /></label>
         <div className="dialog-footer"><span className="dialog-footer-gap" /><button type="button" onClick={() => setLaunchItem(null)} disabled={launchBusy}>取消</button><button type="button" className={styles.primary} disabled={launchBusy || !launchTool || !launchText.trim()} onClick={() => void startSession()}>在外部终端启动</button></div>

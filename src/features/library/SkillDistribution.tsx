@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
+import { FilterSelect } from '../../components/FilterSelect';
 import { ToolIcon } from '../../components/ToolIcon';
 import { confirmAction } from '../../lib/confirm';
 import { native } from '../../lib/native';
+import { shortPath } from '../../lib/paths';
 import type { Project } from '../../types/launch';
 import type { AdapterDescriptor, Scope } from '../../types/native';
 import type { SkillInstallation, SkillPackage, SkillTargetPreview } from '../../types/resources';
@@ -26,16 +28,14 @@ export function SkillDistribution({ item, tools, projects, installations, initia
   const globalIds = mine.filter((entry) => entry.scope === 'global').map((entry) => entry.toolId);
   const firstProject = mine.find((entry) => entry.scope === 'project');
   const openOnProject = !initialTools.length && !globalIds.length && !!firstProject;
-  const openProjectId = (openOnProject ? projects.find((entry) => samePath(entry.path, firstProject?.projectPath))?.id : undefined) ?? projects.find((entry) => entry.available)?.id ?? '';
   const [scope, setScope] = useState<Scope>(openOnProject ? 'project' : 'global');
-  const [projectId, setProjectId] = useState(openProjectId);
+  const [projectPath, setProjectPath] = useState<string | null>((openOnProject ? firstProject?.projectPath ?? null : null) ?? projects.find((item) => item.available && item.path)?.path ?? null);
   const [selected, setSelected] = useState<string[]>(initialTools.length ? initialTools : openOnProject ? mine.filter((entry) => entry.scope === 'project' && samePath(entry.projectPath, firstProject?.projectPath)).map((entry) => entry.toolId) : globalIds);
   const [pending, setPending] = useState<Array<SkillTargetPreview & { toolId: string }>>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const project = projects.find((entry) => entry.id === projectId);
-  const projectPath = scope === 'project' ? project?.path ?? null : null;
+  const activePath = scope === 'project' ? projectPath : null;
   const placed = installations.filter((entry) => entry.packageId === item.id);
 
   async function install(allowTakeover: boolean, ids = selected) {
@@ -46,9 +46,9 @@ export function SkillDistribution({ item, tools, projects, installations, initia
       const conflicts: Array<SkillTargetPreview & { toolId: string }> = [];
       const notes: string[] = [];
       for (const toolId of ids) {
-        const preview = allowTakeover ? pending.find((entry) => entry.toolId === toolId) ?? null : await native.previewSkillTarget(item.id, toolId, scope, projectPath);
+        const preview = allowTakeover ? pending.find((entry) => entry.toolId === toolId) ?? null : await native.previewSkillTarget(item.id, toolId, scope, activePath);
         if (!allowTakeover && preview?.status === 'conflict') { conflicts.push({ ...preview, toolId }); continue; }
-        const outcome = await native.installSkill(item.id, toolId, scope, projectPath, preview?.previewToken ?? null, allowTakeover && preview?.status === 'conflict');
+        const outcome = await native.installSkill(item.id, toolId, scope, activePath, preview?.previewToken ?? null, allowTakeover && preview?.status === 'conflict');
         notes.push(`${tools.find((tool) => tool.id === toolId)?.name ?? toolId}：${outcome.status === 'failed' ? outcome.detail : '已安装'}`);
       }
       setPending(conflicts);
@@ -85,8 +85,18 @@ export function SkillDistribution({ item, tools, projects, installations, initia
     <section className={styles.skillSection}>
       <h3>再安装到</h3>
       <div className={styles.fields}>
-        <label>范围<select aria-label="分发范围" value={scope} onChange={(event) => { const next = event.target.value as Scope; const path = next === 'project' ? projects.find((entry) => entry.id === projectId)?.path ?? null : null; setScope(next); setSelected(mine.filter((entry) => entry.scope === next && (next === 'global' || samePath(entry.projectPath, path))).map((entry) => entry.toolId)); setPending([]); }}><option value="global">全局</option><option value="project">项目</option></select></label>
-        {scope === 'project' && <label>项目<select aria-label="分发项目" value={projectId} onChange={(event) => { const path = projects.find((entry) => entry.id === event.target.value)?.path ?? null; setProjectId(event.target.value); setSelected(mine.filter((entry) => entry.scope === 'project' && samePath(entry.projectPath, path)).map((entry) => entry.toolId)); setPending([]); }}><option value="">选择项目</option>{projects.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}{entry.available ? '' : ' · 目录失效'}</option>)}</select></label>}
+        <FilterSelect className={styles.scopePick} label="分发范围" triggerDetail={false} value={scope === 'global' ? '__global__' : projectPath ?? ''} options={[
+          { value: '__global__', label: '全局' },
+          ...projects.map((entry) => ({ value: entry.path ?? `id:${entry.id}`, label: entry.name, detail: entry.path ? shortPath(entry.path) : undefined, note: entry.available && entry.path ? undefined : '目录失效', disabled: !entry.available || !entry.path })),
+          ...(scope === 'project' && projectPath && !projects.some((entry) => samePath(entry.path, projectPath)) ? [{ value: projectPath, label: projectPath.split(/[\\/]/).filter(Boolean).at(-1) || projectPath, detail: shortPath(projectPath), note: '项目未关联' }] : []),
+        ]} placeholder="选择项目…" searchLabel="搜索项目" onChange={(value) => {
+          const next: Scope = value === '__global__' ? 'global' : 'project';
+          const path = next === 'project' ? value : null;
+          setScope(next);
+          if (path) setProjectPath(path);
+          setSelected(mine.filter((entry) => entry.scope === next && (next === 'global' || samePath(entry.projectPath, path))).map((entry) => entry.toolId));
+          setPending([]);
+        }} />
       </div>
       <div className={styles.targets}>{tools.map((tool) => <label key={tool.id}><input type="checkbox" checked={selected.includes(tool.id)} onChange={(event) => { setSelected(event.target.checked ? [...selected, tool.id] : selected.filter((id) => id !== tool.id)); setPending([]); }} /><ToolIcon toolId={tool.id} size={18} />{tool.name}</label>)}</div>
       <div className={styles.actions}><button type="button" className={styles.primary} disabled={busy || !selected.length} onClick={() => void install(false)}>安装到所选 CLI</button></div>

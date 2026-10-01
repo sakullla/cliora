@@ -1,13 +1,15 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { save } from '@tauri-apps/plugin-dialog';
 import { native, nativeAvailable } from '../../lib/native';
 import type { AdapterDescriptor } from '../../types/native';
 import type { Project } from '../../types/launch';
-import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, ScanStatus, UsageSummary } from '../../types/history';
+import type { HistoryDetail, HistoryFilter, HistoryMessage, HistoryPrice, HistorySession, ScanStatus, UsageSummary } from '../../types/history';
 import { displayPath } from '../../lib/paths';
 import { FilterSelect } from '../../components/FilterSelect';
 import { GuideDialog } from '../../components/GuideDialog';
-import { ToolIcon } from '../../components/ToolIcon';
+import { ToastStack, type Toast } from '../../components/Toast';
+import { ToolIcon, toolOptions } from '../../components/ToolIcon';
 import { Icon } from '../../components/Icon';
 import { searchShortcutHint } from '../../lib/shortcut';
 import styles from './RecordsPage.module.css';
@@ -15,6 +17,18 @@ import styles from './RecordsPage.module.css';
 const copiedCommandText = '已复制原生恢复命令，粘贴后由终端执行。';
 
 const day = (ms: number | null) => ms === null ? '时间未知' : new Date(ms).toLocaleString();
+const timeOfDay = (date: Date) => date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+const startOfDay = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+function compactDay(ms: number | null) {
+  if (ms === null) return '时间未知';
+  const date = new Date(ms);
+  const now = new Date();
+  const daysAgo = Math.round((startOfDay(now) - startOfDay(date)) / 86400000);
+  if (daysAgo <= 0) return timeOfDay(date);
+  if (daysAgo === 1) return `昨天 ${timeOfDay(date)}`;
+  if (date.getFullYear() === now.getFullYear()) return `${date.getMonth() + 1}月${date.getDate()}日`;
+  return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()}`;
+}
 const compactFormat = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 2 });
 const compact = (value: number | null) => value === null ? '未知' : value < 1000 ? value.toLocaleString() : compactFormat.format(value);
 function Metric({ label, value, hint }: { label: string; value: number | null; hint?: string }) {
@@ -23,6 +37,74 @@ function Metric({ label, value, hint }: { label: string; value: number | null; h
 }
 function Amount({ value, title }: { value: number | null; title?: string }) {
   return <span title={title ?? (value === null || value < 1000 ? undefined : value.toLocaleString())}>{compact(value)}</span>;
+}
+const MESSAGE_CLAMP = 1000;
+function MessageItem({ item }: { item: HistoryMessage }) {
+  const [expanded, setExpanded] = useState(false);
+  const clampable = item.text.length > MESSAGE_CLAMP;
+  const clamped = clampable && !expanded;
+  return <article data-role={item.role}>
+    <small>{item.role === 'user' ? '你' : '助手'} · {day(item.timestamp)}</small>
+    <p className={clamped ? styles.clamped : undefined}>{item.text}</p>
+    {clampable && <button type="button" className={styles.expandMessage} aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>{expanded ? '收起' : `展开全文（${item.text.length.toLocaleString()} 字）`}</button>}
+  </article>;
+}
+function RangePicker({ value, customFrom, customTo, onChange, onCustomFrom, onCustomTo }: {
+  value: RangeKey; customFrom: string; customTo: string;
+  onChange: (key: RangeKey) => void; onCustomFrom: (value: string) => void; onCustomTo: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [box, setBox] = useState<{ top: number; left: number } | null>(null);
+  const anchor = useRef<HTMLDivElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const rect = anchor.current?.getBoundingClientRect();
+      if (!rect) return;
+      const width = 244;
+      setBox({ top: rect.bottom + 4, left: Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)) });
+    };
+    place();
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    return () => { window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true); };
+  }, [open]);
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (anchor.current?.contains(target) || panel.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') { setOpen(false); anchor.current?.querySelector('button')?.focus(); } };
+    document.addEventListener('mousedown', close);
+    document.addEventListener('keydown', escape);
+    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', escape); };
+  }, [open]);
+  const label = value === 'custom'
+    ? (rangeCaption(customFrom, customTo) || '自定义')
+    : rangePresets.find((item) => item.id === value)?.label ?? '全部';
+  const choose = (key: RangeKey) => {
+    onChange(key);
+    if (key !== 'custom') setOpen(false);
+  };
+  return <div ref={anchor} className={styles.rangePicker}>
+    <button type="button" className={styles.rangeTrigger} aria-label="时间范围" aria-haspopup="dialog" aria-expanded={open} data-open={open || undefined} onClick={() => setOpen((current) => !current)}>
+      <Icon name="clock" size={13} /><span>{label}</span>
+    </button>
+    {open && box && createPortal(<div ref={panel} className={styles.rangePanel} style={{ top: box.top, left: box.left }} role="dialog" aria-label="时间范围">
+      <div className={styles.rangeOptions} role="listbox" aria-label="预设范围">
+        {rangePresets.map((item) => <button type="button" key={item.id} role="option" aria-selected={value === item.id} onClick={() => choose(item.id)}>
+          <span>{item.label}</span>{value === item.id && <Icon name="check" size={13} />}
+        </button>)}
+      </div>
+      {value === 'custom' && <div className={styles.rangeDates}>
+        <label>开始<input aria-label="开始日期" type="date" value={customFrom} max={customTo || undefined} onChange={(event) => onCustomFrom(event.target.value)} /></label>
+        <label>结束<input aria-label="结束日期" type="date" value={customTo} min={customFrom || undefined} onChange={(event) => onCustomTo(event.target.value)} /></label>
+      </div>}
+    </div>, document.body)}
+  </div>;
 }
 function formatFailure(error: unknown, objectText: string, nextText: string): string {
   const fallback = `${objectText}。${nextText}`;
@@ -116,28 +198,34 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
   const [filterLoading, setFilterLoading] = useState(false);
   const [scanProgress, setScanProgress] = useState<{ running: boolean; toolId: string; completedSources: number; totalSources: number } | null>(null);
   const scanRequest = useRef(0);
-  const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
+  const [error, setError] = useState<Toast | null>(null);
+  const [notice, setNotice] = useState<Toast | null>(null);
+  const toastSequence = useRef(0);
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), 4500);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
   const [copyFlash, setCopyFlash] = useState(0);
   useEffect(() => {
     if (!copyFlash) return;
     const timer = window.setTimeout(() => setCopyFlash(0), 1800);
     return () => window.clearTimeout(timer);
   }, [copyFlash]);
-  const copied = !!copyFlash && notice === copiedCommandText;
+  const copied = !!copyFlash;
   const protectSave = useRef(false);
   function showError(value: unknown) {
     protectSave.current = false;
-    setNotice('');
-    setError(typeof value === 'string' ? value : errorText(value));
+    setNotice(null);
+    setError({ id: ++toastSequence.current, tone: 'alert', text: typeof value === 'string' ? value : errorText(value) });
   }
   function showReadError(value: unknown) {
-    if (!protectSave.current) setNotice('');
-    setError(typeof value === 'string' ? value : formatFailure(value, '使用记录读取失败', recordNext));
+    if (!protectSave.current) setNotice(null);
+    setError({ id: ++toastSequence.current, tone: 'alert', text: typeof value === 'string' ? value : formatFailure(value, '使用记录读取失败', recordNext) });
   }
   function showNotice(text: string, protect = false) {
-    setError('');
-    setNotice(text);
+    setError(null);
+    setNotice({ id: ++toastSequence.current, tone: 'status', text });
     protectSave.current = protect;
   }
   const initialized = useRef(false);
@@ -160,7 +248,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
     try {
       const [items, summary] = await Promise.all([native.listHistorySessions(current), native.getHistoryUsage(current)]);
       if (sequence !== request.current || key !== JSON.stringify(filterRef.current)) return false;
-      setSessions(items); setUsage(summary); setScans(summary.scans); setError('');
+      setSessions(items); setUsage(summary); setScans(summary.scans); setError(null);
       setSelectedId((old) => old && items.some((item) => item.id === old) ? old : items[0]?.id ?? null);
       return true;
     } catch (value) {
@@ -221,7 +309,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
   }, [scanning, active]);
   async function refresh(announce = true) {
     if (!nativeAvailable || scanning) return;
-    const sequence = ++scanRequest.current; setScanning(true); protectSave.current = false; setNotice(''); setError('');
+    const sequence = ++scanRequest.current; setScanning(true); protectSave.current = false; setNotice(null); setError(null);
     try {
       const reports = await native.refreshHistory();
       if (sequence !== scanRequest.current) return;
@@ -233,7 +321,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
     finally { if (sequence === scanRequest.current) { setScanning(false); setScanProgress(null); } }
   }
   async function cancelScan() {
-    scanRequest.current++; setScanning(false); setScanProgress(null); protectSave.current = false; setNotice(''); setError('');
+    scanRequest.current++; setScanning(false); setScanProgress(null); protectSave.current = false; setNotice(null); setError(null);
     try { await native.cancelHistoryRefresh(); showNotice('已请求停止扫描，现有记录保留。'); }
     catch (value) { showError(value); }
   }
@@ -258,14 +346,14 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
 
   async function copy() {
     if (!readyCommand) return;
-    protectSave.current = false; setNotice(''); setError('');
+    protectSave.current = false; setNotice(null); setError(null);
     try { await navigator.clipboard.writeText(readyCommand); showNotice(copiedCommandText); setCopyFlash((value) => value + 1); }
     catch { showError('复制失败，恢复命令仍在页面上，可以手动选择。'); }
   }
 
   async function resume() {
     if (!selected || !readyCommand) return;
-    setBusy(true); protectSave.current = false; setNotice(''); setError('');
+    setBusy(true); protectSave.current = false; setNotice(null); setError(null);
     try { await native.resumeHistorySession(selected.session.id, mode); showNotice('已请求外部终端恢复会话。'); }
     catch (value) { showError(value); }
     finally { setBusy(false); }
@@ -277,7 +365,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
       const destination = await save({ title: '导出会话资料', defaultPath: `cliora-session-${selected.session.nativeId ?? selected.session.id.slice(0, 8)}.${format === 'json' ? 'json' : 'md'}`,
         filters: [{ name: format === 'json' ? 'JSON' : 'Markdown', extensions: [format === 'json' ? 'json' : 'md'] }] });
       if (!destination) return;
-      protectSave.current = false; setNotice(''); setError('');
+      protectSave.current = false; setNotice(null); setError(null);
       const path = await native.exportHistorySession(selected.session.id, format, destination);
       showNotice(`已导出到 ${path}`);
     } catch (value) { showError(value); }
@@ -290,7 +378,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
     if (![priceDraft.input, priceDraft.output, priceDraft.read, priceDraft.write].every((value) => value.trim() !== '')) {
       setPriceError('请填写四项单价；确认为免费的项目可填 0。'); return;
     }
-    protectSave.current = false; setNotice(''); setError(''); setPriceError('');
+    protectSave.current = false; setNotice(null); setError(null); setPriceError('');
     try {
       const price = await native.saveHistoryPrice({ toolId: chosenTool, model: chosenModel, currency: priceDraft.currency.trim().toUpperCase(),
         inputPerMillion: Number(priceDraft.input), outputPerMillion: Number(priceDraft.output),
@@ -303,39 +391,58 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
     } catch (value) { setPriceError(typeof value === 'string' ? value : errorText(value)); }
   }
 
+  const toolName = (id: string) => tools.find((item) => item.id === id)?.name ?? id;
+  const activeFilters = useMemo(() => {
+    const items: Array<{ key: string; label: string; clear: () => void }> = [];
+    if (toolId) items.push({ key: 'tool', label: `工具：${toolName(toolId)}`, clear: () => setToolId('') });
+    if (tab === 'sessions' && search.trim()) items.push({ key: 'search', label: `搜索：${search.trim()}`, clear: () => setSearch('') });
+    if (tab === 'sessions' && favoriteOnly) items.push({ key: 'favorite', label: '只看收藏', clear: () => setFavoriteOnly(false) });
+    if (projectId) items.push({ key: 'project', label: `项目：${projectId === '__unknown__' ? '未归类' : projects.find((item) => item.id === projectId)?.name ?? projectId}`, clear: () => setProjectId('') });
+    if (model) items.push({ key: 'model', label: `模型：${model === '__unknown__' ? '模型未知' : model}`, clear: () => setModel('') });
+    if (rangeKey !== 'all') items.push({ key: 'range', label: `时间：${rangeKey === 'custom' ? rangeCaption(dates.from, dates.to) || '自定义' : rangePresets.find((item) => item.id === rangeKey)?.label ?? rangeKey}`, clear: () => setRangeKey('all') });
+    return items;
+  }, [toolId, tab, search, favoriteOnly, projectId, model, rangeKey, projects, dates, tools]);
+  function clearAllFilters() {
+    setToolId(''); setSearch(''); setFavoriteOnly(false); setProjectId(''); setModel(''); setRangeKey('all');
+  }
+
   if (!nativeAvailable) return <div className={styles.empty}><h2>本机使用记录</h2><p>在桌面应用中读取原生 CLI 会话。浏览器预览不展示本机历史。</p></div>;
   return <section className={styles.page} aria-label="使用记录内容">
     <div className={styles.toolbar}><div className={styles.tabs} role="tablist" aria-label="使用记录类型">
-      <button type="button" role="tab" aria-selected={tab === 'sessions'} onClick={() => setTab('sessions')}>会话</button>
+      <button type="button" role="tab" aria-selected={tab === 'sessions'} onClick={() => setTab('sessions')}>会话{usage ? <span className="count-chip">{usage.sessionCount}</span> : null}</button>
       <button type="button" role="tab" aria-selected={tab === 'usage'} onClick={() => setTab('usage')}>用量</button>
     </div><button type="button" className={styles.refresh} disabled={scanning} aria-busy={scanning || undefined} onClick={() => void refresh()}>{scanning && <span className="spinner" aria-hidden="true" />}刷新本机记录</button></div>
     {(scanning || filterLoading) && <p className={styles.caveat} role="status">{scanning ? `后台扫描 ${tools.find(item => item.id === scanProgress?.toolId)?.name ?? scanProgress?.toolId ?? ''} ${scanProgress?.totalSources ? `${scanProgress.completedSources} / ${scanProgress.totalSources}` : '正在发现文件'}` : '正在筛选已缓存记录…'}{scanning && <span className={styles.progress} aria-hidden="true"><span style={scanProgress?.totalSources ? { width: `${Math.min(100, (scanProgress.completedSources / scanProgress.totalSources) * 100)}%` } : undefined} data-indeterminate={!scanProgress?.totalSources || undefined} /></span>}{scanning && <button type="button" onClick={() => void cancelScan()}>停止扫描</button>}</p>}
     <div className={styles.filters}>
-      {tab === 'sessions' && <label className={styles.search}>搜索<input aria-label="搜索会话" data-page-search title={searchShortcutHint} value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape' && search) { event.preventDefault(); setSearch(''); } }} placeholder="标题或正文" /></label>}
-      <label className={styles.filterSelect}><span>工具</span><FilterSelect label="筛选工具" value={toolId} options={[{ value: '', label: '全部工具' }, ...tools.map((item) => ({ value: item.id, label: item.name }))]} onChange={setToolId} /></label>
+      {tab === 'sessions' && <label className={styles.search}><span className="sr-only">搜索</span><span className={styles.searchBox}><input aria-label="搜索会话" data-page-search title={searchShortcutHint} value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape' && search) { event.preventDefault(); setSearch(''); } }} placeholder="搜索标题或正文" />{search && <button type="button" className={styles.clearSearch} aria-label="清空搜索" onClick={() => setSearch('')}><Icon name="close" size={12} strokeWidth={2.2} /></button>}</span></label>}
+      <label className={styles.filterSelect}><span className="sr-only">工具</span><FilterSelect label="筛选工具" value={toolId} options={[{ value: '', label: '全部工具' }, ...toolOptions(tools)]} onChange={setToolId} /></label>
       {tab === 'sessions' && <label className={styles.favorite}><input type="checkbox" checked={favoriteOnly} onChange={(event) => setFavoriteOnly(event.target.checked)} />只看收藏</label>}
+      <RangePicker value={rangeKey} customFrom={customFrom} customTo={customTo}
+        onChange={(key) => { setRangeKey(key); if (key === 'custom' && !customFrom && !customTo) { const today = isoDay(new Date()); setCustomFrom(today); setCustomTo(today); } }}
+        onCustomFrom={(value) => { if (customTo && value && value > customTo) { setCustomFrom(customTo); setCustomTo(value); } else setCustomFrom(value); }}
+        onCustomTo={(value) => { if (customFrom && value && value < customFrom) { setCustomTo(customFrom); setCustomFrom(value); } else setCustomTo(value); }} />
+      <div className={styles.filterMeta}>
+        <details className={styles.moreFilters}><summary>更多筛选{[projectId, model].filter(Boolean).length ? ` · ${[projectId, model].filter(Boolean).length} 项已启用` : ''}</summary><div className={styles.filters}>
+          <label className={styles.filterSelect}><span>项目</span><FilterSelect label="筛选项目" value={projectId} options={[{ value: '', label: '全部项目' }, { value: '__unknown__', label: '未归类' }, ...projects.map((item) => ({ value: item.id, label: item.name }))]} onChange={setProjectId} /></label>
+          <label className={styles.filterSelect}><span>模型</span><FilterSelect label="筛选模型" value={model} options={[{ value: '', label: '全部模型' }, { value: '__unknown__', label: '模型未知' }, ...(usage?.models ?? []).map((item) => ({ value: item, label: item }))]} onChange={setModel} /></label>
+          <button type="button" onClick={() => { setProjectId(''); setModel(''); }}>清除更多筛选</button></div></details>
+        {!!scans.length && <details className={styles.coverage}><summary>本机覆盖 · {scans.reduce((total, item) => total + item.sourceCount, 0)} 个来源{scans.some((item) => item.failedCount || item.incomplete) ? ' · 有失败或扫描不完整' : ''}</summary>{scans.map((item) => <span key={item.toolId}>{item.toolId} {item.sourceCount} 个来源{item.failedCount ? ` · ${item.failedCount} 个失败` : ''}{item.incomplete ? ' · 扫描不完整' : ''}</span>)}</details>}
+      </div>
     </div>
-    <div className={styles.range} role="group" aria-label="时间范围">{rangePresets.map((item) => <button type="button" key={item.id} aria-pressed={rangeKey === item.id} onClick={() => { setRangeKey(item.id); if (item.id === 'custom' && !customFrom && !customTo) { const today = isoDay(new Date()); setCustomFrom(today); setCustomTo(today); } }}>{item.label}</button>)}</div>
-    {rangeKey === 'custom' && <div className={styles.rangeCustom}>
-      <label>开始<input aria-label="开始日期" type="date" value={customFrom} max={customTo || undefined} onChange={(event) => { const value = event.target.value; if (customTo && value && value > customTo) { setCustomFrom(customTo); setCustomTo(value); } else setCustomFrom(value); }} /></label>
-      <label>结束<input aria-label="结束日期" type="date" value={customTo} min={customFrom || undefined} onChange={(event) => { const value = event.target.value; if (customFrom && value && value < customFrom) { setCustomTo(customFrom); setCustomFrom(value); } else setCustomTo(value); }} /></label>
+    {activeFilters.length > 0 && <div className={styles.activeFilters} aria-label="已启用的筛选">
+      {activeFilters.map((item) => <button type="button" key={item.key} className={styles.filterChip} title="点击移除该筛选" onClick={item.clear}><span>{item.label}</span><Icon name="close" size={11} strokeWidth={2.4} /></button>)}
+      {activeFilters.length > 1 && <button type="button" className="text-button" onClick={clearAllFilters}>清除全部筛选</button>}
     </div>}
-    {tab === 'usage' ? <p className={styles.rangeSummary}>{rangeSummary(dates.from, dates.to)}</p> : rangeCaption(dates.from, dates.to) && <p className={styles.rangeSummary}>{rangeCaption(dates.from, dates.to)}</p>}
-    <details className={styles.moreFilters}><summary>更多筛选{[projectId, model].filter(Boolean).length ? ` · ${[projectId, model].filter(Boolean).length} 项已启用` : ''}</summary><div className={styles.filters}>
-      <label className={styles.filterSelect}><span>项目</span><FilterSelect label="筛选项目" value={projectId} options={[{ value: '', label: '全部项目' }, { value: '__unknown__', label: '未归类' }, ...projects.map((item) => ({ value: item.id, label: item.name }))]} onChange={setProjectId} /></label>
-      <label className={styles.filterSelect}><span>模型</span><FilterSelect label="筛选模型" value={model} options={[{ value: '', label: '全部模型' }, { value: '__unknown__', label: '模型未知' }, ...(usage?.models ?? []).map((item) => ({ value: item, label: item }))]} onChange={setModel} /></label>
-<button type="button" onClick={() => { setProjectId(''); setModel(''); }}>清除更多筛选</button></div></details>
-    {error && <div className={styles.error} role="alert">{error}</div>}
-    {notice && <div className={styles.notice} role="status">{notice}</div>}
-    {!!scans.length && <details className={styles.coverage}><summary>本机覆盖 · {scans.reduce((total, item) => total + item.sourceCount, 0)} 个来源{scans.some((item) => item.failedCount || item.incomplete) ? ' · 有失败或扫描不完整' : ''}</summary>{scans.map((item) => <span key={item.toolId}>{item.toolId} {item.sourceCount} 个来源{item.failedCount ? ` · ${item.failedCount} 个失败` : ''}{item.incomplete ? ' · 扫描不完整' : ''}</span>)}</details>}
+    {tab === 'usage' && <p className={styles.rangeSummary}>{rangeSummary(dates.from, dates.to)}</p>}
+    <ToastStack status={notice} alert={error} onDismiss={(tone) => { if (tone === 'alert') setError(null); else setNotice(null); }} />
     {tab === 'sessions' ? <div className={styles.columns}>
       <div className={styles.list} aria-label="会话列表">{sessions.length ? sessions.map((item) => <button type="button" key={item.id} className={selectedId === item.id ? styles.selected : ''} onClick={() => setSelectedId(item.id)}>
-        <span className={styles.sessionTitle}><ToolIcon toolId={item.toolId} size={22} /><strong title={item.title}>{item.favorite ? '★ ' : ''}{item.title}</strong></span><small>{tools.find((tool) => tool.id === item.toolId)?.name ?? item.toolId} · {day(item.updatedAt)}</small>
-        <small>{item.model ?? '模型未知'}{item.partial ? ' · 部分记录' : ''}{item.stale ? ' · 源暂不可读' : ''}</small>
-      </button>) : <div className={styles.empty}>没有符合条件的会话。可刷新记录或调整筛选。</div>}</div>
+        <span className={styles.sessionTitle}><ToolIcon toolId={item.toolId} size={22} /><strong title={item.title}>{item.favorite ? '★ ' : ''}{item.title}</strong></span><small>{toolName(item.toolId)} · <time title={day(item.updatedAt)}>{compactDay(item.updatedAt)}</time></small>
+        <small>{item.model ?? '模型未知'} · {item.messageCount.toLocaleString()} 条消息{item.partial ? ' · 部分记录' : ''}{item.stale ? ' · 源暂不可读' : ''}</small>
+      </button>) : <div className={styles.empty}><span className="empty-symbol"><Icon name="search" size={20} /></span><p>没有符合条件的会话。可刷新记录或调整筛选。</p>{activeFilters.length > 0 && <button type="button" className="text-button" onClick={clearAllFilters}>清除全部筛选</button>}</div>}</div>
       <div className={styles.detail}>{selected ? <>
         <div className={styles.detailBar}>
-        <div className={styles.detailHead}><div><h2 title={selected.session.title}>{selected.session.title}</h2><p>{tools.find((tool) => tool.id === selected.session.toolId)?.name ?? selected.session.toolId} · {day(selected.session.updatedAt)} · {selected.session.model ?? '模型未知'} · {selected.session.cwd ? displayPath(selected.session.cwd) : '项目目录未知'}</p></div><button type="button" onClick={() => void favorite()} aria-label={selected.session.favorite ? '取消收藏' : '收藏会话'}>{selected.session.favorite ? '★ 已收藏' : '☆ 收藏'}</button></div>
+        <div className={styles.detailHead}><div className={styles.detailIdentity}><ToolIcon toolId={selected.session.toolId} size={30} /><div><h2 title={selected.session.title}>{selected.session.title}</h2><p>{toolName(selected.session.toolId)} · {day(selected.session.updatedAt)} · {selected.session.model ?? '模型未知'} · {selected.session.cwd ? displayPath(selected.session.cwd) : '项目目录未知'}</p></div></div><button type="button" data-active={selected.session.favorite || undefined} aria-pressed={selected.session.favorite} onClick={() => void favorite()} aria-label={selected.session.favorite ? '取消收藏' : '收藏会话'}>{selected.session.favorite ? '★ 已收藏' : '☆ 收藏'}</button></div>
         {(selected.session.partial || selected.session.stale) && <p className={styles.caveat}>原始记录不完整或最近读取失败；仅展示已索引的内容。</p>}
         <div className={styles.resume}>
           <div className={styles.resumeBar}><select aria-label="恢复模式" value={mode} onChange={(event) => setMode(event.target.value as 'normal' | 'yolo')}><option value="normal">普通模式</option>{yolo && <option value="yolo">YOLO 模式</option>}</select>{readyCommand && <div className={styles.actions}><button type="button" className={styles.primary} disabled={busy} onClick={() => void resume()}>在外部终端继续</button><button type="button" aria-label="复制命令" data-copied={copied || undefined} onClick={() => void copy()}>{copied ? <><Icon name="check" size={13} strokeWidth={2.2} />已复制</> : '复制命令'}</button></div>}{readyCommand ? <pre aria-label="原生恢复命令" title={readyCommand}>{readyCommand}</pre> : <p>{shownResumeError || '正在确认原生恢复命令…'}</p>}</div>
@@ -343,20 +450,22 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
           {selected.resumeReason && <button type="button" onClick={onOpenProjects}>前往最近项目重新关联目录</button>}
         </div>
         </div>
-        <div className={styles.transcript} aria-label="会话正文"><div className={styles.messages}>{selected.messages.length ? selected.messages.map((item) => <article key={item.id} data-role={item.role}><small>{item.role === 'user' ? '你' : '助手'} · {day(item.timestamp)}</small><p>{item.text}</p></article>) : <p>此记录没有可读取的对话正文。</p>}</div></div>
-      </> : <div className={styles.empty}>选择左侧会话查看详情。</div>}</div>
+        <div className={styles.transcript} aria-label="会话正文"><div className={styles.messages}>{selected.messages.length ? selected.messages.map((item) => <MessageItem key={item.id} item={item} />) : <p>此记录没有可读取的对话正文。</p>}</div></div>
+      </> : <div className={styles.empty}><span className="empty-symbol"><Icon name="records" size={20} /></span><p>选择左侧会话查看详情。</p></div>}</div>
     </div> : <div className={styles.usage}>
       <div className={styles.metrics}><div><small>会话</small><strong>{usage?.sessionCount ?? '—'}</strong></div><Metric label={`输入 token${partialTotals ? ' · 已知小计' : ''}`} value={usage?.input ?? null} /><Metric label={`输出 token${partialTotals ? ' · 已知小计' : ''}`} value={usage?.output ?? null} /><Metric label={`缓存读取${partialTotals ? ' · 已知小计' : ''}`} value={usage?.cacheRead ?? null} /><Metric label={`缓存写入${partialTotals ? ' · 已知小计' : ''}`} value={usage?.cacheWrite ?? null} /><div><small>估算费用{usage?.costPartial ? ' · 已知小计' : ''}</small><strong>{usage?.estimatedCost === null || usage?.estimatedCost === undefined ? '未知' : `${usage.currency ?? ''} ${usage.estimatedCost.toFixed(4)}`}</strong></div></div>
-      <p className={styles.caveat}>仅统计本机可读取的记录；{usage?.usageSessions ?? 0} 个会话有用量，{usage?.unknownUsageSessions ?? 0} 个未知，{usage?.partialSessions ?? 0} 个不完整，{usage?.staleSessions ?? 0} 个源暂不可读。{partialTotals || usage?.costPartial ? '显示的是已知小计，实际总量未知。' : ''}没有手填价格时，能对上公开价的模型按公开价估算。费用为估算，不等于账单。</p>
-      <p className={styles.caveat}>{usage?.inputIncludesCache === true ? '输入已包含缓存读取和缓存写入。缓存两列是其中的明细，不要再加一次。' : '这次没有可计入的输入。'}</p>
-      {!!usage?.priceSources.length && <div className={styles.priceSources}><strong>价格依据</strong>{usage.priceSources.map((source) => <span key={source}>{source}</span>)}</div>}
-      {!!usage?.byModel?.length && <div className={styles.modelTable}><table aria-label="按模型用量明细"><thead><tr><th>工具 / 模型</th><th>会话</th><th>输入</th><th>输出</th><th>缓存读 / 写</th><th>估算费用</th></tr></thead><tbody>{usage.byModel.map(row => <tr key={JSON.stringify([row.toolId, row.model])}><td><button type="button" onClick={() => { setPriceTool(row.toolId); setPriceModel(row.model ?? ''); setPriceError(''); setPriceOpen(true); }}>{tools.find(item => item.id === row.toolId)?.name ?? row.toolId}<br /><strong>{row.model ?? '模型未知'}</strong></button></td><td>{row.sessionCount}{row.unknownUsageSessions ? ` · ${row.unknownUsageSessions} 用量未知` : ''}</td><td><Amount value={row.input} /></td><td><Amount value={row.output} /></td><td><Amount value={row.cacheRead} /> / <Amount value={row.cacheWrite} /></td><td>{row.estimatedCost === null ? '未知' : `${row.currency ?? ''} ${row.estimatedCost.toFixed(4)}`}</td></tr>)}</tbody></table></div>}
-      <button type="button" onClick={() => { setPriceError(''); setPriceOpen(true); }}>设置估算价格</button>
-      {!!prices.length && <div className={styles.savedPrices}><strong>已保存的价格</strong>{prices.map((price) => <p key={`${price.toolId}:${price.model}`}>{price.toolId} / {price.model} · {price.currency} · {price.source} · {day(price.updatedAt)}</p>)}</div>}
+      <div className={styles.usageNotes}>
+        <p>仅统计本机可读取的记录；{usage?.usageSessions ?? 0} 个会话有用量，{usage?.unknownUsageSessions ?? 0} 个未知，{usage?.partialSessions ?? 0} 个不完整，{usage?.staleSessions ?? 0} 个源暂不可读。{partialTotals || usage?.costPartial ? '显示的是已知小计，实际总量未知。' : ''}没有手填价格时，能对上公开价的模型按公开价估算。费用为估算，不等于账单。</p>
+        <p>{usage?.inputIncludesCache === true ? '输入已包含缓存读取和缓存写入，缓存两列是其中的明细，不要再加一次。' : '这次没有可计入的输入。'}</p>
+      </div>
+      {!!usage?.priceSources.length && <div className={styles.priceSources}><strong>价格依据</strong><div className={styles.chipRow}>{usage.priceSources.map((source) => <span className="quiet-chip" key={source}>{source}</span>)}</div></div>}
+      {!!usage?.byModel?.length && <div className={styles.modelTable}><table aria-label="按模型用量明细"><thead><tr><th>工具 / 模型</th><th>会话</th><th>输入</th><th>输出</th><th>缓存读 / 写</th><th>估算费用</th></tr></thead><tbody>{usage.byModel.map(row => <tr key={JSON.stringify([row.toolId, row.model])}><td><button type="button" title="点击为该模型设置估算价格" onClick={() => { setPriceTool(row.toolId); setPriceModel(row.model ?? ''); setPriceError(''); setPriceOpen(true); }}>{toolName(row.toolId)}<br /><strong>{row.model ?? '模型未知'}</strong></button></td><td>{row.sessionCount}{row.unknownUsageSessions ? ` · ${row.unknownUsageSessions} 用量未知` : ''}</td><td><Amount value={row.input} /></td><td><Amount value={row.output} /></td><td><Amount value={row.cacheRead} /> / <Amount value={row.cacheWrite} /></td><td>{row.estimatedCost === null ? '未知' : `${row.currency ?? ''} ${row.estimatedCost.toFixed(4)}`}</td></tr>)}</tbody></table></div>}
+      <button type="button" onClick={() => { setPriceError(''); setPriceOpen(true); }}><Icon name="sparkle" size={13} />设置估算价格</button>
+      {!!prices.length && <div className={styles.savedPrices}><strong>已保存的价格</strong>{prices.map((price) => <p key={`${price.toolId}:${price.model}`} title={`输入 ${price.inputPerMillion} · 输出 ${price.outputPerMillion} · 缓存读 ${price.cacheReadPerMillion} · 缓存写 ${price.cacheWritePerMillion}（${price.currency} / 每 100 万 token）`}><span>{toolName(price.toolId)} / {price.model}</span><small>{price.currency} · 输入 {price.inputPerMillion} · 输出 {price.outputPerMillion}{price.source ? ` · ${price.source}` : ''} · {day(price.updatedAt)}</small></p>)}</div>}
     </div>}
     <GuideDialog open={priceOpen} title="设置估算价格" hint="价格按每 100 万 token 填写，仅用于本机估算。" onClose={() => { setPriceOpen(false); setPriceError(''); }}>
       <div className={styles.priceForm}>
-        <label>工具<select aria-label="价格工具" value={priceTool} onChange={event => setPriceTool(event.target.value)}><option value="">选择工具</option>{tools.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+        <label>工具<FilterSelect label="价格工具" value={priceTool} options={[{ value: '', label: '选择工具' }, ...toolOptions(tools)]} searchLabel="搜索工具" onChange={setPriceTool} /></label>
         <label>模型<input aria-label="价格模型" list="priced-models" value={priceModel} onChange={event => setPriceModel(event.target.value)} /><datalist id="priced-models">{[...new Set([...(usage?.models ?? []), ...prices.filter(item => item.toolId === priceTool).map(item => item.model)])].map(value => <option key={value} value={value} />)}</datalist></label>
         <label>币种<input aria-label="价格币种" value={priceDraft.currency} onChange={(event) => setPriceDraft({ ...priceDraft, currency: event.target.value })} /></label>
         <label>输入<input aria-label="输入单价" type="number" min="0" value={priceDraft.input} onChange={(event) => setPriceDraft({ ...priceDraft, input: event.target.value })} /></label>

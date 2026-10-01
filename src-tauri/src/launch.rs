@@ -116,6 +116,7 @@ pub struct LaunchPlan {
     pub cli_args: Vec<String>,
     pub directory: PathBuf,
     pub terminal: TerminalId,
+    pub session_markers: &'static [&'static str],
 }
 
 #[derive(Clone, Debug)]
@@ -123,6 +124,7 @@ pub struct TerminalCommand {
     pub program: &'static str,
     pub args: Vec<String>,
     pub directory: PathBuf,
+    pub session_markers: &'static [&'static str],
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -491,6 +493,7 @@ fn plan_with_stage_at(
         executable: PathBuf::from(selected_path),
         cli_args,
         directory,
+        session_markers: adapter.session_env_markers(),
         terminal: selected_terminal(db)
             .map_err(|message| LaunchPlanError::new(LaunchStage::Terminal, message))?,
     })
@@ -503,7 +506,7 @@ pub fn login_plan(db: &Database, registry: &Registry, home: &Path, tool: &str, c
     let probe = adapter::probe_registered(registry, tool, custom, home, None, Scope::Global)?;
     let selected = probe.selected_path.ok_or("未找到可验证的 CLI，先安装或重新检测")?;
     Ok(LaunchPlan {tool_id:tool.into(),project_id:None,mode:LaunchMode::Normal,executable:PathBuf::from(selected),cli_args,
-        directory:projects::checked_directory(&home.display().to_string())?,terminal:selected_terminal(db)?})
+        directory:projects::checked_directory(&home.display().to_string())?,session_markers:adapter.session_env_markers(),terminal:selected_terminal(db)?})
 }
 
 fn quote_powershell(value: &str) -> String {
@@ -567,14 +570,21 @@ fn shell_script(plan: &LaunchPlan) -> Result<String, String> {
 }
 
 fn interactive_powershell_script(plan: &LaunchPlan) -> Result<String, String> {
+    let cleanup = if plan.session_markers.is_empty() {
+        String::new()
+    } else {
+        let markers = plan.session_markers.iter().map(|name| format!("'{name}'")).collect::<Vec<_>>().join(",");
+        format!("foreach ($name in {markers}) {{ Remove-Item -LiteralPath \"Env:$name\" -ErrorAction SilentlyContinue }}; ")
+    };
     Ok(format!(
-        "if ($null -ne $env:NO_COLOR) {{ Remove-Item Env:NO_COLOR -ErrorAction SilentlyContinue }}; if ($env:TERM -eq 'dumb') {{ Remove-Item Env:TERM -ErrorAction SilentlyContinue }}; if ($env:FORCE_COLOR -in '0','false') {{ Remove-Item Env:FORCE_COLOR -ErrorAction SilentlyContinue }}; {}",
+        "if ($null -ne $env:NO_COLOR) {{ Remove-Item Env:NO_COLOR -ErrorAction SilentlyContinue }}; if ($env:TERM -eq 'dumb') {{ Remove-Item Env:TERM -ErrorAction SilentlyContinue }}; if ($env:FORCE_COLOR -in '0','false') {{ Remove-Item Env:FORCE_COLOR -ErrorAction SilentlyContinue }}; {cleanup}{}",
         powershell_script(plan)?
     ))
 }
 fn interactive_shell_script(plan: &LaunchPlan) -> Result<String, String> {
+    let cleanup = if plan.session_markers.is_empty() { String::new() } else { format!("unset {}; ", plan.session_markers.join(" ")) };
     Ok(format!(
-        "unset NO_COLOR; if [ \"${{TERM-}}\" = dumb ]; then unset TERM; fi; if [ \"${{FORCE_COLOR-}}\" = 0 ] || [ \"${{FORCE_COLOR-}}\" = false ]; then unset FORCE_COLOR; fi; {}",
+        "unset NO_COLOR; if [ \"${{TERM-}}\" = dumb ]; then unset TERM; fi; if [ \"${{FORCE_COLOR-}}\" = 0 ] || [ \"${{FORCE_COLOR-}}\" = false ]; then unset FORCE_COLOR; fi; {cleanup}{}",
         shell_script(plan)?
     ))
 }
@@ -650,6 +660,7 @@ pub fn terminal_command(plan: &LaunchPlan) -> Result<TerminalCommand, String> {
         program,
         args,
         directory: PathBuf::from(directory),
+        session_markers: plan.session_markers,
     })
 }
 
@@ -706,7 +717,7 @@ fn shell_terminal(terminal: TerminalId, directory: &Path, script: &str) -> Resul
         TerminalId::Xterm => ("xterm", vec!["-e".into(), "sh".into(), "-lc".into(), script.to_owned()]),
         TerminalId::Auto => return Err("请先选择可用的终端".into()),
     };
-    Ok(TerminalCommand { program, args, directory: PathBuf::from(directory_text) })
+    Ok(TerminalCommand { program, args, directory: PathBuf::from(directory_text), session_markers: &[] })
 }
 
 fn spawn_terminal(terminal_id: TerminalId, terminal: TerminalCommand) -> Result<(), String> {
@@ -724,6 +735,7 @@ fn spawn_terminal(terminal_id: TerminalId, terminal: TerminalCommand) -> Result<
     command.env_remove("NO_COLOR");
     if env::var("TERM").as_deref() == Ok("dumb") { command.env_remove("TERM"); }
     if matches!(env::var("FORCE_COLOR").as_deref(), Ok("0") | Ok("false")) { command.env_remove("FORCE_COLOR"); }
+    for name in terminal.session_markers { command.env_remove(name); }
     command.spawn().map_err(|error| format!("无法打开所选终端，请在设置中更换后重试：{error}"))?;
     Ok(())
 }

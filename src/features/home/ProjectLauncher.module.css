@@ -36,6 +36,11 @@
 .heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 6px; min-height: 30px; }
 .heading strong { font-size: 14px; font-weight: 650; }
 
+.projectSearch { position: relative; display: flex; align-items: center; }
+.projectSearch > svg { position: absolute; left: 11px; color: var(--text-3); pointer-events: none; }
+.projectSearch > input { width: 100%; max-width: 380px; padding-left: 32px; }
+.noMatch { margin: 0; padding: 20px 4px; color: var(--text-3); font-size: 12.5px; text-align: center; }
+
 /* Project cards */
 .projectGrid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
 .project {

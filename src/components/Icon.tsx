@@ -1,5 +1,5 @@
 export type IconName = 'home' | 'connections' | 'library' | 'records' | 'settings' | 'leaf' | 'migration' | 'tool'
-  | 'sun' | 'moon' | 'monitor' | 'alert' | 'info' | 'close' | 'check' | 'trash' | 'sparkle' | 'folder';
+  | 'sun' | 'moon' | 'monitor' | 'alert' | 'info' | 'close' | 'check' | 'trash' | 'sparkle' | 'folder' | 'search' | 'clock' | 'archive';
 const paths: Record<IconName, string> = {
   home: 'M3 10.5 12 3l9 7.5M5.5 9v11h13V9M10 20v-6h4v6',
   connections: 'M8 3v4M16 3v4M6 7h12v4a6 6 0 0 1-12 0zM12 17v4',
@@ -19,6 +19,9 @@ const paths: Record<IconName, string> = {
   trash: 'M4 7h16M10 11v6M14 11v6M5.5 7l1 12.5A1.5 1.5 0 0 0 8 21h8a1.5 1.5 0 0 0 1.5-1.5L18.5 7M9 7V4.5A1.5 1.5 0 0 1 10.5 3h3A1.5 1.5 0 0 1 15 4.5V7',
   sparkle: 'M12 3.5 13.8 9a2 2 0 0 0 1.2 1.2l5.5 1.8-5.5 1.8a2 2 0 0 0-1.2 1.2L12 20.5 10.2 15A2 2 0 0 0 9 13.8L3.5 12 9 10.2A2 2 0 0 0 10.2 9Z',
   folder: 'M3.5 7A1.5 1.5 0 0 1 5 5.5h3.6a1.5 1.5 0 0 1 1.2.6l1 1.4H19a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 19 18.5H5A1.5 1.5 0 0 1 3.5 17z',
+  search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14ZM21 21l-4.8-4.8',
+  clock: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM12 6.5V12l3.5 2',
+  archive: 'M4 8V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2M4 8h16M4 8v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8M10 12h4',
 };
 export function Icon({ name, size = 18, strokeWidth = 1.7 }: { name: IconName; size?: number; strokeWidth?: number }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name]} /></svg>;

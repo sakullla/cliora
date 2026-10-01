@@ -169,14 +169,14 @@ test('an unfinished MCP preview cannot return after switching scope or distribut
   await page.evaluate(() => { (window as typeof window & { __resourceDeferMcpPreview: boolean }).__resourceDeferMcpPreview = true; });
   await page.getByRole('button', { name: '保存并分发' }).click();
   await expect.poll(() => page.evaluate(() => (window as typeof window & { __resourcePendingPreviews: unknown[] }).__resourcePendingPreviews.length)).toBe(1);
-  await page.getByRole('combobox', { name: '分发范围' }).selectOption('project');
+  await page.getByRole('button', { name: '分发范围' }).click();
+  await page.getByRole('option', { name: 'Second project' }).click();
   await page.evaluate(() => {
     const state = window as typeof window & { __resourceDeferMcpPreview: boolean; __resourcePendingPreviews: Array<() => void> };
     state.__resourceDeferMcpPreview = false;
     state.__resourcePendingPreviews.shift()?.();
   });
   await expect(page.getByRole('button', { name: '替换并分发', exact: true })).toHaveCount(0);
-  await page.getByRole('combobox', { name: '分发项目' }).selectOption('second-project');
   await page.getByRole('checkbox', { name: 'Codex' }).check();
   await page.getByRole('button', { name: '保存并分发' }).click();
   const writes = await page.evaluate(() => (window as typeof window & { __resourceWrites: Array<{ targets: Array<Record<string, unknown>> }> }).__resourceWrites);
