@@ -2,9 +2,10 @@ use std::path::Path;
 
 use serde_json::Value;
 
+use super::usage::{self, TokenCounts};
 use super::{
-    at, discover_jsonl_controlled, read_jsonl_controlled, text_content, timestamp, valid_native_id, HistorySource,
-    ParsedSession, UsageEvent,
+    discover_jsonl_controlled, read_jsonl_controlled, text_content, timestamp, valid_native_id,
+    HistorySource, ParsedSession, UsageEvent,
 };
 
 pub fn sources(home: &Path) -> Result<Vec<HistorySource>, String> {
@@ -21,8 +22,16 @@ pub fn sources_controlled(home: &Path, cancelled: &dyn Fn() -> bool) -> Result<V
     }, cancelled)
 }
 
-fn count(value: &Value, key: &str) -> Option<u64> {
-    value.get(key).and_then(Value::as_u64)
+fn token_counts(value: &Value) -> Option<TokenCounts> {
+    if !value.is_object() {
+        return None;
+    }
+    usage::from_optional(
+        usage::field(value, "input_tokens"),
+        usage::field(value, "output_tokens"),
+        usage::field(value, "cached_input_tokens"),
+        usage::field(value, "cache_write_input_tokens"),
+    )
 }
 
 pub fn parse(source: &HistorySource) -> Result<ParsedSession, String> {
@@ -31,7 +40,8 @@ pub fn parse(source: &HistorySource) -> Result<ParsedSession, String> {
 
 pub fn parse_controlled(source: &HistorySource, cancelled: &dyn Fn() -> bool) -> Result<ParsedSession, String> {
     let mut session = ParsedSession::new();
-    let mut totals: Option<(u64, u64, u64, u64)> = None;
+    let mut high_water: Option<TokenCounts> = None;
+    let mut previous_snapshot: Option<(TokenCounts, TokenCounts)> = None;
     let mut model: Option<String> = None;
     let partial = read_jsonl_controlled(source, cancelled, |line, row| {
         let time = row.get("timestamp").and_then(timestamp);
@@ -74,35 +84,45 @@ pub fn parse_controlled(source: &HistorySource, cancelled: &dyn Fn() -> bool) ->
             Some("event_msg")
                 if payload.get("type").and_then(Value::as_str) == Some("token_count") =>
             {
-                let Some(total) = at(payload, &["info", "total_token_usage"]) else {
+                let info = payload.get("info").unwrap_or(&Value::Null);
+                let last = info.get("last_token_usage").and_then(token_counts);
+                let total = info.get("total_token_usage").and_then(token_counts);
+                let Some(request) = last.filter(|counts| usage::active(*counts)).or(total) else {
                     return;
                 };
-                let Some((input, output)) =
-                    count(&total, "input_tokens").zip(count(&total, "output_tokens"))
-                else {
+                let snapshot = (last.unwrap_or(request), total.unwrap_or(request));
+                if previous_snapshot == Some(snapshot) {
                     return;
-                };
-                let read = count(&total, "cached_input_tokens").unwrap_or(0);
-                let write = count(&total, "cache_write_input_tokens").unwrap_or(0);
-                let before = totals.unwrap_or((0, 0, 0, 0));
-                if input >= before.0 && output >= before.1 && read >= before.2 && write >= before.3
-                {
-                    if (input, output, read, write) != before {
-                        session.usage.push(UsageEvent {
-                            id: format!("{}:token-{line}", source.key()),
-                            model: model.clone(),
-                            timestamp: time,
-                            input: Some(input - before.0),
-                            output: Some(output - before.1),
-                            cache_read: Some(read - before.2),
-                            cache_write: Some(write - before.3),
-                            input_includes_cache: true,
-                        });
-                    }
-                    totals = Some((input, output, read, write));
-                } else {
-                    session.partial = true;
                 }
+                previous_snapshot = Some(snapshot);
+                // `last_token_usage` is this request. `total_token_usage` is a running
+                // counter shared across turns, so subtracting it recounts or drops
+                // everything after the counter stalls.
+                let delta = if last.is_some_and(usage::active) {
+                    if let Some(total) = total {
+                        if high_water.is_some_and(|high| total.input < high.input) {
+                            high_water = Some(total);
+                        } else {
+                            let _ = usage::cumulative_delta(&mut high_water, total);
+                        }
+                    }
+                    usage::clamp_cache_inside_input(request)
+                } else {
+                    usage::clamp_cache_inside_input(usage::cumulative_delta(&mut high_water, request))
+                };
+                if !usage::active(delta) {
+                    return;
+                }
+                session.usage.push(UsageEvent {
+                    id: format!("{}:token-{line}", source.key()),
+                    model: model.clone(),
+                    timestamp: time,
+                    input: Some(delta.input),
+                    output: Some(delta.output),
+                    cache_read: Some(delta.read),
+                    cache_write: Some(delta.write),
+                    input_includes_cache: true,
+                });
             }
             _ => {}
         }

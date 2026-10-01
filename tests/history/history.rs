@@ -35,6 +35,15 @@ fn indexed_id(db: &Database, source: &Path) -> String {
 }
 
 #[test]
+fn codex_request_usage_survives_a_reset_cumulative_counter() {
+    let session = codex::parse(&file("codex-last-usage.jsonl")).unwrap();
+    assert_eq!(session.usage.iter().map(|item| item.input.unwrap()).sum::<u64>(), 200);
+    assert_eq!(session.usage.iter().map(|item| item.output.unwrap()).sum::<u64>(), 12);
+    assert_eq!(session.usage.iter().map(|item| item.cache_read.unwrap()).sum::<u64>(), 110);
+    assert_eq!(session.usage.len(), 3);
+}
+
+#[test]
 fn five_versioned_sources_extract_visible_messages_and_distinct_usage() {
     let codex = codex::parse(&file("codex-0.158.jsonl")).unwrap();
     assert_eq!(
@@ -106,6 +115,7 @@ fn five_versioned_sources_extract_visible_messages_and_distinct_usage() {
         "model usage replaces, rather than adds to, session total"
     );
     assert_eq!(grok.usage[0].input, Some(40));
+    assert!(grok.usage[0].input_includes_cache);
 
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join(".local/share/opencode");
@@ -125,7 +135,7 @@ fn five_versioned_sources_extract_visible_messages_and_distinct_usage() {
         ],
     )
     .unwrap();
-    db.execute("INSERT INTO message VALUES (?1,?2,?3,?4)",params!["msg_assistant","ses_fixture",r#"{"role":"assistant","modelID":"gpt-5","tokens":{"input":12,"output":8,"cache":{"read":3,"write":1}}}"#,1790668801000_i64]).unwrap();
+    db.execute("INSERT INTO message VALUES (?1,?2,?3,?4)",params!["msg_assistant","ses_fixture",r#"{"role":"assistant","modelID":"gpt-5","tokens":{"input":12,"output":8,"reasoning":4,"cache":{"read":3,"write":1}}}"#,1790668801000_i64]).unwrap();
     db.execute(
         "INSERT INTO part VALUES (?1,?2,?3,?4,?5)",
         params![
@@ -148,12 +158,25 @@ fn five_versioned_sources_extract_visible_messages_and_distinct_usage() {
         ],
     )
     .unwrap();
+    db.execute(
+        "INSERT INTO part VALUES (?1,?2,?3,?4,?5)",
+        params![
+            "part_step",
+            "msg_assistant",
+            "ses_fixture",
+            r#"{"type":"step-finish","tokens":{"input":12,"output":8,"reasoning":4,"cache":{"read":3,"write":1}}}"#,
+            1790668801000_i64
+        ],
+    )
+    .unwrap();
     drop(db);
     let source = opencode::sources(temp.path()).unwrap().pop().unwrap();
     let open = opencode::parse(&source).unwrap();
     assert_eq!(open.native_id.as_deref(), Some("ses_fixture"));
     assert_eq!(open.messages.len(), 2);
+    assert_eq!(open.usage.len(), 1);
     assert_eq!(open.usage[0].input, Some(12));
+    assert_eq!(open.usage[0].output, Some(12));
     let db = rusqlite::Connection::open(root.join("opencode.db")).unwrap();
     db.execute(
         "UPDATE session SET version = NULL WHERE id = 'ses_fixture'",
@@ -161,6 +184,60 @@ fn five_versioned_sources_extract_visible_messages_and_distinct_usage() {
     )
     .unwrap();
     assert!(opencode::parse(&source).unwrap_err().contains("版本"));
+}
+
+#[test]
+fn claude_counts_subagent_calls_without_replaying_snapshots() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    let id = "22222222-2222-4222-8222-222222222222";
+    fs::create_dir_all(root.join(id).join("subagents")).unwrap();
+    fs::write(
+        root.join(format!("{id}.jsonl")),
+        "\
+{\"type\":\"assistant\",\"uuid\":\"a1\",\"requestId\":\"req-main\",\"sessionId\":\"22222222-2222-4222-8222-222222222222\",\"timestamp\":\"2026-09-29T08:00:01Z\",\"message\":{\"id\":\"msg-main\",\"model\":\"claude-opus\",\"usage\":{\"input_tokens\":5,\"output_tokens\":1,\"cache_read_input_tokens\":20,\"cache_creation_input_tokens\":10}}}
+{\"type\":\"assistant\",\"uuid\":\"a2\",\"requestId\":\"req-main\",\"timestamp\":\"2026-09-29T08:00:02Z\",\"message\":{\"id\":\"msg-main\",\"model\":\"claude-opus\",\"usage\":{\"input_tokens\":5,\"output_tokens\":12,\"cache_read_input_tokens\":20,\"cache_creation_input_tokens\":10,\"iterations\":[{\"type\":\"message\",\"input_tokens\":5,\"output_tokens\":12,\"cache_read_input_tokens\":20,\"cache_creation_input_tokens\":10},{\"type\":\"advisor_message\",\"model\":\"claude-haiku\",\"input_tokens\":6,\"output_tokens\":2,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}]}}}
+{\"type\":\"assistant\",\"uuid\":\"a3\",\"timestamp\":\"2026-09-29T08:00:03Z\",\"message\":{\"id\":\"msg-skip\",\"model\":\"<synthetic>\",\"usage\":{\"input_tokens\":999,\"output_tokens\":999}}}
+",
+    )
+    .unwrap();
+    fs::write(
+        root.join(id).join("subagents").join("agent-1.jsonl"),
+        "\
+{\"type\":\"assistant\",\"uuid\":\"s1\",\"requestId\":\"req-sub\",\"timestamp\":\"2026-09-29T08:00:04Z\",\"message\":{\"id\":\"msg-sub\",\"model\":\"claude-sonnet\",\"usage\":{\"input_tokens\":3,\"output_tokens\":1,\"cache_read_input_tokens\":100,\"cache_creation_input_tokens\":0}}}
+{\"type\":\"assistant\",\"uuid\":\"s2\",\"requestId\":\"req-sub\",\"timestamp\":\"2026-09-29T08:00:05Z\",\"message\":{\"id\":\"msg-sub\",\"model\":\"claude-sonnet\",\"usage\":{\"input_tokens\":3,\"output_tokens\":7,\"cache_read_input_tokens\":100,\"cache_creation_input_tokens\":0}}}
+",
+    )
+    .unwrap();
+    let session = claude::parse(&HistorySource {
+        path: root.join(format!("{id}.jsonl")),
+        native_id: None,
+        fingerprint: "fixture".into(),
+        fingerprint_error: None,
+    })
+    .unwrap();
+    assert_eq!(session.usage.len(), 3);
+    assert_eq!(
+        session.usage.iter().map(|item| item.input.unwrap()).sum::<u64>(),
+        14
+    );
+    assert_eq!(
+        session.usage.iter().map(|item| item.output.unwrap()).sum::<u64>(),
+        21
+    );
+    assert_eq!(
+        session
+            .usage
+            .iter()
+            .map(|item| item.cache_read.unwrap())
+            .sum::<u64>(),
+        120
+    );
+    assert!(session.usage.iter().any(|item| {
+        item.model.as_deref() == Some("claude-haiku") && item.id.contains("advisor")
+    }));
+    assert!(session.usage.iter().all(|item| !item.input_includes_cache));
+    assert!(session.usage.iter().all(|item| item.input != Some(999)));
 }
 
 #[test]
@@ -519,11 +596,33 @@ fn usage_dates_and_manual_price_keep_cache_out_of_double_counting() {
         &db,
         &HistoryFilter {
             from_ms: Some(1800000000000),
-            ..filter
+            ..filter.clone()
         },
     )
     .unwrap();
     assert_eq!(outside.session_count, 0);
+    let shifted = vec![UsageEvent {
+        id: "request-old".into(),
+        model: Some("gpt-6-astra".into()),
+        timestamp: Some(1),
+        input: Some(999),
+        output: Some(1),
+        cache_read: Some(0),
+        cache_write: Some(0),
+        input_includes_cache: true,
+    }];
+    db.with_connection(|conn| {
+        conn.execute(
+            "UPDATE history_sessions SET updated_at = ?1, usage_json = ?2",
+            params![1790668801000i64, serde_json::to_string(&shifted).unwrap()],
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+    })
+    .unwrap();
+    let updated_only = usage_summary(&db, &filter).unwrap();
+    assert_eq!(updated_only.session_count, 0);
+    assert_eq!(updated_only.input, None);
 }
 
 #[test]

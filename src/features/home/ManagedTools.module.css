@@ -35,15 +35,35 @@
 
 .switch { min-width: 0; }
 .switch > small { color: var(--text-2); font-size: 12px; }
-.switch > div { display: flex; flex-wrap: wrap; gap: 6px; }
+.switch > div[role="radiogroup"] { display: flex; flex-wrap: wrap; gap: 6px; }
+.switcher {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+}
+.step {
+  flex: none;
+  width: 30px;
+  min-height: 36px;
+  padding: 0;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+  color: var(--text-2);
+}
+.step:hover:not(:disabled) { color: var(--text); }
 .menuTrigger {
   display: flex;
-  width: min(100%, 240px);
-  min-height: 30px;
+  flex: 1;
+  align-items: center;
+  width: auto;
+  min-width: 0;
+  min-height: 36px;
   justify-content: flex-start;
-  padding: 0 28px 0 12px;
-  border: 1px solid var(--accent-line);
-  border-radius: 99px;
+  padding: 4px 28px 4px 10px;
+  border-color: var(--accent-line);
+  border-radius: var(--radius-sm);
   background-color: var(--accent-soft);
   background-image: var(--chevron);
   background-repeat: no-repeat;
@@ -54,12 +74,14 @@
   font-weight: 640;
   text-align: left;
 }
-.menuTrigger > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.menuTrigger[data-empty="true"] { border-color: var(--line-strong); background-color: var(--surface); color: var(--text-2); font-weight: 560; }
-.menuTrigger:hover:not(:disabled) { background-color: var(--accent-soft); border-color: var(--accent); }
-.menuTrigger[data-empty="true"]:hover:not(:disabled) { background-color: var(--surface); border-color: var(--text-3); }
-.menuTrigger[data-open="true"] { box-shadow: 0 0 0 3px var(--accent-ring); }
-.menuTrigger:disabled { opacity: .5; }
+.switchCopy { display: grid; min-width: 0; max-width: 100%; line-height: 1.2; }
+.switchCopy > span,
+.switchCopy > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.switchCopy > small { color: var(--text-2); font-size: 11px; font-weight: 450; }
+.menuTrigger:hover:not(:disabled) { border-color: var(--accent); background-color: var(--accent-soft); color: var(--accent); }
+.menuTrigger[data-empty="true"], .menuTrigger[data-empty="true"]:hover:not(:disabled) { border-color: var(--line-strong); background-color: var(--surface); color: var(--text-2); font-weight: 560; }
+.menuTrigger[data-open="true"] { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
+.menuTrigger:disabled, .step:disabled { opacity: .5; }
 .menu {
   position: fixed;
   z-index: 40;
@@ -71,19 +93,21 @@
   border-radius: var(--radius);
   background: var(--surface);
   box-shadow: var(--shadow-md);
+  outline: none;
 }
 .menu > input { width: 100%; background-color: var(--surface-2); }
 .menu > input:focus { box-shadow: none; }
 .menuList { display: grid; align-content: start; gap: 2px; min-height: 0; overflow: auto; }
 .menuList > button {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: flex-start;
+  justify-content: stretch;
   gap: 8px;
-  min-height: 30px;
-  padding: 0 8px;
+  min-height: 44px;
+  padding: 6px 8px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: transparent;
   box-shadow: none;
   color: var(--text);
@@ -91,15 +115,21 @@
   font-weight: 500;
   text-align: left;
 }
-.menuList > button > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.menuList > button > small { margin-left: auto; overflow: hidden; color: var(--text-3); font-size: 11.5px; font-weight: 450; text-overflow: ellipsis; white-space: nowrap; }
-.menuList > button > em { flex: none; color: var(--warning); font-size: 11px; font-style: normal; font-weight: 560; }
+.menuList > button > span { display: grid; min-width: 0; }
+.menuList > button strong,
+.menuList > button small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.menuList > button strong { font-weight: 620; }
+.menuList > button small { color: var(--text-3); font-size: 11.5px; font-weight: 450; }
+.menuMarks { display: inline-flex; align-items: center; gap: 6px; }
+.menuMarks > em { color: var(--warning); font-size: 11px; font-style: normal; font-weight: 560; }
+.menuMarks svg { flex: none; color: var(--accent); }
 .menuList > button:hover:not(:disabled) { background: var(--surface-3); border-color: transparent; }
 .menuList > button[data-active="true"] { background: var(--surface-3); }
 .menuList > button[aria-selected="true"], .menuList > button[aria-selected="true"]:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent); }
+.menuList > button[aria-selected="true"] small { color: var(--accent); }
 .menuList > p { margin: 0; padding: 8px; color: var(--text-3); font-size: 12px; }
 
-.switch > div > button {
+.switch > div[role="radiogroup"] > button {
   max-width: 100%;
   min-height: 30px;
   padding: 0 12px;
@@ -114,7 +144,7 @@
   white-space: nowrap;
   transition: background-color var(--fast) var(--ease), border-color var(--fast) var(--ease), color var(--fast) var(--ease);
 }
-.switch > div > button:hover:not(:disabled) { border-color: var(--text-3); color: var(--text); }
+.switch > div[role="radiogroup"] > button:hover:not(:disabled) { border-color: var(--text-3); color: var(--text); }
 .activeConfig, .activeConfig:hover:not(:disabled) { border-color: var(--accent-line) !important; background: var(--accent-soft) !important; color: var(--accent) !important; font-weight: 640 !important; }
 .activeConfig::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: currentColor; vertical-align: 1px; }
 

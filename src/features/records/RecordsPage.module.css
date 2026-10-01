@@ -32,6 +32,11 @@
 .moreFilters { color: var(--text-2); font-size: 12.5px; }
 .moreFilters > summary { width: fit-content; }
 .moreFilters > div { margin-top: 10px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.range, .rangeCustom { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; }
+.range button { min-height: 30px; padding: 0 12px; border: 1px solid var(--line); border-radius: 999px; background: transparent; box-shadow: none; color: var(--text-2); font-size: 12.5px; font-weight: 560; }
+.range button[aria-pressed="true"], .range button[aria-pressed="true"]:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.rangeCustom label { display: grid; gap: 5px; min-width: 150px; color: var(--text-2); font-size: 12px; font-weight: 560; }
+.rangeSummary { margin: 0; color: var(--text-2); font-size: 12.5px; line-height: 1.55; }
 
 .coverage { color: var(--text-3); font-size: 12px; }
 .coverage > summary { width: fit-content; }
@@ -51,14 +56,15 @@
 /* Sessions */
 .columns { display: grid; flex: 1; grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); gap: 14px; min-height: 0; align-items: stretch; }
 .list, .detail, .usage { min-width: 0; min-height: 0; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-xs); }
-.list { display: grid; align-content: start; gap: 2px; overflow: auto; overscroll-behavior: contain; padding: 6px; }
+.list { display: grid; align-content: start; grid-auto-rows: max-content; gap: 2px; overflow: auto; overscroll-behavior: contain; padding: 6px; }
 .list > button {
   display: grid;
   justify-content: stretch;
   justify-items: start;
   gap: 3px;
   width: 100%;
-  min-height: 0;
+  height: auto;
+  min-height: min-content;
   padding: 10px;
   border: 0;
   border-radius: var(--radius-sm);
@@ -72,28 +78,29 @@
 .list > button:hover:not(:disabled) { background: var(--surface-2); }
 .list > button.selected, .list > button.selected:hover:not(:disabled) { background: var(--accent-soft); }
 .list > button.selected strong { color: var(--accent); }
-.list button strong { display: -webkit-box; overflow: hidden; font-size: 13px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.list button strong { display: block; max-height: 2.8em; overflow: hidden; font-size: 13px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
 .list button small { padding-left: 30px; color: var(--text-2); font-size: 11.5px; overflow-wrap: anywhere; }
 .list button small + small { color: var(--text-3); font-family: var(--font-mono); font-size: 11px; }
-.sessionTitle { display: flex; align-items: flex-start; gap: 8px; }
-.sessionTitle > :first-child { margin-top: -1px; }
+.sessionTitle { display: flex; align-items: flex-start; gap: 8px; width: 100%; min-width: 0; }
+.sessionTitle > :first-child { flex: none; margin-top: 0; }
+.sessionTitle strong { flex: 1; min-width: 0; }
 
-.detail { display: flex; flex-direction: column; overflow: hidden; }
-.detailBar { display: grid; flex: none; gap: 12px; padding: 16px 18px 14px; border-bottom: 1px solid var(--line); }
-.detailHead { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
-.detailHead h2 { display: -webkit-box; margin: 6px 0 4px; overflow: hidden; font-size: 17px; font-weight: 660; line-height: 1.4; letter-spacing: -.2px; overflow-wrap: anywhere; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.detail { display: flex; flex-direction: column; overflow: auto; overscroll-behavior: contain; }
+.detailBar { display: grid; flex: none; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.detailHead { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.detailHead h2 { margin: 2px 0; overflow: hidden; font-size: 16px; font-weight: 660; line-height: 1.35; letter-spacing: -.2px; text-overflow: ellipsis; white-space: nowrap; }
 .detailHead > div { min-width: 0; }
 .detailHead > button { flex: none; }
-.detailHead p, .detailHead small { margin: 0; color: var(--text-2); font-size: 12px; overflow-wrap: anywhere; }
+.detailHead p, .detailHead small { margin: 0; overflow: hidden; color: var(--text-2); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .detailHead p { font-family: var(--font-mono); font-size: 11.5px; }
 .detailIdentity { display: flex; align-items: center; gap: 8px; }
 
-.resume { display: grid; gap: 8px; }
-.resumeBar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.resumeBar > strong { font-size: 13px; font-weight: 620; }
-.resume select { width: auto; min-width: 120px; min-height: var(--control-h-sm); font-size: 12.5px; }
-.resume pre { margin: 0; max-height: 58px; padding: 8px 10px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text-2); font-size: 11.5px; line-height: 1.5; white-space: pre; user-select: text; }
-.resume > p { color: var(--text-2); font-size: 12.5px; }
+.resume { display: grid; gap: 6px; }
+.resumeBar { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; min-width: 0; }
+.resumeBar > p { min-width: 0; overflow: hidden; color: var(--text-2); font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
+.resumeBar .actions, .resume select { flex: none; }
+.resume select { width: auto; min-width: 108px; min-height: var(--control-h-sm); font-size: 12.5px; }
+.resumeBar pre, .resume pre { flex: 1 1 auto; min-width: 0; margin: 0; padding: 0 8px; overflow: hidden; border: 0; background: transparent; color: var(--text-3); font-size: 11.5px; line-height: 28px; text-overflow: ellipsis; white-space: nowrap; user-select: text; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .moreActions { color: var(--text-2); font-size: 12.5px; }
 .moreActions > summary { width: fit-content; }
@@ -101,17 +108,17 @@
 .moreActions > .actions { margin-top: 4px; }
 .projectLink { max-width: 360px; }
 
-.transcript { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 16px 18px 20px; }
+.transcript { flex: none; overflow: visible; padding: 14px 16px 18px; }
 .messages { display: grid; gap: 10px; }
-.messages article { max-width: 88%; padding: 12px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
-.messages article[data-role="user"] { justify-self: end; border-color: var(--accent-line); border-bottom-right-radius: 4px; background: var(--accent-soft); }
-.messages article:not([data-role="user"]) { justify-self: start; border-bottom-left-radius: 4px; }
+.messages article { width: 100%; max-width: none; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); }
+.messages article[data-role="user"] { border-color: var(--accent-line); background: var(--accent-soft); }
+.messages article:not([data-role="user"]) { background: var(--surface); }
 .messages article small { color: var(--text-3); font-size: 11.5px; }
-.messages article p { margin: 6px 0 0; font-size: 13.5px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.messages article p { margin: 6px 0 0; font-size: 13.5px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
 .messages > p { color: var(--text-2); font-size: 12.5px; }
 
 /* Usage */
-.usage { display: grid; flex: 1; align-content: start; justify-items: start; gap: 14px; overflow: auto; overscroll-behavior: contain; padding: 20px; }
+.usage { display: grid; flex: 1; align-content: start; grid-auto-rows: max-content; justify-items: start; gap: 14px; overflow: auto; overscroll-behavior: contain; padding: 20px; }
 .metrics { display: grid; width: 100%; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .metrics div { display: grid; gap: 6px; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
 .metrics small { color: var(--text-2); font-size: 12px; }
@@ -123,18 +130,18 @@
 .priceSources, .savedPrices { display: grid; gap: 4px; color: var(--text-2); font-size: 12.5px; }
 .priceSources strong, .savedPrices strong { color: var(--text); font-size: 13px; }
 .savedPrices p { margin: 0; }
-.priceForm { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; width: 100%; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
-.priceForm label { flex: 1 1 130px; }
-.priceForm p { flex-basis: 100%; margin: 0; color: var(--text-2); font-size: 12.5px; }
+.priceForm { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
+.priceForm label { flex: 1 1 140px; }
+.priceForm .error { flex-basis: 100%; }
 
-.modelTable { width: 100%; margin: 4px 0; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); }
+.modelTable { width: 100%; min-height: min-content; margin: 4px 0; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); }
 .modelTable table { width: 100%; border-collapse: collapse; font-size: 12.5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .modelTable th, .modelTable td { padding: 10px 12px; border-bottom: 1px solid var(--line); text-align: left; }
 .modelTable th { background: var(--surface-2); color: var(--text-2); font-size: 11.5px; font-weight: 600; }
 .modelTable tbody tr { transition: background-color var(--fast) var(--ease); }
 .modelTable tbody tr:hover { background: var(--surface-2); }
 .modelTable tbody tr:last-child td { border-bottom: 0; }
-.modelTable td button { display: block; min-height: 0; padding: 0; border: 0; background: none; box-shadow: none; color: var(--text-2); font-weight: 400; text-align: left; }
+.modelTable td button { display: block; height: auto; min-height: auto; padding: 0; border: 0; background: none; box-shadow: none; color: var(--text-2); font-weight: 400; text-align: left; white-space: normal; }
 .modelTable td button strong { color: var(--text); font-weight: 600; }
 .modelTable td button:hover:not(:disabled) { background: none; }
 .modelTable td button:hover strong { color: var(--accent); }
@@ -145,6 +152,7 @@
 @media (max-width: 900px) {
   .columns { grid-template-columns: 1fr; grid-template-rows: minmax(168px, 34%) minmax(0, 1fr); }
   .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .resumeBar { flex-wrap: wrap; }
 }
 @media (max-width: 540px) {
   .detail, .usage { padding: 14px; }

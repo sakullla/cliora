@@ -74,6 +74,8 @@ test('five full pages are navigable and browser mode never implies native data',
   await expect(page.getByRole('status')).toContainText('浏览器预览');
   await page.keyboard.press('Tab');
   await expect(page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始' })).toBeFocused();
+  await expect(page.locator('.brandmark')).toBeVisible();
+  await expect(page.locator('.brandmark')).toHaveAttribute('src', /128x128/);
   for (const name of ['快速开始', '工具与连接', '资料库', '使用记录', '设置']) {
     await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name }).click();
     await expect(page.getByRole('heading', { name, level: 1 })).toBeVisible();

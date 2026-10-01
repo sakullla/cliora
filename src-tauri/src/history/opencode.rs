@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::{Connection, OpenFlags};
 use serde_json::Value;
 
+use super::usage;
 use super::{check_cancelled, text_content, valid_native_id, HistorySource, ParsedSession, UsageEvent, MAX_SOURCES};
 
 fn database(home: &Path) -> PathBuf {
@@ -60,7 +61,7 @@ pub fn sources_controlled(home: &Path, cancelled: &dyn Fn() -> bool) -> Result<V
 }
 
 fn token(value: &Value, key: &str) -> Option<u64> {
-    value.get(key).and_then(Value::as_u64)
+    usage::field(value, key)
 }
 
 pub fn parse(source: &HistorySource) -> Result<ParsedSession, String> {
@@ -126,13 +127,15 @@ pub fn parse_controlled(source: &HistorySource, cancelled: &dyn Fn() -> bool) ->
                 session.model = model.clone();
             }
             if let Some(tokens) = message.get("tokens") {
+                // `step-finish` parts repeat this same object; the message is the call.
+                // Stored input already excludes cache. Reasoning is generated and is not inside output.
                 let cache = tokens.get("cache").unwrap_or(&Value::Null);
                 session.usage.push(UsageEvent {
                     id: message_id,
                     model,
                     timestamp: time,
                     input: token(tokens, "input"),
-                    output: token(tokens, "output"),
+                    output: usage::generated(token(tokens, "output"), token(tokens, "reasoning")),
                     cache_read: token(cache, "read"),
                     cache_write: token(cache, "write"),
                     input_includes_cache: false,

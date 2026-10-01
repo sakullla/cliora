@@ -2,4 +2,5 @@
 {"type":"model_change","id":"model-1","timestamp":"2026-09-29T08:00:01Z","provider":"openai","modelId":"gpt-5"}
 {"type":"message","id":"user-1","timestamp":"2026-09-29T08:00:02Z","message":{"role":"user","content":[{"type":"text","text":"Build tests"}]}}
 {"type":"message","id":"assistant-1","timestamp":"2026-09-29T08:00:03Z","message":{"role":"assistant","content":[{"type":"text","text":"Done."}],"model":"gpt-5","usage":{"input":11,"output":7,"cacheRead":3,"cacheWrite":2,"totalTokens":23}}}
+{"type":"message","id":"assistant-1","timestamp":"2026-09-29T08:00:03Z","message":{"role":"assistant","content":[{"type":"text","text":"Done."}],"model":"gpt-5","usage":{"input":11,"output":1,"cacheRead":100,"cacheWrite":2,"totalTokens":114}}}
 {"type":"usage","id":"warm-1","timestamp":"2026-09-29T08:00:04Z","model":"gpt-5","usage":{"input":0,"output":0,"cacheRead":25,"cacheWrite":0,"totalTokens":25}}

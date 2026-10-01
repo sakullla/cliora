@@ -5,6 +5,7 @@ test('records keep search, show native resume command and only launch on request
     const records: Array<Record<string, any>> = [
       { id: 'record-a', toolId: 'codex', nativeId: '1111-2222', title: 'Review change', cwd: 'C:\\project', model: 'gpt-6-astra', projectId: null, startedAt: 1790668800000, updatedAt: 1790668800000, favorite: false, partial: false, stale: false, messageCount: 2, usageCount: 1 },
       { id: 'record-b', toolId: 'codex', nativeId: null, title: 'Incomplete record', cwd: null, model: null, projectId: null, startedAt: null, updatedAt: null, favorite: false, partial: true, stale: false, messageCount: 1, usageCount: 0 },
+      ...Array.from({ length: 16 }, (_, index) => ({ id: `record-long-${index}`, toolId: 'codex', nativeId: null, title: `解决区域截图选择录屏没办法操作录取画面以及录屏控制栏看不到按钮只有取消 ${index}`, cwd: 'C:\\project', model: 'glm-5.3', projectId: null, startedAt: 1790668800000, updatedAt: 1790668800000 - index, favorite: false, partial: false, stale: false, messageCount: 1, usageCount: 0 })),
     ];
     const launches: Array<Record<string, unknown>> = [];
     const clipboard: string[] = [];
@@ -23,11 +24,15 @@ test('records keep search, show native resume command and only launch on request
           && (!args.filter.favoriteOnly || item.favorite));
         if (command === 'get_history_session') {
           const session = records.find((item) => item.id === args.id);
-          return { session, messages: [{ id: 'm1', role: 'user', text: 'Review change', timestamp: 1790668800000 }, { id: 'm2', role: 'assistant', text: 'Looks good.', timestamp: 1790668801000 }], usage: [], resumeReason: session?.nativeId ? null : '原始记录没有可验证的恢复 ID' };
+          return { session, messages: [{ id: 'm1', role: 'user', text: 'Review change', timestamp: 1790668800000 }, { id: 'm2', role: 'assistant', text: `Looks good.\n${'历史正文需要整栏滚动。'.repeat(40)}`, timestamp: 1790668801000 }], usage: [], resumeReason: session?.nativeId ? null : '原始记录没有可验证的恢复 ID' };
         }
         if (command === 'set_history_favorite') { const item = records.find((value) => value.id === args.id); if (item) item.favorite = args.favorite; return null; }
         if (command === 'set_history_project') { const item = records.find((value) => value.id === args.id); if (item) item.projectId = args.projectId; return null; }
-        if (command === 'get_history_usage') return { sessionCount: 2, usageSessions: 1, unknownUsageSessions: 1, partialSessions: 1, staleSessions: 0, input: 150, output: 30, cacheRead: 60, cacheWrite: 0, inputIncludesCache: true, estimatedCost: null, currency: null, priceSources: [], scans: [{ toolId: 'codex', scannedAt: 1, sourceCount: 2, failedCount: 0, incomplete: false, detail: '' }] };
+        if (command === 'get_history_usage') return { sessionCount: 2, usageSessions: 1, unknownUsageSessions: 1, partialSessions: 1, staleSessions: 0, input: 150, output: 30, cacheRead: 60, cacheWrite: 0, inputIncludesCache: true, estimatedCost: null, currency: null, priceSources: [], models: ['gpt-6-astra'], byModel: [
+          { toolId: 'codex', model: 'gpt-6-astra', sessionCount: 14, unknownUsageSessions: 0, input: 100, output: 20, cacheRead: 0, cacheWrite: 0, estimatedCost: null, currency: null },
+          { toolId: 'codex', model: 'gpt-6-sol', sessionCount: 8, unknownUsageSessions: 1, input: 50, output: 10, cacheRead: 1, cacheWrite: 2, estimatedCost: null, currency: null },
+          { toolId: 'codex', model: 'gpt-6-luna', sessionCount: 3, unknownUsageSessions: 0, input: 5, output: 1, cacheRead: 0, cacheWrite: 0, estimatedCost: null, currency: null },
+        ], scans: [{ toolId: 'codex', scannedAt: 1, sourceCount: 2, failedCount: 0, incomplete: false, detail: '' }] };
         if (command === 'copy_history_resume_command') {
           const text = `Set-Location -LiteralPath '${records.find((item) => item.id === args.id)?.projectId ? 'C:\\new-project' : 'C:\\project'}'; & 'codex' ${args.mode === 'yolo' ? "'--yolo' " : ''}'resume' '1111-2222'`;
           if (args.mode === 'yolo' && control.delayYolo) return new Promise((resolve) => { control.pending.push(() => resolve(text)); });
@@ -43,6 +48,20 @@ test('records keep search, show native resume command and only launch on request
   const navigation = page.getByRole('navigation', { name: '页面' });
   await navigation.getByRole('button', { name: '使用记录' }).click();
   await expect(page.getByRole('button', { name: /Review change/ })).toBeVisible();
+  const listLayout = await page.evaluate(() => {
+    const buttons = [...document.querySelectorAll('[aria-label="会话列表"] > button')];
+    const boxes = buttons.map((button) => button.getBoundingClientRect());
+    const overlaps = boxes.slice(1).filter((box, index) => box.top < boxes[index].bottom - 1).length;
+    const title = buttons[2]?.querySelector('strong');
+    const titleBox = title?.getBoundingClientRect();
+    const lineHeight = title ? Number.parseFloat(getComputedStyle(title).lineHeight) : 0;
+    return { count: buttons.length, overlaps, minHeight: Math.min(...boxes.map((box) => box.height)), titleLines: titleBox && lineHeight ? titleBox.height / lineHeight : 0 };
+  });
+  expect(listLayout.count).toBeGreaterThan(8);
+  expect(listLayout.overlaps).toBe(0);
+  expect(listLayout.minHeight).toBeGreaterThan(48);
+  expect(listLayout.titleLines).toBeGreaterThan(1);
+  expect(listLayout.titleLines).toBeLessThanOrEqual(2.05);
   const filterOrder = await page.evaluate(() => {
     const search = document.querySelector('[aria-label="搜索会话"]')?.closest('label');
     const tool = document.querySelector('[aria-label="筛选工具"]')?.closest('label');
@@ -63,18 +82,27 @@ test('records keep search, show native resume command and only launch on request
   const scrollSplit = await page.evaluate(() => {
     const list = document.querySelector('[aria-label="会话列表"]');
     const transcript = document.querySelector('[aria-label="会话正文"]');
+    const detail = transcript?.parentElement;
+    const command = document.querySelector('[aria-label="原生恢复命令"]');
     const main = document.getElementById('main');
-    if (!list || !transcript || !main) return null;
+    if (!list || !transcript || !detail || !command || !main || !(detail instanceof HTMLElement)) return null;
     const before = list.scrollTop;
+    const commandTop = command.getBoundingClientRect().top;
+    detail.scrollTop = detail.scrollHeight;
+    const commandAfter = command.getBoundingClientRect().top;
+    const scrolledAway = detail.scrollTop > 0 && commandAfter < commandTop && commandAfter < detail.getBoundingClientRect().top;
+    detail.scrollTop = 0;
     transcript.dispatchEvent(new WheelEvent('wheel', { deltaY: 240, bubbles: true, cancelable: true }));
     return {
       main: getComputedStyle(main).overflowY,
       list: getComputedStyle(list).overflowY,
+      detail: getComputedStyle(detail).overflowY,
       transcript: getComputedStyle(transcript).overflowY,
       chained: list.scrollTop !== before,
+      scrolledAway,
     };
   });
-  expect(scrollSplit).toEqual({ main: 'hidden', list: 'auto', transcript: 'auto', chained: false });
+  expect(scrollSplit).toEqual({ main: 'hidden', list: 'auto', detail: 'auto', transcript: 'visible', chained: false, scrolledAway: true });
   const resumeOutside = page.getByRole('button', { name: '在外部终端继续' });
   await expect(resumeOutside).toBeVisible();
   await expect(resumeOutside).toHaveClass(/primary/);
@@ -109,7 +137,22 @@ test('records keep search, show native resume command and only launch on request
   await navigation.getByRole('button', { name: '使用记录' }).click();
   await expect(page.getByRole('textbox', { name: '搜索会话' })).toHaveValue('Review');
   await page.getByRole('tab', { name: '用量' }).click();
+  const usageLayout = await page.evaluate(() => {
+    const table = document.querySelector('[aria-label="按模型用量明细"]');
+    const wrap = table?.parentElement;
+    const button = [...document.querySelectorAll('button')].find((item) => item.textContent === '设置估算价格');
+    if (!table || !wrap || !button) return null;
+    const tableBox = table.getBoundingClientRect();
+    const wrapBox = wrap.getBoundingClientRect();
+    const buttonBox = button.getBoundingClientRect();
+    return { wrapShowsTable: wrapBox.height >= tableBox.height - 1, buttonBelow: buttonBox.top >= wrapBox.bottom - 1, rows: table.querySelectorAll('tbody tr').length };
+  });
+  expect(usageLayout).toEqual({ wrapShowsTable: true, buttonBelow: true, rows: 3 });
   await expect(page.getByText('150', { exact: true })).toBeVisible();
   await expect(page.getByText('输入 token · 已知小计')).toBeVisible();
-  await expect(page.getByText('未知', { exact: true })).toBeVisible();
+  await expect(page.getByText('估算费用', { exact: true }).locator('..').getByText('未知', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '设置估算价格' }).click();
+  const priceDialog = page.getByRole('dialog', { name: '设置估算价格' });
+  await expect(priceDialog.getByLabel('价格工具')).toBeVisible();
+  await expect(priceDialog.getByRole('button', { name: '保存价格' })).toBeVisible();
 });

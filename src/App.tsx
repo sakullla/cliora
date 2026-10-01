@@ -4,6 +4,7 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Icon } from './components/Icon';
 import type { IconName } from './components/Icon';
+import brandIcon from '../src-tauri/icons/128x128@2x.png';
 import { ConfirmationHost } from './components/ConfirmationHost';
 import { ToolIcon, ToolIconsContext } from './components/ToolIcon';
 import { ToolIconSettings } from './features/settings/ToolIconSettings';
@@ -244,7 +245,7 @@ export default function App() {
 
   return <ToolIconsContext value={bootstrap.preferences.tool_icons ?? {}}><div className="shell">
     <aside className="sidebar" aria-label="主导航">
-      <div className="brand"><span className="brandmark" aria-hidden="true"><Icon name="leaf" size={20} strokeWidth={1.9} /></span><span><strong>栖点</strong><small>CLIORA</small></span></div>
+      <div className="brand"><img className="brandmark" src={brandIcon} alt="" /><span><strong>栖点</strong><small>CLIORA</small></span></div>
       <nav className="nav" aria-label="页面">
         {pages.map((item, index) => <button key={item.id} type="button" className={page === item.id ? 'active' : ''} aria-current={page === item.id ? 'page' : undefined} aria-keyshortcuts={`${modAria}+${index + 1}`} title={`${item.label}（${modLabel}+${index + 1}）`} onClick={() => go(item.id)}>
           <span className="nav-glyph" aria-hidden="true"><Icon name={item.glyph} /></span>{item.label}<kbd className="nav-kbd" aria-hidden="true">{modLabel === '⌘' ? '⌘' : '^'}{index + 1}</kbd>
