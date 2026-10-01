@@ -9,7 +9,6 @@ import { CodeEditor } from '../../components/CodeEditor';
 import { FilterSelect } from '../../components/FilterSelect';
 import type { FilterSelectOption } from '../../components/FilterSelect';
 import { GuideDialog } from '../../components/GuideDialog';
-import { Icon } from '../../components/Icon';
 import { ToolIcon } from '../../components/ToolIcon';
 import { displayPath } from '../../lib/paths';
 import styles from './ManagedTools.module.css';
@@ -251,7 +250,7 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
       const rememberedDir = launchDirectories.get(tool.id);
       const switchTitle = !workspace ? undefined : !writable ? workspace.probe.nativeWrites.reason || '当前不能写入这个工具的配置' : '点一下即切换，下次启动会读取这份配置';
       const launchTitle = !installed && workspace ? '尚未确认安装，可在“工具与连接”中检查'
-        : [rememberedDir ? `在 ${displayPath(rememberedDir)} 启动` : '', launchMode === 'yolo' ? '按此 CLI 的原生参数跳过审批' : launchSettings?.cliMode === 'yolo' ? '此 CLI 未提供已确认的 YOLO 参数，将用普通模式启动' : ''].filter(Boolean).join('；') || undefined;
+        : [rememberedDir ? `在 ${displayPath(rememberedDir)} 启动；右键更换目录` : '', launchMode === 'yolo' ? '按此 CLI 的原生参数跳过审批' : launchSettings?.cliMode === 'yolo' ? '此 CLI 未提供已确认的 YOLO 参数，将用普通模式启动' : ''].filter(Boolean).join('；') || undefined;
       const line = loaded?.error
         ? lineNotice('error', `${tool.name} 检测失败。可编辑配置或重新进入本页重新读取。`, loaded.error)
         : loaded?.activity === 'apply'
@@ -266,7 +265,7 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
             : profiles.length ? <div role="radiogroup" aria-label={`切换${tool.name}的配置`} title={switchTitle}>{profiles.map((item) => <button key={item.id} type="button" role="radio" aria-checked={item.id === selected?.id} className={item.id === selected?.id ? styles.activeConfig : ''} disabled={loaded?.busy || !writable} title={profileLabel(item.name, item.connection)} onClick={() => { if (item.id !== selected?.id || !appliedCurrent) void switchProfile(tool.id, item.id); }}>{item.name}</button>)}</div>
             : <button type="button" className={styles.addConfig} onClick={() => onOpenTool(tool.id)}>新建配置</button>}
         </div>
-        <div className={styles.rowActions}><button type="button" className={styles.iconAction} aria-label={`选择${tool.name}的启动目录`} title="选择本次启动的工作目录" disabled={!installed || loaded?.busy} onClick={() => void launchTool(tool.id, true)}><Icon name="folder" size={15} /></button><button type="button" className={styles.launch} disabled={!installed || loaded?.busy} aria-busy={loaded?.activity === 'launch' || undefined} title={launchTitle} onClick={() => void launchTool(tool.id)}>{loaded?.activity === 'launch' ? '正在启动' : '启动'}</button><button type="button" onClick={() => onOpenTool(tool.id)}>编辑配置 →</button></div>
+        <div className={styles.rowActions}><button type="button" className={styles.launch} disabled={!installed || loaded?.busy} aria-busy={loaded?.activity === 'launch' || undefined} title={launchTitle} onClick={() => void launchTool(tool.id)} onContextMenu={(event) => { event.preventDefault(); void launchTool(tool.id, true); }}>{loaded?.activity === 'launch' ? '正在启动' : '启动'}</button><button type="button" onClick={() => onOpenTool(tool.id)}>编辑配置 →</button></div>
         {line && <div className={styles.note} data-tone={line.tone} role={line.tone === 'error' ? 'alert' : 'status'} title={line.title}>{line.text}</div>}
       </div>;
     })}
