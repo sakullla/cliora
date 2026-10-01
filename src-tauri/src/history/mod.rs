@@ -18,6 +18,7 @@ pub mod codex;
 pub mod grok;
 pub mod opencode;
 pub mod pi;
+mod usage;
 
 const MAX_SOURCE_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_SOURCES: usize = 5_000;
@@ -723,9 +724,24 @@ fn query_sessions(
     })
 }
 
+fn timestamp_in_range(filter: &HistoryFilter, time: Option<i64>) -> bool {
+    time.is_some_and(|time| {
+        filter.from_ms.is_none_or(|from| time >= from)
+            && filter.to_ms.is_none_or(|to| time < to)
+    })
+}
+
 pub fn list(db: &Database, filter: &HistoryFilter) -> Result<Vec<HistorySession>, String> {
-    Ok(query_sessions(db, filter, true)?
+    let dated = filter.from_ms.is_some() || filter.to_ms.is_some();
+    Ok(query_sessions(db, filter, false)?
         .into_iter()
+        .filter(|(session, events)| {
+            !dated
+                || timestamp_in_range(filter, session.updated_at)
+                || events
+                    .iter()
+                    .any(|event| timestamp_in_range(filter, event.timestamp))
+        })
         .map(|(session, _)| session)
         .collect())
 }
@@ -924,12 +940,6 @@ fn summarize_rows(rows: &[(HistorySession, Vec<UsageEvent>)], price_map: &BTreeM
     let mut semantics: Option<bool> = None;
     let mut mixed_semantics = false;
     for (session, events) in rows {
-        let in_range = |time: Option<i64>| {
-            time.is_some_and(|time| {
-                filter.from_ms.is_none_or(|from| time >= from)
-                    && filter.to_ms.is_none_or(|to| time < to)
-            })
-        };
         let selected: Vec<_> = events
             .iter()
             .filter(|event| {
@@ -938,13 +948,11 @@ fn summarize_rows(rows: &[(HistorySession, Vec<UsageEvent>)], price_map: &BTreeM
                     .as_deref()
                     .is_none_or(|model| if model == "__unknown__" { event.model.is_none() } else { event.model.as_deref() == Some(model) })
                     && ((filter.from_ms.is_none() && filter.to_ms.is_none())
-                        || in_range(event.timestamp))
+                        || timestamp_in_range(filter, event.timestamp))
             })
             .collect();
-        if filter.from_ms.is_some() || filter.to_ms.is_some() {
-            if selected.is_empty() && !in_range(session.updated_at) {
-                continue;
-            }
+        if (filter.from_ms.is_some() || filter.to_ms.is_some()) && selected.is_empty() {
+            continue;
         }
         result.session_count += 1;
         if session.partial {

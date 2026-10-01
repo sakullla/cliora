@@ -6,6 +6,7 @@ import { native, nativeAvailable } from '../../lib/native';
 import type { LaunchSettings } from '../../types/launch';
 import { preferredLaunchMode } from '../../types/launch';
 import type { AdapterDescriptor, RegisteredToolWorkspace } from '../../types/native';
+import { Icon } from '../../components/Icon';
 import { ToolIcon } from '../../components/ToolIcon';
 import styles from './ManagedTools.module.css';
 
@@ -36,6 +37,10 @@ function profileLabel(name: string, connection: { model?: string | null } | null
 
 type SwitchableProfile = { id: string; name: string; connection: { model?: string | null } | null | undefined };
 
+function StepGlyph({ direction }: { direction: 'left' | 'right' }) {
+  return <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={direction === 'left' ? 'm15 6-6 6 6 6' : 'm9 6 6 6-6 6'} /></svg>;
+}
+
 function ProfileMenu({ label, profiles, selected, appliedCurrent, disabled, title, onSwitch }: {
   label: string;
   profiles: SwitchableProfile[];
@@ -49,22 +54,25 @@ function ProfileMenu({ label, profiles, selected, appliedCurrent, disabled, titl
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
   const [box, setBox] = useState<{ top?: number; bottom?: number; left: number; width: number; maxHeight: number } | null>(null);
-  const anchor = useRef<HTMLButtonElement>(null);
+  const anchor = useRef<HTMLDivElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const listId = useId();
+  const showSearch = profiles.length > 8;
   const matches = profiles.filter((item) => profileLabel(item.name, item.connection).toLowerCase().includes(query.trim().toLowerCase()));
+  const selectedModel = selected?.connection?.model?.trim() ?? '';
+  const selectedIndex = profiles.findIndex((item) => item.id === selected?.id);
 
   useLayoutEffect(() => {
     if (!open || !anchor.current) return;
     const place = () => {
       const rect = anchor.current?.getBoundingClientRect();
       if (!rect) return;
-      const width = Math.max(rect.width, 240);
+      const width = Math.min(Math.max(rect.width, 280), window.innerWidth - 16);
       const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
       const below = window.innerHeight - rect.bottom - 12;
       const above = rect.top - 12;
-      const upward = below < 180 && above > below;
-      setBox({ left, width, maxHeight: Math.max(160, Math.min(280, upward ? above : below)), top: upward ? undefined : rect.bottom + 4, bottom: upward ? window.innerHeight - rect.top + 4 : undefined });
+      const upward = below < 220 && above > below;
+      setBox({ left, width, maxHeight: Math.max(180, Math.min(320, upward ? above : below)), top: upward ? undefined : rect.bottom + 4, bottom: upward ? window.innerHeight - rect.top + 4 : undefined });
     };
     place();
     window.addEventListener('resize', place);
@@ -72,18 +80,37 @@ function ProfileMenu({ label, profiles, selected, appliedCurrent, disabled, titl
     return () => { window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true); };
   }, [open]);
 
-  useEffect(() => { setActive(0); }, [query, open]);
   useEffect(() => { if (disabled) setOpen(false); }, [disabled]);
+  useEffect(() => {
+    if (!open) return;
+    setActive(Math.max(0, profiles.findIndex((item) => item.id === selected?.id)));
+  }, [open]);
+  useEffect(() => { setActive(0); }, [query]);
   useEffect(() => {
     if (!open) return;
     const close = (event: MouseEvent) => {
       const target = event.target as Node;
       if (anchor.current?.contains(target) || panel.current?.contains(target)) return;
       setOpen(false);
+      setQuery('');
     };
     document.addEventListener('mousedown', close);
     return () => document.removeEventListener('mousedown', close);
   }, [open]);
+  useEffect(() => {
+    if (!open || showSearch) return;
+    panel.current?.focus();
+  }, [open, showSearch, box]);
+  useEffect(() => {
+    if (!open || !panel.current) return;
+    const node = panel.current.querySelector<HTMLElement>('[data-active="true"]');
+    const list = node?.parentElement;
+    if (!node || !list) return;
+    const top = node.offsetTop;
+    const bottom = top + node.offsetHeight;
+    if (top < list.scrollTop) list.scrollTop = top;
+    else if (bottom > list.scrollTop + list.clientHeight) list.scrollTop = bottom - list.clientHeight;
+  }, [open, active, query]);
 
   function choose(item: SwitchableProfile) {
     setOpen(false);
@@ -91,21 +118,45 @@ function ProfileMenu({ label, profiles, selected, appliedCurrent, disabled, titl
     if (item.id !== selected?.id || !appliedCurrent) onSwitch(item.id);
   }
 
-  function onSearchKey(event: KeyboardEvent<HTMLInputElement>) {
+  function move(direction: -1 | 1) {
+    if (disabled || profiles.length < 2) return;
+    const index = selectedIndex < 0 ? 0 : selectedIndex;
+    const next = profiles[(index + direction + profiles.length) % profiles.length];
+    if (next) choose(next);
+  }
+
+  function onMenuKey(event: KeyboardEvent<HTMLElement>) {
     if (event.key === 'ArrowDown') { event.preventDefault(); setActive((index) => Math.min(index + 1, Math.max(matches.length - 1, 0))); return; }
     if (event.key === 'ArrowUp') { event.preventDefault(); setActive((index) => Math.max(index - 1, 0)); return; }
     if (event.key === 'Enter' && matches[active]) { event.preventDefault(); choose(matches[active]); return; }
-    if (event.key === 'Escape') { event.preventDefault(); setOpen(false); }
+    if (event.key === 'Escape') { event.preventDefault(); setOpen(false); setQuery(''); }
+  }
+
+  function onTriggerKey(event: KeyboardEvent<HTMLButtonElement>) {
+    if (event.key === 'ArrowLeft') { event.preventDefault(); move(-1); return; }
+    if (event.key === 'ArrowRight') { event.preventDefault(); move(1); return; }
+    if (event.key === 'ArrowDown' && !open) { event.preventDefault(); setOpen(true); }
   }
 
   return <>
-    <button ref={anchor} type="button" className={styles.menuTrigger} data-empty={!selected || undefined} data-open={open || undefined} aria-label={label} aria-haspopup="listbox" aria-expanded={open} aria-controls={listId} disabled={disabled} title={title ?? (selected ? profileLabel(selected.name, selected.connection) : undefined)} onClick={() => setOpen((value) => !value)}>
-      <span>{selected?.name ?? '选择要使用的配置'}</span>
-    </button>
-    {open && box && createPortal(<div ref={panel} className={styles.menu} role="listbox" id={listId} aria-label={label} style={{ top: box.top, bottom: box.bottom, left: box.left, width: box.width }}>
-      <input aria-label="搜索配置" placeholder="输入配置名称" value={query} autoFocus onChange={(event) => setQuery(event.target.value)} onKeyDown={onSearchKey} />
-      <div className={styles.menuList} style={{ maxHeight: Math.max(120, box.maxHeight - 52) }}>
-        {matches.length ? matches.map((item, index) => <button key={item.id} type="button" role="option" aria-selected={item.id === selected?.id} data-active={index === active || undefined} title={profileLabel(item.name, item.connection)} onMouseEnter={() => setActive(index)} onClick={() => choose(item)}><span>{item.name}</span>{item.connection?.model?.trim() && <small>{item.connection.model.trim()}</small>}{item.id === selected?.id && !appliedCurrent && <em>有未应用修改</em>}</button>) : <p>没有匹配的配置</p>}
+    <div ref={anchor} className={styles.switcher}>
+      <button type="button" className={styles.step} aria-label="上一个配置" disabled={disabled || profiles.length < 2} title="切换到上一个配置" onClick={() => move(-1)}><StepGlyph direction="left" /></button>
+      <button type="button" className={styles.menuTrigger} data-empty={!selected || undefined} data-open={open || undefined} aria-label={label} aria-haspopup="listbox" aria-expanded={open} aria-controls={listId} disabled={disabled} title={title ?? (selected ? profileLabel(selected.name, selected.connection) : undefined)} onClick={() => setOpen((value) => !value)} onKeyDown={onTriggerKey}>
+        <span className={styles.switchCopy}><span>{selected?.name ?? '选择要使用的配置'}</span>{selectedModel && <small>{selectedModel}</small>}</span>
+      </button>
+      <button type="button" className={styles.step} aria-label="下一个配置" disabled={disabled || profiles.length < 2} title="切换到下一个配置" onClick={() => move(1)}><StepGlyph direction="right" /></button>
+    </div>
+    {open && box && createPortal(<div ref={panel} className={styles.menu} role="listbox" id={listId} aria-label={label} tabIndex={-1} style={{ top: box.top, bottom: box.bottom, left: box.left, width: box.width }} onKeyDown={showSearch ? undefined : onMenuKey}>
+      {showSearch && <input aria-label="搜索配置" placeholder="输入配置名称" value={query} autoFocus onChange={(event) => setQuery(event.target.value)} onKeyDown={onMenuKey} />}
+      <div className={styles.menuList} style={{ maxHeight: Math.max(140, box.maxHeight - (showSearch ? 52 : 8)) }}>
+        {matches.length ? matches.map((item, index) => {
+          const model = item.connection?.model?.trim();
+          const current = item.id === selected?.id;
+          return <button key={item.id} type="button" role="option" aria-selected={current} data-active={index === active || undefined} title={profileLabel(item.name, item.connection)} onMouseEnter={() => setActive(index)} onClick={() => choose(item)}>
+            <span><strong>{item.name}</strong>{model && <small>{model}</small>}</span>
+            <span className={styles.menuMarks}>{current && !appliedCurrent && <em>有未应用修改</em>}{current && <Icon name="check" size={14} />}</span>
+          </button>;
+        }) : <p>没有匹配的配置</p>}
       </div>
     </div>, document.body)}
   </>;
@@ -214,7 +265,7 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
         : loaded?.activity === 'apply'
           ? lineNotice('pending', `正在应用 ${tool.name} 的配置。`)
           : loaded?.notice ?? null;
-      return <div className={styles.row} key={tool.id}>
+      return <div className={styles.row} data-tool-row key={tool.id}>
         <div className={styles.name}><ToolIcon toolId={tool.id} size={34} /><span><strong>{tool.name}</strong><small className={styles.status} data-state={loaded?.error ? 'error' : !workspace ? 'loading' : installed ? 'ok' : 'warn'}>{loaded?.error ? '检测失败' : workspace ? installed ? workspace.probe.installations.find((item) => item.path === workspace.probe.selectedPath)?.version ?? '已安装' : '未确认安装' : '正在检测'}</small></span></div>
         <div className={styles.switch}>
           {loaded?.error ? null

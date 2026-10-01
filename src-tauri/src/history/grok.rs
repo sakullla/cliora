@@ -3,6 +3,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
+use super::usage;
 use super::{
     check_cancelled, read_jsonl_controlled, source_fingerprint, source_fingerprint_controlled, text_content, timestamp, valid_native_id, HistorySource,
     ParsedSession, UsageEvent, MAX_SOURCES,
@@ -100,7 +101,34 @@ fn read_json(path: &Path) -> Result<Value, String> {
 }
 
 fn token(value: &Value, key: &str) -> Option<u64> {
-    value.get(key).and_then(Value::as_u64)
+    usage::field(value, key)
+}
+
+fn push_turn(session: &mut ParsedSession, id: String, model: Option<String>, time: Option<i64>, values: &Value) {
+    // Grok's inputTokens already include cache. reasoningTokens are already inside outputTokens.
+    // `usage.json` turns partition the session; summing `updates.jsonl` turn_completed snapshots would recount.
+    let Some(counts) = usage::from_optional(
+        token(values, "inputTokens"),
+        token(values, "outputTokens"),
+        token(values, "cachedReadTokens"),
+        token(values, "cacheCreationTokens"),
+    ) else {
+        return;
+    };
+    let counts = usage::clamp_cache_inside_input(counts);
+    if !usage::active(counts) {
+        return;
+    }
+    session.usage.push(UsageEvent {
+        id,
+        model,
+        timestamp: time,
+        input: Some(counts.input),
+        output: Some(counts.output),
+        cache_read: Some(counts.read),
+        cache_write: Some(counts.write),
+        input_includes_cache: true,
+    });
 }
 
 pub fn parse(source: &HistorySource) -> Result<ParsedSession, String> {
@@ -190,32 +218,27 @@ pub fn parse_controlled(source: &HistorySource, cancelled: &dyn Fn() -> bool) ->
                         {
                             for (model, values) in models {
                                 check_cancelled(cancelled)?;
-                                session.usage.push(UsageEvent {
-                                    id: format!("{}:turn-{turn_id}:{model}", source.key()),
-                                    model: Some(model.clone()),
-                                    timestamp: time,
-                                    input: token(values, "inputTokens"),
-                                    output: token(values, "outputTokens"),
-                                    cache_read: token(values, "cachedReadTokens"),
-                                    cache_write: token(values, "cacheCreationTokens"),
-                                    input_includes_cache: false,
-                                });
+                                push_turn(
+                                    &mut session,
+                                    format!("{}:turn-{turn_id}:{model}", source.key()),
+                                    Some(model.clone()),
+                                    time,
+                                    values,
+                                );
                             }
                         } else {
-                            session.usage.push(UsageEvent {
-                                id: format!("{}:turn-{turn_id}", source.key()),
-                                model: turn
-                                    .get("primaryModelId")
-                                    .and_then(Value::as_str)
-                                    .map(str::to_owned)
-                                    .or_else(|| session.model.clone()),
-                                timestamp: time,
-                                input: token(turn, "inputTokens"),
-                                output: token(turn, "outputTokens"),
-                                cache_read: token(turn, "cachedReadTokens"),
-                                cache_write: token(turn, "cacheCreationTokens"),
-                                input_includes_cache: false,
-                            });
+                            let model = turn
+                                .get("primaryModelId")
+                                .and_then(Value::as_str)
+                                .map(str::to_owned)
+                                .or_else(|| session.model.clone());
+                            push_turn(
+                                &mut session,
+                                format!("{}:turn-{turn_id}", source.key()),
+                                model,
+                                time,
+                                turn,
+                            );
                         }
                     }
                 } else if let Some(models) = total
@@ -223,30 +246,27 @@ pub fn parse_controlled(source: &HistorySource, cancelled: &dyn Fn() -> bool) ->
                     .and_then(Value::as_object)
                     .filter(|models| !models.is_empty())
                 {
+                    let updated = session.updated_at;
                     for (model, values) in models {
                         check_cancelled(cancelled)?;
-                        session.usage.push(UsageEvent {
-                            id: format!("{}:model-{model}", source.key()),
-                            model: Some(model.clone()),
-                            timestamp: session.updated_at,
-                            input: token(values, "inputTokens"),
-                            output: token(values, "outputTokens"),
-                            cache_read: token(values, "cachedReadTokens"),
-                            cache_write: token(values, "cacheCreationTokens"),
-                            input_includes_cache: false,
-                        });
+                        push_turn(
+                            &mut session,
+                            format!("{}:model-{model}", source.key()),
+                            Some(model.clone()),
+                            updated,
+                            values,
+                        );
                     }
                 } else if total.is_object() {
-                    session.usage.push(UsageEvent {
-                        id: format!("{}:session-total", source.key()),
-                        model: session.model.clone(),
-                        timestamp: session.updated_at,
-                        input: token(total, "inputTokens"),
-                        output: token(total, "outputTokens"),
-                        cache_read: token(total, "cachedReadTokens"),
-                        cache_write: token(total, "cacheCreationTokens"),
-                        input_includes_cache: false,
-                    });
+                    let model = session.model.clone();
+                    let updated = session.updated_at;
+                    push_turn(
+                        &mut session,
+                        format!("{}:session-total", source.key()),
+                        model,
+                        updated,
+                        total,
+                    );
                 }
             }
             Err(_) => session.partial = true,

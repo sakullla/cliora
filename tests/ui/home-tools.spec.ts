@@ -257,8 +257,9 @@ test('many profiles stay in one searchable menu', async ({ page }) => {
   const tools = page.getByLabel('管理中的工具');
   await expect(tools.getByRole('radiogroup')).toHaveCount(0);
   const menu = tools.getByRole('button', { name: '切换Codex的配置' });
-  await expect(menu).toHaveText('日常');
-  const rowHeight = await menu.evaluate((element) => element.parentElement?.parentElement?.getBoundingClientRect().height ?? 999);
+  await expect(menu).toContainText('日常');
+  await expect(menu).toContainText('m0');
+  const rowHeight = await menu.evaluate((element) => element.closest('[data-tool-row]')?.getBoundingClientRect().height ?? 999);
   expect(rowHeight).toBeLessThan(140);
   await menu.click();
   const list = page.getByRole('listbox', { name: '切换Codex的配置' });
@@ -267,9 +268,85 @@ test('many profiles stay in one searchable menu', async ({ page }) => {
   await page.getByLabel('搜索配置').fill('配置 12');
   await expect(list.getByRole('option')).toHaveCount(1);
   await list.getByRole('option', { name: '配置 12' }).click();
-  await expect(menu).toHaveText('配置 12');
+  await expect(menu).toContainText('配置 12');
+  await expect(menu).toContainText('m12');
   await expect(page.getByRole('listbox')).toHaveCount(0);
   await expect(tools.getByRole('status')).toHaveText('Codex 已写入原生文件，下次启动读取。');
   const calls = await page.evaluate(() => (window as unknown as { __applyCalls: Array<{ profileId: string }> }).__applyCalls);
   expect(calls.map((call) => call.profileId)).toEqual(['p12']);
+});
+
+test('a short profile menu switches by step buttons and shows the model', async ({ page }) => {
+  await page.addInitScript(() => {
+    const applied = { codex: 'zhipu' };
+    const profiles = [
+      { id: 'kimi', tool: 'codex', name: 'Kimi For Coding', version: 1, inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection: { model: 'k3' } },
+      { id: 'zhipu', tool: 'codex', name: 'Zhipu GLM', version: 1, inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection: { model: 'glm-5.3' } },
+      { id: 'cpa', tool: 'codex', name: 'cpa', version: 1, inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection: { model: 'claude-opus-5-5' } },
+      { id: 'deepseek', tool: 'codex', name: 'DeepSeek', version: 1, inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection: { model: 'deepseek-flash' } },
+      { id: 'minimax', tool: 'codex', name: 'MiniMax', version: 1, inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection: { model: 'MiniMax-M3' } },
+      { id: 'spare', tool: 'codex', name: '备用', version: 1, inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection: { model: 'spare-model' } },
+    ];
+    Object.assign(window, {
+      isTauri: true,
+      __applyCalls: [] as unknown[],
+      __TAURI_INTERNALS__: { invoke: async (command: string, args: { profileId?: string } = {}) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [] }], managedIds: ['codex'], preservedUnknown: [] };
+        if (command === 'list_projects' || command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_skill_recovery_issues' || command === 'scan_native_skills' || command === 'list_native_mcp') return [];
+        if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
+        if (command === 'get_tray_status') return { available: false, error: null };
+        if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+        if (command === 'get_registered_tool_workspace') {
+          const profile = profiles.find((item) => item.id === applied.codex);
+          return { probe: { selectedPath: 'C:/codex.cmd', installations: [{ path: 'C:/codex.cmd', version: '1.0.0', status: 'available' }], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: [], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '' }, profiles, binding: { scopeKey: 'global', tool: 'codex', profileId: applied.codex, profileVersion: profile?.version ?? 1, managed: {} }, snapshots: [], recoveryNeeded: [], common: null, customPath: null };
+        }
+        if (command === 'apply_registered_native_profile') { (window as unknown as { __applyCalls: unknown[] }).__applyCalls.push(args); applied.codex = args.profileId ?? applied.codex; return { applications: [] }; }
+        return null;
+      } },
+    });
+  });
+  await page.setViewportSize({ width: 1360, height: 768 });
+  await page.goto('/');
+  const tools = page.getByLabel('管理中的工具');
+  const menu = tools.getByRole('button', { name: '切换Codex的配置' });
+  const stacked = await menu.evaluate((element) => {
+    const name = element.querySelector('span span');
+    const model = element.querySelector('small');
+    if (!name || !model) return false;
+    const nameBox = name.getBoundingClientRect();
+    const modelBox = model.getBoundingClientRect();
+    return modelBox.top >= nameBox.bottom - 1 && model.textContent === 'glm-5.3' && nameBox.width > 40;
+  });
+  expect(stacked).toBe(true);
+  await tools.getByRole('button', { name: '下一个配置' }).click();
+  await expect(page.getByRole('listbox')).toHaveCount(0);
+  await expect(menu).toContainText('cpa');
+  await expect(menu).toContainText('claude-opus-5-5');
+  await expect(tools.getByRole('status')).toHaveText('Codex 已写入原生文件，下次启动读取。');
+  await tools.getByRole('button', { name: '上一个配置' }).click();
+  await expect(menu).toContainText('Zhipu GLM');
+  await menu.focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(menu).toContainText('cpa');
+  await menu.click();
+  const list = page.getByRole('listbox', { name: '切换Codex的配置' });
+  await expect(list.getByRole('option')).toHaveCount(6);
+  await expect(page.getByLabel('搜索配置')).toHaveCount(0);
+  const option = list.getByRole('option', { name: 'DeepSeek' });
+  await expect(option).toContainText('deepseek-flash');
+  const optionStacked = await option.evaluate((element) => {
+    const name = element.querySelector('strong')?.getBoundingClientRect();
+    const model = element.querySelector('small')?.getBoundingClientRect();
+    return !!name && !!model && model.top >= name.bottom - 1;
+  });
+  expect(optionStacked).toBe(true);
+  await expect(list).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('listbox')).toHaveCount(0);
+  await expect(menu).toContainText('DeepSeek');
+  await expect(menu).toContainText('deepseek-flash');
+  const calls = await page.evaluate(() => (window as unknown as { __applyCalls: Array<{ profileId: string }> }).__applyCalls);
+  expect(calls.map((call) => call.profileId)).toEqual(['cpa', 'zhipu', 'cpa', 'deepseek']);
 });

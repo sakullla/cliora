@@ -1,7 +1,9 @@
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use serde_json::Value;
 
+use super::usage::{self, RequestUsage};
 use super::{
     discover_jsonl_controlled, read_jsonl_controlled, text_content, timestamp, valid_native_id, HistorySource,
     ParsedSession, UsageEvent,
@@ -17,22 +19,20 @@ pub fn sources_controlled(home: &Path, cancelled: &dyn Fn() -> bool) -> Result<V
     }, cancelled)
 }
 
-fn usage_event(
-    id: String,
-    model: Option<String>,
-    time: Option<i64>,
-    usage: &Value,
-) -> Option<UsageEvent> {
-    Some(UsageEvent {
-        id,
-        model,
-        timestamp: time,
-        input: usage.get("input").and_then(Value::as_u64),
-        output: usage.get("output").and_then(Value::as_u64),
-        cache_read: usage.get("cacheRead").and_then(Value::as_u64),
-        cache_write: usage.get("cacheWrite").and_then(Value::as_u64),
-        input_includes_cache: false,
-    })
+fn remember(events: &mut BTreeMap<String, RequestUsage>, id: String, model: Option<String>, time: Option<i64>, usage: &Value) {
+    // Pi follows Anthropic: input excludes cache, and reasoning is already inside output.
+    let Some(counts) = usage::from_optional(
+        usage::field(usage, "input"),
+        usage::field(usage, "output"),
+        usage::field(usage, "cacheRead"),
+        usage::field(usage, "cacheWrite"),
+    ) else {
+        return;
+    };
+    if !usage::active(counts) {
+        return;
+    }
+    usage::keep_largest_output(events, id, RequestUsage { counts, model, timestamp: time });
 }
 
 pub fn parse(source: &HistorySource) -> Result<ParsedSession, String> {
@@ -41,6 +41,7 @@ pub fn parse(source: &HistorySource) -> Result<ParsedSession, String> {
 
 pub fn parse_controlled(source: &HistorySource, cancelled: &dyn Fn() -> bool) -> Result<ParsedSession, String> {
     let mut session = ParsedSession::new();
+    let mut events = BTreeMap::<String, RequestUsage>::new();
     let mut model: Option<String> = None;
     let partial = read_jsonl_controlled(source, cancelled, |line, row| {
         let time = row.get("timestamp").and_then(timestamp);
@@ -95,9 +96,7 @@ pub fn parse_controlled(source: &HistorySource, cancelled: &dyn Fn() -> bool) ->
                     session.model = event_model.clone();
                 }
                 if let Some(usage) = message.get("usage") {
-                    if let Some(event) = usage_event(id, event_model, effective_time, usage) {
-                        session.usage.push(event);
-                    }
+                    remember(&mut events, id, event_model, effective_time, usage);
                 }
             }
             Some("usage") | Some("compaction") => {
@@ -112,14 +111,25 @@ pub fn parse_controlled(source: &HistorySource, cancelled: &dyn Fn() -> bool) ->
                         .and_then(Value::as_str)
                         .map(str::to_owned)
                         .or_else(|| model.clone());
-                    if let Some(event) = usage_event(id, event_model, time, usage) {
-                        session.usage.push(event);
-                    }
+                    remember(&mut events, id, event_model, time, usage);
                 }
             }
             _ => {}
         }
     })?;
     session.partial |= partial;
+    session.usage = events
+        .into_iter()
+        .map(|(id, event)| UsageEvent {
+            id,
+            model: event.model,
+            timestamp: event.timestamp,
+            input: Some(event.counts.input),
+            output: Some(event.counts.output),
+            cache_read: Some(event.counts.read),
+            cache_write: Some(event.counts.write),
+            input_includes_cache: false,
+        })
+        .collect();
     session.finish(source)
 }

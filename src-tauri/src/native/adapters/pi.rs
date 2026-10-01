@@ -343,8 +343,6 @@ impl CliAdapter for Pi {
             Ok(())
         }
     }
-    fn login_args(&self) -> Option<Vec<String>> { Some(vec![]) }
-    fn login_hint(&self) -> &'static str { "Pi 打开后输入 /login，选择供应商并登录。" }
     fn launch_args(&self, session: Option<&str>, mode: LaunchMode) -> Result<Vec<String>, String> {
         if matches!(mode, LaunchMode::Yolo) {
             return Err("Pi 尚无已验证的 YOLO 启动参数".into());
@@ -408,5 +406,17 @@ impl CliAdapter for Pi {
                 self.npm_package()
             )
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pi_has_no_cli_login() {
+        let adapter = Pi;
+        assert!(adapter.login_args().is_none());
+        assert!(adapter.descriptor().login.is_none());
     }
 }
