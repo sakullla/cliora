@@ -33,6 +33,14 @@ function formatFailure(error: unknown, objectText: string, nextText: string): st
 }
 
 const libraryNext = '可调整搜索，或点击上方的新建。';
+const savedListNext = '可点击关闭后查看列表。';
+
+function listFailureAfterSave(value: unknown): string {
+  const formatted = formatFailure(value, '资料列表读取失败', savedListNext);
+  if (!/搜索|新建/.test(formatted)) return formatted;
+  const detail = formatted.replace(/可调整搜索[，,]?\s*或?\s*点击上方的新建[。！]?/g, '').replace(/[。！？\s]+$/g, '').trim();
+  return `${detail || '资料列表读取失败'}。${savedListNext}`;
+}
 
 function empty(kind: LibraryKind): LibraryDraft {
   return { id: null, kind, title: '', body: '', category: '', projectId: null, expectedVersion: null };
@@ -112,6 +120,9 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
     setKind(next); setDraft(null); setSavedText(''); setCategoryFilter('*'); setNotice(''); setError(''); clearDialogResult();
   }
   async function refresh(nextKind = kind) { setItems(await native.listLibraryItems(nextKind, null, search)); }
+  function keepSaved(saved: LibraryItem) {
+    setItems((current) => current.some((item) => item.id === saved.id) ? current.map((item) => item.id === saved.id ? saved : item) : [saved, ...current]);
+  }
   async function save() {
     if (!draft || busy || !nativeAvailable) return;
     setBusy(true); clearDialogResult();
@@ -121,8 +132,12 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
       setDraft(next); setSavedText(JSON.stringify(next));
       try { await refresh(); }
       catch (value) {
+        keepSaved(saved);
+        const failure = listFailureAfterSave(value);
+        setNotice('已保存在本机资料库。');
+        setError(failure);
         setDialogNotice('已保存在本机资料库。');
-        setDialogError(formatFailure(value, '资料列表读取失败', libraryNext));
+        setDialogError(failure);
         return;
       }
       showDialogNotice('已保存在本机资料库。');
