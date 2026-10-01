@@ -10,6 +10,19 @@ function message(error: unknown): string {
   return detail.includes('重新选择终端') ? detail : `${detail}。可以重新选择终端。`;
 }
 
+function loadFailure(error: unknown): string {
+  const raw = error && typeof error === 'object' && 'message' in error && String(error.message).trim()
+    ? String(error.message).trim()
+    : '';
+  const action = error && typeof error === 'object' && typeof (error as { action?: unknown }).action === 'string'
+    ? String((error as { action: string }).action).trim()
+    : '';
+  const usable = !!action && !/^请重试[。！]?$/.test(action) && !action.includes('重新选择终端');
+  const detail = (raw || '终端设置读取失败').replace(/可以重新选择终端。?/g, '').replace(/重新选择终端/g, '').replace(/[。！？\s]+$/, '');
+  const next = (usable ? action : '可先打开「迁移与同步」，再回到「常规」重新读取').replace(/[。！？\s]+$/, '');
+  return `${detail || '终端设置读取失败'}。${next}。`;
+}
+
 export function TerminalSettings() {
   const [settings, setSettings] = useState<LaunchSettings | null>(null);
   const [tray, setTray] = useState<TrayStatus | null>(null);
@@ -18,7 +31,7 @@ export function TerminalSettings() {
 
   useEffect(() => {
     if (!nativeAvailable) return;
-    void Promise.all([native.getLaunchSettings(), native.getTrayStatus()]).then(([launch, trayStatus]) => { setSettings(launch); setTray(trayStatus); }).catch((value) => setError(message(value)));
+    void Promise.all([native.getLaunchSettings(), native.getTrayStatus()]).then(([launch, trayStatus]) => { setSettings(launch); setTray(trayStatus); }).catch((value) => setError(loadFailure(value)));
     let active = true;
     let unsubscribe: (() => void) | undefined;
     void listen<string>('cliora:tray-error', (event) => {
