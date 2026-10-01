@@ -22,6 +22,10 @@ test('new configuration dialog has one save action', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
   await expect(page.getByRole('heading', { name: '工具与连接' })).toBeVisible();
+  await expect(page.getByText('安装与更新')).toBeVisible();
+  await page.getByText('安装与更新').click();
+  await expect(page.getByRole('link', { name: '官方安装说明 ↗' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '重新检测' })).toBeVisible();
   await page.getByRole('button', { name: '新建配置' }).click();
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByRole('heading', { name: '新建配置' })).toHaveCount(1);
