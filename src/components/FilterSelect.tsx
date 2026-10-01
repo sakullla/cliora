@@ -8,7 +8,7 @@ export type FilterSelectOption = { value: string; label: string; detail?: string
 const searchThreshold = 4;
 const searchInputLabel = (label: string) => `搜索${label.replace(/^(筛选|切换)/, '')}`;
 
-export function FilterSelect({ label, value, options, placeholder = '选择', disabled = false, title, searchable = true, searchLabel, searchPlaceholder = '输入名称', emptyText = '没有匹配的选项', onChange, variant = 'default', className, triggerRef, onTriggerKeyDown }: {
+export function FilterSelect({ label, value, options, placeholder = '选择', disabled = false, title, searchable = true, forceSearch = false, searchLabel, searchPlaceholder = '输入名称', emptyText = '没有匹配的选项', onChange, variant = 'default', className, triggerRef, onTriggerKeyDown }: {
   label: string;
   value: string;
   options: FilterSelectOption[];
@@ -16,6 +16,7 @@ export function FilterSelect({ label, value, options, placeholder = '选择', di
   disabled?: boolean;
   title?: string;
   searchable?: boolean;
+  forceSearch?: boolean;
   searchLabel?: string;
   searchPlaceholder?: string;
   emptyText?: string;
@@ -33,7 +34,7 @@ export function FilterSelect({ label, value, options, placeholder = '选择', di
   const panel = useRef<HTMLDivElement>(null);
   const listId = useId();
   const selected = options.find((item) => item.value === value);
-  const showSearch = searchable && options.length > searchThreshold;
+  const showSearch = searchable && (forceSearch || options.length > searchThreshold);
   const needle = query.trim().toLowerCase();
   const matches = options.filter((item) => `${item.label} ${item.detail ?? ''}`.toLowerCase().includes(needle));
 

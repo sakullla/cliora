@@ -66,6 +66,8 @@
 .scopeBar label { display: flex; align-items: center; gap: 8px; color: var(--text-2); font-size: 12.5px; white-space: nowrap; }
 .scopeBar select { min-height: var(--control-h-sm); font-size: 12.5px; }
 .scopeBar > select { width: 190px; max-width: 100%; }
+.scopeBar .projectSelect { width: 190px; max-width: 100%; }
+.scopeBar .projectSelect > button { min-height: var(--control-h-sm); font-size: 12.5px; }
 
 /* Status messages */
 .hint { color: var(--text-2); font-size: 12.5px; line-height: 1.6; }
@@ -137,7 +139,11 @@
 .listHeading { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 52px; padding: 8px 12px 8px 16px; background: var(--surface-2); border-bottom: 1px solid var(--line); }
 .listHeading > strong { font-size: 13px; font-weight: 650; }
 .listActions { display: flex; gap: 6px; }
-.profileRow { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 58px; padding: 0 12px 0 0; border-top: 1px solid var(--line); transition: background-color var(--fast) var(--ease); }
+.profileRow { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 58px; padding: 0 12px 0 0; border-top: 1px solid var(--line); transition: background-color var(--fast) var(--ease); animation: reveal var(--medium) var(--ease) both; }
+.profileRow:nth-child(2) { animation-delay: 30ms; }
+.profileRow:nth-child(3) { animation-delay: 60ms; }
+.profileRow:nth-child(4) { animation-delay: 90ms; }
+.profileRow:nth-child(5) { animation-delay: 120ms; }
 .listHeading + .profileRow { border-top: 0; }
 .profileRow:hover { background: var(--surface-2); }
 .profileRow[data-active="true"] { background: color-mix(in srgb, var(--accent) 7%, var(--surface)); }
@@ -167,8 +173,9 @@
   background: color-mix(in srgb, var(--surface) 55%, transparent);
 }
 .taskEmpty > .primary { min-height: var(--control-h); padding: 0 16px; }
+.taskEmpty > p { flex-basis: 100%; margin: 0; color: var(--text-2); font-size: 12.5px; line-height: 1.6; }
 
-.quickApply { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; padding: 10px 12px; border: 1px solid var(--warning-line); border-radius: var(--radius); background: var(--warning-soft); color: var(--warning); font-size: 12.5px; }
+.quickApply { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; padding: 10px 12px; border: 1px solid var(--warning-line); border-radius: var(--radius); background: var(--warning-soft); color: var(--warning); font-size: 12.5px; animation: reveal var(--medium) var(--ease); }
 
 .empty { padding: 32px 16px; border: 1px dashed var(--line-strong); border-radius: var(--radius-lg); color: var(--text-2); font-size: 13px; text-align: center; }
 
