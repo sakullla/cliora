@@ -1,7 +1,7 @@
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::env;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::{
     file, project_root, CliAdapter, InspectionFields, LaunchMode, McpLocation,
@@ -17,6 +17,21 @@ use crate::native::profile::{self, Connection, RegisteredProfile};
 use crate::resources::mcp::{self, McpDefinition, McpTransport};
 
 pub struct OpenCode;
+
+/// OpenCode follows `XDG_CONFIG_HOME` for the signed-in user. A caller-supplied
+/// home that is not the real user home (tests, isolated profiles) stays under
+/// that home so CI cannot redirect writes to the runner's config directory.
+fn config_base(home: &Path) -> PathBuf {
+    if dirs::home_dir().as_deref() == Some(home) {
+        if let Some(xdg) = env::var_os("XDG_CONFIG_HOME") {
+            let path = PathBuf::from(xdg);
+            if path.is_absolute() {
+                return path;
+            }
+        }
+    }
+    home.join(".config")
+}
 
 impl CliAdapter for OpenCode {
     fn id(&self) -> &'static str {
@@ -47,12 +62,9 @@ impl CliAdapter for OpenCode {
         let Some(root) = project_root(scope, project) else {
             return vec![];
         };
-        let dir = root.map(Path::to_path_buf).unwrap_or_else(|| {
-            env::var_os("XDG_CONFIG_HOME")
-                .map(Into::into)
-                .unwrap_or_else(|| home.join(".config"))
-                .join("opencode")
-        });
+        let dir = root
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| config_base(home).join("opencode"));
         let jsonc = dir.join("opencode.jsonc");
         let (path, kind) = if jsonc.exists() {
             (jsonc, FileKind::Jsonc)
@@ -199,10 +211,7 @@ impl CliAdapter for OpenCode {
         project: Option<&Path>,
     ) -> Option<std::path::PathBuf> {
         Some(match scope {
-            Scope::Global => env::var_os("XDG_CONFIG_HOME")
-                .map(Into::into)
-                .unwrap_or_else(|| home.join(".config"))
-                .join("opencode/skills"),
+            Scope::Global => config_base(home).join("opencode/skills"),
             Scope::Project => project?.join(".opencode/skills"),
         })
     }
@@ -213,10 +222,7 @@ impl CliAdapter for OpenCode {
         project: Option<&Path>,
     ) -> Option<std::path::PathBuf> {
         Some(match scope {
-            Scope::Global => env::var_os("XDG_CONFIG_HOME")
-                .map(Into::into)
-                .unwrap_or_else(|| home.join(".config"))
-                .join("opencode/AGENTS.md"),
+            Scope::Global => config_base(home).join("opencode/AGENTS.md"),
             Scope::Project => project?.join("AGENTS.md"),
         })
     }
