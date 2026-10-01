@@ -23,6 +23,7 @@
 .trigger[data-open="true"] { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
 .trigger[data-empty="true"] .triggerCopy > span { color: var(--text-2); }
 .trigger:disabled { opacity: .5; }
+.triggerIcon { display: grid; place-items: center; flex: none; margin-right: 7px; }
 .triggerCopy { display: grid; min-width: 0; max-width: 100%; line-height: 1.2; }
 .triggerCopy > span,
 .triggerCopy > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -60,11 +61,10 @@
 
 .list { display: grid; align-content: start; gap: 2px; min-height: 0; overflow: auto; }
 .list > button {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: flex;
   align-items: center;
-  justify-content: stretch;
   gap: 8px;
+  width: 100%;
   min-height: 40px;
   padding: 5px 8px;
   border: 0;
@@ -76,7 +76,9 @@
   font-weight: 500;
   text-align: left;
 }
-.optionCopy { display: grid; min-width: 0; }
+.optionIcon { display: grid; place-items: center; flex: none; }
+.optionCopy { display: grid; flex: 1; min-width: 0; }
+.optionMarks { display: inline-flex; flex: none; align-items: center; gap: 6px; }
 .optionCopy > strong,
 .optionCopy > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .optionCopy > strong { font-weight: 600; }
@@ -91,3 +93,25 @@
 .list > button[aria-selected="true"] small { color: var(--accent); }
 .list > button:disabled { opacity: .5; }
 .list > p { margin: 0; padding: 8px; color: var(--text-3); font-size: 12px; }
+
+.folderPick {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  margin: 0 -6px -6px;
+  padding: 0 14px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0 0 var(--radius) var(--radius);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 560;
+  text-align: left;
+}
+.folderPick:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
+.folderPick > svg { flex: none; color: var(--text-3); }
+.folderPick:hover:not(:disabled) > svg { color: var(--accent); }

@@ -83,7 +83,6 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   const [scope, setScope] = useState<Scope>(repair?.scope ?? 'global');
   const [projectPath, setProjectPath] = useState(repair?.projectPath ?? '');
   const [projects, setProjects] = useState<Project[]>([]);
-  const [choosingProject, setChoosingProject] = useState(false);
   const [preferredProfileId, setPreferredProfileId] = useState<string | null>(repair?.profileId ?? null);
   const appliedRepair = useRef(repair?.sequence ?? 0);
   const appliedOpenSequence = useRef(0);
@@ -140,11 +139,11 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   const previewSequence = useRef(0);
   const savedDraft = useRef('');
   useEffect(() => {
-    if (!nativeAvailable) return;
-    let active = true;
-    void native.listProjects().then(result => { if (active) setProjects(result); }).catch(value => { if (active) setError(errorText(value)); });
-    return () => { active = false; };
-  }, []);
+    if (!nativeAvailable || !active) return;
+    let live = true;
+    void native.listProjects().then(result => { if (live) setProjects(result); }).catch(value => { if (live) setError(errorText(value)); });
+    return () => { live = false; };
+  }, [active]);
 
   const visibleTools = managedTools;
   const prefetchIds = visibleTools.map((item) => item.id).join('\0');
@@ -620,19 +619,23 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   }
 
   async function switchProject(path: string) {
-    if (path === projectPath) return;
+    if (scope === 'project' && path === projectPath) return;
     if ((dirty || mcpDirty || skillsDirty) && !await confirmChange('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return;
-    invalidateDraftRequest(); setProjectPath(path);
+    invalidateDraftRequest(); setScope('project'); setProjectPath(path);
+  }
+
+  async function switchGlobal() {
+    if (scope === 'global') return;
+    if ((dirty || mcpDirty || skillsDirty) && !await confirmChange('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return;
+    invalidateDraftRequest(); setScope('global');
   }
 
   async function chooseProjectFolder() {
     const context = draftContext;
-    setChoosingProject(true);
     try {
       const picked = await open({ directory: true, multiple: false, title: '选择配置项目文件夹' });
       if (typeof picked === 'string' && latestDraft.current.context === context) switchProject(picked);
     } catch (value) { if (latestDraft.current.context === context) setError(errorText(value)); }
-    finally { setChoosingProject(false); }
   }
 
   async function checkConnection(allowModelRequest: boolean) {
@@ -901,7 +904,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
         <button type="button" role="tab" aria-selected={resourceView === 'mcp'} className={resourceView === 'mcp' ? styles.selected : ''} onClick={() => void switchResourceView('mcp')}>MCP</button>
         <button type="button" role="tab" aria-selected={resourceView === 'skills'} className={resourceView === 'skills' ? styles.selected : ''} onClick={() => void switchResourceView('skills')}>Skill</button>
       </div>
-      <div className={styles.scopeBar}><label>配置范围 <select value={scope} onChange={async (event) => { const value = event.target.value as Scope; if ((dirty || mcpDirty || skillsDirty) && !await confirmChange('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return; invalidateDraftRequest(); setScope(value); }}><option value="global">全局</option><option value="project">项目</option></select></label>{scope === 'project' && <><FilterSelect className={styles.projectSelect} label="配置项目" value={projectPath} options={[{ value: '', label: '选择项目…' }, ...projects.map((project) => ({ value: project.path ?? project.id, label: project.name, detail: project.path ? shortPath(project.path) : undefined, note: project.available ? undefined : '目录不可用', disabled: !project.available || !project.path })), ...(projectPath && !projects.some((project) => project.path === projectPath) ? [{ value: projectPath, label: projectPath.split(/[\\/]/).filter(Boolean).at(-1) || projectPath, detail: shortPath(projectPath) }] : [])]} placeholder="选择项目…" forceSearch searchLabel="搜索项目" title={projectPath || '选择已有项目'} onChange={(value) => void switchProject(value)} /><button type="button" disabled={choosingProject || busy} onClick={() => void chooseProjectFolder()}>选择文件夹</button></>}</div>
+      <div className={styles.scopeBar}><FilterSelect className={styles.projectSelect} label="配置范围" triggerDetail={false} value={scope === 'global' ? '__global__' : projectPath} options={[{ value: '__global__', label: '全局配置' }, ...projects.map((project) => ({ value: project.path ?? project.id, label: project.name, detail: project.path ? shortPath(project.path) : undefined, note: project.available ? undefined : '目录不可用', disabled: !project.available || !project.path })), ...(projectPath && !projects.some((project) => project.path === projectPath) ? [{ value: projectPath, label: projectPath.split(/[\\/]/).filter(Boolean).at(-1) || projectPath, detail: shortPath(projectPath) }] : [])]} placeholder="选择项目…" forceSearch searchLabel="搜索项目" title={scope === 'global' ? '全局配置' : projectPath || '选择已有项目'} onChange={(value) => void (value === '__global__' ? switchGlobal() : switchProject(value))} onPickFolder={() => void chooseProjectFolder()} pickFolderLabel="选择文件夹…" /></div>
     </div>
     <div hidden={resourceView !== 'config'}>
     {scope === 'project' && !projectPath.trim() && <p className={styles.hint}>选择已有项目，或选择一个本机文件夹后，再编辑配置。</p>}

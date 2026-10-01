@@ -313,7 +313,8 @@ test('saved price stays visible when the following usage read fails', async ({ p
   await expect(records.getByText('正在筛选已缓存记录…')).toHaveCount(0);
   await page.evaluate(() => { (window as unknown as { __statusCopy: { usageFails: boolean } }).__statusCopy.usageFails = true; });
   await records.getByRole('button', { name: '设置估算价格' }).click();
-  await records.getByLabel('价格工具').selectOption('codex');
+  await records.getByRole('button', { name: '价格工具' }).click();
+  await records.getByRole('option', { name: 'Codex' }).click();
   await records.getByLabel('价格模型').fill('gpt');
   await records.getByLabel('输入单价').fill('1');
   await records.getByLabel('输出单价').fill('1');
