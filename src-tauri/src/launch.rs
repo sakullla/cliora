@@ -558,14 +558,17 @@ fn shell_script(plan: &LaunchPlan) -> Result<String, String> {
     ))
 }
 
-fn inherited_noninteractive_color() -> bool { env::var("TERM").as_deref()==Ok("dumb") && env::var("NO_COLOR").as_deref()==Ok("1") }
-fn interactive_powershell_script(plan: &LaunchPlan) -> Result<String,String> {
-    let inherited=if inherited_noninteractive_color() {"$true"} else {"$false"};
-    Ok(format!("if ($env:TERM -eq 'dumb' -or {inherited}) {{ if ($env:NO_COLOR -eq '1') {{ Remove-Item Env:NO_COLOR -ErrorAction SilentlyContinue }}; if ($env:TERM -eq 'dumb') {{ Remove-Item Env:TERM -ErrorAction SilentlyContinue }} }}; {}",powershell_script(plan)?))
+fn interactive_powershell_script(plan: &LaunchPlan) -> Result<String, String> {
+    Ok(format!(
+        "if ($null -ne $env:NO_COLOR) {{ Remove-Item Env:NO_COLOR -ErrorAction SilentlyContinue }}; if ($env:TERM -eq 'dumb') {{ Remove-Item Env:TERM -ErrorAction SilentlyContinue }}; if ($env:FORCE_COLOR -in '0','false') {{ Remove-Item Env:FORCE_COLOR -ErrorAction SilentlyContinue }}; {}",
+        powershell_script(plan)?
+    ))
 }
-fn interactive_shell_script(plan: &LaunchPlan) -> Result<String,String> {
-    let prefix=if inherited_noninteractive_color() {"unset TERM NO_COLOR; "} else {"if [ \"${TERM-}\" = dumb ]; then unset TERM; if [ \"${NO_COLOR-}\" = 1 ]; then unset NO_COLOR; fi; fi; "};
-    Ok(format!("{prefix}{}",shell_script(plan)?))
+fn interactive_shell_script(plan: &LaunchPlan) -> Result<String, String> {
+    Ok(format!(
+        "unset NO_COLOR; if [ \"${{TERM-}}\" = dumb ]; then unset TERM; fi; if [ \"${{FORCE_COLOR-}}\" = 0 ] || [ \"${{FORCE_COLOR-}}\" = false ]; then unset FORCE_COLOR; fi; {}",
+        shell_script(plan)?
+    ))
 }
 
 pub fn terminal_command(plan: &LaunchPlan) -> Result<TerminalCommand, String> {
@@ -663,29 +666,70 @@ fn spawn_console(terminal: &TerminalCommand) -> Result<(),String> {
     Ok(())
 }
 
-pub fn spawn(plan: LaunchPlan) -> Result<LaunchResult, String> {
-    let terminal = terminal_command(&plan)?;
+fn shell_terminal(terminal: TerminalId, directory: &Path, script: &str) -> Result<TerminalCommand, String> {
+    if script.is_empty() || script.contains('\0') || script.contains('\n') || script.contains('\r') {
+        return Err("安装命令无效".into());
+    }
+    let directory_text = terminal_path(directory)?;
+    let (program, args) = match terminal {
+        TerminalId::WindowsTerminal => (
+            "wt.exe",
+            vec!["powershell.exe".into(), "-NoProfile".into(), "-NoExit".into(), "-ExecutionPolicy".into(), "Bypass".into(), "-EncodedCommand".into(), encoded_powershell(script)],
+        ),
+        TerminalId::PowerShell => (
+            "powershell.exe",
+            vec!["-NoProfile".into(), "-NoExit".into(), "-ExecutionPolicy".into(), "Bypass".into(), "-EncodedCommand".into(), encoded_powershell(script)],
+        ),
+        TerminalId::MacTerminal => {
+            let script = script.replace('\\', "\\\\").replace('"', "\\\"");
+            (
+                "osascript",
+                vec!["-e".into(), format!("tell application \"Terminal\" to do script \"{script}\""), "-e".into(), "tell application \"Terminal\" to activate".into()],
+            )
+        }
+        TerminalId::GnomeTerminal => (
+            "gnome-terminal",
+            vec![format!("--working-directory={directory_text}"), "--".into(), "sh".into(), "-lc".into(), script.to_owned()],
+        ),
+        TerminalId::Konsole => (
+            "konsole",
+            vec!["--workdir".into(), directory_text.clone(), "-e".into(), "sh".into(), "-lc".into(), script.to_owned()],
+        ),
+        TerminalId::Xterm => ("xterm", vec!["-e".into(), "sh".into(), "-lc".into(), script.to_owned()]),
+        TerminalId::Auto => return Err("请先选择可用的终端".into()),
+    };
+    Ok(TerminalCommand { program, args, directory: PathBuf::from(directory_text) })
+}
+
+fn spawn_terminal(terminal_id: TerminalId, terminal: TerminalCommand) -> Result<(), String> {
     #[cfg(windows)]
-    if plan.terminal==TerminalId::PowerShell {
-        spawn_console(&terminal)?;
-        return Ok(LaunchResult {tool_id:plan.tool_id,project_id:plan.project_id,mode:plan.mode,terminal:plan.terminal,status:"terminal_requested"});
+    if terminal_id == TerminalId::PowerShell {
+        return spawn_console(&terminal);
     }
     let mut command = Command::new(terminal.program);
-    command
-        .args(&terminal.args)
-        .current_dir(&terminal.directory)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+    command.args(&terminal.args).current_dir(&terminal.directory).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0000_0010 | 0x0000_0200); // CREATE_NEW_CONSOLE | CREATE_NEW_PROCESS_GROUP
+        command.creation_flags(0x0000_0010 | 0x0000_0200);
     }
-    if env::var("TERM").as_deref()==Ok("dumb") { command.env_remove("TERM"); if env::var("NO_COLOR").as_deref()==Ok("1") {command.env_remove("NO_COLOR");} }
-    command
-        .spawn()
-        .map_err(|error| format!("无法打开所选终端，请在设置中更换后重试：{error}"))?;
+    command.env_remove("NO_COLOR");
+    if env::var("TERM").as_deref() == Ok("dumb") { command.env_remove("TERM"); }
+    if matches!(env::var("FORCE_COLOR").as_deref(), Ok("0") | Ok("false")) { command.env_remove("FORCE_COLOR"); }
+    command.spawn().map_err(|error| format!("无法打开所选终端，请在设置中更换后重试：{error}"))?;
+    Ok(())
+}
+
+pub fn open_shell(db: &Database, script: &str) -> Result<(), String> {
+    let terminal = selected_terminal(db)?;
+    let home = env::var_os("USERPROFILE").or_else(|| env::var_os("HOME")).map(PathBuf::from).filter(|path| path.is_dir()).ok_or("找不到用户目录")?;
+    spawn_terminal(terminal, shell_terminal(terminal, &home, script)?)
+}
+
+pub fn spawn(plan: LaunchPlan) -> Result<LaunchResult, String> {
+    let terminal_id = plan.terminal;
+    let terminal = terminal_command(&plan)?;
+    spawn_terminal(terminal_id, terminal)?;
     Ok(LaunchResult {
         tool_id: plan.tool_id,
         project_id: plan.project_id,

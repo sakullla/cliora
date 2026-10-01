@@ -228,6 +228,46 @@ pub fn save_definition(db: &Database, draft: McpDraft) -> Result<McpDefinition, 
     Ok(definition)
 }
 
+pub fn delete_definition(db: &Database, id: &str, expected_version: u64) -> Result<(), String> {
+    db.with_connection(|conn| {
+        let changed = conn.execute(
+            "DELETE FROM mcp_definitions WHERE id = ?1 AND version = ?2",
+            params![id, expected_version as i64],
+        ).map_err(|error| error.to_string())?;
+        if changed != 1 { return Err("MCP 定义已被修改或不存在，请重新读取".into()); }
+        Ok(())
+    })
+}
+
+pub fn remove_native(
+    db: &Database,
+    credentials: &dyn CredentialStore,
+    registry: &Registry,
+    home: &Path,
+    target: &McpTargetRequest,
+    name: &str,
+) -> Result<(), String> {
+    let name = name.trim();
+    if name.is_empty() { return Err("请选择要删除的 MCP".into()); }
+    let (location, scope_key) = target_location(db, registry, target, home)?;
+    let (baseline, parsed) = parse_native(&location)?;
+    if entry_root(&parsed, &location).and_then(|root| root.get(name)).is_none() {
+        return Err("当前工具上已没有这个 MCP".into());
+    }
+    let field = entry_path(&location, name);
+    let name_owned = name.to_owned();
+    let tool = target.tool_id.clone();
+    transaction::apply(db, credentials, &[transaction::FilePatch {
+        path: location.path.clone(), kind: location.kind, baseline,
+        changes: vec![transaction::FieldChange { path: field, value: None }],
+        sensitive: false, force_restrict: false,
+    }], move |tx: &rusqlite::Transaction<'_>| {
+        tx.execute("DELETE FROM mcp_targets WHERE tool = ?1 AND scope_key = ?2 AND definition_id IN (SELECT id FROM mcp_definitions WHERE name = ?3)",
+            params![tool, scope_key, name_owned]).map(|_| ()).map_err(|error| error.to_string())
+    })?;
+    Ok(())
+}
+
 pub fn managed_enabled(db: &Database, definition_id: &str, target: &McpTargetRequest) -> Result<Option<bool>,String> {
     let key=match target.scope { Scope::Global=>"global".into(), Scope::Project=>format!("project:{}",projects::checked_directory(target.project_path.as_deref().ok_or("请选择项目目录")?)?.display()) };
     db.with_connection(|conn|conn.query_row("SELECT enabled FROM mcp_targets WHERE definition_id=?1 AND tool=?2 AND scope_key=?3",params![definition_id,target.tool_id,key],|row|row.get(0)).optional().map_err(|e|e.to_string()))

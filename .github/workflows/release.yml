@@ -1,0 +1,304 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  prepare:
+    name: Prepare draft release
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    outputs:
+      release-id: ${{ steps.draft.outputs.release-id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          filter: blob:none
+
+      - name: Generate changelog from commits
+        shell: bash
+        run: |
+          set -euo pipefail
+          PREV_TAG=$(git tag --sort=-v:refname | grep -v "^${GITHUB_REF_NAME}$" | head -1 || true)
+          if [ -n "$PREV_TAG" ]; then
+            RANGE="${PREV_TAG}..${GITHUB_REF_NAME}"
+            SINCE="自 ${PREV_TAG}"
+          else
+            RANGE="${GITHUB_REF_NAME}"
+            SINCE="首个发布"
+          fi
+
+          FEATS=$(git log "$RANGE" --pretty=format:'- %s' --no-merges | grep -E '^- (feat|perf)(\(|:)' || true)
+          FIXES=$(git log "$RANGE" --pretty=format:'- %s' --no-merges | grep -E '^- fix(\(|:)' || true)
+          OTHERS=$(git log "$RANGE" --pretty=format:'- %s' --no-merges | grep -vE '^- (feat|fix|perf)(\(|:)' || true)
+
+          {
+            echo "本版本变更（${SINCE}）："
+            echo ""
+            if [ -n "$FEATS" ]; then echo "### 新特性"; echo "$FEATS"; echo ""; fi
+            if [ -n "$FIXES" ]; then echo "### 修复"; echo "$FIXES"; echo ""; fi
+            if [ -n "$OTHERS" ]; then echo "### 其他"; echo "$OTHERS"; echo ""; fi
+            echo "---"
+            echo "Windows: NSIS 安装包；macOS: DMG（Apple Silicon，自签证书）；Linux: deb/AppImage。"
+            echo ""
+            echo "> macOS 包未经过 Apple 公证。首次启动如被 Gatekeeper 拦截，请在 Finder 中右键 Cliora.app 选择“打开”，或前往“系统设置 → 隐私与安全性”选择“仍要打开”。"
+          } > release-notes.md
+
+      - name: Create or resume draft
+        id: draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          release=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate --slurp \
+            | jq --arg tag "$RELEASE_TAG" '[.[][] | select(.tag_name == $tag)] | first')
+          endpoint="repos/$GITHUB_REPOSITORY/releases"
+          method=POST
+          if [[ "$release" != null ]]; then
+            if [[ $(jq -r '.draft' <<< "$release") != true ]]; then
+              echo "::error::Release is already published; use a new version tag."
+              exit 1
+            fi
+            endpoint="$endpoint/$(jq -r '.id' <<< "$release")"
+            method=PATCH
+          fi
+          release_id=$(gh api --method "$method" "$endpoint" \
+            -f tag_name="$RELEASE_TAG" -f target_commitish="$GITHUB_SHA" \
+            -f name="Cliora $RELEASE_TAG" -F body=@release-notes.md \
+            -F draft=true -F prerelease=false --jq '.id')
+          echo "release-id=$release_id" >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows
+            target: x86_64-pc-windows-msvc
+            rust-targets: x86_64-pc-windows-msvc
+            args: --target x86_64-pc-windows-msvc --verbose
+          - os: macos-latest
+            platform: macos
+            target: aarch64-apple-darwin
+            rust-targets: aarch64-apple-darwin
+            args: --target aarch64-apple-darwin --verbose
+          - os: ubuntu-22.04
+            platform: linux
+            target: x86_64-unknown-linux-gnu
+            rust-targets: x86_64-unknown-linux-gnu
+            args: --target x86_64-unknown-linux-gnu --verbose
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'linux'
+        timeout-minutes: 10
+        run: bash .github/scripts/install-linux-deps.sh
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          cache-workspace-crates: true
+          cache-bin: false
+          cache-on-failure: true
+
+      - name: Install frontend dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Require stable macOS signing certificate
+        if: matrix.platform == 'macos'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          test -n "${APPLE_CERTIFICATE}"
+          test -n "${APPLE_CERTIFICATE_PASSWORD}"
+          test -n "${APPLE_SIGNING_IDENTITY}"
+
+      - name: Build and upload to draft release
+        if: matrix.platform != 'macos'
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          releaseId: ${{ needs.prepare.outputs.release-id }}
+          tagName: ${{ github.ref_name }}
+          releaseDraft: true
+          prerelease: false
+          retryAttempts: 3
+          args: ${{ matrix.args }}
+
+      - name: Build and sign macOS disk image
+        if: matrix.platform == 'macos'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          # CI=true makes Tauri add --skip-jenkins and drop the DMG window layout.
+          export TAURI_BUNDLER_DMG_IGNORE_CI=true
+          env -u APPLE_CERTIFICATE -u APPLE_CERTIFICATE_PASSWORD -u APPLE_SIGNING_IDENTITY \
+            npm run tauri -- build --target "$TARGET" --bundles dmg --no-sign -- --locked
+          version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          arch="${TARGET%%-*}"
+          dmg="src-tauri/target/$TARGET/release/bundle/dmg/Cliora_${version}_${arch}.dmg"
+          test -f "$dmg"
+          keychain="$RUNNER_TEMP/cliora.keychain-db"
+          keychain_password="$(openssl rand -hex 16)"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security list-keychains -d user -s "$keychain"
+          security default-keychain -s "$keychain"
+          base64 --decode > "$RUNNER_TEMP/cliora.p12" <<< "${APPLE_CERTIFICATE}"
+          security import "$RUNNER_TEMP/cliora.p12" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain"
+          rw="$RUNNER_TEMP/cliora-rw.dmg"
+          rm -f "$rw"
+          hdiutil convert "$dmg" -format UDRW -o "$rw"
+          rw_size_mib=$(( ($(stat -f %z "$rw") + 1048575) / 1048576 + 64 ))
+          hdiutil resize -size "${rw_size_mib}m" "$rw"
+          mount="$RUNNER_TEMP/cliora-mnt"
+          rm -rf "$mount"
+          mkdir -p "$mount"
+          hdiutil attach "$rw" -readwrite -mountpoint "$mount" -nobrowse -noverify -noautoopen
+          app="$mount/Cliora.app"
+          test -d "$app"
+          signing_app="$RUNNER_TEMP/Cliora.app"
+          rm -rf "$signing_app"
+          ditto "$app" "$signing_app"
+          find "$signing_app" -type f -print0 | while IFS= read -r -d '' bin; do
+            if file -b "$bin" | grep -q 'Mach-O'; then
+              printf '%s\n' "$bin"
+            fi
+          done | awk '{ print length($0) "\t" $0 }' | sort -nr | cut -f2- | while IFS= read -r bin; do
+            codesign --force --options runtime --keychain "$keychain" --sign "$APPLE_SIGNING_IDENTITY" "$bin"
+          done
+          codesign --force --options runtime --entitlements src-tauri/entitlements.plist --keychain "$keychain" --sign "$APPLE_SIGNING_IDENTITY" "$signing_app"
+          codesign --verify --deep --strict --verbose=2 "$signing_app"
+          rm -rf "$app"
+          ditto "$signing_app" "$app"
+          rm -f "$RUNNER_TEMP/cliora.p12"
+          hdiutil detach "$mount"
+          rm -f "$dmg"
+          hdiutil convert "$rw" -format UDZO -o "$dmg"
+          security delete-keychain "$keychain"
+
+      - name: Verify macOS self-signed signature
+        if: matrix.platform == 'macos'
+        env:
+          TARGET: ${{ matrix.target }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          arch="${TARGET%%-*}"
+          dmg="src-tauri/target/$TARGET/release/bundle/dmg/Cliora_${version}_${arch}.dmg"
+          test -f "$dmg"
+          mount="$RUNNER_TEMP/cliora-verify"
+          rm -rf "$mount"
+          mkdir -p "$mount"
+          hdiutil attach "$dmg" -mountpoint "$mount" -nobrowse -noverify -noautoopen
+          app="$mount/Cliora.app"
+          test -d "$app"
+          test -n "${APPLE_SIGNING_IDENTITY}"
+          signature=$(codesign --display --verbose=4 "$app" 2>&1)
+          echo "$signature"
+          if grep -q '^Signature=adhoc$' <<< "$signature"; then
+            echo "release app is ad-hoc; expected ${APPLE_SIGNING_IDENTITY}" >&2
+            exit 1
+          fi
+          grep -F -x -q "Authority=${APPLE_SIGNING_IDENTITY}" <<< "$signature"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          hdiutil detach "$mount"
+
+      - name: Upload verified macOS disk image
+        if: matrix.platform == 'macos'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          arch="${TARGET%%-*}"
+          dmg="src-tauri/target/$TARGET/release/bundle/dmg/Cliora_${version}_${arch}.dmg"
+          gh release upload "$RELEASE_TAG" "$dmg" --clobber
+
+  verify-release:
+    name: Verify and publish release
+    needs: [prepare, release]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Require all platform installers
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ needs.prepare.outputs.release-id }}
+        run: |
+          set -euo pipefail
+          RELEASE_JSON=$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}")
+          IS_DRAFT=$(jq -r '.draft' <<< "$RELEASE_JSON")
+          if [ "$IS_DRAFT" != "true" ]; then
+            echo "::error::Release ${GITHUB_REF_NAME} was published before asset verification"
+            exit 1
+          fi
+
+          ASSETS=$(jq -r '.assets[].name' <<< "$RELEASE_JSON")
+          echo "$ASSETS"
+
+          for PATTERN in '\.exe$' '\.dmg$' '\.deb$' '\.AppImage$'; do
+            if ! grep -Eq "$PATTERN" <<< "$ASSETS"; then
+              echo "::error::Release ${GITHUB_REF_NAME} is missing an asset matching ${PATTERN}"
+              exit 1
+            fi
+          done
+
+      - name: Publish verified release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ needs.prepare.outputs.release-id }}
+        run: |
+          set -euo pipefail
+          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            -F draft=false
+          echo "Published release ${GITHUB_REF_NAME} (id=${RELEASE_ID})"

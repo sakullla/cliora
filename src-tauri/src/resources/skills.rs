@@ -1089,6 +1089,24 @@ pub fn installations(
         }).collect())
     })
 }
+
+pub fn delete_package(db: &Database, registry: &Registry, home: &Path, id: &str) -> Result<(), String> {
+    let pending: i64 = db.with_connection(|conn| conn.query_row(
+        "SELECT COUNT(*) FROM skill_operations WHERE package_id = ?1 AND status NOT IN ('committed', 'disabled', 'rollback')",
+        [id], |row| row.get(0)).map_err(|error| error.to_string()))?;
+    if pending > 0 { return Err("这个 Skill 还有未完成的安装，请稍后再删除".into()); }
+    let installed = installations(db, registry, home, id)?;
+    for item in &installed {
+        let result = remove(db, registry, home, id, &item.tool_id, item.scope, item.project_path.as_deref());
+        if result.status == "failed" { return Err(format!("未能从 {} 移除：{}", item.tool_id, result.detail)); }
+    }
+    db.with_connection(|conn| {
+        conn.execute("DELETE FROM skill_operations WHERE package_id = ?1", [id]).map_err(|error| error.to_string())?;
+        let changed = conn.execute("DELETE FROM skill_packages WHERE id = ?1", [id]).map_err(|error| error.to_string())?;
+        if changed != 1 { return Err("Skill 包不存在".into()); }
+        Ok(())
+    })
+}
 #[derive(Clone, Debug, Serialize, serde::Deserialize)]
 struct SkillOverrideRecord { previous: Option<serde_json::Value>, disabled: serde_json::Value }
 fn switch_pointer(field: &[String]) -> String { format!("/{}",field.iter().map(|part| part.replace('~',"~0").replace('/',"~1")).collect::<Vec<_>>().join("/")) }

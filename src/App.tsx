@@ -15,6 +15,7 @@ import { TerminalSettings } from './features/settings/TerminalSettings';
 import { MigrationSettings } from './features/settings/MigrationSettings';
 import { ToolWorkspacePage } from './features/tools/ToolWorkspace';
 import { native, nativeAvailable } from './lib/native';
+import { isEditableTarget, modAria, modLabel, withMod } from './lib/shortcut';
 import { browserBootstrap } from './types/domain';
 import type { ApiError, Bootstrap, Theme } from './types/domain';
 import type { TrayRepairTarget } from './types/launch';
@@ -37,13 +38,11 @@ const themes: { id: Theme; label: string; glyph: IconName }[] = [
   { id: 'dark', label: '深色主题', glyph: 'moon' },
 ];
 
-const shortcutKey = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl';
-
 function titleFor(page: Page): [string, string] {
   switch (page) {
     case 'home': return ['快速开始', '选择工具与项目，一键在外部终端启动。'];
     case 'connections': return ['工具与连接', '管理每个 CLI 的配置、MCP 与 Skill。'];
-    case 'library': return ['资料库', '统一保存常用提示词与规则。'];
+    case 'library': return ['资料库', '统一保存提示词、规则、MCP 与 Skill。'];
     case 'records': return ['使用记录', '查看本机会话与用量。'];
     case 'settings': return ['设置', '只保留日常需要的选项。'];
   }
@@ -58,6 +57,25 @@ function LoadingSkeleton() {
     <p className="muted-copy">正在读取本机设置</p>
     <div className="skeleton-row"><div className="skeleton-page"><div className="skeleton-block" /><div className="skeleton-block" /><div className="skeleton-block" /></div><div className="skeleton-block tall" /></div>
   </div>;
+}
+
+const themeChoices: { id: Theme; label: string; glyph: IconName }[] = [
+  { id: 'system', label: '跟随系统', glyph: 'monitor' },
+  { id: 'light', label: '浅色', glyph: 'sun' },
+  { id: 'dark', label: '深色', glyph: 'moon' },
+];
+
+function ThemeChoice({ value, disabled, onChange }: { value: Theme; disabled: boolean; onChange: (theme: Theme) => void }) {
+  const refs = useRef<(HTMLButtonElement | null)[]>([]);
+  function move(from: number, step: number) {
+    const next = (from + step + themeChoices.length) % themeChoices.length;
+    refs.current[next]?.focus();
+    onChange(themeChoices[next].id);
+  }
+  return <div className="theme-choice" role="radiogroup" aria-label="主题">{themeChoices.map((item, index) => <button key={item.id} ref={(element) => { refs.current[index] = element; }} type="button" role="radio" aria-checked={value === item.id} tabIndex={value === item.id ? 0 : -1} disabled={disabled} onClick={() => onChange(item.id)} onKeyDown={(event) => {
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') { event.preventDefault(); move(index, 1); }
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') { event.preventDefault(); move(index, -1); }
+  }}><Icon name={item.glyph} size={15} />{item.label}</button>)}</div>;
 }
 
 function PageTabs<T extends string>({ items, value, onChange }: { items: [T, string][]; value: T; onChange: (value: T) => void }) {
@@ -161,7 +179,18 @@ export default function App() {
   const goRef = useRef<(next: Page) => void>(() => {});
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
+      const findShortcut = withMod(event) && event.key.toLowerCase() === 'f';
+      const slashShortcut = event.key === '/' && !event.ctrlKey && !event.metaKey && !event.altKey && !isEditableTarget(event.target);
+      if (findShortcut || slashShortcut) {
+        if (document.querySelector('dialog[open]')) return;
+        const input = [...document.querySelectorAll<HTMLInputElement>('main input[data-page-search]')].find((item) => item.getClientRects().length);
+        if (!input) return;
+        event.preventDefault();
+        input.focus();
+        input.select();
+        return;
+      }
+      if (!withMod(event)) return;
       const index = Number(event.key) - 1;
       if (!Number.isInteger(index) || index < 0 || index >= pages.length || document.querySelector('dialog[open]')) return;
       event.preventDefault();
@@ -217,8 +246,8 @@ export default function App() {
     <aside className="sidebar" aria-label="主导航">
       <div className="brand"><span className="brandmark" aria-hidden="true"><Icon name="leaf" size={20} strokeWidth={1.9} /></span><span><strong>栖点</strong><small>CLIORA</small></span></div>
       <nav className="nav" aria-label="页面">
-        {pages.map((item, index) => <button key={item.id} type="button" className={page === item.id ? 'active' : ''} aria-current={page === item.id ? 'page' : undefined} aria-keyshortcuts={`${shortcutKey === '⌘' ? 'Meta' : 'Control'}+${index + 1}`} title={`${item.label}（${shortcutKey}+${index + 1}）`} onClick={() => go(item.id)}>
-          <span className="nav-glyph" aria-hidden="true"><Icon name={item.glyph} /></span>{item.label}<kbd className="nav-kbd" aria-hidden="true">{shortcutKey === '⌘' ? '⌘' : '^'}{index + 1}</kbd>
+        {pages.map((item, index) => <button key={item.id} type="button" className={page === item.id ? 'active' : ''} aria-current={page === item.id ? 'page' : undefined} aria-keyshortcuts={`${modAria}+${index + 1}`} title={`${item.label}（${modLabel}+${index + 1}）`} onClick={() => go(item.id)}>
+          <span className="nav-glyph" aria-hidden="true"><Icon name={item.glyph} /></span>{item.label}<kbd className="nav-kbd" aria-hidden="true">{modLabel === '⌘' ? '⌘' : '^'}{index + 1}</kbd>
         </button>)}
       </nav>
       <div className="sidebar-foot">
@@ -226,7 +255,7 @@ export default function App() {
         <div className="sidebar-status"><span className="status-dot" data-tone={nativeAvailable ? undefined : 'preview'} />{nativeAvailable ? '本机资料 · 仅存于此设备' : '浏览器预览'}</div>
       </div>
     </aside>
-    <main className="content" id="main"><div className="content-inner">
+    <main className={`content${page === 'records' ? ' content-locked' : ''}`} id="main"><div className="content-inner">
       {!nativeAvailable && <div className="environment-banner" role="status"><span className="banner-icon"><Icon name="info" size={16} /></span><span>浏览器预览：原生配置、持久保存和系统凭据仅在桌面应用中可用。</span></div>}
       {error && <div className="error-banner" role="alert"><span className="banner-icon"><Icon name="alert" size={16} /></span><div className="error-copy"><strong>{error.message}</strong><span>{error.action}</span>{error.data_directory && <code>{error.data_directory}</code>}</div>{loaded && <button type="button" onClick={() => setError(null)} aria-label="关闭错误提示"><Icon name="close" size={14} /></button>}</div>}
       <header className="page-head"><div><h1 tabIndex={-1}>{title[0]}</h1>{title[1] && <p>{title[1]}</p>}</div></header>
@@ -242,11 +271,11 @@ export default function App() {
           {selectedTool ? nativeAvailable ? <ToolWorkspacePage managedTools={visibleDescriptors} initialTool={selectedTool} openSequence={toolOpenSequence} active={page === 'connections'} repair={trayRepair?.page === 'connections' ? trayRepair : null} onDirtyChange={onWorkspaceDirtyChange} /> : <><div className="tool-tabs" role="tablist" aria-label="工具">{visible.map((item) => <button key={item.id} type="button" role="tab" aria-selected={selectedTool === item.id} className={selectedTool === item.id ? 'active' : ''} onClick={() => setTool(item.id)}>{item.name}</button>)}</div><div className="connection-layout"><div className="profile-column"><div className="column-title">{selectedToolName} 配置</div><div className="muted-copy">浏览器预览不读取本机配置</div></div><div className="detail-panel"><div className="detail-header"><div><div className="eyebrow">配置</div><h2>{selectedToolName}</h2></div><span className="status-pill">预览</span></div><Empty title="请在桌面应用中编辑原生配置" detail="桌面应用可读取和保存 CLI 的 TOML / JSON 原文。" /></div></div></> : <Empty title="没有管理中的工具" detail="先在设置中勾选需要管理的 CLI。" action={<button className="button primary" type="button" onClick={() => go('settings')}>前往设置</button>} />}
         </div>}
         <div hidden={page !== 'library'}><LibraryPage managedTools={visibleDescriptors} active={page === 'library'} /></div>
-        <div hidden={page !== 'records'}><RecordsPage active={page === 'records'} tools={catalog?.registered ?? []} onOpenProjects={() => go('home')} /></div>
+        <div className="records-shell" hidden={page !== 'records'}><RecordsPage active={page === 'records'} tools={catalog?.registered ?? []} onOpenProjects={() => go('home')} /></div>
         {page === 'settings' && <PageTabs items={[["general", "常规"], ["migration", "迁移与同步"]]} value={settingsTab} onChange={setSettingsTab} />}
         {page === 'settings' && settingsTab === 'general' && <>
           <section className="settings-group"><div className="setting-intro"><h2>管理的 CLI</h2><p>只在首页和工具页显示勾选的工具。关闭管理不会删除已有配置。</p></div><div className="managed-checks">{(nativeAvailable ? catalog?.registered ?? [] : bootstrap.tools).map((item) => <label key={item.id}><input type="checkbox" checked={managed.includes(item.id)} disabled={!nativeAvailable || busy} onChange={(event) => updateManaged(item.id, event.target.checked)} /><ToolIcon toolId={item.id} size={24} /><span>{item.name}</span></label>)}</div><ToolIconSettings tools={nativeAvailable ? catalog?.registered ?? [] : bootstrap.tools} icons={bootstrap.preferences.tool_icons ?? {}} busy={busy} onChange={updateIcon} onError={(message) => setError({ code: 'icon_error', message, action: '请重新选择图片。' })} />{catalog?.preservedUnknown.map((item) => <div className="setting-row" key={item.id}><span><strong>{item.id}</strong><small>未安装适配器，保留 {item.profileCount} 份配置，只读</small></span></div>)}</section>
-          <section className="settings-group"><div className="setting-intro"><h2>外观</h2><p>跟随系统，或固定浅色、深色。</p></div><label className="setting-row"><span><strong>主题</strong></span><select aria-label="主题" value={bootstrap.preferences.theme} disabled={busy} onChange={(event) => updateTheme(event.target.value as Theme)}><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select></label></section>
+          <section className="settings-group"><div className="setting-intro"><h2>外观</h2><p>跟随系统，或固定浅色、深色。</p></div><div className="setting-row"><span><strong>主题</strong><small>侧边栏底部也可以随时切换。</small></span><ThemeChoice value={bootstrap.preferences.theme} disabled={busy} onChange={(theme) => { if (theme !== bootstrap.preferences.theme) void updateTheme(theme); }} /></div></section>
           {nativeAvailable && <TerminalSettings />}
           <div className="setting-row migration-entry"><span><strong>换设备与备份</strong><small>导出加密配置包，或通过 WebDAV 同步</small></span><button className="button" type="button" onClick={() => setSettingsTab('migration')}>迁移与同步 →</button></div>
         </>}

@@ -129,6 +129,8 @@ pub trait CliAdapter: Sync {
     fn connection_documents_for_existing(&self, connection: &Connection, scope: Scope, _existing: &BTreeMap<String, Value>) -> Result<BTreeMap<String, Value>, String> {
         self.connection_documents(connection,scope)
     }
+    /// Drop or rewrite fields the CLI rejects after documents are merged.
+    fn normalize_applied_document(&self, _role: &str, _document: &mut Value) {}
     fn preserve_native_fields(&self, _role: &str, _original: &Value, _fields: &mut BTreeMap<String, Value>, _profile: &RegisteredProfile) -> Result<(), String> { Ok(()) }
     fn write_connection_secret_for_documents(&self, profile: &RegisteredProfile, scope: Scope, credentials: &dyn CredentialStore, secrets: &mut NativeSecrets, _documents: &BTreeMap<String, Value>) -> Result<(), String> {
         self.write_connection_secret(profile,scope,credentials,secrets)
@@ -299,8 +301,19 @@ pub trait CliAdapter: Sync {
     fn install_command(&self) -> Option<String> {
         Some(format!("npm install -g {}", self.npm_package()))
     }
+    fn native_install_command(&self) -> Option<String> {
+        None
+    }
+    fn npm_install_command(&self) -> Option<String> {
+        let package = self.npm_package();
+        (!package.is_empty()).then(|| format!("npm install -g {package}"))
+    }
     fn upgrade_command(&self, source: &str) -> Option<String> {
         (source == "npm_shim").then(|| format!("npm install -g {}@latest", self.npm_package()))
+    }
+    fn npm_uninstall_command(&self) -> Option<String> {
+        let package = self.npm_package();
+        (!package.is_empty()).then(|| format!("npm uninstall -g {package}"))
     }
     fn anthropic_base_url(&self) -> &'static str {
         "https://api.anthropic.com/v1"

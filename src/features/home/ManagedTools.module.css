@@ -36,7 +36,68 @@
 .switch { min-width: 0; }
 .switch > small { color: var(--text-2); font-size: 12px; }
 .switch > div { display: flex; flex-wrap: wrap; gap: 6px; }
-.switch select { width: 100%; max-width: 360px; }
+.menuTrigger {
+  display: flex;
+  width: min(100%, 240px);
+  min-height: 30px;
+  justify-content: flex-start;
+  padding: 0 28px 0 12px;
+  border: 1px solid var(--accent-line);
+  border-radius: 99px;
+  background-color: var(--accent-soft);
+  background-image: var(--chevron);
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  box-shadow: none;
+  color: var(--accent);
+  font-size: 12.5px;
+  font-weight: 640;
+  text-align: left;
+}
+.menuTrigger > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.menuTrigger[data-empty="true"] { border-color: var(--line-strong); background-color: var(--surface); color: var(--text-2); font-weight: 560; }
+.menuTrigger:hover:not(:disabled) { background-color: var(--accent-soft); border-color: var(--accent); }
+.menuTrigger[data-empty="true"]:hover:not(:disabled) { background-color: var(--surface); border-color: var(--text-3); }
+.menuTrigger[data-open="true"] { box-shadow: 0 0 0 3px var(--accent-ring); }
+.menuTrigger:disabled { opacity: .5; }
+.menu {
+  position: fixed;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+}
+.menu > input { width: 100%; background-color: var(--surface-2); }
+.menu > input:focus { box-shadow: none; }
+.menuList { display: grid; align-content: start; gap: 2px; min-height: 0; overflow: auto; }
+.menuList > button {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  min-height: 30px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 500;
+  text-align: left;
+}
+.menuList > button > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.menuList > button > small { margin-left: auto; overflow: hidden; color: var(--text-3); font-size: 11.5px; font-weight: 450; text-overflow: ellipsis; white-space: nowrap; }
+.menuList > button > em { flex: none; color: var(--warning); font-size: 11px; font-style: normal; font-weight: 560; }
+.menuList > button:hover:not(:disabled) { background: var(--surface-3); border-color: transparent; }
+.menuList > button[data-active="true"] { background: var(--surface-3); }
+.menuList > button[aria-selected="true"], .menuList > button[aria-selected="true"]:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent); }
+.menuList > p { margin: 0; padding: 8px; color: var(--text-3); font-size: 12px; }
 
 .switch > div > button {
   max-width: 100%;

@@ -393,6 +393,9 @@ impl CliAdapter for Pi {
         true
     }
     fn install_command(&self) -> Option<String> {
+        self.npm_install_command()
+    }
+    fn npm_install_command(&self) -> Option<String> {
         Some(format!(
             "npm install -g --ignore-scripts {}",
             self.npm_package()

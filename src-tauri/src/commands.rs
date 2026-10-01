@@ -540,6 +540,20 @@ pub async fn save_mcp_definition(
 }
 
 #[tauri::command]
+pub async fn delete_mcp_definition(app: AppHandle, id: String, expected_version: u64) -> Result<(), ApiError> {
+    blocking(move || app.state::<AppState>().with_database(&app, |db| resources::mcp::delete_definition(db, &id, expected_version).map_err(native_error))).await
+}
+
+#[tauri::command]
+pub async fn remove_native_mcp(app: AppHandle, target: resources::mcp::McpTargetRequest, name: String) -> Result<(), ApiError> {
+    blocking(move || {
+        let home = home()?;
+        let db = app.state::<AppState>().database(&app)?;
+        resources::mcp::remove_native(&db, &SystemCredentialStore, &adapters::Registry::builtins(), &home, &target, &name).map_err(native_error)
+    }).await
+}
+
+#[tauri::command]
 pub async fn list_native_mcp(
     app: AppHandle,
     target: resources::mcp::McpTargetRequest,
@@ -843,6 +857,15 @@ pub async fn install_skill(
 }
 
 #[tauri::command]
+pub async fn delete_skill_package(app: AppHandle, package_id: String) -> Result<(), ApiError> {
+    blocking(move || {
+        let home = home()?;
+        let db = app.state::<AppState>().database(&app)?;
+        resources::skills::delete_package(&db, &adapters::Registry::builtins(), &home, &package_id).map_err(native_error)
+    }).await
+}
+
+#[tauri::command]
 pub async fn remove_skill(
     app: AppHandle,
     package_id: String,
@@ -976,7 +999,9 @@ pub async fn get_registered_tool_workspace(
     tool_id: String,
     scope: Scope,
     project_path: Option<String>,
+    summary: Option<bool>,
 ) -> Result<RegisteredToolWorkspace, ApiError> {
+    let summary = summary.unwrap_or(false);
     blocking(move || {
         let home = home()?;
         let project = checked_project(scope, project_path)?;
@@ -987,14 +1012,27 @@ pub async fn get_registered_tool_workspace(
         let state = app.state::<AppState>();
         state.with_database(&app, |database| {
             let custom = registered_tool_path(database, &tool_id).map_err(native_error)?;
-            let probe = adapter::probe_registered(
-                &registry,
-                &tool_id,
-                custom.as_deref(),
-                &home,
-                project.as_deref(),
-                scope,
-            )
+            // The quick-start page only needs the selected CLI version. Skip sibling shims,
+            // native file reads, and pending-transaction recovery.
+            let probe = if summary {
+                adapter::probe_registered_summary(
+                    &registry,
+                    &tool_id,
+                    custom.as_deref(),
+                    &home,
+                    project.as_deref(),
+                    scope,
+                )
+            } else {
+                adapter::probe_registered(
+                    &registry,
+                    &tool_id,
+                    custom.as_deref(),
+                    &home,
+                    project.as_deref(),
+                    scope,
+                )
+            }
             .map_err(native_error)?;
             let key = match scope {
                 Scope::Global => "global".into(),
@@ -1004,15 +1042,22 @@ pub async fn get_registered_tool_workspace(
                 profile::list_registered_profiles(database, &tool_id).map_err(native_error)?;
             let common =
                 profile::get_registered_common(database, &tool_id).map_err(native_error)?;
-            let recovery_needed = transaction::recover_pending(database, &SystemCredentialStore)
-                .map_err(native_error)?;
+            let recovery_needed = if summary {
+                Vec::new()
+            } else {
+                transaction::recover_pending(database, &SystemCredentialStore).map_err(native_error)?
+            };
             let binding = apply::get_registered_binding(database, &tool_id, &key)
                 .map_err(native_error)?
                 .map(|mut binding| {
                     binding.managed.clear();
                     binding
                 });
-            let snapshots = probe.native_files.iter().map(native_snapshot).collect();
+            let snapshots = if summary {
+                Vec::new()
+            } else {
+                probe.native_files.iter().map(native_snapshot).collect()
+            };
             Ok(RegisteredToolWorkspace {
                 probe,
                 custom_path: custom.map(|path| path.display().to_string()),
@@ -1892,6 +1937,41 @@ pub async fn set_default_launch_mode(
         let _ = crate::tray::refresh(&tray);
     });
     Ok(settings)
+}
+
+#[tauri::command]
+pub async fn maintain_registered_cli(
+    app: AppHandle,
+    tool_id: String,
+    action: String,
+    source: Option<String>,
+) -> Result<(), ApiError> {
+    blocking(move || {
+        let registry = adapters::Registry::builtins();
+        let adapter = registry
+            .get(&tool_id)
+            .ok_or_else(|| native_error("此 CLI 适配器未注册".into()))?;
+        let source = source.as_deref().unwrap_or("unknown");
+        if !matches!(source, "npm_shim" | "native" | "unknown") {
+            return Err(native_error("未知安装来源".into()));
+        }
+        let script = match action.as_str() {
+            "install" => match source {
+                "npm_shim" => adapter.npm_install_command(),
+                "native" => adapter.native_install_command(),
+                _ => adapter.install_command(),
+            },
+            "install_native" => adapter.native_install_command(),
+            "upgrade" => adapter.upgrade_command(source),
+            "uninstall_npm" => adapter.npm_uninstall_command(),
+            _ => None,
+        }
+        .ok_or_else(|| native_error("没有可直接执行的命令".into()))?;
+        app.state::<AppState>().with_database(&app, |database| {
+            launch::open_shell(database, &script).map_err(native_error)
+        })
+    })
+    .await
 }
 
 #[tauri::command]

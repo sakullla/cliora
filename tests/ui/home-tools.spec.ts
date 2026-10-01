@@ -227,3 +227,49 @@ test('detection failure names the tool and points at edit or reread', async ({ p
   });
   expect(color).toBe(true);
 });
+
+test('many profiles stay in one searchable menu', async ({ page }) => {
+  await page.addInitScript(() => {
+    const applied = { codex: 'p0' };
+    const profiles = Array.from({ length: 20 }, (_, index) => ({ id: `p${index}`, tool: 'codex', name: index === 0 ? '日常' : `配置 ${index}`, version: 1, inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection: { model: `m${index}` } }));
+    Object.assign(window, {
+      isTauri: true,
+      __applyCalls: [] as unknown[],
+      __TAURI_INTERNALS__: { invoke: async (command: string, args: { profileId?: string } = {}) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [] }], managedIds: ['codex'], preservedUnknown: [] };
+        if (command === 'list_projects' || command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_skill_recovery_issues' || command === 'scan_native_skills' || command === 'list_native_mcp') return [];
+        if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
+        if (command === 'get_tray_status') return { available: false, error: null };
+        if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+        if (command === 'get_registered_tool_workspace') {
+          const profile = profiles.find((item) => item.id === applied.codex);
+          return { probe: { selectedPath: 'C:/codex.cmd', installations: [{ path: 'C:/codex.cmd', version: '1.0.0', status: 'available' }], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: [], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '' }, profiles, binding: { scopeKey: 'global', tool: 'codex', profileId: applied.codex, profileVersion: profile?.version ?? 1, managed: {} }, snapshots: [], recoveryNeeded: [], common: null, customPath: null };
+        }
+        if (command === 'apply_registered_native_profile') { (window as unknown as { __applyCalls: unknown[] }).__applyCalls.push(args); applied.codex = args.profileId ?? applied.codex; return { applications: [] }; }
+        if (command === 'inspect_registered_native_draft') return null;
+        return null;
+      } },
+    });
+  });
+  await page.setViewportSize({ width: 1360, height: 768 });
+  await page.goto('/');
+  const tools = page.getByLabel('管理中的工具');
+  await expect(tools.getByRole('radiogroup')).toHaveCount(0);
+  const menu = tools.getByRole('button', { name: '切换Codex的配置' });
+  await expect(menu).toHaveText('日常');
+  const rowHeight = await menu.evaluate((element) => element.parentElement?.parentElement?.getBoundingClientRect().height ?? 999);
+  expect(rowHeight).toBeLessThan(140);
+  await menu.click();
+  const list = page.getByRole('listbox', { name: '切换Codex的配置' });
+  await expect(list.getByRole('option')).toHaveCount(20);
+  expect((await list.boundingBox())!.height).toBeLessThan(360);
+  await page.getByLabel('搜索配置').fill('配置 12');
+  await expect(list.getByRole('option')).toHaveCount(1);
+  await list.getByRole('option', { name: '配置 12' }).click();
+  await expect(menu).toHaveText('配置 12');
+  await expect(page.getByRole('listbox')).toHaveCount(0);
+  await expect(tools.getByRole('status')).toHaveText('Codex 已写入原生文件，下次启动读取。');
+  const calls = await page.evaluate(() => (window as unknown as { __applyCalls: Array<{ profileId: string }> }).__applyCalls);
+  expect(calls.map((call) => call.profileId)).toEqual(['p12']);
+});

@@ -82,8 +82,9 @@
 .cardActions button:last-child { border-color: transparent; background: transparent; box-shadow: none; color: var(--accent); }
 .cardActions button:last-child:hover:not(:disabled) { background: var(--accent-soft); }
 
-.empty { grid-column: 1 / -1; padding: 40px 16px; border: 1px dashed var(--line-strong); border-radius: var(--radius-lg); color: var(--text-2); font-size: 13px; text-align: center; }
-
+.empty { grid-column: 1 / -1; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 40px 16px; border: 1px dashed var(--line-strong); border-radius: var(--radius-lg); color: var(--text-2); font-size: 13px; text-align: center; }
+.empty > strong { color: var(--text); font-size: 15px; font-weight: 650; }
+.empty > button { margin-top: 10px; min-height: var(--control-h); padding: 0 16px; }
 /* Editor (dialog) */
 .editor { display: grid; gap: 14px; }
 .editorHead { display: flex; align-items: center; justify-content: space-between; gap: 10px; }

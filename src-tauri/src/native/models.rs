@@ -330,8 +330,8 @@ fn save_cache(db: &Database, key: &str, directory: &ModelDirectory) -> Result<()
     })
 }
 
-fn endpoint(connection: &Connection) -> Result<Url, String> {
-    let mut url = Url::parse(&connection.base_url).map_err(|_| "模型目录地址不是有效 URL")?;
+fn checked_base(connection: &Connection) -> Result<Url, String> {
+    let url = Url::parse(&connection.base_url).map_err(|_| "模型目录地址不是有效 URL")?;
     if !matches!(url.scheme(), "https" | "http") || url.host_str().is_none() {
         return Err("模型目录只支持 HTTP(S) 地址".into());
     }
@@ -350,22 +350,66 @@ fn endpoint(connection: &Connection) -> Result<Url, String> {
     {
         return Err("远程模型目录须使用 HTTPS".into());
     }
-    if !url.path().ends_with("/models") {
-        let mut path = url.path().trim_end_matches('/').to_owned();
-        if path.is_empty() && connection.interface_format == "anthropic_messages" {
-            path.push_str("/v1");
-        }
-        path.push_str("/models");
-        url.set_path(&path);
-    }
     Ok(url)
+}
+
+fn version_segment(path: &str) -> bool {
+    path.rsplit('/')
+        .next()
+        .and_then(|segment| segment.strip_prefix('v'))
+        .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DirectoryAuth {
+    Bearer,
+    Anthropic,
+}
+
+/// One documented directory URL. Anthropic lists `GET /v1/models`; an OpenAI-compatible
+/// base that already ends in `/v1` or `/v4` lists `GET {base}/models`. DeepSeek publishes
+/// the model list only at `GET https://api.deepseek.com/models`, including when chat uses
+/// the Anthropic-compatible base `https://api.deepseek.com/anthropic`.
+fn directory(connection: &Connection) -> Result<(Url, DirectoryAuth), String> {
+    let mut url = checked_base(connection)?;
+    if url.host_str() == Some("api.deepseek.com") {
+        url.set_path("/models");
+        url.set_query(None);
+        return Ok((url, DirectoryAuth::Bearer));
+    }
+    let path = url.path().trim_end_matches('/').to_owned();
+    if let Some(host) = url.host_str() {
+        if matches!(host, "open.bigmodel.cn" | "api.z.ai") && !path.contains("/api/") {
+            return Err(format!("这是 {host} 的网站地址，不是 API 地址。模型列表请填写 https://{host}/api/paas/v4；Claude 兼容接口请填写 https://{host}/api/anthropic"));
+        }
+    }
+    if !path.ends_with("/models") {
+        let mut next = path;
+        if version_segment(&next) {
+            next.push_str("/models");
+        } else if next.is_empty() || connection.interface_format == "anthropic_messages" {
+            next.push_str("/v1/models");
+        } else {
+            next.push_str("/models");
+        }
+        url.set_path(&next);
+    }
+    let auth = if connection.interface_format == "anthropic_messages" {
+        DirectoryAuth::Anthropic
+    } else {
+        DirectoryAuth::Bearer
+    };
+    Ok((url, auth))
+}
+
+fn endpoint(connection: &Connection) -> Result<Url, String> {
+    directory(connection).map(|(url, _)| url)
 }
 
 fn fetch(
     connection: &Connection,
     credentials: &dyn CredentialStore,
 ) -> Result<Vec<String>, String> {
-    let mut url = endpoint(connection)?;
     if connection
         .secret_ref
         .as_deref()
@@ -382,12 +426,13 @@ fn fetch(
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|_| "无法建立模型目录连接")?;
+    let (mut url, auth) = directory(connection)?;
     let mut models = BTreeSet::new();
     let mut seen_cursors = HashSet::new();
     for _ in 0..10 {
         let mut request = client.get(url.clone()).header(ACCEPT, "application/json");
         if let Some(secret) = &secret {
-            request = if connection.interface_format == "anthropic_messages" {
+            request = if auth == DirectoryAuth::Anthropic {
                 request
                     .header("x-api-key", secret)
                     .header("anthropic-version", "2023-06-01")
@@ -405,7 +450,17 @@ fn fetch(
         let status = response.status();
         if !status.is_success() {
             return Err(match status.as_u16() {
-                401 | 403 => format!("模型目录返回 HTTP {}（{}）。请确认 API 地址、认证方式与所用密钥", status.as_u16(), if secret.is_none() { "未提供密钥" } else if connection.interface_format == "anthropic_messages" { "x-api-key 认证" } else { "Bearer 认证" }),
+                401 | 403 => format!(
+                    "模型目录返回 HTTP {}（{}）。请确认 API 地址、认证方式与所用密钥",
+                    status.as_u16(),
+                    if secret.is_none() {
+                        "未提供密钥"
+                    } else if auth == DirectoryAuth::Anthropic {
+                        "x-api-key 认证"
+                    } else {
+                        "Bearer 认证"
+                    }
+                ),
                 404 => "供应商没有在该地址提供模型目录，可直接填写模型 ID".into(),
                 429 => "模型目录请求受到频率限制，请稍后刷新".into(),
                 300..=399 => "模型目录发生跳转，出于凭据安全没有继续请求".into(),
@@ -421,8 +476,7 @@ fn fetch(
             return Err("模型目录响应过大".into());
         }
         let body: serde_json::Value =
-            serde_json::from_slice(&bytes).map_err(|_| "模型目录响应不是有效 JSON")?;
-        if body.get("success").and_then(serde_json::Value::as_bool) == Some(false) { return Err("供应商返回业务失败；该地址未提供可用模型目录，可手动填写模型".into()); }
+            serde_json::from_slice(&bytes).map_err(|_| "这个地址返回的不是模型目录，请填写 API 地址而不是网站首页")?;
         let data = body
             .get("data")
             .and_then(serde_json::Value::as_array)
@@ -454,11 +508,7 @@ fn fetch(
             return Err("模型目录分页重复，已停止请求".into());
         }
         url.query_pairs_mut().clear().append_pair(
-            if connection.interface_format == "anthropic_messages" {
-                "after_id"
-            } else {
-                "after"
-            },
+            if auth == DirectoryAuth::Anthropic { "after_id" } else { "after" },
             cursor,
         );
     }
@@ -630,6 +680,94 @@ mod tests {
         assert_eq!(endpoint(&connection).unwrap().path(), "/v1/models");
         connection.base_url.push_str("/v1");
         assert_eq!(endpoint(&connection).unwrap().path(), "/v1/models");
+    }
+
+    #[test]
+    fn zhipu_site_root_is_rejected_and_versioned_base_lists_models() {
+        let site = Connection {
+            provider_id: "zhipu".into(),
+            interface_format: "openai_completions".into(),
+            base_url: "https://open.bigmodel.cn".into(),
+            model: "manual".into(),
+            secret_ref: None,
+            auth_env_var: None,
+        };
+        let message = endpoint(&site).unwrap_err();
+        assert!(message.contains("https://open.bigmodel.cn/api/paas/v4"), "{message}");
+        let api = Connection {
+            base_url: "https://open.bigmodel.cn/api/paas/v4".into(),
+            ..site
+        };
+        assert_eq!(endpoint(&api).unwrap().path(), "/api/paas/v4/models");
+        let claude = Connection {
+            interface_format: "anthropic_messages".into(),
+            base_url: "https://open.bigmodel.cn/api/anthropic".into(),
+            ..api
+        };
+        assert_eq!(endpoint(&claude).unwrap().path(), "/api/anthropic/v1/models");
+    }
+
+    #[test]
+    fn deepseek_lists_models_on_the_account_directory() {
+        for (base, format) in [
+            ("https://api.deepseek.com/anthropic", "anthropic_messages"),
+            ("https://api.deepseek.com", "openai_chat"),
+            ("https://api.deepseek.com/v1", "openai_chat"),
+        ] {
+            let connection = Connection {
+                provider_id: "deepseek".into(),
+                interface_format: format.into(),
+                base_url: base.into(),
+                model: "manual".into(),
+                secret_ref: None,
+                auth_env_var: None,
+            };
+            let (url, auth) = directory(&connection).unwrap();
+            assert_eq!(url.as_str(), "https://api.deepseek.com/models", "{base}");
+            assert_eq!(auth, DirectoryAuth::Bearer);
+        }
+    }
+
+    #[test]
+    fn anthropic_auth_failure_does_not_try_another_directory() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert!(line.starts_with("GET /anthropic/v1/models"), "{line}");
+            loop {
+                line.clear();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" { break; }
+            }
+            write!(stream, "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+            thread::sleep(Duration::from_millis(150));
+            listener.set_nonblocking(true).unwrap();
+            assert!(listener.accept().is_err());
+        });
+        struct Key;
+        impl CredentialStore for Key {
+            fn put(&self, _: &str, _: &str) -> Result<(), String> { Err("unused".into()) }
+            fn get(&self, _: &str) -> Result<String, String> { Ok("test-key".into()) }
+            fn delete(&self, _: &str) -> Result<(), String> { Err("unused".into()) }
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        let connection = Connection {
+            provider_id: "deepseek".into(),
+            interface_format: "anthropic_messages".into(),
+            base_url: format!("http://{address}/anthropic"),
+            model: "manual".into(),
+            secret_ref: Some("connection-11111111-1111-1111-1111-111111111111".into()),
+            auth_env_var: None,
+        };
+        let result = list_models(&db, &Key, &connection, true, "").unwrap();
+        assert_eq!(result.status, "error");
+        assert!(result.error.unwrap().contains("HTTP 401"));
+        server.join().unwrap();
     }
 
     #[test]

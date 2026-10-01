@@ -125,8 +125,12 @@ export function ProjectLauncher({ tools, repair }: { tools: AdapterDescriptor[];
   }
   async function rename(project: Project) {
     begin(project.id);
-    try { await native.renameProject(project.id, names[project.id] ?? project.name); await refresh(); }
-    catch (value) { showDialogError(value); } finally { setBusy(''); }
+    try {
+      await native.renameProject(project.id, names[project.id] ?? project.name);
+      await refresh();
+      setEditingId(null); setDialogError(''); setDialogFeedback('');
+      showPageFeedback('项目名称已保存。');
+    } catch (value) { showDialogError(value); } finally { setBusy(''); }
   }
   async function chooseDirectory(project?: Project) {
     try {
@@ -156,7 +160,8 @@ export function ProjectLauncher({ tools, repair }: { tools: AdapterDescriptor[];
     try {
       const updated = await native.setProjectModelOverride(project.id, toolId, model || null);
       setProjects((old) => old.map((item) => item.id === project.id ? updated : item));
-      showDialogFeedback(model ? '项目模型已保存；下次启动时通过 CLI 参数选择。' : '已清除项目模型覆盖。');
+      setEditingId(null); setDialogError(''); setDialogFeedback('');
+      showPageFeedback(model ? '项目模型已保存；下次启动时通过 CLI 参数选择。' : '已清除项目模型覆盖。');
     } catch (value) { showDialogError(value); }
     finally { setBusy(''); }
   }

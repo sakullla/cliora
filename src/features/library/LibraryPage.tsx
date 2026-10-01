@@ -5,10 +5,15 @@ import { confirmAction, type ConfirmationOptions } from '../../lib/confirm';
 import type { Project } from '../../types/launch';
 import type { LibraryDraft, LibraryItem, LibraryKind } from '../../types/library';
 import type { AdapterDescriptor } from '../../types/native';
+import { LibraryResources } from './LibraryResources';
 import { NativeRuleEditor } from './NativeRuleEditor';
 import { RuleDistribution } from './RuleDistribution';
 import { GuideDialog } from '../../components/GuideDialog';
+import { Icon } from '../../components/Icon';
+import { saveShortcutHint, searchShortcutHint } from '../../lib/shortcut';
 import styles from './LibraryPage.module.css';
+
+const copiedText = '完整正文已复制，可以粘贴使用。';
 
 function formatFailure(error: unknown, objectText: string, nextText: string): string {
   const fallback = `${objectText}。${nextText}`;
@@ -58,7 +63,10 @@ function edit(item: LibraryItem): LibraryDraft {
   return { id: item.id, kind: item.kind, title: item.title, body: item.body, category: item.category, projectId: item.projectId, expectedVersion: item.version };
 }
 
+type LibrarySection = LibraryKind | 'mcp' | 'skill';
+
 export function LibraryPage({ managedTools = [], active = true }: { managedTools?: AdapterDescriptor[]; active?: boolean }) {
+  const [section, setSection] = useState<LibrarySection>('prompt');
   const [kind, setKind] = useState<LibraryKind>('prompt');
   const [search, setSearch] = useState('');
   const [projectFilter, setProjectFilter] = useState('*');
@@ -73,6 +81,12 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
   const [dialogError, setDialogError] = useState('');
   const [dialogNotice, setDialogNotice] = useState('');
   const [tagText, setTagText] = useState('');
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!copiedId) return;
+    const timer = window.setTimeout(() => setCopiedId(null), 1800);
+    return () => window.clearTimeout(timer);
+  }, [copiedId, notice]);
   const dirty = !!draft && JSON.stringify(draft) !== savedText;
   const latest = useRef(''); latest.current = JSON.stringify([kind, draft, active]);
   const mounted = useRef(true);
@@ -115,9 +129,10 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
     const next = empty(kind);
     setDraft(next); setSavedText(JSON.stringify(next)); setTagText(''); setError(''); setNotice(''); clearDialogResult();
   }
-  async function switchKind(next: LibraryKind) {
-    if (next === kind || !await canReplace()) return;
-    setKind(next); setDraft(null); setSavedText(''); setCategoryFilter('*'); setNotice(''); setError(''); clearDialogResult();
+  async function openSection(next: LibrarySection) {
+    if (next === section || !await canReplace()) return;
+    setSection(next); setDraft(null); setSavedText(''); setNotice(''); setError(''); clearDialogResult();
+    if (next === 'prompt' || next === 'rule') { setKind(next); setCategoryFilter('*'); }
   }
   async function refresh(nextKind = kind) { setItems(await native.listLibraryItems(nextKind, null, search)); }
   function keepSaved(saved: LibraryItem) {
@@ -140,7 +155,8 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
         setDialogError(failure);
         return;
       }
-      showDialogNotice('已保存在本机资料库。');
+      setDraft(null); setSavedText(''); clearDialogResult();
+      showNotice('已保存在本机资料库。');
     } catch (value) { showDialogError(formatFailure(value, '资料保存失败', '可修改后再次点击保存。')); }
     finally { setBusy(false); }
   }
@@ -160,13 +176,13 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
     } catch (value) { showDialogError(formatFailure(value, '资料删除失败', '可再次点击删除。')); }
     finally { setBusy(false); }
   }
-  async function copy(text: string, surface: 'page' | 'dialog' = 'page') {
+  async function copy(text: string, surface: 'page' | 'dialog' = 'page', itemId: string | null = null) {
     if (surface === 'dialog') clearDialogResult();
-    else { setNotice(''); setError(''); }
+    else { setNotice(''); setError(''); setCopiedId(null); }
     try {
       await navigator.clipboard.writeText(text);
-      if (surface === 'dialog') showDialogNotice('完整正文已复制，可以粘贴使用。');
-      else showNotice('完整正文已复制，可以粘贴使用。');
+      if (surface === 'dialog') showDialogNotice(copiedText);
+      else { showNotice(copiedText); setCopiedId(itemId); }
     } catch {
       if (surface === 'dialog') showDialogError('复制失败，正文仍在页面上，可以手动选择。');
       else showError('复制失败，正文仍在页面上，可以手动选择。');
@@ -188,14 +204,18 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
   return <section className={styles.page} aria-label="资料库内容">
     <div className={styles.toolbar}>
       <div className={styles.tabs} role="tablist" aria-label="资料类型">
-        <button type="button" role="tab" aria-selected={kind === 'prompt'} onClick={() => switchKind('prompt')}>提示词</button>
-        <button type="button" role="tab" aria-selected={kind === 'rule'} onClick={() => switchKind('rule')}>长期规则</button>
+        <button type="button" role="tab" aria-selected={section === 'prompt'} onClick={() => void openSection('prompt')}>提示词</button>
+        <button type="button" role="tab" aria-selected={section === 'rule'} onClick={() => void openSection('rule')}>长期规则</button>
+        <button type="button" role="tab" aria-selected={section === 'mcp'} onClick={() => void openSection('mcp')}>MCP</button>
+        <button type="button" role="tab" aria-selected={section === 'skill'} onClick={() => void openSection('skill')}>Skill</button>
       </div>
-      <button type="button" className={styles.primary} onClick={() => start(kind)}>＋ 新建{kind === 'prompt' ? '提示词' : '规则'}</button>
+      {(section === 'prompt' || section === 'rule') && <button type="button" className={styles.primary} onClick={() => start(kind)}>＋ 新建{kind === 'prompt' ? '提示词' : '规则'}</button>}
     </div>
-    {kind === 'rule' && <NativeRuleEditor tools={managedTools} projects={projects} />}
+    {section === 'rule' && <NativeRuleEditor tools={managedTools} projects={projects} />}
+    {(section === 'mcp' || section === 'skill') && <LibraryResources section={section} active={active} tools={managedTools} />}
+    {(section === 'prompt' || section === 'rule') && <>
     <div className={styles.filters}>
-      <input aria-label="搜索资料" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索标题、正文或标签" />
+      <input aria-label="搜索资料" data-page-search title={searchShortcutHint} value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape' && search) { event.preventDefault(); setSearch(''); } }} placeholder="搜索标题、正文或标签" />
       <select aria-label="项目筛选" value={projectFilter} onChange={(event) => setProjectFilter(event.target.value)}><option value="*">所有项目</option><option value="global">全局资料</option>{projects.map((project) => <option value={project.id} key={project.id}>{project.name}</option>)}</select>
       <select aria-label="标签筛选" value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}><option value="*">所有标签</option>{categories.map((category) => <option value={category} key={category}>{category}</option>)}</select>
     </div>
@@ -204,14 +224,18 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
     <div className={styles.layout}>
       <div className={styles.list} aria-label={`${kind === 'prompt' ? '提示词' : '规则'}列表`}>
         {shown.length ? shown.map((item) => <article className={styles.card} key={item.id}>
-          <small>{tagsOf(item.category).join(' · ') || '无标签'} · {item.projectId ? projects.find((project) => project.id === item.projectId)?.name ?? '原项目' : '全局'}</small><button className={styles.cardTitle} type="button" onClick={() => choose(item)}>{item.title}</button><p>{item.body.slice(0, 160) || '正文为空'}</p><div className={styles.cardActions}><button type="button" onClick={() => void copy(item.body)} disabled={!item.body}>复制全文</button><button type="button" onClick={() => choose(item)}>修改</button></div>
-        </article>) : <div className={styles.empty}>筛选结果为空，没有符合条件的{kind === 'prompt' ? '提示词' : '规则'}。请使用上方的「新建」。</div>}
+          <small>{tagsOf(item.category).join(' · ') || '无标签'} · {item.projectId ? projects.find((project) => project.id === item.projectId)?.name ?? '原项目' : '全局'}</small><button className={styles.cardTitle} type="button" onClick={() => choose(item)}>{item.title}</button><p>{item.body.slice(0, 160) || '正文为空'}</p><div className={styles.cardActions}>{copiedId === item.id && notice === copiedText
+          ? <button type="button" aria-label="复制全文" data-copied="true" onClick={() => void copy(item.body, 'page', item.id)}><Icon name="check" size={13} strokeWidth={2.2} />已复制</button>
+          : <button type="button" onClick={() => void copy(item.body, 'page', item.id)} disabled={!item.body}>复制全文</button>}<button type="button" onClick={() => choose(item)}>修改</button></div>
+        </article>) : !items.length && !search.trim()
+          ? <div className={styles.empty}><strong>还没有{kind === 'prompt' ? '提示词' : '规则'}</strong>{kind === 'prompt' ? '把常用的提示词存在这里，需要时一键复制。' : '保存长期使用的规则，之后可以分发到各个 CLI。'}<button type="button" className={styles.primary} onClick={() => start(kind)}>＋ 新建第一条{kind === 'prompt' ? '提示词' : '规则'}</button></div>
+          : <div className={styles.empty}>筛选结果为空，没有符合条件的{kind === 'prompt' ? '提示词' : '规则'}。请使用上方的「新建」。</div>}
       </div>
     </div>
     <GuideDialog open={!!draft} title={draft?.id ? `修改${kind === 'prompt' ? '提示词' : '规则'}` : `新建${kind === 'prompt' ? '提示词' : '规则'}`} hint="填写标题和正文，然后保存。规则还可以继续分发到 CLI。" onClose={() => { void (async () => { if (await canReplace()) { setDraft(null); setSavedText(''); clearDialogResult(); } })(); }}>
       {draft && <div className={styles.editor}>
         <div className={styles.editorHead}><div><small>{draft.id ? '编辑资料' : '新资料'}</small><h2>{draft.title || (kind === 'prompt' ? '提示词' : '长期规则')}</h2></div></div>
-        <div className={styles.actions}><span>{dirty ? '草稿尚未保存' : '已保存'}</span><button type="button" onClick={() => void copy(draft.body, 'dialog')} disabled={!draft.body}>复制全文</button>{draft.id && <button type="button" onClick={() => void remove()} disabled={busy}>删除</button>}<button type="button" className={styles.primary} disabled={busy || !draft.title.trim()} onClick={() => void save()}>保存</button></div>
+        <div className={styles.actions}><span>{dirty ? '草稿尚未保存' : '已保存'}</span><button type="button" onClick={() => void copy(draft.body, 'dialog')} disabled={!draft.body}>复制全文</button>{draft.id && <button type="button" onClick={() => void remove()} disabled={busy}>删除</button>}<button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint} disabled={busy || !draft.title.trim()} onClick={() => void save()}>保存</button></div>
         {dialogError && <div className={styles.error} role="alert">{dialogError}</div>}
         {dialogNotice && <div className={styles.notice} role="status">{dialogNotice}</div>}
         <div className={styles.fields}>
@@ -229,5 +253,6 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
         {kind === 'rule' && draft.id && draft.expectedVersion !== null && !dirty && <RuleDistribution key={`${draft.id}:${draft.expectedVersion}`} rule={{ ...draft, id: draft.id, version: draft.expectedVersion, updatedAt: 0 }} tools={managedTools} projects={projects} />}
       </div>}
     </GuideDialog>
+    </>}
   </section>;
 }

@@ -1,6 +1,6 @@
 /* ---------- List layout ------------------------------------------- */
 
-.layout { display: grid; grid-template-columns: minmax(0, 640px); gap: 16px; min-width: 0; }
+.layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; min-width: 0; }
 
 .list {
   display: flex;
@@ -16,15 +16,16 @@
 .listHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 36px; padding: 8px 8px 4px; }
 .listHead strong { color: var(--text-3); font-size: 11.5px; font-weight: 620; letter-spacing: .3px; }
 .listHead:not(:first-child) { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 14px; }
-.listHead button { min-height: 26px; padding: 0 9px; font-size: 12px; }
+.listHead button { min-height: 28px; padding: 0 11px; font-size: 12px; }
 
 .list > button {
+  position: relative;
   display: grid;
   justify-content: stretch;
   justify-items: start;
-  gap: 2px;
+  gap: 3px;
   min-height: 0;
-  padding: 9px 10px;
+  padding: 10px 34px 10px 10px;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -35,7 +36,26 @@
   font-weight: 400;
 }
 .list > button:hover:not(:disabled) { background: var(--surface-2); }
-.list > button strong { font-size: 13px; font-weight: 600; }
+.list > button::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  width: 12px;
+  height: 12px;
+  margin-top: -6px;
+  background: var(--text-3);
+  opacity: .5;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m9 6 6 6-6 6'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m9 6 6 6-6 6'/%3E%3C/svg%3E") center / contain no-repeat;
+  transition: opacity var(--fast) var(--ease), transform var(--fast) var(--ease);
+}
+.list > button:hover:not(:disabled)::after { opacity: 1; transform: translateX(2px); }
+.list > button strong { display: flex; align-items: center; gap: 8px; max-width: 100%; font-size: 13px; font-weight: 600; }
+.state { flex: none; padding: 0 7px; border: 1px solid var(--line); border-radius: 99px; background: var(--surface-2); color: var(--text-2); font-size: 10.5px; font-weight: 560; line-height: 17px; }
+.state[data-on] { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
+.state[data-warn] { border-color: var(--warning-line); background: var(--warning-soft); color: var(--warning); }
+.list small.mono { font-family: var(--font-mono); font-size: 11px; }
 .list > .active, .list > .active:hover:not(:disabled) { background: var(--accent-soft); }
 .list > .active strong { color: var(--accent); }
 .list small { max-width: 100%; overflow: hidden; color: var(--text-2); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }

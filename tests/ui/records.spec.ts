@@ -60,6 +60,21 @@ test('records keep search, show native resume command and only launch on request
   });
   expect(filterOrder).toEqual({ documentOrder: true, visualOrder: true, orders: ['0', '0', '0'] });
   await expect(page.getByLabel('原生恢复命令')).toContainText("'resume' '1111-2222'");
+  const scrollSplit = await page.evaluate(() => {
+    const list = document.querySelector('[aria-label="会话列表"]');
+    const transcript = document.querySelector('[aria-label="会话正文"]');
+    const main = document.getElementById('main');
+    if (!list || !transcript || !main) return null;
+    const before = list.scrollTop;
+    transcript.dispatchEvent(new WheelEvent('wheel', { deltaY: 240, bubbles: true, cancelable: true }));
+    return {
+      main: getComputedStyle(main).overflowY,
+      list: getComputedStyle(list).overflowY,
+      transcript: getComputedStyle(transcript).overflowY,
+      chained: list.scrollTop !== before,
+    };
+  });
+  expect(scrollSplit).toEqual({ main: 'hidden', list: 'auto', transcript: 'auto', chained: false });
   const resumeOutside = page.getByRole('button', { name: '在外部终端继续' });
   await expect(resumeOutside).toBeVisible();
   await expect(resumeOutside).toHaveClass(/primary/);

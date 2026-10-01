@@ -6,7 +6,11 @@ import type { Project } from '../../types/launch';
 import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, ScanStatus, UsageSummary } from '../../types/history';
 import { displayPath } from '../../lib/paths';
 import { ToolIcon } from '../../components/ToolIcon';
+import { Icon } from '../../components/Icon';
+import { searchShortcutHint } from '../../lib/shortcut';
 import styles from './RecordsPage.module.css';
+
+const copiedCommandText = '已复制原生恢复命令，粘贴后由终端执行。';
 
 const day = (ms: number | null) => ms === null ? '时间未知' : new Date(ms).toLocaleString();
 const compactFormat = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 2 });
@@ -71,6 +75,13 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
   const scanRequest = useRef(0);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [copyFlash, setCopyFlash] = useState(0);
+  useEffect(() => {
+    if (!copyFlash) return;
+    const timer = window.setTimeout(() => setCopyFlash(0), 1800);
+    return () => window.clearTimeout(timer);
+  }, [copyFlash]);
+  const copied = !!copyFlash && notice === copiedCommandText;
   const protectSave = useRef(false);
   function showError(value: unknown) {
     protectSave.current = false;
@@ -121,7 +132,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
     void Promise.all([native.listProjects(), native.listHistoryPrices()])
       .then(([knownProjects, knownPrices]) => { setProjects(knownProjects); setPrices(knownPrices); })
       .catch(value => showReadError(value));
-    void refresh();
+    void refresh(false);
   }, [active]);
 
   useEffect(() => {
@@ -163,7 +174,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
     poll(); const timer = window.setInterval(poll, 700);
     return () => window.clearInterval(timer);
   }, [scanning, active]);
-  async function refresh() {
+  async function refresh(announce = true) {
     if (!nativeAvailable || scanning) return;
     const sequence = ++scanRequest.current; setScanning(true); protectSave.current = false; setNotice(''); setError('');
     try {
@@ -171,7 +182,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
       if (sequence !== scanRequest.current) return;
       setScans(reports);
       const loaded = await load(filterRef.current);
-      if (sequence !== scanRequest.current || !loaded) return;
+      if (sequence !== scanRequest.current || !loaded || !announce) return;
       showNotice('已刷新本机记录。');
     } catch (value) { if (sequence === scanRequest.current) showError(value); }
     finally { if (sequence === scanRequest.current) { setScanning(false); setScanProgress(null); } }
@@ -203,7 +214,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
   async function copy() {
     if (!readyCommand) return;
     protectSave.current = false; setNotice(''); setError('');
-    try { await navigator.clipboard.writeText(readyCommand); showNotice('已复制原生恢复命令，粘贴后由终端执行。'); }
+    try { await navigator.clipboard.writeText(readyCommand); showNotice(copiedCommandText); setCopyFlash((value) => value + 1); }
     catch { showError('复制失败，恢复命令仍在页面上，可以手动选择。'); }
   }
 
@@ -252,10 +263,10 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
     <div className={styles.toolbar}><div className={styles.tabs} role="tablist" aria-label="使用记录类型">
       <button type="button" role="tab" aria-selected={tab === 'sessions'} onClick={() => setTab('sessions')}>会话</button>
       <button type="button" role="tab" aria-selected={tab === 'usage'} onClick={() => setTab('usage')}>用量</button>
-    </div><button type="button" className={styles.refresh} disabled={scanning} onClick={() => void refresh()}>刷新本机记录</button></div>
+    </div><button type="button" className={styles.refresh} disabled={scanning} aria-busy={scanning || undefined} onClick={() => void refresh()}>{scanning && <span className="spinner" aria-hidden="true" />}刷新本机记录</button></div>
     {(scanning || filterLoading) && <p className={styles.caveat} role="status">{scanning ? `后台扫描 ${tools.find(item => item.id === scanProgress?.toolId)?.name ?? scanProgress?.toolId ?? ''} ${scanProgress?.totalSources ? `${scanProgress.completedSources} / ${scanProgress.totalSources}` : '正在发现文件'}` : '正在筛选已缓存记录…'}{scanning && <span className={styles.progress} aria-hidden="true"><span style={scanProgress?.totalSources ? { width: `${Math.min(100, (scanProgress.completedSources / scanProgress.totalSources) * 100)}%` } : undefined} data-indeterminate={!scanProgress?.totalSources || undefined} /></span>}{scanning && <button type="button" onClick={() => void cancelScan()}>停止扫描</button>}</p>}
     <div className={styles.filters}>
-      {tab === 'sessions' && <label className={styles.search}>搜索<input aria-label="搜索会话" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="标题或正文" /></label>}
+      {tab === 'sessions' && <label className={styles.search}>搜索<input aria-label="搜索会话" data-page-search title={searchShortcutHint} value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape' && search) { event.preventDefault(); setSearch(''); } }} placeholder="标题或正文" /></label>}
       <label>工具<select aria-label="筛选工具" value={toolId} onChange={(event) => setToolId(event.target.value)}><option value="">全部工具</option>{tools.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
       {tab === 'sessions' && <label className={styles.favorite}><input type="checkbox" checked={favoriteOnly} onChange={(event) => setFavoriteOnly(event.target.checked)} />只看收藏</label>}
     </div>
@@ -274,14 +285,17 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
         <small>{item.model ?? '模型未知'}{item.partial ? ' · 部分记录' : ''}{item.stale ? ' · 源暂不可读' : ''}</small>
       </button>) : <div className={styles.empty}>没有符合条件的会话。可刷新记录或调整筛选。</div>}</div>
       <div className={styles.detail}>{selected ? <>
+        <div className={styles.detailBar}>
         <div className={styles.detailHead}><div><small className={styles.detailIdentity}><ToolIcon toolId={selected.session.toolId} size={22} />{tools.find((tool) => tool.id === selected.session.toolId)?.name ?? selected.session.toolId} · {day(selected.session.updatedAt)}</small><h2 title={selected.session.title}>{selected.session.title}</h2><p>{selected.session.cwd ? displayPath(selected.session.cwd) : '项目目录未知'} · {selected.session.model ?? '模型未知'}</p></div><button type="button" onClick={() => void favorite()} aria-label={selected.session.favorite ? '取消收藏' : '收藏会话'}>{selected.session.favorite ? '★ 已收藏' : '☆ 收藏'}</button></div>
         {(selected.session.partial || selected.session.stale) && <p className={styles.caveat}>原始记录不完整或最近读取失败；仅展示已索引的内容。</p>}
-        <div className={styles.resume}><div className={styles.detailHead}><strong>继续会话</strong><select aria-label="恢复模式" value={mode} onChange={(event) => setMode(event.target.value as 'normal' | 'yolo')}><option value="normal">普通模式</option>{yolo && <option value="yolo">YOLO 模式</option>}</select></div>
-          {readyCommand ? <><pre aria-label="原生恢复命令">{readyCommand}</pre><div className={styles.actions}><button type="button" onClick={() => void copy()}>复制命令</button><button type="button" className={styles.primary} disabled={busy} onClick={() => void resume()}>在外部终端继续</button></div></> : <p>{shownResumeError || '正在确认原生恢复命令…'}</p>}
+        <div className={styles.resume}>
+          <div className={styles.resumeBar}><strong>继续会话</strong><select aria-label="恢复模式" value={mode} onChange={(event) => setMode(event.target.value as 'normal' | 'yolo')}><option value="normal">普通模式</option>{yolo && <option value="yolo">YOLO 模式</option>}</select>{readyCommand && <div className={styles.actions}><button type="button" className={styles.primary} disabled={busy} onClick={() => void resume()}>在外部终端继续</button><button type="button" aria-label="复制命令" data-copied={copied || undefined} onClick={() => void copy()}>{copied ? <><Icon name="check" size={13} strokeWidth={2.2} />已复制</> : '复制命令'}</button></div>}</div>
+          {readyCommand ? <pre aria-label="原生恢复命令">{readyCommand}</pre> : <p>{shownResumeError || '正在确认原生恢复命令…'}</p>}
           <details className={styles.moreActions}><summary>导出与项目关联</summary><div className={styles.actions}><button type="button" onClick={() => void exportSession('markdown')}>导出 Markdown</button><button type="button" onClick={() => void exportSession('json')}>导出 JSON</button></div><label className={styles.projectLink}>关联项目<select aria-label="关联会话项目" value={selected.session.projectId ?? ''} onChange={(event) => void assignProject(event.target.value)}><option value="">使用原会话目录</option>{projects.map((item) => <option key={item.id} value={item.id}>{item.name}{item.available ? '' : ' · 目录失效'}</option>)}</select></label></details>
           {selected.resumeReason && <button type="button" onClick={onOpenProjects}>前往最近项目重新关联目录</button>}
         </div>
-        <div className={styles.messages}>{selected.messages.length ? selected.messages.map((item) => <article key={item.id} data-role={item.role}><small>{item.role === 'user' ? '你' : '助手'} · {day(item.timestamp)}</small><p>{item.text}</p></article>) : <p>此记录没有可读取的对话正文。</p>}</div>
+        </div>
+        <div className={styles.transcript} aria-label="会话正文"><div className={styles.messages}>{selected.messages.length ? selected.messages.map((item) => <article key={item.id} data-role={item.role}><small>{item.role === 'user' ? '你' : '助手'} · {day(item.timestamp)}</small><p>{item.text}</p></article>) : <p>此记录没有可读取的对话正文。</p>}</div></div>
       </> : <div className={styles.empty}>选择左侧会话查看详情。</div>}</div>
     </div> : <div className={styles.usage}>
       <div className={styles.metrics}><div><small>会话</small><strong>{usage?.sessionCount ?? '—'}</strong></div><Metric label={`输入 token${partialTotals ? ' · 已知小计' : ''}`} value={usage?.input ?? null} /><Metric label={`输出 token${partialTotals ? ' · 已知小计' : ''}`} value={usage?.output ?? null} /><Metric label={`缓存读取${partialTotals ? ' · 已知小计' : ''}`} value={usage?.cacheRead ?? null} /><Metric label={`缓存写入${partialTotals ? ' · 已知小计' : ''}`} value={usage?.cacheWrite ?? null} /><div><small>估算费用</small><strong>{usage?.estimatedCost === null || usage?.estimatedCost === undefined ? '未知' : `${usage.currency ?? ''} ${usage.estimatedCost.toFixed(4)}`}</strong></div></div>

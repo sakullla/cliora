@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { chromium } from '@playwright/test';
 const root=fileURLToPath(new URL('../',import.meta.url)).replace(/\\/g,'/').replace(/\/$/,'');
-const out=root+'/docs/verification/ui'; fs.mkdirSync(out,{recursive:true});
+const out=process.env.CLIORA_CAPTURE_OUT ?? root+'/docs/verification/ui'; fs.mkdirSync(out,{recursive:true});
 const browser=await chromium.launch();
 async function mock(initialTheme){
  const names={codex:'Codex',claude_code:'Claude Code',grok:'Grok',pi:'Pi',open_code:'OpenCode'};
@@ -55,16 +55,17 @@ for(const width of [1360,900,640])for(const theme of ['light','dark']){
  const nav=page.getByRole('navigation',{name:'页面'});
  async function capture(name){await page.waitForTimeout(100);await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);const path=`${out}/${name}-${theme}-${width}.png`;await page.screenshot({path});const over=await page.evaluate(()=>[...document.querySelectorAll('main,section,article,input,textarea,select,button')].filter(el=>el.getClientRects().length&&el.getBoundingClientRect().right>innerWidth+1).map(el=>({tag:el.tagName,text:el.textContent?.slice(0,60)})));if(over.length)failures.push({name,theme,width,over});console.log(path);}
  await capture('home');
- await nav.getByRole('button',{name:'工具与连接'}).click();await page.getByRole('textbox',{name:'settings 配置草稿'}).waitFor();await capture('native-config');
- await page.getByRole('button',{name:'常用设置',exact:true}).click();await capture('config-form');
- await page.getByRole('tab',{name:'MCP',exact:true}).click();await page.getByRole('button',{name:/filesystem/}).first().click();await capture('mcp');
- await page.getByRole('tab',{name:'Skills',exact:true}).click();await page.getByRole('button',{name:/code-review/}).first().click();await capture('skills');
+ await nav.getByRole('button',{name:'工具与连接'}).click();const profiles=page.getByRole('region',{name:'工具与连接'}).getByLabel('配置列表');await profiles.waitFor();await capture('tools');
+ await profiles.getByRole('button',{name:'修改'}).first().click();await page.getByRole('dialog').waitFor();await capture('native-config');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
+ await profiles.getByRole('button',{name:'修改'}).nth(1).click();await page.getByRole('dialog').waitFor();await capture('config-form');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
+ await page.getByRole('tab',{name:'MCP',exact:true}).click();await page.getByRole('button',{name:/filesystem/}).first().waitFor();await capture('mcp');
+ await page.getByRole('tab',{name:'Skill',exact:true}).click();await page.getByRole('button',{name:/code-review/}).first().waitFor();await capture('skills');
  await nav.getByRole('button',{name:'资料库'}).click();await page.getByRole('button',{name:'代码审查',exact:true}).waitFor();await capture('library');
  await nav.getByRole('button',{name:'使用记录'}).click();await page.getByLabel('原生恢复命令').waitFor();await capture('sessions');
  await page.getByRole('tab',{name:'用量',exact:true}).click();await capture('usage');
  await nav.getByRole('button',{name:'设置',exact:true}).click();await capture('settings');
  await page.getByRole('tab',{name:'迁移与同步'}).click();await capture('migration');
- await page.getByRole('button',{name:'导出加密配置包',exact:true}).click();await capture('migration-export');
+ await page.getByRole('button',{name:'导出加密配置包',exact:true}).click();await capture('migration-export');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
  await page.getByRole('button',{name:'从配置包恢复',exact:true}).click();await page.getByPlaceholder('输入导出时的口令').fill('correct-password');await page.getByRole('button',{name:'选择配置包并预览'}).click();await capture('migration-import');
  await page.close();
 }
