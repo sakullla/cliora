@@ -4,15 +4,16 @@ import { save } from '@tauri-apps/plugin-dialog';
 import { native, nativeAvailable } from '../../lib/native';
 import type { AdapterDescriptor } from '../../types/native';
 import type { Project } from '../../types/launch';
-import type { HistoryDetail, HistoryFilter, HistoryMessage, HistoryPrice, HistorySession, ScanStatus } from '../../types/history';
+import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, ScanStatus } from '../../types/history';
 import { displayPath } from '../../lib/paths';
-import { writeClipboard } from '../../lib/clipboard';
 import { FilterSelect } from '../../components/FilterSelect';
 import { ToastStack, type Toast } from '../../components/Toast';
 import { ToolIcon, toolOptions } from '../../components/ToolIcon';
 import { Icon } from '../../components/Icon';
 import { searchShortcutHint } from '../../lib/shortcut';
 import { UsageDashboard, type UsageNotify } from './UsageDashboard';
+import { SessionReader } from './SessionReader';
+import { navigateChoices } from './choiceNavigation';
 import styles from './RecordsPage.module.css';
 
 const copiedCommandText = '已复制原生恢复命令，粘贴后由终端执行。';
@@ -30,15 +31,6 @@ function compactDay(ms: number | null) {
   if (date.getFullYear() === now.getFullYear()) return `${date.getMonth() + 1}月${date.getDate()}日`;
   return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()}`;
 }
-const MESSAGE_CLAMP = 1000;
-const sameDay = (a: number | null, b: number | null) => a !== null && b !== null && startOfDay(new Date(a)) === startOfDay(new Date(b));
-/** Within one transcript the date is only repeated when it changes between messages. */
-function messageTime(ms: number | null, previous: number | null | undefined) {
-  if (ms === null) return '时间未知';
-  const date = new Date(ms);
-  if (previous !== undefined && sameDay(ms, previous)) return timeOfDay(date);
-  return `${date.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' })} ${timeOfDay(date)}`;
-}
 type SessionGroup = 'favorite' | 'today' | 'yesterday' | 'week' | 'earlier' | 'unknown';
 const groupLabels: Record<SessionGroup, string> = { favorite: '收藏', today: '今天', yesterday: '昨天', week: '近 7 天', earlier: '更早', unknown: '时间未知' };
 function groupOf(ms: number | null): SessionGroup {
@@ -55,25 +47,6 @@ function rowTime(ms: number | null) {
   if (group === 'today') return timeOfDay(new Date(ms));
   if (group === 'yesterday') return `昨天 ${timeOfDay(new Date(ms))}`;
   return compactDay(ms);
-}
-function MessageItem({ item, previous }: { item: HistoryMessage; previous: number | null | undefined }) {
-  const [expanded, setExpanded] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const clampable = item.text.length > MESSAGE_CLAMP;
-  const clamped = clampable && !expanded;
-  useEffect(() => {
-    if (!copied) return;
-    const timer = window.setTimeout(() => setCopied(false), 1600);
-    return () => window.clearTimeout(timer);
-  }, [copied]);
-  return <article data-role={item.role}>
-    <div className={styles.messageHead}>
-      <small>{item.role === 'user' ? '你' : '助手'} · <time title={day(item.timestamp)}>{messageTime(item.timestamp, previous)}</time></small>
-      <button type="button" className={styles.messageCopy} aria-label={copied ? '已复制这条消息' : '复制这条消息'} title="复制这条消息" data-copied={copied || undefined} onClick={() => { void writeClipboard(item.text).then((ok) => { if (ok) setCopied(true); }); }}><Icon name={copied ? 'check' : 'copy'} size={13} strokeWidth={2} /></button>
-    </div>
-    <p className={clamped ? styles.clamped : undefined}>{item.text}</p>
-    {clampable && <button type="button" className={styles.expandMessage} aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>{expanded ? '收起' : `展开全文（${item.text.length.toLocaleString()} 字）`}</button>}
-  </article>;
 }
 function RangePicker({ value, customFrom, customTo, onChange, onCustomFrom, onCustomTo }: {
   value: RangeKey; customFrom: string; customTo: string;
@@ -196,11 +169,18 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
   const [favoriteOnly, setFavoriteOnly] = useState(false);
+  const [sort, setSort] = useState('recent');
+  const [detailError, setDetailError] = useState('');
+  const [detailRetry, setDetailRetry] = useState(0);
+  const [listError, setListError] = useState(false);
+  const [favoriteBusy, setFavoriteBusy] = useState(false);
   const [sessions, setSessions] = useState<HistorySession[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [scans, setScans] = useState<ScanStatus[]>([]);
   const [detail, setDetail] = useState<HistoryDetail | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [mobileDetail, setMobileDetail] = useState(false);
+  const pendingSession = useRef<string | null>(null);
   const [prices, setPrices] = useState<HistoryPrice[]>([]);
   const [modelCatalog, setModelCatalog] = useState<string[]>([]);
   const [scanVersion, setScanVersion] = useState(0);
@@ -262,16 +242,18 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
   const load = useCallback(async (current: HistoryFilter) => {
     if (!nativeAvailable) return false;
     const sequence = ++request.current;
-    const key = JSON.stringify(current); setFilterLoading(true);
+    const key = JSON.stringify(current); setFilterLoading(true); setListError(false);
     try {
       const items = await native.listHistorySessions(current);
       if (sequence !== request.current || key !== JSON.stringify(filterRef.current)) return false;
       setSessions(items); setError(null);
       setModelCatalog((old) => { const next = [...new Set([...old, ...items.flatMap((item) => item.model ? [item.model] : [])])].sort(); return next.length === old.length ? old : next; });
-      setSelectedId((old) => old && items.some((item) => item.id === old) ? old : items[0]?.id ?? null);
+      const pending = pendingSession.current;
+      pendingSession.current = null;
+      setSelectedId((old) => pending && items.some((item) => item.id === pending) ? pending : old && items.some((item) => item.id === old) ? old : items[0]?.id ?? null);
       return true;
     } catch (value) {
-      if (sequence === request.current && key === JSON.stringify(filterRef.current)) showReadError(value);
+      if (sequence === request.current && key === JSON.stringify(filterRef.current)) { setListError(true); showReadError(value); }
       return false;
     }
     finally { if (sequence === request.current) setFilterLoading(false); }
@@ -303,11 +285,13 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
   }, [filter, active, load]);
 
   useEffect(() => {
-    if (!selectedId || !nativeAvailable) { setDetail(null); return; }
     const sequence = ++detailRequest.current;
+    setDetailError('');
+    if (!selectedId || !nativeAvailable) { setDetail(null); return; }
     void native.getHistorySession(selectedId).then((value) => { if (sequence === detailRequest.current) setDetail(value); })
-      .catch((value) => { if (sequence === detailRequest.current) showReadError(value); });
-  }, [selectedId]);
+      .catch((value) => { if (sequence === detailRequest.current) setDetailError(formatFailure(value, '这段会话暂时无法读取', '请重新加载会话。')); });
+    return () => { detailRequest.current++; };
+  }, [selectedId, detailRetry]);
 
   const selected = detail?.session.id === selectedId ? detail : null;
   const yolo = tools.find((item) => item.id === selected?.session.toolId)?.yoloAvailable ?? false;
@@ -356,19 +340,22 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
   }
 
   async function favorite() {
-    if (!selected) return;
+    if (!selected || favoriteBusy) return;
+    setFavoriteBusy(true);
     try {
       await native.setHistoryFavorite(selected.session.id, !selected.session.favorite);
-      setDetail({ ...selected, session: { ...selected.session, favorite: !selected.session.favorite } });
+      setDetail((current) => current?.session.id === selected.session.id ? { ...current, session: { ...current.session, favorite: !selected.session.favorite } } : current);
       await load(filter);
     } catch (value) { showError(value); }
+    finally { setFavoriteBusy(false); }
   }
 
   async function assignProject(next: string) {
     if (!selected) return;
     try {
       await native.setHistoryProject(selected.session.id, next || null);
-      setDetail(await native.getHistorySession(selected.session.id));
+      const updated = await native.getHistorySession(selected.session.id);
+      setDetail((current) => current?.session.id === updated.session.id ? updated : current);
       await load(filter);
     } catch (value) { showError(value); }
   }
@@ -377,7 +364,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
     if (!readyCommand) return;
     protectSave.current = false; setNotice(null); setError(null);
     try { await navigator.clipboard.writeText(readyCommand); showNotice(copiedCommandText); setCopyFlash((value) => value + 1); }
-    catch { showError('复制失败，恢复命令仍在页面上，可以手动选择。'); }
+    catch { setCopyFlash(0); if (commandRef.current) commandRef.current.open = true; showError('复制失败，恢复命令仍在页面上，可以手动选择。'); }
   }
 
   async function resume() {
@@ -398,9 +385,9 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
     });
   }
   function moveSession(current: HistorySession, step: 1 | -1) {
-    const index = sessions.findIndex((item) => item.id === current.id);
-    if (index < 0 || sessions.length < 2) return;
-    focusSession(sessions[(index + step + sessions.length) % sessions.length]);
+    const index = orderedSessions.findIndex((item) => item.id === current.id);
+    if (index < 0 || orderedSessions.length < 2) return;
+    focusSession(orderedSessions[(index + step + orderedSessions.length) % orderedSessions.length]);
   }
 
   async function exportSession(format: 'markdown' | 'json') {
@@ -417,15 +404,27 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
 
   const toolName = (id: string) => tools.find((item) => item.id === id)?.name ?? id;
   const detailRef = useRef<HTMLDivElement>(null);
+  const commandRef = useRef<HTMLDetailsElement>(null);
+  function selectSession(id: string) {
+    setSelectedId(id); setMobileDetail(true);
+    requestAnimationFrame(() => {
+      if (window.matchMedia('(max-width: 760px)').matches) detailRef.current?.querySelector('button')?.focus({ preventScroll: true });
+    });
+  }
+  useEffect(() => { detailRef.current?.scrollTo({ top: 0 }); }, [selectedId]);
   const groupedSessions = useMemo(() => {
-    const groups: Array<{ group: SessionGroup; items: HistorySession[] }> = [];
-    for (const item of sessions) {
+    const groups = new Map<SessionGroup, HistorySession[]>();
+    const sorted = [...sessions].sort((a, b) => sort === 'messages' ? b.messageCount - a.messageCount : sort === 'oldest' ? (a.updatedAt ?? Infinity) - (b.updatedAt ?? Infinity) : (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+    if (sort !== 'recent') return [{ group: 'earlier' as SessionGroup, items: sorted }];
+    for (const item of sorted) {
       const group: SessionGroup = item.favorite ? 'favorite' : groupOf(item.updatedAt);
-      const last = groups[groups.length - 1];
-      if (last && last.group === group) last.items.push(item); else groups.push({ group, items: [item] });
+      if (!groups.has(group)) groups.set(group, []);
+      groups.get(group)!.push(item);
     }
-    return groups;
-  }, [sessions]);
+    return (['favorite', 'today', 'yesterday', 'week', 'earlier', 'unknown'] as const)
+      .flatMap((group) => groups.has(group) ? [{ group, items: groups.get(group)! }] : []);
+  }, [sessions, sort]);
+  const orderedSessions = groupedSessions.flatMap((group) => group.items);
   const activeFilters = useMemo(() => {
     const items: Array<{ key: string; label: string; clear: () => void }> = [];
     if (toolId) items.push({ key: 'tool', label: `工具：${toolName(toolId)}`, clear: () => setToolId('') });
@@ -442,19 +441,25 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
 
   const notify: UsageNotify = { status: (text, protect) => showNotice(text, protect), alert: showError, readAlert: showReadError, clear: () => { protectSave.current = false; setNotice(null); setError(null); } };
   function openSession(id: string) {
+    pendingSession.current = search.trim() || favoriteOnly || toolId || model || projectId || rangeKey !== 'all' ? id : null;
+    clearAllFilters();
     setTab('sessions');
-    setSelectedId(id);
+    selectSession(id);
     requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(`[data-session-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'nearest' }));
   }
 
   if (!nativeAvailable) return <div className={styles.empty}><h2>本机使用记录</h2><p>在桌面应用中读取原生 CLI 会话。浏览器预览不展示本机历史。</p></div>;
-  return <section className={styles.page} aria-label="使用记录内容">
-    <div className={styles.toolbar}><div className={styles.tabs} role="tablist" aria-label="使用记录类型">
-      <button type="button" role="tab" aria-selected={tab === 'sessions'} onClick={() => setTab('sessions')}>会话{initialized.current ? <span className="count-chip">{sessions.length}</span> : null}</button>
-      <button type="button" role="tab" aria-selected={tab === 'usage'} onClick={() => setTab('usage')}>用量</button>
+  return <section className={styles.page} aria-label="使用记录内容" data-mobile-detail={mobileDetail || undefined}>
+    <div className={styles.toolbar}><div className={styles.tabs} role="tablist" aria-label="使用记录类型" onKeyDown={navigateChoices}>
+      <button type="button" role="tab" id="records-sessions-tab" aria-controls="records-sessions-panel" tabIndex={tab === 'sessions' ? 0 : -1} aria-selected={tab === 'sessions'} onClick={() => setTab('sessions')}><Icon name="records" size={15} />会话{initialized.current ? <span className="count-chip">{sessions.length}</span> : null}</button>
+      <button type="button" role="tab" id="records-usage-tab" aria-controls="records-usage-panel" tabIndex={tab === 'usage' ? 0 : -1} aria-selected={tab === 'usage'} onClick={() => setTab('usage')}><Icon name="connections" size={15} />用量</button>
     </div><button type="button" className={styles.refresh} disabled={scanning} aria-busy={scanning || undefined} onClick={() => void refresh()}>{scanning && <span className="spinner" aria-hidden="true" />}刷新本机记录</button></div>
-    {((scanning && scanMode === 'manual') || (filterLoading && tab === 'sessions')) && <p className={styles.caveat} role="status">{scanning ? `后台扫描 ${tools.find(item => item.id === scanProgress?.toolId)?.name ?? scanProgress?.toolId ?? ''} ${scanProgress?.totalSources ? `${scanProgress.completedSources} / ${scanProgress.totalSources}` : '正在发现文件'}` : '正在筛选已缓存记录…'}{scanning && <span className={styles.progress} aria-hidden="true"><span style={scanProgress?.totalSources ? { width: `${Math.min(100, (scanProgress.completedSources / scanProgress.totalSources) * 100)}%` } : undefined} data-indeterminate={!scanProgress?.totalSources || undefined} /></span>}{scanning && <button type="button" onClick={() => void cancelScan()}>停止扫描</button>}</p>}
-    {tab === 'sessions' && <><div className={styles.filters}>
+    {scanning && scanMode === 'manual' && <p className={styles.caveat} role="status">{`后台扫描 ${tools.find(item => item.id === scanProgress?.toolId)?.name ?? scanProgress?.toolId ?? ''} ${scanProgress?.totalSources ? `${scanProgress.completedSources} / ${scanProgress.totalSources}` : '正在发现文件'}`}<span className={styles.progress} aria-hidden="true"><span style={scanProgress?.totalSources ? { width: `${Math.min(100, (scanProgress.completedSources / scanProgress.totalSources) * 100)}%` } : undefined} data-indeterminate={!scanProgress?.totalSources || undefined} /></span><button type="button" onClick={() => void cancelScan()}>停止扫描</button></p>}
+    <ToastStack status={notice} alert={error} onDismiss={(tone) => { if (tone === 'alert') setError(null); else setNotice(null); }} />
+    <div className={styles.columns} id="records-sessions-panel" role="tabpanel" aria-labelledby="records-sessions-tab" hidden={tab !== 'sessions'}>
+      <aside className={styles.sessionLibrary} aria-label="会话库">
+        <div className={styles.libraryHead}><div><h2>会话库</h2><span>{sessions.length.toLocaleString()} 个会话</span></div><Icon name="archive" size={18} /></div>
+        <div className={styles.filters}>
       <label className={styles.search}><span className="sr-only">搜索</span><span className={styles.searchBox}><input aria-label="搜索会话" data-page-search title={searchShortcutHint} value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape' && search) { event.preventDefault(); setSearch(''); } }} placeholder="搜索标题或正文" />{search && <button type="button" className={styles.clearSearch} aria-label="清空搜索" onClick={() => setSearch('')}><Icon name="close" size={12} strokeWidth={2.2} /></button>}</span></label>
       <label className={styles.filterSelect}><span className="sr-only">工具</span><FilterSelect label="筛选工具" value={toolId} options={[{ value: '', label: '全部工具' }, ...toolOptions(tools)]} onChange={setToolId} /></label>
       <label className={styles.favorite}><input type="checkbox" checked={favoriteOnly} onChange={(event) => setFavoriteOnly(event.target.checked)} />只看收藏</label>
@@ -467,39 +472,45 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
           <label className={styles.filterSelect}><span>项目</span><FilterSelect label="筛选项目" value={projectId} options={[{ value: '', label: '全部项目' }, { value: '__unknown__', label: '未归类' }, ...projects.map((item) => ({ value: item.id, label: item.name }))]} onChange={setProjectId} /></label>
           <label className={styles.filterSelect}><span>模型</span><FilterSelect label="筛选模型" value={model} options={[{ value: '', label: '全部模型' }, { value: '__unknown__', label: '模型未知' }, ...modelCatalog.map((item) => ({ value: item, label: item }))]} onChange={setModel} /></label>
           <button type="button" onClick={() => { setProjectId(''); setModel(''); }}>清除更多筛选</button></div></details>
-        {!!scans.length && <details className={styles.coverage}><summary>本机覆盖 · {scans.reduce((total, item) => total + item.sourceCount, 0)} 个来源{scans.some((item) => item.failedCount || item.incomplete) ? ' · 有失败或扫描不完整' : ''}{lastScanAt ? ` · ${timeOfDay(new Date(lastScanAt))} 更新` : ''}</summary>{scans.map((item) => <span key={item.toolId}>{toolName(item.toolId)} {item.sourceCount} 个来源{item.failedCount ? ` · ${item.failedCount} 个失败` : ''}{item.incomplete ? ' · 扫描不完整' : ''}</span>)}</details>}
       </div>
     </div>
     {activeFilters.length > 0 && <div className={styles.activeFilters} aria-label="已启用的筛选">
       {activeFilters.map((item) => <button type="button" key={item.key} className={styles.filterChip} title="点击移除该筛选" onClick={item.clear}><span>{item.label}</span><Icon name="close" size={11} strokeWidth={2.4} /></button>)}
       {activeFilters.length > 1 && <button type="button" className="text-button" onClick={clearAllFilters}>清除全部筛选</button>}
-    </div>}</>}
-    <ToastStack status={notice} alert={error} onDismiss={(tone) => { if (tone === 'alert') setError(null); else setNotice(null); }} />
-    {tab === 'sessions' ? <div className={styles.columns}>
-      <div className={styles.list} aria-label="会话列表">{sessions.length ? groupedSessions.flatMap(({ group, items }, groupIndex) => [
-        <div key={`group-${groupIndex}-${group}`} className={styles.group} role="presentation" aria-hidden="true">{groupLabels[group]}<span>{items.length}</span></div>,
-        ...items.map((item) => <button type="button" key={item.id} data-session-id={item.id} aria-current={selectedId === item.id ? 'true' : undefined} className={selectedId === item.id ? styles.selected : ''} onClick={() => setSelectedId(item.id)} onKeyDown={(event) => { if (event.key === 'ArrowDown') { event.preventDefault(); moveSession(item, 1); } else if (event.key === 'ArrowUp') { event.preventDefault(); moveSession(item, -1); } else if (event.key === 'Home') { event.preventDefault(); focusSession(sessions[0]); } else if (event.key === 'End') { event.preventDefault(); focusSession(sessions[sessions.length - 1]); } }}>
-          <span className={styles.sessionTitle}><ToolIcon toolId={item.toolId} size={22} /><strong title={item.title}>{item.favorite && <span className={styles.favoriteMark} aria-hidden="true">★</span>}{item.title}</strong></span><small>{toolName(item.toolId)} · <time title={day(item.updatedAt)}>{rowTime(item.updatedAt)}</time></small>
-          <small className={styles.sessionMeta}>{item.model ?? '模型未知'} · {item.messageCount.toLocaleString()} 条消息{item.partial && <em className={styles.flag}>部分记录</em>}{item.stale && <em className={styles.flag} data-tone="muted">源暂不可读</em>}</small>
+    </div>}
+        <div className={styles.listToolbar}><span>{filterLoading ? '正在更新…' : activeFilters.length ? '筛选结果' : '全部会话'}</span><select aria-label="会话排序" value={sort} onChange={(event) => setSort(event.target.value)}><option value="recent">最近活跃</option><option value="oldest">最早活跃</option><option value="messages">消息最多</option></select></div>
+      <div className={styles.list} aria-label="会话列表" aria-busy={filterLoading || undefined}>{sessions.length ? groupedSessions.flatMap(({ group, items }, groupIndex) => [
+        <div key={`group-${groupIndex}-${group}`} className={styles.group} role="presentation" aria-hidden="true">{sort === 'recent' ? groupLabels[group] : sort === 'messages' ? '按消息数量' : '从早到晚'}<span>{items.length}</span></div>,
+        ...items.map((item) => <button type="button" key={item.id} data-session-id={item.id} aria-current={selectedId === item.id ? 'true' : undefined} className={selectedId === item.id ? styles.selected : ''} onClick={() => selectSession(item.id)} onKeyDown={(event) => { if (event.key === 'ArrowDown') { event.preventDefault(); moveSession(item, 1); } else if (event.key === 'ArrowUp') { event.preventDefault(); moveSession(item, -1); } else if (event.key === 'Home') { event.preventDefault(); focusSession(orderedSessions[0]); } else if (event.key === 'End') { event.preventDefault(); focusSession(orderedSessions[orderedSessions.length - 1]); } }}>
+          <span className={styles.rowTop}><ToolIcon toolId={item.toolId} size={16} /><span>{toolName(item.toolId)}</span>{item.favorite && <span className={styles.favoriteMark} aria-label="已收藏">★</span>}<time title={day(item.updatedAt)}>{rowTime(item.updatedAt)}</time></span>
+          <strong className={styles.rowTitle} title={item.title}>{item.title || '未命名会话'}</strong>
+          <span className={styles.rowContext}><Icon name="folder" size={12} /><span title={item.cwd ?? undefined}>{projects.find((project) => project.id === item.projectId)?.name ?? item.cwd?.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? '未关联项目'}</span><span>{item.messageCount.toLocaleString()} 条消息</span></span>
+          {(item.partial || item.stale) && <small className={styles.sessionMeta}>{item.partial && <em className={styles.flag}>部分记录</em>}{item.stale && <em className={styles.flag} data-tone="muted">源暂不可读</em>}</small>}
         </button>),
-      ]) : <div className={styles.empty}><span className="empty-symbol"><Icon name="search" size={20} /></span><p>没有符合条件的会话。可刷新记录或调整筛选。</p>{activeFilters.length > 0 && <button type="button" className="text-button" onClick={clearAllFilters}>清除全部筛选</button>}</div>}</div>
-      <div className={styles.detail} ref={detailRef}>{selected ? <>
+      ]) : <div className={styles.empty} role={listError ? 'alert' : 'status'}><span className="empty-symbol"><Icon name={listError ? 'alert' : 'search'} size={20} /></span><h3>{listError ? '会话列表读取失败' : filterLoading ? '正在加载会话…' : activeFilters.length ? '没有匹配的会话' : '从第一段会话开始'}</h3><p>{listError ? '本机记录仍然保留，可以重新读取。' : filterLoading ? '正在读取本机记录。' : activeFilters.length ? '试试其他关键词，或清除筛选。' : '使用受管理的 CLI 后，回到这里查找与继续对话。'}</p>{listError ? <button type="button" onClick={() => void load(filter)}>重新读取列表</button> : activeFilters.length > 0 && <button type="button" className="text-button" onClick={clearAllFilters}>清除全部筛选</button>}</div>}</div>
+        {!!scans.length && <details className={styles.coverage}><summary>已索引 {scans.reduce((total, item) => total + item.sourceCount, 0)} 个来源{scans.some((item) => item.failedCount || item.incomplete) ? ' · 部分未读取' : ''}</summary>{scans.map((item) => <span key={item.toolId}>{toolName(item.toolId)} · {item.sourceCount} 个来源{item.failedCount ? ` · ${item.failedCount} 个失败` : ''}{item.incomplete ? ' · 扫描不完整' : ''}</span>)}</details>}
+        <div className={styles.libraryFoot}><span className={styles.localDot} />{scanning ? '正在同步本机记录…' : lastScanAt ? `${timeOfDay(new Date(lastScanAt))} 已同步` : '仅存于本机'}<span>↑ ↓ 切换会话</span></div>
+      </aside>
+      <div className={styles.detail} ref={detailRef}>
+        <button type="button" className={styles.backToList} onClick={() => { setMobileDetail(false); if (selectedId) requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(`[data-session-id="${CSS.escape(selectedId)}"]`)?.focus()); }}>← 返回会话列表</button>
+        {selected ? <>
         <div className={styles.detailBar}>
-        <div className={styles.detailHead}><div className={styles.detailIdentity}><ToolIcon toolId={selected.session.toolId} size={30} /><div><h2 title={selected.session.title}>{selected.session.title}</h2><p><span>{toolName(selected.session.toolId)}</span><span><time title={day(selected.session.updatedAt)}>{compactDay(selected.session.updatedAt)}</time></span><span className={styles.detailModel}>{selected.session.model ?? '模型未知'}</span><span className={styles.detailPath} title={selected.session.cwd ? displayPath(selected.session.cwd) : undefined}>{selected.session.cwd ? displayPath(selected.session.cwd) : '项目目录未知'}</span></p></div></div><button type="button" data-active={selected.session.favorite || undefined} aria-pressed={selected.session.favorite} onClick={() => void favorite()} aria-label={selected.session.favorite ? '取消收藏' : '收藏会话'}>{selected.session.favorite ? '★ 已收藏' : '☆ 收藏'}</button></div>
+        <div className={styles.detailEyebrow}><ToolIcon toolId={selected.session.toolId} size={18} /><span>{toolName(selected.session.toolId)}</span><span className={styles.modelBadge}>{selected.session.model ?? '模型未知'}</span><button type="button" disabled={favoriteBusy} data-active={selected.session.favorite || undefined} aria-pressed={selected.session.favorite} onClick={() => void favorite()} aria-label={selected.session.favorite ? '取消收藏' : '收藏会话'}>{selected.session.favorite ? '★ 已收藏' : '☆ 收藏'}</button></div>
+        <div className={styles.detailHead}><h2 title={selected.session.title}>{selected.session.title || '未命名会话'}</h2></div>
+        <div className={styles.detailMeta}><span title={selected.session.cwd ? displayPath(selected.session.cwd) : undefined}><Icon name="folder" size={13} />{selected.session.cwd ? displayPath(selected.session.cwd) : '项目目录未知'}</span><time title={day(selected.session.updatedAt)}>{compactDay(selected.session.updatedAt)} 更新</time></div>
         {(selected.session.partial || selected.session.stale) && <p className={styles.caveat}>原始记录不完整或最近读取失败；仅展示已索引的内容。</p>}
         <div className={styles.resume}>
-          <div className={styles.resumeBar}><select aria-label="恢复模式" value={mode} onChange={(event) => setMode(event.target.value as 'normal' | 'yolo')}><option value="normal">普通模式</option>{yolo && <option value="yolo">YOLO 模式</option>}</select>{readyCommand && <div className={styles.actions}><button type="button" className={styles.primary} disabled={busy} onClick={() => void resume()}>在外部终端继续</button><button type="button" aria-label="复制命令" data-copied={copied || undefined} onClick={() => void copy()}>{copied ? <><Icon name="check" size={13} strokeWidth={2.2} />已复制</> : '复制命令'}</button></div>}{readyCommand ? <pre aria-label="原生恢复命令" title={readyCommand}>{readyCommand}</pre> : <p>{shownResumeError || '正在确认原生恢复命令…'}</p>}</div>
+          <div className={styles.resumeBar}>{readyCommand && <button type="button" className={styles.primary} disabled={busy} onClick={() => void resume()}><Icon name="tool" size={14} />{busy ? '正在打开终端…' : '在外部终端继续'}</button>}<select aria-label="恢复模式" value={mode} onChange={(event) => setMode(event.target.value as 'normal' | 'yolo')}><option value="normal">普通模式</option>{yolo && <option value="yolo">YOLO 模式</option>}</select>{readyCommand && <button type="button" aria-label="复制命令" data-copied={copied || undefined} onClick={() => void copy()}><Icon name={copied ? 'check' : 'copy'} size={13} />{copied ? '已复制' : '复制命令'}</button>}{!readyCommand && <p>{shownResumeError || '正在确认原生恢复命令…'}</p>}</div>
+          {readyCommand && <details className={styles.commandDetails} ref={commandRef}><summary>查看恢复命令</summary><pre aria-label="原生恢复命令" title={readyCommand}>{readyCommand}</pre></details>}
           <details className={styles.moreActions}><summary>导出与项目关联</summary><div className={styles.actions}><button type="button" onClick={() => void exportSession('markdown')}>导出 Markdown</button><button type="button" onClick={() => void exportSession('json')}>导出 JSON</button></div><label className={styles.projectLink}>关联项目<select aria-label="关联会话项目" value={selected.session.projectId ?? ''} onChange={(event) => void assignProject(event.target.value)}><option value="">使用原会话目录</option>{projects.map((item) => <option key={item.id} value={item.id}>{item.name}{item.available ? '' : ' · 目录失效'}</option>)}</select></label></details>
           {selected.resumeReason && <button type="button" onClick={onOpenProjects}>前往最近项目重新关联目录</button>}
         </div>
         </div>
-        <div className={styles.transcript} aria-label="会话正文">
-          {selected.messages.length > 0 && <div className={styles.transcriptHead}><span>{selected.messages.length.toLocaleString()} 条消息{selected.session.messageCount > selected.messages.length ? ` · 已索引 ${selected.session.messageCount.toLocaleString()} 条` : ''}</span>{selected.messages.length > 4 && <button type="button" className="text-button" onClick={() => detailRef.current?.scrollTo({ top: detailRef.current.scrollHeight, behavior: 'smooth' })}><Icon name="arrowDown" size={13} strokeWidth={2} />跳到最新</button>}</div>}
-          <div className={styles.messages}>{selected.messages.length ? selected.messages.map((item, index) => <MessageItem key={item.id} item={item} previous={index ? selected.messages[index - 1].timestamp : undefined} />) : <p>此记录没有可读取的对话正文。</p>}</div>
-        </div>
-      </> : selectedId && sessions.some((item) => item.id === selectedId) ? <div className={styles.detailLoading} role="status" aria-label="正在读取会话"><span className={styles.detailSkeleton} /><span className={styles.detailSkeleton} data-size="short" /><span className={styles.detailSkeleton} data-size="block" /></div>
+        <SessionReader key={selected.session.id} detail={selected} toolName={toolName(selected.session.toolId)} />
+      </> : detailError ? <div className={styles.empty} role="alert"><Icon name="alert" size={26} /><h3>暂时无法打开会话</h3><p>{detailError}</p><button type="button" onClick={() => setDetailRetry((value) => value + 1)}>重新加载会话</button></div> : selectedId && sessions.some((item) => item.id === selectedId) ? <div className={styles.detailLoading} role="status" aria-label="正在读取会话"><span className={styles.detailSkeleton} /><span className={styles.detailSkeleton} data-size="short" /><span className={styles.detailSkeleton} data-size="block" /></div>
       : <div className={styles.empty}><span className="empty-symbol"><Icon name="records" size={20} /></span><p>选择左侧会话查看详情。</p></div>}</div>
-    </div> : <UsageDashboard active={active && tab === 'usage'} tools={tools} projects={projects} prices={prices} onPricesChange={setPrices}
-      scanVersion={scanVersion} scanning={scanning} lastScanAt={lastScanAt} onOpenSession={openSession} notify={notify} />}
+    </div>
+    <div className={styles.usagePane} id="records-usage-panel" role="tabpanel" aria-labelledby="records-usage-tab" hidden={tab !== 'usage'}><UsageDashboard active={active && tab === 'usage'} tools={tools} projects={projects} prices={prices} onPricesChange={setPrices}
+      scanVersion={scanVersion} scanning={scanning} lastScanAt={lastScanAt} onOpenSession={openSession} notify={notify} /></div>
   </section>;
 }

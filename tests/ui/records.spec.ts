@@ -138,6 +138,8 @@ test('records keep search, show native resume command and only launch on request
   });
   expect(filterOrder).toEqual({ documentOrder: true, visualOrder: true, orders: ['0', '0', '0'] });
   await expect(page.getByLabel('原生恢复命令')).toContainText("'resume' '1111-2222'");
+  await expect(page.getByLabel('原生恢复命令')).toBeHidden();
+  await page.getByText('查看恢复命令', { exact: true }).click();
   const scrollSplit = await page.evaluate(() => {
     const list = document.querySelector('[aria-label="会话列表"]');
     const transcript = document.querySelector('[aria-label="会话正文"]');
@@ -235,7 +237,7 @@ test('usage dashboard splits tokens, follows rows into filters and opens heavy s
         if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }] };
         if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', yoloAvailable: false, interfaceFormats: [] }], managedIds: ['codex'], preservedUnknown: [] };
         if (command === 'list_projects' || command === 'list_history_prices' || command === 'refresh_history') return [];
-        if (command === 'list_history_sessions') return records;
+        if (command === 'list_history_sessions') return records.filter((item) => !args.filter.search || item.title.includes(args.filter.search));
         if (command === 'get_history_session') return { session: records.find((item) => item.id === args.id), messages: [], usage: [], resumeReason: '原始记录没有可验证的恢复 ID' };
         if (command === 'get_usage_report') { filters.push(args.filter); return report; }
         if (command === 'get_history_scan_progress') return { running: false, toolId: '', completedSources: 0, totalSources: 0 };
@@ -255,9 +257,23 @@ test('usage dashboard splits tokens, follows rows into filters and opens heavy s
   await expect(second).toBeFocused();
   await page.keyboard.press('Home');
   await expect(first).toBeFocused();
+  await page.setViewportSize({ width: 640, height: 850 });
+  await first.click();
+  await expect(page.getByLabel('会话列表')).toBeHidden();
+  await page.getByRole('button', { name: '← 返回会话列表' }).click();
+  await expect(first).toBeFocused();
+  await expect(page.getByLabel('会话列表')).toBeVisible();
+  await page.setViewportSize({ width: 1280, height: 850 });
+  await page.getByRole('textbox', { name: '搜索会话' }).fill('First');
+  await expect(second).toHaveCount(0);
 
   await page.getByRole('tab', { name: '用量' }).click();
   await expect(page.getByRole('radio', { name: '今天' })).toHaveAttribute('aria-checked', 'true');
+  await page.getByRole('radio', { name: '今天' }).focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(page.getByRole('radio', { name: '昨天' })).toHaveAttribute('aria-checked', 'true');
+  await page.keyboard.press('Home');
+  await expect(page.getByRole('radio', { name: '今天' })).toBeFocused();
   const lastFilter = () => page.evaluate(() => {
     const filters = (window as typeof window & { __reportFilters: Array<{ fromMs: number | null; toMs: number | null; model: string | null }> }).__reportFilters;
     return filters[filters.length - 1];
@@ -277,6 +293,10 @@ test('usage dashboard splits tokens, follows rows into filters and opens heavy s
   for (let step = 0; step < 9; step++) await page.keyboard.press('ArrowRight');
   await expect(chart.getByRole('status')).toContainText('1,200,000');
   await expect(chart.getByRole('status')).toContainText('40 次');
+  await page.getByRole('tab', { name: '费用', exact: true }).click();
+  const trend = page.getByRole('region', { name: '用量趋势' });
+  await expect(trend).toContainText('峰值 $1.50');
+  await expect(trend).toContainText('估算费用不等于实际账单');
 
   await page.getByRole('list', { name: '按模型用量明细' }).getByRole('button', { name: /^gpt-6-astra/ }).click();
   await expect.poll(async () => (await lastFilter())?.model).toBe('gpt-6-astra');
@@ -290,4 +310,42 @@ test('usage dashboard splits tokens, follows rows into filters and opens heavy s
   await page.getByRole('list', { name: '消耗最多的会话' }).getByRole('button', { name: /Second session/ }).click();
   await expect(page.getByRole('tab', { name: /会话/ })).toHaveAttribute('aria-selected', 'true');
   await expect(second).toHaveAttribute('aria-current', 'true');
+  await expect(page.getByRole('textbox', { name: '搜索会话' })).toHaveValue('');
+  await page.getByRole('tab', { name: '用量' }).click();
+  await expect(page.getByRole('radio', { name: '近 7 天' })).toHaveAttribute('aria-checked', 'true');
+  await expect(page.getByRole('tab', { name: '费用', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await page.getByRole('tablist', { name: '分布维度' }).getByRole('tab', { name: '工具', exact: true }).click();
+  await page.getByRole('list', { name: '按工具用量明细' }).getByRole('button', { name: /^Codex/ }).click();
+  await expect(page.getByRole('tablist', { name: '分布维度' }).getByRole('tab', { name: '工具', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByLabel('用量工具')).toContainText('Codex');
+});
+
+test('usage failure replaces stale data and can retry with the same filters', async ({ page }) => {
+  await page.addInitScript((report) => {
+    let failed = false;
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', yoloAvailable: false }], managedIds: ['codex'], preservedUnknown: [] };
+        if (command === 'list_projects' || command === 'list_history_prices' || command === 'refresh_history' || command === 'list_history_sessions') return [];
+        if (command === 'get_usage_report') {
+          if (args.filter.model && !failed) { failed = true; throw new Error('Read failed'); }
+          return args.filter.model ? { ...report, totals: { ...report.totals, total: 940000 } } : report;
+        }
+        if (command === 'get_tray_status') return { available: false, error: null };
+        return null;
+      } },
+    });
+  }, todayReport());
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
+  await page.getByRole('tab', { name: '用量' }).click();
+  await expect(page.getByRole('region', { name: '用量概览' })).toContainText('1.2M');
+  await page.getByRole('list', { name: '按模型用量明细' }).getByRole('button', { name: /^gpt-6-astra/ }).click();
+  await expect(page.getByRole('alert')).toContainText('用量暂时没有读取成功');
+  await expect(page.getByRole('region', { name: '用量概览' })).toHaveCount(0);
+  await page.getByRole('button', { name: '重新加载用量' }).click();
+  await expect(page.getByRole('region', { name: '用量概览' })).toContainText('940K');
+  await expect(page.getByLabel('用量模型')).toContainText('gpt-6-astra');
 });
