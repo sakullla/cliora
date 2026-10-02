@@ -1,4 +1,5 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
+import type { AccountCapability, AuthAccount } from '../types/accounts';
 import type { ApiError, Bootstrap, CliId, Theme } from '../types/domain';
 import type { AdapterCatalog, ApplyComparison, ApplyOutcome, CommonConfig, CommonSaveResult, Connection, ConnectionCheck, ModelDirectory, NativeImport, NativeInspection, NativePreview, NativeProfile, PreservedProfile, RegisteredCommon, RegisteredCommonSaveResult, RegisteredProfile, RegisteredToolWorkspace, Scope, ToolWorkspace } from '../types/native';
 import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, TerminalId, TrayStatus } from '../types/launch';
@@ -52,6 +53,15 @@ async function usageCommand<T>(name: string, args?: Record<string, unknown>): Pr
 
 /** Feature modules add named wrappers here; components never invoke arbitrary commands. */
 export const native = {
+  accountCapabilities: () => command<AccountCapability[]>('account_capabilities'),
+  adoptNativeCodexAccount: (label: string) => command<AuthAccount>('adopt_native_codex_account', { label }),
+  listAccounts: () => command<AuthAccount[]>('list_accounts'),
+  createAccount: (toolId: string, label: string) => command<AuthAccount>('create_account', { toolId, label }),
+  renameAccount: (id: string, expectedVersion: number, label: string) => command<AuthAccount>('rename_account', { id, expectedVersion, label }),
+  startAccountLogin: (id: string, expectedVersion: number, method: 'browser' | 'device') => command<AuthAccount>('start_account_login', { id, expectedVersion, method }),
+  cancelAccountLogin: (id: string, attemptId: string) => command<AuthAccount>('cancel_account_login', { id, attemptId }),
+  checkAccount: (id: string) => command<AuthAccount>('check_account', { id }),
+  logoutAccount: (id: string, expectedVersion: number) => command<AuthAccount>('logout_account', { id, expectedVersion }),
   usagePresets: () => usageCommand<UsagePreset[]>('usage_presets'),
   usageBuiltinScript: (config: QueryConfig) => usageCommand<string>('usage_builtin_script', { config }),
   listUsageCache: () => usageCommand<UsageCache[]>('list_usage_cache'),

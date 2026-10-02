@@ -1032,6 +1032,37 @@ fn mac_terminal_result(success: bool, stderr: &str) -> Result<(), String> {
     }
 }
 
+/// Account authentication is an explicitly requested interactive terminal.
+/// Environment changes are scoped to this shell, never the desktop process.
+pub fn spawn_account_terminal(db: &Database, executable: &Path, args: &[String], context: &crate::accounts::NativeContext, hint: &str, completion: Option<&Path>) -> Result<(), String> {
+    crate::accounts::context::check_path(&context.root)?;
+    let quote = if cfg!(windows) { quote_powershell } else { quote_shell };
+    let mut parts = Vec::new();
+    if cfg!(windows) {
+        parts.push(format!("Set-Location -LiteralPath {}", quote(&terminal_path(&context.root)?)));
+        for key in &context.remove_environment { parts.push(format!("Remove-Item -LiteralPath 'Env:{key}' -ErrorAction SilentlyContinue")); }
+        for (key, value) in &context.environment { parts.push(format!("$env:{key} = {}", quote(value))); }
+        parts.push(format!("Write-Host {}", quote(hint)));
+    } else {
+        parts.push(format!("cd {} || exit 1", quote(&terminal_path(&context.root)?)));
+        for key in &context.remove_environment { parts.push(format!("unset {key}")); }
+        for (key, value) in &context.environment { parts.push(format!("export {key}={}", quote(value))); }
+        parts.push(format!("printf '%s\\n' {}", quote(hint)));
+    }
+    let mut invocation = vec![quote(&terminal_path(executable)?)];
+    invocation.extend(context.cli_args.iter().chain(args).map(|value| quote(value)));
+    let invocation = format!("{}{}", if cfg!(windows) { "& " } else { "" }, invocation.join(" "));
+    if let Some(path) = completion {
+        if path.parent() != Some(context.root.as_path()) { return Err("登录结果文件不属于当前上下文".into()); }
+        if cfg!(windows) {
+            parts.push(format!("$clioraAuthExit = 1; try {{ $ErrorActionPreference = 'Stop'; {invocation}; $clioraAuthExit = $LASTEXITCODE }} catch {{ $clioraAuthExit = 1 }}; Set-Content -LiteralPath {} -Value $clioraAuthExit -Encoding Ascii", quote(&terminal_path(path)?)));
+        } else {
+            parts.push(format!("{invocation}; cliora_auth_exit=$?; printf '%s' \"$cliora_auth_exit\" > {}", quote(&terminal_path(path)?)));
+        }
+    } else { parts.push(invocation); }
+    open_shell(db, &parts.join("; "))
+}
+
 pub fn open_shell(db: &Database, script: &str) -> Result<(), String> {
     let terminal = selected_terminal(db)?;
     let home = env::var_os("USERPROFILE").or_else(|| env::var_os("HOME")).map(PathBuf::from).filter(|path| path.is_dir()).ok_or("找不到用户目录")?;

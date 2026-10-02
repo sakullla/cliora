@@ -19,6 +19,7 @@ use crate::history::{HistorySource, ParsedSession};
 use crate::resources::mcp::McpDefinition;
 
 mod claude;
+pub mod accounts;
 mod codex;
 mod grok;
 mod opencode;

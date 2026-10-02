@@ -4,6 +4,7 @@ mod process_environment;
 #[path = "../../tests/platform/macos.rs"]
 mod macos_tests;
 pub mod commands;
+pub mod accounts;
 pub mod credentials;
 pub mod database;
 pub mod domain;
@@ -84,6 +85,15 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            commands::account_capabilities,
+            commands::adopt_native_codex_account,
+            commands::list_accounts,
+            commands::create_account,
+            commands::rename_account,
+            commands::start_account_login,
+            commands::cancel_account_login,
+            commands::check_account,
+            commands::logout_account,
             commands::usage_presets,
             commands::usage_builtin_script,
             commands::list_usage_cache,
