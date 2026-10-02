@@ -191,11 +191,46 @@ fn v14_queries_without_cache_are_due_but_new_saves_wait_for_interval() {
             .map_err(|e| e.to_string())
     })
     .unwrap();
+    // Reproduce the rejected candidate at its consumer boundary: a v14 database
+    // has queries but no cache table. Failed save/delete must roll back.
+    assert_eq!(
+        save_query(&db, &NoSecrets, draft(None)).err().unwrap().code,
+        UsageErrorCode::Storage
+    );
+    assert_eq!(list_cache(&db).unwrap_err().code, UsageErrorCode::Storage);
+    assert_eq!(
+        delete_query(&db, &NoSecrets, &q.id, q.version)
+            .err()
+            .unwrap()
+            .code,
+        UsageErrorCode::Storage
+    );
+    assert_eq!(get_query(&db, &q.id).unwrap(), q);
+    assert_eq!(list_queries(&db).unwrap().len(), 1);
     drop(db);
     let db = Database::open(&path).unwrap();
+    db.with_connection(|conn| {
+        let version: u32 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .map_err(|e| e.to_string())?;
+        assert_eq!(version, 15);
+        Ok(())
+    })
+    .unwrap();
     let cache = list_cache(&db).unwrap();
     assert!(due(&cache[0], &q, false, now()));
     assert!(cache[0].success.is_none());
+    assert_eq!(get_query(&db, &q.id).unwrap(), q);
+    let updated = save_query(&db, &NoSecrets, draft(Some(&q))).unwrap().query;
+    publish(&db, &updated, result()).unwrap();
+    assert!(list_cache(&db).unwrap()[0].success.is_some());
+    drop(db);
+    let db = Database::open(&path).unwrap();
+    assert_eq!(get_query(&db, &updated.id).unwrap(), updated);
+    assert!(list_cache(&db).unwrap()[0].success.is_some());
+    delete_query(&db, &NoSecrets, &updated.id, updated.version).unwrap();
+    assert!(list_queries(&db).unwrap().is_empty());
+    assert!(list_cache(&db).unwrap().is_empty());
 }
 
 #[test]
