@@ -1,0 +1,6 @@
+{
+  "/api/user/self": {"success":true,"data":{"id":14,"quota":600000,"used_quota":100000}},
+  "/api/subscription/plans": {"success":true,"data":[{"plan":{"id":3,"title":"Daily","currency":"USD","price_amount":20,"quota_reset_period":"daily"}},{"plan":{"id":4,"quota_reset_period":"monthly","currency":"CNY","price_amount":50}}]},
+  "/api/subscription/self": {"success":true,"data":{"subscriptions":[{"subscription":{"id":31,"plan_id":3,"amount_total":100000,"amount_used":25000,"start_time":1790812800,"end_time":1793491200,"status":"active","last_reset_time":1790899200,"next_reset_time":1790985600}},{"subscription":{"id":32,"plan_id":4,"amount_total":0,"amount_used":10000,"end_time":1796083200,"status":"active","next_reset_time":1793491200}}]}},
+  "/api/usage/token/": {"code":true,"data":{"object":"token_usage","total_granted":200000,"total_used":50000,"total_available":150000,"unlimited_quota":false,"expires_at":1793491200}}
+}

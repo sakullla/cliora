@@ -1,6 +1,7 @@
 //! Versioned, bundled provider programs. Credentials use the same HTTP broker as user scripts.
 use super::*;
 use serde::Serialize;
+mod sites;
 
 pub const BUILTIN_TEMPLATE_VERSION: u32 = 1;
 
@@ -113,6 +114,9 @@ fn route(config: &QueryConfig) -> Result<Route, UsageError> {
 /// Returns an independent source copy; saving it as JavaScript freezes this template version.
 pub fn builtin_script(config: &QueryConfig) -> Result<String, UsageError> {
     config.validate()?;
+    if sites::is_site(config) {
+        return sites::script(config);
+    }
     let route = route(config)?;
     let endpoint = serde_json::to_string(&format!("{}{}", route.origin, route.path))
         .map_err(|_| UsageError::configuration("内置查询地址无效"))?;
@@ -126,6 +130,9 @@ pub fn builtin_script(config: &QueryConfig) -> Result<String, UsageError> {
 pub(super) fn validate_builtin_credentials(
     input: &super::runtime::HelperInput,
 ) -> Result<(), UsageError> {
+    if sites::is_site(&input.config) {
+        return sites::validate_credentials(input);
+    }
     let route = route(&input.config)?;
     if input.secrets.len() != 1
         || input.secrets[0].name != "api_key"
@@ -236,6 +243,7 @@ pub fn usage_presets() -> Vec<UsagePreset> {
             }
         }
     }
+    presets.extend(sites::presets());
     presets
 }
 

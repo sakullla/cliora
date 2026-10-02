@@ -61,7 +61,7 @@ fn parse(id: &str, name: &str) -> UsageResult {
 
 #[test]
 fn catalog_is_region_bound_versioned_manual_and_copyable() {
-    let presets = usage_presets();
+    let presets: Vec<_> = usage_presets().into_iter().filter(|p| matches!(&p.config.program, QueryProgram::Builtin { provider, .. } if matches!(provider.as_str(), "glm" | "kimi" | "minimax"))).collect();
     assert_eq!(presets.len(), 8);
     for preset in presets {
         assert_eq!(preset.config.refresh_interval_seconds, 0);

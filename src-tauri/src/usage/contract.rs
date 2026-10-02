@@ -236,6 +236,10 @@ pub struct UsageMetric {
     /// Percentage of the quota used, as supplied by the source. May exceed 100.
     pub source_percent: Option<f64>,
     pub unlimited: bool,
+    /// Entitlement/key expiry, distinct from a quota window reset.
+    pub expires_at: Option<String>,
+    #[serde(default)]
+    pub never_expires: bool,
     pub window: Option<UsageWindow>,
     pub missing_reason: Option<String>,
 }
@@ -414,7 +418,8 @@ impl QueryConfig {
                 || !url.username().is_empty()
                 || url.password().is_some()
                 || !(url.scheme() == "https"
-                    || (url.scheme() == "http" && target.allow_private_network
+                    || (url.scheme() == "http"
+                        && target.allow_private_network
                         && (is_private || matches!(url.host(), Some(url::Host::Domain(_))))))
                 || (is_private && !target.allow_private_network)
                 || !origins.insert(&target.origin)
@@ -470,6 +475,11 @@ impl UsageResult {
                     .as_ref()
                     .is_some_and(|v| !nonempty(v, 256))
                 || (metric.unlimited && (metric.total.is_some() || metric.source_percent.is_some()))
+                || (metric.never_expires && metric.expires_at.is_some())
+                || metric
+                    .expires_at
+                    .as_ref()
+                    .is_some_and(|time| chrono::DateTime::parse_from_rfc3339(time).is_err())
                 || (!has_value && metric.missing_reason.is_none())
                 || metric
                     .missing_reason
