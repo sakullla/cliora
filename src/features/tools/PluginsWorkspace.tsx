@@ -7,7 +7,7 @@ import styles from './AccountsPanel.module.css';
 import { useAccountLabels } from '../library/resourceContexts';
 
 const labels: Record<PluginAction, string> = { install: '安装', update: '更新', enable: '启用', disable: '禁用', uninstall: '卸载' };
-const states: Record<string, string> = { installed_load_unknown: '原生已安装 · 加载未验证', configured_load_unknown: '已配置 · 安装与加载未验证', discovered_load_unknown: '已发现 · 加载未验证', disabled: '已禁用' };
+const states: Record<string, string> = { installed_load_unknown: '原生已安装 · 加载未验证', configured_load_unknown: '已配置 · 安装与加载未验证', discovered_load_unknown: '已发现 · 加载未验证', disabled: '已禁用', state_unknown: '声明已被外部修改 · 状态待核对' };
 function message(error: unknown) { return error && typeof error === 'object' && 'message' in error ? String(error.message) : String(error); }
 function policyLabel(value: string) { return value.replaceAll('NOT_AVAILABLE', '安装策略：不可安装').replaceAll('AVAILABLE', '安装策略：允许安装').replaceAll('REQUIRED', '安装策略：组织要求').replaceAll('FORBIDDEN', '安装策略：禁止安装').replaceAll('ON_INSTALL', '安装时认证').replaceAll('NONE', '无需额外认证'); }
 const scopeLabels: Record<string, string> = { user: '全局', project: '项目', local: '项目本地', managed: '组织管理', auto: '自动发现' };

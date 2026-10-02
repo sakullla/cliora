@@ -17,12 +17,20 @@
     "https://github.com/anomalyco/opencode/blob/v1.18.34/packages/opencode/src/plugin/index.ts",
     "Installed Pi 0.99.2 docs/packages.md",
     "Grok 1.0.46 emitted docs/user-guide/09-plugins.md",
-    "Actual per-action --help for installed CLIs"
+    "Actual per-action --help for installed CLIs",
+    "Installed Pi 0.99.2 dist/core/package-manager.js: getInstalledPath, getManagedNpmInstallPath, getGitInstallPath, dedupePackages, collectPackageResources",
+    "Installed Pi 0.99.2 dist/utils/git.js: parseGitUrl"
   ],
   "nativeSequences": {
     "claude_code": "marketplace add local --json; install fixture@market --scope user --json; list --json; disable --scope user --json; list enabled=false; enable --scope user --json; update --scope user --json; uninstall --scope user --json; list empty. All exit 0.",
     "codex": "marketplace add local; add fixture@market --json; list --json; remove --json; list empty. All exit 0.",
     "grok": "GROK_HOME isolated; install absoluteLocal --trust; list --json; disable; list; enable; update; uninstall; list empty. All exit 0. list lacks enabled, config [plugins] enabled/disabled observed.",
     "pi": "PI_CODING_AGENT_DIR isolated; install absoluteLocal --no-approve; list; update --extension absoluteLocal --no-approve; remove absoluteLocal --no-approve; list empty. All exit 0. Stores local source relative to settings directory."
+  },
+  "repairRegressions": {
+    "piNative": "Rust-generated disabled declaration evaluated by installed Pi 0.99.2 dedupePackages/collectPackageResources. Original false; old empty delta true; replacement autoload:true false. npm scoped/user, npm project, Git HTTPS/user+project and SSH installed paths match native getInstalledPath.",
+    "windowsAcl": "Synthetic apiKey in restricted OpenCode document under Users-readable parent; plugin install/disable/uninstall preserves no inherited ACL and no Users SID access.",
+    "restore": "Actual transaction.restore_backup for Pi/OpenCode, scan reconciles exact original metadata and subsequent disable/enable works. Unrecognized external edits retain file and report unknown/read-only.",
+    "packageTrees": "Managed npm/git roots, version, custom manifest exact/glob resources and ownership observed; package file changes independently alter baseline. Missing/unsupported roots read-only."
   }
 }

@@ -415,10 +415,210 @@ fn pi_disabled(item: &Value, source: &str) -> Value {
         .as_object()
         .cloned()
         .unwrap_or_else(|| serde_json::Map::from_iter([("source".into(), json!(source))]));
+    // Project autoload:false is a delta over the global package. Empty delta
+    // arrays remove exclusions, so disabling MUST replace inherited resources.
+    value.insert("autoload".into(), json!(true));
     for kind in ["extensions", "skills", "prompts", "themes"] {
         value.insert(kind.into(), json!([]));
     }
     Value::Object(value)
+}
+
+/// Pi 0.99.2 DefaultPackageManager getManagedNpmInstallPath/getGitInstallPath.
+/// Legacy global npm roots can be customized by arbitrary package-manager
+/// commands: do not execute those during discovery or guess their location.
+fn pi_installed_root(source: &str, base: &Path, home: &Path) -> Result<PathBuf, String> {
+    let root = if let Some(spec) = source.strip_prefix("npm:") {
+        let spec = spec.trim();
+        let name = spec
+            .rfind('@')
+            .filter(|index| *index > 0)
+            .map(|index| &spec[..index])
+            .unwrap_or(spec);
+        let parts: Vec<_> = name.split('/').collect();
+        if name.is_empty()
+            || !name
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || b"@._-/".contains(&c))
+            || parts.iter().any(|part| matches!(*part, "" | "." | ".."))
+            || (name.starts_with('@') && parts.len() != 2)
+            || (!name.starts_with('@') && parts.len() != 1)
+        {
+            return Err("Pi npm 来源无法安全解析，请用原生 CLI 管理".into());
+        }
+        base.join("npm/node_modules").join(name)
+    } else if source.starts_with("git:")
+        || source.starts_with("https://")
+        || source.starts_with("http://")
+        || source.starts_with("ssh://")
+    {
+        let source = if source.starts_with("git://") {
+            source
+        } else {
+            source.strip_prefix("git:").unwrap_or(source)
+        }
+        .trim();
+        let (host, path) = if let Some(scp) = source.strip_prefix("git@") {
+            let (host, path) = scp.split_once(':').ok_or("Pi Git SSH 来源格式未识别")?;
+            (host.to_owned(), path.to_owned())
+        } else if source.contains("://") {
+            let value = url::Url::parse(source).map_err(|_| "Pi Git URL 格式未识别")?;
+            (
+                value.host_str().ok_or("Pi Git URL 缺少主机")?.to_owned(),
+                value.path().trim_start_matches('/').to_owned(),
+            )
+        } else {
+            let expanded = source
+                .strip_prefix("github:")
+                .map(|path| format!("github.com/{path}"))
+                .or_else(|| {
+                    source
+                        .strip_prefix("gitlab:")
+                        .map(|path| format!("gitlab.com/{path}"))
+                })
+                .or_else(|| {
+                    source
+                        .strip_prefix("bitbucket:")
+                        .map(|path| format!("bitbucket.org/{path}"))
+                })
+                .unwrap_or_else(|| source.into());
+            let (host, path) = expanded.split_once('/').ok_or("Pi Git 简写格式未识别")?;
+            if !host.contains('.') && host != "localhost" {
+                return Err("Pi Git 简写的原生安装路径尚未核验".into());
+            }
+            (host.to_owned(), path.to_owned())
+        };
+        let path = path
+            .split(['@', '#'])
+            .next()
+            .unwrap_or("")
+            .trim_end_matches(".git");
+        if host.is_empty()
+            || !host
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || b".-".contains(&c))
+            || path.split('/').count() < 2
+            || path.split('/').any(|part| matches!(part, "" | "." | ".."))
+            || path
+                .bytes()
+                .any(|c| c.is_ascii_control() || b"\\:%?#".contains(&c))
+        {
+            return Err("Pi Git 来源安装路径无法安全解析".into());
+        }
+        base.join("git").join(host).join(path)
+    } else if let Some(rest) = source
+        .strip_prefix("~/")
+        .or_else(|| source.strip_prefix("~\\"))
+    {
+        home.join(rest)
+    } else {
+        local_root(source, base).unwrap_or_else(|| base.join(source))
+    };
+    if !root.exists() {
+        return Err("Pi 安装目录未找到；旧全局 npm/custom package-manager 路径须先由原生 CLI 迁移，当前条目只读".into());
+    }
+    Ok(root)
+}
+
+fn pi_manifest_resources(entry: &mut PluginEntry, manifest: Option<&Value>) -> Result<(), String> {
+    let Some(root) = entry.root.as_ref().map(PathBuf::from) else {
+        return Err("没有可核验的 Pi 包目录".into());
+    };
+    let Some(manifest) = manifest.and_then(|value| value.get("pi")) else {
+        owned_resources(entry);
+        return Ok(());
+    };
+    let canonical_root = root.canonicalize().map_err(|_| "Pi 包目录不可读取")?;
+    for kind in ["extensions", "skills", "prompts", "themes"] {
+        let Some(patterns) = manifest.get(kind) else {
+            continue;
+        };
+        for pattern in patterns.as_array().ok_or("Pi manifest 资源字段不是数组")? {
+            let pattern = pattern.as_str().ok_or("Pi manifest 资源路径不是字符串")?;
+            if pattern.starts_with(['!', '+', '-']) {
+                continue;
+            } // filters do not introduce owned files
+            if Path::new(pattern).is_absolute()
+                || pattern.split(['/', '\\']).any(|part| part == "..")
+                || pattern.contains(['{', '}', '(', ')'])
+            {
+                return Err("Pi manifest 含包外路径或未核验的 glob 语法，已限制管理".into());
+            }
+            let expression = format!(
+                "{}/{}",
+                glob::Pattern::escape(&root.to_string_lossy().replace('\\', "/")),
+                pattern.replace('\\', "/")
+            );
+            for path in glob::glob(&expression)
+                .map_err(|_| "Pi manifest glob 无法解析")?
+                .take(20001)
+            {
+                let path = path.map_err(|_| "Pi manifest 资源不可读取")?;
+                let canonical = path
+                    .canonicalize()
+                    .map_err(|_| "Pi manifest 资源不可读取")?;
+                if !canonical.starts_with(&canonical_root) {
+                    return Err("Pi manifest 资源链接到包外，已限制管理".into());
+                }
+                if entry.resources.len() >= 20000 {
+                    return Err("Pi manifest 资源超过检查上限".into());
+                }
+                if !entry.resources.iter().any(|resource| {
+                    resource.kind == kind && resource.path == path.display().to_string()
+                }) {
+                    entry.resources.push(PluginResource {
+                        kind: kind.into(),
+                        path: path.display().to_string(),
+                        owner_id: entry.id.clone(),
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A native backup restores the document, not Cliora's recovery metadata.
+/// Reconcile only an exact original declaration; arbitrary edits remain unknown.
+fn reconcile_disabled(
+    db: &Database,
+    target: &PluginTarget,
+    path: &Path,
+    baseline: &str,
+    entries: &[Value],
+) -> Result<serde_json::Map<String, Value>, String> {
+    let mut saved = disabled(db, target)?;
+    let before = serde_json::to_string(&saved).map_err(|_| "禁用记录不可读取")?;
+    saved.retain(|_, original| !entries.iter().any(|item| item == original));
+    let after = serde_json::to_string(&saved).map_err(|_| "禁用记录不可读取")?;
+    if before != after {
+        db.with_connection(|conn| {
+            let tx = conn.transaction().map_err(|_| "无法对账插件恢复记录")?;
+            if transaction::read_native(path)? != baseline {
+                return Err("原生配置在恢复对账期间又被修改，请重新扫描".into());
+            }
+            let key = disabled_key(target);
+            let current: String = tx
+                .query_row(
+                    "SELECT value FROM app_settings WHERE key=?1",
+                    [&key],
+                    |row| row.get(0),
+                )
+                .map_err(|_| "插件恢复记录已变化")?;
+            let current: serde_json::Map<String, Value> =
+                serde_json::from_str(&current).map_err(|_| "插件恢复记录损坏")?;
+            if serde_json::to_string(&current).map_err(|_| "恢复记录不可读取")? != before {
+                return Err("插件恢复记录已变化，请重新扫描".into());
+            }
+            tx.execute(
+                "UPDATE app_settings SET value=?1 WHERE key=?2",
+                [&after, &key],
+            )
+            .map_err(|_| "插件恢复对账失败")?;
+            tx.commit().map_err(|_| "插件恢复对账提交失败".to_owned())
+        })?;
+    }
+    Ok(saved)
 }
 fn config_entries(
     db: &Database,
@@ -426,7 +626,8 @@ fn config_entries(
     target: &PluginTarget,
 ) -> Result<Vec<PluginEntry>, String> {
     let (path, kind) = config(home, target)?;
-    let parsed = format::parse(kind, &transaction::read_native(&path)?)?;
+    let baseline = transaction::read_native(&path)?;
+    let parsed = format::parse(kind, &baseline)?;
     let field = if target.tool_id == "pi" {
         "packages"
     } else {
@@ -437,7 +638,7 @@ fn config_entries(
         Some(value) => value.as_array().ok_or("插件配置不是数组")?,
         None => &empty,
     };
-    let saved = disabled(db, target)?;
+    let saved = reconcile_disabled(db, target, &path, &baseline, entries)?;
     let source_of = |item: &Value| {
         item.as_str()
             .map(str::to_owned)
@@ -461,11 +662,20 @@ fn config_entries(
             .ok_or("插件声明没有来源")?;
         let disabled_original = saved.get(&source);
         let enabled = declared && disabled_original.is_none();
-        let conflict = declared
-            && disabled_original.is_some_and(|original| {
+        let conflict = disabled_original.is_some_and(|original| {
+            if declared {
                 target.tool_id != "pi" || item != pi_disabled(original, &source)
-            });
-        let root = local_root(&source, path.parent().ok_or("配置缺少父目录")?);
+            } else {
+                target.tool_id == "pi"
+            }
+        });
+        let resolved = if target.tool_id == "pi" {
+            pi_installed_root(&source, path.parent().ok_or("配置缺少父目录")?, home).map(Some)
+        } else {
+            Ok(local_root(&source, path.parent().ok_or("配置缺少父目录")?))
+        };
+        let resolution_error = resolved.as_ref().err().cloned();
+        let root = resolved.unwrap_or(None);
         let manifest = root
             .as_ref()
             .map(|root| root.join("package.json"))
@@ -486,8 +696,10 @@ fn config_entries(
                 "project"
             }
             .into(),
-            enabled: Some(enabled),
-            state: if enabled {
+            enabled: if conflict { None } else { Some(enabled) },
+            state: if conflict {
+                "state_unknown"
+            } else if enabled {
                 "configured_load_unknown"
             } else {
                 "disabled"
@@ -499,7 +711,7 @@ fn config_entries(
                 "原生策略校验"
             }
             .into(),
-            read_only: conflict,
+            read_only: conflict || resolution_error.is_some(),
             root: root.map(|p| p.display().to_string()),
             resources: vec![],
         };
@@ -508,7 +720,17 @@ fn config_entries(
                 .policy
                 .push_str(" · 禁用后声明被外部修改，请先恢复或核对原生备份");
         }
-        owned_resources(&mut entry);
+        if let Some(error) = resolution_error {
+            entry.policy.push_str(&format!(" · {error}"));
+        }
+        if target.tool_id == "pi" {
+            if let Err(error) = pi_manifest_resources(&mut entry, manifest.as_ref()) {
+                entry.read_only = true;
+                entry.policy.push_str(&format!(" · {error}"));
+            }
+        } else {
+            owned_resources(&mut entry);
+        }
         result.push(entry);
     }
     if target.tool_id == "open_code" {
@@ -644,7 +866,7 @@ fn snapshot_inner(
                 }
             }
         }
-        if entry.resources.is_empty() {
+        if entry.resources.is_empty() && target.tool_id != "pi" {
             owned_resources(entry);
         }
         if let Some(root) = &entry.root {
@@ -786,7 +1008,9 @@ fn mutate_config(
             kind,
             baseline,
             changes,
-            sensitive: false,
+            // The same native document can contain apiKey/env credentials.
+            // Restrict the replacement even when this patch only edits plugins.
+            sensitive: true,
             force_restrict: false,
         }],
         |tx| {

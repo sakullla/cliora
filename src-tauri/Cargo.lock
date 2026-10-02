@@ -675,6 +675,7 @@ dependencies = [
  "chrono",
  "dirs",
  "flate2",
+ "glob",
  "httpdate",
  "jsonc-parser",
  "keyring",

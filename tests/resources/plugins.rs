@@ -260,3 +260,287 @@ fn project_recovery_is_shared_but_global_recovery_is_account_specific() {
     b.scope = Scope::Global;
     assert_ne!(disabled_key(&a), disabled_key(&b));
 }
+
+#[test]
+fn native_pi_delta_replacement_and_installed_path_semantics() {
+    let pi = std::env::var_os("CLIORA_PI_PACKAGE_ROOT")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("APPDATA").map(|root| {
+                PathBuf::from(root).join("npm/node_modules/@earendil-works/pi-coding-agent")
+            })
+        });
+    let Some(pi) = pi.filter(|path| path.join("dist/core/package-manager.js").is_file()) else {
+        eprintln!("Pi native regression not accepted: set CLIORA_PI_PACKAGE_ROOT to Pi 0.99.2");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let source = root.join("package").display().to_string();
+    let original = json!({"source":source,"autoload":false,"extensions":["-extensions/fixture.ts"],"unknownFuture":42});
+    let disabled = pi_disabled(&original, &source);
+    assert_eq!(disabled["autoload"], true);
+    assert_eq!(disabled["unknownFuture"], 42);
+    let input = root.join("declarations.json");
+    fs::write(
+        &input,
+        serde_json::to_vec(&json!({"original":original,"disabled":disabled})).unwrap(),
+    )
+    .unwrap();
+    let mut expected = vec![];
+    for (source, scope, base, relative) in [
+        (
+            "npm:@scope/fixture@1.2.3",
+            "user",
+            root.join("agent"),
+            "npm/node_modules/@scope/fixture",
+        ),
+        (
+            "npm:fixture@^1",
+            "project",
+            root.join(".pi"),
+            "npm/node_modules/fixture",
+        ),
+        (
+            "git:github.com/team/pkg@v1",
+            "user",
+            root.join("agent"),
+            "git/github.com/team/pkg",
+        ),
+        (
+            "https://github.com/team/pkg.git#v1",
+            "project",
+            root.join(".pi"),
+            "git/github.com/team/pkg",
+        ),
+        (
+            "git:git@example.test:team/pkg@main",
+            "user",
+            root.join("agent"),
+            "git/example.test/team/pkg",
+        ),
+    ] {
+        fs::create_dir_all(base.join(relative)).unwrap();
+        let resolved = pi_installed_root(source, &base, root).unwrap();
+        assert_eq!(resolved, base.join(relative));
+        expected
+            .push(json!({"source":source,"scope":scope,"expected":resolved.display().to_string()}));
+    }
+    let roots = root.join("roots.json");
+    fs::write(&roots, serde_json::to_vec(&expected).unwrap()).unwrap();
+    let output = crate::background_process::command("node")
+        .arg(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../tests/fixtures/plugins/pi-native-semantics.mjs"),
+        )
+        .args([
+            pi.as_os_str(),
+            root.as_os_str(),
+            input.as_os_str(),
+            roots.as_os_str(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    eprintln!("{}", String::from_utf8_lossy(&output.stdout));
+}
+
+#[test]
+fn pi_npm_git_manifest_ownership_and_package_edits_change_baseline() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let db = Database::open(&home.join("db")).unwrap();
+    let base = home.join(".pi/agent");
+    fs::create_dir_all(&base).unwrap();
+    let settings = json!({"packages":["npm:@scope/example@1.2.3","git:github.com/team/pkg@v2"]});
+    fs::write(
+        base.join("settings.json"),
+        serde_json::to_vec(&settings).unwrap(),
+    )
+    .unwrap();
+    for relative in ["npm/node_modules/@scope/example", "git/github.com/team/pkg"] {
+        let package = base.join(relative);
+        fs::create_dir_all(package.join("custom-code")).unwrap();
+        fs::create_dir_all(package.join("custom-prompts")).unwrap();
+        fs::write(package.join("custom-code/fixture.ts"), "// fixture").unwrap();
+        fs::write(package.join("custom-prompts/review.md"), "fixture").unwrap();
+        fs::write(package.join("package.json"), serde_json::to_vec(&json!({"name":relative,"version":"1.2.3","pi":{"extensions":["custom-code/*.ts"],"prompts":["custom-prompts/review.md"],"themes":[]}})).unwrap()).unwrap();
+    }
+    let before = snapshot_inner(&db, home, &target("pi"), Path::new("unused")).unwrap();
+    assert_eq!(before.entries.len(), 2);
+    for entry in &before.entries {
+        assert!(!entry.read_only, "{}", entry.policy);
+        assert!(entry.root.is_some());
+        assert_eq!(entry.version.as_deref(), Some("1.2.3"));
+        assert_eq!(entry.resources.len(), 2);
+        assert!(entry
+            .resources
+            .iter()
+            .all(|resource| resource.owner_id == entry.id));
+    }
+    fs::write(
+        base.join("npm/node_modules/@scope/example/custom-code/fixture.ts"),
+        "// external edit",
+    )
+    .unwrap();
+    let npm_changed = snapshot_inner(&db, home, &target("pi"), Path::new("unused")).unwrap();
+    assert_ne!(before.baseline, npm_changed.baseline);
+    fs::write(
+        base.join("git/github.com/team/pkg/custom-prompts/review.md"),
+        "external edit",
+    )
+    .unwrap();
+    assert_ne!(
+        npm_changed.baseline,
+        snapshot_inner(&db, home, &target("pi"), Path::new("unused"))
+            .unwrap()
+            .baseline
+    );
+    fs::write(
+        base.join("settings.json"),
+        r#"{"packages":["npm:not-installed@1"]}"#,
+    )
+    .unwrap();
+    let missing = config_entries(&db, home, &target("pi")).unwrap();
+    assert!(missing[0].read_only);
+    assert!(missing[0].policy.contains("安装目录未找到"));
+    assert!(pi_installed_root("npm:../../outside", &base, home).is_err());
+    assert!(pi_installed_root("git:github.com/../outside", &base, home).is_err());
+}
+
+#[test]
+fn backup_restore_reconciles_only_exact_original_then_allows_management() {
+    for tool in ["pi", "open_code"] {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let db = Database::open(&home.join("db")).unwrap();
+        let credentials = MemoryStore::default();
+        let package = home.join("package");
+        fs::create_dir(&package).unwrap();
+        let source = package.display().to_string();
+        let req = request(tool, "disable", &source);
+        let original = if tool == "pi" {
+            json!({"packages":[{"source":source,"autoload":false,"extensions":["!old.ts"],"future":true}]})
+        } else {
+            json!({"plugin":[source]})
+        };
+        let (path, _) = config(home, &req.target).unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
+        let id = mutate_config(&db, &credentials, home, &req).unwrap();
+        let disabled_entries = config_entries(&db, home, &req.target).unwrap();
+        assert_eq!(disabled_entries[0].enabled, Some(false));
+        assert!(!disabled_entries[0].read_only);
+        let current = fs::read_to_string(&path).unwrap();
+        transaction::restore_backup(&db, &credentials, &path, &id, &current, |_| Ok(())).unwrap();
+        let restored = config_entries(&db, home, &req.target).unwrap();
+        assert_eq!(restored[0].enabled, Some(true));
+        assert!(!restored[0].read_only);
+        assert!(disabled(&db, &req.target).unwrap().is_empty());
+        assert_eq!(
+            serde_json::from_str::<Value>(&fs::read_to_string(&path).unwrap()).unwrap(),
+            original
+        );
+        mutate_config(&db, &credentials, home, &req).unwrap();
+        mutate_config(&db, &credentials, home, &request(tool, "enable", &source)).unwrap();
+        assert_eq!(
+            config_entries(&db, home, &req.target).unwrap()[0].enabled,
+            Some(true)
+        );
+    }
+}
+
+#[test]
+fn unknown_external_change_does_not_claim_disabled_or_overwrite_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let db = Database::open(&home.join("db")).unwrap();
+    let credentials = MemoryStore::default();
+    let package = home.join("package");
+    fs::create_dir(&package).unwrap();
+    let source = package.display().to_string();
+    let req = request("pi", "disable", &source);
+    let (path, _) = config(home, &req.target).unwrap();
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        &path,
+        serde_json::to_vec(&json!({"packages":[{"source":source,"future":1}]})).unwrap(),
+    )
+    .unwrap();
+    mutate_config(&db, &credentials, home, &req).unwrap();
+    let external =
+        serde_json::to_string(&json!({"packages":[{"source":source,"future":2}]})).unwrap();
+    fs::write(&path, &external).unwrap();
+    let entry = &config_entries(&db, home, &req.target).unwrap()[0];
+    assert_eq!(entry.enabled, None);
+    assert_eq!(entry.state, "state_unknown");
+    assert!(entry.read_only);
+    assert_eq!(fs::read_to_string(&path).unwrap(), external);
+    assert!(!disabled(&db, &req.target).unwrap().is_empty());
+}
+
+#[cfg(windows)]
+#[test]
+fn plugin_edits_preserve_restricted_secret_file_acl_under_permissive_parent() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let db = Database::open(&home.join("db")).unwrap();
+    let credentials = MemoryStore::default();
+    let req = request("open_code", "install", "fixture@1");
+    let (path, _) = config(home, &req.target).unwrap();
+    let parent = path.parent().unwrap();
+    fs::create_dir_all(parent).unwrap();
+    let icacls = PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32/icacls.exe");
+    let grant = crate::background_process::command(&icacls)
+        .arg(parent)
+        .args(["/grant", "*S-1-5-32-545:(OI)(CI)R"])
+        .output()
+        .unwrap();
+    assert!(grant.status.success());
+    let secret = r#"{"provider":{"openai":{"options":{"apiKey":"synthetic-secret-only"}}}}"#;
+    fs::write(&path, secret).unwrap();
+    transaction::apply(
+        &db,
+        &credentials,
+        &[FilePatch {
+            path: path.clone(),
+            kind: FileKind::Json,
+            baseline: secret.into(),
+            changes: vec![],
+            sensitive: true,
+            force_restrict: true,
+        }],
+        |_| Ok(()),
+    )
+    .unwrap();
+    for action in ["install", "disable", "uninstall"] {
+        mutate_config(
+            &db,
+            &credentials,
+            home,
+            &request("open_code", action, "fixture@1"),
+        )
+        .unwrap();
+        let acl = crate::background_process::command(&icacls)
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(acl.status.success());
+        assert!(!String::from_utf8_lossy(&acl.stdout).contains("(I)"));
+        let users = crate::background_process::command(&icacls)
+            .arg(&path)
+            .args(["/findsid", "*S-1-5-32-545"])
+            .output()
+            .unwrap();
+        assert!(users.status.success());
+        assert!(!String::from_utf8_lossy(&users.stdout).contains(&path.display().to_string()));
+        assert!(fs::read_to_string(&path)
+            .unwrap()
+            .contains("synthetic-secret-only"));
+    }
+}
