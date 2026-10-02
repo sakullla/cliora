@@ -5,7 +5,7 @@ use serde_json::Value;
 use super::usage::{self, TokenCounts};
 use super::{
     discover_jsonl_controlled, raw_string_after, read_jsonl_filtered, text_content, timestamp, valid_native_id,
-    HistorySource, ParsedSession, UsageEvent,
+    HistoryMessageKind, HistorySource, ParsedSession, UsageEvent,
 };
 
 pub fn sources(home: &Path) -> Result<Vec<HistorySource>, String> {
@@ -13,13 +13,44 @@ pub fn sources(home: &Path) -> Result<Vec<HistorySource>, String> {
 }
 
 pub fn sources_controlled(home: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<HistorySource>, String> {
-    discover_jsonl_controlled(&home.join(".codex/sessions"), |path| {
+    let mut sources = discover_jsonl_controlled(&home.join(".codex/sessions"), |path| {
         path.extension().is_some_and(|value| value == "jsonl")
             && path
                 .file_name()
                 .and_then(|value| value.to_str())
                 .is_some_and(|value| value.starts_with("rollout-"))
-    }, cancelled)
+    }, cancelled)?;
+    // Adapter-local parser version: existing indexes are rebuilt once, even if
+    // the original rollout has not changed. Other CLIs keep their own cache.
+    for source in &mut sources {
+        source.fingerprint = format!("codex-context-v1|{}", source.fingerprint);
+    }
+    Ok(sources)
+}
+
+fn environment_context(text: &str) -> bool {
+    text.strip_prefix("<environment_context>")
+        .and_then(|rest| rest.split_once("</environment_context>"))
+        .is_some_and(|(_, tail)| tail.trim().is_empty())
+}
+
+fn message_kind(role: &str, text: &str) -> HistoryMessageKind {
+    if role != "user" { return HistoryMessageKind::Conversation; }
+    let text = text.trim();
+    if environment_context(text) { return HistoryMessageKind::EnvironmentContext; }
+    if let Some(rest) = text.strip_prefix("# AGENTS.md instructions for ") {
+        if let Some((path, body)) = rest.split_once('\n') {
+            if !path.trim().is_empty() {
+                if let Some((_, tail)) = body.trim_start().strip_prefix("<INSTRUCTIONS>")
+                    .and_then(|value| value.split_once("</INSTRUCTIONS>")) {
+                    if tail.trim().is_empty() || environment_context(tail.trim()) {
+                        return HistoryMessageKind::ProjectContext;
+                    }
+                }
+            }
+        }
+    }
+    HistoryMessageKind::Conversation
 }
 
 fn token_counts(value: &Value) -> Option<TokenCounts> {
@@ -94,7 +125,8 @@ pub fn parse_controlled(source: &HistorySource, cancelled: &dyn Fn() -> bool) ->
                         .and_then(Value::as_str)
                         .map(str::to_owned)
                         .unwrap_or_else(|| format!("line-{line}"));
-                    session.add_message(id, role, body, time);
+                    let kind = message_kind(role, &body);
+                    session.add_classified_message(id, role, body, time, kind);
                 }
             }
             // Newer rollouts write one record per model response. The response id is

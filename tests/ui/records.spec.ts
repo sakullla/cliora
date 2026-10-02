@@ -121,6 +121,8 @@ test('records keep search, show native resume command and only launch on request
   expect(listLayout.minHeight).toBeGreaterThan(48);
   expect(listLayout.titleLines).toBeGreaterThan(1);
   expect(listLayout.titleLines).toBeLessThanOrEqual(2.05);
+  await expect(page.getByRole('checkbox', { name: '只看收藏' })).toBeHidden();
+  await page.getByText('筛选', { exact: true }).click();
   const filterOrder = await page.evaluate(() => {
     const search = document.querySelector('[aria-label="搜索会话"]')?.closest('label');
     const tool = document.querySelector('[aria-label="筛选工具"]')?.closest('label');
@@ -139,6 +141,8 @@ test('records keep search, show native resume command and only launch on request
   expect(filterOrder).toEqual({ documentOrder: true, visualOrder: true, orders: ['0', '0', '0'] });
   await expect(page.getByLabel('原生恢复命令')).toContainText("'resume' '1111-2222'");
   await expect(page.getByLabel('原生恢复命令')).toBeHidden();
+  await page.getByText('筛选', { exact: true }).click();
+  await page.getByText('会话选项', { exact: true }).click();
   await page.getByText('查看恢复命令', { exact: true }).click();
   const scrollSplit = await page.evaluate(() => {
     const list = document.querySelector('[aria-label="会话列表"]');
@@ -167,11 +171,13 @@ test('records keep search, show native resume command and only launch on request
   const resumeOutside = page.getByRole('button', { name: '在外部终端继续' });
   await expect(resumeOutside).toBeVisible();
   await expect(resumeOutside).toHaveClass(/primary/);
-  const exportDetails = page.locator('details').filter({ has: page.getByText('导出与项目关联', { exact: true }) });
+  const exportDetails = page.locator('details').filter({ has: page.getByText('会话选项', { exact: true }) });
   await expect(exportDetails).toHaveCount(1);
+  await page.getByText('会话选项', { exact: true }).click();
   await expect(exportDetails).not.toHaveAttribute('open');
   await expect(exportDetails.getByRole('button', { name: '导出 Markdown' })).toBeHidden();
-  expect(await resumeOutside.evaluate((button) => button.closest('details')?.querySelector('summary')?.textContent?.includes('导出与项目关联') ?? false)).toBe(false);
+  expect(await resumeOutside.evaluate((button) => button.closest('details')?.querySelector('summary')?.textContent?.includes('会话选项') ?? false)).toBe(false);
+  await page.getByText('会话选项', { exact: true }).click();
   await page.evaluate(() => { (window as typeof window & { __recordControl: { delayYolo: boolean } }).__recordControl.delayYolo = true; });
   await page.getByRole('combobox', { name: '恢复模式' }).selectOption('yolo');
   await expect(page.getByLabel('原生恢复命令')).toHaveCount(0);
@@ -185,7 +191,6 @@ test('records keep search, show native resume command and only launch on request
   await expect(page.getByLabel('原生恢复命令')).not.toContainText("'--yolo'");
   await page.getByRole('combobox', { name: '恢复模式' }).selectOption('yolo');
   await expect(page.getByLabel('原生恢复命令')).toContainText("'--yolo'");
-  await page.getByText('导出与项目关联', { exact: true }).click();
   await page.getByRole('combobox', { name: '关联会话项目' }).selectOption('project-new');
   await expect(page.getByLabel('原生恢复命令')).toContainText('C:\\new-project');
   await page.getByRole('button', { name: '复制命令' }).click();
@@ -302,6 +307,20 @@ test('usage dashboard splits tokens, follows rows into filters and opens heavy s
   await expect.poll(async () => (await lastFilter())?.model).toBe('gpt-6-astra');
   await page.getByRole('button', { name: '清除筛选' }).click();
   await expect.poll(async () => (await lastFilter())?.model).toBeNull();
+
+  const beforeCustom = await lastFilter();
+  await page.getByRole('radio', { name: '自定义', exact: true }).click();
+  const dates = page.getByRole('dialog', { name: '自定义时间范围' });
+  const days = dates.getByRole('button', { name: /^\d{4}-\d{2}-\d{2}$/ });
+  const startDay = await days.nth(0).getAttribute('aria-label');
+  const endDay = await days.nth(2).getAttribute('aria-label');
+  await days.nth(0).click();
+  await days.nth(2).click();
+  expect(await lastFilter()).toEqual(beforeCustom);
+  await dates.getByRole('button', { name: '应用范围' }).click();
+  await expect(page.getByRole('radio', { name: '自定义', exact: true })).toHaveAttribute('aria-checked', 'true');
+  const end = new Date(`${endDay}T00:00:00`); end.setDate(end.getDate() + 1);
+  await expect.poll(lastFilter).toMatchObject({ fromMs: new Date(`${startDay}T00:00:00`).getTime(), toMs: end.getTime() });
 
   await page.getByRole('radio', { name: '近 7 天' }).click();
   const weekStart = await page.evaluate(() => { const date = new Date(); date.setHours(0, 0, 0, 0); date.setDate(date.getDate() - 6); return date.getTime(); });

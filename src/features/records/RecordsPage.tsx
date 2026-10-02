@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { save } from '@tauri-apps/plugin-dialog';
 import { native, nativeAvailable } from '../../lib/native';
 import type { AdapterDescriptor } from '../../types/native';
@@ -13,6 +12,8 @@ import { Icon } from '../../components/Icon';
 import { searchShortcutHint } from '../../lib/shortcut';
 import { UsageDashboard, type UsageNotify } from './UsageDashboard';
 import { SessionReader } from './SessionReader';
+import { DateRangeFilter, type RangeKey } from './DateRangeFilter';
+import { useDisclosure } from './useDisclosure';
 import { navigateChoices } from './choiceNavigation';
 import styles from './RecordsPage.module.css';
 
@@ -48,63 +49,6 @@ function rowTime(ms: number | null) {
   if (group === 'yesterday') return `昨天 ${timeOfDay(new Date(ms))}`;
   return compactDay(ms);
 }
-function RangePicker({ value, customFrom, customTo, onChange, onCustomFrom, onCustomTo }: {
-  value: RangeKey; customFrom: string; customTo: string;
-  onChange: (key: RangeKey) => void; onCustomFrom: (value: string) => void; onCustomTo: (value: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [box, setBox] = useState<{ top: number; left: number } | null>(null);
-  const anchor = useRef<HTMLDivElement>(null);
-  const panel = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => {
-    if (!open) return;
-    const place = () => {
-      const rect = anchor.current?.getBoundingClientRect();
-      if (!rect) return;
-      const width = 244;
-      setBox({ top: rect.bottom + 4, left: Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)) });
-    };
-    place();
-    window.addEventListener('resize', place);
-    window.addEventListener('scroll', place, true);
-    return () => { window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true); };
-  }, [open]);
-  useEffect(() => {
-    if (!open) return;
-    const close = (event: MouseEvent) => {
-      const target = event.target as Node;
-      if (anchor.current?.contains(target) || panel.current?.contains(target)) return;
-      setOpen(false);
-    };
-    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') { setOpen(false); anchor.current?.querySelector('button')?.focus(); } };
-    document.addEventListener('mousedown', close);
-    document.addEventListener('keydown', escape);
-    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', escape); };
-  }, [open]);
-  const label = value === 'custom'
-    ? (rangeCaption(customFrom, customTo) || '自定义')
-    : rangePresets.find((item) => item.id === value)?.label ?? '全部';
-  const choose = (key: RangeKey) => {
-    onChange(key);
-    if (key !== 'custom') setOpen(false);
-  };
-  return <div ref={anchor} className={styles.rangePicker}>
-    <button type="button" className={styles.rangeTrigger} aria-label="时间范围" aria-haspopup="dialog" aria-expanded={open} data-open={open || undefined} onClick={() => setOpen((current) => !current)}>
-      <Icon name="clock" size={13} /><span>{label}</span>
-    </button>
-    {open && box && createPortal(<div ref={panel} className={styles.rangePanel} style={{ top: box.top, left: box.left }} role="dialog" aria-label="时间范围">
-      <div className={styles.rangeOptions} role="listbox" aria-label="预设范围">
-        {rangePresets.map((item) => <button type="button" key={item.id} role="option" aria-selected={value === item.id} onClick={() => choose(item.id)}>
-          <span>{item.label}</span>{value === item.id && <Icon name="check" size={13} />}
-        </button>)}
-      </div>
-      {value === 'custom' && <div className={styles.rangeDates}>
-        <label>开始<input aria-label="开始日期" type="date" value={customFrom} max={customTo || undefined} onChange={(event) => onCustomFrom(event.target.value)} /></label>
-        <label>结束<input aria-label="结束日期" type="date" value={customTo} min={customFrom || undefined} onChange={(event) => onCustomTo(event.target.value)} /></label>
-      </div>}
-    </div>, document.body)}
-  </div>;
-}
 function formatFailure(error: unknown, objectText: string, nextText: string): string {
   const fallback = `${objectText}。${nextText}`;
   if (typeof error === 'string') {
@@ -129,7 +73,6 @@ function formatFailure(error: unknown, objectText: string, nextText: string): st
 const recordNext = '可点击刷新本机记录或调整筛选。';
 const errorText = (error: unknown) => formatFailure(error, '使用记录操作失败', recordNext);
 
-type RangeKey = 'all' | 'today' | 'yesterday' | '7' | '30' | 'month' | 'custom';
 const rangePresets: Array<{ id: RangeKey; label: string }> = [
   { id: 'all', label: '全部' },
   { id: 'today', label: '今天' },
@@ -239,6 +182,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
   }), [toolId, model, projectId, search, dates, favoriteOnly, toolKey]);
 
   const filterRef = useRef(filter); filterRef.current = filter;
+  const loadedFilter = useRef('');
   const load = useCallback(async (current: HistoryFilter) => {
     if (!nativeAvailable) return false;
     const sequence = ++request.current;
@@ -246,6 +190,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
     try {
       const items = await native.listHistorySessions(current);
       if (sequence !== request.current || key !== JSON.stringify(filterRef.current)) return false;
+      loadedFilter.current = key;
       setSessions(items); setError(null);
       setModelCatalog((old) => { const next = [...new Set([...old, ...items.flatMap((item) => item.model ? [item.model] : [])])].sort(); return next.length === old.length ? old : next; });
       const pending = pendingSession.current;
@@ -262,7 +207,6 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
   useEffect(() => {
     if (!active || !nativeAvailable || initialized.current) return;
     initialized.current = true;
-    void load(filter);
     void Promise.all([native.listProjects(), native.listHistoryPrices()])
       .then(([knownProjects, knownPrices]) => { setProjects(knownProjects); setPrices(knownPrices); })
       .catch(value => showReadError(value));
@@ -280,7 +224,8 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
 
   useEffect(() => {
     if (!initialized.current || !active) return;
-    const timer = window.setTimeout(() => { void load(filter); }, 180);
+    if (loadedFilter.current === JSON.stringify(filter)) return;
+    const timer = window.setTimeout(() => { void load(filter); }, loadedFilter.current ? 180 : 0);
     return () => window.clearTimeout(timer);
   }, [filter, active, load]);
 
@@ -288,10 +233,13 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
     const sequence = ++detailRequest.current;
     setDetailError('');
     if (!selectedId || !nativeAvailable) { setDetail(null); return; }
-    void native.getHistorySession(selectedId).then((value) => { if (sequence === detailRequest.current) setDetail(value); })
+    void native.getHistorySession(selectedId).then((value) => {
+      if (sequence !== detailRequest.current) return;
+      setDetail(value);
+    })
       .catch((value) => { if (sequence === detailRequest.current) setDetailError(formatFailure(value, '这段会话暂时无法读取', '请重新加载会话。')); });
     return () => { detailRequest.current++; };
-  }, [selectedId, detailRetry]);
+  }, [selectedId, detailRetry, scanVersion]);
 
   const selected = detail?.session.id === selectedId ? detail : null;
   const yolo = tools.find((item) => item.id === selected?.session.toolId)?.yoloAvailable ?? false;
@@ -405,6 +353,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
   const toolName = (id: string) => tools.find((item) => item.id === id)?.name ?? id;
   const detailRef = useRef<HTMLDivElement>(null);
   const commandRef = useRef<HTMLDetailsElement>(null);
+  const actionsRef = useDisclosure();
   function selectSession(id: string) {
     setSelectedId(id); setMobileDetail(true);
     requestAnimationFrame(() => {
@@ -458,21 +407,16 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
     <ToastStack status={notice} alert={error} onDismiss={(tone) => { if (tone === 'alert') setError(null); else setNotice(null); }} />
     <div className={styles.columns} id="records-sessions-panel" role="tabpanel" aria-labelledby="records-sessions-tab" hidden={tab !== 'sessions'}>
       <aside className={styles.sessionLibrary} aria-label="会话库">
-        <div className={styles.libraryHead}><div><h2>会话库</h2><span>{sessions.length.toLocaleString()} 个会话</span></div><Icon name="archive" size={18} /></div>
         <div className={styles.filters}>
       <label className={styles.search}><span className="sr-only">搜索</span><span className={styles.searchBox}><input aria-label="搜索会话" data-page-search title={searchShortcutHint} value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape' && search) { event.preventDefault(); setSearch(''); } }} placeholder="搜索标题或正文" />{search && <button type="button" className={styles.clearSearch} aria-label="清空搜索" onClick={() => setSearch('')}><Icon name="close" size={12} strokeWidth={2.2} /></button>}</span></label>
       <label className={styles.filterSelect}><span className="sr-only">工具</span><FilterSelect label="筛选工具" value={toolId} options={[{ value: '', label: '全部工具' }, ...toolOptions(tools)]} onChange={setToolId} /></label>
+      <details className={styles.moreFilters}><summary>筛选{[projectId, model, favoriteOnly, rangeKey !== 'all'].filter(Boolean).length ? ` · ${[projectId, model, favoriteOnly, rangeKey !== 'all'].filter(Boolean).length}` : ''}</summary><div className={styles.filters}>
       <label className={styles.favorite}><input type="checkbox" checked={favoriteOnly} onChange={(event) => setFavoriteOnly(event.target.checked)} />只看收藏</label>
-      <RangePicker value={rangeKey} customFrom={customFrom} customTo={customTo}
-        onChange={(key) => { setRangeKey(key); if (key === 'custom' && !customFrom && !customTo) { const today = isoDay(new Date()); setCustomFrom(today); setCustomTo(today); } }}
-        onCustomFrom={(value) => { if (customTo && value && value > customTo) { setCustomFrom(customTo); setCustomTo(value); } else setCustomFrom(value); }}
-        onCustomTo={(value) => { if (customFrom && value && value < customFrom) { setCustomTo(customFrom); setCustomFrom(value); } else setCustomTo(value); }} />
-      <div className={styles.filterMeta}>
-        <details className={styles.moreFilters}><summary>更多筛选{[projectId, model].filter(Boolean).length ? ` · ${[projectId, model].filter(Boolean).length} 项已启用` : ''}</summary><div className={styles.filters}>
+      <DateRangeFilter value={rangeKey} customFrom={customFrom} customTo={customTo} presets={rangePresets} onChange={setRangeKey}
+        onCustomRange={(from, to) => { setCustomFrom(from); setCustomTo(to); setRangeKey('custom'); }} />
           <label className={styles.filterSelect}><span>项目</span><FilterSelect label="筛选项目" value={projectId} options={[{ value: '', label: '全部项目' }, { value: '__unknown__', label: '未归类' }, ...projects.map((item) => ({ value: item.id, label: item.name }))]} onChange={setProjectId} /></label>
           <label className={styles.filterSelect}><span>模型</span><FilterSelect label="筛选模型" value={model} options={[{ value: '', label: '全部模型' }, { value: '__unknown__', label: '模型未知' }, ...modelCatalog.map((item) => ({ value: item, label: item }))]} onChange={setModel} /></label>
-          <button type="button" onClick={() => { setProjectId(''); setModel(''); }}>清除更多筛选</button></div></details>
-      </div>
+          <button type="button" onClick={() => { setProjectId(''); setModel(''); setFavoriteOnly(false); setRangeKey('all'); }}>重置筛选</button></div></details>
     </div>
     {activeFilters.length > 0 && <div className={styles.activeFilters} aria-label="已启用的筛选">
       {activeFilters.map((item) => <button type="button" key={item.key} className={styles.filterChip} title="点击移除该筛选" onClick={item.clear}><span>{item.label}</span><Icon name="close" size={11} strokeWidth={2.4} /></button>)}
@@ -488,8 +432,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
           {(item.partial || item.stale) && <small className={styles.sessionMeta}>{item.partial && <em className={styles.flag}>部分记录</em>}{item.stale && <em className={styles.flag} data-tone="muted">源暂不可读</em>}</small>}
         </button>),
       ]) : <div className={styles.empty} role={listError ? 'alert' : 'status'}><span className="empty-symbol"><Icon name={listError ? 'alert' : 'search'} size={20} /></span><h3>{listError ? '会话列表读取失败' : filterLoading ? '正在加载会话…' : activeFilters.length ? '没有匹配的会话' : '从第一段会话开始'}</h3><p>{listError ? '本机记录仍然保留，可以重新读取。' : filterLoading ? '正在读取本机记录。' : activeFilters.length ? '试试其他关键词，或清除筛选。' : '使用受管理的 CLI 后，回到这里查找与继续对话。'}</p>{listError ? <button type="button" onClick={() => void load(filter)}>重新读取列表</button> : activeFilters.length > 0 && <button type="button" className="text-button" onClick={clearAllFilters}>清除全部筛选</button>}</div>}</div>
-        {!!scans.length && <details className={styles.coverage}><summary>已索引 {scans.reduce((total, item) => total + item.sourceCount, 0)} 个来源{scans.some((item) => item.failedCount || item.incomplete) ? ' · 部分未读取' : ''}</summary>{scans.map((item) => <span key={item.toolId}>{toolName(item.toolId)} · {item.sourceCount} 个来源{item.failedCount ? ` · ${item.failedCount} 个失败` : ''}{item.incomplete ? ' · 扫描不完整' : ''}</span>)}</details>}
-        <div className={styles.libraryFoot}><span className={styles.localDot} />{scanning ? '正在同步本机记录…' : lastScanAt ? `${timeOfDay(new Date(lastScanAt))} 已同步` : '仅存于本机'}<span>↑ ↓ 切换会话</span></div>
+        <details className={styles.coverage}><summary>{scanning ? '正在同步本机记录…' : lastScanAt ? `${timeOfDay(new Date(lastScanAt))} 已同步` : '仅存于本机'}{scans.some((item) => item.failedCount || item.incomplete) ? ' · 部分未读取' : ''}</summary>{scans.length ? scans.map((item) => <span key={item.toolId}>{toolName(item.toolId)} · {item.sourceCount} 个来源{item.failedCount ? ` · ${item.failedCount} 个失败` : ''}{item.incomplete ? ' · 扫描不完整' : ''}</span>) : <span>刷新后查看本机记录来源。</span>}</details>
       </aside>
       <div className={styles.detail} ref={detailRef}>
         <button type="button" className={styles.backToList} onClick={() => { setMobileDetail(false); if (selectedId) requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(`[data-session-id="${CSS.escape(selectedId)}"]`)?.focus()); }}>← 返回会话列表</button>
@@ -497,12 +440,17 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
         <div className={styles.detailBar}>
         <div className={styles.detailEyebrow}><ToolIcon toolId={selected.session.toolId} size={18} /><span>{toolName(selected.session.toolId)}</span><span className={styles.modelBadge}>{selected.session.model ?? '模型未知'}</span><button type="button" disabled={favoriteBusy} data-active={selected.session.favorite || undefined} aria-pressed={selected.session.favorite} onClick={() => void favorite()} aria-label={selected.session.favorite ? '取消收藏' : '收藏会话'}>{selected.session.favorite ? '★ 已收藏' : '☆ 收藏'}</button></div>
         <div className={styles.detailHead}><h2 title={selected.session.title}>{selected.session.title || '未命名会话'}</h2></div>
-        <div className={styles.detailMeta}><span title={selected.session.cwd ? displayPath(selected.session.cwd) : undefined}><Icon name="folder" size={13} />{selected.session.cwd ? displayPath(selected.session.cwd) : '项目目录未知'}</span><time title={day(selected.session.updatedAt)}>{compactDay(selected.session.updatedAt)} 更新</time></div>
+        <div className={styles.detailMeta}><span title={selected.session.cwd ? displayPath(selected.session.cwd) : undefined}><Icon name="folder" size={13} />{projects.find((item) => item.id === selected.session.projectId)?.name ?? selected.session.cwd?.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? '项目目录未知'}</span><time title={day(selected.session.updatedAt)}>{compactDay(selected.session.updatedAt)} 更新</time></div>
         {(selected.session.partial || selected.session.stale) && <p className={styles.caveat}>原始记录不完整或最近读取失败；仅展示已索引的内容。</p>}
         <div className={styles.resume}>
-          <div className={styles.resumeBar}>{readyCommand && <button type="button" className={styles.primary} disabled={busy} onClick={() => void resume()}><Icon name="tool" size={14} />{busy ? '正在打开终端…' : '在外部终端继续'}</button>}<select aria-label="恢复模式" value={mode} onChange={(event) => setMode(event.target.value as 'normal' | 'yolo')}><option value="normal">普通模式</option>{yolo && <option value="yolo">YOLO 模式</option>}</select>{readyCommand && <button type="button" aria-label="复制命令" data-copied={copied || undefined} onClick={() => void copy()}><Icon name={copied ? 'check' : 'copy'} size={13} />{copied ? '已复制' : '复制命令'}</button>}{!readyCommand && <p>{shownResumeError || '正在确认原生恢复命令…'}</p>}</div>
-          {readyCommand && <details className={styles.commandDetails} ref={commandRef}><summary>查看恢复命令</summary><pre aria-label="原生恢复命令" title={readyCommand}>{readyCommand}</pre></details>}
-          <details className={styles.moreActions}><summary>导出与项目关联</summary><div className={styles.actions}><button type="button" onClick={() => void exportSession('markdown')}>导出 Markdown</button><button type="button" onClick={() => void exportSession('json')}>导出 JSON</button></div><label className={styles.projectLink}>关联项目<select aria-label="关联会话项目" value={selected.session.projectId ?? ''} onChange={(event) => void assignProject(event.target.value)}><option value="">使用原会话目录</option>{projects.map((item) => <option key={item.id} value={item.id}>{item.name}{item.available ? '' : ' · 目录失效'}</option>)}</select></label></details>
+          {readyCommand && <button type="button" className={styles.primary} disabled={busy} onClick={() => void resume()}><Icon name="tool" size={14} />{busy ? '正在打开终端…' : '在外部终端继续'}{mode === 'yolo' && ' · YOLO'}</button>}
+          <details className={styles.moreActions} ref={actionsRef} key={selected.session.id}><summary>会话选项</summary><div className={styles.actionPanel}>
+            <div className={styles.resumeBar}><label>恢复模式 <select aria-label="恢复模式" value={mode} onChange={(event) => setMode(event.target.value as 'normal' | 'yolo')}><option value="normal">普通模式</option>{yolo && <option value="yolo">YOLO 模式</option>}</select></label>{readyCommand && <button type="button" aria-label="复制命令" data-copied={copied || undefined} onClick={() => void copy()}><Icon name={copied ? 'check' : 'copy'} size={13} />{copied ? '已复制' : '复制命令'}</button>}</div>
+            {readyCommand && <details className={styles.commandDetails} ref={commandRef}><summary>查看恢复命令</summary><pre aria-label="原生恢复命令" title={readyCommand}>{readyCommand}</pre></details>}
+            <div className={styles.actions}><button type="button" onClick={() => void exportSession('markdown')}>导出 Markdown</button><button type="button" onClick={() => void exportSession('json')}>导出 JSON</button></div><label className={styles.projectLink}>关联项目<select aria-label="关联会话项目" value={selected.session.projectId ?? ''} onChange={(event) => void assignProject(event.target.value)}><option value="">使用原会话目录</option>{projects.map((item) => <option key={item.id} value={item.id}>{item.name}{item.available ? '' : ' · 目录失效'}</option>)}</select></label>
+            {selected.session.cwd && <p className={styles.fullPath}>{displayPath(selected.session.cwd)}</p>}
+          </div></details>
+          {!readyCommand && <p className={styles.resumeStatus}>{shownResumeError || '正在确认原生恢复命令…'}</p>}
           {selected.resumeReason && <button type="button" onClick={onOpenProjects}>前往最近项目重新关联目录</button>}
         </div>
         </div>

@@ -13,6 +13,38 @@ fn file(name: &str) -> HistorySource {
     }
 }
 
+#[test]
+#[ignore = "manual performance measurement; prints aggregate timings only"]
+fn history_performance_probe() {
+    use std::time::Instant;
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join(".codex/sessions");
+    fs::create_dir_all(&root).unwrap();
+    for session in 0..240 {
+        let mut rows = vec![serde_json::json!({"type":"session_meta","payload":{"id":format!("bench-{session}"),"cwd":"/fixture"}}).to_string()];
+        for message in 0..40 {
+            rows.push(serde_json::json!({"type":"response_item","payload":{"type":"message","role":if message % 2 == 0 {"user"} else {"assistant"},"content":[{"type":"input_text","text":format!("Question {message}\n{}", "x".repeat(4096))}]}}).to_string());
+            rows.push(serde_json::json!({"type":"token_usage_record","payload":{"response_id":format!("response-{session}-{message}"),"usage":{"input_tokens":100,"output_tokens":20}}}).to_string());
+        }
+        fs::write(root.join(format!("rollout-{session}.jsonl")), rows.join("\n") + "\n").unwrap();
+    }
+    let db = Database::open(&temp.path().join("index.db")).unwrap();
+    let registry = Registry::with_adapters(vec![&CODEX]).unwrap();
+    for phase in ["cold", "unchanged", "unchanged-repeat"] {
+        let start = Instant::now();
+        let report = refresh(&db, &registry, temp.path()).unwrap();
+        let refresh_ms = start.elapsed().as_secs_f64() * 1000.0;
+        assert_eq!(report[0].failed_count, 0);
+        let start = Instant::now();
+        let sessions = list(&db, &HistoryFilter::default()).unwrap();
+        let list_ms = start.elapsed().as_secs_f64() * 1000.0;
+        let start = Instant::now();
+        let detail = detail(&db, &sessions[0].id).unwrap();
+        assert_eq!(detail.messages.len(), 40);
+        println!("BENCH {phase}: sources={} refresh_ms={refresh_ms:.2} list_ms={list_ms:.2} detail_ms={:.2}", sessions.len(), start.elapsed().as_secs_f64() * 1000.0);
+    }
+}
+
 fn indexed_id(db: &Database, source: &Path) -> String {
     let canonical = source.canonicalize().unwrap();
     db.with_connection(|conn| {
@@ -41,6 +73,43 @@ fn codex_request_usage_survives_a_reset_cumulative_counter() {
     assert_eq!(session.usage.iter().map(|item| item.output.unwrap()).sum::<u64>(), 12);
     assert_eq!(session.usage.iter().map(|item| item.cache_read.unwrap()).sum::<u64>(), 110);
     assert_eq!(session.usage.len(), 3);
+}
+
+#[test]
+fn codex_context_is_classified_in_adapter_and_old_indexes_are_rebuilt() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join(".codex/sessions");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("rollout-context.jsonl");
+    let context = "# AGENTS.md instructions for /fixture\n\n<INSTRUCTIONS>\nProject rules\n</INSTRUCTIONS>";
+    let environment = "<environment_context>\n<cwd>/fixture</cwd>\n</environment_context>";
+    let question = "请优化 AGENTS.md 的说明";
+    let texts = [context.to_owned(), environment.to_owned(), question.to_owned(), format!("{context}\nDo not hide this question")];
+    let rows: Vec<String> = texts.iter().map(|text| serde_json::json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":text}]}}).to_string()).collect();
+    fs::write(&path, rows.join("\n") + "\n").unwrap();
+    let db = Database::open(&temp.path().join("index.db")).unwrap();
+    let registry = Registry::with_adapters(vec![&CODEX]).unwrap();
+    refresh(&db, &registry, temp.path()).unwrap();
+    let id = indexed_id(&db, &path);
+    let parsed = detail(&db, &id).unwrap();
+    assert_eq!(parsed.session.title, question);
+    assert_eq!(parsed.messages.iter().map(|item| item.kind).collect::<Vec<_>>(), vec![HistoryMessageKind::ProjectContext, HistoryMessageKind::EnvironmentContext, HistoryMessageKind::Conversation, HistoryMessageKind::Conversation]);
+    assert_eq!(parsed.messages[0].text, context);
+    let legacy: HistoryMessage = serde_json::from_value(serde_json::json!({"id":"old","role":"user","text":context,"timestamp":null})).unwrap();
+    assert_eq!(legacy.kind, HistoryMessageKind::Conversation);
+    db.with_connection(|conn| {
+        conn.execute("UPDATE history_sessions SET title = 'old injected title', favorite = 1, source_fingerprint = ?1", [source_fingerprint(&path)?]).map_err(|e| e.to_string())?;
+        Ok(())
+    }).unwrap();
+    refresh(&db, &registry, temp.path()).unwrap();
+    let refreshed = detail(&db, &id).unwrap();
+    assert_eq!(refreshed.session.title, question);
+    assert!(refreshed.session.favorite);
+    // A common/other adapter's ordinary text must not inherit Codex heuristics.
+    let mut generic = ParsedSession::new();
+    generic.add_message("normal".into(), "user", context.into(), None);
+    assert_eq!(generic.messages[0].kind, HistoryMessageKind::Conversation);
+    assert!(generic.title.starts_with("# AGENTS.md"));
 }
 
 #[test]

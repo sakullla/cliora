@@ -62,6 +62,17 @@ pub struct HistoryMessage {
     pub role: String,
     pub text: String,
     pub timestamp: Option<i64>,
+    #[serde(default)]
+    pub kind: HistoryMessageKind,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HistoryMessageKind {
+    #[default]
+    Conversation,
+    ProjectContext,
+    EnvironmentContext,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -105,6 +116,9 @@ impl ParsedSession {
         }
     }
     pub fn add_message(&mut self, id: String, role: &str, text: String, time: Option<i64>) {
+        self.add_classified_message(id, role, text, time, HistoryMessageKind::Conversation);
+    }
+    pub fn add_classified_message(&mut self, id: String, role: &str, text: String, time: Option<i64>, kind: HistoryMessageKind) {
         if text.trim().is_empty() {
             return;
         }
@@ -117,7 +131,7 @@ impl ParsedSession {
             text = text.chars().take(MAX_MESSAGE_CHARS).collect();
             self.partial = true;
         }
-        if self.title.is_empty() && role == "user" {
+        if self.title.is_empty() && role == "user" && kind == HistoryMessageKind::Conversation {
             self.title = text
                 .lines()
                 .find(|line| !line.trim().is_empty())
@@ -131,6 +145,7 @@ impl ParsedSession {
             role: role.to_owned(),
             text,
             timestamp: time,
+            kind,
         });
     }
     pub fn finish(mut self, source: &HistorySource) -> Result<Self, String> {
@@ -403,16 +418,18 @@ fn read_row(reader: &mut impl BufRead, line: &mut Vec<u8>, skip: &dyn Fn(&[u8]) 
             break;
         }
         read_any = true;
-        let newline = buffer.iter().position(|byte| *byte == b'\n');
+        let newline = memchr::memchr(b'\n', buffer);
         let end = newline.unwrap_or(buffer.len());
         if dropped.is_none() {
-            line.extend_from_slice(&buffer[..end]);
+            let prefix_end = if checked { 0 } else { end.min(LINE_PREFIX_BYTES.saturating_sub(line.len())) };
+            line.extend_from_slice(&buffer[..prefix_end]);
             if !checked && (newline.is_some() || line.len() >= LINE_PREFIX_BYTES) {
                 checked = true;
                 if skip(&line[..line.len().min(LINE_PREFIX_BYTES)]) {
                     dropped = Some(Row::Skipped);
                 }
             }
+            if dropped.is_none() { line.extend_from_slice(&buffer[prefix_end..end]); }
             if line.len() > MAX_LINE_BYTES {
                 dropped = Some(Row::TooLong);
             }
@@ -556,12 +573,27 @@ fn billable_usage_model(model: Option<&str>) -> bool {
     model != Some("<synthetic>")
 }
 
+#[cfg(test)]
 fn store_session(
     conn: &Connection,
     tool: &str,
     source: &HistorySource,
     parsed: &ParsedSession,
     projects: &HashMap<String, String>,
+) -> Result<(), String> {
+    let messages = serde_json::to_string(&parsed.messages).map_err(|error| error.to_string())?;
+    let usage = serde_json::to_string(&parsed.usage).map_err(|error| error.to_string())?;
+    store_encoded_session(conn, tool, source, parsed, projects, &messages, &usage)
+}
+
+fn store_encoded_session(
+    conn: &Connection,
+    tool: &str,
+    source: &HistorySource,
+    parsed: &ParsedSession,
+    projects: &HashMap<String, String>,
+    messages: &str,
+    usage: &str,
 ) -> Result<(), String> {
     let key = source.key();
     let id = stable_id(tool, &key);
@@ -570,8 +602,6 @@ fn store_session(
         .as_deref()
         .and_then(|cwd| projects.get(&cwd.to_ascii_lowercase()).cloned());
     let session_model = model_label(parsed.model.clone());
-    let messages = serde_json::to_string(&parsed.messages).map_err(|error| error.to_string())?;
-    let usage = serde_json::to_string(&parsed.usage).map_err(|error| error.to_string())?;
     conn.execute(
         "INSERT INTO history_sessions (id, tool, source_key, source_path, source_fingerprint, native_id, title, cwd, model, started_at, updated_at, messages_json, usage_json, message_count, usage_count, partial, stale, project_id)
          VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,0,?17)
@@ -663,7 +693,7 @@ fn parse_and_store(
     let next = AtomicUsize::new(0);
     let stop = AtomicBool::new(false);
     let halted = || stop.load(Ordering::Relaxed) || cancelled();
-    let (sender, receiver) = std::sync::mpsc::sync_channel::<(usize, Result<ParsedSession, String>)>(workers * 2);
+    let (sender, receiver) = std::sync::mpsc::sync_channel::<(usize, Result<(ParsedSession, String, String), String>)>(workers * 2);
     std::thread::scope(|scope| {
         for _ in 0..workers {
             let sender = sender.clone();
@@ -673,7 +703,11 @@ fn parse_and_store(
                 if index >= sources.len() || halted() {
                     break;
                 }
-                let parsed = adapter.parse_history_controlled(&sources[index], halted);
+                let parsed = adapter.parse_history_controlled(&sources[index], halted).and_then(|parsed| {
+                    let messages = serde_json::to_string(&parsed.messages).map_err(|error| error.to_string())?;
+                    let usage = serde_json::to_string(&parsed.usage).map_err(|error| error.to_string())?;
+                    Ok((parsed, messages, usage))
+                });
                 if sender.send((index, parsed)).is_err() {
                     break;
                 }
@@ -700,9 +734,9 @@ fn parse_and_store(
                 let mut batch_failures = Vec::new();
                 for (index, parsed) in &batch {
                     let source = &sources[*index];
-                    let outcome = parsed.as_ref().map_err(String::clone).and_then(|parsed| {
+                    let outcome = parsed.as_ref().map_err(String::clone).and_then(|(parsed, messages, usage)| {
                         let savepoint = transaction.savepoint().map_err(|error| error.to_string())?;
-                        store_session(&savepoint, adapter.id(), source, parsed, projects)?;
+                        store_encoded_session(&savepoint, adapter.id(), source, parsed, projects, messages, usage)?;
                         savepoint.commit().map_err(|error| error.to_string())
                     });
                     if let Err(error) = outcome {
@@ -905,7 +939,6 @@ pub fn list(db: &Database, filter: &HistoryFilter) -> Result<Vec<HistorySession>
             "SELECT id,tool,native_id,title,cwd,model,project_id,started_at,updated_at,favorite,partial,stale,message_count,usage_count
              FROM history_sessions s WHERE (?1 IS NULL OR tool = ?1)
              AND (?2 IS NULL OR project_id = ?2 OR (?2 = '__unknown__' AND project_id IS NULL))
-             AND (?3 IS NULL OR title LIKE ?3 ESCAPE '\\' OR messages_json LIKE ?3 ESCAPE '\\')
              AND ((?4 IS NULL AND ?5 IS NULL)
                OR ((?4 IS NULL OR updated_at >= ?4) AND (?5 IS NULL OR updated_at < ?5))
                OR EXISTS (SELECT 1 FROM history_usage u WHERE u.session_id = s.id
@@ -915,6 +948,9 @@ pub fn list(db: &Database, filter: &HistoryFilter) -> Result<Vec<HistorySession>
                OR (?7 = '__unknown__' AND (model IS NULL OR EXISTS (SELECT 1 FROM history_usage u WHERE u.session_id = s.id AND u.model IS NULL)))
                OR model = ?7
                OR EXISTS (SELECT 1 FROM history_usage u WHERE u.session_id = s.id AND u.model = ?7))");
+        if search.is_some() {
+            sql.push_str(" AND (title LIKE ?3 ESCAPE '\\' OR messages_json LIKE ?3 ESCAPE '\\')");
+        }
         if !tools.is_empty() {
             let placeholders = (0..tools.len()).map(|index| format!("?{}", index + 8)).collect::<Vec<_>>().join(",");
             sql.push_str(&format!(" AND tool IN ({placeholders})"));

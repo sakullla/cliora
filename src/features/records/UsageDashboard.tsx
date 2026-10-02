@@ -9,9 +9,10 @@ import { ToolIcon, toolOptions } from '../../components/ToolIcon';
 import { Icon } from '../../components/Icon';
 import { DAY_MS, bucketLabel, cacheHitRate, clockTime, exactMoney, formatMoney, formatPercent, formatTokens, niceScale, ratio, shortDate, tokenParts } from './usageFormat';
 import { navigateChoices } from './choiceNavigation';
+import { DateRangeFilter, type RangeKey } from './DateRangeFilter';
 import styles from './UsageDashboard.module.css';
 
-type UsageRange = 'today' | 'yesterday' | '7' | '30' | 'month' | 'all' | 'custom';
+type UsageRange = RangeKey;
 const ranges: Array<{ id: UsageRange; label: string }> = [
   { id: 'today', label: '今天' },
   { id: 'yesterday', label: '昨天' },
@@ -314,17 +315,8 @@ export function UsageDashboard({ active, tools, projects, prices, onPricesChange
       <button type="button" onClick={() => openPrice()}><Icon name="settings" size={14} />设置估算价格</button>
     </div>
     <div className={styles.header}>
-      <div className={styles.segmented} role="radiogroup" aria-label="统计时间" onKeyDown={navigateChoices}>
-        {ranges.map((item) => <button key={item.id} type="button" role="radio" tabIndex={range === item.id ? 0 : -1} aria-checked={range === item.id} onClick={() => {
-          setRange(item.id);
-          if (item.id === 'custom' && !customFrom && !customTo) { setCustomFrom(shiftDay(today, -6)); setCustomTo(today); }
-        }}>{item.label}</button>)}
-      </div>
-      {range === 'custom' && <div className={styles.dates}>
-        <label><span className="sr-only">开始日期</span><input aria-label="开始日期" type="date" value={customFrom} max={customTo || undefined} onChange={(event) => setCustomFrom(event.target.value)} /></label>
-        <span aria-hidden="true">–</span>
-        <label><span className="sr-only">结束日期</span><input aria-label="结束日期" type="date" value={customTo} min={customFrom || undefined} onChange={(event) => setCustomTo(event.target.value)} /></label>
-      </div>}
+      <DateRangeFilter variant="toolbar" value={range} customFrom={customFrom} customTo={customTo} presets={ranges} onChange={setRange}
+        onCustomRange={(from, to) => { setCustomFrom(from); setCustomTo(to); setRange('custom'); }} />
       <div className={styles.headerFilters}>
         <FilterSelect label="用量工具" value={toolId} options={[{ value: '', label: '全部工具' }, ...toolOptions(tools)]} onChange={setToolId} />
         <FilterSelect label="用量模型" value={model} options={modelOptions} onChange={setModel} />

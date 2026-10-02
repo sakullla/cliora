@@ -7,12 +7,6 @@
 .overviewHead p { margin-top: 4px; color: var(--text-3); font-size: 12px; }
 .overviewHead > button { flex: none; font-size: 12px; }
 .header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); }
-.segmented { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 3px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
-.segmented > button { min-height: 30px; padding: 0 10px; border: 0; border-radius: var(--radius-sm); background: none; color: var(--text-2); font-size: 12px; font-weight: 560; white-space: nowrap; transition: background-color var(--fast) var(--ease), color var(--fast) var(--ease); }
-.segmented > button:hover { color: var(--text); }
-.segmented > button[aria-checked="true"] { background: var(--accent); color: var(--on-accent); font-weight: 650; box-shadow: var(--shadow-xs); }
-.dates { display: inline-flex; align-items: center; gap: 6px; color: var(--text-3); }
-.dates input { min-height: var(--control-h-sm); padding: 0 8px; font-size: 12.5px; }
 .headerFilters { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
 .headerFilters > * { width: 138px; }
 .subhead { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; margin-top: -4px; color: var(--text-2); font-size: 12px; }
@@ -186,7 +180,5 @@ button.rankMain:hover:not(:disabled), .sessions button:hover:not(:disabled) { ba
   .primary, .metric { padding: 16px 12px; }
   .primary > strong, .metric > strong { font-size: 28px; }
   .overviewHead { flex-wrap: wrap; }
-  .segmented { width: 100%; }
-  .segmented > button { flex: 1; padding: 0 8px; }
   .subhead { gap: 8px; }
 }

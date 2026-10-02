@@ -649,7 +649,7 @@ dependencies = [
 
 [[package]]
 name = "cliora"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "argon2",
  "base64 0.22.1",
@@ -658,6 +658,7 @@ dependencies = [
  "dirs",
  "jsonc-parser",
  "keyring",
+ "memchr",
  "rand 0.9.5",
  "reqwest",
  "rusqlite",

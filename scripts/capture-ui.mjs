@@ -71,10 +71,10 @@ for(const width of [1360,900,640])for(const theme of ['light','dark']){
   await nav.getByRole('button',{name:'使用记录'}).click();
   await page.getByLabel('会话列表').getByRole('button').first().waitFor();if(width>760)await page.getByRole('button',{name:'复制代码',exact:true}).waitFor();await capture('sessions');
   if(width<=760){await page.getByLabel('会话列表').getByRole('button').first().click();await page.getByRole('button',{name:'复制代码',exact:true}).waitFor();await capture('session-detail');}
-  if(process.argv.includes('--sessions')){await page.getByLabel('会话正文').locator('article').nth(1).scrollIntoViewIfNeeded();await capture('session-reading');await page.close();continue;}
+  if(process.argv.includes('--sessions')){await page.getByLabel('会话正文').locator('article').nth(1).scrollIntoViewIfNeeded();await capture('session-reading');if(width<=760)await page.getByRole('button',{name:'← 返回会话列表'}).click();await page.locator('summary').filter({hasText:/^筛选/}).click();await capture('session-filters');await page.getByRole('button',{name:'自定义',exact:true}).click();const calendar=page.getByRole('dialog',{name:'自定义时间范围'});await calendar.getByRole('button',{name:/^\d{4}-\d{2}-\d{2}$/}).nth(4).click();await calendar.getByRole('button',{name:/^\d{4}-\d{2}-\d{2}$/}).nth(11).click();await capture('session-dates');await page.close();continue;}
   await page.getByRole('tab',{name:'用量',exact:true}).click();await page.getByRole('radio',{name:'近 7 天',exact:true}).click();
   await page.getByRole('region',{name:'用量概览'}).waitFor();await capture('usage');
-  await page.getByRole('region',{name:'消耗最多的会话'}).scrollIntoViewIfNeeded();await capture('usage-details');
+  await page.getByRole('region',{name:'消耗最多的会话'}).scrollIntoViewIfNeeded();await capture('usage-details');await page.getByRole('radio',{name:'自定义',exact:true}).click();await capture('usage-dates');
   await page.close();continue;
  }
  await capture('home');

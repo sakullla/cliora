@@ -22,7 +22,7 @@ impl Database {
     pub fn open(path: &Path) -> Result<Self, OpenError> {
         let mut connection = Connection::open(path)?;
         let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 12 {
+        if version > 13 {
             return Err(OpenError::UnsupportedVersion(version));
         }
         connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
@@ -366,6 +366,17 @@ impl Database {
             )?;
             tx.commit()?;
         }
+        if version < 13 {
+            let tx = connection.transaction()?;
+            tx.execute_batch(
+                "CREATE INDEX IF NOT EXISTS idx_history_list ON history_sessions
+                   (favorite DESC, updated_at DESC, id, tool, native_id, title, cwd, model, project_id, started_at, partial, stale, message_count, usage_count);
+                 CREATE INDEX IF NOT EXISTS idx_history_fingerprints ON history_sessions
+                   (tool, source_key, source_fingerprint, stale);
+                 PRAGMA user_version = 13;",
+            )?;
+            tx.commit()?;
+        }
         Ok(Self {
             connection: Mutex::new(connection),
         })
@@ -566,7 +577,7 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
-        assert_eq!(version, 12);
+            assert_eq!(version, 13);
             let count: i64 = conn
                 .query_row("SELECT COUNT(*) FROM native_profiles", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;

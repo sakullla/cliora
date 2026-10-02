@@ -1,6 +1,6 @@
 import type { LaunchMode, LaunchResult } from './launch';
 
-export type HistoryMessage = { id: string; role: string; text: string; timestamp: number | null };
+export type HistoryMessage = { id: string; role: string; text: string; timestamp: number | null; kind?: 'conversation' | 'project_context' | 'environment_context' };
 export type UsageEvent = { id: string; model: string | null; timestamp: number | null; input: number | null; output: number | null; cacheRead: number | null; cacheWrite: number | null; inputIncludesCache: boolean };
 export type ScanStatus = { toolId: string; scannedAt: number; sourceCount: number; failedCount: number; incomplete: boolean; detail: string };
 export type HistorySession = { id: string; toolId: string; nativeId: string | null; title: string; cwd: string | null; model: string | null; projectId: string | null; startedAt: number | null; updatedAt: number | null; favorite: boolean; partial: boolean; stale: boolean; messageCount: number; usageCount: number };
