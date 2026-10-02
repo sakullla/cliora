@@ -720,9 +720,9 @@ fn shell_terminal(terminal: TerminalId, directory: &Path, script: &str) -> Resul
     Ok(TerminalCommand { program, args, directory: PathBuf::from(directory_text), session_markers: &[] })
 }
 
-fn spawn_terminal(terminal_id: TerminalId, terminal: TerminalCommand) -> Result<(), String> {
+fn spawn_terminal(_terminal_id: TerminalId, terminal: TerminalCommand) -> Result<(), String> {
     #[cfg(windows)]
-    if terminal_id == TerminalId::PowerShell {
+    if _terminal_id == TerminalId::PowerShell {
         return spawn_console(&terminal);
     }
     let mut command = Command::new(terminal.program);

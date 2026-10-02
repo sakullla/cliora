@@ -585,7 +585,10 @@ label.setting-row:hover { background: var(--surface-2); }
 .guide-dialog-head p { margin-top: 4px; color: var(--text-2); font-size: 12.5px; line-height: 1.55; }
 .guide-dialog-close { flex: none; width: 30px; min-height: 30px; margin: -3px -6px 0 auto; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-2); box-shadow: none; }
 .guide-dialog-close:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
-.guide-dialog-body { flex: 1; min-height: 0; padding: 16px 20px 20px; overflow: auto; max-height: calc(100dvh - 140px); }
+/* An explicit content basis keeps the body from collapsing: `flex: 1` is `0%`, which
+   WebKitGTK can resolve to zero inside the fit-content dialog and leave the body with no
+   height for its content. */
+.guide-dialog-body { flex: 1 1 auto; min-height: 0; padding: 16px 20px 20px; overflow: auto; max-height: calc(100dvh - 140px); }
 .dialog-footer {
   position: sticky;
   bottom: -20px;
