@@ -109,12 +109,18 @@ pub struct QueryIdentity {
     deny_unknown_fields
 )]
 pub enum QueryProgram {
+    Official {
+        tool: String,
+        adapter_version: u32,
+    },
     Builtin {
         provider: String,
         template_version: u32,
     },
     #[serde(rename = "javascript")]
-    JavaScript { source: String },
+    JavaScript {
+        source: String,
+    },
 }
 
 /// HTTP is permitted only on an explicitly declared self-hosted target.
@@ -353,6 +359,10 @@ impl UsageSnapshot {
 
 fn source(program: &QueryProgram) -> String {
     match program {
+        QueryProgram::Official {
+            tool,
+            adapter_version,
+        } => format!("native:{tool}:{adapter_version}"),
         QueryProgram::Builtin {
             provider,
             template_version,
@@ -378,7 +388,7 @@ impl QueryConfig {
         if self.schema_version != USAGE_SCHEMA_VERSION
             || !nonempty(&self.label, 256)
             || !nonempty(&self.site, 256)
-            || self.targets.is_empty()
+            || (self.targets.is_empty() && !matches!(self.program, QueryProgram::Official { .. }))
             || self.targets.len() > 16
             || (self.refresh_interval_seconds != 0 && self.refresh_interval_seconds < 60)
             || [
@@ -393,6 +403,7 @@ impl QueryConfig {
             return Err(invalid());
         }
         match &self.program {
+            QueryProgram::Official { .. } => super::official::validate_config(self)?,
             QueryProgram::Builtin {
                 provider,
                 template_version,

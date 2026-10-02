@@ -369,7 +369,7 @@ fn v13_upgrade_keeps_existing_preferences_and_profiles() {
         .unwrap();
     db.with_connection(|conn| {
         conn.execute_batch("INSERT INTO native_profiles (id, tool, version, data) VALUES ('legacy', 'codex', 1, '{}');
-            DROP TABLE usage_cache; DROP TABLE usage_queries; DROP TABLE usage_credential_gc; PRAGMA user_version = 13;").unwrap();
+            DROP TABLE auth_accounts; ALTER TABLE applied_bindings DROP COLUMN context_id; DROP TABLE usage_cache; DROP TABLE usage_queries; DROP TABLE usage_credential_gc; PRAGMA user_version = 13;").unwrap();
         Ok(())
     }).unwrap();
     drop(db);
@@ -380,7 +380,7 @@ fn v13_upgrade_keeps_existing_preferences_and_profiles() {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 15);
+        assert_eq!(version, 17);
         let data: String = conn
             .query_row(
                 "SELECT data FROM native_profiles WHERE id = 'legacy'",

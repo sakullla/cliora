@@ -229,11 +229,38 @@ fn output(executable: &Path, context: &NativeContext, args: &[&str]) -> Result<V
     Ok(value)
 }
 
-/// A short-lived native owner. No token refresh: it never competes with a running CLI.
+/// Native account/read explicitly avoids refresh. Other methods retain native ownership.
 pub fn codex_read(
     executable: &Path,
     context: &NativeContext,
     method: &str,
+) -> Result<Value, String> {
+    codex_exchange(executable, context, method, None, None)
+}
+
+/// Query and bracket the result with identity checks in the same native process.
+/// No OAuth token is copied into Cliora or independently refreshed.
+pub fn codex_quota(
+    executable: &Path,
+    context: &NativeContext,
+    subject: &str,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<Value, String> {
+    codex_exchange(
+        executable,
+        context,
+        "account/rateLimits/read",
+        Some(subject),
+        Some(cancel),
+    )
+}
+
+fn codex_exchange(
+    executable: &Path,
+    context: &NativeContext,
+    method: &str,
+    quota_subject: Option<&str>,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<Value, String> {
     let _permit = ProbePermit::acquire()?;
     if !matches!(
@@ -282,33 +309,109 @@ pub fn codex_read(
     writeln!(stdin, "{}", json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"cliora","version":"1"}}})).map_err(|_| "账号服务中断")?;
     stdin.flush().map_err(|_| "账号服务中断")?;
     let deadline = Instant::now() + Duration::from_secs(15);
+    let mut quota = None;
     loop {
-        let result = rx
-            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-            .map_err(|_| "账号服务超时或中断")??;
+        if cancel.is_some_and(|value| value.load(std::sync::atomic::Ordering::SeqCst)) {
+            return Err("官方额度查询已取消".into());
+        }
+        if Instant::now() >= deadline {
+            return Err("账号服务超时或中断".into());
+        }
+        let result = match rx.recv_timeout(Duration::from_millis(50)) {
+            Ok(value) => value?,
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(_) => return Err("账号服务超时或中断".into()),
+        };
         if result["id"] == 1 {
             if result.get("error").is_some() {
                 return Err("Codex 初始化失败".into());
             }
             let stdin = process.0.stdin.as_mut().ok_or("账号服务中断")?;
             writeln!(stdin, "{}", json!({"method":"initialized"})).map_err(|_| "账号服务中断")?;
-            let params = if method == "account/read" {
+            let first_method = if quota_subject.is_some() {
+                "account/read"
+            } else {
+                method
+            };
+            let params = if first_method == "account/read" {
                 json!({"refreshToken":false})
             } else {
                 Value::Null
             };
-            writeln!(stdin, "{}", json!({"id":2,"method":method,"params":params}))
-                .map_err(|_| "账号服务中断")?;
+            writeln!(
+                stdin,
+                "{}",
+                json!({"id":2,"method":first_method,"params":params})
+            )
+            .map_err(|_| "账号服务中断")?;
             stdin.flush().map_err(|_| "账号服务中断")?;
         }
         if result["id"] == 2 {
             if result.get("error").is_some() {
                 return Err("Codex 账号接口拒绝请求，请检查登录状态".into());
             }
+            if let Some(subject) = quota_subject {
+                let identity = parse_codex(&result["result"]);
+                if identity.state != AccountState::SignedIn
+                    || identity
+                        .identity
+                        .as_ref()
+                        .is_none_or(|id| id.subject != subject)
+                {
+                    return Err("官方额度账号身份已改变或未登录，请重新认证".into());
+                }
+                let stdin = process.0.stdin.as_mut().ok_or("账号服务中断")?;
+                writeln!(stdin, "{}", json!({"id":3,"method":method}))
+                    .map_err(|_| "账号服务中断")?;
+                stdin.flush().map_err(|_| "账号服务中断")?;
+                continue;
+            }
             return result
                 .get("result")
                 .cloned()
                 .ok_or_else(|| "账号服务缺少结果".into());
+        }
+        if quota_subject.is_some() && result["id"] == 3 {
+            if let Some(error) = result.get("error") {
+                // Inspect native errors only for classification; never expose raw data.
+                let message = error["message"].as_str().unwrap_or("").to_ascii_lowercase();
+                let code = error["code"].as_i64();
+                return Err(if matches!(code, Some(401 | 403))
+                    || message.contains("401")
+                    || message.contains("403")
+                    || message.contains("unauthorized")
+                    || message.contains("not authenticated")
+                {
+                    "官方额度认证失效，请在原生 CLI 重新认证"
+                } else if code == Some(429) || message.contains("429") {
+                    "官方额度请求受限，请稍后刷新"
+                } else {
+                    "Codex 原生额度接口请求失败，未取得新数据"
+                }
+                .into());
+            }
+            quota = Some(result.get("result").cloned().ok_or("账号服务缺少结果")?);
+            let stdin = process.0.stdin.as_mut().ok_or("账号服务中断")?;
+            writeln!(
+                stdin,
+                "{}",
+                json!({"id":4,"method":"account/read","params":{"refreshToken":false}})
+            )
+            .map_err(|_| "账号服务中断")?;
+            stdin.flush().map_err(|_| "账号服务中断")?;
+        }
+        if let Some(subject) = quota_subject.filter(|_| result["id"] == 4) {
+            let identity = parse_codex(&result["result"]);
+            if result.get("error").is_some()
+                || identity.state != AccountState::SignedIn
+                || identity
+                    .identity
+                    .as_ref()
+                    .is_none_or(|id| id.subject != subject)
+            {
+                return Err("官方额度账号身份已改变或未登录，请重新认证".into());
+            }
+            return quota.ok_or("账号服务缺少结果".into());
         }
     }
 }

@@ -61,7 +61,7 @@ fn parse(id: &str, responses: Value) -> UsageResult {
 
 #[test]
 fn site_catalog_versions_subjects_and_credentials_are_explicit() {
-    assert_eq!(usage_presets().len(), 17);
+    assert_eq!(usage_presets().len(), 20);
     for p in presets().into_iter().filter(|p| is_site(&p.config)) {
         p.config.validate().unwrap();
         assert_eq!(p.config.refresh_interval_seconds, 0);
