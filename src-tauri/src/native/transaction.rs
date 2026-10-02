@@ -752,6 +752,17 @@ pub fn preview_backup(db: &Database, credentials: &dyn CredentialStore, target: 
 /// The preview baseline is rechecked under the native write lock; restoration itself gets a new encrypted backup.
 pub fn restore_backup<F>(db: &Database, credentials: &dyn CredentialStore, target: &Path, id: &str, expected_current: &str, commit: F) -> Result<ApplyOutcome, String>
 where F: FnOnce(&rusqlite::Transaction<'_>) -> Result<(), String> {
+    restore_backup_internal(db, credentials, target, id, expected_current, false, commit)
+}
+
+/// Agent undo has no editable diff preview: every original postimage must still match.
+pub fn restore_backup_if_unchanged<F>(db: &Database, credentials: &dyn CredentialStore, target: &Path, id: &str, expected_current: &str, commit: F) -> Result<ApplyOutcome, String>
+where F: FnOnce(&rusqlite::Transaction<'_>) -> Result<(), String> {
+    restore_backup_internal(db, credentials, target, id, expected_current, true, commit)
+}
+
+fn restore_backup_internal<F>(db: &Database, credentials: &dyn CredentialStore, target: &Path, id: &str, expected_current: &str, require_postimage: bool, commit: F) -> Result<ApplyOutcome, String>
+where F: FnOnce(&rusqlite::Transaction<'_>) -> Result<(), String> {
     let preview = preview_backup(db, credentials, target, id)?;
     if preview.current != expected_current { return Err("文件在比较后又被修改，请重新查看差异".into()); }
     let data: String = db.with_connection(|conn| conn.query_row("SELECT data FROM native_transactions WHERE id=?1 AND status='committed'", [id], |row| row.get(0)).map_err(|_| "找不到可恢复的修改记录".into()))?;
@@ -759,7 +770,7 @@ where F: FnOnce(&rusqlite::Transaction<'_>) -> Result<(), String> {
     if journal.id != id || journal.key_id != format!("native-backup-{id}") { return Err("原生修改记录标识不一致".into()); }
     let encoded = credentials.get(&journal.key_id)?;
     let key: [u8;32] = STANDARD.decode(encoded).map_err(|_| "备份密钥无效")?.try_into().map_err(|_| "备份密钥长度无效")?;
-    if journal.coupled {
+    if journal.coupled || require_postimage {
         let integrity = integrity_key(db, credentials)?;
         let mut changes = Vec::new();
         for file in &journal.files {
@@ -772,7 +783,19 @@ where F: FnOnce(&rusqlite::Transaction<'_>) -> Result<(), String> {
             } else { None };
             changes.push(FileMutation { path: file.path.clone(), baseline: file.new_exists.then_some(current), contents });
         }
-        return apply_files(db, credentials, &changes, commit);
+        let mut metadata = Vec::new();
+        for item in &journal.metadata {
+            let bytes = decrypt(&key, &item.data, &item.nonce)?;
+            let (path, key, value): (PathBuf, String, Option<String>) = serde_json::from_slice(&bytes).map_err(|_| "原生元数据备份损坏")?;
+            if journal.files.iter().any(|file|file.path==path) { metadata.push((key,value)); }
+        }
+        return apply_files_internal(db, credentials, &changes, Some(&journal.files), |tx| {
+            for (key,value) in metadata {
+                if let Some(value)=value {tx.execute("INSERT INTO app_settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [&key,&value]).map_err(|_|"恢复原生文件元数据失败")?;}
+                else {tx.execute("DELETE FROM app_settings WHERE key=?1", [&key]).map_err(|_|"恢复原生文件元数据失败")?;}
+            }
+            commit(tx)
+        });
     }
     let mut metadata = Vec::new();
     for item in journal.metadata {
@@ -930,6 +953,10 @@ where F: FnOnce(&rusqlite::Transaction<'_>, &str) -> Result<(),String> {
 pub struct FileMutation { pub path: PathBuf, pub baseline: Option<String>, pub contents: Option<String> }
 pub fn apply_files<F>(db: &Database, credentials: &dyn CredentialStore, changes: &[FileMutation], commit: F) -> Result<ApplyOutcome,String>
 where F: FnOnce(&rusqlite::Transaction<'_>) -> Result<(),String> {
+    apply_files_internal(db,credentials,changes,None,commit)
+}
+fn apply_files_internal<F>(db: &Database, credentials: &dyn CredentialStore, changes: &[FileMutation], expected_postimages: Option<&[JournalFile]>, commit: F) -> Result<ApplyOutcome,String>
+where F: FnOnce(&rusqlite::Transaction<'_>) -> Result<(),String> {
     #[cfg(test)]
     let fixture_lock = fixture_write_lock(db)?;
     #[cfg(test)]
@@ -937,6 +964,15 @@ where F: FnOnce(&rusqlite::Transaction<'_>) -> Result<(),String> {
     #[cfg(not(test))]
     let _guard = write_lock().lock().map_err(|_| "原生事务不可用")?;
     let integrity = integrity_key(db, credentials)?;
+    // Check the original commit's postimages under the same write lock as apply.
+    if let Some(files)=expected_postimages {
+        for file in files {
+            let current=read_native(&file.path)?;
+            if file.path.exists()!=file.new_exists || keyed_fingerprint(&integrity,current.as_bytes())!=file.new_hash {
+                return Err(format!("恢复目标已被外部修改：{}；未恢复任何文件",file.path.display()));
+            }
+        }
+    }
     let mut seen = HashSet::new();
     let mut prepared = Vec::new();
     for change in changes {

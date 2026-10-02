@@ -395,14 +395,25 @@ fn snapshot_inner(
             let dir = Path::new(&resource.path);
             // Native package roots may be links, but their files are never writable here.
             let dir = dir.canonicalize().unwrap_or_else(|_| dir.into());
+            let mut owned = Vec::new();
             scan_directory(
                 &target.tool_id,
                 &dir,
                 extension,
                 plugin.enabled != Some(false),
                 &format!("插件：{}", plugin.id),
-                &mut entries,
+                &mut owned,
             )?;
+            for entry in &mut owned {
+                entry.name = contract::plugin_identity(
+                    &target.tool_id,
+                    &plugin.id,
+                    &dir,
+                    Path::new(&entry.path),
+                    &entry.name,
+                );
+            }
+            entries.extend(owned);
         }
     }
     if target.tool_id == "claude_code" {
@@ -588,8 +599,14 @@ fn operate_inner(
                 return Err("恢复会产生同名定义冲突；未恢复任何文件".into());
             }
         }
-        outcome =
-            transaction::restore_backup(db, credentials, &path, id, &preview.current, |_| Ok(()))?;
+        outcome = transaction::restore_backup_if_unchanged(
+            db,
+            credentials,
+            &path,
+            id,
+            &preview.current,
+            |_| Ok(()),
+        )?;
         restore_path = path.display().to_string();
     } else {
         let path;
