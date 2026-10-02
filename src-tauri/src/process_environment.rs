@@ -142,6 +142,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(unix)]
     fn finder_path_recovers_shell_tools_and_homebrew_without_duplicates() {
         let value = merged_macos_path(
             Some(std::ffi::OsStr::new(
@@ -169,6 +170,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn failed_shell_still_has_native_and_system_locations() {
         let value =
             merged_macos_path(None, None, Some(std::path::Path::new("/Users/test"))).unwrap();

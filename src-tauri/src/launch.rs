@@ -978,6 +978,7 @@ fn write_launch_script(script: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn open_mac_terminal(script: &str) -> Result<(), String> {
     let path = write_launch_script(script)?;
     let output = Command::new("/usr/bin/open")
@@ -1019,6 +1020,7 @@ fn spawn_custom(db: &Database, script: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn mac_terminal_result(success: bool, stderr: &str) -> Result<(), String> {
     if success {
         Ok(())
