@@ -184,6 +184,7 @@ test('record copy and resume replace the previous result', async ({ page }) => {
   const records = page.getByRole('region', { name: '使用记录内容' });
   await expect(records.getByLabel('原生恢复命令')).toContainText('codex resume 1111');
   await page.waitForTimeout(400);
+  await records.getByText('会话选项', { exact: true }).click();
   await records.getByRole('button', { name: '复制命令' }).click();
   await expect(records.getByText('已复制原生恢复命令，粘贴后由终端执行。')).toBeVisible();
   await expect(records.getByRole('alert')).toHaveCount(0);

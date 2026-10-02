@@ -1,5 +1,5 @@
 .reader { flex: none; min-width: 0; overflow: visible; }
-.readerToolbar { position: sticky; top: 0; z-index: 3; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 14px 24px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.readerToolbar { position: sticky; top: 0; z-index: 3; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 8px 24px; border-bottom: 1px solid var(--line); background: var(--surface); }
 .readerTitle { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .readerTitle strong { font-size: 13px; font-weight: 650; }
 .readerTitle > span { color: var(--text-3); font-size: 11px; }
@@ -16,7 +16,7 @@
 .messages { max-width: 900px; margin: 0 auto; padding: 0 24px 32px; }
 .dayDivider { display: flex; align-items: center; gap: 14px; margin: 22px 0 8px; color: var(--text-3); font-size: 11px; }
 .dayDivider::before, .dayDivider::after { content: ''; flex: 1; height: 1px; background: var(--line); }
-.message { display: flex; align-items: flex-start; gap: 12px; padding: 20px 0; scroll-margin: 145px 0 24px; }
+.message { display: flex; align-items: flex-start; gap: 12px; padding: 16px 0; scroll-margin: 145px 0 24px; }
 .avatar { display: grid; flex: none; place-items: center; width: 30px; height: 30px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-2); color: var(--text-2); font-size: 11px; font-weight: 650; }
 .message[data-role="user"] .avatar { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
 .messageContent { flex: 1; min-width: 0; }
@@ -26,7 +26,7 @@
 .messageHead time { margin-left: auto; }
 .messageHead button { min-height: 26px; padding: 0 6px; border: 0; background: transparent; color: var(--text-3); font-size: 11px; box-shadow: none; }
 .prose { min-width: 0; color: var(--text); font-size: 13px; line-height: 1.85; overflow-wrap: anywhere; }
-.message[data-role="user"] .prose { padding: 12px 16px; border: 1px solid var(--accent-line); border-radius: 2px 12px 12px 12px; background: var(--accent-soft); }
+.message[data-role="user"] .prose { padding: 12px 16px; border: 0; border-radius: 10px; background: var(--surface-2); }
 .message[data-current-match] .prose { outline: 2px solid var(--accent); outline-offset: 5px; border-radius: 6px; }
 .prose p { margin: 0 0 12px; }
 .prose > :last-child { margin-bottom: 0; }
@@ -60,8 +60,21 @@
 .empty h3 { font-size: 14px; color: var(--text-2); }
 .empty p { font-size: 12px; }
 @media (max-width: 1100px) {
-  .readerToolbar { padding: 12px 16px; }
+  .readerToolbar { padding: 8px 16px; }
   .messages { padding: 0 16px 24px; }
   .message { gap: 8px; }
   .avatar { width: 26px; height: 26px; }
+}
+
+.readingOptions { position: relative; color: var(--text-2); font-size: 11.5px; }
+.readingOptions summary { padding: 6px 8px; cursor: pointer; }
+.readingOptions > div { position: absolute; top: calc(100% + 6px); right: 0; display: grid; gap: 2px; width: 156px; padding: 6px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-md); }
+.readingOptions label { display: flex; align-items: center; gap: 10px; min-height: 34px; padding: 0 8px; border-radius: var(--radius-xs); cursor: pointer; }
+.readingOptions label:hover { background: var(--surface-2); }
+.message[data-context] { padding: 8px 0; }
+.contextToggle { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 36px; padding: 8px 12px; border: 0; background: var(--surface-2); box-shadow: none; color: var(--text-3); font-size: 11.5px; }
+.contextToggle > span:last-child { margin-left: auto; }
+@media (hover: hover) {
+  .messageHead > button { opacity: 0; }
+  .message:hover .messageHead > button, .message:focus-within .messageHead > button { opacity: 1; }
 }
