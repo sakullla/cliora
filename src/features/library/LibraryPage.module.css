@@ -1,4 +1,4 @@
-.page { display: grid; gap: 16px; min-width: 0; }
+.page { display: grid; gap: 16px; min-width: 0; container-type: inline-size; }
 
 /* Toolbar: tabs + primary action */
 .toolbar { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); }
@@ -35,15 +35,14 @@
 .primary, .primary:hover:not(:disabled) { border-color: var(--accent) !important; background: var(--accent) !important; color: var(--on-accent) !important; }
 .primary:hover:not(:disabled) { filter: brightness(1.06); }
 
-/* Filters */
-.filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.filters input { flex: 1 1 240px; min-width: 0; }
-.filterPick { flex: 0 1 200px; }
+/* Filters stay on one row until the page is too narrow for three controls */
+.filters { display: grid; grid-template-columns: minmax(0, 1fr) minmax(132px, 190px) minmax(132px, 190px); align-items: center; gap: 8px; }
+.filters input { min-width: 0; width: 100%; }
+.filterPick { min-width: 0; width: 100%; }
 .scopePick { max-width: 320px; }
 .searchBox {
   position: relative;
   display: flex;
-  flex: 1 1 240px;
   align-items: center;
   min-width: 0;
 }
@@ -144,22 +143,24 @@
   display: -webkit-box;
   min-width: 0;
   min-height: 0;
-  margin: 0 0 10px;
+  margin: 2px 0 12px;
   overflow: hidden;
-  color: var(--text-3);
-  font-size: 12px;
-  line-height: 1.4;
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
 }
 .cardBar { position: relative; z-index: 1; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 10px; margin: auto -14px 0; padding: 8px 12px; border-top: 1px solid var(--line); background: var(--surface-2); border-radius: 0 0 calc(var(--radius-lg) - 1px) calc(var(--radius-lg) - 1px); }
 .scopeLines { display: grid; gap: 4px; min-width: 0; }
 .scopeLine { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .scopeName { flex: none; max-width: 120px; overflow: hidden; padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--text-2); font-size: 11px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
-.cardActions { display: flex; flex: none; align-items: center; gap: 6px; }
+.cardActions { display: flex; flex: none; align-items: center; gap: 6px; margin-left: auto; }
 .cardActions button { min-height: 28px; font-size: 12px; }
+.cardLaunch, .cardLaunch:hover:not(:disabled) { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
+.cardLaunch:hover:not(:disabled) { border-color: var(--accent); }
 .mono { font-family: var(--font-mono); font-size: 11.5px !important; }
 .send { margin-left: auto; }
 
@@ -254,8 +255,14 @@
 .error { border-color: var(--danger-line); background: var(--danger-soft); color: var(--danger); }
 .notice { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
 
+@container (max-width: 560px) {
+  .filters { grid-template-columns: 1fr 1fr; }
+  .searchBox { grid-column: 1 / -1; }
+}
+@container (max-width: 380px) {
+  .filters { grid-template-columns: 1fr; }
+}
 @media (max-width: 680px) {
   .toolbar { flex-wrap: wrap; }
-  .filterPick { flex: 1 1 140px; }
   .sources { grid-template-columns: 1fr; }
 }

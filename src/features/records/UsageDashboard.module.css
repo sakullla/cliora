@@ -12,7 +12,13 @@
 .headerFilters { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
 .headerFilters > * { width: 150px; }
 .subhead { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; margin-top: -4px; color: var(--text-2); font-size: 12px; }
-.subhead p { display: flex; align-items: center; gap: 6px; margin: 0; }
+.subhead p { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: 0; }
+.activeChips { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.chip { display: inline-flex; align-items: center; gap: 5px; max-width: 220px; min-height: 22px; padding: 0 5px 0 8px; border: 1px solid var(--accent-line); border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 11px; font-weight: 560; box-shadow: none; }
+.chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip > svg { flex: none; opacity: .7; }
+.chip:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.chip:hover:not(:disabled) > svg { opacity: 1; }
 .subhead :global(.text-button) { min-height: 24px; font-size: 12px; }
 .freshness { color: var(--text-3); font-variant-numeric: tabular-nums; }
 .freshness :global(.spinner) { width: 10px; height: 10px; color: var(--accent); }

@@ -6,6 +6,7 @@ import type { AdapterDescriptor } from '../../types/native';
 import type { Project } from '../../types/launch';
 import type { HistoryDetail, HistoryFilter, HistoryMessage, HistoryPrice, HistorySession, ScanStatus } from '../../types/history';
 import { displayPath } from '../../lib/paths';
+import { writeClipboard } from '../../lib/clipboard';
 import { FilterSelect } from '../../components/FilterSelect';
 import { ToastStack, type Toast } from '../../components/Toast';
 import { ToolIcon, toolOptions } from '../../components/ToolIcon';
@@ -30,12 +31,46 @@ function compactDay(ms: number | null) {
   return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()}`;
 }
 const MESSAGE_CLAMP = 1000;
-function MessageItem({ item }: { item: HistoryMessage }) {
+const sameDay = (a: number | null, b: number | null) => a !== null && b !== null && startOfDay(new Date(a)) === startOfDay(new Date(b));
+/** Within one transcript the date is only repeated when it changes between messages. */
+function messageTime(ms: number | null, previous: number | null | undefined) {
+  if (ms === null) return '时间未知';
+  const date = new Date(ms);
+  if (previous !== undefined && sameDay(ms, previous)) return timeOfDay(date);
+  return `${date.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' })} ${timeOfDay(date)}`;
+}
+type SessionGroup = 'favorite' | 'today' | 'yesterday' | 'week' | 'earlier' | 'unknown';
+const groupLabels: Record<SessionGroup, string> = { favorite: '收藏', today: '今天', yesterday: '昨天', week: '近 7 天', earlier: '更早', unknown: '时间未知' };
+function groupOf(ms: number | null): SessionGroup {
+  if (ms === null) return 'unknown';
+  const daysAgo = Math.round((startOfDay(new Date()) - startOfDay(new Date(ms))) / 86400000);
+  if (daysAgo <= 0) return 'today';
+  if (daysAgo === 1) return 'yesterday';
+  if (daysAgo < 7) return 'week';
+  return 'earlier';
+}
+function rowTime(ms: number | null) {
+  if (ms === null) return '时间未知';
+  const group = groupOf(ms);
+  if (group === 'today') return timeOfDay(new Date(ms));
+  if (group === 'yesterday') return `昨天 ${timeOfDay(new Date(ms))}`;
+  return compactDay(ms);
+}
+function MessageItem({ item, previous }: { item: HistoryMessage; previous: number | null | undefined }) {
   const [expanded, setExpanded] = useState(false);
+  const [copied, setCopied] = useState(false);
   const clampable = item.text.length > MESSAGE_CLAMP;
   const clamped = clampable && !expanded;
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 1600);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
   return <article data-role={item.role}>
-    <small>{item.role === 'user' ? '你' : '助手'} · {day(item.timestamp)}</small>
+    <div className={styles.messageHead}>
+      <small>{item.role === 'user' ? '你' : '助手'} · <time title={day(item.timestamp)}>{messageTime(item.timestamp, previous)}</time></small>
+      <button type="button" className={styles.messageCopy} aria-label={copied ? '已复制这条消息' : '复制这条消息'} title="复制这条消息" data-copied={copied || undefined} onClick={() => { void writeClipboard(item.text).then((ok) => { if (ok) setCopied(true); }); }}><Icon name={copied ? 'check' : 'copy'} size={13} strokeWidth={2} /></button>
+    </div>
     <p className={clamped ? styles.clamped : undefined}>{item.text}</p>
     {clampable && <button type="button" className={styles.expandMessage} aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>{expanded ? '收起' : `展开全文（${item.text.length.toLocaleString()} 字）`}</button>}
   </article>;
@@ -381,6 +416,16 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
   }
 
   const toolName = (id: string) => tools.find((item) => item.id === id)?.name ?? id;
+  const detailRef = useRef<HTMLDivElement>(null);
+  const groupedSessions = useMemo(() => {
+    const groups: Array<{ group: SessionGroup; items: HistorySession[] }> = [];
+    for (const item of sessions) {
+      const group: SessionGroup = item.favorite ? 'favorite' : groupOf(item.updatedAt);
+      const last = groups[groups.length - 1];
+      if (last && last.group === group) last.items.push(item); else groups.push({ group, items: [item] });
+    }
+    return groups;
+  }, [sessions]);
   const activeFilters = useMemo(() => {
     const items: Array<{ key: string; label: string; clear: () => void }> = [];
     if (toolId) items.push({ key: 'tool', label: `工具：${toolName(toolId)}`, clear: () => setToolId('') });
@@ -422,7 +467,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
           <label className={styles.filterSelect}><span>项目</span><FilterSelect label="筛选项目" value={projectId} options={[{ value: '', label: '全部项目' }, { value: '__unknown__', label: '未归类' }, ...projects.map((item) => ({ value: item.id, label: item.name }))]} onChange={setProjectId} /></label>
           <label className={styles.filterSelect}><span>模型</span><FilterSelect label="筛选模型" value={model} options={[{ value: '', label: '全部模型' }, { value: '__unknown__', label: '模型未知' }, ...modelCatalog.map((item) => ({ value: item, label: item }))]} onChange={setModel} /></label>
           <button type="button" onClick={() => { setProjectId(''); setModel(''); }}>清除更多筛选</button></div></details>
-        {!!scans.length && <details className={styles.coverage}><summary>本机覆盖 · {scans.reduce((total, item) => total + item.sourceCount, 0)} 个来源{scans.some((item) => item.failedCount || item.incomplete) ? ' · 有失败或扫描不完整' : ''}</summary>{scans.map((item) => <span key={item.toolId}>{item.toolId} {item.sourceCount} 个来源{item.failedCount ? ` · ${item.failedCount} 个失败` : ''}{item.incomplete ? ' · 扫描不完整' : ''}</span>)}</details>}
+        {!!scans.length && <details className={styles.coverage}><summary>本机覆盖 · {scans.reduce((total, item) => total + item.sourceCount, 0)} 个来源{scans.some((item) => item.failedCount || item.incomplete) ? ' · 有失败或扫描不完整' : ''}{lastScanAt ? ` · ${timeOfDay(new Date(lastScanAt))} 更新` : ''}</summary>{scans.map((item) => <span key={item.toolId}>{toolName(item.toolId)} {item.sourceCount} 个来源{item.failedCount ? ` · ${item.failedCount} 个失败` : ''}{item.incomplete ? ' · 扫描不完整' : ''}</span>)}</details>}
       </div>
     </div>
     {activeFilters.length > 0 && <div className={styles.activeFilters} aria-label="已启用的筛选">
@@ -431,13 +476,16 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
     </div>}</>}
     <ToastStack status={notice} alert={error} onDismiss={(tone) => { if (tone === 'alert') setError(null); else setNotice(null); }} />
     {tab === 'sessions' ? <div className={styles.columns}>
-      <div className={styles.list} aria-label="会话列表">{sessions.length ? sessions.map((item) => <button type="button" key={item.id} data-session-id={item.id} aria-current={selectedId === item.id ? 'true' : undefined} className={selectedId === item.id ? styles.selected : ''} onClick={() => setSelectedId(item.id)} onKeyDown={(event) => { if (event.key === 'ArrowDown') { event.preventDefault(); moveSession(item, 1); } else if (event.key === 'ArrowUp') { event.preventDefault(); moveSession(item, -1); } else if (event.key === 'Home') { event.preventDefault(); focusSession(sessions[0]); } else if (event.key === 'End') { event.preventDefault(); focusSession(sessions[sessions.length - 1]); } }}>
-        <span className={styles.sessionTitle}><ToolIcon toolId={item.toolId} size={22} /><strong title={item.title}>{item.favorite && <span className={styles.favoriteMark} aria-hidden="true">★</span>}{item.title}</strong></span><small>{toolName(item.toolId)} · <time title={day(item.updatedAt)}>{compactDay(item.updatedAt)}</time></small>
-        <small className={styles.sessionMeta}>{item.model ?? '模型未知'} · {item.messageCount.toLocaleString()} 条消息{item.partial && <em className={styles.flag}>部分记录</em>}{item.stale && <em className={styles.flag} data-tone="muted">源暂不可读</em>}</small>
-      </button>) : <div className={styles.empty}><span className="empty-symbol"><Icon name="search" size={20} /></span><p>没有符合条件的会话。可刷新记录或调整筛选。</p>{activeFilters.length > 0 && <button type="button" className="text-button" onClick={clearAllFilters}>清除全部筛选</button>}</div>}</div>
-      <div className={styles.detail}>{selected ? <>
+      <div className={styles.list} aria-label="会话列表">{sessions.length ? groupedSessions.flatMap(({ group, items }, groupIndex) => [
+        <div key={`group-${groupIndex}-${group}`} className={styles.group} role="presentation" aria-hidden="true">{groupLabels[group]}<span>{items.length}</span></div>,
+        ...items.map((item) => <button type="button" key={item.id} data-session-id={item.id} aria-current={selectedId === item.id ? 'true' : undefined} className={selectedId === item.id ? styles.selected : ''} onClick={() => setSelectedId(item.id)} onKeyDown={(event) => { if (event.key === 'ArrowDown') { event.preventDefault(); moveSession(item, 1); } else if (event.key === 'ArrowUp') { event.preventDefault(); moveSession(item, -1); } else if (event.key === 'Home') { event.preventDefault(); focusSession(sessions[0]); } else if (event.key === 'End') { event.preventDefault(); focusSession(sessions[sessions.length - 1]); } }}>
+          <span className={styles.sessionTitle}><ToolIcon toolId={item.toolId} size={22} /><strong title={item.title}>{item.favorite && <span className={styles.favoriteMark} aria-hidden="true">★</span>}{item.title}</strong></span><small>{toolName(item.toolId)} · <time title={day(item.updatedAt)}>{rowTime(item.updatedAt)}</time></small>
+          <small className={styles.sessionMeta}>{item.model ?? '模型未知'} · {item.messageCount.toLocaleString()} 条消息{item.partial && <em className={styles.flag}>部分记录</em>}{item.stale && <em className={styles.flag} data-tone="muted">源暂不可读</em>}</small>
+        </button>),
+      ]) : <div className={styles.empty}><span className="empty-symbol"><Icon name="search" size={20} /></span><p>没有符合条件的会话。可刷新记录或调整筛选。</p>{activeFilters.length > 0 && <button type="button" className="text-button" onClick={clearAllFilters}>清除全部筛选</button>}</div>}</div>
+      <div className={styles.detail} ref={detailRef}>{selected ? <>
         <div className={styles.detailBar}>
-        <div className={styles.detailHead}><div className={styles.detailIdentity}><ToolIcon toolId={selected.session.toolId} size={30} /><div><h2 title={selected.session.title}>{selected.session.title}</h2><p>{toolName(selected.session.toolId)} · {day(selected.session.updatedAt)} · {selected.session.model ?? '模型未知'} · {selected.session.cwd ? displayPath(selected.session.cwd) : '项目目录未知'}</p></div></div><button type="button" data-active={selected.session.favorite || undefined} aria-pressed={selected.session.favorite} onClick={() => void favorite()} aria-label={selected.session.favorite ? '取消收藏' : '收藏会话'}>{selected.session.favorite ? '★ 已收藏' : '☆ 收藏'}</button></div>
+        <div className={styles.detailHead}><div className={styles.detailIdentity}><ToolIcon toolId={selected.session.toolId} size={30} /><div><h2 title={selected.session.title}>{selected.session.title}</h2><p><span>{toolName(selected.session.toolId)}</span><span><time title={day(selected.session.updatedAt)}>{compactDay(selected.session.updatedAt)}</time></span><span className={styles.detailModel}>{selected.session.model ?? '模型未知'}</span><span className={styles.detailPath} title={selected.session.cwd ? displayPath(selected.session.cwd) : undefined}>{selected.session.cwd ? displayPath(selected.session.cwd) : '项目目录未知'}</span></p></div></div><button type="button" data-active={selected.session.favorite || undefined} aria-pressed={selected.session.favorite} onClick={() => void favorite()} aria-label={selected.session.favorite ? '取消收藏' : '收藏会话'}>{selected.session.favorite ? '★ 已收藏' : '☆ 收藏'}</button></div>
         {(selected.session.partial || selected.session.stale) && <p className={styles.caveat}>原始记录不完整或最近读取失败；仅展示已索引的内容。</p>}
         <div className={styles.resume}>
           <div className={styles.resumeBar}><select aria-label="恢复模式" value={mode} onChange={(event) => setMode(event.target.value as 'normal' | 'yolo')}><option value="normal">普通模式</option>{yolo && <option value="yolo">YOLO 模式</option>}</select>{readyCommand && <div className={styles.actions}><button type="button" className={styles.primary} disabled={busy} onClick={() => void resume()}>在外部终端继续</button><button type="button" aria-label="复制命令" data-copied={copied || undefined} onClick={() => void copy()}>{copied ? <><Icon name="check" size={13} strokeWidth={2.2} />已复制</> : '复制命令'}</button></div>}{readyCommand ? <pre aria-label="原生恢复命令" title={readyCommand}>{readyCommand}</pre> : <p>{shownResumeError || '正在确认原生恢复命令…'}</p>}</div>
@@ -445,8 +493,12 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
           {selected.resumeReason && <button type="button" onClick={onOpenProjects}>前往最近项目重新关联目录</button>}
         </div>
         </div>
-        <div className={styles.transcript} aria-label="会话正文"><div className={styles.messages}>{selected.messages.length ? selected.messages.map((item) => <MessageItem key={item.id} item={item} />) : <p>此记录没有可读取的对话正文。</p>}</div></div>
-      </> : <div className={styles.empty}><span className="empty-symbol"><Icon name="records" size={20} /></span><p>选择左侧会话查看详情。</p></div>}</div>
+        <div className={styles.transcript} aria-label="会话正文">
+          {selected.messages.length > 0 && <div className={styles.transcriptHead}><span>{selected.messages.length.toLocaleString()} 条消息{selected.session.messageCount > selected.messages.length ? ` · 已索引 ${selected.session.messageCount.toLocaleString()} 条` : ''}</span>{selected.messages.length > 4 && <button type="button" className="text-button" onClick={() => detailRef.current?.scrollTo({ top: detailRef.current.scrollHeight, behavior: 'smooth' })}><Icon name="arrowDown" size={13} strokeWidth={2} />跳到最新</button>}</div>}
+          <div className={styles.messages}>{selected.messages.length ? selected.messages.map((item, index) => <MessageItem key={item.id} item={item} previous={index ? selected.messages[index - 1].timestamp : undefined} />) : <p>此记录没有可读取的对话正文。</p>}</div>
+        </div>
+      </> : selectedId && sessions.some((item) => item.id === selectedId) ? <div className={styles.detailLoading} role="status" aria-label="正在读取会话"><span className={styles.detailSkeleton} /><span className={styles.detailSkeleton} data-size="short" /><span className={styles.detailSkeleton} data-size="block" /></div>
+      : <div className={styles.empty}><span className="empty-symbol"><Icon name="records" size={20} /></span><p>选择左侧会话查看详情。</p></div>}</div>
     </div> : <UsageDashboard active={active && tab === 'usage'} tools={tools} projects={projects} prices={prices} onPricesChange={setPrices}
       scanVersion={scanVersion} scanning={scanning} lastScanAt={lastScanAt} onOpenSession={openSession} notify={notify} />}
   </section>;

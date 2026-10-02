@@ -310,7 +310,12 @@ export function UsageDashboard({ active, tools, projects, prices, onPricesChange
       </div>
     </div>
     <div className={styles.subhead}>
-      <p>{rangeCaption(report, range, now)}{(toolId || model || projectId) && <button type="button" className="text-button" onClick={() => { setToolId(''); setModel(''); setProjectId(''); }}>清除筛选</button>}</p>
+      <p>{rangeCaption(report, range, now)}{(toolId || model || projectId) && <span className={styles.activeChips} aria-label="已启用的筛选">
+        {toolId && <button type="button" className={styles.chip} title="点击移除该筛选" onClick={() => setToolId('')}><span>工具：{toolName(toolId)}</span><Icon name="close" size={10} strokeWidth={2.4} /></button>}
+        {model && <button type="button" className={styles.chip} title="点击移除该筛选" onClick={() => setModel('')}><span>模型：{model}</span><Icon name="close" size={10} strokeWidth={2.4} /></button>}
+        {projectId && <button type="button" className={styles.chip} title="点击移除该筛选" onClick={() => setProjectId('')}><span>项目：{projectId === '__unknown__' ? '未关联项目' : projects.find((item) => item.id === projectId)?.name ?? projectId}</span><Icon name="close" size={10} strokeWidth={2.4} /></button>}
+        <button type="button" className="text-button" onClick={() => { setToolId(''); setModel(''); setProjectId(''); }}>清除筛选</button>
+      </span>}</p>
       <p className={styles.freshness}>
         {scanning ? <><span className="spinner" aria-hidden="true" />正在同步本机记录…</> : scanned ? `数据更新于 ${clockTime(scanned)}` : '尚未扫描本机记录'}
         <button type="button" className="text-button" onClick={() => openPrice()}><Icon name="sparkle" size={13} />设置估算价格</button>

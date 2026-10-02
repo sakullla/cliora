@@ -349,7 +349,7 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
             }} /> : <span />}
             <div className={styles.cardActions}>{copiedId === item.id && notice === copiedText
               ? <button type="button" aria-label="复制全文" data-copied="true" onClick={() => void copy(item.body, 'page', item.id)}><Icon name="check" size={13} strokeWidth={2.2} />已复制</button>
-              : <button type="button" onClick={() => void copy(item.body, 'page', item.id)} disabled={!item.body}>复制全文</button>}{kind === 'prompt' && <button type="button" onClick={() => openLaunch(item)} disabled={!item.body}>启动会话</button>}<button type="button" onClick={() => choose(item)}>修改</button></div>
+              : <button type="button" onClick={() => void copy(item.body, 'page', item.id)} disabled={!item.body}>复制全文</button>}{kind === 'prompt' && <button type="button" className={styles.cardLaunch} onClick={() => openLaunch(item)} disabled={!item.body}>启动会话</button>}<button type="button" onClick={() => choose(item)}>修改</button></div>
           </div>
         </article>) : !items.length && !search.trim()
           ? <div className={styles.empty}><Icon name="library" size={28} strokeWidth={1.3} /><strong>还没有{kind === 'prompt' ? '提示词' : '规则'}</strong>{kind === 'prompt' ? '把常用的提示词存在这里。保存后可以选择 CLI，直接开一场会话。' : '保存后，在卡片上点 CLI 图标即可写入。彩色表示已经生效，灰色表示还没写入。'}<button type="button" className={styles.primary} onClick={() => start(kind)}>＋ 新建第一条{kind === 'prompt' ? '提示词' : '规则'}</button></div>
