@@ -38,6 +38,27 @@ function Metric({ label, value, hint }: { label: string; value: number | null; h
 function Amount({ value, title }: { value: number | null; title?: string }) {
   return <span title={title ?? (value === null || value < 1000 ? undefined : value.toLocaleString())}>{compact(value)}</span>;
 }
+function UsageComposition({ usage }: { usage: UsageSummary }) {
+  const includesCache = usage.inputIncludesCache === true;
+  const inputOther = usage.input === null ? null : includesCache ? Math.max(0, usage.input - (usage.cacheRead ?? 0) - (usage.cacheWrite ?? 0)) : usage.input;
+  const segments = [
+    { key: 'input' as const, label: '输入', value: inputOther, hint: includesCache ? '输入 token 中扣除缓存明细的部分' : '输入 token' },
+    { key: 'output' as const, label: '输出', value: usage.output, hint: '输出 token' },
+    { key: 'read' as const, label: '缓存读取', value: usage.cacheRead, hint: '缓存读取 token' },
+    { key: 'write' as const, label: '缓存写入', value: usage.cacheWrite, hint: '缓存写入 token' },
+  ].filter((item) => item.value !== null && item.value > 0);
+  const total = segments.reduce((sum, item) => sum + (item.value ?? 0), 0);
+  if (!segments.length || total <= 0) return null;
+  return <div className={styles.composition} role="group" aria-label="token 构成">
+    <div className={styles.compositionHead}><strong>token 构成</strong><small title={`${Number(total).toLocaleString()} token（已知小计）`}>{compact(total)} · 已知小计</small></div>
+    <div className={styles.compositionBar} aria-hidden="true">
+      {segments.map((item) => <span key={item.key} className={styles.compositionSegment} data-key={item.key} style={{ flexGrow: item.value ?? 0 }} title={`${item.hint} ${Number(item.value).toLocaleString()}（${(((item.value ?? 0) / total) * 100).toFixed(1)}%）`} />)}
+    </div>
+    <ul className={styles.compositionLegend}>
+      {segments.map((item) => <li key={item.key} title={`${item.hint} ${Number(item.value).toLocaleString()}`}><i data-key={item.key} aria-hidden="true" />{item.label}<small>{(((item.value ?? 0) / total) * 100).toFixed(1)}%</small></li>)}
+    </ul>
+  </div>;
+}
 const MESSAGE_CLAMP = 1000;
 function MessageItem({ item }: { item: HistoryMessage }) {
   const [expanded, setExpanded] = useState(false);
@@ -359,6 +380,21 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
     finally { setBusy(false); }
   }
 
+  function focusSession(next: HistorySession | undefined) {
+    if (!next) return;
+    setSelectedId(next.id);
+    requestAnimationFrame(() => {
+      const target = document.querySelector<HTMLButtonElement>(`[data-session-id="${CSS.escape(next.id)}"]`);
+      target?.focus({ preventScroll: true });
+      target?.scrollIntoView({ block: 'nearest' });
+    });
+  }
+  function moveSession(current: HistorySession, step: 1 | -1) {
+    const index = sessions.findIndex((item) => item.id === current.id);
+    if (index < 0 || sessions.length < 2) return;
+    focusSession(sessions[(index + step + sessions.length) % sessions.length]);
+  }
+
   async function exportSession(format: 'markdown' | 'json') {
     if (!selected) return;
     try {
@@ -436,9 +472,9 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
     {tab === 'usage' && <p className={styles.rangeSummary}>{rangeSummary(dates.from, dates.to)}</p>}
     <ToastStack status={notice} alert={error} onDismiss={(tone) => { if (tone === 'alert') setError(null); else setNotice(null); }} />
     {tab === 'sessions' ? <div className={styles.columns}>
-      <div className={styles.list} aria-label="会话列表">{sessions.length ? sessions.map((item) => <button type="button" key={item.id} className={selectedId === item.id ? styles.selected : ''} onClick={() => setSelectedId(item.id)}>
-        <span className={styles.sessionTitle}><ToolIcon toolId={item.toolId} size={22} /><strong title={item.title}>{item.favorite ? '★ ' : ''}{item.title}</strong></span><small>{toolName(item.toolId)} · <time title={day(item.updatedAt)}>{compactDay(item.updatedAt)}</time></small>
-        <small>{item.model ?? '模型未知'} · {item.messageCount.toLocaleString()} 条消息{item.partial ? ' · 部分记录' : ''}{item.stale ? ' · 源暂不可读' : ''}</small>
+      <div className={styles.list} aria-label="会话列表">{sessions.length ? sessions.map((item) => <button type="button" key={item.id} data-session-id={item.id} aria-current={selectedId === item.id ? 'true' : undefined} className={selectedId === item.id ? styles.selected : ''} onClick={() => setSelectedId(item.id)} onKeyDown={(event) => { if (event.key === 'ArrowDown') { event.preventDefault(); moveSession(item, 1); } else if (event.key === 'ArrowUp') { event.preventDefault(); moveSession(item, -1); } else if (event.key === 'Home') { event.preventDefault(); focusSession(sessions[0]); } else if (event.key === 'End') { event.preventDefault(); focusSession(sessions[sessions.length - 1]); } }}>
+        <span className={styles.sessionTitle}><ToolIcon toolId={item.toolId} size={22} /><strong title={item.title}>{item.favorite && <span className={styles.favoriteMark} aria-hidden="true">★</span>}{item.title}</strong></span><small>{toolName(item.toolId)} · <time title={day(item.updatedAt)}>{compactDay(item.updatedAt)}</time></small>
+        <small className={styles.sessionMeta}>{item.model ?? '模型未知'} · {item.messageCount.toLocaleString()} 条消息{item.partial && <em className={styles.flag}>部分记录</em>}{item.stale && <em className={styles.flag} data-tone="muted">源暂不可读</em>}</small>
       </button>) : <div className={styles.empty}><span className="empty-symbol"><Icon name="search" size={20} /></span><p>没有符合条件的会话。可刷新记录或调整筛选。</p>{activeFilters.length > 0 && <button type="button" className="text-button" onClick={clearAllFilters}>清除全部筛选</button>}</div>}</div>
       <div className={styles.detail}>{selected ? <>
         <div className={styles.detailBar}>
@@ -454,9 +490,10 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
       </> : <div className={styles.empty}><span className="empty-symbol"><Icon name="records" size={20} /></span><p>选择左侧会话查看详情。</p></div>}</div>
     </div> : <div className={styles.usage}>
       <div className={styles.metrics}><div><small>会话</small><strong>{usage?.sessionCount ?? '—'}</strong></div><Metric label={`输入 token${partialTotals ? ' · 已知小计' : ''}`} value={usage?.input ?? null} /><Metric label={`输出 token${partialTotals ? ' · 已知小计' : ''}`} value={usage?.output ?? null} /><Metric label={`缓存读取${partialTotals ? ' · 已知小计' : ''}`} value={usage?.cacheRead ?? null} /><Metric label={`缓存写入${partialTotals ? ' · 已知小计' : ''}`} value={usage?.cacheWrite ?? null} /><div><small>估算费用{usage?.costPartial ? ' · 已知小计' : ''}</small><strong>{usage?.estimatedCost === null || usage?.estimatedCost === undefined ? '未知' : `${usage.currency ?? ''} ${usage.estimatedCost.toFixed(4)}`}</strong></div></div>
+      {usage && <UsageComposition usage={usage} />}
       <div className={styles.usageNotes}>
         <p>仅统计本机可读取的记录；{usage?.usageSessions ?? 0} 个会话有用量，{usage?.unknownUsageSessions ?? 0} 个未知，{usage?.partialSessions ?? 0} 个不完整，{usage?.staleSessions ?? 0} 个源暂不可读。{partialTotals || usage?.costPartial ? '显示的是已知小计，实际总量未知。' : ''}没有手填价格时，能对上公开价的模型按公开价估算。费用为估算，不等于账单。</p>
-        <p>{usage?.inputIncludesCache === true ? '输入已包含缓存读取和缓存写入，缓存两列是其中的明细，不要再加一次。' : '这次没有可计入的输入。'}</p>
+        <p>{usage?.inputIncludesCache === true ? '输入已包含缓存读取和缓存写入，缓存两列是其中的明细，不要再加一次。' : (usage?.input ?? 0) > 0 ? '输入、输出与缓存读取、缓存写入分别是独立计数，可以直接相加。' : '这次没有可计入的输入。'}</p>
       </div>
       {!!usage?.priceSources.length && <div className={styles.priceSources}><strong>价格依据</strong><div className={styles.chipRow}>{usage.priceSources.map((source) => <span className="quiet-chip" key={source}>{source}</span>)}</div></div>}
       {!!usage?.byModel?.length && <div className={styles.modelTable}><table aria-label="按模型用量明细"><thead><tr><th>工具 / 模型</th><th>会话</th><th>输入</th><th>输出</th><th>缓存读 / 写</th><th>估算费用</th></tr></thead><tbody>{usage.byModel.map(row => <tr key={JSON.stringify([row.toolId, row.model])}><td><button type="button" title="点击为该模型设置估算价格" onClick={() => { setPriceTool(row.toolId); setPriceModel(row.model ?? ''); setPriceError(''); setPriceOpen(true); }}>{toolName(row.toolId)}<br /><strong>{row.model ?? '模型未知'}</strong></button></td><td>{row.sessionCount}{row.unknownUsageSessions ? ` · ${row.unknownUsageSessions} 用量未知` : ''}</td><td><Amount value={row.input} /></td><td><Amount value={row.output} /></td><td><Amount value={row.cacheRead} /> / <Amount value={row.cacheWrite} /></td><td>{row.estimatedCost === null ? '未知' : `${row.currency ?? ''} ${row.estimatedCost.toFixed(4)}`}</td></tr>)}</tbody></table></div>}
