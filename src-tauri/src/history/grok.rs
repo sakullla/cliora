@@ -93,7 +93,7 @@ fn sources_with_control(home: &Path, fingerprint: impl Fn(&Path) -> Result<Strin
 
 fn read_json(path: &Path) -> Result<Value, String> {
     let metadata = fs::metadata(path).map_err(|error| error.to_string())?;
-    if metadata.len() > 2 * 1024 * 1024 || path.is_symlink() {
+    if metadata.len() > 64 * 1024 * 1024 || path.is_symlink() {
         return Err("Grok 会话资料过大或为链接".into());
     }
     serde_json::from_slice(&fs::read(path).map_err(|error| error.to_string())?)

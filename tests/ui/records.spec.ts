@@ -1,7 +1,37 @@
 import { expect, test } from '@playwright/test';
 
+type Totals = { requests: number; sessions: number; input: number; cacheRead: number; cacheWrite: number; output: number; total: number; cost: number | null; unpricedTokens: number };
+const totals = (input: number, cacheRead: number, cacheWrite: number, output: number, extra: Partial<Totals> = {}): Totals => ({
+  requests: 0, sessions: 0, input, cacheRead, cacheWrite, output, total: input + cacheRead + cacheWrite + output, cost: null, unpricedTokens: 0, ...extra,
+});
+const emptyReport = () => ({
+  generatedAt: 0, from: null, to: null, bucket: 'day', currency: 'USD', totals: totals(0, 0, 0, 0), previous: null, timeline: [],
+  byModel: [], byTool: [], byProject: [], topSessions: [], models: [], untimedRequests: 0, duplicateRequests: 0,
+  partialSessions: 0, staleSessions: 0, mixedCurrency: false, latestEventAt: null, priceSources: [], scans: [],
+});
+/** Today's report: 24 hourly buckets with all usage at 09:00. */
+function todayReport() {
+  const midnight = new Date(); midnight.setHours(0, 0, 0, 0);
+  const start = midnight.getTime();
+  const hour = 3_600_000;
+  const sum = totals(200_000, 900_000, 50_000, 50_000, { requests: 40, sessions: 2, cost: 1.5, unpricedTokens: 260_000 });
+  return {
+    ...emptyReport(), generatedAt: start + 10 * hour, from: start, to: start + 24 * hour, bucket: 'hour', totals: sum,
+    previous: { from: start - 24 * hour, to: start - 14 * hour, totals: totals(100_000, 800_000, 50_000, 50_000, { requests: 30, sessions: 1, cost: 1 }) },
+    timeline: Array.from({ length: 24 }, (_, index) => ({ start: start + index * hour, end: start + (index + 1) * hour, totals: index === 9 ? sum : totals(0, 0, 0, 0) })),
+    byModel: [
+      { key: 'codex\u001fgpt-6-astra', label: 'gpt-6-astra', toolId: 'codex', model: 'gpt-6-astra', projectId: null, priced: true, totals: totals(150_000, 700_000, 50_000, 40_000, { requests: 30, sessions: 2, cost: 1.5 }) },
+      { key: 'codex\u001fglm-5.3', label: 'glm-5.3', toolId: 'codex', model: 'glm-5.3', projectId: null, priced: false, totals: totals(50_000, 200_000, 0, 10_000, { requests: 10, sessions: 1, unpricedTokens: 260_000 }) },
+    ],
+    byTool: [{ key: 'codex', label: 'codex', toolId: 'codex', model: null, projectId: null, priced: true, totals: sum }],
+    byProject: [{ key: 'dir:c:\\project', label: 'project', toolId: null, model: null, projectId: null, priced: true, totals: sum }],
+    topSessions: [{ id: 'key-b', toolId: 'codex', title: 'Second session', model: 'gpt-6-astra', updatedAt: start + 9 * hour, totals: sum }],
+    models: ['glm-5.3', 'gpt-6-astra'],
+  };
+}
+
 test('records only lists managed CLIs and scopes session reads to them', async ({ page }) => {
-  await page.addInitScript(() => {
+  await page.addInitScript((report) => {
     const filters: Array<Record<string, unknown>> = [];
     Object.assign(window, {
       isTauri: true,
@@ -11,14 +41,14 @@ test('records only lists managed CLIs and scopes session reads to them', async (
         if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', yoloAvailable: true }, { id: 'claude_code', name: 'Claude Code', yoloAvailable: true }], managedIds: ['claude_code'], preservedUnknown: [] };
         if (command === 'list_projects' || command === 'list_history_prices' || command === 'refresh_history') return [];
         if (command === 'list_history_sessions') { filters.push(args.filter); return []; }
-        if (command === 'get_history_usage') return { sessionCount: 0, usageSessions: 0, unknownUsageSessions: 0, partialSessions: 0, staleSessions: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, inputIncludesCache: null, estimatedCost: null, currency: null, priceSources: [], models: [], byModel: [], scans: [] };
+        if (command === 'get_usage_report') return report;
         if (command === 'get_history_scan_progress') return { running: false, toolId: '', completedSources: 0, totalSources: 0 };
         if (command === 'get_tray_status') return { available: false, error: null };
         if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
         return null;
       } },
     });
-  });
+  }, emptyReport());
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
   await page.getByLabel('筛选工具').click();
@@ -34,7 +64,7 @@ test('records only lists managed CLIs and scopes session reads to them', async (
 });
 
 test('records keep search, show native resume command and only launch on request', async ({ page }) => {
-  await page.addInitScript(() => {
+  await page.addInitScript((report) => {
     const records: Array<Record<string, any>> = [
       { id: 'record-a', toolId: 'codex', nativeId: '1111-2222', title: 'Review change', cwd: 'C:\\project', model: 'gpt-6-astra', projectId: null, startedAt: 1790668800000, updatedAt: 1790668800000, favorite: false, partial: false, stale: false, messageCount: 2, usageCount: 1 },
       { id: 'record-b', toolId: 'codex', nativeId: null, title: 'Incomplete record', cwd: null, model: null, projectId: null, startedAt: null, updatedAt: null, favorite: false, partial: true, stale: false, messageCount: 1, usageCount: 0 },
@@ -45,7 +75,7 @@ test('records keep search, show native resume command and only launch on request
     const control = { delayYolo: false, pending: [] as Array<() => void> };
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (value: string) => { clipboard.push(value); } } });
     Object.assign(window, {
-      isTauri: true, __recordLaunches: launches, __recordClipboard: clipboard, __recordControl: control,
+      isTauri: true, __recordLaunches: launches, __recordClipboard: clipboard, __recordControl: control, __reportFilters: [] as unknown[],
       __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
         if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }] };
         if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', yoloAvailable: true, interfaceFormats: [] }], managedIds: ['codex'], preservedUnknown: [] };
@@ -61,11 +91,7 @@ test('records keep search, show native resume command and only launch on request
         }
         if (command === 'set_history_favorite') { const item = records.find((value) => value.id === args.id); if (item) item.favorite = args.favorite; return null; }
         if (command === 'set_history_project') { const item = records.find((value) => value.id === args.id); if (item) item.projectId = args.projectId; return null; }
-        if (command === 'get_history_usage') return { sessionCount: 2, usageSessions: 1, unknownUsageSessions: 1, partialSessions: 1, staleSessions: 0, input: 150, output: 30, cacheRead: 60, cacheWrite: 0, inputIncludesCache: true, estimatedCost: null, currency: null, priceSources: [], models: ['gpt-6-astra'], byModel: [
-          { toolId: 'codex', model: 'gpt-6-astra', sessionCount: 14, unknownUsageSessions: 0, input: 100, output: 20, cacheRead: 0, cacheWrite: 0, estimatedCost: null, currency: null },
-          { toolId: 'codex', model: 'gpt-6-sol', sessionCount: 8, unknownUsageSessions: 1, input: 50, output: 10, cacheRead: 1, cacheWrite: 2, estimatedCost: null, currency: null },
-          { toolId: 'codex', model: 'gpt-6-luna', sessionCount: 3, unknownUsageSessions: 0, input: 5, output: 1, cacheRead: 0, cacheWrite: 0, estimatedCost: null, currency: null },
-        ], scans: [{ toolId: 'codex', scannedAt: 1, sourceCount: 2, failedCount: 0, incomplete: false, detail: '' }] };
+        if (command === 'get_usage_report') { (window as typeof window & { __reportFilters?: unknown[] }).__reportFilters?.push(args.filter); return report; }
         if (command === 'copy_history_resume_command') {
           const text = `Set-Location -LiteralPath '${records.find((item) => item.id === args.id)?.projectId ? 'C:\\new-project' : 'C:\\project'}'; & 'codex' ${args.mode === 'yolo' ? "'--yolo' " : ''}'resume' '1111-2222'`;
           if (args.mode === 'yolo' && control.delayYolo) return new Promise((resolve) => { control.pending.push(() => resolve(text)); });
@@ -76,7 +102,7 @@ test('records keep search, show native resume command and only launch on request
         throw new Error(`Unexpected IPC: ${command}`);
       } },
     });
-  });
+  }, todayReport());
   await page.goto('/');
   const navigation = page.getByRole('navigation', { name: '页面' });
   await navigation.getByRole('button', { name: '使用记录' }).click();
@@ -170,48 +196,55 @@ test('records keep search, show native resume command and only launch on request
   await navigation.getByRole('button', { name: '使用记录' }).click();
   await expect(page.getByRole('textbox', { name: '搜索会话' })).toHaveValue('Review');
   await page.getByRole('tab', { name: '用量' }).click();
-  const usageLayout = await page.evaluate(() => {
-    const table = document.querySelector('[aria-label="按模型用量明细"]');
-    const wrap = table?.parentElement;
-    const button = [...document.querySelectorAll('button')].find((item) => item.textContent === '设置估算价格');
-    if (!table || !wrap || !button) return null;
-    const tableBox = table.getBoundingClientRect();
-    const wrapBox = wrap.getBoundingClientRect();
-    const buttonBox = button.getBoundingClientRect();
-    return { wrapShowsTable: wrapBox.height >= tableBox.height - 1, buttonBelow: buttonBox.top >= wrapBox.bottom - 1, rows: table.querySelectorAll('tbody tr').length };
+  const summary = page.getByRole('region', { name: '用量概览' });
+  await expect(summary).toContainText('1.2M');
+  await expect(summary).toContainText('↑ 20%');
+  await expect(summary).toContainText('较昨日同时段');
+  await expect(summary).toContainText('$1.50');
+  await expect(summary).toContainText('22% token 未定价');
+  const reportFilter = await page.evaluate(() => {
+    const filters = (window as typeof window & { __reportFilters: Array<{ search: string | null; favoriteOnly: boolean }> }).__reportFilters;
+    return filters[filters.length - 1];
   });
-  expect(usageLayout).toEqual({ wrapShowsTable: true, buttonBelow: true, rows: 3 });
-  await expect(page.getByText('150', { exact: true })).toBeVisible();
-  await expect(page.getByText('输入 token · 已知小计')).toBeVisible();
-  await expect(page.getByText('估算费用', { exact: true }).locator('..').getByText('未知', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: '设置估算价格' }).click();
+  expect(reportFilter.search).toBeNull();
+  expect(reportFilter.favoriteOnly).toBe(false);
+  const ranking = page.getByRole('list', { name: '按模型用量明细' });
+  await expect(ranking.getByRole('listitem')).toHaveCount(2);
+  await expect(ranking.getByRole('button', { name: '定价', exact: true })).toHaveCount(1);
+  await ranking.getByRole('button', { name: '定价', exact: true }).click();
   const priceDialog = page.getByRole('dialog', { name: '设置估算价格' });
-  await expect(priceDialog.getByLabel('价格工具')).toBeVisible();
+  await expect(priceDialog.getByLabel('价格模型')).toHaveValue('glm-5.3');
   await expect(priceDialog.getByRole('button', { name: '保存价格' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: '设置估算价格', exact: true }).click();
+  await expect(priceDialog.getByLabel('价格工具')).toBeVisible();
+  await expect(priceDialog.getByLabel('价格模型')).toHaveValue('');
 });
 
-test('usage composes token segments and the session list follows arrow keys', async ({ page }) => {
-  await page.addInitScript(() => {
+test('usage dashboard splits tokens, follows rows into filters and opens heavy sessions', async ({ page }) => {
+  await page.addInitScript((report) => {
     const records = [
       { id: 'key-a', toolId: 'codex', nativeId: '1111', title: 'First session', cwd: 'C:\\project', model: 'gpt-6-astra', projectId: null, startedAt: 1790668800000, updatedAt: 1790668800000, favorite: false, partial: false, stale: false, messageCount: 1, usageCount: 1 },
       { id: 'key-b', toolId: 'codex', nativeId: '2222', title: 'Second session', cwd: 'C:\\project', model: 'gpt-6-astra', projectId: null, startedAt: 1790668700000, updatedAt: 1790668700000, favorite: false, partial: false, stale: false, messageCount: 1, usageCount: 1 },
     ];
+    const filters: Array<Record<string, unknown>> = [];
     Object.assign(window, {
       isTauri: true,
+      __reportFilters: filters,
       __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
         if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }] };
         if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', yoloAvailable: false, interfaceFormats: [] }], managedIds: ['codex'], preservedUnknown: [] };
         if (command === 'list_projects' || command === 'list_history_prices' || command === 'refresh_history') return [];
         if (command === 'list_history_sessions') return records;
         if (command === 'get_history_session') return { session: records.find((item) => item.id === args.id), messages: [], usage: [], resumeReason: '原始记录没有可验证的恢复 ID' };
-        if (command === 'get_history_usage') return { sessionCount: 2, usageSessions: 2, unknownUsageSessions: 0, partialSessions: 0, staleSessions: 0, input: 150, output: 30, cacheRead: 60, cacheWrite: 0, inputIncludesCache: true, estimatedCost: null, currency: null, priceSources: [], models: ['gpt-6-astra'], byModel: [], scans: [] };
+        if (command === 'get_usage_report') { filters.push(args.filter); return report; }
         if (command === 'get_history_scan_progress') return { running: false, toolId: '', completedSources: 0, totalSources: 0 };
         if (command === 'get_tray_status') return { available: false, error: null };
         if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
         return null;
       } },
     });
-  });
+  }, todayReport());
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
   const first = page.getByRole('button', { name: /First session/ });
@@ -220,14 +253,41 @@ test('usage composes token segments and the session list follows arrow keys', as
   await first.focus();
   await page.keyboard.press('ArrowDown');
   await expect(second).toBeFocused();
-  await expect(second).toHaveAttribute('aria-current', 'true');
   await page.keyboard.press('Home');
   await expect(first).toBeFocused();
+
   await page.getByRole('tab', { name: '用量' }).click();
+  await expect(page.getByRole('radio', { name: '今天' })).toHaveAttribute('aria-checked', 'true');
+  const lastFilter = () => page.evaluate(() => {
+    const filters = (window as typeof window & { __reportFilters: Array<{ fromMs: number | null; toMs: number | null; model: string | null }> }).__reportFilters;
+    return filters[filters.length - 1];
+  });
+  const midnight = await page.evaluate(() => { const date = new Date(); date.setHours(0, 0, 0, 0); return date.getTime(); });
+  await expect.poll(async () => (await lastFilter())?.fromMs).toBe(midnight);
   const composition = page.getByRole('group', { name: 'token 构成' });
-  await expect(composition).toBeVisible();
-  await expect(composition).toContainText('180 · 已知小计');
-  await expect(composition).toContainText('输入');
+  await expect(composition).toContainText('新输入');
   await expect(composition).toContainText('缓存读取');
-  await expect(composition).toContainText('50.0%');
+  await expect(composition).toContainText('75%');
+  await expect(page.getByText('缓存命中', { exact: true }).locator('..')).toContainText('78%');
+
+  const chart = page.getByRole('group', { name: /用量趋势/ });
+  await chart.focus();
+  await page.keyboard.press('Home');
+  await expect(chart.getByRole('status')).toContainText('00:00–01:00');
+  for (let step = 0; step < 9; step++) await page.keyboard.press('ArrowRight');
+  await expect(chart.getByRole('status')).toContainText('1,200,000');
+  await expect(chart.getByRole('status')).toContainText('40 次');
+
+  await page.getByRole('list', { name: '按模型用量明细' }).getByRole('button', { name: /^gpt-6-astra/ }).click();
+  await expect.poll(async () => (await lastFilter())?.model).toBe('gpt-6-astra');
+  await page.getByRole('button', { name: '清除筛选' }).click();
+  await expect.poll(async () => (await lastFilter())?.model).toBeNull();
+
+  await page.getByRole('radio', { name: '近 7 天' }).click();
+  const weekStart = await page.evaluate(() => { const date = new Date(); date.setHours(0, 0, 0, 0); date.setDate(date.getDate() - 6); return date.getTime(); });
+  await expect.poll(async () => (await lastFilter())?.fromMs).toBe(weekStart);
+
+  await page.getByRole('list', { name: '消耗最多的会话' }).getByRole('button', { name: /Second session/ }).click();
+  await expect(page.getByRole('tab', { name: /会话/ })).toHaveAttribute('aria-selected', 'true');
+  await expect(second).toHaveAttribute('aria-current', 'true');
 });

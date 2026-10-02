@@ -7,7 +7,17 @@ export type HistorySession = { id: string; toolId: string; nativeId: string | nu
 export type HistoryDetail = { session: HistorySession; messages: HistoryMessage[]; usage: UsageEvent[]; resumeReason: string | null };
 export type HistoryFilter = { toolId?: string | null; model?: string | null; projectId?: string | null; search?: string | null; fromMs?: number | null; toMs?: number | null; favoriteOnly?: boolean; tools?: string[] | null };
 export type HistoryPrice = { toolId: string; model: string; currency: string; inputPerMillion: number; outputPerMillion: number; cacheReadPerMillion: number; cacheWritePerMillion: number; source: string; updatedAt: number };
-export type ModelUsage = { toolId: string; model: string | null; sessionCount: number; unknownUsageSessions: number; input: number | null; output: number | null; cacheRead: number | null; cacheWrite: number | null; estimatedCost: number | null; costPartial?: boolean; currency: string | null };
-export type UsageSummary = { byModel?: ModelUsage[]; models?: string[]; sessionCount: number; usageSessions: number; unknownUsageSessions: number; partialSessions: number; staleSessions: number; input: number | null; output: number | null; cacheRead: number | null; cacheWrite: number | null; inputIncludesCache: boolean | null; estimatedCost: number | null; costPartial?: boolean; currency: string | null; priceSources: string[]; scans: ScanStatus[] };
+/** Disjoint token buckets: `input` is fresh prompt tokens, never including cache. */
+export type UsageTotals = { requests: number; sessions: number; input: number; cacheRead: number; cacheWrite: number; output: number; total: number; cost: number | null; unpricedTokens: number };
+export type UsageBucket = { start: number; end: number; totals: UsageTotals };
+export type UsageGroup = { key: string; label: string; toolId: string | null; model: string | null; projectId: string | null; priced: boolean; totals: UsageTotals };
+export type SessionUsage = { id: string; toolId: string; title: string; model: string | null; updatedAt: number | null; totals: UsageTotals };
+export type UsageReport = {
+  generatedAt: number; from: number | null; to: number | null; bucket: 'hour' | 'day' | 'month'; currency: string;
+  totals: UsageTotals; previous: { from: number; to: number; totals: UsageTotals } | null; timeline: UsageBucket[];
+  byModel: UsageGroup[]; byTool: UsageGroup[]; byProject: UsageGroup[]; topSessions: SessionUsage[]; models: string[];
+  untimedRequests: number; duplicateRequests: number; partialSessions: number; staleSessions: number; mixedCurrency: boolean;
+  latestEventAt: number | null; priceSources: string[]; scans: ScanStatus[];
+};
 export type ResumeMode = LaunchMode;
 export type ResumeResult = LaunchResult;

@@ -62,9 +62,10 @@ async function install(page: Page, seed: Record<string, boolean> = {}) {
         if (command === 'list_history_prices') return [];
         if (command === 'list_history_sessions') return [session];
         if (command === 'get_history_session') return { session, messages: [{ id: 'm1', role: 'user', text: 'Review change', timestamp: 1 }], usage: [], resumeReason: null };
-        if (command === 'get_history_usage') {
+        if (command === 'get_usage_report') {
           if (control.usageFails) throw { message: '用量读取失败', action: '可点击刷新本机记录或调整筛选。' };
-          return { sessionCount: 1, usageSessions: 0, unknownUsageSessions: 0, partialSessions: 0, staleSessions: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, inputIncludesCache: false, estimatedCost: null, currency: null, priceSources: [], models: [], byModel: [], scans: [] };
+          const zero = { requests: 0, sessions: 0, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, total: 0, cost: null, unpricedTokens: 0 };
+          return { generatedAt: 0, from: null, to: null, bucket: 'day', currency: 'USD', totals: zero, previous: null, timeline: [], byModel: [], byTool: [], byProject: [], topSessions: [], models: [], untimedRequests: 0, duplicateRequests: 0, partialSessions: 0, staleSessions: 0, mixedCurrency: false, latestEventAt: null, priceSources: [], scans: [] };
         }
         if (command === 'save_history_price') return { ...args.price, updatedAt: 2 };
         if (command === 'copy_history_resume_command') return 'codex resume 1111';

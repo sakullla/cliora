@@ -1,11 +1,12 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::UNIX_EPOCH;
 
 use chrono::{DateTime, Utc};
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -19,12 +20,22 @@ pub mod codex;
 pub mod grok;
 pub mod opencode;
 pub mod pi;
+mod report;
 mod usage;
 
-const MAX_SOURCE_BYTES: u64 = 16 * 1024 * 1024;
+pub use report::{usage_report, UsageReport};
+
+/// Usage lives at the end of long sessions, so whole files are streamed. The cap only
+/// protects against devices or runaway files, not ordinary large rollouts.
+const MAX_SOURCE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+const MAX_LINE_BYTES: usize = 256 * 1024 * 1024;
+/// Line filters only look at this many leading bytes before deciding to skip a row.
+const LINE_PREFIX_BYTES: usize = 1024;
 const MAX_SOURCES: usize = 5_000;
 const MAX_MESSAGES: usize = 2_000;
 const MAX_MESSAGE_CHARS: usize = 16_000;
+/// A source that parsed cleanly but holds nothing to show is skipped, not a failure.
+pub const EMPTY_SESSION: &str = "会话没有可展示的内容";
 
 #[derive(Clone, Debug)]
 pub struct HistorySource {
@@ -146,7 +157,7 @@ impl ParsedSession {
                 .or(self.updated_at);
         }
         if self.messages.is_empty() && self.usage.is_empty() && self.native_id.is_none() {
-            return Err("未识别到可展示的会话记录".into());
+            return Err(if self.partial { "未识别到可展示的会话记录" } else { EMPTY_SESSION }.into());
         }
         Ok(self)
     }
@@ -322,34 +333,126 @@ pub fn read_jsonl(
     read_jsonl_controlled(source, &|| false, consume)
 }
 
-pub fn read_jsonl_controlled(source: &HistorySource, cancelled: &dyn Fn() -> bool, mut consume: impl FnMut(usize, Value)) -> Result<bool, String> {
+pub fn read_jsonl_controlled(source: &HistorySource, cancelled: &dyn Fn() -> bool, consume: impl FnMut(usize, Value)) -> Result<bool, String> {
+    read_jsonl_filtered(source, cancelled, |_| false, consume)
+}
+
+/// Streams every row. `skip` sees at most the first `LINE_PREFIX_BYTES` of a row and
+/// may drop rows that are known to carry neither text nor usage (tool output, compaction
+/// snapshots) without allocating or parsing them. Row indexes still count skipped rows,
+/// so line-based ids stay stable.
+pub fn read_jsonl_filtered(
+    source: &HistorySource,
+    cancelled: &dyn Fn() -> bool,
+    skip: impl Fn(&[u8]) -> bool,
+    mut consume: impl FnMut(usize, Value),
+) -> Result<bool, String> {
     check_cancelled(cancelled)?;
     let size = fs::metadata(&source.path)
         .map_err(|error| error.to_string())?
         .len();
     if size > MAX_SOURCE_BYTES {
-        return Err("会话文件超过 16 MiB，未读取".into());
+        return Err("会话文件超过 8 GiB，未读取".into());
     }
     let file = fs::File::open(&source.path).map_err(|error| error.to_string())?;
+    let mut reader = BufReader::with_capacity(256 * 1024, file);
     let mut partial = false;
-    for (index, line) in BufReader::new(file).lines().enumerate() {
+    let mut line = Vec::new();
+    let mut index = 0usize;
+    loop {
         check_cancelled(cancelled)?;
-        if index > 30_000 {
-            partial = true;
-            break;
+        match read_row(&mut reader, &mut line, &skip).map_err(|error| error.to_string())? {
+            Row::End => break,
+            Row::Skipped => {}
+            Row::TooLong => partial = true,
+            Row::Kept => {
+                let text = line.strip_suffix(b"\r").unwrap_or(&line[..]);
+                if !text.iter().all(u8::is_ascii_whitespace) {
+                    match serde_json::from_slice::<Value>(text) {
+                        Ok(value) => consume(index, value),
+                        Err(_) => partial = true,
+                    }
+                }
+            }
         }
-        let line = line.map_err(|error| error.to_string())?;
-        if line.len() > 1_000_000 {
-            partial = true;
-            continue;
-        }
-        match serde_json::from_str::<Value>(&line) {
-            Ok(value) => consume(index, value),
-            Err(_) => partial = true,
-        }
+        index += 1;
     }
     check_cancelled(cancelled)?;
     Ok(partial)
+}
+
+enum Row {
+    End,
+    Kept,
+    Skipped,
+    TooLong,
+}
+
+fn read_row(reader: &mut impl BufRead, line: &mut Vec<u8>, skip: &dyn Fn(&[u8]) -> bool) -> std::io::Result<Row> {
+    line.clear();
+    let mut read_any = false;
+    let mut checked = false;
+    let mut dropped = None;
+    loop {
+        let buffer = match reader.fill_buf() {
+            Ok(buffer) => buffer,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        };
+        if buffer.is_empty() {
+            break;
+        }
+        read_any = true;
+        let newline = buffer.iter().position(|byte| *byte == b'\n');
+        let end = newline.unwrap_or(buffer.len());
+        if dropped.is_none() {
+            line.extend_from_slice(&buffer[..end]);
+            if !checked && (newline.is_some() || line.len() >= LINE_PREFIX_BYTES) {
+                checked = true;
+                if skip(&line[..line.len().min(LINE_PREFIX_BYTES)]) {
+                    dropped = Some(Row::Skipped);
+                }
+            }
+            if line.len() > MAX_LINE_BYTES {
+                dropped = Some(Row::TooLong);
+            }
+            if dropped.is_some() {
+                line.clear();
+            }
+        }
+        reader.consume(newline.map_or(end, |at| at + 1));
+        if newline.is_some() {
+            break;
+        }
+    }
+    if !read_any {
+        return Ok(Row::End);
+    }
+    if let Some(row) = dropped {
+        return Ok(row);
+    }
+    if !checked && skip(line) {
+        return Ok(Row::Skipped);
+    }
+    Ok(Row::Kept)
+}
+
+pub(crate) fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    find_bytes(haystack, needle).is_some()
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+    haystack.windows(needle.len()).position(|window| window == needle)
+}
+
+/// The string that follows the first occurrence of `marker` (for example `"type":"`).
+pub(crate) fn raw_string_after<'a>(raw: &'a [u8], marker: &[u8]) -> Option<&'a [u8]> {
+    let start = find_bytes(raw, marker)? + marker.len();
+    let length = raw[start..].iter().position(|byte| *byte == b'"')?;
+    Some(&raw[start..start + length])
 }
 
 fn stable_id(tool: &str, key: &str) -> String {
@@ -422,75 +525,54 @@ pub struct HistoryPrice {
     pub updated_at: i64,
 }
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UsageSummary {
-    pub session_count: usize,
-    pub usage_sessions: usize,
-    pub unknown_usage_sessions: usize,
-    pub partial_sessions: usize,
-    pub stale_sessions: usize,
-    pub input: Option<u64>,
-    pub output: Option<u64>,
-    pub cache_read: Option<u64>,
-    pub cache_write: Option<u64>,
-    pub input_includes_cache: Option<bool>,
-    pub estimated_cost: Option<f64>,
-    pub cost_partial: bool,
-    pub currency: Option<String>,
-    pub price_sources: Vec<String>,
-    pub scans: Vec<ScanStatus>,
-    pub models: Vec<String>,
-    pub by_model: Vec<ModelUsage>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ModelUsage {
-    pub tool_id: String,
-    pub model: Option<String>,
-    pub session_count: usize,
-    pub unknown_usage_sessions: usize,
-    pub input: Option<u64>,
-    pub output: Option<u64>,
-    pub cache_read: Option<u64>,
-    pub cache_write: Option<u64>,
-    pub estimated_cost: Option<f64>,
-    pub cost_partial: bool,
-    pub currency: Option<String>,
-}
-
 fn now_ms() -> i64 {
     Utc::now().timestamp_millis()
 }
 
-fn project_for_path(db: &Database, cwd: Option<&str>) -> Result<Option<String>, String> {
-    let Some(cwd) = cwd else {
-        return Ok(None);
-    };
-    db.with_connection(|conn| {
-        conn.query_row(
-            "SELECT id FROM projects WHERE path = ?1 COLLATE NOCASE",
-            [cwd],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|error| error.to_string())
-    })
+/// Projects are matched to session directories once per scan instead of once per row.
+fn project_paths(conn: &Connection) -> Result<HashMap<String, String>, String> {
+    let mut statement = conn
+        .prepare("SELECT id, path FROM projects WHERE path IS NOT NULL")
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+        .map_err(|error| error.to_string())?;
+    let mut paths = HashMap::new();
+    for row in rows {
+        let (id, path) = row.map_err(|error| error.to_string())?;
+        paths.entry(path.to_ascii_lowercase()).or_insert(id);
+    }
+    Ok(paths)
+}
+
+pub(crate) fn model_label(model: Option<String>) -> Option<String> {
+    let model = model?;
+    let label = crate::history::opencode::model_id(model.trim());
+    (!label.is_empty()).then_some(label)
+}
+
+/// Claude Code writes `<synthetic>` on local command and placeholder rows. Those are not model calls.
+fn billable_usage_model(model: Option<&str>) -> bool {
+    model != Some("<synthetic>")
 }
 
 fn store_session(
-    db: &Database,
-    adapter: &dyn CliAdapter,
+    conn: &Connection,
+    tool: &str,
     source: &HistorySource,
     parsed: &ParsedSession,
+    projects: &HashMap<String, String>,
 ) -> Result<(), String> {
     let key = source.key();
-    let id = stable_id(adapter.id(), &key);
-    let project_id = project_for_path(db, parsed.cwd.as_deref())?;
+    let id = stable_id(tool, &key);
+    let project_id = parsed
+        .cwd
+        .as_deref()
+        .and_then(|cwd| projects.get(&cwd.to_ascii_lowercase()).cloned());
+    let session_model = model_label(parsed.model.clone());
     let messages = serde_json::to_string(&parsed.messages).map_err(|error| error.to_string())?;
     let usage = serde_json::to_string(&parsed.usage).map_err(|error| error.to_string())?;
-    db.with_connection(|conn| conn.execute(
+    conn.execute(
         "INSERT INTO history_sessions (id, tool, source_key, source_path, source_fingerprint, native_id, title, cwd, model, started_at, updated_at, messages_json, usage_json, message_count, usage_count, partial, stale, project_id)
          VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,0,?17)
          ON CONFLICT(id) DO UPDATE SET source_fingerprint=excluded.source_fingerprint, native_id=excluded.native_id,
@@ -498,22 +580,52 @@ fn store_session(
          updated_at=excluded.updated_at, messages_json=excluded.messages_json, usage_json=excluded.usage_json,
          message_count=excluded.message_count, usage_count=excluded.usage_count,
          partial=excluded.partial, stale=0, project_id=COALESCE(history_sessions.project_id, excluded.project_id)",
-        params![id,adapter.id(),key,source.path.display().to_string(),source.fingerprint,parsed.native_id,parsed.title,
-            parsed.cwd,parsed.model,parsed.started_at,parsed.updated_at,messages,usage,
+        params![id,tool,key,source.path.display().to_string(),source.fingerprint,parsed.native_id,parsed.title,
+            parsed.cwd,session_model,parsed.started_at,parsed.updated_at,messages,usage,
             parsed.messages.len() as i64,parsed.usage.len() as i64,parsed.partial as i64,project_id])
-        .map(|_| ()).map_err(|error| error.to_string()))
+        .map_err(|error| error.to_string())?;
+    conn.execute("DELETE FROM history_usage WHERE session_id = ?1", [&id])
+        .map_err(|error| error.to_string())?;
+    let mut insert = conn
+        .prepare_cached(
+            "INSERT OR REPLACE INTO history_usage (session_id,event_id,tool,model,timestamp,input,output,cache_read,cache_write,input_includes_cache)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+        )
+        .map_err(|error| error.to_string())?;
+    for event in &parsed.usage {
+        let model = model_label(event.model.clone()).or_else(|| session_model.clone());
+        if !billable_usage_model(model.as_deref()) {
+            continue;
+        }
+        insert
+            .execute(params![
+                id,
+                event.id,
+                tool,
+                model,
+                event.timestamp,
+                event.input.map(|value| value as i64),
+                event.output.map(|value| value as i64),
+                event.cache_read.map(|value| value as i64),
+                event.cache_write.map(|value| value as i64),
+                event.input_includes_cache as i64
+            ])
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
-fn existing_fingerprint(db: &Database, key: &str) -> Result<Option<(String, bool)>, String> {
-    db.with_connection(|conn| {
-        conn.query_row(
-            "SELECT source_fingerprint, stale FROM history_sessions WHERE source_key = ?1",
-            [key],
-            |row| Ok((row.get(0)?, row.get::<_, i64>(1)? != 0)),
-        )
-        .optional()
+fn cached_fingerprints(conn: &Connection, tool: &str) -> Result<HashMap<String, (String, bool)>, String> {
+    let mut statement = conn
+        .prepare("SELECT source_key, source_fingerprint, stale FROM history_sessions WHERE tool = ?1")
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map([tool], |row| {
+            Ok((row.get::<_, String>(0)?, (row.get::<_, String>(1)?, row.get::<_, i64>(2)? != 0)))
+        })
+        .map_err(|error| error.to_string())?;
+    rows.collect::<Result<HashMap<_, _>, _>>()
         .map_err(|error| error.to_string())
-    })
 }
 
 #[cfg(test)]
@@ -525,7 +637,96 @@ fn scan_adapter_sources(
     scan_adapter_sources_controlled(db, adapter, discovered, &|| false)
 }
 
-fn scan_adapter_sources_controlled(db: &Database, adapter: &dyn CliAdapter, discovered: Result<Vec<HistorySource>, String>, cancelled: &impl Fn() -> bool) -> ScanStatus {
+const CANCELLED_DETAIL: &str = "扫描已取消，原索引已保留";
+const WRITE_BATCH: usize = 64;
+
+/// Sessions are parsed on worker threads and written by this thread in batched
+/// transactions, so one slow file does not hold up the others and the database
+/// is not committed once per session.
+fn parse_and_store(
+    db: &Database,
+    adapter: &dyn CliAdapter,
+    sources: &[HistorySource],
+    projects: &HashMap<String, String>,
+    cancelled: &(dyn Fn() -> bool + Sync),
+    progress: &dyn Fn(usize),
+) -> Result<Vec<(String, String)>, ()> {
+    let mut failures = Vec::new();
+    if sources.is_empty() {
+        return Ok(failures);
+    }
+    let workers = std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(4)
+        .clamp(1, 8)
+        .min(sources.len());
+    let next = AtomicUsize::new(0);
+    let stop = AtomicBool::new(false);
+    let halted = || stop.load(Ordering::Relaxed) || cancelled();
+    let (sender, receiver) = std::sync::mpsc::sync_channel::<(usize, Result<ParsedSession, String>)>(workers * 2);
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            let sender = sender.clone();
+            let (next, halted) = (&next, &halted);
+            scope.spawn(move || loop {
+                let index = next.fetch_add(1, Ordering::Relaxed);
+                if index >= sources.len() || halted() {
+                    break;
+                }
+                let parsed = adapter.parse_history_controlled(&sources[index], halted);
+                if sender.send((index, parsed)).is_err() {
+                    break;
+                }
+            });
+        }
+        drop(sender);
+        let mut done = 0usize;
+        let mut aborted = false;
+        while let Ok(first) = receiver.recv() {
+            let mut batch = vec![first];
+            while batch.len() < WRITE_BATCH {
+                match receiver.try_recv() {
+                    Ok(item) => batch.push(item),
+                    Err(_) => break,
+                }
+            }
+            if cancelled() {
+                aborted = true;
+                break;
+            }
+            done += batch.len();
+            let written = db.with_connection(|conn| {
+                let mut transaction = conn.transaction().map_err(|error| error.to_string())?;
+                let mut batch_failures = Vec::new();
+                for (index, parsed) in &batch {
+                    let source = &sources[*index];
+                    let outcome = parsed.as_ref().map_err(String::clone).and_then(|parsed| {
+                        let savepoint = transaction.savepoint().map_err(|error| error.to_string())?;
+                        store_session(&savepoint, adapter.id(), source, parsed, projects)?;
+                        savepoint.commit().map_err(|error| error.to_string())
+                    });
+                    if let Err(error) = outcome {
+                        batch_failures.push((source.key(), error));
+                    }
+                }
+                transaction.commit().map_err(|error| error.to_string())?;
+                Ok(batch_failures)
+            });
+            match written {
+                Ok(batch_failures) => failures.extend(batch_failures),
+                Err(error) => failures.extend(batch.iter().map(|(index, _)| (sources[*index].key(), error.clone()))),
+            }
+            progress(done);
+        }
+        if aborted {
+            stop.store(true, Ordering::Relaxed);
+        }
+        drop(receiver);
+        if aborted { Err(()) } else { Ok(failures) }
+    })
+}
+
+fn scan_adapter_sources_controlled(db: &Database, adapter: &dyn CliAdapter, discovered: Result<Vec<HistorySource>, String>, cancelled: &(impl Fn() -> bool + Sync)) -> ScanStatus {
     let mut report = ScanStatus {
         tool_id: adapter.id().into(),
         scanned_at: now_ms(),
@@ -544,65 +745,60 @@ fn scan_adapter_sources_controlled(db: &Database, adapter: &dyn CliAdapter, disc
         }
     };
     report.source_count = sources.len();
-    let mut seen = HashSet::new();
-    for (index, source) in sources.into_iter().enumerate() {
-        if cancelled() { report.incomplete = true; report.detail = "扫描已取消，原索引已保留".into(); return report; }
-        set_scan_progress(true, adapter.id(), index + 1, report.source_count);
-        let key = source.key();
-        seen.insert(key.clone());
-        let outcome = if let Some(error) = source.fingerprint_error.as_ref() {
-            Err(format!("{}：{error}", source.path.display()))
-        } else {
-            let cached = existing_fingerprint(db, &key).ok().flatten();
-            if source.fingerprint != "0" && !source.fingerprint.is_empty()
-                && cached.as_ref().is_some_and(|(fingerprint, stale)| {
-                    !stale && history_fingerprints_match(fingerprint, &source.fingerprint)
-                })
-            {
-                continue;
-            }
-            adapter.parse_history_controlled(&source, cancelled)
-                .and_then(|parsed| { check_cancelled(cancelled)?; store_session(db, adapter, &source, &parsed) })
-        };
-        if cancelled() { report.incomplete = true; report.detail = "扫描已取消，原索引已保留".into(); return report; }
-        match outcome {
-            Ok(()) => {}
-            Err(error) => {
-                report.failed_count += 1;
-                report.incomplete = true;
-                if report.detail.is_empty() {
-                    report.detail = error;
-                }
-                let _ = db.with_connection(|conn| {
-                    conn.execute(
-                        "UPDATE history_sessions SET stale = 1 WHERE source_key = ?1",
-                        [&key],
-                    )
-                    .map(|_| ())
-                    .map_err(|error| error.to_string())
-                });
-            }
+    let (cached, projects) = match db.with_connection(|conn| Ok((cached_fingerprints(conn, adapter.id())?, project_paths(conn)?))) {
+        Ok(value) => value,
+        Err(error) => {
+            report.incomplete = true;
+            report.detail = error;
+            return report;
+        }
+    };
+    let seen: HashSet<String> = sources.iter().map(HistorySource::key).collect();
+    let mut failures = Vec::new();
+    let mut pending = Vec::new();
+    for source in sources {
+        if let Some(error) = source.fingerprint_error.as_ref() {
+            failures.push((source.key(), format!("{}：{error}", source.path.display())));
+            continue;
+        }
+        let unchanged = source.fingerprint != "0"
+            && !source.fingerprint.is_empty()
+            && cached.get(&source.key()).is_some_and(|(fingerprint, stale)| {
+                !stale && history_fingerprints_match(fingerprint, &source.fingerprint)
+            });
+        if !unchanged {
+            pending.push(source);
         }
     }
-    if cancelled() { report.incomplete = true; report.detail = "扫描已取消，原索引已保留".into(); return report; }
+    let settled = report.source_count - pending.len();
+    let total = report.source_count;
+    set_scan_progress(true, adapter.id(), settled, total);
+    let progress = |done: usize| set_scan_progress(true, adapter.id(), settled + done, total);
+    let parsed = parse_and_store(db, adapter, &pending, &projects, cancelled, &progress);
+    if cancelled() || parsed.is_err() {
+        report.incomplete = true;
+        report.detail = CANCELLED_DETAIL.into();
+        return report;
+    }
+    failures.extend(parsed.unwrap_or_default().into_iter().filter(|(_, error)| error != EMPTY_SESSION));
+    report.failed_count = failures.len();
+    if let Some((_, error)) = failures.first() {
+        report.incomplete = true;
+        report.detail = error.clone();
+    }
     if let Err(error) = db.with_connection(|conn| {
-        let transaction = conn.unchecked_transaction().map_err(|error| error.to_string())?;
-        let mut statement = conn
-            .prepare("SELECT source_key FROM history_sessions WHERE tool = ?1")
-            .map_err(|error| error.to_string())?;
-        let keys = statement
-            .query_map([adapter.id()], |row| row.get::<_, String>(0))
-            .map_err(|error| error.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| error.to_string())?;
-        for key in keys {
-            check_cancelled(cancelled)?;
-            if !seen.contains(&key) {
-                conn.execute("DELETE FROM history_sessions WHERE source_key = ?1", [key])
-                    .map_err(|error| error.to_string())?;
-            }
+        let transaction = conn.transaction().map_err(|error| error.to_string())?;
+        for (key, _) in &failures {
+            transaction
+                .execute("UPDATE history_sessions SET stale = 1 WHERE source_key = ?1", [key])
+                .map_err(|error| error.to_string())?;
         }
-        drop(statement);
+        for key in cached.keys().filter(|key| !seen.contains(*key)) {
+            check_cancelled(cancelled)?;
+            transaction
+                .execute("DELETE FROM history_sessions WHERE source_key = ?1", [key])
+                .map_err(|error| error.to_string())?;
+        }
         check_cancelled(cancelled)?;
         transaction.commit().map_err(|error| error.to_string())
     }) {
@@ -626,7 +822,7 @@ fn history_fingerprints_match(cached: &str, current: &str) -> bool {
 pub fn refresh(db: &Database, registry: &Registry, home: &Path) -> Result<Vec<ScanStatus>, String> {
     refresh_controlled(db, registry, home, &CliId::ALL, &|| false)
 }
-pub fn refresh_controlled(db: &Database, registry: &Registry, home: &Path, managed: &[CliId], cancelled: &impl Fn() -> bool) -> Result<Vec<ScanStatus>, String> {
+pub fn refresh_controlled(db: &Database, registry: &Registry, home: &Path, managed: &[CliId], cancelled: &(impl Fn() -> bool + Sync)) -> Result<Vec<ScanStatus>, String> {
     struct Finish;
     impl Drop for Finish { fn drop(&mut self) { let state = scan_progress(); set_scan_progress(false, &state.tool_id, state.completed_sources, state.total_sources); } }
     let _finish = Finish;
@@ -686,11 +882,7 @@ fn row_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistorySession> {
     })
 }
 
-fn query_sessions(
-    db: &Database,
-    filter: &HistoryFilter,
-    date_on_session: bool,
-) -> Result<Vec<(HistorySession, Vec<UsageEvent>)>, String> {
+pub fn list(db: &Database, filter: &HistoryFilter) -> Result<Vec<HistorySession>, String> {
     let search = filter
         .search
         .as_deref()
@@ -704,62 +896,38 @@ fn query_sessions(
                     .replace('_', "\\_")
             )
         });
-    let (from, to) = if date_on_session {
-        (filter.from_ms, filter.to_ms)
-    } else {
-        (None, None)
-    };
+    let model = filter.model.as_deref().filter(|model| !model.is_empty());
     let tools: Vec<&String> = filter.tools.as_ref().map(|list| list.iter().filter(|tool| !tool.is_empty()).collect()).unwrap_or_default();
     db.with_connection(|conn| {
+        // A session belongs to a date range when it was last active there or when any
+        // of its model calls happened there, so long sessions show up on every day used.
         let mut sql = String::from(
-            "SELECT id,tool,native_id,title,cwd,model,project_id,started_at,updated_at,favorite,partial,stale,message_count,usage_count,usage_json
-             FROM history_sessions WHERE (?1 IS NULL OR tool = ?1)
+            "SELECT id,tool,native_id,title,cwd,model,project_id,started_at,updated_at,favorite,partial,stale,message_count,usage_count
+             FROM history_sessions s WHERE (?1 IS NULL OR tool = ?1)
              AND (?2 IS NULL OR project_id = ?2 OR (?2 = '__unknown__' AND project_id IS NULL))
              AND (?3 IS NULL OR title LIKE ?3 ESCAPE '\\' OR messages_json LIKE ?3 ESCAPE '\\')
-             AND (?4 IS NULL OR updated_at >= ?4) AND (?5 IS NULL OR updated_at < ?5)
-             AND (?6 = 0 OR favorite = 1)");
+             AND ((?4 IS NULL AND ?5 IS NULL)
+               OR ((?4 IS NULL OR updated_at >= ?4) AND (?5 IS NULL OR updated_at < ?5))
+               OR EXISTS (SELECT 1 FROM history_usage u WHERE u.session_id = s.id
+                 AND (?4 IS NULL OR u.timestamp >= ?4) AND (?5 IS NULL OR u.timestamp < ?5)))
+             AND (?6 = 0 OR favorite = 1)
+             AND (?7 IS NULL
+               OR (?7 = '__unknown__' AND (model IS NULL OR EXISTS (SELECT 1 FROM history_usage u WHERE u.session_id = s.id AND u.model IS NULL)))
+               OR model = ?7
+               OR EXISTS (SELECT 1 FROM history_usage u WHERE u.session_id = s.id AND u.model = ?7))");
         if !tools.is_empty() {
-            let placeholders = (0..tools.len()).map(|index| format!("?{}", index + 7)).collect::<Vec<_>>().join(",");
+            let placeholders = (0..tools.len()).map(|index| format!("?{}", index + 8)).collect::<Vec<_>>().join(",");
             sql.push_str(&format!(" AND tool IN ({placeholders})"));
         }
         sql.push_str(" ORDER BY favorite DESC, updated_at DESC, id");
         let mut statement = conn.prepare(&sql).map_err(|error| error.to_string())?;
-        let mut values: Vec<&dyn rusqlite::ToSql> = vec![&filter.tool_id, &filter.project_id, &search, &from, &to, &filter.favorite_only];
+        let mut values: Vec<&dyn rusqlite::ToSql> = vec![&filter.tool_id, &filter.project_id, &search, &filter.from_ms, &filter.to_ms, &filter.favorite_only, &model];
         for tool in &tools { values.push(*tool); }
-        let rows = statement.query_map(rusqlite::params_from_iter(values), |row| {
-            Ok((row_session(row)?,row.get::<_,String>(14)?))
-        }).map_err(|error| error.to_string())?;
-        let mut result = Vec::new();
-        for row in rows {
-            let (session,text) = row.map_err(|error| error.to_string())?;
-            let usage: Vec<UsageEvent> = serde_json::from_str(&text).map_err(|_| "会话用量缓存损坏")?;
-            if filter.model.as_deref().is_some_and(|model| if model == "__unknown__" { session.model.is_some() && !usage.iter().any(|event| event.model.is_none()) } else { session.model.as_deref() != Some(model) && !usage.iter().any(|event| event.model.as_deref() == Some(model)) }) { continue; }
-            result.push((session,usage));
-        }
-        Ok(result)
+        let rows = statement
+            .query_map(rusqlite::params_from_iter(values), row_session)
+            .map_err(|error| error.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())
     })
-}
-
-fn timestamp_in_range(filter: &HistoryFilter, time: Option<i64>) -> bool {
-    time.is_some_and(|time| {
-        filter.from_ms.is_none_or(|from| time >= from)
-            && filter.to_ms.is_none_or(|to| time < to)
-    })
-}
-
-pub fn list(db: &Database, filter: &HistoryFilter) -> Result<Vec<HistorySession>, String> {
-    let dated = filter.from_ms.is_some() || filter.to_ms.is_some();
-    Ok(query_sessions(db, filter, false)?
-        .into_iter()
-        .filter(|(session, events)| {
-            !dated
-                || timestamp_in_range(filter, session.updated_at)
-                || events
-                    .iter()
-                    .any(|event| timestamp_in_range(filter, event.timestamp))
-        })
-        .map(|(session, _)| session)
-        .collect())
 }
 
 pub fn detail(db: &Database, id: &str) -> Result<HistoryDetail, String> {
@@ -901,236 +1069,9 @@ pub fn save_price(
     Ok(price)
 }
 
-/// A missing number on one event must not erase the subtotal from every other event.
-fn add_reported(total: &mut Option<u64>, seen: &mut bool, value: Option<u64>) {
-    let Some(value) = value else { return };
-    *seen = true;
-    *total = total.and_then(|old| old.checked_add(value));
-}
-
-fn model_label(model: Option<String>) -> Option<String> {
-    let model = model?;
-    let label = crate::history::opencode::model_id(model.trim());
-    (!label.is_empty()).then_some(label)
-}
-
-/// Claude Code writes `<synthetic>` on local command and placeholder rows. Those are not model calls.
-fn billable_usage_model(model: Option<&str>) -> bool {
-    model != Some("<synthetic>")
-}
-
-/// Prompt tokens actually consumed. Claude, Pi, and OpenCode store cache beside input;
-/// Codex and Grok already fold cache into input.
-fn prompt_tokens(event: &UsageEvent) -> Option<u64> {
-    let input = event.input?;
-    if event.input_includes_cache {
-        return Some(input);
-    }
-    input
-        .checked_add(event.cache_read.unwrap_or(0))?
-        .checked_add(event.cache_write.unwrap_or(0))
-}
-
-pub fn usage_summary(db: &Database, filter: &HistoryFilter) -> Result<UsageSummary, String> {
-    let price_map: BTreeMap<(String, String), HistoryPrice> = prices(db)?.into_iter()
-        .map(|price| ((price.tool_id.clone(), price.model.clone()), price)).collect();
-    let rows = query_sessions(db, filter, false)?;
-    let mut result = summarize_rows(&rows, &price_map, filter, scans(db)?);
-    let mut catalog_filter = filter.clone();
-    catalog_filter.model = None;
-    let catalog_rows = query_sessions(db, &catalog_filter, false)?;
-    result.models = catalog_rows.iter().flat_map(|(session, events)| session.model.clone().into_iter().chain(events.iter().filter_map(|event| event.model.clone())))
-        .filter_map(|model| model_label(Some(model)).filter(|model| billable_usage_model(Some(model))))
-        .collect::<std::collections::BTreeSet<_>>().into_iter().collect();
-    let mut groups: BTreeMap<(String, Option<String>), Vec<(HistorySession, Vec<UsageEvent>)>> = BTreeMap::new();
-    for (session, events) in &rows {
-        let mut event_groups: BTreeMap<Option<String>, Vec<UsageEvent>> = BTreeMap::new();
-        for event in events {
-            let model = model_label(event.model.clone());
-            if billable_usage_model(model.as_deref()) {
-                let mut stored = event.clone();
-                stored.model = model.clone();
-                event_groups.entry(model).or_default().push(stored);
-            }
-        }
-        if event_groups.is_empty() {
-            let model = model_label(session.model.clone());
-            if billable_usage_model(model.as_deref()) {
-                event_groups.insert(model, Vec::new());
-            }
-        }
-        for (model, events) in event_groups {
-            if filter.model.as_deref().is_some_and(|selected| if selected == "__unknown__" { model.is_some() } else { model.as_deref() != Some(selected) }) { continue; }
-            groups.entry((session.tool_id.clone(), model)).or_default().push((session.clone(), events));
-        }
-    }
-    for ((tool_id, model), rows) in groups {
-        let summary = summarize_rows(&rows, &price_map, filter, Vec::new());
-        if summary.usage_sessions == 0 { continue; }
-        result.by_model.push(ModelUsage {tool_id, model, session_count:summary.session_count,
-            unknown_usage_sessions:summary.unknown_usage_sessions, input:summary.input, output:summary.output,
-            cache_read:summary.cache_read, cache_write:summary.cache_write, estimated_cost:summary.estimated_cost, cost_partial:summary.cost_partial, currency:summary.currency});
-    }
-    Ok(result)
-}
-
-fn summarize_rows(rows: &[(HistorySession, Vec<UsageEvent>)], price_map: &BTreeMap<(String, String), HistoryPrice>, filter: &HistoryFilter, scans: Vec<ScanStatus>) -> UsageSummary {
-    let mut saw_price = false;
-    let mut cost_gap = false;
-    let mut result = UsageSummary {
-        session_count: 0,
-        usage_sessions: 0,
-        unknown_usage_sessions: 0,
-        partial_sessions: 0,
-        stale_sessions: 0,
-        input: Some(0),
-        output: Some(0),
-        cache_read: Some(0),
-        cache_write: Some(0),
-        input_includes_cache: None,
-        estimated_cost: Some(0.0),
-        cost_partial: false,
-        currency: None,
-        price_sources: Vec::new(),
-        scans, models: Vec::new(), by_model: Vec::new(),
-    };
-    let mut seen_events = HashSet::new();
-    let mut folded_input = false;
-    let mut saw_input = false;
-    let mut saw_output = false;
-    let mut saw_read = false;
-    let mut saw_write = false;
-    for (session, events) in rows {
-        let selected: Vec<_> = events
-            .iter()
-            .filter(|event| {
-                billable_usage_model(event.model.as_deref())
-                    && filter
-                    .model
-                    .as_deref()
-                    .is_none_or(|model| if model == "__unknown__" { event.model.is_none() } else { event.model.as_deref() == Some(model) })
-                    && ((filter.from_ms.is_none() && filter.to_ms.is_none())
-                        || timestamp_in_range(filter, event.timestamp))
-            })
-            .collect();
-        if (filter.from_ms.is_some() || filter.to_ms.is_some()) && selected.is_empty() {
-            continue;
-        }
-        result.session_count += 1;
-        if session.partial {
-            result.partial_sessions += 1;
-        }
-        if session.stale {
-            result.stale_sessions += 1;
-        }
-        if selected.is_empty() {
-            result.unknown_usage_sessions += 1;
-            continue;
-        }
-        result.usage_sessions += 1;
-        for event in selected {
-            if !seen_events.insert((session.tool_id.clone(), event.id.clone())) {
-                continue;
-            }
-            let input = prompt_tokens(event);
-            if input.is_some() {
-                folded_input = true;
-            }
-            add_reported(&mut result.input, &mut saw_input, input);
-            add_reported(&mut result.output, &mut saw_output, event.output);
-            add_reported(&mut result.cache_read, &mut saw_read, event.cache_read);
-            add_reported(&mut result.cache_write, &mut saw_write, event.cache_write);
-            let priced = event.model.as_ref().and_then(|model| {
-                price_map
-                    .get(&(session.tool_id.clone(), model.clone()))
-                    .cloned()
-                    .map(|price| (price, false))
-                    .or_else(|| published_rate(&session.tool_id, model).map(|price| (price, true)))
-            });
-            let Some((price, long_context)) = priced else {
-                cost_gap = true;
-                continue;
-            };
-            if result
-                .currency
-                .as_deref()
-                .is_some_and(|currency| currency != price.currency)
-            {
-                result.estimated_cost = None;
-                result.currency = None;
-                continue;
-            }
-            let (Some(input), Some(output)) = (event.input, event.output) else {
-                cost_gap = true;
-                continue;
-            };
-            let read = event.cache_read.unwrap_or(0);
-            let write = event.cache_write.unwrap_or(0);
-            let mut input_rate = price.input_per_million;
-            let mut read_rate = price.cache_read_per_million;
-            let mut write_rate = price.cache_write_per_million;
-            let mut output_rate = price.output_per_million;
-            if long_context && prompt_tokens(event).unwrap_or(input) > 272_000 {
-                input_rate *= 2.0;
-                read_rate *= 2.0;
-                write_rate *= 2.0;
-                output_rate *= 1.5;
-            }
-            let Some(uncached) = (if event.input_includes_cache {
-                input
-                    .checked_sub(read)
-                    .and_then(|value| value.checked_sub(write))
-            } else {
-                Some(input)
-            }) else {
-                cost_gap = true;
-                continue;
-            };
-            result.currency = Some(price.currency.clone());
-            saw_price = true;
-            if let Some(cost) = &mut result.estimated_cost {
-                *cost += (uncached as f64 * input_rate
-                    + output as f64 * output_rate
-                    + read as f64 * read_rate
-                    + write as f64 * write_rate)
-                    / 1_000_000.0;
-            }
-            let updated = if price.updated_at == 0 {
-                String::new()
-            } else {
-                DateTime::<Utc>::from_timestamp_millis(price.updated_at)
-                    .map(|time| time.to_rfc3339())
-                    .unwrap_or_else(|| "更新时间未知".into())
-            };
-            let label = if updated.is_empty() {
-                format!("{} / {} · {}", price.tool_id, price.model, price.source)
-            } else {
-                format!(
-                    "{} / {} · {} · {}",
-                    price.tool_id, price.model, price.source, updated
-                )
-            };
-            if !result.price_sources.contains(&label) {
-                result.price_sources.push(label);
-            }
-        }
-    }
-    result.input_includes_cache = if folded_input { Some(true) } else { None };
-    if result.usage_sessions == 0 || !saw_input { result.input = None; }
-    if result.usage_sessions == 0 || !saw_output { result.output = None; }
-    if result.usage_sessions == 0 || !saw_read { result.cache_read = None; }
-    if result.usage_sessions == 0 || !saw_write { result.cache_write = None; }
-    if result.usage_sessions == 0 || !saw_price {
-        result.estimated_cost = None;
-        result.currency = None;
-    }
-    result.cost_partial = result.estimated_cost.is_some() && (cost_gap || result.unknown_usage_sessions > 0);
-    result
-}
-
 /// Short-context public rates, per million tokens: input, cached input, cache write, output.
 /// Requests above 272K input tokens use 2x input-side rates and 1.5x output.
-fn published_rate(tool_id: &str, model: &str) -> Option<HistoryPrice> {
+pub(crate) fn published_rate(tool_id: &str, model: &str) -> Option<HistoryPrice> {
     let (input, cached, write, output, source) = match model {
         "gpt-6-astra" => (10.0, 1.0, 12.5, 50.0, "OpenAI 公开价"),
         "gpt-6.1-sol" => (2.0, 0.10, 2.5, 10.0, "OpenAI 公开价"),
