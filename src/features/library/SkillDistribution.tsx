@@ -99,7 +99,7 @@ export function SkillDistribution({ item, tools, projects, installations, initia
         }} />
       </div>
       <div className={styles.targets}>{tools.map((tool) => <label key={tool.id}><input type="checkbox" checked={selected.includes(tool.id)} onChange={(event) => { setSelected(event.target.checked ? [...selected, tool.id] : selected.filter((id) => id !== tool.id)); setPending([]); }} /><ToolIcon toolId={tool.id} size={18} />{tool.name}</label>)}</div>
-      <div className={styles.actions}><button type="button" className={styles.primary} disabled={busy || !selected.length} onClick={() => void install(false)}>安装到所选 CLI</button></div>
+      <div className={styles.actions}><button type="button" className={styles.primary} disabled={busy || !selected.length} onClick={() => void install(false)}>{selected.some((id) => mine.some((entry) => entry.toolId === id && entry.scope === scope && (scope === 'global' || samePath(entry.projectPath, activePath)) && (entry.state === 'update_available' || entry.state === 'missing'))) ? '同步到所选 CLI' : '安装到所选 CLI'}</button></div>
     </section>
     {!!pending.length && <section className={styles.skillSection}>
       <h3>这些 CLI 上已有同名内容</h3>

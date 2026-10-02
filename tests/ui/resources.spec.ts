@@ -161,6 +161,33 @@ test('editing an MCP starts from the CLIs already written and unchecking removes
   expect(writes).toEqual([expect.objectContaining({ command: 'remove_native_mcp' })]);
 });
 
+test('editing an MCP rewrites every CLI that already has it, including another scope', async ({ page }) => {
+  await mockResources(page);
+  await page.goto('/');
+  await page.evaluate(() => {
+    const state = window as typeof window & { __resourceMcpDefinitions: Array<Record<string, unknown>>; __resourceMcpPlacements: Array<Record<string, unknown>> };
+    state.__resourceMcpDefinitions.push({ id: 'mcp-1', name: 'filesystem', transport: 'stdio', command: 'npx', args: ['-y', 'old'], url: '', env: {}, headers: {}, inLibrary: true, version: 1 });
+    state.__resourceMcpPlacements.push(
+      { definitionId: 'mcp-1', toolId: 'codex', scope: 'global', projectPath: null, enabled: true },
+      { definitionId: 'mcp-1', toolId: 'codex', scope: 'project', projectPath: '/tmp/second-project', enabled: true },
+    );
+  });
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  await page.getByRole('button', { name: '修改' }).click();
+  await expect(page.getByRole('checkbox', { name: 'Codex' })).toBeChecked();
+  await page.getByRole('textbox', { name: '命令' }).fill('node');
+  await page.getByRole('button', { name: '保存并分发' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  const writes = await page.evaluate(() => (window as typeof window & { __resourceWrites: Array<{ targets: Array<Record<string, unknown>> }> }).__resourceWrites);
+  expect(writes).toHaveLength(1);
+  expect(writes[0].targets).toEqual(expect.arrayContaining([
+    expect.objectContaining({ toolId: 'codex', scope: 'global', projectPath: null }),
+    expect.objectContaining({ toolId: 'codex', scope: 'project', projectPath: '/tmp/second-project' }),
+  ]));
+  await expect(page.getByRole('status').filter({ hasText: '已写入' })).toBeVisible();
+});
+
 test('an unfinished MCP preview cannot return after switching scope or distribute to the old scope', async ({ page }) => {
   await mockResources(page);
   await page.goto('/');

@@ -19,6 +19,7 @@ pub enum TerminalId {
     WindowsTerminal,
     PowerShell,
     MacTerminal,
+    Custom,
     GnomeTerminal,
     Konsole,
     Xterm,
@@ -31,6 +32,7 @@ impl TerminalId {
             Self::WindowsTerminal => "Windows Terminal",
             Self::PowerShell => "PowerShell",
             Self::MacTerminal => "Terminal",
+            Self::Custom => "自定义",
             Self::GnomeTerminal => "GNOME Terminal",
             Self::Konsole => "Konsole",
             Self::Xterm => "XTerm",
@@ -42,7 +44,8 @@ impl TerminalId {
             Self::Auto => None,
             Self::WindowsTerminal => Some("wt.exe"),
             Self::PowerShell => Some("powershell.exe"),
-            Self::MacTerminal => Some("osascript"),
+            Self::MacTerminal => Some("/usr/bin/open"),
+            Self::Custom => None,
             Self::GnomeTerminal => Some("gnome-terminal"),
             Self::Konsole => Some("konsole"),
             Self::Xterm => Some("xterm"),
@@ -54,6 +57,7 @@ impl TerminalId {
             Self::Auto => true,
             Self::WindowsTerminal | Self::PowerShell => cfg!(windows),
             Self::MacTerminal => cfg!(target_os = "macos"),
+            Self::Custom => true,
             Self::GnomeTerminal | Self::Konsole | Self::Xterm => cfg!(target_os = "linux"),
         }
     }
@@ -72,8 +76,35 @@ pub struct TerminalOption {
 pub struct LaunchSettings {
     pub selected: TerminalId,
     pub terminals: Vec<TerminalOption>,
+    pub presets: Vec<TerminalPreset>,
+    pub custom: Option<CustomTerminal>,
     pub cli_mode: LaunchMode,
     pub project_mode: LaunchMode,
+}
+
+/// A saved launch command. `{script}` is replaced with the script file; arguments are not passed through a shell.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomTerminal {
+    pub program: String,
+    pub args: Vec<String>,
+}
+
+/// An installed terminal whose launch command is already known. Choosing one only fills `CustomTerminal`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalPreset {
+    pub id: String,
+    pub label: String,
+    pub program: String,
+    pub args: Vec<String>,
+}
+
+struct KnownTerminal {
+    id: &'static str,
+    label: &'static str,
+    args: &'static [&'static str],
+    find: fn() -> Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -125,6 +156,9 @@ pub struct TerminalCommand {
     pub args: Vec<String>,
     pub directory: PathBuf,
     pub session_markers: &'static [&'static str],
+    /// macOS runs this from a file. Terminal's `do script` types into the tty,
+    /// and the canonical input limit drops everything after 1024 bytes.
+    pub mac_script: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -149,10 +183,76 @@ impl LaunchPlanError {
 }
 
 fn on_path(name: &str) -> bool {
-    env::var_os("PATH")
+    crate::process_environment::directories()
         .into_iter()
-        .flat_map(|value| env::split_paths(&value).collect::<Vec<_>>())
         .any(|directory| directory.join(name).is_file())
+}
+
+fn app_binary(bundle: &Path) -> Option<PathBuf> {
+    let plist = bundle.join("Contents/Info.plist");
+    let output = Command::new("/usr/bin/defaults")
+        .args(["read", &plist.to_string_lossy(), "CFBundleExecutable"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let name = String::from_utf8(output.stdout).ok()?;
+    let binary = bundle.join("Contents/MacOS").join(name.trim());
+    binary.is_file().then_some(binary)
+}
+
+fn find_bundle_binary(name: &str) -> Option<PathBuf> {
+    let mut bundles = vec![PathBuf::from("/Applications").join(name)];
+    if let Some(home) = dirs::home_dir() {
+        bundles.push(home.join("Applications").join(name));
+    }
+    bundles.into_iter().find(|path| path.is_dir()).and_then(|path| app_binary(&path))
+}
+
+fn find_tabby() -> Option<PathBuf> {
+    find_bundle_binary("Tabby.app")
+}
+
+fn find_ghostty() -> Option<PathBuf> {
+    find_bundle_binary("Ghostty.app").map(|_| PathBuf::from("/usr/bin/open"))
+}
+
+/// Launch recipes verified from the terminal's own CLI, not one enum variant per product.
+/// Tabby runs `run <command> <args…>` (`tabby-local` CLI). Ghostty accepts
+/// `open -na Ghostty.app --args --wait-after-command=true -e <command>` (VS Code's external terminal).
+fn known_terminals() -> &'static [KnownTerminal] {
+    &[
+        KnownTerminal { id: "tabby", label: "Tabby", args: &["run", "/bin/sh", "{script}"], find: find_tabby },
+        KnownTerminal {
+            id: "ghostty",
+            label: "Ghostty",
+            args: &["-na", "Ghostty.app", "--args", "--wait-after-command=true", "-e", "/bin/sh", "{script}"],
+            find: find_ghostty,
+        },
+    ]
+}
+
+pub fn terminal_presets() -> Vec<TerminalPreset> {
+    known_terminals()
+        .iter()
+        .filter_map(|preset| {
+            let program = (preset.find)()?;
+            Some(TerminalPreset {
+                id: preset.id.to_owned(),
+                label: preset.label.to_owned(),
+                program: program.display().to_string(),
+                args: preset.args.iter().map(|arg| (*arg).to_owned()).collect(),
+            })
+        })
+        .collect()
+}
+
+fn terminal_available(id: TerminalId) -> bool {
+    match id {
+        TerminalId::Custom => true,
+        other => other.binary().is_some_and(on_path),
+    }
 }
 
 fn supported_terminals() -> &'static [TerminalId] {
@@ -171,9 +271,7 @@ fn supported_terminals() -> &'static [TerminalId] {
 
 pub fn terminal_options() -> Vec<TerminalOption> {
     let mut options = Vec::new();
-    let available = supported_terminals()
-        .iter()
-        .any(|terminal| terminal.binary().is_some_and(on_path));
+    let available = supported_terminals().iter().any(|terminal| terminal_available(*terminal));
     options.push(TerminalOption {
         id: TerminalId::Auto,
         label: TerminalId::Auto.label(),
@@ -183,26 +281,108 @@ pub fn terminal_options() -> Vec<TerminalOption> {
         options.push(TerminalOption {
             id: *id,
             label: id.label(),
-            available: id.binary().is_some_and(on_path),
+            available: terminal_available(*id),
         });
     }
+    options.push(TerminalOption {
+        id: TerminalId::Custom,
+        label: TerminalId::Custom.label(),
+        available: true,
+    });
     options
 }
 
-pub fn terminal_preference(db: &Database) -> Result<TerminalId, String> {
+fn read_setting(db: &Database, key: &str) -> Result<Option<String>, String> {
     db.with_connection(|conn| {
-        let value: Option<String> = conn
-            .query_row(
-                "SELECT value FROM app_settings WHERE key = 'preferred_terminal'",
-                [],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|error| error.to_string())?;
-        value
-            .map(|text| serde_json::from_str(&text).map_err(|_| "终端设置格式无法识别".into()))
-            .unwrap_or(Ok(TerminalId::Auto))
+        conn.query_row(
+            "SELECT value FROM app_settings WHERE key = ?1",
+            [key],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())
     })
+}
+
+fn write_setting(db: &Database, key: &str, value: &str) -> Result<(), String> {
+    db.with_connection(|conn| {
+        conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(())
+    })
+}
+
+pub fn terminal_preference(db: &Database) -> Result<TerminalId, String> {
+    let Some(text) = read_setting(db, "preferred_terminal")? else {
+        return Ok(TerminalId::Auto);
+    };
+    let name: String = serde_json::from_str(&text).map_err(|_| "终端设置格式无法识别".to_string())?;
+    // Older builds stored a product name. Keep that choice as a command template.
+    if name == "tabby" {
+        return migrate_removed_terminal(db, "tabby");
+    }
+    serde_json::from_str(&text).map_err(|_| "终端设置格式无法识别".into())
+}
+
+fn migrate_removed_terminal(db: &Database, id: &str) -> Result<TerminalId, String> {
+    if let Some(preset) = terminal_presets().into_iter().find(|preset| preset.id == id) {
+        store_custom(db, &CustomTerminal { program: preset.program, args: preset.args })?;
+        write_setting(db, "preferred_terminal", &serde_json::to_string(&TerminalId::Custom).map_err(|error| error.to_string())?)?;
+        return Ok(TerminalId::Custom);
+    }
+    write_setting(db, "preferred_terminal", &serde_json::to_string(&TerminalId::Auto).map_err(|error| error.to_string())?)?;
+    Ok(TerminalId::Auto)
+}
+
+fn stored_custom(db: &Database) -> Result<Option<CustomTerminal>, String> {
+    let Some(text) = read_setting(db, "custom_terminal")? else {
+        return Ok(None);
+    };
+    serde_json::from_str(&text).map(Some).map_err(|_| "自定义终端格式无法识别".into())
+}
+
+fn store_custom(db: &Database, custom: &CustomTerminal) -> Result<(), String> {
+    let value = serde_json::to_string(custom).map_err(|error| error.to_string())?;
+    write_setting(db, "custom_terminal", &value)
+}
+
+fn normalize_custom(program: &str, args: &[String]) -> Result<CustomTerminal, String> {
+    let trimmed = program.trim();
+    if trimmed.is_empty() {
+        return Err("请填写终端程序".into());
+    }
+    let mut program_path = PathBuf::from(trimmed);
+    if program_path.extension().and_then(|ext| ext.to_str()) == Some("app") {
+        program_path = app_binary(&program_path).ok_or("无法从这个应用包找到可执行文件")?;
+    }
+    if !program_path.is_file() {
+        return Err("终端程序不存在".into());
+    }
+    let mut args: Vec<String> = args.iter().map(|arg| arg.trim().to_owned()).filter(|arg| !arg.is_empty()).collect();
+    if args.is_empty() {
+        args.push("{script}".into());
+    }
+    let matches: Vec<_> = terminal_presets().into_iter().filter(|preset| preset.program == program_path.display().to_string()).collect();
+    if matches.len() == 1 && args == ["{script}"] {
+        args = matches[0].args.clone();
+    }
+    if args.iter().filter(|arg| arg.as_str() == "{script}").count() != 1 {
+        return Err("参数里要有且只有一个 {script}，它会换成要运行的脚本".into());
+    }
+    if args.iter().any(|arg| arg.contains('\0') || arg.contains('\n') || arg.contains('\r')) {
+        return Err("参数不能包含换行或空字符".into());
+    }
+    Ok(CustomTerminal { program: program_path.display().to_string(), args })
+}
+
+pub fn set_custom_terminal(db: &Database, program: String, args: Vec<String>) -> Result<LaunchSettings, String> {
+    let custom = normalize_custom(&program, &args)?;
+    store_custom(db, &custom)?;
+    set_terminal(db, TerminalId::Custom)
 }
 
 pub(crate) fn saved_launch_modes(db: &Database) -> Result<(LaunchMode, LaunchMode), String> {
@@ -227,6 +407,8 @@ pub fn settings(db: &Database) -> Result<LaunchSettings, String> {
     Ok(LaunchSettings {
         selected: terminal_preference(db)?,
         terminals: terminal_options(),
+        presets: terminal_presets(),
+        custom: stored_custom(db)?,
         cli_mode,
         project_mode,
     })
@@ -259,6 +441,9 @@ pub fn set_terminal(db: &Database, terminal: TerminalId) -> Result<LaunchSetting
     if !terminal.platform() {
         return Err("当前系统不支持所选终端".into());
     }
+    if terminal == TerminalId::Custom && stored_custom(db)?.is_none() {
+        return Err("请先填写自定义终端命令".into());
+    }
     if !terminal_options()
         .iter()
         .any(|option| option.id == terminal && option.available)
@@ -284,9 +469,16 @@ fn selected_terminal(db: &Database) -> Result<TerminalId, String> {
     if preferred == TerminalId::Auto {
         return options
             .into_iter()
-            .find(|option| option.id != TerminalId::Auto && option.available)
+            .find(|option| option.id != TerminalId::Auto && option.id != TerminalId::Custom && option.available)
             .map(|option| option.id)
             .ok_or_else(|| "未找到可用的外部终端，请安装终端后重试".into());
+    }
+    if preferred == TerminalId::Custom {
+        let custom = stored_custom(db)?.ok_or("请先在设置里填写自定义终端命令")?;
+        if !Path::new(&custom.program).is_file() {
+            return Err("自定义终端程序不存在，请在设置里重新选择".into());
+        }
+        return Ok(TerminalId::Custom);
     }
     if options
         .iter()
@@ -589,9 +781,24 @@ fn interactive_shell_script(plan: &LaunchPlan) -> Result<String, String> {
     ))
 }
 
+fn mac_terminal_shell_body(directory: &str, script: &str) -> String {
+    // Terminal may reuse an already running shell with a different PATH. Pass the
+    // same environment used by version probes, including Node for npm entrypoints.
+    let path = crate::process_environment::path()
+        .and_then(|value| value.into_string().ok())
+        .map(|value| format!("export PATH={}:\"$PATH\"; ", quote_shell(&value)))
+        .unwrap_or_default();
+    format!("{path}cd -- {} && {script}", quote_shell(directory))
+}
+
 pub fn terminal_command(plan: &LaunchPlan) -> Result<TerminalCommand, String> {
     let directory = terminal_path(&plan.directory)?;
     let powershell = || interactive_powershell_script(plan).map(|script| encoded_powershell(&script));
+    let mac_script = if matches!(plan.terminal, TerminalId::MacTerminal | TerminalId::Custom) {
+        Some(mac_terminal_shell_body(&directory, &interactive_shell_script(plan)?))
+    } else {
+        None
+    };
     let (program, args) = match plan.terminal {
         TerminalId::WindowsTerminal => (
             "wt.exe",
@@ -616,19 +823,8 @@ pub fn terminal_command(plan: &LaunchPlan) -> Result<TerminalCommand, String> {
                 powershell()?,
             ],
         ),
-        TerminalId::MacTerminal => {
-            let script = interactive_shell_script(plan)?;
-            let script = script.replace('\\', "\\\\").replace('"', "\\\"");
-            (
-                "osascript",
-                vec![
-                    "-e".into(),
-                    format!("tell application \"Terminal\" to do script \"{script}\""),
-                    "-e".into(),
-                    "tell application \"Terminal\" to activate".into(),
-                ],
-            )
-        }
+        TerminalId::MacTerminal => ("/usr/bin/open", vec!["-a".into(), "Terminal".into()]),
+        TerminalId::Custom => ("", Vec::new()),
         TerminalId::GnomeTerminal => (
             "gnome-terminal",
             vec![
@@ -661,6 +857,7 @@ pub fn terminal_command(plan: &LaunchPlan) -> Result<TerminalCommand, String> {
         args,
         directory: PathBuf::from(directory),
         session_markers: plan.session_markers,
+        mac_script,
     })
 }
 
@@ -690,6 +887,11 @@ fn shell_terminal(terminal: TerminalId, directory: &Path, script: &str) -> Resul
         return Err("安装命令无效".into());
     }
     let directory_text = terminal_path(directory)?;
+    let mac_script = if matches!(terminal, TerminalId::MacTerminal | TerminalId::Custom) {
+        Some(mac_terminal_shell_body(&directory_text, script))
+    } else {
+        None
+    };
     let (program, args) = match terminal {
         TerminalId::WindowsTerminal => (
             "wt.exe",
@@ -699,13 +901,8 @@ fn shell_terminal(terminal: TerminalId, directory: &Path, script: &str) -> Resul
             "powershell.exe",
             vec!["-NoProfile".into(), "-NoExit".into(), "-ExecutionPolicy".into(), "Bypass".into(), "-EncodedCommand".into(), encoded_powershell(script)],
         ),
-        TerminalId::MacTerminal => {
-            let script = script.replace('\\', "\\\\").replace('"', "\\\"");
-            (
-                "osascript",
-                vec!["-e".into(), format!("tell application \"Terminal\" to do script \"{script}\""), "-e".into(), "tell application \"Terminal\" to activate".into()],
-            )
-        }
+        TerminalId::MacTerminal => ("/usr/bin/open", vec!["-a".into(), "Terminal".into()]),
+        TerminalId::Custom => ("", Vec::new()),
         TerminalId::GnomeTerminal => (
             "gnome-terminal",
             vec![format!("--working-directory={directory_text}"), "--".into(), "sh".into(), "-lc".into(), script.to_owned()],
@@ -717,15 +914,32 @@ fn shell_terminal(terminal: TerminalId, directory: &Path, script: &str) -> Resul
         TerminalId::Xterm => ("xterm", vec!["-e".into(), "sh".into(), "-lc".into(), script.to_owned()]),
         TerminalId::Auto => return Err("请先选择可用的终端".into()),
     };
-    Ok(TerminalCommand { program, args, directory: PathBuf::from(directory_text), session_markers: &[] })
+    Ok(TerminalCommand { program, args, directory: PathBuf::from(directory_text), session_markers: &[], mac_script })
 }
 
-fn spawn_terminal(_terminal_id: TerminalId, terminal: TerminalCommand) -> Result<(), String> {
+fn spawn_terminal(db: &Database, terminal_id: TerminalId, terminal: TerminalCommand) -> Result<(), String> {
     #[cfg(windows)]
-    if _terminal_id == TerminalId::PowerShell {
+    if terminal_id == TerminalId::PowerShell {
         return spawn_console(&terminal);
     }
+    if terminal_id == TerminalId::MacTerminal {
+        let script = terminal.mac_script.as_deref().ok_or("终端命令无效")?;
+        #[cfg(target_os = "macos")]
+        {
+            return open_mac_terminal(script);
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = script;
+            return Err("Terminal 仅在 macOS 上可用".into());
+        }
+    }
+    if terminal_id == TerminalId::Custom {
+        let script = terminal.mac_script.as_deref().ok_or("终端命令无效")?;
+        return spawn_custom(db, script);
+    }
     let mut command = Command::new(terminal.program);
+    crate::process_environment::apply(&mut command);
     command.args(&terminal.args).current_dir(&terminal.directory).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     #[cfg(windows)]
     {
@@ -740,16 +954,92 @@ fn spawn_terminal(_terminal_id: TerminalId, terminal: TerminalCommand) -> Result
     Ok(())
 }
 
+fn write_launch_script(script: &str) -> Result<PathBuf, String> {
+    use std::io::Write;
+
+    if script.is_empty() || script.contains('\0') {
+        return Err("终端命令无效".into());
+    }
+    let path = env::temp_dir().join(format!("cliora-launch-{}.command", uuid::Uuid::new_v4()));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o700);
+    }
+    let mut file = options.open(&path).map_err(|error| format!("无法准备终端启动脚本：{error}"))?;
+    // The shell unlinks the script after it has the file open, so a long command
+    // is not left behind and is never typed into a terminal's input buffer.
+    if let Err(error) = writeln!(file, "#!/bin/sh\nrm -f \"$0\"\n{script}") {
+        let _ = std::fs::remove_file(&path);
+        return Err(format!("无法准备终端启动脚本：{error}"));
+    }
+    Ok(path)
+}
+
+fn open_mac_terminal(script: &str) -> Result<(), String> {
+    let path = write_launch_script(script)?;
+    let output = Command::new("/usr/bin/open")
+        .args(["-a", "Terminal"])
+        .arg(&path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|error| {
+            let _ = std::fs::remove_file(&path);
+            format!("无法打开 Terminal：{error}")
+        })?;
+    if !output.status.success() {
+        let _ = std::fs::remove_file(&path);
+    }
+    mac_terminal_result(output.status.success(), &String::from_utf8_lossy(&output.stderr))
+}
+
+fn spawn_custom(db: &Database, script: &str) -> Result<(), String> {
+    let custom = stored_custom(db)?.ok_or("请先在设置里填写自定义终端命令")?;
+    if !Path::new(&custom.program).is_file() {
+        return Err("自定义终端程序不存在，请在设置里重新选择".into());
+    }
+    let path = write_launch_script(script)?;
+    let args: Vec<String> = custom.args.into_iter().map(|arg| if arg == "{script}" { path.display().to_string() } else { arg }).collect();
+    // Spawn and return. Some terminals, including Tabby, keep this process alive
+    // or only show their own confirmation after the CLI has already returned.
+    Command::new(&custom.program)
+        .args(&args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| {
+            let _ = std::fs::remove_file(&path);
+            format!("无法打开自定义终端：{error}")
+        })?;
+    Ok(())
+}
+
+fn mac_terminal_result(success: bool, stderr: &str) -> Result<(), String> {
+    if success {
+        Ok(())
+    } else if stderr.contains("-1743") {
+        Err("macOS 未允许控制 Terminal，请在系统设置 → 隐私与安全性 → 自动化中允许 Cliora 控制 Terminal 后重试".into())
+    } else {
+        // osascript errors can echo the entire command, including user prompts.
+        Err("无法向 Terminal 发送启动命令，请确认 Terminal 可用后重试".into())
+    }
+}
+
 pub fn open_shell(db: &Database, script: &str) -> Result<(), String> {
     let terminal = selected_terminal(db)?;
     let home = env::var_os("USERPROFILE").or_else(|| env::var_os("HOME")).map(PathBuf::from).filter(|path| path.is_dir()).ok_or("找不到用户目录")?;
-    spawn_terminal(terminal, shell_terminal(terminal, &home, script)?)
+    spawn_terminal(db, terminal, shell_terminal(terminal, &home, script)?)
 }
 
-pub fn spawn(plan: LaunchPlan) -> Result<LaunchResult, String> {
+pub fn spawn(db: &Database, plan: LaunchPlan) -> Result<LaunchResult, String> {
     let terminal_id = plan.terminal;
     let terminal = terminal_command(&plan)?;
-    spawn_terminal(terminal_id, terminal)?;
+    spawn_terminal(db, terminal_id, terminal)?;
     Ok(LaunchResult {
         tool_id: plan.tool_id,
         project_id: plan.project_id,

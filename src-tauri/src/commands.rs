@@ -450,11 +450,11 @@ pub async fn resume_history_session(
 ) -> Result<launch::LaunchResult, ApiError> {
     blocking(move || {
         let home = home()?;
-        let plan = app.state::<AppState>().with_database(&app, |db| {
-            history::resume_plan(db, &adapters::Registry::builtins(), &home, &id, mode)
-                .map_err(native_error)
-        })?;
-        launch::spawn(plan).map_err(native_error)
+        app.state::<AppState>().with_database(&app, |db| {
+            let plan = history::resume_plan(db, &adapters::Registry::builtins(), &home, &id, mode)
+                .map_err(native_error)?;
+            launch::spawn(db, plan).map_err(native_error)
+        })
     })
     .await
 }
@@ -1425,7 +1425,7 @@ pub async fn launch_cli_login(app: AppHandle, tool_id: String) -> Result<launch:
         app.state::<AppState>().with_database(&app, |db| {
             let custom = registered_tool_path(db, &tool_id).map_err(native_error)?;
             let plan = launch::login_plan(db, &adapters::Registry::builtins(), &home, &tool_id, custom.as_deref()).map_err(native_error)?;
-            launch::spawn(plan).map_err(native_error)
+            launch::spawn(&db, plan).map_err(native_error)
         })
     }).await
 }
@@ -1978,6 +1978,20 @@ pub async fn set_preferred_terminal(
 }
 
 #[tauri::command]
+pub async fn set_custom_terminal(
+    app: AppHandle,
+    program: String,
+    args: Vec<String>,
+) -> Result<launch::LaunchSettings, ApiError> {
+    blocking(move || {
+        app.state::<AppState>().with_database(&app, |db| {
+            launch::set_custom_terminal(db, program, args).map_err(native_error)
+        })
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn set_default_launch_mode(
     app: AppHandle,
     target: String,
@@ -2169,8 +2183,8 @@ pub(crate) fn launch_now_with_stage(
             project_path,
             profile_id: None,
         })?;
-    let result = launch::spawn(plan)
-        .map_err(|message| LaunchFailure::new(LaunchStage::Terminal, native_error(message)))?;
+    let db = app.state::<AppState>().database(app).map_err(|error| LaunchFailure::new(LaunchStage::Terminal, error))?;
+    let result = launch::spawn(&db, plan).map_err(|message| LaunchFailure::new(LaunchStage::Terminal, native_error(message)))?;
     if let Some(project_id) = &project_id {
         if let Err(error) = app.state::<AppState>().with_database(app, |db| {
             projects::touch(db, project_id).map_err(native_error)
