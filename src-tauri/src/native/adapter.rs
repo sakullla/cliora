@@ -130,6 +130,15 @@ fn source_of(path: &Path, adapter: &dyn CliAdapter) -> &'static str {
             }
         }
     }
+    // Unix npm links the global binary to the package inside node_modules.
+    if !cfg!(windows) && !adapter.npm_package().is_empty() {
+        if let Ok(real) = path.canonicalize() {
+            let sample = real.to_string_lossy().replace('\\', "/");
+            if sample.contains("node_modules/") && sample.contains(adapter.npm_package()) {
+                return "npm_shim";
+            }
+        }
+    }
     if adapter.recognizes_native_install_path(path) {
         return "native";
     }
@@ -300,6 +309,39 @@ pub enum Scope {
     Project,
 }
 
+/// Unix npm keeps global binaries next to the Node executable, because its default
+/// prefix is the Node installation prefix. That directory is not always on PATH — a
+/// distribution or hand-installed Node often lives in its own tree — so the app
+/// would install a CLI through npm and then fail to find it again.
+fn npm_global_bin_dirs(node: Option<PathBuf>, home: Option<PathBuf>) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let node_dir = node
+        .and_then(|candidate| candidate.canonicalize().ok())
+        .and_then(|real| real.parent().map(Path::to_path_buf));
+    if let Some(dir) = node_dir {
+        dirs.push(dir);
+    }
+    if let Some(home) = home {
+        dirs.push(home.join(".local/bin"));
+        dirs.push(home.join(".npm-global/bin"));
+        dirs.push(home.join(".local/share/pnpm"));
+        dirs.push(home.join(".bun/bin"));
+    }
+    dirs
+}
+
+fn fallback_bin_dirs() -> Vec<PathBuf> {
+    if cfg!(windows) {
+        return Vec::new();
+    }
+    let node = env::var_os("PATH")
+        .into_iter()
+        .flat_map(|value| env::split_paths(&value).collect::<Vec<_>>())
+        .map(|dir| dir.join("node"))
+        .find(|candidate| candidate.is_file());
+    npm_global_bin_dirs(node, dirs::home_dir())
+}
+
 fn candidates(adapter: &dyn CliAdapter) -> Vec<PathBuf> {
     let name = adapter.command();
     let mut paths = Vec::new();
@@ -310,13 +352,15 @@ fn candidates(adapter: &dyn CliAdapter) -> Vec<PathBuf> {
     } else {
         &[""]
     };
-    if let Some(path) = env::var_os("PATH") {
-        for dir in env::split_paths(&path) {
-            for suffix in suffixes {
-                let candidate = dir.join(format!("{name}{suffix}"));
-                if candidate.is_file() && !paths.contains(&candidate) {
-                    paths.push(candidate);
-                }
+    let mut directories: Vec<PathBuf> = env::var_os("PATH")
+        .map(|value| env::split_paths(&value).collect())
+        .unwrap_or_default();
+    directories.extend(fallback_bin_dirs());
+    for dir in directories {
+        for suffix in suffixes {
+            let candidate = dir.join(format!("{name}{suffix}"));
+            if candidate.is_file() && !paths.contains(&candidate) {
+                paths.push(candidate);
             }
         }
     }
@@ -765,6 +809,25 @@ pub fn probe(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn npm_globals_beside_a_symlinked_node_are_searched_even_when_off_path() {
+        // A hand-installed Node keeps npm's global binaries in the directory holding the
+        // node executable, which is reached through a symlink on PATH. Searching only
+        // PATH would miss a CLI that npm had just installed.
+        let temp = tempfile::tempdir().unwrap();
+        let real_bin = temp.path().join("lib/nodejs/bin");
+        std::fs::create_dir_all(&real_bin).unwrap();
+        std::fs::write(real_bin.join("node"), "#!/bin/sh\n").unwrap();
+        let linked_dir = temp.path().join("bin");
+        std::fs::create_dir_all(&linked_dir).unwrap();
+        std::os::unix::fs::symlink(real_bin.join("node"), linked_dir.join("node")).unwrap();
+
+        let dirs = npm_global_bin_dirs(Some(linked_dir.join("node")), None);
+
+        assert_eq!(dirs.first(), Some(&real_bin), "{dirs:?}");
+    }
 
     #[test]
     fn recognized_newer_minor_version_is_not_rejected_for_native_editing() {
