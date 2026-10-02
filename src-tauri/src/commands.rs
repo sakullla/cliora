@@ -1129,6 +1129,7 @@ pub struct ToolWorkspace {
     pub profiles: Vec<NativeProfile>,
     pub common: Option<CommonConfig>,
     pub binding: Option<AppliedBinding>,
+    pub effective_context_id: Option<String>,
     pub snapshots: Vec<NativeSnapshot>,
     pub recovery_needed: Vec<String>,
 }
@@ -1141,6 +1142,7 @@ pub struct RegisteredToolWorkspace {
     pub profiles: Vec<RegisteredProfile>,
     pub common: Option<RegisteredCommon>,
     pub binding: Option<AppliedBinding>,
+    pub effective_context_id: Option<String>,
     pub snapshots: Vec<NativeSnapshot>,
     pub recovery_needed: Vec<String>,
 }
@@ -1246,6 +1248,7 @@ pub async fn get_registered_tool_workspace(
                 probe.native_files.iter().map(native_snapshot).collect()
             };
             Ok(RegisteredToolWorkspace {
+                effective_context_id: crate::accounts::selection::current(&tool_id).map(|context| context.id),
                 probe,
                 custom_path: custom.map(|path| path.display().to_string()),
                 profiles,
@@ -1292,6 +1295,7 @@ pub async fn get_tool_workspace(
                 });
             let snapshots = probe.native_files.iter().map(native_snapshot).collect();
             Ok(ToolWorkspace {
+                effective_context_id: crate::accounts::selection::current(tool.stable_id()).map(|context| context.id),
                 probe,
                 custom_path: custom.map(|path| path.display().to_string()),
                 profiles,

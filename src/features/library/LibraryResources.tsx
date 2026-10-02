@@ -1,3 +1,4 @@
+import { removalContext, useAccountLabels } from './resourceContexts';
 import { useEffect, useRef, useState } from 'react';
 import { open as pickPath } from '@tauri-apps/plugin-dialog';
 import { GuideDialog } from '../../components/GuideDialog';
@@ -46,6 +47,7 @@ const installState: Record<SkillInstallation['state'], string> = {
 };
 
 export function LibraryResources({ section, active, tools, projects }: { section: 'mcp' | 'skill'; active: boolean; tools: AdapterDescriptor[]; projects: Project[] }) {
+  const contextLabel = useAccountLabels();
   const [definitions, setDefinitions] = useState<McpDefinition[]>([]);
   const [placements, setPlacements] = useState<McpPlacement[]>([]);
   const [willDistribute, setWillDistribute] = useState(false);
@@ -268,15 +270,15 @@ export function LibraryResources({ section, active, tools, projects }: { section
     finally { setBusy(false); }
   }
 
-  async function toggleMcp(item: McpDefinition, toolId: string, scope: Scope, projectPath: string | null) {
+  async function toggleMcp(item: McpDefinition, toolId: string, scope: Scope, projectPath: string | null, contextId: string | null) {
     if (busy) return;
     const toolName = tools.find((tool) => tool.id === toolId)?.name ?? toolId;
     const where = scope === 'project' ? `${scopeLabel(scope, projectPath, projects)} 的 ` : '';
-    const place = placements.find((entry) => entry.definitionId === item.id && entry.toolId === toolId && entry.scope === scope && (scope === 'global' || samePath(entry.projectPath, projectPath)));
+    const place = placements.find((entry) => entry.definitionId === item.id && entry.toolId === toolId && entry.scope === scope && (entry.contextId ?? null) === contextId && (scope === 'global' || samePath(entry.projectPath, projectPath)));
     setBusy(true); setError(''); setNotice('');
     try {
       if (place) {
-        await native.removeNativeMcp({ toolId, scope, projectPath: place.projectPath, contextId: place.contextId, enabled: place.enabled }, item.name);
+        await native.removeNativeMcp({ toolId, scope, projectPath: place.projectPath, contextId: await removalContext(place), enabled: place.enabled }, item.name);
         setNotice(`已从 ${where}${toolName} 移除。`);
       } else {
         const target: McpTargetRequest = { toolId, scope, projectPath, enabled: true };
@@ -292,15 +294,15 @@ export function LibraryResources({ section, active, tools, projects }: { section
     finally { setBusy(false); }
   }
 
-  async function toggleSkill(item: SkillPackage, toolId: string, scope: Scope, projectPath: string | null) {
+  async function toggleSkill(item: SkillPackage, toolId: string, scope: Scope, projectPath: string | null, contextId: string | null) {
     if (busy) return;
     const toolName = tools.find((tool) => tool.id === toolId)?.name ?? toolId;
     const where = scope === 'project' ? `${scopeLabel(scope, projectPath, projects)} 的 ` : '';
-    const place = installations.find((entry) => entry.packageId === item.id && entry.toolId === toolId && entry.scope === scope && (scope === 'global' || samePath(entry.projectPath, projectPath)));
+    const place = installations.find((entry) => entry.packageId === item.id && entry.toolId === toolId && entry.scope === scope && (entry.contextId ?? null) === contextId && (scope === 'global' || samePath(entry.projectPath, projectPath)));
     setBusy(true); setError(''); setNotice('');
     try {
       if (place) {
-        await native.removeSkill(item.id, toolId, scope, place.projectPath);
+        await native.removeSkill(item.id, toolId, scope, place.projectPath, await removalContext(place));
         setNotice(`已从 ${where}${toolName} 移除。`);
       } else {
         const preview = await native.previewSkillTarget(item.id, toolId, scope, projectPath);
@@ -340,7 +342,7 @@ export function LibraryResources({ section, active, tools, projects }: { section
             </div>
             <p>{item.description || '完整资源包'}</p>
             <div className={styles.cardBar}>
-              <ScopeMarks label={`${item.name} 的 CLI`} tools={tools} places={installations.filter((entry) => entry.packageId === item.id)} projects={projects} busy={busy} onToggle={(toolId, scope, projectPath) => void toggleSkill(item, toolId, scope, projectPath)} mark={(place) => {
+              <ScopeMarks contextLabel={contextLabel} accountContexts label={`${item.name} 的 CLI`} tools={tools} places={installations.filter((entry) => entry.packageId === item.id)} projects={projects} busy={busy} onToggle={(toolId, scope, projectPath, contextId) => void toggleSkill(item, toolId, scope, projectPath, contextId)} mark={(place) => {
                 if (!place) return { pressed: false, state: 'off', status: '未安装' };
                 if (place.state === 'current') return { pressed: true, state: 'current', status: '已生效' };
                 if (place.state === 'conflict' || place.state === 'update_available') return { pressed: true, state: 'drifted', status: installState[place.state] };
@@ -408,7 +410,7 @@ export function LibraryResources({ section, active, tools, projects }: { section
           </div>
           <p className={styles.mono}>{item.transport === 'http' ? item.url || '未填写网址' : [item.command, ...item.args].filter(Boolean).join(' ') || '未填写命令'}</p>
           <div className={styles.cardBar}>
-            <ScopeMarks label={`${item.name} 的 CLI`} tools={tools} places={placements.filter((entry) => entry.definitionId === item.id)} projects={projects} busy={busy} onToggle={(toolId, scope, projectPath) => void toggleMcp(item, toolId, scope, projectPath)} mark={(place) => {
+            <ScopeMarks contextLabel={contextLabel} accountContexts label={`${item.name} 的 CLI`} tools={tools} places={placements.filter((entry) => entry.definitionId === item.id)} projects={projects} busy={busy} onToggle={(toolId, scope, projectPath, contextId) => void toggleMcp(item, toolId, scope, projectPath, contextId)} mark={(place) => {
               if (!place) return { pressed: false, state: 'off', status: '未写入' };
               if (!place.enabled) return { pressed: true, state: 'unavailable', status: '已写入但未启用' };
               return { pressed: true, state: 'current', status: '已生效' };

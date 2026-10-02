@@ -146,7 +146,7 @@ pub fn split_key(key: &str) -> (Option<&str>, &str) {
 pub fn validate_expected(tool: &str, expected: Option<&str>) -> Result<(), String> {
     let actual = current(tool).map(|ctx| ctx.id).unwrap_or_default();
     if actual != expected.unwrap_or("") {
-        return Err("账号上下文已切换，请重新读取当前文件或资源后操作".into());
+        return Err("账号上下文已切换；请先应用目标账号的配置，再重新读取文件或资源后操作".into());
     }
     Ok(())
 }

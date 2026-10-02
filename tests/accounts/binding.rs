@@ -528,3 +528,61 @@ fn skill_recovery_blocks_only_its_native_account_or_shared_project() {
         assert!(!issue.affects("codex", "project:shared"));
     }
 }
+
+#[test]
+fn project_without_binding_inherits_global_account_for_native_and_resource_writes() {
+    use crate::resources::{mcp, skills};
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("app.db")).unwrap();
+    let registry = Registry::builtins();
+    let secret = Secrets::default();
+    let a = account(&db, temp.path(), "inherited");
+    let profile = profile(&db, &a);
+    {
+        let _context = selection::enter(a.context.clone());
+        let files = registry.get("codex").unwrap().native_files(Scope::Global, temp.path(), None, true);
+        apply::apply_registered_validated(&registry, &db, &secret, &profile, None, &files, "global", Scope::Global, true).unwrap();
+    }
+    let project = temp.path().join("project");
+    std::fs::create_dir_all(project.join(".codex")).unwrap();
+    std::fs::write(project.join(".codex/config.toml"), "model = \"before\"\n").unwrap();
+    let key = apply::scope_key(Scope::Project, Some(&project)).unwrap();
+    assert!(apply::get_registered_binding(&db, "codex", &key).unwrap().is_none());
+    let _context = selection::enter_bound(&db, temp.path(), "codex", Scope::Project, Some(&project)).unwrap();
+    let effective = selection::current("codex").map(|context| context.id);
+    assert_eq!(effective, a.context.as_ref().map(|context| context.id.clone()));
+    assert!(selection::validate_expected("codex", None).is_err());
+    selection::validate_expected("codex", effective.as_deref()).unwrap();
+    let original = crate::native::adapters::read_registered_file(&registry, "codex", "settings", Scope::Project, temp.path(), Some(&project), true).unwrap();
+    crate::native::adapters::save_registered_text(&registry, "codex", "settings", Scope::Project, temp.path(), Some(&project), "0.160.0", &db, &secret, &original, "model = \"after\"\n").unwrap();
+    assert!(std::fs::read_to_string(project.join(".codex/config.toml")).unwrap().contains("after"));
+    assert!(apply::get_registered_binding(&db, "codex", &key).unwrap().is_none());
+
+    let definition = mcp::save_definition(&db, serde_json::from_value(serde_json::json!({
+        "name":"inherited-server", "transport":"stdio", "command":"node", "args":[], "url":"", "env":{}, "headers":{}, "inLibrary":true
+    })).unwrap()).unwrap();
+    let mut target = mcp::McpTargetRequest { context_id: effective.clone(), tool_id: "codex".into(), scope: Scope::Project, project_path: Some(project.to_string_lossy().into()), enabled: true, baseline_hash: None, allow_replace: false, preview_token: None };
+    let preview = mcp::preview_targets(&db, &registry, temp.path(), &definition.id, vec![target.clone()]);
+    assert_eq!(preview[0].status, "ready", "{}", preview[0].detail);
+    target.baseline_hash = preview[0].baseline_hash.clone();
+    target.preview_token = preview[0].preview_token.clone();
+    let written = mcp::distribute(&db, &secret, &registry, temp.path(), &definition.id, vec![target.clone()]);
+    assert_eq!(written[0].status, "written", "{}", written[0].detail);
+    assert_eq!(mcp::list_native(&db, &registry, temp.path(), &target).unwrap().len(), 1);
+    mcp::remove_native(&db, &secret, &registry, temp.path(), &target, &definition.name).unwrap();
+    assert!(mcp::list_native(&db, &registry, temp.path(), &target).unwrap().is_empty());
+
+    let source = temp.path().join("inherited-skill");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(source.join("SKILL.md"), "---\nname: inherited-skill\ndescription: fixture\n---\n").unwrap();
+    let package = skills::import_local(&db, source.to_str().unwrap(), None, None).unwrap();
+    let installed = skills::install(&db, &registry, temp.path(), &package.id, "codex", Scope::Project, project.to_str());
+    assert_eq!(installed.status, "installed", "{}", installed.detail);
+    selection::validate_expected("codex", effective.as_deref()).unwrap();
+    skills::set_enabled(&db, &secret, &registry, temp.path(), &package.id, "codex", Scope::Project, project.to_str(), false).unwrap();
+    assert!(!skills::enabled(&db, &registry, temp.path(), &package.id, "codex", Scope::Project, project.to_str()).unwrap());
+    skills::set_enabled(&db, &secret, &registry, temp.path(), &package.id, "codex", Scope::Project, project.to_str(), true).unwrap();
+    let removed = skills::remove(&db, &registry, temp.path(), &package.id, "codex", Scope::Project, project.to_str());
+    assert_eq!(removed.status, "removed", "{}", removed.detail);
+    assert!(!temp.path().join(".codex/config.toml").exists());
+}
