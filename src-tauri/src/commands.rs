@@ -20,6 +20,15 @@ use crate::{history, launch, library, portable, projects, resources};
 use crate::resources::rules;
 
 #[tauri::command]
+pub async fn scan_native_agents(app: AppHandle, target: resources::plugins::PluginTarget) -> Result<resources::agents::AgentSnapshot, ApiError> {
+    blocking(move || { let db = app.state::<AppState>().database(&app)?; resources::agents::scan(&db, &home()?, &target).map_err(native_error) }).await
+}
+#[tauri::command]
+pub async fn operate_native_agent(app: AppHandle, request: resources::agents::AgentRequest) -> Result<resources::agents::AgentResult, ApiError> {
+    blocking(move || { let db = app.state::<AppState>().database(&app)?; resources::agents::operate(&db, &SystemCredentialStore, &home()?, &request).map_err(native_error) }).await
+}
+
+#[tauri::command]
 pub async fn scan_native_plugins(app: AppHandle, target: resources::plugins::PluginTarget) -> Result<resources::plugins::PluginSnapshot, ApiError> {
     blocking(move || { let db = app.state::<AppState>().database(&app)?; resources::plugins::scan(&db, &home()?, &target).map_err(native_error) }).await
 }

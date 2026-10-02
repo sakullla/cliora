@@ -1,0 +1,40 @@
+{
+  "checkedAt": "2026-10-03",
+  "platform": "Windows",
+  "sources": {
+    "codex": {
+      "version": "0.160.0",
+      "ref": "https://github.com/openai/codex/tree/rust-v0.160.0/codex-rs/agent-roles/src",
+      "schema": "https://raw.githubusercontent.com/openai/codex/rust-v0.160.0/codex-rs/core/config.schema.json",
+      "schemaSha256": "9d11eacc48c999e8786d4641fc39cc53a34d7952d916c9854b04ad71c2d119d0",
+      "format": "Recursive config-folder/agents/**/*.toml. name, description, developer_instructions required. Explicit config.toml role/config_file remains visible read-only."
+    },
+    "claude_code": {
+      "version": "2.1.287",
+      "ref": "https://code.claude.com/docs/en/sub-agents.md",
+      "format": "User/project agents recursive YAML markdown. Managed directory .claude/agents. Prompt body; name/description/tools/model/permissionMode. Documentation inspected on checkedAt; actual --help agents is runtime sessions, not definition list."
+    },
+    "grok": {
+      "version": "1.0.46 (2765805b9442)",
+      "ref": "https://docs.x.ai/build/features/subagents.md",
+      "format": "Installed executable embedded Agent Profiles reference confirms YAML Markdown under .grok/agents and GROK_HOME/agents. inspect --json verified actual enabled fixture then absence after moving outside agents; exit 0 both, no inference. A nested agents/subdir fixture was not discovered by native inspect; Grok scanning is intentionally shallow."
+    },
+    "open_code": {
+      "version": "1.18.34",
+      "ref": "https://github.com/anomalyco/opencode/blob/v1.18.34/packages/opencode/src/config/agent.ts",
+      "schema": "https://github.com/anomalyco/opencode/blob/v1.18.34/packages/core/src/v1/config/agent.ts",
+      "format": "agent/agents/**/*.md follows JSON agent config merge. --pure agent list found isolated fixture; moving outside agents removed it; exit 0 both, no inference."
+    },
+    "pi": {
+      "version": "0.99.2",
+      "ref": "https://github.com/earendil-works/pi/tree/main/packages/coding-agent/docs",
+      "limitation": "No verified unified native definition format. Package-owned agents not reclassified as rules."
+    }
+  },
+  "acceptanceLimits": [
+    "No real inference or account credentials used.",
+    "Claude/Codex definition loading is not yet verified against a live CLI session.",
+    "macOS/Linux not exercised.",
+    "Static definition state is distinct from an existing session loaded state."
+  ]
+}

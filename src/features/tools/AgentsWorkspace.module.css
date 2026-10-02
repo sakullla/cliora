@@ -1,0 +1,5 @@
+.editor { display: grid; gap: 12px; max-width: 100%; }
+.editor > label { display: flex; gap: 12px; align-items: center; }
+.editor > label input { min-width: 220px; }
+.import { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.import input { max-width: 260px; }

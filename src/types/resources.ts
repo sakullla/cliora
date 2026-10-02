@@ -41,3 +41,8 @@ export type SkillTargetResult = { toolId: string; scope: Scope; projectPath: str
 export type SkillRecoveryIssue = { contextId?: string | null; operationId: string; toolId: string; scope: Scope; projectPath: string | null; targetPath: string; backupPath: string; detail: string };
 export type NativeSkillEntry = { name: string; path: string; digest: string | null; state: 'managed' | 'external' | 'unreadable'; detail: string; packageId: string | null };
 export type SkillTargetPreview = { path: string; status: 'ready' | 'conflict'; detail: string; previewToken: string | null; existingDigest: string | null; packageDigest: string; changes: SkillFileChange[] };
+
+export type AgentEntry = { id: string; name: string; description: string; path: string; format: 'toml' | 'markdown' | 'json'; content: string; enabled: boolean; readOnly: boolean; owner: string; detail: string };
+export type AgentSnapshot = { target: PluginTarget; capability: { version: string; supported: boolean; format: 'toml' | 'markdown' | 'text'; detail: string; template: string }; entries: AgentEntry[]; baseline: string; detail: string };
+export type AgentRequest = { target: PluginTarget; action: 'create' | 'save' | 'enable' | 'disable' | 'delete' | 'restore'; id: string | null; name: string; content: string; baseline: string; transactionId: string | null };
+export type AgentResult = { transactionId: string; changedPaths: string[]; restorePath: string; snapshot: AgentSnapshot; detail: string };

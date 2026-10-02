@@ -21,6 +21,7 @@ use crate::resources::mcp::McpDefinition;
 mod claude;
 pub mod accounts;
 pub mod plugins;
+pub mod agents;
 mod codex;
 mod grok;
 mod opencode;
