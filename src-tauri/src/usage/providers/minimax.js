@@ -1,3 +1,13 @@
+// Known MiniMax responses use 10-digit Unix seconds or 13-digit milliseconds.
+// Reject other magnitudes instead of guessing a date in 1970 or a distant future.
+function minimaxEpoch(value) {
+  const n = number(value);
+  if (!Number.isInteger(n)) return null;
+  if (n >= 1000000000 && n < 10000000000) return epochMillis(n * 1000);
+  if (n >= 1000000000000 && n < 10000000000000) return epochMillis(n);
+  return null;
+}
+
 async function query(ctx) {
   const root = await read(ctx, { 'MM-API-Source': 'Cliora', 'content-type': 'application/json' });
   const data = root.data && typeof root.data === 'object' ? root.data : root;
@@ -25,9 +35,14 @@ async function query(ctx) {
       const unlimited = weekly && textService && status === 3 && remainingPercent >= 100;
       // Status 3 + empty video lane is not an entitlement and must not look like a full quota.
       if (!unlimited && status === 3 && (total === null || total === 0) && (remaining === null || remaining === 0) && remainingPercent >= 100) continue;
-      const start = epochMillis(raw[weekly ? 'weekly_start_time' : 'start_time']);
-      const end = epochMillis(raw[weekly ? 'weekly_end_time' : 'end_time']);
+      const rawStart = raw[weekly ? 'weekly_start_time' : 'start_time'];
+      const rawEnd = raw[weekly ? 'weekly_end_time' : 'end_time'];
+      const start = minimaxEpoch(rawStart);
+      let end = minimaxEpoch(rawEnd);
       const duration = start && end ? seconds((Date.parse(end) - Date.parse(start)) / 1000) : null;
+      const invalidRange = start !== null && end !== null && duration === null;
+      const invalidTime = (rawStart != null && start === null) || (rawEnd != null && end === null) || invalidRange;
+      if (invalidRange) end = null;
       const boost = nonnegative(raw[weekly ? 'weekly_boost_permille' : 'interval_boost_permille'] ?? raw[weekly ? 'weekly_boost_permill' : 'interval_boost_permill']);
       const boostLabel = boost && boost !== 1000 ? ' · 配额倍率 ' + (boost / 1000) : '';
       const m = metric('minimax-' + index + (weekly ? '-weekly' : '-interval'), name + (weekly ? ' · 周额度' : ' · 周期额度') + boostLabel,
@@ -37,6 +52,7 @@ async function query(ctx) {
       else if (total !== null && total > 0 && remaining !== null && remaining <= total) {
         m.total = total; m.remaining = remaining; m.used = total - remaining;
       } else missing(m, errors, 'MiniMax 此窗口缺少可用额度，未假定为零');
+      if (!unlimited && invalidTime) missing(m, errors, 'MiniMax 周期时间无法可靠识别，已保留可用额度并省略无效时间');
       metrics.push(m);
     }
   });

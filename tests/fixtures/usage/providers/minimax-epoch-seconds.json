@@ -1,0 +1,16 @@
+{
+  "base_resp": { "status_code": 0 },
+  "data": {
+    "plan_name": "Max",
+    "model_remains": [
+      {
+        "model_name": "MiniMax-M1",
+        "current_interval_total_count": 10,
+        "current_interval_usage_count": 8,
+        "start_time": 1779019200,
+        "end_time": 1779037200,
+        "remains_time": 3600
+      }
+    ]
+  }
+}

@@ -4,7 +4,7 @@
   "upstreamRepository": "https://github.com/steipete/CodexBar",
   "upstreamRevision": "2cfa63250079b96b00a0da10358001e676cee19d",
   "realAccountCapture": false,
-  "notes": "Field shapes transcribed from fixed-source parser/docs/tests; all values and timestamps synthesized. No private account or network acceptance is claimed. auth/business fixtures exercise explicit envelopes; HTTP status errors are covered separately.",
+  "notes": "Field shapes transcribed from fixed-source parser/docs/tests; values and timestamps are synthetic except minimax-epoch-seconds, which preserves the public upstream codingPlanJSON fixture values to reproduce its seconds format. No private account or network acceptance is claimed. auth/business fixtures exercise explicit envelopes; HTTP status errors are covered separately.",
   "sources": {
     "glm": [
       "Sources/CodexBarCore/Resources/Plugins/zai.js",
@@ -20,7 +20,8 @@
       "Sources/CodexBarCore/Providers/MiniMax/MiniMaxModelRemains.swift",
       "Sources/CodexBarCore/Providers/MiniMax/MiniMaxAPIRegion.swift",
       "Tests/CodexBarTests/MiniMaxCurrentTokenPlanResponseTests.swift",
-      "Tests/CodexBarTests/MiniMaxAPITokenFetchTests.swift"
+      "Tests/CodexBarTests/MiniMaxAPITokenFetchTests.swift",
+      "Tests/CodexBarTests/MiniMaxProviderTests.swift#L1177"
     ]
   },
   "variants": {
@@ -29,8 +30,9 @@
     "kimi-counts": "older count-based Code API /usages",
     "kimi-ratios": "new ratio pools, shared month total, no weekly pool",
     "kimi-mixed": "international legacy matching-reset zero placeholder",
-    "minimax-counts": "legacy Coding Plan counts (usage_count means remaining)",
+    "minimax-counts": "legacy Coding Plan counts with epoch milliseconds (usage_count means remaining)",
     "minimax-ratios": "Token/M Plan ratio pools, boost permille, placeholder video, extra points",
-    "minimax-unlimited": "known general weekly status=3 unlimited lane"
+    "minimax-unlimited": "known general weekly status=3 unlimited lane",
+    "minimax-epoch-seconds": "Public MiniMaxProviderTests.swift codingPlanJSON fixture at lines 1177-1195; exact start_time=1779019200/end_time=1779037200 seconds retained. Tests derive an explicit seven-day weekly interval and equivalent milliseconds/numeric strings. Unit decoding reference: MiniMaxUsageFetcher.swift dateFromEpoch, lines 956-965."
   }
 }
