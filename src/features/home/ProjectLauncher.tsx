@@ -7,6 +7,7 @@ import type { LaunchSettings, Project, TrayRepairTarget } from '../../types/laun
 import { preferredLaunchMode } from '../../types/launch';
 import type { AdapterDescriptor } from '../../types/native';
 import { displayPath, shortPath } from '../../lib/paths';
+import { writeClipboard } from '../../lib/clipboard';
 import { FilterSelect } from '../../components/FilterSelect';
 import { Icon } from '../../components/Icon';
 import { ToolIcon, toolOptions } from '../../components/ToolIcon';
@@ -52,6 +53,8 @@ export function ProjectLauncher({ tools, repair }: { tools: AdapterDescriptor[];
   const [relink, setRelink] = useState<Record<string, string>>({});
   const [modelEdits, setModelEdits] = useState<Record<string, string>>({});
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [copiedPath, setCopiedPath] = useState('');
+  const copiedTimer = useRef(0);
   const repairDirectoryInput = useRef<HTMLInputElement>(null);
   const repairToolSelect = useRef<HTMLButtonElement>(null);
   const repairCard = useRef<HTMLDivElement>(null);
@@ -192,6 +195,15 @@ export function ProjectLauncher({ tools, repair }: { tools: AdapterDescriptor[];
     catch (value) { showDialogError(value); }
   }
 
+  async function copyPath(project: Project) {
+    if (!project.path) return;
+    const value = displayPath(project.path);
+    const copied = await writeClipboard(value);
+    window.clearTimeout(copiedTimer.current);
+    setCopiedPath(copied ? value : `fail:${value}`);
+    copiedTimer.current = window.setTimeout(() => setCopiedPath(''), 1600);
+  }
+
   async function applySelected(project: Project, toolId: string) {
     const profileId = project.selectedProfiles[toolId];
     if (!profileId || !project.path) return;
@@ -249,7 +261,7 @@ export function ProjectLauncher({ tools, repair }: { tools: AdapterDescriptor[];
         <GuideDialog open={editingId === project.id} title={`修改${project.name}`} hint="可以改名称、目录、模型和这次启动方式。启动按钮仍在卡片上。" onClose={() => { setEditingId(null); setDialogError(''); setDialogFeedback(''); }}>
           {dialogError && <div className={styles.error} role="alert">{dialogError}</div>}
           {dialogFeedback && <div className={styles.feedback} role="status">{dialogFeedback}</div>}
-          {project.path && <div className={styles.projectPath}><small>{displayPath(project.path)}</small><button type="button" className={styles.secondary} onClick={() => void navigator.clipboard.writeText(displayPath(project.path!))}>复制路径</button></div>}
+          {project.path && <div className={styles.projectPath}><small>{displayPath(project.path)}</small><button type="button" className={styles.secondary} data-copied={copiedPath === displayPath(project.path) || undefined} onClick={() => void copyPath(project)}>{copiedPath === displayPath(project.path) ? '已复制' : copiedPath === `fail:${displayPath(project.path)}` ? '复制失败' : '复制路径'}</button></div>}
           <div className={styles.extra}><label>项目名称<input aria-label={`${project.name} 项目名称`} value={names[project.id] ?? project.name} onChange={event => setNames({ ...names,[project.id]:event.target.value })} /></label><button type="button" disabled={!!busy || !names[project.id]?.trim()} onClick={() => void rename(project)}>保存名称</button><button type="button" className={styles.secondary} disabled={!!busy} onClick={() => void remove(project)}>移除项目</button></div>
           <button type="button" className={styles.secondary} disabled={!!busy || !project.available} onClick={() => void openProject(project)}>打开目录</button>
           {descriptor?.projectModelOverride && <div className={styles.extra}><label>项目模型 <input aria-label={`${project.name} 项目模型`} value={modelEdits[modelKey] ?? project.modelOverrides[toolId] ?? ''} placeholder="留空则使用原生默认模型" onChange={(event) => setModelEdits((old) => ({ ...old, [modelKey]: event.target.value }))} /></label><button type="button" disabled={busy === project.id} onClick={() => void saveModel(project, toolId)}>保存</button></div>}

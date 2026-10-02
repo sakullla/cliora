@@ -339,7 +339,7 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
             {!!item.updatedAt && <span className={styles.cardTime} title={fullTime(item.updatedAt)}><Icon name="clock" size={11} />{shortTime(item.updatedAt)}</span>}
           </small>
           <button className={styles.cardTitle} type="button" onClick={() => choose(item)}>{item.title}</button>
-          <p>{item.body.slice(0, 160) || '正文为空'}</p>
+          <p>{item.body ? item.body.length > 160 ? `${item.body.slice(0, 160)}…` : item.body : '正文为空'}</p>
           <div className={styles.cardBar}>
             {kind === 'rule' ? <ScopeMarks label={`${item.title} 的 CLI`} tools={managedTools} places={rulePlacements.filter((entry) => entry.ruleId === item.id)} projects={projects} busy={busy} onToggle={(toolId, scope, projectPath) => void toggleRule(item, toolId, scope, projectPath)} mark={(place) => {
               if (!place) return { pressed: false, state: 'off', status: '未写入' };

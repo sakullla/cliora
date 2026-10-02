@@ -253,7 +253,7 @@
 .compositionLegend i[data-key="output"] { background: var(--chart-output); }
 .compositionLegend i[data-key="read"] { background: var(--chart-read); }
 .compositionLegend i[data-key="write"] { background: var(--chart-write); }
-.usageNotes { display: grid; gap: 3px; width: 100%; color: var(--text-2); font-size: 12px; line-height: 1.6; }
+.usageNotes { display: grid; gap: 3px; width: 100%; max-width: 68ch; color: var(--text-2); font-size: 12px; line-height: 1.6; }
 .usageNotes p { margin: 0; }
 .priceSources, .savedPrices { display: grid; gap: 6px; width: 100%; color: var(--text-2); font-size: 12px; }
 .priceSources strong, .savedPrices strong { color: var(--text); font-size: 12.5px; }
