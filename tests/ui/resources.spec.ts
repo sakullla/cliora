@@ -303,3 +303,82 @@ test('an MCP write conflict stays in the dialog', async ({ page }) => {
   await expect(dialog.getByRole('status').filter({ hasText: '已写入当前工具。' })).toHaveCount(0);
 });
 
+
+async function mockAccountResources(page: Page, contexts = ['ctx-a', 'ctx-b']) {
+  await mockResources(page);
+  await page.addInitScript(({ contexts }) => {
+    const win = window as any;
+    const invoke = win.__TAURI_INTERNALS__.invoke;
+    win.__activeContext = contexts.at(-1);
+    win.__accountInstalls = contexts.map(contextId => ({ packageId: 'skill-1', toolId: 'codex', scope: 'global', projectPath: null, contextId, state: 'current', targetPath: `/accounts/${contextId}/skills/alpha` }));
+    win.__resourceSkillPackages.push({ id: 'skill-1', name: 'alpha', description: 'Account skill', fileCount: 1, digest: 'digest', source: 'local', inLibrary: true });
+    win.__resourceMcpDefinitions.push({ id: 'mcp-1', name: 'filesystem', transport: 'stdio', command: 'npx', args: [], url: '', env: {}, headers: {}, inLibrary: true, version: 1 });
+    win.__resourceMcpPlacements.push(...contexts.map(contextId => ({ definitionId: 'mcp-1', toolId: 'codex', scope: 'global', projectPath: null, contextId, enabled: true })));
+    win.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command === 'list_accounts') return contexts.map(id => ({ label: id === 'ctx-a' ? '工作账号' : '个人账号', context: { id }, retiredContexts: [] }));
+      if (command === 'get_registered_tool_workspace') return { ...await invoke(command, args), effectiveContextId: win.__activeContext };
+      if (command === 'list_skill_installations') return win.__accountInstalls;
+      if (command === 'remove_skill' || command === 'remove_native_mcp') {
+        const context = command === 'remove_skill' ? args.expectedContextId : args.target.contextId;
+        win.__resourceWrites.push({ command, args });
+        if (context !== win.__activeContext) throw { message: '请先应用目标账号的配置' };
+        const items = command === 'remove_skill' ? win.__accountInstalls : win.__resourceMcpPlacements;
+        const index = items.findIndex((item: any) => item.contextId === context);
+        if (index >= 0) items.splice(index, 1);
+        return null;
+      }
+      return invoke(command, args);
+    };
+  }, { contexts });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
+}
+
+test('OAuth MCP uncheck passes its exact context with one account', async ({ page }) => {
+  await mockAccountResources(page, ['ctx-a']);
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  await page.getByRole('button', { name: '修改' }).click();
+  await expect(page.getByRole('checkbox', { name: 'Codex' })).toBeChecked();
+  await page.getByRole('checkbox', { name: 'Codex' }).uncheck();
+  await page.getByRole('button', { name: '保存并分发' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).__resourceWrites)).toEqual([{ command: 'remove_native_mcp', args: { name: 'filesystem', target: expect.objectContaining({ contextId: 'ctx-a' }) } }]);
+});
+
+test('A and B MCP placements stay distinct and unchecking B preserves A', async ({ page }) => {
+  await mockAccountResources(page);
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  await expect(page.getByRole('group', { name: 'filesystem 的 CLI · 全局 · 工作账号', exact: true })).toBeVisible();
+  await expect(page.getByRole('group', { name: 'filesystem 的 CLI · 全局 · 个人账号', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '修改' }).click();
+  await expect(page.getByText('Codex · 全局 · 工作账号（切换后可修改）')).toBeVisible();
+  await expect(page.getByRole('checkbox', { name: 'Codex' })).toBeChecked();
+  await page.getByRole('checkbox', { name: 'Codex' }).uncheck();
+  await page.getByRole('button', { name: '保存并分发' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  const state = await page.evaluate(() => ({ writes: (window as any).__resourceWrites, places: (window as any).__resourceMcpPlacements }));
+  expect(state.writes).toHaveLength(1);
+  expect(state.writes[0].args.target.contextId).toBe('ctx-b');
+  expect(state.places.map((item: any) => item.contextId)).toEqual(['ctx-a']);
+});
+
+test('Skill card and installed list remove the selected account without collapsing A/B', async ({ page }) => {
+  await mockAccountResources(page);
+  await page.getByRole('region', { name: '资料库内容' }).getByRole('tab', { name: 'Skill', exact: true }).click();
+  const a = page.getByRole('group', { name: 'alpha 的 CLI · 全局 · 工作账号', exact: true });
+  const b = page.getByRole('group', { name: 'alpha 的 CLI · 全局 · 个人账号', exact: true });
+  await expect(a).toBeVisible(); await expect(b).toBeVisible();
+  await a.getByRole('button').click();
+  await expect(page.getByRole('alert')).toContainText('请先应用目标账号');
+  await b.getByRole('button').click();
+  await expect(b).toHaveCount(0); await expect(a).toBeVisible();
+  await page.evaluate(() => { (window as any).__activeContext = 'ctx-a'; });
+  await page.getByRole('button', { name: '修改' }).click();
+  const row = page.getByRole('dialog').getByRole('listitem').filter({ hasText: '工作账号' });
+  await expect(row).toBeVisible();
+  await row.getByRole('button', { name: '移除', exact: true }).click();
+  await page.getByRole('dialog').last().getByRole('button', { name: '移除', exact: true }).click();
+  await expect(row).toHaveCount(0);
+  const writes = await page.evaluate(() => (window as any).__resourceWrites);
+  expect(writes.map((entry: any) => entry.args.expectedContextId)).toEqual(['ctx-a', 'ctx-b', 'ctx-a']);
+});

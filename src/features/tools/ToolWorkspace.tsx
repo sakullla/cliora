@@ -742,7 +742,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   }
 
   async function openCurrentFile(nextRole = role, abandonConfirmed = false) {
-    editorContextId.current = workspace?.binding?.contextId ?? null;
+    editorContextId.current = workspace?.effectiveContextId ?? null;
     if (!currentTool) return;
     const started = captureDraft();
     if (dirty && !abandonConfirmed && !await confirmChange('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return;
@@ -969,7 +969,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     </>}
     </div>
     {resourceView === 'accounts' && currentTool && <AccountsPanel key={currentTool} toolId={currentTool} state={accountState} />}
-    {resourceView === 'mcp' && currentTool && <McpWorkspace key={JSON.stringify([currentTool, scope, projectPath, resourceEpoch, workspace?.binding?.contextId])} toolId={currentTool} scope={scope} projectPath={projectPath} contextId={workspace?.binding?.contextId ?? null} onDirtyChange={setMcpDirty} />}
-    {resourceView === 'skills' && currentTool && <SkillsWorkspace key={JSON.stringify([currentTool, scope, projectPath, resourceEpoch, workspace?.binding?.contextId])} toolId={currentTool} scope={scope} projectPath={projectPath} contextId={workspace?.binding?.contextId ?? null} onDirtyChange={setSkillsDirty} />}
+    {resourceView === 'mcp' && currentTool && <McpWorkspace key={JSON.stringify([currentTool, scope, projectPath, resourceEpoch, workspace?.effectiveContextId])} toolId={currentTool} scope={scope} projectPath={projectPath} contextId={workspace?.effectiveContextId ?? null} onDirtyChange={setMcpDirty} />}
+    {resourceView === 'skills' && currentTool && <SkillsWorkspace key={JSON.stringify([currentTool, scope, projectPath, resourceEpoch, workspace?.effectiveContextId])} toolId={currentTool} scope={scope} projectPath={projectPath} contextId={workspace?.effectiveContextId ?? null} onDirtyChange={setSkillsDirty} />}
   </section>;
 }

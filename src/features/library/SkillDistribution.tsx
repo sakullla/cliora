@@ -1,3 +1,4 @@
+import { removalContext, useResourceContexts, useAccountLabels } from './resourceContexts';
 import { useEffect, useRef, useState } from 'react';
 import { FilterSelect } from '../../components/FilterSelect';
 import { ToolIcon } from '../../components/ToolIcon';
@@ -24,6 +25,7 @@ const stateLabel: Record<SkillInstallation['state'], string> = {
 };
 
 export function SkillDistribution({ item, tools, projects, installations, initialTools = [], autoRun = false, onChanged }: { item: SkillPackage; tools: AdapterDescriptor[]; projects: Project[]; installations: SkillInstallation[]; initialTools?: string[]; autoRun?: boolean; onChanged: () => Promise<void> }) {
+  const contextLabel = useAccountLabels();
   const mine = installations.filter((entry) => entry.packageId === item.id);
   const globalIds = mine.filter((entry) => entry.scope === 'global').map((entry) => entry.toolId);
   const firstProject = mine.find((entry) => entry.scope === 'project');
@@ -36,7 +38,12 @@ export function SkillDistribution({ item, tools, projects, installations, initia
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const activePath = scope === 'project' ? projectPath : null;
+  const contexts = useResourceContexts(tools, mine);
   const placed = installations.filter((entry) => entry.packageId === item.id);
+
+  useEffect(() => {
+    if (contexts.ready && !initialTools.length) setSelected(mine.filter((entry) => entry.scope === scope && (scope === 'global' || samePath(entry.projectPath, activePath)) && contexts.matches(entry)).map((entry) => entry.toolId));
+  }, [contexts.ready, contexts.stamp, scope, activePath]);
 
   async function install(allowTakeover: boolean, ids = selected) {
     if (scope === 'project' && !projectPath) { setError('请先选择项目。'); return; }
@@ -67,7 +74,7 @@ export function SkillDistribution({ item, tools, projects, installations, initia
     if (!await confirmAction(`从${tools.find((tool) => tool.id === entry.toolId)?.name ?? entry.toolId}移除「${item.name}」？资料库里的包会保留。`, () => true, { title: '从该工具移除', confirmLabel: '移除', destructive: true })) return;
     setBusy(true); setError('');
     try {
-      await native.removeSkill(item.id, entry.toolId, entry.scope, entry.projectPath);
+      await native.removeSkill(item.id, entry.toolId, entry.scope, entry.projectPath, await removalContext(entry));
       await onChanged();
     } catch (value) { setError(text(value)); }
     finally { setBusy(false); }
@@ -76,14 +83,15 @@ export function SkillDistribution({ item, tools, projects, installations, initia
   return <div className={styles.skillAdd}>
     <section className={styles.skillSection}>
       <h3>已经装在</h3>
-      {placed.length ? <ul className={styles.installed}>{placed.map((entry) => <li key={`${entry.toolId}:${entry.scope}:${entry.projectPath ?? ''}`}>
+      {placed.length ? <ul className={styles.installed}>{placed.map((entry) => <li key={`${entry.toolId}:${entry.scope}:${entry.projectPath ?? ''}:${entry.contextId ?? 'default'}`}>
         <ToolIcon toolId={entry.toolId} size={22} />
-        <span><strong>{tools.find((tool) => tool.id === entry.toolId)?.name ?? entry.toolId}</strong><small>{scopeLabel(entry.scope, entry.projectPath, projects)} · {stateLabel[entry.state]}</small></span>
+        <span><strong>{tools.find((tool) => tool.id === entry.toolId)?.name ?? entry.toolId}</strong><small>{scopeLabel(entry.scope, entry.projectPath, projects)} · {stateLabel[entry.state]}{` · ${contextLabel(entry.contextId)}`}</small></span>
         <button type="button" disabled={busy} onClick={() => void remove(entry)}>移除</button>
       </li>)}</ul> : <p>还没有安装到任何 CLI。</p>}
     </section>
     <section className={styles.skillSection}>
       <h3>再安装到</h3>
+      <p>安装使用当前生效账号。移除其它账号的安装前，请先应用该账号的配置。</p>
       <div className={styles.fields}>
         <FilterSelect className={styles.scopePick} label="分发范围" triggerDetail={false} value={scope === 'global' ? '__global__' : projectPath ?? ''} options={[
           { value: '__global__', label: '全局' },
@@ -94,12 +102,12 @@ export function SkillDistribution({ item, tools, projects, installations, initia
           const path = next === 'project' ? value : null;
           setScope(next);
           if (path) setProjectPath(path);
-          setSelected(mine.filter((entry) => entry.scope === next && (next === 'global' || samePath(entry.projectPath, path))).map((entry) => entry.toolId));
+          setSelected(mine.filter((entry) => entry.scope === next && contexts.matches(entry) && (next === 'global' || samePath(entry.projectPath, path))).map((entry) => entry.toolId));
           setPending([]);
         }} />
       </div>
-      <div className={styles.targets}>{tools.map((tool) => <label key={tool.id}><input type="checkbox" checked={selected.includes(tool.id)} onChange={(event) => { setSelected(event.target.checked ? [...selected, tool.id] : selected.filter((id) => id !== tool.id)); setPending([]); }} /><ToolIcon toolId={tool.id} size={18} />{tool.name}</label>)}</div>
-      <div className={styles.actions}><button type="button" className={styles.primary} disabled={busy || !selected.length} onClick={() => void install(false)}>{selected.some((id) => mine.some((entry) => entry.toolId === id && entry.scope === scope && (scope === 'global' || samePath(entry.projectPath, activePath)) && (entry.state === 'update_available' || entry.state === 'missing'))) ? '同步到所选 CLI' : '安装到所选 CLI'}</button></div>
+      <div className={styles.targets}>{tools.map((tool) => <label key={tool.id}><input type="checkbox" disabled={!contexts.ready} checked={selected.includes(tool.id)} onChange={(event) => { setSelected(event.target.checked ? [...selected, tool.id] : selected.filter((id) => id !== tool.id)); setPending([]); }} /><ToolIcon toolId={tool.id} size={18} />{tool.name}</label>)}</div>
+      <div className={styles.actions}><button type="button" className={styles.primary} disabled={busy || !contexts.ready || !selected.length} onClick={() => void install(false)}>{selected.some((id) => mine.some((entry) => entry.toolId === id && entry.scope === scope && contexts.matches(entry) && (scope === 'global' || samePath(entry.projectPath, activePath)) && (entry.state === 'update_available' || entry.state === 'missing'))) ? '同步到所选 CLI' : '安装到所选 CLI'}</button></div>
     </section>
     {!!pending.length && <section className={styles.skillSection}>
       <h3>这些 CLI 上已有同名内容</h3>
@@ -108,6 +116,7 @@ export function SkillDistribution({ item, tools, projects, installations, initia
       <div className={styles.actions}><button type="button" className={styles.primary} disabled={busy} onClick={() => void install(true)}>确认替换并安装</button></div>
     </section>}
     {notice && <p className={styles.notice} role="status">{notice}</p>}
+    {contexts.error && <p role="alert">{contexts.error}</p>}
     {error && <p className={styles.error} role="alert">{error}</p>}
   </div>;
 }

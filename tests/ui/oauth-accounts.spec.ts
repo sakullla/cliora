@@ -1,13 +1,29 @@
 import { expect, test, type Page } from '@playwright/test';
 
-async function setup(page: Page) {
-  await page.addInitScript(() => {
+async function setup(page: Page, inherited = false) {
+  await page.addInitScript((inherited) => {
     const account = (id: string, label: string) => ({ id, label, toolId: 'codex', provider: 'openai', version: 1, state: 'signed_in', identity: { subject: id, email: `${id}@example.test`, plan: 'Plus', source: 'mock' }, context: { id: `ctx-${id}` }, retiredContexts: [], pendingLogin: null, detail: null, checkedAt: null });
-    const harness = { accounts: [account('a', '工作账号'), account('b', '个人账号')], profiles: [] as any[], binding: null as any, calls: [] as { command: string; args: any }[] };
+    const harness = { skillEnabled: true, accounts: [account('a', '工作账号'), account('b', '个人账号')], profiles: [] as any[], binding: null as any, calls: [] as { command: string; args: any }[] };
     Object.assign(window, { isTauri: true, oauthHarness: harness, __TAURI_INTERNALS__: { invoke: async (command: string, args: any) => {
       harness.calls.push({ command, args });
       if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }] };
       if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: ['openai_responses'], login: { hint: '原生登录' } }], managedIds: ['codex'], preservedUnknown: [] };
+      if (inherited && command === 'list_projects') return [{ id: 'project', name: '继承项目', path: '/tmp/project', available: true, selectedProfiles: {}, appliedProfiles: {} }];
+      if (inherited && command === 'read_registered_native_file_for_edit') return 'model = \"before\"';
+      if (inherited && command === 'save_registered_native_file') {
+        if (args.expectedContextId !== 'ctx-a') throw { message: '账号上下文错误' };
+        return { status: 'written_for_next_session', changedFiles: [] };
+      }
+      if (inherited && command === 'list_native_mcp') {
+        if (args.target.contextId !== 'ctx-a') throw { message: 'MCP 上下文错误' };
+        return [{ name: 'project-server', command: 'node', args: [], env: {}, headers: {}, transport: 'stdio', enabled: true }];
+      }
+      if (inherited && command === 'list_skill_packages') return [{ id: 'skill', name: 'project-skill', description: 'fixture', fileCount: 1, source: '/tmp/fixtures/project-skill', digest: 'fixture-digest', compatibility: null, inLibrary: true, updatedAt: 1 }];
+      if (inherited && command === 'scan_native_skills') return [{ name: 'project-skill', packageId: 'skill', state: 'managed', path: '/tmp/project/.agents/skills/project-skill', description: 'fixture' }];
+      if (inherited && command === 'list_skill_installations') return [{ packageId: 'skill', toolId: 'codex', scope: 'project', projectPath: '/tmp/project', contextId: null, state: 'current', targetPath: '/tmp/project/.agents/skills/project-skill' }];
+      if (command === 'list_skill_recovery_issues') return [];
+      if (inherited && command === 'get_skill_enabled') return harness.skillEnabled;
+      if (inherited && command === 'set_skill_enabled') { if (args.expectedContextId !== 'ctx-a') throw { message: 'Skill 上下文错误' }; harness.skillEnabled = args.enabled; return null; }
       if (['list_projects', 'list_usage_queries', 'list_usage_cache', 'list_mcp_definitions', 'list_skill_packages'].includes(command)) return [];
       if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
       if (command === 'get_tray_status') return { available: false, error: null };
@@ -24,7 +40,7 @@ async function setup(page: Page) {
         if (command === 'rename_account') value.label = args.label;
         return value;
       }
-      if (command === 'get_registered_tool_workspace') return { probe: { tool: 'codex', selectedPath: 'C:/codex.cmd', installations: [{ path: 'C:/codex.cmd', version: '0.160.0', status: 'available', source: 'npm_shim', detail: null }], nativeFiles: [{ role: 'settings', path: 'C:/fixture/config.toml', format: 'toml', writable: true, sensitive: false }], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: ['openai_responses'], providerPresets: [], dependencies: [], installUrl: 'https://developers.openai.com/codex/cli', upgradeHint: '', installCommand: null, upgradeCommand: null, nativeInstallCommand: null }, profiles: harness.profiles, binding: harness.binding, snapshots: [{ role: 'settings', text: '', fingerprint: '', error: null }], common: null, customPath: null, recoveryNeeded: [] };
+      if (command === 'get_registered_tool_workspace') return { probe: { tool: 'codex', selectedPath: 'C:/codex.cmd', installations: [{ path: 'C:/codex.cmd', version: '0.160.0', status: 'available', source: 'npm_shim', detail: null }], nativeFiles: [{ role: 'settings', path: 'C:/fixture/config.toml', format: 'toml', writable: true, sensitive: false }], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: ['openai_responses'], providerPresets: [], dependencies: [], installUrl: 'https://developers.openai.com/codex/cli', upgradeHint: '', installCommand: null, upgradeCommand: null, nativeInstallCommand: null }, profiles: harness.profiles, effectiveContextId: inherited ? 'ctx-a' : harness.binding?.contextId ?? null, binding: harness.binding, snapshots: [{ role: 'settings', text: '', fingerprint: inherited ? 'present' : '', error: null }], common: null, customPath: null, recoveryNeeded: [] };
       if (command === 'prepare_registered_native_import') return { files: args.files, nativeCredentials: {}, migratedSecret: false, inspection: { connection: null, providerId: null, model: null, baseUrl: null, reasoningEffort: null } };
       if (command === 'inspect_registered_native_draft') return { connection: null, providerId: null, model: null, reasoningEffort: null };
       if (command === 'preview_registered_native_profile') return { documents: {}, rendered: {}, sources: {} };
@@ -32,7 +48,7 @@ async function setup(page: Page) {
       if (command === 'apply_registered_native_profile') { const profile = harness.profiles.find(item => item.id === args.profileId); harness.binding = { scopeKey: 'global', tool: 'codex', profileId: profile.id, profileVersion: profile.version, contextId: `ctx-${profile.authentication.accountId}`, managed: {} }; return { transactionId: 'mock', changedFiles: [], status: 'written_for_next_session' }; }
       return null;
     } } });
-  });
+  }, inherited);
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
 }
@@ -66,4 +82,25 @@ test('OAuth profile saves and applies the selected account without an API connec
   expect(result.profiles[0].authentication).toEqual({ kind: 'oauth', accountId: 'b' });
   expect(result.profiles[0].connection).toBeNull(); expect(result.profiles[0].nativeCredentials).toEqual({});
   expect(result.binding.contextId).toBe('ctx-b');
+});
+
+
+test('project without explicit binding edits and queries using its inherited effective account', async ({ page }) => {
+  await setup(page, true);
+  await page.getByRole('button', { name: '配置范围' }).click();
+  await page.getByRole('option', { name: '继承项目' }).click();
+  await page.getByRole('button', { name: '修改正在使用的文件', exact: true }).click();
+  await page.getByRole('textbox', { name: 'settings 配置草稿' }).fill('model = "after"');
+  await page.getByRole('dialog').getByRole('button', { name: '保存', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  await expect(page.getByRole('button', { name: /project-server/ })).toBeVisible();
+  await page.getByRole('tab', { name: 'Skill', exact: true }).click();
+  await page.getByRole('button').filter({ hasText: 'project-skill' }).click();
+  await expect(page.getByRole('checkbox', { name: '启用 Skill' })).toBeChecked();
+  await page.getByRole('checkbox', { name: '启用 Skill' }).uncheck();
+  const calls = await page.evaluate(() => (window as any).oauthHarness.calls);
+  expect(calls.find((call: any) => call.command === 'save_registered_native_file').args).toMatchObject({ scope: 'project', expectedContextId: 'ctx-a' });
+  expect(calls.find((call: any) => call.command === 'set_skill_enabled').args).toMatchObject({ scope: 'project', expectedContextId: 'ctx-a' });
+  expect(await page.evaluate(() => (window as any).oauthHarness.binding)).toBeNull();
 });
