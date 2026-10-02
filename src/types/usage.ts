@@ -55,6 +55,21 @@ export interface CredentialBinding {
   allowedOrigins: string[];
 }
 
+/** Bundled catalog metadata. Listing/copying a preset never queries or reads secrets. */
+export interface PresetCredential {
+  name: string;
+  label: string;
+  instructions: string;
+  allowedOrigins: string[];
+}
+export interface UsagePreset {
+  id: string;
+  label: string;
+  description: string;
+  config: QueryConfig;
+  credentials: PresetCredential[];
+}
+
 export interface CredentialDraft {
   name: string;
   allowedOrigins: string[];

@@ -1,0 +1,8 @@
+{
+  "usages": {
+    "limit_5h": {
+      "used_ratio": 0.23
+    },
+    "limit_month_total": {}
+  }
+}

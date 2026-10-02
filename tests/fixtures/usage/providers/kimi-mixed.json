@@ -1,0 +1,14 @@
+{
+  "usage": {
+    "limit": "100",
+    "used": "19",
+    "remaining": "81",
+    "resetTime": "2026-10-09T16:45:59.449979Z"
+  },
+  "usages": {
+    "limit_7d": {
+      "used_ratio": 0,
+      "reset_time": "2026-10-09T16:45:58Z"
+    }
+  }
+}

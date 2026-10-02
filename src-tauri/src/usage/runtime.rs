@@ -413,10 +413,12 @@ pub(super) fn execute(input: HelperInput) -> RuntimeReport {
 
 fn run(input: &HelperInput, start: Instant) -> Result<serde_json::Value, UsageError> {
     input.config.validate()?;
-    let QueryProgram::JavaScript { source } = &input.config.program else {
-        return Err(UsageError::configuration(
-            "此执行器需要 JavaScript 查询程序",
-        ));
+    let source = match &input.config.program {
+        QueryProgram::JavaScript { source } => std::borrow::Cow::Borrowed(source.as_str()),
+        QueryProgram::Builtin { .. } => {
+            super::providers::validate_builtin_credentials(input)?;
+            std::borrow::Cow::Owned(super::providers::builtin_script(&input.config)?)
+        }
     };
     let vm_error = || limit(UsageStage::Script);
     let runtime = Runtime::new().map_err(|_| vm_error())?;
