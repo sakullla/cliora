@@ -99,6 +99,9 @@ fn collect_credentials(db: &Database, secrets: &dyn CredentialStore) -> bool {
 
 pub(super) fn validate_draft(draft: &UsageQueryDraft) -> Result<(), UsageError> {
     draft.config.validate()?;
+    if matches!(draft.config.program, QueryProgram::Official { .. }) && !draft.credentials.is_empty() {
+        return Err(UsageError::configuration("官方账号查询不接受独立凭据，请选择原生账号"));
+    }
     if draft.id.is_some() != draft.expected_version.is_some()
         || draft.expected_version == Some(0)
         || draft

@@ -187,7 +187,7 @@ fn v14_queries_without_cache_are_due_but_new_saves_wait_for_interval() {
     let cache = list_cache(&db).unwrap();
     assert!(!due(&cache[0], &q, false, now()));
     db.with_connection(|c| {
-        c.execute_batch("DROP TABLE usage_cache; PRAGMA user_version=14;")
+        c.execute_batch("DROP TABLE auth_accounts; ALTER TABLE applied_bindings DROP COLUMN context_id; DROP TABLE usage_cache; PRAGMA user_version=14;")
             .map_err(|e| e.to_string())
     })
     .unwrap();
@@ -213,7 +213,7 @@ fn v14_queries_without_cache_are_due_but_new_saves_wait_for_interval() {
         let version: u32 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(|e| e.to_string())?;
-        assert_eq!(version, 15);
+        assert_eq!(version, 17);
         Ok(())
     })
     .unwrap();

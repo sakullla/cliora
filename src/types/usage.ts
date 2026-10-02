@@ -25,6 +25,7 @@ export interface QueryIdentity {
 }
 
 export type QueryProgram = { kind: 'builtin'; provider: string; templateVersion: number }
+  | { kind: 'official'; tool: 'codex' | 'claude_code' | 'grok'; adapterVersion: number }
   | { kind: 'javascript'; source: string };
 
 export interface QueryTarget {

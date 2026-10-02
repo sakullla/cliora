@@ -1,0 +1,47 @@
+{
+  "observedAt": "2026-10-03",
+  "versions": {
+    "codex": "0.160.0",
+    "claude_code": "2.1.287",
+    "grok": "1.0.46"
+  },
+  "sources": [
+    {
+      "url": "https://developers.openai.com/codex/app-server/",
+      "fetched": true,
+      "fields": "account/read(refreshToken:false), account/rateLimits/read, rateLimitsByLimitId, usedPercent, windowDurationMins, resetsAt seconds; credits are optional"
+    },
+    {
+      "kind": "installed-schema",
+      "command": "codex app-server generate-json-schema --out <temporary-directory>",
+      "exitCode": 0,
+      "path": "tests/fixtures/usage/codex-rate-limits-schema.json",
+      "sha256": "cb9655e68130116f634ed9353e45b336492e6069a6628f424d1cd52e54eda0e0"
+    },
+    {
+      "kind": "installed-help",
+      "command": "grok usage --help",
+      "exitCode": 0,
+      "observation": "Print persisted token and cost usage for a session. This is not subscription quota."
+    },
+    {
+      "kind": "installed-help",
+      "command": "claude --help",
+      "exitCode": 0,
+      "observation": "No non-interactive quota command advertised; auth status is identity only."
+    },
+    {
+      "url": "https://code.claude.com/docs/en/cli-reference",
+      "fetched": false,
+      "reason": "HTTP 403; not used to claim an implemented quota endpoint"
+    },
+    {
+      "kind": "installed-native-check",
+      "command": "cargo test --manifest-path src-tauri/Cargo.toml --lib official_installed_codex_empty_context_rejects_quota_and_cancels -- --ignored --nocapture",
+      "exitCode": 0,
+      "platform": "Windows",
+      "observation": "Actual Codex 0.160.0 in a new private empty context rejects quota for an unlogged identity; cancellation returns a cancelled error. No credentials, authorization or inference were used. This is not successful quota acceptance."
+    }
+  ],
+  "limits": "Sanitized parser fixtures and native protocol shim are not real-account acceptance. Real Codex account quota, Claude quota source, Grok quota source and macOS/Linux acceptance remain unverified."
+}

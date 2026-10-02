@@ -115,7 +115,9 @@ pub fn cancel_test_execution(id: &str) -> Result<(), UsageError> {
     let mut state = registry().lock().map_err(|_| capacity())?;
     if let Some(entry) = state.entries.get(id) {
         entry.cancelled.store(true, Ordering::SeqCst);
-        if !entry.started { state.entries.remove(id); }
+        if !entry.started {
+            state.entries.remove(id);
+        }
     }
     Ok(())
 }
@@ -244,6 +246,18 @@ pub fn test_draft(
         }
         let input = resolve_draft(db, credentials, &draft)?;
         acquire(&mut guard, &cancel, start)?;
+        if matches!(input.config.program, QueryProgram::Official { .. }) {
+            let result = super::official::query(db, &input.config, &cancel)?;
+            result.validate()?;
+            return Ok(RuntimeReport {
+                preview: serde_json::to_string_pretty(&result).unwrap_or_default(),
+                result: Some(result),
+                error: None,
+                elapsed_ms: 0,
+                stage: UsageStage::Validation,
+                request_origins: vec![],
+            });
+        }
         let executable = std::env::current_exe().map_err(|_| {
             UsageError::new(
                 UsageErrorCode::Script,

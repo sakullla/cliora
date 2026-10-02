@@ -244,6 +244,7 @@ pub fn usage_presets() -> Vec<UsagePreset> {
         }
     }
     presets.extend(sites::presets());
+    presets.extend(super::official::presets());
     presets
 }
 

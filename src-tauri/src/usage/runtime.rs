@@ -426,6 +426,7 @@ pub(super) fn execute(input: HelperInput) -> RuntimeReport {
 fn run(input: &HelperInput, start: Instant, request_origins:&mut Vec<String>) -> Result<serde_json::Value, UsageError> {
     input.config.validate()?;
     let source = match &input.config.program {
+        QueryProgram::Official { .. } => return Err(UsageError::configuration("官方账号查询只由原生账号服务执行")),
         QueryProgram::JavaScript { source } => std::borrow::Cow::Borrowed(source.as_str()),
         QueryProgram::Builtin { .. } => {
             super::providers::validate_builtin_credentials(input)?;

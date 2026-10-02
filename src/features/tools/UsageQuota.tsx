@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { native, nativeAvailable } from '../../lib/native';
+import type { AuthAccount } from '../../types/accounts';
 import type { CredentialDraft, DraftTestReport, QueryConfig, UsageCache, UsagePreset, UsageQuery, UsageQueryDraft, UsageResult } from '../../types/usage';
 import { GuideDialog } from '../../components/GuideDialog';
 import { CodeEditor } from '../../components/CodeEditor';
@@ -41,7 +42,7 @@ export function UsageMetrics({ result, now = Date.now() }: { result: UsageResult
     </div>;
   })}{result.errors.map((e, i) => <p className={styles.error} key={i}>{e.message}</p>)}</div>;
 }
-export function ProfileQuota({ profileId, state }: { profileId: string; state: QuotaState }) {
+export function ProfileQuota({ profileId, profileAccountId, toolId, state }: { profileId: string; profileAccountId?: string; toolId?: string; state: QuotaState }) {
   const [editing, setEditing] = useState<UsageQuery | 'new' | null>(null);
   const [error, setError] = useState('');
   const queries = state.queries.filter(q => q.config.identity.profileId === profileId);
@@ -66,7 +67,7 @@ export function ProfileQuota({ profileId, state }: { profileId: string; state: Q
         {cache?.attemptedAt && <small>最近尝试：{date(cache.attemptedAt)}</small>}
       </div>;
     })}
-    {editing && <QuotaEditor key={typeof editing === 'string' ? 'new' : editing.id} profileId={profileId} query={editing === 'new' ? null : editing} presets={state.presets} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); void state.reload(); }} />}
+    {editing && <QuotaEditor key={typeof editing === 'string' ? 'new' : editing.id} profileId={profileId} profileAccountId={profileAccountId} toolId={toolId} query={editing === 'new' ? null : editing} presets={state.presets} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); void state.reload(); }} />}
   </section>;
 }
 function fromQuery(query: UsageQuery): UsageQueryDraft {
@@ -78,9 +79,12 @@ function fromPreset(p: UsagePreset, profileId: string): UsageQueryDraft {
 function empty(profileId: string): UsageQueryDraft {
   return { id: null, expectedVersion: null, config: { schemaVersion: 1, label: '自定义查询', site: 'https://your-site.example', identity: { accountId: null, contextId: null, profileId, subject: 'account', subjectId: null }, program: { kind: 'javascript', source: 'async function query(ctx) {\n  // 使用 ctx.http 查询已声明的目标，返回 schemaVersion/status/metrics/errors。\n  throw new Error("请填写额度查询脚本");\n}' }, parameters: {}, targets: [{ origin: 'https://your-site.example', allowPrivateNetwork: false }], enabled: true, refreshIntervalSeconds: 0 }, credentials: [] };
 }
-export function QuotaEditor({ profileId, query, presets, onClose, onSaved }: { profileId: string; query: UsageQuery | null; presets: UsagePreset[]; onClose: () => void; onSaved: () => void }) {
+export function QuotaEditor({ profileId, profileAccountId, toolId, query, presets, onClose, onSaved }: { profileId: string; profileAccountId?: string; toolId?: string; query: UsageQuery | null; presets: UsagePreset[]; onClose: () => void; onSaved: () => void }) {
   const [draft, setDraft] = useState<UsageQueryDraft>(() => query ? fromQuery(query) : presets[0] ? fromPreset(presets[0], profileId) : empty(profileId));
   const [presetId, setPresetId] = useState(query ? '' : presets[0]?.id ?? 'custom');
+  const [accounts, setAccounts] = useState<AuthAccount[]>([]);
+  const official = draft.config.program.kind === 'official' ? draft.config.program : null;
+  useEffect(() => { let live = true; if (official) void native.listAccounts().then(items => { if (live) setAccounts(items ?? []); }).catch(() => { if (live) setError('无法读取账号，请在账号管理检查状态后重试'); }); return () => { live = false; }; }, [official?.tool]);
   const [parameters, setParameters] = useState(() => JSON.stringify(draft.config.parameters, null, 2));
   const [error, setError] = useState('');
   const [report, setReport] = useState<DraftTestReport | null>(null);
@@ -143,18 +147,19 @@ export function QuotaEditor({ profileId, query, presets, onClose, onSaved }: { p
       <label>查询预设<select aria-label="查询预设" value={presetId} onChange={e => {
         const id = e.target.value; const p = presets.find(p => p.id === id); const next = p ? fromPreset(p, profileId) : empty(profileId);
         edit({ ...next, id: draft.id, expectedVersion: draft.expectedVersion }); setParameters(JSON.stringify(next.config.parameters, null, 2)); setPresetId(id);
-      }}><option value="">已保存的查询</option>{presets.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}<option value="custom">自定义 JavaScript</option></select></label>
-      {preset && <p>{preset.description}</p>}
+      }}><option value="">已保存的查询</option>{presets.filter(p => p.config.program.kind !== 'official' || !toolId || p.config.program.tool === toolId).map(p => <option key={p.id} value={p.id}>{p.label}</option>)}<option value="custom">自定义 JavaScript</option></select></label>
+      {preset && !official && <p>{preset.description}</p>}
       <label>查询名称<input aria-label="查询名称" value={draft.config.label} onChange={e => config({ label: e.target.value })} /></label>
-      <label>站点地址<input aria-label="额度站点地址" value={draft.config.site} onChange={e => {
+      {official && <><p>{presets.find(p => p.config.program.kind === 'official' && p.config.program.tool === official.tool)?.description}</p>{official.tool === 'codex' && <label>官方查询账号<select aria-label="官方查询账号" value={draft.config.identity.accountId && draft.config.identity.contextId ? `${draft.config.identity.accountId}:${draft.config.identity.contextId}` : ''} onChange={e => { const account = accounts.find(a => `${a.id}:${a.context?.id}` === e.target.value); config({ identity: { ...draft.config.identity, accountId: account?.id ?? null, contextId: account?.context?.id ?? null } }); }}><option value="">请选择配置绑定的 OAuth 账号</option>{draft.config.identity.accountId && !accounts.some(a => a.id === draft.config.identity.accountId && a.context?.id === draft.config.identity.contextId && a.id === profileAccountId && a.state === 'signed_in') && <option value={`${draft.config.identity.accountId}:${draft.config.identity.contextId}`} disabled>原绑定已不可用，请重新选择</option>}{accounts.filter(a => a.toolId === 'codex' && a.context && a.state === 'signed_in' && !a.pendingLogin && a.id === profileAccountId).map(a => <option key={a.id} value={`${a.id}:${a.context!.id}`}>{a.label}{a.identity?.email ? ` · ${a.identity.email}` : ''}</option>)}</select><small>需先在配置认证方式中选择 Codex OAuth 账号。重新认证后重新选择当前上下文。</small></label>}</>}
+      {!official && <label>站点地址<input aria-label="额度站点地址" value={draft.config.site} onChange={e => {
         const previous = draft.config.site, site = e.target.value;
         const next = { ...draft, config: { ...draft.config, site, targets: draft.config.targets.map(t => t.origin === previous ? { ...t, origin: site } : t) }, credentials: draft.credentials.map(c => ({ ...c, allowedOrigins: c.allowedOrigins.map(o => o === previous ? site : o) })) };
         try { const p = JSON.parse(parameters); if (p.site === previous) setParameters(JSON.stringify({ ...p, site }, null, 2)); } catch { /* Preserve invalid draft text. */ }
         edit(next);
-      }} /></label>
+      }} /></label>}
       <label className={styles.check}><input type="checkbox" checked={draft.config.enabled} onChange={e => config({ enabled: e.target.checked })} />启用查询</label>
-      <label>自动刷新<select aria-label="自动刷新" value={draft.config.refreshIntervalSeconds} onChange={e => config({ refreshIntervalSeconds: Number(e.target.value) })}><option value={0}>关闭，仅手动</option>{[60, 300, 900, 1800, 3600, ...(draft.config.refreshIntervalSeconds && ![60, 300, 900, 1800, 3600].includes(draft.config.refreshIntervalSeconds) ? [draft.config.refreshIntervalSeconds] : [])].map(n => <option key={n} value={n}>每 {n / 60} 分钟</option>)}</select></label>
-      <details><summary>网络目标与统计对象</summary>
+      <label>自动刷新<select aria-label="自动刷新" disabled={!!official && official.tool !== 'codex'} value={draft.config.refreshIntervalSeconds} onChange={e => config({ refreshIntervalSeconds: Number(e.target.value) })}><option value={0}>关闭，仅手动</option>{[60, 300, 900, 1800, 3600, ...(draft.config.refreshIntervalSeconds && ![60, 300, 900, 1800, 3600].includes(draft.config.refreshIntervalSeconds) ? [draft.config.refreshIntervalSeconds] : [])].map(n => <option key={n} value={n}>每 {n / 60} 分钟</option>)}</select></label>
+      {!official && <><details><summary>网络目标与统计对象</summary>
         {draft.config.targets.map((target, i) => <div className={styles.target} key={i}><label>允许的 origin<input aria-label={`允许目标 ${i + 1}`} value={target.origin} onChange={e => config({ targets: draft.config.targets.map((t, j) => i === j ? { ...t, origin: e.target.value } : t) })} /></label><label className={styles.check}><input type="checkbox" checked={target.allowPrivateNetwork} onChange={e => config({ targets: draft.config.targets.map((t, j) => i === j ? { ...t, allowPrivateNetwork: e.target.checked } : t) })} />允许此目标访问私网</label><button type="button" onClick={() => config({ targets: draft.config.targets.filter((_, j) => j !== i) })}>移除目标</button></div>)}
         <button type="button" onClick={() => config({ targets: [...draft.config.targets, { origin: '', allowPrivateNetwork: false }] })}>添加目标</button>
         <label>统计对象<select value={draft.config.identity.subject} onChange={e => config({ identity: { ...draft.config.identity, subject: e.target.value as QueryConfig['identity']['subject'] } })}><option value="account">账户</option><option value="plan">套餐</option><option value="key">Key</option><option value="extra">额外资源</option></select></label>
@@ -168,7 +173,8 @@ export function QuotaEditor({ profileId, query, presets, onClose, onSaved }: { p
         <button type="button" onClick={() => edit({ ...draft, credentials: draft.credentials.filter((_, j) => j !== i) })}>移除凭据</button>
       </div>)}<button type="button" onClick={() => edit({ ...draft, credentials: [...draft.credentials, { name: `token_${draft.credentials.length + 1}`, allowedOrigins: [], value: { kind: 'replace', secret: '' } }] })}>添加凭据</button></section>
       <label>普通参数（JSON，不含秘密）</label><CodeEditor format="json" label="额度查询普通参数" value={parameters} onChange={v => { invalidate(); setParameters(v); }} readOnly={saving} compact />
-      {draft.config.program.kind === 'builtin' ? <button type="button" onClick={() => void copyScript()}>复制为自定义脚本</button> : <><label>JavaScript · async query(ctx)</label><CodeEditor format="javascript" label="额度查询脚本" value={draft.config.program.source} onChange={source => config({ program: { kind: 'javascript', source } })} readOnly={saving} errorLine={line} /><small>ctx.parameters 为普通参数；ctx.credentials 为命名引用。使用 ctx.http 的 auth 绑定凭据，结果包含 schemaVersion、status、metrics、errors。</small></>}
+      {draft.config.program.kind === 'builtin' ? <button type="button" onClick={() => void copyScript()}>复制为自定义脚本</button> : draft.config.program.kind === 'javascript' ? <><label>JavaScript · async query(ctx)</label><CodeEditor format="javascript" label="额度查询脚本" value={draft.config.program.source} onChange={source => config({ program: { kind: 'javascript', source } })} readOnly={saving} errorLine={line} /><small>ctx.parameters 为普通参数；ctx.credentials 为命名引用。使用 ctx.http 的 auth 绑定凭据，结果包含 schemaVersion、status、metrics、errors。</small></> : null}
+      </>}
       {error && <p role="alert" className={styles.error}>{error}</p>}
       {report && <section aria-label="草稿测试结果"><p>阶段：{report.stage} · 耗时 {report.elapsedMs} ms · 仅草稿测试</p>{!!report.requestOrigins?.length && <p>请求目标（不含路径及参数）：{report.requestOrigins.join('、')}</p>}{report.error && <p role="alert" className={styles.error}>{report.error.message}{line && `（第 ${line} 行）`}</p>}{report.result && <UsageMetrics result={report.result} />}<details><summary>脱敏预览</summary><pre>{report.preview || '无返回数据'}</pre></details></section>}
       <div className={styles.actions}><button type="button" disabled={testing} onClick={() => void test()}>{testing ? '测试中' : '测试当前草稿'}</button>{testing && <button type="button" onClick={invalidate}>取消测试</button>}<button type="button" data-dialog-save onClick={() => void save()}>保存查询</button>{query && <button type="button" onClick={() => void remove()}>删除查询</button>}</div>

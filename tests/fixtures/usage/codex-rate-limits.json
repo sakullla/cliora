@@ -1,0 +1,16 @@
+{
+  "rateLimits": { "primary": { "usedPercent": 99, "windowDurationMins": 300, "resetsAt": 1800000000 } },
+  "rateLimitsByLimitId": {
+    "codex": {
+      "primary": { "usedPercent": 125, "windowDurationMins": 300, "resetsAt": 1800000000 },
+      "secondary": { "usedPercent": 24, "windowDurationMins": 10080, "resetsAt": 1800600000 },
+      "credits": { "hasCredits": true, "unlimited": false, "balance": "10.5" }
+    },
+    "codex_other": {
+      "primary": { "usedPercent": 0, "windowDurationMins": 60, "resetsAt": null },
+      "secondary": null,
+      "credits": { "hasCredits": true, "unlimited": true, "balance": null }
+    }
+  },
+  "rateLimitResetCredits": { "availableCount": 2, "credits": null }
+}

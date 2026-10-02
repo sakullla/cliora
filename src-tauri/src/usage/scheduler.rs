@@ -90,12 +90,31 @@ pub fn cancel_refresh(id: &str) -> Result<(), UsageError> {
 pub fn list_cache(db: &Database) -> Result<Vec<UsageCache>, UsageError> {
     let state = flights().lock().map_err(|_| UsageError::storage())?;
     let queries = list_queries(db)?;
+    // Account/context/profile changes invalidate display immediately, even when
+    // refresh is manual. Do not show another account's previous success.
+    let invalid: HashMap<_, _> = queries
+        .iter()
+        .filter_map(|q| {
+            if matches!(&q.config.program, QueryProgram::Official { tool, .. } if tool == "codex") {
+                super::official::selection(db, &q.config)
+                    .err()
+                    .map(|error| (q.id.clone(), error))
+            } else {
+                None
+            }
+        })
+        .collect();
     db.with_connection(|conn| {
         queries
             .iter()
             .map(|q| {
                 let mut cache = read(conn, q)?;
                 cache.refreshing = state.contains_key(&q.id);
+                if let Some(error) = invalid.get(&q.id) {
+                    cache.success = None;
+                    cache.errors = vec![error.clone()];
+                    cache.auth_paused = true;
+                }
                 Ok(cache)
             })
             .collect()
