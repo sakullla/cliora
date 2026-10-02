@@ -127,3 +127,13 @@ export interface UsageSnapshot {
   measuredAt: string | null;
   result: UsageResult;
 }
+
+/** Testing never writes the query, credential store, or successful-result cache. */
+export interface DraftTestReport {
+  execution: Extract<UsageExecution, { kind: 'draft' }>;
+  result: UsageResult | null;
+  error: UsageError | null;
+  elapsedMs: number;
+  stage: UsageStage;
+  preview: string;
+}

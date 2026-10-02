@@ -414,7 +414,8 @@ impl QueryConfig {
                 || !url.username().is_empty()
                 || url.password().is_some()
                 || !(url.scheme() == "https"
-                    || (url.scheme() == "http" && target.allow_private_network && is_private))
+                    || (url.scheme() == "http" && target.allow_private_network
+                        && (is_private || matches!(url.host(), Some(url::Host::Domain(_))))))
                 || (is_private && !target.allow_private_network)
                 || !origins.insert(&target.origin)
             {

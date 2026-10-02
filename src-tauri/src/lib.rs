@@ -80,6 +80,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::list_usage_queries,
+            commands::create_usage_test,
+            commands::cancel_usage_test,
+            commands::test_usage_query,
             commands::get_usage_query,
             commands::save_usage_query,
             commands::delete_usage_query,
