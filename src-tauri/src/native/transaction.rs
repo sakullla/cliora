@@ -72,8 +72,40 @@ struct Journal {
     id: String,
     key_id: String,
     files: Vec<JournalFile>,
+    /// App metadata tied to these exact file preimages, encrypted with the
+    /// journal key. Restoring a backup restores both halves of the state.
+    #[serde(default)]
+    metadata: Vec<EncryptedMetadata>,
     #[serde(default)]
     created_at: i64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct EncryptedMetadata { data: String, nonce: String }
+
+/// Register a machine-local app_setting whose lifecycle follows a native file.
+/// This is internal-only; no generic metadata registration IPC is exposed.
+pub fn watch_file_metadata(db: &Database, path: &Path, key: &str) -> Result<(), String> {
+    if !path.is_absolute() || !key.starts_with("native_plugin_disabled:") { return Err("原生文件元数据目标无效".into()); }
+    let watch_key = format!("native_metadata_watch:{}", fingerprint(key.as_bytes()));
+    let value = serde_json::to_string(&(path, key)).map_err(|_| "无法登记原生文件元数据")?;
+    db.with_connection(|conn| { conn.execute("INSERT INTO app_settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [&watch_key, &value]).map_err(|_| "无法登记原生文件元数据")?; Ok(()) })
+}
+
+fn watched_metadata(db: &Database, targets: &[PathBuf]) -> Result<Vec<(PathBuf, String, Option<String>)>, String> {
+    db.with_connection(|conn| {
+        let mut query = conn.prepare("SELECT value FROM app_settings WHERE key LIKE 'native_metadata_watch:%'").map_err(|_| "无法读取原生元数据登记")?;
+        let rows = query.query_map([], |row| row.get::<_, String>(0)).map_err(|_| "无法读取原生元数据登记")?;
+        let mut values = Vec::new();
+        for row in rows {
+            let (path, key): (PathBuf, String) = serde_json::from_str(&row.map_err(|_| "无法读取原生元数据登记")?).map_err(|_| "原生元数据登记损坏")?;
+            if targets.contains(&path) {
+                let value = conn.query_row("SELECT value FROM app_settings WHERE key=?1", [&key], |row| row.get::<_, String>(0)).optional().map_err(|_| "无法读取原生文件元数据")?;
+                values.push((path, key, value));
+            }
+        }
+        Ok(values)
+    })
 }
 
 const RECENT_BACKUP_LIMIT: usize = 20;
@@ -715,7 +747,26 @@ pub fn restore_backup<F>(db: &Database, credentials: &dyn CredentialStore, targe
 where F: FnOnce(&rusqlite::Transaction<'_>) -> Result<(), String> {
     let preview = preview_backup(db, credentials, target, id)?;
     if preview.current != expected_current { return Err("文件在比较后又被修改，请重新查看差异".into()); }
-    apply_text(db, credentials, &[TextPatch {path:target.into(), baseline:expected_current.into(), contents:preview.original, sensitive:true}], commit)
+    let data: String = db.with_connection(|conn| conn.query_row("SELECT data FROM native_transactions WHERE id=?1 AND status='committed'", [id], |row| row.get(0)).map_err(|_| "找不到可恢复的修改记录".into()))?;
+    let journal: Journal = serde_json::from_str(&data).map_err(|_| "原生修改记录损坏")?;
+    if journal.id != id || journal.key_id != format!("native-backup-{id}") { return Err("原生修改记录标识不一致".into()); }
+    let encoded = credentials.get(&journal.key_id)?;
+    let key: [u8;32] = STANDARD.decode(encoded).map_err(|_| "备份密钥无效")?.try_into().map_err(|_| "备份密钥长度无效")?;
+    let mut metadata = Vec::new();
+    for item in journal.metadata {
+        let value = decrypt(&key, &item.data, &item.nonce)?;
+        let (path, key, value): (PathBuf, String, Option<String>) = serde_json::from_slice(&value).map_err(|_| "原生元数据备份损坏")?;
+        if path == target { metadata.push((key, value)); }
+    }
+    // Even identical file text can represent different disabled-entry metadata
+    // (e.g. OpenCode uninstall of an already-disabled declaration).
+    apply_text_internal(db, credentials, &[TextPatch {path:target.into(), baseline:expected_current.into(), contents:preview.original, sensitive:true}], true, |tx, _| {
+        for (key, value) in metadata {
+            if let Some(value) = value { tx.execute("INSERT INTO app_settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [&key, &value]).map_err(|_| "恢复原生文件元数据失败")?; }
+            else { tx.execute("DELETE FROM app_settings WHERE key=?1", [&key]).map_err(|_| "恢复原生文件元数据失败")?; }
+        }
+        commit(tx)
+    })
 }
 
 pub fn recover_pending(
@@ -801,6 +852,10 @@ where
 }
 pub fn apply_text_with_id<F>(db: &Database, credentials: &dyn CredentialStore, patches: &[TextPatch], commit: F) -> Result<ApplyOutcome,String>
 where F: FnOnce(&rusqlite::Transaction<'_>, &str) -> Result<(),String> {
+    apply_text_internal(db, credentials, patches, false, commit)
+}
+fn apply_text_internal<F>(db: &Database, credentials: &dyn CredentialStore, patches: &[TextPatch], force: bool, commit: F) -> Result<ApplyOutcome,String>
+where F: FnOnce(&rusqlite::Transaction<'_>, &str) -> Result<(),String> {
     #[cfg(test)]
     let fixture_lock=fixture_write_lock(db)?;
     #[cfg(test)]
@@ -818,7 +873,7 @@ where F: FnOnce(&rusqlite::Transaction<'_>, &str) -> Result<(),String> {
         if current != patch.baseline {
             return Err(format!("原生文本已被外部修改：{}", patch.path.display()));
         }
-        if current == patch.contents {
+        if current == patch.contents && !force {
             continue;
         }
         let existed = patch.path.exists();
@@ -861,6 +916,7 @@ where
         return Err("没有需要写入的原生字段".into());
     }
     let targets: Vec<_> = prepared.iter().map(|(item, _)| item.path.clone()).collect();
+    let metadata_before = watched_metadata(db, &targets)?;
     let pending = pending_target_collision(db, &targets)?;
     if pending {
         return Err("目标文件有未解决的原生事务，请先恢复".into());
@@ -886,10 +942,16 @@ where
         }
         files.push(item);
     }
+    let metadata = metadata_before.iter().map(|item| {
+        let bytes = serde_json::to_vec(item).map_err(|_| "无法序列化原生文件元数据")?;
+        let (data, nonce) = encrypt(&key, &bytes)?;
+        Ok(EncryptedMetadata { data, nonce })
+    }).collect::<Result<Vec<_>, String>>()?;
     let journal = Journal {
         id: id.clone(),
         key_id,
         files,
+        metadata,
         created_at: backup_created_at(),
     };
     save_journal(db, &journal, "prepared")?;
@@ -914,6 +976,10 @@ where
         }
         db.with_connection(|conn| {
             let tx = conn.transaction().map_err(|e| e.to_string())?;
+            for (_, key, expected) in &metadata_before {
+                let current: Option<String> = tx.query_row("SELECT value FROM app_settings WHERE key=?1", [key], |row| row.get(0)).optional().map_err(|_| "无法核对原生文件元数据")?;
+                if &current != expected { return Err("原生文件元数据在写入期间被修改；停止提交".into()); }
+            }
             commit(&tx, &id)?;
             tx.execute(
                 "UPDATE native_transactions SET status = 'committed' WHERE id = ?1",
@@ -1036,6 +1102,7 @@ mod tests {
         let target = temp.path().join("config.toml");
         for index in 0..21 {
             let journal = Journal {
+                metadata: vec![],
                 id: format!("backup-{index}"),
                 key_id: format!("native-backup-backup-{index}"),
                 files: vec![JournalFile {
@@ -1085,6 +1152,7 @@ mod tests {
         let old_hash = fingerprint(b"low-entropy-old-file");
         let secret_hash = fingerprint(b"short-key");
         let journal = Journal {
+                metadata: vec![],
             id: "committed-history".into(),
             key_id: "missing".into(),
             created_at: 0,
@@ -1166,6 +1234,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let db = Database::open(&temp.path().join("app.db")).unwrap();
         let journal = Journal {
+                metadata: vec![],
             id: "corrupt-history".into(),
             key_id: "missing".into(),
             created_at: 0,
@@ -1202,6 +1271,7 @@ mod tests {
             .unwrap();
         let (backup, nonce) = encrypt(&backup_key, original).unwrap();
         let journal = Journal {
+                metadata: vec![],
             id: "pending".into(),
             key_id: "native-backup-pending".into(),
             created_at: 0,
@@ -1268,6 +1338,7 @@ mod tests {
             let managed = serde_json::json!({"settings": {"/env/ANTHROPIC_API_KEY": {"__cliora_secret_sha256": raw_secret_hash}}});
             conn.execute("INSERT INTO applied_bindings (scope_key, tool, profile_id, profile_version, managed) VALUES ('global', 'claude_code', 'legacy', 1, ?1)", [managed.to_string()]).map_err(|e| e.to_string())?;
             let journal = Journal {
+                metadata: vec![],
                 id: "legacy".into(), key_id: "native-backup-legacy".into(), created_at: 0,
                 files: vec![JournalFile {path: temp.path().join("settings.json"), existed: true,
                     old_hash: raw_file_hash.clone(), new_hash: raw_file_hash.clone(),
@@ -1381,6 +1452,7 @@ mod tests {
         fs::write(&file, "model = \"one\"\n").unwrap();
         let db = Database::open(&temp.path().join("app.db")).unwrap();
         let journal = Journal {
+                metadata: vec![],
             id: "pending".into(),
             key_id: "missing".into(),
             created_at: 0,
@@ -1510,6 +1582,7 @@ mod tests {
             }
         };
         let journal = Journal {
+                metadata: vec![],
             id: id.clone(),
             key_id,
             files: vec![
@@ -1538,6 +1611,7 @@ mod tests {
         let original = b"model = \"old\"\n";
         let (backup, nonce) = encrypt(&key, original).unwrap();
         let journal = Journal {
+                metadata: vec![],
             id: id.clone(),
             key_id,
             files: vec![JournalFile {
