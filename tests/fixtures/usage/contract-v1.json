@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "status": "partial",
+  "metrics": [
+    {
+      "id": "plan.hour", "label": "Hourly quota", "subject": "plan", "subjectId": "plan-a",
+      "unit": { "kind": "requests" },
+      "used": 125, "remaining": -25, "total": 100, "sourcePercent": null, "unlimited": false,
+      "window": { "durationSeconds": 3600, "resetsAt": "2026-10-02T08:00:00+08:00", "recovery": "fixed" },
+      "missingReason": null
+    },
+    {
+      "id": "plan.week", "label": "Weekly quota", "subject": "plan", "subjectId": "plan-a",
+      "unit": { "kind": "credits" },
+      "used": null, "remaining": null, "total": null, "sourcePercent": 20, "unlimited": false,
+      "window": { "durationSeconds": 604800, "resetsAt": null, "recovery": "rolling" },
+      "missingReason": null
+    },
+    {
+      "id": "key.unlimited", "label": "Unlimited Key", "subject": "key", "subjectId": "key-a",
+      "unit": { "kind": "tokens" },
+      "used": 0, "remaining": null, "total": null, "sourcePercent": null, "unlimited": true,
+      "window": null, "missingReason": null
+    },
+    {
+      "id": "account.balance", "label": "Account balance", "subject": "account", "subjectId": null,
+      "unit": { "kind": "currency", "code": "USD" },
+      "used": null, "remaining": null, "total": null, "sourcePercent": null, "unlimited": false,
+      "window": null, "missingReason": "Account permission required"
+    }
+  ],
+  "errors": [
+    {
+      "code": "permission", "stage": "http", "message": "Account permission required",
+      "retryAfterSeconds": null, "metricId": "account.balance"
+    }
+  ]
+}

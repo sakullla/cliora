@@ -15,6 +15,7 @@ pub mod portable;
 pub mod projects;
 pub mod resources;
 pub mod tray;
+pub mod usage;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -78,6 +79,10 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            commands::list_usage_queries,
+            commands::get_usage_query,
+            commands::save_usage_query,
+            commands::delete_usage_query,
             commands::merge_registered_native_edits,
             commands::list_portable_items,
             commands::export_portable_bundle,

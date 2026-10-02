@@ -22,7 +22,7 @@ impl Database {
     pub fn open(path: &Path) -> Result<Self, OpenError> {
         let mut connection = Connection::open(path)?;
         let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 13 {
+        if version > 14 {
             return Err(OpenError::UnsupportedVersion(version));
         }
         connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
@@ -377,6 +377,22 @@ impl Database {
             )?;
             tx.commit()?;
         }
+        if version < 14 {
+            let tx = connection.transaction()?;
+            tx.execute_batch(
+                "CREATE TABLE usage_queries (
+                   id TEXT PRIMARY KEY NOT NULL,
+                   version INTEGER NOT NULL CHECK(version > 0),
+                   generation INTEGER NOT NULL CHECK(generation > 0),
+                   data TEXT NOT NULL
+                 );
+                 CREATE TABLE usage_credential_gc (
+                   secret_ref TEXT PRIMARY KEY NOT NULL
+                 );
+                 PRAGMA user_version = 14;",
+            )?;
+            tx.commit()?;
+        }
         Ok(Self {
             connection: Mutex::new(connection),
         })
@@ -577,7 +593,7 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
-            assert_eq!(version, 13);
+            assert_eq!(version, 14);
             let count: i64 = conn
                 .query_row("SELECT COUNT(*) FROM native_profiles", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;

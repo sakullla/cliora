@@ -6,6 +6,7 @@ import type { LibraryDraft, LibraryItem, LibraryKind } from '../types/library';
 import type { McpDefinition, McpDraft, McpPlacement, McpTargetRequest, McpTargetResult, NativeMcpEntry, RuleTarget, RulePreview, RuleApplyResult, RulePlacement, RuleClientSelection, RuleSyncResult, SkillPackage, SkillImportPreview, SkillInstallation, SkillTargetResult, NativeSkillEntry, SkillTargetPreview, SkillRecoveryIssue } from '../types/resources';
 import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, ScanStatus, UsageReport } from '../types/history';
 import type { ConflictPreview, PortableApplyTarget, PortableImportReport, PortableItem, PortablePreview, PortableProjectLink, SyncStatus, WebdavSetup } from '../types/portable';
+import type { DeleteQueryResult, SaveQueryResult, UsageError, UsageQuery, UsageQueryDraft } from '../types/usage';
 
 export const nativeAvailable = isTauri();
 
@@ -33,8 +34,28 @@ async function command<T>(name: string, args?: Record<string, unknown>): Promise
   }
 }
 
+/** Preserve quota-specific stage and retry metadata instead of reducing to ApiError. */
+async function usageCommand<T>(name: string, args?: Record<string, unknown>): Promise<T> {
+  try {
+    return await invoke<T>(name, args);
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && 'stage' in error && 'code' in error && 'message' in error) {
+      throw error;
+    }
+    const failure: UsageError = {
+      code: 'storage', stage: 'ipc', message: readError(error).message,
+      retryAfterSeconds: null, metricId: null,
+    };
+    throw failure;
+  }
+}
+
 /** Feature modules add named wrappers here; components never invoke arbitrary commands. */
 export const native = {
+  listUsageQueries: () => usageCommand<UsageQuery[]>('list_usage_queries'),
+  getUsageQuery: (id: string) => usageCommand<UsageQuery>('get_usage_query', { id }),
+  saveUsageQuery: (draft: UsageQueryDraft) => usageCommand<SaveQueryResult>('save_usage_query', { draft }),
+  deleteUsageQuery: (id: string, expectedVersion: number) => usageCommand<DeleteQueryResult>('delete_usage_query', { id, expectedVersion }),
   listPortableItems: () => command<PortableItem[]>('list_portable_items'),
   exportPortableBundle: (destination: string, password: string, selected: string[]) => command<number>('export_portable_bundle', { destination, password, selected }),
   previewPortableBundle: (source: string, password: string) => command<PortablePreview>('preview_portable_bundle', { source, password }),
