@@ -349,3 +349,28 @@ fn schema_check(
     }
     Ok(())
 }
+
+/// Claude reserves colons for plugin-scoped identifiers; local frontmatter stays unchanged.
+pub fn plugin_identity(
+    tool: &str,
+    plugin_id: &str,
+    agents_root: &Path,
+    path: &Path,
+    native_name: &str,
+) -> String {
+    if tool != "claude_code" {
+        return native_name.into();
+    }
+    let plugin = plugin_id.split('@').next().unwrap_or(plugin_id);
+    let mut parts = vec![plugin.to_owned()];
+    if let Ok(relative) = path.strip_prefix(agents_root) {
+        if let Some(parent) = relative.parent() {
+            parts.extend(parent.components().filter_map(|part| match part {
+                std::path::Component::Normal(name) => Some(name.to_string_lossy().into_owned()),
+                _ => None,
+            }));
+        }
+    }
+    parts.push(native_name.into());
+    parts.join(":")
+}

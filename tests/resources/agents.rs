@@ -343,7 +343,11 @@ fn stale_baseline_duplicate_names_invalid_import_and_package_ownership_block_wri
         }],
     }];
     let snap = snapshot_inner(home, &target, &plugins).unwrap();
-    let owned = snap.entries.iter().find(|e| e.name == "owned").unwrap();
+    let owned = snap
+        .entries
+        .iter()
+        .find(|e| e.name == "owned:owned")
+        .unwrap();
     assert!(owned.read_only);
     let mut req = request(home, &target, "delete", Some(owned), "");
     req.baseline = snap.baseline;
@@ -493,4 +497,203 @@ fn grok_only_scans_direct_agent_files_as_verified_by_native_inspect() {
     let snapshot = snapshot_inner(home, &target, &[]).unwrap();
     assert_eq!(snapshot.entries.len(), 1);
     assert_eq!(snapshot.entries[0].name, "reviewer");
+}
+
+#[test]
+fn agent_save_undo_rejects_external_edits_after_rescan_but_explicit_preview_restore_still_works() {
+    for tool in ["codex", "claude_code"] {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let db = Database::open(&home.join("db.sqlite")).unwrap();
+        let store = MemoryStore::default();
+        let target = target(tool, home);
+        let original = contract::capability(tool).unwrap().template;
+        let created = operate_inner(
+            &db,
+            &store,
+            home,
+            &request(home, &target, "create", None, original),
+            &[],
+        )
+        .unwrap();
+        let updated = original.replace("Review code", "Updated review");
+        let saved = operate_inner(
+            &db,
+            &store,
+            home,
+            &request(
+                home,
+                &target,
+                "save",
+                Some(&created.snapshot.entries[0]),
+                &updated,
+            ),
+            &[],
+        )
+        .unwrap();
+        let path = Path::new(&saved.restore_path);
+        let external = updated.replace("Updated review", "External edit");
+        write(path, &external);
+        // Fresh snapshot models the UI's rescan; retaining the undo record must not authorize C -> A.
+        let mut undo = request(home, &target, "restore", None, "");
+        undo.id = Some(saved.restore_path.clone());
+        undo.transaction_id = Some(saved.transaction_id.clone());
+        assert!(operate_inner(&db, &store, home, &undo, &[])
+            .unwrap_err()
+            .contains("修改"));
+        assert_eq!(read(path).unwrap(), external);
+        fs::remove_file(path).unwrap();
+        undo.baseline = snapshot_inner(home, &target, &[]).unwrap().baseline;
+        assert!(operate_inner(&db, &store, home, &undo, &[]).is_err());
+        assert!(!path.exists());
+        write(path, &updated);
+        undo.baseline = snapshot_inner(home, &target, &[]).unwrap().baseline;
+        operate_inner(&db, &store, home, &undo, &[]).unwrap();
+        assert_eq!(read(path).unwrap(), original);
+        // The existing native-file editor has an explicit current/original diff and keeps its contract.
+        write(path, &external);
+        let preview =
+            transaction::preview_backup(&db, &store, path, &saved.transaction_id).unwrap();
+        assert_eq!(preview.current, external);
+        transaction::restore_backup(
+            &db,
+            &store,
+            path,
+            &saved.transaction_id,
+            &preview.current,
+            |_| Ok(()),
+        )
+        .unwrap();
+        assert_eq!(read(path).unwrap(), original);
+    }
+}
+
+#[test]
+fn inline_agent_undo_never_reverts_later_unrelated_config_after_rescan() {
+    for action in ["save", "disable", "enable", "delete"] {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let db = Database::open(&home.join("db.sqlite")).unwrap();
+        let store = MemoryStore::default();
+        let target = target("open_code", home);
+        let path = home.join("opencode.jsonc");
+        let original = format!("{{\n// preserved\n\"provider\":{{\"fixture\":{{\"options\":{{\"apiKey\":\"synthetic-only\"}}}}}},\"agent\":{{\"reviewer\":{{\"description\":\"original\",\"disable\":{}}}}}}}", action == "enable");
+        write(&path, &original);
+        let snapshot = snapshot_inner(home, &target, &[]).unwrap();
+        let result = operate_inner(
+            &db,
+            &store,
+            home,
+            &request(
+                home,
+                &target,
+                action,
+                Some(&snapshot.entries[0]),
+                r#"{"description":"updated","prompt":"review"}"#,
+            ),
+            &[],
+        )
+        .unwrap();
+        let committed = read(&path).unwrap();
+        let external = format::set_path(
+            FileKind::Jsonc,
+            &committed,
+            &["model".into()],
+            Some(&Value::String("external/model".into())),
+        )
+        .unwrap();
+        write(&path, &external);
+        let mut undo = request(home, &target, "restore", None, "");
+        undo.id = Some(result.restore_path.clone());
+        undo.transaction_id = Some(result.transaction_id.clone());
+        assert!(
+            operate_inner(&db, &store, home, &undo, &[])
+                .unwrap_err()
+                .contains("修改"),
+            "{action}"
+        );
+        assert_eq!(read(&path).unwrap(), external);
+        write(&path, &committed);
+        undo.baseline = snapshot_inner(home, &target, &[]).unwrap().baseline;
+        operate_inner(&db, &store, home, &undo, &[]).unwrap();
+        assert_eq!(read(&path).unwrap(), original, "{action}");
+    }
+}
+
+#[test]
+fn claude_plugin_namespace_keeps_local_same_names_editable_and_nested_plugins_distinct() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let db = Database::open(&home.join("db.sqlite")).unwrap();
+    let store = MemoryStore::default();
+    let target = target("claude_code", home);
+    let template = contract::capability("claude_code").unwrap().template;
+    let mut plugins = Vec::new();
+    for id in ["my-plugin@market", "other-plugin@market"] {
+        let root = home.join("plugins").join(id).join("agents");
+        write(&root.join("reviewer.md"), template);
+        write(
+            &root.join("review/security.md"),
+            &template.replace("reviewer", "security"),
+        );
+        plugins.push(plugins::PluginEntry {
+            id: id.into(),
+            name: id.into(),
+            source: "fixture".into(),
+            version: None,
+            scope: "user".into(),
+            enabled: Some(true),
+            state: "installed".into(),
+            policy: String::new(),
+            read_only: false,
+            root: None,
+            resources: vec![plugins::PluginResource {
+                kind: "agents".into(),
+                path: root.display().to_string(),
+                owner_id: id.into(),
+            }],
+        });
+    }
+    let initial = snapshot_inner(home, &target, &plugins).unwrap();
+    for name in [
+        "my-plugin:reviewer",
+        "other-plugin:reviewer",
+        "my-plugin:review:security",
+        "other-plugin:review:security",
+    ] {
+        let item = initial
+            .entries
+            .iter()
+            .find(|entry| entry.name == name)
+            .unwrap();
+        assert!(item.read_only);
+        assert!(!item.detail.contains("同名"));
+        assert_eq!(read(Path::new(&item.path)).unwrap(), item.content);
+    }
+    let mut create = request(home, &target, "create", None, template);
+    create.baseline = initial.baseline;
+    let mut snapshot = operate_inner(&db, &store, home, &create, &plugins)
+        .unwrap()
+        .snapshot;
+    for action in ["save", "disable", "enable", "delete"] {
+        let local = snapshot
+            .entries
+            .iter()
+            .find(|entry| entry.name == "reviewer")
+            .unwrap();
+        assert!(!local.read_only);
+        let mut req = request(
+            home,
+            &target,
+            action,
+            Some(local),
+            &template.replace("Review code", "Local updated"),
+        );
+        req.baseline = snapshot.baseline;
+        snapshot = operate_inner(&db, &store, home, &req, &plugins)
+            .unwrap()
+            .snapshot;
+    }
+    assert_eq!(snapshot.entries.len(), 4);
+    assert!(snapshot.entries.iter().all(|entry| entry.read_only));
 }
