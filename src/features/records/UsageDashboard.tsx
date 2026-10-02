@@ -8,6 +8,7 @@ import { GuideDialog } from '../../components/GuideDialog';
 import { ToolIcon, toolOptions } from '../../components/ToolIcon';
 import { Icon } from '../../components/Icon';
 import { DAY_MS, bucketLabel, cacheHitRate, clockTime, exactMoney, formatMoney, formatPercent, formatTokens, niceScale, ratio, shortDate, tokenParts } from './usageFormat';
+import { navigateChoices } from './choiceNavigation';
 import styles from './UsageDashboard.module.css';
 
 type UsageRange = 'today' | 'yesterday' | '7' | '30' | 'month' | 'all' | 'custom';
@@ -80,10 +81,19 @@ function Delta({ current, previous, label, title }: { current: number | null; pr
 }
 
 function Composition({ totals }: { totals: UsageTotals }) {
-  const shown = tokenParts.filter((part) => totals[part.key] > 0);
+  let offset = 0;
   return <div className={styles.composition} role="group" aria-label="token 构成">
-    <div className={styles.compositionBar} aria-hidden="true">
-      {shown.map((part) => <span key={part.key} data-key={part.key} style={{ flexGrow: totals[part.key] }} />)}
+    <div className={styles.donut} aria-hidden="true">
+      <svg viewBox="0 0 160 160">
+        <circle cx="80" cy="80" r="62" className={styles.donutTrack} />
+        {tokenParts.map((part) => {
+          const share = ratio(totals[part.key], totals.total) * 100;
+          const start = offset; offset += share;
+          return share > 0 && <circle key={part.key} cx="80" cy="80" r="62" pathLength="100" data-part={part.key}
+            strokeDasharray={`${Math.max(share - 0.7, 0.1)} ${100 - Math.max(share - 0.7, 0.1)}`} strokeDashoffset={-start} />;
+        })}
+      </svg>
+      <div><strong>{formatTokens(totals.total)}</strong><small>总 Token</small></div>
     </div>
     <ul>
       {tokenParts.map((part) => <li key={part.key} title={`${part.hint}：${totals[part.key].toLocaleString()} token`}>
@@ -121,7 +131,7 @@ function TrendChart({ report, metric, now }: { report: UsageReport; metric: 'tok
         {buckets.map((bucket, index) => {
           const amount = value(bucket.totals);
           const height = amount > 0 ? Math.max(1.5, (amount / top) * 100) : 0;
-          return <div key={bucket.start} className={styles.column} data-active={active === index || undefined} data-future={bucket.start > now || undefined} data-current={bucket.start <= now && now < bucket.end || undefined} onMouseEnter={() => setActive(index)}>
+          return <div key={bucket.start} className={styles.column} data-active={active === index || undefined} data-future={bucket.start > now || undefined} data-current={bucket.start <= now && now < bucket.end || undefined} onMouseEnter={() => setActive(index)} onClick={() => setActive(index)}>
             <div className={styles.stack} style={{ height: `${height}%` }} data-metric={metric}>
               {metric === 'tokens' ? tokenParts.map((part) => bucket.totals[part.key] > 0 && <span key={part.key} data-key={part.key} style={{ flexGrow: bucket.totals[part.key] }} />) : <span data-key="cost" style={{ flexGrow: 1 }} />}
             </div>
@@ -145,13 +155,13 @@ function TrendChart({ report, metric, now }: { report: UsageReport; metric: 'tok
 }
 
 type BreakdownView = 'model' | 'tool' | 'project';
-function Breakdown({ report, toolName, filter, onFilter, onPrice }: {
+function Breakdown({ report, toolName, filter, onFilter, onPrice, view, onView }: {
   report: UsageReport; toolName: (id: string) => string;
   filter: { toolId: string; model: string; projectId: string };
   onFilter: (next: Partial<{ toolId: string; model: string; projectId: string }>) => void;
   onPrice: (toolId: string, model: string) => void;
+  view: BreakdownView; onView: (view: BreakdownView) => void;
 }) {
-  const [view, setView] = useState<BreakdownView>('model');
   const [expanded, setExpanded] = useState(false);
   const rows = view === 'model' ? report.byModel : view === 'tool' ? report.byTool : report.byProject;
   const visible = expanded ? rows : rows.slice(0, 8);
@@ -166,10 +176,11 @@ function Breakdown({ report, toolName, filter, onFilter, onPrice }: {
   return <section className={styles.card} aria-labelledby="usage-breakdown-title">
     <header className={styles.cardHead}>
       <h3 id="usage-breakdown-title">用量分布</h3>
-      <div className={styles.miniTabs} role="tablist" aria-label="分布维度">
-        {(['model', 'tool', 'project'] as const).map((item) => <button key={item} type="button" role="tab" aria-selected={view === item} onClick={() => { setView(item); setExpanded(false); }}>{{ model: '模型', tool: '工具', project: '项目' }[item]}</button>)}
+      <div className={styles.miniTabs} role="tablist" aria-label="分布维度" onKeyDown={navigateChoices}>
+        {(['model', 'tool', 'project'] as const).map((item) => <button key={item} type="button" role="tab" tabIndex={view === item ? 0 : -1} aria-selected={view === item} onClick={() => { onView(item); setExpanded(false); }}>{{ model: '模型', tool: '工具', project: '项目' }[item]}</button>)}
       </div>
     </header>
+    <p className={styles.cardHint}>点击一项筛选，追踪用量来自哪里</p>
     <ol className={styles.rank} aria-label={view === 'model' ? '按模型用量明细' : view === 'tool' ? '按工具用量明细' : '按项目用量明细'}>
       {visible.map((row) => {
         const share = ratio(row.totals.total, total);
@@ -204,8 +215,11 @@ export function UsageDashboard({ active, tools, projects, prices, onPricesChange
   const [model, setModel] = useState('');
   const [projectId, setProjectId] = useState('');
   const [metric, setMetric] = useState<'tokens' | 'cost'>('tokens');
+  const [breakdownView, setBreakdownView] = useState<BreakdownView>('model');
   const [report, setReport] = useState<UsageReport | null>(null);
   const [loading, setLoading] = useState(false);
+  const [readError, setReadError] = useState(false);
+  const [retry, setRetry] = useState(0);
   const [now, setNow] = useState(() => Date.now());
   const [priceOpen, setPriceOpen] = useState(false);
   const [priceError, setPriceError] = useState('');
@@ -214,6 +228,7 @@ export function UsageDashboard({ active, tools, projects, prices, onPricesChange
   const [priceDraft, setPriceDraft] = useState({ currency: 'USD', input: '', output: '', read: '', write: '', source: '' });
   const request = useRef(0);
   const loaded = useRef(false);
+  const reportFilter = useRef('');
 
   useEffect(() => {
     if (!active) return;
@@ -234,15 +249,17 @@ export function UsageDashboard({ active, tools, projects, prices, onPricesChange
   useEffect(() => {
     if (!active || !nativeAvailable) return;
     const sequence = ++request.current;
-    setLoading(true);
+    const filterKey = JSON.stringify(filter);
+    setLoading(true); setReadError(false);
+    if (filterKey !== reportFilter.current) setReport(null);
     const timer = window.setTimeout(() => {
       native.getUsageReport(filter)
-        .then((value) => { if (sequence === request.current) { setReport(value); loaded.current = true; } })
-        .catch((value) => { if (sequence === request.current) notify.readAlert(value); })
+        .then((value) => { if (sequence === request.current) { setReport(value); reportFilter.current = filterKey; loaded.current = true; } })
+        .catch(() => { if (sequence === request.current) { setReport(null); setReadError(true); } })
         .finally(() => { if (sequence === request.current) setLoading(false); });
     }, loaded.current ? 120 : 0);
-    return () => window.clearTimeout(timer);
-  }, [filter, active, scanVersion]);
+    return () => { window.clearTimeout(timer); request.current++; };
+  }, [filter, active, scanVersion, retry]);
 
   const toolName = (id: string) => tools.find((item) => item.id === id)?.name ?? id;
   const totals = report?.totals ?? null;
@@ -254,8 +271,10 @@ export function UsageDashboard({ active, tools, projects, prices, onPricesChange
   const multiDay = report?.bucket !== 'hour';
   const shownMetric = totals?.cost === null ? 'tokens' : metric;
   const timedBuckets = report?.timeline.filter((bucket) => bucket.start <= now) ?? [];
-  const average = timedBuckets.length ? (totals?.total ?? 0) / timedBuckets.length : 0;
-  const peak = report?.timeline.reduce<UsageBucket | null>((best, bucket) => bucket.totals.total > (best?.totals.total ?? 0) ? bucket : best, null) ?? null;
+  const metricValue = (value: UsageTotals) => shownMetric === 'cost' ? value.cost ?? 0 : value.total;
+  const metricFormat = (value: number) => shownMetric === 'cost' ? formatMoney(value, report?.currency ?? 'USD') : formatTokens(value);
+  const average = timedBuckets.length && totals ? metricValue(totals) / timedBuckets.length : 0;
+  const peak = report?.timeline.reduce<UsageBucket | null>((best, bucket) => metricValue(bucket.totals) > (best ? metricValue(best.totals) : 0) ? bucket : best, null) ?? null;
 
   function openPrice(tool = '', name = '') {
     const existing = prices.find((item) => item.toolId === tool && item.model === name);
@@ -291,9 +310,12 @@ export function UsageDashboard({ active, tools, projects, prices, onPricesChange
   const modelOptions = [{ value: '', label: '全部模型' }, ...(report?.models ?? []).map((item) => ({ value: item, label: item })), ...(model && !(report?.models ?? []).includes(model) ? [{ value: model, label: model }] : [])];
 
   return <div className={styles.dashboard} data-loading={loading || undefined} aria-busy={loading || undefined}>
+    <div className={styles.overviewHead}><div><h2>用量总览</h2><p>看清每一次调用，让消耗有迹可循。</p></div>
+      <button type="button" onClick={() => openPrice()}><Icon name="settings" size={14} />设置估算价格</button>
+    </div>
     <div className={styles.header}>
-      <div className={styles.segmented} role="radiogroup" aria-label="统计时间">
-        {ranges.map((item) => <button key={item.id} type="button" role="radio" aria-checked={range === item.id} onClick={() => {
+      <div className={styles.segmented} role="radiogroup" aria-label="统计时间" onKeyDown={navigateChoices}>
+        {ranges.map((item) => <button key={item.id} type="button" role="radio" tabIndex={range === item.id ? 0 : -1} aria-checked={range === item.id} onClick={() => {
           setRange(item.id);
           if (item.id === 'custom' && !customFrom && !customTo) { setCustomFrom(shiftDay(today, -6)); setCustomTo(today); }
         }}>{item.label}</button>)}
@@ -317,65 +339,73 @@ export function UsageDashboard({ active, tools, projects, prices, onPricesChange
         <button type="button" className="text-button" onClick={() => { setToolId(''); setModel(''); setProjectId(''); }}>清除筛选</button>
       </span>}</p>
       <p className={styles.freshness}>
-        {scanning ? <><span className="spinner" aria-hidden="true" />正在同步本机记录…</> : scanned ? `数据更新于 ${clockTime(scanned)}` : '尚未扫描本机记录'}
-        <button type="button" className="text-button" onClick={() => openPrice()}><Icon name="sparkle" size={13} />设置估算价格</button>
+        {scanning || loading ? <><span className="spinner" aria-hidden="true" />{scanning ? '正在同步本机记录…' : '正在更新用量…'}</> : scanned ? `数据更新于 ${clockTime(scanned)}` : '尚未扫描本机记录'}
       </p>
     </div>
 
-    {!report ? <div className={styles.skeleton} aria-hidden="true"><span /><span /><span /></div> : empty ? <div className={styles.empty}>
+    {readError ? <div className={styles.empty} role="alert"><span className="empty-symbol"><Icon name="alert" size={20} /></span><h3>用量暂时没有读取成功</h3><p>筛选条件已保留，可以重新加载。</p><button type="button" onClick={() => setRetry((value) => value + 1)}>重新加载用量</button></div>
+    : !report ? <div className={styles.skeleton} role="status" aria-label="正在加载用量"><span /><span /><span /></div> : empty ? <div className={styles.empty}>
       <span className="empty-symbol"><Icon name="clock" size={20} /></span>
       <h3>{range === 'all' ? '还没有可统计的模型调用' : '这段时间没有模型调用'}</h3>
-      <p>{range === 'all' ? '使用受管理的 CLI 后，本机记录会自动出现在这里。' : '换个时间范围看看，或者确认相关 CLI 已在“设置”里被管理。'}</p>
+      <p>{toolId || model || projectId ? '当前筛选下没有用量，试试清除筛选或扩大时间范围。' : range === 'all' ? '使用受管理的 CLI 后，本机记录会自动出现在这里。' : '换个时间范围看看，或者确认相关 CLI 已在“设置”里被管理。'}</p>
       <div>{range !== '7' && <button type="button" onClick={() => setRange('7')}>查看近 7 天</button>}{range !== 'all' && <button type="button" onClick={() => setRange('all')}>查看全部</button>}</div>
     </div> : totals && <>
       <section className={styles.summary} aria-label="用量概览">
         <div className={styles.primary}>
-          <small>总 Token</small>
+          <small><Icon name="sparkle" size={15} />总 Token</small>
           <strong title={`${totals.total.toLocaleString()} token`}>{formatTokens(totals.total)}</strong>
           <Delta current={totals.total} previous={previous?.totals.total} label={compare} title={compareTitle} />
         </div>
         <div className={styles.metric}>
-          <small>估算费用</small>
+          <small><Icon name="archive" size={15} />估算费用 <span className={styles.currency}>{report.currency}</span></small>
           <strong title={exactMoney(totals.cost, report.currency)} data-unpriced={totals.cost === null || undefined}>{formatMoney(totals.cost, report.currency)}</strong>
           {totals.unpricedTokens > 0
             ? <button type="button" className={styles.metricNote} onClick={() => openPrice()}>{formatPercent(1 - pricedShare)} token 未定价</button>
             : <Delta current={totals.cost} previous={previous?.totals.cost ?? (previous ? 0 : undefined)} label={compare} title={compareTitle} />}
         </div>
         <div className={styles.metric}>
-          <small>模型调用</small>
+          <small><Icon name="connections" size={15} />模型调用</small>
           <strong>{totals.requests.toLocaleString()}</strong>
           <span className={styles.metricNote}>{totals.sessions} 个会话 · 每次约 {formatTokens(totals.total / Math.max(1, totals.requests))}</span>
         </div>
         <div className={styles.metric}>
-          <small>缓存命中</small>
+          <small><Icon name="leaf" size={15} />缓存命中</small>
           <strong title="提示词 token 中从缓存读取的比例">{formatPercent(cacheHitRate(totals))}</strong>
           <span className={styles.metricNote}>新输入 {formatTokens(totals.input)} · 输出 {formatTokens(totals.output)}</span>
         </div>
-        <Composition totals={totals} />
       </section>
 
+      <div className={styles.analysisGrid}>
       <section className={styles.card} aria-labelledby="usage-trend-title">
         <header className={styles.cardHead}>
           <h3 id="usage-trend-title">用量趋势<small>{{ hour: '按小时', day: '按天', month: '按月' }[report.bucket]}</small></h3>
-          <p className={styles.trendStats}>
-            {peak && <span>峰值 <b>{bucketLabel(peak, report.bucket, true)}</b> {formatTokens(peak.totals.total)}</span>}
-            {timedBuckets.length > 1 && <span>平均每{multiDay ? (report.bucket === 'month' ? '月' : '天') : '小时'} <b>{formatTokens(average)}</b></span>}
-          </p>
-          {totals.cost !== null && <div className={styles.miniTabs} role="tablist" aria-label="趋势指标">
-            <button type="button" role="tab" aria-selected={metric === 'tokens'} onClick={() => setMetric('tokens')}>Token</button>
-            <button type="button" role="tab" aria-selected={metric === 'cost'} onClick={() => setMetric('cost')}>费用</button>
+          {totals.cost !== null && <div className={styles.miniTabs} role="tablist" aria-label="趋势指标" onKeyDown={navigateChoices}>
+            <button type="button" role="tab" tabIndex={metric === 'tokens' ? 0 : -1} aria-selected={metric === 'tokens'} onClick={() => setMetric('tokens')}>Token</button>
+            <button type="button" role="tab" tabIndex={metric === 'cost' ? 0 : -1} aria-selected={metric === 'cost'} onClick={() => setMetric('cost')}>费用</button>
           </div>}
         </header>
+        <p className={styles.trendStats}>
+          {peak && <span>峰值 <b>{metricFormat(metricValue(peak.totals))}</b> · {bucketLabel(peak, report.bucket, true)}</span>}
+          {timedBuckets.length > 1 && <span>平均每{multiDay ? (report.bucket === 'month' ? '月' : '天') : '小时'} <b>{metricFormat(average)}</b></span>}
+        </p>
         <TrendChart report={report} metric={shownMetric} now={now} />
         {shownMetric === 'tokens' && <ul className={styles.legend} aria-hidden="true">{tokenParts.map((part) => <li key={part.key}><i data-key={part.key} />{part.label}</li>)}</ul>}
+        {shownMetric === 'cost' && <p className={styles.cardHint}>仅包含已定价用量，估算费用不等于实际账单。</p>}
       </section>
+      <section className={styles.card} aria-labelledby="usage-composition-title">
+        <header className={styles.cardHead}><h3 id="usage-composition-title">Token 构成</h3><span className={styles.cardHint}>输入与输出</span></header>
+        <Composition totals={totals} />
+      </section>
+      </div>
 
       <div className={styles.split}>
         <Breakdown report={report} toolName={toolName} filter={{ toolId, model, projectId }}
+          view={breakdownView} onView={setBreakdownView}
           onFilter={(next) => { if (next.toolId !== undefined) setToolId(next.toolId); if (next.model !== undefined) setModel(next.model); if (next.projectId !== undefined) setProjectId(next.projectId); }}
           onPrice={openPrice} />
         <section className={styles.card} aria-labelledby="usage-sessions-title">
-          <header className={styles.cardHead}><h3 id="usage-sessions-title">消耗最多的会话</h3></header>
+          <header className={styles.cardHead}><h3 id="usage-sessions-title">消耗最多的会话</h3><span className={styles.cardHint}>Top {report.topSessions.length}</span></header>
+          <p className={styles.cardHint}>打开会话，回到消耗发生的上下文</p>
           <ol className={styles.sessions} aria-label="消耗最多的会话">
             {report.topSessions.map((item) => <li key={item.id}><button type="button" onClick={() => onOpenSession(item.id)} title="在会话中查看">
               <ToolIcon toolId={item.toolId} size={20} />

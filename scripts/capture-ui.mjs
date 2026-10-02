@@ -53,7 +53,7 @@ async function mock(initialTheme){
   if(command==='list_history_sessions')return records.filter(i=>!args.filter.search||i.title.includes(args.filter.search));
   if(command==='get_usage_report')return usageReport(args.filter);
   if(command==='list_history_prices')return [];
-  if(command==='get_history_session')return {session:records.find(i=>i.id===args.id),resumeReason:null,usage:[],messages:[{id:'m1',role:'user',timestamp:1790751600000,text:'请梳理原生配置与通用配置的继承关系，确认保存草稿和应用配置的行为。'},{id:'m2',role:'assistant',timestamp:1790751800000,text:'命名配置可以继承本工具的通用配置。保存时只更新资料库；点击保存并应用后，合并结果通过文件事务写入 CLI 原生文件。\n\n若文件已被外部程序修改，应用会暂停并提示冲突，保留当前文件和原绑定。'},{id:'m3',role:'user',timestamp:1790753600000,text:'请补充项目作用域的边界，并给出验证步骤。'}]};
+  if(command==='get_history_session')return {session:records.find(i=>i.id===args.id),resumeReason:null,usage:[],messages:[{id:'m1',role:'user',timestamp:1790751600000,text:'请梳理原生配置与通用配置的继承关系，确认保存草稿和应用配置的行为。'},{id:'m2',role:'assistant',timestamp:1790751800000,text:'## 配置继承关系\n\n命名配置可以继承本工具的**通用配置**。\n\n1. 保存草稿：仅更新本机资料库。\n2. 保存并应用：合并配置并写入 CLI 原生文件。\n3. 检测到冲突：保留当前文件，等待确认。\n\n```typescript\nconst config = { ...common, ...profile };\nawait applyConfiguration(config);\n```\n\n> 已运行的会话继续使用原配置，新会话使用更新后的配置。'},{id:'m3',role:'user',timestamp:1790753600000,text:'请补充项目作用域的边界，并给出验证步骤。'}]};
   if(command==='copy_history_resume_command')return "Set-Location -LiteralPath 'C:\\Projects\\cliora'; & 'codex' "+(args.mode==='yolo'?"'--yolo' ":'')+"'resume' '01992e52-1ac0-7387-a5e4-41067718dd93'";
   if(command==='list_portable_items')return [{key:'preferences:managed',kind:'preferences',label:'外观与管理偏好',pendingFields:[]},{key:'profile:codex-daily',kind:'profile',label:'Codex · 日常开发',pendingFields:[]},{key:'library:prompt-1',kind:'library',label:'代码审查',pendingFields:[]},{key:'project:cliora',kind:'project',label:'栖点 · 桌面工具',pendingFields:['本机目录']}];
   if(command==='get_webdav_status')return sync;
@@ -66,7 +66,17 @@ const failures=[];
 for(const width of [1360,900,640])for(const theme of ['light','dark']){
  const page=await browser.newPage({viewport:{width,height:1000}});page.on('pageerror',e=>failures.push(e.message));await page.addInitScript(mock,theme);await page.goto(process.env.CLIORA_PREVIEW_URL ?? 'http://127.0.0.1:14736');await page.getByText('正在读取本机设置').waitFor({state:'hidden'});await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);
  const nav=page.getByRole('navigation',{name:'页面'});
- async function capture(name){await page.waitForTimeout(100);await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);const path=`${out}/${name}-${theme}-${width}.png`;await page.screenshot({path});const over=await page.evaluate(()=>[...document.querySelectorAll('main,section,article,input,textarea,select,button')].filter(el=>el.getClientRects().length&&el.getBoundingClientRect().right>innerWidth+1).map(el=>({tag:el.tagName,text:el.textContent?.slice(0,60)})));if(over.length)failures.push({name,theme,width,over});console.log(path);}
+ async function capture(name){await page.mouse.move(0,0);await page.waitForTimeout(100);await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);const path=`${out}/${name}-${theme}-${width}.png`;await page.screenshot({path});const over=await page.evaluate(()=>[...document.querySelectorAll('main,section,article,input,textarea,select,button')].filter(el=>el.getClientRects().length&&el.getBoundingClientRect().right>innerWidth+1).map(el=>({tag:el.tagName,text:el.textContent?.slice(0,60)})));if(over.length)failures.push({name,theme,width,over});console.log(path);}
+ if(process.argv.includes('--records') || process.argv.includes('--sessions')){
+  await nav.getByRole('button',{name:'使用记录'}).click();
+  await page.getByLabel('会话列表').getByRole('button').first().waitFor();if(width>760)await page.getByRole('button',{name:'复制代码',exact:true}).waitFor();await capture('sessions');
+  if(width<=760){await page.getByLabel('会话列表').getByRole('button').first().click();await page.getByRole('button',{name:'复制代码',exact:true}).waitFor();await capture('session-detail');}
+  if(process.argv.includes('--sessions')){await page.getByLabel('会话正文').locator('article').nth(1).scrollIntoViewIfNeeded();await capture('session-reading');await page.close();continue;}
+  await page.getByRole('tab',{name:'用量',exact:true}).click();await page.getByRole('radio',{name:'近 7 天',exact:true}).click();
+  await page.getByRole('region',{name:'用量概览'}).waitFor();await capture('usage');
+  await page.getByRole('region',{name:'消耗最多的会话'}).scrollIntoViewIfNeeded();await capture('usage-details');
+  await page.close();continue;
+ }
  await capture('home');
  await nav.getByRole('button',{name:'工具与连接'}).click();const profiles=page.getByRole('region',{name:'工具与连接'}).getByLabel('配置列表');await profiles.waitFor();await capture('tools');
  await profiles.getByRole('button',{name:'修改'}).first().click();await page.getByRole('dialog').waitFor();await capture('native-config');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
@@ -74,7 +84,8 @@ for(const width of [1360,900,640])for(const theme of ['light','dark']){
  await page.getByRole('tab',{name:'MCP',exact:true}).click();await page.getByRole('button',{name:/filesystem/}).first().waitFor();await capture('mcp');
  await page.getByRole('tab',{name:'Skill',exact:true}).click();await page.getByRole('button',{name:/code-review/}).first().waitFor();await capture('skills');
  await nav.getByRole('button',{name:'资料库'}).click();await page.getByRole('button',{name:'代码审查',exact:true}).waitFor();await capture('library');
- await nav.getByRole('button',{name:'使用记录'}).click();await page.getByLabel('原生恢复命令').waitFor();await capture('sessions');
+ await nav.getByRole('button',{name:'使用记录'}).click();await page.getByLabel('会话列表').getByRole('button').first().waitFor();if(width>760)await page.getByRole('button',{name:'在外部终端继续'}).waitFor();await capture('sessions');
+ if(width<=760){await page.getByLabel('会话列表').getByRole('button').first().click();await page.getByRole('button',{name:'在外部终端继续'}).waitFor();await capture('session-detail');}
  await page.getByRole('tab',{name:'用量',exact:true}).click();await capture('usage');
  await nav.getByRole('button',{name:'设置',exact:true}).click();await capture('settings');
  await page.getByRole('tab',{name:'迁移与同步'}).click();await capture('migration');
