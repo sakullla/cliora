@@ -1,0 +1,10 @@
+[
+  {
+    "id": "fixture@market",
+    "version": "1.0.0",
+    "scope": "user",
+    "enabled": true,
+    "installPath": "/fixture/claude/plugins/cache/market/fixture/1.0.0",
+    "projectEnabled": false
+  }
+]

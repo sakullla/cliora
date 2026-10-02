@@ -1,0 +1,11 @@
+[
+  {
+    "status": "installed",
+    "name": "fixture",
+    "repo_key": "fixture-source-1234",
+    "version": "1.0.0",
+    "path": "/fixture/grok/installed-plugins/fixture-source-1234",
+    "source": "/fixture/source",
+    "marketplace": null
+  }
+]

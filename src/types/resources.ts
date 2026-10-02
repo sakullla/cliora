@@ -1,5 +1,12 @@
 import type { Scope } from './native';
 
+export type PluginTarget = { toolId: string; scope: Scope; projectPath: string | null; contextId: string | null };
+export type PluginAction = 'install' | 'update' | 'enable' | 'disable' | 'uninstall';
+export type PluginEntry = { id: string; name: string; source: string; version: string | null; scope: string; enabled: boolean | null; state: string; policy: string; readOnly: boolean; root: string | null; resources: { kind: string; path: string; ownerId: string }[] };
+export type PluginSnapshot = { target: PluginTarget; capability: { version: string; sources: string; actions: PluginAction[]; project: boolean; detail: string }; entries: PluginEntry[]; baseline: string; detail: string };
+export type PluginRequest = { target: PluginTarget; action: PluginAction; source: string; baseline: string; trusted: boolean };
+export type PluginResult = { status: string; detail: string; transactionId: string | null; snapshot: PluginSnapshot | null };
+
 export type McpTransport = 'stdio' | 'http';
 export type McpDefinition = {
   id: string;

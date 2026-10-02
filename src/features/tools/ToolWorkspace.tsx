@@ -17,6 +17,7 @@ import { ProfileQuota, useUsageQuota } from './UsageQuota';
 import { InstallPanel } from './InstallPanel';
 import { ModelCombobox } from './ModelCombobox';
 import { McpWorkspace, SkillsWorkspace } from './ResourceWorkspace';
+import { PluginsWorkspace } from './PluginsWorkspace';
 import { ToolIcon } from '../../components/ToolIcon';
 import { FileConflict } from '../../components/FileConflict';
 import { FilterSelect } from '../../components/FilterSelect';
@@ -102,7 +103,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   };
   const [commonDraft, setCommonDraft] = useState<RegisteredCommon | null>(null);
   const [view, setView] = useState<View>('form');
-  const [resourceView, setResourceView] = useState<'config' | 'mcp' | 'skills' | 'accounts'>(repair?.resourceView ?? 'config');
+  const [resourceView, setResourceView] = useState<'config' | 'mcp' | 'skills' | 'accounts' | 'plugins'>(repair?.resourceView ?? 'config');
   const [mcpDirty, setMcpDirty] = useState(false);
   const [skillsDirty, setSkillsDirty] = useState(false);
   const [resourceEpoch, setResourceEpoch] = useState(0);
@@ -438,7 +439,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     setView('form'); setError(''); setNotice(''); setApplyComparison(null); setGuide(true);
   }
 
-  async function switchResourceView(next: 'config' | 'mcp' | 'skills' | 'accounts') {
+  async function switchResourceView(next: 'config' | 'mcp' | 'skills' | 'accounts' | 'plugins') {
     if (next === resourceView) return;
     const hadUnsaved = dirty || mcpDirty || skillsDirty;
     if (hadUnsaved && !await confirmChange('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return;
@@ -911,6 +912,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
         <button type="button" role="tab" aria-selected={resourceView === 'accounts'} className={resourceView === 'accounts' ? styles.selected : ''} onClick={() => void switchResourceView('accounts')}>账号</button>
         <button type="button" role="tab" aria-selected={resourceView === 'mcp'} className={resourceView === 'mcp' ? styles.selected : ''} onClick={() => void switchResourceView('mcp')}>MCP</button>
         <button type="button" role="tab" aria-selected={resourceView === 'skills'} className={resourceView === 'skills' ? styles.selected : ''} onClick={() => void switchResourceView('skills')}>Skill</button>
+        <button type="button" role="tab" aria-selected={resourceView === 'plugins'} className={resourceView === 'plugins' ? styles.selected : ''} onClick={() => void switchResourceView('plugins')}>插件</button>
       </div>
       <div className={styles.scopeBar}><FilterSelect className={styles.projectSelect} label="配置范围" triggerDetail={false} value={scope === 'global' ? '__global__' : projectPath} options={[{ value: '__global__', label: '全局配置' }, ...projects.map((project) => ({ value: project.path ?? project.id, label: project.name, detail: project.path ? shortPath(project.path) : undefined, note: project.available ? undefined : '目录不可用', disabled: !project.available || !project.path })), ...(projectPath && !projects.some((project) => project.path === projectPath) ? [{ value: projectPath, label: projectPath.split(/[\\/]/).filter(Boolean).at(-1) || projectPath, detail: shortPath(projectPath) }] : [])]} placeholder="选择项目…" forceSearch searchLabel="搜索项目" title={scope === 'global' ? '全局配置' : projectPath || '选择已有项目'} onChange={(value) => void (value === '__global__' ? switchGlobal() : switchProject(value))} onPickFolder={() => void chooseProjectFolder()} pickFolderLabel="选择文件夹…" /></div>
     </div>
@@ -969,6 +971,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     </>}
     </div>
     {resourceView === 'accounts' && currentTool && <AccountsPanel key={currentTool} toolId={currentTool} state={accountState} />}
+    {resourceView === 'plugins' && currentTool && <PluginsWorkspace key={JSON.stringify([currentTool, scope, projectPath, resourceEpoch, workspace?.effectiveContextId])} toolId={currentTool} scope={scope} projectPath={projectPath} contextId={workspace?.effectiveContextId ?? null} />}
     {resourceView === 'mcp' && currentTool && <McpWorkspace key={JSON.stringify([currentTool, scope, projectPath, resourceEpoch, workspace?.effectiveContextId])} toolId={currentTool} scope={scope} projectPath={projectPath} contextId={workspace?.effectiveContextId ?? null} onDirtyChange={setMcpDirty} />}
     {resourceView === 'skills' && currentTool && <SkillsWorkspace key={JSON.stringify([currentTool, scope, projectPath, resourceEpoch, workspace?.effectiveContextId])} toolId={currentTool} scope={scope} projectPath={projectPath} contextId={workspace?.effectiveContextId ?? null} onDirtyChange={setSkillsDirty} />}
   </section>;

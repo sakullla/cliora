@@ -1,0 +1,28 @@
+{
+  "evidenceDate": "2026-10-03",
+  "platform": "Windows",
+  "acceptance": "Isolated local synthetic packages; no interactive session load or private marketplace acceptance",
+  "versions": {
+    "claude_code": "2.1.287",
+    "codex": "0.160.0",
+    "grok": "1.0.46",
+    "pi": "0.99.2",
+    "open_code": "1.18.34"
+  },
+  "sources": [
+    "https://raw.githubusercontent.com/openai/codex/rust-v0.160.0/codex-rs/config/src/plugin_edit.rs",
+    "https://raw.githubusercontent.com/openai/codex/rust-v0.160.0/codex-rs/core-plugin-common/src/installed.rs",
+    "https://raw.githubusercontent.com/openai/codex/rust-v0.160.0/codex-rs/cli/src/plugin_cmd.rs",
+    "https://docs.x.ai/build/features/skills-plugins-marketplaces",
+    "https://github.com/anomalyco/opencode/blob/v1.18.34/packages/opencode/src/plugin/index.ts",
+    "Installed Pi 0.99.2 docs/packages.md",
+    "Grok 1.0.46 emitted docs/user-guide/09-plugins.md",
+    "Actual per-action --help for installed CLIs"
+  ],
+  "nativeSequences": {
+    "claude_code": "marketplace add local --json; install fixture@market --scope user --json; list --json; disable --scope user --json; list enabled=false; enable --scope user --json; update --scope user --json; uninstall --scope user --json; list empty. All exit 0.",
+    "codex": "marketplace add local; add fixture@market --json; list --json; remove --json; list empty. All exit 0.",
+    "grok": "GROK_HOME isolated; install absoluteLocal --trust; list --json; disable; list; enable; update; uninstall; list empty. All exit 0. list lacks enabled, config [plugins] enabled/disabled observed.",
+    "pi": "PI_CODING_AGENT_DIR isolated; install absoluteLocal --no-approve; list; update --extension absoluteLocal --no-approve; remove absoluteLocal --no-approve; list empty. All exit 0. Stores local source relative to settings directory."
+  }
+}

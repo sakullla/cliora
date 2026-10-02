@@ -1,0 +1,19 @@
+{
+  "installed": [
+    {
+      "pluginId": "fixture@market",
+      "name": "fixture",
+      "marketplaceName": "market",
+      "version": "1.0.0",
+      "installed": true,
+      "enabled": true,
+      "source": {
+        "source": "local",
+        "path": "/fixture/source"
+      },
+      "installPolicy": "AVAILABLE",
+      "authPolicy": "ON_INSTALL"
+    }
+  ],
+  "available": []
+}

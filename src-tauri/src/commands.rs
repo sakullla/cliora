@@ -18,6 +18,16 @@ use crate::native::{
 };
 use crate::{history, launch, library, portable, projects, resources};
 use crate::resources::rules;
+
+#[tauri::command]
+pub async fn scan_native_plugins(app: AppHandle, target: resources::plugins::PluginTarget) -> Result<resources::plugins::PluginSnapshot, ApiError> {
+    blocking(move || { let db = app.state::<AppState>().database(&app)?; resources::plugins::scan(&db, &home()?, &target).map_err(native_error) }).await
+}
+
+#[tauri::command]
+pub async fn operate_native_plugin(app: AppHandle, request: resources::plugins::PluginRequest) -> Result<resources::plugins::PluginResult, ApiError> {
+    blocking(move || { let db = app.state::<AppState>().database(&app)?; resources::plugins::operate(&db, &SystemCredentialStore, &home()?, &request).map_err(native_error) }).await
+}
 use std::path::PathBuf;
 
 #[derive(Default)]

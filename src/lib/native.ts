@@ -1,5 +1,6 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import type { AccountCapability, AuthAccount } from '../types/accounts';
+import type { PluginTarget, PluginRequest, PluginSnapshot, PluginResult } from '../types/resources';
 import type { ApiError, Bootstrap, CliId, Theme } from '../types/domain';
 import type { AdapterCatalog, ApplyComparison, ApplyOutcome, CommonConfig, CommonSaveResult, Connection, ConnectionCheck, ModelDirectory, NativeImport, NativeInspection, NativePreview, NativeProfile, PreservedProfile, RegisteredCommon, RegisteredCommonSaveResult, RegisteredProfile, RegisteredToolWorkspace, Scope, ToolWorkspace } from '../types/native';
 import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, TerminalId, TrayStatus } from '../types/launch';
@@ -53,6 +54,8 @@ async function usageCommand<T>(name: string, args?: Record<string, unknown>): Pr
 
 /** Feature modules add named wrappers here; components never invoke arbitrary commands. */
 export const native = {
+  scanNativePlugins: (target: PluginTarget) => command<PluginSnapshot>('scan_native_plugins', { target }),
+  operateNativePlugin: (request: PluginRequest) => command<PluginResult>('operate_native_plugin', { request }),
   accountCapabilities: () => command<AccountCapability[]>('account_capabilities'),
   adoptNativeCodexAccount: (label: string) => command<AuthAccount>('adopt_native_codex_account', { label }),
   listAccounts: () => command<AuthAccount[]>('list_accounts'),
