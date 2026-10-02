@@ -6,7 +6,7 @@ import type { LibraryDraft, LibraryItem, LibraryKind } from '../types/library';
 import type { McpDefinition, McpDraft, McpPlacement, McpTargetRequest, McpTargetResult, NativeMcpEntry, RuleTarget, RulePreview, RuleApplyResult, RulePlacement, RuleClientSelection, RuleSyncResult, SkillPackage, SkillImportPreview, SkillInstallation, SkillTargetResult, NativeSkillEntry, SkillTargetPreview, SkillRecoveryIssue } from '../types/resources';
 import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, ScanStatus, UsageReport } from '../types/history';
 import type { ConflictPreview, PortableApplyTarget, PortableImportReport, PortableItem, PortablePreview, PortableProjectLink, SyncStatus, WebdavSetup } from '../types/portable';
-import type { DeleteQueryResult, SaveQueryResult, UsageError, UsageQuery, UsageQueryDraft } from '../types/usage';
+import type { DeleteQueryResult, DraftTestReport, SaveQueryResult, UsageError, UsageQuery, UsageQueryDraft } from '../types/usage';
 
 export const nativeAvailable = isTauri();
 
@@ -53,6 +53,9 @@ async function usageCommand<T>(name: string, args?: Record<string, unknown>): Pr
 /** Feature modules add named wrappers here; components never invoke arbitrary commands. */
 export const native = {
   listUsageQueries: () => usageCommand<UsageQuery[]>('list_usage_queries'),
+  createUsageTest: () => usageCommand<string>('create_usage_test'),
+  cancelUsageTest: (executionId: string) => usageCommand<void>('cancel_usage_test', { executionId }),
+  testUsageQuery: (executionId: string, draftRevision: number, draft: UsageQueryDraft) => usageCommand<DraftTestReport>('test_usage_query', { executionId, draftRevision, draft }),
   getUsageQuery: (id: string) => usageCommand<UsageQuery>('get_usage_query', { id }),
   saveUsageQuery: (draft: UsageQueryDraft) => usageCommand<SaveQueryResult>('save_usage_query', { draft }),
   deleteUsageQuery: (id: string, expectedVersion: number) => usageCommand<DeleteQueryResult>('delete_usage_query', { id, expectedVersion }),

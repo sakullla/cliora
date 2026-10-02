@@ -39,7 +39,7 @@ impl CredentialStore for Secrets {
     }
 }
 
-fn config() -> QueryConfig {
+pub(super) fn config() -> QueryConfig {
     QueryConfig {
         schema_version: 1,
         label: "Query".into(),

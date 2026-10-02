@@ -16,6 +16,7 @@ tauri-build = { version = "2.5", features = [] }
 tauri = { version = "2.10", features = ["tray-icon"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+rquickjs = { version = "=0.14.0", default-features = false, features = ["std"] }
 memchr = "2"
 rusqlite = { version = "0.40", features = ["bundled"] }
 keyring = "4.2"
@@ -25,7 +26,7 @@ toml = "1.1"
 jsonc-parser = { version = "0.34", features = ["serde", "cst"] }
 sha2 = "0.10"
 uuid = { version = "1.26", features = ["v4", "serde"] }
-reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls"] }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls", "gzip"] }
 zip = { version = "8.6", default-features = false, features = ["deflate"] }
 url = "2"
 base64 = "0.22"
@@ -42,6 +43,7 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Secur
 
 [dev-dependencies]
 tempfile = "3"
+flate2 = "1"
 
 # Keep the real 64 MiB / 3-pass KDF in tests; optimize only its CPU-bound dependencies.
 [profile.test.package.argon2]

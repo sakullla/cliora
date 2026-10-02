@@ -42,6 +42,21 @@ pub async fn list_usage_queries(app: AppHandle) -> Result<Vec<crate::usage::Usag
 }
 
 #[tauri::command]
+pub fn create_usage_test() -> Result<String, crate::usage::UsageError> {
+    crate::usage::create_test_execution()
+}
+
+#[tauri::command]
+pub fn cancel_usage_test(execution_id: String) -> Result<(), crate::usage::UsageError> {
+    crate::usage::cancel_test_execution(&execution_id)
+}
+
+#[tauri::command]
+pub async fn test_usage_query(app: AppHandle, execution_id: String, draft_revision: u32, draft: crate::usage::UsageQueryDraft) -> Result<crate::usage::DraftTestReport, crate::usage::UsageError> {
+    usage_blocking(app, move |db| crate::usage::test_draft(db, &SystemCredentialStore, execution_id, draft_revision, draft)).await
+}
+
+#[tauri::command]
 pub async fn get_usage_query(app: AppHandle, id: String) -> Result<crate::usage::UsageQuery, crate::usage::UsageError> {
     usage_blocking(app, move |db| crate::usage::get_query(db, &id)).await
 }

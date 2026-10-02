@@ -97,7 +97,7 @@ fn collect_credentials(db: &Database, secrets: &dyn CredentialStore) -> bool {
     .unwrap_or(true)
 }
 
-fn validate_draft(draft: &UsageQueryDraft) -> Result<(), UsageError> {
+pub(super) fn validate_draft(draft: &UsageQueryDraft) -> Result<(), UsageError> {
     draft.config.validate()?;
     if draft.id.is_some() != draft.expected_version.is_some()
         || draft.expected_version == Some(0)
