@@ -166,3 +166,94 @@ fn actual_helper_process_cancellation_reaping_and_recovery() {
     .unwrap();
     assert!(report.result.is_some(), "{:?}", report.error);
 }
+
+#[test]
+#[ignore = "requires cargo build --bin cliora; run with --include-ignored for real helper acceptance"]
+fn actual_helper_preserves_retry_after_metadata() {
+    let exe = std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join(if cfg!(windows) {
+            "cliora.exe"
+        } else {
+            "cliora"
+        });
+    assert!(
+        exe.is_file(),
+        "build the application binary before this native process test"
+    );
+    let future = (chrono::Utc::now() + chrono::Duration::minutes(5))
+        .format("%a, %d %b %Y %H:%M:%S GMT")
+        .to_string();
+    for (status, header, expected) in [
+        (429, "300".to_string(), Some(295..=300)),
+        (429, future.clone(), Some(295..=300)),
+        (503, future, Some(295..=300)),
+        (
+            429,
+            "Sun, 06 Nov 1994 08:49:37 GMT".to_string(),
+            Some(0..=0),
+        ),
+        (429, "invalid".to_string(), None),
+        (
+            429,
+            "999999999999999999999999".to_string(),
+            Some(u32::MAX..=u32::MAX),
+        ),
+    ] {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut buffer = [0; 4096];
+            stream.read(&mut buffer).unwrap();
+            let response = format!("HTTP/1.1 {status} Unavailable\r\nRetry-After: {header}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+        let mut config = super::super::tests::config();
+        config.targets = vec![QueryTarget {
+            origin: origin.clone(),
+            allow_private_network: true,
+        }];
+        config.program = QueryProgram::JavaScript {
+            source: format!("async function query(ctx){{await ctx.http({{url:'{origin}/'}});}}"),
+        };
+        let report = run_child(
+            &exe,
+            HelperInput {
+                config,
+                secrets: vec![],
+            },
+            &AtomicBool::new(false),
+            Instant::now(),
+        )
+        .unwrap();
+        server.join().unwrap();
+        assert!(report.result.is_none());
+        let error = report.error.unwrap();
+        assert_eq!(
+            error.code,
+            if status == 429 {
+                UsageErrorCode::RateLimit
+            } else {
+                UsageErrorCode::Network
+            }
+        );
+        match expected {
+            Some(range) => assert!(
+                error
+                    .retry_after_seconds
+                    .is_some_and(|seconds| range.contains(&seconds)),
+                "{:?}",
+                error
+            ),
+            None => assert_eq!(error.retry_after_seconds, None),
+        }
+    }
+}

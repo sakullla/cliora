@@ -238,6 +238,23 @@ fn old_credential_cleanup_failure_is_reported_and_retried() {
 
 #[test]
 fn bindings_cannot_keep_another_querys_secret_or_exceed_target_authority() {
+    let copy_keep = |value: &UsageQueryDraft| UsageQueryDraft {
+        id: value.id.clone(),
+        expected_version: value.expected_version,
+        config: value.config.clone(),
+        credentials: value
+            .credentials
+            .iter()
+            .map(|credential| {
+                assert!(matches!(credential.value, CredentialUpdate::Keep));
+                CredentialDraft {
+                    name: credential.name.clone(),
+                    allowed_origins: credential.allowed_origins.clone(),
+                    value: CredentialUpdate::Keep,
+                }
+            })
+            .collect(),
+    };
     let dir = tempfile::tempdir().unwrap();
     let db = Database::open(&dir.path().join("db")).unwrap();
     let secrets = Secrets::default();
@@ -266,12 +283,81 @@ fn bindings_cannot_keep_another_querys_secret_or_exceed_target_authority() {
     edit.credentials[0]
         .allowed_origins
         .push("https://second.example.com".into());
+    assert_eq!(
+        helper::resolve_draft(&db, &secrets, &edit)
+            .err()
+            .unwrap()
+            .code,
+        UsageErrorCode::InvalidConfiguration
+    );
+    let mut mixed = copy_keep(&edit);
+    mixed.credentials.insert(
+        0,
+        CredentialDraft {
+            name: "new-token".into(),
+            allowed_origins: vec!["https://second.example.com".into()],
+            value: CredentialUpdate::Replace {
+                secret: "new-fixture".into(),
+            },
+        },
+    );
+    assert!(helper::resolve_draft(&db, &secrets, &mixed).is_err());
+    assert!(save_query(&db, &secrets, mixed).is_err());
+    assert_eq!(secrets.puts.get(), 1);
+    assert_eq!(secrets.gets.get(), 0);
+    assert_eq!(
+        save_query(&db, &secrets, copy_keep(&edit))
+            .err()
+            .unwrap()
+            .code,
+        UsageErrorCode::InvalidConfiguration
+    );
+    assert_eq!(get_query(&db, &original.id).unwrap(), original);
+    assert_eq!(secrets.puts.get(), 1);
+    assert_eq!(secrets.gets.get(), 0);
+    // Saving must not turn the rejected draft into an authorized baseline.
+    assert_eq!(
+        helper::resolve_draft(&db, &secrets, &edit)
+            .err()
+            .unwrap()
+            .code,
+        UsageErrorCode::InvalidConfiguration
+    );
+    edit.credentials[0].value = CredentialUpdate::Replace {
+        secret: "explicitly-reauthorized-fixture".into(),
+    };
+    assert!(helper::resolve_draft(&db, &secrets, &edit).is_ok());
     let saved = save_query(&db, &secrets, edit).unwrap().query;
     assert_eq!(saved.credentials[0].revision, 2);
-    assert_eq!(
+    assert_ne!(
         saved.credentials[0].secret_ref,
         original.credentials[0].secret_ref
     );
+    let mut retained = draft(Some(&saved));
+    retained.credentials[0].allowed_origins = saved.credentials[0].allowed_origins.clone();
+    assert!(helper::resolve_draft(&db, &secrets, &retained).is_ok());
+    let unchanged = save_query(&db, &secrets, copy_keep(&retained))
+        .unwrap()
+        .query;
+    assert_eq!(unchanged.credentials, saved.credentials);
+    // Narrowing is allowed, but re-expansion requires Replace again.
+    retained.expected_version = Some(unchanged.version);
+    retained.credentials[0].allowed_origins.remove(1);
+    assert!(helper::resolve_draft(&db, &secrets, &retained).is_ok());
+    let narrowed = save_query(&db, &secrets, copy_keep(&retained))
+        .unwrap()
+        .query;
+    assert_eq!(narrowed.credentials[0].revision, 3);
+    assert_eq!(
+        narrowed.credentials[0].secret_ref,
+        saved.credentials[0].secret_ref
+    );
+    retained.expected_version = Some(narrowed.version);
+    retained.credentials[0].allowed_origins = saved.credentials[0].allowed_origins.clone();
+    assert!(helper::resolve_draft(&db, &secrets, &retained).is_err());
+    assert!(save_query(&db, &secrets, retained).is_err());
+    assert_eq!(get_query(&db, &original.id).unwrap(), narrowed);
+    assert_eq!(secrets.puts.get(), 2);
 }
 
 #[test]

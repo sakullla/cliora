@@ -186,25 +186,18 @@ pub(super) fn resolve_draft(
             "测试草稿的保存版本已变更",
         ));
     }
+    // Reject every invalid Keep before reading any secret, matching save's preflight.
+    for credential in &draft.credentials {
+        if matches!(credential.value, CredentialUpdate::Keep) {
+            super::store::retained_binding(old.as_ref(), credential)?;
+        }
+    }
     let mut secrets = Vec::new();
     for credential in &draft.credentials {
         let value = match &credential.value {
             CredentialUpdate::Replace { secret } => secret.clone(),
             CredentialUpdate::Keep => {
-                let binding = old
-                    .as_ref()
-                    .and_then(|q| q.credentials.iter().find(|c| c.name == credential.name))
-                    .ok_or_else(|| UsageError::configuration("测试只能读取本查询已绑定凭据"))?;
-                // Keep never silently expands the authority of an existing secret.
-                if credential
-                    .allowed_origins
-                    .iter()
-                    .any(|origin| !binding.allowed_origins.contains(origin))
-                {
-                    return Err(UsageError::configuration(
-                        "扩展凭据目标需要重新明确提供凭据",
-                    ));
-                }
+                let binding = super::store::retained_binding(old.as_ref(), credential)?;
                 credentials.get(&binding.secret_ref).map_err(|_| {
                     UsageError::new(
                         UsageErrorCode::Credential,

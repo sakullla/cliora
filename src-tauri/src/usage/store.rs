@@ -139,6 +139,32 @@ pub(super) fn validate_draft(draft: &UsageQueryDraft) -> Result<(), UsageError> 
     Ok(())
 }
 
+/// Both saving and testing must use the persisted binding as the authority ceiling.
+/// Changing declared targets does not reauthorize an existing secret.
+pub(super) fn retained_binding<'a>(
+    previous: Option<&'a UsageQuery>,
+    credential: &CredentialDraft,
+) -> Result<&'a CredentialBinding, UsageError> {
+    let binding = previous
+        .and_then(|query| {
+            query
+                .credentials
+                .iter()
+                .find(|item| item.name == credential.name)
+        })
+        .ok_or_else(|| UsageError::configuration("只能保留此查询已有的命名凭据"))?;
+    if credential
+        .allowed_origins
+        .iter()
+        .any(|origin| !binding.allowed_origins.contains(origin))
+    {
+        return Err(UsageError::configuration(
+            "扩展凭据目标需要重新明确提供凭据",
+        ));
+    }
+    Ok(binding)
+}
+
 pub fn save_query(
     db: &Database,
     secrets: &dyn CredentialStore,
@@ -168,15 +194,8 @@ pub fn save_query(
             .ok_or_else(conflict)?;
         // Validate all Keep operations before touching the credential store.
         for credential in &draft.credentials {
-            if matches!(credential.value, CredentialUpdate::Keep)
-                && !old.as_ref().is_some_and(|query| {
-                    query
-                        .credentials
-                        .iter()
-                        .any(|binding| binding.name == credential.name)
-                })
-            {
-                return Err(UsageError::configuration("只能保留此查询已有的命名凭据"));
+            if matches!(credential.value, CredentialUpdate::Keep) {
+                retained_binding(old.as_ref(), credential)?;
             }
         }
         let mut bindings = Vec::new();
