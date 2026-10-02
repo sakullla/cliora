@@ -112,9 +112,10 @@ pub fn create_test_execution() -> Result<String, UsageError> {
     Ok(id)
 }
 pub fn cancel_test_execution(id: &str) -> Result<(), UsageError> {
-    let state = registry().lock().map_err(|_| capacity())?;
+    let mut state = registry().lock().map_err(|_| capacity())?;
     if let Some(entry) = state.entries.get(id) {
         entry.cancelled.store(true, Ordering::SeqCst);
+        if !entry.started { state.entries.remove(id); }
     }
     Ok(())
 }
@@ -370,3 +371,6 @@ pub(super) fn run_child(
 #[cfg(test)]
 #[path = "../../../tests/usage/helper.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(super) static REGISTRY_TEST_LOCK: Mutex<()> = Mutex::new(());

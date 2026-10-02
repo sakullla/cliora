@@ -12,6 +12,7 @@ export interface UsageError {
   message: string;
   retryAfterSeconds: number | null;
   metricId: string | null;
+  scriptLine?: number;
 }
 
 export type UsageSubject = 'account' | 'plan' | 'key' | 'extra';
@@ -154,4 +155,18 @@ export interface DraftTestReport {
   elapsedMs: number;
   stage: UsageStage;
   preview: string;
+  requestOrigins: string[];
+}
+
+export interface UsageCache {
+  queryId: string;
+  generation: number;
+  success: UsageSnapshot | null;
+  attemptedAt: string | null;
+  errors: UsageError[];
+  nextAllowedAt: number;
+  nextAutoAt: number;
+  failures: number;
+  authPaused: boolean;
+  refreshing: boolean;
 }

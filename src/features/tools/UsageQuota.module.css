@@ -1,0 +1,17 @@
+.quota { width: 100%; display: grid; gap: 8px; margin-top: 8px; font-size: 12px; }
+.heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.query { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px; display: grid; gap: 6px; background: var(--surface); }
+.metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(210px, 100%), 1fr)); gap: 10px; }
+.metric { display: grid; align-content: start; gap: 4px; min-width: 0; }
+.metric progress { width: 100%; height: 7px; accent-color: var(--accent); }
+.values { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.error { color: var(--danger, #c33); white-space: pre-wrap; margin: 4px 0; }
+.editor { display: grid; gap: 12px; border: 0; padding: 0; min-width: 0; }
+.editor label { display: grid; gap: 5px; font-size: 13px; }
+.editor input, .editor select, .editor textarea { width: 100%; box-sizing: border-box; }
+.editor .check { display: flex; align-items: center; gap: 8px; }
+.check input { width: auto; }
+.editor small, .quota small { color: var(--text-2); white-space: normal !important; }
+.editor pre { overflow: auto; max-height: 260px; white-space: pre-wrap; }
+.credential, .target { display: grid; gap: 7px; padding: 10px; margin: 8px 0; border: 1px solid var(--line); border-radius: var(--radius); }

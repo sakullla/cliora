@@ -42,6 +42,9 @@ pub struct RuntimeReport {
     pub elapsed_ms: u64,
     pub stage: UsageStage,
     pub preview: String,
+    /// Origins requested by this draft; no URL path, query, headers or body.
+    #[serde(default)]
+    pub request_origins: Vec<String>,
 }
 impl RuntimeReport {
     pub(super) fn failure(error: UsageError, start: Instant) -> Self {
@@ -51,6 +54,7 @@ impl RuntimeReport {
             result: None,
             elapsed_ms: start.elapsed().as_millis() as u64,
             preview: String::new(),
+            request_origins: Vec::new(),
         }
     }
 }
@@ -356,7 +360,8 @@ const BRIDGE: &str = r#"(function(submit, data) {
         return value;
       }); }
       catch (e) { return stringify({ok:false, error: e && typeof e === 'object' ? {
-        code:e.code, stage:e.stage, message:e.message, retryAfterSeconds:e.retryAfterSeconds ?? null, metricId:null
+        code:e.code || 'script', stage:e.stage || 'script', message:e.code ? e.message : 'JavaScript 执行失败', retryAfterSeconds:e.retryAfterSeconds ?? null, metricId:null,
+        scriptLine:e.code ? undefined : (() => { const m=String(e.stack || '').match(/usage-script\.js:(\d+)/); return m ? Math.max(1, Number(m[1])-1) : undefined; })()
       } : null}); }
     },
     settle: (id, raw) => {
@@ -370,7 +375,8 @@ const BRIDGE: &str = r#"(function(submit, data) {
 
 pub(super) fn execute(input: HelperInput) -> RuntimeReport {
     let start = Instant::now();
-    match run(&input, start) {
+    let mut request_origins = Vec::new();
+    let mut report = match run(&input, start, &mut request_origins) {
         Ok(mut value) => {
             redact_value(&mut value, &input.secrets);
             match serde_json::from_value::<UsageResult>(value) {
@@ -387,6 +393,7 @@ pub(super) fn execute(input: HelperInput) -> RuntimeReport {
                             elapsed_ms: start.elapsed().as_millis() as u64,
                             stage: UsageStage::Validation,
                             preview,
+                            request_origins: Vec::new(),
                         }
                     }
                     Err(e) => RuntimeReport::failure(e, start),
@@ -408,10 +415,15 @@ pub(super) fn execute(input: HelperInput) -> RuntimeReport {
             failure.message = failure.message.chars().take(512).collect();
             RuntimeReport::failure(failure, start)
         }
+    };
+    for origin in &mut request_origins {
+        for secret in &input.secrets { *origin=origin.replace(&secret.value,"[redacted]"); }
     }
+    report.request_origins=request_origins;
+    report
 }
 
-fn run(input: &HelperInput, start: Instant) -> Result<serde_json::Value, UsageError> {
+fn run(input: &HelperInput, start: Instant, request_origins:&mut Vec<String>) -> Result<serde_json::Value, UsageError> {
     input.config.validate()?;
     let source = match &input.config.program {
         QueryProgram::JavaScript { source } => std::borrow::Cow::Borrowed(source.as_str()),
@@ -458,8 +470,22 @@ fn run(input: &HelperInput, start: Instant) -> Result<serde_json::Value, UsageEr
         let bridge: Object = factory.call((submit, data)).map_err(|_| js_error())?;
         let runner: Function = bridge.get("run").map_err(|_| js_error())?;
         let settle: Function = bridge.get("settle").map_err(|_| js_error())?;
-        let query: Function = ctx.eval(format!("(function(){{'use strict';\n{source}\n;return query;}})()"))
-            .map_err(|_| js_error())?;
+        let mut options = rquickjs::context::EvalOptions::default();
+        options.filename = Some("usage-script.js".into());
+        let query: Function = ctx.eval_with_options(format!("(function(){{'use strict';\n{source}\n;return query;}})()"), options)
+            .map_err(|_| {
+                let mut failure=js_error();
+                let exception=ctx.catch();
+                if let Some(object)=exception.as_object() {
+                    if let Ok(stack)=object.get::<_,String>("stack") {
+                        if let Some(tail)=stack.split("usage-script.js:").nth(1) {
+                            let digits:String=tail.chars().take_while(|c|c.is_ascii_digit()).collect();
+                            failure.script_line=digits.parse::<u32>().ok().map(|n|n.saturating_sub(1).max(1));
+                        }
+                    }
+                }
+                failure
+            })?;
         let promise: Promise = runner.call((query,)).map_err(|_| js_error())?;
         disarm();
         let (tx, rx) = mpsc::channel();
@@ -488,6 +514,12 @@ fn run(input: &HelperInput, start: Instant) -> Result<serde_json::Value, UsageEr
             }
             while active.len() < MAX_HTTP_ACTIVE {
                 let Some((id, raw)) = queue.borrow_mut().pop_front() else { break; };
+                if let Ok(request) = serde_json::from_str::<HttpRequest>(&raw) {
+                    if let Ok(url) = url::Url::parse(&request.url) {
+                        let origin=url.origin().ascii_serialization();
+                        if !request_origins.contains(&origin) { request_origins.push(origin); }
+                    }
+                }
                 let (tx, shared) = (tx.clone(), shared.clone());
                 let began = Instant::now();
                 active.insert(id, began);

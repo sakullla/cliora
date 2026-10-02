@@ -37,17 +37,14 @@ fn draft_resolution_reads_only_bound_secrets_and_never_saves() {
 
 #[test]
 fn reservations_are_bounded_and_cancellation_precedes_spawn() {
+    let _serial = REGISTRY_TEST_LOCK.lock().unwrap();
     let ids: Vec<_> = (0..MAX_ENTRIES)
         .map(|_| create_test_execution().unwrap())
         .collect();
     assert!(create_test_execution().is_err());
     for id in ids {
         cancel_test_execution(&id).unwrap();
-        let (mut guard, cancel, start) = claim(&id).unwrap();
-        assert_eq!(
-            acquire(&mut guard, &cancel, start).unwrap_err().code,
-            UsageErrorCode::Cancelled
-        );
+        assert!(claim(&id).is_err());
     }
     assert!(registry().lock().unwrap().entries.is_empty());
     let mut guards = Vec::new();

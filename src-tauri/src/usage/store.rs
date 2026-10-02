@@ -256,6 +256,7 @@ pub fn save_query(
         tx.execute("INSERT INTO usage_queries (id, version, generation, data) VALUES (?1, ?2, ?3, ?4)
             ON CONFLICT(id) DO UPDATE SET version=excluded.version, generation=excluded.generation, data=excluded.data",
             params![query.id, query.version, query.generation, data]).map_err(|_| UsageError::storage())?;
+        super::scheduler::reset(&tx, &query)?;
         tx.commit().map_err(|_| UsageError::storage())?;
         Ok(query)
     });
@@ -275,6 +276,7 @@ pub fn save_query(
         }
     }
     let query = outcome?;
+    super::scheduler::invalidate(&query.id, Some(query.generation));
     Ok(SaveQueryResult {
         query,
         credential_cleanup_pending: collect_credentials(db, secrets),
@@ -302,11 +304,14 @@ pub fn delete_query(
             )
             .map_err(|_| UsageError::storage())?;
         }
+        tx.execute("DELETE FROM usage_cache WHERE query_id = ?1", [id])
+            .map_err(|_| UsageError::storage())?;
         tx.execute("DELETE FROM usage_queries WHERE id = ?1", [id])
             .map_err(|_| UsageError::storage())?;
         tx.commit().map_err(|_| UsageError::storage())?;
         Ok(())
     })?;
+    super::scheduler::invalidate(id, None);
     Ok(DeleteQueryResult {
         credential_cleanup_pending: collect_credentials(db, secrets),
     })

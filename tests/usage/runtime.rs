@@ -350,3 +350,26 @@ fn retry_after_dates_round_up_and_invalid_or_large_values_are_explicit() {
         Some(u32::MAX)
     );
 }
+
+#[test]
+fn script_error_line_is_numeric_and_diagnostics_do_not_echo_script_text() {
+    let report=execute(input("async function query(ctx) {\n  throw new Error('private diagnostic');\n}"));
+    let error=report.error.unwrap();
+    assert_eq!(error.script_line,Some(2));
+    assert!(!error.message.contains("private diagnostic"));
+    let report=execute(input("async function query(ctx) {\n  const x = ;\n}"));
+    assert_eq!(report.error.unwrap().script_line,Some(2));
+}
+
+#[test]
+fn draft_request_diagnostics_include_origin_without_path_query_or_userinfo() {
+    let (origin,server)=server(1, |_|response("{}"));
+    let mut data=input(&script(&format!("await ctx.http({{url:{url}}});{result}",url=serde_json::to_string(&format!("{origin}/private-path?token=private-query")).unwrap(),result=returns())));
+    local(&mut data,&origin);
+    let report=execute(data);
+    server.join().unwrap();
+    assert!(report.error.is_none());
+    assert_eq!(report.request_origins,vec![origin]);
+    let json=serde_json::to_string(&report).unwrap();
+    assert!(!json.contains("private-path"));assert!(!json.contains("private-query"));
+}
