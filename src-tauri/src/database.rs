@@ -22,7 +22,7 @@ impl Database {
     pub fn open(path: &Path) -> Result<Self, OpenError> {
         let mut connection = Connection::open(path)?;
         let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 15 {
+        if version > 16 {
             return Err(OpenError::UnsupportedVersion(version));
         }
         connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
@@ -398,6 +398,11 @@ impl Database {
             tx.execute_batch("CREATE TABLE usage_cache (query_id TEXT PRIMARY KEY NOT NULL REFERENCES usage_queries(id) ON DELETE CASCADE, generation INTEGER NOT NULL, data TEXT NOT NULL); PRAGMA user_version = 15;")?;
             tx.commit()?;
         }
+        if version < 16 {
+            let tx = connection.transaction()?;
+            tx.execute_batch("CREATE TABLE auth_accounts (id TEXT PRIMARY KEY NOT NULL, tool TEXT NOT NULL, version INTEGER NOT NULL, data TEXT NOT NULL); CREATE INDEX idx_auth_accounts_tool ON auth_accounts(tool); CREATE UNIQUE INDEX idx_auth_accounts_context ON auth_accounts(json_extract(data, '$.context.id')) WHERE json_extract(data, '$.context.id') IS NOT NULL; PRAGMA user_version = 16;")?;
+            tx.commit()?;
+        }
         Ok(Self {
             connection: Mutex::new(connection),
         })
@@ -598,7 +603,7 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
-            assert_eq!(version, 15);
+            assert_eq!(version, 16);
             let count: i64 = conn
                 .query_row("SELECT COUNT(*) FROM native_profiles", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;

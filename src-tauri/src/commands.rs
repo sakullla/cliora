@@ -37,6 +37,62 @@ async fn usage_blocking<T: Send + 'static>(
 }
 
 #[tauri::command]
+pub fn account_capabilities() -> Vec<crate::accounts::AccountCapability> { adapters::accounts::capabilities() }
+
+#[tauri::command]
+pub async fn adopt_native_codex_account(app: AppHandle, label: String) -> Result<crate::accounts::AuthAccount, ApiError> {
+    let db = app.state::<AppState>().database(&app)?;
+    let home = dirs::home_dir().ok_or_else(|| native_error("无法定位用户目录".into()))?;
+    blocking(move || crate::accounts::adopt_codex(&db, &home, &label).map_err(native_error)).await
+}
+
+#[tauri::command]
+pub async fn list_accounts(app: AppHandle) -> Result<Vec<crate::accounts::AuthAccount>, ApiError> {
+    let db = app.state::<AppState>().database(&app)?;
+    blocking(move || crate::accounts::list(&db).map_err(native_error)).await
+}
+
+#[tauri::command]
+pub async fn create_account(app: AppHandle, tool_id: String, label: String) -> Result<crate::accounts::AuthAccount, ApiError> {
+    let db = app.state::<AppState>().database(&app)?;
+    blocking(move || crate::accounts::create(&db, &tool_id, &label).map_err(native_error)).await
+}
+
+#[tauri::command]
+pub async fn rename_account(app: AppHandle, id: String, expected_version: u32, label: String) -> Result<crate::accounts::AuthAccount, ApiError> {
+    let db = app.state::<AppState>().database(&app)?;
+    blocking(move || crate::accounts::rename(&db, &id, expected_version, &label).map_err(native_error)).await
+}
+
+#[tauri::command]
+pub async fn start_account_login(app: AppHandle, id: String, expected_version: u32, method: String) -> Result<crate::accounts::AuthAccount, ApiError> {
+    let db = app.state::<AppState>().database(&app)?;
+    let base = app.path().app_data_dir().map_err(|_| native_error("无法定位账号数据目录".into()))?;
+    let home = dirs::home_dir().ok_or_else(|| native_error("无法定位用户目录".into()))?;
+    blocking(move || crate::accounts::start_login(db, &base, &home, &id, expected_version, &method).map_err(native_error)).await
+}
+
+#[tauri::command]
+pub async fn cancel_account_login(app: AppHandle, id: String, attempt_id: String) -> Result<crate::accounts::AuthAccount, ApiError> {
+    let db = app.state::<AppState>().database(&app)?;
+    blocking(move || crate::accounts::cancel(&db, &id, &attempt_id, false).map_err(native_error)).await
+}
+
+#[tauri::command]
+pub async fn check_account(app: AppHandle, id: String) -> Result<crate::accounts::AuthAccount, ApiError> {
+    let db = app.state::<AppState>().database(&app)?;
+    let home = dirs::home_dir().ok_or_else(|| native_error("无法定位用户目录".into()))?;
+    blocking(move || crate::accounts::check(&db, &home, &id).map_err(native_error)).await
+}
+
+#[tauri::command]
+pub async fn logout_account(app: AppHandle, id: String, expected_version: u32) -> Result<crate::accounts::AuthAccount, ApiError> {
+    let db = app.state::<AppState>().database(&app)?;
+    let home = dirs::home_dir().ok_or_else(|| native_error("无法定位用户目录".into()))?;
+    blocking(move || crate::accounts::logout(db, &home, &id, expected_version).map_err(native_error)).await
+}
+
+#[tauri::command]
 pub fn usage_presets() -> Vec<crate::usage::UsagePreset> { crate::usage::usage_presets() }
 
 #[tauri::command]
