@@ -467,6 +467,7 @@ fn collect_snapshot_on(
             None
         };
         let mut native_secrets = BTreeMap::new();
+        if matches!(profile.authentication, crate::native::profile::ProfileAuthentication::OAuth { .. }) { profile.authentication=crate::native::profile::ProfileAuthentication::RebindRequired; pending_fields.push("OAuth 账号需要在此设备重新绑定".into()); }
         for (role, credentials) in std::mem::take(&mut profile.native_credentials) {
             if role == "auth" || role == "local_auth" {
                 pending_fields.push(format!("{role} 本机登录凭据"));
@@ -626,7 +627,8 @@ pub fn validate_snapshot(snapshot: &PortableSnapshot) -> Result<(), String> {
                         .connection
                         .as_ref()
                         .is_none_or(|c| c.secret_ref.is_none())
-                    && value.profile.native_credentials.is_empty() => {}
+                    && value.profile.native_credentials.is_empty()
+                    && !matches!(value.profile.authentication, crate::native::profile::ProfileAuthentication::OAuth { .. }) => {}
             PortablePayload::Common(value) if value.tool == entity.id => {}
             PortablePayload::Project(value) if value.id == entity.id && value.name.len() <= 200 => {
             }

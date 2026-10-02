@@ -12,6 +12,7 @@ import type { ApiError } from '../../types/domain';
 import type { Project, TrayRepairTarget } from '../../types/launch';
 import type { AdapterDescriptor, ApplyComparison, Connection, ConnectionCheck, ModelDirectory, NativeInspection, NativePreview, RegisteredCommon, RegisteredProfile, RegisteredToolWorkspace, Scope } from '../../types/native';
 import { authEnvName, uiAdapterFor } from './adapters';
+import { AccountsPanel, accountStates, useAccounts } from './AccountsPanel';
 import { ProfileQuota, useUsageQuota } from './UsageQuota';
 import { InstallPanel } from './InstallPanel';
 import { ModelCombobox } from './ModelCombobox';
@@ -85,6 +86,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   const [projectPath, setProjectPath] = useState(repair?.projectPath ?? '');
   const [projects, setProjects] = useState<Project[]>([]);
   const quotaState = useUsageQuota(active);
+  const accountState = useAccounts(tool, active);
   const [preferredProfileId, setPreferredProfileId] = useState<string | null>(repair?.profileId ?? null);
   const appliedRepair = useRef(repair?.sequence ?? 0);
   const appliedOpenSequence = useRef(0);
@@ -100,7 +102,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   };
   const [commonDraft, setCommonDraft] = useState<RegisteredCommon | null>(null);
   const [view, setView] = useState<View>('form');
-  const [resourceView, setResourceView] = useState<'config' | 'mcp' | 'skills'>(repair?.resourceView ?? 'config');
+  const [resourceView, setResourceView] = useState<'config' | 'mcp' | 'skills' | 'accounts'>(repair?.resourceView ?? 'config');
   const [mcpDirty, setMcpDirty] = useState(false);
   const [skillsDirty, setSkillsDirty] = useState(false);
   const [resourceEpoch, setResourceEpoch] = useState(0);
@@ -137,6 +139,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   const inspectionSequence = useRef(0);
   const importSequence = useRef(0);
   const rawSequence = useRef(0);
+  const editorContextId = useRef<string | null>(null);
   const reasoningSequence = useRef(0);
   const previewSequence = useRef(0);
   const savedDraft = useRef('');
@@ -435,7 +438,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     setView('form'); setError(''); setNotice(''); setApplyComparison(null); setGuide(true);
   }
 
-  async function switchResourceView(next: 'config' | 'mcp' | 'skills') {
+  async function switchResourceView(next: 'config' | 'mcp' | 'skills' | 'accounts') {
     if (next === resourceView) return;
     const hadUnsaved = dirty || mcpDirty || skillsDirty;
     if (hadUnsaved && !await confirmChange('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return;
@@ -475,7 +478,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     let savedForTakeover: RegisteredProfile | null = null;
     try {
       if (editor === 'native' && pendingRaw && currentTool) {
-        await native.saveRegisteredNativeFile(currentTool, scope, projectPath, pendingRaw.role, pendingRaw.original, pendingRaw.text);
+        await native.saveRegisteredNativeFile(currentTool, scope, projectPath, pendingRaw.role, pendingRaw.original, pendingRaw.text, editorContextId.current);
         if (!stillCurrent(started)) return;
         const text = await native.readRegisteredNativeFileForEdit(currentTool, scope, projectPath, pendingRaw.role);
         if (!stillCurrent(started)) return;
@@ -510,7 +513,8 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
         let editedConnection = pendingRaw ? imported.inspection.connection : imported.migratedSecret || !draft.connection ? importedConnection(imported, draft.connection) : draft.connection;
         editedConnection = await connectionWithSecret(editedConnection, started);
         if (!stillCurrent(started)) return;
-        const edited = { ...draft, files: imported.files, nativeCredentials, connection: editedConnection };
+        const oauth = draft.authentication?.kind === 'oauth';
+        const edited = { ...draft, files: imported.files, nativeCredentials: oauth ? {} : nativeCredentials, connection: oauth ? null : editedConnection };
         const saved = await native.saveRegisteredNativeProfile(edited, edited.version || null);
         savedForTakeover = saved;
         if (!stillCurrent(started)) { setNotice('原草稿已保存；当前继续编辑的内容已保留。'); return; }
@@ -738,6 +742,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   }
 
   async function openCurrentFile(nextRole = role, abandonConfirmed = false) {
+    editorContextId.current = workspace?.binding?.contextId ?? null;
     if (!currentTool) return;
     const started = captureDraft();
     if (dirty && !abandonConfirmed && !await confirmChange('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return;
@@ -836,7 +841,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     if (!stillCurrent(started)) return;
     setBusy(true); setError('');
     try {
-      await native.restoreNativeBackup(currentTool, scope, projectPath, role, backupPreview.transactionId, backupPreview.current);
+      await native.restoreNativeBackup(currentTool, scope, projectPath, role, backupPreview.transactionId, backupPreview.current, editorContextId.current);
       if (stillCurrent(started)) { setHistoryOpen(false); setBackupPreview(null); await openCurrentFile(role, true); setNotice('已恢复此文件。'); }
     } catch (value) { if (stillCurrent(started)) setError(errorText(value)); }
     finally { setBusy(false); }
@@ -903,6 +908,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     <div className={styles.taskBar}>
       <div className={styles.views} role="tablist" aria-label="当前任务">
         <button type="button" role="tab" aria-selected={resourceView === 'config'} className={resourceView === 'config' ? styles.selected : ''} onClick={() => void switchResourceView('config')}>配置</button>
+        <button type="button" role="tab" aria-selected={resourceView === 'accounts'} className={resourceView === 'accounts' ? styles.selected : ''} onClick={() => void switchResourceView('accounts')}>账号</button>
         <button type="button" role="tab" aria-selected={resourceView === 'mcp'} className={resourceView === 'mcp' ? styles.selected : ''} onClick={() => void switchResourceView('mcp')}>MCP</button>
         <button type="button" role="tab" aria-selected={resourceView === 'skills'} className={resourceView === 'skills' ? styles.selected : ''} onClick={() => void switchResourceView('skills')}>Skill</button>
       </div>
@@ -935,7 +941,8 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
       <GuideDialog open={guide && (editor !== 'profile' || !!draft)} title={historyOpen && editor === 'native' ? '修改记录' : editor === 'native' ? '修改正在使用的文件' : editor === 'common' ? '修改通用配置' : draft?.id ? '修改配置' : '新建配置'} hint={historyOpen && editor === 'native' ? '最多 20 次。选一条查看当时的文件，确认后才会写回。' : undefined} onClose={() => void closeGuide()}>
         <div className={styles.editor}>
             {historyOpen && editor === 'native' ? <div className={styles.history}>{backups.length ? <ul className={styles.historyList} aria-label="修改记录">{backups.map((item, index) => <li key={item.transactionId}><button type="button" aria-pressed={backupPreview?.transactionId === item.transactionId} disabled={busy} onClick={() => void inspectBackup(item.transactionId)}>{formatBackupTime(item.createdAt, index)}</button></li>)}</ul> : <p className={styles.historyEmpty}>还没有可恢复的修改。</p>}{backups.length > 0 && <div className={styles.historyPreview}><CodeEditor label="当时的文件" readOnly format={activeFile?.format ?? 'text'} value={backupPreview?.original ?? ''} placeholder={backupPreview ? '' : '正在读取…'} /></div>}</div> : <>
-            {editor === 'profile' && draft && <div className={styles.form}>{connectionForm}</div>}
+            {editor === 'profile' && draft && <div className={styles.form}><label>认证方式<select aria-label="认证方式" value={draft.authentication?.kind ?? 'native'} onChange={event => { const kind = event.target.value; setNewSecret(''); setDraft({ ...draft, authentication: kind === 'oauth' ? { kind, accountId: accountState.accounts.find(account => account.state === 'signed_in')?.id ?? '' } : { kind: kind as 'native' | 'api_key' }, connection: kind === 'oauth' ? null : draft.connection, nativeCredentials: kind === 'oauth' ? {} : draft.nativeCredentials }); }}><option value="native">沿用原生认证（兼容）</option><option value="api_key">API Key</option><option value="oauth">OAuth 账号</option>{draft.authentication?.kind === 'rebind_required' && <option value="rebind_required">需要重新绑定</option>}</select></label>
+              {draft.authentication?.kind === 'oauth' ? <><label>绑定账号<select aria-label="绑定账号" value={draft.authentication.accountId} onChange={event => setDraft({ ...draft, authentication: { kind: 'oauth', accountId: event.target.value } })}><option value="">请选择已登录账号</option>{accountState.accounts.map(account => <option key={account.id} value={account.id}>{account.label} · {accountStates[account.state]}</option>)}</select></label><label>配置名称<input aria-label="配置名称" value={draft.name} onChange={event => setDraft({ ...draft, name: event.target.value })} /></label><p>账号在“账号”页管理。应用后影响后续启动；原生文件与资源页显示当前已应用账号的内容。</p><CodeEditor label="OAuth 配置内容" format={activeFile?.format ?? 'json'} value={draft.files.settings ?? ''} onChange={value => setDraft({ ...draft, files: { ...draft.files, settings: value } })} /></> : draft.authentication?.kind === 'rebind_required' ? <p role="alert">跨设备导入的 OAuth 配置需要重新选择此设备上的账号。</p> : connectionForm}</div>}
             {(editor === 'native' || editor === 'common') && nativeEditor()}
             {fileConflict?.context === draftContext && pendingRaw && <FileConflict current={fileConflict.current} edited={pendingRaw.text} format={activeFile?.format ?? 'text'} busy={busy} onKeep={() => { setRawDisk({ ...pendingRaw, original:fileConflict.current, text:fileConflict.current }); setFileConflict(null); setError(''); }} onUse={() => { setRawDisk({ ...pendingRaw, original:fileConflict.current }); setFileConflict(null); setError(''); setNotice('已保留本次修改，点击保存写入。'); }} />}
             {moreOptions}
@@ -949,7 +956,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
                 <button type="button" className={styles.primary} disabled={busy || !backupPreview} onClick={() => void restoreBackup()}>恢复这个版本</button>
               </> : <>
               {editor === 'profile' && draft?.id && <><button type="button" disabled={busy} onClick={() => void duplicateProfile()}>复制</button><button type="button" disabled={busy} onClick={() => void deleteCurrent()}>删除</button></>}
-              {currentDescriptor?.login && <button type="button" disabled={busy} title={currentDescriptor.login.hint} onClick={() => void login()}>登录</button>}
+              {currentDescriptor?.login && draft?.authentication?.kind !== 'oauth' && <button type="button" disabled={busy} title={currentDescriptor.login.hint} onClick={() => void login()}>登录</button>}
               {editor === 'native' && <button type="button" disabled={busy} onClick={() => void openHistory()}>修改记录</button>}
               {editor === 'native' && hasCurrentNative && <button type="button" disabled={busy} onClick={() => void importCurrentNative(false, true)}>复制为配置</button>}
               <span>{dirty ? '未保存' : ''}</span>
@@ -961,7 +968,8 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
       {editor === 'profile' && draft?.id && workspace && !dirty && (workspace.binding?.profileId !== draft.id || workspace.binding.profileVersion !== draft.version) && <div className={styles.quickApply}><span>这份配置已保存，但尚未应用到当前范围。</span><button type="button" onClick={() => void applySaved(draft)} disabled={busy || enablingId !== null || workspace.probe.nativeWrites.state !== 'supported'}>启用</button></div>}
     </>}
     </div>
-    {resourceView === 'mcp' && currentTool && <McpWorkspace key={JSON.stringify([currentTool, scope, projectPath, resourceEpoch])} toolId={currentTool} scope={scope} projectPath={projectPath} onDirtyChange={setMcpDirty} />}
-    {resourceView === 'skills' && currentTool && <SkillsWorkspace key={JSON.stringify([currentTool, scope, projectPath, resourceEpoch])} toolId={currentTool} scope={scope} projectPath={projectPath} onDirtyChange={setSkillsDirty} />}
+    {resourceView === 'accounts' && currentTool && <AccountsPanel key={currentTool} toolId={currentTool} state={accountState} />}
+    {resourceView === 'mcp' && currentTool && <McpWorkspace key={JSON.stringify([currentTool, scope, projectPath, resourceEpoch, workspace?.binding?.contextId])} toolId={currentTool} scope={scope} projectPath={projectPath} contextId={workspace?.binding?.contextId ?? null} onDirtyChange={setMcpDirty} />}
+    {resourceView === 'skills' && currentTool && <SkillsWorkspace key={JSON.stringify([currentTool, scope, projectPath, resourceEpoch, workspace?.binding?.contextId])} toolId={currentTool} scope={scope} projectPath={projectPath} contextId={workspace?.binding?.contextId ?? null} onDirtyChange={setSkillsDirty} />}
   </section>;
 }

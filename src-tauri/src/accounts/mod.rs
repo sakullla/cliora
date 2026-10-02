@@ -1,5 +1,6 @@
 //! Native CLI owns authorization and refresh. Cliora only owns context selection.
 pub mod context;
+pub mod selection;
 mod contract;
 pub mod native;
 mod store;
@@ -568,3 +569,7 @@ pub fn validate_selected_context(db: &Database, id: &str, context_id: &str) -> R
 #[cfg(test)]
 #[path = "../../../tests/accounts/lifecycle.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../tests/accounts/binding.rs"]
+mod binding_tests;

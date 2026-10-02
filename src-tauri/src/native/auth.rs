@@ -186,6 +186,7 @@ mod tests {
             files: BTreeMap::new(),
             suppressed: BTreeMap::new(),
             connection: None,
+            authentication: crate::native::profile::ProfileAuthentication::Native,
             native_credentials: BTreeMap::from([
                 (
                     "settings".into(),

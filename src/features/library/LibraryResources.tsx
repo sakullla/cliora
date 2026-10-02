@@ -276,7 +276,7 @@ export function LibraryResources({ section, active, tools, projects }: { section
     setBusy(true); setError(''); setNotice('');
     try {
       if (place) {
-        await native.removeNativeMcp({ toolId, scope, projectPath: place.projectPath, enabled: place.enabled }, item.name);
+        await native.removeNativeMcp({ toolId, scope, projectPath: place.projectPath, contextId: place.contextId, enabled: place.enabled }, item.name);
         setNotice(`已从 ${where}${toolName} 移除。`);
       } else {
         const target: McpTargetRequest = { toolId, scope, projectPath, enabled: true };
@@ -284,7 +284,7 @@ export function LibraryResources({ section, active, tools, projects }: { section
         const first = preview[0];
         if (!first || (first.status !== 'ready' && first.status !== 'conflict')) { setError(first?.detail || `${toolName} 现在不能写入。`); return; }
         if (first.status === 'conflict' && !await confirmAction(`「${item.name}」和 ${toolName} 里的同名内容不一致。确认后用这份替换。`, () => true, { title: '替换同名 MCP？', confirmLabel: '替换并写入' })) return;
-        await native.distributeMcp(item.id, [{ ...target, baselineHash: first.baselineHash, previewToken: first.previewToken, allowReplace: first.status === 'conflict' }]);
+        await native.distributeMcp(item.id, [{ ...target, contextId: first.contextId, baselineHash: first.baselineHash, previewToken: first.previewToken, allowReplace: first.status === 'conflict' }]);
         setNotice(`已写入 ${where}${toolName}。`);
       }
       setPlacements(await native.listMcpPlacements().catch(() => placements));

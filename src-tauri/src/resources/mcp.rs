@@ -59,6 +59,8 @@ fn default_in_library() -> bool {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpTargetRequest {
+    #[serde(default)]
+    pub context_id: Option<String>,
     pub tool_id: String,
     pub scope: Scope,
     pub project_path: Option<String>,
@@ -74,6 +76,7 @@ pub struct McpTargetRequest {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpTargetResult {
+    pub context_id: Option<String>,
     pub tool_id: String,
     pub scope: Scope,
     pub project_path: Option<String>,
@@ -284,6 +287,7 @@ pub fn remove_native(
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpPlacement {
+    pub context_id: Option<String>,
     pub definition_id: String,
     pub tool_id: String,
     pub scope: Scope,
@@ -301,7 +305,7 @@ pub fn list_placements(db: &Database) -> Result<Vec<McpPlacement>, String> {
             } else {
                 (Scope::Global, None)
             };
-            Ok(McpPlacement { definition_id: row.get(0)?, tool_id: row.get(1)?, scope, project_path, enabled: row.get::<_, i64>(3)? != 0 })
+            Ok(McpPlacement { context_id:crate::accounts::selection::split_key(&scope_key).0.map(str::to_owned), definition_id: row.get(0)?, tool_id: row.get(1)?, scope, project_path, enabled: row.get::<_, i64>(3)? != 0 })
         }).map_err(|error| error.to_string())?;
         rows.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())
     })
@@ -309,6 +313,8 @@ pub fn list_placements(db: &Database) -> Result<Vec<McpPlacement>, String> {
 
 pub fn managed_enabled(db: &Database, definition_id: &str, target: &McpTargetRequest) -> Result<Option<bool>,String> {
     let key=match target.scope { Scope::Global=>"global".into(), Scope::Project=>format!("project:{}",projects::checked_directory(target.project_path.as_deref().ok_or("请选择项目目录")?)?.display()) };
+    let binding = crate::native::apply::get_registered_binding(db,&target.tool_id,&key)?;
+    let key=if target.scope==Scope::Global { binding.and_then(|binding|binding.context_id).map(|id|format!("context:{id}:{key}")).unwrap_or(key) } else {key};
     db.with_connection(|conn|conn.query_row("SELECT enabled FROM mcp_targets WHERE definition_id=?1 AND tool=?2 AND scope_key=?3",params![definition_id,target.tool_id,key],|row|row.get(0)).optional().map_err(|e|e.to_string()))
 }
 
@@ -318,6 +324,8 @@ fn target_location(
     target: &McpTargetRequest,
     home: &Path,
 ) -> Result<(McpLocation, String), String> {
+    let _context = crate::accounts::selection::enter_bound(db, home, &target.tool_id, target.scope, target.project_path.as_deref().map(Path::new))?;
+    crate::accounts::selection::validate_expected(&target.tool_id,target.context_id.as_deref())?;
     let cli = registry
         .get(&target.tool_id)
         .ok_or("此 CLI 尚无注册适配器")?;
@@ -365,7 +373,7 @@ fn target_location(
         || "global".to_owned(),
         |path| format!("project:{}", path.display()),
     );
-    Ok((location, key))
+    Ok((location, crate::accounts::selection::key(&key)))
 }
 
 fn parse_native(location: &McpLocation) -> Result<(String, Value), String> {
@@ -547,8 +555,11 @@ pub fn preview_targets(
     targets: Vec<McpTargetRequest>,
 ) -> Vec<McpTargetResult> {
     let definition = get_definition(db, definition_id);
-    targets.into_iter().map(|target| {
-        let mut result = McpTargetResult { tool_id: target.tool_id.clone(), scope: target.scope,
+    targets.into_iter().map(|mut target| {
+        if target.context_id.is_none() {
+            if let Ok(Some((_,context)))=crate::accounts::selection::bound(db,home,&target.tool_id,target.scope,target.project_path.as_deref().map(Path::new),false) {target.context_id=Some(context.id);}
+        }
+        let mut result = McpTargetResult { context_id:target.context_id.clone(), tool_id: target.tool_id.clone(), scope: target.scope,
             project_path: target.project_path.clone(), path: None, status: "unsupported", detail: String::new(), baseline_hash: None, preview_token: None, existing: None, proposed: None };
         match target_location(db, registry, &target, home) {
             Ok((location, scope_key)) => {
@@ -598,7 +609,7 @@ pub fn distribute(
 ) -> Vec<McpTargetResult> {
     let definition = get_definition(db, definition_id);
     targets.into_iter().map(|target| {
-        let mut result = McpTargetResult { tool_id: target.tool_id.clone(), scope: target.scope,
+        let mut result = McpTargetResult { context_id:target.context_id.clone(), tool_id: target.tool_id.clone(), scope: target.scope,
             project_path: target.project_path.clone(), path: None, status: "failed", detail: String::new(), baseline_hash: None, preview_token: None, existing: None, proposed: None };
         let attempt = (|| {
             let definition = definition.as_ref().map_err(Clone::clone)?;

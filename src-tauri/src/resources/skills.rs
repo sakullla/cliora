@@ -36,6 +36,7 @@ pub struct SkillPackage {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SkillInstallation {
+    pub context_id: Option<String>,
     pub package_id: String,
     pub tool_id: String,
     pub scope: Scope,
@@ -259,6 +260,7 @@ struct SkillOperation {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SkillRecoveryIssue {
+    pub context_id: Option<String>,
     pub operation_id: String,
     pub tool_id: String,
     pub scope: Scope,
@@ -273,14 +275,15 @@ pub struct SkillRecoveryIssue {
 impl SkillRecoveryIssue {
     fn from_operation(op: &SkillOperation, detail: String) -> Self {
         Self {
+            context_id: crate::accounts::selection::split_key(&op.scope_key).0.map(str::to_owned),
             operation_id: op.id.clone(),
             tool_id: op.tool.clone(),
-            scope: if op.scope_key == "global" {
+            scope: if crate::accounts::selection::split_key(&op.scope_key).1 == "global" {
                 Scope::Global
             } else {
                 Scope::Project
             },
-            project_path: op.scope_key.strip_prefix("project:").map(str::to_owned),
+            project_path: crate::accounts::selection::split_key(&op.scope_key).1.strip_prefix("project:").map(str::to_owned),
             target_path: op.target.display().to_string(),
             backup_path: op.backup.display().to_string(),
             detail,
@@ -289,7 +292,11 @@ impl SkillRecoveryIssue {
     }
 
     pub fn affects(&self, tool: &str, scope_key: &str) -> bool {
-        self.tool_id == tool && (self.scope_key == "global" || self.scope_key == scope_key)
+        let (issue_context,issue_scope)=crate::accounts::selection::split_key(&self.scope_key);
+        let (target_context,target_scope)=crate::accounts::selection::split_key(scope_key);
+        let current=crate::accounts::selection::current(tool);
+        let target_context=target_context.or(current.as_ref().map(|ctx|ctx.id.as_str()));
+        self.tool_id==tool && if issue_scope=="global" {issue_context==target_context} else {issue_scope==target_scope}
     }
 
     fn message(&self) -> String {
@@ -932,7 +939,7 @@ fn target(
         || "global".to_owned(),
         |path| format!("project:{}", path.display()),
     );
-    Ok((root.join(name), key))
+    Ok((root.join(name), crate::accounts::selection::key(&key)))
 }
 fn on_disk(path: &Path) -> Result<Option<String>, String> {
     let name = path
@@ -981,6 +988,7 @@ pub fn scan_native(
     scope: Scope,
     project_path: Option<&str>,
 ) -> Result<Vec<NativeSkillEntry>, String> {
+    let _context = crate::accounts::selection::enter_bound(db,home,tool,scope,project_path.map(Path::new))?;
     let _ = recover_report(db)?;
     let (placeholder, scope_key) = target(registry, home, tool, scope, project_path, "scan")?;
     let root = placeholder.parent().ok_or("Skills 原生目录无效")?;
@@ -1046,6 +1054,7 @@ pub fn preview_target(
     scope: Scope,
     project_path: Option<&str>,
 ) -> Result<SkillTargetPreview, String> {
+    let _context = crate::accounts::selection::enter_bound(db,home,tool,scope,project_path.map(Path::new))?;
     let issues = recover_report(db)?;
     let (package, files) = package(db, package_id)?;
     let (path, scope_key) = target(registry, home, tool, scope, project_path, &package.name)?;
@@ -1101,21 +1110,26 @@ pub fn installations(
 ) -> Result<Vec<SkillInstallation>, String> {
     let _ = recover_report(db)?;
     let (package, _) = package(db, package_id)?;
-    db.with_connection(|conn| {
+    let records = db.with_connection(|conn| {
         let mut statement = conn.prepare("SELECT tool,scope_key,target_path,digest,0 FROM skill_installations WHERE package_id=?1 UNION ALL SELECT tool,scope_key,target_path,old_digest,1 FROM skill_operations WHERE package_id=?1 AND status='disabled' ORDER BY tool,scope_key")
             .map_err(|error| error.to_string())?;
         let records = statement.query_map([package_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?, row.get::<_, bool>(4)?)))
             .map_err(|error| error.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?;
-        Ok(records.into_iter().map(|(tool_id, scope_key, target_path, checksum, disabled)| {
+        Ok(records)
+    })?;
+    let accounts=crate::accounts::list(db)?;
+    Ok(records.into_iter().map(|(tool_id, scope_key, target_path, checksum, disabled)| {
+            let (context_id, scope_key)=crate::accounts::selection::split_key(&scope_key);
+            let context=context_id.and_then(|id|accounts.iter().flat_map(|account|account.context.iter().chain(&account.retired_contexts)).find(|ctx|ctx.id==id)).cloned();
+            let _context=crate::accounts::selection::enter(context);
             let scope = if scope_key == "global" { Scope::Global } else { Scope::Project };
             let project_path = scope_key.strip_prefix("project:").map(str::to_owned);
             let expected = target(registry, home, &tool_id, scope, project_path.as_deref(), &package.name);
             let state = if disabled { "disabled" } else if expected.as_ref().is_ok_and(|(path, _)| path.to_string_lossy() == target_path) {
                 match on_disk(Path::new(&target_path)) { Ok(Some(actual)) if actual == checksum => if checksum == package.digest { "current" } else { "update_available" }, Ok(None) => "missing", _ => "conflict" }
             } else { "unavailable" };
-            SkillInstallation { package_id: package_id.into(), tool_id, scope, project_path, target_path, digest: checksum, state }
+            SkillInstallation { context_id:context_id.map(str::to_owned), package_id: package_id.into(), tool_id, scope, project_path, target_path, digest: checksum, state }
         }).collect())
-    })
 }
 
 pub fn delete_package(db: &Database, registry: &Registry, home: &Path, id: &str) -> Result<(), String> {
@@ -1125,6 +1139,8 @@ pub fn delete_package(db: &Database, registry: &Registry, home: &Path, id: &str)
     if pending > 0 { return Err("这个 Skill 还有未完成的安装，请稍后再删除".into()); }
     let installed = installations(db, registry, home, id)?;
     for item in &installed {
+        let context=item.context_id.as_deref().map(|id|crate::accounts::selection::by_id(db,&item.tool_id,id)).transpose()?;
+        let _context=crate::accounts::selection::enter(context);
         let result = remove(db, registry, home, id, &item.tool_id, item.scope, item.project_path.as_deref());
         if result.status == "failed" { return Err(format!("未能从 {} 移除：{}", item.tool_id, result.detail)); }
     }
@@ -1139,6 +1155,7 @@ pub fn delete_package(db: &Database, registry: &Registry, home: &Path, id: &str)
 struct SkillOverrideRecord { previous: Option<serde_json::Value>, disabled: serde_json::Value }
 fn switch_pointer(field: &[String]) -> String { format!("/{}",field.iter().map(|part| part.replace('~',"~0").replace('/',"~1")).collect::<Vec<_>>().join("/")) }
 pub fn enabled(db: &Database, registry: &Registry, home: &Path, package_id: &str, tool: &str, scope: Scope, project_path: Option<&str>) -> Result<bool,String> {
+    let _context = crate::accounts::selection::enter_bound(db,home,tool,scope,project_path.map(Path::new))?;
     let (package,_)=package(db,package_id)?; let (path,_)=target(registry,home,tool,scope,project_path,&package.name)?;
     if !path.exists() { return Ok(false); }
     let adapter=registry.get(tool).ok_or("未注册的 CLI")?;
@@ -1150,6 +1167,7 @@ pub fn enabled(db: &Database, registry: &Registry, home: &Path, package_id: &str
     Ok(true)
 }
 pub fn set_enabled(db: &Database, credentials: &dyn crate::credentials::CredentialStore, registry: &Registry, home: &Path, package_id: &str, tool: &str, scope: Scope, project_path: Option<&str>, enabled: bool) -> Result<(),String> {
+    let _context = crate::accounts::selection::enter_bound(db,home,tool,scope,project_path.map(Path::new))?;
     let (package,_)=package(db,package_id)?; let (path,key)=target(registry,home,tool,scope,project_path,&package.name)?;
     let adapter=registry.get(tool).ok_or("未注册的 CLI")?;
     if let Some(location)=adapter.skill_switch_location(scope,home,project_path.map(Path::new),&package.name) {
@@ -1182,6 +1200,7 @@ pub fn set_enabled(db: &Database, credentials: &dyn crate::credentials::Credenti
     }
 }
 fn enable_archived(db: &Database, registry: &Registry, home: &Path, package_id: &str, tool: &str, scope: Scope, project_path: Option<&str>) -> Result<(),String> {
+    let _context = crate::accounts::selection::enter_bound(db,home,tool,scope,project_path.map(Path::new))?;
     let _guard=lock().lock().map_err(|_| "Skills 写入服务暂时不可用")?;
     let (package,_)=package(db,package_id)?; let (path,key)=target(registry,home,tool,scope,project_path,&package.name)?;
     let op:Option<(String,String,String)>=db.with_connection(|conn| conn.query_row("SELECT id,backup_path,old_digest FROM skill_operations WHERE package_id=?1 AND tool=?2 AND scope_key=?3 AND status='disabled' ORDER BY rowid DESC LIMIT 1",params![package_id,tool,key],|row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).optional().map_err(|e| e.to_string()))?;
@@ -1285,6 +1304,7 @@ fn operate(
         detail: String::new(),
     };
     let attempt = (|| {
+        let _context=crate::accounts::selection::enter_bound(db,home,tool_id,scope,project_path.map(Path::new))?;
         let _guard = lock().lock().map_err(|_| "Skills 写入服务暂时不可用")?;
         let issues = recover_locked_report(db)?;
         let (package, files) = package(db, package_id)?;

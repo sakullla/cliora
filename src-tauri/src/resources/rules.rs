@@ -14,6 +14,8 @@ use crate::projects;
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuleTarget {
+    #[serde(default)]
+    pub context_id: Option<String>,
     pub tool_id: String,
     pub scope: Scope,
     pub project_path: Option<String>,
@@ -42,10 +44,12 @@ pub struct RuleApplyResult {
 }
 
 fn path_for(
+    db: &Database,
     registry: &Registry,
     home: &Path,
     target: &RuleTarget,
 ) -> Result<std::path::PathBuf, String> {
+    let _context=if let Some(id)=&target.context_id {crate::accounts::selection::enter(if id.is_empty() {None} else {Some(crate::accounts::selection::by_id(db,&target.tool_id,id)?)})} else {crate::accounts::selection::enter_bound(db,home,&target.tool_id,target.scope,target.project_path.as_deref().map(Path::new))?};
     let adapter = registry
         .get(&target.tool_id)
         .ok_or("此 CLI 尚无注册适配器")?;
@@ -62,26 +66,31 @@ fn path_for(
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct NativeRule { pub path: String, pub text: String, pub fingerprint: String }
+pub struct NativeRule { pub context_id: Option<String>, pub path: String, pub text: String, pub fingerprint: String }
 
-pub fn read_current(registry: &Registry, home: &Path, target: &RuleTarget) -> Result<NativeRule, String> {
-    let path = path_for(registry, home, target)?;
+pub fn read_current(db: &Database, registry: &Registry, home: &Path, target: &RuleTarget) -> Result<NativeRule, String> {
+    let _context=crate::accounts::selection::enter_bound(db,home,&target.tool_id,target.scope,target.project_path.as_deref().map(Path::new))?;
+    let path = path_for(db,registry, home, target)?;
     let text = transaction::read_native(&path)?;
-    Ok(NativeRule {path:path.display().to_string(), fingerprint:transaction::fingerprint(text.as_bytes()), text})
+    Ok(NativeRule {context_id:crate::accounts::selection::current(&target.tool_id).map(|ctx|ctx.id),path:path.display().to_string(), fingerprint:transaction::fingerprint(text.as_bytes()), text})
 }
 
 pub fn save_current(db: &Database, credentials: &dyn CredentialStore, registry: &Registry, home: &Path, target: &RuleTarget, original: &str, edited: &str) -> Result<transaction::ApplyOutcome, String> {
+    let _context=crate::accounts::selection::enter_bound(db,home,&target.tool_id,target.scope,target.project_path.as_deref().map(Path::new))?;
+    crate::accounts::selection::validate_expected(&target.tool_id,target.context_id.as_deref())?;
     if edited.len() > 1024 * 1024 { return Err("规则内容超过 1 MiB".into()); }
-    let path = path_for(registry, home, target)?;
+    let path = path_for(db,registry, home, target)?;
     transaction::apply_text(db, credentials, &[TextPatch {path, baseline:original.into(),contents:edited.into(),sensitive:false}], |_| Ok(()))
 }
 
-pub fn enabled(_db: &Database, registry: &Registry, home: &Path, target: &RuleTarget) -> Result<bool,String> {
-    let file=read_current(registry,home,target)?;
+pub fn enabled(db: &Database, registry: &Registry, home: &Path, target: &RuleTarget) -> Result<bool,String> {
+    let file=read_current(db,registry,home,target)?;
     Ok(!file.text.is_empty())
 }
 pub fn set_enabled(db: &Database, credentials: &dyn CredentialStore, registry: &Registry, home: &Path, target: &RuleTarget, enabled: bool) -> Result<(),String> {
-    let path=path_for(registry,home,target)?; let current=transaction::read_native(&path)?;
+    let _context=crate::accounts::selection::enter_bound(db,home,&target.tool_id,target.scope,target.project_path.as_deref().map(Path::new))?;
+    crate::accounts::selection::validate_expected(&target.tool_id,target.context_id.as_deref())?;
+    let path=path_for(db,registry,home,target)?; let current=transaction::read_native(&path)?;
     let key=format!("native_rule_switch:{}:{}",target.tool_id,path.display());
     let record:Option<String>=db.with_connection(|conn| conn.query_row("SELECT value FROM app_settings WHERE key=?1",[&key],|row| row.get(0)).optional().map_err(|e| e.to_string()))?;
     if enabled {
@@ -125,7 +134,9 @@ pub fn preview(
             };
             let found = (|| {
                 let rule = rule.as_ref().map_err(Clone::clone)?;
-                let path = path_for(registry, home, &result.target)?;
+                let _context=crate::accounts::selection::enter_bound(db,home,&result.target.tool_id,result.target.scope,result.target.project_path.as_deref().map(Path::new))?;
+                result.target.context_id=Some(crate::accounts::selection::current(&result.target.tool_id).map(|ctx|ctx.id).unwrap_or_default());
+                let path = path_for(db,registry, home, &result.target)?;
                 let existing = transaction::read_native(&path)?;
                 Ok((path, existing, rule.body.clone()))
             })();
@@ -185,7 +196,9 @@ pub fn apply(
                     .baseline_hash
                     .as_deref()
                     .ok_or("请先预览原生差异")?;
-                let path = path_for(registry, home, &result.target)?;
+                let _context=crate::accounts::selection::enter_bound(db,home,&result.target.tool_id,result.target.scope,result.target.project_path.as_deref().map(Path::new))?;
+                crate::accounts::selection::validate_expected(&result.target.tool_id,result.target.context_id.as_deref())?;
+                let path = path_for(db,registry, home, &result.target)?;
                 result.path = Some(path.display().to_string());
                 let existing = transaction::read_native(&path)?;
                 if existing == rule.body {
@@ -222,6 +235,7 @@ pub fn apply(
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RulePlacement {
+    pub context_id: Option<String>,
     pub rule_id: String,
     pub tool_id: String,
     pub scope: Scope,
@@ -271,7 +285,7 @@ fn scope_key(scope: Scope, project_path: Option<&str>) -> Result<String, String>
 }
 
 fn split_scope(scope_key: &str) -> (Scope, Option<String>) {
-    scope_key
+    crate::accounts::selection::split_key(scope_key).1
         .strip_prefix("project:")
         .map(|path| (Scope::Project, Some(path.to_owned())))
         .unwrap_or((Scope::Global, None))
@@ -393,7 +407,7 @@ pub fn list_placements(db: &Database, registry: &Registry, home: &Path) -> Resul
             .query_map([], |row| {
                 let scope_key: String = row.get(2)?;
                 let (scope, project_path) = split_scope(&scope_key);
-                Ok((RulePlacement { rule_id: row.get(0)?, tool_id: row.get(1)?, scope, project_path, state: "drifted" }, scope_key))
+                Ok((RulePlacement { context_id:crate::accounts::selection::split_key(&scope_key).0.map(str::to_owned), rule_id: row.get(0)?, tool_id: row.get(1)?, scope, project_path, state: "drifted" }, scope_key))
             })
             .map_err(|error| error.to_string())?;
         listed.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())
@@ -414,8 +428,8 @@ pub fn list_placements(db: &Database, registry: &Registry, home: &Path) -> Resul
 }
 
 fn target_state(db: &Database, registry: &Registry, home: &Path, tool: &str, scope_key: &str, scope: Scope, project_path: Option<&str>) -> &'static str {
-    let target = RuleTarget { tool_id: tool.to_owned(), scope, project_path: project_path.map(str::to_owned), baseline_hash: None };
-    let Ok(path) = path_for(registry, home, &target) else { return "unavailable"; };
+    let target = RuleTarget { context_id: Some(crate::accounts::selection::split_key(scope_key).0.unwrap_or("").to_owned()), tool_id: tool.to_owned(), scope, project_path: project_path.map(str::to_owned), baseline_hash: None };
+    let Ok(path) = path_for(db,registry, home, &target) else { return "unavailable"; };
     let Ok(existing) = transaction::read_native(&path) else { return "unavailable"; };
     let owned = match owned_hash(db, tool, scope_key) {
         Ok(hash) => hash,
@@ -451,13 +465,17 @@ pub fn sync_clients(
     let mut tools: Vec<String> = selection.tool_ids.into_iter().filter(|id| !id.is_empty()).collect();
     tools.sort();
     tools.dedup();
-    let mut affected: Vec<(String, String)> = tools.iter().map(|tool| (tool.clone(), key.clone())).collect();
+    let mut affected: Vec<(String, String)> = tools.iter().map(|tool| {
+        let _context=crate::accounts::selection::enter_bound(db,home,tool,selection.scope,selection.project_path.as_deref().map(Path::new))?;
+        Ok((tool.clone(),crate::accounts::selection::key(&key)))
+    }).collect::<Result<_,String>>()?;
     let current = list_placements(db, registry, home)?;
     for place in &current {
         if place.rule_id != rule_id {
             continue;
         }
-        let place_key = scope_key(place.scope, place.project_path.as_deref())?;
+        let base_key = scope_key(place.scope, place.project_path.as_deref())?;
+        let place_key=place.context_id.as_ref().map(|id|format!("context:{id}:{base_key}")).unwrap_or(base_key);
         if place_key == key && !tools.iter().any(|tool| tool == &place.tool_id) {
             affected.push((place.tool_id.clone(), place_key));
         } else if place_key != key {
@@ -469,13 +487,13 @@ pub fn sync_clients(
     let mut planned = Vec::new();
     let mut results_early = Vec::new();
     for (tool, scope_key) in affected {
-        let target = RuleTarget {
+        let target = RuleTarget { context_id: Some(crate::accounts::selection::split_key(&scope_key).0.unwrap_or("").to_owned()),
             tool_id: tool.clone(),
             scope: split_scope(&scope_key).0,
             project_path: split_scope(&scope_key).1,
             baseline_hash: None,
         };
-        let path = match path_for(registry, home, &target) {
+        let path = match path_for(db,registry, home, &target) {
             Ok(path) => path,
             Err(error) => {
                 results_early.push(RuleSyncResult {
@@ -490,12 +508,16 @@ pub fn sync_clients(
             }
         };
         let mut group = members(db, &tool, &scope_key)?;
-        let included = if scope_key == key {
+        let selected_here={
+            let _context=crate::accounts::selection::enter_bound(db,home,&tool,selection.scope,selection.project_path.as_deref().map(Path::new))?;
+            scope_key==crate::accounts::selection::key(&key)
+        };
+        let included = if selected_here {
             tools.iter().any(|id| id == &tool)
         } else {
             group.iter().any(|member| member.rule_id == rule_id)
         };
-        if scope_key == key {
+        if selected_here {
             if included {
                 if !group.iter().any(|member| member.rule_id == rule_id) {
                     let position = group.iter().map(|member| member.position).max().unwrap_or(0) + 1;
@@ -608,11 +630,12 @@ pub fn release_rule(
     }
     let placed = list_placements(db, registry, home)?.into_iter().filter(|place| place.rule_id == id).collect::<Vec<_>>();
     for place in placed {
-        let key = scope_key(place.scope, place.project_path.as_deref())?;
+        let base_key = scope_key(place.scope, place.project_path.as_deref())?;
+        let key=place.context_id.as_ref().map(|id|format!("context:{id}:{base_key}")).unwrap_or(base_key);
         let mut group = members(db, &place.tool_id, &key)?;
         group.retain(|member| member.rule_id != id);
-        let target = RuleTarget { tool_id: place.tool_id.clone(), scope: place.scope, project_path: place.project_path.clone(), baseline_hash: None };
-        let path = match path_for(registry, home, &target) {
+        let target = RuleTarget { context_id: Some(place.context_id.clone().unwrap_or_default()), tool_id: place.tool_id.clone(), scope: place.scope, project_path: place.project_path.clone(), baseline_hash: None };
+        let path = match path_for(db,registry, home, &target) {
             Ok(path) => path,
             Err(_) => continue,
         };

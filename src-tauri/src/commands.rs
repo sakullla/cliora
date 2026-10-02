@@ -1048,6 +1048,7 @@ pub async fn delete_skill_package(app: AppHandle, package_id: String) -> Result<
 #[tauri::command]
 pub async fn remove_skill(
     app: AppHandle,
+    expected_context_id: Option<String>,
     package_id: String,
     tool_id: String,
     scope: Scope,
@@ -1056,6 +1057,8 @@ pub async fn remove_skill(
     blocking(move || {
         let home = home()?;
         let db = app.state::<AppState>().database(&app)?;
+        let _context=crate::accounts::selection::enter_bound(&db,&home,&tool_id,scope,project_path.as_deref().map(Path::new)).map_err(native_error)?;
+        crate::accounts::selection::validate_expected(&tool_id,expected_context_id.as_deref()).map_err(native_error)?;
         Ok(resources::skills::remove(
             &db,
             &adapters::Registry::builtins(),
@@ -1193,6 +1196,7 @@ pub async fn get_registered_tool_workspace(
         }
         let state = app.state::<AppState>();
         state.with_database(&app, |database| {
+            let _context = crate::accounts::selection::enter_bound(database, &home, &tool_id, scope, project.as_deref()).map_err(native_error)?;
             let custom = registered_tool_path(database, &tool_id).map_err(native_error)?;
             // The quick-start page only needs the selected CLI version. Skip sibling shims,
             // native file reads, and pending-transaction recovery.
@@ -1267,6 +1271,7 @@ pub async fn get_tool_workspace(
         let project = checked_project(scope, project_path)?;
         let state = app.state::<AppState>();
         state.with_database(&app, |database| {
+            let _context = crate::accounts::selection::enter_bound(database, &home, tool.stable_id(), scope, project.as_deref()).map_err(native_error)?;
             let custom = tool_path(database, tool).map_err(native_error)?;
             let probe = adapter::probe(tool, custom.as_deref(), &home, project.as_deref(), scope);
             let key = match scope {
@@ -1386,7 +1391,7 @@ pub async fn save_common_config(
                 database
                     .with_connection(|conn| {
                         let mut statement = conn
-                    .prepare("SELECT scope_key, profile_id FROM applied_bindings WHERE tool = ?1")
+                    .prepare("SELECT scope_key, profile_id FROM applied_bindings WHERE tool = ?1 AND scope_key NOT LIKE 'context:%'")
                     .map_err(|e| e.to_string())?;
                         let rows = statement
                             .query_map(
@@ -1522,8 +1527,8 @@ pub async fn get_skill_enabled(app: AppHandle, package_id: String, tool_id: Stri
     blocking(move || app.state::<AppState>().with_database(&app, |db| resources::skills::enabled(db,&adapters::Registry::builtins(),&home()?,&package_id,&tool_id,scope,project_path.as_deref()).map_err(native_error))).await
 }
 #[tauri::command]
-pub async fn set_skill_enabled(app: AppHandle, package_id: String, tool_id: String, scope: Scope, project_path: Option<String>, enabled: bool) -> Result<(),ApiError> {
-    blocking(move || app.state::<AppState>().with_database(&app, |db| resources::skills::set_enabled(db,&SystemCredentialStore,&adapters::Registry::builtins(),&home()?,&package_id,&tool_id,scope,project_path.as_deref(),enabled).map_err(native_error))).await
+pub async fn set_skill_enabled(app: AppHandle, expected_context_id: Option<String>, package_id: String, tool_id: String, scope: Scope, project_path: Option<String>, enabled: bool) -> Result<(),ApiError> {
+    blocking(move || app.state::<AppState>().with_database(&app, |db| { let home=home()?; let _context=crate::accounts::selection::enter_bound(db,&home,&tool_id,scope,project_path.as_deref().map(Path::new)).map_err(native_error)?; crate::accounts::selection::validate_expected(&tool_id,expected_context_id.as_deref()).map_err(native_error)?; resources::skills::set_enabled(db,&SystemCredentialStore,&adapters::Registry::builtins(),&home,&package_id,&tool_id,scope,project_path.as_deref(),enabled).map_err(native_error) })).await
 }
 #[tauri::command]
 pub async fn get_native_rule_enabled(app: AppHandle, target: rules::RuleTarget) -> Result<bool,ApiError> {
@@ -1535,8 +1540,8 @@ pub async fn set_native_rule_enabled(app: AppHandle, target: rules::RuleTarget, 
 }
 
 #[tauri::command]
-pub async fn read_native_rule(target: rules::RuleTarget) -> Result<rules::NativeRule, ApiError> {
-    blocking(move || rules::read_current(&adapters::Registry::builtins(), &home()?, &target).map_err(native_error)).await
+pub async fn read_native_rule(app: AppHandle, target: rules::RuleTarget) -> Result<rules::NativeRule, ApiError> {
+    blocking(move || app.state::<AppState>().with_database(&app, |db| rules::read_current(db, &adapters::Registry::builtins(), &home()?, &target).map_err(native_error))).await
 }
 
 #[tauri::command]
@@ -1654,6 +1659,7 @@ pub async fn prepare_native_import_from_disk(
         let project = checked_project(scope, project_path)?;
         let state = app.state::<AppState>();
         state.with_database(&app, |database| {
+            let _context = crate::accounts::selection::enter_bound(database, &home, tool.stable_id(), scope, project.as_deref()).map_err(native_error)?;
             let custom = tool_path(database, tool).map_err(native_error)?;
             let probe = adapter::probe(tool, custom.as_deref(), &home, project.as_deref(), scope);
             for role in &roles {
@@ -1694,6 +1700,7 @@ pub async fn read_native_file_for_edit(
         let project = checked_project(scope, project_path)?;
         let state = app.state::<AppState>();
         state.with_database(&app, |database| {
+            let _context = crate::accounts::selection::enter_bound(database, &home, tool.stable_id(), scope, project.as_deref()).map_err(native_error)?;
             let custom = tool_path(database, tool).map_err(native_error)?;
             let probe = adapter::probe(tool, custom.as_deref(), &home, project.as_deref(), scope);
             adapters::read_registered_file(
@@ -1811,7 +1818,7 @@ pub async fn save_registered_common_config(
                 .with_connection(|conn| {
                     let mut statement = conn
                         .prepare(
-                            "SELECT scope_key, profile_id FROM applied_bindings WHERE tool = ?1",
+                            "SELECT scope_key, profile_id FROM applied_bindings WHERE tool = ?1 AND scope_key NOT LIKE 'context:%'",
                         )
                         .map_err(|e| e.to_string())?;
                     let rows = statement
@@ -2372,6 +2379,7 @@ pub async fn prepare_registered_native_import_from_disk(
         let state = app.state::<AppState>();
         state.with_database(&app, |database| {
             let registry = adapters::Registry::builtins();
+            let _context = crate::accounts::selection::enter_bound(database, &home, &tool_id, scope, project.as_deref()).map_err(native_error)?;
             let custom = registered_tool_path(database, &tool_id).map_err(native_error)?;
             let probe = adapter::probe_registered(
                 &registry,
@@ -2496,6 +2504,7 @@ pub async fn read_registered_native_file_for_edit(
         let state = app.state::<AppState>();
         state.with_database(&app, |database| {
             let registry = adapters::Registry::builtins();
+            let _context = crate::accounts::selection::enter_bound(database, &home, &tool_id, scope, project.as_deref()).map_err(native_error)?;
             let custom = registered_tool_path(database, &tool_id).map_err(native_error)?;
             let probe = adapter::probe_registered(
                 &registry,
@@ -2531,6 +2540,8 @@ fn backup_target(registry: &adapters::Registry, tool_id: &str, scope: Scope, hom
 pub async fn list_native_backups(app: AppHandle, tool_id: String, scope: Scope, project_path: Option<String>, role: String) -> Result<Vec<transaction::BackupRecord>, ApiError> {
     blocking(move || {
         let home = home()?; let project = checked_project(scope, project_path)?;
+        let account_db=app.state::<AppState>().database(&app)?;
+        let _context=crate::accounts::selection::enter_bound(&account_db,&home,&tool_id,scope,project.as_deref()).map_err(native_error)?;
         let path = backup_target(&adapters::Registry::builtins(), &tool_id, scope, &home, project.as_deref(), &role)?;
         app.state::<AppState>().with_database(&app, |db| transaction::recent_backups(db, &path).map_err(native_error))
     }).await
@@ -2540,36 +2551,44 @@ pub async fn list_native_backups(app: AppHandle, tool_id: String, scope: Scope, 
 pub async fn preview_native_backup(app: AppHandle, tool_id: String, scope: Scope, project_path: Option<String>, role: String, transaction_id: String) -> Result<transaction::BackupPreview, ApiError> {
     blocking(move || {
         let home = home()?; let project = checked_project(scope, project_path)?;
+        let account_db=app.state::<AppState>().database(&app)?;
+        let _context=crate::accounts::selection::enter_bound(&account_db,&home,&tool_id,scope,project.as_deref()).map_err(native_error)?;
         let path = backup_target(&adapters::Registry::builtins(), &tool_id, scope, &home, project.as_deref(), &role)?;
         app.state::<AppState>().with_database(&app, |db| transaction::preview_backup(db, &SystemCredentialStore, &path, &transaction_id).map_err(native_error))
     }).await
 }
 
 #[tauri::command]
-pub async fn restore_native_backup(app: AppHandle, tool_id: String, scope: Scope, project_path: Option<String>, role: String, transaction_id: String, current: String) -> Result<transaction::ApplyOutcome, ApiError> {
+pub async fn restore_native_backup(app: AppHandle, expected_context_id: Option<String>, tool_id: String, scope: Scope, project_path: Option<String>, role: String, transaction_id: String, current: String) -> Result<transaction::ApplyOutcome, ApiError> {
     blocking(move || {
         let home = home()?; let project = checked_project(scope, project_path)?;
+        let account_db=app.state::<AppState>().database(&app)?;
+        let _context=crate::accounts::selection::enter_bound(&account_db,&home,&tool_id,scope,project.as_deref()).map_err(native_error)?;
         let registry = adapters::Registry::builtins();
         let path = backup_target(&registry, &tool_id, scope, &home, project.as_deref(), &role)?;
         app.state::<AppState>().with_database(&app, |db| {
+            let _context = crate::accounts::selection::enter_bound(db, &home, &tool_id, scope, project.as_deref()).map_err(native_error)?;
+            crate::accounts::selection::validate_expected(&tool_id,expected_context_id.as_deref()).map_err(native_error)?;
             let custom = registered_tool_path(db, &tool_id).map_err(native_error)?;
             let probe = adapter::probe_registered(&registry, &tool_id, custom.as_deref(), &home, project.as_deref(), scope).map_err(native_error)?;
             if probe.native_writes.state != "supported" { return Err(native_error(probe.native_writes.reason.into())); }
             let scope_key = apply::scope_key(scope, project.as_deref()).map_err(native_error)?;
             transaction::restore_backup(db, &SystemCredentialStore, &path, &transaction_id, &current, |tx| {
-                tx.execute("DELETE FROM applied_bindings WHERE tool=?1 AND scope_key=?2", rusqlite::params![tool_id, scope_key]).map(|_| ()).map_err(|e| e.to_string())
+                tx.execute("UPDATE applied_bindings SET managed='{}', profile_version=-1 WHERE tool=?1 AND scope_key=?2", rusqlite::params![tool_id, scope_key]).map(|_| ()).map_err(|e| e.to_string())
             }).map_err(native_error)
         })
     }).await
 }
 
 #[tauri::command]
-pub async fn save_registered_native_file(app: AppHandle, tool_id: String, scope: Scope, project_path: Option<String>, role: String, original: String, edited: String) -> Result<crate::native::transaction::ApplyOutcome, ApiError> {
+pub async fn save_registered_native_file(app: AppHandle, expected_context_id: Option<String>, tool_id: String, scope: Scope, project_path: Option<String>, role: String, original: String, edited: String) -> Result<crate::native::transaction::ApplyOutcome, ApiError> {
     blocking(move || {
         let home = home()?;
         let project = checked_project(scope, project_path)?;
         app.state::<AppState>().with_database(&app, |db| {
             let registry = adapters::Registry::builtins();
+            let _context = crate::accounts::selection::enter_bound(db, &home, &tool_id, scope, project.as_deref()).map_err(native_error)?;
+            crate::accounts::selection::validate_expected(&tool_id,expected_context_id.as_deref()).map_err(native_error)?;
             let custom = registered_tool_path(db, &tool_id).map_err(native_error)?;
             let probe = adapter::probe_registered(&registry, &tool_id, custom.as_deref(), &home, project.as_deref(), scope).map_err(native_error)?;
             if probe.native_writes.state != "supported" { return Err(native_error(probe.native_writes.reason.into())); }
@@ -2778,6 +2797,7 @@ mod tests {
                 files: std::collections::BTreeMap::new(),
                 suppressed: std::collections::BTreeMap::new(),
                 connection: None,
+                authentication: crate::native::profile::ProfileAuthentication::Native,
                 native_credentials: std::collections::BTreeMap::new()
             },
             Some(1)

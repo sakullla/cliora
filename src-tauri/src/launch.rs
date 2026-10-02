@@ -140,6 +140,8 @@ pub struct LaunchResult {
 
 #[derive(Clone, Debug)]
 pub struct LaunchPlan {
+    pub account_version: Option<u32>,
+    pub account_context: Option<(String, crate::accounts::NativeContext)>,
     pub tool_id: String,
     pub project_id: Option<String>,
     pub mode: LaunchMode,
@@ -519,6 +521,11 @@ pub fn plan_with_stage(
     home: &Path,
     request: LaunchRequest,
 ) -> Result<LaunchPlan, LaunchPlanError> {
+    if let Some(native_id)=&request.session_id {
+        if let Some(id)=crate::history::unique_session_id(db,&request.tool_id,native_id).map_err(|message|LaunchPlanError::new(LaunchStage::Configuration,message))? {
+            return crate::history::resume_plan(db,registry,home,&id,request.mode).map_err(|message|LaunchPlanError::new(LaunchStage::Configuration,message));
+        }
+    }
     let original = request
         .session_id
         .as_deref()
@@ -539,7 +546,7 @@ pub fn plan_with_stage(
         ));
     }
     let directory = original.or_else(|| request.directory.as_ref().map(PathBuf::from));
-    plan_with_stage_at(db, registry, home, request, directory.as_deref())
+    plan_with_stage_at(db, registry, home, request, directory.as_deref(), None)
 }
 
 pub fn plan_history(
@@ -549,7 +556,11 @@ pub fn plan_history(
     request: LaunchRequest,
     cwd: &Path,
 ) -> Result<LaunchPlan, LaunchPlanError> {
-    plan_with_stage_at(db, registry, home, request, Some(cwd))
+    plan_with_stage_at(db, registry, home, request, Some(cwd), None)
+}
+
+pub fn plan_history_context(db: &Database, registry: &Registry, home: &Path, request: LaunchRequest, cwd: &Path, context: Option<(String, crate::accounts::NativeContext)>) -> Result<LaunchPlan, LaunchPlanError> {
+    plan_with_stage_at(db, registry, home, request, Some(cwd), Some(context))
 }
 
 fn plan_with_stage_at(
@@ -558,6 +569,7 @@ fn plan_with_stage_at(
     home: &Path,
     request: LaunchRequest,
     directory_override: Option<&Path>,
+    resume_context: Option<Option<(String, crate::accounts::NativeContext)>>,
 ) -> Result<LaunchPlan, LaunchPlanError> {
     let skill_issues = skills::recover_report(db).map_err(|message| {
         LaunchPlanError::new(
@@ -602,6 +614,12 @@ fn plan_with_stage_at(
     } else {
         Scope::Global
     };
+    let account_context = match resume_context {
+        Some(context) => context,
+        None => crate::accounts::selection::bound(db, home, &request.tool_id, scope, (scope==Scope::Project).then_some(directory.as_path()), true)
+            .map_err(|message|LaunchPlanError::new(LaunchStage::Configuration,message))?,
+    };
+    let _context = crate::accounts::selection::enter(account_context.as_ref().map(|(_,ctx)|ctx.clone()));
     let scope_key = if scope == Scope::Global {
         "global".to_owned()
     } else {
@@ -630,6 +648,7 @@ fn plan_with_stage_at(
         scope,
     )
     .map_err(|message| LaunchPlanError::new(LaunchStage::Tool, message))?;
+    crate::accounts::selection::validate_oauth_files(registry,&request.tool_id,home,(scope==Scope::Project).then_some(directory.as_path())).map_err(|message|LaunchPlanError::new(LaunchStage::Configuration,message))?;
     let selected_path = probe.selected_path.as_deref().ok_or_else(|| {
         LaunchPlanError::new(
             LaunchStage::Tool,
@@ -661,6 +680,7 @@ fn plan_with_stage_at(
         request.mode,
     )
     .map_err(|message| LaunchPlanError::new(LaunchStage::Tool, message))?;
+    if let Some((_, context)) = &account_context { cli_args.splice(0..0, context.cli_args.clone()); }
     if let Some(project) = &project {
         let model = project
             .model_overrides
@@ -679,6 +699,8 @@ fn plan_with_stage_at(
         cli_args.push(prompt.to_owned());
     }
     Ok(LaunchPlan {
+        account_version: account_context.as_ref().map(|(id,_)|crate::accounts::get(db,id).map(|account|account.version)).transpose().map_err(|message|LaunchPlanError::new(LaunchStage::Configuration,message))?,
+        account_context,
         tool_id: request.tool_id,
         project_id: request.project_id,
         mode: request.mode,
@@ -697,7 +719,7 @@ pub fn login_plan(db: &Database, registry: &Registry, home: &Path, tool: &str, c
     let cli_args = adapter.login_args().ok_or("此 CLI 没有原生交互登录入口，请配置 API 连接")?;
     let probe = adapter::probe_registered(registry, tool, custom, home, None, Scope::Global)?;
     let selected = probe.selected_path.ok_or("未找到可验证的 CLI，先安装或重新检测")?;
-    Ok(LaunchPlan {tool_id:tool.into(),project_id:None,mode:LaunchMode::Normal,executable:PathBuf::from(selected),cli_args,
+    Ok(LaunchPlan {account_version:None,account_context:None,tool_id:tool.into(),project_id:None,mode:LaunchMode::Normal,executable:PathBuf::from(selected),cli_args,
         directory:projects::checked_directory(&home.display().to_string())?,session_markers:adapter.session_env_markers(),terminal:selected_terminal(db)?})
 }
 
@@ -737,13 +759,22 @@ pub fn native_command(plan: &LaunchPlan) -> Result<String, String> {
     }
 }
 
+fn context_script(plan: &LaunchPlan, windows: bool) -> String {
+    let Some((_,context))=&plan.account_context else {return String::new();};
+    let mut parts=Vec::new();
+    for key in &context.remove_environment { parts.push(if windows {format!("Remove-Item -LiteralPath 'Env:{key}' -ErrorAction SilentlyContinue")} else {format!("unset {key}")}); }
+    for (key,value) in &context.environment { parts.push(if windows {format!("$env:{key} = {}",quote_powershell(value))} else {format!("export {key}={}",quote_shell(value))}); }
+    format!("{}; ",parts.join("; "))
+}
+
 fn powershell_script(plan: &LaunchPlan) -> Result<String, String> {
     let directory = terminal_path(&plan.directory)?;
     let executable = terminal_path(&plan.executable)?;
     let mut parts = vec![format!("& {}", quote_powershell(&executable))];
     parts.extend(plan.cli_args.iter().map(|arg| quote_powershell(arg)));
     Ok(format!(
-        "Set-Location -LiteralPath {}; {}",
+        "{}Set-Location -LiteralPath {}; {}",
+        context_script(plan,true),
         quote_powershell(&directory),
         parts.join(" ")
     ))
@@ -755,7 +786,8 @@ fn shell_script(plan: &LaunchPlan) -> Result<String, String> {
     let mut parts = vec![quote_shell(executable)];
     parts.extend(plan.cli_args.iter().map(|arg| quote_shell(arg)));
     Ok(format!(
-        "cd -- {} && exec {}",
+        "{}cd -- {} && exec {}",
+        context_script(plan,false),
         quote_shell(directory),
         parts.join(" ")
     ))
@@ -1070,6 +1102,7 @@ pub fn open_shell(db: &Database, script: &str) -> Result<(), String> {
 }
 
 pub fn spawn(db: &Database, plan: LaunchPlan) -> Result<LaunchResult, String> {
+    if let Some((id,context))=&plan.account_context { if Some(crate::accounts::get(db,id)?.version)!=plan.account_version {return Err("账号在计划后发生变化，请重新启动".into());} crate::accounts::validate_selected_context(db,id,&context.id)?; crate::accounts::context::check_path(&context.root)?; }
     let terminal_id = plan.terminal;
     let terminal = terminal_command(&plan)?;
     spawn_terminal(db, terminal_id, terminal)?;

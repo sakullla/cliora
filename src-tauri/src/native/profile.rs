@@ -8,6 +8,17 @@ use super::format::{self, FileKind};
 use crate::database::Database;
 use crate::domain::CliId;
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ProfileAuthentication {
+    #[default]
+    Native,
+    ApiKey,
+    #[serde(rename = "oauth")]
+    OAuth { #[serde(rename = "accountId")] account_id: String },
+    RebindRequired,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Connection {
@@ -39,6 +50,8 @@ pub struct NativeProfile {
     pub files: BTreeMap<String, String>,
     #[serde(default)]
     pub suppressed: BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    pub authentication: ProfileAuthentication,
     pub connection: Option<Connection>,
     /// Opaque keyring IDs for credentials removed from native file roles.
     /// The outer key is the file role; the inner key is the CLI environment name.
@@ -61,6 +74,8 @@ pub struct RegisteredProfile {
     pub files: BTreeMap<String, String>,
     #[serde(default)]
     pub suppressed: BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    pub authentication: ProfileAuthentication,
     pub connection: Option<Connection>,
     #[serde(default)]
     pub native_credentials: BTreeMap<String, BTreeMap<String, String>>,
@@ -77,6 +92,7 @@ impl From<NativeProfile> for RegisteredProfile {
             inherit_common: profile.inherit_common,
             files: profile.files,
             suppressed: profile.suppressed,
+            authentication: profile.authentication,
             connection: profile.connection,
             native_credentials: profile.native_credentials,
         }
@@ -95,6 +111,7 @@ impl TryFrom<RegisteredProfile> for NativeProfile {
             inherit_common: profile.inherit_common,
             files: profile.files,
             suppressed: profile.suppressed,
+            authentication: profile.authentication,
             connection: profile.connection,
             native_credentials: profile.native_credentials,
         })
@@ -468,6 +485,15 @@ pub fn save_registered_profile(
     if profile.name.chars().count() > 100 {
         return Err("配置名称不能超过 100 个字符".into());
     }
+    match &profile.authentication {
+        ProfileAuthentication::OAuth { account_id } => {
+            let account = crate::accounts::get(db, account_id)?;
+            if account.tool_id != profile.tool { return Err("账号属于另一个 CLI".into()); }
+            if profile.connection.is_some() || !profile.native_credentials.is_empty() { return Err("OAuth 配置不能同时包含 API Key 连接或原生密钥".into()); }
+        }
+        ProfileAuthentication::ApiKey if profile.connection.is_none() => return Err("API Key 配置需要连接设置".into()),
+        _ => (),
+    }
     validate_registered_files(registry, &profile.tool, &profile.files)?;
     validate_registered_native_credentials(registry, &profile)?;
     if let Some(connection) = &profile.connection {
@@ -521,7 +547,7 @@ pub fn delete_registered_profile(
         let tx = conn.transaction().map_err(|e| e.to_string())?;
         let bound: i64 = tx
             .query_row(
-                "SELECT COUNT(*) FROM applied_bindings WHERE profile_id = ?1",
+                "SELECT COUNT(*) FROM applied_bindings WHERE profile_id = ?1 AND scope_key NOT LIKE 'context:%'",
                 [id],
                 |row| row.get(0),
             )
@@ -647,6 +673,7 @@ mod tests {
             files: BTreeMap::new(),
             suppressed: BTreeMap::new(),
             connection: None,
+            authentication: crate::native::profile::ProfileAuthentication::Native,
             native_credentials: BTreeMap::new(),
         }
     }

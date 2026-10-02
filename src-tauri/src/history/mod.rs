@@ -873,7 +873,20 @@ pub fn refresh_controlled(db: &Database, registry: &Registry, home: &Path, manag
         }
         if cancelled() { return Err("扫描已取消".into()); }
         set_scan_progress(true, adapter.id(), 0, 0);
-        let report = scan_adapter_sources_controlled(db, adapter, adapter.history_sources_controlled(home, cancelled), cancelled);
+        let all_sources = (|| {
+            let mut sources=adapter.history_sources_controlled(home,cancelled)?;
+            for account in crate::accounts::list(db)?.into_iter().filter(|account|account.tool_id==adapter.id()) {
+                for context in account.context.iter().chain(&account.retired_contexts) {
+                    crate::accounts::context::check_path(&context.root)?;
+                    let _scope=crate::accounts::selection::enter(Some(context.clone()));
+                    sources.extend(adapter.history_sources_controlled(home,cancelled)?);
+                }
+            }
+            let mut seen=std::collections::HashSet::new();
+            sources.retain(|source|seen.insert(source.key()));
+            Ok(sources)
+        })();
+        let report = scan_adapter_sources_controlled(db, adapter, all_sources, cancelled);
         if cancelled() { return Err("扫描已取消".into()); }
         db.with_connection(|conn| conn.execute(
             "INSERT INTO history_scan_state (tool,scanned_at,source_count,failed_count,incomplete,detail) VALUES (?1,?2,?3,?4,?5,?6)
@@ -1130,6 +1143,12 @@ pub(crate) fn published_rate(tool_id: &str, model: &str) -> Option<HistoryPrice>
     })
 }
 
+pub fn unique_session_id(db: &Database, tool: &str, native: &str) -> Result<Option<String>,String> {
+    let ids:Vec<String>=db.with_connection(|conn|{let mut query=conn.prepare("SELECT id FROM history_sessions WHERE tool=?1 AND native_id=?2 LIMIT 2").map_err(|e|e.to_string())?; let rows=query.query_map(params![tool,native],|row|row.get(0)).map_err(|e|e.to_string())?; rows.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())})?;
+    if ids.len()>1 {return Err("多个账号含相同原生会话 ID，请从历史列表选择具体记录恢复".into());}
+    Ok(ids.into_iter().next())
+}
+
 pub fn native_session_directory(db: &Database, tool: &str, native_id: &str) -> Result<Option<PathBuf>, String> {
     let id: Option<String> = db.with_connection(|conn| conn.query_row(
         "SELECT id FROM history_sessions WHERE tool = ?1 AND native_id = ?2 ORDER BY updated_at DESC LIMIT 1",
@@ -1162,8 +1181,20 @@ pub fn resume_plan(
     if detail.session.cwd.is_none() && detail.session.project_id.is_none() {
         return Err("原会话没有项目目录".into());
     }
-    let cwd = native_session_directory(db, &detail.session.tool_id, &native_id)?.ok_or("原会话没有工作目录")?;
-    crate::launch::plan_history(
+    let cwd = match detail.session.cwd.as_deref() {
+        Some(cwd)=>PathBuf::from(cwd),
+        None=>crate::projects::get(db,detail.session.project_id.as_deref().ok_or("原会话没有工作目录")?)?.path.map(PathBuf::from).ok_or("原会话没有工作目录")?,
+    };
+    let source_path:String=db.with_connection(|conn|conn.query_row("SELECT source_path FROM history_sessions WHERE id=?1",[id],|row|row.get(0)).map_err(|e|e.to_string()))?;
+    let mut context=None;
+    for account in crate::accounts::list(db)?.into_iter().filter(|account|account.tool_id==detail.session.tool_id) {
+        for ctx in account.context.iter().chain(&account.retired_contexts) {
+            if ctx.history_roots.iter().any(|root|Path::new(&source_path).starts_with(root)) {
+                context=Some((account.id.clone(),crate::accounts::resolve_retained(db,home,&account.id,&account.tool_id,&ctx.id)?));
+            }
+        }
+    }
+    crate::launch::plan_history_context(
         db,
         registry,
         home,
@@ -1176,6 +1207,7 @@ pub fn resume_plan(
             mode,
         },
         &cwd,
+        context,
     )
     .map_err(|error| error.message)
 }

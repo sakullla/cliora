@@ -79,7 +79,7 @@ fn five_cli_mcp_and_skills_work_in_macos_global_and_project_directories() {
     for tool in ["codex", "claude_code", "grok", "pi", "open_code"] {
         for scope in [Scope::Global, Scope::Project] {
             let project_path = (scope == Scope::Project).then(|| project.to_str().unwrap());
-            let mut target = mcp::McpTargetRequest {
+            let mut target = mcp::McpTargetRequest { context_id: None,
                 tool_id: tool.into(),
                 scope,
                 project_path: project_path.map(str::to_owned),

@@ -13,13 +13,16 @@ pub fn sources(home: &Path) -> Result<Vec<HistorySource>, String> {
 }
 
 pub fn sources_controlled(home: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<HistorySource>, String> {
-    let mut sources = discover_jsonl_controlled(&home.join(".codex/sessions"), |path| {
+    let mut sources = discover_jsonl_controlled(&crate::accounts::selection::history_root("codex", || home.join(".codex/sessions")), |path| {
         path.extension().is_some_and(|value| value == "jsonl")
             && path
                 .file_name()
                 .and_then(|value| value.to_str())
                 .is_some_and(|value| value.starts_with("rollout-"))
     }, cancelled)?;
+    if let Some(context)=crate::accounts::selection::current("codex") {
+        for root in context.history_roots.iter().skip(1) { sources.extend(discover_jsonl_controlled(root, |path|path.extension().is_some_and(|ext|ext=="jsonl"),cancelled)?); }
+    }
     // Adapter-local parser version: existing indexes are rebuilt once, even if
     // the original rollout has not changed. Other CLIs keep their own cache.
     for source in &mut sources {

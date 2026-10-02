@@ -12,7 +12,7 @@ export function NativeRuleEditor({ tools, projects }: { tools: AdapterDescriptor
   const [tool, setTool] = useState(tools[0]?.id ?? '');
   const [scope, setScope] = useState<Scope>('global');
   const [project, setProject] = useState('');
-  const [loaded, setLoaded] = useState<{ path: string; text: string } | null>(null);
+  const [loaded, setLoaded] = useState<{ contextId?: string | null; path: string; text: string } | null>(null);
   const [text, setText] = useState('');
   const [conflict, setConflict] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -49,7 +49,7 @@ export function NativeRuleEditor({ tools, projects }: { tools: AdapterDescriptor
     if (original === undefined) return;
     const started = { ...latest.current }; setBusy(true); clearResult();
     try {
-      await native.saveNativeRule(target, original, started.text);
+      await native.saveNativeRule({ ...target, contextId: loaded?.contextId }, original, started.text);
       if (latest.current.context !== started.context) return;
       const current = await native.readNativeRule(target);
       if (latest.current.context !== started.context) return;
@@ -66,7 +66,7 @@ export function NativeRuleEditor({ tools, projects }: { tools: AdapterDescriptor
     const snapshot = latest.current;
     if (dirty && !await confirmAction('切换规则前放弃未保存修改？', () => isCurrent(snapshot), { title: '放弃未保存修改？', confirmLabel: '放弃修改' })) return;
     const started=latest.current.context;setBusy(true);clearResult();
-    try { await native.setNativeRuleEnabled(target,next); const value=await native.readNativeRule(target); if(latest.current.context===started){setLoaded(value);setText(value.text);setEnabled(!!value.text);} }
+    try { await native.setNativeRuleEnabled({ ...target, contextId: loaded?.contextId },next); const value=await native.readNativeRule(target); if(latest.current.context===started){setLoaded(value);setText(value.text);setEnabled(!!value.text);} }
     catch(value){if(latest.current.context===started)showFailure(value,'规则切换失败','可以再次切换启用规则。');}finally{setBusy(false);}
   }
   return <>

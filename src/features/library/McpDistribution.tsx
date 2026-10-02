@@ -91,7 +91,7 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
   }
   function targets(ids = selected): McpTargetRequest[] {
     const current = ids.map((toolId) => ({ toolId, scope, projectPath: activePath, enabled }));
-    const outside = outsidePlacements().map((item): McpTargetRequest => ({ toolId: item.toolId, scope: item.scope, projectPath: item.projectPath, enabled: item.enabled }));
+    const outside = outsidePlacements().map((item): McpTargetRequest => ({ toolId: item.toolId, scope: item.scope, projectPath: item.projectPath, contextId: item.contextId, enabled: item.enabled }));
     return [...current, ...outside];
   }
   function choose(ids: string[], nextScope = scope, nextPath = activePath) {
@@ -172,7 +172,7 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
       }
       const enabledFor = (item: McpTargetResult) => requested.find((entry) => entry.toolId === item.toolId && entry.scope === item.scope && samePath(entry.projectPath, item.projectPath))?.enabled ?? enabled;
       const payload = writable.map((item): McpTargetRequest => ({
-        toolId: item.toolId, scope: item.scope, projectPath: item.projectPath, enabled: enabledFor(item), baselineHash: item.baselineHash, previewToken: item.previewToken,
+        toolId: item.toolId, scope: item.scope, projectPath: item.projectPath, contextId: item.contextId, enabled: enabledFor(item), baselineHash: item.baselineHash, previewToken: item.previewToken,
       }));
       let written = await native.distributeMcp(saved.id, payload);
       if (written.some((item) => item.detail.includes('请重新预览'))) {
@@ -186,7 +186,7 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
           return { status: 'pending' };
         }
         const retry = items.filter((item) => item.status === 'ready').map((item): McpTargetRequest => ({
-          toolId: item.toolId, scope: item.scope, projectPath: item.projectPath, enabled: enabledFor(item), baselineHash: item.baselineHash, previewToken: item.previewToken,
+          toolId: item.toolId, scope: item.scope, projectPath: item.projectPath, contextId: item.contextId, enabled: enabledFor(item), baselineHash: item.baselineHash, previewToken: item.previewToken,
         }));
         if (retry.length) written = await native.distributeMcp(saved.id, retry);
       }
@@ -210,7 +210,7 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
       const written = await native.distributeMcp(definition.id, active.map((item): McpTargetRequest => {
         const inView = item.scope === scope && (scope === 'global' || samePath(item.projectPath, activePath));
         const placed = placements.find((entry) => entry.definitionId === definition.id && entry.toolId === item.toolId && entry.scope === item.scope && samePath(entry.projectPath, item.projectPath));
-        return { toolId: item.toolId, scope: item.scope, projectPath: item.projectPath, enabled: inView ? enabled : placed?.enabled ?? enabled, baselineHash: item.baselineHash, previewToken: item.previewToken, allowReplace: item.status === 'conflict' };
+        return { toolId: item.toolId, scope: item.scope, projectPath: item.projectPath, contextId: item.contextId, enabled: inView ? enabled : placed?.enabled ?? enabled, baselineHash: item.baselineHash, previewToken: item.previewToken, allowReplace: item.status === 'conflict' };
       }));
       if (!mounted.current || request !== requestRef.current || epoch !== epochRef.current.epoch) return { status: 'stale' };
       setPreview(null);

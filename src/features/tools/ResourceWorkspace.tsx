@@ -32,7 +32,7 @@ function parseLines(value: string): Record<string, string> {
   return output;
 }
 
-export function McpWorkspace({ toolId, scope, projectPath, onDirtyChange }: { toolId: string; scope: Scope; projectPath: string; onDirtyChange?: (dirty: boolean) => void }) {
+export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyChange }: { toolId: string; scope: Scope; projectPath: string; contextId?: string | null; onDirtyChange?: (dirty: boolean) => void }) {
   const [definitions, setDefinitions] = useState<McpDefinition[]>([]);
   const [draft, setDraft] = useState<McpDraft>(blank);
   const [envText, setEnvText] = useState('');
@@ -65,7 +65,7 @@ export function McpWorkspace({ toolId, scope, projectPath, onDirtyChange }: { to
   }
   useLayoutEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
   useEffect(() => () => { onDirtyChange?.(false); }, [onDirtyChange]);
-  const target = useMemo<McpTargetRequest>(() => ({ toolId, scope, projectPath: project, enabled }), [toolId, scope, project, enabled]);
+  const target = useMemo<McpTargetRequest>(() => ({ toolId, scope, projectPath: project, enabled, contextId }), [toolId, scope, project, enabled, contextId]);
 
   useEffect(() => {
     void native.listMcpDefinitions().then(setDefinitions).catch((value) => setError(errorText(value)));
@@ -122,7 +122,7 @@ export function McpWorkspace({ toolId, scope, projectPath, onDirtyChange }: { to
   }
   async function applyItems(id: string, items: McpTargetResult[], replace: boolean) {
     const targets = items.filter(item => item.status === 'ready' || item.status === 'conflict').map((item): McpTargetRequest => ({ toolId: item.toolId, scope: item.scope,
-      projectPath: item.projectPath, enabled, baselineHash: item.baselineHash, previewToken: item.previewToken, allowReplace: replace && item.status === 'conflict' }));
+      projectPath: item.projectPath, contextId: item.contextId ?? contextId, enabled, baselineHash: item.baselineHash, previewToken: item.previewToken, allowReplace: replace && item.status === 'conflict' }));
     const outcome = await native.distributeMcp(id, targets);
     setNativeEntries(await native.listNativeMcp(target)); setCurrentConflict(null);
     const written = outcome.every(item => item.status === 'written');
@@ -220,7 +220,7 @@ export function McpWorkspace({ toolId, scope, projectPath, onDirtyChange }: { to
   </>;
 }
 
-export function SkillsWorkspace({ toolId, scope, projectPath, onDirtyChange }: { toolId: string; scope: Scope; projectPath: string; onDirtyChange?: (dirty: boolean) => void }) {
+export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirtyChange }: { toolId: string; scope: Scope; projectPath: string; contextId?: string | null; onDirtyChange?: (dirty: boolean) => void }) {
   const [packages, setPackages] = useState<SkillPackage[]>([]);
   const [nativeEntries, setNativeEntries] = useState<NativeSkillEntry[]>([]);
   const [recoveryIssues, setRecoveryIssues] = useState<SkillRecoveryIssue[]>([]);
@@ -248,7 +248,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, onDirtyChange }: {
   }, [result]);
   const selected = packages.find((item) => item.id === selectedId);
   const project = scope === 'project' ? projectPath || null : null;
-  const visibleIssues = recoveryIssues.filter((issue) => issue.toolId === toolId);
+  const visibleIssues = recoveryIssues.filter((issue) => issue.toolId === toolId && (issue.scope === 'project' || (issue.contextId ?? null) === (contextId ?? null)));
   const empty = !nativeEntries.length && !adding && !guide && !pendingImport && !archiveSelection;
   useEffect(() => { setPendingTarget(null); }, [toolId, scope, project, selectedId]);
   useEffect(() => {
@@ -264,7 +264,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, onDirtyChange }: {
       .catch((value) => { if (live) setError(errorText(value)); });
     return () => { live = false; };
   }, [toolId, scope, project]);
-  const installed = installations.find((item) => item.toolId === toolId && item.scope === scope && item.projectPath === project);
+  const installed = installations.find((item) => item.toolId === toolId && item.scope === scope && item.projectPath === project && (item.contextId ?? null) === (scope === 'global' ? contextId ?? null : null));
   useEffect(() => { void native.listSkillPackages().then(setPackages).catch((value) => setError(errorText(value))); }, []);
   useEffect(() => {
     if (!selectedId) return;
@@ -391,7 +391,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, onDirtyChange }: {
     try {
       const targetPreview = !remove ? pendingTarget ?? await native.previewSkillTarget(selected.id, toolId, scope, project) : null;
       if (!remove && !pendingTarget && targetPreview?.status === 'conflict') { setPendingTarget(targetPreview); return; }
-      const outcome = remove ? await native.removeSkill(selected.id, toolId, scope, project)
+      const outcome = remove ? await native.removeSkill(selected.id, toolId, scope, project, contextId)
         : await native.installSkill(selected.id, toolId, scope, project, targetPreview?.previewToken ?? null, targetPreview?.status === 'conflict');
       setResult(outcome);
       setPendingTarget(null);
@@ -405,7 +405,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, onDirtyChange }: {
   }
   async function toggleSkill(next: boolean) {
     if (!selected) return; setBusy(true);setError('');
-    try {await native.setSkillEnabled(selected.id,toolId,scope,project,next);setSkillEnabled(await native.getSkillEnabled(selected.id,toolId,scope,project));setInstallations(await native.listSkillInstallations(selected.id));setNativeEntries(await native.scanNativeSkills(toolId,scope,project));}
+    try {await native.setSkillEnabled(selected.id,toolId,scope,project,next,contextId);setSkillEnabled(await native.getSkillEnabled(selected.id,toolId,scope,project));setInstallations(await native.listSkillInstallations(selected.id));setNativeEntries(await native.scanNativeSkills(toolId,scope,project));}
     catch(value){setError(errorText(value));}finally{setBusy(false);}
   }
   async function checkRecovery() {

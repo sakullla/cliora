@@ -96,6 +96,16 @@ fn native_secrets_for_documents(registry: &super::adapters::Registry, profile: &
         }
     }
     let mut result = NativeSecrets::default();
+    if matches!(profile.authentication, profile::ProfileAuthentication::OAuth { .. }) {
+        if profile.connection.is_some() || !profile.native_credentials.is_empty() { return Err("OAuth 配置不能包含 API Key".into()); }
+        if profile.tool == "claude_code" {
+            for role in ["settings", "local_settings"].into_iter().filter(|role| *role == "settings" || scope == Scope::Project) {
+                for name in ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"] { result.remove(role, &["env",name]); }
+                result.remove(role, &["apiKeyHelper"]);
+            }
+        }
+        return Ok(result);
+    }
     adapter.restore_imported_secrets(profile, scope, credentials, &mut result)?;
     adapter.write_connection_secret_for_documents(profile, scope, credentials, &mut result, documents)?;
     Ok(result)
@@ -122,6 +132,7 @@ fn managed_value(value: Option<&Value>, marker: Option<&Value>, integrity: &[u8;
 #[serde(rename_all = "camelCase")]
 pub struct AppliedBinding {
     pub scope_key: String,
+    pub context_id: Option<String>,
     pub tool: String,
     pub profile_id: String,
     pub profile_version: u64,
@@ -222,9 +233,9 @@ pub fn get_registered_binding(
     key: &str,
 ) -> Result<Option<AppliedBinding>, String> {
     db.with_connection(|conn| {
-        let row: Option<(String, i64, String)> = conn.query_row("SELECT profile_id, profile_version, managed FROM applied_bindings WHERE scope_key = ?1 AND tool = ?2", params![key, tool], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).optional().map_err(|e| e.to_string())?;
-        row.map(|(profile_id, profile_version, managed)| {
-            Ok(AppliedBinding { scope_key: key.into(), tool: tool.into(), profile_id, profile_version: profile_version.max(0) as u64, managed: serde_json::from_str(&managed).map_err(|_| "活动配置记录损坏")? })
+        let row: Option<(String, i64, String, Option<String>)> = conn.query_row("SELECT profile_id, profile_version, managed, context_id FROM applied_bindings WHERE scope_key = ?1 AND tool = ?2", params![key, tool], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))).optional().map_err(|e| e.to_string())?;
+        row.map(|(profile_id, profile_version, managed, context_id)| {
+            Ok(AppliedBinding { context_id, scope_key: key.into(), tool: tool.into(), profile_id, profile_version: profile_version.max(0) as u64, managed: serde_json::from_str(&managed).map_err(|_| "活动配置记录损坏")? })
         }).transpose()
     })
 }
@@ -275,6 +286,15 @@ pub fn desired_registered_documents(
             let existing = result.entry(role).or_insert_with(|| json!({}));
             let (merged, _) = format::resolve(existing, &overlay, &[])?;
             *existing = merged;
+        }
+    }
+    if matches!(profile.authentication, profile::ProfileAuthentication::OAuth { .. }) {
+        let settings=result.entry("settings".into()).or_insert_with(||json!({}));
+        match profile.tool.as_str() {
+            "codex" => { settings["model_provider"]=json!("openai"); settings["cli_auth_credentials_store"]=json!("file"); }
+            "pi" => { settings["defaultProvider"]=json!("openai-codex"); }
+            "open_code" => { if !settings.get("model").and_then(Value::as_str).is_some_and(|model|model.starts_with("openai/")) { return Err("此账号仅支持 OpenCode 的 OpenAI 模型，请在配置中设置 model 为 openai/模型名称".into()); } }
+            _ => (),
         }
     }
     for (role, document) in &mut result {
@@ -388,7 +408,10 @@ fn apply_registered_validated_compared(
     let desired = desired_registered_documents(registry, profile, common, scope)?;
     let secrets = native_secrets_for_documents(registry, profile, scope, credentials, &desired)?;
     let integrity = transaction::integrity_key(db, credentials)?;
-    let old = get_registered_binding(db, &profile.tool, key)?;
+    let context=crate::accounts::selection::current(&profile.tool);
+    let context_key = if key.starts_with("project:") { key.to_owned() } else { format!("context:{}:{key}",context.as_ref().map(|ctx|ctx.id.as_str()).unwrap_or("default")) };
+    let old = get_registered_binding(db, &profile.tool, &context_key)?;
+    let old = if old.is_none() && context.is_none() { get_registered_binding(db,&profile.tool,key)?.filter(|binding|binding.context_id.is_none()) } else { old };
     let mut new_managed = Managed::new();
     for (role, root) in desired {
         let mut fields = BTreeMap::new();
@@ -512,7 +535,10 @@ fn apply_registered_validated_compared(
         return transaction::commit_matching(db, &matching_baselines, |tx| {
             check_apply_snapshot(tx, profile, common)?;
             let json = serde_json::to_string(&new_managed).map_err(|e| e.to_string())?;
-            tx.execute("INSERT INTO applied_bindings (scope_key, tool, profile_id, profile_version, managed) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(scope_key, tool) DO UPDATE SET profile_id = excluded.profile_id, profile_version = excluded.profile_version, managed = excluded.managed", params![key, profile.tool, profile.id, profile.version as i64, json]).map_err(|e| e.to_string())?;
+            let context = crate::accounts::selection::current(&profile.tool);
+            for target_key in [&context_key, &key.to_owned()] {
+                tx.execute("INSERT INTO applied_bindings (scope_key, tool, profile_id, profile_version, managed, context_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(scope_key, tool) DO UPDATE SET profile_id=excluded.profile_id, profile_version=excluded.profile_version, managed=excluded.managed, context_id=excluded.context_id", params![target_key, profile.tool, profile.id, profile.version as i64, json, context.as_ref().map(|ctx|&ctx.id)]).map_err(|e|e.to_string())?;
+            }
             Ok(())
         });
     }
@@ -526,7 +552,10 @@ fn apply_registered_validated_compared(
         |tx| {
             check_apply_snapshot(tx, profile, common)?;
             let json = serde_json::to_string(&new_managed).map_err(|e| e.to_string())?;
-            tx.execute("INSERT INTO applied_bindings (scope_key, tool, profile_id, profile_version, managed) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(scope_key, tool) DO UPDATE SET profile_id = excluded.profile_id, profile_version = excluded.profile_version, managed = excluded.managed", params![key, profile.tool, profile.id, profile.version as i64, json]).map_err(|e| e.to_string())?;
+            let context = crate::accounts::selection::current(&profile.tool);
+            for target_key in [&context_key, &key.to_owned()] {
+                tx.execute("INSERT INTO applied_bindings (scope_key, tool, profile_id, profile_version, managed, context_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(scope_key, tool) DO UPDATE SET profile_id=excluded.profile_id, profile_version=excluded.profile_version, managed=excluded.managed, context_id=excluded.context_id", params![target_key, profile.tool, profile.id, profile.version as i64, json, context.as_ref().map(|ctx|&ctx.id)]).map_err(|e|e.to_string())?;
+            }
             Ok(())
         },
     )
@@ -537,7 +566,7 @@ fn apply_registered_validated_compared(
 pub struct ApplyComparisonFile { pub role:String, pub format:String, pub current:String, pub proposed:Value, pub proposed_text:String }
 #[derive(Clone,Debug,Serialize,Deserialize)]
 #[serde(rename_all="camelCase")]
-pub struct ApplyComparison { pub profile:RegisteredProfile, pub common:Option<RegisteredCommon>, pub files:Vec<ApplyComparisonFile> }
+pub struct ApplyComparison { #[serde(default)] pub context_id: Option<String>, pub profile:RegisteredProfile, pub common:Option<RegisteredCommon>, pub files:Vec<ApplyComparisonFile> }
 
 fn comparison_files(native:&[NativeFile],documents:&BTreeMap<String,Value>,required:&BTreeSet<String>)->Result<Vec<ApplyComparisonFile>,String> {
     // Authentication cleanup may touch another declared config file even when it
@@ -561,18 +590,21 @@ fn comparison_files(native:&[NativeFile],documents:&BTreeMap<String,Value>,requi
 
 pub fn compare_registered_application(registry:&super::adapters::Registry,db:&Database,home:&Path,scope:Scope,project:Option<&Path>,profile_id:&str)->Result<ApplyComparison,String> {
     let profile=profile::get_registered_profile(db,profile_id)?;
+    let _context = crate::accounts::selection::enter(crate::accounts::selection::for_profile(db, home, &profile)?);
     let common=profile::get_registered_common(db,&profile.tool)?;
     let adapter=registry.get(&profile.tool).ok_or("未注册的 CLI")?;
     let documents=desired_registered_documents(registry,&profile,common.as_ref(),scope)?;
-    let previous=get_registered_binding(db,&profile.tool,&scope_key(scope,project)?)?;
+    let previous=get_registered_binding(db,&profile.tool,&crate::accounts::selection::key(&scope_key(scope,project)?))?;
     let roles:BTreeSet<_>=documents.keys().chain(previous.iter().flat_map(|binding|binding.managed.keys())).cloned().collect();
     let native=adapter.native_files(scope,home,project,true);
     let files=comparison_files(&native,&documents,&roles)?;
-    Ok(ApplyComparison{profile,common,files})
+    Ok(ApplyComparison{context_id:crate::accounts::selection::current(&profile.tool).map(|ctx|ctx.id),profile,common,files})
 }
 
 pub fn apply_compared_application(registry:&super::adapters::Registry,db:&Database,credentials:&dyn CredentialStore,comparison:&ApplyComparison,home:&Path,scope:Scope,project:Option<&Path>,custom:Option<&Path>)->Result<ApplyOutcome,String> {
     let profile=profile::get_registered_profile(db,&comparison.profile.id)?;
+    let _context = crate::accounts::selection::enter(crate::accounts::selection::for_profile(db, home, &profile)?);
+    if crate::accounts::selection::current(&profile.tool).map(|ctx|ctx.id)!=comparison.context_id {return Err("账号上下文已变化，请重新比较".into());}
     let common=profile::get_registered_common(db,&profile.tool)?;
     if serde_json::to_value(&profile).unwrap()!=serde_json::to_value(&comparison.profile).unwrap() || profile.inherit_common && serde_json::to_value(&common).unwrap()!=serde_json::to_value(&comparison.common).unwrap() {return Err("配置资料在比较后变化，请重新比较".into());}
     if let Some(connection)=&profile.connection {auth::verify_stored_credential(connection,credentials)?;}
@@ -591,6 +623,12 @@ fn check_apply_snapshot(
     profile: &RegisteredProfile,
     common: Option<&RegisteredCommon>,
 ) -> Result<(), String> {
+    if let profile::ProfileAuthentication::OAuth { account_id } = &profile.authentication {
+        let context = crate::accounts::selection::current(&profile.tool).ok_or("OAuth 应用缺少上下文")?;
+        let data: String = tx.query_row("SELECT data FROM auth_accounts WHERE id=?1", [account_id], |row|row.get(0)).map_err(|_|"账号已被移除")?;
+        let account: crate::accounts::AuthAccount=serde_json::from_str(&data).map_err(|_|"账号格式异常")?;
+        if account.state != crate::accounts::AccountState::SignedIn || account.pending_login.is_some() || account.context.as_ref().map(|ctx|&ctx.id)!=Some(&context.id) {return Err("账号在应用期间变化，请重新应用".into());}
+    }
     let current: Option<String> = tx.query_row(
         "SELECT data FROM native_profiles WHERE id=?1", [&profile.id], |row| row.get(0),
     ).optional().map_err(|error| error.to_string())?;
@@ -653,6 +691,7 @@ pub fn apply_registered_profile(
     allow_takeover: bool,
 ) -> Result<ApplyOutcome, String> {
     let profile = profile::get_registered_profile(db, profile_id)?;
+    let _context = crate::accounts::selection::enter(crate::accounts::selection::for_profile(db, home, &profile)?);
     if profile.tool != tool {
         return Err("配置属于另一个 CLI".into());
     }
@@ -716,6 +755,7 @@ mod tests {
             inherit_common: false,
             files: BTreeMap::from([("settings".into(), format!("model = \"{model}\"\n"))]),
             suppressed: BTreeMap::new(),
+            authentication: crate::native::profile::ProfileAuthentication::Native,
             native_credentials: BTreeMap::new(),
             connection: None,
         }
@@ -1117,6 +1157,7 @@ mod tests {
             inherit_common: false,
             files: BTreeMap::new(),
             suppressed: BTreeMap::new(),
+            authentication: crate::native::profile::ProfileAuthentication::Native,
             native_credentials: BTreeMap::new(),
             connection: Some(Connection {
                 provider_id: provider.into(),
@@ -1376,6 +1417,7 @@ mod tests {
             files: imported.files,
             suppressed: BTreeMap::new(),
             connection: imported.inspection.connection,
+            authentication: crate::native::profile::ProfileAuthentication::Native,
             native_credentials: imported.native_credentials,
         };
         let native_files = [
@@ -1483,6 +1525,7 @@ mod tests {
             inherit_common: false,
             files: BTreeMap::new(),
             suppressed: BTreeMap::new(),
+            authentication: crate::native::profile::ProfileAuthentication::Native,
             native_credentials: BTreeMap::new(),
             connection: None,
         };
@@ -1584,6 +1627,7 @@ mod tests {
             inherit_common: false,
             files: BTreeMap::new(),
             suppressed: BTreeMap::new(),
+            authentication: crate::native::profile::ProfileAuthentication::Native,
             native_credentials: BTreeMap::new(),
             connection: None,
         };

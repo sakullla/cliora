@@ -298,6 +298,7 @@ mod tests {
                 files: imported.files,
                 suppressed: BTreeMap::new(),
                 connection: imported.inspection.connection,
+                authentication: crate::native::profile::ProfileAuthentication::Native,
                 native_credentials: imported.native_credentials,
             },
             None,
@@ -373,6 +374,7 @@ mod tests {
                 files: local_only,
                 suppressed: BTreeMap::new(),
                 connection: None,
+                authentication: crate::native::profile::ProfileAuthentication::Native,
                 native_credentials: BTreeMap::new(),
             },
             None
@@ -388,6 +390,7 @@ mod tests {
             files: imported.files,
             suppressed: BTreeMap::new(),
             connection: None,
+            authentication: crate::native::profile::ProfileAuthentication::Native,
             native_credentials: imported.native_credentials,
         };
         let temp = tempfile::tempdir().unwrap();
@@ -461,6 +464,7 @@ mod tests {
             inherit_common: false,
             files: imported.files,
             suppressed: BTreeMap::new(),
+            authentication: crate::native::profile::ProfileAuthentication::Native,
             native_credentials: BTreeMap::new(),
             connection: Some(connection),
         };
@@ -634,6 +638,7 @@ mod tests {
             inherit_common: false,
             files,
             suppressed: BTreeMap::new(),
+            authentication: crate::native::profile::ProfileAuthentication::Native,
             native_credentials: BTreeMap::new(),
             connection: Some(edited),
         };
