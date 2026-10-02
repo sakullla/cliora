@@ -5,7 +5,8 @@ import { native, nativeAvailable } from '../../lib/native';
 import type { LaunchMode, LaunchSettings, TerminalId, TerminalPreset, TrayStatus } from '../../types/launch';
 
 function matchedPreset(current: LaunchSettings | null) {
-  if (!current?.custom) return null;
+  // Custom commands remain saved when another terminal becomes the active choice.
+  if (current?.selected !== 'custom' || !current.custom) return null;
   const args = current.custom.args.join('\n');
   return (current.presets ?? []).find((preset) => preset.program === current.custom?.program && preset.args.join('\n') === args) ?? null;
 }
