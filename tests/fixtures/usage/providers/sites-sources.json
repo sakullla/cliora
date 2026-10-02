@@ -1,0 +1,16 @@
+{
+  "kind":"synthetic-sanitized-contract-fixtures",
+  "capturedAt":"2026-10-02",
+  "realAccountCapture":false,
+  "sub2api":{
+    "repository":"https://github.com/Wei-Shaw/sub2api",
+    "revision":"b8dece9000c68815a5b867ca5a1e6f236e173905",
+    "paths":["backend/internal/handler/gateway_handler.go#Usage","backend/internal/handler/subscription_handler.go#GetActive/GetProgress","backend/internal/service/subscription_service.go#SubscriptionProgress/UsageWindowProgress","backend/internal/server/routes/user.go"]
+  },
+  "newapi":{
+    "repository":"https://github.com/QuantumNous/new-api",
+    "revision":"1a4166d8e8ba9802d2ca56fe8ecf0ed5404e80d5",
+    "paths":["controller/token.go#GetTokenUsage","controller/user.go#GetSelf","controller/subscription.go#GetSubscriptionSelf/GetSubscriptionPlans","model/subscription.go#UserSubscription/SubscriptionSummary/SubscriptionPlan","middleware/auth.go#TokenAuthReadOnly/authHelper"]
+  },
+  "notes":"Shapes are transcribed from pinned source with synthetic IDs, amounts and dates. Tests derive missing, permission, business, unlimited, overage, expiry and partial variants. HTTP fixture servers verify requests and actual packaged helper entry in a Windows development binary; no real-site/account acceptance is claimed. Forks are not assumed compatible."
+}

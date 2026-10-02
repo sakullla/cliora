@@ -119,6 +119,9 @@ export interface UsageMetric {
   /** Percent used, supplied by the source; can exceed 100. */
   sourcePercent: number | null;
   unlimited: boolean;
+  /** Entitlement/key expiry, independent of window reset; null can mean unknown. */
+  expiresAt: string | null;
+  neverExpires: boolean;
   window: UsageWindow | null;
   missingReason: string | null;
 }

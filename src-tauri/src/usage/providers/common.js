@@ -19,7 +19,7 @@ function epochMillis(value) {
 }
 function metric(id, label, unit, duration = null, reset = null, recovery = 'unknown') {
   return { id, label, subject: 'plan', subjectId: null, unit, used: null, remaining: null,
-    total: null, sourcePercent: null, unlimited: false,
+    total: null, sourcePercent: null, unlimited: false, expiresAt: null, neverExpires: false,
     window: { durationSeconds: duration, resetsAt: reset, recovery }, missingReason: null };
 }
 function finish(metrics, errors) {
