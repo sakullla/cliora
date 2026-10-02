@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use super::usage::{self, TokenCounts};
 use super::{
-    discover_jsonl_controlled, read_jsonl_controlled, text_content, timestamp, valid_native_id,
+    discover_jsonl_controlled, raw_string_after, read_jsonl_filtered, text_content, timestamp, valid_native_id,
     HistorySource, ParsedSession, UsageEvent,
 };
 
@@ -38,12 +38,28 @@ pub fn parse(source: &HistorySource) -> Result<ParsedSession, String> {
     parse_controlled(source, &|| false)
 }
 
+/// Rows that never carry visible text or usage. Tool output, reasoning blobs and
+/// compaction snapshots make up most of a long rollout, so they are dropped from the
+/// leading bytes without being parsed. Unknown shapes are always parsed.
+fn skip_row(raw: &[u8]) -> bool {
+    let Some(kind) = raw_string_after(raw, b"\"type\":\"") else {
+        return false;
+    };
+    match kind {
+        b"compacted" | b"world_state" => true,
+        b"response_item" => raw_string_after(raw, b"\"payload\":{\"type\":\"").is_some_and(|payload| payload != b"message"),
+        b"event_msg" => raw_string_after(raw, b"\"payload\":{\"type\":\"").is_some_and(|payload| payload != b"token_count"),
+        _ => false,
+    }
+}
+
 pub fn parse_controlled(source: &HistorySource, cancelled: &dyn Fn() -> bool) -> Result<ParsedSession, String> {
     let mut session = ParsedSession::new();
     let mut high_water: Option<TokenCounts> = None;
     let mut previous_snapshot: Option<(TokenCounts, TokenCounts)> = None;
     let mut model: Option<String> = None;
-    let partial = read_jsonl_controlled(source, cancelled, |line, row| {
+    let mut records = std::collections::HashSet::<String>::new();
+    let partial = read_jsonl_filtered(source, cancelled, skip_row, |line, row| {
         let time = row.get("timestamp").and_then(timestamp);
         let payload = row.get("payload").unwrap_or(&Value::Null);
         match row.get("type").and_then(Value::as_str) {
@@ -81,8 +97,37 @@ pub fn parse_controlled(source: &HistorySource, cancelled: &dyn Fn() -> bool) ->
                     session.add_message(id, role, body, time);
                 }
             }
+            // Newer rollouts write one record per model response. The response id is
+            // global, so forked or resumed copies of the same call collapse to one.
+            Some("token_usage_record") => {
+                let Some(counts) = payload.get("usage").and_then(token_counts) else {
+                    return;
+                };
+                let counts = usage::clamp_cache_inside_input(counts);
+                let id = payload
+                    .get("response_id")
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.is_empty())
+                    .map(|id| format!("codex:response:{id}"))
+                    .unwrap_or_else(|| format!("{}:record-{line}", source.key()));
+                if !usage::active(counts) || !records.insert(id.clone()) {
+                    return;
+                }
+                session.usage.push(UsageEvent {
+                    id,
+                    model: model.clone(),
+                    timestamp: time,
+                    input: Some(counts.input),
+                    output: Some(counts.output),
+                    cache_read: Some(counts.read),
+                    cache_write: Some(counts.write),
+                    input_includes_cache: true,
+                });
+            }
+            // `token_count` repeats the record above; it is only the source of truth
+            // for rollouts written before per-response records existed.
             Some("event_msg")
-                if payload.get("type").and_then(Value::as_str) == Some("token_count") =>
+                if payload.get("type").and_then(Value::as_str) == Some("token_count") && records.is_empty() =>
             {
                 let info = payload.get("info").unwrap_or(&Value::Null);
                 let last = info.get("last_token_usage").and_then(token_counts);

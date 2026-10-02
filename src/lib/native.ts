@@ -4,7 +4,7 @@ import type { AdapterCatalog, ApplyComparison, ApplyOutcome, CommonConfig, Commo
 import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, TerminalId, TrayStatus } from '../types/launch';
 import type { LibraryDraft, LibraryItem, LibraryKind } from '../types/library';
 import type { McpDefinition, McpDraft, McpPlacement, McpTargetRequest, McpTargetResult, NativeMcpEntry, RuleTarget, RulePreview, RuleApplyResult, RulePlacement, RuleClientSelection, RuleSyncResult, SkillPackage, SkillImportPreview, SkillInstallation, SkillTargetResult, NativeSkillEntry, SkillTargetPreview, SkillRecoveryIssue } from '../types/resources';
-import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, ScanStatus, UsageSummary } from '../types/history';
+import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, ScanStatus, UsageReport } from '../types/history';
 import type { ConflictPreview, PortableApplyTarget, PortableImportReport, PortableItem, PortablePreview, PortableProjectLink, SyncStatus, WebdavSetup } from '../types/portable';
 
 export const nativeAvailable = isTauri();
@@ -53,7 +53,7 @@ export const native = {
   getHistorySession: (id: string) => command<HistoryDetail>('get_history_session', { id }),
   setHistoryFavorite: (id: string, favorite: boolean) => command<void>('set_history_favorite', { id, favorite }),
   setHistoryProject: (id: string, projectId: string | null) => command<void>('set_history_project', { id, projectId }),
-  getHistoryUsage: (filter: HistoryFilter) => command<UsageSummary>('get_history_usage', { filter }),
+  getUsageReport: (filter: HistoryFilter) => command<UsageReport>('get_usage_report', { filter }),
   listHistoryPrices: () => command<HistoryPrice[]>('list_history_prices'),
   saveHistoryPrice: (price: HistoryPrice) => command<HistoryPrice>('save_history_price', { price }),
   copyHistoryResumeCommand: (id: string, mode: LaunchRequest['mode']) => command<string>('copy_history_resume_command', { id, mode }),

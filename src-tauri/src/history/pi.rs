@@ -118,10 +118,12 @@ pub fn parse_controlled(source: &HistorySource, cancelled: &dyn Fn() -> bool) ->
         }
     })?;
     session.partial |= partial;
+    // Pi row ids are only unique inside one file; usage ids must be unique across files.
+    let key = source.key();
     session.usage = events
         .into_iter()
         .map(|(id, event)| UsageEvent {
-            id,
+            id: format!("{key}:{id}"),
             model: event.model,
             timestamp: event.timestamp,
             input: Some(event.counts.input),

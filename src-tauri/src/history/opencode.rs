@@ -130,7 +130,9 @@ pub fn parse_controlled(source: &HistorySource, cancelled: &dyn Fn() -> bool) ->
     session.updated_at = updated;
     session.model = fallback_model.as_deref().map(model_id).filter(|id| !id.is_empty());
     let mut roles = std::collections::HashMap::<String, (String, Option<i64>)>::new();
-    let mut statement = db.prepare("SELECT id, data, time_created FROM message WHERE session_id = ?1 ORDER BY time_created, id LIMIT 3001")
+    // Every assistant message carries usage, so messages are never truncated here;
+    // visible text is capped separately by `add_message`.
+    let mut statement = db.prepare("SELECT id, data, time_created FROM message WHERE session_id = ?1 ORDER BY time_created, id")
         .map_err(|error| error.to_string())?;
     let rows = statement
         .query_map([id], |row| {
@@ -141,12 +143,8 @@ pub fn parse_controlled(source: &HistorySource, cancelled: &dyn Fn() -> bool) ->
             ))
         })
         .map_err(|error| error.to_string())?;
-    for (index, row) in rows.enumerate() {
+    for row in rows {
         check_cancelled(cancelled)?;
-        if index >= 3000 {
-            session.partial = true;
-            break;
-        }
         let (message_id, data, time) = row.map_err(|error| error.to_string())?;
         let Ok(message) = serde_json::from_str::<Value>(&data) else {
             session.partial = true;

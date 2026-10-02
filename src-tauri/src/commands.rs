@@ -392,13 +392,13 @@ pub async fn set_history_project(
 }
 
 #[tauri::command]
-pub async fn get_history_usage(
+pub async fn get_usage_report(
     app: AppHandle,
     filter: history::HistoryFilter,
-) -> Result<history::UsageSummary, ApiError> {
+) -> Result<history::UsageReport, ApiError> {
     blocking(move || {
         app.state::<AppState>().with_database(&app, |db| {
-            history::usage_summary(db, &filter).map_err(native_error)
+            history::usage_report(db, &filter).map_err(native_error)
         })
     })
     .await

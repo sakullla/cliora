@@ -97,7 +97,7 @@ pub fn run() {
             commands::get_history_session,
             commands::set_history_favorite,
             commands::set_history_project,
-            commands::get_history_usage,
+            commands::get_usage_report,
             commands::list_history_prices,
             commands::save_history_price,
             commands::copy_history_resume_command,

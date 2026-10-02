@@ -42,9 +42,10 @@ async function installDesktop(page: Page) {
       profiles: [], binding: null, snapshots: [], recoveryNeeded: [], common: null, customPath: null,
     });
     const usage = () => ({
-      sessionCount: 0, usageSessions: 0, unknownUsageSessions: 0, partialSessions: 0, staleSessions: 0,
-      input: null, output: null, cacheRead: null, cacheWrite: null, inputIncludesCache: null,
-      estimatedCost: null, currency: null, priceSources: [], scans: [], models: [], byModel: [],
+      generatedAt: 0, from: null, to: null, bucket: 'day', currency: 'USD', previous: null, timeline: [],
+      totals: { requests: 0, sessions: 0, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, total: 0, cost: null, unpricedTokens: 0 },
+      byModel: [], byTool: [], byProject: [], topSessions: [], models: [], untimedRequests: 0, duplicateRequests: 0,
+      partialSessions: 0, staleSessions: 0, mixedCurrency: false, latestEventAt: null, priceSources: [], scans: [],
     });
     Object.assign(window, {
       isTauri: true,
@@ -57,7 +58,7 @@ async function installDesktop(page: Page) {
           };
           if (command === 'get_registered_tool_workspace') return workspace();
           if (command === 'list_projects' || command === 'list_library_items' || command === 'list_history_sessions' || command === 'list_history_prices' || command === 'refresh_history' || command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_skill_recovery_issues' || command === 'scan_native_skills' || command === 'list_native_mcp' || command === 'list_portable_items') return [];
-          if (command === 'get_history_usage') return usage();
+          if (command === 'get_usage_report') return usage();
           if (command === 'get_launch_settings') return { selected: 'auto', terminals: [{ id: 'auto', label: '系统默认', available: true }], cliMode: 'normal', projectMode: 'normal' };
           if (command === 'get_tray_status') return { available: false, error: null };
           if (command === 'get_history_scan_progress') return { running: false, toolId: '', completedSources: 0, totalSources: 0 };

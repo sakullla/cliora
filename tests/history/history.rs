@@ -312,24 +312,23 @@ fn jsonl_fingerprint_failure_isolated_then_recovered_without_losing_old_index() 
     .unwrap();
     // Stop during discovery, rather than waiting until the whole directory has
     // been fingerprinted. An incomplete discovery must not delete old entries.
-    let stop = std::cell::Cell::new(false);
+    let stop = AtomicBool::new(false);
     let discovered = discover_jsonl_with_control(&root, |_| true, |path| {
         let fingerprint = source_fingerprint(path);
-        stop.set(true);
+        stop.store(true, Ordering::SeqCst);
         fingerprint
-    }, &|| stop.get());
+    }, &|| stop.load(Ordering::SeqCst));
     assert!(discovered.as_ref().unwrap_err().contains("已取消"));
-    let cancelled = scan_adapter_sources_controlled(&db, &CODEX, discovered, &|| stop.get());
+    let cancelled = scan_adapter_sources_controlled(&db, &CODEX, discovered, &|| stop.load(Ordering::SeqCst));
     assert!(cancelled.incomplete);
     assert_eq!(list(&db, &HistoryFilter::default()).unwrap().len(), 2);
     // Cancel after the first parsed JSONL row. Neither a partial replacement
     // nor a stale marker may be written, and the unseen second entry remains.
-    let calls = std::cell::Cell::new(0);
+    let calls = AtomicUsize::new(0);
     let cancelled = scan_adapter_sources_controlled(&db, &CODEX, CODEX.history_sources(&home), &|| {
-        calls.set(calls.get() + 1);
-        calls.get() > 3
+        calls.fetch_add(1, Ordering::SeqCst) + 1 > 3
     });
-    assert!(calls.get() > 3);
+    assert!(calls.load(Ordering::SeqCst) > 3);
     assert!(cancelled.incomplete && cancelled.detail.contains("已取消"));
     assert_eq!(cancelled.failed_count, 0);
     for id in [&failed_id, &healthy_id] {
@@ -495,8 +494,29 @@ fn same_length_and_restored_mtime_still_refreshes_changed_content() {
         .any(|message| message.text == "Looks fine."));
 }
 
+/// `counts` is (input, output, cache read, cache write).
+fn event(id: &str, model: Option<&str>, timestamp: i64, counts: (u64, u64, Option<u64>, Option<u64>), includes_cache: bool) -> UsageEvent {
+    let (input, output, read, write) = counts;
+    UsageEvent { id: id.into(), model: model.map(str::to_owned), timestamp: Some(timestamp), input: Some(input), output: Some(output), cache_read: read, cache_write: write, input_includes_cache: includes_cache }
+}
+
+/// Stores a synthetic session through the same path a scan uses.
+fn store_events(db: &Database, tool: &str, key: &str, model: Option<&str>, usage: Vec<UsageEvent>) -> String {
+    let source = HistorySource { path: PathBuf::from(key), native_id: None, fingerprint: "fixture".into(), fingerprint_error: None };
+    let mut parsed = ParsedSession::new();
+    parsed.title = key.into();
+    parsed.model = model.map(str::to_owned);
+    parsed.updated_at = usage.iter().filter_map(|item| item.timestamp).max();
+    parsed.usage = usage;
+    db.with_connection(|conn| store_session(conn, tool, &source, &parsed, &HashMap::new())).unwrap();
+    stable_id(tool, &source.key())
+}
+
+const DAY: i64 = 86_400_000;
+const FIXTURE_DAY: i64 = 1790668800000;
+
 #[test]
-fn unknown_only_usage_is_not_zero_and_mixed_usage_is_a_known_subtotal() {
+fn report_counts_disjoint_tokens_groups_models_and_filters() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     let root = home.join(".codex/sessions");
@@ -506,75 +526,69 @@ fn unknown_only_usage_is_not_zero_and_mixed_usage_is_a_known_subtotal() {
     let db = Database::open(&temp.path().join("cliora.db")).unwrap();
     let registry = Registry::with_adapters(vec![&CODEX]).unwrap();
     refresh(&db, &registry, &home).unwrap();
-    let unknown = usage_summary(&db, &HistoryFilter::default()).unwrap();
-    assert_eq!(unknown.session_count, 1);
-    assert_eq!(unknown.usage_sessions, 0);
-    assert_eq!(unknown.unknown_usage_sessions, 1);
-    assert_eq!(
-        (
-            unknown.input,
-            unknown.output,
-            unknown.cache_read,
-            unknown.cache_write
-        ),
-        (None, None, None, None)
-    );
-    fs::copy(
-        fixtures().join("codex-0.158.jsonl"),
-        root.join("rollout-with-usage.jsonl"),
-    )
-    .unwrap();
+    let empty = usage_report(&db, &HistoryFilter::default()).unwrap();
+    assert_eq!(empty.totals.requests, 0);
+    assert_eq!(empty.totals.cost, None);
+    assert!(empty.timeline.is_empty());
+
+    fs::copy(fixtures().join("codex-0.158.jsonl"), root.join("rollout-with-usage.jsonl")).unwrap();
     refresh(&db, &registry, &home).unwrap();
-    let mixed = usage_summary(&db, &HistoryFilter::default()).unwrap();
-    assert_eq!(mixed.session_count, 2);
-    assert_eq!(mixed.usage_sessions, 1);
-    assert_eq!(mixed.unknown_usage_sessions, 1);
-    assert_eq!(mixed.input, Some(150));
-    assert!(mixed.estimated_cost.is_some());
-    assert!(mixed.cost_partial);
-    assert!(mixed.by_model.iter().all(|row| row.unknown_usage_sessions < row.session_count));
-    let events=vec![
-        UsageEvent{id:"request-a".into(),model:Some("model-a".into()),timestamp:Some(1790668801000),input:Some(10),output:Some(2),cache_read:Some(0),cache_write:Some(0),input_includes_cache:true},
-        UsageEvent{id:"request-b".into(),model:Some("model-b".into()),timestamp:Some(1790668802000),input:Some(30),output:Some(5),cache_read:Some(0),cache_write:Some(0),input_includes_cache:true},
-    ];
-    db.with_connection(|conn|conn.execute("UPDATE history_sessions SET usage_json=?1 WHERE usage_count>0",[serde_json::to_string(&events).unwrap()]).map(|_|()).map_err(|e|e.to_string())).unwrap();
-    let grouped=usage_summary(&db,&HistoryFilter::default()).unwrap();
-    for (model,input) in [("model-a",10),("model-b",30)] {
-        let row=grouped.by_model.iter().find(|row|row.model.as_deref()==Some(model)).unwrap();
-        assert_eq!(row.session_count,1);assert_eq!(row.input,Some(input));
-        let selected=usage_summary(&db,&HistoryFilter{model:Some(model.into()),..Default::default()}).unwrap();
-        assert_eq!(selected.input,Some(input));assert_eq!(selected.by_model.len(),1);
+    let report = usage_report(&db, &HistoryFilter::default()).unwrap();
+    // 150 prompt tokens of which 60 were cache reads: 90 fresh + 60 cached + 30 output.
+    assert_eq!((report.totals.input, report.totals.cache_read, report.totals.cache_write, report.totals.output), (90, 60, 0, 30));
+    assert_eq!(report.totals.total, 180);
+    assert_eq!((report.totals.requests, report.totals.sessions), (2, 1));
+    assert!(report.totals.cost.is_some());
+    assert_eq!(report.totals.unpriced_tokens, 0);
+    assert_eq!(report.by_model.len(), 1);
+    assert_eq!(report.by_tool[0].tool_id.as_deref(), Some("codex"));
+    assert_eq!(report.timeline.iter().map(|bucket| bucket.totals.total).sum::<u64>(), 180);
+
+    store_events(&db, "codex", "split", None, vec![
+        event("request-a", Some("model-a"), FIXTURE_DAY + 1000, (10, 2, Some(0), Some(0)), true),
+        event("request-b", Some("model-b"), FIXTURE_DAY + 2000, (30, 5, Some(10), Some(0)), true),
+    ]);
+    let grouped = usage_report(&db, &HistoryFilter::default()).unwrap();
+    for (model, total) in [("model-a", 12), ("model-b", 35)] {
+        let row = grouped.by_model.iter().find(|row| row.model.as_deref() == Some(model)).unwrap();
+        assert_eq!((row.totals.total, row.totals.sessions, row.priced), (total, 1, false));
+        assert_eq!(row.totals.unpriced_tokens, total);
+        let selected = usage_report(&db, &HistoryFilter { model: Some(model.into()), ..Default::default() }).unwrap();
+        assert_eq!(selected.totals.total, total);
+        assert_eq!(selected.by_model.len(), 1);
+        assert!(selected.models.len() >= 3, "the model menu keeps every model while one is selected");
     }
-    let unknown=usage_summary(&db,&HistoryFilter{model:Some("__unknown__".into()),..Default::default()}).unwrap();
-    assert_eq!(unknown.session_count,1);assert_eq!(unknown.input,None);
+    assert_eq!(grouped.totals.unpriced_tokens, 47);
+    let unknown = usage_report(&db, &HistoryFilter { model: Some("__unknown__".into()), ..Default::default() }).unwrap();
+    assert_eq!(unknown.totals.requests, 0);
 }
 
 #[test]
-fn usage_dates_and_manual_price_keep_cache_out_of_double_counting() {
+fn report_dates_follow_each_call_and_compare_the_same_elapsed_window() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     let root = home.join(".codex/sessions");
     fs::create_dir_all(&root).unwrap();
-    fs::copy(
-        fixtures().join("codex-0.158.jsonl"),
-        root.join("rollout-price.jsonl"),
-    )
-    .unwrap();
+    fs::copy(fixtures().join("codex-0.158.jsonl"), root.join("rollout-price.jsonl")).unwrap();
     let db = Database::open(&temp.path().join("cliora.db")).unwrap();
     let registry = Registry::with_adapters(vec![&CODEX]).unwrap();
     refresh(&db, &registry, &home).unwrap();
     let filter = HistoryFilter {
         tool_id: Some("codex".into()),
         model: Some("gpt-6-astra".into()),
-        from_ms: Some(1790668800000),
-        to_ms: Some(1790755200000),
+        from_ms: Some(FIXTURE_DAY),
+        to_ms: Some(FIXTURE_DAY + DAY),
         ..Default::default()
     };
-    let unknown = usage_summary(&db, &filter).unwrap();
-    assert_eq!(unknown.input, Some(150));
-    assert_eq!(unknown.cache_read, Some(60));
-    assert!(unknown.estimated_cost.is_some());
-    assert!(unknown.price_sources.iter().any(|source| source.contains("OpenAI 公开价")));
+    let published = usage_report(&db, &filter).unwrap();
+    assert_eq!((published.totals.input, published.totals.cache_read), (90, 60));
+    assert!((published.totals.cost.unwrap() - 0.00246).abs() < 1e-9);
+    assert!(published.price_sources.iter().any(|source| source.contains("OpenAI 公开价")));
+    assert_eq!(published.bucket, "hour");
+    assert_eq!(published.timeline.iter().map(|bucket| bucket.totals.requests).sum::<u64>(), 2);
+    let previous = published.previous.as_ref().unwrap();
+    assert_eq!((previous.from, previous.to), (FIXTURE_DAY - DAY, FIXTURE_DAY));
+    assert_eq!(previous.totals.requests, 0);
     save_price(
         &db,
         &registry,
@@ -591,73 +605,120 @@ fn usage_dates_and_manual_price_keep_cache_out_of_double_counting() {
         },
     )
     .unwrap();
-    let priced = usage_summary(&db, &filter).unwrap();
-    assert!((priced.estimated_cost.unwrap() - 0.000156).abs() < 0.0000001);
+    let priced = usage_report(&db, &filter).unwrap();
+    assert!((priced.totals.cost.unwrap() - 0.000156).abs() < 1e-9);
     assert_eq!(priced.price_sources.len(), 1);
-    let outside = usage_summary(
-        &db,
-        &HistoryFilter {
-            from_ms: Some(1800000000000),
-            ..filter.clone()
-        },
-    )
-    .unwrap();
-    assert_eq!(outside.session_count, 0);
-    let shifted = vec![UsageEvent {
-        id: "request-old".into(),
-        model: Some("gpt-6-astra".into()),
-        timestamp: Some(1),
-        input: Some(999),
-        output: Some(1),
-        cache_read: Some(0),
-        cache_write: Some(0),
-        input_includes_cache: true,
-    }];
-    db.with_connection(|conn| {
-        conn.execute(
-            "UPDATE history_sessions SET updated_at = ?1, usage_json = ?2",
-            params![1790668801000i64, serde_json::to_string(&shifted).unwrap()],
-        )
-        .map(|_| ())
-        .map_err(|error| error.to_string())
-    })
-    .unwrap();
-    let updated_only = usage_summary(&db, &filter).unwrap();
-    assert_eq!(updated_only.session_count, 0);
-    assert_eq!(updated_only.input, None);
+    let next_day = usage_report(&db, &HistoryFilter { from_ms: Some(FIXTURE_DAY + DAY), to_ms: Some(FIXTURE_DAY + 2 * DAY), ..filter.clone() }).unwrap();
+    assert_eq!(next_day.totals.requests, 0);
+    assert_eq!(next_day.previous.unwrap().totals.requests, 2, "the previous day holds the calls");
+
+    // A long session last touched today must not move yesterday's calls onto today.
+    store_events(&db, "codex", "long-session", Some("gpt-6-astra"), vec![
+        event("old", None, FIXTURE_DAY - DAY + 5_000, (999, 1, Some(0), Some(0)), true),
+        event("today", None, FIXTURE_DAY + 5_000, (10, 1, Some(0), Some(0)), true),
+    ]);
+    let today = usage_report(&db, &filter).unwrap();
+    assert_eq!(today.totals.requests, 3);
+    assert_eq!(today.totals.input, 90 + 10);
+    assert_eq!(today.previous.unwrap().totals.input, 999);
+    let sessions = list(&db, &HistoryFilter { from_ms: Some(FIXTURE_DAY - DAY), to_ms: Some(FIXTURE_DAY), ..Default::default() }).unwrap();
+    assert_eq!(sessions.len(), 1, "sessions with calls on a day are listed for that day");
 }
 
 #[test]
-fn claude_synthetic_placeholder_is_omitted_from_usage_models() {
+fn report_drops_placeholders_dedupes_copied_calls_and_keeps_known_cache() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    store_events(&db, "claude_code", "main", Some("<synthetic>"), vec![
+        event("placeholder", Some("<synthetic>"), FIXTURE_DAY + 1000, (0, 0, Some(0), Some(0)), false),
+        event("msg-1:req-1", Some("glm-5.3"), FIXTURE_DAY + 2000, (10, 2, Some(0), Some(0)), false),
+    ]);
+    // A resumed session copies earlier calls; the same request is billed once.
+    store_events(&db, "claude_code", "resumed", Some("glm-5.3"), vec![
+        event("msg-1:req-1", Some("glm-5.3"), FIXTURE_DAY + 2000, (10, 2, Some(0), Some(0)), false),
+        event("msg-2:req-2", Some("glm-5.3"), FIXTURE_DAY + 3000, (4, 1, Some(9), None), false),
+    ]);
+    let report = usage_report(&db, &HistoryFilter::default()).unwrap();
+    assert!(report.models.iter().all(|model| model != "<synthetic>"));
+    assert!(report.by_model.iter().all(|row| row.model.as_deref() != Some("<synthetic>")));
+    assert_eq!(report.totals.requests, 2);
+    assert_eq!(report.duplicate_requests, 1);
+    assert_eq!((report.totals.input, report.totals.cache_read, report.totals.cache_write), (14, 9, 0));
+    assert!(!report.top_sessions.is_empty());
+
+    store_events(&db, "open_code", "pickle", Some("{\"id\":\"big-pickle\",\"providerID\":\"opencode\"}"), vec![
+        event("msg_open", None, FIXTURE_DAY + 4000, (4, 1, Some(9), Some(2)), false),
+    ]);
+    let open = usage_report(&db, &HistoryFilter { tool_id: Some("open_code".into()), ..Default::default() }).unwrap();
+    assert!(open.models.iter().any(|model| model == "big-pickle"));
+    assert!(open.models.iter().all(|model| !model.starts_with('{')));
+    assert_eq!((open.totals.cache_read, open.totals.cache_write), (9, 2));
+    assert_eq!(open.totals.cost, Some(0.0), "a free published model is priced at zero, not unknown");
+}
+
+#[test]
+fn codex_prefers_per_response_records_and_reads_past_old_row_limits() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("rollout-records.jsonl");
+    let mut text = String::from(
+        "{\"timestamp\":\"2026-09-29T08:00:00Z\",\"ordinal\":1,\"type\":\"session_meta\",\"payload\":{\"id\":\"66666666-6666-4666-8666-666666666666\",\"cwd\":\"/fixture\"}}\n\
+         {\"timestamp\":\"2026-09-29T08:00:01Z\",\"ordinal\":2,\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-6-astra\"}}\n\
+         {\"timestamp\":\"2026-09-29T08:00:02Z\",\"ordinal\":3,\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"Ship it\"}]}}\n",
+    );
+    let filler = format!(
+        "{{\"timestamp\":\"2026-09-29T08:00:03Z\",\"ordinal\":4,\"type\":\"response_item\",\"payload\":{{\"type\":\"custom_tool_call_output\",\"output\":\"{}\"}}}}\n",
+        "x".repeat(600)
+    );
+    for _ in 0..31_000 {
+        text.push_str(&filler);
+    }
+    text.push_str(&format!("{{\"timestamp\":\"2026-09-29T08:00:04Z\",\"ordinal\":5,\"type\":\"compacted\",\"payload\":{{\"message\":\"{}\"}}}}\n", "y".repeat(5000)));
+    for (ordinal, response) in [(6, "resp-1"), (8, "resp-1"), (10, "resp-2")] {
+        text.push_str(&format!(
+            "{{\"timestamp\":\"2026-09-30T09:00:0{}Z\",\"ordinal\":{ordinal},\"type\":\"token_usage_record\",\"payload\":{{\"response_id\":\"{response}\",\"usage\":{{\"input_tokens\":100,\"cached_input_tokens\":80,\"cache_write_input_tokens\":0,\"output_tokens\":5}}}}}}\n",
+            ordinal % 10
+        ));
+        text.push_str("{\"timestamp\":\"2026-09-30T09:00:09Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"last_token_usage\":{\"input_tokens\":100,\"cached_input_tokens\":80,\"output_tokens\":5},\"total_token_usage\":{\"input_tokens\":500,\"cached_input_tokens\":80,\"output_tokens\":5}}}}\n");
+    }
+    fs::write(&path, text).unwrap();
+    assert!(fs::metadata(&path).unwrap().len() > 16 * 1024 * 1024);
+    let session = codex::parse(&HistorySource { path, native_id: None, fingerprint: "fixture".into(), fingerprint_error: None }).unwrap();
+    assert_eq!(session.usage.len(), 2, "records replace token_count and repeat ids collapse");
+    assert!(session.usage.iter().all(|item| item.id.starts_with("codex:response:")));
+    assert_eq!(session.usage.iter().map(|item| item.input.unwrap()).sum::<u64>(), 200);
+    assert_eq!(session.usage.iter().map(|item| item.cache_read.unwrap()).sum::<u64>(), 160);
+    assert_eq!(session.messages.len(), 1);
+    assert!(!session.partial);
+}
+
+#[test]
+fn pi_usage_ids_are_unique_per_file() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut ids = HashSet::new();
+    for name in ["a.jsonl", "b.jsonl"] {
+        let path = temp.path().join(name);
+        fs::copy(fixtures().join("pi-0.87-v3.jsonl"), &path).unwrap();
+        let session = pi::parse(&HistorySource { path, native_id: None, fingerprint: "fixture".into(), fingerprint_error: None }).unwrap();
+        for item in session.usage {
+            assert!(ids.insert(item.id), "Pi row ids repeat across files and must not be merged");
+        }
+    }
+    assert_eq!(ids.len(), 4);
+}
+
+#[test]
+fn clean_files_without_content_are_skipped_not_failed() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
-    let root = home.join(".codex/sessions");
+    let root = home.join(".claude/projects/demo");
     fs::create_dir_all(&root).unwrap();
-    fs::copy(fixtures().join("codex-0.158.jsonl"), root.join("rollout-synthetic.jsonl")).unwrap();
+    fs::write(root.join("summary-only.jsonl"), "{\"type\":\"summary\",\"summary\":\"Earlier work\"}\n").unwrap();
+    fs::copy(fixtures().join("claude-2.1.jsonl"), root.join("22222222-2222-4222-8222-222222222222.jsonl")).unwrap();
     let db = Database::open(&temp.path().join("cliora.db")).unwrap();
-    let registry = Registry::with_adapters(vec![&CODEX]).unwrap();
-    refresh(&db, &registry, &home).unwrap();
-    let events = vec![
-        UsageEvent { id: "placeholder".into(), model: Some("<synthetic>".into()), timestamp: Some(1790668801000), input: Some(0), output: Some(0), cache_read: Some(0), cache_write: Some(0), input_includes_cache: false },
-        UsageEvent { id: "real".into(), model: Some("glm-5.3".into()), timestamp: Some(1790668802000), input: Some(10), output: Some(2), cache_read: Some(0), cache_write: Some(0), input_includes_cache: true },
-    ];
-    db.with_connection(|conn| conn.execute("UPDATE history_sessions SET model = '<synthetic>', usage_json = ?1, usage_count = 2", [serde_json::to_string(&events).unwrap()]).map(|_| ()).map_err(|error| error.to_string())).unwrap();
-    let summary = usage_summary(&db, &HistoryFilter::default()).unwrap();
-    assert!(summary.models.iter().all(|model| model != "<synthetic>"));
-    assert!(summary.by_model.iter().all(|row| row.model.as_deref() != Some("<synthetic>")));
-    let real = summary.by_model.iter().find(|row| row.model.as_deref() == Some("glm-5.3")).unwrap();
-    assert_eq!(real.input, Some(10));
-    assert_eq!(summary.input, Some(10));
-    let gap = vec![
-        UsageEvent { id: "known".into(), model: Some("glm-5.3".into()), timestamp: Some(1790668802000), input: Some(4), output: Some(1), cache_read: Some(9), cache_write: Some(2), input_includes_cache: false },
-        UsageEvent { id: "blank".into(), model: Some("glm-5.3".into()), timestamp: Some(1790668803000), input: Some(0), output: Some(0), cache_read: None, cache_write: None, input_includes_cache: false },
-    ];
-    db.with_connection(|conn| conn.execute("UPDATE history_sessions SET model = '{\"id\":\"big-pickle\",\"providerID\":\"opencode\"}', usage_json = ?1", [serde_json::to_string(&gap).unwrap()]).map(|_| ()).map_err(|error| error.to_string())).unwrap();
-    let kept = usage_summary(&db, &HistoryFilter::default()).unwrap();
-    assert_eq!(kept.cache_read, Some(9));
-    assert_eq!(kept.cache_write, Some(2));
-    assert!(kept.models.iter().any(|model| model == "big-pickle"));
-    assert!(kept.models.iter().all(|model| !model.starts_with('{')));
+    let registry = Registry::with_adapters(vec![&crate::native::adapters::CLAUDE]).unwrap();
+    let reports = refresh(&db, &registry, &home).unwrap();
+    assert_eq!((reports[0].source_count, reports[0].failed_count, reports[0].incomplete), (2, 0, false));
+    assert_eq!(list(&db, &HistoryFilter::default()).unwrap().len(), 1);
 }
 
 #[test]

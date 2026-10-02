@@ -25,8 +25,8 @@
 
 /* Filters */
 .filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.filters label, .priceForm label, .projectLink, .filterSelect { display: grid; gap: 5px; min-width: 160px; color: var(--text-2); font-size: 12px; font-weight: 560; }
-.filters input:not([type=checkbox]), .filters select, .priceForm input, .projectLink select { width: 100%; min-height: var(--control-h-sm); color: var(--text); font-weight: 400; }
+.filters label, .projectLink, .filterSelect { display: grid; gap: 5px; min-width: 160px; color: var(--text-2); font-size: 12px; font-weight: 560; }
+.filters input:not([type=checkbox]), .filters select, .projectLink select { width: 100%; min-height: var(--control-h-sm); color: var(--text); font-weight: 400; }
 .filters .search { flex: 0 1 300px; min-width: 200px; }
 .searchBox { position: relative; display: block; }
 .searchBox input { width: 100%; padding-right: 30px; }
@@ -127,7 +127,6 @@
 .rangeDates label { display: grid; gap: 4px; color: var(--text-2); font-size: 11.5px; font-weight: 560; }
 .rangeDates input { width: 100%; min-height: 28px; padding: 0 6px; font-size: 12px; }
 
-.rangeSummary { margin: 0; color: var(--text-2); font-size: 12px; line-height: 1.5; }
 .filterMeta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; margin-left: auto; }
 .filterMeta > .coverage[open] { flex-basis: 100%; }
 .moreFilters { color: var(--text-2); font-size: 12px; }
@@ -151,7 +150,7 @@
 
 /* Sessions */
 .columns { display: grid; flex: 1; grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); gap: 14px; min-height: 0; align-items: stretch; }
-.list, .detail, .usage { min-width: 0; min-height: 0; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-xs); }
+.list, .detail { min-width: 0; min-height: 0; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-xs); }
 .list { display: grid; align-content: start; grid-auto-rows: max-content; gap: 2px; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 6px; }
 .list > button {
   display: grid;
@@ -222,63 +221,6 @@
 .expandMessage:hover:not(:disabled) { background: none; text-decoration: underline; text-underline-offset: 2px; }
 .messages > p { color: var(--text-2); font-size: 12.5px; }
 
-/* Usage */
-.usage { display: grid; flex: 1; align-content: start; grid-auto-rows: max-content; justify-items: start; gap: 12px; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 14px 16px; container-type: inline-size; }
-.metrics { display: grid; width: 100%; grid-template-columns: repeat(auto-fit, minmax(148px, 1fr)); gap: 8px; }
-@container (min-width: 620px) { .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-@container (min-width: 1000px) { .metrics { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
-.metrics div { display: grid; gap: 3px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
-.metrics small { color: var(--text-2); font-size: 11.5px; }
-.metrics span { color: var(--text-3); font-size: 11px; font-variant-numeric: tabular-nums; }
-.metrics strong { font-size: 18px; font-weight: 660; letter-spacing: -.3px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.metrics div:last-child { border-color: var(--accent-line); background: var(--accent-soft); }
-.metrics div:last-child strong { color: var(--accent); }
-.usage > .caveat { width: 100%; }
-.composition { display: grid; width: 100%; gap: 7px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
-.compositionHead { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
-.compositionHead strong { font-size: 12.5px; font-weight: 620; }
-.compositionHead small { color: var(--text-3); font-size: 11px; font-variant-numeric: tabular-nums; }
-.compositionBar { display: flex; height: 10px; overflow: hidden; border-radius: 99px; background: var(--surface-3); box-shadow: inset 0 0 0 1px var(--line); }
-.compositionSegment { flex-basis: 0; min-width: 5px; transition: flex-grow 320ms var(--ease), filter var(--fast) var(--ease), opacity var(--fast) var(--ease); }
-.compositionSegment:hover { filter: brightness(1.08); }
-.compositionSegment[data-key="input"] { background: var(--chart-input); }
-.compositionSegment[data-key="output"] { background: var(--chart-output); }
-.compositionSegment[data-key="read"] { background: var(--chart-read); }
-.compositionSegment[data-key="write"] { background: var(--chart-write); }
-.compositionLegend { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 0; padding: 0; list-style: none; color: var(--text-2); font-size: 11.5px; }
-.compositionLegend li { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
-.compositionLegend li > small { color: var(--text-3); font-variant-numeric: tabular-nums; }
-.compositionLegend i { width: 8px; height: 8px; flex: none; border-radius: 3px; }
-.compositionLegend i[data-key="input"] { background: var(--chart-input); }
-.compositionLegend i[data-key="output"] { background: var(--chart-output); }
-.compositionLegend i[data-key="read"] { background: var(--chart-read); }
-.compositionLegend i[data-key="write"] { background: var(--chart-write); }
-.usageNotes { display: grid; gap: 3px; width: 100%; max-width: 68ch; color: var(--text-2); font-size: 12px; line-height: 1.6; }
-.usageNotes p { margin: 0; }
-.priceSources, .savedPrices { display: grid; gap: 6px; width: 100%; color: var(--text-2); font-size: 12px; }
-.priceSources strong, .savedPrices strong { color: var(--text); font-size: 12.5px; }
-.chipRow { display: flex; flex-wrap: wrap; gap: 6px; }
-.savedPrices p { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 0; padding: 6px 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
-.savedPrices p > span { color: var(--text); font-weight: 600; }
-.savedPrices p > small { color: var(--text-3); font-size: 11px; font-variant-numeric: tabular-nums; }
-.priceForm { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; }
-.priceForm label { min-width: 0; }
-.priceForm .error { grid-column: 1 / -1; }
-.priceForm > :global(.dialog-footer) { grid-column: 1 / -1; }
-
-.modelTable { width: 100%; min-height: min-content; margin: 0; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); }
-.modelTable table { width: 100%; border-collapse: collapse; font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.modelTable th, .modelTable td { padding: 8px 12px; border-bottom: 1px solid var(--line); text-align: left; }
-.modelTable th { position: sticky; top: 0; z-index: 1; background: var(--surface-2); color: var(--text-2); font-size: 11.5px; font-weight: 600; }
-.modelTable tbody tr:nth-child(even) { background: color-mix(in srgb, var(--surface-2) 55%, transparent); }
-.modelTable tbody tr { transition: background-color var(--fast) var(--ease); }
-.modelTable tbody tr:hover { background: var(--surface-2); }
-.modelTable tbody tr:last-child td { border-bottom: 0; }
-.modelTable td button { display: block; height: auto; min-height: auto; padding: 0; border: 0; background: none; box-shadow: none; color: var(--text-2); font-weight: 400; text-align: left; white-space: normal; }
-.modelTable td button strong { color: var(--text); font-weight: 600; }
-.modelTable td button:hover:not(:disabled) { background: none; }
-.modelTable td button:hover strong { color: var(--accent); }
-
 .empty { display: grid; justify-items: center; align-content: center; gap: 10px; padding: 40px 24px; color: var(--text-2); text-align: center; }
 .empty h2 { margin: 0 0 6px; color: var(--text); font-size: 15px; }
 .empty p { max-width: 340px; line-height: 1.65; }
@@ -290,7 +232,7 @@
   .resumeBar { flex-wrap: wrap; }
 }
 @media (max-width: 540px) {
-  .detail, .usage { padding: 14px; }
+  .detail { padding: 14px; }
   .toolbar { flex-wrap: wrap; align-items: stretch; }
   .messages article { max-width: 100%; }
 }

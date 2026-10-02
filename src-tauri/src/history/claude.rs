@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 
 use super::usage::{self, RequestUsage};
 use super::{
-    check_cancelled, discover_jsonl_controlled, read_jsonl_controlled, source_fingerprint_controlled, text_content,
+    check_cancelled, contains_bytes, discover_jsonl_controlled, read_jsonl_filtered, source_fingerprint_controlled, text_content,
     timestamp, valid_native_id, HistorySource, ParsedSession, UsageEvent,
 };
 
@@ -84,11 +84,19 @@ pub fn parse(source: &HistorySource) -> Result<ParsedSession, String> {
     parse_controlled(source, &|| false)
 }
 
+/// Tool results are user rows whose content is only `tool_result` blocks. They hold most
+/// of a transcript's bytes but never visible text or usage, so they are not parsed.
+fn skip_row(raw: &[u8]) -> bool {
+    contains_bytes(raw, b"\"type\":\"user\"")
+        && contains_bytes(raw, b"\"type\":\"tool_result\"")
+        && !contains_bytes(raw, b"\"type\":\"text\"")
+}
+
 pub fn parse_controlled(source: &HistorySource, cancelled: &dyn Fn() -> bool) -> Result<ParsedSession, String> {
     let mut session = ParsedSession::new();
     let mut events = BTreeMap::<String, RequestUsage>::new();
     let mut seen = std::collections::HashSet::new();
-    let partial = read_jsonl_controlled(source, cancelled, |line, row| {
+    let partial = read_jsonl_filtered(source, cancelled, skip_row, |line, row| {
         let kind = row.get("type").and_then(Value::as_str).unwrap_or("");
         if kind != "user" && kind != "assistant" {
             return;
@@ -136,7 +144,7 @@ pub fn parse_controlled(source: &HistorySource, cancelled: &dyn Fn() -> bool) ->
                     fingerprint: String::new(),
                     fingerprint_error: None,
                 };
-                match read_jsonl_controlled(&nested, cancelled, |_line, row| {
+                match read_jsonl_filtered(&nested, cancelled, skip_row, |_line, row| {
                     if row.get("type").and_then(Value::as_str) != Some("assistant") {
                         return;
                     }

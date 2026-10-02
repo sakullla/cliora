@@ -22,7 +22,7 @@ impl Database {
     pub fn open(path: &Path) -> Result<Self, OpenError> {
         let mut connection = Connection::open(path)?;
         let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 11 {
+        if version > 12 {
             return Err(OpenError::UnsupportedVersion(version));
         }
         connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
@@ -332,6 +332,40 @@ impl Database {
             )?;
             tx.commit()?;
         }
+        if version < 12 {
+            // Usage moves into one row per model call so date ranges and groupings are
+            // indexed queries. Existing caches are copied over, then every source is
+            // re-read once because older scans stopped at 30k rows / 16 MiB.
+            let tx = connection.transaction()?;
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS history_usage (
+                   session_id TEXT NOT NULL REFERENCES history_sessions(id) ON DELETE CASCADE,
+                   event_id TEXT NOT NULL,
+                   tool TEXT NOT NULL,
+                   model TEXT,
+                   timestamp INTEGER,
+                   input INTEGER,
+                   output INTEGER,
+                   cache_read INTEGER,
+                   cache_write INTEGER,
+                   input_includes_cache INTEGER NOT NULL,
+                   PRIMARY KEY(session_id, event_id)
+                 );
+                 CREATE INDEX IF NOT EXISTS idx_history_usage_time ON history_usage(timestamp);
+                 CREATE INDEX IF NOT EXISTS idx_history_usage_tool_model ON history_usage(tool, model);
+                 INSERT OR IGNORE INTO history_usage (session_id,event_id,tool,model,timestamp,input,output,cache_read,cache_write,input_includes_cache)
+                   SELECT s.id, json_extract(e.value,'$.id'), s.tool, COALESCE(json_extract(e.value,'$.model'), s.model),
+                     json_extract(e.value,'$.timestamp'), json_extract(e.value,'$.input'), json_extract(e.value,'$.output'),
+                     json_extract(e.value,'$.cacheRead'), json_extract(e.value,'$.cacheWrite'),
+                     COALESCE(json_extract(e.value,'$.inputIncludesCache'), 0)
+                   FROM history_sessions s, json_each(s.usage_json) e
+                   WHERE json_valid(s.usage_json) AND json_extract(e.value,'$.id') IS NOT NULL
+                     AND COALESCE(json_extract(e.value,'$.model'), s.model, '') <> '<synthetic>';
+                 UPDATE history_sessions SET source_fingerprint = '';
+                 PRAGMA user_version = 12;",
+            )?;
+            tx.commit()?;
+        }
         Ok(Self {
             connection: Mutex::new(connection),
         })
@@ -532,7 +566,7 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
-        assert_eq!(version, 11);
+        assert_eq!(version, 12);
             let count: i64 = conn
                 .query_row("SELECT COUNT(*) FROM native_profiles", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
