@@ -287,3 +287,66 @@ fn echoed_secret_is_redacted_before_entering_javascript() {
     assert!(execute(value).error.is_none());
     handle.join().unwrap();
 }
+
+#[test]
+fn retry_after_http_preserves_seconds_and_date() {
+    for header in [
+        "300".to_string(),
+        (chrono::Utc::now() + chrono::Duration::minutes(5))
+            .format("%a, %d %b %Y %H:%M:%S GMT")
+            .to_string(),
+    ] {
+        let (origin, handle) = server(1, move |_| {
+            format!(
+            "HTTP/1.1 429 Too Many Requests\r\nRetry-After: {header}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        )
+        });
+        let mut value = input(&script(&format!("await ctx.http({{url:'{origin}/'}});")));
+        local(&mut value, &origin);
+        let error = execute(value).error.unwrap();
+        handle.join().unwrap();
+        assert_eq!(error.code, UsageErrorCode::RateLimit);
+        assert!(
+            matches!(error.retry_after_seconds, Some(295..=300)),
+            "{:?}",
+            error
+        );
+    }
+}
+
+#[test]
+fn retry_after_dates_round_up_and_invalid_or_large_values_are_explicit() {
+    let deadline = httpdate::parse_http_date("Sun, 06 Nov 1994 08:49:37 GMT").unwrap();
+    let now = deadline - Duration::from_millis(300_250);
+    for header in [
+        "Sun, 06 Nov 1994 08:49:37 GMT",
+        "Sunday, 06-Nov-94 08:49:37 GMT",
+        "Sun Nov  6 08:49:37 1994",
+    ] {
+        assert_eq!(retry_after_seconds(header, now), Some(301));
+        assert_eq!(retry_after_seconds(header, deadline), Some(0));
+        assert_eq!(
+            retry_after_seconds(header, deadline + Duration::from_secs(1)),
+            Some(0)
+        );
+    }
+    for (header, expected) in [
+        ("0", Some(0)),
+        (" 300 ", Some(300)),
+        ("4294967295", Some(u32::MAX)),
+        ("4294967296", Some(u32::MAX)),
+        ("999999999999999999999999999999999999999", Some(u32::MAX)),
+        ("", None),
+        ("tomorrow", None),
+        ("-1", None),
+        ("+1", None),
+        ("1.5", None),
+        ("300, 301", None),
+    ] {
+        assert_eq!(retry_after_seconds(header, now), expected, "{header}");
+    }
+    assert_eq!(
+        retry_after_seconds("Fri, 31 Dec 9999 23:59:59 GMT", now),
+        Some(u32::MAX)
+    );
+}

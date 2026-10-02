@@ -9,7 +9,7 @@ use std::{
     net::{IpAddr, ToSocketAddrs},
     rc::Rc,
     sync::{mpsc, Arc},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 pub const HEAP_BYTES: usize = 32 * 1024 * 1024;
@@ -59,6 +59,25 @@ fn error(code: UsageErrorCode, stage: UsageStage, message: &str) -> UsageError {
 }
 fn limit(stage: UsageStage) -> UsageError {
     error(UsageErrorCode::ResourceLimit, stage, "查询超过资源预算")
+}
+
+fn retry_after_seconds(value: &str, now: SystemTime) -> Option<u32> {
+    let value = value.trim();
+    if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) {
+        // Saturate even values larger than u64 instead of discarding the server delay.
+        return Some(value.bytes().fold(0u32, |seconds, digit| {
+            seconds
+                .saturating_mul(10)
+                .saturating_add(u32::from(digit - b'0'))
+        }));
+    }
+    let deadline = httpdate::parse_http_date(value).ok()?;
+    let remaining = deadline.duration_since(now).unwrap_or(Duration::ZERO);
+    // Round up so a fractional second never schedules a refresh before the deadline.
+    let seconds = remaining
+        .as_secs()
+        .saturating_add(u64::from(remaining.subsec_nanos() != 0));
+    Some(seconds.min(u64::from(u32::MAX)) as u32)
 }
 
 /// Redact values before serializing, so JSON escaping cannot hide a known secret.
@@ -288,7 +307,7 @@ fn http(
             .headers()
             .get("retry-after")
             .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse().ok());
+            .and_then(|v| retry_after_seconds(v, SystemTime::now()));
         return Err(failure);
     }
     if response.headers().contains_key("content-encoding") {
