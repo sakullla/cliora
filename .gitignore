@@ -20,3 +20,4 @@ test-results/
 docs/sakullla-workflow/**/00-state.yaml
 docs/sakullla-workflow/**/task-runs/
 docs/sakullla-workflow/**/evidence/
+docs/verification/ui/
