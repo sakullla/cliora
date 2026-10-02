@@ -1,0 +1,129 @@
+/** Remote quota data. Local history estimates remain in types/history.ts. */
+export type UsageErrorCode = 'network' | 'timeout' | 'cancelled' | 'authentication'
+  | 'permission' | 'rate_limit' | 'business' | 'parse' | 'script' | 'result_contract'
+  | 'resource_limit' | 'invalid_configuration' | 'version_conflict' | 'not_found'
+  | 'storage' | 'credential';
+export type UsageStage = 'configuration' | 'credential' | 'launch' | 'ipc' | 'http'
+  | 'script' | 'validation' | 'storage';
+
+export interface UsageError {
+  code: UsageErrorCode;
+  stage: UsageStage;
+  message: string;
+  retryAfterSeconds: number | null;
+  metricId: string | null;
+}
+
+export type UsageSubject = 'account' | 'plan' | 'key' | 'extra';
+export interface QueryIdentity {
+  accountId: string | null;
+  contextId: string | null;
+  profileId: string | null;
+  subject: UsageSubject;
+  subjectId: string | null;
+}
+
+export type QueryProgram = { kind: 'builtin'; provider: string; templateVersion: number }
+  | { kind: 'javascript'; source: string };
+
+export interface QueryTarget {
+  origin: string;
+  allowPrivateNetwork: boolean;
+}
+
+export type QueryParameter = null | boolean | number | string | QueryParameter[]
+  | { [key: string]: QueryParameter };
+
+export interface QueryConfig {
+  schemaVersion: 1;
+  label: string;
+  site: string;
+  identity: QueryIdentity;
+  program: QueryProgram;
+  /** Non-secret parameters only. Use named credential bindings for secrets. */
+  parameters: Record<string, QueryParameter>;
+  targets: QueryTarget[];
+  enabled: boolean;
+  /** Zero means manual refresh. Nonzero intervals must be at least 60 seconds. */
+  refreshIntervalSeconds: number;
+}
+
+export interface CredentialBinding {
+  name: string;
+  secretRef: string;
+  revision: number;
+  allowedOrigins: string[];
+}
+
+export interface CredentialDraft {
+  name: string;
+  allowedOrigins: string[];
+  value: { kind: 'keep' } | { kind: 'replace'; secret: string };
+}
+
+export interface UsageQueryDraft {
+  id: string | null;
+  expectedVersion: number | null;
+  config: QueryConfig;
+  credentials: CredentialDraft[];
+}
+
+export interface UsageQuery {
+  id: string;
+  version: number;
+  generation: number;
+  config: QueryConfig;
+  credentials: CredentialBinding[];
+}
+
+export interface SaveQueryResult {
+  query: UsageQuery;
+  credentialCleanupPending: boolean;
+}
+export interface DeleteQueryResult { credentialCleanupPending: boolean }
+
+export type UsageUnit = { kind: 'tokens' | 'requests' | 'credits' }
+  | { kind: 'currency'; code: string } | { kind: 'custom'; label: string };
+
+export interface UsageWindow {
+  durationSeconds: number | null;
+  /** RFC 3339, including an explicit timezone offset. */
+  resetsAt: string | null;
+  recovery: 'fixed' | 'rolling' | 'unknown';
+}
+
+export interface UsageMetric {
+  id: string;
+  label: string;
+  subject: UsageSubject;
+  subjectId: string | null;
+  unit: UsageUnit;
+  used: number | null;
+  remaining: number | null;
+  total: number | null;
+  /** Percent used, supplied by the source; can exceed 100. */
+  sourcePercent: number | null;
+  unlimited: boolean;
+  window: UsageWindow | null;
+  missingReason: string | null;
+}
+
+export interface UsageResult {
+  schemaVersion: 1;
+  status: 'success' | 'partial' | 'failed';
+  metrics: UsageMetric[];
+  errors: UsageError[];
+}
+
+export type UsageExecution = {
+  kind: 'saved'; queryId: string; generation: number; identity: QueryIdentity;
+} | { kind: 'draft'; executionId: string; draftRevision: number };
+
+/** Host-owned identity/source/timestamps, never accepted from script output. */
+export interface UsageSnapshot {
+  execution: UsageExecution;
+  source: string;
+  attemptedAt: string;
+  measuredAt: string | null;
+  result: UsageResult;
+}

@@ -26,6 +26,36 @@ pub struct AppState {
     portable_draft: Mutex<Option<portable::ImportDraft>>,
 }
 
+async fn usage_blocking<T: Send + 'static>(
+    app: AppHandle,
+    operation: impl FnOnce(&Database) -> Result<T, crate::usage::UsageError> + Send + 'static,
+) -> Result<T, crate::usage::UsageError> {
+    use crate::usage::{UsageError, UsageErrorCode, UsageStage};
+    let db = app.state::<AppState>().database(&app).map_err(|_| UsageError::storage())?;
+    tauri::async_runtime::spawn_blocking(move || operation(&db)).await
+        .map_err(|_| UsageError::new(UsageErrorCode::Storage, UsageStage::Storage, "额度查询后台操作中断"))?
+}
+
+#[tauri::command]
+pub async fn list_usage_queries(app: AppHandle) -> Result<Vec<crate::usage::UsageQuery>, crate::usage::UsageError> {
+    usage_blocking(app, crate::usage::list_queries).await
+}
+
+#[tauri::command]
+pub async fn get_usage_query(app: AppHandle, id: String) -> Result<crate::usage::UsageQuery, crate::usage::UsageError> {
+    usage_blocking(app, move |db| crate::usage::get_query(db, &id)).await
+}
+
+#[tauri::command]
+pub async fn save_usage_query(app: AppHandle, draft: crate::usage::UsageQueryDraft) -> Result<crate::usage::SaveQueryResult, crate::usage::UsageError> {
+    usage_blocking(app, move |db| crate::usage::save_query(db, &SystemCredentialStore, draft)).await
+}
+
+#[tauri::command]
+pub async fn delete_usage_query(app: AppHandle, id: String, expected_version: u32) -> Result<crate::usage::DeleteQueryResult, crate::usage::UsageError> {
+    usage_blocking(app, move |db| crate::usage::delete_query(db, &SystemCredentialStore, &id, expected_version)).await
+}
+
 #[tauri::command]
 pub async fn list_portable_items(app: AppHandle) -> Result<Vec<portable::ImportItem>, ApiError> {
     let db = app.state::<AppState>().database(&app)?;
