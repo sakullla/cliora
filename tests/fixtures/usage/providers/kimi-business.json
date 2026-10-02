@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "FAILED_PRECONDITION",
+    "message": "sanitized subscription unavailable"
+  }
+}

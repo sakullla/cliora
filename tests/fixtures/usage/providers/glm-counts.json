@@ -1,0 +1,34 @@
+{
+  "success": true,
+  "code": 200,
+  "data": {
+    "limits": [
+      {
+        "type": "TOKENS_LIMIT",
+        "unit": 3,
+        "number": 5,
+        "percentage": 10,
+        "usage": 100,
+        "currentValue": 120,
+        "remaining": -20,
+        "nextResetTime": 1790960400000
+      },
+      {
+        "type": "CREDIT_LIMIT",
+        "unit": 6,
+        "number": 1,
+        "percentage": 25,
+        "usage": 400,
+        "currentValue": 100
+      },
+      {
+        "type": "TIME_LIMIT",
+        "unit": 5,
+        "number": 1,
+        "percentage": 10,
+        "usage": 1000,
+        "currentValue": 100
+      }
+    ]
+  }
+}

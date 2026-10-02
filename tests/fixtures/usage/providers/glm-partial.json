@@ -1,0 +1,21 @@
+{
+  "success": true,
+  "code": 200,
+  "data": {
+    "limits": [
+      {
+        "type": "CREDIT_LIMIT",
+        "unit": 3,
+        "number": 5,
+        "percentage": 12.5
+      },
+      {
+        "type": "FUTURE_LIMIT"
+      },
+      {
+        "type": "TOKENS_LIMIT",
+        "percentage": 20
+      }
+    ]
+  }
+}

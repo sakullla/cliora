@@ -1,0 +1,36 @@
+{
+  "kind": "synthetic-sanitized-contract-fixtures",
+  "capturedAt": "2026-10-02",
+  "upstreamRepository": "https://github.com/steipete/CodexBar",
+  "upstreamRevision": "2cfa63250079b96b00a0da10358001e676cee19d",
+  "realAccountCapture": false,
+  "notes": "Field shapes transcribed from fixed-source parser/docs/tests; all values and timestamps synthesized. No private account or network acceptance is claimed. auth/business fixtures exercise explicit envelopes; HTTP status errors are covered separately.",
+  "sources": {
+    "glm": [
+      "Sources/CodexBarCore/Resources/Plugins/zai.js",
+      "docs/zai.md"
+    ],
+    "kimi": [
+      "Sources/CodexBarCore/Providers/Kimi/KimiModels.swift",
+      "Tests/CodexBarTests/KimiRatioPoolTests.swift",
+      "docs/kimi.md"
+    ],
+    "minimax": [
+      "Sources/CodexBarCore/Providers/MiniMax/MiniMaxUsageFetcher.swift",
+      "Sources/CodexBarCore/Providers/MiniMax/MiniMaxModelRemains.swift",
+      "Sources/CodexBarCore/Providers/MiniMax/MiniMaxAPIRegion.swift",
+      "Tests/CodexBarTests/MiniMaxCurrentTokenPlanResponseTests.swift",
+      "Tests/CodexBarTests/MiniMaxAPITokenFetchTests.swift"
+    ]
+  },
+  "variants": {
+    "glm-counts": "TOKENS_LIMIT/CREDIT_LIMIT/TIME_LIMIT; personal v1 adapter",
+    "glm-partial": "unknown type + missing window",
+    "kimi-counts": "older count-based Code API /usages",
+    "kimi-ratios": "new ratio pools, shared month total, no weekly pool",
+    "kimi-mixed": "international legacy matching-reset zero placeholder",
+    "minimax-counts": "legacy Coding Plan counts (usage_count means remaining)",
+    "minimax-ratios": "Token/M Plan ratio pools, boost permille, placeholder video, extra points",
+    "minimax-unlimited": "known general weekly status=3 unlimited lane"
+  }
+}

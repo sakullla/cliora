@@ -3,6 +3,8 @@ mod contract;
 mod store;
 mod runtime;
 mod helper;
+mod providers;
+pub use providers::{builtin_script, usage_presets, PresetCredential, UsagePreset};
 pub use helper::{helper_entry, create_test_execution, cancel_test_execution, test_draft, DraftTestReport};
 pub use runtime::RuntimeReport;
 
