@@ -229,14 +229,14 @@ pub fn source_fingerprint_controlled(path: &Path, cancelled: &dyn Fn() -> bool) 
     Ok(format!("m3:{}:{modified}:{changed}", metadata.len()))
 }
 
-fn source_change_time(path: &Path, metadata: &fs::Metadata, cancelled: &dyn Fn() -> bool) -> Result<String, String> {
+fn source_change_time(_path: &Path, metadata: &fs::Metadata, _cancelled: &dyn Fn() -> bool) -> Result<String, String> {
     #[cfg(windows)] {
         use std::os::windows::io::AsRawHandle;
         #[repr(C)] struct BasicInfo { creation:i64, accessed:i64, written:i64, changed:i64, attributes:u32 }
         #[link(name="kernel32")] unsafe extern "system" {
             fn GetFileInformationByHandleEx(handle:*mut std::ffi::c_void, class:i32, info:*mut std::ffi::c_void, size:u32) -> i32;
         }
-        let file = fs::File::open(path).map_err(|e| e.to_string())?;
+        let file = fs::File::open(_path).map_err(|e| e.to_string())?;
         let mut info = BasicInfo {creation:0,accessed:0,written:0,changed:0,attributes:0};
         if unsafe { GetFileInformationByHandleEx(file.as_raw_handle(), 0, (&mut info as *mut BasicInfo).cast(), std::mem::size_of::<BasicInfo>() as u32) } != 0 {
             return Ok(info.changed.to_string());
@@ -249,9 +249,9 @@ fn source_change_time(path: &Path, metadata: &fs::Metadata, cancelled: &dyn Fn()
     // Fail over to content hashing when the filesystem cannot report change-time.
     #[allow(unreachable_code)] {
         let _ = metadata;
-        let mut file = fs::File::open(path).map_err(|e| e.to_string())?;
+        let mut file = fs::File::open(_path).map_err(|e| e.to_string())?;
         let mut digest = Sha256::new(); let mut buffer = [0u8;64*1024];
-        loop { check_cancelled(cancelled)?; let count = file.read(&mut buffer).map_err(|e| e.to_string())?; if count == 0 {break;} digest.update(&buffer[..count]); }
+        loop { check_cancelled(_cancelled)?; let count = file.read(&mut buffer).map_err(|e| e.to_string())?; if count == 0 {break;} digest.update(&buffer[..count]); }
         Ok(format!("{:x}",digest.finalize()))
     }
 }
@@ -516,6 +516,7 @@ fn existing_fingerprint(db: &Database, key: &str) -> Result<Option<(String, bool
     })
 }
 
+#[cfg(test)]
 fn scan_adapter_sources(
     db: &Database,
     adapter: &dyn CliAdapter,

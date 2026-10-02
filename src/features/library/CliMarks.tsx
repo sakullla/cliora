@@ -5,8 +5,13 @@ import styles from './LibraryPage.module.css';
 export type CliMarkState = 'off' | 'current' | 'drifted' | 'unavailable';
 export type Mark = { pressed: boolean; state: CliMarkState; status: string };
 
+// Linux paths are case-sensitive: only fold case and separators on Windows.
+const windowsHost = typeof navigator !== 'undefined' && /win/i.test(navigator.platform);
+
 export function samePath(left: string | null | undefined, right: string | null | undefined) {
-  const norm = (value: string) => value.replace(/^\\\\\?\\/i, '').replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
+  const norm = (value: string) => windowsHost
+    ? value.replace(/^\\\\\?\\/i, '').replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase()
+    : value.replace(/[\\/]+$/, '');
   if (!left || !right) return !left && !right;
   return norm(left) === norm(right);
 }
