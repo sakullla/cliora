@@ -140,6 +140,8 @@ pub fn run() {
             commands::remove_native_mcp,
             commands::list_native_mcp,
             commands::list_mcp_placements,
+            commands::scan_native_plugins,
+            commands::operate_native_plugin,
             commands::get_managed_mcp_enabled,
             commands::preview_mcp_targets,
             commands::distribute_mcp,
