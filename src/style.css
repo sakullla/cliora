@@ -24,7 +24,7 @@
   /* Text */
   --text: #1d2420;
   --text-2: #5b655e;
-  --text-3: #87908a;
+  --text-3: #67716a;
 
   /* Lines */
   --line: #e3e6df;
@@ -49,6 +49,12 @@
   --info: #2c5f8a;
   --info-soft: #ecf3f9;
   --info-line: #bed3e6;
+
+  /* Data visualization */
+  --chart-input: #4a78a8;
+  --chart-output: #3f8659;
+  --chart-read: #bd8a33;
+  --chart-write: #8266a8;
 
   /* Shape */
   --radius-xs: 5px;
@@ -94,7 +100,7 @@
 
   --text: #e6ebe7;
   --text-2: #a3aea6;
-  --text-3: #75807a;
+  --text-3: #85908a;
 
   --line: #2c3530;
   --line-strong: #3a453e;
@@ -116,6 +122,11 @@
   --info: #9cc3e6;
   --info-soft: #1d2a35;
   --info-line: #35506a;
+
+  --chart-input: #7fb0e0;
+  --chart-output: #8fcb9f;
+  --chart-read: #e0b96a;
+  --chart-write: #b5a1e0;
 
   --shadow-xs: 0 1px 2px rgb(0 0 0 / 30%);
   --shadow-sm: 0 1px 2px rgb(0 0 0 / 30%), 0 2px 6px rgb(0 0 0 / 18%);
@@ -159,7 +170,7 @@ kbd { display: inline-block; min-width: 18px; padding: 0 5px; border: 1px solid 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: var(--line-strong); border: 3px solid transparent; border-radius: 99px; background-clip: padding-box; }
 ::-webkit-scrollbar-thumb:hover { background-color: var(--text-3); }
-::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
 
 /* ---------- Base controls (zero specificity, easy to override) --------- */
 
@@ -195,6 +206,7 @@ kbd { display: inline-block; min-width: 18px; padding: 0 5px; border: 1px solid 
   transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease), background-color var(--fast) var(--ease);
 }
 :where(textarea) { padding: 8px 10px; line-height: 1.55; resize: vertical; }
+:where(input, textarea) { caret-color: var(--accent); }
 :where(input, select, textarea)::placeholder { color: var(--text-3); }
 :where(input:not([type="checkbox"]):not([type="radio"]), select, textarea):hover:not(:disabled):not(:focus) { border-color: var(--text-3); }
 :where(input:not([type="checkbox"]):not([type="radio"]), select, textarea):focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }

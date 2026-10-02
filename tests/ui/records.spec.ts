@@ -189,3 +189,45 @@ test('records keep search, show native resume command and only launch on request
   await expect(priceDialog.getByLabel('价格工具')).toBeVisible();
   await expect(priceDialog.getByRole('button', { name: '保存价格' })).toBeVisible();
 });
+
+test('usage composes token segments and the session list follows arrow keys', async ({ page }) => {
+  await page.addInitScript(() => {
+    const records = [
+      { id: 'key-a', toolId: 'codex', nativeId: '1111', title: 'First session', cwd: 'C:\\project', model: 'gpt-6-astra', projectId: null, startedAt: 1790668800000, updatedAt: 1790668800000, favorite: false, partial: false, stale: false, messageCount: 1, usageCount: 1 },
+      { id: 'key-b', toolId: 'codex', nativeId: '2222', title: 'Second session', cwd: 'C:\\project', model: 'gpt-6-astra', projectId: null, startedAt: 1790668700000, updatedAt: 1790668700000, favorite: false, partial: false, stale: false, messageCount: 1, usageCount: 1 },
+    ];
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', yoloAvailable: false, interfaceFormats: [] }], managedIds: ['codex'], preservedUnknown: [] };
+        if (command === 'list_projects' || command === 'list_history_prices' || command === 'refresh_history') return [];
+        if (command === 'list_history_sessions') return records;
+        if (command === 'get_history_session') return { session: records.find((item) => item.id === args.id), messages: [], usage: [], resumeReason: '原始记录没有可验证的恢复 ID' };
+        if (command === 'get_history_usage') return { sessionCount: 2, usageSessions: 2, unknownUsageSessions: 0, partialSessions: 0, staleSessions: 0, input: 150, output: 30, cacheRead: 60, cacheWrite: 0, inputIncludesCache: true, estimatedCost: null, currency: null, priceSources: [], models: ['gpt-6-astra'], byModel: [], scans: [] };
+        if (command === 'get_history_scan_progress') return { running: false, toolId: '', completedSources: 0, totalSources: 0 };
+        if (command === 'get_tray_status') return { available: false, error: null };
+        if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+        return null;
+      } },
+    });
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
+  const first = page.getByRole('button', { name: /First session/ });
+  const second = page.getByRole('button', { name: /Second session/ });
+  await expect(first).toBeVisible();
+  await first.focus();
+  await page.keyboard.press('ArrowDown');
+  await expect(second).toBeFocused();
+  await expect(second).toHaveAttribute('aria-current', 'true');
+  await page.keyboard.press('Home');
+  await expect(first).toBeFocused();
+  await page.getByRole('tab', { name: '用量' }).click();
+  const composition = page.getByRole('group', { name: 'token 构成' });
+  await expect(composition).toBeVisible();
+  await expect(composition).toContainText('180 · 已知小计');
+  await expect(composition).toContainText('输入');
+  await expect(composition).toContainText('缓存读取');
+  await expect(composition).toContainText('50.0%');
+});
