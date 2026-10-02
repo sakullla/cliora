@@ -985,21 +985,7 @@ fn mutate_config(
     };
     let key = disabled_key(target);
     let value = serde_json::to_string(&saved).map_err(|_| "无法保存禁用记录")?;
-    if request.action == "uninstall"
-        && changes.iter().all(|change| {
-            change.path.len() == 1 && parsed.get(&change.path[0]) == change.value.as_ref()
-        })
-    {
-        // Removing an already-disabled declaration only removes recovery metadata.
-        // The native transaction deliberately refuses no-op file rewrites.
-        db.with_connection(|conn| {
-            let tx = conn.transaction().map_err(|_| "无法更新插件恢复记录")?;
-            if transaction::read_native(&path)? != baseline { return Err("原生配置已变更，请重新扫描".into()); }
-            tx.execute("INSERT INTO app_settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [&key, &value]).map_err(|_| "更新插件恢复记录失败")?;
-            tx.commit().map_err(|_| "提交插件恢复记录失败".to_owned())
-        })?;
-        return Ok(String::new());
-    }
+    transaction::watch_file_metadata(db, &path, &key)?;
     let result = transaction::apply(
         db,
         credentials,
@@ -1011,7 +997,7 @@ fn mutate_config(
             // The same native document can contain apiKey/env credentials.
             // Restrict the replacement even when this patch only edits plugins.
             sensitive: true,
-            force_restrict: false,
+            force_restrict: true,
         }],
         |tx| {
             tx.execute("INSERT INTO app_settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [&key, &value]).map_err(|_| "保存插件恢复记录失败")?;

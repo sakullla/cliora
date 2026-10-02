@@ -484,6 +484,187 @@ fn unknown_external_change_does_not_claim_disabled_or_overwrite_files() {
     assert!(!disabled(&db, &req.target).unwrap().is_empty());
 }
 
+#[test]
+fn specific_backup_restores_disabled_metadata_after_enable_or_uninstall() {
+    for tool in ["pi", "open_code"] {
+        for action in ["enable", "uninstall"] {
+            let dir = tempfile::tempdir().unwrap();
+            let home = dir.path();
+            let db = Database::open(&home.join("db")).unwrap();
+            let credentials = MemoryStore::default();
+            let package = home.join("package");
+            fs::create_dir(&package).unwrap();
+            let source = package.display().to_string();
+            let t = target(tool);
+            let (path, _) = config(home, &t).unwrap();
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let original = if tool == "pi" {
+                json!({"packages":[{"source":source,"autoload":false,"extensions":["!old.ts"],"future":"backup-metadata-private-marker"}]})
+            } else {
+                json!({"plugin":[source]})
+            };
+            fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
+            let disable_id =
+                mutate_config(&db, &credentials, home, &request(tool, "disable", &source)).unwrap();
+            let disabled_file = fs::read_to_string(&path).unwrap();
+            let disabled_metadata = disabled(&db, &t).unwrap();
+            let action_id =
+                mutate_config(&db, &credentials, home, &request(tool, action, &source)).unwrap();
+            assert_ne!(disable_id, action_id);
+            assert!(!action_id.is_empty());
+            assert!(disabled(&db, &t).unwrap().is_empty());
+            let after_action = fs::read_to_string(&path).unwrap();
+            let restore = transaction::restore_backup(
+                &db,
+                &credentials,
+                &path,
+                &action_id,
+                &after_action,
+                |_| Ok(()),
+            )
+            .unwrap();
+            assert_eq!(fs::read_to_string(&path).unwrap(), disabled_file);
+            assert_eq!(disabled(&db, &t).unwrap(), disabled_metadata);
+            let entries = config_entries(&db, home, &t).unwrap();
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].enabled, Some(false));
+            assert!(!entries[0].read_only);
+            // Undoing a restore must also restore the metadata present before it.
+            transaction::restore_backup(
+                &db,
+                &credentials,
+                &path,
+                &restore.transaction_id,
+                &disabled_file,
+                |_| Ok(()),
+            )
+            .unwrap();
+            assert_eq!(fs::read_to_string(&path).unwrap(), after_action);
+            assert!(disabled(&db, &t).unwrap().is_empty());
+            transaction::restore_backup(
+                &db,
+                &credentials,
+                &path,
+                &action_id,
+                &after_action,
+                |_| Ok(()),
+            )
+            .unwrap();
+            mutate_config(&db, &credentials, home, &request(tool, "enable", &source)).unwrap();
+            assert_eq!(
+                config_entries(&db, home, &t).unwrap()[0].enabled,
+                Some(true)
+            );
+            assert_eq!(
+                serde_json::from_str::<Value>(&fs::read_to_string(&path).unwrap()).unwrap(),
+                original
+            );
+            db.with_connection(|conn| {
+                let journal: String = conn
+                    .query_row(
+                        "SELECT data FROM native_transactions WHERE id=?1",
+                        [&action_id],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                assert!(!journal.contains("backup-metadata-private-marker"));
+                Ok(())
+            })
+            .unwrap();
+        }
+    }
+}
+
+#[test]
+fn configuration_edit_backup_also_preserves_plugin_recovery_and_failed_restore_is_atomic() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let db = Database::open(&home.join("db")).unwrap();
+    let credentials = MemoryStore::default();
+    let source = "fixture@1";
+    let t = target("open_code");
+    let (path, _) = config(home, &t).unwrap();
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, r#"{"plugin":["fixture@1"]}"#).unwrap();
+    mutate_config(
+        &db,
+        &credentials,
+        home,
+        &request("open_code", "disable", source),
+    )
+    .unwrap();
+    let disabled_file = fs::read_to_string(&path).unwrap();
+    let metadata = disabled(&db, &t).unwrap();
+    // This models the configuration editor, not a plugin lifecycle operation.
+    let edit = transaction::apply_text(
+        &db,
+        &credentials,
+        &[transaction::TextPatch {
+            path: path.clone(),
+            baseline: disabled_file.clone(),
+            contents: r#"{"plugin":[],"unrelated":42}"#.into(),
+            sensitive: true,
+        }],
+        |_| Ok(()),
+    )
+    .unwrap();
+    mutate_config(
+        &db,
+        &credentials,
+        home,
+        &request("open_code", "enable", source),
+    )
+    .unwrap();
+    let before_restore = fs::read_to_string(&path).unwrap();
+    let failure = transaction::restore_backup(
+        &db,
+        &credentials,
+        &path,
+        &edit.transaction_id,
+        &before_restore,
+        |_| Err("injected metadata commit failure".into()),
+    );
+    assert!(failure
+        .unwrap_err()
+        .contains("injected metadata commit failure"));
+    assert_eq!(fs::read_to_string(&path).unwrap(), before_restore);
+    assert!(disabled(&db, &t).unwrap().is_empty());
+    fs::write(&path, "{\"external\":true}").unwrap();
+    assert!(transaction::restore_backup(
+        &db,
+        &credentials,
+        &path,
+        &edit.transaction_id,
+        &before_restore,
+        |_| Ok(())
+    )
+    .is_err());
+    assert_eq!(fs::read_to_string(&path).unwrap(), "{\"external\":true}");
+    assert!(disabled(&db, &t).unwrap().is_empty());
+    transaction::restore_backup(
+        &db,
+        &credentials,
+        &path,
+        &edit.transaction_id,
+        "{\"external\":true}",
+        |_| Ok(()),
+    )
+    .unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), disabled_file);
+    assert_eq!(disabled(&db, &t).unwrap(), metadata);
+    mutate_config(
+        &db,
+        &credentials,
+        home,
+        &request("open_code", "enable", source),
+    )
+    .unwrap();
+    assert_eq!(
+        config_entries(&db, home, &t).unwrap()[0].enabled,
+        Some(true)
+    );
+}
+
 #[cfg(windows)]
 #[test]
 fn plugin_edits_preserve_restricted_secret_file_acl_under_permissive_parent() {
