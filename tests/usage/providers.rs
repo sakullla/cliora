@@ -215,6 +215,124 @@ fn minimax_remaining_counts_ratios_boost_unlimited_and_points_stay_distinct() {
 }
 
 #[test]
+fn minimax_source_seconds_fixture_keeps_five_hour_window() {
+    let result = parse("minimax-cn-coding-plan", "minimax-epoch-seconds");
+    assert_eq!(result.status, UsageStatus::Success);
+    let window = result.metrics[0].window.as_ref().unwrap();
+    assert_eq!(window.duration_seconds, Some(18000));
+    assert_eq!(
+        window.resets_at.as_deref(),
+        Some("2026-05-17T17:00:00.000Z")
+    );
+    assert_eq!(result.metrics[0].used, Some(2.0));
+}
+
+#[test]
+fn minimax_interval_and_weekly_accept_seconds_milliseconds_and_numeric_strings() {
+    for id in ["minimax-cn-coding-plan", "minimax-global-token-plan"] {
+        for scale in [1i64, 1000] {
+            for strings in [false, true] {
+                let mut raw = fixture("minimax-epoch-seconds");
+                let item = &mut raw["data"]["model_remains"][0];
+                item["current_weekly_total_count"] = 100.into();
+                item["current_weekly_usage_count"] = 80.into();
+                for (key, stamp) in [
+                    ("start_time", 1779019200i64),
+                    ("end_time", 1779037200),
+                    ("weekly_start_time", 1779019200),
+                    ("weekly_end_time", 1779624000),
+                ] {
+                    item[key] = if strings {
+                        (stamp * scale).to_string().into()
+                    } else {
+                        (stamp * scale).into()
+                    };
+                }
+                let report = parse_value(id, raw);
+                assert!(report.error.is_none(), "{:?}", report.error);
+                let result = report.result.unwrap();
+                assert_eq!(result.status, UsageStatus::Success);
+                for (index, duration, reset) in [
+                    (0, 18000, "2026-05-17T17:00:00.000Z"),
+                    (1, 604800, "2026-05-24T12:00:00.000Z"),
+                ] {
+                    let window = result.metrics[index].window.as_ref().unwrap();
+                    assert_eq!(window.duration_seconds, Some(duration));
+                    assert_eq!(window.resets_at.as_deref(), Some(reset));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn minimax_ambiguous_invalid_and_reversed_times_preserve_only_reliable_fields() {
+    for invalid in [
+        json!(0),
+        json!(-1),
+        json!(17790372000i64),
+        json!(177903720000i64),
+        json!(17790372000000i64),
+        json!(1779037200.25),
+        json!(""),
+        json!("bad"),
+        json!(true),
+        json!({}),
+    ] {
+        let mut raw = fixture("minimax-epoch-seconds");
+        raw["data"]["model_remains"][0]["end_time"] = invalid.clone();
+        let report = parse_value("minimax-cn-coding-plan", raw);
+        assert!(
+            report.error.is_none(),
+            "invalid={invalid}: {:?}",
+            report.error
+        );
+        let result = report.result.unwrap();
+        assert_eq!(result.status, UsageStatus::Partial, "invalid={invalid}");
+        let metric = &result.metrics[0];
+        assert_eq!(metric.used, Some(2.0));
+        assert!(metric.missing_reason.is_some());
+        assert_eq!(metric.window.as_ref().unwrap().duration_seconds, None);
+        assert_eq!(metric.window.as_ref().unwrap().resets_at, None);
+        assert_eq!(result.errors[0].code, UsageErrorCode::Parse);
+    }
+    let mut raw = fixture("minimax-epoch-seconds");
+    raw["data"]["model_remains"][0]["start_time"] = 1779037201i64.into();
+    let result = parse_value("minimax-cn-coding-plan", raw).result.unwrap();
+    assert_eq!(result.status, UsageStatus::Partial);
+    assert_eq!(result.metrics[0].window.as_ref().unwrap().resets_at, None);
+
+    let mut raw = fixture("minimax-epoch-seconds");
+    raw["data"]["model_remains"][0]["start_time"] = json!("ambiguous");
+    let result = parse_value("minimax-cn-coding-plan", raw).result.unwrap();
+    assert_eq!(result.status, UsageStatus::Partial);
+    assert_eq!(
+        result.metrics[0].window.as_ref().unwrap().duration_seconds,
+        None
+    );
+    assert_eq!(
+        result.metrics[0]
+            .window
+            .as_ref()
+            .unwrap()
+            .resets_at
+            .as_deref(),
+        Some("2026-05-17T17:00:00.000Z")
+    );
+
+    let mut raw = fixture("minimax-epoch-seconds");
+    raw["data"]["model_remains"][0]["start_time"] = Value::Null;
+    raw["data"]["model_remains"][0]["end_time"] = Value::Null;
+    let result = parse_value("minimax-cn-coding-plan", raw).result.unwrap();
+    assert_eq!(result.status, UsageStatus::Success); // Optional absent dates are unknown, never fabricated.
+    assert_eq!(
+        result.metrics[0].window.as_ref().unwrap().duration_seconds,
+        None
+    );
+    assert_eq!(result.metrics[0].window.as_ref().unwrap().resets_at, None);
+}
+
+#[test]
 fn missing_authentication_business_and_invalid_json_are_not_zero_success() {
     for (id, provider) in [
         ("glm-cn", "glm"),
