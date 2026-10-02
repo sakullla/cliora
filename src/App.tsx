@@ -42,7 +42,7 @@ const themes: { id: Theme; label: string; glyph: IconName }[] = [
 function titleFor(page: Page): [string, string] {
   switch (page) {
     case 'home': return ['快速开始', '选择工具与项目，一键在外部终端启动。'];
-    case 'connections': return ['工具与连接', '管理每个 CLI 的配置、账号、插件、MCP 与 Skill。'];
+    case 'connections': return ['工具与连接', '管理每个 CLI 的配置、账号、插件、Agent 定义、MCP 与 Skill。'];
     case 'library': return ['资料库', '统一保存提示词、规则、MCP 与 Skill。'];
     case 'records': return ['使用记录', '查看本机会话与用量。'];
     case 'settings': return ['设置', '只保留日常需要的选项。'];

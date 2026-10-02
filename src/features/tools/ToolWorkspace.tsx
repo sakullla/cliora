@@ -18,6 +18,7 @@ import { InstallPanel } from './InstallPanel';
 import { ModelCombobox } from './ModelCombobox';
 import { McpWorkspace, SkillsWorkspace } from './ResourceWorkspace';
 import { PluginsWorkspace } from './PluginsWorkspace';
+import { AgentsWorkspace } from './AgentsWorkspace';
 import { ToolIcon } from '../../components/ToolIcon';
 import { FileConflict } from '../../components/FileConflict';
 import { FilterSelect } from '../../components/FilterSelect';
@@ -103,9 +104,10 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   };
   const [commonDraft, setCommonDraft] = useState<RegisteredCommon | null>(null);
   const [view, setView] = useState<View>('form');
-  const [resourceView, setResourceView] = useState<'config' | 'mcp' | 'skills' | 'accounts' | 'plugins'>(repair?.resourceView ?? 'config');
+  const [resourceView, setResourceView] = useState<'config' | 'mcp' | 'skills' | 'accounts' | 'plugins' | 'agents'>(repair?.resourceView ?? 'config');
   const [mcpDirty, setMcpDirty] = useState(false);
   const [skillsDirty, setSkillsDirty] = useState(false);
+  const [agentsDirty, setAgentsDirty] = useState(false);
   const [resourceEpoch, setResourceEpoch] = useState(0);
   const [role, setRole] = useState('settings');
   const [preview, setPreview] = useState<NativePreview | null>(null);
@@ -172,9 +174,9 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   const pendingRaw = rawDisk?.context === draftContext ? rawDisk : null;
   const activeRaw = pendingRaw?.role === role ? pendingRaw : null;
   const dirty = (editor === 'profile' ? !!draft && JSON.stringify(draft) !== savedDraft.current : editor === 'common' && !!commonDraft && JSON.stringify(commonDraft) !== savedDraft.current) || !!pendingRaw && pendingRaw.text !== pendingRaw.original || !!newSecret;
-  const refreshState = useRef({ currentTool, scope, projectPath, selectedId, editor, dirty, busy, mcpDirty, skillsDirty });
-  refreshState.current = { currentTool, scope, projectPath, selectedId, editor, dirty, busy, mcpDirty, skillsDirty };
-  const confirmationContext = JSON.stringify([draftContext, draft, commonDraft, rawDisk, newSecret, mcpDirty, skillsDirty]);
+  const refreshState = useRef({ currentTool, scope, projectPath, selectedId, editor, dirty, busy, mcpDirty, skillsDirty, agentsDirty });
+  refreshState.current = { currentTool, scope, projectPath, selectedId, editor, dirty, busy, mcpDirty, skillsDirty, agentsDirty };
+  const confirmationContext = JSON.stringify([draftContext, draft, commonDraft, rawDisk, newSecret, mcpDirty, skillsDirty, agentsDirty]);
   const latestConfirmation = useRef(confirmationContext); latestConfirmation.current = confirmationContext;
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -186,7 +188,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   useEffect(() => {
     const refresh = () => {
       const state = refreshState.current;
-      if (!state.currentTool || state.dirty || state.busy || state.mcpDirty || state.skillsDirty) return;
+      if (!state.currentTool || state.dirty || state.busy || state.mcpDirty || state.skillsDirty || state.agentsDirty) return;
       void native.getRegisteredToolWorkspace(state.currentTool, state.scope, state.projectPath, false, true).then((result) => {
         if (!mounted.current) return;
         const now = refreshState.current;
@@ -206,11 +208,11 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     return confirmAction(message, () => mounted.current && stillCurrent(started) && context === latestConfirmation.current, options);
   }
   async function closeGuide() {
-    if ((dirty || mcpDirty || skillsDirty) && !await confirmChange('当前草稿尚未保存，关闭后会丢失这些修改。继续吗？')) return;
+    if ((dirty || mcpDirty || skillsDirty || agentsDirty) && !await confirmChange('当前草稿尚未保存，关闭后会丢失这些修改。继续吗？')) return;
     setHistoryOpen(false); setBackupPreview(null);
     setGuide(false);
   }
-  useLayoutEffect(() => { onDirtyChange?.(dirty || mcpDirty || skillsDirty); }, [dirty, mcpDirty, skillsDirty, onDirtyChange]);
+  useLayoutEffect(() => { onDirtyChange?.(dirty || mcpDirty || skillsDirty || agentsDirty); }, [dirty, mcpDirty, skillsDirty, agentsDirty, onDirtyChange]);
   useEffect(() => () => { onDirtyChange?.(false); }, [onDirtyChange]);
 
   const reload = useCallback(async (nextTool: string, nextScope: Scope, nextProject: string, preferredId?: string | null, fresh = false) => {
@@ -307,7 +309,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     appliedOpenSequence.current = openSequence;
     let live = true;
     void (async () => {
-      const hadUnsaved = dirty || mcpDirty || skillsDirty;
+      const hadUnsaved = dirty || mcpDirty || skillsDirty || agentsDirty;
       if (hadUnsaved && !await confirmChange('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return;
       if (!live) return;
       if (hadUnsaved) await discardUnsavedDrafts();
@@ -338,7 +340,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
         if (current.currentTool !== started.currentTool || current.scope !== started.scope || current.projectPath !== started.projectPath) return;
         setWorkspace(result);
         setLoading(false);
-        if (current.dirty || current.busy || current.mcpDirty || current.skillsDirty) {
+        if (current.dirty || current.busy || current.mcpDirty || current.skillsDirty || current.agentsDirty) {
           setNotice('已收到资料更新；当前未保存草稿已保留，保存时会检查资料是否变化。');
           return;
         }
@@ -360,7 +362,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     appliedRepair.current = repair.sequence;
     let live = true;
     void (async () => {
-      if ((dirty || mcpDirty || skillsDirty) && !await confirmChange('当前草稿尚未保存，打开托盘指向的配置会丢失这些修改。继续吗？')) {
+      if ((dirty || mcpDirty || skillsDirty || agentsDirty) && !await confirmChange('当前草稿尚未保存，打开托盘指向的配置会丢失这些修改。继续吗？')) {
         if (live) setNotice('当前草稿已保留；可保存后再从托盘打开修复位置。');
         return;
       }
@@ -439,9 +441,9 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     setView('form'); setError(''); setNotice(''); setApplyComparison(null); setGuide(true);
   }
 
-  async function switchResourceView(next: 'config' | 'mcp' | 'skills' | 'accounts' | 'plugins') {
+  async function switchResourceView(next: 'config' | 'mcp' | 'skills' | 'accounts' | 'plugins' | 'agents') {
     if (next === resourceView) return;
-    const hadUnsaved = dirty || mcpDirty || skillsDirty;
+    const hadUnsaved = dirty || mcpDirty || skillsDirty || agentsDirty;
     if (hadUnsaved && !await confirmChange('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return;
     if (hadUnsaved) await discardUnsavedDrafts();
     setResourceView(next);
@@ -627,13 +629,13 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
 
   async function switchProject(path: string) {
     if (scope === 'project' && path === projectPath) return;
-    if ((dirty || mcpDirty || skillsDirty) && !await confirmChange('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return;
+    if ((dirty || mcpDirty || skillsDirty || agentsDirty) && !await confirmChange('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return;
     invalidateDraftRequest(); setScope('project'); setProjectPath(path);
   }
 
   async function switchGlobal() {
     if (scope === 'global') return;
-    if ((dirty || mcpDirty || skillsDirty) && !await confirmChange('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return;
+    if ((dirty || mcpDirty || skillsDirty || agentsDirty) && !await confirmChange('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return;
     invalidateDraftRequest(); setScope('global');
   }
 
@@ -904,7 +906,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
 
   return <section className={styles.workspace} aria-label="工具与连接">
     <div className={styles.toolbar}>
-      <div className={styles.toolSwitcher} role="tablist" aria-label="CLI">{visibleTools.map((item) => <button key={item.id} type="button" role="tab" aria-selected={currentTool === item.id} title={item.name} className={currentTool === item.id ? styles.selected : ''} onClick={async () => { if (currentTool === item.id) return; if ((dirty || mcpDirty || skillsDirty) && !await confirmChange('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return; invalidateDraftRequest(); setTool(item.id); }}><ToolIcon toolId={item.id} size={23} />{item.name}</button>)}</div>
+      <div className={styles.toolSwitcher} role="tablist" aria-label="CLI">{visibleTools.map((item) => <button key={item.id} type="button" role="tab" aria-selected={currentTool === item.id} title={item.name} className={currentTool === item.id ? styles.selected : ''} onClick={async () => { if (currentTool === item.id) return; if ((dirty || mcpDirty || skillsDirty || agentsDirty) && !await confirmChange('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return; invalidateDraftRequest(); setTool(item.id); }}><ToolIcon toolId={item.id} size={23} />{item.name}</button>)}</div>
     </div>
     <div className={styles.taskBar}>
       <div className={styles.views} role="tablist" aria-label="当前任务">
@@ -912,6 +914,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
         <button type="button" role="tab" aria-selected={resourceView === 'accounts'} className={resourceView === 'accounts' ? styles.selected : ''} onClick={() => void switchResourceView('accounts')}>账号</button>
         <button type="button" role="tab" aria-selected={resourceView === 'mcp'} className={resourceView === 'mcp' ? styles.selected : ''} onClick={() => void switchResourceView('mcp')}>MCP</button>
         <button type="button" role="tab" aria-selected={resourceView === 'skills'} className={resourceView === 'skills' ? styles.selected : ''} onClick={() => void switchResourceView('skills')}>Skill</button>
+        <button type="button" role="tab" aria-selected={resourceView === 'agents'} className={resourceView === 'agents' ? styles.selected : ''} onClick={() => void switchResourceView('agents')}>Agents</button>
         <button type="button" role="tab" aria-selected={resourceView === 'plugins'} className={resourceView === 'plugins' ? styles.selected : ''} onClick={() => void switchResourceView('plugins')}>插件</button>
       </div>
       <div className={styles.scopeBar}><FilterSelect className={styles.projectSelect} label="配置范围" triggerDetail={false} value={scope === 'global' ? '__global__' : projectPath} options={[{ value: '__global__', label: '全局配置' }, ...projects.map((project) => ({ value: project.path ?? project.id, label: project.name, detail: project.path ? shortPath(project.path) : undefined, note: project.available ? undefined : '目录不可用', disabled: !project.available || !project.path })), ...(projectPath && !projects.some((project) => project.path === projectPath) ? [{ value: projectPath, label: projectPath.split(/[\\/]/).filter(Boolean).at(-1) || projectPath, detail: shortPath(projectPath) }] : [])]} placeholder="选择项目…" forceSearch searchLabel="搜索项目" title={scope === 'global' ? '全局配置' : projectPath || '选择已有项目'} onChange={(value) => void (value === '__global__' ? switchGlobal() : switchProject(value))} onPickFolder={() => void chooseProjectFolder()} pickFolderLabel="选择文件夹…" /></div>
@@ -971,6 +974,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     </>}
     </div>
     {resourceView === 'accounts' && currentTool && <AccountsPanel key={currentTool} toolId={currentTool} state={accountState} />}
+    {resourceView === 'agents' && currentTool && <AgentsWorkspace key={JSON.stringify([currentTool, scope, projectPath, resourceEpoch, workspace?.effectiveContextId])} toolId={currentTool} scope={scope} projectPath={projectPath} contextId={workspace?.effectiveContextId ?? null} onDirtyChange={setAgentsDirty} />}
     {resourceView === 'plugins' && currentTool && <PluginsWorkspace key={JSON.stringify([currentTool, scope, projectPath, resourceEpoch, workspace?.effectiveContextId])} toolId={currentTool} scope={scope} projectPath={projectPath} contextId={workspace?.effectiveContextId ?? null} />}
     {resourceView === 'mcp' && currentTool && <McpWorkspace key={JSON.stringify([currentTool, scope, projectPath, resourceEpoch, workspace?.effectiveContextId])} toolId={currentTool} scope={scope} projectPath={projectPath} contextId={workspace?.effectiveContextId ?? null} onDirtyChange={setMcpDirty} />}
     {resourceView === 'skills' && currentTool && <SkillsWorkspace key={JSON.stringify([currentTool, scope, projectPath, resourceEpoch, workspace?.effectiveContextId])} toolId={currentTool} scope={scope} projectPath={projectPath} contextId={workspace?.effectiveContextId ?? null} onDirtyChange={setSkillsDirty} />}

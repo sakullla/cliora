@@ -63,15 +63,21 @@ struct JournalFile {
     backup: Option<String>,
     nonce: Option<String>,
     old_readonly: bool,
+    #[serde(default = "default_true")]
+    new_exists: bool,
     #[serde(default)]
     sensitive: bool,
 }
+
+fn default_true() -> bool { true }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Journal {
     id: String,
     key_id: String,
     files: Vec<JournalFile>,
+    #[serde(default)]
+    coupled: bool,
     /// App metadata tied to these exact file preimages, encrypted with the
     /// journal key. Restoring a backup restores both halves of the state.
     #[serde(default)]
@@ -495,6 +501,7 @@ fn prepare(
                 backup: None,
                 nonce: None,
                 old_readonly,
+                new_exists: true,
                 sensitive: patch.sensitive,
             },
             output,
@@ -661,10 +668,10 @@ fn restore(
             }
         }
         let hash = keyed_fingerprint(integrity, current.as_bytes());
-        if hash == item.old_hash {
+        if hash == item.old_hash && item.path.exists() == item.existed {
             continue;
         }
-        if hash != item.new_hash {
+        if hash != item.new_hash || item.path.exists() != item.new_exists {
             problems.push(format!(
                 "{} 已出现新的外部修改，不能自动恢复",
                 item.path.display()
@@ -708,7 +715,7 @@ fn restore(
 pub struct BackupRecord { pub transaction_id: String, pub path: String, pub created_at: i64 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BackupPreview { pub transaction_id: String, pub current: String, pub original: String }
+pub struct BackupPreview { pub transaction_id: String, pub current: String, pub original: String, pub affected_paths: Vec<String> }
 
 pub fn recent_backups(db: &Database, target: &Path) -> Result<Vec<BackupRecord>, String> {
     db.with_connection(|conn| {
@@ -739,7 +746,7 @@ pub fn preview_backup(db: &Database, credentials: &dyn CredentialStore, target: 
     let integrity = integrity_key(db, credentials)?;
     if keyed_fingerprint(&integrity, &bytes) != file.old_hash { return Err("备份内容摘要不一致，停止恢复".into()); }
     let original = String::from_utf8(bytes).map_err(|_| "备份不是 UTF-8 文本")?;
-    Ok(BackupPreview {transaction_id:id.into(),current:read_native(target)?,original})
+    Ok(BackupPreview {transaction_id:id.into(),current:read_native(target)?,original, affected_paths: if journal.coupled { journal.files.iter().map(|f| f.path.display().to_string()).collect() } else { vec![target.display().to_string()] }})
 }
 
 /// The preview baseline is rechecked under the native write lock; restoration itself gets a new encrypted backup.
@@ -752,6 +759,21 @@ where F: FnOnce(&rusqlite::Transaction<'_>) -> Result<(), String> {
     if journal.id != id || journal.key_id != format!("native-backup-{id}") { return Err("原生修改记录标识不一致".into()); }
     let encoded = credentials.get(&journal.key_id)?;
     let key: [u8;32] = STANDARD.decode(encoded).map_err(|_| "备份密钥无效")?.try_into().map_err(|_| "备份密钥长度无效")?;
+    if journal.coupled {
+        let integrity = integrity_key(db, credentials)?;
+        let mut changes = Vec::new();
+        for file in &journal.files {
+            let current = read_native(&file.path)?;
+            if file.path.exists() != file.new_exists || keyed_fingerprint(&integrity, current.as_bytes()) != file.new_hash {
+                return Err(format!("成组恢复目标已被修改：{}；未恢复任何文件", file.path.display()));
+            }
+            let contents = if file.existed {
+                Some(String::from_utf8(decrypt(&key, file.backup.as_deref().ok_or("备份缺失")?, file.nonce.as_deref().ok_or("备份缺失")?)?).map_err(|_| "备份不是 UTF-8")?)
+            } else { None };
+            changes.push(FileMutation { path: file.path.clone(), baseline: file.new_exists.then_some(current), contents });
+        }
+        return apply_files(db, credentials, &changes, commit);
+    }
     let mut metadata = Vec::new();
     for item in journal.metadata {
         let value = decrypt(&key, &item.data, &item.nonce)?;
@@ -894,12 +916,45 @@ where F: FnOnce(&rusqlite::Transaction<'_>, &str) -> Result<(),String> {
                 backup: None,
                 nonce: None,
                 old_readonly,
+                new_exists: true,
                 sensitive: patch.sensitive,
             },
             patch.contents.clone(),
         ));
     }
     apply_prepared(db, credentials, &integrity, prepared, commit)
+}
+
+/// Coupled create/remove with explicit absence and encrypted preimages.
+#[derive(Clone, Debug)]
+pub struct FileMutation { pub path: PathBuf, pub baseline: Option<String>, pub contents: Option<String> }
+pub fn apply_files<F>(db: &Database, credentials: &dyn CredentialStore, changes: &[FileMutation], commit: F) -> Result<ApplyOutcome,String>
+where F: FnOnce(&rusqlite::Transaction<'_>) -> Result<(),String> {
+    #[cfg(test)]
+    let fixture_lock = fixture_write_lock(db)?;
+    #[cfg(test)]
+    let _guard = fixture_lock.lock().map_err(|_| "原生事务不可用")?;
+    #[cfg(not(test))]
+    let _guard = write_lock().lock().map_err(|_| "原生事务不可用")?;
+    let integrity = integrity_key(db, credentials)?;
+    let mut seen = HashSet::new();
+    let mut prepared = Vec::new();
+    for change in changes {
+        if !change.path.is_absolute() || change.path.components().any(|c|matches!(c,std::path::Component::ParentDir)) {return Err("文件目标必须是规范绝对路径".into());}
+        if !seen.insert(&change.path) { return Err("重复的文件目标".into()); }
+        for ancestor in change.path.ancestors() {
+            if let Ok(meta) = fs::symlink_metadata(ancestor) {
+                #[cfg(windows)]
+                { use std::os::windows::fs::MetadataExt; if meta.file_attributes() & 0x400 != 0 { return Err("不修改重解析点中的文件".into()); } }
+                if meta.file_type().is_symlink() { return Err("不修改符号链接中的文件".into()); }
+            }
+        }
+        let current = read_native(&change.path)?;
+        if change.path.exists() != change.baseline.is_some() || current != change.baseline.as_deref().unwrap_or("") { return Err(format!("文件已被外部修改：{}",change.path.display())); }
+        if change.baseline == change.contents { continue; }
+        prepared.push((JournalFile { path: change.path.clone(), existed: change.baseline.is_some(), new_exists: change.contents.is_some(), old_hash: keyed_fingerprint(&integrity,current.as_bytes()), new_hash: keyed_fingerprint(&integrity,change.contents.as_deref().unwrap_or("").as_bytes()), backup: None, nonce: None, old_readonly: fs::metadata(&change.path).is_ok_and(|m|m.permissions().readonly()), sensitive: true }, change.contents.clone().unwrap_or_default()));
+    }
+    apply_prepared(db,credentials,&integrity,prepared,|tx,_|commit(tx))
 }
 
 fn apply_prepared<F>(
@@ -950,6 +1005,7 @@ where
     let journal = Journal {
         id: id.clone(),
         key_id,
+        coupled: files.iter().any(|item| !item.new_exists),
         files,
         metadata,
         created_at: backup_created_at(),
@@ -959,17 +1015,19 @@ where
         set_status(db, &id, "applying")?;
         for (item, output) in &prepared {
             let current = read_native(&item.path)?;
-            if keyed_fingerprint(&integrity, current.as_bytes()) != item.old_hash {
+            if item.path.exists() != item.existed || keyed_fingerprint(&integrity, current.as_bytes()) != item.old_hash {
                 return Err(format!("原生文件写入前发生变化：{}", item.path.display()));
             }
-            write_replacement(&item.path, output.as_bytes(), &id, item.sensitive)?;
-            let written = fs::read(&item.path).map_err(|_| "无法核验原生写入")?;
+            if item.new_exists { write_replacement(&item.path, output.as_bytes(), &id, item.sensitive)?; }
+            else { fs::remove_file(&item.path).map_err(|_| "无法移除原生文件")?; }
+            let written = read_native(&item.path)?.into_bytes();
             if keyed_fingerprint(&integrity, &written) != item.new_hash {
                 return Err("原生写入后校验失败".into());
             }
         }
         for (item, _) in &prepared {
-            let written = fs::read(&item.path).map_err(|_| "提交前无法重读原生文件")?;
+            let written = read_native(&item.path)?.into_bytes();
+            if item.path.exists() != item.new_exists { return Err("提交前文件存在状态改变".into()); }
             if keyed_fingerprint(&integrity, &written) != item.new_hash {
                 return Err(format!("提交前发现外部修改：{}", item.path.display()));
             }
@@ -1101,11 +1159,11 @@ mod tests {
         let db = Database::open(&temp.path().join("app.db")).unwrap();
         let target = temp.path().join("config.toml");
         for index in 0..21 {
-            let journal = Journal {
+            let journal = Journal { coupled: false,
                 metadata: vec![],
                 id: format!("backup-{index}"),
                 key_id: format!("native-backup-backup-{index}"),
-                files: vec![JournalFile {
+                files: vec![JournalFile { new_exists: true,
                     path: target.clone(),
                     existed: true,
                     old_hash: "h".into(),
@@ -1151,12 +1209,12 @@ mod tests {
         integrity_key(&db, &store).unwrap();
         let old_hash = fingerprint(b"low-entropy-old-file");
         let secret_hash = fingerprint(b"short-key");
-        let journal = Journal {
+        let journal = Journal { coupled: false,
                 metadata: vec![],
             id: "committed-history".into(),
             key_id: "missing".into(),
             created_at: 0,
-            files: vec![JournalFile {
+            files: vec![JournalFile { new_exists: true,
                 path: temp.path().join("old.json"),
                 existed: true,
                 old_hash: old_hash.clone(),
@@ -1233,12 +1291,12 @@ mod tests {
     fn corrupt_committed_digest_is_reported_instead_of_masked_as_locked_keyring() {
         let temp = tempfile::tempdir().unwrap();
         let db = Database::open(&temp.path().join("app.db")).unwrap();
-        let journal = Journal {
+        let journal = Journal { coupled: false,
                 metadata: vec![],
             id: "corrupt-history".into(),
             key_id: "missing".into(),
             created_at: 0,
-            files: vec![JournalFile {
+            files: vec![JournalFile { new_exists: true,
                 path: temp.path().join("old.json"),
                 existed: true,
                 old_hash: "broken-digest".into(),
@@ -1270,12 +1328,12 @@ mod tests {
             .put("native-backup-pending", &STANDARD.encode(backup_key))
             .unwrap();
         let (backup, nonce) = encrypt(&backup_key, original).unwrap();
-        let journal = Journal {
+        let journal = Journal { coupled: false,
                 metadata: vec![],
             id: "pending".into(),
             key_id: "native-backup-pending".into(),
             created_at: 0,
-            files: vec![JournalFile {
+            files: vec![JournalFile { new_exists: true,
                 path: path.clone(),
                 existed: true,
                 old_hash: keyed_fingerprint(&integrity, original),
@@ -1337,10 +1395,10 @@ mod tests {
         db.with_connection(|conn| {
             let managed = serde_json::json!({"settings": {"/env/ANTHROPIC_API_KEY": {"__cliora_secret_sha256": raw_secret_hash}}});
             conn.execute("INSERT INTO applied_bindings (scope_key, tool, profile_id, profile_version, managed) VALUES ('global', 'claude_code', 'legacy', 1, ?1)", [managed.to_string()]).map_err(|e| e.to_string())?;
-            let journal = Journal {
+            let journal = Journal { coupled: false,
                 metadata: vec![],
                 id: "legacy".into(), key_id: "native-backup-legacy".into(), created_at: 0,
-                files: vec![JournalFile {path: temp.path().join("settings.json"), existed: true,
+                files: vec![JournalFile { new_exists: true,path: temp.path().join("settings.json"), existed: true,
                     old_hash: raw_file_hash.clone(), new_hash: raw_file_hash.clone(),
                     backup: None, nonce: None, old_readonly: false, sensitive: true}],
             };
@@ -1451,12 +1509,12 @@ mod tests {
         let file = temp.path().join("config.toml");
         fs::write(&file, "model = \"one\"\n").unwrap();
         let db = Database::open(&temp.path().join("app.db")).unwrap();
-        let journal = Journal {
+        let journal = Journal { coupled: false,
                 metadata: vec![],
             id: "pending".into(),
             key_id: "missing".into(),
             created_at: 0,
-            files: vec![JournalFile {
+            files: vec![JournalFile { new_exists: true,
                 path: file.clone(),
                 existed: true,
                 old_hash: fingerprint(b"model = \"one\"\n"),
@@ -1570,7 +1628,7 @@ mod tests {
         let make_file = |path: &Path, new: &[u8]| {
             let old = fs::read(path).unwrap();
             let (backup, nonce) = encrypt(&key, &old).unwrap();
-            JournalFile {
+            JournalFile { new_exists: true,
                 path: path.into(),
                 existed: true,
                 old_hash: fingerprint(&old),
@@ -1581,7 +1639,7 @@ mod tests {
                 sensitive: false,
             }
         };
-        let journal = Journal {
+        let journal = Journal { coupled: false,
                 metadata: vec![],
             id: id.clone(),
             key_id,
@@ -1610,11 +1668,11 @@ mod tests {
         store.put(&key_id, &STANDARD.encode(key)).unwrap();
         let original = b"model = \"old\"\n";
         let (backup, nonce) = encrypt(&key, original).unwrap();
-        let journal = Journal {
+        let journal = Journal { coupled: false,
                 metadata: vec![],
             id: id.clone(),
             key_id,
-            files: vec![JournalFile {
+            files: vec![JournalFile { new_exists: true,
                 path: file.clone(),
                 existed: true,
                 old_hash: fingerprint(original),

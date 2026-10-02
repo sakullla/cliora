@@ -1,6 +1,6 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import type { AccountCapability, AuthAccount } from '../types/accounts';
-import type { PluginTarget, PluginRequest, PluginSnapshot, PluginResult } from '../types/resources';
+import type { AgentSnapshot, AgentRequest, AgentResult, PluginTarget, PluginRequest, PluginSnapshot, PluginResult } from '../types/resources';
 import type { ApiError, Bootstrap, CliId, Theme } from '../types/domain';
 import type { AdapterCatalog, ApplyComparison, ApplyOutcome, CommonConfig, CommonSaveResult, Connection, ConnectionCheck, ModelDirectory, NativeImport, NativeInspection, NativePreview, NativeProfile, PreservedProfile, RegisteredCommon, RegisteredCommonSaveResult, RegisteredProfile, RegisteredToolWorkspace, Scope, ToolWorkspace } from '../types/native';
 import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, TerminalId, TrayStatus } from '../types/launch';
@@ -54,6 +54,8 @@ async function usageCommand<T>(name: string, args?: Record<string, unknown>): Pr
 
 /** Feature modules add named wrappers here; components never invoke arbitrary commands. */
 export const native = {
+  scanNativeAgents: (target: PluginTarget) => command<AgentSnapshot>('scan_native_agents', { target }),
+  operateNativeAgent: (request: AgentRequest) => command<AgentResult>('operate_native_agent', { request }),
   scanNativePlugins: (target: PluginTarget) => command<PluginSnapshot>('scan_native_plugins', { target }),
   operateNativePlugin: (request: PluginRequest) => command<PluginResult>('operate_native_plugin', { request }),
   accountCapabilities: () => command<AccountCapability[]>('account_capabilities'),
