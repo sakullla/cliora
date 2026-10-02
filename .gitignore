@@ -17,7 +17,6 @@ playwright-report/
 test-results/
 
 # Keep requirements and design tracked; workflow runtime files are local.
-docs/sakullla-workflow/**/00-state.yaml
-docs/sakullla-workflow/**/task-runs/
-docs/sakullla-workflow/**/evidence/
+docs/*
+docs/requirements/*
 docs/verification/ui/
