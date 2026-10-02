@@ -209,7 +209,13 @@ fn actual_helper_preserves_retry_after_metadata() {
                 .set_read_timeout(Some(Duration::from_secs(3)))
                 .unwrap();
             let mut buffer = [0; 4096];
-            stream.read(&mut buffer).unwrap();
+            let mut received = 0;
+            while !buffer[..received].windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                assert!(received < buffer.len(), "request headers exceed 4096 bytes");
+                let count = stream.read(&mut buffer[received..]).unwrap();
+                assert_ne!(count, 0, "EOF before complete request headers");
+                received += count;
+            }
             let response = format!("HTTP/1.1 {status} Unavailable\r\nRetry-After: {header}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
             stream.write_all(response.as_bytes()).unwrap();
         });
