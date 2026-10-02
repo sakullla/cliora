@@ -8,11 +8,14 @@ pub(crate) fn command(program: impl AsRef<OsStr>) -> Command {
     {
         use std::os::windows::process::CommandExt;
         let mut command = Command::new(program);
+        crate::process_environment::apply(&mut command);
         command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         command
     }
     #[cfg(not(windows))]
     {
-        Command::new(program)
+        let mut command = Command::new(program);
+        crate::process_environment::apply(&mut command);
+        command
     }
 }

@@ -51,6 +51,16 @@ test('changed discovery output is rejected by its content hash',()=>{
   assert.throws(()=>verifyPlatformEvidence(matrix,root),/changed evidence/);
  });
 });
+test('repository path aliases work while an evidence symlink escaping the directory is rejected',()=>{
+ withDiscoveryEvidence((root)=>{
+  const alias=path.join(root,'repository-alias');fs.symlinkSync(root,alias,'dir');
+  const result=verifyPlatformEvidence(structuredClone(base),alias);
+  assert.equal(result.accepted,0);
+  const outside=path.join(root,'outside.json');fs.writeFileSync(outside,discoveryBytes);
+  const evidence=path.join(root,'docs/verification/fixture-discovery.json');fs.unlinkSync(evidence);fs.symlinkSync(outside,evidence);
+  assert.throws(()=>verifyPlatformEvidence(structuredClone(base),alias),/evidence escapes directory/);
+ });
+});
 test('version output cannot be submitted as native behavioral evidence',()=>{
  linkedFixture(({matrix,root,reports,saveReport})=>{
   reports.native_config.kind='cli-version-discovery';saveReport('native_config');

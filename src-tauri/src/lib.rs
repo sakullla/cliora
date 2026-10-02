@@ -1,4 +1,8 @@
 mod background_process;
+mod process_environment;
+#[cfg(all(test, target_os = "macos"))]
+#[path = "../../tests/platform/macos.rs"]
+mod macos_tests;
 pub mod commands;
 pub mod credentials;
 pub mod database;
@@ -143,6 +147,7 @@ pub fn run() {
             commands::set_project_model_override,
             commands::get_launch_settings,
             commands::set_preferred_terminal,
+            commands::set_custom_terminal,
             commands::set_default_launch_mode,
             commands::launch_cli,
             commands::cli_latest_version,

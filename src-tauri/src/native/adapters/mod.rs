@@ -301,6 +301,9 @@ pub trait CliAdapter: Sync {
     fn recognizes_native_install_path(&self, _path: &Path) -> bool {
         false
     }
+    fn native_binary_directories(&self, _home: &Path) -> Vec<PathBuf> {
+        Vec::new()
+    }
     fn install_command(&self) -> Option<String> {
         Some(format!("npm install -g {}", self.npm_package()))
     }

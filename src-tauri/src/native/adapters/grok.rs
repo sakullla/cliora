@@ -1,7 +1,7 @@
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::env;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::{
     file, project_root, CliAdapter, InspectionFields, LaunchMode, McpLocation,
@@ -307,6 +307,12 @@ impl CliAdapter for Grok {
     }
     fn node_required_when_missing(&self) -> bool {
         false
+    }
+    fn native_binary_directories(&self, home: &Path) -> Vec<PathBuf> {
+        vec![home.join(".grok/bin")]
+    }
+    fn recognizes_native_install_path(&self, path: &Path) -> bool {
+        cfg!(target_os = "macos") && path.parent().is_some_and(|parent| parent.ends_with(".grok/bin"))
     }
     fn install_command(&self) -> Option<String> {
         self.native_install_command()

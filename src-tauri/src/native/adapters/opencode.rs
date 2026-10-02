@@ -46,6 +46,9 @@ impl CliAdapter for OpenCode {
     fn npm_package(&self) -> &'static str {
         "opencode-ai"
     }
+    fn native_binary_directories(&self, home: &Path) -> Vec<PathBuf> {
+        vec![home.join(".opencode/bin")]
+    }
     fn version_identity(&self, basename: &str, output: &str) -> bool {
         output.contains("opencode")
             || (basename == "opencode"

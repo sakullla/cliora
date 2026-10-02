@@ -14,7 +14,7 @@ function text(error: unknown) {
   return error && typeof error === 'object' && 'message' in error ? String(error.message) : '操作失败，请重试';
 }
 
-export type McpDistributeOutcome = { status: 'written'; notice: string } | { status: 'pending' } | { status: 'failed' } | { status: 'stale' };
+export type McpDistributeOutcome = { status: 'written'; notice: string } | { status: 'pending' } | { status: 'failed'; message: string } | { status: 'stale' };
 export type McpDistributeHandle = {
   run: (saved: McpDefinition) => Promise<McpDistributeOutcome>;
   commit: () => Promise<McpDistributeOutcome>;
@@ -56,7 +56,7 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
   const stampRef = useRef(formStamp);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  useEffect(() => { onWillDistribute(willDistribute(selected, scope, activePath)); }, []);
+  useEffect(() => { onWillDistribute(willDistribute(selected, scope, activePath)); }, [selected, scope, activePath, placements, definition.id]);
   useEffect(() => {
     if (stampRef.current === formStamp) return;
     stampRef.current = formStamp;
@@ -69,22 +69,30 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
   function toolName(id: string) {
     return tools.find((item) => item.id === id)?.name ?? id;
   }
+  function outsidePlacements(nextScope = scope, nextPath = activePath) {
+    return placements.filter((item) => item.definitionId === definition.id && (item.scope !== nextScope || (nextScope === 'project' && !samePath(item.projectPath, nextPath))));
+  }
   function willDistribute(ids: string[], nextScope: Scope, nextPath: string | null) {
     const placed = idsFor(nextScope, nextPath);
-    return ids.length > 0 || placed.some((id) => !ids.includes(id));
+    return ids.length > 0 || placed.some((id) => !ids.includes(id)) || outsidePlacements(nextScope, nextPath).length > 0;
   }
   function droppedIds(ids = selected) {
     return idsFor(scope, activePath).filter((id) => !ids.includes(id));
   }
-  function noticeFor(writtenIds: string[], removedIds: string[]) {
-    const where = scope === 'project' ? `${scopeLabel(scope, activePath, projects)} 的 ` : '';
+  function placeLabel(toolId: string, nextScope: Scope, nextPath: string | null) {
+    const where = nextScope === 'project' ? `${scopeLabel(nextScope, nextPath, projects)} 的 ` : '';
+    return `${where}${toolName(toolId)}`;
+  }
+  function noticeFor(written: McpTargetResult[], removedIds: string[]) {
     const parts: string[] = [];
-    if (writtenIds.length) parts.push(`已写入 ${where}${writtenIds.map(toolName).join('、')}。`);
-    if (removedIds.length) parts.push(`已从 ${where}${removedIds.map(toolName).join('、')} 移除。`);
+    if (written.length) parts.push(`已写入 ${written.map((item) => placeLabel(item.toolId, item.scope, item.projectPath)).join('、')}。`);
+    if (removedIds.length) parts.push(`已从 ${scope === 'project' ? `${scopeLabel(scope, activePath, projects)} 的 ` : ''}${removedIds.map(toolName).join('、')} 移除。`);
     return parts.join('');
   }
   function targets(ids = selected): McpTargetRequest[] {
-    return ids.map((toolId) => ({ toolId, scope, projectPath: activePath, enabled }));
+    const current = ids.map((toolId) => ({ toolId, scope, projectPath: activePath, enabled }));
+    const outside = outsidePlacements().map((item): McpTargetRequest => ({ toolId: item.toolId, scope: item.scope, projectPath: item.projectPath, enabled: item.enabled }));
+    return [...current, ...outside];
   }
   function choose(ids: string[], nextScope = scope, nextPath = activePath) {
     setSelected(ids);
@@ -116,39 +124,45 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
     const failedWrites = written.filter((item) => item.status !== 'written');
     if (failedWrites.length) {
       setResults(written);
-      setError('');
-      return { status: 'failed' };
+      const message = failedWrites.map((item) => `${placeLabel(item.toolId, item.scope, item.projectPath)}：${item.detail || '没有写入'}`).join('；');
+      setError(message);
+      return { status: 'failed', message };
     }
     const failedRemoves = await removeDropped(saved, removed);
     if (!mounted.current) return { status: 'stale' };
     if (failedRemoves.length) {
       setError(failedRemoves.join('；'));
-      return { status: 'failed' };
+      return { status: 'failed', message: failedRemoves.join('；') };
     }
     onConflictChange(false);
-    return { status: 'written', notice: noticeFor(written.map((item) => item.toolId), removed) };
+    return { status: 'written', notice: noticeFor(written, removed) };
   }
   async function inspect(saved: McpDefinition): Promise<McpDistributeOutcome> {
     const ids = selected;
     const removed = droppedIds(ids);
-    if (!saved.id) return { status: 'failed' };
-    if (!ids.length && !removed.length) return { status: 'failed' };
-    if (scope === 'project' && !projectPath) { setError('请先选择项目。'); return { status: 'failed' }; }
+    if (!saved.id) return { status: 'failed', message: 'MCP 还没有保存，不能写入 CLI。' };
+    const requested = targets(ids);
+    if (!requested.length && !removed.length) return { status: 'failed', message: '没有勾选要写入的 CLI。' };
+    if (scope === 'project' && !projectPath && ids.length) { setError('请先选择项目。'); return { status: 'failed', message: '请先选择项目。' }; }
     const epoch = epochRef.current.epoch;
     const request = ++requestRef.current;
     setPreview(null); setResults(null); setError('');
     onConflictChange(false);
     try {
-      if (!ids.length) {
+      if (!requested.length) {
         const failed = await removeDropped(saved, removed);
         if (!mounted.current || request !== requestRef.current || epoch !== epochRef.current.epoch) return { status: 'stale' };
-        if (failed.length) { setError(failed.join('；')); return { status: 'failed' }; }
+        if (failed.length) { setError(failed.join('；')); return { status: 'failed', message: failed.join('；') }; }
         return { status: 'written', notice: noticeFor([], removed) };
       }
-      const items = await native.previewMcpTargets(saved.id, targets(ids));
+      let items = await native.previewMcpTargets(saved.id, requested);
       if (!mounted.current || request !== requestRef.current || epoch !== epochRef.current.epoch) return { status: 'stale' };
       const writable = items.filter((item) => item.status === 'ready' || item.status === 'conflict');
-      if (!writable.length) { setError(items.map((item) => item.detail).filter(Boolean).join('；') || '没有可写入的目标。'); return { status: 'failed' }; }
+      if (!writable.length) {
+        const message = items.map((item) => item.detail).filter(Boolean).join('；') || '没有可写入的目标。';
+        setError(message);
+        return { status: 'failed', message };
+      }
       if (items.some((item) => item.status === 'conflict')) {
         dropRef.current = removed;
         stampRef.current = formStamp;
@@ -156,34 +170,55 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
         onConflictChange(true);
         return { status: 'pending' };
       }
-      const written = await native.distributeMcp(saved.id, writable.map((item): McpTargetRequest => ({
-        toolId: item.toolId, scope: item.scope, projectPath: item.projectPath, enabled, baselineHash: item.baselineHash, previewToken: item.previewToken,
-      })));
+      const enabledFor = (item: McpTargetResult) => requested.find((entry) => entry.toolId === item.toolId && entry.scope === item.scope && samePath(entry.projectPath, item.projectPath))?.enabled ?? enabled;
+      const payload = writable.map((item): McpTargetRequest => ({
+        toolId: item.toolId, scope: item.scope, projectPath: item.projectPath, enabled: enabledFor(item), baselineHash: item.baselineHash, previewToken: item.previewToken,
+      }));
+      let written = await native.distributeMcp(saved.id, payload);
+      if (written.some((item) => item.detail.includes('请重新预览'))) {
+        items = await native.previewMcpTargets(saved.id, requested);
+        if (!mounted.current || request !== requestRef.current || epoch !== epochRef.current.epoch) return { status: 'stale' };
+        if (items.some((item) => item.status === 'conflict')) {
+          dropRef.current = removed;
+          stampRef.current = formStamp;
+          setPreview({ epoch, items });
+          onConflictChange(true);
+          return { status: 'pending' };
+        }
+        const retry = items.filter((item) => item.status === 'ready').map((item): McpTargetRequest => ({
+          toolId: item.toolId, scope: item.scope, projectPath: item.projectPath, enabled: enabledFor(item), baselineHash: item.baselineHash, previewToken: item.previewToken,
+        }));
+        if (retry.length) written = await native.distributeMcp(saved.id, retry);
+      }
       if (!mounted.current || request !== requestRef.current || epoch !== epochRef.current.epoch) return { status: 'stale' };
       return finish(saved, written, removed);
     } catch (value) {
-      if (request === requestRef.current && epoch === epochRef.current.epoch) setError(text(value));
-      return { status: 'failed' };
+      const message = text(value);
+      if (request === requestRef.current && epoch === epochRef.current.epoch) setError(message);
+      return { status: 'failed', message };
     }
   }
   async function commit(): Promise<McpDistributeOutcome> {
     const current = preview;
-    if (!current) return { status: 'failed' };
+    if (!current) return { status: 'failed', message: '没有可替换的预览，请再点一次保存并分发。' };
     const epoch = epochRef.current.epoch;
     const request = ++requestRef.current;
     const active = current.filter((item) => item.status === 'ready' || item.status === 'conflict');
     const removed = dropRef.current;
     setError('');
     try {
-      const written = await native.distributeMcp(definition.id, active.map((item): McpTargetRequest => ({
-        toolId: item.toolId, scope: item.scope, projectPath: item.projectPath, enabled, baselineHash: item.baselineHash, previewToken: item.previewToken, allowReplace: item.status === 'conflict',
-      })));
+      const written = await native.distributeMcp(definition.id, active.map((item): McpTargetRequest => {
+        const inView = item.scope === scope && (scope === 'global' || samePath(item.projectPath, activePath));
+        const placed = placements.find((entry) => entry.definitionId === definition.id && entry.toolId === item.toolId && entry.scope === item.scope && samePath(entry.projectPath, item.projectPath));
+        return { toolId: item.toolId, scope: item.scope, projectPath: item.projectPath, enabled: inView ? enabled : placed?.enabled ?? enabled, baselineHash: item.baselineHash, previewToken: item.previewToken, allowReplace: item.status === 'conflict' };
+      }));
       if (!mounted.current || request !== requestRef.current || epoch !== epochRef.current.epoch) return { status: 'stale' };
       setPreview(null);
       return finish(definition, written, removed);
     } catch (value) {
-      if (request === requestRef.current) setError(text(value));
-      return { status: 'failed' };
+      const message = text(value);
+      if (request === requestRef.current) setError(message);
+      return { status: 'failed', message };
     }
   }
 

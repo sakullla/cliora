@@ -117,6 +117,12 @@ fn provider_presets(adapter: &dyn CliAdapter, known: bool) -> Vec<ProviderPreset
 }
 
 fn source_of(path: &Path, adapter: &dyn CliAdapter) -> &'static str {
+    #[cfg(target_os = "macos")]
+    if !adapter.npm_package().is_empty() && path.canonicalize().is_ok_and(|target| {
+        target.to_string_lossy().contains(&format!("/node_modules/{}/", adapter.npm_package()))
+    }) {
+        return "npm_shim";
+    }
     let ext = path.extension().and_then(|v| v.to_str()).unwrap_or("");
     if ext.eq_ignore_ascii_case("ps1") || ext.eq_ignore_ascii_case("cmd") {
         if let Ok(file) = std::fs::File::open(path) {
@@ -146,9 +152,8 @@ fn source_of(path: &Path, adapter: &dyn CliAdapter) -> &'static str {
 }
 
 fn on_path(name: &str) -> bool {
-    env::var_os("PATH")
+    crate::process_environment::directories()
         .into_iter()
-        .flat_map(|paths| env::split_paths(&paths).collect::<Vec<_>>())
         .any(|dir| {
             if cfg!(windows) {
                 dir.join(format!("{name}.exe")).is_file()
@@ -330,19 +335,7 @@ fn npm_global_bin_dirs(node: Option<PathBuf>, home: Option<PathBuf>) -> Vec<Path
     dirs
 }
 
-fn fallback_bin_dirs() -> Vec<PathBuf> {
-    if cfg!(windows) {
-        return Vec::new();
-    }
-    let node = env::var_os("PATH")
-        .into_iter()
-        .flat_map(|value| env::split_paths(&value).collect::<Vec<_>>())
-        .map(|dir| dir.join("node"))
-        .find(|candidate| candidate.is_file());
-    npm_global_bin_dirs(node, dirs::home_dir())
-}
-
-fn candidates(adapter: &dyn CliAdapter) -> Vec<PathBuf> {
+fn candidates(adapter: &dyn CliAdapter, home: &Path) -> Vec<PathBuf> {
     let name = adapter.command();
     let mut paths = Vec::new();
     // Windows npm publishes name, name.cmd and name.ps1 together. The extensionless file is a
@@ -352,10 +345,12 @@ fn candidates(adapter: &dyn CliAdapter) -> Vec<PathBuf> {
     } else {
         &[""]
     };
-    let mut directories: Vec<PathBuf> = env::var_os("PATH")
-        .map(|value| env::split_paths(&value).collect())
-        .unwrap_or_default();
-    directories.extend(fallback_bin_dirs());
+    let mut directories = crate::process_environment::directories();
+    let node = directories.iter().map(|dir| dir.join("node")).find(|candidate| candidate.is_file());
+    directories.extend(npm_global_bin_dirs(node, Some(home.to_path_buf())));
+    if cfg!(target_os = "macos") {
+        directories.extend(adapter.native_binary_directories(home));
+    }
     for dir in directories {
         for suffix in suffixes {
             let candidate = dir.join(format!("{name}{suffix}"));
@@ -716,7 +711,7 @@ fn finish_probe(
     let adapter = registry
         .get(id)
         .ok_or("未注册的 CLI 适配器，不能探测或写入")?;
-    let mut paths = candidates(adapter);
+    let mut paths = candidates(adapter, home);
     if let Some(path) = custom_path {
         paths.retain(|candidate| candidate != path);
         paths.insert(0, path.to_path_buf());
@@ -827,6 +822,56 @@ mod tests {
         let dirs = npm_global_bin_dirs(Some(linked_dir.join("node")), None);
 
         assert_eq!(dirs.first(), Some(&real_bin), "{dirs:?}");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_npm_symlink_is_recognized_without_confusing_another_package() {
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("lib/node_modules/@openai/codex/bin/codex.js");
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&target, "#!/usr/bin/env node\n").unwrap();
+        let link = temp.path().join("codex");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert_eq!(source_of(&link, adapters::known(CliId::Codex)), "npm_shim");
+        assert_eq!(source_of(&link, adapters::known(CliId::ClaudeCode)), "unknown");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_discovers_native_cli_outside_the_gui_path() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::tempdir().unwrap();
+        for (tool, directory, output) in [
+            (CliId::Grok, ".grok/bin", "grok 1.0.0"),
+            (CliId::OpenCode, ".opencode/bin", "opencode 1.18.0"),
+        ] {
+            let adapter = adapters::known(tool);
+            let executable = home.path().join(directory).join(adapter.command());
+            std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
+            std::fs::write(&executable, format!("#!/bin/sh\nprintf '%s\\n' '{output}'\n")).unwrap();
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+            assert!(candidates(adapter, home.path()).contains(&executable));
+            assert_eq!(probe_path(tool, &executable).status, "available");
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "requires locally installed Codex, Claude Code and Grok; only runs version probes"]
+    fn live_macos_probe_recovers_cli_and_node_from_finder_environment() {
+        let home = dirs::home_dir().unwrap();
+        for tool in [CliId::Codex, CliId::ClaudeCode, CliId::Grok] {
+            let result = probe(tool, None, &home, None, Scope::Global);
+            assert!(result.selected_path.is_some(), "{}: {:?}", tool.name(), result.installations);
+            for dependency in &result.dependencies {
+                assert_eq!(dependency.status, "found", "{}: {}", tool.name(), dependency.name);
+            }
+            eprintln!("{}: {} ({})", tool.name(), result.selected_path.unwrap(), result.installations.iter().find(|item| item.status == "available").unwrap().version.as_deref().unwrap());
+        }
+        assert!(on_path("node"));
+        assert!(on_path("npm"));
+        assert!(node_version().is_some());
     }
 
     #[test]

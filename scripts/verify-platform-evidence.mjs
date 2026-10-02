@@ -11,6 +11,7 @@ const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 
 /** platformCandidates maps each platform to a content-hashed desktop-build record (or null until built). */
 export function verifyPlatformEvidence(matrix,repositoryRoot=root){
+ repositoryRoot=fs.realpathSync(repositoryRoot);
  const pending=[];
  function artifact(ref,label,evidenceOnly=true){
  if(!ref||typeof ref.path!=='string'||(evidenceOnly&&!/^docs\/verification\//.test(ref.path))||! /^[a-f0-9]{64}$/.test(ref.sha256??''))throw new Error(`${label}: missing repository-relative evidence path or SHA-256`);

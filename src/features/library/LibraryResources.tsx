@@ -123,14 +123,34 @@ export function LibraryResources({ section, active, tools, projects }: { section
   }
 
   async function finishSkillImport(item?: SkillPackage) {
+    const prior = item ? installations.filter((entry) => entry.packageId === item.id && entry.state !== 'conflict' && entry.state !== 'disabled' && entry.state !== 'unavailable') : [];
+    const checked = installTools.filter((toolId) => !prior.some((entry) => entry.toolId === toolId && entry.scope === 'global'));
     await reloadSkills();
-    const toolsToInstall = installTools;
     closeSkill();
     setInstallTools([]);
-    if (item && toolsToInstall.length) {
-      setSkillSeed(toolsToInstall);
-      setSkillTarget(item);
-      setNotice('');
+    const targets = [
+      ...prior.map((entry) => ({ toolId: entry.toolId, scope: entry.scope, projectPath: entry.projectPath })),
+      ...checked.map((toolId) => ({ toolId, scope: 'global' as const, projectPath: null })),
+    ];
+    if (item && targets.length) {
+      const notes: string[] = [];
+      const conflicts: string[] = [];
+      for (const target of targets) {
+        const name = tools.find((tool) => tool.id === target.toolId)?.name ?? target.toolId;
+        const preview = await native.previewSkillTarget(item.id, target.toolId, target.scope, target.projectPath);
+        if (preview?.status === 'conflict') { conflicts.push(name); continue; }
+        const outcome = await native.installSkill(item.id, target.toolId, target.scope, target.projectPath, preview?.previewToken ?? null, false);
+        notes.push(`${name}：${outcome.status === 'failed' ? outcome.detail : '已同步'}`);
+      }
+      await reloadSkills();
+      const failed = notes.filter((line) => !line.endsWith('已同步'));
+      if (conflicts.length) {
+        setSkillSeed([]);
+        setSkillTarget(item);
+        setNotice(`资料库已更新。${conflicts.join('、')} 上有外部修改，请在这个窗口确认替换。`);
+      } else if (failed.length) setError(failed.join('；'));
+      else setNotice(notes.join('；') || '已同步到已安装的 CLI。');
+      if (!failed.length) setError('');
       return;
     }
     setNotice('已放进资料库。');
@@ -217,12 +237,16 @@ export function LibraryResources({ section, active, tools, projects }: { section
       const saved = await native.saveMcpDefinition({ ...draft, inLibrary: true, env: parseLines(envText), headers: parseLines(headerText) });
       setDefinitions(await native.listMcpDefinitions());
       setDraft(draftOf(saved));
-      if (willDistribute) {
+      const alreadyPlaced = placements.some((item) => item.definitionId === saved.id);
+      if (willDistribute || alreadyPlaced) {
         const outcome = await distributeRef.current?.run(saved);
         setPlacements(await native.listMcpPlacements().catch(() => []));
-        if (outcome?.status === 'written') { setConflict(false); setDraft(null); setNotice(outcome.notice); }
+        if (outcome?.status === 'written') { setConflict(false); setDialogError(''); setDraft(null); setNotice(outcome.notice); }
         else if (outcome?.status === 'pending') setConflict(true);
-        else setConflict(false);
+        else {
+          setConflict(false);
+          setDialogError(outcome?.status === 'failed' ? outcome.message : '已保存在资料库，但没有重新写入 CLI。请再点一次保存并分发。');
+        }
       } else {
         setPlacements(await native.listMcpPlacements().catch(() => []));
         setDraft(null);
@@ -354,7 +378,7 @@ export function LibraryResources({ section, active, tools, projects }: { section
           {pendingImport && <section className={styles.skillSection} role="group" aria-label="Skills 同名更新预览">
             <h3>资料库里已有「{pendingImport.preview.name}」</h3>
             <p>来源：{pendingImport.preview.source} · {pendingImport.preview.fileCount} 个文件。确认后会换成这一份{installTools.length ? '，并安装到勾选的 CLI' : ''}。</p>
-            <div className={styles.actions}><button type="button" onClick={() => setPendingImport(null)}>返回</button><button type="button" className={styles.primary} disabled={busy} onClick={() => void confirmSkillImport()}>确认更新资料库包</button></div>
+            <div className={styles.actions}><button type="button" onClick={() => setPendingImport(null)}>返回</button><button type="button" className={styles.primary} disabled={busy} onClick={() => void confirmSkillImport()}>{installations.some((entry) => packages.some((item) => item.id === entry.packageId && item.name === pendingImport.preview.name)) ? '更新并同步到已安装的 CLI' : '确认更新资料库包'}</button></div>
           </section>}
           {dialogError && <p className={styles.error} role="alert">{dialogError}</p>}
         </div>
@@ -409,9 +433,9 @@ export function LibraryResources({ section, active, tools, projects }: { section
             <label className={styles.span}>URL<input aria-label="网址" value={draft.url} onChange={(event) => setDraft({ ...draft, url: event.target.value })} placeholder="https://example.com/mcp" /></label>
             <label className={styles.span}>请求头<textarea rows={4} value={headerText} onChange={(event) => setHeaderText(event.target.value)} placeholder="Authorization=Bearer ${API_TOKEN}" /></label>
           </>}
-          {dialogError && <p className={styles.error} role="alert">{dialogError}</p>}
         </div>
         <McpDistribution key={formKey} ref={distributeRef} definition={definitions.find((item) => item.id === draft.id) ?? { ...draft, id: draft.id ?? '', version: draft.expectedVersion ?? 0 }} tools={tools} projects={projects} placements={placements} formStamp={JSON.stringify([draft.name, draft.transport, draft.command, draft.args, draft.url, envText, headerText])} onWillDistribute={setWillDistribute} onConflictChange={setConflict} />
+        {dialogError && <p className={styles.error} role="alert">{dialogError}</p>}
         <div className="dialog-footer">{draft.id && <button type="button" disabled={busy} onClick={() => { const current = definitions.find((item) => item.id === draft.id); if (current) void remove(current); }}>删除</button>}<span className="dialog-footer-gap" />{conflict && <button type="button" disabled={busy} onClick={() => { setConflict(false); distributeRef.current?.dismiss(); }}>保留当前文件</button>}<button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint} disabled={busy || !draft.name.trim()} onClick={() => void (conflict ? replaceDistribution() : save())}>{conflict ? '替换并分发' : willDistribute ? '保存并分发' : '保存'}</button></div>
       </>}
     </GuideDialog>

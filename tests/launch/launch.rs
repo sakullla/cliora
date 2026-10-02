@@ -1,5 +1,96 @@
 use super::*;
 
+#[test]
+fn macos_terminal_receives_path_directory_and_escaped_cli_arguments() {
+    let mut plan = sample(TerminalId::MacTerminal);
+    plan.directory = PathBuf::from("/Users/test/项目 'one'");
+    plan.executable = PathBuf::from("/Users/test/.nvm/bin/codex");
+    plan.cli_args = vec!["prompt with \"quotes\", \\slashes and\nnewlines $(touch unwanted)".into()];
+    let terminal = terminal_command(&plan).unwrap();
+    assert_eq!(terminal.program, "/usr/bin/open");
+    assert_eq!(terminal.args, ["-a", "Terminal"]);
+    let script = terminal.mac_script.unwrap();
+    assert!(script.contains("export PATH="));
+    assert!(script.contains("cd -- '/Users/test/项目 '\"'\"'one'\"'\"''"));
+    assert!(script.contains("prompt with \"quotes\", \\slashes and\nnewlines $(touch unwanted)"));
+    assert!(!script.contains("tell application"));
+    assert!(terminal.args.iter().all(|arg| !arg.contains("do script") && arg.len() < 1024));
+    let maintenance = shell_terminal(TerminalId::MacTerminal, &plan.directory, "npm install -g example").unwrap();
+    let maintenance = maintenance.mac_script.unwrap();
+    assert!(maintenance.contains("export PATH="));
+    assert!(maintenance.contains("cd -- "));
+    assert!(maintenance.contains("&& npm install -g example"));
+}
+
+#[test]
+fn custom_terminal_keeps_one_script_placeholder_and_presets_are_templates() {
+    let temp = tempfile::tempdir().unwrap();
+    let program = temp.path().join("terminal");
+    std::fs::write(&program, "").unwrap();
+    let missing = normalize_custom(program.to_str().unwrap(), &["--flag".into()]).unwrap_err();
+    assert!(missing.contains("{script}"));
+    let command = normalize_custom(program.to_str().unwrap(), &["--flag".into(), "{script}".into()]).unwrap();
+    assert_eq!(command.args, ["--flag", "{script}"]);
+    let expanded: Vec<_> = command.args.iter().map(|arg| if arg == "{script}" { "/tmp/cliora launch.command".to_owned() } else { arg.clone() }).collect();
+    assert_eq!(expanded, ["--flag".to_owned(), "/tmp/cliora launch.command".to_owned()]);
+    let presets = terminal_presets();
+    assert!(presets.iter().all(|preset| preset.args.iter().filter(|arg| arg.as_str() == "{script}").count() == 1));
+    let mut plan = sample(TerminalId::Custom);
+    plan.cli_args = vec!["y".repeat(2000)];
+    let terminal = terminal_command(&plan).unwrap();
+    assert!(terminal.args.iter().map(String::len).sum::<usize>() < 1024);
+    assert!(terminal.mac_script.unwrap().contains(&"y".repeat(2000)));
+}
+
+#[test]
+fn macos_launch_keeps_long_commands_out_of_the_tty_input_buffer() {
+    let mut plan = sample(TerminalId::MacTerminal);
+    plan.cli_args = vec!["resume".into(), "x".repeat(2000)];
+    let terminal = terminal_command(&plan).unwrap();
+    let script = terminal.mac_script.unwrap();
+    assert!(script.contains(&"x".repeat(2000)));
+    assert!(terminal.args.iter().map(String::len).sum::<usize>() < 1024);
+    assert!(!format!("{:?}", terminal.args).contains("do script"));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_launch_script_runs_in_the_original_directory_with_literal_arguments() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("项目 with 'quotes' and spaces");
+    std::fs::create_dir(&directory).unwrap();
+    let executable = temp.path().join("test cli");
+    std::fs::write(&executable, "#!/bin/sh\nprintf '%s\\0' \"$PWD\" \"$@\"\n").unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let plan = LaunchPlan {
+        directory: directory.canonicalize().unwrap(),
+        executable,
+        cli_args: vec!["--resume".into(), "session 'one'".into(), "\"quote\" \\slash\nnewline $(touch unwanted)".into()],
+        ..sample(TerminalId::MacTerminal)
+    };
+    let terminal = terminal_command(&plan).unwrap();
+    let script = terminal.mac_script.unwrap();
+    let output = Command::new("/bin/sh").args(["-c", &script])
+        .env_clear().env("PATH", "/usr/bin:/bin").output().unwrap();
+    assert!(output.status.success(), "{:?}", output.stderr);
+    let fields: Vec<_> = output.stdout.split(|byte| *byte == 0).collect();
+    assert_eq!(fields[0], plan.directory.to_str().unwrap().as_bytes());
+    for (index, arg) in plan.cli_args.iter().enumerate() {
+        assert_eq!(fields[index + 1], arg.as_bytes());
+    }
+    assert!(!plan.directory.join("unwanted").exists());
+}
+
+#[test]
+fn macos_terminal_denial_is_an_error_and_does_not_echo_private_commands() {
+    assert!(mac_terminal_result(true, "").is_ok());
+    let denied = mac_terminal_result(false, "Not authorized to send Apple events to Terminal. (-1743)").unwrap_err();
+    assert!(denied.contains("自动化"));
+    let failed = mac_terminal_result(false, "private initial prompt in an AppleScript error").unwrap_err();
+    assert!(!failed.contains("private initial prompt"));
+}
+
 fn sample(terminal: TerminalId) -> LaunchPlan {
     LaunchPlan {
         tool_id: "grok".into(),
