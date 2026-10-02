@@ -49,6 +49,8 @@ pub struct UsageError {
     pub message: String,
     pub retry_after_seconds: Option<u32>,
     pub metric_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub script_line: Option<u32>,
 }
 
 impl UsageError {
@@ -59,6 +61,7 @@ impl UsageError {
             message: message.into(),
             retry_after_seconds: None,
             metric_id: None,
+            script_line: None,
         }
     }
 
@@ -298,7 +301,7 @@ pub enum UsageExecution {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageSnapshot {
     pub execution: UsageExecution,

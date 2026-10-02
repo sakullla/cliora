@@ -29,6 +29,11 @@ pub fn run() {
             // The window must remain available when local storage needs repair.
             app.manage(commands::AppState::default());
             tray::setup(app);
+            let usage_handle = app.handle().clone();
+            std::thread::spawn(move || loop {
+                let _ = commands::usage_background_tick(&usage_handle);
+                std::thread::sleep(std::time::Duration::from_secs(5));
+            });
             let sync_handle = app.handle().clone();
             std::thread::spawn(move || loop {
                 let _ = commands::sync_background_tick(&sync_handle);
@@ -79,6 +84,11 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            commands::usage_presets,
+            commands::usage_builtin_script,
+            commands::list_usage_cache,
+            commands::refresh_usage_query,
+            commands::cancel_usage_refresh,
             commands::list_usage_queries,
             commands::create_usage_test,
             commands::cancel_usage_test,

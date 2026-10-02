@@ -6,12 +6,12 @@ import { defaultKeymap, history, historyKeymap, indentWithTab, undo, redo, undoD
 import { HighlightStyle, StreamLanguage, bracketMatching, indentOnInput, syntaxHighlighting } from '@codemirror/language';
 import { json } from '@codemirror/lang-json';
 import { markdown } from '@codemirror/lang-markdown';
-import { json as jsonWithComments } from '@codemirror/legacy-modes/mode/javascript';
+import { javascript, json as jsonWithComments } from '@codemirror/legacy-modes/mode/javascript';
 import { toml } from '@codemirror/legacy-modes/mode/toml';
 import { tags } from '@lezer/highlight';
 import './CodeEditor.css';
 
-export type CodeFormat = 'json' | 'jsonc' | 'toml' | 'markdown' | 'text';
+export type CodeFormat = 'json' | 'jsonc' | 'toml' | 'markdown' | 'text' | 'javascript';
 const highlighting = HighlightStyle.define([
   { tag: tags.comment, class: 'code-comment' },
   { tag: [tags.propertyName, tags.definition(tags.variableName)], class: 'code-property' },
@@ -22,6 +22,7 @@ const highlighting = HighlightStyle.define([
 ]);
 function language(format: CodeFormat) {
   switch (format) {
+    case 'javascript': return StreamLanguage.define(javascript);
     case 'json': return json();
     case 'jsonc': return StreamLanguage.define(jsonWithComments);
     case 'toml': return StreamLanguage.define(toml);
@@ -31,9 +32,9 @@ function language(format: CodeFormat) {
 }
 
 /** A format-driven editor shared by native files, structured previews and library text. */
-export function CodeEditor({ value, onChange, format = 'text', label, readOnly = false, placeholder = '', compact = false }: {
+export function CodeEditor({ value, onChange, format = 'text', label, readOnly = false, placeholder = '', compact = false, errorLine }: {
   value: string; onChange?: (value: string) => void; format?: CodeFormat; label: string;
-  readOnly?: boolean; placeholder?: string; compact?: boolean;
+  readOnly?: boolean; placeholder?: string; compact?: boolean; errorLine?: number;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const editor = useRef<EditorView | null>(null);
@@ -66,6 +67,13 @@ export function CodeEditor({ value, onChange, format = 'text', label, readOnly =
     const view = editor.current;
     if (view && view.state.doc.toString() !== value) view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value }, annotations: Transaction.addToHistory.of(false) });
   }, [value]);
+  useLayoutEffect(() => {
+    const view = editor.current;
+    if (view && errorLine && errorLine <= view.state.doc.lines) {
+      const line = view.state.doc.line(errorLine);
+      view.dispatch({ selection: { anchor: line.from, head: line.to }, effects: EditorView.scrollIntoView(line.from, { y: 'center' }) });
+    }
+  }, [errorLine]);
   useLayoutEffect(() => {
     if (!menu || !menuHost.current) return;
     const element = menuHost.current;

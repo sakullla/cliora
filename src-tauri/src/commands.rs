@@ -37,6 +37,31 @@ async fn usage_blocking<T: Send + 'static>(
 }
 
 #[tauri::command]
+pub fn usage_presets() -> Vec<crate::usage::UsagePreset> { crate::usage::usage_presets() }
+
+#[tauri::command]
+pub fn usage_builtin_script(config: crate::usage::QueryConfig) -> Result<String, crate::usage::UsageError> { crate::usage::builtin_script(&config) }
+
+#[tauri::command]
+pub async fn list_usage_cache(app: AppHandle) -> Result<Vec<crate::usage::UsageCache>, crate::usage::UsageError> {
+    usage_blocking(app, crate::usage::list_cache).await
+}
+
+#[tauri::command]
+pub async fn refresh_usage_query(app: AppHandle, id: String) -> Result<(), crate::usage::UsageError> {
+    let db=app.state::<AppState>().database(&app).map_err(|_|crate::usage::UsageError::storage())?;
+    tauri::async_runtime::spawn_blocking(move ||crate::usage::refresh_query(db,&id,true)).await.map_err(|_|crate::usage::UsageError::storage())?
+}
+
+#[tauri::command]
+pub fn cancel_usage_refresh(id: String) -> Result<(), crate::usage::UsageError> { crate::usage::cancel_refresh(&id) }
+
+pub fn usage_background_tick(app: &AppHandle) -> Result<(), crate::usage::UsageError> {
+    let db=app.state::<AppState>().database(app).map_err(|_|crate::usage::UsageError::storage())?;
+    crate::usage::scheduler_tick(db)
+}
+
+#[tauri::command]
 pub async fn list_usage_queries(app: AppHandle) -> Result<Vec<crate::usage::UsageQuery>, crate::usage::UsageError> {
     usage_blocking(app, crate::usage::list_queries).await
 }
