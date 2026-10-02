@@ -31,7 +31,6 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
   onWillDistribute: (active: boolean) => void;
   onConflictChange: (active: boolean) => void;
 }>(function McpDistribution({ definition, tools, projects, placements, formStamp, onWillDistribute, onConflictChange }, ref) {
-  const contexts = useResourceContexts(tools, placements.filter((item) => item.definitionId === definition.id));
   const placedFor = (nextScope: Scope, nextPath: string | null) => placements.filter((item) => item.definitionId === definition.id && contexts.matches(item) && item.scope === nextScope && (nextScope === 'global' || samePath(item.projectPath, nextPath)));
   const idsFor = (nextScope: Scope, nextPath: string | null) => placedFor(nextScope, nextPath).map((item) => item.toolId);
   const contextLabel = useAccountLabels();
@@ -41,7 +40,7 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
   const openOnProject = !globalPlaced.length && !!firstProject;
   const openScope: Scope = openOnProject ? 'project' : 'global';
   const openPath = openOnProject ? firstProject?.projectPath ?? null : null;
-  const initialPlaced = placedFor(openScope, openPath);
+  const initialPlaced = mine.filter((item) => item.scope === openScope && (openScope === 'global' || samePath(item.projectPath, openPath)));
   const [scope, setScope] = useState<Scope>(openScope);
   const [projectPath, setProjectPath] = useState<string | null>(openPath ?? projects.find((item) => item.available && item.path)?.path ?? null);
   const [selected, setSelected] = useState<string[]>(() => initialPlaced.map((item) => item.toolId));
@@ -50,6 +49,8 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
   const [results, setResults] = useState<McpTargetResult[] | null>(null);
   const [error, setError] = useState('');
   const activePath = scope === 'project' ? projectPath : null;
+  const contexts = useResourceContexts(tools, mine, { scope, projectPath: activePath });
+  const targetFor = (toolId: string) => ({ toolId, scope, projectPath: activePath });
   const context = JSON.stringify([scope, activePath, selected, enabled]);
   const epochRef = useRef({ context, epoch: 0 });
   if (epochRef.current.context !== context) epochRef.current = { context, epoch: epochRef.current.epoch + 1 };
@@ -69,13 +70,16 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
     onConflictChange(false);
   }, [formStamp, previewState, onConflictChange]);
 
+  const initialized = useRef(new Set<string>());
   useEffect(() => {
-    if (contexts.ready) {
+    const newlyReady = tools.filter((tool) => contexts.ready(targetFor(tool.id)) && !initialized.current.has(JSON.stringify(targetFor(tool.id))));
+    for (const tool of newlyReady) initialized.current.add(JSON.stringify(targetFor(tool.id)));
+    setSelected((previous) => [...new Set([...previous.filter((id) => contexts.ready(targetFor(id))), ...newlyReady.filter((tool) => placedFor(scope, activePath).some((place) => place.toolId === tool.id)).map((tool) => tool.id)])]);
+    if (newlyReady.length) {
       const placed = placedFor(scope, activePath);
-      setSelected(placed.map((item) => item.toolId));
       setEnabled(placed.length === 0 || placed.some((item) => item.enabled));
     }
-  }, [contexts.ready, contexts.stamp]);
+  }, [contexts.stamp, scope, activePath]);
 
   function toolName(id: string) {
     return tools.find((item) => item.id === id)?.name ?? id;
@@ -101,7 +105,7 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
     return parts.join('');
   }
   function targets(ids = selected): McpTargetRequest[] {
-    const current = ids.map((toolId) => ({ toolId, scope, projectPath: activePath, contextId: contexts.context({ toolId, scope, projectPath: activePath }), enabled }));
+    const current = ids.filter((id) => contexts.ready(targetFor(id))).map((toolId) => ({ toolId, scope, projectPath: activePath, contextId: contexts.context({ toolId, scope, projectPath: activePath }), enabled }));
     const outside = outsidePlacements().map((item): McpTargetRequest => ({ toolId: item.toolId, scope: item.scope, projectPath: item.projectPath, contextId: contexts.context(item), enabled: item.enabled }));
     return [...current, ...outside];
   }
@@ -115,6 +119,7 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
   function applyScope(nextScope: Scope, nextPath = projectPath) {
     const placed = placedFor(nextScope, nextScope === 'project' ? nextPath : null);
     const ids = placed.map((item) => item.toolId);
+    initialized.current.clear();
     setScope(nextScope);
     if (nextScope === 'project') setProjectPath(nextPath);
     setEnabled(placed.length === 0 || placed.some((item) => item.enabled));
@@ -151,8 +156,7 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
     return { status: 'written', notice: noticeFor(written, removed) };
   }
   async function inspect(saved: McpDefinition): Promise<McpDistributeOutcome> {
-    if (!contexts.ready) return { status: 'failed', message: contexts.error || '正在读取当前账号，请稍后重试。' };
-    const ids = selected;
+    const ids = selected.filter((id) => contexts.ready(targetFor(id)));
     const removed = droppedIds(ids);
     if (!saved.id) return { status: 'failed', message: 'MCP 还没有保存，不能写入 CLI。' };
     const requested = targets(ids);
@@ -240,7 +244,7 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
     run: inspect,
     commit,
     dismiss: () => { setPreview(null); setResults(null); onConflictChange(false); },
-  }), [selected, scope, activePath, enabled, definition, placements, formStamp, preview, contexts.stamp, contexts.ready]);
+  }), [selected, scope, activePath, enabled, definition, placements, formStamp, preview, contexts.stamp]);
 
   const placedNow = new Set(idsFor(scope, activePath));
 
@@ -253,9 +257,9 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
       ...(scope === 'project' && projectPath && !projects.some((item) => samePath(item.path, projectPath)) ? [{ value: projectPath, label: projectPath.split(/[\\/]/).filter(Boolean).at(-1) || projectPath, detail: shortPath(projectPath), note: '项目未关联' }] : []),
     ]} placeholder="选择项目…" searchLabel="搜索项目" onChange={(value) => { if (value === '__global__') applyScope('global'); else applyScope('project', value); }} />
     <label className={styles.choice}><input type="checkbox" checked={enabled} onChange={(event) => { setEnabled(event.target.checked); setPreview(null); setResults(null); onConflictChange(false); }} />写入后启用</label>
-    <div className={styles.targets}>{tools.map((item) => <label key={item.id} title={placedNow.has(item.id) ? '已写入。取消勾选并保存会从该 CLI 移除。' : '保存时写入这个 CLI'}><input type="checkbox" disabled={!contexts.ready} checked={selected.includes(item.id)} onChange={(event) => choose(event.target.checked ? [...selected, item.id] : selected.filter((id) => id !== item.id))} /><ToolIcon toolId={item.id} size={22} />{item.name}</label>)}</div>
-    {mine.filter((item) => !contexts.matches(item)).map((item) => <p key={JSON.stringify([item.toolId, item.scope, item.projectPath, item.contextId])}>{toolName(item.toolId)} · {scopeLabel(item.scope, item.projectPath, projects)} · {contextLabel(item.contextId)}（切换后可修改）</p>)}
-    {contexts.error && <p role="alert">{contexts.error}</p>}
+    <div className={styles.targets}>{tools.map((item) => <label key={item.id} title={placedNow.has(item.id) ? '已写入。取消勾选并保存会从该 CLI 移除。' : '保存时写入这个 CLI'}><input type="checkbox" disabled={!contexts.ready(targetFor(item.id))} checked={selected.includes(item.id)} onChange={(event) => choose(event.target.checked ? [...selected, item.id] : selected.filter((id) => id !== item.id))} /><ToolIcon toolId={item.id} size={22} />{item.name}</label>)}</div>
+    {mine.filter((item) => contexts.ready(item) && !contexts.matches(item)).map((item) => <p key={JSON.stringify([item.toolId, item.scope, item.projectPath, item.contextId])}>{toolName(item.toolId)} · {scopeLabel(item.scope, item.projectPath, projects)} · {contextLabel(item.contextId)}（切换后可修改）</p>)}
+    {contexts.issues.map((issue) => <p key={issue.key} role="status">{toolName(issue.toolId)} · {scopeLabel(issue.scope, issue.projectPath, projects)}：{issue.detail}；已有安装保留。</p>)}
     {preview && <div className={styles.distribute} role="group" aria-label="MCP 写入冲突">
       <p><strong>这些 CLI 上已有同名内容。</strong>比较后可以选择替换，或保留当前文件。</p>
       {preview.map((item) => <div key={JSON.stringify([item.toolId, item.scope, item.projectPath, item.contextId])}>

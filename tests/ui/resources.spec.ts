@@ -42,7 +42,7 @@ async function mockResources(page: Page) {
         if (command === 'get_registered_tool_workspace') return {
           probe: { selectedPath: null, installations: [], nativeFiles: [], nativeWrites: { state: 'unknown', reason: '尚未安装' },
             interfaceFormats: [], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '', installCommand: null, upgradeCommand: null },
-          profiles: [], common: null, binding: null, snapshots: [], recoveryNeeded: [], customPath: null,
+          profiles: [], common: null, binding: null, effectiveContextId: null, snapshots: [], recoveryNeeded: [], customPath: null,
         };
         if (command === 'list_mcp_definitions') return definitions;
         if (command === 'list_mcp_placements') return placements;
@@ -381,4 +381,90 @@ test('Skill card and installed list remove the selected account without collapsi
   await expect(row).toHaveCount(0);
   const writes = await page.evaluate(() => (window as any).__resourceWrites);
   expect(writes.map((entry: any) => entry.args.expectedContextId)).toEqual(['ctx-a', 'ctx-b', 'ctx-a']);
+});
+
+
+async function mockBrokenResourceTargets(page: Page) {
+  await mockResources(page);
+  await page.addInitScript(() => {
+    const win = window as any;
+    const invoke = win.__TAURI_INTERNALS__.invoke;
+    win.__deferContext = false;
+    win.__pendingContexts = [];
+    win.__isolatedInstalls = [
+      { packageId: 'skill-broken', toolId: 'codex', scope: 'global', projectPath: null, contextId: null, targetPath: '/tmp/global/alpha', state: 'current' },
+      { packageId: 'skill-broken', toolId: 'codex', scope: 'project', projectPath: '/tmp/deleted-project', contextId: null, targetPath: '/tmp/deleted-project/alpha', state: 'current' },
+    ];
+    win.__resourceSkillPackages.push({ id: 'skill-broken', name: 'alpha', description: 'fixture', source: 'local', digest: 'fixture', fileCount: 1, inLibrary: true });
+    win.__resourceMcpDefinitions.push({ id: 'mcp-broken', name: 'filesystem', transport: 'stdio', command: 'node', args: [], url: '', env: {}, headers: {}, inLibrary: true, version: 1 });
+    win.__resourceMcpPlacements.push(
+      { definitionId: 'mcp-broken', toolId: 'codex', scope: 'global', projectPath: null, contextId: null, enabled: true },
+      { definitionId: 'mcp-broken', toolId: 'codex', scope: 'project', projectPath: '/tmp/deleted-project', contextId: null, enabled: true },
+    );
+    win.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command === 'list_cli_adapters') {
+        const catalog = await invoke(command, args);
+        return { ...catalog, registered: [...catalog.registered, { ...catalog.registered[0], id: 'claude_code', name: 'Claude Code' }], managedIds: ['codex', 'claude_code'] };
+      }
+      if (command === 'get_registered_tool_workspace') {
+        if (args.scope === 'project') throw { message: '项目目录已删除' };
+        if (args.toolId === 'claude_code') throw { message: '账号绑定不可读' };
+        const workspace = { ...await invoke(command, args), effectiveContextId: null };
+        if (win.__deferContext) return new Promise(resolve => win.__pendingContexts.push(() => resolve(workspace)));
+        return workspace;
+      }
+      if (command === 'list_skill_installations') return win.__isolatedInstalls;
+      if (command === 'preview_skill_target') { win.__resourceWrites.push({ command, args }); return { status: 'ready', previewToken: 'isolated-token' }; }
+      if (command === 'remove_skill') { win.__resourceWrites.push({ command, args }); return null; }
+      return invoke(command, args);
+    };
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
+}
+
+test('MCP isolates failed historical projects and bindings while default global context resolves independently', async ({ page }) => {
+  await mockBrokenResourceTargets(page);
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  await page.evaluate(() => { (window as any).__deferContext = true; });
+  await page.getByRole('button', { name: '修改' }).click();
+  const codex = page.getByRole('checkbox', { name: 'Codex', exact: true });
+  await expect(codex).toBeDisabled();
+  await expect(page.getByText(/项目目录已删除/)).toBeVisible();
+  await expect(page.getByRole('checkbox', { name: 'Claude Code' })).toBeDisabled();
+  expect(await page.evaluate(() => (window as any).__resourceWrites)).toHaveLength(0);
+  await page.evaluate(() => { const win = window as any; win.__deferContext = false; win.__pendingContexts.forEach((resolve: () => void) => resolve()); });
+  await expect(codex).toBeEnabled(); await expect(codex).toBeChecked();
+  await page.getByRole('button', { name: '保存并分发' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  const writes = await page.evaluate(() => (window as any).__resourceWrites);
+  expect(writes).toHaveLength(1);
+  expect(writes[0].targets).toEqual([expect.objectContaining({ toolId: 'codex', scope: 'global', contextId: null })]);
+  await page.getByRole('button', { name: '修改' }).click();
+  await expect(codex).toBeEnabled(); await expect(codex).toBeChecked();
+  await codex.uncheck();
+  await page.getByRole('button', { name: '保存并分发' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  const state = await page.evaluate(() => ({ writes: (window as any).__resourceWrites, places: (window as any).__resourceMcpPlacements }));
+  expect(state.writes[1]).toMatchObject({ command: 'remove_native_mcp', args: { target: { toolId: 'codex', scope: 'global', contextId: null } } });
+  expect(state.places).toEqual([expect.objectContaining({ scope: 'project', projectPath: '/tmp/deleted-project' })]);
+});
+
+test('Skill failed project stays visible and disabled while healthy global installation proceeds', async ({ page }) => {
+  await mockBrokenResourceTargets(page);
+  await page.getByRole('region', { name: '资料库内容' }).getByRole('tab', { name: 'Skill', exact: true }).click();
+  await page.getByRole('button', { name: '修改' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByText(/项目目录已删除/)).toBeVisible();
+  await expect(dialog.getByRole('listitem').filter({ hasText: 'deleted-project' }).getByRole('button', { name: '移除' })).toBeDisabled();
+  await expect(dialog.getByRole('checkbox', { name: 'Claude Code' })).toBeDisabled();
+  await expect(dialog.getByRole('checkbox', { name: 'Codex', exact: true })).toBeEnabled();
+  await expect(dialog.getByRole('checkbox', { name: 'Codex', exact: true })).toBeChecked();
+  await dialog.getByRole('button', { name: '安装到所选 CLI' }).click();
+  await expect(dialog.getByRole('status').filter({ hasText: 'Codex：已安装' })).toBeVisible();
+  const writes = await page.evaluate(() => (window as any).__resourceWrites);
+  expect(writes).toHaveLength(2);
+  expect(writes[0]).toMatchObject({ command: 'preview_skill_target', args: { toolId: 'codex', scope: 'global', projectPath: null } });
+  expect(writes[1]).toMatchObject({ toolId: 'codex', scope: 'global', projectPath: null, previewToken: 'isolated-token' });
+  expect(await page.evaluate(() => (window as any).__isolatedInstalls)).toHaveLength(2);
 });

@@ -32,27 +32,49 @@ export async function removalContext(target: Target) {
   return workspace.effectiveContextId ?? null;
 }
 
-export function useResourceContexts(tools: { id: string }[], placements: Target[]) {
-  const targets = [...tools.map((tool): Target => ({ toolId: tool.id, scope: 'global', projectPath: null })), ...placements];
+type ContextResult = { status: 'pending' } | { status: 'resolved'; contextId: string | null } | { status: 'failed'; error: string };
+
+export function useResourceContexts(tools: { id: string }[], placements: Target[], active: { scope: Scope; projectPath: string | null }) {
+  const targets = [...tools.map((tool): Target => ({ toolId: tool.id, ...active })), ...placements];
   const stamp = JSON.stringify([...new Set(targets.map(scopeKey))].sort());
-  const [state, setState] = useState<{ stamp: string; values: Record<string, string | null> }>({ stamp: '', values: {} });
-  const [error, setError] = useState('');
+  const [state, setState] = useState<{ stamp: string; values: Record<string, ContextResult> }>({ stamp: '', values: {} });
   useEffect(() => {
     let live = true;
-    setError('');
-    void Promise.all((JSON.parse(stamp) as string[]).map(async (key) => {
+    setState({ stamp, values: {} });
+    for (const key of JSON.parse(stamp) as string[]) {
       const [toolId, scope, path] = JSON.parse(key) as [string, Scope, string | null];
-      const workspace = await native.getRegisteredToolWorkspace(toolId, scope, path ?? undefined, true);
-      return [key, workspace.effectiveContextId ?? null] as const;
-    })).then((entries) => { if (live) setState({ stamp, values: Object.fromEntries(entries) }); })
-      .catch(() => { if (live) setError('无法读取当前账号，请重新打开分发窗口。'); });
+      const publish = (result: ContextResult) => {
+        if (live) setState((previous) => ({ stamp, values: { ...previous.values, [key]: result } }));
+      };
+      void native.getRegisteredToolWorkspace(toolId, scope, path ?? undefined, true)
+        .then((workspace) => {
+          if (workspace.effectiveContextId !== null && typeof workspace.effectiveContextId !== 'string') throw new Error('工作区缺少有效账号上下文');
+          publish({ status: 'resolved', contextId: workspace.effectiveContextId });
+        })
+        .catch((error: unknown) => publish({ status: 'failed', error: error && typeof error === 'object' && 'message' in error ? String(error.message) : '无法读取账号上下文' }));
+    }
     return () => { live = false; };
   }, [stamp]);
+  const result = (target: Target): ContextResult => state.stamp === stamp ? state.values[scopeKey(target)] ?? { status: 'pending' } : { status: 'pending' };
+  const ready = (target: Target) => result(target).status === 'resolved';
   return {
-    ready: state.stamp === stamp,
+    ready,
     stamp: JSON.stringify(state),
-    error,
-    context: (target: Target) => state.values[scopeKey(target)] ?? null,
-    matches: (target: Target) => target.scope === 'project' || (target.contextId ?? null) === state.values[scopeKey(target)],
+    result,
+    context: (target: Target) => {
+      const value = result(target);
+      if (value.status !== 'resolved') throw new Error('目标账号上下文尚不可用');
+      return value.contextId;
+    },
+    matches: (target: Target) => {
+      const value = result(target);
+      return value.status === 'resolved' && (target.scope === 'project' || (target.contextId ?? null) === value.contextId);
+    },
+    issues: (JSON.parse(stamp) as string[]).flatMap((key) => {
+      const [toolId, scope, projectPath] = JSON.parse(key) as [string, Scope, string | null];
+      const target = { toolId, scope, projectPath };
+      const value = result(target);
+      return value.status === 'resolved' ? [] : [{ key, ...target, detail: value.status === 'failed' ? value.error : '正在读取账号上下文…' }];
+    }),
   };
 }
