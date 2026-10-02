@@ -310,8 +310,8 @@ details[open] > :not(summary) { animation: reveal var(--medium) var(--ease); }
 .nav button:hover { background: var(--surface-3); color: var(--text); }
 .nav button.active { background: var(--surface); color: var(--text); font-weight: 620; box-shadow: var(--shadow-sm); }
 .nav button.active .nav-glyph { color: var(--accent); }
-.nav button .nav-kbd { margin-left: auto; opacity: 0; transition: opacity var(--fast) var(--ease); }
-.nav button:hover .nav-kbd, .nav button:focus-visible .nav-kbd { opacity: 1; }
+.nav button .nav-kbd { margin-left: auto; opacity: .62; transition: opacity var(--fast) var(--ease); }
+.nav button:hover .nav-kbd, .nav button:focus-visible .nav-kbd, .nav button.active .nav-kbd { opacity: 1; }
 .nav button:last-child { margin-top: auto; }
 .nav-glyph { display: grid; place-items: center; width: 18px; color: var(--text-3); transition: color var(--fast) var(--ease); }
 .nav button:hover .nav-glyph { color: var(--text-2); }
@@ -419,7 +419,9 @@ details[open] > :not(summary) { animation: reveal var(--medium) var(--ease); }
 .home-band { display: grid; grid-template-columns: minmax(0, 1fr) minmax(290px, 340px); gap: 20px; align-items: start; }
 .home-band > * { min-width: 0; }
 .home-tools { min-width: 0; container-type: inline-size; }
-@media (min-width: 1265px) { .home-band > section[aria-label="项目与启动"] { padding-top: 40px; } }
+@media (min-width: 1265px) {
+  .home-band > section[aria-label="项目与启动"] { position: sticky; top: 16px; padding-top: 40px; }
+}
 .home-secondary { margin-top: 0; }
 .subtle-panel { padding: 18px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-xs); }
 .subtle-panel strong { font-size: 13px; font-weight: 620; }
@@ -661,6 +663,9 @@ details:not([open]) > :not(summary) { display: none !important; }
   .brand { flex: none; padding: 0 4px 0 2px; }
   .brandmark { width: 28px; height: 28px; }
   .brand > span:last-child, .nav-label, .nav .nav-kbd { display: none; }
+  /* Keep the full text in the DOM for assistive tech and tests; show only the short label visually. */
+  .status-text { font-size: 0; line-height: 0; }
+  .status-text::after { content: attr(data-short); font-size: 11px; line-height: normal; }
   .nav { flex-direction: row; flex: 1 1 auto; min-width: 0; overflow-x: auto; gap: 2px; }
   .nav button { width: auto; min-height: 32px; padding: 0 9px; gap: 6px; font-size: 12px; }
   .nav button:last-child { margin-top: 0; }

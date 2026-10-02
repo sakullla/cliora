@@ -152,6 +152,23 @@
 .columns { display: grid; flex: 1; grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); gap: 14px; min-height: 0; align-items: stretch; }
 .list, .detail { min-width: 0; min-height: 0; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-xs); }
 .list { display: grid; align-content: start; grid-auto-rows: max-content; gap: 2px; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 6px; }
+.group {
+  position: sticky;
+  top: -6px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 -2px;
+  padding: 10px 10px 4px;
+  background: linear-gradient(var(--surface) 78%, transparent);
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 620;
+  letter-spacing: .3px;
+}
+.group:first-child { padding-top: 6px; }
+.group > span { font-weight: 500; font-variant-numeric: tabular-nums; }
 .list > button {
   display: grid;
   justify-content: stretch;
@@ -192,7 +209,14 @@
 .detailIdentity > :first-child { flex: none; }
 .detailHead > button { flex: none; min-height: 26px; padding: 0 10px; font-size: 12px; }
 .detailHead > button[data-active], .detailHead > button[data-active]:hover:not(:disabled) { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
-.detailHead p, .detailHead small { margin: 0; overflow: hidden; color: var(--text-2); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
+.detailHead p { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 0; margin: 2px 0 0; min-width: 0; color: var(--text-2); font-size: 11.5px; line-height: 1.5; }
+.detailHead p > span { display: inline-flex; align-items: center; min-width: 0; white-space: nowrap; }
+.detailHead p > span + span::before { content: '·'; margin: 0 6px; color: var(--text-3); }
+.detailModel { font-family: var(--font-mono); font-size: 11px; }
+.detailHead p > .detailPath { flex: 1 1 100%; min-width: 0; color: var(--text-3); font-family: var(--font-mono); font-size: 11px; }
+.detailHead p > .detailPath::before { content: none; }
+.detailHead p > .detailPath { display: block; overflow: hidden; text-overflow: ellipsis; }
+.detailHead small { margin: 0; overflow: hidden; color: var(--text-2); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
 
 .resume { display: grid; gap: 6px; }
 .resumeBar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
@@ -201,7 +225,7 @@
 .resumeBar .actions { gap: 6px; }
 .resumeBar .actions button { min-height: 26px; padding: 0 10px; font-size: 12px; }
 .resume select { width: auto; min-width: 96px; min-height: 26px; padding-top: 0; padding-bottom: 0; font-size: 12px; }
-.resumeBar pre, .resume pre { flex: 1 1 100%; order: 5; min-width: 0; margin: 0; padding: 3px 8px; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-xs); background: var(--surface-2); color: var(--text-3); font-size: 11px; line-height: 18px; text-overflow: ellipsis; white-space: nowrap; user-select: text; }
+.resumeBar pre, .resume pre { flex: 1 1 100%; order: 5; min-width: 0; max-height: 4.8em; margin: 0; padding: 6px 8px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-xs); background: var(--surface-2); color: var(--text-2); font-size: 12px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .moreActions { color: var(--text-2); font-size: 12.5px; }
 .moreActions > summary { width: fit-content; }
@@ -209,13 +233,26 @@
 .moreActions > .actions { margin-top: 4px; }
 .projectLink { max-width: 360px; }
 
-.transcript { flex: none; overflow: visible; padding: 14px 16px 18px; }
+.transcript { flex: none; overflow: visible; padding: 12px 16px 18px; }
+.transcriptHead { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; color: var(--text-3); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.transcriptHead :global(.text-button) { min-height: 24px; padding: 0 6px; font-size: 12px; }
 .messages { display: grid; gap: 10px; }
+.messageHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.messageCopy { width: 24px; min-height: 24px; padding: 0; border: 0; border-radius: var(--radius-xs); background: transparent; box-shadow: none; color: var(--text-3); opacity: 0; transition: opacity var(--fast) var(--ease), background-color var(--fast) var(--ease), color var(--fast) var(--ease); }
+.messages article:hover .messageCopy, .messageCopy:focus-visible, .messageCopy[data-copied] { opacity: 1; }
+.messageCopy:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 8%, transparent); color: var(--text); }
+.messageCopy[data-copied], .messageCopy[data-copied]:hover:not(:disabled) { background: transparent; color: var(--accent); }
+@media (hover: none) { .messageCopy { opacity: .7; } }
+.detailLoading { display: grid; gap: 10px; padding: 16px; }
+.detailSkeleton { display: block; height: 18px; width: 55%; border-radius: var(--radius-xs); background: linear-gradient(90deg, var(--surface-2) 0%, var(--surface-3) 40%, var(--surface-2) 80%) 0 0 / 300% 100%; animation: shimmer 1.4s linear infinite; }
+.detailSkeleton[data-size="short"] { width: 35%; height: 12px; }
+.detailSkeleton[data-size="block"] { width: 100%; height: 120px; margin-top: 8px; border-radius: var(--radius); }
 .messages article { width: 100%; max-width: none; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
-.messages article[data-role="user"] { border-color: var(--accent-line); background: var(--accent-soft); }
+.messages article[data-role="user"] { border-color: var(--accent-line); border-left-width: 3px; background: var(--accent-soft); }
 .messages article:not([data-role="user"]) { background: var(--surface); }
 .messages article small { color: var(--text-3); font-size: 11px; }
-.messages article p { margin: 5px 0 0; font-size: 13px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.messages article[data-role="user"] small { color: var(--accent); font-weight: 600; }
+.messages article p { margin: 3px 0 0; font-size: 13px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
 .messages article p.clamped { display: -webkit-box; -webkit-line-clamp: 10; -webkit-box-orient: vertical; overflow: hidden; }
 .expandMessage { min-height: 22px; margin-top: 2px; padding: 0; border: 0; background: none; box-shadow: none; color: var(--accent); font-size: 12px; font-weight: 560; }
 .expandMessage:hover:not(:disabled) { background: none; text-decoration: underline; text-underline-offset: 2px; }

@@ -253,7 +253,7 @@ export default function App() {
       </nav>
       <div className="sidebar-foot">
         <div className="theme-switch" role="group" aria-label="切换主题">{themes.map((item) => <button key={item.id} type="button" aria-label={item.label} title={item.label} aria-pressed={bootstrap.preferences.theme === item.id} disabled={busy} onClick={() => { if (bootstrap.preferences.theme !== item.id) void updateTheme(item.id); }}><Icon name={item.glyph} size={14} /></button>)}</div>
-        <div className="sidebar-status"><span className="status-dot" data-tone={nativeAvailable ? undefined : 'preview'} />{nativeAvailable ? '本机资料 · 仅存于此设备' : '浏览器预览'}</div>
+        <div className="sidebar-status" title={nativeAvailable ? '本机资料仅存于此设备' : '浏览器预览，原生功能不可用'}><span className="status-dot" data-tone={nativeAvailable ? undefined : 'preview'} /><span className="status-text" data-short={nativeAvailable ? '本机' : '预览'}>{nativeAvailable ? '本机资料 · 仅存于此设备' : '浏览器预览'}</span></div>
       </div>
     </aside>
     <main className={`content${page === 'records' ? ' content-locked' : ''}`} id="main"><div className="content-inner">
