@@ -57,9 +57,9 @@ impl CliAdapter for Pi {
                 false,
             )],
             None => {
-                let dir = env::var_os("PI_CODING_AGENT_DIR")
+                let dir = crate::accounts::selection::config_root("pi", || env::var_os("PI_CODING_AGENT_DIR")
                     .map(Into::into)
-                    .unwrap_or_else(|| home.join(".pi/agent"));
+                    .unwrap_or_else(|| home.join(".pi/agent")));
                 vec![
                     file(
                         "settings",
@@ -117,9 +117,9 @@ impl CliAdapter for Pi {
         project: Option<&Path>,
     ) -> Option<std::path::PathBuf> {
         Some(match scope {
-            Scope::Global => env::var_os("PI_CODING_AGENT_DIR")
+            Scope::Global => crate::accounts::selection::config_root("pi", || env::var_os("PI_CODING_AGENT_DIR")
                 .map(Into::into)
-                .unwrap_or_else(|| home.join(".pi/agent"))
+                .unwrap_or_else(|| home.join(".pi/agent")))
                 .join("skills"),
             Scope::Project => project?.join(".pi/skills"),
         })
@@ -131,9 +131,9 @@ impl CliAdapter for Pi {
         project: Option<&Path>,
     ) -> Option<std::path::PathBuf> {
         Some(match scope {
-            Scope::Global => env::var_os("PI_CODING_AGENT_DIR")
+            Scope::Global => crate::accounts::selection::config_root("pi", || env::var_os("PI_CODING_AGENT_DIR")
                 .map(Into::into)
-                .unwrap_or_else(|| home.join(".pi/agent"))
+                .unwrap_or_else(|| home.join(".pi/agent")))
                 .join("AGENTS.md"),
             Scope::Project => project?.join("AGENTS.md"),
         })
@@ -145,9 +145,9 @@ impl CliAdapter for Pi {
         project: Option<&Path>,
     ) -> Option<McpLocation> {
         let path = match scope {
-            Scope::Global => env::var_os("PI_CODING_AGENT_DIR")
+            Scope::Global => crate::accounts::selection::config_root("pi", || env::var_os("PI_CODING_AGENT_DIR")
                 .map(Into::into)
-                .unwrap_or_else(|| home.join(".pi/agent"))
+                .unwrap_or_else(|| home.join(".pi/agent")))
                 .join("mcp.json"),
             Scope::Project => project?.join(".pi/mcp.json"),
         };

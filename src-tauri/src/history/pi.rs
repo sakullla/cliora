@@ -14,7 +14,7 @@ pub fn sources(home: &Path) -> Result<Vec<HistorySource>, String> {
 }
 
 pub fn sources_controlled(home: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<HistorySource>, String> {
-    discover_jsonl_controlled(&home.join(".pi/agent/sessions"), |path| {
+    discover_jsonl_controlled(&crate::accounts::selection::history_root("pi", || home.join(".pi/agent/sessions")), |path| {
         path.extension().is_some_and(|value| value == "jsonl")
     }, cancelled)
 }

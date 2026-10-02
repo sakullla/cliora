@@ -79,7 +79,7 @@ impl CliAdapter for Claude {
             ],
             None => vec![file(
                 "settings",
-                home.join(".claude/settings.json"),
+                crate::accounts::selection::config_root("claude_code", || home.join(".claude")).join("settings.json"),
                 FileKind::Json,
                 known,
                 None,
@@ -114,7 +114,7 @@ impl CliAdapter for Claude {
         project: Option<&Path>,
     ) -> Option<McpLocation> {
         let path = match scope {
-            Scope::Global => home.join(".claude.json"),
+            Scope::Global => crate::accounts::selection::current("claude_code").map(|ctx|ctx.config_root.join(".claude.json")).unwrap_or_else(||home.join(".claude.json")),
             Scope::Project => project?.join(".mcp.json"),
         };
         Some(McpLocation {
@@ -159,7 +159,7 @@ impl CliAdapter for Claude {
         project: Option<&Path>,
     ) -> Option<std::path::PathBuf> {
         Some(match scope {
-            Scope::Global => home.join(".claude/skills"),
+            Scope::Global => crate::accounts::selection::config_root("claude_code", || home.join(".claude")).join("skills"),
             Scope::Project => project?.join(".claude/skills"),
         })
     }
@@ -170,7 +170,7 @@ impl CliAdapter for Claude {
         project: Option<&Path>,
     ) -> Option<std::path::PathBuf> {
         Some(match scope {
-            Scope::Global => home.join(".claude/CLAUDE.md"),
+            Scope::Global => crate::accounts::selection::config_root("claude_code", || home.join(".claude")).join("CLAUDE.md"),
             Scope::Project => project?.join("CLAUDE.md"),
         })
     }

@@ -606,7 +606,8 @@ fn summary_cache() -> &'static Mutex<HashMap<String, SummaryCacheEntry>> {
 #[cfg(not(test))]
 fn summary_cache_key(id: &str, custom_path: Option<&Path>, scope: Scope, project: Option<&Path>) -> String {
     format!(
-        "{id}|{}|{}|{}",
+        "{id}|{}|{}|{}|{}",
+        crate::accounts::selection::current(id).map(|ctx|ctx.id).unwrap_or_default(),
         custom_path.map(|path| path.to_string_lossy().to_string()).unwrap_or_default(),
         match scope {
             Scope::Global => "global",

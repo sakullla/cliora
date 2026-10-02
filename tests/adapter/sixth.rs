@@ -250,6 +250,7 @@ fn sixth_adapter_uses_the_same_probe_native_transaction_and_launch_orchestration
                 secret_ref: None,
                 auth_env_var: None,
             }),
+            authentication: crate::native::profile::ProfileAuthentication::Native,
             native_credentials: BTreeMap::new(),
         },
         None,
@@ -372,6 +373,7 @@ fn sixth_adapter_uses_the_same_probe_native_transaction_and_launch_orchestration
             files: BTreeMap::new(),
             suppressed: BTreeMap::new(),
             connection: None,
+            authentication: crate::native::profile::ProfileAuthentication::Native,
             native_credentials: BTreeMap::new(),
         },
         None

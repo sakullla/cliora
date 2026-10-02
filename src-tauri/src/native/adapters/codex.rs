@@ -73,9 +73,9 @@ impl CliAdapter for Codex {
         };
         let path = match root {
             Some(root) => root.join(".codex/config.toml"),
-            None => env::var_os("CODEX_HOME")
+            None => crate::accounts::selection::config_root("codex", || env::var_os("CODEX_HOME")
                 .map(Into::into)
-                .unwrap_or_else(|| home.join(".codex"))
+                .unwrap_or_else(|| home.join(".codex")))
                 .join("config.toml"),
         };
         vec![file("settings", path, FileKind::Toml, known, None, false)]
@@ -153,7 +153,7 @@ impl CliAdapter for Codex {
         project: Option<&Path>,
     ) -> Option<std::path::PathBuf> {
         Some(match scope {
-            Scope::Global => home.join(".agents/skills"),
+            Scope::Global => crate::accounts::selection::current("codex").map(|ctx|ctx.resource_root.join("skills")).unwrap_or_else(||home.join(".agents/skills")),
             Scope::Project => project?.join(".agents/skills"),
         })
     }
@@ -164,9 +164,9 @@ impl CliAdapter for Codex {
         project: Option<&Path>,
     ) -> Option<std::path::PathBuf> {
         Some(match scope {
-            Scope::Global => env::var_os("CODEX_HOME")
+            Scope::Global => crate::accounts::selection::config_root("codex", || env::var_os("CODEX_HOME")
                 .map(Into::into)
-                .unwrap_or_else(|| home.join(".codex"))
+                .unwrap_or_else(|| home.join(".codex")))
                 .join("AGENTS.md"),
             Scope::Project => project?.join("AGENTS.md"),
         })

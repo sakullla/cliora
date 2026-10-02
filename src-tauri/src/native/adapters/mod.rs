@@ -671,8 +671,13 @@ pub fn save_registered_text(registry: &Registry, id: &str, role: &str, scope: Sc
     // encrypts backups and restricts the replacement file's permissions instead.
     let scope_key = super::apply::scope_key(scope, project)?;
     transaction::apply_text(db, credentials, &[transaction::TextPatch { path, baseline: current, contents, sensitive: true }], |tx| {
-        // A deliberate manual edit ends automatic application of the old profile.
-        tx.execute("DELETE FROM applied_bindings WHERE scope_key = ?1 AND tool = ?2", rusqlite::params![scope_key, id]).map_err(|_| "无法保存当前配置状态")?;
+        // Manual text edits invalidate profile ownership but must retain the OAuth
+        // launch identity; deleting it would silently return to the default account.
+        if crate::accounts::selection::current(id).is_some() {
+            tx.execute("UPDATE applied_bindings SET profile_version=-1,managed='{}' WHERE scope_key=?1 AND tool=?2", rusqlite::params![scope_key,id]).map_err(|_|"无法保存账号绑定状态")?;
+        } else {
+            tx.execute("DELETE FROM applied_bindings WHERE scope_key = ?1 AND tool = ?2", rusqlite::params![scope_key, id]).map_err(|_| "无法保存当前配置状态")?;
+        }
         Ok(())
     })
 }

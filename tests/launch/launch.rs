@@ -64,6 +64,8 @@ fn macos_launch_script_runs_in_the_original_directory_with_literal_arguments() {
     std::fs::write(&executable, "#!/bin/sh\nprintf '%s\\0' \"$PWD\" \"$@\"\n").unwrap();
     std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
     let plan = LaunchPlan {
+        account_version: None,
+        account_context: None,
         directory: directory.canonicalize().unwrap(),
         executable,
         cli_args: vec!["--resume".into(), "session 'one'".into(), "\"quote\" \\slash\nnewline $(touch unwanted)".into()],
@@ -93,6 +95,8 @@ fn macos_terminal_denial_is_an_error_and_does_not_echo_private_commands() {
 
 fn sample(terminal: TerminalId) -> LaunchPlan {
     LaunchPlan {
+        account_version: None,
+        account_context: None,
         tool_id: "grok".into(),
         project_id: Some("project-1".into()),
         mode: LaunchMode::Normal,

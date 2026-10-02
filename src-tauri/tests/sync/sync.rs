@@ -250,7 +250,7 @@ fn fresh_device_receives_non_default_preferences_and_common_changes_without_sync
     let common = profile::save_registered_common(&a, &registry, RegisteredCommon {
         tool: "codex".into(), version: 0, revision: String::new(), files: BTreeMap::from([("settings".into(), "model = \"first\"".into())]),
     }, None).unwrap();
-    let named = profile::save_registered_profile(&a, &registry, RegisteredProfile {
+    let named = profile::save_registered_profile(&a, &registry, RegisteredProfile { authentication: crate::native::profile::ProfileAuthentication::Native,
         id: String::new(), tool: "codex".into(), name: "Work".into(), version: 0, revision: String::new(),
         inherit_common: true, files: BTreeMap::new(), suppressed: BTreeMap::new(), connection: None, native_credentials: BTreeMap::new(),
     }, None).unwrap();

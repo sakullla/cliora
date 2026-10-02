@@ -74,7 +74,7 @@ fn cancellation_and_timeout_never_promote_late_login() {
 #[test]
 fn reauthentication_must_preserve_identity_and_old_context_on_failure() {
     let (temp, db) = fixture();
-    let a = create(&db, "claude_code", "A").unwrap();
+    let a = create(&db, "codex", "A").unwrap();
     let a = login(&db, temp.path(), &a.id, a.version, "same-account");
     let before = a.context.clone();
     let rejected = login(&db, temp.path(), &a.id, a.version, "different-account");

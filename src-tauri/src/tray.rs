@@ -622,12 +622,14 @@ mod tests {
             files: BTreeMap::new(),
             suppressed: BTreeMap::new(),
             connection: None,
+            authentication: crate::native::profile::ProfileAuthentication::Native,
             native_credentials: BTreeMap::new(),
         }
     }
 
     fn old_binding() -> apply::AppliedBinding {
         apply::AppliedBinding {
+            context_id: None,
             scope_key: "global".into(),
             tool: "grok".into(),
             profile_id: "daily".into(),

@@ -43,7 +43,7 @@ fn rule_preview_requires_fresh_confirm_and_preserves_external_edit() {
         },
     )
     .unwrap();
-    let target = RuleTarget {
+    let target = RuleTarget { context_id: None,
         tool_id: "codex".into(),
         scope: Scope::Project,
         project_path: Some(project.display().to_string()),
@@ -90,7 +90,7 @@ fn rule_preview_requires_fresh_confirm_and_preserves_external_edit() {
     assert_eq!(std::fs::read_to_string(&path).unwrap(),"new rule");
     assert!(save_current(&db,&credential,&registry,temp.path(),&target,"old rule","ours").is_err());
     save_current(&db,&credential,&registry,temp.path(),&target,"new rule","direct edited").unwrap();
-    let native_path=std::path::PathBuf::from(read_current(&registry,temp.path(),&target).unwrap().path);
+    let native_path=std::path::PathBuf::from(read_current(&db,&registry,temp.path(),&target).unwrap().path);
     let backups=transaction::recent_backups(&db,&native_path).unwrap();
     let id=&backups[0].transaction_id;
     let diff=transaction::preview_backup(&db,&credential,&native_path,id).unwrap();

@@ -51,7 +51,7 @@ fn sample(db: &Database) -> McpDefinition {
 }
 
 fn target(tool: &str, enabled: bool) -> McpTargetRequest {
-    McpTargetRequest {
+    McpTargetRequest { context_id: None,
         tool_id: tool.into(),
         scope: Scope::Global,
         project_path: None,

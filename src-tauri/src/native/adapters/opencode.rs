@@ -67,7 +67,7 @@ impl CliAdapter for OpenCode {
         };
         let dir = root
             .map(Path::to_path_buf)
-            .unwrap_or_else(|| config_base(home).join("opencode"));
+            .unwrap_or_else(|| crate::accounts::selection::config_root("open_code", || config_base(home).join("opencode")));
         let jsonc = dir.join("opencode.jsonc");
         let (path, kind) = if jsonc.exists() {
             (jsonc, FileKind::Jsonc)
@@ -213,7 +213,7 @@ impl CliAdapter for OpenCode {
         project: Option<&Path>,
     ) -> Option<std::path::PathBuf> {
         Some(match scope {
-            Scope::Global => config_base(home).join("opencode/skills"),
+            Scope::Global => crate::accounts::selection::config_root("open_code", || config_base(home).join("opencode")).join("skills"),
             Scope::Project => project?.join(".opencode/skills"),
         })
     }
@@ -224,7 +224,7 @@ impl CliAdapter for OpenCode {
         project: Option<&Path>,
     ) -> Option<std::path::PathBuf> {
         Some(match scope {
-            Scope::Global => config_base(home).join("opencode/AGENTS.md"),
+            Scope::Global => crate::accounts::selection::config_root("open_code", || config_base(home).join("opencode")).join("AGENTS.md"),
             Scope::Project => project?.join("AGENTS.md"),
         })
     }

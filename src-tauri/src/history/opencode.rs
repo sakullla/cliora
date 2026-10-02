@@ -10,7 +10,7 @@ fn database(home: &Path) -> PathBuf {
     let base = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| home.join(".local/share"));
-    base.join("opencode/opencode.db")
+    crate::accounts::selection::history_root("open_code", || base.join("opencode")).join("opencode.db")
 }
 
 fn open(path: &Path) -> Result<Connection, String> {

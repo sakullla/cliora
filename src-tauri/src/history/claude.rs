@@ -16,7 +16,7 @@ pub fn sources(home: &Path) -> Result<Vec<HistorySource>, String> {
 }
 
 pub fn sources_controlled(home: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<HistorySource>, String> {
-    let mut sources = discover_jsonl_controlled(&home.join(".claude/projects"), |path| {
+    let mut sources = discover_jsonl_controlled(&crate::accounts::selection::history_root("claude_code", || home.join(".claude/projects")), |path| {
         path.extension().is_some_and(|value| value == "jsonl")
             && !path
                 .components()
