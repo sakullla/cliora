@@ -2,7 +2,10 @@
 //! of docs/sakullla-workflow/2026-10-03-new-cli-adapters-default-off). The five
 //! ids register as non-enumerated stable strings, stay out of the default
 //! enabled set, flow through the existing unknown-id management channel, and
-//! expose only honest stub descriptors until the adapter tasks deliver.
+//! declare exactly the evidence-gated dimensions the adapter tasks delivered:
+//! no fabricated quota, accounts or login anywhere, and per-adapter gaps
+//! (qoder sessions, deepseek agents/plugins, read-only plugin listings) stay
+//! absent or action-limited with recorded reasons.
 
 use crate::adapters::Registry;
 use crate::domain::{CliId, Preferences};
@@ -105,41 +108,103 @@ fn checking_new_ids_flows_through_the_unknown_managed_channel() {
 }
 
 #[test]
-fn five_stub_descriptors_stay_honest_and_unavailable() {
+fn five_added_adapters_declare_their_delivered_dimensions() {
     let registry = Registry::builtins();
     for id in NEW_IDS {
         let adapter = registry.get(id).unwrap();
-        assert!(adapter.official_usage().is_none(), "{id} 不声明官方额度");
-        assert!(adapter.agents().is_none(), "{id} 不声明 Agents");
-        assert!(adapter.plugins().is_none(), "{id} 不声明插件");
-        assert!(adapter.accounts().is_none(), "{id} 不声明账号");
-        assert!(!adapter.supports_mcp(), "{id} 不声明 MCP");
-        assert!(!adapter.supports_skills(), "{id} 不声明 Skills");
-        assert!(!adapter.history_supported(), "{id} 不声明会话");
-        assert!(adapter.launch_args(None, Default::default()).is_err());
         let descriptor = adapter.descriptor();
         assert_eq!(descriptor.id, id);
-        assert!(!descriptor.yolo_available, "{id} 不声明 YOLO");
-        assert!(!descriptor.project_model_override);
+        // Nothing fabricated: none of the five ships an official quota
+        // adapter, managed accounts or a login surface.
+        assert!(adapter.official_usage().is_none(), "{id} 不声明官方额度");
+        assert!(adapter.accounts().is_none(), "{id} 不声明账号代管");
         assert!(descriptor.login.is_none(), "{id} 不声明登录");
         assert!(!descriptor.management.accounts);
-        assert!(!descriptor.management.mcp);
-        assert!(!descriptor.management.skills);
-        assert!(!descriptor.management.agents);
-        assert!(!descriptor.management.plugins);
-        assert!(!descriptor.management.project_plugins);
+        // Config editing, launching and MCP/Skills resources are delivered by
+        // all five additions.
+        assert!(adapter.supports_mcp(), "{id} 应交付 MCP");
+        assert!(adapter.supports_skills(), "{id} 应交付 Skills");
+        assert!(
+            adapter
+                .launch_args(None, crate::adapters::LaunchMode::Normal)
+                .is_ok(),
+            "{id} 应支持普通启动"
+        );
+        assert_eq!(descriptor.native_config.state, "available", "{id} 配置面");
+        assert_eq!(descriptor.launch.state, "available", "{id} 启动面");
+        assert_eq!(descriptor.resources.state, "available", "{id} 资源面");
+        // Every undelivered facet must stay in the honest vocabulary with a
+        // recorded reason instead of a silent gap.
         for (facet, dimension) in [
-            (&descriptor.native_config, "native_config"),
-            (&descriptor.launch, "launch"),
             (&descriptor.resume, "resume"),
-            (&descriptor.resources, "resources"),
             (&descriptor.history, "history"),
         ] {
-            assert_ne!(facet.state, "available", "{id} 的 {dimension} 不得宣称可用");
             assert!(
-                !facet.reason.trim().is_empty(),
-                "{id} 的 {dimension} 原因不得为空"
+                ["available", "planned", "unsupported"].contains(&facet.state),
+                "{id} 的 {dimension} 状态词汇异常：{}",
+                facet.state
             );
+            if facet.state != "available" {
+                assert!(
+                    !facet.reason.trim().is_empty(),
+                    "{id} 的 {dimension} 未交付时原因不得为空"
+                );
+            }
         }
     }
+    // zcode: desktop form; sessions with token usage, read-only plugin
+    // listing, agents delivered; no resume contract and no verified YOLO.
+    let zcode = registry.get("zcode").unwrap();
+    assert!(zcode.history_supported());
+    assert!(zcode.agents().is_some());
+    assert_eq!(zcode.plugins().unwrap().capability().actions, ["list"]);
+    assert!(!zcode.descriptor().management.project_plugins);
+    assert_eq!(zcode.descriptor().resume.state, "unsupported");
+    assert!(!zcode.descriptor().yolo_available);
+    assert!(zcode.launch_args(None, crate::adapters::LaunchMode::Yolo).is_err());
+    // qoder: terminal CLI with full plugin verbs and project scope, agents and
+    // YOLO; the session dimension stays planned because the transcript fields
+    // are undocumented and usage is metered in Credits only.
+    let qoder = registry.get("qoder").unwrap();
+    assert!(!qoder.history_supported());
+    assert_eq!(qoder.descriptor().history.state, "planned");
+    assert_eq!(qoder.descriptor().resume.state, "planned");
+    assert!(qoder.agents().is_some());
+    assert_eq!(
+        qoder.plugins().unwrap().capability().actions,
+        ["install", "update", "enable", "disable", "uninstall"]
+    );
+    assert!(qoder.plugins().unwrap().capability().project);
+    assert!(qoder.descriptor().management.project_plugins);
+    assert!(qoder.descriptor().yolo_available);
+    // kimi_code: config.toml editing, resumable sessions with per-stream token
+    // usage, read-only plugin listing, YOLO as Ask-When-Needed.
+    let kimi = registry.get("kimi_code").unwrap();
+    assert!(kimi.history_supported());
+    assert!(kimi.agents().is_some());
+    assert_eq!(kimi.plugins().unwrap().capability().actions, ["list"]);
+    assert_eq!(kimi.descriptor().resume.state, "available");
+    assert!(kimi.descriptor().yolo_available);
+    // deepseek: YAML patch editing, zstd sessions with TokenUsage, MCP/Skills;
+    // agents and plugins stay wholly absent (no verifiable contract).
+    let deepseek = registry.get("deepseek").unwrap();
+    assert!(deepseek.history_supported());
+    assert!(deepseek.agents().is_none());
+    assert!(deepseek.plugins().is_none());
+    assert!(!deepseek.descriptor().management.agents);
+    assert!(!deepseek.descriptor().management.plugins);
+    assert_eq!(deepseek.descriptor().resume.state, "unsupported");
+    assert!(!deepseek.descriptor().yolo_available);
+    // codebuddy: resumable sessions with provider usage, agents, project-scope
+    // plugin enable/disable only (install/uninstall stay native).
+    let codebuddy = registry.get("codebuddy").unwrap();
+    assert!(codebuddy.history_supported());
+    assert!(codebuddy.agents().is_some());
+    assert_eq!(
+        codebuddy.plugins().unwrap().capability().actions,
+        ["enable", "disable"]
+    );
+    assert!(codebuddy.plugins().unwrap().capability().project);
+    assert_eq!(codebuddy.descriptor().resume.state, "available");
+    assert!(codebuddy.descriptor().yolo_available);
 }
