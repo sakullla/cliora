@@ -9,6 +9,10 @@ import styles from './SessionReader.module.css';
 const MessageMarkdown = lazy(() => import('./MessageMarkdown'));
 const CLAMP_LENGTH = 1800;
 
+function MarkdownPending() {
+  return <div className={styles.markdownPending} aria-hidden="true"><span /><span /><span /></div>;
+}
+
 function Highlight({ text, query }: { text: string; query: string }) {
   if (!query) return <>{text}</>;
   const parts: Array<string | React.JSX.Element> = [];
@@ -51,7 +55,7 @@ const Message = memo(function Message({ item, toolId, toolName, raw, query, curr
       </header>
       <div className={`${styles.prose} ${clamped ? styles.clamped : ''}`}>
         {raw || user || query || !renderMarkdown ? <p className={styles.raw}><Highlight text={text} query={query} /></p>
-          : <Suspense fallback={<p className={styles.raw}>{text}</p>}><MessageMarkdown text={text} /></Suspense>}
+          : <Suspense fallback={<MarkdownPending />}><MessageMarkdown text={text} /></Suspense>}
       </div>
       {(context || item.text.length > CLAMP_LENGTH) && !query && !raw && <button type="button" className={styles.expand} aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>{expanded ? context ? '收起项目上下文' : '收起长消息' : `展开全文 · ${item.text.length.toLocaleString()} 字`}</button>}
     </div>
@@ -70,6 +74,9 @@ export function SessionReader({ detail, toolName }: { detail: HistoryDetail; too
   const root = useRef<HTMLDivElement>(null);
   const [rendered, setRendered] = useState(() => new Set(detail.messages.slice(0, 8).map((item) => item.id)));
   const search = query.trim();
+  useEffect(() => {
+    void import('./MessageMarkdown').catch(() => {});
+  }, []);
   const visible = useMemo(() => detail.messages.map((item) => ({ item })).filter(({ item }) => !onlyQuestions || item.role === 'user'), [detail.messages, onlyQuestions]);
   const matches = useMemo(() => search ? visible.filter(({ item }) => item.text.toLowerCase().includes(search.toLowerCase())) : [], [visible, search]);
   const selected = matches.length ? current % matches.length : 0;

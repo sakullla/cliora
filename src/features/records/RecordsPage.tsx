@@ -14,7 +14,7 @@ import { UsageDashboard, type UsageNotify } from './UsageDashboard';
 import { SessionReader } from './SessionReader';
 import { DateRangeFilter, type RangeKey } from './DateRangeFilter';
 import { useDisclosure } from './useDisclosure';
-import { navigateChoices } from './choiceNavigation';
+import { navigateChoices } from '../../lib/choiceNavigation';
 import styles from './RecordsPage.module.css';
 
 const copiedCommandText = '已复制原生恢复命令，粘贴后由终端执行。';

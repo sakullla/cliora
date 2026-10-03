@@ -13,6 +13,7 @@ import { toolOptions } from '../../components/ToolIcon';
 import { Icon } from '../../components/Icon';
 import { shortPath } from '../../lib/paths';
 import { saveShortcutHint, searchShortcutHint } from '../../lib/shortcut';
+import { navigateChoices } from '../../lib/choiceNavigation';
 import { ScopeMarks, samePath, scopeLabel } from './CliMarks';
 import styles from './LibraryPage.module.css';
 
@@ -303,11 +304,11 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
   if (!nativeAvailable) return <div className={styles.empty}>资料库仅在桌面应用中读取和保存。</div>;
   return <section className={styles.page} aria-label="资料库内容">
     <div className={styles.toolbar}>
-      <div className={styles.tabs} role="tablist" aria-label="资料类型">
-        <button type="button" role="tab" aria-selected={section === 'prompt'} onClick={() => void openSection('prompt')}>提示词{counts.prompt != null && <span className={styles.tabCount} aria-hidden="true">{counts.prompt}</span>}</button>
-        <button type="button" role="tab" aria-selected={section === 'rule'} onClick={() => void openSection('rule')}>长期规则{counts.rule != null && <span className={styles.tabCount} aria-hidden="true">{counts.rule}</span>}</button>
-        <button type="button" role="tab" aria-selected={section === 'mcp'} onClick={() => void openSection('mcp')}>MCP</button>
-        <button type="button" role="tab" aria-selected={section === 'skill'} onClick={() => void openSection('skill')}>Skill</button>
+      <div className={styles.tabs} role="tablist" aria-label="资料类型" onKeyDown={navigateChoices}>
+        <button type="button" role="tab" aria-selected={section === 'prompt'} tabIndex={section === 'prompt' ? 0 : -1} onClick={() => void openSection('prompt')}>提示词{counts.prompt != null && <span className={styles.tabCount} aria-hidden="true">{counts.prompt}</span>}</button>
+        <button type="button" role="tab" aria-selected={section === 'rule'} tabIndex={section === 'rule' ? 0 : -1} onClick={() => void openSection('rule')}>长期规则{counts.rule != null && <span className={styles.tabCount} aria-hidden="true">{counts.rule}</span>}</button>
+        <button type="button" role="tab" aria-selected={section === 'mcp'} tabIndex={section === 'mcp' ? 0 : -1} onClick={() => void openSection('mcp')}>MCP</button>
+        <button type="button" role="tab" aria-selected={section === 'skill'} tabIndex={section === 'skill' ? 0 : -1} onClick={() => void openSection('skill')}>Skill</button>
       </div>
       {(section === 'prompt' || section === 'rule') && <button type="button" className={styles.primary} onClick={() => start(kind)}>＋ 新建{kind === 'prompt' ? '提示词' : '规则'}</button>}
     </div>

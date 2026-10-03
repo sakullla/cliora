@@ -63,6 +63,7 @@ async function mock(initialTheme){
   if(command==='get_tray_status')return {available:true,error:null};
   if(command==='list_library_items')return library.filter(i=>i.kind===args.kind&&(!args.search||(i.title+i.body+i.category).includes(args.search)));
   if(command==='list_mcp_definitions')return definitions;
+  if(command==='list_mcp_placements')return [{definitionId:'mcp-1',toolId:'codex',scope:'global',projectPath:null,enabled:true}];
   if(command==='list_native_mcp')return [{...definitions[0],enabled:true,protectedValues:false}];
   if(command==='list_skill_packages')return skills;
   if(command==='list_skill_installations')return [{packageId:'skill-1',toolId:'codex',scope:'global',projectPath:null,targetPath:'C:/Users/local/.codex/skills/code-review',state:'current'}];
@@ -120,8 +121,13 @@ for(const width of [1360,900,640])for(const theme of ['light','dark']){
  await page.getByRole('tab',{name:'MCP',exact:true}).click();await page.getByRole('button',{name:/filesystem/}).first().waitFor();await capture('mcp');
  await page.getByRole('tab',{name:'Skill',exact:true}).click();await page.getByRole('button',{name:/code-review/}).first().waitFor();await capture('skills');
  await nav.getByRole('button',{name:'资料库'}).click();await page.getByRole('button',{name:'代码审查',exact:true}).waitFor();await capture('library');
- await nav.getByRole('button',{name:'使用记录'}).click();await page.getByLabel('会话列表').getByRole('button').first().waitFor();if(width>760)await page.getByRole('button',{name:'在外部终端继续'}).waitFor();await capture('sessions');
- if(width<=760){await page.getByLabel('会话列表').getByRole('button').first().click();await page.getByRole('button',{name:'在外部终端继续'}).waitFor();await capture('session-detail');}
+ await page.getByRole('tab',{name:/^长期规则/}).click();await page.getByRole('button',{name:'项目协作约定',exact:true}).waitFor();await capture('library-rules');
+ await page.getByRole('tab',{name:'MCP',exact:true}).click();await page.getByLabel('MCP 列表').getByRole('button',{name:'filesystem',exact:true}).waitFor();await capture('library-mcp');
+ await page.getByRole('button',{name:'＋ 新建 MCP',exact:true}).click();await page.getByRole('dialog').waitFor();await capture('library-mcp-editor');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
+ await page.getByRole('tab',{name:'Skill',exact:true}).click();await page.getByLabel('Skill 列表').getByRole('button',{name:'code-review',exact:true}).waitFor();await capture('library-skills');
+ await page.getByRole('button',{name:'添加 Skill',exact:true}).click();await page.getByRole('dialog').waitFor();await capture('library-skill-add');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
+ await nav.getByRole('button',{name:'使用记录'}).click();await page.getByLabel('会话列表').getByRole('button').first().waitFor();if(width>760)await page.getByRole('button',{name:'在外部终端继续'}).waitFor();if(width>760)await page.getByRole('button',{name:'复制代码',exact:true}).waitFor();await capture('sessions');
+ if(width<=760){await page.getByLabel('会话列表').getByRole('button').first().click();await page.getByRole('button',{name:'在外部终端继续'}).waitFor();await page.getByRole('button',{name:'复制代码',exact:true}).waitFor();await capture('session-detail');}
  await page.getByRole('tab',{name:'用量',exact:true}).click();await capture('usage');
  await nav.getByRole('button',{name:'设置',exact:true}).click();await capture('settings');
  await page.getByRole('tab',{name:'迁移与同步'}).click();await capture('migration');
