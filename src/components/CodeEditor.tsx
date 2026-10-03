@@ -11,7 +11,7 @@ import { toml } from '@codemirror/legacy-modes/mode/toml';
 import { tags } from '@lezer/highlight';
 import './CodeEditor.css';
 
-export type CodeFormat = 'json' | 'jsonc' | 'toml' | 'markdown' | 'text' | 'javascript';
+export type CodeFormat = 'json' | 'jsonc' | 'toml' | 'yaml' | 'markdown' | 'text' | 'javascript';
 const highlighting = HighlightStyle.define([
   { tag: tags.comment, class: 'code-comment' },
   { tag: [tags.propertyName, tags.definition(tags.variableName)], class: 'code-property' },

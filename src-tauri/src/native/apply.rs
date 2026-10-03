@@ -449,6 +449,7 @@ fn apply_registered_validated_compared(
             "toml" => format::FileKind::Toml,
             "json" => format::FileKind::Json,
             "jsonc" => format::FileKind::Jsonc,
+            "yaml" => format::FileKind::Yaml,
             _ => return Err("原生文件格式不受支持".into()),
         };
         let file_path = Path::new(&native.path);
@@ -575,6 +576,7 @@ fn comparison_files(native:&[NativeFile],documents:&BTreeMap<String,Value>,requi
         let kind = match file.format {
             "toml" => format::FileKind::Toml,
             "jsonc" => format::FileKind::Jsonc,
+            "yaml" => format::FileKind::Yaml,
             _ => format::FileKind::Json,
         };
         let proposed_text = format::render(kind, &proposed)?;
