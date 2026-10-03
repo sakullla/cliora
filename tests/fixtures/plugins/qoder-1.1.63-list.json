@@ -1,0 +1,10 @@
+[
+  {
+    "id": "fixture-plugin@fixture-market",
+    "name": "fixture-plugin",
+    "version": "1.0.0",
+    "scope": "user",
+    "enabled": true,
+    "installPath": "/fixture/qoder/plugins/fixture-market/fixture-plugin/1.0.0"
+  }
+]
