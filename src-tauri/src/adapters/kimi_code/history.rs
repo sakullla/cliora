@@ -241,8 +241,12 @@ pub fn parse_controlled(
                             .and_then(Value::as_str)
                             .map(str::to_owned);
                     }
+                    // Wire-scoped ids: history_usage keys on (session_id,
+                    // event_id) with INSERT OR REPLACE, so a session-level id
+                    // would let one agent stream silently overwrite another's
+                    // token events.
                     session.usage.push(UsageEvent {
-                        id: format!("{}:usage-{usage_index}", source.key()),
+                        id: format!("{}:usage-{usage_index}", wire_source.key()),
                         model: row.get("model").and_then(Value::as_str).map(str::to_owned),
                         timestamp: row.get("time").and_then(timestamp),
                         input: Some(counts.input),
@@ -352,6 +356,33 @@ mod tests {
         assert!(first.timestamp.is_some());
         let total: u64 = parsed.usage.iter().map(|event| event.input.unwrap_or(0)).sum();
         assert_eq!(total, 13976 + 1104);
+    }
+
+    #[test]
+    fn subagent_wire_usage_events_keep_distinct_ids_and_join_the_total() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = session_tree(temp.path());
+        std::fs::create_dir_all(session.join("agents/researcher")).unwrap();
+        std::fs::write(
+            session.join("agents/researcher/wire.jsonl"),
+            "{\"type\":\"usage.record\",\"time\":\"2026-08-02T03:24:00.000Z\",\"model\":\"kimi-code/k3\",\"usage\":{\"inputOther\":42,\"output\":7,\"inputCacheRead\":0,\"inputCacheCreation\":0}}\n",
+        )
+        .unwrap();
+        let source = sources(temp.path()).unwrap().remove(0);
+        let parsed = parse(&source).unwrap();
+        // The main fixture wire contributes two usage events; the subagent
+        // stream's record must survive alongside them instead of overwriting.
+        assert_eq!(parsed.usage.len(), 3, "{:?}", parsed.usage);
+        let mut ids: Vec<&str> = parsed
+            .usage
+            .iter()
+            .map(|event| event.id.as_str())
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), parsed.usage.len(), "多 agent 流 usage 事件 id 不得冲突");
+        let total: u64 = parsed.usage.iter().map(|event| event.input.unwrap_or(0)).sum();
+        assert_eq!(total, 13976 + 1104 + 42, "子代理 token 应计入会话总量");
     }
 
     #[test]
