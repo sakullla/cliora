@@ -1,7 +1,7 @@
 import type { KeyboardEvent } from 'react';
 
 /** Match visual order and keep each tab/radio group to one keyboard stop. */
-export function navigateChoices(event: KeyboardEvent<HTMLDivElement>) {
+export function navigateChoices(event: KeyboardEvent<HTMLElement>) {
   if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
   const choices = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];
   const current = choices.indexOf(event.target as HTMLButtonElement);

@@ -31,6 +31,10 @@
 .prose p { margin: 0 0 12px; }
 .prose > :last-child { margin-bottom: 0; }
 .raw { white-space: pre-wrap; }
+.markdownPending { display: grid; gap: 9px; padding: 4px 0; }
+.markdownPending span { height: 12px; border-radius: 6px; background: linear-gradient(90deg, var(--surface-2) 0%, var(--surface-3) 40%, var(--surface-2) 80%) 0 0 / 300% 100%; animation: shimmer 1.4s linear infinite; }
+.markdownPending span:nth-child(2) { width: 86%; }
+.markdownPending span:nth-child(3) { width: 58%; }
 .prose mark { border-radius: 2px; background: var(--warning-soft); color: var(--warning); box-shadow: 0 1px var(--warning-line); }
 .prose h1, .prose h2, .prose h3, .prose h4, .prose h5, .prose h6 { margin: 18px 0 8px; font-size: 14px; font-weight: 650; line-height: 1.5; text-wrap: wrap; }
 .prose h1 { font-size: 18px; }

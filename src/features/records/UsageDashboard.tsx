@@ -8,7 +8,7 @@ import { GuideDialog } from '../../components/GuideDialog';
 import { ToolIcon, toolOptions } from '../../components/ToolIcon';
 import { Icon } from '../../components/Icon';
 import { DAY_MS, bucketLabel, cacheHitRate, clockTime, exactMoney, formatMoney, formatPercent, formatTokens, niceScale, ratio, shortDate, tokenParts } from './usageFormat';
-import { navigateChoices } from './choiceNavigation';
+import { navigateChoices } from '../../lib/choiceNavigation';
 import { DateRangeFilter, type RangeKey } from './DateRangeFilter';
 import styles from './UsageDashboard.module.css';
 

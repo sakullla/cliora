@@ -26,6 +26,7 @@ import { GuideDialog } from '../../components/GuideDialog';
 import { displayPath, shortPath } from '../../lib/paths';
 import { writeClipboard } from '../../lib/clipboard';
 import { saveShortcutHint } from '../../lib/shortcut';
+import { navigateChoices } from '../../lib/choiceNavigation';
 import { CodeEditor } from '../../components/CodeEditor';
 import styles from './ToolWorkspace.module.css';
 
@@ -943,16 +944,16 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
 
   return <section className={styles.workspace} aria-label="工具与连接">
     <div className={styles.toolbar}>
-      <div className={styles.toolSwitcher} role="tablist" aria-label="CLI">{visibleTools.map((item) => <button key={item.id} type="button" role="tab" aria-selected={currentTool === item.id} title={item.name} className={currentTool === item.id ? styles.selected : ''} onClick={async () => { if (currentTool === item.id) return; if ((dirty || mcpDirty || skillsDirty || agentsDirty) && !await confirmChange('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return; invalidateDraftRequest(); setTool(item.id); }}><ToolIcon toolId={item.id} size={23} />{item.name}</button>)}</div>
+      <div className={styles.toolSwitcher} role="tablist" aria-label="CLI" onKeyDown={navigateChoices}>{visibleTools.map((item) => <button key={item.id} type="button" role="tab" aria-selected={currentTool === item.id} tabIndex={currentTool === item.id ? 0 : -1} title={item.name} className={currentTool === item.id ? styles.selected : ''} onClick={async () => { if (currentTool === item.id) return; if ((dirty || mcpDirty || skillsDirty || agentsDirty) && !await confirmChange('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return; invalidateDraftRequest(); setTool(item.id); }}><ToolIcon toolId={item.id} size={23} />{item.name}</button>)}</div>
     </div>
     <div className={styles.taskBar}>
-      <div className={styles.views} role="tablist" aria-label="当前任务">
-        <button type="button" role="tab" aria-selected={resourceView === 'config'} className={resourceView === 'config' ? styles.selected : ''} onClick={() => void switchResourceView('config')}>配置</button>
-        {supports.accounts && <button type="button" role="tab" aria-selected={resourceView === 'accounts'} className={resourceView === 'accounts' ? styles.selected : ''} onClick={() => void switchResourceView('accounts')}>账号</button>}
-        {supports.mcp && <button type="button" role="tab" aria-selected={resourceView === 'mcp'} className={resourceView === 'mcp' ? styles.selected : ''} onClick={() => void switchResourceView('mcp')}>MCP</button>}
-        {supports.skills && <button type="button" role="tab" aria-selected={resourceView === 'skills'} className={resourceView === 'skills' ? styles.selected : ''} onClick={() => void switchResourceView('skills')}>Skill</button>}
-        {supports.agents && <button type="button" role="tab" aria-selected={resourceView === 'agents'} className={resourceView === 'agents' ? styles.selected : ''} onClick={() => void switchResourceView('agents')}>Agents</button>}
-        {supports.plugins && <button type="button" role="tab" aria-selected={resourceView === 'plugins'} className={resourceView === 'plugins' ? styles.selected : ''} onClick={() => void switchResourceView('plugins')}>插件</button>}
+      <div className={styles.views} role="tablist" aria-label="当前任务" onKeyDown={navigateChoices}>
+        <button type="button" role="tab" aria-selected={resourceView === 'config'} tabIndex={resourceView === 'config' ? 0 : -1} className={resourceView === 'config' ? styles.selected : ''} onClick={() => void switchResourceView('config')}>配置</button>
+        {supports.accounts && <button type="button" role="tab" aria-selected={resourceView === 'accounts'} tabIndex={resourceView === 'accounts' ? 0 : -1} className={resourceView === 'accounts' ? styles.selected : ''} onClick={() => void switchResourceView('accounts')}>账号</button>}
+        {supports.mcp && <button type="button" role="tab" aria-selected={resourceView === 'mcp'} tabIndex={resourceView === 'mcp' ? 0 : -1} className={resourceView === 'mcp' ? styles.selected : ''} onClick={() => void switchResourceView('mcp')}>MCP</button>}
+        {supports.skills && <button type="button" role="tab" aria-selected={resourceView === 'skills'} tabIndex={resourceView === 'skills' ? 0 : -1} className={resourceView === 'skills' ? styles.selected : ''} onClick={() => void switchResourceView('skills')}>Skill</button>}
+        {supports.agents && <button type="button" role="tab" aria-selected={resourceView === 'agents'} tabIndex={resourceView === 'agents' ? 0 : -1} className={resourceView === 'agents' ? styles.selected : ''} onClick={() => void switchResourceView('agents')}>Agents</button>}
+        {supports.plugins && <button type="button" role="tab" aria-selected={resourceView === 'plugins'} tabIndex={resourceView === 'plugins' ? 0 : -1} className={resourceView === 'plugins' ? styles.selected : ''} onClick={() => void switchResourceView('plugins')}>插件</button>}
       </div>
       <div className={styles.scopeBar}><FilterSelect className={styles.projectSelect} label="配置范围" triggerDetail={false} value={scope === 'global' ? '__global__' : projectPath} options={[{ value: '__global__', label: '全局配置' }, ...projects.map((project) => ({ value: project.path ?? project.id, label: project.name, detail: project.path ? shortPath(project.path) : undefined, note: project.available ? undefined : '目录不可用', disabled: !project.available || !project.path })), ...(projectPath && !projects.some((project) => project.path === projectPath) ? [{ value: projectPath, label: projectPath.split(/[\\/]/).filter(Boolean).at(-1) || projectPath, detail: shortPath(projectPath) }] : [])]} placeholder="选择项目…" forceSearch searchLabel="搜索项目" title={scope === 'global' ? '全局配置' : projectPath || '选择已有项目'} onChange={(value) => void (value === '__global__' ? switchGlobal() : switchProject(value))} onPickFolder={() => void chooseProjectFolder()} pickFolderLabel="选择文件夹…" /></div>
     </div>

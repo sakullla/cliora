@@ -144,7 +144,7 @@ node scripts/capture-ui.mjs
 
 ## Windows desktop candidate and installation
 
-The full `node scripts/capture-ui.mjs` run includes compact quota results and expanded details, linked-query settings, JavaScript editor/test preview, native CLI logins, managed accounts and account creation, plugin list/install state, agent list/editor and Grok/Pi capability visibility at 1360/900/640 px in light/dark. It writes `capture-ui-manifest.json` with captured states and overflow/page-error checks. These are synthetic UI fixtures.
+The full `node scripts/capture-ui.mjs` run includes compact quota results and expanded details, linked-query settings, JavaScript editor/test preview, native CLI logins, managed accounts and account creation, plugin list/install state, agent list/editor, library rule/MCP/Skill lists with their add/edit dialogs, and Grok/Pi capability visibility at 1360/900/640 px in light/dark. It writes `capture-ui-manifest.json` with captured states and overflow/page-error checks. These are synthetic UI fixtures.
 
 For a native application already launched with an accessible local WebView2 CDP endpoint, `node scripts/drive-records.mjs tools` captures configuration/quotas (including expanded details) and supported account/native-login, MCP, agent and plugin panels without invoking login or extension/file mutations. Unsupported tabs are skipped. `CLIORA_CDP_URL` defaults to `http://localhost:9222`; `CLIORA_NATIVE_CAPTURE_OUT` defaults to `docs/verification/native-ui`. This script also retains its existing `sessions` and `usage` modes. Native UI captures alone do not establish full CLI or platform acceptance.
 

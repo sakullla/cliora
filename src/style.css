@@ -24,7 +24,7 @@
   /* Text */
   --text: #1d2420;
   --text-2: #5b655e;
-  --text-3: #67716a;
+  --text-3: #626c65;
 
   /* Lines */
   --line: #e3e6df;
@@ -100,7 +100,7 @@
 
   --text: #e6ebe7;
   --text-2: #a3aea6;
-  --text-3: #85908a;
+  --text-3: #97a39c;
 
   --line: #2c3530;
   --line-strong: #3a453e;
@@ -310,8 +310,7 @@ details[open] > :not(summary) { animation: reveal var(--medium) var(--ease); }
 .nav button:hover { background: var(--surface-3); color: var(--text); }
 .nav button.active { background: var(--surface); color: var(--text); font-weight: 620; box-shadow: var(--shadow-sm); }
 .nav button.active .nav-glyph { color: var(--accent); }
-.nav button .nav-kbd { margin-left: auto; opacity: .62; transition: opacity var(--fast) var(--ease); }
-.nav button:hover .nav-kbd, .nav button:focus-visible .nav-kbd, .nav button.active .nav-kbd { opacity: 1; }
+.nav button .nav-kbd { margin-left: auto; }
 .nav button:last-child { margin-top: auto; }
 .nav-glyph { display: grid; place-items: center; width: 18px; color: var(--text-3); transition: color var(--fast) var(--ease); }
 .nav button:hover .nav-glyph { color: var(--text-2); }

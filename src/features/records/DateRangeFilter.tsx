@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { GuideDialog } from '../../components/GuideDialog';
-import { navigateChoices } from './choiceNavigation';
+import { navigateChoices } from '../../lib/choiceNavigation';
 import styles from './DateRangeFilter.module.css';
 
 export type RangeKey = 'all' | 'today' | 'yesterday' | '7' | '30' | 'month' | 'custom';
