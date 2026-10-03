@@ -11,6 +11,7 @@ pub enum FileKind {
     Toml,
     Json,
     Jsonc,
+    Yaml,
 }
 
 impl FileKind {
@@ -21,6 +22,8 @@ impl FileKind {
             Ok(Self::Jsonc)
         } else if name.ends_with(".json") {
             Ok(Self::Json)
+        } else if name.ends_with(".yml") || name.ends_with(".yaml") {
+            Ok(Self::Yaml)
         } else {
             Err("不支持的原生文件格式".into())
         }
@@ -87,6 +90,10 @@ pub fn parse(kind: FileKind, text: &str) -> Result<Value, String> {
                 parse_to_serde_value(text, &opts).map_err(|e| format!("JSON 格式错误：{e}"))?;
             parsed
         }
+        // Anchors/aliases resolve through serde_yaml defaults; constructs it cannot
+        // express (multi-document, malformed input) fail closed without guessing.
+        FileKind::Yaml => serde_yaml::from_str::<Value>(text)
+            .map_err(|e| format!("YAML 格式错误：{e}"))?,
     };
     if !value.is_object() {
         return Err("配置文件顶层必须是对象".into());
@@ -180,6 +187,7 @@ pub fn render(kind: FileKind, value: &Value) -> Result<String, String> {
         FileKind::Json | FileKind::Jsonc => {
             serde_json::to_string_pretty(value).map_err(|error| error.to_string())
         }
+        FileKind::Yaml => serde_yaml::to_string(value).map_err(|error| error.to_string()),
     }
 }
 
@@ -262,6 +270,37 @@ pub fn set_path(
                 }
             }
             let output = root.to_string();
+            parse(kind, &output)?;
+            Ok(output)
+        }
+        // No comment-preserving YAML editor exists in the dependency set, so a
+        // managed edit re-renders the parsed document; the transaction layer
+        // keeps the original whenever anything in this path fails.
+        FileKind::Yaml => {
+            let mut root = existing;
+            let key = path.last().unwrap();
+            let mut cursor = &mut root;
+            for part in &path[..path.len() - 1] {
+                let table = cursor
+                    .as_object_mut()
+                    .ok_or("配置路径不是 YAML 映射")?;
+                if !table.contains_key(part) {
+                    table.insert(part.clone(), Value::Object(Map::new()));
+                }
+                cursor = table.get_mut(part).unwrap();
+            }
+            let table = cursor
+                .as_object_mut()
+                .ok_or("配置路径不是 YAML 映射")?;
+            match value {
+                Some(value) => {
+                    table.insert(key.clone(), value.clone());
+                }
+                None => {
+                    table.remove(key);
+                }
+            }
+            let output = render(FileKind::Yaml, &root)?;
             parse(kind, &output)?;
             Ok(output)
         }
@@ -480,6 +519,101 @@ mod tests {
             .unwrap(),
             original
         );
+    }
+
+    #[test]
+    fn yaml_documents_round_trip_and_kind_matches_yml_and_yaml_names() {
+        let text = "model: gpt-6.1\nenabled: false\ncount: 7\nlabel: \"true\"\npatch:\n  mcp:\n    - name: fetch\n      url: https://example.test\n";
+        let parsed = parse(FileKind::Yaml, text).unwrap();
+        assert_eq!(parsed.pointer("/model"), Some(&json!("gpt-6.1")));
+        assert_eq!(parsed.pointer("/enabled"), Some(&json!(false)));
+        assert_eq!(parsed.pointer("/count"), Some(&json!(7)));
+        assert_eq!(parsed.pointer("/label"), Some(&json!("true")));
+        assert_eq!(parsed.pointer("/patch/mcp/0/name"), Some(&json!("fetch")));
+        let rendered = render(FileKind::Yaml, &parsed).unwrap();
+        assert_eq!(parse(FileKind::Yaml, &rendered).unwrap(), parsed);
+        assert!(rendered.contains("model: gpt-6.1"));
+        // A quoted scalar stays quoted so it never degrades into another type.
+        assert!(rendered.contains("'true'"));
+        assert_eq!(FileKind::for_name("cordis.patch.yml").unwrap(), FileKind::Yaml);
+        assert_eq!(FileKind::for_name("dsh.yaml").unwrap(), FileKind::Yaml);
+    }
+
+    #[test]
+    fn yaml_set_path_edits_and_removes_nested_entries() {
+        let text = "model: old\npatch:\n  mcp:\n    - name: fetch\n";
+        let edited = set_path(
+            FileKind::Yaml,
+            text,
+            &["patch".into(), "desktop".into(), "mode".into()],
+            Some(&json!("strict")),
+        )
+        .unwrap();
+        let value = parse(FileKind::Yaml, &edited).unwrap();
+        assert_eq!(value.pointer("/patch/desktop/mode"), Some(&json!("strict")));
+        assert_eq!(value.pointer("/patch/mcp/0/name"), Some(&json!("fetch")));
+        let removed = set_path(
+            FileKind::Yaml,
+            &edited,
+            &["patch".into(), "desktop".into()],
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            parse(FileKind::Yaml, &removed)
+                .unwrap()
+                .pointer("/patch/desktop"),
+            None
+        );
+        assert_eq!(
+            set_path(FileKind::Yaml, text, &["missing".into(), "child".into()], None).unwrap(),
+            text
+        );
+        assert!(set_path(
+            FileKind::Yaml,
+            text,
+            &["model".into(), "child".into()],
+            Some(&json!(1))
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn yaml_merge_edits_rebase_independent_fields_and_conflict_on_overlap() {
+        let original = "model: old\ntheme: dark\nsize: 3\n";
+        let edited = original.replace("old", "new");
+        let current = original.replace("dark", "light");
+        let merged = merge_edits(FileKind::Yaml, original, &edited, &current).unwrap();
+        assert_eq!(
+            parse(FileKind::Yaml, &merged).unwrap(),
+            json!({"model": "new", "theme": "light", "size": 3})
+        );
+        // An external edit of the same field stays an explicit conflict.
+        assert!(merge_edits(
+            FileKind::Yaml,
+            original,
+            &edited,
+            &original.replace("old", "theirs")
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn malformed_yaml_fails_closed_and_never_becomes_empty_config() {
+        assert!(parse(FileKind::Yaml, "model: [unclosed\n").is_err());
+        assert!(parse(FileKind::Yaml, "a: 1\n\tb: 2\n").is_err());
+        // Multi-document streams are outside the single-config boundary.
+        assert!(parse(FileKind::Yaml, "---\na: 1\n---\nb: 2\n").is_err());
+        // YAML null is not a config object, mirroring the JSON top-level rule.
+        assert!(parse(FileKind::Yaml, "null").is_err());
+        assert!(set_path(
+            FileKind::Yaml,
+            "model: [unclosed\n",
+            &["model".into()],
+            Some(&json!("x"))
+        )
+        .is_err());
+        assert!(merge_edits(FileKind::Yaml, "a: 1\n", "a: [\n", "a: 2\n").is_err());
     }
 
     #[test]
