@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, type ReactNode } from 'react';
 import { Icon } from './Icon';
 import { withMod } from '../lib/shortcut';
 
-export function GuideDialog({ open, title, hint, onClose, children }: { open: boolean; title: string; hint?: string; onClose: () => void; children: ReactNode }) {
+export function GuideDialog({ open, title, hint, wide, onClose, children }: { open: boolean; title: string; hint?: string; wide?: boolean; onClose: () => void; children: ReactNode }) {
   const dialog = useRef<HTMLDialogElement>(null);
 
   useLayoutEffect(() => {
@@ -13,7 +13,7 @@ export function GuideDialog({ open, title, hint, onClose, children }: { open: bo
   }, [open]);
 
   if (!open) return null;
-  return <dialog ref={dialog} className="guide-dialog" aria-labelledby="guide-dialog-title" onCancel={(event) => { event.preventDefault(); onClose(); }} onKeyDown={(event) => {
+  return <dialog ref={dialog} className={wide ? 'guide-dialog guide-dialog-wide' : 'guide-dialog'} aria-labelledby="guide-dialog-title" onCancel={(event) => { event.preventDefault(); onClose(); }} onKeyDown={(event) => {
     if (!withMod(event) || event.key.toLowerCase() !== 's') return;
     event.preventDefault();
     if (!event.repeat) dialog.current?.querySelector<HTMLButtonElement>('[data-dialog-save]:not(:disabled)')?.click();

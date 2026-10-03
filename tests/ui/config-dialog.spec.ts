@@ -51,7 +51,7 @@ test('new configuration dialog has one save action', async ({ page }) => {
   await expect(dialog.getByText('先填写名称')).toHaveCount(0);
   await expect(dialog.getByRole('button', { name: '仅保存' })).toHaveCount(0);
   await expect(dialog.getByRole('button', { name: '保存并给这个工具使用' })).toHaveCount(0);
-  await expect(dialog.getByRole('button', { name: '保存' })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: '保存', exact: true })).toBeVisible();
   await expect(dialog.getByLabel('配置名称')).toBeVisible();
   await expect(dialog.getByLabel('API 地址')).toHaveValue('https://api.openai.com/v1');
   await dialog.getByRole('button', { name: '关闭' }).click();
@@ -240,7 +240,7 @@ test('saving a configuration closes the dialog', async ({ page }) => {
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
   await page.getByRole('button', { name: '新建配置' }).click();
   const dialog = page.getByRole('dialog');
-  await dialog.getByRole('button', { name: '保存' }).click();
+  await dialog.getByRole('button', { name: '保存', exact: true }).click();
   await expect(dialog).toHaveCount(0);
   await expect(page.getByRole('status')).toContainText('已保存');
 });
@@ -397,7 +397,7 @@ test('clicking a saved profile switches the active configuration', async ({ page
   await expect(kimi.getByText('正在使用')).toBeVisible();
   await zhipu.getByRole('button', { name: '修改' }).click();
   await expect(page.getByRole('dialog', { name: '修改配置' })).toBeVisible();
-  await page.getByRole('dialog').getByRole('button', { name: '保存' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '保存', exact: true }).click();
   await expect(page.getByRole('dialog', { name: '修改配置' })).toHaveCount(0);
   await expect(page.getByText('当前仍使用「Kimi For Coding」')).toBeVisible();
   await expect(kimi.getByText('正在使用')).toBeVisible();
@@ -407,6 +407,97 @@ test('clicking a saved profile switches the active configuration', async ({ page
   await expect(page.getByText('已使用此配置，下次启动生效。')).toHaveCount(0);
   const calls = await page.evaluate(() => (window as unknown as { __applyCalls: Array<{ profileId: string; scope: string; allowTakeover: boolean }> }).__applyCalls);
   expect(calls).toEqual([{ toolId: 'claude_code', profileId: 'zhipu', scope: 'global', projectPath: null, allowTakeover: false }]);
+});
+
+test('save and enable switches to the edited profile from the dialog', async ({ page }) => {
+  await page.addInitScript(() => {
+    const applied = { id: 'kimi' };
+    const profiles = [
+      { id: 'kimi', tool: 'claude_code', name: 'Kimi For Coding', version: 1, revision: 'a', inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection: { providerId: 'kimi', interfaceFormat: 'anthropic_messages', baseUrl: 'https://api.kimi.com/coding', model: 'k3', secretRef: null, authEnvVar: null } },
+      { id: 'zhipu', tool: 'claude_code', name: 'Zhipu GLM', version: 1, revision: 'b', inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection: { providerId: 'zhipu', interfaceFormat: 'anthropic_messages', baseUrl: 'https://open.bigmodel.cn/api/anthropic', model: 'glm-5.3', secretRef: null, authEnvVar: null } },
+    ];
+    Object.assign(window, {
+      isTauri: true,
+      __applyCalls: [] as unknown[],
+      __TAURI_INTERNALS__: { invoke: async (command: string, args?: { profileId?: string }) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['claude_code'], theme: 'system' }, tools: [{ id: 'claude_code', name: 'Claude Code' }] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'claude_code', name: 'Claude Code', interfaceFormats: ['anthropic_messages'] }], managedIds: ['claude_code'], preservedUnknown: [] };
+        if (command === 'list_projects' || command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_skill_recovery_issues' || command === 'scan_native_skills' || command === 'list_native_mcp') return [];
+        if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
+        if (command === 'get_tray_status') return { available: false, error: null };
+        if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+        if (command === 'get_registered_tool_workspace') return {
+          probe: { selectedPath: 'C:/claude.cmd', installations: [], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: ['anthropic_messages'], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '' },
+          profiles, binding: { scopeKey: 'global', tool: 'claude_code', profileId: applied.id, profileVersion: 1, managed: {} }, snapshots: [], recoveryNeeded: [], common: null, customPath: null,
+        };
+        if (command === 'apply_registered_native_profile') {
+          (window as unknown as { __applyCalls: unknown[] }).__applyCalls.push(args);
+          applied.id = args?.profileId ?? applied.id;
+          return { transactionId: '1', changedFiles: ['settings'], status: 'written_for_next_session' };
+        }
+        if (command === 'prepare_registered_native_import') return { files: {}, inspection: { connection: null, reasoningEffort: null }, migratedSecret: false, nativeCredentials: {} };
+        if (command === 'save_registered_native_profile') return profiles[1];
+        if (command === 'inspect_registered_native_draft') return { connection: null, reasoningEffort: null };
+        return null;
+      } },
+    });
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  const zhipu = page.locator('[data-profile-id="zhipu"]');
+  await page.locator('[data-profile-id="kimi"]').getByRole('button', { name: '修改', exact: true }).click();
+  await expect(page.getByRole('dialog').getByRole('button', { name: '保存并启用' })).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await zhipu.getByRole('button', { name: '修改', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '修改配置' });
+  await dialog.getByRole('button', { name: '保存并启用' }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(zhipu.getByText('正在使用')).toBeVisible();
+  await expect(page.getByRole('status')).toContainText('已保存并启用');
+  const calls = await page.evaluate(() => (window as unknown as { __applyCalls: Array<{ profileId: string }> }).__applyCalls);
+  expect(calls.map(call => call.profileId)).toEqual(['zhipu']);
+});
+
+test('subscription profiles are grouped apart and quota is added from the row menu', async ({ page }) => {
+  await page.addInitScript(() => {
+    const connection = { providerId: 'p', interfaceFormat: 'openai_responses', baseUrl: 'https://api.example.test/v1', model: 'm', secretRef: null, authEnvVar: null };
+    const profiles = [
+      { id: 'plain', tool: 'codex', name: '普通配置', version: 1, revision: 'a', inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection },
+      { id: 'plan', tool: 'codex', name: '套餐配置', version: 1, revision: 'b', inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection },
+    ];
+    const config = { schemaVersion: 1, label: '套餐查询', site: 'https://quota.example.test', identity: { profileId: 'plan', accountId: null, contextId: null, subject: 'plan', subjectId: null }, program: { kind: 'builtin', provider: 'glm', templateVersion: 1 }, parameters: {}, targets: [], enabled: true, refreshIntervalSeconds: 0 };
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_INTERNALS__: { invoke: async (command: string) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: ['openai_responses'] }], managedIds: ['codex'], preservedUnknown: [] };
+        if (command === 'list_projects' || command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_skill_recovery_issues' || command === 'scan_native_skills' || command === 'list_native_mcp' || command === 'list_usage_cache') return [];
+        if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
+        if (command === 'get_tray_status') return { available: false, error: null };
+        if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+        if (command === 'get_registered_tool_workspace') return {
+          probe: { selectedPath: 'C:/codex.cmd', installations: [], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: ['openai_responses'], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '' },
+          profiles, binding: { scopeKey: 'global', tool: 'codex', profileId: 'plain', profileVersion: 1, managed: {} }, snapshots: [], recoveryNeeded: [], common: null, customPath: null,
+        };
+        if (command === 'list_usage_queries') return [{ id: 'q1', version: 1, generation: 1, config, credentials: [] }];
+        if (command === 'usage_presets') return [{ id: 'glm-cn', label: 'GLM', description: '套餐查询', config, credentials: [] }];
+        return null;
+      } },
+    });
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  const subscription = page.locator('[data-group="subscription"]');
+  const other = page.locator('[data-group="other"]');
+  await expect(subscription.getByText('订阅套餐', { exact: true })).toBeVisible();
+  await expect(subscription.locator('[data-profile-id="plan"]')).toBeVisible();
+  await expect(other.getByText('其他配置', { exact: true })).toBeVisible();
+  await expect(other.locator('[data-profile-id="plain"]')).toBeVisible();
+  const plain = other.locator('[data-profile-id="plain"]');
+  await expect(plain.getByRole('button', { name: '添加额度查询' })).toHaveCount(0);
+  await plain.getByRole('button', { name: '普通配置 更多操作' }).click();
+  await page.getByRole('menuitem', { name: '添加额度查询' }).click();
+  await expect(page.getByRole('dialog', { name: '额度查询设置' })).toBeVisible();
 });
 
 test('a long configuration list can be searched without growing the page', async ({ page }) => {

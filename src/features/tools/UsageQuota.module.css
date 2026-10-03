@@ -1,34 +1,38 @@
 .quota { width: 100%; min-width: 0; display: grid; gap: 10px; font-size: 12px; }
 .quota > .heading { justify-content: flex-end; }
 .quota > .heading > span { margin-right: auto; color: var(--text-2); }
-.addQuery { font-size: 12px; padding: 4px 8px; }
-.quota .iconButton {
+.quota .iconButton, .quota .refresh {
   display: inline-grid;
   place-items: center;
-  width: 30px; height: 30px;
+  min-width: 28px; height: 28px;
+  min-height: 28px;
   padding: 0;
   flex: none;
-  border: 1px solid var(--line-strong);
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  background: var(--surface);
+  background: transparent;
+  box-shadow: none;
   color: var(--text-2);
 }
-.quota .iconButton:hover { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
-.quota[data-empty="true"] { width: auto; align-self: start; }
+.quota .refresh { padding: 0 9px; font-size: 12px; }
+.quota .iconButton:hover:not(:disabled), .quota .refresh:hover:not(:disabled) { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
+.quota[data-empty="true"]:empty { display: none; }
 .linked { color: var(--accent) !important; }
 .heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
 .actions { display: flex; gap: 6px; flex-wrap: wrap; }
-.query { min-width: 0; padding: 10px 0 0; display: grid; gap: 11px; }
-.query + .query { border-top: 1px solid var(--line); padding-top: 14px; }
+.actions { align-items: center; gap: 2px; }
+.query { min-width: 0; display: grid; gap: 8px; }
+.query + .query { border-top: 1px solid var(--line); padding-top: 10px; }
 .queryTitle { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; min-width: 0; }
 .queryTitle > span { font-weight: 620; overflow-wrap: anywhere; font-size: 12.5px; }
 .queryTitle .stale { color: var(--warning); }
-.query > .heading button { font-size: 12px; padding: 4px 9px; }
-.summaryMetrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); gap: 14px 22px; }
-.summaryMetric { display: grid; gap: 6px; align-content: start; min-width: 0; }
+.summaryMetrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); gap: 10px 24px; }
+.summaryMetric { display: grid; gap: 5px; align-content: start; min-width: 0; }
+.metricMeta { display: flex; flex-wrap: wrap; gap: 0 6px; }
+.metricMeta > span + span::before { content: '·'; margin-right: 6px; color: var(--text-3); }
 .summaryMetric > div { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 4px 8px; }
 .summaryMetric > div > span { color: var(--text-2); }
-.summaryMetric > div > strong { font-size: 15px; font-variant-numeric: tabular-nums; font-weight: 640; letter-spacing: -.01em; }
+.summaryMetric > div > strong { font-size: 13.5px; font-variant-numeric: tabular-nums; font-weight: 640; letter-spacing: -.01em; }
 .summaryMetric progress {
   appearance: none;
   width: 100%; height: 6px;
@@ -42,7 +46,8 @@
 .summaryMetric[data-warning="true"] progress::-webkit-progress-value { background: linear-gradient(90deg, var(--warning) 0%, color-mix(in srgb, var(--warning) 75%, var(--danger)) 100%); }
 .summaryMetric small { overflow-wrap: anywhere; line-height: 1.5; color: var(--text-3); }
 .quotaDetails { font-size: 12px; color: var(--text-2); }
-.quotaDetails > summary { cursor: pointer; width: fit-content; padding: 3px 0; }
+.quotaDetails > summary { cursor: pointer; width: fit-content; padding: 1px 0; color: var(--text-3); font-size: 11.5px; }
+.quotaDetails > summary:hover { color: var(--accent); }
 .quotaDetails[open] > summary { margin-bottom: 12px; }
 .quotaDetails > .metrics { color: var(--text); padding: 14px; border-radius: var(--radius); background: var(--surface-2); border: 1px solid var(--line); }
 .metadata { display: grid; gap: 5px; padding-top: 11px; overflow-wrap: anywhere; }

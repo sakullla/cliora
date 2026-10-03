@@ -215,7 +215,7 @@ test('native rule save failure is an alert and success stays a status', async ({
   await page.getByRole('button', { name: '＋ 新建规则' }).click();
   const dialog = page.getByRole('dialog');
   await dialog.getByLabel('标题').fill('一条规则');
-  await dialog.getByRole('button', { name: '保存' }).click();
+  await dialog.getByRole('button', { name: '保存', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   const library = page.getByRole('region', { name: '资料库内容' });
   const icon = library.getByRole('button', { name: 'Codex · 未写入' });
@@ -269,12 +269,12 @@ test('library save closes the dialog and copy results stay in the dialog', async
   await library.getByRole('button', { name: '修改' }).click();
   const dialog = page.getByRole('dialog');
   await page.evaluate(() => { (window as unknown as { __statusCopy: { librarySaveFails: boolean } }).__statusCopy.librarySaveFails = true; });
-  await dialog.getByRole('button', { name: '保存' }).click();
+  await dialog.getByRole('button', { name: '保存', exact: true }).click();
   await expect(dialog.getByRole('alert')).toContainText('资料没有写入');
   await expect(dialog.getByRole('alert')).toContainText('可修改后再次点击保存');
   await expect(dialog.getByRole('status')).toHaveCount(0);
   await page.evaluate(() => { (window as unknown as { __statusCopy: { librarySaveFails: boolean } }).__statusCopy.librarySaveFails = false; });
-  await dialog.getByRole('button', { name: '保存' }).click();
+  await dialog.getByRole('button', { name: '保存', exact: true }).click();
   await expect(dialog).toHaveCount(0);
   await expect(library.getByRole('status')).toContainText('已保存在本机资料库');
   await expect(library.getByRole('alert')).toHaveCount(0);
@@ -356,7 +356,7 @@ test('saved library item stays visible when the following list read fails', asyn
   const dialog = page.getByRole('dialog');
   await dialog.getByLabel('标题').fill('发布检查已更新');
   await page.evaluate(() => { (window as unknown as { __statusCopy: { libraryListFails: boolean } }).__statusCopy.libraryListFails = true; });
-  await dialog.getByRole('button', { name: '保存' }).click();
+  await dialog.getByRole('button', { name: '保存', exact: true }).click();
   await expect(dialog.getByRole('status')).toContainText('已保存在本机资料库');
   const dialogAlert = dialog.getByRole('alert');
   await expect(dialogAlert).toContainText('资料列表读取失败');
@@ -372,7 +372,7 @@ test('saved library item stays visible when the following list read fails', asyn
   await expect(alert).not.toContainText('新建');
   await expect(library.getByRole('button', { name: '发布检查已更新', exact: true })).toBeVisible();
   await library.getByRole('button', { name: '修改' }).click();
-  await page.getByRole('dialog').getByRole('button', { name: '保存' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '保存', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as unknown as { __statusCopy: { lastLibraryVersion: number | null } }).__statusCopy.lastLibraryVersion)).toBe(2);
 });
 

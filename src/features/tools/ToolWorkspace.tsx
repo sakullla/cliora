@@ -52,6 +52,18 @@ function formatLabel(value: string): string {
   return ({ openai_completions: 'Chat Completions', openai_responses: 'Responses', anthropic_messages: 'Anthropic Messages' } as Record<string, string>)[value] ?? value;
 }
 
+function profileFacts(item: RegisteredProfile): { label: string; title?: string }[] {
+  const kind = item.authentication?.kind;
+  const auth = kind === 'api_key' ? 'API Key' : kind === 'oauth' ? 'OAuth' : kind === 'rebind_required' ? '需重新绑定' : '原生认证';
+  const url = item.connection?.baseUrl?.trim() ?? '';
+  let host = '';
+  if (url) {
+    try { host = new URL(url).host; }
+    catch { host = url.replace(/^https?:\/\//, '').split('/')[0] ?? ''; }
+  }
+  return [{ label: auth }, ...(host ? [{ label: host, title: url }] : [])];
+}
+
 function connectionShape(value: Connection | null): string {
   return value ? JSON.stringify([value.providerId, value.interfaceFormat, value.baseUrl, value.model, value.authEnvVar]) : '';
 }
@@ -106,6 +118,8 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   const [projectPath, setProjectPath] = useState(repair?.projectPath ?? '');
   const [projects, setProjects] = useState<Project[]>([]);
   const quotaState = useUsageQuota(active);
+  const [quotaAddFor, setQuotaAddFor] = useState<string | null>(null);
+  const clearQuotaAdd = useCallback(() => setQuotaAddFor(null), []);
   const accountState = useAccounts(tool, active);
   const [preferredProfileId, setPreferredProfileId] = useState<string | null>(repair?.profileId ?? null);
   const appliedRepair = useRef(repair?.sequence ?? 0);
@@ -504,7 +518,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     setView('native'); setError(''); setNotice(''); setGuide(true);
   }
 
-  async function save(applyAfter: boolean) {
+  async function save(applyAfter: boolean, activate = false) {
     if (!nativeAvailable || busy) return;
     if (editor === 'profile' && draft && !draft.name.trim()) { setError('请输入配置名称。'); document.querySelector<HTMLInputElement>('[name="profile-name"]')?.focus(); return; }
     const started = captureDraft();
@@ -554,10 +568,10 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
         if (!stillCurrent(started)) { setNotice('原草稿已保存；当前继续编辑的内容已保留。'); return; }
         const activeId = workspace?.binding?.profileId;
         const activeName = workspace?.profiles.find((item) => item.id === activeId)?.name;
-        if (applyAfter && saved.id === activeId) {
+        if (applyAfter && (saved.id === activeId || activate)) {
           await native.applyRegisteredNativeProfile(currentTool, saved.id, scope, projectPath, false);
           if (!stillCurrent(started)) return;
-          setNotice('已保存。');
+          setNotice(saved.id === activeId ? '已保存。' : '已保存并启用，下次启动会读取这份配置。');
         } else if (applyAfter && activeName) setNotice(`已保存。当前仍使用「${activeName}」。`);
         else if (applyAfter) setNotice('已保存。点启用后，下次启动会读取这份配置。');
         else setNotice('已保存。当前无法写入这个工具。');
@@ -845,6 +859,9 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     if (draft?.id) await deleteGiven(draft);
   }
 
+  const profileEditorHint = editor === 'profile' && draft ? `${toolName} · ${draft.name.trim() || '未命名'} · ${draft.authentication?.kind === 'api_key' ? 'API Key' : draft.authentication?.kind === 'oauth' ? 'OAuth 账号' : draft.authentication?.kind === 'rebind_required' ? '需要重新绑定账号' : '沿用原生认证'}。${draft.id && workspace?.binding?.profileId === draft.id ? '这份配置正在使用，保存会写入当前文件。' : workspace?.probe.nativeWrites.state === 'supported' ? '只保存不会替换正在使用的文件；要立即切换，请选“保存并启用”。' : '保存不会替换正在使用的文件。'}` : undefined;
+  const saveState = dirty ? '未保存' : editor === 'profile' && draft?.id ? (workspace?.binding?.profileId === draft.id ? '正在使用' : '尚未启用') : '';
+
   if (!visibleTools.length) return <div className={styles.empty}>还没有管理中的 CLI。请先在设置里选择要管理的工具。</div>;
 
   const hasCurrentNative = !!workspace?.snapshots.some(item => item.fingerprint && !workspace.probe.nativeFiles.find(file => file.role === item.role)?.sensitive);
@@ -853,6 +870,19 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     if (workspace?.binding?.profileId === item.id) return workspace.binding.profileVersion === item.version ? '正在使用' : '已保存，尚未应用';
     return '已保存';
   };
+  const quotaProfileIds = new Set(quotaState.queries.map(query => query.config.identity.profileId).filter(Boolean));
+  const isSubscription = (item: RegisteredProfile) => quotaProfileIds.has(item.id) || item.authentication?.kind === 'oauth';
+  function profileRow(item: RegisteredProfile, probe: NonNullable<typeof workspace>['probe']) {
+    const status = profileStatus(item);
+    const current = status === '正在使用';
+    const writable = probe.nativeWrites.state === 'supported';
+    const model = item.connection?.model?.trim();
+    return <div className={styles.profileRow} role="listitem" data-profile-id={item.id} data-active={current || undefined} key={item.id}>
+      <span><button type="button" className={styles.profileName} onClick={() => void selectProfile(item)}>{item.name}</button><span className={styles.profileMeta}><span className={styles.badge} data-tone={status === '正在使用' ? 'ok' : status === '已保存' ? undefined : 'warn'}>{status}</span>{profileFacts(item).map(fact => <span className={styles.profileFact} title={fact.title} key={fact.label}>{fact.label}</span>)}{model ? <span className={styles.profileModel} title={model}>{model}</span> : null}</span></span>
+      <span className={styles.profileActions}>{!current && <button type="button" className={styles.primary} disabled={busy || enablingId !== null || !writable} title={writable ? '写入原生文件，下次启动读取这份配置' : probe.nativeWrites.reason || '当前不能写入这个工具的配置'} onClick={() => void applySaved(item)}>{enablingId === item.id ? '启用中' : '启用'}</button>}<button type="button" onClick={() => void selectProfile(item)}>修改</button><RowMenu label={`${item.name} 更多操作`}><button type="button" role="menuitem" onClick={() => void selectProfile(item)}>修改配置</button><button type="button" role="menuitem" disabled={busy} onClick={() => void duplicateGiven(item)}>复制配置</button><button type="button" role="menuitem" disabled={!nativeAvailable} onClick={() => setQuotaAddFor(item.id)}>添加额度查询</button><button type="button" role="menuitem" data-danger="true" disabled={busy} onClick={() => void deleteGiven(item)}>删除配置</button></RowMenu></span>
+      <ProfileQuota key={`${item.id}:${item.version}`} profileId={item.id} profileVersion={item.version} toolId={item.tool} profileAccountId={item.authentication?.kind === 'oauth' ? item.authentication.accountId : undefined} state={quotaState} addRequested={quotaAddFor === item.id} onAddHandled={clearQuotaAdd} />
+    </div>;
+  }
   async function openHistory() {
     if (!currentTool) return;
     const context = draftContext;
@@ -895,13 +925,18 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
 
             </div>; }
 
+  const reasoningControl = draft && uiAdapter.reasoning ? <label>{uiAdapter.reasoning.label}<select aria-label={uiAdapter.reasoning.label} value={inspection?.reasoningEffort ?? ''} onChange={event => void changeReasoningEffort(event.target.value)}><option value="">跟随原生默认</option>{uiAdapter.reasoning.choices.map(([id, label]) => <option key={id} value={id}>{label}</option>)}{inspection?.reasoningEffort && !uiAdapter.reasoning.choices.some(([id]) => id === inspection.reasoningEffort) && <option value={inspection.reasoningEffort}>当前原生值：{inspection.reasoningEffort}</option>}</select></label> : null;
   const connectionForm = draft && connection ? <>
-    <label>名称<input name="profile-name" aria-label="配置名称" value={draft.name} onChange={event => setDraft({ ...draft, name: event.target.value })} /></label>
+    <label className={styles.pair}>名称<input name="profile-name" aria-label="配置名称" value={draft.name} onChange={event => setDraft({ ...draft, name: event.target.value })} /></label>
+    <div className={styles.sectionLabel}>连接</div>
     <label>API 地址<input aria-label="API 地址" value={connection.baseUrl} onChange={event => setDraft({ ...draft, connection: { ...connection, baseUrl: event.target.value } })} placeholder="https://api.example.com/v1" /></label>
     <label>API 密钥<div className={styles.secretField}><input aria-label="API 密钥" type={revealedSecret !== null ? "text" : "password"} autoComplete="off" value={revealedSecret ?? newSecret} onChange={event => { invalidateDraftRequest(); setNewSecret(event.target.value); modelSequence.current++; setModelDirectory(null); setModelLoading(false); }} placeholder={connection.secretRef ? '已保存' : 'sk-…'} /><button type="button" disabled={!newSecret && !connection.secretRef} onClick={() => void showSecret()}>{revealedSecret !== null ? '隐藏' : '显示'}</button></div></label>
+    <div className={styles.sectionLabel}>模型</div>
     <div className={styles.modelPicker}><label>模型<ModelCombobox label="模型" value={primaryModel.model} placeholder="选择或输入模型" options={modelOptions} onChange={model => void updateModel(model)} /></label><button type="button" disabled={busy || modelLoading || !connection.baseUrl.trim()} onClick={() => void fetchModels()}>{modelLoading ? '获取中…' : '获取模型'}</button></div>
     {modelDirectory && <p className={styles.hint} role="status">{modelDirectory.status === 'ready' ? '已获取 ' + modelDirectory.models.length + ' 个模型' : modelDirectory.status === 'empty' ? '目录为空，可手动输入模型。' : modelDirectory.status === 'stale' ? '显示旧目录：' + modelDirectory.error : modelDirectory.error}{modelDirectory.fetchedAt ? ' · 更新于 ' + new Date(modelDirectory.fetchedAt * 1000).toLocaleString() : ''}</p>}
+    {uiAdapter.incompleteConnectionText && (!connection.baseUrl.trim() || !primaryModel.model.trim()) && <p className={styles.hint}>{uiAdapter.incompleteConnectionText.replace(/^；/, '')}</p>}
     {uiAdapter.modelMapping?.primaryRole && <label className={styles.check}><input type="checkbox" checked={primaryModel.longContext} disabled={!primaryModel.model} onChange={event => updateModel(primaryModel.model,event.target.checked)} />1M 上下文</label>}
+    {reasoningControl}
     {!!uiAdapter.modelMapping && <div className={styles.roleMapping}>
       <div className={styles.roleHeading}><strong>其他角色</strong><button type="button" className="text-button" disabled={!primaryModel.model} onClick={() => void updateRoleModel('', { model: '', name: '', longContext: false }, true)}>所有角色使用当前模型</button></div>
       {uiAdapter.modelMapping.roles.filter(item => item.id !== uiAdapter.modelMapping?.primaryRole).map(item => {
@@ -926,13 +961,11 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     {editor === 'profile' && draft && <label className={styles.check}><input type="checkbox" checked={draft.inheritCommon} onChange={event => setDraft({ ...draft, inheritCommon: event.target.checked })} />继承本工具通用配置</label>}
     {editor === 'profile' && connection && <details className={styles.connectionAdvanced}><summary>高级连接选项</summary>
       {!!workspace.probe.providerPresets.length && <div className={styles.modelBar}><span>官方接口预设</span>{workspace.probe.providerPresets.map(item => <button key={item.id} type="button" title={item.sourceUrl} onClick={() => applyPreset(item.id, item.baseUrl, item.interfaceFormat)}>{item.label}</button>)}</div>}
-      <div className={styles.formGrid}><label>供应商 ID<input value={connection.providerId} onChange={event => setDraft({ ...draft!, connection: { ...connection, providerId: event.target.value } })} /></label>{(workspace.probe.interfaceFormats.length > 1 || !workspace.probe.interfaceFormats.includes(connection.interfaceFormat as never)) && <label>接口格式<select value={connection.interfaceFormat} onChange={event => setDraft({ ...draft!, connection: { ...connection, interfaceFormat: event.target.value } })}>{!workspace.probe.interfaceFormats.includes(connection.interfaceFormat as never) && <option value={connection.interfaceFormat}>当前格式 · {formatLabel(connection.interfaceFormat)}</option>}{workspace.probe.interfaceFormats.map(item => <option key={item} value={item}>{formatLabel(item)}</option>)}</select></label>}</div>
-      <label>认证环境变量名<input value={connection.authEnvVar ?? ''} onChange={event => setDraft({ ...draft!, connection: { ...connection, authEnvVar: event.target.value || null } })} placeholder="可选" /></label>
+      <div className={styles.formGrid}><label>供应商 ID<input value={connection.providerId} onChange={event => setDraft({ ...draft!, connection: { ...connection, providerId: event.target.value } })} /></label>{(workspace.probe.interfaceFormats.length > 1 || !workspace.probe.interfaceFormats.includes(connection.interfaceFormat as never)) && <label>接口格式<select value={connection.interfaceFormat} onChange={event => setDraft({ ...draft!, connection: { ...connection, interfaceFormat: event.target.value } })}>{!workspace.probe.interfaceFormats.includes(connection.interfaceFormat as never) && <option value={connection.interfaceFormat}>当前格式 · {formatLabel(connection.interfaceFormat)}</option>}{workspace.probe.interfaceFormats.map(item => <option key={item} value={item}>{formatLabel(item)}</option>)}</select></label>}<label>认证环境变量名<input value={connection.authEnvVar ?? ''} onChange={event => setDraft({ ...draft!, connection: { ...connection, authEnvVar: event.target.value || null } })} placeholder="可选" /></label></div>
       {effectiveEnvName && !connection.secretRef && <p className={styles.hint}>原生配置引用：<code>{effectiveEnvName}</code></p>}
       <div className={styles.diagnosticActions}><button type="button" disabled={checkingConnection || !!newSecret} onClick={() => void checkConnection(false)}>检查连接</button><details><summary>更多诊断</summary><button type="button" disabled={checkingConnection || !!newSecret} onClick={() => void checkConnection(true)}>发送最小请求（可能计费）</button></details></div>
       {newSecret && <p className={styles.hint}>先获取模型或保存配置，再进行连接诊断。</p>}
       {connectionCheck && <details className={styles.diagnosticResult}><summary>连接诊断 · {connectionCheck.connectivity.state === 'failed' ? '未通过' : connectionCheck.connectivity.state === 'passed' ? '已连接' : '部分完成'}</summary><p>{connectionCheck.format.message}</p><p>{connectionCheck.connectivity.message}</p><p>{connectionCheck.modelRequest.message}</p></details>}
-      {uiAdapter.reasoning && <label>{uiAdapter.reasoning.label}<select value={inspection?.reasoningEffort ?? ''} onChange={event => void changeReasoningEffort(event.target.value)}><option value="">跟随原生默认</option>{uiAdapter.reasoning.choices.map(([id, label]) => <option key={id} value={id}>{label}</option>)}{inspection?.reasoningEffort && !uiAdapter.reasoning.choices.some(([id]) => id === inspection.reasoningEffort) && <option value={inspection.reasoningEffort}>当前原生值：{inspection.reasoningEffort}</option>}</select></label>}
       {inspection?.connection && connectionShape(inspection.connection) !== connectionShape(connection) && <button type="button" onClick={adoptInspectedConnection}>使用原生配置中的连接</button>}
     </details>}
     {(editor === 'profile' && draft) && <>
@@ -962,7 +995,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     {scope === 'project' && workspace?.probe.nativeFiles.find((item) => !item.sensitive && item.reason)?.reason && <p className={styles.hint}>{workspace.probe.nativeFiles.find((item) => !item.sensitive && item.reason)?.reason}</p>}
     {loading && <p className={styles.hint} role="status">正在读取配置…</p>}
     {error && <div className={styles.error} role="alert">{error}</div>}
-    <GuideDialog open={!!applyComparison} title="比较当前文件与本次配置" hint="原生文件里已有不同内容。可以保留现有文件，或改用这次保存的配置。" onClose={() => setApplyComparison(null)}>
+    <GuideDialog wide open={!!applyComparison} title="比较当前文件与本次配置" hint="原生文件里已有不同内容。可以保留现有文件，或改用这次保存的配置。" onClose={() => setApplyComparison(null)}>
       {applyComparison && <div className="file-conflict" aria-label="配置应用冲突">{applyComparison.files.map(file=><div className="file-conflict-columns" key={file.role}><div><strong>当前文件</strong><CodeEditor label={`当前 ${file.role} 文件`} readOnly compact format={file.format} value={file.current}/></div><div><strong>本次配置</strong><CodeEditor label={`本次 ${file.role} 配置`} readOnly compact format={file.format} value={file.proposedText ?? ''}/></div></div>)}<div className="file-conflict-actions"><button type="button" onClick={()=>setApplyComparison(null)}>保留当前文件</button><button type="button" disabled={busy} onClick={()=>void resolveApplication()}>使用本次配置</button></div></div>}
     </GuideDialog>
     {notice && <div className={styles.notice} role="status">{notice}</div>}
@@ -972,24 +1005,31 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
       {writeUnavailable}
       {workspace && workspace.profiles.length ? <div className={styles.profileList} aria-label="配置列表">
           <div className={styles.listHeading}><strong>配置</strong><span className={styles.listActions}><button type="button" onClick={() => void editCommon()}>通用配置</button><button type="button" className={styles.primary} onClick={() => void createProfile()}>新建配置</button></span></div>
-          <div className={styles.profileRow} data-kind="native"><span><strong>正在使用的文件</strong><small>保存即写入该文件</small></span><button type="button" onClick={() => void openCurrentFile()}>修改</button></div>
+          <div className={styles.profileRow} data-kind="native"><span><button type="button" className={styles.profileName} onClick={() => void openCurrentFile()}>正在使用的文件</button><small>直接改 CLI 正在读取的文件</small></span><button type="button" onClick={() => void openCurrentFile()}>修改</button></div>
           {workspace.profiles.length > 6 && <label className={styles.profileFilter}><input aria-label="搜索配置" placeholder="搜索配置" value={profileQuery} onChange={event => setProfileQuery(event.target.value)} /></label>}
-          <div role="list" aria-label="配置项" className={workspace.profiles.length > 6 ? styles.profileScroll : undefined}>{workspace.profiles.filter(item => item.name.toLowerCase().includes(profileQuery.trim().toLowerCase())).map((item) => { const status = profileStatus(item); const current = status === '正在使用'; const writable = workspace.probe.nativeWrites.state === 'supported'; const model = item.connection?.model?.trim(); return <div className={styles.profileRow} role="listitem" data-profile-id={item.id} data-active={current || undefined} key={item.id}><span><strong>{item.name}</strong><span className={styles.profileMeta}><span className={styles.badge} data-tone={status === '正在使用' ? 'ok' : status === '已保存' ? undefined : 'warn'}>{status}</span>{model ? <span className={styles.profileModel} title={model}>{model}</span> : null}</span></span><span className={styles.profileActions}>{!current && <button type="button" className={styles.primary} disabled={busy || enablingId !== null || !writable} title={writable ? '写入原生文件，下次启动读取这份配置' : workspace.probe.nativeWrites.reason || '当前不能写入这个工具的配置'} onClick={() => void applySaved(item)}>{enablingId === item.id ? '启用中' : '启用'}</button>}<button type="button" onClick={() => void selectProfile(item)}>修改</button><RowMenu label={`${item.name} 更多操作`}><button type="button" role="menuitem" onClick={() => void selectProfile(item)}>修改配置</button><button type="button" role="menuitem" disabled={busy} onClick={() => void duplicateGiven(item)}>复制配置</button><button type="button" role="menuitem" data-danger="true" disabled={busy} onClick={() => void deleteGiven(item)}>删除配置</button></RowMenu></span><ProfileQuota key={`${item.id}:${item.version}`} profileId={item.id} profileVersion={item.version} toolId={item.tool} profileAccountId={item.authentication?.kind === 'oauth' ? item.authentication.accountId : undefined} state={quotaState} /></div>; })}{profileQuery.trim() && !workspace.profiles.some(item => item.name.toLowerCase().includes(profileQuery.trim().toLowerCase())) && <p className={styles.profileEmpty}>没有匹配的配置</p>}</div>
+          <div role="list" aria-label="配置项" className={workspace.profiles.length > 6 ? styles.profileScroll : undefined}>{(() => {
+            const visible = workspace.profiles.filter(item => item.name.toLowerCase().includes(profileQuery.trim().toLowerCase()));
+            const groups = [{ id: 'subscription', label: '订阅套餐', hint: '带额度查询或 OAuth 账号', items: visible.filter(isSubscription) }, { id: 'other', label: '其他配置', hint: 'API Key 与原生认证', items: visible.filter(item => !isSubscription(item)) }].filter(group => group.items.length);
+            return groups.map(group => <div key={group.id} role="presentation" className={styles.profileGroup} data-group={group.id}>
+              {groups.length > 1 && <div role="presentation" className={styles.groupLabel}><strong>{group.label}</strong><span>{group.items.length}</span><small>{group.hint}</small></div>}
+              {group.items.map(item => profileRow(item, workspace.probe))}
+            </div>);
+          })()}{profileQuery.trim() && !workspace.profiles.some(item => item.name.toLowerCase().includes(profileQuery.trim().toLowerCase())) && <p className={styles.profileEmpty}>没有匹配的配置</p>}</div>
         </div> : <div className={styles.taskEmpty}>
         <p>还没有命名配置。新建一份，或先改通用配置。</p>
         <button type="button" className={styles.primary} disabled={busy || !currentTool} onClick={() => void createProfile()}>新建配置</button>
         <button type="button" className={styles.secondary} disabled={busy || !currentTool} onClick={() => void editCommon()}>通用配置</button>
         <button type="button" className={styles.secondary} disabled={busy || !hasCurrentNative} onClick={() => void openCurrentFile()}>修改正在使用的文件</button>
       </div>}
-      <GuideDialog open={guide && (editor !== 'profile' || !!draft)} title={historyOpen && editor === 'native' ? '修改记录' : editor === 'native' ? '修改正在使用的文件' : editor === 'common' ? '修改通用配置' : draft?.id ? '修改配置' : '新建配置'} hint={historyOpen && editor === 'native' ? '最多 20 次。选一条查看当时的文件，确认后才会写回。' : undefined} onClose={() => void closeGuide()}>
+      <GuideDialog wide open={guide && (editor !== 'profile' || !!draft)} title={historyOpen && editor === 'native' ? '修改记录' : editor === 'native' ? '修改正在使用的文件' : editor === 'common' ? '修改通用配置' : draft?.id ? '修改配置' : '新建配置'} hint={historyOpen && editor === 'native' ? '最多 20 次。选一条查看当时的文件，确认后才会写回。' : profileEditorHint} onClose={() => void closeGuide()}>
         <div className={styles.editor}>
-            {historyOpen && editor === 'native' ? <div className={styles.history}>{backups.length ? <ul className={styles.historyList} aria-label="修改记录">{backups.map((item, index) => <li key={item.transactionId}><button type="button" aria-pressed={backupPreview?.transactionId === item.transactionId} disabled={busy} onClick={() => void inspectBackup(item.transactionId)}>{formatBackupTime(item.createdAt, index)}</button></li>)}</ul> : <p className={styles.historyEmpty}>还没有可恢复的修改。</p>}{backups.length > 0 && <div className={styles.historyPreview}><CodeEditor label="当时的文件" readOnly format={activeFile?.format ?? 'text'} value={backupPreview?.original ?? ''} placeholder={backupPreview ? '' : '正在读取…'} /></div>}</div> : <>
-            {editor === 'profile' && draft && <div className={styles.form}><label>认证方式<select aria-label="认证方式" value={draft.authentication?.kind ?? 'native'} onChange={event => { const kind = event.target.value; setNewSecret(''); setDraft({ ...draft, authentication: kind === 'oauth' ? { kind, accountId: accountState.accounts.find(account => account.state === 'signed_in')?.id ?? '' } : { kind: kind as 'native' | 'api_key' }, connection: kind === 'oauth' ? null : draft.connection, nativeCredentials: kind === 'oauth' ? {} : draft.nativeCredentials }); }}><option value="native">沿用原生认证（兼容）</option><option value="api_key">API Key</option>{supports.accounts && <option value="oauth">OAuth 账号</option>}{draft.authentication?.kind === 'rebind_required' && <option value="rebind_required">需要重新绑定</option>}</select></label>
-              {draft.authentication?.kind === 'oauth' ? <><label>绑定账号<select aria-label="绑定账号" value={draft.authentication.accountId} onChange={event => setDraft({ ...draft, authentication: { kind: 'oauth', accountId: event.target.value } })}><option value="">请选择已登录账号</option>{accountState.accounts.map(account => <option key={account.id} value={account.id}>{account.label} · {accountStates[account.state]}</option>)}</select></label><label>配置名称<input aria-label="配置名称" value={draft.name} onChange={event => setDraft({ ...draft, name: event.target.value })} /></label><p>账号在“账号”页管理。应用后影响后续启动；原生文件与资源页显示当前已应用账号的内容。</p><CodeEditor label="OAuth 配置内容" format={activeFile?.format ?? 'json'} value={draft.files.settings ?? ''} onChange={value => setDraft({ ...draft, files: { ...draft.files, settings: value } })} /></> : draft.authentication?.kind === 'rebind_required' ? <p role="alert">跨设备导入的 OAuth 配置需要重新选择此设备上的账号。</p> : connectionForm}</div>}
+            {historyOpen && editor === 'native' ? <div className={styles.history}>{backups.length ? <ul className={styles.historyList} aria-label="修改记录">{backups.map((item, index) => <li key={item.transactionId}><button type="button" aria-pressed={backupPreview?.transactionId === item.transactionId} disabled={busy} onClick={() => void inspectBackup(item.transactionId)}>{formatBackupTime(item.createdAt, index)}</button></li>)}</ul> : <p className={styles.historyEmpty}>还没有可恢复的修改。</p>}{backups.length > 0 && <div className={styles.historyPreview}><CodeEditor label="当时的文件" readOnly format={activeFile?.format ?? 'text'} value={backupPreview?.original ?? ''} placeholder={backupPreview ? '' : '正在读取…'} /></div>}</div> : <div className={styles.editorScroll}>
+            {editor === 'profile' && draft && <div className={styles.form}><div className={styles.sectionLabel}>基本信息</div><label className={styles.pair}>认证方式<select aria-label="认证方式" value={draft.authentication?.kind ?? 'native'} onChange={event => { const kind = event.target.value; setNewSecret(''); setDraft({ ...draft, authentication: kind === 'oauth' ? { kind, accountId: accountState.accounts.find(account => account.state === 'signed_in')?.id ?? '' } : { kind: kind as 'native' | 'api_key' }, connection: kind === 'oauth' ? null : draft.connection, nativeCredentials: kind === 'oauth' ? {} : draft.nativeCredentials }); }}><option value="native">沿用原生认证（兼容）</option><option value="api_key">API Key</option>{supports.accounts && <option value="oauth">OAuth 账号</option>}{draft.authentication?.kind === 'rebind_required' && <option value="rebind_required">需要重新绑定</option>}</select></label>
+              {draft.authentication?.kind === 'oauth' ? <><label className={styles.pair}>配置名称<input aria-label="配置名称" value={draft.name} onChange={event => setDraft({ ...draft, name: event.target.value })} /></label><label>绑定账号<select aria-label="绑定账号" value={draft.authentication.accountId} onChange={event => setDraft({ ...draft, authentication: { kind: 'oauth', accountId: event.target.value } })}><option value="">请选择已登录账号</option>{accountState.accounts.map(account => <option key={account.id} value={account.id}>{account.label} · {accountStates[account.state]}</option>)}</select></label><p className={styles.hint}>账号在“账号”页管理。保存不会立刻切换；启用后，下次启动和资源页才会使用这个账号。</p><CodeEditor label="OAuth 配置内容" format={activeFile?.format ?? 'json'} value={draft.files.settings ?? ''} onChange={value => setDraft({ ...draft, files: { ...draft.files, settings: value } })} /></> : draft.authentication?.kind === 'rebind_required' ? <p role="alert">跨设备导入的 OAuth 配置需要重新选择此设备上的账号。</p> : connectionForm}</div>}
             {(editor === 'native' || editor === 'common') && nativeEditor()}
             {fileConflict?.context === draftContext && pendingRaw && <FileConflict current={fileConflict.current} edited={pendingRaw.text} format={activeFile?.format ?? 'text'} busy={busy} onKeep={() => { setRawDisk({ ...pendingRaw, original:fileConflict.current, text:fileConflict.current }); setFileConflict(null); setError(''); }} onUse={() => { setRawDisk({ ...pendingRaw, original:fileConflict.current }); setFileConflict(null); setError(''); setNotice('已保留本次修改，点击保存写入。'); }} />}
             {moreOptions}
-            </>}
+            </div>}
             {error && <div className={styles.error} role="alert">{error}</div>}
             {notice && <div className={styles.notice} role="status">{notice}</div>}
             <div className={styles.actions}>
@@ -1002,7 +1042,8 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
               {currentDescriptor?.login && draft?.authentication?.kind !== 'oauth' && <button type="button" disabled={busy} title={currentDescriptor.login.hint} onClick={() => void login()}>登录</button>}
               {editor === 'native' && <button type="button" disabled={busy} onClick={() => void openHistory()}>修改记录</button>}
               {editor === 'native' && hasCurrentNative && <button type="button" disabled={busy} onClick={() => void importCurrentNative(false, true)}>复制为配置</button>}
-              <span>{dirty ? '未保存' : ''}</span>
+              <span data-tone={dirty || saveState === '尚未启用' ? 'warn' : saveState ? 'ok' : undefined}>{saveState}</span>
+              {editor === 'profile' && draft && workspace?.probe.nativeWrites.state === 'supported' && workspace.binding?.profileId !== draft.id && <button type="button" title="保存后写入原生文件，下次启动读取这份配置" disabled={busy || !nativeAvailable || enablingId !== null} onClick={() => void save(true, true)}>保存并启用</button>}
               <button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint} disabled={busy || !nativeAvailable || (editor === 'native' && workspace?.probe.nativeWrites.state !== 'supported')} onClick={() => void save(editor === 'profile' && workspace?.probe.nativeWrites.state === 'supported')}>保存</button>
               </>}
             </div>
