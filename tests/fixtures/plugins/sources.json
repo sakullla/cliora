@@ -7,7 +7,12 @@
     "codex": "0.160.0",
     "grok": "1.0.46",
     "pi": "0.99.2",
-    "open_code": "1.18.34"
+    "open_code": "1.18.34",
+    "zcode": "3.14.4",
+    "qoder": "1.1.63",
+    "kimi_code": "0.31.1",
+    "deepseek": "0.2.1-alpha line (plugins dimension not delivered)",
+    "codebuddy": "2.161.1"
   },
   "sources": [
     "https://raw.githubusercontent.com/openai/codex/rust-v0.160.0/codex-rs/config/src/plugin_edit.rs",
@@ -19,13 +24,21 @@
     "Grok 1.0.46 emitted docs/user-guide/09-plugins.md",
     "Actual per-action --help for installed CLIs",
     "Installed Pi 0.99.2 dist/core/package-manager.js: getInstalledPath, getManagedNpmInstallPath, getGitInstallPath, dedupePackages, collectPackageResources",
-    "Installed Pi 0.99.2 dist/utils/git.js: parseGitUrl"
+    "Installed Pi 0.99.2 dist/utils/git.js: parseGitUrl",
+    "ZCode 3.14.4 desktop sources: github.com/zai-org/ZCode installedPluginRoots.ts and officialPluginCache.ts (installed_plugins.json read-only listing; install/uninstall verbs belong to the bundled zcode-cli agent process)",
+    "Qoder 1.1.63: https://docs.qoder.com/cli/plugins and https://docs.qoder.com/cli/plugin-marketplaces (qoder plugins subcommands)",
+    "Kimi Code 0.31.1: https://www.kimi.com/code/docs/customization/plugins (managed plugins directory and in-session /plugins management)",
+    "CodeBuddy 2.161.1: https://www.codebuddy.ai/docs/zh/cli/plugins and https://www.codebuddy.ai/docs/zh/cli/plugins-reference"
   ],
   "nativeSequences": {
     "claude_code": "marketplace add local --json; install fixture@market --scope user --json; list --json; disable --scope user --json; list enabled=false; enable --scope user --json; update --scope user --json; uninstall --scope user --json; list empty. All exit 0.",
     "codex": "marketplace add local; add fixture@market --json; list --json; remove --json; list empty. All exit 0.",
     "grok": "GROK_HOME isolated; install absoluteLocal --trust; list --json; disable; list; enable; update; uninstall; list empty. All exit 0. list lacks enabled, config [plugins] enabled/disabled observed.",
-    "pi": "PI_CODING_AGENT_DIR isolated; install absoluteLocal --no-approve; list; update --extension absoluteLocal --no-approve; remove absoluteLocal --no-approve; list empty. All exit 0. Stores local source relative to settings directory."
+    "pi": "PI_CODING_AGENT_DIR isolated; install absoluteLocal --no-approve; list; update --extension absoluteLocal --no-approve; remove absoluteLocal --no-approve; list empty. All exit 0. Stores local source relative to settings directory.",
+    "zcode_2026_10_04": "Read-only listing only: installed_plugins.json parsed from the real ~/.zcode/cli/plugins tree (sanitized fixture from the 3.14.4 install). No install/uninstall verbs exercised; management verbs stay with the in-session /plugins of the bundled agent.",
+    "qoder_2026_10_04": "qoder plugins list (plural subcommand, verified exit 0 on the local 1.1.63 install); enable/disable/update/uninstall routed through the same qoder plugins subcommands per docs; project-scope state stays in the project settings.local.json enabledPlugins field.",
+    "kimi_code_2026_10_04": "Read-only listing only: plugins/managed/<id> manifests parsed from the locally verified 0.31.1 data root. Management verbs stay in-session (/plugins).",
+    "codebuddy_2026_10_04": "codebuddy plugin list --json (singular subcommand, exit 0 verified on the local 2.161.1 install); enable/disable delivered as project-level enabledPlugins configuration transactions only; install/uninstall stay with the native /plugin interface."
   },
   "repairRegressions": {
     "piNative": "Rust-generated disabled declaration evaluated by installed Pi 0.99.2 dedupePackages/collectPackageResources. Original false; old empty delta true; replacement autoload:true false. npm scoped/user, npm project, Git HTTPS/user+project and SSH installed paths match native getInstalledPath.",

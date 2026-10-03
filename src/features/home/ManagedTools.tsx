@@ -159,7 +159,7 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
         lastLaunchDirectory = picked;
       }
       await native.launchCli({ toolId, projectId: null, sessionId: null, mode: preferredLaunchMode(launchSettings, 'cli', !!tools.find((item) => item.id === toolId)?.yoloAvailable), directory });
-      const notice = lineNotice('ok', `${toolName} 已向外部终端发出请求。`);
+      const notice = lineNotice('ok', tools.find((item) => item.id === toolId)?.launchForm === 'desktop' ? `${toolName} 已请求启动桌面应用。` : `${toolName} 已向外部终端发出请求。`);
       setStates((old) => ({ ...old, [toolId]: settle(previous, notice) }));
       clearNoticeLater(toolId, notice);
     } catch (error) {
@@ -247,9 +247,11 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
       const installed = !!workspace?.probe.selectedPath;
       const writable = workspace?.probe.nativeWrites.state === 'supported';
       const launchMode = preferredLaunchMode(launchSettings, 'cli', !!tool.yoloAvailable);
+      const desktop = tool.launchForm === 'desktop';
       const rememberedDir = launchDirectories.get(tool.id);
       const switchTitle = !workspace ? undefined : !writable ? workspace.probe.nativeWrites.reason || '当前不能写入这个工具的配置' : '点一下即切换，下次启动会读取这份配置';
       const launchTitle = !installed && workspace ? '尚未确认安装，可在“工具与连接”中检查'
+        : desktop ? [rememberedDir ? `在 ${displayPath(rememberedDir)} 打开；右键更换目录` : '启动已安装的桌面应用'].join('；')
         : [rememberedDir ? `在 ${displayPath(rememberedDir)} 启动；右键更换目录` : '', launchMode === 'yolo' ? '按此 CLI 的原生参数跳过审批' : launchSettings?.cliMode === 'yolo' ? '此 CLI 未提供已确认的 YOLO 参数，将用普通模式启动' : ''].filter(Boolean).join('；') || undefined;
       const line = loaded?.error
         ? lineNotice('error', `${tool.name} 检测失败。可编辑配置或重新进入本页重新读取。`, loaded.error)

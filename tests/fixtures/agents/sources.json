@@ -29,12 +29,43 @@
       "version": "0.99.2",
       "ref": "https://github.com/earendil-works/pi/tree/main/packages/coding-agent/docs",
       "limitation": "No verified unified native definition format. Package-owned agents not reclassified as rules."
+    },
+    "zcode": {
+      "version": "3.14.4",
+      "checkedAt": "2026-10-04",
+      "ref": "https://github.com/zai-org/ZCode (desktop sources; agent definitions resolve through the shared ~/.zcode/agents resource root)",
+      "format": "Shared resource-root agent definitions; ZCODE_DATA_BASE_DIR relocates the whole data root. Delivered per the 2026-10-03 default-off workflow."
+    },
+    "qoder": {
+      "version": "1.1.63",
+      "checkedAt": "2026-10-04",
+      "ref": "https://docs.qoder.com/cli/subagent",
+      "format": "~/.qoder/agents definition directories; QODER_CONFIG_DIR relocates the config root."
+    },
+    "kimi_code": {
+      "version": "0.31.1",
+      "checkedAt": "2026-10-04",
+      "ref": "https://www.kimi.com/code/docs/customization/agents",
+      "format": "Native agents directory under the KIMI_CODE_HOME data root; locally verified 0.31.1 install."
+    },
+    "deepseek": {
+      "version": "0.2.1-alpha line",
+      "checkedAt": "2026-10-04",
+      "ref": "https://github.com/deepseek-ai/deepseek-harness (docs/)",
+      "limitation": "No declarative agent-definition contract found in official sources; the whole agents dimension stays absent with the descriptor reason recorded."
+    },
+    "codebuddy": {
+      "version": "2.161.1",
+      "checkedAt": "2026-10-04",
+      "ref": "https://www.codebuddy.ai/docs/zh/cli/sub-agents",
+      "format": "Native sub-agent definitions under the CODEBUDDY_CONFIG_DIR root; npm @tencent-ai/codebuddy-code 2.161.1 verified locally."
     }
   },
   "acceptanceLimits": [
     "No real inference or account credentials used.",
     "Claude/Codex definition loading is not yet verified against a live CLI session.",
     "macOS/Linux not exercised.",
-    "Static definition state is distinct from an existing session loaded state."
+    "Static definition state is distinct from an existing session loaded state.",
+    "The five default-off additions (zcode/qoder/kimi_code/deepseek/codebuddy) were checked on Windows only; deepseek delivers no agents dimension by evidence gate."
   ]
 }

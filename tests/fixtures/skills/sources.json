@@ -1,0 +1,37 @@
+{
+  "checkedAt": "2026-10-04",
+  "platform": "Windows",
+  "purpose": "Evidence sources for the Skills dimension of the five default-off CLI additions (docs/sakullla-workflow/2026-10-03-new-cli-adapters-default-off). The shared Skills pipeline imports packages into each adapter's native discovery directory; these entries record where each directory contract comes from.",
+  "sources": {
+    "zcode": {
+      "version": "3.14.4",
+      "ref": "https://github.com/zai-org/ZCode (desktop sources)",
+      "format": "Shared resource root ~/.zcode/skills; ZCODE_DATA_BASE_DIR relocates the whole data root. Delivered with the desktop adapter."
+    },
+    "qoder": {
+      "version": "1.1.63",
+      "ref": "https://docs.qoder.com/cli/Skills",
+      "format": "~/.qoder/skills discovery directory; QODER_CONFIG_DIR relocates the config root."
+    },
+    "kimi_code": {
+      "version": "0.31.1",
+      "ref": "https://www.kimi.com/code/docs/customization/skills",
+      "format": "Skills directory under the KIMI_CODE_HOME data root; locally verified 0.31.1 install."
+    },
+    "deepseek": {
+      "version": "0.2.1-alpha line",
+      "ref": "https://github.com/deepseek-ai/deepseek-harness (packages/skill/skill-filesystem/README.md)",
+      "format": "Ranked .dsh/skills directories; DSH_HOME relocates the data root."
+    },
+    "codebuddy": {
+      "version": "2.161.1",
+      "ref": "https://www.codebuddy.ai/docs/zh/cli/skills",
+      "format": "Skills directory under the CODEBUDDY_CONFIG_DIR root; npm @tencent-ai/codebuddy-code 2.161.1 verified locally."
+    }
+  },
+  "acceptanceLimits": [
+    "Directory contracts verified from official documentation or desktop sources; no live skill execution acceptance performed.",
+    "Windows development host only; macOS/Linux not exercised.",
+    "Skill package install/update/remove flows through the shared pipeline are covered by the existing synthetic fixtures, not per-CLI live samples."
+  ]
+}

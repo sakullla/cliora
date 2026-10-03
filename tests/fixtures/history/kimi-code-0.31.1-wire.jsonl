@@ -1,0 +1,13 @@
+{"type":"metadata","protocol_version":"1.4","created_at":1785649082964}
+{"type":"config.update","profileName":"agent","systemPrompt":"[sanitized] Kimi Code CLI system prompt (kept short; full text stays in the session's original file)"}
+{"type":"tools.set_active_tools","names":["Read","Write","Edit","Grep","Glob","Bash","TaskList","Skill","WebSearch","Agent","mcp__*"],"time":1785649082965}
+{"type":"mcp.tools_discovered","serverName":"playwright","hash":"0000000000000000000000000000000000000000000000000000000000000000","tools":[]}
+{"type":"permission.set_mode","mode":"default","time":1785649082966}
+{"type":"turn.prompt","input":[{"type":"text","text":"帮我把示例项目整理成两个目录"}],"origin":{"kind":"user"},"time":1785649285831}
+{"type":"context.append_message","message":{"role":"user","content":[{"type":"text","text":"帮我把示例项目整理成两个目录"}],"toolCalls":[],"origin":{"kind":"user"}},"time":1785649285832}
+{"type":"context.append_loop_event","event":{"type":"step.begin","uuid":"0c320e51-cd7f-4481-bf1b-b67688eee190","turnId":"0","step":1},"time":1785649285836}
+{"type":"context.append_loop_event","event":{"type":"content.part","uuid":"a039dc56-a181-4839-bb41-18c7d1c9f43e","turnId":"0","step":1,"part":{"type":"text","text":"我先查看目录结构，再移动文件。"}},"time":1785649285900}
+{"type":"context.append_loop_event","event":{"type":"content.part","uuid":"fd9f9d2a-b519-4913-920b-f7dfdfa6776f","turnId":"0","step":2,"part":{"type":"text","text":"已完成整理：docs/ 与 src/。"}},"time":1785649297300}
+{"type":"usage.record","model":"kimi-code/k3","usage":{"inputOther":13976,"output":327,"inputCacheRead":10496,"inputCacheCreation":0},"usageScope":"turn","time":1785649297402}
+{"type":"context.append_loop_event","event":{"type":"content.part","uuid":"b41e0f26-5c2a-4d1e-93f7-02ab59c7d1e8","turnId":"1","step":1,"part":{"type":"text","text":"已把变更提交到本地仓库。"}},"time":1785649317100}
+{"type":"usage.record","model":"kimi-code/k3","usage":{"inputOther":1104,"output":117,"inputCacheRead":3328,"inputCacheCreation":16},"usageScope":"turn","time":1785649317204}

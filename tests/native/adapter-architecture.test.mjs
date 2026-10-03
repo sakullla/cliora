@@ -13,8 +13,8 @@ const sources = [
 test('shared account, resource, quota and UI services do not dispatch on builtin IDs', async () => {
   for (const path of sources) {
     const source = (await readFile(path, 'utf8')).split('#[cfg(test)]')[0];
-    assert.doesNotMatch(source, /(?:===?|!==?)\s*['"](?:codex|claude_code|grok|pi|open_code|glm|kimi|minimax|sub2api|newapi)['"]/, path);
-    assert.doesNotMatch(source, /['"](?:codex|claude_code|grok|pi|open_code|glm|kimi|minimax|sub2api|newapi)['"]\s*=>/, path);
+    assert.doesNotMatch(source, /(?:===?|!==?)\s*['"](?:codex|claude_code|grok|pi|open_code|glm|kimi|minimax|sub2api|newapi|zcode|qoder|kimi_code|deepseek|codebuddy)['"]/, path);
+    assert.doesNotMatch(source, /['"](?:codex|claude_code|grok|pi|open_code|glm|kimi|minimax|sub2api|newapi|zcode|qoder|kimi_code|deepseek|codebuddy)['"]\s*=>/, path);
   }
   assert.doesNotMatch(await readFile('src-tauri/src/accounts/context.rs', 'utf8'), /['"](?:OPENAI_API_KEY|ANTHROPIC_API_KEY|GROK_HOME|CODEX_HOME|PI_CODING_AGENT_DIR)['"]/, 'environment policy belongs to adapters');
   assert.doesNotMatch(await readFile('src/features/tools/AccountsPanel.tsx', 'utf8'), /adoptNativeCodexAccount/, 'native adoption dispatch must use the selected tool');
@@ -29,5 +29,10 @@ test('adapter implementations have only the frontend and backend package roots',
     await access(`src/adapters/${cli}/index.ts`);
     await access(`src-tauri/src/adapters/${cli}/accounts.rs`);
     await access(`src-tauri/src/adapters/${cli}/history.rs`);
+  }
+  // The five default-off additions ship backend adapters under the same
+  // package root; they need no frontend package until custom controls exist.
+  for (const cli of ['zcode', 'qoder', 'kimi_code', 'deepseek', 'codebuddy']) {
+    await access(`src-tauri/src/adapters/${cli}/mod.rs`);
   }
 });
