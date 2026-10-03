@@ -196,7 +196,7 @@
 .profileActions { display: flex; flex: none; align-items: center; gap: 6px; }
 .profileFilter { display: block; padding: 10px 14px; border-top: 1px solid var(--line); }
 .profileFilter input { width: 100%; }
-.profileScroll { max-height: 420px; overflow: auto; }
+.profileScroll { max-height: 406px; overflow: auto; }
 .profileEmpty { margin: 0; padding: 16px 18px; border-top: 1px solid var(--line); color: var(--text-3); font-size: 12.5px; }
 .profileRow strong { overflow: hidden; font-size: 14px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .profileRow small { overflow: hidden; color: var(--text-2); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
