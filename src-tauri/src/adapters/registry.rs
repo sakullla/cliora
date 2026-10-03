@@ -10,7 +10,18 @@ pub struct Registry {
 impl Registry {
     pub fn builtins() -> Self {
         Self {
-            entries: vec![&CODEX, &CLAUDE, &GROK, &PI, &OPENCODE],
+            entries: vec![
+                &CODEX,
+                &CLAUDE,
+                &GROK,
+                &PI,
+                &OPENCODE,
+                &ZCODE,
+                &QODER,
+                &KIMI_CODE,
+                &DEEPSEEK,
+                &CODEBUDDY,
+            ],
             #[cfg(test)]
             fixture_installations: BTreeMap::new(),
         }
@@ -64,3 +75,7 @@ impl Registry {
             .collect()
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/adapter/registry-additions.rs"]
+mod registry_additions_tests;
