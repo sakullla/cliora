@@ -8,7 +8,7 @@ use crate::database::Database;
 use crate::history::{self, HistoryFilter};
 use crate::launch::{self, TerminalId};
 use crate::native::adapter::Scope;
-use crate::native::adapters::{LaunchMode, Registry};
+use crate::adapters::{LaunchMode, Registry};
 use crate::resources::{mcp, skills};
 
 #[derive(Default)]

@@ -10,7 +10,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::commands::{self, AppState};
 use crate::launch::{self, LaunchRequest, LaunchStage};
 use crate::native::adapter::Scope;
-use crate::native::adapters::{LaunchMode, Registry};
+use crate::adapters::{LaunchMode, Registry};
 use crate::native::{apply, profile};
 use crate::projects;
 

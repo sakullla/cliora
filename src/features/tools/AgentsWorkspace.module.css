@@ -3,3 +3,7 @@
 .editor > label input { min-width: 220px; }
 .import { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .import input { max-width: 260px; }
+.editor { padding: 18px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); }
+.editor > label { flex-wrap: wrap; }
+.editor > label input { min-width: 0; flex: 1; }
+@media (max-width: 760px) { .editor { padding: 12px; } }

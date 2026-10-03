@@ -278,7 +278,7 @@ fn native_pi_delta_replacement_and_installed_path_semantics() {
     let root = dir.path();
     let source = root.join("package").display().to_string();
     let original = json!({"source":source,"autoload":false,"extensions":["-extensions/fixture.ts"],"unknownFuture":42});
-    let disabled = pi_disabled(&original, &source);
+    let disabled = crate::adapters::pi::plugins::pi_disabled(&original, &source);
     assert_eq!(disabled["autoload"], true);
     assert_eq!(disabled["unknownFuture"], 42);
     let input = root.join("declarations.json");
@@ -321,7 +321,7 @@ fn native_pi_delta_replacement_and_installed_path_semantics() {
         ),
     ] {
         fs::create_dir_all(base.join(relative)).unwrap();
-        let resolved = pi_installed_root(source, &base, root).unwrap();
+        let resolved = crate::adapters::pi::plugins::pi_installed_root(source, &base, root).unwrap();
         assert_eq!(resolved, base.join(relative));
         expected
             .push(json!({"source":source,"scope":scope,"expected":resolved.display().to_string()}));
@@ -409,8 +409,8 @@ fn pi_npm_git_manifest_ownership_and_package_edits_change_baseline() {
     let missing = config_entries(&db, home, &target("pi")).unwrap();
     assert!(missing[0].read_only);
     assert!(missing[0].policy.contains("安装目录未找到"));
-    assert!(pi_installed_root("npm:../../outside", &base, home).is_err());
-    assert!(pi_installed_root("git:github.com/../outside", &base, home).is_err());
+    assert!(crate::adapters::pi::plugins::pi_installed_root("npm:../../outside", &base, home).is_err());
+    assert!(crate::adapters::pi::plugins::pi_installed_root("git:github.com/../outside", &base, home).is_err());
 }
 
 #[test]

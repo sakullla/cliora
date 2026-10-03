@@ -24,13 +24,13 @@ pub const MAX_IPC_BYTES: usize = 1024 * 1024;
 
 // Secret-bearing types deliberately do not implement Debug.
 #[derive(Clone, Serialize, Deserialize)]
-pub(super) struct BoundSecret {
+pub(crate) struct BoundSecret {
     pub name: String,
     pub allowed_origins: Vec<String>,
     pub value: String,
 }
 #[derive(Clone, Serialize, Deserialize)]
-pub(super) struct HelperInput {
+pub(crate) struct HelperInput {
     pub config: QueryConfig,
     pub secrets: Vec<BoundSecret>,
 }
@@ -426,7 +426,7 @@ pub(super) fn execute(input: HelperInput) -> RuntimeReport {
 fn run(input: &HelperInput, start: Instant, request_origins:&mut Vec<String>) -> Result<serde_json::Value, UsageError> {
     input.config.validate()?;
     let source = match &input.config.program {
-        QueryProgram::Official { .. } => return Err(UsageError::configuration("官方账号查询只由原生账号服务执行")),
+        QueryProgram::Official { .. } | QueryProgram::ProfileBuiltin { .. } => return Err(UsageError::configuration("配置关联查询必须先由原生服务解析")),
         QueryProgram::JavaScript { source } => std::borrow::Cow::Borrowed(source.as_str()),
         QueryProgram::Builtin { .. } => {
             super::providers::validate_builtin_credentials(input)?;

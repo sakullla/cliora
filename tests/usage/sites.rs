@@ -62,10 +62,10 @@ fn parse(id: &str, responses: Value) -> UsageResult {
 #[test]
 fn site_catalog_versions_subjects_and_credentials_are_explicit() {
     assert_eq!(usage_presets().len(), 20);
-    for p in presets().into_iter().filter(|p| is_site(&p.config)) {
+    for p in usage_presets().into_iter().filter(|p| matches!(&p.config.program,QueryProgram::Builtin{provider,..} if provider=="sub2api" || provider=="newapi")) {
         p.config.validate().unwrap();
         assert_eq!(p.config.refresh_interval_seconds, 0);
-        validate_credentials(&input(p.config.clone())).unwrap();
+        validate_builtin_credentials(&input(p.config.clone())).unwrap();
         let mut wrong = input(p.config.clone());
         wrong.secrets[0].name = if wrong.secrets[0].name == "api_key" {
             "user_token"
@@ -73,12 +73,12 @@ fn site_catalog_versions_subjects_and_credentials_are_explicit() {
             "api_key"
         }
         .into();
-        assert!(validate_credentials(&wrong).is_err());
+        assert!(validate_builtin_credentials(&wrong).is_err());
         let mut wrong = input(p.config.clone());
         wrong.secrets[0]
             .allowed_origins
             .push("https://other.example".into());
-        assert!(validate_credentials(&wrong).is_err());
+        assert!(validate_builtin_credentials(&wrong).is_err());
         let mut other = p.config.clone();
         other.site = "https://other.example".into();
         assert!(builtin_script(&other).is_err());

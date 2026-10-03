@@ -1,3 +1,4 @@
+import { ExternalLink } from '../../components/ExternalLink';
 import { useEffect, useState } from 'react';
 import { native } from '../../lib/native';
 import type { ToolProbe } from '../../types/native';
@@ -106,7 +107,7 @@ export function InstallPanel({ toolName, probe, customPath, busy, loading, onCus
     </div>)}
     {failed.map(item => <p className={styles.installFail} key={item.path} title={item.detail ?? item.path}>未能运行 · {fileName(item.path)}</p>)}
     {hasNpm && hasNative && <p className={styles.installNote}>两份都在。选择栖点启动用的那一份。</p>}
-    {problems.map(item => <p className={styles.installNote} key={item.name}>{item.name} {item.status === 'outdated' ? '版本过旧' : '缺失'}{item.helpUrl && <a href={item.helpUrl} target="_blank" rel="noreferrer"> 安装 ↗</a>}</p>)}
+    {problems.map(item => <p className={styles.installNote} key={item.name}>{item.name} {item.status === 'outdated' ? '版本过旧' : '缺失'}{item.helpUrl && <ExternalLink href={item.helpUrl}> 安装 ↗</ExternalLink>}</p>)}
     <div className={styles.installActions}>
       {!selected && multiple && <>
         <button type="button" disabled={busy} onClick={() => onMaintain('install_native', 'native')}>安装原生</button>
@@ -114,7 +115,7 @@ export function InstallPanel({ toolName, probe, customPath, busy, loading, onCus
       </>}
       {!selected && !multiple && probe.installCommand && <button type="button" className={styles.primary} disabled={busy} onClick={() => onMaintain('install')}>安装</button>}
       {behind && probe.upgradeCommand && <button type="button" className={styles.primary} disabled={busy || loading} onClick={() => onMaintain('upgrade', selected?.source)}>{updateLabel}</button>}
-      {probe.installUrl && <a href={probe.installUrl} target="_blank" rel="noreferrer">官方安装说明 ↗</a>}
+      {probe.installUrl && <ExternalLink href={probe.installUrl}>官方安装说明 ↗</ExternalLink>}
     </div>
     <details className={styles.pathCustom}><summary>指定路径</summary><div><input aria-label="CLI 可执行文件路径" value={customPath} onChange={event => onCustomPath(event.target.value)} placeholder="可执行文件完整路径" /><button type="button" disabled={busy} onClick={onSavePath}>保存并重检</button></div></details>
   </details>;

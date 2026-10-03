@@ -1,3 +1,4 @@
+use crate::adapters::Registry;
 use std::collections::{BTreeSet, HashSet};
 use std::io::Read;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -10,7 +11,7 @@ use sha2::{Digest, Sha256};
 use url::Url;
 
 use super::{
-    adapters::Registry,
+
     profile::{self, Connection},
 };
 use crate::credentials::CredentialStore;
@@ -360,11 +361,7 @@ fn version_segment(path: &str) -> bool {
         .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DirectoryAuth {
-    Bearer,
-    Anthropic,
-}
+use crate::adapters::model_directory::DirectoryAuth;
 
 /// One documented directory URL. Anthropic lists `GET /v1/models`; an OpenAI-compatible
 /// base that already ends in `/v1` or `/v4` lists `GET {base}/models`. DeepSeek publishes
@@ -372,17 +369,10 @@ enum DirectoryAuth {
 /// the Anthropic-compatible base `https://api.deepseek.com/anthropic`.
 fn directory(connection: &Connection) -> Result<(Url, DirectoryAuth), String> {
     let mut url = checked_base(connection)?;
-    if url.host_str() == Some("api.deepseek.com") {
-        url.set_path("/models");
-        url.set_query(None);
-        return Ok((url, DirectoryAuth::Bearer));
+    if let Some(route) = crate::adapters::model_directory::route(&url)? {
+        return Ok(route);
     }
     let path = url.path().trim_end_matches('/').to_owned();
-    if let Some(host) = url.host_str() {
-        if matches!(host, "open.bigmodel.cn" | "api.z.ai") && !path.contains("/api/") {
-            return Err(format!("这是 {host} 的网站地址，不是 API 地址。模型列表请填写 https://{host}/api/paas/v4；Claude 兼容接口请填写 https://{host}/api/anthropic"));
-        }
-    }
     if !path.ends_with("/models") {
         let mut next = path;
         if version_segment(&next) {

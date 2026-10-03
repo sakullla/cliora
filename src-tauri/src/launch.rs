@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::database::Database;
 use crate::native::adapter::{self, Scope};
-use crate::native::adapters::{self, LaunchMode, Registry};
+use crate::adapters::{self, LaunchMode, Registry};
 use crate::projects;
 use crate::resources::skills;
 
@@ -1083,7 +1083,12 @@ pub fn spawn_account_terminal(db: &Database, executable: &Path, args: &[String],
     }
     let mut invocation = vec![quote(&terminal_path(executable)?)];
     invocation.extend(context.cli_args.iter().chain(args).map(|value| quote(value)));
-    let invocation = format!("{}{}", if cfg!(windows) { "& " } else { "" }, invocation.join(" "));
+    let mut invocation = format!("{}{}", if cfg!(windows) { "& " } else { "" }, invocation.join(" "));
+    if cfg!(windows) && completion.is_some() {
+        if let Some(endpoint) = crate::adapters::accounts::get(&context.tool_id)?.browser_login_endpoint() {
+            invocation = browser_login_invocation(&invocation, endpoint, &context.root.join(".cliora-auth-url"))?;
+        }
+    }
     if let Some(path) = completion {
         if path.parent() != Some(context.root.as_path()) { return Err("登录结果文件不属于当前上下文".into()); }
         if cfg!(windows) {
@@ -1099,6 +1104,14 @@ pub fn open_shell(db: &Database, script: &str) -> Result<(), String> {
     let terminal = selected_terminal(db)?;
     let home = env::var_os("USERPROFILE").or_else(|| env::var_os("HOME")).map(PathBuf::from).filter(|path| path.is_dir()).ok_or("找不到用户目录")?;
     spawn_terminal(db, terminal, shell_terminal(terminal, &home, script)?)
+}
+
+/// Preserve visible native output, capture only the allowlisted URL, and open it
+/// through ShellExecute once. No full auth output or tokens are logged.
+fn browser_login_invocation(invocation: &str, endpoint: &str, receipt: &Path) -> Result<String, String> {
+    let endpoint = quote_powershell(endpoint);
+    let receipt = quote_powershell(&terminal_path(receipt)?);
+    Ok(format!(r#"{invocation} | ForEach-Object {{ Write-Host $_; if (-not (Test-Path -LiteralPath {receipt}) -and ([string]$_ -match '(https://[^\s\x1b]+)')) {{ $clioraAuthUrl = $Matches[1]; $clioraAuthUri = $null; if ([Uri]::TryCreate($clioraAuthUrl, [UriKind]::Absolute, [ref]$clioraAuthUri) -and $clioraAuthUri.GetLeftPart([UriPartial]::Path) -ceq {endpoint} -and -not $clioraAuthUri.UserInfo -and -not $clioraAuthUri.Fragment) {{ Set-Content -LiteralPath {receipt} -Value $clioraAuthUrl -Encoding UTF8; try {{ Start-Process -FilePath $clioraAuthUrl -ErrorAction Stop }} catch {{ Write-Host '浏览器未打开，请在 Cliora 点击“打开授权页面”，或复制上方 Go to 链接。' }} }} }} }}"#))
 }
 
 pub fn spawn(db: &Database, plan: LaunchPlan) -> Result<LaunchResult, String> {

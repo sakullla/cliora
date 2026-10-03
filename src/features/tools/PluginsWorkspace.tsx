@@ -1,9 +1,10 @@
+import { uiAdapterFor } from '../../adapters';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { native } from '../../lib/native';
 import { confirmAction } from '../../lib/confirm';
 import type { Scope } from '../../types/native';
 import type { PluginAction, PluginEntry, PluginSnapshot, PluginTarget } from '../../types/resources';
-import styles from './AccountsPanel.module.css';
+import styles from './ManagementPanel.module.css';
 import { useAccountLabels } from '../library/resourceContexts';
 
 const labels: Record<PluginAction, string> = { install: '安装', update: '更新', enable: '启用', disable: '禁用', uninstall: '卸载' };
@@ -20,8 +21,12 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId }: { to
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState('all');
   const generation = useRef(0);
   const accountLabel = useAccountLabels();
+  const entries = snapshot?.entries ?? [];
+  const filtered = entries.filter(entry => `${entry.name} ${entry.source}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()) && (filter === 'all' || (filter === 'readonly' ? entry.readOnly : filter === 'enabled' ? entry.enabled === true : entry.enabled === false)));
   useEffect(() => { const id = ++generation.current; setSnapshot(null); setError(''); setNotice(''); setBusy(true);
     void native.scanNativePlugins(target).then(value => { if (id === generation.current) setSnapshot(value); }).catch(value => { if (id === generation.current) setError(message(value)); }).finally(() => { if (id === generation.current) setBusy(false); });
     return () => { generation.current++; };
@@ -47,25 +52,26 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId }: { to
     finally { if (id === generation.current) setBusy(false); }
   }
   return <section className={styles.panel} aria-label="原生插件管理">
-    <div className={styles.actions}><h2>插件</h2><button disabled={busy} onClick={() => void refresh()}>重新扫描</button></div>
-    <p>{scope === 'global' ? '全局' : projectPath} · {accountLabel(contextId)}</p>
+    <div className={styles.header}><div><h2>插件</h2><p>安装和管理 CLI 扩展；插件内的 Agent、Skill 随插件一起管理。</p></div><div className={styles.actions}><button disabled={busy} onClick={() => void refresh()}>重新扫描</button></div></div>
+    <div className={styles.context}><span>{scope === 'global' ? '全局' : projectPath}</span><span>{accountLabel(contextId)}</span></div>
     {busy && <p role="status">正在处理原生插件…</p>}
     {error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
     {snapshot && <>
-      <p>能力核验版本 {snapshot.capability.version} · {snapshot.capability.detail}</p><p>{snapshot.detail}</p>
-      <div className={styles.create}><label>插件来源<input aria-label="插件来源" value={source} onChange={event => { setSource(event.target.value); setTrusted(false); }} placeholder={snapshot.capability.sources} disabled={busy} style={{ width: 'min(500px, 60vw)' }} /></label>
-        <button disabled={busy || !source.trim() || !trusted || !snapshot.capability.actions.includes('install')} onClick={() => void operate('install')}>{toolId === 'open_code' ? '添加插件声明' : '安装插件'}</button></div>
-      <p>支持来源：{snapshot.capability.sources}</p>
-      <label><input type="checkbox" checked={trusted} onChange={event => setTrusted(event.target.checked)} disabled={busy} /> 我信任所选来源，允许安装或更新插件代码{toolId === 'pi' && scope === 'project' ? '并授予此次原生项目操作信任' : ''}</label>
-      {!snapshot.entries.length && <p>此作用域尚未发现插件。</p>}
-      <ul className={styles.list}>{snapshot.entries.map(entry => <li key={`${entry.scope}:${entry.id}`}>
-        <div><strong>{entry.name}</strong><span>{entry.version ?? '版本未提供'}</span></div>
-        <p>{entry.source} · {scopeLabels[entry.scope] ?? entry.scope} · {entry.enabled === null ? '启用状态未知' : entry.enabled ? '已启用' : '已禁用'}</p>
-        <p>{states[entry.state] ?? entry.state} · {policyLabel(entry.policy)}{entry.readOnly ? ' · 只读' : ''}</p>
-        {entry.root && <p>{entry.root}</p>}
+      <div className={styles.installBox}><div className={styles.create}><label>插件来源<input aria-label="插件来源" value={source} onChange={event => { setSource(event.target.value); setTrusted(false); }} placeholder={snapshot.capability.sources} disabled={busy} /></label>
+        <button className={styles.primary} disabled={busy || !source.trim() || !trusted || !snapshot.capability.actions.includes('install')} onClick={() => void operate('install')}>{uiAdapterFor(toolId).plugins?.installLabel ?? '安装插件'}</button></div>
+      <label className={styles.trust}><input type="checkbox" checked={trusted} onChange={event => setTrusted(event.target.checked)} disabled={busy} /> 我信任所选来源，允许安装或更新插件代码{uiAdapterFor(toolId).plugins?.projectTrust && scope === 'project' ? '并授予此次原生项目操作信任' : ''}</label>
+      <p>来源格式：{snapshot.capability.sources}。更改来源后需重新确认信任。</p></div>
+      <div className={styles.listToolbar}><input type="search" aria-label="搜索插件" placeholder="搜索插件名称或来源" value={search} onChange={event => setSearch(event.target.value)} /><select aria-label="插件状态筛选" value={filter} onChange={event => setFilter(event.target.value)}><option value="all">全部状态</option><option value="enabled">已启用</option><option value="disabled">已禁用</option><option value="readonly">只读插件</option></select><span>{filtered.length === entries.length ? `${entries.length} 个插件` : `${filtered.length} / ${entries.length} 个插件`}</span></div>
+      {!snapshot.entries.length && <p className={styles.empty}>此作用域还没有插件。填写来源并确认信任后即可安装。</p>}
+      <ul className={styles.resourceList}>{filtered.map(entry => <li key={`${entry.scope}:${entry.id}`}>
+        <div className={styles.resourceBody}><div className={styles.resourceTitle}><strong>{entry.name}</strong><span className={styles.badge} data-state={entry.enabled ? 'signed_in' : 'signed_out'}>{entry.enabled === null ? '状态未知' : entry.enabled ? '已启用' : '已禁用'}</span>{entry.readOnly && <span className={styles.badge}>只读</span>}<span className={styles.resourceMeta}>{entry.version ?? '版本未提供'}</span></div><p>{entry.source} · {scopeLabels[entry.scope] ?? entry.scope}</p><p>{states[entry.state] ?? entry.state}</p></div>
+        <div className={styles.actions}>{(['update', entry.enabled === false ? 'enable' : 'disable', 'uninstall'] as PluginAction[]).filter(action => snapshot.capability.actions.includes(action)).map(action => <button key={action} className={action === 'uninstall' ? styles.danger : undefined} title={entry.readOnly ? policyLabel(entry.policy) : action === 'update' && !trusted ? '请先确认上方来源信任，再更新插件' : undefined} disabled={busy || entry.readOnly || (action === 'update' && (!trusted || (uiAdapterFor(toolId).plugins?.projectUpdate === false && scope === 'project')))} onClick={() => void operate(action, entry)}>{labels[action]}</button>)}</div>
+        <details><summary>安装策略与说明</summary><p>{policyLabel(entry.policy)}{entry.readOnly ? ' · 只读' : ''}</p></details>
+        {entry.root && <details><summary>安装位置</summary><p>{entry.root}</p></details>}
         {!!entry.resources.length && <details><summary>包内资源（随插件管理）</summary><ul>{entry.resources.map(resource => <li key={resource.path}>{resource.kind} · {resource.path}</li>)}</ul></details>}
-        <div className={styles.actions}>{(['update', entry.enabled === false ? 'enable' : 'disable', 'uninstall'] as PluginAction[]).filter(action => snapshot.capability.actions.includes(action)).map(action => <button key={action} disabled={busy || entry.readOnly || (action === 'update' && (!trusted || (toolId === 'pi' && scope === 'project')))} onClick={() => void operate(action, entry)}>{labels[action]}</button>)}</div>
       </li>)}</ul>
+      {entries.length > 0 && filtered.length === 0 && <p className={styles.empty}>没有匹配的插件。<button onClick={() => { setSearch(''); setFilter('all'); }}>清除筛选</button></p>}
+      <details className={styles.compatibility}><summary>兼容性与加载说明</summary><p>参考核验版本 {snapshot.capability.version} · {snapshot.capability.detail}</p><p>{snapshot.detail}</p></details>
     </>}
   </section>;
 }

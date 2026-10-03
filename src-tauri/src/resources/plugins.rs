@@ -1,18 +1,21 @@
-//! Plugins are native packages, never flattened into the Skill library.
+use crate::adapters::plugins::text;
+use crate::adapters::{self, Registry};
+// Plugins are native packages, never flattened into the Skill library.
 use crate::{
     accounts::selection,
     credentials::CredentialStore,
     database::Database,
     native::{
         adapter::{self, Scope},
-        adapters::{self, Registry},
         format::{self, FileKind},
-        transaction::{self, FieldChange, FilePatch},
+        transaction::{self, FilePatch},
     },
 };
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+#[cfg(test)]
+use serde_json::json;
+use serde_json::Value;
 use std::{
     fs,
     io::Read,
@@ -81,7 +84,7 @@ pub struct PluginResult {
     pub snapshot: Option<PluginSnapshot>,
 }
 
-fn project(target: &PluginTarget) -> Result<Option<PathBuf>, String> {
+pub(crate) fn project(target: &PluginTarget) -> Result<Option<PathBuf>, String> {
     if target.scope == Scope::Global {
         return Ok(None);
     }
@@ -127,13 +130,13 @@ fn executable(db: &Database, home: &Path, target: &PluginTarget) -> Result<PathB
         .find(|item| item.path == selected)
         .and_then(|item| item.version.as_deref())
         .ok_or("未识别 CLI 版本")?;
-    let expected = adapters::plugins::capability(&target.tool_id)?.version;
-    // Patch releases in the same minor line retain the native contract; failures
-    // remain explicit rather than silently fabricating successful operations.
-    let minor = |s: &str| s.split('.').take(2).collect::<Vec<_>>().join(".");
-    if minor(version) != minor(expected) {
+    let adapter = adapters::plugins::get(&target.tool_id)?;
+    let policy = adapter.version_policy();
+    if !policy.accepts(version) {
         return Err(format!(
-            "插件契约核验版本为 {expected}；当前 {version} 不在已核验版本系列"
+            "插件参考核验版本 {}；当前 {version} 不满足原生契约范围 {}，请使用兼容版本或更新适配器",
+            adapter.capability().version,
+            policy.requirement
         ));
     }
     Ok(selected.into())
@@ -238,106 +241,21 @@ fn run(
         std::thread::sleep(Duration::from_millis(40));
     }
 }
-fn text(value: &Value, names: &[&str]) -> Option<String> {
-    names
-        .iter()
-        .find_map(|name| value.get(*name).and_then(Value::as_str).map(str::to_owned))
-}
-fn string_source(value: &Value) -> String {
-    value
-        .as_str()
-        .map(str::to_owned)
-        .or_else(|| text(value, &["url", "path", "source", "repo"]))
-        .unwrap_or_else(|| "原生来源未提供".into())
-}
+
 fn parse_list(
     tool: &str,
     value: &Value,
     target: &PluginTarget,
 ) -> Result<Vec<PluginEntry>, String> {
-    let rows = if tool == "codex" {
-        value.get("installed")
-    } else {
-        Some(value)
-    }
-    .and_then(Value::as_array)
-    .ok_or("原生插件列表结构不兼容；未解释为无插件")?;
-    rows.iter()
-        .filter(|row| {
-            if tool != "claude_code" {
-                return true;
-            }
-            let scope = row
-                .get("scope")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown");
-            if target.scope == Scope::Global {
-                scope == "user" || scope == "managed"
-            } else {
-                (scope == "project" || scope == "local")
-                    && row
-                        .get("projectPath")
-                        .and_then(Value::as_str)
-                        .zip(target.project_path.as_deref())
-                        .is_some_and(|(actual, expected)| {
-                            let normalize = |p: &str| {
-                                let p = p.replace('\\', "/").trim_end_matches('/').to_owned();
-                                if cfg!(windows) {
-                                    p.to_lowercase()
-                                } else {
-                                    p
-                                }
-                            };
-                            normalize(actual) == normalize(expected)
-                        })
-            }
-        })
-        .map(|row| {
-            let id = text(row, &["pluginId", "id", "name"])
-                .ok_or("插件条目缺少身份；请使用原生 CLI 检查")?;
-            let install_policy =
-                text(row, &["installPolicy", "policy"]).unwrap_or_else(|| "原生策略校验".into());
-            let auth_policy = text(row, &["authPolicy"]);
-            let policy = format!(
-                "{}{}",
-                install_policy,
-                auth_policy
-                    .as_ref()
-                    .map(|policy| format!(" · 认证 {policy}（原生校验）"))
-                    .unwrap_or_default()
-            );
-            let scope = text(row, &["scope"]).unwrap_or_else(|| "user".into());
-            let read_only = scope == "managed"
-                || matches!(
-                    install_policy.as_str(),
-                    "REQUIRED" | "NOT_AVAILABLE" | "FORBIDDEN"
-                )
-                || scope == "local"
-                || (tool == "codex"
-                    && (!matches!(
-                        install_policy.as_str(),
-                        "AVAILABLE" | "REQUIRED" | "NOT_AVAILABLE" | "FORBIDDEN"
-                    ) || auth_policy
-                        .as_deref()
-                        .is_some_and(|p| !matches!(p, "ON_INSTALL" | "NONE"))));
-            Ok(PluginEntry {
-                name: text(row, &["name"]).unwrap_or_else(|| id.clone()),
-                id: id.clone(),
-                source: row
-                    .get("source")
-                    .map(string_source)
-                    .unwrap_or_else(|| id.clone()),
-                version: text(row, &["version", "revision", "commit"]),
-                scope,
-                enabled: row.get("enabled").and_then(Value::as_bool),
-                state: "installed_load_unknown".into(),
-                policy,
-                read_only,
-                root: text(row, &["installPath", "installedPath", "path"]),
-                resources: vec![],
-            })
-        })
-        .collect()
+    parse_list_registered(&Registry::builtins(), tool, value, target)
+}
+pub(crate) fn parse_list_registered(
+    registry: &Registry,
+    tool: &str,
+    value: &Value,
+    target: &PluginTarget,
+) -> Result<Vec<PluginEntry>, String> {
+    adapters::plugins::get_registered(registry, tool)?.parse_list(value, target)
 }
 fn disabled_key(target: &PluginTarget) -> String {
     let mut target = target.clone();
@@ -372,211 +290,10 @@ fn disabled(
         .map(|s| serde_json::from_str(&s).map_err(|_| "禁用插件记录损坏".into()))
         .unwrap_or_else(|| Ok(Default::default()))
 }
-fn owned_resources(entry: &mut PluginEntry) {
-    let Some(root) = entry.root.as_deref().map(Path::new) else {
-        return;
-    };
-    for (kind, paths) in [
-        ("agents", vec!["agents"]),
-        ("skills", vec!["skills"]),
-        ("hooks", vec!["hooks"]),
-        ("mcp", vec![".mcp.json"]),
-        ("extensions", vec!["extensions"]),
-        ("prompts", vec!["prompts"]),
-        ("themes", vec!["themes"]),
-    ] {
-        for path in paths {
-            let path = root.join(path);
-            if path.exists() {
-                entry.resources.push(PluginResource {
-                    kind: kind.into(),
-                    path: path.display().to_string(),
-                    owner_id: entry.id.clone(),
-                });
-            }
-        }
-    }
-}
-fn local_root(source: &str, base: &Path) -> Option<PathBuf> {
-    if source.starts_with("file:") {
-        return url::Url::parse(source).ok()?.to_file_path().ok();
-    }
-    let path = Path::new(source);
-    if path.is_absolute() {
-        Some(path.to_path_buf())
-    } else if source.starts_with('.') {
-        Some(base.join(path))
-    } else {
-        None
-    }
-}
-fn pi_disabled(item: &Value, source: &str) -> Value {
-    let mut value = item
-        .as_object()
-        .cloned()
-        .unwrap_or_else(|| serde_json::Map::from_iter([("source".into(), json!(source))]));
-    // Project autoload:false is a delta over the global package. Empty delta
-    // arrays remove exclusions, so disabling MUST replace inherited resources.
-    value.insert("autoload".into(), json!(true));
-    for kind in ["extensions", "skills", "prompts", "themes"] {
-        value.insert(kind.into(), json!([]));
-    }
-    Value::Object(value)
-}
 
 /// Pi 0.99.2 DefaultPackageManager getManagedNpmInstallPath/getGitInstallPath.
 /// Legacy global npm roots can be customized by arbitrary package-manager
 /// commands: do not execute those during discovery or guess their location.
-fn pi_installed_root(source: &str, base: &Path, home: &Path) -> Result<PathBuf, String> {
-    let root = if let Some(spec) = source.strip_prefix("npm:") {
-        let spec = spec.trim();
-        let name = spec
-            .rfind('@')
-            .filter(|index| *index > 0)
-            .map(|index| &spec[..index])
-            .unwrap_or(spec);
-        let parts: Vec<_> = name.split('/').collect();
-        if name.is_empty()
-            || !name
-                .bytes()
-                .all(|c| c.is_ascii_alphanumeric() || b"@._-/".contains(&c))
-            || parts.iter().any(|part| matches!(*part, "" | "." | ".."))
-            || (name.starts_with('@') && parts.len() != 2)
-            || (!name.starts_with('@') && parts.len() != 1)
-        {
-            return Err("Pi npm 来源无法安全解析，请用原生 CLI 管理".into());
-        }
-        base.join("npm/node_modules").join(name)
-    } else if source.starts_with("git:")
-        || source.starts_with("https://")
-        || source.starts_with("http://")
-        || source.starts_with("ssh://")
-    {
-        let source = if source.starts_with("git://") {
-            source
-        } else {
-            source.strip_prefix("git:").unwrap_or(source)
-        }
-        .trim();
-        let (host, path) = if let Some(scp) = source.strip_prefix("git@") {
-            let (host, path) = scp.split_once(':').ok_or("Pi Git SSH 来源格式未识别")?;
-            (host.to_owned(), path.to_owned())
-        } else if source.contains("://") {
-            let value = url::Url::parse(source).map_err(|_| "Pi Git URL 格式未识别")?;
-            (
-                value.host_str().ok_or("Pi Git URL 缺少主机")?.to_owned(),
-                value.path().trim_start_matches('/').to_owned(),
-            )
-        } else {
-            let expanded = source
-                .strip_prefix("github:")
-                .map(|path| format!("github.com/{path}"))
-                .or_else(|| {
-                    source
-                        .strip_prefix("gitlab:")
-                        .map(|path| format!("gitlab.com/{path}"))
-                })
-                .or_else(|| {
-                    source
-                        .strip_prefix("bitbucket:")
-                        .map(|path| format!("bitbucket.org/{path}"))
-                })
-                .unwrap_or_else(|| source.into());
-            let (host, path) = expanded.split_once('/').ok_or("Pi Git 简写格式未识别")?;
-            if !host.contains('.') && host != "localhost" {
-                return Err("Pi Git 简写的原生安装路径尚未核验".into());
-            }
-            (host.to_owned(), path.to_owned())
-        };
-        let path = path
-            .split(['@', '#'])
-            .next()
-            .unwrap_or("")
-            .trim_end_matches(".git");
-        if host.is_empty()
-            || !host
-                .bytes()
-                .all(|c| c.is_ascii_alphanumeric() || b".-".contains(&c))
-            || path.split('/').count() < 2
-            || path.split('/').any(|part| matches!(part, "" | "." | ".."))
-            || path
-                .bytes()
-                .any(|c| c.is_ascii_control() || b"\\:%?#".contains(&c))
-        {
-            return Err("Pi Git 来源安装路径无法安全解析".into());
-        }
-        base.join("git").join(host).join(path)
-    } else if let Some(rest) = source
-        .strip_prefix("~/")
-        .or_else(|| source.strip_prefix("~\\"))
-    {
-        home.join(rest)
-    } else {
-        local_root(source, base).unwrap_or_else(|| base.join(source))
-    };
-    if !root.exists() {
-        return Err("Pi 安装目录未找到；旧全局 npm/custom package-manager 路径须先由原生 CLI 迁移，当前条目只读".into());
-    }
-    Ok(root)
-}
-
-fn pi_manifest_resources(entry: &mut PluginEntry, manifest: Option<&Value>) -> Result<(), String> {
-    let Some(root) = entry.root.as_ref().map(PathBuf::from) else {
-        return Err("没有可核验的 Pi 包目录".into());
-    };
-    let Some(manifest) = manifest.and_then(|value| value.get("pi")) else {
-        owned_resources(entry);
-        return Ok(());
-    };
-    let canonical_root = root.canonicalize().map_err(|_| "Pi 包目录不可读取")?;
-    for kind in ["extensions", "skills", "prompts", "themes"] {
-        let Some(patterns) = manifest.get(kind) else {
-            continue;
-        };
-        for pattern in patterns.as_array().ok_or("Pi manifest 资源字段不是数组")? {
-            let pattern = pattern.as_str().ok_or("Pi manifest 资源路径不是字符串")?;
-            if pattern.starts_with(['!', '+', '-']) {
-                continue;
-            } // filters do not introduce owned files
-            if Path::new(pattern).is_absolute()
-                || pattern.split(['/', '\\']).any(|part| part == "..")
-                || pattern.contains(['{', '}', '(', ')'])
-            {
-                return Err("Pi manifest 含包外路径或未核验的 glob 语法，已限制管理".into());
-            }
-            let expression = format!(
-                "{}/{}",
-                glob::Pattern::escape(&root.to_string_lossy().replace('\\', "/")),
-                pattern.replace('\\', "/")
-            );
-            for path in glob::glob(&expression)
-                .map_err(|_| "Pi manifest glob 无法解析")?
-                .take(20001)
-            {
-                let path = path.map_err(|_| "Pi manifest 资源不可读取")?;
-                let canonical = path
-                    .canonicalize()
-                    .map_err(|_| "Pi manifest 资源不可读取")?;
-                if !canonical.starts_with(&canonical_root) {
-                    return Err("Pi manifest 资源链接到包外，已限制管理".into());
-                }
-                if entry.resources.len() >= 20000 {
-                    return Err("Pi manifest 资源超过检查上限".into());
-                }
-                if !entry.resources.iter().any(|resource| {
-                    resource.kind == kind && resource.path == path.display().to_string()
-                }) {
-                    entry.resources.push(PluginResource {
-                        kind: kind.into(),
-                        path: path.display().to_string(),
-                        owner_id: entry.id.clone(),
-                    });
-                }
-            }
-        }
-    }
-    Ok(())
-}
 
 /// A native backup restores the document, not Cliora's recovery metadata.
 /// Reconcile only an exact original declaration; arbitrary edits remain unknown.
@@ -628,11 +345,8 @@ fn config_entries(
     let (path, kind) = config(home, target)?;
     let baseline = transaction::read_native(&path)?;
     let parsed = format::parse(kind, &baseline)?;
-    let field = if target.tool_id == "pi" {
-        "packages"
-    } else {
-        "plugin"
-    };
+    let adapter = adapters::plugins::get(&target.tool_id)?;
+    let field = adapter.config_field().ok_or("插件没有配置声明格式")?;
     let empty = vec![];
     let entries = match parsed.get(field) {
         Some(value) => value.as_array().ok_or("插件配置不是数组")?,
@@ -663,33 +377,22 @@ fn config_entries(
         let disabled_original = saved.get(&source);
         let enabled = declared && disabled_original.is_none();
         let conflict = disabled_original.is_some_and(|original| {
+            let disabled = adapter.disabled_declaration(original, &source);
             if declared {
-                target.tool_id != "pi" || item != pi_disabled(original, &source)
+                disabled.as_ref() != Some(&item)
             } else {
-                target.tool_id == "pi"
+                disabled.is_some()
             }
         });
-        let resolved = if target.tool_id == "pi" {
-            pi_installed_root(&source, path.parent().ok_or("配置缺少父目录")?, home).map(Some)
-        } else {
-            Ok(local_root(&source, path.parent().ok_or("配置缺少父目录")?))
-        };
+        let resolved = adapter.resolve_root(&source, path.parent().ok_or("配置缺少父目录")?, home);
         let resolution_error = resolved.as_ref().err().cloned();
         let root = resolved.unwrap_or(None);
-        let manifest = root
-            .as_ref()
-            .map(|root| root.join("package.json"))
-            .filter(|path| path.is_file())
-            .and_then(|path| fs::read_to_string(path).ok())
-            .and_then(|s| serde_json::from_str::<Value>(&s).ok());
+        let package = adapter.package_metadata(root.as_deref());
         let mut entry = PluginEntry {
             id: source.clone(),
-            name: manifest
-                .as_ref()
-                .and_then(|v| text(v, &["name"]))
-                .unwrap_or_else(|| source.clone()),
+            name: package.name.unwrap_or_else(|| source.clone()),
             source,
-            version: manifest.as_ref().and_then(|v| text(v, &["version"])),
+            version: package.version,
             scope: if target.scope == Scope::Global {
                 "user"
             } else {
@@ -705,7 +408,7 @@ fn config_entries(
                 "disabled"
             }
             .into(),
-            policy: if target.tool_id == "pi" && target.scope == Scope::Project {
+            policy: if adapter.project_trust() && target.scope == Scope::Project {
                 "需原生项目信任"
             } else {
                 "原生策略校验"
@@ -723,47 +426,13 @@ fn config_entries(
         if let Some(error) = resolution_error {
             entry.policy.push_str(&format!(" · {error}"));
         }
-        if target.tool_id == "pi" {
-            if let Err(error) = pi_manifest_resources(&mut entry, manifest.as_ref()) {
-                entry.read_only = true;
-                entry.policy.push_str(&format!(" · {error}"));
-            }
-        } else {
-            owned_resources(&mut entry);
+        if let Err(error) = adapter.resources(&mut entry, package.manifest.as_ref()) {
+            entry.read_only = true;
+            entry.policy.push_str(&format!(" · {error}"));
         }
         result.push(entry);
     }
-    if target.tool_id == "open_code" {
-        let dir = if target.scope == Scope::Project {
-            project(target)?
-                .ok_or("请选择项目")?
-                .join(".opencode/plugins")
-        } else {
-            path.parent().ok_or("配置缺少父目录")?.join("plugins")
-        };
-        if dir.is_dir() {
-            for file in fs::read_dir(dir).map_err(|_| "无法读取自动发现插件目录")? {
-                let file = file.map_err(|_| "读取插件失败")?;
-                let path = file.path();
-                if path.extension().is_some_and(|e| e == "ts" || e == "js") {
-                    let source = path.display().to_string();
-                    result.push(PluginEntry {
-                        id: format!("auto:{source}"),
-                        name: file.file_name().to_string_lossy().into(),
-                        source: source.clone(),
-                        version: None,
-                        scope: "auto".into(),
-                        enabled: Some(true),
-                        state: "discovered_load_unknown".into(),
-                        policy: "自动扫描文件，需在原生目录管理".into(),
-                        read_only: true,
-                        root: Some(source),
-                        resources: vec![],
-                    });
-                }
-            }
-        }
-    }
+    result.extend(adapter.discover(home, target, &path)?);
     Ok(result)
 }
 // Bound complete package trees, including directory membership. Never follow
@@ -817,7 +486,8 @@ fn snapshot_inner(
     if target.scope == Scope::Project && !capability.project {
         return Err(capability.detail.into());
     }
-    let mut entries = if matches!(target.tool_id.as_str(), "pi" | "open_code") {
+    let adapter = adapters::plugins::get(&target.tool_id)?;
+    let mut entries = if adapter.config_field().is_some() {
         config_entries(db, home, target)?
     } else {
         let output = run(
@@ -834,40 +504,9 @@ fn snapshot_inner(
     basis.push_str(&transaction::read_native(&path)?);
     let mut budget = (0, 0);
     for entry in &mut entries {
-        if target.tool_id == "grok" {
-            let value = format::parse(FileKind::Toml, &transaction::read_native(&path)?)?;
-            let has = |field: &str| {
-                value
-                    .get("plugins")
-                    .and_then(|p| p.get(field))
-                    .and_then(Value::as_array)
-                    .is_some_and(|items| items.iter().any(|item| item.as_str() == Some(&entry.id)))
-            };
-            entry.enabled = Some(has("enabled") && !has("disabled"));
-        }
-        if target.tool_id == "codex" && entry.root.is_none() {
-            if let (Some((name, market)), Some(version)) =
-                (entry.id.split_once('@'), entry.version.as_deref())
-            {
-                if [name, market, version]
-                    .iter()
-                    .all(|s| !s.is_empty() && !s.contains(['/', '\\']) && *s != "." && *s != "..")
-                {
-                    let root = path
-                        .parent()
-                        .ok_or("配置目录缺失")?
-                        .join("plugins/cache")
-                        .join(market)
-                        .join(name)
-                        .join(version);
-                    if root.is_dir() {
-                        entry.root = Some(root.display().to_string());
-                    }
-                }
-            }
-        }
-        if entry.resources.is_empty() && target.tool_id != "pi" {
-            owned_resources(entry);
+        adapter.decorate(entry, &path)?;
+        if entry.resources.is_empty() {
+            adapter.fill_missing_resources(entry)?;
         }
         if let Some(root) = &entry.root {
             // Native local installs intentionally link the package root (Grok).
@@ -915,74 +554,8 @@ fn mutate_config(
     let baseline = transaction::read_native(&path)?;
     let parsed = format::parse(kind, &baseline)?;
     let mut saved = disabled(db, target)?;
-    let changes = if target.tool_id == "codex" {
-        vec![FieldChange {
-            path: vec!["plugins".into(), request.source.clone(), "enabled".into()],
-            value: Some(json!(request.action == "enable")),
-        }]
-    } else {
-        let field = if target.tool_id == "pi" {
-            "packages"
-        } else {
-            "plugin"
-        };
-        let mut items = parsed
-            .get(field)
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let index = items.iter().position(|item| {
-            item.as_str() == Some(&request.source)
-                || item.get("source").and_then(Value::as_str) == Some(&request.source)
-        });
-        match request.action.as_str() {
-            "disable" => {
-                let index = index.ok_or("插件声明已消失")?;
-                if saved.contains_key(&request.source) {
-                    return Err("此包已禁用，请重新扫描".into());
-                }
-                let original = items[index].clone();
-                if target.tool_id == "pi" {
-                    items[index] = pi_disabled(&original, &request.source);
-                } else {
-                    items.remove(index);
-                }
-                saved.insert(request.source.clone(), original);
-            }
-            "enable" => {
-                let original = saved
-                    .remove(&request.source)
-                    .ok_or("没有可恢复的插件声明")?;
-                if let Some(index) = index {
-                    if target.tool_id != "pi"
-                        || items[index] != pi_disabled(&original, &request.source)
-                    {
-                        return Err("相同来源已被外部修改；重新扫描后处理冲突".into());
-                    }
-                    items[index] = original;
-                } else {
-                    items.push(original);
-                }
-            }
-            "install" => {
-                if index.is_some() || saved.contains_key(&request.source) {
-                    return Err("此来源已配置；请启用或先移除".into());
-                }
-                items.push(json!(request.source));
-            }
-            "uninstall" => {
-                if let Some(index) = index {
-                    items.remove(index);
-                }
-                saved.remove(&request.source);
-            }
-            _ => return Err("不支持的配置操作".into()),
-        }
-        vec![FieldChange {
-            path: vec![field.into()],
-            value: Some(json!(items)),
-        }]
-    };
+    let changes =
+        adapters::plugins::get(&target.tool_id)?.config_changes(&parsed, &mut saved, request)?;
     let key = disabled_key(target);
     let value = serde_json::to_string(&saved).map_err(|_| "无法保存禁用记录")?;
     transaction::watch_file_metadata(db, &path, &key)?;
@@ -1063,29 +636,14 @@ pub fn operate(
     if fresh_context != target.context_id {
         return Err("扫描期间账号上下文已切换，请重新扫描".into());
     }
-    let config_only = target.tool_id == "open_code"
-        || (matches!(target.tool_id.as_str(), "codex" | "pi")
-            && matches!(request.action.as_str(), "enable" | "disable"))
-        || (target.tool_id == "pi"
-            && request.action == "uninstall"
-            && entry.is_some_and(|entry| entry.enabled == Some(false)));
-    if target.tool_id == "pi"
-        && request.action == "update"
-        && entry.is_some_and(|entry| entry.enabled == Some(false))
-    {
-        return Err("先恢复包声明再执行原生更新".into());
-    }
+    let adapter = adapters::plugins::get(&target.tool_id)?;
+    let config_only = adapter.config_only(&request.action, entry);
+    adapter.validate_operation(request, entry)?;
     let result = if config_only {
         mutate_config(db, credentials, home, request).map(Some)
     } else {
-        let source = if target.tool_id == "pi" && request.action != "install" {
-            let (path, _) = config(home, target)?;
-            local_root(&request.source, path.parent().ok_or("配置目录缺失")?)
-                .map(|path| path.display().to_string())
-                .unwrap_or_else(|| request.source.clone())
-        } else {
-            request.source.clone()
-        };
+        let (path, _) = config(home, target)?;
+        let source = adapter.operation_source(request, &path)?;
         let args = adapters::plugins::command_args(
             &target.tool_id,
             &request.action,

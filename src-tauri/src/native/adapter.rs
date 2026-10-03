@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use super::adapters::{self, CliAdapter, Registry};
+use crate::adapters::{self, CliAdapter, Registry};
 use crate::domain::CliId;
 
 #[derive(Clone, Debug, Serialize)]

@@ -1,5 +1,6 @@
+use crate::adapters::{codex::history as codex,claude::history as claude,grok::history as grok,pi::history as pi,opencode::history as opencode};
 use super::*;
-use crate::native::adapters::{LaunchMode, CODEX, GROK};
+use crate::adapters::{LaunchMode, CODEX, GROK};
 
 fn fixtures() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/history")
@@ -784,7 +785,7 @@ fn clean_files_without_content_are_skipped_not_failed() {
     fs::write(root.join("summary-only.jsonl"), "{\"type\":\"summary\",\"summary\":\"Earlier work\"}\n").unwrap();
     fs::copy(fixtures().join("claude-2.1.jsonl"), root.join("22222222-2222-4222-8222-222222222222.jsonl")).unwrap();
     let db = Database::open(&temp.path().join("cliora.db")).unwrap();
-    let registry = Registry::with_adapters(vec![&crate::native::adapters::CLAUDE]).unwrap();
+    let registry = Registry::with_adapters(vec![&crate::adapters::CLAUDE]).unwrap();
     let reports = refresh(&db, &registry, &home).unwrap();
     assert_eq!((reports[0].source_count, reports[0].failed_count, reports[0].incomplete), (2, 0, false));
     assert_eq!(list(&db, &HistoryFilter::default()).unwrap().len(), 1);
@@ -861,7 +862,7 @@ fn exports_are_separate_read_only_files_and_resume_arguments_are_native() {
     ];
     for (tool, version, ordinary, yolo) in cases {
         assert_eq!(
-            crate::native::adapters::plan_launch(
+            crate::adapters::plan_launch(
                 &all,
                 tool,
                 version,
@@ -872,7 +873,7 @@ fn exports_are_separate_read_only_files_and_resume_arguments_are_native() {
             ordinary
         );
         match yolo {
-            Some(flag) => assert!(crate::native::adapters::plan_launch(
+            Some(flag) => assert!(crate::adapters::plan_launch(
                 &all,
                 tool,
                 version,
@@ -881,7 +882,7 @@ fn exports_are_separate_read_only_files_and_resume_arguments_are_native() {
             )
             .unwrap()
             .contains(&flag.to_owned())),
-            None => assert!(crate::native::adapters::plan_launch(
+            None => assert!(crate::adapters::plan_launch(
                 &all,
                 tool,
                 version,

@@ -1,5 +1,6 @@
 //! Native CLI owns authorization and refresh. Cliora only owns context selection.
 pub mod context;
+pub mod discovery;
 pub mod selection;
 mod contract;
 pub mod native;
@@ -8,6 +9,7 @@ use crate::{database::Database, launch};
 pub use contract::*;
 use std::{path::Path, sync::Arc, time::Duration};
 pub use store::get;
+pub use store::delete;
 
 pub fn now() -> i64 {
     chrono::Utc::now().timestamp()
@@ -44,7 +46,7 @@ fn admit(db: &Database) -> Result<(), String> {
 }
 
 pub fn create(db: &Database, tool: &str, label: &str) -> Result<AuthAccount, String> {
-    let capability = crate::native::adapters::accounts::capability(tool).ok_or("未知 CLI")?;
+    let capability = crate::adapters::accounts::capability(tool).ok_or("未知 CLI")?;
     if !capability.managed_login {
         return Err(capability.reason.into());
     }
@@ -76,19 +78,22 @@ fn validate_label(label: &str) -> Result<(), String> {
 
 /// Explicit adoption of the existing file-backed Codex context, without copying
 /// rotating tokens into a second refresh owner or importing unrelated files.
-pub fn adopt_codex(db: &Database, home: &Path, label: &str) -> Result<AuthAccount, String> {
+pub fn adopt_codex(db:&Database,home:&Path,label:&str)->Result<AuthAccount,String> {adopt_native(db,home,"codex",label)}
+
+pub fn adopt_native(db: &Database, home: &Path, tool: &str, label: &str) -> Result<AuthAccount, String> {
     use sha2::{Digest, Sha256};
     validate_label(label)?;
-    let root = std::env::var_os("CODEX_HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| home.join(".codex"));
+    let adapter=crate::adapters::accounts::get(tool)?;
+    let capability=adapter.capability();
+    if !capability.import_native {return Err(capability.reason.into());}
+    let root = crate::adapters::accounts::get(tool)?.native_root(home)?;
     if !root.is_absolute() {
-        return Err("原生 CODEX_HOME 必须是绝对路径".into());
+        return Err("原生账号根目录 必须是绝对路径".into());
     }
     context::check_path(&root)?;
-    let root = root.canonicalize().map_err(|_| "原生 Codex 目录不存在")?;
+    let root = root.canonicalize().map_err(|_| "原生账号目录不存在")?;
     let id = format!(
-        "adopted-codex-{:x}",
+        "adopted-{tool}-{:x}",
         Sha256::digest(root.to_string_lossy().to_lowercase().as_bytes())
     );
     if list(db)?.iter().any(|account| {
@@ -100,16 +105,16 @@ pub fn adopt_codex(db: &Database, home: &Path, label: &str) -> Result<AuthAccoun
     }) {
         return Err("此原生上下文已纳入管理".into());
     }
-    let context = context::context_at(root, "codex", id)?;
-    if !context.auth_files[0].is_file() {
+    let context = context::context_at(root, tool, id)?;
+    if !context.auth_files.first().is_some_and(|path| path.is_file()) {
         return Err("仅支持明确存在的 file 认证材料；系统 keyring/外部认证材料尚不支持纳入".into());
     }
-    let executable = native::executable(db, home, "codex")?;
+    let executable = native::executable(db, home, tool)?;
     let observation = native::observe(&executable, &context)?;
     if observation.state != AccountState::SignedIn || observation.identity.is_none() {
-        return Err("原生 Codex 账号尚无可核验的 ChatGPT 身份".into());
+        return Err("原生账号尚无可核验的 OAuth 身份".into());
     }
-    let account = AuthAccount { id: uuid::Uuid::new_v4().to_string(), tool_id: "codex".into(), provider: "chatgpt".into(), label: label.trim().into(), version: 1,
+    let account = AuthAccount { id: uuid::Uuid::new_v4().to_string(), tool_id: tool.into(), provider: capability.provider.into(), label: label.trim().into(), version: 1,
         state: AccountState::SignedIn, identity: observation.identity, context: Some(context), retired_contexts: vec![], pending_login: None, checked_at: Some(now()),
         detail: Some("已明确纳入原生默认上下文，未复制令牌；在此账号执行退出会影响使用该原生目录的普通终端。".into()) };
     store::insert(db, &account)?;
@@ -158,11 +163,7 @@ pub fn prepare_login(
     });
     account.state = AccountState::Pending;
     account.detail = Some(
-        if account.tool_id == "pi" {
-            "请在隔离终端执行 /login 并选择 openai-codex。取消只停止接纳结果，终端仍由用户控制。"
-        } else {
-            "请完成原生终端中的浏览器或设备授权；创建终端不代表已登录。取消后请关闭终端。"
-        }
+        crate::adapters::accounts::get(&account.tool_id)?.login_detail()
         .into(),
     );
     store::replace(db, &mut account)?;
@@ -281,7 +282,13 @@ fn watch(db: Arc<Database>, account: AuthAccount, executable: std::path::PathBuf
     let Some(pending) = account.pending_login else {
         return;
     };
-    std::thread::spawn(move || loop {
+    std::thread::spawn(move || {
+        struct LinkReceipt(std::path::PathBuf);
+        impl Drop for LinkReceipt {
+            fn drop(&mut self) { if context::check_path(&self.0).is_ok() { let _ = std::fs::remove_file(&self.0); } }
+        }
+        let _link_receipt = LinkReceipt(pending.context.root.join(".cliora-auth-url"));
+        loop {
         let Ok(current) = get(&db, &account.id) else {
             return;
         };
@@ -339,6 +346,7 @@ fn watch(db: Arc<Database>, account: AuthAccount, executable: std::path::PathBuf
             }
         }
         std::thread::sleep(Duration::from_secs(2));
+        }
     });
 }
 
@@ -441,21 +449,17 @@ pub fn logout(
         expires_at: now() + 300,
         context: context.clone(),
         previous_state: account.state.clone(),
-        external_terminal: account.tool_id == "pi",
+        external_terminal: crate::adapters::accounts::get(&account.tool_id)?.terminal_logout(),
         operation: "logout".into(),
     });
     account.state = AccountState::Pending;
     account.detail = Some(
-        if account.tool_id == "pi" {
-            "请在此账号终端执行 /logout 并选择 openai-codex；完成前账号不可启动。只影响所选上下文。"
-        } else {
-            "正在所选上下文执行原生退出；本地核验前账号不可启动。未撤销服务端其他设备。"
-        }
+        crate::adapters::accounts::get(&account.tool_id)?.logout_detail()
         .into(),
     );
     store::replace(&db, &mut account)?;
     drop(admission);
-    if account.tool_id != "pi" {
+    if !crate::adapters::accounts::get(&account.tool_id)?.terminal_logout() {
         let attempt = account
             .pending_login
             .as_ref()
@@ -573,3 +577,7 @@ mod tests;
 #[cfg(test)]
 #[path = "../../../tests/accounts/binding.rs"]
 mod binding_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/accounts/discovery.rs"]
+mod discovery_tests;

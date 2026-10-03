@@ -200,6 +200,7 @@ fn minimax_remaining_counts_ratios_boost_unlimited_and_points_stay_distinct() {
     assert_eq!(new.status, UsageStatus::Success);
     assert_eq!(new.metrics.len(), 3); // video placeholder excluded, points separate
     assert_eq!(new.metrics[0].source_percent, Some(4.0));
+    assert!(new.metrics[0].label.starts_with("文本套餐"));
     assert_eq!(new.metrics[0].used, None);
     assert_eq!(new.metrics[1].source_percent, Some(30.0));
     assert!(new.metrics[1].label.contains("1.5"));

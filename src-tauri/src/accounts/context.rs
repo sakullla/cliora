@@ -1,5 +1,5 @@
 use super::NativeContext;
-use std::{collections::BTreeMap, fs, path::Path, process::Command};
+use std::{fs, path::Path, process::Command};
 
 /// Reject links/junctions before accessing native authentication material.
 pub fn check_path(path: &Path) -> Result<(), String> {
@@ -86,102 +86,41 @@ pub fn context_at(
     tool: &str,
     id: String,
 ) -> Result<NativeContext, String> {
-    check_path(&root)?;
-    let mut environment = BTreeMap::new();
-    let mut cli_args = vec![];
-    let config_root;
-    let auth_files;
-    let history_roots;
-    match tool {
-        "codex" => {
-            config_root = root.clone();
-            environment.insert("CODEX_HOME".into(), root.to_string_lossy().into_owned());
-            cli_args = vec!["-c".into(), "cli_auth_credentials_store=\"file\"".into()];
-            auth_files = vec![root.join("auth.json")];
-            history_roots = vec![root.join("sessions"), root.join("archived_sessions")];
-        }
-        "claude_code" => {
-            config_root = root.clone();
-            environment.insert(
-                "CLAUDE_CONFIG_DIR".into(),
-                root.to_string_lossy().into_owned(),
-            );
-            auth_files = vec![root.join(".credentials.json")];
-            history_roots = vec![root.join("projects")];
-        }
-        "pi" => {
-            config_root = root.clone();
-            environment.insert(
-                "PI_CODING_AGENT_DIR".into(),
-                root.to_string_lossy().into_owned(),
-            );
-            auth_files = vec![root.join("auth.json")];
-            history_roots = vec![root.join("sessions")];
-        }
-        "open_code" => {
-            for (key, directory) in [
-                ("XDG_CONFIG_HOME", "config"),
-                ("XDG_DATA_HOME", "data"),
-                ("XDG_STATE_HOME", "state"),
-                ("XDG_CACHE_HOME", "cache"),
-            ] {
-                private_directory(&root.join(directory))?;
-                environment.insert(
-                    key.into(),
-                    root.join(directory).to_string_lossy().into_owned(),
-                );
-            }
-            config_root = root.join("config/opencode");
-            environment.insert(
-                "OPENCODE_CONFIG_DIR".into(),
-                config_root.to_string_lossy().into_owned(),
-            );
-            auth_files = vec![root.join("data/opencode/auth.json")];
-            history_roots = vec![root.join("data/opencode")];
-        }
-        _ => return Err("此 CLI 尚未提供可隔离的认证上下文".into()),
+    context_at_registered(&crate::adapters::Registry::builtins(), root, tool, id)
+}
+pub fn context_at_registered(
+    registry: &crate::adapters::Registry,
+    root: std::path::PathBuf,
+    tool: &str,
+    id: String,
+) -> Result<NativeContext, String> {
+    if !root.is_absolute() {
+        return Err("账号根目录必须为绝对路径".into());
     }
-    let remove_environment = [
-        "OPENAI_API_KEY",
-        "OPENAI_BASE_URL",
-        "CODEX_API_KEY",
-        "CODEX_HOME",
-        "CODEX_AUTH_JSON",
-        "CODEX_CI_API_KEY",
-        "ANTHROPIC_API_KEY",
-        "ANTHROPIC_AUTH_TOKEN",
-        "ANTHROPIC_BASE_URL",
-        "CLAUDE_CODE_OAUTH_TOKEN",
-        "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
-        "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
-        "CLAUDE_CONFIG_DIR",
-        "CLAUDE_CODE_USE_BEDROCK",
-        "CLAUDE_CODE_USE_VERTEX",
-        "CLAUDE_CODE_USE_FOUNDRY",
-        "CLAUDECODE",
-        "CLAUDE_CODE_SESSION_ID",
-        "PI_CODING_AGENT_DIR",
-        "OPENCODE_AUTH_CONTENT",
-        "OPENCODE_CONFIG",
-        "OPENCODE_CONFIG_CONTENT",
-        "OPENCODE_CONFIG_DIR",
-        "OPENCODE_TEST_HOME",
-    ]
-    .into_iter()
-    .map(str::to_owned)
-    .collect();
-    Ok(NativeContext {
-        id,
-        tool_id: tool.into(),
-        root,
-        resource_root: config_root.clone(),
-        config_root,
-        auth_files,
-        history_roots,
-        environment,
-        remove_environment,
-        cli_args,
-    })
+    check_path(&root)?;
+    let adapter = crate::adapters::accounts::get_registered(registry, tool)?;
+    let mut context = adapter.context(root.clone(), id)?;
+    // Clear conflicting authentication sources from all registered families,
+    // including a previous CLI's environment. Definitions stay in adapters.
+    let mut remove_environment = std::mem::take(&mut context.remove_environment)
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    for cli in registry.iter().filter_map(|cli| cli.accounts()) {
+        remove_environment.extend(cli.remove_environment().iter().map(|key| (*key).to_owned()));
+    }
+    for path in adapter.private_directories(&context) {
+        if !path.is_absolute()
+            || !path.starts_with(&root)
+            || path
+                .components()
+                .any(|part| matches!(part, std::path::Component::ParentDir))
+        {
+            return Err("适配器私有目录不属于账号根目录".into());
+        }
+        private_directory(&path)?;
+    }
+    context.remove_environment = remove_environment.into_iter().collect();
+    Ok(context)
 }
 
 impl NativeContext {

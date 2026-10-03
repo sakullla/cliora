@@ -72,6 +72,7 @@ pub struct AuthAccount {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountCapability {
+    pub browser_link: bool,
     pub tool_id: &'static str,
     pub provider: &'static str,
     pub version: &'static str,
@@ -89,4 +90,24 @@ pub struct Observation {
     pub state: AccountState,
     pub identity: Option<AccountIdentity>,
     pub detail: Option<String>,
+}
+
+/// Read-only discovery, separate from an account owned and selected by Cliora.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeLogin {
+    pub provider: String,
+    pub auth_kind: String,
+    pub state: AccountState,
+    pub identity: Option<AccountIdentity>,
+    pub detail: Option<String>,
+    pub managed_account_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeLoginSnapshot {
+    pub tool_id: String,
+    pub logins: Vec<NativeLogin>,
+    pub checked_at: i64,
 }

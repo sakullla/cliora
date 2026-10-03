@@ -1,26 +1,24 @@
-use super::{AccountIdentity, AccountState, NativeContext, Observation};
+use super::{AccountState, NativeContext, Observation};
+use crate::adapters::Registry;
 use crate::{
     database::Database,
-    native::{
-        adapter::{self, Scope},
-        adapters::Registry,
-    },
+    native::adapter::{self, Scope},
 };
 use serde_json::{json, Value};
 use std::{
     fs,
-    io::{BufRead, BufReader, Read, Write},
+    io::Read,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::mpsc,
     time::{Duration, Instant},
 };
 
-const OUTPUT_LIMIT: u64 = 64 * 1024;
+pub(crate) const OUTPUT_LIMIT: u64 = 64 * 1024;
 static ACTIVE_PROBES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-struct ProbePermit;
+pub(crate) struct ProbePermit;
 impl ProbePermit {
-    fn acquire() -> Result<Self, String> {
+    pub(crate) fn acquire() -> Result<Self, String> {
         use std::sync::atomic::Ordering;
         ACTIVE_PROBES
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
@@ -56,18 +54,20 @@ pub fn executable(db: &Database, home: &Path, tool: &str) -> Result<PathBuf, Str
         Scope::Global,
     )?;
     let selected = probe.selected_path.ok_or("未找到可核验的 CLI 安装")?;
-    let expected = crate::native::adapters::accounts::capability(tool).ok_or("未知 CLI")?;
+    let account_adapter = crate::adapters::accounts::get(tool)?;
+    let expected = account_adapter.capability();
+    let policy = account_adapter.version_policy();
     let version = probe
         .installations
         .iter()
         .find(|item| item.path == selected)
         .and_then(|item| item.version.as_deref())
         .ok_or("无法核验 CLI 版本")?;
-    if version != expected.version {
+    if !policy.accepts(version) {
         return Err(format!(
-            "当前账号适配已核对 {} {}；安装版本 {} 尚未核验",
+            "当前账号适配参考 {} {}；安装版本 {} 不满足原生契约范围",
             tool, expected.version, version
-        ));
+        ) + &format!("（{}）；请使用兼容版本或更新适配器", policy.requirement));
     }
     Ok(PathBuf::from(selected))
 }
@@ -96,13 +96,9 @@ pub fn command(
         // npm's PowerShell pipeline buffers stdin and cannot carry a duplex JSON
         // protocol. Resolve only the known, version-probed npm entry adjacent to
         // that exact shim; never shell-evaluate or guess a different installation.
-        let relative = match context.tool_id.as_str() {
-            "codex" => "node_modules/@openai/codex/bin/codex.js",
-            "claude_code" => "node_modules/@anthropic-ai/claude-code/bin/claude.exe",
-            "pi" => "node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js",
-            "open_code" => "node_modules/opencode-ai/bin/opencode.exe",
-            _ => return Err("此 CLI 未提供后台协议入口".into()),
-        };
+        let relative = crate::adapters::accounts::get(&context.tool_id)?
+            .npm_entry()
+            .ok_or("此 CLI 未提供后台协议入口")?;
         let directory = executable.parent().ok_or("CLI 入口缺少目录")?;
         let target = directory.join(relative);
         let mut sample = String::new();
@@ -146,7 +142,7 @@ pub fn command(
     Ok(command)
 }
 
-struct Process(Child);
+pub(crate) struct Process(pub(crate) Child);
 impl Drop for Process {
     fn drop(&mut self) {
         #[cfg(unix)]
@@ -176,7 +172,7 @@ impl Drop for Process {
     }
 }
 
-fn run(
+pub(crate) fn run(
     executable: &Path,
     context: &NativeContext,
     args: &[&str],
@@ -215,295 +211,14 @@ fn run(
     Ok((status.success(), bytes))
 }
 
-fn output(executable: &Path, context: &NativeContext, args: &[&str]) -> Result<Value, String> {
+pub(crate) fn output(
+    executable: &Path,
+    context: &NativeContext,
+    args: &[&str],
+) -> Result<(bool, Value), String> {
     let (success, bytes) = run(executable, context, args)?;
-    // Native signed-out checks may intentionally return a nonzero exit status.
-    let value: Value = serde_json::from_slice(&bytes).map_err(|_| "原生身份检查返回格式不兼容")?;
-    if !success
-        && value["loggedIn"] != false
-        && value["status"] != "not_ready"
-        && value["status"] != "invalid"
-    {
-        return Err("原生身份检查执行失败".into());
-    }
-    Ok(value)
-}
-
-/// Native account/read explicitly avoids refresh. Other methods retain native ownership.
-pub fn codex_read(
-    executable: &Path,
-    context: &NativeContext,
-    method: &str,
-) -> Result<Value, String> {
-    codex_exchange(executable, context, method, None, None)
-}
-
-/// Query and bracket the result with identity checks in the same native process.
-/// No OAuth token is copied into Cliora or independently refreshed.
-pub fn codex_quota(
-    executable: &Path,
-    context: &NativeContext,
-    subject: &str,
-    cancel: &std::sync::atomic::AtomicBool,
-) -> Result<Value, String> {
-    codex_exchange(
-        executable,
-        context,
-        "account/rateLimits/read",
-        Some(subject),
-        Some(cancel),
-    )
-}
-
-fn codex_exchange(
-    executable: &Path,
-    context: &NativeContext,
-    method: &str,
-    quota_subject: Option<&str>,
-    cancel: Option<&std::sync::atomic::AtomicBool>,
-) -> Result<Value, String> {
-    let _permit = ProbePermit::acquire()?;
-    if !matches!(
-        method,
-        "account/read" | "account/rateLimits/read" | "account/logout"
-    ) {
-        return Err("不允许的账号协议方法".into());
-    }
-    let mut process = Process(
-        command(executable, context, &["app-server"])?
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-            .map_err(|_| "无法启动 Codex 账号服务")?,
-    );
-    let stdout = process.0.stdout.take().ok_or("无法读取账号服务")?;
-    let (tx, rx) = mpsc::sync_channel(16);
-    std::thread::spawn(move || {
-        let mut reader = BufReader::new(stdout);
-        let mut total = 0;
-        loop {
-            let mut line = vec![];
-            let read = (&mut reader)
-                .take(OUTPUT_LIMIT + 1)
-                .read_until(b'\n', &mut line);
-            total += line.len();
-            if read.is_err() || line.len() as u64 > OUTPUT_LIMIT || total > 1024 * 1024 {
-                let _ = tx.try_send(Err("账号服务输出超限或中断".to_owned()));
-                break;
-            }
-            if line.is_empty() {
-                break;
-            }
-            if tx
-                .try_send(
-                    serde_json::from_slice::<Value>(&line)
-                        .map_err(|_| "账号协议输出不兼容".to_owned()),
-                )
-                .is_err()
-            {
-                break;
-            }
-        }
-    });
-    let stdin = process.0.stdin.as_mut().ok_or("无法写入账号服务")?;
-    writeln!(stdin, "{}", json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"cliora","version":"1"}}})).map_err(|_| "账号服务中断")?;
-    stdin.flush().map_err(|_| "账号服务中断")?;
-    let deadline = Instant::now() + Duration::from_secs(15);
-    let mut quota = None;
-    loop {
-        if cancel.is_some_and(|value| value.load(std::sync::atomic::Ordering::SeqCst)) {
-            return Err("官方额度查询已取消".into());
-        }
-        if Instant::now() >= deadline {
-            return Err("账号服务超时或中断".into());
-        }
-        let result = match rx.recv_timeout(Duration::from_millis(50)) {
-            Ok(value) => value?,
-            Err(mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(_) => return Err("账号服务超时或中断".into()),
-        };
-        if result["id"] == 1 {
-            if result.get("error").is_some() {
-                return Err("Codex 初始化失败".into());
-            }
-            let stdin = process.0.stdin.as_mut().ok_or("账号服务中断")?;
-            writeln!(stdin, "{}", json!({"method":"initialized"})).map_err(|_| "账号服务中断")?;
-            let first_method = if quota_subject.is_some() {
-                "account/read"
-            } else {
-                method
-            };
-            let params = if first_method == "account/read" {
-                json!({"refreshToken":false})
-            } else {
-                Value::Null
-            };
-            writeln!(
-                stdin,
-                "{}",
-                json!({"id":2,"method":first_method,"params":params})
-            )
-            .map_err(|_| "账号服务中断")?;
-            stdin.flush().map_err(|_| "账号服务中断")?;
-        }
-        if result["id"] == 2 {
-            if result.get("error").is_some() {
-                return Err("Codex 账号接口拒绝请求，请检查登录状态".into());
-            }
-            if let Some(subject) = quota_subject {
-                let identity = parse_codex(&result["result"]);
-                if identity.state != AccountState::SignedIn
-                    || identity
-                        .identity
-                        .as_ref()
-                        .is_none_or(|id| id.subject != subject)
-                {
-                    return Err("官方额度账号身份已改变或未登录，请重新认证".into());
-                }
-                let stdin = process.0.stdin.as_mut().ok_or("账号服务中断")?;
-                writeln!(stdin, "{}", json!({"id":3,"method":method}))
-                    .map_err(|_| "账号服务中断")?;
-                stdin.flush().map_err(|_| "账号服务中断")?;
-                continue;
-            }
-            return result
-                .get("result")
-                .cloned()
-                .ok_or_else(|| "账号服务缺少结果".into());
-        }
-        if quota_subject.is_some() && result["id"] == 3 {
-            if let Some(error) = result.get("error") {
-                // Inspect native errors only for classification; never expose raw data.
-                let message = error["message"].as_str().unwrap_or("").to_ascii_lowercase();
-                let code = error["code"].as_i64();
-                return Err(if matches!(code, Some(401 | 403))
-                    || message.contains("401")
-                    || message.contains("403")
-                    || message.contains("unauthorized")
-                    || message.contains("not authenticated")
-                {
-                    "官方额度认证失效，请在原生 CLI 重新认证"
-                } else if code == Some(429) || message.contains("429") {
-                    "官方额度请求受限，请稍后刷新"
-                } else {
-                    "Codex 原生额度接口请求失败，未取得新数据"
-                }
-                .into());
-            }
-            quota = Some(result.get("result").cloned().ok_or("账号服务缺少结果")?);
-            let stdin = process.0.stdin.as_mut().ok_or("账号服务中断")?;
-            writeln!(
-                stdin,
-                "{}",
-                json!({"id":4,"method":"account/read","params":{"refreshToken":false}})
-            )
-            .map_err(|_| "账号服务中断")?;
-            stdin.flush().map_err(|_| "账号服务中断")?;
-        }
-        if let Some(subject) = quota_subject.filter(|_| result["id"] == 4) {
-            let identity = parse_codex(&result["result"]);
-            if result.get("error").is_some()
-                || identity.state != AccountState::SignedIn
-                || identity
-                    .identity
-                    .as_ref()
-                    .is_none_or(|id| id.subject != subject)
-            {
-                return Err("官方额度账号身份已改变或未登录，请重新认证".into());
-            }
-            return quota.ok_or("账号服务缺少结果".into());
-        }
-    }
-}
-
-fn email(value: &Value) -> Option<String> {
-    let text = value.as_str()?;
-    (text.len() <= 254
-        && text.contains('@')
-        && !text.chars().any(char::is_control)
-        && !text.contains(' '))
-    .then(|| text.to_owned())
-}
-fn account_id(value: &Value) -> Option<String> {
-    let text = value.as_str()?;
-    (text.len() <= 128
-        && !text.is_empty()
-        && text
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'))
-    .then(|| text.to_owned())
-}
-fn safe_plan(value: &Value) -> Option<String> {
-    let text = value.as_str()?;
-    [
-        "free",
-        "plus",
-        "pro",
-        "team",
-        "business",
-        "enterprise",
-        "edu",
-        "max",
-        "claude_pro",
-        "claude_max",
-    ]
-    .contains(&text)
-    .then(|| text.to_owned())
-}
-fn missing(state: AccountState, detail: &str) -> Observation {
-    Observation {
-        state,
-        identity: None,
-        detail: Some(detail.into()),
-    }
-}
-
-pub fn parse_codex(value: &Value) -> Observation {
-    if value.get("account").is_none() {
-        return missing(AccountState::Unknown, "原生状态缺少 account 字段");
-    }
-    let account = &value["account"];
-    if account.is_null() {
-        return missing(AccountState::SignedOut, "原生上下文未登录");
-    }
-    if account["type"] != "chatgpt" {
-        return missing(AccountState::Unknown, "当前原生认证不是 ChatGPT OAuth");
-    }
-    let Some(email) = email(&account["email"]) else {
-        return missing(AccountState::Unknown, "原生账号缺少可核验身份");
-    };
-    Observation {
-        state: AccountState::SignedIn,
-        identity: Some(AccountIdentity {
-            subject: email.clone(),
-            email: Some(email),
-            plan: safe_plan(&account["planType"]),
-            source: "codex_account_read".into(),
-        }),
-        detail: Some("原生本地账号状态；未发起推理或独立刷新令牌".into()),
-    }
-}
-
-pub fn parse_claude(value: &Value) -> Observation {
-    if value["loggedIn"] == false {
-        return missing(AccountState::SignedOut, "原生上下文未登录");
-    }
-    if value["loggedIn"] != true || value["authMethod"] != "claude.ai" {
-        return missing(AccountState::Unknown, "当前原生认证不是 claude.ai OAuth");
-    }
-    let Some(email) = email(&value["email"]) else {
-        return missing(AccountState::Unknown, "原生状态未提供可核验身份");
-    };
-    Observation {
-        state: AccountState::SignedIn,
-        identity: Some(AccountIdentity {
-            subject: email.clone(),
-            email: Some(email),
-            plan: safe_plan(&value["subscriptionType"]),
-            source: "claude_auth_status".into(),
-        }),
-        detail: Some("原生 auth status 身份；未发起推理".into()),
-    }
+    let value = serde_json::from_slice(&bytes).map_err(|_| "原生身份检查返回格式不兼容")?;
+    Ok((success, value))
 }
 
 pub fn read_auth_file(context: &NativeContext) -> Result<Value, String> {
@@ -524,166 +239,50 @@ pub fn read_auth_file(context: &NativeContext) -> Result<Value, String> {
     serde_json::from_slice(&bytes).map_err(|_| "原生认证文件格式不兼容".into())
 }
 
-pub fn parse_oauth_record(value: &Value, provider: &str, now: i64) -> Observation {
-    let Some(auth) = value.get(provider) else {
-        return missing(AccountState::SignedOut, "原生上下文未登录所选提供方");
-    };
-    if auth["type"] != "oauth" {
-        return missing(AccountState::Unknown, "当前原生认证不是 OAuth");
-    }
-    let Some(subject) = account_id(&auth["accountId"]) else {
-        return missing(
-            AccountState::Unknown,
-            "该原生 OAuth 记录未提供 accountId，不能猜测身份",
-        );
-    };
-    let Some(expires) = auth["expires"].as_i64() else {
-        return missing(AccountState::Unknown, "原生 OAuth 记录缺少有效期");
-    };
-    if expires <= now.saturating_mul(1000) {
-        return missing(
-            AccountState::Expired,
-            "原生令牌已过期；由原生 CLI 刷新或重新认证，Cliora 不轮换令牌",
-        );
-    }
-    if !auth["access"].as_str().is_some_and(|v| !v.is_empty())
-        || !auth["refresh"].as_str().is_some_and(|v| !v.is_empty())
-    {
-        return missing(AccountState::Unknown, "原生 OAuth 记录不完整");
-    }
-    Observation {
-        state: AccountState::SignedIn,
-        identity: Some(AccountIdentity {
-            subject,
-            email: None,
-            plan: None,
-            source: "native_oauth_account_id".into(),
-        }),
-        detail: Some("原生 OAuth 完成记录与本地有效期；未在线验证服务端撤销状态".into()),
-    }
-}
-
 pub fn observe(executable: &Path, context: &NativeContext) -> Result<Observation, String> {
-    match context.tool_id.as_str() {
-        "codex" => Ok(parse_codex(&codex_read(
-            executable,
-            context,
-            "account/read",
-        )?)),
-        "claude_code" => Ok(parse_claude(&output(
-            executable,
-            context,
-            &["auth", "status", "--json"],
-        )?)),
-        "pi" => {
-            let observation =
-                parse_oauth_record(&read_auth_file(context)?, "openai-codex", super::now());
-            if observation.state != AccountState::SignedIn {
-                return Ok(observation);
-            }
-            let value = output(
-                executable,
-                context,
-                &[
-                    "auth",
-                    "check",
-                    "--provider",
-                    "openai-codex",
-                    "--json",
-                    "--no-refresh",
-                ],
-            )?;
-            if value["status"] == "ready"
-                && value["authType"] == "oauth"
-                && value["provider"] == "openai-codex"
-            {
-                Ok(observation)
-            } else {
-                Ok(missing(
-                    AccountState::Unknown,
-                    "Pi 原生无刷新检查未确认 OAuth 可用",
-                ))
-            }
-        }
-        "open_code" => Ok(parse_oauth_record(
-            &read_auth_file(context)?,
-            "openai",
-            super::now(),
-        )),
-        _ => Err("此 CLI 未提供可核验身份检查".into()),
-    }
+    crate::adapters::accounts::get(&context.tool_id)?.observe(executable, context)
 }
 
 pub fn login_args(tool: &str, method: &str) -> Result<Vec<String>, String> {
-    let capability = crate::native::adapters::accounts::capability(tool).ok_or("未知 CLI")?;
-    if !capability.managed_login || !capability.methods.contains(&method) {
-        return Err(capability.reason.into());
+    let adapter = crate::adapters::accounts::get(tool)?;
+    let cap = adapter.capability();
+    if !cap.managed_login || !cap.methods.contains(&method) {
+        return Err(cap.reason.into());
     }
-    Ok(match tool {
-        "codex" => {
-            if method == "device" {
-                vec!["login", "--device-auth"]
-            } else {
-                vec!["login"]
-            }
-        }
-        "claude_code" => vec!["auth", "login", "--claudeai"],
-        "pi" => vec![
-            "--no-extensions",
-            "--no-skills",
-            "--no-prompt-templates",
-            "--no-themes",
-        ],
-        "open_code" => vec![
-            "auth",
-            "login",
-            "--pure",
-            "--provider",
-            "openai",
-            "--method",
-            if method == "device" {
-                "ChatGPT Pro/Plus (headless)"
-            } else {
-                "ChatGPT Pro/Plus (browser)"
-            },
-        ],
-        _ => return Err("此 CLI 尚未提供受管登录".into()),
-    }
-    .into_iter()
-    .map(str::to_owned)
-    .collect())
+    adapter.login_args(method)
 }
 
 pub fn logout_args(tool: &str) -> Vec<String> {
-    match tool {
-        "codex" => vec!["logout"],
-        "claude_code" => vec!["auth", "logout"],
-        "open_code" => vec!["auth", "logout", "openai", "--pure"],
-        "pi" => vec![
-            "--no-extensions",
-            "--no-skills",
-            "--no-prompt-templates",
-            "--no-themes",
-        ],
-        _ => vec![],
+    crate::adapters::accounts::get(tool)
+        .map(|a| a.logout_args())
+        .unwrap_or_default()
+}
+
+pub(crate) fn validated_login_url(tool: &str, value: &str) -> Result<String, String> {
+    let endpoint = crate::adapters::accounts::get(tool)?.browser_login_endpoint().ok_or("此 CLI 不支持授权页面重试")?;
+    let value = value.trim().trim_start_matches('\u{feff}');
+    let parsed = url::Url::parse(&crate::external::validated_url(value)?).map_err(|_| "授权链接格式无效")?;
+    let expected = url::Url::parse(endpoint).map_err(|_| "授权适配器无效")?;
+    if parsed.origin() != expected.origin() || parsed.path() != expected.path() || parsed.fragment().is_some() {
+        return Err("授权链接不属于当前 CLI 登录流程".into());
     }
-    .into_iter()
-    .map(str::to_owned)
-    .collect()
+    Ok(parsed.into())
+}
+
+pub fn login_url(db: &Database, id: &str, attempt: &str) -> Result<String, String> {
+    let account = super::get(db, id)?;
+    let pending = account.pending_login.as_ref().filter(|pending| pending.id == attempt && pending.operation == "login" && pending.expires_at > super::now())
+        .ok_or("此登录尝试已结束，请重新登录")?;
+    let path = pending.context.root.join(".cliora-auth-url");
+    super::context::check_path(&path)?;
+    let mut value = String::new();
+    fs::File::open(path).map_err(|_| "授权链接尚未生成，请等待终端显示 Go to 链接后重试")?
+        .take(8193).read_to_string(&mut value).map_err(|_| "无法读取授权链接")?;
+    validated_login_url(&account.tool_id, &value)
 }
 
 pub fn perform_logout(executable: &Path, context: &NativeContext) -> Result<Observation, String> {
-    if context.tool_id == "codex" {
-        codex_read(executable, context, "account/logout")?;
-    } else if context.tool_id == "claude_code" || context.tool_id == "open_code" {
-        let args = logout_args(&context.tool_id);
-        let args: Vec<&str> = args.iter().map(String::as_str).collect();
-        if !run(executable, context, &args)?.0 {
-            return Err("原生退出命令失败，请重新检查账号状态".into());
-        }
-    } else {
-        return Err("此 CLI 需要在原生终端完成退出".into());
-    }
+    crate::adapters::accounts::get(&context.tool_id)?.logout(executable, context)?;
     let observation = observe(executable, context)?;
     if observation.state != AccountState::SignedOut {
         return Err("原生退出后仍检测到认证材料，请重新检查状态".into());

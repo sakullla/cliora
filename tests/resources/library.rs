@@ -9,7 +9,7 @@ fn library_crud_search_project_filter_and_optimistic_versions_survive_restart() 
         let db = Database::open(&path).unwrap();
         let project = crate::projects::add(
             &db,
-            &crate::native::adapters::Registry::builtins(),
+            &crate::adapters::Registry::builtins(),
             temp.path().to_str().unwrap(),
             Some("测试项目"),
             None,

@@ -74,7 +74,7 @@ pub(crate) fn read_secret(id: &str, credentials: &dyn CredentialStore) -> Result
 
 #[cfg(test)]
 fn native_secrets(
-    registry: &super::adapters::Registry,
+    registry: &crate::adapters::Registry,
     profile: &RegisteredProfile,
     scope: Scope,
     credentials: &dyn CredentialStore,
@@ -82,7 +82,7 @@ fn native_secrets(
     let documents = desired_registered_documents(registry,profile,None,scope)?;
     native_secrets_for_documents(registry,profile,scope,credentials,&documents)
 }
-fn native_secrets_for_documents(registry: &super::adapters::Registry, profile: &RegisteredProfile, scope: Scope, credentials: &dyn CredentialStore, documents: &BTreeMap<String, Value>) -> Result<NativeSecrets, String> {
+fn native_secrets_for_documents(registry: &crate::adapters::Registry, profile: &RegisteredProfile, scope: Scope, credentials: &dyn CredentialStore, documents: &BTreeMap<String, Value>) -> Result<NativeSecrets, String> {
     let adapter = registry
         .get(&profile.tool)
         .ok_or("未注册的 CLI 适配器，不能应用")?;
@@ -200,7 +200,7 @@ fn connection_documents(
     connection: &profile::Connection,
     scope: Scope,
 ) -> Result<BTreeMap<String, Value>, String> {
-    super::adapters::known(tool).connection_documents(connection, scope)
+    crate::adapters::known(tool).connection_documents(connection, scope)
 }
 
 pub(crate) fn scope_key(scope: Scope, project: Option<&Path>) -> Result<String, String> {
@@ -248,7 +248,7 @@ pub fn desired_documents(
     let registered = RegisteredProfile::from(profile.clone());
     let common = common.cloned().map(RegisteredCommon::from);
     desired_registered_documents(
-        &super::adapters::Registry::builtins(),
+        &crate::adapters::Registry::builtins(),
         &registered,
         common.as_ref(),
         scope,
@@ -256,7 +256,7 @@ pub fn desired_documents(
 }
 
 pub fn desired_registered_documents(
-    registry: &super::adapters::Registry,
+    registry: &crate::adapters::Registry,
     profile: &RegisteredProfile,
     common: Option<&RegisteredCommon>,
     scope: Scope,
@@ -289,13 +289,8 @@ pub fn desired_registered_documents(
         }
     }
     if matches!(profile.authentication, profile::ProfileAuthentication::OAuth { .. }) {
-        let settings=result.entry("settings".into()).or_insert_with(||json!({}));
-        match profile.tool.as_str() {
-            "codex" => { settings["model_provider"]=json!("openai"); settings["cli_auth_credentials_store"]=json!("file"); }
-            "pi" => { settings["defaultProvider"]=json!("openai-codex"); }
-            "open_code" => { if !settings.get("model").and_then(Value::as_str).is_some_and(|model|model.starts_with("openai/")) { return Err("此账号仅支持 OpenCode 的 OpenAI 模型，请在配置中设置 model 为 openai/模型名称".into()); } }
-            _ => (),
-        }
+        adapter.accounts().ok_or("此 CLI 未提供账号适配")?.prepare_documents(&mut result)?;
+
     }
     for (role, document) in &mut result {
         adapter.normalize_applied_document(role, document);
@@ -312,7 +307,7 @@ pub fn preview(
     let registered = RegisteredProfile::from(profile.clone());
     let common = common.cloned().map(RegisteredCommon::from);
     preview_registered(
-        &super::adapters::Registry::builtins(),
+        &crate::adapters::Registry::builtins(),
         &registered,
         common.as_ref(),
         scope,
@@ -320,7 +315,7 @@ pub fn preview(
 }
 
 pub fn preview_registered(
-    registry: &super::adapters::Registry,
+    registry: &crate::adapters::Registry,
     profile: &RegisteredProfile,
     common: Option<&RegisteredCommon>,
     scope: Scope,
@@ -371,7 +366,7 @@ pub fn apply_validated(
     let registered = RegisteredProfile::from(profile.clone());
     let common = common.cloned().map(RegisteredCommon::from);
     apply_registered_validated(
-        &super::adapters::Registry::builtins(),
+        &crate::adapters::Registry::builtins(),
         db,
         credentials,
         &registered,
@@ -384,7 +379,7 @@ pub fn apply_validated(
 }
 
 pub fn apply_registered_validated(
-    registry: &super::adapters::Registry,
+    registry: &crate::adapters::Registry,
     db: &Database,
     credentials: &dyn CredentialStore,
     profile: &RegisteredProfile,
@@ -398,7 +393,7 @@ pub fn apply_registered_validated(
 }
 
 fn apply_registered_validated_compared(
-    registry: &super::adapters::Registry, db: &Database, credentials: &dyn CredentialStore,
+    registry: &crate::adapters::Registry, db: &Database, credentials: &dyn CredentialStore,
     profile: &RegisteredProfile, common: Option<&RegisteredCommon>, native_files: &[NativeFile],
     key: &str, scope: Scope, allow_takeover: bool, comparison: Option<&BTreeMap<String,String>>,
 ) -> Result<ApplyOutcome,String> {
@@ -542,7 +537,7 @@ fn apply_registered_validated_compared(
             Ok(())
         });
     }
-    super::adapters::commit_registered_patches(
+    crate::adapters::commit_registered_patches(
         registry,
         &profile.tool,
         native_files,
@@ -588,7 +583,7 @@ fn comparison_files(native:&[NativeFile],documents:&BTreeMap<String,Value>,requi
     Ok(files)
 }
 
-pub fn compare_registered_application(registry:&super::adapters::Registry,db:&Database,home:&Path,scope:Scope,project:Option<&Path>,profile_id:&str)->Result<ApplyComparison,String> {
+pub fn compare_registered_application(registry:&crate::adapters::Registry,db:&Database,home:&Path,scope:Scope,project:Option<&Path>,profile_id:&str)->Result<ApplyComparison,String> {
     let profile=profile::get_registered_profile(db,profile_id)?;
     let _context = crate::accounts::selection::enter(crate::accounts::selection::for_profile(db, home, &profile)?);
     let common=profile::get_registered_common(db,&profile.tool)?;
@@ -601,7 +596,7 @@ pub fn compare_registered_application(registry:&super::adapters::Registry,db:&Da
     Ok(ApplyComparison{context_id:crate::accounts::selection::current(&profile.tool).map(|ctx|ctx.id),profile,common,files})
 }
 
-pub fn apply_compared_application(registry:&super::adapters::Registry,db:&Database,credentials:&dyn CredentialStore,comparison:&ApplyComparison,home:&Path,scope:Scope,project:Option<&Path>,custom:Option<&Path>)->Result<ApplyOutcome,String> {
+pub fn apply_compared_application(registry:&crate::adapters::Registry,db:&Database,credentials:&dyn CredentialStore,comparison:&ApplyComparison,home:&Path,scope:Scope,project:Option<&Path>,custom:Option<&Path>)->Result<ApplyOutcome,String> {
     let profile=profile::get_registered_profile(db,&comparison.profile.id)?;
     let _context = crate::accounts::selection::enter(crate::accounts::selection::for_profile(db, home, &profile)?);
     if crate::accounts::selection::current(&profile.tool).map(|ctx|ctx.id)!=comparison.context_id {return Err("账号上下文已变化，请重新比较".into());}
@@ -665,7 +660,7 @@ pub fn apply_profile(
     allow_takeover: bool,
 ) -> Result<ApplyOutcome, String> {
     apply_registered_profile(
-        &super::adapters::Registry::builtins(),
+        &crate::adapters::Registry::builtins(),
         db,
         credentials,
         tool.stable_id(),
@@ -679,7 +674,7 @@ pub fn apply_profile(
 }
 
 pub fn apply_registered_profile(
-    registry: &super::adapters::Registry,
+    registry: &crate::adapters::Registry,
     db: &Database,
     credentials: &dyn CredentialStore,
     tool: &str,
@@ -792,7 +787,7 @@ mod tests {
     }
 
     fn probe_import_interleave(common_only: bool, writes: bool) {
-        use crate::native::adapters::Registry;
+        use crate::adapters::Registry;
         use crate::portable::{self, PortablePayload};
         use std::thread;
         use std::time::{Duration, Instant};
@@ -989,7 +984,7 @@ mod tests {
                 .profile_id,
             "second"
         );
-        let registry=crate::native::adapters::Registry::builtins();
+        let registry=crate::adapters::Registry::builtins();
         let registered=RegisteredProfile::from(first.clone());
         let compared=fs::read_to_string(&path).unwrap();
         let baselines=BTreeMap::from([("settings".into(),compared.clone())]);
@@ -1037,7 +1032,7 @@ mod tests {
         assert_eq!(codex["settings"]["model_provider"], "openai-custom");
         assert_eq!(codex["settings"]["model_providers"]["openai-custom"]["base_url"], "https://example.test/v1");
         assert_eq!(codex["settings"]["model_providers"]["openai-custom"]["wire_api"], "responses");
-        let registry=crate::native::adapters::Registry::builtins();
+        let registry=crate::adapters::Registry::builtins();
         let existing=BTreeMap::from([("models".into(),json!({"providers":{"demo":{"models":[{"id":"m1","contextWindow":123,"cost":{"input":2}},{"id":"other","name":"Keep"}]}}}))]);
         let preserved=registry.get("pi").unwrap().connection_documents_for_existing(&connection,Scope::Global,&existing).unwrap();
         assert_eq!(preserved["models"]["providers"]["demo"]["models"],existing["models"]["providers"]["demo"]["models"]);
@@ -1122,7 +1117,7 @@ mod tests {
         assert_eq!(second["env"]["CLAUDE_CODE_SUBAGENT_MODEL"],"subagent-id");
         assert_eq!(second["env"]["UNRELATED"],"keep");assert_eq!(second["extra"]["keep"],true);
 
-        let registry=crate::native::adapters::Registry::builtins();
+        let registry=crate::adapters::Registry::builtins();
         let project=temp.path().join("项目 O'Neil;目录");fs::create_dir_all(project.join(".claude")).unwrap();
         let project_settings=project.join(".claude/settings.json");let local=project.join(".claude/settings.local.json");
         fs::write(&project_settings,json!({"env":{"ANTHROPIC_MODEL":"different[1M]"},"unrelated":7}).to_string()).unwrap();
@@ -1224,7 +1219,7 @@ mod tests {
                 false,
             )
             .unwrap();
-            let registry=crate::native::adapters::Registry::builtins();
+            let registry=crate::adapters::Registry::builtins();
             let registered=RegisteredProfile::from(profile.clone());
             let documents=desired_registered_documents(&registry,&registered,None,Scope::Global).unwrap();
             let mut declared=files.clone();let mut identity=native_role("auth",&temp.path().join("identity.json"),"json");identity.sensitive=true;declared.push(identity);
@@ -1484,7 +1479,7 @@ mod tests {
         assert!(!written.contains("ANTHROPIC_API_KEY"));
         profile.connection.as_mut().unwrap().auth_env_var = Some("CUSTOM_TOKEN".into());
         assert!(native_secrets(
-            &super::super::adapters::Registry::builtins(),
+            &crate::adapters::Registry::builtins(),
             &RegisteredProfile::from(profile.clone()),
             Scope::Global,
             &store

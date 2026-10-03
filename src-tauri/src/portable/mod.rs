@@ -15,7 +15,7 @@ use uuid::Uuid;
 use crate::credentials::CredentialStore;
 use crate::database::Database;
 use crate::library::LibraryItem;
-use crate::native::adapters::Registry;
+use crate::adapters::Registry;
 use crate::native::format::{self, FileKind};
 use crate::native::profile::{RegisteredCommon, RegisteredProfile};
 use crate::resources::mcp::McpDefinition;

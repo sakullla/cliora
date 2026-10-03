@@ -1,0 +1,159 @@
+use std::collections::BTreeMap;
+use std::path::Path;
+
+use serde_json::Value;
+
+use crate::history::usage::{self, RequestUsage};
+use crate::history::{
+    discover_jsonl_controlled, read_jsonl_controlled, text_content, timestamp, valid_native_id,
+    HistorySource, ParsedSession, UsageEvent,
+};
+
+pub fn sources(home: &Path) -> Result<Vec<HistorySource>, String> {
+    sources_controlled(home, &|| false)
+}
+
+pub fn sources_controlled(
+    home: &Path,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Vec<HistorySource>, String> {
+    discover_jsonl_controlled(
+        &crate::accounts::selection::history_root("pi", || home.join(".pi/agent/sessions")),
+        |path| path.extension().is_some_and(|value| value == "jsonl"),
+        cancelled,
+    )
+}
+
+fn remember(
+    events: &mut BTreeMap<String, RequestUsage>,
+    id: String,
+    model: Option<String>,
+    time: Option<i64>,
+    usage: &Value,
+) {
+    // Pi follows Anthropic: input excludes cache, and reasoning is already inside output.
+    let Some(counts) = usage::from_optional(
+        usage::field(usage, "input"),
+        usage::field(usage, "output"),
+        usage::field(usage, "cacheRead"),
+        usage::field(usage, "cacheWrite"),
+    ) else {
+        return;
+    };
+    if !usage::active(counts) {
+        return;
+    }
+    usage::keep_largest_output(
+        events,
+        id,
+        RequestUsage {
+            counts,
+            model,
+            timestamp: time,
+        },
+    );
+}
+
+pub fn parse(source: &HistorySource) -> Result<ParsedSession, String> {
+    parse_controlled(source, &|| false)
+}
+
+pub fn parse_controlled(
+    source: &HistorySource,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<ParsedSession, String> {
+    let mut session = ParsedSession::new();
+    let mut events = BTreeMap::<String, RequestUsage>::new();
+    let mut model: Option<String> = None;
+    let partial = read_jsonl_controlled(source, cancelled, |line, row| {
+        let time = row.get("timestamp").and_then(timestamp);
+        match row.get("type").and_then(Value::as_str) {
+            Some("session") => {
+                if row
+                    .get("version")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|version| version > 3)
+                {
+                    session.partial = true;
+                    return;
+                }
+                session.native_id = row
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .filter(|id| valid_native_id(id))
+                    .map(str::to_owned);
+                session.cwd = row.get("cwd").and_then(Value::as_str).map(str::to_owned);
+                session.started_at = time;
+            }
+            Some("model_change") => {
+                model = row
+                    .get("modelId")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                session.model = model.clone();
+            }
+            Some("message") => {
+                let message = row.get("message").unwrap_or(&Value::Null);
+                let role = message.get("role").and_then(Value::as_str).unwrap_or("");
+                let id = row
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| format!("line-{line}"));
+                let effective_time = message.get("timestamp").and_then(timestamp).or(time);
+                if role == "user" || role == "assistant" {
+                    session.add_message(
+                        id.clone(),
+                        role,
+                        message.get("content").map(text_content).unwrap_or_default(),
+                        effective_time,
+                    );
+                }
+                let event_model = message
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                    .or_else(|| model.clone());
+                if event_model.is_some() {
+                    session.model = event_model.clone();
+                }
+                if let Some(usage) = message.get("usage") {
+                    remember(&mut events, id, event_model, effective_time, usage);
+                }
+            }
+            Some("usage") | Some("compaction") => {
+                if let Some(usage) = row.get("usage") {
+                    let id = row
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| format!("line-{line}"));
+                    let event_model = row
+                        .get("model")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                        .or_else(|| model.clone());
+                    remember(&mut events, id, event_model, time, usage);
+                }
+            }
+            _ => {}
+        }
+    })?;
+    session.partial |= partial;
+    // Pi row ids are only unique inside one file; usage ids must be unique across files.
+    let key = source.key();
+    session.usage = events
+        .into_iter()
+        .map(|(id, event)| UsageEvent {
+            id: format!("{key}:{id}"),
+            model: event.model,
+            timestamp: event.timestamp,
+            input: Some(event.counts.input),
+            output: Some(event.counts.output),
+            cache_read: Some(event.counts.read),
+            cache_write: Some(event.counts.write),
+            input_includes_cache: false,
+        })
+        .collect();
+    session.finish(source)
+}

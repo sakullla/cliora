@@ -95,12 +95,14 @@ pub fn list_cache(db: &Database) -> Result<Vec<UsageCache>, UsageError> {
     let invalid: HashMap<_, _> = queries
         .iter()
         .filter_map(|q| {
-            if matches!(&q.config.program, QueryProgram::Official { tool, .. } if tool == "codex") {
+            if matches!(&q.config.program, QueryProgram::Official { tool, .. } if crate::adapters::official::get(tool).is_ok_and(|a|a.capability().account_required)) {
                 super::official::selection(db, &q.config)
                     .err()
                     .map(|error| (q.id.clone(), error))
             } else {
-                None
+                if matches!(q.config.program, QueryProgram::ProfileBuiltin { .. }) {
+                    super::profile::selection(db, &q.config).err().map(|error| (q.id.clone(), error))
+                } else { None }
             }
         })
         .collect();

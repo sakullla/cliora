@@ -1,0 +1,64 @@
+.panel { display: grid; gap: 16px; padding: 18px 0; min-width: 0; }
+.panel h2, .panel h3, .panel p { margin: 0; }
+.panel h2 { font-size: 19px; letter-spacing: -.02em; }
+.panel h3 { font-size: 14px; }
+.sectionTitle { display: flex; align-items: center; gap: 8px; }
+.sectionTitle > span { color: var(--text-2); font-size: 12px; }
+.badge { padding: 3px 8px; border-radius: 99px; font-size: 12px; color: var(--text-2); background: var(--surface); }
+.badge[data-state="signed_in"] { color: var(--accent); background: var(--accent-soft); }
+.badge[data-state="expired"], .badge[data-state="error"] { color: var(--danger); background: var(--danger-soft); }
+.panel p { color: var(--text-2); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.header > div:first-child { display: grid; gap: 5px; flex: 1 1 280px; }
+.header > .actions { display: flex; flex: 0 1 auto; }
+.context { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--text-2); font-size: 12px; }
+.context span { padding: 4px 9px; border: 1px solid var(--line); border-radius: 99px; background: var(--surface-2); overflow-wrap: anywhere; }
+.create { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface-2); }
+.create label { display: grid; gap: 6px; font-size: 13px; flex: 1 1 180px; min-width: 0; }
+.create input, .create select { width: 100%; box-sizing: border-box; }
+.actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.panel input, .panel select { padding: 9px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: inherit; min-width: 0; }
+.panel input:focus-visible, .panel select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.panel button { min-height: 32px; padding: 6px 10px; font-size: 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: inherit; }
+.panel button:disabled { opacity: .5; }
+.primary { background: var(--accent) !important; color: var(--on-accent) !important; border-color: var(--accent) !important; }
+.trust { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; line-height: 1.6; }
+.trust input { flex: none; margin-top: 4px; }
+.compatibility { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; font-size: 12px; color: var(--text-2); }
+.compatibility summary { cursor: pointer; }
+.compatibility p { margin-top: 8px; }
+.list { list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; }
+.list > li { display: grid; gap: 10px; border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 18px; background: var(--surface); min-width: 0; }
+.list > li > div:first-child { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.list > li > div:first-child > span { padding: 3px 8px; border-radius: 99px; background: var(--surface-2); color: var(--text-2); font-size: 12px; }
+.list > li > div:first-child > span[data-state="signed_in"] { color: var(--accent); background: var(--accent-soft); }
+.list > li > div:first-child > span[data-state="pending"] { color: var(--warning); background: var(--warning-soft); }
+.list details { font-size: 12px; color: var(--text-2); overflow-wrap: anywhere; }
+.list details > p { margin-top: 8px; }
+.panel [role="alert"] { padding: 12px; border: 1px solid var(--danger-line); border-radius: var(--radius); background: var(--danger-soft); color: var(--danger); }
+.panel [role="status"] { padding: 10px 12px; border-radius: var(--radius); background: var(--accent-soft); }
+.empty { padding: 28px 18px; text-align: center; border: 1px dashed var(--line); border-radius: var(--radius-lg); }
+@media (max-width: 760px) { .panel { padding: 16px 0; } .create { align-items: stretch; } .create > button { flex: 1 1 auto; } .list > li { padding: 14px; } }
+.resourceList { list-style: none; padding: 0; margin: 0; display: grid; gap: 0; border: 1px solid var(--line); border-radius: var(--radius-lg); overflow: hidden; background: var(--surface); }
+.resourceList > li { padding: 14px 16px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 8px 20px; min-width: 0; }
+.resourceList > li + li { border-top: 1px solid var(--line); }
+.resourceList > li > .actions { align-self: start; }
+.resourceBody { display: grid; gap: 5px; min-width: 0; }
+.resourceTitle { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.resourceTitle > strong { overflow-wrap: anywhere; font-size: 14px; }
+.resourceMeta { color: var(--text-2); font-size: 12px; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; }
+.resourceMeta > span { overflow-wrap: anywhere; }
+.resourceList .description { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.resourceList details { grid-column: 1 / -1; color: var(--text-2); font-size: 12px; min-width: 0; overflow-wrap: anywhere; }
+.resourceList details > p, .resourceList details > ul { margin-top: 8px; }
+.resourceList summary { cursor: pointer; width: fit-content; }
+.resourceList .danger { color: var(--danger); }
+.listToolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.listToolbar input { flex: 1 1 220px; min-width: 0; }
+.listToolbar select { flex: 0 1 130px; }
+.listToolbar > span { color: var(--text-2); font-size: 12px; white-space: nowrap; }
+.listNote { color: var(--text-2); font-size: 12px; }
+.installBox { display: grid; gap: 10px; padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface-2); }
+.installBox .create { padding: 0; border: 0; background: transparent; }
+.installBox .create label { flex-basis: 320px; }
+@media (max-width: 760px) { .resourceList > li { padding: 12px; grid-template-columns: minmax(0, 1fr); gap: 8px; } .resourceList > li > .actions { justify-content: flex-start; } .header > .actions { width: auto; } }

@@ -1,3 +1,5 @@
+pub mod adapters;
+mod external;
 mod background_process;
 mod process_environment;
 #[cfg(all(test, target_os = "macos"))]
@@ -25,6 +27,7 @@ pub fn run() {
             tray::show_main(app)
         }))
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::Builder::new().open_js_links_on_click(false).build())
         .setup(|app| {
             use tauri::{Listener, Manager};
             // The window must remain available when local storage needs repair.
@@ -86,15 +89,20 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::account_capabilities,
+            commands::discover_native_logins,
             commands::adopt_native_codex_account,
+            commands::adopt_native_account,
             commands::list_accounts,
             commands::create_account,
             commands::rename_account,
+            commands::delete_account,
+            commands::open_account_login_link,
             commands::start_account_login,
             commands::cancel_account_login,
             commands::check_account,
             commands::logout_account,
             commands::usage_presets,
+            commands::ensure_profile_usage,
             commands::usage_builtin_script,
             commands::list_usage_cache,
             commands::refresh_usage_query,
@@ -169,6 +177,7 @@ pub fn run() {
             commands::delete_skill_package,
             commands::get_bootstrap,
             commands::list_cli_adapters,
+            commands::open_external_url,
             commands::list_projects,
             commands::add_project,
             commands::relink_project,

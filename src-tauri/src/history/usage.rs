@@ -109,3 +109,19 @@ pub fn cumulative_delta(high_water: &mut Option<TokenCounts>, total: TokenCounts
     });
     delta
 }
+
+// Normalize legacy serialized model labels persisted in history storage.
+pub(crate) fn stored_model_id(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        if let Some(id) = value
+            .get("id")
+            .or_else(|| value.get("modelID"))
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+        {
+            return id.to_owned();
+        }
+    }
+    trimmed.to_owned()
+}

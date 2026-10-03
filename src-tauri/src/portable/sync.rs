@@ -19,7 +19,7 @@ use super::{
 };
 use crate::credentials::CredentialStore;
 use crate::database::Database;
-use crate::native::adapters::Registry;
+use crate::adapters::Registry;
 
 const MAX_REMOTE: usize = 96 * 1024 * 1024;
 const MAX_HEADS: usize = 8;

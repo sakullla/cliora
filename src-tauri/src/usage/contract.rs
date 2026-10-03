@@ -109,6 +109,12 @@ pub struct QueryIdentity {
     deny_unknown_fields
 )]
 pub enum QueryProgram {
+    /// Resolves the current profile credential in the parent, never in JS or IPC.
+    ProfileBuiltin {
+        provider: String,
+        template_version: u32,
+        profile_version: u64,
+    },
     Official {
         tool: String,
         adapter_version: u32,
@@ -367,6 +373,8 @@ fn source(program: &QueryProgram) -> String {
             provider,
             template_version,
         } => format!("builtin:{provider}:{template_version}"),
+        QueryProgram::ProfileBuiltin { provider, template_version, profile_version } =>
+            format!("profile:{provider}:{template_version}:{profile_version}"),
         QueryProgram::JavaScript { .. } => "javascript:v1".into(),
     }
 }
@@ -403,6 +411,9 @@ impl QueryConfig {
             return Err(invalid());
         }
         match &self.program {
+            QueryProgram::ProfileBuiltin { provider, template_version, profile_version }
+                if !valid_name(provider) || *template_version != 1 || *profile_version == 0
+                    || self.identity.profile_id.is_none() => return Err(invalid()),
             QueryProgram::Official { .. } => super::official::validate_config(self)?,
             QueryProgram::Builtin {
                 provider,

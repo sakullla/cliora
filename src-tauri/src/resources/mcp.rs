@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::credentials::CredentialStore;
 use crate::database::Database;
 use crate::native::adapter::{self, Scope};
-use crate::native::adapters::{McpLocation, Registry};
+use crate::adapters::{McpLocation, Registry};
 use crate::native::{format, transaction};
 use crate::projects;
 

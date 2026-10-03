@@ -189,6 +189,9 @@ pub(super) fn resolve_draft(
             "测试草稿的保存版本已变更",
         ));
     }
+    if matches!(draft.config.program, QueryProgram::ProfileBuiltin { .. }) {
+        return super::profile::resolve(db, credentials, &draft.config);
+    }
     // Reject every invalid Keep before reading any secret, matching save's preflight.
     for credential in &draft.credentials {
         if matches!(credential.value, CredentialUpdate::Keep) {
@@ -268,6 +271,11 @@ pub fn test_draft(
         run_child(&executable, input, &cancel, start)
     })();
     let mut report = outcome.unwrap_or_else(|e| RuntimeReport::failure(e, start));
+    if matches!(draft.config.program, QueryProgram::ProfileBuiltin { .. }) {
+        if let Err(error) = super::profile::selection(db, &draft.config) {
+            report = RuntimeReport::failure(error, start);
+        }
+    }
     // Recheck at publication; a cancelled execution must never publish success.
     if cancel.load(Ordering::SeqCst) {
         report = RuntimeReport::failure(cancelled(), start);
