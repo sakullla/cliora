@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "fixture-stdio": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "fixture-mcp-server@1.0.0"],
+      "env": { "FIXTURE_API_TOKEN": "${FIXTURE_API_TOKEN}" }
+    },
+    "fixture-http": {
+      "type": "http",
+      "url": "https://mcp.example.test/mcp",
+      "headers": { "Authorization": "${MCP_FIXTURE_TOKEN}" },
+      "disabled": true
+    }
+  },
+  "enabledPlugins": {
+    "fixture-plugin@fixture-market": true
+  },
+  "customUserField": { "keep": true }
+}
