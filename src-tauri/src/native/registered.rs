@@ -42,6 +42,7 @@ pub fn file(
             FileKind::Toml => "toml",
             FileKind::Json => "json",
             FileKind::Jsonc => "jsonc",
+            FileKind::Yaml => "yaml",
         },
         writable: known && !sensitive,
         reason: if known {
@@ -178,6 +179,7 @@ where
                     ("toml", FileKind::Toml)
                         | ("json", FileKind::Json)
                         | ("jsonc", FileKind::Jsonc)
+                        | ("yaml", FileKind::Yaml)
                 )
         });
         if !allowed {
@@ -221,6 +223,7 @@ where
             "toml" => FileKind::Toml,
             "json" => FileKind::Json,
             "jsonc" => FileKind::Jsonc,
+            "yaml" => FileKind::Yaml,
             _ => return Err("原生文件格式不受支持".into()),
         },
         baseline,

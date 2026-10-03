@@ -290,6 +290,8 @@ fn portable_files(
                 .map_err(|_| "无法整理可迁移 TOML 字段".to_string())?,
             FileKind::Json | FileKind::Jsonc => serde_json::to_string_pretty(&clean)
                 .map_err(|_| "无法整理可迁移 JSON 字段".to_string())?,
+            FileKind::Yaml => serde_yaml::to_string(&clean)
+                .map_err(|_| "无法整理可迁移 YAML 字段".to_string())?,
         };
         result.insert(role.clone(), rendered);
     }

@@ -1,0 +1,18 @@
+# DeepSeek Harness (dsh) desktop profile patch layer.
+# Constructed sanitized sample of ~/.dsh/profiles/desktop/cordis.patch.yml
+# (tested line: 0.2.1 pre-releases; evidence: official docs describe MCP
+# entries as insert items in the cordis patch layer — no machine sample was
+# available, so field-level shapes follow the documented contract only).
+insert:
+  memory:
+    id: mcp:memory
+    package: '@deepseek-ai/dsh-mcp-client'
+    config:
+      serverName: memory
+      transport: stdio
+      command: npx
+      args:
+        - '-y'
+        - '@modelcontextprotocol/server-memory'
+      env:
+        LOG_LEVEL: info
