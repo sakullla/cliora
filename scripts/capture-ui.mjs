@@ -98,6 +98,37 @@ for(const width of [1360,900,640])for(const theme of ['light','dark']){
   await page.getByRole('region',{name:'消耗最多的会话'}).scrollIntoViewIfNeeded();await capture('usage-details');await page.getByRole('radio',{name:'自定义',exact:true}).click();await capture('usage-dates');
   await page.close();continue;
  }
+ if(process.argv.includes('--connections')){
+  await page.setViewportSize({width,height:Math.max(1100,page.viewportSize()?.height??1000)});
+  await nav.getByRole('button',{name:'工具与连接'}).click();
+  const region=page.getByRole('region',{name:'工具与连接'});
+  const profiles=region.getByLabel('配置列表');
+  await profiles.waitFor();
+  for(const name of ['Codex','Claude Code','Grok','Pi','OpenCode']){
+   await region.getByRole('tablist',{name:'CLI'}).getByRole('tab',{name,exact:true}).click();
+   await profiles.waitFor();
+   const slug=name.toLowerCase().replace(/\s+/g,'-');
+   await capture(`conn-${slug}`);
+   const edits=profiles.getByRole('button',{name:'修改',exact:true});
+   const count=await edits.count();
+   if(!count) continue;
+   await edits.nth(Math.min(2,count-1)).click();
+   const dialog=page.getByRole('dialog');
+   await dialog.waitFor();
+   await capture(`conn-${slug}-config`);
+   const more=dialog.getByText('更多选项',{exact:true});
+   if(await more.count()){
+    await more.click();
+    const advanced=dialog.getByText('高级连接选项',{exact:true});
+    if(await advanced.count()) await advanced.click();
+    await dialog.locator('summary').filter({hasText:'更多选项'}).scrollIntoViewIfNeeded();
+    await capture(`conn-${slug}-more`);
+   }
+   await page.keyboard.press('Escape');
+   await dialog.waitFor({state:'hidden'});
+  }
+  await page.close(); continue;
+ }
  await capture('home');
  await nav.getByRole('button',{name:'工具与连接'}).click();const profiles=page.getByRole('region',{name:'工具与连接'}).getByLabel('配置列表');await profiles.waitFor();await capture('tools');
  await profiles.getByRole('button',{name:'修改'}).first().click();await page.getByRole('dialog').waitFor();await capture('native-config');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});

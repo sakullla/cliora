@@ -592,6 +592,7 @@ label.setting-row:hover { background: var(--surface-2); }
 .guide-dialog::backdrop, .confirmation-dialog::backdrop { background: var(--overlay); backdrop-filter: blur(2px); animation: fade-in 200ms var(--ease); }
 
 .guide-dialog { width: min(760px, calc(100vw - 40px)); flex-direction: column; }
+.guide-dialog-wide { width: min(880px, calc(100vw - 32px)); }
 .guide-dialog[open] { display: flex; }
 .guide-dialog-head { display: flex; align-items: flex-start; gap: 12px; padding: 18px 20px 14px; border-bottom: 1px solid var(--line); }
 .guide-dialog-head h2 { font-size: 16px; line-height: 1.4; font-weight: 660; letter-spacing: -.1px; }

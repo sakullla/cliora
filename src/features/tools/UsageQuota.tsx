@@ -57,8 +57,7 @@ function MetricSummary({ metric, label, now }: { metric: UsageMetric; label: str
   return <div className={styles.summaryMetric} data-warning={percent !== null && percent >= 90 || metric.remaining !== null && metric.remaining < 0}>
     <div><span>{label}</span><strong>{metric.unlimited ? '无限额' : percent === null ? '比例未知' : `${new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 1 }).format(percent)}% 已用`}</strong></div>
     {percent !== null && <progress aria-label={`${label}已用比例`} max={100} value={Math.min(100, Math.max(0, percent))} />}
-    <small>{metric.unlimited ? (metric.neverExpires ? '永不过期' : '不设上限') : amount}</small>
-    {!metric.unlimited && metric.window && (metric.window.resetsAt || metric.window.recovery !== 'unknown') && <small>{usageReset(metric, now)}</small>}
+    <small className={styles.metricMeta}>{(metric.unlimited || amount) && <span>{metric.unlimited ? (metric.neverExpires ? '永不过期' : '不设上限') : amount}</span>}{!metric.unlimited && metric.window && (metric.window.resetsAt || metric.window.recovery !== 'unknown') && <span>{usageReset(metric, now)}</span>}</small>
   </div>;
 }
 export function UsageMetrics({ result, now = Date.now(), program }: { result: UsageResult; now?: number; program?: QueryConfig['program'] }) {
@@ -76,8 +75,13 @@ export function UsageMetrics({ result, now = Date.now(), program }: { result: Us
     </div>;
   })}{result.errors.map((e, i) => <p className={styles.error} key={i}>{e.message}</p>)}</div>;
 }
-export function ProfileQuota({ profileId, profileVersion, profileAccountId, toolId, state }: { profileId: string; profileVersion: number; profileAccountId?: string; toolId?: string; state: QuotaState }) {
+export function ProfileQuota({ profileId, profileVersion, profileAccountId, toolId, state, addRequested = false, onAddHandled }: { profileId: string; profileVersion: number; profileAccountId?: string; toolId?: string; state: QuotaState; addRequested?: boolean; onAddHandled?: () => void }) {
   const [editing, setEditing] = useState<UsageQuery | 'new' | null>(null);
+  useEffect(() => {
+    if (!addRequested) return;
+    if (nativeAvailable) setEditing('new');
+    onAddHandled?.();
+  }, [addRequested, onAddHandled]);
   const [expanded, setExpanded] = useState(new Set<string>());
   const [error, setError] = useState('');
   const queries = state.queries.filter(q => q.config.identity.profileId === profileId && (q.config.program.kind !== 'profile_builtin' || q.config.program.profileVersion === profileVersion));
@@ -90,8 +94,7 @@ export function ProfileQuota({ profileId, profileVersion, profileAccountId, tool
     try { setError(''); await (cancel ? native.cancelUsageRefresh(q.id) : native.refreshUsageQuery(q.id)); await state.reload(); } catch (e) { setError(message(e)); }
   }
   return <section className={styles.quota} aria-label="套餐额度" data-empty={queries.length === 0}>
-    {queries.length === 0 && <button className={styles.iconButton} type="button" aria-label="添加额度查询" title="添加额度查询" disabled={!nativeAvailable} onClick={() => setEditing('new')}><Icon name="plus" /></button>}
-    {!nativeAvailable && <small>桌面服务不可用，无法保存或查询额度。</small>}
+    {!nativeAvailable && queries.length > 0 && <small>桌面服务不可用，无法保存或查询额度。</small>}
     {(error || state.error) && <p role="alert" className={styles.error}>{error || state.error}</p>}
     {queries.map((q, index) => {
       const cache = state.cache.find(c => c.queryId === q.id && c.generation === q.generation);
@@ -102,7 +105,7 @@ export function ProfileQuota({ profileId, profileVersion, profileAccountId, tool
       const metrics = snapshot?.result.metrics ?? [];
       const primary = [...metrics.filter(metric => metric.subject !== 'extra'), ...metrics.filter(metric => metric.subject === 'extra')].slice(0, 3);
       return <div className={styles.query} key={q.id}>
-        <div className={styles.heading}><div className={styles.queryTitle}><span title={q.config.label}>{q.config.program.kind === 'profile_builtin' ? '官方套餐' : q.config.label}</span>{!q.config.enabled ? <small>已停用</small> : stale ? <small className={styles.stale}>数据已过期</small> : snapshot?.measuredAt && <small title={date(snapshot.measuredAt)}>更新于 {new Date(snapshot.measuredAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</small>}</div><div className={styles.actions}><button type="button" onClick={() => void refresh(q)} disabled={!q.config.enabled || cache?.refreshing || cooldown > 0}>{cache?.refreshing ? '刷新中' : cooldown > 0 ? `${cooldown} 秒后可刷新` : '刷新额度'}</button>{cache?.refreshing && <button type="button" onClick={() => void refresh(q, true)}>停止刷新</button>}<button className={styles.iconButton} type="button" aria-label="额度设置" title="额度设置" onClick={() => setEditing(q)}><Icon name="settings" size={16} /></button>{index === 0 && <button className={styles.iconButton} type="button" aria-label="添加额度查询" title="添加额度查询" disabled={!nativeAvailable} onClick={() => setEditing('new')}><Icon name="plus" size={16} /></button>}</div></div>
+        <div className={styles.heading}><div className={styles.queryTitle}><span title={q.config.label}>{q.config.program.kind === 'profile_builtin' ? '官方套餐' : q.config.label}</span>{!q.config.enabled ? <small>已停用</small> : stale ? <small className={styles.stale}>数据已过期</small> : snapshot?.measuredAt && <small title={date(snapshot.measuredAt)}>更新于 {new Date(snapshot.measuredAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</small>}</div><div className={styles.actions}><button className={styles.refresh} type="button" onClick={() => void refresh(q)} disabled={!q.config.enabled || cache?.refreshing || cooldown > 0}>{cache?.refreshing ? '刷新中' : cooldown > 0 ? `${cooldown} 秒后可刷新` : '刷新额度'}</button>{cache?.refreshing && <button type="button" onClick={() => void refresh(q, true)}>停止刷新</button>}<button className={styles.iconButton} type="button" aria-label="额度设置" title="额度设置" onClick={() => setEditing(q)}><Icon name="settings" size={16} /></button>{index === 0 && <button className={styles.iconButton} type="button" aria-label="添加额度查询" title="添加额度查询" disabled={!nativeAvailable} onClick={() => setEditing('new')}><Icon name="plus" size={16} /></button>}</div></div>
         {snapshot ? <div className={styles.summaryMetrics}>{primary.map(metric => <MetricSummary key={metric.id} metric={metric} label={usageMetricLabel(q.config.program, metric)} now={now} />)}</div> : <small>{cache?.refreshing ? '正在查询套餐额度…' : !q.config.enabled ? '启用查询后可获取套餐额度' : '尚无成功查询数据'}</small>}
         {cache?.authPaused && <p className={styles.error}>认证失效，自动刷新已暂停；请检查配置凭据。</p>}
         {!!cache?.errors.length && <p role="alert" className={styles.error}>{cache.errors.map(e => e.message).join('；')}</p>}
