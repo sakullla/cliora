@@ -45,6 +45,7 @@ pub struct AdapterDescriptor {
     pub interface_formats: &'static [&'static str],
     pub project_model_override: bool,
     pub yolo_available: bool,
+    pub launch_form: LaunchForm,
     pub native_config: Facet,
     pub launch: Facet,
     pub resume: Facet,
@@ -77,6 +78,17 @@ pub enum LaunchMode {
     #[default]
     Normal,
     Yolo,
+}
+
+/// How a registered CLI is started: an interactive terminal session or the
+/// installed desktop application. Terminal-only concerns (terminal choice,
+/// session env markers) never apply to the desktop form.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LaunchForm {
+    #[default]
+    Terminal,
+    Desktop,
 }
 
 #[derive(Default)]
@@ -244,6 +256,17 @@ pub trait CliAdapter: Sync {
         ""
     }
     fn launch_args(&self, session: Option<&str>, mode: LaunchMode) -> Result<Vec<String>, String>;
+    /// Declares whether launches open an interactive terminal or start the
+    /// installed desktop application directly. Defaults to terminal.
+    fn launch_form(&self) -> LaunchForm {
+        LaunchForm::Terminal
+    }
+    /// Directory-dependent arguments for a desktop launch, such as a workspace
+    /// flag. Only consulted for the desktop form; terminal launches set the
+    /// working directory instead.
+    fn desktop_launch_args(&self, _directory: &Path) -> Result<Vec<String>, String> {
+        Ok(Vec::new())
+    }
     fn history_sources(&self, _home: &Path) -> Result<Vec<HistorySource>, String> {
         Ok(Vec::new())
     }
@@ -423,13 +446,18 @@ pub trait CliAdapter: Sync {
             interface_formats: self.interface_formats(),
             project_model_override: self.supports_project_model_override(),
             yolo_available: self.launch_args(None, LaunchMode::Yolo).is_ok(),
+            launch_form: self.launch_form(),
             native_config: Facet {
                 state: "available",
                 reason: "已确认 CLI 身份，可编辑受支持的原生文件格式",
             },
             launch: Facet {
                 state: "available",
-                reason: "可在外部终端启动",
+                reason: if self.launch_form() == LaunchForm::Desktop {
+                    "可直接启动已安装的桌面应用"
+                } else {
+                    "可在外部终端启动"
+                },
             },
             resume: Facet {
                 state: "available",
