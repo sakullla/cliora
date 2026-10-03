@@ -8,6 +8,7 @@ export type AdapterDescriptor = {
   interfaceFormats: InterfaceFormat[];
   projectModelOverride: boolean;
   yoloAvailable: boolean;
+  launchForm: 'terminal' | 'desktop';
   nativeConfig: AdapterFacet;
   launch: AdapterFacet;
   resume: AdapterFacet;

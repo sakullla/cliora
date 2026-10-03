@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::database::Database;
 use crate::native::adapter::{self, Scope};
-use crate::adapters::{self, LaunchMode, Registry};
+use crate::adapters::{self, LaunchForm, LaunchMode, Registry};
 use crate::projects;
 use crate::resources::skills;
 
@@ -23,6 +23,10 @@ pub enum TerminalId {
     GnomeTerminal,
     Konsole,
     Xterm,
+    /// A desktop-form launch starts the installed application directly. This
+    /// is a spawn-channel marker carried by the plan, never a selectable
+    /// terminal preference.
+    Desktop,
 }
 
 impl TerminalId {
@@ -36,6 +40,7 @@ impl TerminalId {
             Self::GnomeTerminal => "GNOME Terminal",
             Self::Konsole => "Konsole",
             Self::Xterm => "XTerm",
+            Self::Desktop => "桌面应用",
         }
     }
 
@@ -49,6 +54,7 @@ impl TerminalId {
             Self::GnomeTerminal => Some("gnome-terminal"),
             Self::Konsole => Some("konsole"),
             Self::Xterm => Some("xterm"),
+            Self::Desktop => None,
         }
     }
 
@@ -59,6 +65,8 @@ impl TerminalId {
             Self::MacTerminal => cfg!(target_os = "macos"),
             Self::Custom => true,
             Self::GnomeTerminal | Self::Konsole | Self::Xterm => cfg!(target_os = "linux"),
+            // Desktop launches bypass terminal selection entirely.
+            Self::Desktop => false,
         }
     }
 }
@@ -580,6 +588,13 @@ fn plan_with_stage_at(
     let adapter = registry
         .get(&request.tool_id)
         .ok_or_else(|| LaunchPlanError::new(LaunchStage::Tool, "未注册的 CLI 不能启动".into()))?;
+    let launch_form = adapter.launch_form();
+    if launch_form == LaunchForm::Desktop && request.session_id.is_some() {
+        return Err(LaunchPlanError::new(
+            LaunchStage::Tool,
+            "此 CLI 是桌面应用，官方没有已验证的会话恢复契约".into(),
+        ));
+    }
     let project = request
         .project_id
         .as_deref()
@@ -655,31 +670,54 @@ fn plan_with_stage_at(
             "CLI 未确认安装，请在工具页检查安装路径".into(),
         )
     })?;
-    let version = probe
+    let installation_version = probe
         .installations
         .iter()
         .find(|item| item.path == selected_path && item.status == "available")
-        .and_then(|item| item.version.as_deref())
-        .ok_or_else(|| {
-            LaunchPlanError::new(
-                LaunchStage::Tool,
-                "CLI 版本未确认，请在工具页重新检测".into(),
-            )
-        })?;
+        .and_then(|item| item.version.as_deref());
+    // Desktop install markers are authoritative without a readable version;
+    // terminal launches keep requiring a confirmed version.
+    if launch_form == LaunchForm::Terminal && installation_version.is_none() {
+        return Err(LaunchPlanError::new(
+            LaunchStage::Tool,
+            "CLI 版本未确认，请在工具页重新检测".into(),
+        ));
+    }
+    if installation_version.is_some_and(|value| adapter.explicitly_incompatible_launch_version(value))
+    {
+        return Err(LaunchPlanError::new(
+            LaunchStage::Tool,
+            "此 CLI 版本不支持所请求的启动参数".into(),
+        ));
+    }
+    let version = installation_version.unwrap_or("");
     if request.session_id.is_some() && !adapter.history_resume_version_supported(version) {
         return Err(LaunchPlanError::new(
             LaunchStage::Tool,
             "此 CLI 版本的精确会话恢复命令尚未验证".into(),
         ));
     }
-    let mut cli_args = adapters::plan_launch(
-        registry,
-        &request.tool_id,
-        version,
-        request.session_id.as_deref(),
-        request.mode,
-    )
-    .map_err(|message| LaunchPlanError::new(LaunchStage::Tool, message))?;
+    let mut cli_args = match launch_form {
+        LaunchForm::Terminal => adapters::plan_launch(
+            registry,
+            &request.tool_id,
+            version,
+            request.session_id.as_deref(),
+            request.mode,
+        )
+        .map_err(|message| LaunchPlanError::new(LaunchStage::Tool, message))?,
+        LaunchForm::Desktop => {
+            let mut args = adapter
+                .launch_args(None, request.mode)
+                .map_err(|message| LaunchPlanError::new(LaunchStage::Tool, message))?;
+            args.extend(
+                adapter
+                    .desktop_launch_args(&directory)
+                    .map_err(|message| LaunchPlanError::new(LaunchStage::Tool, message))?,
+            );
+            args
+        }
+    };
     if let Some((_, context)) = &account_context { cli_args.splice(0..0, context.cli_args.clone()); }
     if let Some(project) = &project {
         let model = project
@@ -693,6 +731,12 @@ fn plan_with_stage_at(
         );
     }
     if let Some(prompt) = request.initial_prompt.as_deref().map(str::trim).filter(|text| !text.is_empty()) {
+        if launch_form == LaunchForm::Desktop {
+            return Err(LaunchPlanError::new(
+                LaunchStage::Tool,
+                "桌面应用启动尚无已验证的初始提示词契约".into(),
+            ));
+        }
         if prompt.chars().count() > 20_000 {
             return Err(LaunchPlanError::new(LaunchStage::Tool, "提示词过长，请先缩短后再启动。".into()));
         }
@@ -707,9 +751,18 @@ fn plan_with_stage_at(
         executable: PathBuf::from(selected_path),
         cli_args,
         directory,
-        session_markers: adapter.session_env_markers(),
-        terminal: selected_terminal(db)
-            .map_err(|message| LaunchPlanError::new(LaunchStage::Terminal, message))?,
+        session_markers: if launch_form == LaunchForm::Desktop {
+            // Session markers scope nested terminal sessions; a desktop app
+            // never inherits a terminal environment.
+            &[]
+        } else {
+            adapter.session_env_markers()
+        },
+        terminal: match launch_form {
+            LaunchForm::Terminal => selected_terminal(db)
+                .map_err(|message| LaunchPlanError::new(LaunchStage::Terminal, message))?,
+            LaunchForm::Desktop => TerminalId::Desktop,
+        },
     })
 }
 
@@ -882,6 +935,7 @@ pub fn terminal_command(plan: &LaunchPlan) -> Result<TerminalCommand, String> {
             "xterm",
             vec!["-e".into(), "sh".into(), "-lc".into(), interactive_shell_script(plan)?],
         ),
+        TerminalId::Desktop => return Err("桌面应用启动不经过终端".into()),
         TerminalId::Auto => return Err("请先选择可用的终端".into()),
     };
     Ok(TerminalCommand {
@@ -944,6 +998,7 @@ fn shell_terminal(terminal: TerminalId, directory: &Path, script: &str) -> Resul
             vec!["--workdir".into(), directory_text.clone(), "-e".into(), "sh".into(), "-lc".into(), script.to_owned()],
         ),
         TerminalId::Xterm => ("xterm", vec!["-e".into(), "sh".into(), "-lc".into(), script.to_owned()]),
+        TerminalId::Desktop => return Err("桌面应用启动不经过终端".into()),
         TerminalId::Auto => return Err("请先选择可用的终端".into()),
     };
     Ok(TerminalCommand { program, args, directory: PathBuf::from(directory_text), session_markers: &[], mac_script })
@@ -1116,6 +1171,9 @@ fn browser_login_invocation(invocation: &str, endpoint: &str, receipt: &Path) ->
 
 pub fn spawn(db: &Database, plan: LaunchPlan) -> Result<LaunchResult, String> {
     if let Some((id,context))=&plan.account_context { if Some(crate::accounts::get(db,id)?.version)!=plan.account_version {return Err("账号在计划后发生变化，请重新启动".into());} crate::accounts::validate_selected_context(db,id,&context.id)?; crate::accounts::context::check_path(&context.root)?; }
+    if plan.terminal == TerminalId::Desktop {
+        return spawn_desktop(&plan);
+    }
     let terminal_id = plan.terminal;
     let terminal = terminal_command(&plan)?;
     spawn_terminal(db, terminal_id, terminal)?;
@@ -1126,6 +1184,324 @@ pub fn spawn(db: &Database, plan: LaunchPlan) -> Result<LaunchResult, String> {
         terminal: plan.terminal,
         status: "terminal_requested",
     })
+}
+
+/// Desktop launches start the installed application directly: detached from
+/// any terminal, owning its own windows and lifetime. The status only reports
+/// that the start was requested, never that the application came up.
+fn spawn_desktop(plan: &LaunchPlan) -> Result<LaunchResult, String> {
+    if !plan.executable.is_file() {
+        return Err("桌面应用可执行文件不存在，请在工具页重新检测".into());
+    }
+    let mut command = Command::new(&plan.executable);
+    crate::process_environment::apply(&mut command);
+    command
+        .args(&plan.cli_args)
+        .current_dir(&plan.directory)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+    }
+    if let Some((_, context)) = &plan.account_context {
+        for key in &context.remove_environment {
+            command.env_remove(key);
+        }
+        for (key, value) in &context.environment {
+            command.env(key, value);
+        }
+    }
+    command
+        .spawn()
+        .map_err(|error| format!("无法启动桌面应用：{error}"))?;
+    Ok(LaunchResult {
+        tool_id: plan.tool_id.clone(),
+        project_id: plan.project_id.clone(),
+        mode: plan.mode,
+        terminal: TerminalId::Desktop,
+        status: "desktop_requested",
+    })
+}
+
+#[cfg(test)]
+mod desktop_launch {
+    use std::collections::BTreeMap;
+    use std::path::Path;
+
+    use serde_json::Value;
+
+    use super::*;
+    use crate::adapters::{CliAdapter, InspectionFields, LaunchForm};
+    use crate::credentials::CredentialStore;
+    use crate::native::adapter::{Installation, NativeFile, Scope};
+    use crate::native::apply::NativeSecrets;
+    use crate::native::format::FileKind;
+    use crate::native::profile::{Connection, RegisteredProfile};
+
+    /// A desktop-form fixture adapter: bare launch plus a workspace flag that
+    /// mirrors how a desktop application receives the resolved directory.
+    struct DesktopApp;
+    static DESKTOP_APP: DesktopApp = DesktopApp;
+
+    impl CliAdapter for DesktopApp {
+        fn id(&self) -> &'static str {
+            "desktop_fixture"
+        }
+        fn name(&self) -> &'static str {
+            "Desktop fixture"
+        }
+        fn command(&self) -> &'static str {
+            "desktop-fixture"
+        }
+        fn npm_package(&self) -> &'static str {
+            ""
+        }
+        fn version_identity(&self, _basename: &str, _output: &str) -> bool {
+            false
+        }
+        fn native_files(
+            &self,
+            _scope: Scope,
+            _home: &Path,
+            _project: Option<&Path>,
+            _known: bool,
+        ) -> Vec<NativeFile> {
+            Vec::new()
+        }
+        fn interface_formats(&self) -> &'static [&'static str] {
+            &[]
+        }
+        fn file_kind(&self, _role: &str) -> Result<FileKind, String> {
+            Err("fixture has no native config".into())
+        }
+        fn connection_documents(
+            &self,
+            _connection: &Connection,
+            _scope: Scope,
+        ) -> Result<BTreeMap<String, Value>, String> {
+            Ok(BTreeMap::new())
+        }
+        fn write_connection_secret(
+            &self,
+            _profile: &RegisteredProfile,
+            _scope: Scope,
+            _credentials: &dyn CredentialStore,
+            _secrets: &mut NativeSecrets,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+        fn has_native_secret(&self, _role: &str, _root: &Value) -> bool {
+            false
+        }
+        fn inspect_values(
+            &self,
+            _settings: &Value,
+            _local_settings: &Value,
+            _models: &Value,
+        ) -> InspectionFields {
+            InspectionFields::default()
+        }
+        fn launch_args(
+            &self,
+            _session: Option<&str>,
+            mode: LaunchMode,
+        ) -> Result<Vec<String>, String> {
+            if mode == LaunchMode::Yolo {
+                return Err("桌面应用没有已验证的跳审批启动参数".into());
+            }
+            Ok(Vec::new())
+        }
+        fn install_guidance(&self) -> (&'static str, &'static str) {
+            ("https://example.invalid/desktop", "fixture only")
+        }
+        fn launch_form(&self) -> LaunchForm {
+            LaunchForm::Desktop
+        }
+        fn desktop_launch_args(&self, directory: &Path) -> Result<Vec<String>, String> {
+            Ok(vec![format!("--open-workspace={}", directory.display())])
+        }
+    }
+
+    fn desktop_registry() -> Registry {
+        Registry::with_adapters(vec![&DESKTOP_APP]).unwrap()
+    }
+
+    fn request(directory: Option<String>, session_id: Option<String>, mode: LaunchMode) -> LaunchRequest {
+        LaunchRequest {
+            tool_id: "desktop_fixture".into(),
+            project_id: None,
+            session_id,
+            directory,
+            initial_prompt: None,
+            mode,
+        }
+    }
+
+    #[test]
+    fn descriptor_declares_the_launch_form_in_both_contracts() {
+        let descriptor = desktop_registry().get("desktop_fixture").unwrap().descriptor();
+        assert_eq!(descriptor.launch_form, LaunchForm::Desktop);
+        let value = serde_json::to_value(&descriptor).unwrap();
+        assert_eq!(value["launchForm"], "desktop");
+        let builtin = Registry::builtins().get("grok").unwrap().descriptor();
+        assert_eq!(builtin.launch_form, LaunchForm::Terminal);
+        assert_eq!(serde_json::to_value(&builtin).unwrap()["launchForm"], "terminal");
+    }
+
+    #[test]
+    fn desktop_plan_resolves_the_installed_executable_without_terminal_artifacts() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        let registry = desktop_registry().with_fixture_installation("desktop_fixture", "1.2.3");
+        // A terminal preference that would fail selection must not affect a
+        // desktop plan: terminal choice does not apply to the desktop form.
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO app_settings (key, value) VALUES ('preferred_terminal', '\"mac_terminal\"')",
+                [],
+            )
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+        })
+        .unwrap();
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir(&workspace).unwrap();
+        let plan = plan(
+            &db,
+            &registry,
+            temp.path(),
+            request(Some(workspace.display().to_string()), None, LaunchMode::Normal),
+        )
+        .unwrap();
+        assert_eq!(plan.executable, PathBuf::from("fixture-cli/desktop_fixture"));
+        assert_eq!(plan.terminal, TerminalId::Desktop);
+        assert!(plan.session_markers.is_empty());
+        assert_eq!(
+            plan.cli_args,
+            [format!("--open-workspace={}", plan.directory.display())]
+        );
+        assert!(terminal_command(&plan).is_err());
+    }
+
+    #[test]
+    fn desktop_plan_accepts_an_install_marker_without_a_version() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        let mut registry = desktop_registry();
+        registry.fixture_installations.insert(
+            "desktop_fixture".into(),
+            vec![Installation {
+                path: "fixture-cli/desktop_fixture".into(),
+                version: None,
+                source: "test_fixture",
+                status: "available",
+                detail: None,
+            }],
+        );
+        let plan = plan(
+            &db,
+            &registry,
+            temp.path(),
+            request(Some(temp.path().display().to_string()), None, LaunchMode::Normal),
+        )
+        .unwrap();
+        assert_eq!(plan.executable, PathBuf::from("fixture-cli/desktop_fixture"));
+    }
+
+    #[test]
+    fn desktop_plans_reject_resume_yolo_and_initial_prompts() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        let registry = desktop_registry().with_fixture_installation("desktop_fixture", "1.2.3");
+        let home = temp.path().display().to_string();
+        let resume = plan_with_stage(
+            &db,
+            &registry,
+            temp.path(),
+            request(Some(home.clone()), Some("session 1".into()), LaunchMode::Normal),
+        )
+        .unwrap_err();
+        assert_eq!(resume.stage, LaunchStage::Tool);
+        assert!(resume.message.contains("会话恢复"));
+        let yolo = plan_with_stage(
+            &db,
+            &registry,
+            temp.path(),
+            request(Some(home.clone()), None, LaunchMode::Yolo),
+        )
+        .unwrap_err();
+        assert_eq!(yolo.stage, LaunchStage::Tool);
+        assert!(yolo.message.contains("跳审批"));
+        let mut prompt_request = request(Some(home), None, LaunchMode::Normal);
+        prompt_request.initial_prompt = Some("hello".into());
+        let prompt = plan_with_stage(&db, &registry, temp.path(), prompt_request).unwrap_err();
+        assert_eq!(prompt.stage, LaunchStage::Tool);
+        assert!(prompt.message.contains("提示词"));
+    }
+
+    fn benign_desktop_plan(executable: PathBuf, args: Vec<String>) -> LaunchPlan {
+        LaunchPlan {
+            account_version: None,
+            account_context: None,
+            tool_id: "desktop_fixture".into(),
+            project_id: None,
+            mode: LaunchMode::Normal,
+            executable,
+            cli_args: args,
+            directory: std::env::temp_dir(),
+            terminal: TerminalId::Desktop,
+            session_markers: &[],
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn desktop_spawn_runs_a_detached_process_and_only_reports_requested() {
+        let temp = tempfile::tempdir().unwrap();
+        let marker = temp.path().join("desktop-launched.txt");
+        let shell = std::env::var_os("ComSpec")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("C:/Windows/System32/cmd.exe"));
+        let plan = benign_desktop_plan(
+            shell,
+            vec!["/c".into(), format!("type nul > {}", marker.display())],
+        );
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        let result = spawn(&db, plan).unwrap();
+        assert_eq!(result.status, "desktop_requested");
+        assert_eq!(result.terminal, TerminalId::Desktop);
+        assert_eq!(result.tool_id, "desktop_fixture");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !marker.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(marker.exists(), "detached desktop process did not run");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn desktop_spawn_runs_a_detached_process_and_only_reports_requested() {
+        let temp = tempfile::tempdir().unwrap();
+        let marker = temp.path().join("desktop-launched.txt");
+        let plan = benign_desktop_plan(
+            PathBuf::from("/bin/sh"),
+            vec!["-c".into(), format!("touch '{}'", marker.display())],
+        );
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        let result = spawn(&db, plan).unwrap();
+        assert_eq!(result.status, "desktop_requested");
+        assert_eq!(result.terminal, TerminalId::Desktop);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !marker.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(marker.exists(), "detached desktop process did not run");
+    }
 }
 
 #[cfg(test)]
