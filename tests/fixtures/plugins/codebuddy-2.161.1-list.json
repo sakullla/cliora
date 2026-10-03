@@ -1,0 +1,24 @@
+[
+  {
+    "id": "find-skills@codebuddy-plugins-official",
+    "version": "1.0.0",
+    "scope": "user",
+    "enabled": true,
+    "installPath": "C:\\Users\\example\\.codebuddy\\plugins\\cache\\codebuddy-plugins-official\\find-skills\\1.0.0"
+  },
+  {
+    "id": "pdf@codebuddy-plugins-official",
+    "version": "1.0.0",
+    "scope": "user",
+    "enabled": true,
+    "installPath": "C:\\Users\\example\\.codebuddy\\plugins\\cache\\codebuddy-plugins-official\\pdf\\1.0.0",
+    "gitCommitSha": "7062701cb13cf858eb1ab68d45b36b14e664a752"
+  },
+  {
+    "id": "pptx@codebuddy-plugins-official",
+    "version": "unknown",
+    "scope": "user",
+    "enabled": false,
+    "installPath": "C:\\Users\\example\\.codebuddy\\plugins\\cache\\codebuddy-plugins-official\\pptx\\unknown"
+  }
+]
