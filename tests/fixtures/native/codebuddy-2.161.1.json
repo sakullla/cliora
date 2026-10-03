@@ -1,0 +1,21 @@
+{
+  "trustedDirectories": [
+    "C:/Users/example/project/demo",
+    "C:/Users/example/project/demo/**"
+  ],
+  "model": "kimi-k3-2",
+  "enabledPlugins": {
+    "skills-sec-audit@codebuddy-plugins-official": true,
+    "find-skills@codebuddy-plugins-official": true,
+    "pdf@codebuddy-plugins-official": true,
+    "agent-browser@codebuddy-plugins-official": true
+  },
+  "variantModels": {
+    "lite": "kimi-k3-2"
+  },
+  "codebuddy": {
+    "agentHome": {
+      "orchestration": true
+    }
+  }
+}
