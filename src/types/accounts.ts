@@ -1,4 +1,6 @@
 export type AccountState = 'signed_out' | 'pending' | 'signed_in' | 'expired' | 'error' | 'unknown';
+export type NativeLogin = { provider: string; authKind: 'oauth' | 'api_key'; state: AccountState; identity: AccountIdentity | null; detail: string | null; managedAccountId: string | null };
+export type NativeLoginSnapshot = { toolId: string; logins: NativeLogin[]; checkedAt: number };
 export type AccountIdentity = { subject: string; email: string | null; plan: string | null; source: string };
 export type NativeContext = {
   id: string; toolId: string; root: string; configRoot: string; authFiles: string[];
@@ -15,6 +17,7 @@ export type AuthAccount = {
   pendingLogin: PendingLogin | null; checkedAt: number | null; detail: string | null;
 };
 export type AccountCapability = {
+  browserLink?: boolean;
   toolId: string; provider: string; version: string; managedLogin: boolean; importNative: boolean;
   methods: ('browser' | 'device')[]; reason: string; identitySource: string;
   refreshOwner: 'native_cli'; acceptance: string;

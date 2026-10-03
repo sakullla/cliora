@@ -1,5 +1,5 @@
 use super::*;
-use serde_json::json;
+use serde_json::{json,Value};
 
 fn fixture() -> Value {
     serde_json::from_str(include_str!("../fixtures/usage/codex-rate-limits.json")).unwrap()
@@ -248,7 +248,7 @@ fn official_installed_codex_empty_context_rejects_quota_and_cancels() {
     let context = accounts::context::create_context(temp.path(), "codex").unwrap();
     let executable =
         accounts::native::executable(&db, &dirs::home_dir().unwrap(), "codex").unwrap();
-    let error = accounts::native::codex_quota(
+    let error = crate::adapters::codex::accounts::codex_quota(
         &executable,
         &context,
         "test@example.test",
@@ -256,7 +256,7 @@ fn official_installed_codex_empty_context_rejects_quota_and_cancels() {
     )
     .unwrap_err();
     assert!(error.contains("身份") || error.contains("登录"));
-    let error = accounts::native::codex_quota(
+    let error = crate::adapters::codex::accounts::codex_quota(
         &executable,
         &context,
         "test@example.test",
@@ -300,7 +300,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
             .environment
             .insert("CLIORA_TEST_MODE".into(), mode.into());
         fs::write(context.root.join("calls.jsonl"), "").unwrap();
-        let result = accounts::native::codex_quota(
+        let result = crate::adapters::codex::accounts::codex_quota(
             executable,
             &context,
             "test@example.test",
@@ -363,7 +363,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
         signal.store(true, Ordering::SeqCst);
     });
     let start = Instant::now();
-    let error = accounts::native::codex_quota(executable, &context, "test@example.test", &cancel)
+    let error = crate::adapters::codex::accounts::codex_quota(executable, &context, "test@example.test", &cancel)
         .unwrap_err();
     thread.join().unwrap();
     assert!(error.contains("取消"));

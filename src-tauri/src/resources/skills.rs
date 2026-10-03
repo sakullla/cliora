@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::database::Database;
 use crate::native::adapter::Scope;
-use crate::native::adapters::Registry;
+use crate::adapters::Registry;
 use crate::projects;
 
 const MAX_FILES: usize = 256;

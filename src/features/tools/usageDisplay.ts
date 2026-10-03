@@ -15,8 +15,12 @@ export function usageAmount(value: number): string { return new Intl.NumberForma
 export function usageReset(metric: UsageMetric, now: number): string {
   const window = metric.window;
   if (!window) return '';
-  const kind = window.recovery === 'rolling' ? '滚动恢复' : window.recovery === 'fixed' ? '重置' : '恢复方式未知';
+  const kind = window.recovery === 'rolling' ? '滚动恢复' : window.recovery === 'fixed' ? '重置' : window.resetsAt ? '窗口结束' : '恢复方式未知';
   if (!window.resetsAt) return kind;
   const seconds = Math.ceil((Date.parse(window.resetsAt) - now) / 1000);
-  return seconds <= 0 ? `${kind}时间已到，待刷新` : `${kind}：${seconds >= 3600 ? `${Math.ceil(seconds / 3600)} 小时` : `${Math.ceil(seconds / 60)} 分钟`}后`;
+  if (seconds <= 0) return kind === '窗口结束' ? '窗口已结束，待刷新' : `${kind}时间已到，待刷新`;
+  const minutes = Math.ceil(seconds / 60);
+  const days = Math.floor(minutes / 1440), hours = Math.floor(minutes % 1440 / 60), rest = minutes % 60;
+  const duration = days ? `${days} 天${hours ? ` ${hours} 小时` : ''}` : hours ? `${hours} 小时${rest ? ` ${rest} 分钟` : ''}` : `${minutes} 分钟`;
+  return `${kind}：${duration}后`;
 }

@@ -7,7 +7,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::database::Database;
-use crate::native::adapters::Registry;
+use crate::adapters::Registry;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

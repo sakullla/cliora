@@ -1,8 +1,9 @@
+use crate::adapters::Registry;
 use super::*;
 use crate::credentials::CredentialStore;
 use crate::native::{
     adapter::Scope,
-    adapters::Registry,
+
     apply,
     profile::{self, ProfileAuthentication, RegisteredProfile},
 };
@@ -155,7 +156,7 @@ fn applying_accounts_preserves_each_native_file_and_context_binding() {
         let _context = selection::enter(a.context.clone());
         let path = a.context.as_ref().unwrap().root.join("config.toml");
         let original = std::fs::read_to_string(&path).unwrap();
-        crate::native::adapters::save_registered_text(
+        crate::adapters::save_registered_text(
             &registry,
             "codex",
             "settings",
@@ -249,7 +250,7 @@ fn spawn_rejects_logout_or_reauthentication_since_plan_before_terminal_side_effe
         account_version: Some(a.version),
         tool_id: "codex".into(),
         project_id: None,
-        mode: crate::native::adapters::LaunchMode::Normal,
+        mode: crate::adapters::LaunchMode::Normal,
         executable: PathBuf::from("never-launched"),
         cli_args: vec![],
         directory: temp.path().to_owned(),
@@ -553,8 +554,8 @@ fn project_without_binding_inherits_global_account_for_native_and_resource_write
     assert_eq!(effective, a.context.as_ref().map(|context| context.id.clone()));
     assert!(selection::validate_expected("codex", None).is_err());
     selection::validate_expected("codex", effective.as_deref()).unwrap();
-    let original = crate::native::adapters::read_registered_file(&registry, "codex", "settings", Scope::Project, temp.path(), Some(&project), true).unwrap();
-    crate::native::adapters::save_registered_text(&registry, "codex", "settings", Scope::Project, temp.path(), Some(&project), "0.160.0", &db, &secret, &original, "model = \"after\"\n").unwrap();
+    let original = crate::adapters::read_registered_file(&registry, "codex", "settings", Scope::Project, temp.path(), Some(&project), true).unwrap();
+    crate::adapters::save_registered_text(&registry, "codex", "settings", Scope::Project, temp.path(), Some(&project), "0.160.0", &db, &secret, &original, "model = \"after\"\n").unwrap();
     assert!(std::fs::read_to_string(project.join(".codex/config.toml")).unwrap().contains("after"));
     assert!(apply::get_registered_binding(&db, "codex", &key).unwrap().is_none());
 

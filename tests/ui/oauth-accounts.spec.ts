@@ -3,7 +3,7 @@ import { expect, test, type Page } from '@playwright/test';
 async function setup(page: Page, inherited = false) {
   await page.addInitScript((inherited) => {
     const account = (id: string, label: string) => ({ id, label, toolId: 'codex', provider: 'openai', version: 1, state: 'signed_in', identity: { subject: id, email: `${id}@example.test`, plan: 'Plus', source: 'mock' }, context: { id: `ctx-${id}` }, retiredContexts: [], pendingLogin: null, detail: null, checkedAt: null });
-    const harness = { skillEnabled: true, accounts: [account('a', '工作账号'), account('b', '个人账号')], profiles: [] as any[], binding: null as any, calls: [] as { command: string; args: any }[] };
+    const harness = { nativeFailure: '', nativeSnapshot: { toolId: 'codex', checkedAt: 1790992800, logins: [{ provider: 'chatgpt', authKind: 'oauth', state: 'signed_in', identity: { subject: 'native', email: 'native@example.test', plan: 'plus', source: 'native' }, detail: '原生本地登录，未在线核验。', managedAccountId: null }] }, skillEnabled: true, accounts: [account('a', '工作账号'), account('b', '个人账号')], profiles: [] as any[], binding: null as any, calls: [] as { command: string; args: any }[] };
     Object.assign(window, { isTauri: true, oauthHarness: harness, __TAURI_INTERNALS__: { invoke: async (command: string, args: any) => {
       harness.calls.push({ command, args });
       if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }] };
@@ -29,9 +29,11 @@ async function setup(page: Page, inherited = false) {
       if (command === 'get_tray_status') return { available: false, error: null };
       if (command.startsWith('plugin:event|')) return 1;
       if (command === 'list_accounts') return harness.accounts;
-      if (command === 'account_capabilities') return [{ toolId: 'codex', provider: 'openai', version: '0.160.0', managedLogin: true, importNative: true, methods: ['browser', 'device'], reason: '使用原生登录，在独立目录完成身份核验。', identitySource: 'mock', refreshOwner: 'native_cli', acceptance: 'mock only' }];
+      if (command === 'discover_native_logins') { if (harness.nativeFailure) throw { message: harness.nativeFailure }; return structuredClone(harness.nativeSnapshot); }
+      if (command === 'account_capabilities') return [{ toolId: 'codex', provider: 'openai', version: '0.160.0', browserLink: (harness as any).browserLink ?? false, managedLogin: true, importNative: true, methods: ['browser', 'device'], reason: '使用原生登录，在独立目录完成身份核验。', identitySource: 'mock', refreshOwner: 'native_cli', acceptance: 'mock only' }];
       if (command === 'create_account') { const value = { ...account('new', args.label), state: 'signed_out', identity: null, context: null }; harness.accounts.push(value as any); return value; }
-      if (command === 'adopt_native_codex_account') { const value = account('adopted', args.label); harness.accounts.push(value); return value; }
+      if (command === 'delete_account') { const value = harness.accounts.find(item => item.id === args.id); if (value?.version !== args.expectedVersion) throw { message: '账号已发生变化，请重新读取' }; harness.accounts = harness.accounts.filter(item => item.id !== args.id); return null; }
+      if (command === 'adopt_native_account') { if (args.toolId !== 'codex') throw { message: '原生账号工具错误' }; const value = account('adopted', args.label); harness.accounts.push(value); return value; }
       if (['start_account_login', 'cancel_account_login', 'logout_account', 'check_account', 'rename_account'].includes(command)) {
         const value: any = harness.accounts.find(item => item.id === args.id); value.version++;
         if (command === 'start_account_login') { value.state = 'pending'; value.pendingLogin = { id: 'attempt-1', expiresAt: 1999999999, operation: 'login' }; }
@@ -56,6 +58,9 @@ async function setup(page: Page, inherited = false) {
 test('account panel distinguishes pending, cancel, reauthentication, logout and native adoption', async ({ page }) => {
   await setup(page); await page.getByRole('tab', { name: '账号', exact: true }).click();
   await expect(page.getByText('a@example.test · Plus')).toBeVisible();
+  await expect(page.getByText('native@example.test', { exact: true })).toBeVisible();
+  await expect(page.getByText('CLI 已登录', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '添加账号', exact: true }).click();
   await page.getByLabel('账号名称').fill('新账号'); await page.getByRole('button', { name: '添加并登录' }).click();
   await expect(page.getByText('等待原生登录完成', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '取消登录' }).click();
@@ -67,7 +72,69 @@ test('account panel distinguishes pending, cancel, reauthentication, logout and 
   await personal.getByRole('button', { name: '退出此账号' }).click(); await expect(personal.getByText('已退出')).toBeVisible();
   await page.getByLabel('账号名称').fill('既有账号'); await page.getByRole('button', { name: '纳入现有原生账号' }).click();
   await expect(page.getByText('已将现有原生账号纳入管理；继续使用原目录，未复制令牌。')).toBeVisible();
+  const adoption = await page.evaluate(() => (window as any).oauthHarness.calls.filter((call: any) => call.command === 'adopt_native_account'));
+  expect(adoption).toEqual([{ command: 'adopt_native_account', args: { toolId: 'codex', label: '既有账号' } }]);
   await page.screenshot({ path: 'test-results/oauth-accounts.png', fullPage: true });
+});
+
+test('account deletion confirms its scope, cancel makes no call and pending login cannot delete', async ({ page }) => {
+  await setup(page); await page.getByRole('tab', { name: '账号', exact: true }).click();
+  const work = page.getByRole('listitem').filter({ hasText: '工作账号' });
+  await work.getByRole('button', { name: '删除账号', exact: true }).click();
+  await expect(page.getByRole('dialog')).toContainText('原生登录文件、插件和历史记录会保留');
+  await page.getByRole('dialog').getByRole('button', { name: '取消', exact: true }).click();
+  expect(await page.evaluate(() => (window as any).oauthHarness.calls.filter((call: any) => call.command === 'delete_account').length)).toBe(0);
+  await work.getByRole('button', { name: '重新认证' }).click();
+  await expect(work.getByRole('button', { name: '删除账号', exact: true })).toBeDisabled();
+  await work.getByRole('button', { name: '取消登录' }).click();
+  await work.getByRole('button', { name: '删除账号', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '删除账号', exact: true }).click();
+  await expect(work).toHaveCount(0);
+  await expect(page.getByText('个人账号', { exact: true })).toBeVisible();
+  await expect(page.getByText('native@example.test', { exact: true })).toBeVisible();
+});
+
+test('browser retry follows adapter capability and uses only the current attempt', async ({ page }) => {
+  await setup(page);
+  await page.evaluate(() => { (window as any).oauthHarness.browserLink = true; });
+  await page.getByRole('tab', { name: '账号', exact: true }).click();
+  const work = page.getByRole('listitem').filter({ hasText: '工作账号' });
+  await expect(work.getByRole('button', { name: '打开授权页面' })).toHaveCount(0);
+  await work.getByRole('button', { name: '重新认证' }).click();
+  await work.getByRole('button', { name: '打开授权页面' }).click();
+  expect(await page.evaluate(() => (window as any).oauthHarness.calls.filter((call: any) => call.command === 'open_account_login_link'))).toEqual([{ command: 'open_account_login_link', args: { id: 'a', attemptId: 'attempt-1' } }]);
+  await work.getByRole('button', { name: '取消登录' }).click();
+  await expect(work.getByRole('button', { name: '打开授权页面' })).toHaveCount(0);
+});
+
+test('existing CLI login is visible without managed accounts and discovery never adopts it', async ({ page }) => {
+  await setup(page);
+  await page.evaluate(() => { (window as any).oauthHarness.accounts = []; });
+  expect(await page.evaluate(() => (window as any).oauthHarness.calls.filter((call: any) => call.command === 'discover_native_logins').length)).toBe(0);
+  await page.getByRole('tab', { name: '账号', exact: true }).click();
+  const native = page.getByLabel('CLI 原生登录');
+  await expect(native.getByText('CLI 已登录', { exact: true })).toBeVisible();
+  await expect(native.getByText('native@example.test', { exact: true })).toBeVisible();
+  await expect(page.getByText(/还没有独立账号/)).toBeVisible();
+  await expect(native.getByRole('button', { name: /^(退出|重新认证|登录)$/ })).toHaveCount(0);
+  await page.evaluate(() => { (window as any).oauthHarness.nativeSnapshot.logins[0].state = 'expired'; });
+  await native.getByRole('button', { name: '检查原生登录' }).click();
+  await expect(native.getByText('认证失效', { exact: true })).toBeVisible();
+  const commands = await page.evaluate(() => (window as any).oauthHarness.calls.map((call: any) => call.command));
+  expect(commands.filter((command: string) => command === 'discover_native_logins')).toHaveLength(2);
+  expect(commands.filter((command: string) => ['create_account', 'adopt_native_account', 'start_account_login', 'logout_account'].includes(command))).toEqual([]);
+});
+
+test('native discovery failure keeps managed accounts and offers a retry', async ({ page }) => {
+  await setup(page);
+  await page.evaluate(() => { (window as any).oauthHarness.nativeFailure = '无法读取原生认证文件'; });
+  await page.getByRole('tab', { name: '账号', exact: true }).click();
+  await expect(page.getByRole('alert')).toHaveText('无法读取原生认证文件');
+  await expect(page.getByText('a@example.test · Plus')).toBeVisible();
+  await page.evaluate(() => { (window as any).oauthHarness.nativeFailure = ''; });
+  await page.getByRole('button', { name: '检查原生登录' }).click();
+  await expect(page.getByText('CLI 已登录', { exact: true })).toBeVisible();
+  await expect(page.getByRole('alert')).toHaveCount(0);
 });
 
 test('OAuth profile saves and applies the selected account without an API connection', async ({ page }) => {

@@ -7,7 +7,7 @@ use crate::credentials::CredentialStore;
 use crate::database::Database;
 use crate::library::{self, LibraryKind};
 use crate::native::adapter::Scope;
-use crate::native::adapters::Registry;
+use crate::adapters::Registry;
 use crate::native::transaction::{self, TextPatch};
 use crate::projects;
 

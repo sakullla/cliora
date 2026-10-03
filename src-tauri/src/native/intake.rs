@@ -4,7 +4,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use super::{
-    format::{self, FileKind},
+    format::{self},
     profile::{self, Connection},
 };
 use crate::credentials::CredentialStore;
@@ -36,7 +36,7 @@ pub fn prepare_import(
     credentials: &dyn CredentialStore,
 ) -> Result<NativeImport, String> {
     prepare_registered_import(
-        &super::adapters::Registry::builtins(),
+        &crate::adapters::Registry::builtins(),
         tool.stable_id(),
         files,
         credentials,
@@ -44,7 +44,7 @@ pub fn prepare_import(
 }
 
 pub fn prepare_registered_import(
-    registry: &super::adapters::Registry,
+    registry: &crate::adapters::Registry,
     id: &str,
     mut files: BTreeMap<String, String>,
     credentials: &dyn CredentialStore,
@@ -132,14 +132,14 @@ pub(crate) fn api_format(value: &str) -> Option<&'static str> {
 
 pub fn inspect(tool: CliId, files: &BTreeMap<String, String>) -> Result<NativeInspection, String> {
     inspect_registered(
-        &super::adapters::Registry::builtins(),
+        &crate::adapters::Registry::builtins(),
         tool.stable_id(),
         files,
     )
 }
 
 pub fn inspect_registered(
-    registry: &super::adapters::Registry,
+    registry: &crate::adapters::Registry,
     id: &str,
     files: &BTreeMap<String, String>,
 ) -> Result<NativeInspection, String> {
@@ -196,19 +196,7 @@ pub fn inspect_registered(
     })
 }
 
-pub fn set_codex_reasoning_effort(text: &str, effort: Option<&str>) -> Result<String, String> {
-    if effort.is_some_and(|value| !matches!(value, "minimal" | "low" | "medium" | "high" | "xhigh"))
-    {
-        return Err("不支持的 Codex 推理强度".into());
-    }
-    let value = effort.map(|value| json!(value));
-    format::set_path(
-        FileKind::Toml,
-        text,
-        &["model_reasoning_effort".into()],
-        value.as_ref(),
-    )
-}
+pub fn set_codex_reasoning_effort(text:&str,effort:Option<&str>)->Result<String,String> { crate::adapters::codex::settings::set_codex_reasoning_effort(text,effort) }
 
 #[cfg(test)]
 mod tests {

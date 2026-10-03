@@ -1,5 +1,5 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
-import type { AccountCapability, AuthAccount } from '../types/accounts';
+import type { AccountCapability, AuthAccount, NativeLoginSnapshot } from '../types/accounts';
 import type { AgentSnapshot, AgentRequest, AgentResult, PluginTarget, PluginRequest, PluginSnapshot, PluginResult } from '../types/resources';
 import type { ApiError, Bootstrap, CliId, Theme } from '../types/domain';
 import type { AdapterCatalog, ApplyComparison, ApplyOutcome, CommonConfig, CommonSaveResult, Connection, ConnectionCheck, ModelDirectory, NativeImport, NativeInspection, NativePreview, NativeProfile, PreservedProfile, RegisteredCommon, RegisteredCommonSaveResult, RegisteredProfile, RegisteredToolWorkspace, Scope, ToolWorkspace } from '../types/native';
@@ -54,20 +54,26 @@ async function usageCommand<T>(name: string, args?: Record<string, unknown>): Pr
 
 /** Feature modules add named wrappers here; components never invoke arbitrary commands. */
 export const native = {
+  openExternalUrl: (url: string) => command<void>('open_external_url', { url }),
   scanNativeAgents: (target: PluginTarget) => command<AgentSnapshot>('scan_native_agents', { target }),
   operateNativeAgent: (request: AgentRequest) => command<AgentResult>('operate_native_agent', { request }),
   scanNativePlugins: (target: PluginTarget) => command<PluginSnapshot>('scan_native_plugins', { target }),
   operateNativePlugin: (request: PluginRequest) => command<PluginResult>('operate_native_plugin', { request }),
   accountCapabilities: () => command<AccountCapability[]>('account_capabilities'),
+  discoverNativeLogins: (toolId: string) => command<NativeLoginSnapshot>('discover_native_logins', { toolId }),
   adoptNativeCodexAccount: (label: string) => command<AuthAccount>('adopt_native_codex_account', { label }),
+  adoptNativeAccount: (toolId: string, label: string) => command<AuthAccount>('adopt_native_account', { toolId, label }),
   listAccounts: () => command<AuthAccount[]>('list_accounts'),
   createAccount: (toolId: string, label: string) => command<AuthAccount>('create_account', { toolId, label }),
   renameAccount: (id: string, expectedVersion: number, label: string) => command<AuthAccount>('rename_account', { id, expectedVersion, label }),
+  deleteAccount: (id: string, expectedVersion: number) => command<void>('delete_account', { id, expectedVersion }),
+  openAccountLoginLink: (id: string, attemptId: string) => command<void>('open_account_login_link', { id, attemptId }),
   startAccountLogin: (id: string, expectedVersion: number, method: 'browser' | 'device') => command<AuthAccount>('start_account_login', { id, expectedVersion, method }),
   cancelAccountLogin: (id: string, attemptId: string) => command<AuthAccount>('cancel_account_login', { id, attemptId }),
   checkAccount: (id: string) => command<AuthAccount>('check_account', { id }),
   logoutAccount: (id: string, expectedVersion: number) => command<AuthAccount>('logout_account', { id, expectedVersion }),
   usagePresets: () => usageCommand<UsagePreset[]>('usage_presets'),
+  ensureProfileUsage: (profileId: string, expectedProfileVersion: number) => usageCommand<UsageQuery | null>('ensure_profile_usage', { profileId, expectedProfileVersion }),
   usageBuiltinScript: (config: QueryConfig) => usageCommand<string>('usage_builtin_script', { config }),
   listUsageCache: () => usageCommand<UsageCache[]>('list_usage_cache'),
   cancelUsageRefresh: (id: string) => usageCommand<void>('cancel_usage_refresh', { id }),

@@ -139,7 +139,10 @@
 .listHeading { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 52px; padding: 8px 12px 8px 16px; background: var(--surface-2); border-bottom: 1px solid var(--line); }
 .listHeading > strong { font-size: 13px; font-weight: 650; }
 .listActions { display: flex; gap: 6px; }
-.profileRow { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 58px; padding: 0 12px 0 0; border-top: 1px solid var(--line); transition: background-color var(--fast) var(--ease); animation: reveal var(--medium) var(--ease) both; }
+.profileRow { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 8px 12px; min-height: 58px; padding: 12px 16px; border-top: 1px solid var(--line); transition: background-color var(--fast) var(--ease); animation: reveal var(--medium) var(--ease) both; }
+.profileRow > section { grid-column: 1 / -1; }
+.profileRow:has(> section[data-empty="true"]) { grid-template-columns: minmax(0, 1fr) auto 30px; }
+.profileRow > section[data-empty="true"] { grid-column: 3; grid-row: 1; }
 .profileRow:nth-child(2) { animation-delay: 30ms; }
 .profileRow:nth-child(3) { animation-delay: 60ms; }
 .profileRow:nth-child(4) { animation-delay: 90ms; }
@@ -148,7 +151,7 @@
 .profileRow:hover { background: var(--surface-2); }
 .profileRow[data-active="true"] { background: color-mix(in srgb, var(--accent) 7%, var(--surface)); }
 .profileRow[data-active="true"]:hover { background: color-mix(in srgb, var(--accent) 11%, var(--surface)); }
-.profileRow > span:not(.profileActions) { display: grid; flex: 1; gap: 3px; min-width: 0; justify-items: start; padding: 10px 0 10px 16px; }
+.profileRow > span:not(.profileActions) { display: grid; gap: 3px; min-width: 0; justify-items: start; }
 .profileActions { display: flex; flex: none; align-items: center; gap: 6px; }
 .profileFilter { display: block; padding: 8px 12px; border-top: 1px solid var(--line); }
 .profileFilter input { width: 100%; }

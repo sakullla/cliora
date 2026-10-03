@@ -160,7 +160,7 @@ pub fn by_id(db: &Database, tool: &str, id: &str) -> Result<NativeContext, Strin
         .ok_or_else(|| "资源所属账号上下文不存在，请重新绑定".into())
 }
 pub fn validate_oauth_files(
-    registry: &crate::native::adapters::Registry,
+    registry: &crate::adapters::Registry,
     tool: &str,
     home: &Path,
     project: Option<&Path>,
@@ -169,7 +169,7 @@ pub fn validate_oauth_files(
         return Ok(());
     }
     let adapter = registry.get(tool).ok_or("CLI 未注册")?;
-    let mut open_code_model = false;
+    let mut documents = Vec::new();
     for scope in [Scope::Global, Scope::Project] {
         if scope == Scope::Project && project.is_none() {
             continue;
@@ -181,65 +181,11 @@ pub fn validate_oauth_files(
         {
             let text = crate::native::transaction::read_native(Path::new(&file.path))?;
             let value = crate::native::format::parse(adapter.file_kind(file.role)?, &text)?;
-            if tool == "open_code"
-                && value
-                    .get("model")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|model| model.starts_with("openai/"))
-            {
-                open_code_model = true;
-            }
-            let conflict = match tool {
-                "codex" => {
-                    value
-                        .get("model_provider")
-                        .and_then(serde_json::Value::as_str)
-                        .is_some_and(|provider| provider != "openai")
-                        || value
-                            .get("forced_login_method")
-                            .and_then(serde_json::Value::as_str)
-                            == Some("api")
-                }
-                "claude_code" => {
-                    value.get("apiKeyHelper").is_some()
-                        || value
-                            .get("env")
-                            .and_then(serde_json::Value::as_object)
-                            .is_some_and(|env| {
-                                [
-                                    "ANTHROPIC_API_KEY",
-                                    "ANTHROPIC_AUTH_TOKEN",
-                                    "ANTHROPIC_BASE_URL",
-                                    "CLAUDE_CODE_OAUTH_TOKEN",
-                                    "CLAUDE_CODE_USE_BEDROCK",
-                                    "CLAUDE_CODE_USE_VERTEX",
-                                    "CLAUDE_CODE_USE_FOUNDRY",
-                                ]
-                                .iter()
-                                .any(|key| env.contains_key(*key))
-                            })
-                }
-                "pi" => value
-                    .get("defaultProvider")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|provider| provider != "openai-codex"),
-                "open_code" => {
-                    value
-                        .get("model")
-                        .and_then(serde_json::Value::as_str)
-                        .is_some_and(|model| !model.starts_with("openai/"))
-                        || value.pointer("/provider/openai/options/apiKey").is_some()
-                        || value.pointer("/provider/openai/options/baseURL").is_some()
-                }
-                _ => false,
-            };
-            if conflict {
-                return Err("原生配置含与所选 OAuth 账号冲突的供应商或认证设置，请修改后重新应用；未回退到 API Key".into());
-            }
+            documents.push(value);
         }
     }
-    if tool == "open_code" && !open_code_model {
-        return Err("OpenCode OAuth 需要显式配置 openai/ 模型，未回退到其他提供方".into());
-    }
-    Ok(())
+    adapter
+        .accounts()
+        .ok_or("此 CLI 未提供账号适配")?
+        .validate_documents(&documents)
 }

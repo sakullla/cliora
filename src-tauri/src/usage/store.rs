@@ -99,7 +99,7 @@ fn collect_credentials(db: &Database, secrets: &dyn CredentialStore) -> bool {
 
 pub(super) fn validate_draft(draft: &UsageQueryDraft) -> Result<(), UsageError> {
     draft.config.validate()?;
-    if matches!(draft.config.program, QueryProgram::Official { .. }) && !draft.credentials.is_empty() {
+    if matches!(draft.config.program, QueryProgram::Official { .. } | QueryProgram::ProfileBuiltin { .. }) && !draft.credentials.is_empty() {
         return Err(UsageError::configuration("官方账号查询不接受独立凭据，请选择原生账号"));
     }
     if draft.id.is_some() != draft.expected_version.is_some()
@@ -174,12 +174,19 @@ pub fn save_query(
     draft: UsageQueryDraft,
 ) -> Result<SaveQueryResult, UsageError> {
     validate_draft(&draft)?;
+    if matches!(draft.config.program, QueryProgram::ProfileBuiltin { .. }) {
+        super::profile::selection(db, &draft.config)?;
+    }
     let mut created = Vec::new();
     let outcome = with_db(db, |conn| {
         // BEGIN IMMEDIATE serializes independent database handles before checking CAS.
         let tx = conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(|_| UsageError::storage())?;
+        if let Some(account_id) = draft.config.identity.account_id.as_ref().filter(|_| matches!(draft.config.program, QueryProgram::Official { .. })) {
+            let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM auth_accounts WHERE id=?1)", [account_id], |row| row.get(0)).map_err(|_| UsageError::storage())?;
+            if !exists { return Err(UsageError::configuration("账号已删除或不存在，请重新选择账号")); }
+        }
         let old = match &draft.id {
             Some(id) => Some(read(&tx, id)?.ok_or_else(not_found)?),
             None => None,

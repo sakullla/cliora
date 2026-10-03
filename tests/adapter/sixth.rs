@@ -5,12 +5,17 @@ use std::sync::Mutex;
 use serde_json::{json, Value};
 
 use super::*;
+use crate::adapters::{CliAdapter,Registry};
 use crate::native::adapter;
 
 struct Sixth;
 static SIXTH: Sixth = Sixth;
 
 impl CliAdapter for Sixth {
+    fn accounts(&self)->Option<&dyn crate::adapters::accounts::AccountAdapter> {Some(self)}
+    fn plugins(&self)->Option<&dyn crate::adapters::plugins::PluginAdapter> {Some(self)}
+    fn agents(&self)->Option<&dyn crate::adapters::agents::AgentAdapter> {Some(self)}
+
     fn id(&self) -> &'static str {
         "sixth_fixture"
     }
@@ -395,4 +400,59 @@ fn sixth_adapter_uses_the_same_probe_native_transaction_and_launch_orchestration
     assert!(save_registered_text(&registry, "sixth_fixture", "settings", Scope::Global, home, None, "1.0.0", &db, &credentials, &actual, "invalid json").is_err());
     assert!(save_registered_text(&registry, "sixth_fixture", "settings", Scope::Global, home, None, "", &db, &credentials, &actual, &actual).is_err());
     assert_eq!(std::fs::read_to_string(&target).unwrap(), actual);
+}
+
+impl crate::adapters::accounts::AccountAdapter for Sixth {
+    fn remove_environment(&self)-> &'static [&'static str] {&["SIXTH_API_KEY"]}
+    fn capability(&self)->crate::accounts::AccountCapability {crate::accounts::AccountCapability {
+        browser_link: false,
+        tool_id:"sixth_fixture",provider:"fixture",version:"1.2.3",managed_login:true,import_native:false,methods:vec!["browser"],reason:"fixture",identity_source:"fixture",refresh_owner:"native_cli",acceptance:"synthetic",
+    }}
+    fn context(&self,root:std::path::PathBuf,id:String)->Result<crate::accounts::NativeContext,String> {
+        Ok(crate::accounts::NativeContext{id,tool_id:"sixth_fixture".into(),config_root:root.clone(),resource_root:root.clone(),auth_files:vec![root.join("fixture-auth.json")],history_roots:vec![],environment:BTreeMap::new(),remove_environment:vec![],cli_args:vec![],root})
+    }
+}
+impl crate::adapters::plugins::PluginAdapter for Sixth {
+    fn capability(&self)->crate::adapters::plugins::PluginCapability {crate::adapters::plugins::PluginCapability {version:"1.2.3",sources:"fixture",actions:vec!["install"],project:false,detail:"fixture"}}
+    fn command_args(&self,action:&str,source:&str,_project:bool)->Result<Vec<String>,String> {Ok(vec![action.into(),source.into()])}
+    fn list_rows<'a>(&self,value:&'a Value)->Option<&'a Vec<Value>> {value.get("fixturePlugins").and_then(Value::as_array)}
+}
+impl crate::adapters::agents::AgentAdapter for Sixth {
+    fn capability(&self)->crate::adapters::agents::AgentCapability {crate::adapters::agents::AgentCapability{version:"1.2.3",supported:true,format:"json",detail:"fixture",template:"{}"}}
+    fn root(&self,_scope:Scope,home:&Path,_project:Option<&Path>)->Result<std::path::PathBuf,String> {Ok(home.join(".sixth"))}
+    fn validate_fields(&self,value:&Value)->Result<(),String> {if value["fixtureField"]==true {Ok(())} else {Err("missing fixture field".into())}}
+}
+#[test]
+fn sixth_cli_account_plugin_and_agent_capabilities_reach_shared_consumers() {
+    let registry=Registry::with_adapters(vec![&SIXTH]).unwrap();let temp=tempfile::tempdir().unwrap();
+    let catalog=crate::adapters::accounts::capabilities_registered(&registry);
+    assert_eq!(catalog.len(),1);assert_eq!(catalog[0].provider,"fixture");
+    let ctx=crate::accounts::context::context_at_registered(&registry,temp.path().join("context"),"sixth_fixture","fixture-context".into()).unwrap();
+    assert_eq!(ctx.auth_files,[ctx.root.join("fixture-auth.json")]);
+    assert!(ctx.remove_environment.contains(&"SIXTH_API_KEY".into()));
+    let target=crate::resources::plugins::PluginTarget{tool_id:"sixth_fixture".into(),scope:Scope::Global,project_path:None,context_id:None};
+    let plugins=crate::resources::plugins::parse_list_registered(&registry,"sixth_fixture",&json!({"fixturePlugins":[{"id":"sixth-package","enabled":true}]}),&target).unwrap();
+    assert_eq!(plugins[0].id,"sixth-package");
+    let source=r#"{"name":"reviewer","description":"fixture","fixtureField":true}"#;
+    let agent=crate::adapters::agents::validate_registered(&registry,"sixth_fixture","json",source,"reviewer").unwrap();
+    assert_eq!(agent.0,"reviewer");
+    assert!(crate::adapters::agents::validate_registered(&registry,"sixth_fixture","json",r#"{"name":"reviewer","description":"fixture"}"#,"reviewer").is_err());
+    assert!(registry.get("sixth_fixture").unwrap().official_usage().is_none());
+}
+#[test]
+fn management_descriptors_follow_adapter_ports_and_default_to_absent() {
+    let registry = crate::adapters::Registry::builtins();
+    for adapter in registry.iter() {
+        let descriptor = adapter.descriptor();
+        assert_eq!(descriptor.management.accounts, adapter.accounts().is_some_and(|port| {
+            let capability = port.capability();
+            capability.managed_login || capability.import_native
+        }));
+        assert_eq!(descriptor.management.agents, adapter.agents().is_some_and(|port| port.capability().supported));
+        assert_eq!(descriptor.management.plugins, adapter.plugins().is_some_and(|port| !port.capability().actions.is_empty()));
+        assert_eq!(descriptor.management.mcp, adapter.supports_mcp());
+    }
+    assert!(!registry.get("grok").unwrap().descriptor().management.accounts);
+    assert!(!registry.get("pi").unwrap().descriptor().management.agents);
+    assert!(registry.get("claude_code").unwrap().descriptor().management.agents);
 }

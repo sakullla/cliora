@@ -1,5 +1,16 @@
 import { expect, test, type Page } from '@playwright/test';
 
+test('plugin search and read-only filter expose relevant actions without changing state', async ({ page }) => {
+  await setup(page);
+  await page.getByLabel('搜索插件').fill('no-match');
+  await expect(page.getByRole('listitem')).toHaveCount(0);
+  await page.getByRole('button', { name: '清除筛选' }).click();
+  await page.getByLabel('插件状态筛选').selectOption('readonly');
+  await expect(page.getByText('Organization plugin', { exact: true })).toBeVisible();
+  await expect(page.getByText('Fixture plugin', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('listitem').getByRole('button', { name: '卸载', exact: true })).toBeDisabled();
+});
+
 async function setup(page: Page) {
   await page.addInitScript(() => {
     const entry = { id: 'fixture@market', name: 'Fixture plugin', source: 'fixture@market', version: '1.0.0', scope: 'user', enabled: true, state: 'installed_load_unknown', policy: 'AVAILABLE · ON_INSTALL', readOnly: false, root: '/fixture/plugins/fixture', resources: [{ kind: 'agents', path: '/fixture/plugins/fixture/agents', ownerId: 'fixture@market' }] };
@@ -9,7 +20,8 @@ async function setup(page: Page) {
       state.calls.push({ command, args });
       if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['claude_code'], theme: 'system' }, tools: [{ id: 'claude_code', name: 'Claude Code' }] };
       if (command === 'list_cli_adapters') return { registered: [{ id: 'claude_code', name: 'Claude Code', interfaceFormats: ['anthropic_messages'], login: { hint: '原生登录' } }], managedIds: ['claude_code'], preservedUnknown: [] };
-      if (['list_projects', 'list_usage_queries', 'list_usage_cache', 'list_accounts'].includes(command)) return [];
+      if (command === 'list_projects') return [{ id: 'project', name: '测试项目', path: '/fixture/project', available: true, selectedProfiles: {}, appliedProfiles: {} }];
+      if (['list_usage_queries', 'list_usage_cache', 'list_accounts'].includes(command)) return [];
       if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
       if (command === 'get_tray_status') return { available: false, error: null };
       if (command.startsWith('plugin:event|')) return 1;
@@ -57,4 +69,17 @@ test('failed native operation retains rescanned state and allows explicit recove
   await expect(card.getByRole('button', { name: '禁用' })).toBeEnabled(); await page.getByRole('button', { name: '重新扫描' }).click();
   await expect(page.getByRole('alert')).toHaveCount(0);
   expect(await page.evaluate(() => (window as any).pluginsHarness.calls.filter((c: any) => c.command === 'scan_native_plugins').length)).toBeGreaterThan(1);
+});
+
+test('changing plugin scope clears the previous source trust before a project operation', async ({ page }) => {
+  await setup(page);
+  await page.getByLabel('插件来源', { exact: true }).fill('second@market');
+  await page.getByRole('checkbox').check();
+  await expect(page.getByRole('button', { name: '安装插件' })).toBeEnabled();
+  await page.getByRole('button', { name: '配置范围' }).click();
+  await page.getByRole('option', { name: '测试项目' }).click();
+  await expect(page.getByRole('checkbox')).not.toBeChecked();
+  await page.getByLabel('插件来源', { exact: true }).fill('second@market');
+  await expect(page.getByRole('button', { name: '安装插件' })).toBeDisabled();
+  expect(await page.evaluate(() => (window as any).pluginsHarness.calls.filter((call: any) => call.command === 'operate_native_plugin'))).toEqual([]);
 });

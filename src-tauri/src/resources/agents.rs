@@ -1,16 +1,17 @@
 use super::plugins::{self, PluginTarget};
+use crate::adapters::{agents as contract, Registry};
 use crate::{
     accounts::selection,
     credentials::CredentialStore,
     database::Database,
     native::{
         adapter::Scope,
-        adapters::{agents as contract, Registry},
         format::{self, FileKind},
         transaction::{self, FileMutation},
     },
 };
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
 use serde_json::Value;
 use std::{
     fs,
@@ -62,7 +63,7 @@ pub struct AgentResult {
     pub snapshot: AgentSnapshot,
     pub detail: String,
 }
-fn project(target: &PluginTarget) -> Result<Option<PathBuf>, String> {
+pub(crate) fn project(target: &PluginTarget) -> Result<Option<PathBuf>, String> {
     if target.scope == Scope::Global {
         return Ok(None);
     }
@@ -131,14 +132,14 @@ fn walk(
     }
     Ok(())
 }
-fn read(path: &Path) -> Result<String, String> {
+pub(crate) fn read(path: &Path) -> Result<String, String> {
     safe_path(path)?;
     if fs::metadata(path).map_err(|_| "无法读取 agent 文件")?.len() > 256 * 1024 {
         return Err("agent 文件超过 256 KiB".into());
     }
     transaction::read_native(path)
 }
-fn entry(
+pub(crate) fn entry(
     tool: &str,
     path: &Path,
     format: &str,
@@ -152,10 +153,13 @@ fn entry(
         Ok((n, d)) => (n, d, String::new()),
         Err(e) => (fallback.into(), String::new(), e),
     };
-    let native_disabled =
-        tool == "open_code" && format == "markdown" && markdown_disabled(&content);
+    let native_disabled = contract::get(tool).is_ok_and(|a| a.native_disabled(format, &content));
     if native_disabled {
-        detail.push_str("原生 disable: true；启用会保留其他字段并关闭此开关。 ");
+        detail.push_str(
+            contract::get(tool)
+                .map(|a| a.disabled_detail())
+                .unwrap_or("原生定义已停用。"),
+        );
     }
     AgentEntry {
         id: path.display().to_string(),
@@ -171,72 +175,17 @@ fn entry(
     }
 }
 
-fn markdown_disabled(text: &str) -> bool {
-    let normalized = text.replace("\r\n", "\n");
-    normalized
-        .strip_prefix("---\n")
-        .and_then(|tail| tail.split_once("\n---\n"))
-        .and_then(|(yaml, _)| serde_yaml::from_str::<Value>(yaml).ok())
-        .and_then(|v| v.get("disable").and_then(Value::as_bool))
-        .unwrap_or(false)
-}
-fn enable_markdown(text: &str) -> Result<String, String> {
-    let mut header = false;
-    let mut delimiters = 0;
-    let mut changed = false;
-    let mut result = String::new();
-    for line in text.split_inclusive('\n') {
-        if line.trim() == "---" {
-            delimiters += 1;
-            header = delimiters == 1;
-        }
-        if header && !line.starts_with(char::is_whitespace) {
-            if let Some((key, tail)) = line.split_once(':') {
-                if key.trim().trim_matches(['\'', '"']) == "disable" {
-                    let value = tail.trim_start();
-                    if let Some(rest) = value.strip_prefix("true") {
-                        if rest.trim().is_empty() || rest.trim_start().starts_with('#') {
-                            let offset = line.len() - value.len();
-                            result.push_str(&line[..offset]);
-                            result.push_str("false");
-                            result.push_str(rest);
-                            changed = true;
-                            continue;
-                        }
-                    }
-                }
-            }
-        }
-        result.push_str(line);
-    }
-    if !changed {
-        return Err("此 disable 字段使用复杂 YAML 写法，请在编辑器中改为 false 后保存".into());
-    }
-    Ok(result)
-}
-
 fn config_files(home: &Path, target: &PluginTarget) -> Result<Vec<PathBuf>, String> {
     let project = project(target)?;
     let adapter = Registry::builtins();
     let adapter = adapter.get(&target.tool_id).ok_or("未知 CLI")?;
-    let mut paths: Vec<PathBuf> = adapter
+    let paths: Vec<PathBuf> = adapter
         .native_files(target.scope, home, project.as_deref(), true)
         .into_iter()
         .filter(|f| f.role == "settings" && !f.sensitive)
         .map(|f| f.path.into())
         .collect();
-    if target.tool_id == "open_code" {
-        // Native loads both files; inventory both rather than silently selecting one.
-        if let Some(path) = paths.first() {
-            let parent = path.parent().ok_or("配置目录缺失")?;
-            paths = vec![parent.join("opencode.json"), parent.join("opencode.jsonc")];
-        }
-    }
-    if target.tool_id == "open_code" && target.scope == Scope::Project {
-        let root = contract::root(&target.tool_id, target.scope, home, project.as_deref())?;
-        paths.extend([root.join("opencode.json"), root.join("opencode.jsonc")]);
-    }
-    Ok(paths)
+    contract::get(&target.tool_id)?.config_paths(home, target, paths)
 }
 fn snapshot_inner(
     home: &Path,
@@ -259,30 +208,14 @@ fn snapshot_inner(
         home,
         project(target)?.as_deref(),
     )?;
-    let extension = if target.tool_id == "codex" {
-        "toml"
-    } else {
-        "md"
-    };
+    let adapter = contract::get(&target.tool_id)?;
+    let extension = adapter.extension();
     let mut entries = Vec::new();
     let mut basis = serde_json::to_string(target).map_err(|_| "目标无效")?;
-    for (dir, enabled) in [
-        (root.join("agents"), true),
-        (root.join(".cliora-disabled-agents/agents"), false),
-    ] {
-        scan_directory(
-            &target.tool_id,
-            &dir,
-            extension,
-            enabled,
-            "独立定义",
-            &mut entries,
-        )?;
-    }
-    if target.tool_id == "open_code" {
+    for name in adapter.definition_dirs() {
         for (dir, enabled) in [
-            (root.join("agent"), true),
-            (root.join(".cliora-disabled-agents/agent"), false),
+            (root.join(name), true),
+            (root.join(".cliora-disabled-agents").join(name), false),
         ] {
             scan_directory(
                 &target.tool_id,
@@ -301,92 +234,10 @@ fn snapshot_inner(
         let text = read(&path)?;
         basis.push_str(&text);
         let value = format::parse(FileKind::for_name(&path.display().to_string())?, &text)?;
-        if target.tool_id == "open_code" {
-            if let Some(agents) = value.get("agent") {
-                let agents = agents.as_object().ok_or("原生 agent 配置不是对象")?;
-                for (name, value) in agents {
-                    let mut e = entry(
-                        &target.tool_id,
-                        &path,
-                        "json",
-                        serde_json::to_string_pretty(value).map_err(|_| "定义无效")?,
-                        name,
-                        !value
-                            .get("disable")
-                            .and_then(Value::as_bool)
-                            .unwrap_or(false),
-                        "独立定义",
-                    );
-                    e.id = format!("{}#agent/{name}", path.display());
-                    e.name = name.clone();
-                    entries.push(e);
-                }
-            }
-        } else if target.tool_id == "codex" {
-            if let Some(agents) = value.get("agents").and_then(Value::as_object) {
-                for (name, value) in agents.iter().filter(|(_, v)| v.is_object()) {
-                    let file = value
-                        .get("config_file")
-                        .and_then(Value::as_str)
-                        .map(|file| path.parent().unwrap_or(&root).join(file));
-                    if let Some(file) = &file {
-                        for e in &mut entries {
-                            if Path::new(&e.path).canonicalize().ok() == file.canonicalize().ok()
-                                && file.exists()
-                            {
-                                e.read_only = true;
-                                e.owner = "config.toml 显式引用".into();
-                                e.detail =
-                                    "显式引用需要同时维护原生配置，请在配置编辑器管理".into();
-                            }
-                        }
-                    }
-                    if !entries.iter().any(|e| e.name == *name) {
-                        entries.push(AgentEntry {
-                            id: format!("{}#agents/{name}", path.display()),
-                            name: name.clone(),
-                            description: value
-                                .get("description")
-                                .and_then(Value::as_str)
-                                .unwrap_or("")
-                                .into(),
-                            path: file.as_ref().unwrap_or(&path).display().to_string(),
-                            format: "toml".into(),
-                            content: file.as_ref().and_then(|p| read(p).ok()).unwrap_or_default(),
-                            enabled: true,
-                            read_only: true,
-                            owner: "config.toml 显式引用".into(),
-                            detail: "此兼容格式由配置编辑器管理；新增定义使用原生自动扫描格式"
-                                .into(),
-                        });
-                    }
-                }
-            }
-        }
+        adapter.config_entries(target, &root, &path, &value, &mut entries)?;
     }
-    if target.tool_id == "grok" {
-        scan_directory(
-            &target.tool_id,
-            &root.join("bundled/agents"),
-            "md",
-            true,
-            "原生托管 bundle",
-            &mut entries,
-        )?;
-        let compatible = if target.scope == Scope::Project {
-            project(target)?.unwrap().join(".claude/agents")
-        } else {
-            home.join(".claude/agents")
-        };
-        scan_directory(
-            &target.tool_id,
-            &compatible,
-            "md",
-            true,
-            "Claude 兼容来源（在 Claude 工作区管理）",
-            &mut entries,
-        )?;
-    }
+
+    adapter.additional_sources(home, target, &root, &mut entries)?;
     for plugin in plugins {
         for resource in &plugin.resources {
             if resource.kind != "agents" {
@@ -416,26 +267,7 @@ fn snapshot_inner(
             entries.extend(owned);
         }
     }
-    if target.tool_id == "claude_code" {
-        let managed = if cfg!(windows) {
-            std::env::var_os("ProgramFiles")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("C:/Program Files"))
-                .join("ClaudeCode/.claude/agents")
-        } else if cfg!(target_os = "macos") {
-            PathBuf::from("/Library/Application Support/ClaudeCode/.claude/agents")
-        } else {
-            PathBuf::from("/etc/claude-code/.claude/agents")
-        };
-        scan_directory(
-            &target.tool_id,
-            &managed,
-            "md",
-            true,
-            "组织管理",
-            &mut entries,
-        )?;
-    }
+
     let names: Vec<_> = entries
         .iter()
         .filter(|e| e.enabled)
@@ -451,7 +283,7 @@ fn snapshot_inner(
     basis.push_str(&serde_json::to_string(&entries).map_err(|_| "无法序列化定义")?);
     Ok(AgentSnapshot { target:target.clone(),capability,entries,baseline:transaction::fingerprint(basis.as_bytes()),detail:"此页显示所选作用域的定义；启停只影响这一来源，其他作用域或内置同名项可能生效。已配置不表示当前会话已加载。导入不会转换 CLI 格式。".into() })
 }
-fn scan_directory(
+pub(crate) fn scan_directory(
     tool: &str,
     dir: &Path,
     extension: &str,
@@ -460,9 +292,15 @@ fn scan_directory(
     entries: &mut Vec<AgentEntry>,
 ) -> Result<(), String> {
     let mut files = Vec::new();
-    walk(dir, extension, &mut files, 0, tool != "grok")?;
+    walk(
+        dir,
+        extension,
+        &mut files,
+        0,
+        contract::get(tool)?.recursive(),
+    )?;
     for path in files {
-        let fallback = if tool == "open_code" {
+        let fallback = if contract::get(tool)?.namespaced_names() {
             path.strip_prefix(dir)
                 .unwrap_or(&path)
                 .with_extension("")
@@ -546,6 +384,7 @@ fn operate_inner(
         home,
         project(target)?.as_deref(),
     )?;
+    let adapter = contract::get(&target.tool_id)?;
     let selected = request
         .id
         .as_ref()
@@ -556,8 +395,10 @@ fn operate_inner(
     if request.action == "restore" {
         let path = PathBuf::from(request.id.as_deref().ok_or("缺少恢复路径")?);
         let allowed = |p: &Path| {
-            p.starts_with(root.join("agents"))
-                || p.starts_with(root.join("agent"))
+            adapter
+                .definition_dirs()
+                .iter()
+                .any(|directory| p.starts_with(root.join(directory)))
                 || p.starts_with(root.join(".cliora-disabled-agents"))
                 || config_files(home, target).is_ok_and(|files| files.contains(&p.to_path_buf()))
         };
@@ -614,13 +455,14 @@ fn operate_inner(
             if !contract::valid_name(&request.name) {
                 return Err("文件名只能包含字母、数字、连字符和下划线".into());
             }
-            let extension = if target.tool_id == "codex" {
-                "toml"
-            } else {
-                "md"
-            };
+            let extension = adapter.extension();
             path = root
-                .join("agents")
+                .join(
+                    adapter
+                        .definition_dirs()
+                        .first()
+                        .ok_or("此 CLI 未提供可写定义目录")?,
+                )
                 .join(format!("{}.{extension}", request.name));
             if path.exists() {
                 return Err("同名文件已存在".into());
@@ -647,26 +489,7 @@ fn operate_inner(
             path = PathBuf::from(&entry.path);
             if entry.format == "json" {
                 let old = read(&path)?;
-                let kind = FileKind::for_name(&entry.path)?;
-                let value = match request.action.as_str() {
-                    "save" => {
-                        contract::validate(&target.tool_id, "json", &request.content, &entry.name)?;
-                        Some(format::parse(FileKind::Json, &request.content)?)
-                    }
-                    "delete" => None,
-                    "enable" | "disable" => {
-                        let mut v = format::parse(FileKind::Json, &entry.content)?;
-                        v["disable"] = Value::Bool(request.action == "disable");
-                        Some(v)
-                    }
-                    _ => return Err("未知 agent 操作".into()),
-                };
-                let output = format::set_path(
-                    kind,
-                    &old,
-                    &["agent".into(), entry.name.clone()],
-                    value.as_ref(),
-                )?;
+                let output = adapter.config_edit(entry, request)?;
                 changes.push(FileMutation {
                     path: path.clone(),
                     baseline: Some(old),
@@ -713,13 +536,13 @@ fn operate_inner(
                             return Err("状态未改变".into());
                         }
                         if enabled
-                            && target.tool_id == "open_code"
+                            && adapter.native_disabled(&entry.format, &entry.content)
                             && !path.starts_with(root.join(".cliora-disabled-agents"))
                         {
                             changes.push(FileMutation {
                                 path: path.clone(),
                                 baseline: Some(entry.content.clone()),
-                                contents: Some(enable_markdown(&entry.content)?),
+                                contents: Some(adapter.enable_content(&entry.content)?),
                             });
                         } else {
                             let relative = if enabled {
@@ -751,10 +574,9 @@ fn operate_inner(
                                 baseline: None,
                                 contents: Some(
                                     if enabled
-                                        && target.tool_id == "open_code"
-                                        && markdown_disabled(&entry.content)
+                                        && adapter.native_disabled(&entry.format, &entry.content)
                                     {
-                                        enable_markdown(&entry.content)?
+                                        adapter.enable_content(&entry.content)?
                                     } else {
                                         entry.content.clone()
                                     },

@@ -13,15 +13,10 @@ use sha2::{Digest, Sha256};
 
 use crate::database::Database;
 use crate::domain::CliId;
-use crate::native::adapters::{CliAdapter, Registry};
+use crate::adapters::{CliAdapter, Registry};
 
-pub mod claude;
-pub mod codex;
-pub mod grok;
-pub mod opencode;
-pub mod pi;
 mod report;
-mod usage;
+pub(crate) mod usage;
 
 pub use report::{usage_report, UsageReport};
 
@@ -31,7 +26,7 @@ const MAX_SOURCE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 const MAX_LINE_BYTES: usize = 256 * 1024 * 1024;
 /// Line filters only look at this many leading bytes before deciding to skip a row.
 const LINE_PREFIX_BYTES: usize = 1024;
-const MAX_SOURCES: usize = 5_000;
+pub(crate) const MAX_SOURCES: usize = 5_000;
 const MAX_MESSAGES: usize = 2_000;
 const MAX_MESSAGE_CHARS: usize = 16_000;
 /// A source that parsed cleanly but holds nothing to show is skipped, not a failure.
@@ -293,7 +288,7 @@ pub fn discover_jsonl_controlled(root: &Path, accept: impl Fn(&Path) -> bool, ca
     discover_jsonl_with_control(root, accept, |path| source_fingerprint_controlled(path, cancelled), cancelled)
 }
 
-fn discover_jsonl_with(
+pub(crate) fn discover_jsonl_with(
     root: &Path,
     accept: impl Fn(&Path) -> bool,
     fingerprint: impl Fn(&Path) -> Result<String, String>,
@@ -301,7 +296,7 @@ fn discover_jsonl_with(
     discover_jsonl_with_control(root, accept, fingerprint, &|| false)
 }
 
-fn discover_jsonl_with_control(root: &Path, accept: impl Fn(&Path) -> bool, fingerprint: impl Fn(&Path) -> Result<String, String>, cancelled: &dyn Fn() -> bool) -> Result<Vec<HistorySource>, String> {
+pub(crate) fn discover_jsonl_with_control(root: &Path, accept: impl Fn(&Path) -> bool, fingerprint: impl Fn(&Path) -> Result<String, String>, cancelled: &dyn Fn() -> bool) -> Result<Vec<HistorySource>, String> {
     check_cancelled(cancelled)?;
     if !root.exists() {
         return Ok(Vec::new());
@@ -564,7 +559,7 @@ fn project_paths(conn: &Connection) -> Result<HashMap<String, String>, String> {
 
 pub(crate) fn model_label(model: Option<String>) -> Option<String> {
     let model = model?;
-    let label = crate::history::opencode::model_id(model.trim());
+    let label = usage::stored_model_id(model.trim());
     (!label.is_empty()).then_some(label)
 }
 
@@ -1168,7 +1163,7 @@ pub fn resume_plan(
     registry: &Registry,
     home: &Path,
     id: &str,
-    mode: crate::native::adapters::LaunchMode,
+    mode: crate::adapters::LaunchMode,
 ) -> Result<crate::launch::LaunchPlan, String> {
     let detail = detail(db, id)?;
     if let Some(reason) = detail.resume_reason {
@@ -1217,7 +1212,7 @@ pub fn copy_resume_command(
     registry: &Registry,
     home: &Path,
     id: &str,
-    mode: crate::native::adapters::LaunchMode,
+    mode: crate::adapters::LaunchMode,
 ) -> Result<String, String> {
     crate::launch::native_command(&resume_plan(db, registry, home, id, mode)?)
 }

@@ -1,3 +1,4 @@
+use crate::adapters::{self, AdapterCatalog, UnknownAdapterRecord};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -9,7 +10,7 @@ use crate::database::{Database, OpenError};
 use crate::domain::{Bootstrap, CliId, Theme};
 use crate::native::{
     adapter::{self, Scope, ToolProbe},
-    adapters::{self, AdapterCatalog, UnknownAdapterRecord},
+
     apply::{self, AppliedBinding},
     intake::{self, NativeInspection},
     models::{self, ModelDirectory},
@@ -57,6 +58,20 @@ async fn usage_blocking<T: Send + 'static>(
 
 #[tauri::command]
 pub fn account_capabilities() -> Vec<crate::accounts::AccountCapability> { adapters::accounts::capabilities() }
+
+#[tauri::command]
+pub async fn discover_native_logins(app: AppHandle, tool_id: String) -> Result<crate::accounts::NativeLoginSnapshot, ApiError> {
+    let db = app.state::<AppState>().database(&app)?;
+    let home = home()?;
+    blocking(move || crate::accounts::discovery::discover(&db, &home, &tool_id).map_err(native_error)).await
+}
+
+#[tauri::command]
+pub async fn adopt_native_account(app: AppHandle, tool_id: String, label: String) -> Result<crate::accounts::AuthAccount, ApiError> {
+    let db = app.state::<AppState>().database(&app)?;
+    let home = dirs::home_dir().ok_or_else(|| native_error("无法定位用户目录".into()))?;
+    blocking(move || crate::accounts::adopt_native(&db, &home, &tool_id, &label).map_err(native_error)).await
+}
 
 #[tauri::command]
 pub async fn adopt_native_codex_account(app: AppHandle, label: String) -> Result<crate::accounts::AuthAccount, ApiError> {
@@ -113,6 +128,26 @@ pub async fn logout_account(app: AppHandle, id: String, expected_version: u32) -
 
 #[tauri::command]
 pub fn usage_presets() -> Vec<crate::usage::UsagePreset> { crate::usage::usage_presets() }
+
+#[tauri::command]
+pub async fn ensure_profile_usage(app: AppHandle, profile_id: String, expected_profile_version: u64) -> Result<Option<crate::usage::UsageQuery>, crate::usage::UsageError> {
+    usage_blocking(app, move |db| crate::usage::ensure_profile_query(db, &SystemCredentialStore, &profile_id, expected_profile_version)).await
+}
+
+#[tauri::command]
+pub async fn delete_account(app: AppHandle, id: String, expected_version: u32) -> Result<(), ApiError> {
+    let db = app.state::<AppState>().database(&app)?;
+    blocking(move || crate::accounts::delete(&db, &id, expected_version).map_err(native_error)).await
+}
+
+#[tauri::command]
+pub async fn open_account_login_link(app: AppHandle, id: String, attempt_id: String) -> Result<(), ApiError> {
+    let db = app.state::<AppState>().database(&app)?;
+    blocking(move || {
+        let value = crate::accounts::native::login_url(&db, &id, &attempt_id).map_err(native_error)?;
+        crate::external::open(&app, &value).map_err(native_error)
+    }).await
+}
 
 #[tauri::command]
 pub fn usage_builtin_script(config: crate::usage::QueryConfig) -> Result<String, crate::usage::UsageError> { crate::usage::builtin_script(&config) }
@@ -2924,3 +2959,6 @@ mod tests {
         assert_eq!(std::fs::read(file).unwrap(), original);
     }
 }
+
+#[tauri::command]
+pub async fn open_external_url(app:AppHandle,url:String)->Result<(),ApiError> {blocking(move || crate::external::open(&app,&url).map_err(native_error)).await}

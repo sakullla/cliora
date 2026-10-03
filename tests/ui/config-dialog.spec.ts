@@ -4,7 +4,14 @@ test('new configuration dialog has one save action', async ({ page }) => {
   await page.addInitScript(() => {
     Object.assign(window, {
       isTauri: true,
-      __TAURI_INTERNALS__: { invoke: async (command: string) => {
+      __externalLinks: [] as string[],
+      __failExternal: false,
+      __TAURI_INTERNALS__: { invoke: async (command: string, args?: { url?: string }) => {
+        if (command === 'open_external_url') {
+          const state=window as unknown as {__externalLinks:string[];__failExternal:boolean};
+          if (state.__failExternal) throw {message:'无法打开系统浏览器，请复制链接到浏览器打开'};
+          state.__externalLinks.push(args!.url!);return null;
+        }
         if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }] };
         if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: ['openai_responses'], login: { hint: '登录' } }], managedIds: ['codex'], preservedUnknown: [] };
         if (command === 'list_projects' || command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_skill_recovery_issues' || command === 'scan_native_skills' || command === 'list_native_mcp') return [];
@@ -24,7 +31,16 @@ test('new configuration dialog has one save action', async ({ page }) => {
   await expect(page.getByRole('heading', { name: '工具与连接' })).toBeVisible();
   await expect(page.getByText('安装与更新')).toBeVisible();
   await page.getByText('安装与更新').click();
-  await expect(page.getByRole('link', { name: '官方安装说明 ↗' })).toBeVisible();
+  const docs=page.getByRole('link', { name: '官方安装说明 ↗' });
+  await expect(docs).toBeVisible();
+  await docs.click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as {__externalLinks:string[]}).__externalLinks)).toEqual(['https://developers.openai.com/codex/cli']);
+  expect(page.context().pages()).toHaveLength(1);
+  await page.evaluate(() => { (window as unknown as {__failExternal:boolean}).__failExternal=true; });
+  await docs.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('alert').filter({hasText:'无法打开系统浏览器'})).toBeVisible();
+
   await expect(page.getByText('当前 1.0.0')).toBeVisible();
   await expect(page.getByRole('button', { name: '重新检测' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '安装原生' })).toHaveCount(0);

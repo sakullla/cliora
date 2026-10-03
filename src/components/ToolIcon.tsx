@@ -1,5 +1,5 @@
 import { createContext, useContext, useState } from 'react';
-import { uiAdapterFor } from '../features/tools/adapters';
+import { uiAdapterFor } from '../adapters';
 import type { FilterSelectOption } from './FilterSelect';
 import { Icon } from './Icon';
 

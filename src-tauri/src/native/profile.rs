@@ -34,7 +34,7 @@ pub struct Connection {
 /// Environment name used by the launcher's child process and by profiles
 /// that explicitly use a native environment reference.
 pub fn auth_env_name(tool: CliId, connection: &Connection) -> Option<String> {
-    super::adapters::known(tool).auth_env_name(connection)
+    crate::adapters::known(tool).auth_env_name(connection)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -170,11 +170,11 @@ pub struct EffectiveFile {
 }
 
 pub fn file_kind(tool: CliId, role: &str) -> Result<FileKind, String> {
-    super::adapters::known(tool).file_kind(role)
+    crate::adapters::known(tool).file_kind(role)
 }
 
 pub fn validate_registered_files(
-    registry: &super::adapters::Registry,
+    registry: &crate::adapters::Registry,
     id: &str,
     files: &BTreeMap<String, String>,
 ) -> Result<(), String> {
@@ -198,7 +198,7 @@ pub fn validate_registered_files(
 #[cfg(test)]
 pub(crate) fn validate_files(tool: CliId, files: &BTreeMap<String, String>) -> Result<(), String> {
     validate_registered_files(
-        &super::adapters::Registry::builtins(),
+        &crate::adapters::Registry::builtins(),
         tool.stable_id(),
         files,
     )
@@ -280,7 +280,7 @@ pub fn resolve_file(
     let registered = RegisteredProfile::from(profile.clone());
     let common = common.cloned().map(RegisteredCommon::from);
     resolve_registered_file(
-        &super::adapters::Registry::builtins(),
+        &crate::adapters::Registry::builtins(),
         &registered,
         common.as_ref(),
         role,
@@ -288,7 +288,7 @@ pub fn resolve_file(
 }
 
 pub fn resolve_registered_file(
-    registry: &super::adapters::Registry,
+    registry: &crate::adapters::Registry,
     profile: &RegisteredProfile,
     common: Option<&RegisteredCommon>,
     role: &str,
@@ -435,13 +435,13 @@ pub(crate) fn validate_connection(connection: &Connection) -> Result<(), String>
 
 pub(crate) fn validate_native_credentials(profile: &NativeProfile) -> Result<(), String> {
     validate_registered_native_credentials(
-        &super::adapters::Registry::builtins(),
+        &crate::adapters::Registry::builtins(),
         &RegisteredProfile::from(profile.clone()),
     )
 }
 
 pub fn validate_registered_native_credentials(
-    registry: &super::adapters::Registry,
+    registry: &crate::adapters::Registry,
     profile: &RegisteredProfile,
 ) -> Result<(), String> {
     let adapter = registry
@@ -464,7 +464,7 @@ pub fn save_profile(
 ) -> Result<NativeProfile, String> {
     NativeProfile::try_from(save_registered_profile(
         db,
-        &super::adapters::Registry::builtins(),
+        &crate::adapters::Registry::builtins(),
         profile.into(),
         expected_version,
     )?)
@@ -472,7 +472,7 @@ pub fn save_profile(
 
 pub fn save_registered_profile(
     db: &Database,
-    registry: &super::adapters::Registry,
+    registry: &crate::adapters::Registry,
     mut profile: RegisteredProfile,
     expected_version: Option<u64>,
 ) -> Result<RegisteredProfile, String> {
@@ -501,6 +501,10 @@ pub fn save_registered_profile(
     }
     db.with_connection(|conn| {
         let tx = conn.transaction().map_err(|e| e.to_string())?;
+        if let ProfileAuthentication::OAuth { account_id } = &profile.authentication {
+            let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM auth_accounts WHERE id=?1 AND tool=?2)", params![account_id, profile.tool], |row| row.get(0)).map_err(|_| "无法检查账号引用")?;
+            if !exists { return Err("账号已删除，请重新选择账号".into()); }
+        }
         if profile.id.is_empty() {
             if expected_version.is_some() { return Err("新建配置不能携带旧版本".into()); }
             profile.id = Uuid::new_v4().to_string();
@@ -529,7 +533,7 @@ pub fn valid_connection_secret_ref(id: &str) -> bool {
 pub fn delete_profile(db: &Database, id: &str, expected_version: u64, expected_revision: &str) -> Result<(), String> {
     delete_registered_profile(
         db,
-        &super::adapters::Registry::builtins(),
+        &crate::adapters::Registry::builtins(),
         id,
         expected_version,
         expected_revision,
@@ -538,7 +542,7 @@ pub fn delete_profile(db: &Database, id: &str, expected_version: u64, expected_r
 
 pub fn delete_registered_profile(
     db: &Database,
-    registry: &super::adapters::Registry,
+    registry: &crate::adapters::Registry,
     id: &str,
     expected_version: u64,
     expected_revision: &str,
@@ -617,7 +621,7 @@ pub fn save_common(
 ) -> Result<CommonConfig, String> {
     CommonConfig::try_from(save_registered_common(
         db,
-        &super::adapters::Registry::builtins(),
+        &crate::adapters::Registry::builtins(),
         common.into(),
         expected_version,
     )?)
@@ -625,7 +629,7 @@ pub fn save_common(
 
 pub fn save_registered_common(
     db: &Database,
-    registry: &super::adapters::Registry,
+    registry: &crate::adapters::Registry,
     mut common: RegisteredCommon,
     expected_version: Option<u64>,
 ) -> Result<RegisteredCommon, String> {

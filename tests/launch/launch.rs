@@ -1,5 +1,20 @@
 use super::*;
 
+#[cfg(windows)]
+#[test]
+fn browser_bridge_streams_url_opens_once_and_rejects_untrusted_output() {
+    let temp = tempfile::tempdir().unwrap();
+    let receipt = temp.path().join("url.txt");
+    let native = "& { Write-Output 'Go to: https://evil.test/oauth/authorize'; Write-Output 'Go to: https://auth.openai.com/oauth/authorize?state=synthetic'; Write-Output 'Go to: https://auth.openai.com/oauth/authorize?state=second' }";
+    let bridge = browser_login_invocation(native, "https://auth.openai.com/oauth/authorize", &receipt).unwrap();
+    let count = temp.path().join("opened.txt");
+    let script = format!("function Start-Process {{ param($FilePath, $ErrorAction); Add-Content -LiteralPath {} -Value 'opened' }}; {bridge}", quote_powershell(count.to_str().unwrap()));
+    let result = crate::background_process::command("powershell.exe").args(["-NoProfile", "-Command", &script]).output().unwrap();
+    assert!(result.status.success(), "browser bridge failed");
+    assert_eq!(std::fs::read_to_string(&receipt).unwrap().trim().trim_start_matches('\u{feff}'), "https://auth.openai.com/oauth/authorize?state=synthetic");
+    assert_eq!(std::fs::read_to_string(count).unwrap().lines().count(), 1);
+}
+
 #[test]
 fn macos_terminal_receives_path_directory_and_escaped_cli_arguments() {
     let mut plan = sample(TerminalId::MacTerminal);

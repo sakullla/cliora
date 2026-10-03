@@ -1,5 +1,17 @@
 import { expect, test, type Page } from '@playwright/test';
 
+test('Agent search and status filters preserve access to read-only definitions', async ({ page }) => {
+  await setup(page);
+  await page.getByLabel('搜索 Agent 定义').fill('no-match');
+  await expect(page.getByRole('listitem')).toHaveCount(0);
+  await page.getByRole('button', { name: '清除筛选' }).click();
+  await expect(page.getByText('reviewer', { exact: true })).toBeVisible();
+  await page.getByLabel('Agent 状态筛选').selectOption('readonly');
+  await expect(page.getByText('reviewer', { exact: true })).toHaveCount(0);
+  await page.getByLabel('Agent 状态筛选').selectOption('all');
+  await expect(page.getByText('reviewer', { exact: true })).toBeVisible();
+});
+
 async function setup(page: Page) {
   await page.addInitScript(() => {
     const entry = { id: 'fixture', name: 'reviewer', description: 'Reviews code', path: '/fixture/agents/reviewer.md', format: 'markdown', content: '---\nname: reviewer\ndescription: Reviews code\ntools: Read\ncustom: preserved\n---\nReview code.\n', enabled: true, readOnly: false, owner: '独立定义', detail: '' };
