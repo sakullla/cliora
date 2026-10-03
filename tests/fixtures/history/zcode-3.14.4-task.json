@@ -1,0 +1,32 @@
+{
+  "meta": {
+    "taskId": "sess_imported-2026_09_28-deadbeef",
+    "traceId": "abcdefab-1234-4000-8000-00000000000f",
+    "title": "导入的历史任务",
+    "workspacePath": "C:\\Users\\user\\project\\demo",
+    "createdAt": 1790579000000,
+    "updatedAt": 1790580000000,
+    "mode": "yolo",
+    "model": "GLM-5.3",
+    "provider": "glm",
+    "status": "completed"
+  },
+  "messages": [
+    {
+      "id": "msg_0000000000000001",
+      "role": "user",
+      "content": "导入的历史任务",
+      "timestamp": 1790579000123,
+      "turnIndex": 0
+    },
+    {
+      "id": "msg_0000000000000002",
+      "role": "assistant",
+      "content": "这是从 Claude Code 原生会话导入的任务，快照本身不携带 token 计数。",
+      "timestamp": 1790579010456,
+      "model": "GLM-5.3",
+      "durationMs": 10333,
+      "turnIndex": 0
+    }
+  ]
+}

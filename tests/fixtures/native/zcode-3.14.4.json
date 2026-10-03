@@ -1,0 +1,28 @@
+{
+  "recentProjects": [
+    "C:\\Users\\user\\project\\demo",
+    "C:\\Users\\user\\project\\tools"
+  ],
+  "locale": "zh-CN",
+  "localePreference": "system",
+  "terminalInheritSystemProfile": true,
+  "embeddedBrowserAllowInsecureCertificates": false,
+  "embeddedBrowserViewportPreference": {
+    "mode": "normal",
+    "viewport": { "width": 393, "height": 852 },
+    "zoom": "fit"
+  },
+  "computerUseComposerEntryHidden": true,
+  "taskAutoArchiveEnabled": false,
+  "taskAutoArchiveOlderThanDays": 7,
+  "closeToTrayOnWindows": true,
+  "keepAwakeWhileRunning": false,
+  "desktopWindowSize": { "width": 1201, "height": 800, "maximized": false },
+  "desktopChromiumHardwareAccelerationEnabled": true,
+  "messageStreamShowReasoning": true,
+  "messageStreamShowTodos": false,
+  "zcodeInteractionBehavior": "queue",
+  "memoryEnabled": false,
+  "receivePreviewUpdates": false,
+  "autoDownloadAndInstallUpdates": false
+}
