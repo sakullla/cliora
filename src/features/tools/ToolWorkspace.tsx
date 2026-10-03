@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { SetStateAction } from 'react';
+import type { ReactNode, SetStateAction } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import { native, nativeAvailable } from '../../lib/native';
@@ -80,6 +80,23 @@ function requestWorkspace(toolId: string, scope: Scope, projectPath: string, fre
 
 function emptyProfile(tool: string): RegisteredProfile {
   return { id: '', tool, name: '', version: 0, inheritCommon: false, files: {}, suppressed: {}, connection: null, nativeCredentials: {} };
+}
+
+function RowMenu({ label, children }: { label: string; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: MouseEvent) => { if (!ref.current?.contains(event.target as Node)) setOpen(false); };
+    const key = (event: KeyboardEvent) => { if (event.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', close);
+    document.addEventListener('keydown', key);
+    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', key); };
+  }, [open]);
+  return <div className={styles.rowMenu} ref={ref}>
+    <button type="button" className={styles.rowMenuButton} aria-label={label} aria-expanded={open} aria-haspopup="menu" onClick={() => setOpen(value => !value)}>···</button>
+    {open && <div className={styles.rowMenuList} role="menu" onClick={() => setOpen(false)}>{children}</div>}
+  </div>;
 }
 
 export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0, active = true, repair, onDirtyChange }: { active?: boolean; managedTools: AdapterDescriptor[]; initialTool?: string; openSequence?: number; repair?: TrayRepairTarget | null; onDirtyChange?: (dirty: boolean) => void }) {
@@ -614,14 +631,17 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     } catch (value) { if (stillCurrent(started)) setError(errorText(value)); }
   }
 
-  async function duplicateProfile() {
-    if (!draft || dirty && !await confirmChange('当前草稿尚未保存，复制前放弃这些修改？')) return;
+  async function duplicateGiven(item: RegisteredProfile) {
+    if (dirty && !await confirmChange('当前草稿尚未保存，复制前放弃这些修改？')) return;
     setApplyComparison(null);
-    const names = workspace?.profiles.map(item => item.name) ?? [];
-    const base = `${draft.name} 副本`; let name = base; let count = 2;
+    const names = workspace?.profiles.map(entry => entry.name) ?? [];
+    const base = `${item.name} 副本`; let name = base; let count = 2;
     while (names.includes(name)) name = `${base} ${count++}`;
-    const copied = { ...structuredClone(draft), id: '', name, version: 0, revision: undefined };
-    setDraft(copied); setSelectedId(null); setEditor('profile'); setView('form'); setRawDisk(null); savedDraft.current = ''; setNotice('');
+    const copied = { ...structuredClone(item), id: '', name, version: 0, revision: undefined };
+    setDraft(copied); setSelectedId(null); setEditor('profile'); setView('form'); setRawDisk(null); savedDraft.current = ''; setNotice(''); setGuide(true);
+  }
+  async function duplicateProfile() {
+    if (draft) await duplicateGiven(draft);
   }
 
   async function fetchModels() {
@@ -808,16 +828,20 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     } catch (value) { if (sequence === reasoningSequence.current && stillCurrent(started)) setError(errorText(value)); }
   }
 
-  async function deleteCurrent() {
-    if (!draft?.id || !currentTool || busy) return;
-    if (!await confirmChange(`删除命名配置“${draft.name}”？已经写入的原生文件不会自动删除。`, { title: '删除配置', confirmLabel: '删除配置', destructive: true })) return;
+  async function deleteGiven(item: RegisteredProfile) {
+    if (!item.id || !currentTool || busy) return;
+    if (!await confirmChange(`删除命名配置“${item.name}”？已经写入的原生文件不会自动删除。`, { title: '删除配置', confirmLabel: '删除配置', destructive: true })) return;
     setBusy(true); setError('');
     try {
-      await native.deleteNativeProfile(draft.id, draft.version, draft.revision ?? '');
+      await native.deleteNativeProfile(item.id, item.version, item.revision ?? '');
       await reload(currentTool, scope, projectPath);
       setNotice('命名配置已删除，原生文件保持原样。');
+      setGuide(false);
     } catch (value) { setError(errorText(value)); }
     finally { setBusy(false); }
+  }
+  async function deleteCurrent() {
+    if (draft?.id) await deleteGiven(draft);
   }
 
   if (!visibleTools.length) return <div className={styles.empty}>还没有管理中的 CLI。请先在设置里选择要管理的工具。</div>;
@@ -949,7 +973,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
           <div className={styles.listHeading}><strong>配置</strong><span className={styles.listActions}><button type="button" onClick={() => void editCommon()}>通用配置</button><button type="button" className={styles.primary} onClick={() => void createProfile()}>新建配置</button></span></div>
           <div className={styles.profileRow} data-kind="native"><span><strong>正在使用的文件</strong><small>保存即写入该文件</small></span><button type="button" onClick={() => void openCurrentFile()}>修改</button></div>
           {workspace.profiles.length > 6 && <label className={styles.profileFilter}><input aria-label="搜索配置" placeholder="搜索配置" value={profileQuery} onChange={event => setProfileQuery(event.target.value)} /></label>}
-          <div role="list" aria-label="配置项" className={workspace.profiles.length > 6 ? styles.profileScroll : undefined}>{workspace.profiles.filter(item => item.name.toLowerCase().includes(profileQuery.trim().toLowerCase())).map((item) => { const status = profileStatus(item); const current = status === '正在使用'; const writable = workspace.probe.nativeWrites.state === 'supported'; const model = item.connection?.model?.trim(); return <div className={styles.profileRow} role="listitem" data-profile-id={item.id} data-active={current || undefined} key={item.id}><span><strong>{item.name}</strong><span className={styles.profileMeta}><span className={styles.badge} data-tone={status === '正在使用' ? 'ok' : status === '已保存' ? undefined : 'warn'}>{status}</span>{model ? <span className={styles.profileModel} title={model}>{model}</span> : null}</span></span><span className={styles.profileActions}>{!current && <button type="button" disabled={busy || enablingId !== null || !writable} title={writable ? '写入原生文件，下次启动读取这份配置' : workspace.probe.nativeWrites.reason || '当前不能写入这个工具的配置'} onClick={() => void applySaved(item)}>{enablingId === item.id ? '启用中' : '启用'}</button>}<button type="button" onClick={() => void selectProfile(item)}>修改</button></span><ProfileQuota key={`${item.id}:${item.version}`} profileId={item.id} profileVersion={item.version} toolId={item.tool} profileAccountId={item.authentication?.kind === 'oauth' ? item.authentication.accountId : undefined} state={quotaState} /></div>; })}{profileQuery.trim() && !workspace.profiles.some(item => item.name.toLowerCase().includes(profileQuery.trim().toLowerCase())) && <p className={styles.profileEmpty}>没有匹配的配置</p>}</div>
+          <div role="list" aria-label="配置项" className={workspace.profiles.length > 6 ? styles.profileScroll : undefined}>{workspace.profiles.filter(item => item.name.toLowerCase().includes(profileQuery.trim().toLowerCase())).map((item) => { const status = profileStatus(item); const current = status === '正在使用'; const writable = workspace.probe.nativeWrites.state === 'supported'; const model = item.connection?.model?.trim(); return <div className={styles.profileRow} role="listitem" data-profile-id={item.id} data-active={current || undefined} key={item.id}><span><strong>{item.name}</strong><span className={styles.profileMeta}><span className={styles.badge} data-tone={status === '正在使用' ? 'ok' : status === '已保存' ? undefined : 'warn'}>{status}</span>{model ? <span className={styles.profileModel} title={model}>{model}</span> : null}</span></span><span className={styles.profileActions}>{!current && <button type="button" className={styles.primary} disabled={busy || enablingId !== null || !writable} title={writable ? '写入原生文件，下次启动读取这份配置' : workspace.probe.nativeWrites.reason || '当前不能写入这个工具的配置'} onClick={() => void applySaved(item)}>{enablingId === item.id ? '启用中' : '启用'}</button>}<button type="button" onClick={() => void selectProfile(item)}>修改</button><RowMenu label={`${item.name} 更多操作`}><button type="button" role="menuitem" onClick={() => void selectProfile(item)}>修改配置</button><button type="button" role="menuitem" disabled={busy} onClick={() => void duplicateGiven(item)}>复制配置</button><button type="button" role="menuitem" data-danger="true" disabled={busy} onClick={() => void deleteGiven(item)}>删除配置</button></RowMenu></span><ProfileQuota key={`${item.id}:${item.version}`} profileId={item.id} profileVersion={item.version} toolId={item.tool} profileAccountId={item.authentication?.kind === 'oauth' ? item.authentication.accountId : undefined} state={quotaState} /></div>; })}{profileQuery.trim() && !workspace.profiles.some(item => item.name.toLowerCase().includes(profileQuery.trim().toLowerCase())) && <p className={styles.profileEmpty}>没有匹配的配置</p>}</div>
         </div> : <div className={styles.taskEmpty}>
         <p>还没有命名配置。新建一份，或先改通用配置。</p>
         <button type="button" className={styles.primary} disabled={busy || !currentTool} onClick={() => void createProfile()}>新建配置</button>
