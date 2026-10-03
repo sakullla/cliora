@@ -291,12 +291,12 @@ fn disabled(
         .unwrap_or_else(|| Ok(Default::default()))
 }
 
-/// Pi 0.99.2 DefaultPackageManager getManagedNpmInstallPath/getGitInstallPath.
-/// Legacy global npm roots can be customized by arbitrary package-manager
-/// commands: do not execute those during discovery or guess their location.
-
-/// A native backup restores the document, not Cliora's recovery metadata.
-/// Reconcile only an exact original declaration; arbitrary edits remain unknown.
+// Pi 0.99.2 DefaultPackageManager getManagedNpmInstallPath/getGitInstallPath.
+// Legacy global npm roots can be customized by arbitrary package-manager
+// commands: do not execute those during discovery or guess their location.
+//
+// A native backup restores the document, not Cliora's recovery metadata.
+// Reconcile only an exact original declaration; arbitrary edits remain unknown.
 fn reconcile_disabled(
     db: &Database,
     target: &PluginTarget,
@@ -490,12 +490,7 @@ fn snapshot_inner(
     let mut entries = if adapter.config_field().is_some() {
         config_entries(db, home, target)?
     } else {
-        let output = run(
-            exe,
-            home,
-            target,
-            &["plugin".into(), "list".into(), "--json".into()],
-        )?;
+        let output = run(exe, home, target, &adapter.list_command_args())?;
         let value: Value = serde_json::from_str(&output).map_err(|_| "原生插件输出格式不兼容")?;
         parse_list(&target.tool_id, &value, target)?
     };

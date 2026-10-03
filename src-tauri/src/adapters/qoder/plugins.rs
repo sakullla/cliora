@@ -28,6 +28,11 @@ impl PluginAdapter for Qoder {
         }
         Ok(args)
     }
+    fn list_command_args(&self) -> Vec<String> {
+        // Qoder's native subcommand is plural; the shared snapshot consumes this
+        // hook instead of the historical singular default.
+        vec!["plugins".into(), "list".into(), "--json".into()]
+    }
     fn includes_row(&self, row: &Value, target: &PluginTarget) -> bool {
         let scope = row
             .get("scope")
@@ -104,6 +109,25 @@ mod tests {
         // refuses unlisted verbs or invalid sources.
         assert!(crate::adapters::plugins::command_args("qoder", "validate", "x", false).is_err());
         assert!(crate::adapters::plugins::command_args("qoder", "install", "--yes", false).is_err());
+    }
+
+    #[test]
+    fn snapshot_list_command_uses_the_plural_qoder_subcommand() {
+        assert_eq!(
+            Qoder.list_command_args(),
+            ["plugins", "list", "--json"]
+        );
+        // The trait default keeps the historical singular shape so existing
+        // command-driven adapters stay unchanged; the shared snapshot consumes
+        // the hook, never a CLI-specific branch.
+        assert_eq!(
+            crate::adapters::CLAUDE.list_command_args(),
+            ["plugin", "list", "--json"]
+        );
+        assert_eq!(
+            crate::adapters::GROK.list_command_args(),
+            ["plugin", "list", "--json"]
+        );
     }
 
     #[test]
