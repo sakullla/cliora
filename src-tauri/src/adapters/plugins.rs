@@ -45,6 +45,13 @@ pub trait PluginAdapter: Sync {
         source: &str,
         project: bool,
     ) -> Result<Vec<String>, String>;
+    /// Arguments the shared snapshot runs to list native plugins. Command-driven
+    /// adapters whose native subcommand differs from the historical shape
+    /// override this; the default keeps `plugin list --json` so existing
+    /// adapters stay byte-identical.
+    fn list_command_args(&self) -> Vec<String> {
+        vec!["plugin".into(), "list".into(), "--json".into()]
+    }
     fn parse_list(&self, value: &Value, target: &PluginTarget) -> Result<Vec<PluginEntry>, String> {
         parse_native_list(self, value, target)
     }
