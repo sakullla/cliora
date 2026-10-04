@@ -63,8 +63,8 @@ The five additions registered by the 2026-10 workflow deliver each dimension onl
 | MCP | `~/.zcode/cli/config.json` `mcp.servers` | `settings.json` `mcpServers` | `mcp.json` | `cordis.patch.yml` `insert` patch items | native MCP map |
 | Skills | ✅ `~/.zcode/skills` | ✅ `~/.qoder/skills` | ✅ skills root | ✅ ranked `.dsh/skills` | ✅ native skills directory |
 | Agents | ✅ shared resource root | ✅ `~/.qoder/agents` | ✅ native agents directory | ✗ no declarative definition contract | ✅ sub-agent definitions |
-| Sessions (read-only index) | ✅ model-io rollouts + task snapshots | ✗ transcript `.jsonl` fields undocumented, no verifiable sample | ✅ `state.json` + `agents/*/wire.jsonl` | ✅ checksum-chained zstd frames (V3/V4) | ✅ `projects/*.jsonl` |
-| Token usage | ✅ from session snapshots (six buckets) | ✗ official metering is Credits only | ✅ per-call `usage.record` split buckets incl. subagent streams | ✅ `TokenUsage` per turn (input excludes cache) | ✅ assistant `providerData.usage` only |
+| Sessions (read-only index) | ✅ internal session db (rollouts/snapshots as fallback and transcript carriers) | ✗ transcript `.jsonl` fields undocumented, no verifiable sample | ✅ `state.json` + `agents/*/wire.jsonl` | ✅ `sessions/*/session.v4.jsonl.zstd` | ✅ `projects/*.jsonl` + `subagents/agent-*.jsonl` usage |
+| Token usage | ✅ internal db `model_usage` (input incl. cache; cancelled/error rows are all-zero) | ✗ official metering is Credits only | ✅ per-call `usage.record` split buckets incl. subagent streams | ✅ `TokenUsage` per turn (input excludes cache) | ✅ assistant `providerData.usage` incl. subagent wires (input incl. cache) |
 | Plugins | read-only listing (`installed_plugins.json`) | ✅ full verbs incl. project scope (`qoder plugins`) | read-only listing (managed directory) | ✗ plugin patch-item field shape unverifiable | project-level enable/disable only |
 | Managed credentials | ✗ | ✗ | ✅ `api_key` → system credential store | ✗ | ✅ frozen `env` key set → system credential store |
 
