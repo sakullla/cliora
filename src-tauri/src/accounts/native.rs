@@ -147,11 +147,7 @@ impl Drop for Process {
     fn drop(&mut self) {
         #[cfg(unix)]
         {
-            let _ = crate::background_process::command("/bin/kill")
-                .args(["-KILL", "--", &format!("-{}", self.0.id())])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
+            let _ = crate::background_process::kill_process_group(self.0.id());
         }
         #[cfg(windows)]
         {

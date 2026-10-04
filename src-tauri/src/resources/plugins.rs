@@ -231,11 +231,7 @@ fn run(
             }
             #[cfg(unix)]
             {
-                let _ = crate::background_process::command("/bin/kill")
-                    .args(["-KILL", "--", &format!("-{}", child.id())])
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status();
+                let _ = crate::background_process::kill_process_group(child.id());
             }
             let _ = child.kill();
             let _ = child.wait();

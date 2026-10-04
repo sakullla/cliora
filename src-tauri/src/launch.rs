@@ -18,6 +18,7 @@ pub enum TerminalId {
     Auto,
     WindowsTerminal,
     PowerShell,
+    Cmd,
     MacTerminal,
     Custom,
     GnomeTerminal,
@@ -35,6 +36,7 @@ impl TerminalId {
             Self::Auto => "系统默认",
             Self::WindowsTerminal => "Windows Terminal",
             Self::PowerShell => "PowerShell",
+            Self::Cmd => "CMD（命令提示符）",
             Self::MacTerminal => "Terminal",
             Self::Custom => "自定义",
             Self::GnomeTerminal => "GNOME Terminal",
@@ -49,6 +51,7 @@ impl TerminalId {
             Self::Auto => None,
             Self::WindowsTerminal => Some("wt.exe"),
             Self::PowerShell => Some("powershell.exe"),
+            Self::Cmd => Some("cmd.exe"),
             Self::MacTerminal => Some("/usr/bin/open"),
             Self::Custom => None,
             Self::GnomeTerminal => Some("gnome-terminal"),
@@ -61,7 +64,7 @@ impl TerminalId {
     fn platform(self) -> bool {
         match self {
             Self::Auto => true,
-            Self::WindowsTerminal | Self::PowerShell => cfg!(windows),
+            Self::WindowsTerminal | Self::PowerShell | Self::Cmd => cfg!(windows),
             Self::MacTerminal => cfg!(target_os = "macos"),
             Self::Custom => true,
             Self::GnomeTerminal | Self::Konsole | Self::Xterm => cfg!(target_os = "linux"),
@@ -261,13 +264,15 @@ pub fn terminal_presets() -> Vec<TerminalPreset> {
 fn terminal_available(id: TerminalId) -> bool {
     match id {
         TerminalId::Custom => true,
+        #[cfg(windows)]
+        TerminalId::Cmd => system_console_path(TerminalId::Cmd).is_ok() && system_console_path(TerminalId::PowerShell).is_ok(),
         other => other.binary().is_some_and(on_path),
     }
 }
 
 fn supported_terminals() -> &'static [TerminalId] {
     if cfg!(windows) {
-        &[TerminalId::WindowsTerminal, TerminalId::PowerShell]
+        &[TerminalId::WindowsTerminal, TerminalId::PowerShell, TerminalId::Cmd]
     } else if cfg!(target_os = "macos") {
         &[TerminalId::MacTerminal]
     } else {
@@ -805,6 +810,11 @@ fn encoded_powershell(script: &str) -> String {
 }
 
 pub fn native_command(plan: &LaunchPlan) -> Result<String, String> {
+    #[cfg(windows)]
+    if plan.terminal == TerminalId::Cmd {
+        let args = cmd_arguments(&powershell_script(plan)?)?;
+        return Ok(format!("\"{}\" {}", terminal_path(&system_console_path(TerminalId::PowerShell)?)?, args[4..].join(" ")));
+    }
     if cfg!(windows) {
         powershell_script(plan)
     } else {
@@ -822,6 +832,9 @@ fn context_script(plan: &LaunchPlan, windows: bool) -> String {
 
 fn powershell_script(plan: &LaunchPlan) -> Result<String, String> {
     let directory = terminal_path(&plan.directory)?;
+    #[cfg(windows)]
+    let executable = terminal_path(&windows_cli_path(&plan.executable))?;
+    #[cfg(not(windows))]
     let executable = terminal_path(&plan.executable)?;
     let mut parts = vec![format!("& {}", quote_powershell(&executable))];
     parts.extend(plan.cli_args.iter().map(|arg| quote_powershell(arg)));
@@ -831,6 +844,32 @@ fn powershell_script(plan: &LaunchPlan) -> Result<String, String> {
         quote_powershell(&directory),
         parts.join(" ")
     ))
+}
+
+#[cfg(windows)]
+fn windows_cli_path(path: &Path) -> PathBuf {
+    // npm's extensionless sibling is a Unix shell script, not a Win32 entry.
+    // Resolve only siblings of that exact installation, never another PATH hit.
+    if path.extension().is_none() {
+        for extension in ["exe", "cmd", "bat", "ps1"] {
+            let candidate = path.with_extension(extension);
+            if candidate.is_file() { return candidate; }
+        }
+    }
+    path.to_path_buf()
+}
+
+#[cfg(windows)]
+fn cmd_helper_script(script: &str, directories: &[PathBuf]) -> String {
+    // The helper uses PowerShell syntax, but package manager commands should
+    // resolve to their Windows batch entrypoints just as they do at a CMD prompt.
+    let mut prelude = String::new();
+    for name in ["npm", "npx"] {
+        if let Some(path) = directories.iter().map(|directory| directory.join(format!("{name}.cmd"))).find(|path| path.is_file()) {
+            prelude.push_str(&format!("function {name} {{ & {} @args }}; ", quote_powershell(&path.to_string_lossy())));
+        }
+    }
+    format!("{prelude}{script}")
 }
 
 fn shell_script(plan: &LaunchPlan) -> Result<String, String> {
@@ -876,6 +915,22 @@ fn mac_terminal_shell_body(directory: &str, script: &str) -> String {
     format!("{path}cd -- {} && {script}", quote_shell(directory))
 }
 
+// CMD hosts the CLI in its own interactive console. Passing only an encoded
+// PowerShell payload through cmd avoids an additional expansion of paths,
+// prompts, %, !, & and other command-shell metacharacters. The helper exits
+// with the CLI; /K then leaves the user at a normal CMD prompt.
+fn cmd_arguments(script: &str) -> Result<Vec<String>, String> {
+    #[cfg(windows)]
+    let script = cmd_helper_script(script, &crate::process_environment::directories());
+    #[cfg(windows)]
+    let script = script.as_str();
+    let encoded = encoded_powershell(script);
+    if encoded.len() > 7600 {
+        return Err("启动命令超过 CMD 长度限制，请在设置中选择 PowerShell 或 Windows Terminal".into());
+    }
+    Ok(vec!["/D".into(), "/V:OFF".into(), "/K".into(), "powershell.exe".into(), "-NoProfile".into(), "-ExecutionPolicy".into(), "Bypass".into(), "-EncodedCommand".into(), encoded])
+}
+
 pub fn terminal_command(plan: &LaunchPlan) -> Result<TerminalCommand, String> {
     let directory = terminal_path(&plan.directory)?;
     let powershell = || interactive_powershell_script(plan).map(|script| encoded_powershell(&script));
@@ -908,6 +963,7 @@ pub fn terminal_command(plan: &LaunchPlan) -> Result<TerminalCommand, String> {
                 powershell()?,
             ],
         ),
+        TerminalId::Cmd => ("cmd.exe", cmd_arguments(&interactive_powershell_script(plan)?)?),
         TerminalId::MacTerminal => ("/usr/bin/open", vec!["-a".into(), "Terminal".into()]),
         TerminalId::Custom => ("", Vec::new()),
         TerminalId::GnomeTerminal => (
@@ -948,23 +1004,55 @@ pub fn terminal_command(plan: &LaunchPlan) -> Result<TerminalCommand, String> {
 }
 
 #[cfg(windows)]
-fn spawn_console(terminal: &TerminalCommand) -> Result<(),String> {
-    use windows_sys::Win32::{Foundation::CloseHandle,System::Threading::{CreateProcessW,PROCESS_INFORMATION,STARTUPINFOW,CREATE_NEW_CONSOLE}};
-    let executable=env::var_os("SystemRoot").map(PathBuf::from).ok_or("找不到 Windows 系统目录")?
-        .join("System32/WindowsPowerShell/v1.0/powershell.exe");
-    if !executable.is_file() {return Err("找不到系统 PowerShell，请选择 Windows Terminal".into());}
-    // EncodedCommand and the fixed PowerShell flags contain no quoting-sensitive characters.
-    if terminal.args.iter().any(|arg|arg.chars().any(|ch|ch.is_whitespace() || ch=='"' || ch=='\0')) {return Err("PowerShell 启动参数无效".into());}
-    let wide=|text:&str|text.encode_utf16().chain(std::iter::once(0)).collect::<Vec<_>>();
-    let application=wide(&terminal_path(&executable)?);
-    let mut line=wide(&format!("\"{}\" {}",terminal_path(&executable)?,terminal.args.join(" ")));
-    let directory=wide(&terminal_path(&terminal.directory)?);
-    let mut startup:STARTUPINFOW=unsafe{std::mem::zeroed()};startup.cb=std::mem::size_of::<STARTUPINFOW>() as u32;
-    let mut process:PROCESS_INFORMATION=unsafe{std::mem::zeroed()};
-    // No STARTF_USESTDHANDLES: Windows initializes the new console's real input/output handles.
-    let created=unsafe{CreateProcessW(application.as_ptr(),line.as_mut_ptr(),std::ptr::null(),std::ptr::null(),0,CREATE_NEW_CONSOLE,std::ptr::null(),directory.as_ptr(),&startup,&mut process)};
-    if created==0 {return Err(format!("无法打开 PowerShell：{}",std::io::Error::last_os_error()));}
-    unsafe {CloseHandle(process.hThread);CloseHandle(process.hProcess);}
+fn system_console_path(terminal: TerminalId) -> Result<PathBuf, String> {
+    let relative = match terminal {
+        TerminalId::PowerShell => r"System32\WindowsPowerShell\v1.0\powershell.exe",
+        TerminalId::Cmd => r"System32\cmd.exe",
+        _ => return Err("所选终端不是系统控制台".into()),
+    };
+    let executable = env::var_os("SystemRoot").map(PathBuf::from).ok_or("找不到 Windows 系统目录")?.join(relative);
+    if !executable.is_absolute() || !executable.is_file() { return Err(format!("找不到系统 {}", terminal.label())); }
+    Ok(executable)
+}
+
+#[cfg(windows)]
+fn console_command_line(terminal: &TerminalCommand) -> Result<(PathBuf, String), String> {
+    let id = match terminal.program {
+        "powershell.exe" => TerminalId::PowerShell,
+        "cmd.exe" => TerminalId::Cmd,
+        _ => return Err("系统控制台命令无效".into()),
+    };
+    let executable = system_console_path(id)?;
+    // Fixed flags and the base64 payload never contain shell-sensitive text.
+    if terminal.args.iter().any(|arg| arg.chars().any(|ch| ch.is_whitespace() || ch == '"' || ch == '\0')) { return Err("系统控制台启动参数无效".into()); }
+    let application = terminal_path(&executable)?;
+    let line = if id == TerminalId::Cmd {
+        if terminal.args.len() != 9 || terminal.args[..8] != ["/D", "/V:OFF", "/K", "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand"] { return Err("CMD 启动参数无效".into()); }
+        let helper = terminal_path(&system_console_path(TerminalId::PowerShell)?)?;
+        format!("\"{application}\" /D /V:OFF /S /K \"\"{helper}\" {}\"", terminal.args[4..].join(" "))
+    } else {
+        format!("\"{application}\" {}", terminal.args.join(" "))
+    };
+    if id == TerminalId::Cmd && line.encode_utf16().count() > 8191 {
+        return Err("启动命令超过 CMD 长度限制，请在设置中选择 PowerShell 或 Windows Terminal".into());
+    }
+    Ok((executable, line))
+}
+
+#[cfg(windows)]
+fn spawn_console(terminal: &TerminalCommand) -> Result<(), String> {
+    use windows_sys::Win32::{Foundation::CloseHandle, System::Threading::{CreateProcessW, PROCESS_INFORMATION, STARTUPINFOW, CREATE_NEW_CONSOLE}};
+    let (executable, line) = console_command_line(terminal)?;
+    let wide = |text: &str| text.encode_utf16().chain(std::iter::once(0)).collect::<Vec<_>>();
+    let application = wide(&terminal_path(&executable)?);
+    let mut line = wide(&line);
+    let directory = wide(&terminal_path(&terminal.directory)?);
+    let mut startup: STARTUPINFOW = unsafe { std::mem::zeroed() }; startup.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+    let mut process: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+    // Windows supplies real console I/O handles; don't inherit the GUI's null handles.
+    let created = unsafe { CreateProcessW(application.as_ptr(), line.as_mut_ptr(), std::ptr::null(), std::ptr::null(), 0, CREATE_NEW_CONSOLE, std::ptr::null(), directory.as_ptr(), &startup, &mut process) };
+    if created == 0 { return Err(format!("无法打开系统终端：{}", std::io::Error::last_os_error())); }
+    unsafe { CloseHandle(process.hThread); CloseHandle(process.hProcess); }
     Ok(())
 }
 
@@ -987,6 +1075,7 @@ fn shell_terminal(terminal: TerminalId, directory: &Path, script: &str) -> Resul
             "powershell.exe",
             vec!["-NoProfile".into(), "-NoExit".into(), "-ExecutionPolicy".into(), "Bypass".into(), "-EncodedCommand".into(), encoded_powershell(script)],
         ),
+        TerminalId::Cmd => ("cmd.exe", cmd_arguments(script)?),
         TerminalId::MacTerminal => ("/usr/bin/open", vec!["-a".into(), "Terminal".into()]),
         TerminalId::Custom => ("", Vec::new()),
         TerminalId::GnomeTerminal => (
@@ -1006,7 +1095,7 @@ fn shell_terminal(terminal: TerminalId, directory: &Path, script: &str) -> Resul
 
 fn spawn_terminal(db: &Database, terminal_id: TerminalId, terminal: TerminalCommand) -> Result<(), String> {
     #[cfg(windows)]
-    if terminal_id == TerminalId::PowerShell {
+    if matches!(terminal_id, TerminalId::PowerShell | TerminalId::Cmd) {
         return spawn_console(&terminal);
     }
     if terminal_id == TerminalId::MacTerminal {

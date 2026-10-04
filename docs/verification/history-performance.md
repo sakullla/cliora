@@ -126,3 +126,23 @@ Rust fixture 验证原生目录读取、删除抑制、未知启停、预览无�
 折叠与宽屏布局加入后的最终完整 UI：108 passed，脚本 36.69s。用户随后确认停止 MCP 排查，本版本未修改 MCP 配置或加载行为。
 
 最终布局后的原生构建成功（2m41s），实际 0.2.8 WebView 中侧栏 212px→68px，使用记录主区与内容同为 1082px、无水平溢出。最终集成命令 5.20s / 5 passed。原生 exe SHA-256：5EA3A6A389052F001FD552013A82050526BCC7211C1B721B2D0307F2FE789CD5。检查完成后已移除临时调试参数，重新启动本地原生应用。
+
+## 2026-10-04：0.2.9 CMD 与 Linux CI 修复
+
+通过 gh 下载 run 37183510516 的 Rust job 111380637167：Windows 注册表路径 fixture 在 Linux 使用 Path::parent()，无法拆分反斜线，导致 ZCode 卸载项回归失败。改为适配器内显式处理 Windows 分隔符；随后 run 37184737368 中该测试通过，但仍在运行测试约七秒后以 137 结束，远未达到十二分钟 timeout。降低并发并没有解决这次终止，不能将其归因为已证实的内存不足。
+
+第二次日志共有 413 / 414 条测试结果，未完成的是官方原生协议取消回归。其 Process 清理执行 `/bin/kill -KILL -<pid>`。使用 Ubuntu 22.04 的 procps 3.3.17-6ubuntu2.1 二进制和 LD_PRELOAD 拦截 kill（不发送真实信号），实测 `-KILL -12345` 调用 kill(0, 9)，而 `-KILL -- -12345` 调用 kill(-12345, 9)。前者终止调用者的整个进程组，解释 timeout、cargo 和测试进程同时收到 SIGKILL。Debian procps 4.0.4 的行为不同，不能以新版工具的本地结果代替 Ubuntu 验收。
+
+清理统一进入共享 kill_process_group：拒绝 0、1 和超出有符号 PID 范围的值，负进程组操作数前显式使用 `--`，清理工具自身也隔离进程组。账号协议退出与插件超时均使用它。新增 Unix 回归验证目标及持有输出管道的后代停止、无关进程存活，fixture 有两秒的就绪/退出边界。临时 strace 和 apt 依赖在定位后移除，CI 保留任务/测试限时、四线程和耗时/内存报告。
+
+最小修复的 run 37185270615 全部成功：Linux 406 passed / 8 ignored，原生协议取消回归完成；前端与 macOS target check 也通过。此次测试执行 14.99s 包含 strace 开销，冷编译加测试步骤 3m48s，峰值 RSS 2159676 KiB；这些数据不采用本机缓存就绪验收口径。最终共享清理回归另由发布提交的 CI 验证。
+
+Windows 终端契约同步增加 cmd：设置可选择并持久化 CMD，CLI、会话恢复、账号登录和维护命令使用同一终端选择。通过 CreateProcessW / CREATE_NEW_CONSOLE 创建真实控制台，系统 PowerShell helper 执行已有配置上下文后退出，CMD 保留普通提示符；外层不直接拼用户路径、参数或提示词。复制的会话命令也可直接粘贴到 CMD。超出 CMD 长度限制明确返回恢复错误，不截断。
+
+CMD helper 中 npm / npx 解析现有 `.cmd` 入口；无后缀 CLI 路径只查同一安装目录的 `.exe`、`.cmd`、`.bat`、`.ps1`，不执行 npm 的 Unix sibling，也不跨 PATH 替换指定安装。已有 `.ps1` 可通过系统 helper 执行。Windows 真实脚本回归验证中文目录、空格、引号、百分号、感叹号、换行及 shell 文本按字面进入 PS1，清除嵌套会话/颜色标记，复制命令执行一致；另验证 npm/npx batch 优先于同名 PS1/Unix shim、无后缀解析和设置数据库重开保留选择。16 条 launch 回归通过，执行 2.23s；不是各 CLI 的真实登录或完整交互验收。
+
+完整浏览器回归 109 passed（脚本 48.07s），CMD 的选择、重载、切换启动模式与保存失败恢复包含在其中。TypeScript/Vite 构建和本机 clippy --all-targets 通过，保留原有 47 条 warning。本机一轮缓存就绪全量单元完整 npm 命令 10.11s，快速命令 10.71s（Rust 414 passed / 9 ignored，Node 20 passed）。同时进行本机编译时核心集成 5 passed，但命令 93.29s；该高负载观测不满足十秒目标，最终空闲复测结果另记。
+
+复测发现并发 HTTP fixture 用固定 40ms sleep 断言峰值必须为二，在调度延迟时峰值会成为一。改为有两秒上限的 Condvar 到达条件，确保前两条 form 请求实际重叠；没有增大 sleep、放宽并发断言或调整生产预算。针对性回归 1 passed / 0.03s。最终全量单元命令 11.51s，核心集成完整 npm 命令 5.73s / 5 passed。另一次快速命令 15.71s 包含 Clippy 占用构建目录锁的 6.45s，日志有 Blocking waiting for file lock；无编译任务时单独重测为 10.02s，Rust 414 passed / 9 ignored，Node 20 passed。
+
+原生 0.2.9 构建成功（release 编译 2m30s）。实际 WebView IPC 返回 version=0.2.9，CMD available=true；设置选择与窗口重载后数据库选择均为 cmd。验证后恢复原选择并移除临时 WebView 调试参数，重新启动本地原生窗口（进程响应正常）。本机独立 CMD 只读命令验证 npm 和 npx 都返回 11.17.0，不执行包安装或远端登录。exe SHA-256：5796D745EBA3CAED716F6B770FD83F9FB0F9C19F8DBF0658CD60BB75EAD44A9E。
