@@ -87,7 +87,12 @@ test('records keep search, show native resume command and only launch on request
           && (!args.filter.favoriteOnly || item.favorite));
         if (command === 'get_history_session') {
           const session = records.find((item) => item.id === args.id);
-          return { session, messages: [{ id: 'm1', role: 'user', text: 'Review change', timestamp: 1790668800000 }, { id: 'm2', role: 'assistant', text: `Looks good.\n${'历史正文需要整栏滚动。'.repeat(70)}`, timestamp: 1790668801000 }], usage: [], resumeReason: session?.nativeId ? null : '原始记录没有可验证的恢复 ID' };
+          const messages = [
+            { id: 'm1', role: 'user', text: 'Review change', timestamp: 1790668800000 },
+            ...Array.from({ length: 24 }, (_, index) => ({ id: `pad-${index}`, role: 'user', text: `历史正文需要整栏滚动 ${index}`, timestamp: 1790668800000 })),
+            { id: 'm2', role: 'assistant', text: `Looks good.\n${'历史正文需要整栏滚动。'.repeat(70)}`, timestamp: 1790668801000 },
+          ];
+          return { session, messages, usage: [], resumeReason: session?.nativeId ? null : '原始记录没有可验证的恢复 ID' };
         }
         if (command === 'set_history_favorite') { const item = records.find((value) => value.id === args.id); if (item) item.favorite = args.favorite; return null; }
         if (command === 'set_history_project') { const item = records.find((value) => value.id === args.id); if (item) item.projectId = args.projectId; return null; }

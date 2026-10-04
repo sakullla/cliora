@@ -427,7 +427,7 @@ test('sidebar collapse preserves navigation and records use the wide viewport', 
   const sidebar = page.getByLabel('主导航');
   await page.getByRole('button', { name: '折叠侧栏', exact: true }).click();
   await expect(page.getByRole('button', { name: '展开侧栏', exact: true })).toHaveAttribute('aria-expanded', 'false');
-  expect((await sidebar.boundingBox())!.width).toBeLessThan(80);
+  await expect.poll(async () => (await sidebar.boundingBox())?.width ?? 999).toBeLessThan(80);
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录', exact: true }).click();
   await expect(page.getByRole('heading', { name: '使用记录', exact: true })).toBeVisible();
   expect((await page.locator('.content-inner').boundingBox())!.width).toBeGreaterThan(2400);
@@ -435,7 +435,8 @@ test('sidebar collapse preserves navigation and records use the wide viewport', 
   await page.reload();
   await expect(page.getByRole('button', { name: '展开侧栏', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '展开侧栏', exact: true }).click();
-  expect((await sidebar.boundingBox())!.width).toBeGreaterThan(180);
+  await expect(page.getByRole('button', { name: '折叠侧栏', exact: true })).toHaveAttribute('aria-expanded', 'true');
+  await expect.poll(async () => (await sidebar.boundingBox())?.width ?? 0).toBeGreaterThan(180);
   await page.setViewportSize({ width: 640, height: 760 });
   await expectNoHorizontalScroll(page);
 });

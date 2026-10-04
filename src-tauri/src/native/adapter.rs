@@ -906,7 +906,8 @@ mod tests {
 
         let dirs = npm_global_bin_dirs(Some(linked_dir.join("node")), None);
 
-        assert_eq!(dirs.first(), Some(&real_bin), "{dirs:?}");
+        let expected = real_bin.canonicalize().unwrap();
+        assert_eq!(dirs.first(), Some(&expected), "{dirs:?}");
     }
 
     #[cfg(target_os = "macos")]

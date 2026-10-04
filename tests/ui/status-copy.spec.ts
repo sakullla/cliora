@@ -324,8 +324,9 @@ test('saved price stays visible when the following usage read fails', async ({ p
   await records.getByLabel('缓存写入单价').fill('1');
   await records.getByRole('button', { name: '保存价格' }).click();
   await expect(records.getByText('估算价格已保存；只影响本机统计。')).toBeVisible();
-  await expect(records.getByRole('alert')).toContainText('用量读取失败');
-  await expect(records.getByRole('alert')).toContainText('可点击刷新本机记录或调整筛选');
+  const usageAlert = records.getByRole('alert').filter({ hasText: '用量读取失败' });
+  await expect(usageAlert).toContainText('用量读取失败');
+  await expect(usageAlert).toContainText('可点击刷新本机记录或调整筛选');
 });
 
 test('dialog launch success stays with the list failure after the dialog closes', async ({ page }) => {
