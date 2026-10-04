@@ -159,6 +159,19 @@ impl CliAdapter for Grok {
             Scope::Project => Some(project?.join("AGENTS.md")),
         }
     }
+    fn connection_policy(&self, scope: Scope) -> crate::native::adapter::ConnectionPolicy {
+        crate::native::adapter::ConnectionPolicy {
+            api_key: if scope == Scope::Project {
+                crate::native::adapter::api_key_scope_denied(
+                    "Grok 项目层不能写入供应商密钥；请使用全局配置",
+                )
+            } else {
+                crate::native::adapter::api_key_writable()
+            },
+            provider_address: crate::native::adapter::address_configurable(),
+            projection: "single_connection",
+        }
+    }
     fn connection_documents(
         &self,
         connection: &Connection,
@@ -250,7 +263,7 @@ impl CliAdapter for Grok {
             return Ok(());
         };
         if scope == Scope::Project {
-            return Err("Grok 项目层不能写入供应商密钥".into());
+            return Err("Grok 项目层不能写入供应商密钥；请使用全局配置".into());
         }
         let alias = documents
             .get("settings")

@@ -128,6 +128,17 @@ impl CliAdapter for ZCode {
             Scope::Project => project?.join("AGENTS.md"),
         })
     }
+    fn connection_policy(&self, _scope: Scope) -> crate::native::adapter::ConnectionPolicy {
+        crate::native::adapter::ConnectionPolicy {
+            api_key: crate::native::adapter::api_key_unsupported(
+                "ZCode 凭据由产品加密保管（credentials.json），不提供凭据管理",
+            ),
+            provider_address: crate::native::adapter::address_unsupported(
+                "ZCode 桌面端经产品内账号登录；setting.json 无文档化 API 连接字段",
+            ),
+            projection: "single_connection",
+        }
+    }
     fn connection_documents(
         &self,
         _connection: &Connection,
@@ -371,6 +382,7 @@ mod tests {
             model: String::new(),
             secret_ref: None,
             auth_env_var: None,
+            model_records: Vec::new(),
         }
     }
 

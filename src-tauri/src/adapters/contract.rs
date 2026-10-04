@@ -8,11 +8,11 @@ use serde_json::Value;
 
 use crate::credentials::CredentialStore;
 use crate::history::{HistorySource, ParsedSession};
-use crate::native::adapter::{NativeFile, Scope};
+use crate::native::adapter::{self, NativeFile, Scope};
 use crate::native::apply::NativeSecrets;
 use crate::native::format::FileKind;
 use crate::native::intake::NativeInspection;
-use crate::native::profile::{Connection, RegisteredProfile};
+use crate::native::profile::{Connection, ModelRecord, RegisteredProfile};
 use crate::resources::mcp::McpDefinition;
 
 #[derive(Clone, Debug, Serialize)]
@@ -168,6 +168,24 @@ pub trait CliAdapter: Sync {
         connection: &Connection,
         scope: Scope,
     ) -> Result<BTreeMap<String, Value>, String>;
+    /// Key, provider-address, and model-projection capability for the loaded scope.
+    fn connection_policy(&self, _scope: Scope) -> adapter::ConnectionPolicy {
+        adapter::ConnectionPolicy {
+            api_key: adapter::api_key_writable(),
+            provider_address: adapter::address_configurable(),
+            projection: "single_connection",
+        }
+    }
+    /// Models already stored under the selected provider. `None` means this CLI
+    /// does not project nested model records.
+    fn projected_models(
+        &self,
+        _settings: &Value,
+        _models: &Value,
+        _provider: Option<&str>,
+    ) -> Option<Vec<ModelRecord>> {
+        None
+    }
     fn connection_documents_for_existing(
         &self,
         connection: &Connection,
@@ -219,6 +237,21 @@ pub trait CliAdapter: Sync {
         credentials: &dyn CredentialStore,
         secrets: &mut NativeSecrets,
     ) -> Result<(), String>;
+    /// A new key on a scope that cannot store one fails before any file is opened.
+    fn reject_new_secret(&self, profile: &RegisteredProfile, scope: Scope) -> Result<(), String> {
+        let Some(connection) = &profile.connection else {
+            return Ok(());
+        };
+        if connection.secret_ref.as_deref().is_none_or(str::is_empty) {
+            return Ok(());
+        }
+        let facet = self.connection_policy(scope).api_key;
+        if facet.state == "writable" {
+            Ok(())
+        } else {
+            Err(facet.reason.to_owned())
+        }
+    }
     fn has_native_secret(&self, role: &str, root: &Value) -> bool;
     fn inspect_values(
         &self,
@@ -523,6 +556,29 @@ pub trait CliAdapter: Sync {
             },
         }
     }
+}
+
+/// Update keys that already exist. Nested objects recurse; absent keys are not created.
+pub(crate) fn assign_existing_fields(target: &mut Value, edits: &serde_json::Map<String, Value>) {
+    let Some(target_map) = target.as_object_mut() else {
+        return;
+    };
+    for (key, edit) in edits {
+        if !target_map.contains_key(key) {
+            continue;
+        }
+        let current = target_map.get_mut(key).unwrap();
+        if current.is_object() && edit.as_object().is_some_and(|map| !map.is_empty()) {
+            let nested = edit.as_object().unwrap().clone();
+            assign_existing_fields(current, &nested);
+        } else {
+            *current = edit.clone();
+        }
+    }
+}
+
+pub(crate) fn pointer_token(value: &str) -> String {
+    value.replace('~', "~0").replace('/', "~1")
 }
 
 #[derive(Clone, Debug, Serialize)]

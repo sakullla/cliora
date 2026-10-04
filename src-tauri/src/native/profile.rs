@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use uuid::Uuid;
 
 use super::format::{self, FileKind};
@@ -19,6 +20,15 @@ pub enum ProfileAuthentication {
     RebindRequired,
 }
 
+/// One native model object under the selected provider. `fields` contains only
+/// keys already stored on that object; missing keys are not a request to create them.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelRecord {
+    pub id: String,
+    pub fields: Map<String, Value>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Connection {
@@ -29,6 +39,9 @@ pub struct Connection {
     pub secret_ref: Option<String>,
     #[serde(default)]
     pub auth_env_var: Option<String>,
+    /// Edits to model objects that already exist. Empty keeps every stored field.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub model_records: Vec<ModelRecord>,
 }
 
 /// Environment name used by the launcher's child process and by profiles
@@ -803,6 +816,7 @@ mod tests {
             model: "m".into(),
             secret_ref: None,
             auth_env_var: None,
+            model_records: Vec::new(),
         });
         assert!(save_profile(&db, item, None).is_err());
         assert!(list_profiles(&db, CliId::Codex).unwrap().is_empty());

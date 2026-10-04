@@ -8,8 +8,8 @@ use std::env;
 use std::path::Path;
 
 use super::{
-    file, project_root, CliAdapter, InspectionFields, LaunchMode, McpLocation,
-    NativeCredentialRefs, PendingSecrets,
+    assign_existing_fields, file, project_root, CliAdapter, InspectionFields, LaunchMode,
+    McpLocation, NativeCredentialRefs, PendingSecrets,
 };
 use crate::credentials::CredentialStore;
 use crate::native::adapter::{NativeFile, Scope};
@@ -17,7 +17,7 @@ use crate::native::apply::{read_secret, set_json, NativeSecrets};
 use crate::native::format::FileKind;
 use crate::native::intake::NativeInspection;
 use crate::native::intake::{api_format, pi_env_name, string_at};
-use crate::native::profile::{self, Connection, RegisteredProfile};
+use crate::native::profile::{self, Connection, ModelRecord, RegisteredProfile};
 use crate::resources::mcp::{self, McpDefinition, McpTransport};
 
 pub struct Pi;
@@ -25,6 +25,23 @@ pub struct Pi;
 /// 0.99.2 and 1.0.0 share the verified auth/package/session protocols.
 pub(crate) fn version_policy() -> super::version::VersionPolicy {
     super::version::VersionPolicy { requirement: ">=0.99.2, <2.0.0".into(), excluded: &[] }
+}
+
+fn apply_model_record_edits(models: &mut [Value], records: &[ModelRecord]) {
+    if records.is_empty() {
+        return;
+    }
+    for item in models {
+        let Some(id) = item.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(record) = records.iter().find(|record| record.id == id) else {
+            continue;
+        };
+        let mut edits = record.fields.clone();
+        edits.remove("id");
+        assign_existing_fields(item, &edits);
+    }
 }
 
 #[cfg(test)]
@@ -232,6 +249,47 @@ impl CliAdapter for Pi {
         map.insert("enabled".into(), json!(enabled));
         Ok(Some(Value::Object(map)))
     }
+    fn connection_policy(&self, scope: Scope) -> crate::native::adapter::ConnectionPolicy {
+        crate::native::adapter::ConnectionPolicy {
+            api_key: if scope == Scope::Project {
+                crate::native::adapter::api_key_scope_denied(
+                    "Pi 项目层不能写入供应商密钥；请使用全局配置",
+                )
+            } else {
+                crate::native::adapter::api_key_writable()
+            },
+            provider_address: crate::native::adapter::address_configurable(),
+            projection: "provider_models",
+        }
+    }
+    fn projected_models(
+        &self,
+        _settings: &Value,
+        models: &Value,
+        provider: Option<&str>,
+    ) -> Option<Vec<ModelRecord>> {
+        let Some(provider) = provider.filter(|id| !id.is_empty()) else {
+            return Some(Vec::new());
+        };
+        let Some(list) = models
+            .get("providers")
+            .and_then(|root| root.get(provider))
+            .and_then(|entry| entry.get("models"))
+            .and_then(Value::as_array)
+        else {
+            return Some(Vec::new());
+        };
+        Some(
+            list.iter()
+                .filter_map(|item| {
+                    let id = item.get("id").and_then(Value::as_str)?.to_owned();
+                    let mut fields = item.as_object()?.clone();
+                    fields.remove("id");
+                    Some(ModelRecord { id, fields })
+                })
+                .collect(),
+        )
+    }
     fn connection_documents(
         &self,
         connection: &Connection,
@@ -302,6 +360,14 @@ impl CliAdapter for Pi {
                 &["providers", &connection.provider_id, "models"],
                 json!(values),
             );
+            if let Some(list) = models
+                .get_mut("providers")
+                .and_then(|root| root.get_mut(&connection.provider_id))
+                .and_then(|provider| provider.get_mut("models"))
+                .and_then(Value::as_array_mut)
+            {
+                apply_model_record_edits(list, &connection.model_records);
+            }
         }
         Ok(docs)
     }
@@ -341,6 +407,7 @@ impl CliAdapter for Pi {
                 }
             }
         }
+        apply_model_record_edits(next, &connection.model_records);
         Ok(())
     }
     fn write_connection_secret(

@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 
 use super::{
     format::{self},
-    profile::{self, Connection},
+    profile::{self, Connection, ModelRecord},
 };
 use crate::credentials::CredentialStore;
 use crate::domain::CliId;
@@ -17,6 +17,7 @@ pub struct NativeInspection {
     pub model: Option<String>,
     pub connection: Option<Connection>,
     pub reasoning_effort: Option<String>,
+    pub projected_models: Option<Vec<ModelRecord>>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -173,6 +174,7 @@ pub fn inspect_registered(
     let wire = fields.wire;
     let env = fields.env;
     let reasoning_effort = fields.reasoning_effort;
+    let projected_models = adapter.projected_models(&settings, &models, provider.as_deref());
     let connection = match (&provider, &model, &base, wire) {
         (Some(provider_id), Some(model), Some(base_url), Some(interface_format))
             if !provider_id.is_empty() && !model.is_empty() && !base_url.is_empty() =>
@@ -184,6 +186,7 @@ pub fn inspect_registered(
                 model: model.clone(),
                 secret_ref: None,
                 auth_env_var: env,
+                model_records: Vec::new(),
             })
         }
         _ => None,
@@ -193,6 +196,7 @@ pub fn inspect_registered(
         model,
         connection,
         reasoning_effort,
+        projected_models,
     })
 }
 
@@ -680,5 +684,62 @@ mod tests {
         assert_eq!(found.provider_id.as_deref(), Some("custom"));
         assert_eq!(found.model.as_deref(), Some("m"));
         assert!(found.connection.is_none());
+    }
+
+    #[test]
+    fn projected_models_keep_stored_fields_and_skip_sibling_catalogs() {
+        let registry = crate::adapters::Registry::builtins();
+        let opencode = inspect_registered(
+            &registry,
+            "open_code",
+            &BTreeMap::from([(
+                "settings".into(),
+                r#"{"model":"demo/m1","provider":{"demo":{"npm":"@ai-sdk/openai","name":"demo","options":{"baseURL":"https://example.test/v1"},"models":{"m1":{"name":"Custom","extra":true},"m2":{"name":"Second"}}}}}"#.into(),
+            )]),
+        )
+        .unwrap();
+        let models = opencode.projected_models.expect("OpenCode projects provider models");
+        let m1 = models.iter().find(|item| item.id == "m1").unwrap();
+        assert_eq!(m1.fields["name"], "Custom");
+        assert_eq!(m1.fields["extra"], true);
+        assert!(m1.fields.get("contextWindow").is_none());
+        assert!(models.iter().any(|item| item.id == "m2" && item.fields["name"] == "Second"));
+
+        let pi = inspect_registered(
+            &registry,
+            "pi",
+            &BTreeMap::from([
+                ("settings".into(), r#"{"defaultProvider":"demo","defaultModel":"model-a"}"#.into()),
+                ("models".into(), r#"{"providers":{"demo":{"api":"openai-responses","baseUrl":"https://example.test/v1","models":[{"id":"model-a","contextWindow":100,"cost":{"input":1}},{"id":"sibling","name":"Keep"}]}}}"#.into()),
+            ]),
+        )
+        .unwrap();
+        let models = pi.projected_models.expect("Pi projects provider models");
+        let current = models.iter().find(|item| item.id == "model-a").unwrap();
+        assert!(current.fields.get("id").is_none());
+        assert_eq!(current.fields["contextWindow"], 100);
+        assert_eq!(current.fields["cost"]["input"], 1);
+        assert!(models.iter().any(|item| item.id == "sibling" && item.fields["name"] == "Keep"));
+
+        let codex = inspect_registered(
+            &registry,
+            "codex",
+            &BTreeMap::from([(
+                "settings".into(),
+                "model = \"m\"\nmodel_provider = \"demo\"\n[model_providers.demo]\nbase_url = \"https://example.test/v1\"\nwire_api = \"responses\"\n".into(),
+            )]),
+        )
+        .unwrap();
+        assert!(codex.projected_models.is_none());
+        let kimi = inspect_registered(
+            &registry,
+            "kimi_code",
+            &BTreeMap::from([(
+                "settings".into(),
+                "default_model = \"alias\"\n[models.alias]\nprovider = \"demo\"\nmodel = \"k\"\n[providers.demo]\ntype = \"openai\"\nbase_url = \"https://example.test/v1\"\n".into(),
+            )]),
+        )
+        .unwrap();
+        assert!(kimi.projected_models.is_none(), "Kimi models stay beside providers");
     }
 }
