@@ -3,6 +3,8 @@ import type { Connection } from '../types/native';
 export type ReasoningControl = {
   label: string;
   choices: readonly [string, string][];
+  /** Value stored in the draft file, not a separate inspection result. */
+  read: (text: string) => string | null;
   update: (text: string, value: string | null) => Promise<string>;
 };
 
