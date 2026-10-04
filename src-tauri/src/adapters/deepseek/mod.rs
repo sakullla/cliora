@@ -133,6 +133,17 @@ impl CliAdapter for DeepSeek {
     fn mcp_change(&self, parsed: &Value, _location: &McpLocation, name: &str, value: Option<Value>) -> Result<crate::native::transaction::FieldChange, String> {
         mcp::change(parsed, name, value)
     }
+    fn connection_policy(&self, _scope: Scope) -> crate::native::adapter::ConnectionPolicy {
+        crate::native::adapter::ConnectionPolicy {
+            api_key: crate::native::adapter::api_key_unsupported(
+                "DeepSeek Harness 凭据管理不交付：.credentials.yaml 由官方 dsh-credentials-local 插件管理，适配器不读取也不改写",
+            ),
+            provider_address: crate::native::adapter::address_unsupported(
+                "DeepSeek Harness 原生连接写入不交付：凭据由官方插件经 .credentials.yaml 管理（UI 只写），适配器不触碰",
+            ),
+            projection: "single_connection",
+        }
+    }
     fn connection_documents(
         &self,
         _connection: &Connection,

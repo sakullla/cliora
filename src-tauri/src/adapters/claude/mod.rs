@@ -755,6 +755,7 @@ mod tests {
             model: model.into(),
             secret_ref: None,
             auth_env_var: None,
+            model_records: Vec::new(),
         }
     }
 

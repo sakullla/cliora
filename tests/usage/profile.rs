@@ -38,6 +38,7 @@ fn profile(base: &str) -> RegisteredProfile {
             model: "model".into(),
             secret_ref: Some("profile-key-1".into()),
             auth_env_var: None,
+            model_records: Vec::new(),
         }),
     }
 }

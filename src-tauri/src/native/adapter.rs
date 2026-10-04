@@ -62,6 +62,42 @@ pub struct Capability {
     pub evidence: &'static str,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionFacet {
+    pub state: &'static str,
+    pub reason: &'static str,
+}
+
+/// Scope-loaded connection contract shared with `src/types/native.ts`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionPolicy {
+    pub api_key: ConnectionFacet,
+    pub provider_address: ConnectionFacet,
+    pub projection: &'static str,
+}
+
+pub fn api_key_writable() -> ConnectionFacet {
+    ConnectionFacet { state: "writable", reason: "" }
+}
+
+pub fn api_key_scope_denied(reason: &'static str) -> ConnectionFacet {
+    ConnectionFacet { state: "scope_denied", reason }
+}
+
+pub fn api_key_unsupported(reason: &'static str) -> ConnectionFacet {
+    ConnectionFacet { state: "unsupported", reason }
+}
+
+pub fn address_configurable() -> ConnectionFacet {
+    ConnectionFacet { state: "configurable", reason: "" }
+}
+
+pub fn address_unsupported(reason: &'static str) -> ConnectionFacet {
+    ConnectionFacet { state: "unsupported", reason }
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolProbe {
@@ -79,6 +115,7 @@ pub struct ToolProbe {
     pub native_install_command: Option<String>,
     pub npm_install_command: Option<String>,
     pub provider_presets: Vec<ProviderPreset>,
+    pub connection_policy: ConnectionPolicy,
 }
 
 fn provider_presets(adapter: &dyn CliAdapter, known: bool) -> Vec<ProviderPreset> {
@@ -827,6 +864,7 @@ fn finish_probe(
         native_install_command: adapter.native_install_command(),
         npm_install_command: adapter.npm_install_command(),
         provider_presets: provider_presets(adapter, writable),
+        connection_policy: adapter.connection_policy(scope),
     })
 }
 
@@ -1170,6 +1208,43 @@ mod tests {
                 tool.name(),
                 result.installations
             );
+        }
+    }
+
+    #[test]
+    fn scope_loaded_connection_policy_reuses_adapter_reasons() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let cases = [
+            ("codex", "writable", "scope_denied", "Codex 项目层不能写入供应商密钥；请使用全局配置", "configurable", "", "current_model"),
+            ("claude_code", "writable", "writable", "", "configurable", "", "single_connection"),
+            ("grok", "writable", "scope_denied", "Grok 项目层不能写入供应商密钥；请使用全局配置", "configurable", "", "single_connection"),
+            ("pi", "writable", "scope_denied", "Pi 项目层不能写入供应商密钥；请使用全局配置", "configurable", "", "provider_models"),
+            ("open_code", "writable", "scope_denied", "OpenCode 项目共享配置不能写入明文密钥；请使用全局配置或原生登录", "configurable", "", "provider_models"),
+            ("kimi_code", "writable", "scope_denied", "Kimi Code 密钥只在用户级 config.toml 管理", "configurable", "", "single_connection"),
+            ("codebuddy", "writable", "writable", "", "unsupported", "CodeBuddy 此版本不提供第三方供应商接口接入；模型经官方网关访问", "single_connection"),
+            ("zcode", "unsupported", "unsupported", "ZCode 凭据由产品加密保管（credentials.json），不提供凭据管理", "unsupported", "ZCode 桌面端经产品内账号登录；setting.json 无文档化 API 连接字段", "single_connection"),
+            ("qoder_cn", "unsupported", "unsupported", "Qoder CN 凭据由产品登录态管理，Cliora 不读取或复制账号令牌", "unsupported", "Qoder 通过官方账号认证，settings.json 没有文档化的供应商连接字段", "single_connection"),
+            ("deepseek", "unsupported", "unsupported", "DeepSeek Harness 凭据管理不交付：.credentials.yaml 由官方 dsh-credentials-local 插件管理，适配器不读取也不改写", "unsupported", "DeepSeek Harness 原生连接写入不交付：凭据由官方插件经 .credentials.yaml 管理（UI 只写），适配器不触碰", "single_connection"),
+        ];
+        for (id, global_key, project_key, key_reason, address, address_reason, projection) in cases {
+            let registry = Registry::builtins().with_fixture_installation(id, "1.0.0");
+            for scope in [Scope::Global, Scope::Project] {
+                let policy = probe_registered(&registry, id, None, temp.path(), Some(&project), scope)
+                    .unwrap()
+                    .connection_policy;
+                let (state, reason) = if scope == Scope::Global {
+                    (global_key, if global_key == "writable" { "" } else { key_reason })
+                } else {
+                    (project_key, if project_key == "writable" { "" } else { key_reason })
+                };
+                assert_eq!(policy.api_key.state, state, "{id} {scope:?}");
+                assert_eq!(policy.api_key.reason, reason, "{id} {scope:?}");
+                assert_eq!(policy.provider_address.state, address, "{id}");
+                assert_eq!(policy.provider_address.reason, address_reason, "{id}");
+                assert_eq!(policy.projection, projection, "{id}");
+            }
         }
     }
 }

@@ -261,6 +261,19 @@ impl CliAdapter for Codex {
             Scope::Project => project?.join("AGENTS.md"),
         })
     }
+    fn connection_policy(&self, scope: Scope) -> crate::native::adapter::ConnectionPolicy {
+        crate::native::adapter::ConnectionPolicy {
+            api_key: if scope == Scope::Project {
+                crate::native::adapter::api_key_scope_denied(
+                    "Codex 项目层不能写入供应商密钥；请使用全局配置",
+                )
+            } else {
+                crate::native::adapter::api_key_writable()
+            },
+            provider_address: crate::native::adapter::address_configurable(),
+            projection: "current_model",
+        }
+    }
     fn connection_documents(
         &self,
         connection: &Connection,

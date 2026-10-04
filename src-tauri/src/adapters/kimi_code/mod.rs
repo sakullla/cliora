@@ -213,6 +213,19 @@ impl CliAdapter for KimiCode {
             Scope::Project => project?.join(".kimi-code/skills"),
         })
     }
+    fn connection_policy(&self, scope: Scope) -> crate::native::adapter::ConnectionPolicy {
+        crate::native::adapter::ConnectionPolicy {
+            api_key: if scope == Scope::Project {
+                crate::native::adapter::api_key_scope_denied(
+                    "Kimi Code 密钥只在用户级 config.toml 管理",
+                )
+            } else {
+                crate::native::adapter::api_key_writable()
+            },
+            provider_address: crate::native::adapter::address_configurable(),
+            projection: "single_connection",
+        }
+    }
     fn connection_documents(
         &self,
         connection: &Connection,
@@ -608,6 +621,7 @@ mod tests {
             model: "demo-model".into(),
             secret_ref: Some("connection-930b8796-7d77-4e70-a8ba-6209ff1272e8".into()),
             auth_env_var: None,
+            model_records: Vec::new(),
         }
     }
 
@@ -744,6 +758,7 @@ mod tests {
             model: Some("k3".into()),
             connection: Some(connection()),
             reasoning_effort: None,
+            projected_models: None,
         };
         let mut pending = Vec::new();
         let mut refs = NativeCredentialRefs::new();
@@ -772,6 +787,7 @@ mod tests {
             model: Some("k3".into()),
             connection: Some(connection()),
             reasoning_effort: None,
+            projected_models: None,
         };
         let error = KimiCode
             .import_literal_secrets(&mut files, &mut found, &mut Vec::new(), &mut NativeCredentialRefs::new())

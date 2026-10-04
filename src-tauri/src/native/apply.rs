@@ -418,6 +418,7 @@ fn apply_registered_validated_compared(
     let adapter = registry
         .get(&profile.tool)
         .ok_or("未注册的 CLI 适配器，不能应用")?;
+    adapter.reject_new_secret(profile, scope)?;
     let desired = desired_registered_documents(registry, profile, common, scope)?;
     let secrets = native_secrets_for_documents(registry, profile, scope, credentials, &desired)?;
     let integrity = transaction::integrity_key(db, credentials)?;
@@ -1038,6 +1039,7 @@ mod tests {
             model: "m1".into(),
             secret_ref: None,
             auth_env_var: Some("DEMO_KEY".into()),
+            model_records: Vec::new(),
         };
         let codex = connection_documents(CliId::Codex, &connection, Scope::Global).unwrap();
         assert_eq!(
@@ -1198,6 +1200,7 @@ mod tests {
                 model: "model-a".into(),
                 secret_ref: Some(id.into()),
                 auth_env_var: None,
+                model_records: Vec::new(),
             }),
         }
     }
@@ -1732,5 +1735,207 @@ mod tests {
         let local_after = fs::read_to_string(&local).unwrap();
         assert!(!local_after.contains("test-only-project-secret"));
         assert!(local_after.contains("enabledPlugins"));
+    }
+
+    fn record(id: &str, fields: Value) -> profile::ModelRecord {
+        profile::ModelRecord { id: id.into(), fields: fields.as_object().cloned().unwrap_or_default() }
+    }
+
+    fn save_registered(db: &Database, profile: &RegisteredProfile) {
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO native_profiles (id,tool,version,data) VALUES (?1,?2,?3,?4)
+                 ON CONFLICT(id) DO UPDATE SET data=excluded.data,version=excluded.version,tool=excluded.tool",
+                params![profile.id, profile.tool, profile.version as i64, serde_json::to_string(profile).unwrap()],
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    fn registered(tool: &str, provider: &str, model: &str, secret: Option<&str>, records: Vec<profile::ModelRecord>) -> RegisteredProfile {
+        RegisteredProfile {
+            id: format!("{tool}-save"),
+            tool: tool.into(),
+            name: tool.into(),
+            version: 1,
+            revision: String::new(),
+            inherit_common: false,
+            files: BTreeMap::new(),
+            suppressed: BTreeMap::new(),
+            authentication: profile::ProfileAuthentication::Native,
+            native_credentials: BTreeMap::new(),
+            connection: Some(Connection {
+                provider_id: provider.into(),
+                interface_format: "openai_responses".into(),
+                base_url: "https://example.test/v1".into(),
+                model: model.into(),
+                secret_ref: secret.map(str::to_owned),
+                auth_env_var: None,
+                model_records: records,
+            }),
+        }
+    }
+
+    #[test]
+    fn opencode_save_edits_existing_model_fields_and_keeps_siblings() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        let store = MemoryStore::default();
+        let path = temp.path().join("opencode.json");
+        let original = r#"{
+            "model": "existing/one",
+            "provider": {
+                "existing": {"npm": "@ai-sdk/openai-compatible", "name": "existing", "models": {"one": {"name": "Kept One"}}},
+                "demo": {
+                    "npm": "@ai-sdk/openai",
+                    "name": "demo",
+                    "options": {"baseURL": "https://old.example/v1"},
+                    "models": {
+                        "m1": {"name": "Custom M1", "extra": true},
+                        "m2": {"name": "Custom M2"}
+                    }
+                }
+            }
+        }"#;
+        fs::write(&path, original).unwrap();
+        let mut profile = registered("open_code", "demo", "m1", None, vec![record("m1", json!({"extra": false, "contextWindow": 999}))]);
+        save_registered(&db, &profile);
+        let files = [native_role("settings", &path, "json")];
+        apply_registered_validated(&crate::adapters::Registry::builtins(), &db, &store, &profile, None, &files, "global", Scope::Global, true).unwrap();
+        let first = format::parse(format::FileKind::Json, &fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(first["model"], "demo/m1");
+        assert_eq!(first["provider"]["demo"]["models"]["m1"]["name"], "Custom M1");
+        assert_eq!(first["provider"]["demo"]["models"]["m1"]["extra"], false);
+        assert!(first["provider"]["demo"]["models"]["m1"].get("contextWindow").is_none());
+        assert_eq!(first["provider"]["demo"]["models"]["m2"]["name"], "Custom M2");
+        assert_eq!(first["provider"]["existing"]["models"]["one"]["name"], "Kept One");
+        profile.connection.as_mut().unwrap().model = "m2".into();
+        profile.connection.as_mut().unwrap().model_records.clear();
+        save_registered(&db, &profile);
+        apply_registered_validated(&crate::adapters::Registry::builtins(), &db, &store, &profile, None, &files, "global", Scope::Global, false).unwrap();
+        let second = format::parse(format::FileKind::Json, &fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(second["model"], "demo/m2");
+        assert_eq!(second["provider"]["demo"]["models"]["m1"]["name"], "Custom M1");
+        assert_eq!(second["provider"]["demo"]["models"]["m1"]["extra"], false);
+        assert!(second["provider"]["demo"]["models"]["m1"].get("contextWindow").is_none());
+        assert_eq!(second["provider"]["demo"]["models"]["m2"]["name"], "Custom M2");
+        assert_eq!(second["provider"]["existing"]["models"]["one"]["name"], "Kept One");
+    }
+
+    #[test]
+    fn pi_save_edits_existing_nested_fields_without_adding_keys_or_models() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        let store = MemoryStore::default();
+        let settings = temp.path().join("settings.json");
+        let models = temp.path().join("models.json");
+        fs::write(&settings, r#"{"theme":"kept"}"#).unwrap();
+        fs::write(&models, r#"{
+            "providers": {
+                "demo": {"baseUrl":"https://old.example/v1","api":"openai-responses","models":[{"id":"model-a","contextWindow":100,"cost":{"input":1,"output":2}},{"id":"sibling","name":"Keep","contextWindow":50}]},
+                "other": {"baseUrl":"https://other.example/v1","models":[{"id":"x","name":"Other"}]}
+            }
+        }"#).unwrap();
+        let profile = registered("pi", "demo", "model-a", None, vec![record("model-a", json!({"contextWindow": 200, "cost": {"input": 9}, "missingField": true}))]);
+        save_registered(&db, &profile);
+        let files = [native_role("settings", &settings, "json"), native_role("models", &models, "jsonc")];
+        apply_registered_validated(&crate::adapters::Registry::builtins(), &db, &store, &profile, None, &files, "global", Scope::Global, true).unwrap();
+        let settings_text = fs::read_to_string(&settings).unwrap();
+        let models_value = format::parse(format::FileKind::Jsonc, &fs::read_to_string(&models).unwrap()).unwrap();
+        assert!(settings_text.contains("kept"));
+        assert_eq!(models_value["providers"]["demo"]["models"][0]["contextWindow"], 200);
+        assert_eq!(models_value["providers"]["demo"]["models"][0]["cost"]["input"], 9);
+        assert_eq!(models_value["providers"]["demo"]["models"][0]["cost"]["output"], 2);
+        assert!(models_value["providers"]["demo"]["models"][0].get("missingField").is_none());
+        assert_eq!(models_value["providers"]["demo"]["models"][1]["name"], "Keep");
+        assert_eq!(models_value["providers"]["demo"]["models"][1]["contextWindow"], 50);
+        assert_eq!(models_value["providers"]["other"]["models"][0]["name"], "Other");
+        assert_eq!(models_value["providers"]["demo"]["models"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn codex_save_changes_provider_model_and_reasoning_only() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        let store = MemoryStore::default();
+        let path = temp.path().join("config.toml");
+        fs::write(&path, "model = \"old-model\"\nmodel_provider = \"other\"\nmodel_reasoning_effort = \"low\"\nunrelated = 1\n\n[model_providers.other]\nname = \"other\"\nbase_url = \"https://other.example/v1\"\nwire_api = \"responses\"\n\n[model_providers.demo]\nname = \"demo\"\nbase_url = \"https://old.example/v1\"\nwire_api = \"responses\"\ncontext_note = \"keep-me\"\n").unwrap();
+        let mut profile = registered("codex", "demo", "gpt-new", None, vec![record("gpt-new", json!({"contextWindow": 4096}))]);
+        profile.files.insert("settings".into(), "model_reasoning_effort = \"high\"\n".into());
+        save_registered(&db, &profile);
+        apply_registered_validated(&crate::adapters::Registry::builtins(), &db, &store, &profile, None, &[native(&path)], "global", Scope::Global, true).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        let parsed = format::parse(format::FileKind::Toml, &text).unwrap();
+        assert_eq!(parsed["model"], "gpt-new");
+        assert_eq!(parsed["model_provider"], "demo");
+        assert_eq!(parsed["model_reasoning_effort"], "high");
+        assert_eq!(parsed["unrelated"], 1);
+        assert_eq!(parsed["model_providers"]["other"]["base_url"], "https://other.example/v1");
+        assert_eq!(parsed["model_providers"]["demo"]["context_note"], "keep-me");
+        assert!(!text.contains("contextWindow"));
+    }
+
+    #[test]
+    fn new_secrets_are_rejected_before_files_change_and_stored_keys_stay() {
+        let registry = crate::adapters::Registry::builtins();
+        let cases = [
+            ("codex", Scope::Project, "Codex 项目层不能写入供应商密钥；请使用全局配置"),
+            ("open_code", Scope::Project, "OpenCode 项目共享配置不能写入明文密钥；请使用全局配置或原生登录"),
+            ("pi", Scope::Project, "Pi 项目层不能写入供应商密钥；请使用全局配置"),
+            ("grok", Scope::Project, "Grok 项目层不能写入供应商密钥；请使用全局配置"),
+            ("kimi_code", Scope::Project, "Kimi Code 密钥只在用户级 config.toml 管理"),
+            ("zcode", Scope::Global, "ZCode 凭据由产品加密保管（credentials.json），不提供凭据管理"),
+            ("zcode", Scope::Project, "ZCode 凭据由产品加密保管（credentials.json），不提供凭据管理"),
+            ("qoder_cn", Scope::Global, "Qoder CN 凭据由产品登录态管理，Cliora 不读取或复制账号令牌"),
+            ("deepseek", Scope::Project, "DeepSeek Harness 凭据管理不交付：.credentials.yaml 由官方 dsh-credentials-local 插件管理，适配器不读取也不改写"),
+        ];
+        for (tool, scope, reason) in cases {
+            let temp = tempfile::tempdir().unwrap();
+            let db = Database::open(&temp.path().join("app.db")).unwrap();
+            let store = MemoryStore::default();
+            let secret_id = "connection-00000000-0000-4000-8000-000000000099";
+            let secret = format!("stored-{tool}-key");
+            store.put(secret_id, &secret).unwrap();
+            let path = temp.path().join("target.txt");
+            let sentinel = format!("sentinel-{tool}-unchanged\n");
+            fs::write(&path, &sentinel).unwrap();
+            let profile = registered(tool, "demo", "model-a", Some(secret_id), Vec::new());
+            let error = apply_registered_validated(&registry, &db, &store, &profile, None, &[native_role("settings", &path, "json")], "project:rejected", scope, true).unwrap_err();
+            assert!(error.contains(reason), "{tool}: {error}");
+            assert_eq!(fs::read_to_string(&path).unwrap(), sentinel, "{tool}");
+            assert_eq!(store.get(secret_id).unwrap(), secret, "{tool}");
+        }
+        let mut without_key = registered("codex", "demo", "model-a", None, Vec::new());
+        registry.get("codex").unwrap().reject_new_secret(&without_key, Scope::Project).unwrap();
+        without_key.connection.as_mut().unwrap().secret_ref = Some(String::new());
+        registry.get("codex").unwrap().reject_new_secret(&without_key, Scope::Project).unwrap();
+        let claude = registered("claude_code", "anthropic", "model-a", Some("connection-00000000-0000-4000-8000-000000000099"), Vec::new());
+        registry.get("claude_code").unwrap().reject_new_secret(&claude, Scope::Project).unwrap();
+    }
+
+    #[test]
+    fn codebuddy_writes_official_env_key_without_a_provider_address() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        let store = MemoryStore::default();
+        let secret_id = "connection-00000000-0000-4000-8000-0000000000cb";
+        store.put(secret_id, "cb-test-key").unwrap();
+        let path = temp.path().join("settings.json");
+        fs::write(&path, r#"{"model":"keep-model","env":{"CODEBUDDY_BASE_URL":"https://gateway.example"}}"#).unwrap();
+        let mut profile = registered("codebuddy", "third-party", "should-not-matter", Some(secret_id), Vec::new());
+        profile.connection.as_mut().unwrap().base_url = "https://third-party.example/v1".into();
+        profile.connection.as_mut().unwrap().interface_format = "openai_completions".into();
+        save_registered(&db, &profile);
+        apply_registered_validated(&crate::adapters::Registry::builtins(), &db, &store, &profile, None, &[native_role("settings", &path, "json")], "global", Scope::Global, false).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        let parsed = format::parse(format::FileKind::Json, &text).unwrap();
+        assert_eq!(parsed["model"], "keep-model");
+        assert_eq!(parsed["env"]["CODEBUDDY_BASE_URL"], "https://gateway.example");
+        assert_eq!(parsed["env"]["CODEBUDDY_API_KEY"], "cb-test-key");
+        assert!(!text.contains("third-party"));
+        assert!(!text.contains("should-not-matter"));
+        assert_eq!(store.get(secret_id).unwrap(), "cb-test-key");
     }
 }

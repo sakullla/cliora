@@ -55,6 +55,7 @@ fn encrypted_bundle_restores_on_fresh_device_without_identity_or_paths_and_is_id
             model: "gpt-6".into(),
             secret_ref: Some("connection-original".into()),
             auth_env_var: None,
+            model_records: Vec::new(),
         }),
         native_credentials: BTreeMap::new(),
     };
@@ -338,6 +339,7 @@ fn import_rechecks_digest_inside_the_write_transaction() {
                     model: "gpt-6".into(),
                     secret_ref: None,
                     auth_env_var: None,
+                    model_records: Vec::new(),
                 }),
                 native_credentials: BTreeMap::new(),
             },

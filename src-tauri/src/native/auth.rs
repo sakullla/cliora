@@ -137,6 +137,7 @@ mod tests {
             model: "model".into(),
             secret_ref: Some(reference.into()),
             auth_env_var: None,
+            model_records: Vec::new(),
         };
         #[cfg(windows)]
         let mut child = {

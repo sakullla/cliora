@@ -8,8 +8,8 @@ use std::env;
 use std::path::{Path, PathBuf};
 
 use super::{
-    file, project_root, CliAdapter, InspectionFields, LaunchMode, McpLocation,
-    NativeCredentialRefs, PendingSecrets,
+    assign_existing_fields, file, pointer_token, project_root, CliAdapter, InspectionFields,
+    LaunchMode, McpLocation, NativeCredentialRefs, PendingSecrets,
 };
 use crate::credentials::CredentialStore;
 use crate::native::adapter::{NativeFile, Scope};
@@ -17,10 +17,104 @@ use crate::native::apply::{read_secret, set_json, NativeSecrets};
 use crate::native::format::FileKind;
 use crate::native::intake::NativeInspection;
 use crate::native::intake::{api_format, string_at};
-use crate::native::profile::{self, Connection, RegisteredProfile};
+use crate::native::profile::{self, Connection, ModelRecord, RegisteredProfile};
 use crate::resources::mcp::{self, McpDefinition, McpTransport};
 
 pub struct OpenCode;
+
+fn unescape_pointer(segment: &str) -> String {
+    segment.replace("~1", "/").replace("~0", "~")
+}
+
+fn insert_path(root: &mut Value, path: &[String], value: Value) {
+    if path.is_empty() || !root.is_object() {
+        return;
+    }
+    let mut cursor = root;
+    for segment in &path[..path.len() - 1] {
+        if !cursor.get(segment).is_some_and(Value::is_object) {
+            cursor
+                .as_object_mut()
+                .unwrap()
+                .insert(segment.clone(), json!({}));
+        }
+        cursor = cursor.get_mut(segment).unwrap();
+    }
+    cursor
+        .as_object_mut()
+        .unwrap()
+        .insert(path[path.len() - 1].clone(), value);
+}
+
+fn model_from_managed(fields: &BTreeMap<String, Value>, prefix: &str) -> Value {
+    let mut model = json!({});
+    let needle = format!("{prefix}/");
+    for (pointer, value) in fields {
+        let Some(rest) = pointer.strip_prefix(&needle) else {
+            continue;
+        };
+        if rest.is_empty() {
+            continue;
+        }
+        let path: Vec<String> = rest.split('/').map(unescape_pointer).collect();
+        insert_path(&mut model, &path, value.clone());
+    }
+    model
+}
+
+fn merge_missing(target: &mut serde_json::Map<String, Value>, source: &serde_json::Map<String, Value>) {
+    for (key, value) in source {
+        if !target.contains_key(key) {
+            target.insert(key.clone(), value.clone());
+            continue;
+        }
+        let existing = target.get_mut(key).unwrap();
+        if let (Some(existing_map), Some(value_map)) = (existing.as_object_mut(), value.as_object()) {
+            merge_missing(existing_map, value_map);
+        }
+    }
+}
+
+fn write_leaves(fields: &mut BTreeMap<String, Value>, prefix: &str, value: &Value, path: &mut Vec<String>) {
+    match value {
+        Value::Object(map) if !map.is_empty() => {
+            for (key, child) in map {
+                path.push(key.clone());
+                write_leaves(fields, prefix, child, path);
+                path.pop();
+            }
+        }
+        _ if !path.is_empty() => {
+            let mut pointer = String::from(prefix);
+            for segment in path.iter() {
+                pointer.push('/');
+                pointer.push_str(&pointer_token(segment));
+            }
+            fields.insert(pointer, value.clone());
+        }
+        _ => {}
+    }
+}
+
+fn replace_model_fields(fields: &mut BTreeMap<String, Value>, prefix: &str, model: &Value) {
+    let needle = format!("{prefix}/");
+    fields.retain(|key, _| !key.starts_with(&needle));
+    write_leaves(fields, prefix, model, &mut Vec::new());
+}
+
+fn draft_models(profile: &RegisteredProfile, provider: &str) -> Result<serde_json::Map<String, Value>, String> {
+    let Some(text) = profile.files.get("settings") else {
+        return Ok(serde_json::Map::new());
+    };
+    let parsed = crate::native::format::parse(FileKind::Jsonc, text)?;
+    Ok(parsed
+        .get("provider")
+        .and_then(|root| root.get(provider))
+        .and_then(|entry| entry.get("models"))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default())
+}
 
 /// OpenCode follows `XDG_CONFIG_HOME` for the signed-in user. A caller-supplied
 /// home that is not the real user home (tests, isolated profiles) stays under
@@ -272,6 +366,46 @@ impl CliAdapter for OpenCode {
             Scope::Project => project?.join("AGENTS.md"),
         })
     }
+    fn connection_policy(&self, scope: Scope) -> crate::native::adapter::ConnectionPolicy {
+        crate::native::adapter::ConnectionPolicy {
+            api_key: if scope == Scope::Project {
+                crate::native::adapter::api_key_scope_denied(
+                    "OpenCode 项目共享配置不能写入明文密钥；请使用全局配置或原生登录",
+                )
+            } else {
+                crate::native::adapter::api_key_writable()
+            },
+            provider_address: crate::native::adapter::address_configurable(),
+            projection: "provider_models",
+        }
+    }
+    fn projected_models(
+        &self,
+        settings: &Value,
+        _models: &Value,
+        provider: Option<&str>,
+    ) -> Option<Vec<ModelRecord>> {
+        let Some(provider) = provider.filter(|id| !id.is_empty()) else {
+            return Some(Vec::new());
+        };
+        let Some(models) = settings
+            .get("provider")
+            .and_then(|root| root.get(provider))
+            .and_then(|entry| entry.get("models"))
+            .and_then(Value::as_object)
+        else {
+            return Some(Vec::new());
+        };
+        Some(
+            models
+                .iter()
+                .map(|(id, fields)| ModelRecord {
+                    id: id.clone(),
+                    fields: fields.as_object().cloned().unwrap_or_default(),
+                })
+                .collect(),
+        )
+    }
     fn connection_documents(
         &self,
         connection: &Connection,
@@ -315,6 +449,100 @@ impl CliAdapter for OpenCode {
             );
         }
         Ok(BTreeMap::from([("settings".into(), settings)]))
+    }
+    fn connection_documents_for_existing(
+        &self,
+        connection: &Connection,
+        scope: Scope,
+        existing: &BTreeMap<String, Value>,
+    ) -> Result<BTreeMap<String, Value>, String> {
+        let mut docs = self.connection_documents(connection, scope)?;
+        let draft = existing
+            .get("settings")
+            .and_then(|root| root.get("provider"))
+            .and_then(|root| root.get(&connection.provider_id))
+            .and_then(|entry| entry.get("models"))
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        let Some(models) = docs
+            .get_mut("settings")
+            .and_then(|root| root.get_mut("provider"))
+            .and_then(|root| root.get_mut(&connection.provider_id))
+            .and_then(|entry| entry.get_mut("models"))
+            .and_then(Value::as_object_mut)
+        else {
+            return Ok(docs);
+        };
+        if let Some(current) = draft.get(&connection.model) {
+            models.insert(connection.model.clone(), current.clone());
+        }
+        for (id, value) in &draft {
+            if id != &connection.model {
+                models.insert(id.clone(), value.clone());
+            }
+        }
+        for (id, model) in models.iter_mut() {
+            if let Some(record) = connection.model_records.iter().find(|record| &record.id == id) {
+                assign_existing_fields(model, &record.fields);
+            }
+        }
+        Ok(docs)
+    }
+    fn preserve_native_fields(
+        &self,
+        role: &str,
+        original: &Value,
+        fields: &mut BTreeMap<String, Value>,
+        profile: &RegisteredProfile,
+    ) -> Result<(), String> {
+        if role != "settings" {
+            return Ok(());
+        }
+        let Some(connection) = &profile.connection else {
+            return Ok(());
+        };
+        let Some(disk_models) = original
+            .get("provider")
+            .and_then(|providers| providers.get(&connection.provider_id))
+            .and_then(|provider| provider.get("models"))
+            .and_then(Value::as_object)
+        else {
+            return Ok(());
+        };
+        let draft = draft_models(profile, &connection.provider_id)?;
+        let provider_token = pointer_token(&connection.provider_id);
+        for (model_id, disk_model) in disk_models {
+            let Some(disk_object) = disk_model.as_object() else {
+                continue;
+            };
+            let prefix = format!("/provider/{provider_token}/models/{}", pointer_token(model_id));
+            let mut model = model_from_managed(fields, &prefix);
+            if let Some(target) = model.as_object_mut() {
+                merge_missing(target, disk_object);
+            }
+            let edited = connection
+                .model_records
+                .iter()
+                .find(|record| &record.id == model_id);
+            let name_edited = edited.is_some_and(|record| record.fields.contains_key("name"));
+            if !draft.contains_key(model_id) && !name_edited {
+                let model_map = model.as_object_mut().unwrap();
+                match disk_model.get("name") {
+                    Some(name) => {
+                        model_map.insert("name".into(), name.clone());
+                    }
+                    None => {
+                        model_map.remove("name");
+                    }
+                }
+            }
+            if let Some(record) = edited {
+                assign_existing_fields(&mut model, &record.fields);
+            }
+            replace_model_fields(fields, &prefix, &model);
+        }
+        Ok(())
     }
     fn write_connection_secret(
         &self,

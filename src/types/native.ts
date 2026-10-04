@@ -28,8 +28,13 @@ export type InterfaceFormat = 'openai_completions' | 'openai_responses' | 'anthr
 export type Installation = { path: string; version: string | null; source: string; status: 'available' | 'probe_failed'; detail: string | null };
 export type NativeFile = { role: string; path: string; format: 'toml' | 'json' | 'jsonc' | 'yaml'; writable: boolean; reason: string | null; sensitive: boolean };
 export type Capability = { state: 'supported' | 'unknown' | 'unsupported'; reason: string; evidence: string };
-export type ToolProbe = { tool: CliId; installations: Installation[]; selectedPath: string | null; nativeFiles: NativeFile[]; nativeWrites: Capability; interfaceFormats: InterfaceFormat[]; installUrl: string; upgradeHint: string; dependencies: { name: string; status: 'found' | 'missing' | 'outdated'; detail: string; helpUrl: string }[]; installCommand: string | null; upgradeCommand: string | null; nativeInstallCommand: string | null; npmInstallCommand: string | null; providerPresets: { id: string; label: string; baseUrl: string; interfaceFormat: InterfaceFormat; sourceUrl: string }[] };
-export type Connection = { providerId: string; interfaceFormat: InterfaceFormat | string; baseUrl: string; model: string; secretRef: string | null; authEnvVar: string | null };
+export type ApiKeyWrite = { state: 'writable' | 'scope_denied' | 'unsupported'; reason: string };
+export type ProviderAddressWrite = { state: 'configurable' | 'unsupported'; reason: string };
+export type ConnectionProjection = 'provider_models' | 'current_model' | 'single_connection';
+export type ConnectionPolicy = { apiKey: ApiKeyWrite; providerAddress: ProviderAddressWrite; projection: ConnectionProjection };
+export type ModelRecord = { id: string; fields: Record<string, unknown> };
+export type ToolProbe = { tool: CliId; installations: Installation[]; selectedPath: string | null; nativeFiles: NativeFile[]; nativeWrites: Capability; interfaceFormats: InterfaceFormat[]; installUrl: string; upgradeHint: string; dependencies: { name: string; status: 'found' | 'missing' | 'outdated'; detail: string; helpUrl: string }[]; installCommand: string | null; upgradeCommand: string | null; nativeInstallCommand: string | null; npmInstallCommand: string | null; providerPresets: { id: string; label: string; baseUrl: string; interfaceFormat: InterfaceFormat; sourceUrl: string }[]; connectionPolicy: ConnectionPolicy };
+export type Connection = { providerId: string; interfaceFormat: InterfaceFormat | string; baseUrl: string; model: string; secretRef: string | null; authEnvVar: string | null; modelRecords?: ModelRecord[] };
 export type ProfileAuthentication = { kind: 'native' | 'api_key' | 'rebind_required' } | { kind: 'oauth'; accountId: string };
 export type NativeProfile = { authentication?: ProfileAuthentication; id: string; tool: CliId; name: string; version: number; revision?: string; inheritCommon: boolean; files: Record<string, string>; suppressed: Record<string, string[]>; connection: Connection | null; nativeCredentials: Record<string, Record<string, string>> };
 export type RegisteredProfile = Omit<NativeProfile, 'tool'> & { tool: string };
@@ -51,7 +56,7 @@ export type ApplyOutcome = { transactionId: string; changedFiles: string[]; stat
 export type ModelDirectory = { models: string[]; status: 'ready' | 'empty' | 'stale' | 'error'; fetchedAt: number | null; error: string | null; source: string };
 export type CheckStep = { state: 'passed' | 'partial' | 'failed' | 'skipped'; message: string };
 export type ConnectionCheck = { format: CheckStep; connectivity: CheckStep; modelRequest: CheckStep };
-export type NativeInspection = { providerId: string | null; model: string | null; connection: Connection | null; reasoningEffort: string | null };
+export type NativeInspection = { providerId: string | null; model: string | null; connection: Connection | null; reasoningEffort: string | null; projectedModels: ModelRecord[] | null };
 export type NativeImport = { files: Record<string, string>; inspection: NativeInspection; migratedSecret: boolean; nativeCredentials: Record<string, Record<string, string>> };
 
 export function emptyProfile(tool: CliId): NativeProfile {

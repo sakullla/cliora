@@ -257,6 +257,7 @@ fn sixth_adapter_uses_the_same_probe_native_transaction_and_launch_orchestration
                 model: "named-from-connection".into(),
                 secret_ref: None,
                 auth_env_var: None,
+                model_records: Vec::new(),
             }),
             authentication: crate::native::profile::ProfileAuthentication::Native,
             native_credentials: BTreeMap::new(),
@@ -320,6 +321,7 @@ fn sixth_adapter_uses_the_same_probe_native_transaction_and_launch_orchestration
         model: "m".into(),
         secret_ref: None,
         auth_env_var: None,
+        model_records: Vec::new(),
     };
     let check = crate::native::models::test_registered_connection(
         &registry,

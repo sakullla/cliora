@@ -627,6 +627,7 @@ mod tests {
             model: "manual".into(),
             secret_ref: None,
             auth_env_var: None,
+            model_records: Vec::new(),
         };
         let result = list_models(&db, &NoCredential, &connection, true, "").unwrap();
         assert_eq!(result.models, vec!["alpha", "beta", "gamma"]);
@@ -650,6 +651,7 @@ mod tests {
             model: "hand-entered".into(),
             secret_ref: None,
             auth_env_var: None,
+            model_records: Vec::new(),
         };
         let result = list_models(&db, &NoCredential, &connection, true, "").unwrap();
         assert_eq!(result.status, "error");
@@ -666,6 +668,7 @@ mod tests {
             model: "manual".into(),
             secret_ref: None,
             auth_env_var: None,
+            model_records: Vec::new(),
         };
         assert_eq!(endpoint(&connection).unwrap().path(), "/v1/models");
         connection.base_url.push_str("/v1");
@@ -681,6 +684,7 @@ mod tests {
             model: "manual".into(),
             secret_ref: None,
             auth_env_var: None,
+            model_records: Vec::new(),
         };
         let message = endpoint(&site).unwrap_err();
         assert!(message.contains("https://open.bigmodel.cn/api/paas/v4"), "{message}");
@@ -711,6 +715,7 @@ mod tests {
                 model: "manual".into(),
                 secret_ref: None,
                 auth_env_var: None,
+                model_records: Vec::new(),
             };
             let (url, auth) = directory(&connection).unwrap();
             assert_eq!(url.as_str(), "https://api.deepseek.com/models", "{base}");
@@ -753,6 +758,7 @@ mod tests {
             model: "manual".into(),
             secret_ref: Some("connection-11111111-1111-1111-1111-111111111111".into()),
             auth_env_var: None,
+            model_records: Vec::new(),
         };
         let result = list_models(&db, &Key, &connection, true, "").unwrap();
         assert_eq!(result.status, "error");
@@ -808,6 +814,7 @@ mod tests {
             model: "tiny".into(),
             secret_ref: None,
             auth_env_var: None,
+            model_records: Vec::new(),
         };
         let free = test_connection(CliId::Codex, &connection, &NoCredential, false);
         assert_eq!(free.format.state, "passed");
@@ -899,6 +906,7 @@ mod tests {
             model: "tiny".into(),
             secret_ref: None,
             auth_env_var: None,
+            model_records: Vec::new(),
         };
         let checked = test_connection(CliId::Codex, &connection, &NoCredential, true);
         assert_eq!(checked.format.state, "passed");
@@ -945,6 +953,7 @@ mod tests {
             model: "manual".into(),
             secret_ref: None,
             auth_env_var: None,
+            model_records: Vec::new(),
         };
         assert_eq!(
             list_models(&db, &NoCredential, &connection, true, "")

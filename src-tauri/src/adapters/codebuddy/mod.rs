@@ -21,7 +21,7 @@ use std::collections::BTreeMap;
 use std::env;
 use std::path::{Path, PathBuf};
 
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use super::{
     file, project_root, CliAdapter, InspectionFields, LaunchMode, McpLocation,
@@ -190,12 +190,21 @@ impl CliAdapter for CodeBuddy {
             Scope::Project => None,
         }
     }
+    fn connection_policy(&self, _scope: Scope) -> crate::native::adapter::ConnectionPolicy {
+        crate::native::adapter::ConnectionPolicy {
+            api_key: crate::native::adapter::api_key_writable(),
+            provider_address: crate::native::adapter::address_unsupported(
+                "CodeBuddy 此版本不提供第三方供应商接口接入；模型经官方网关访问",
+            ),
+            projection: "single_connection",
+        }
+    }
     fn connection_documents(
         &self,
         _connection: &Connection,
         _scope: Scope,
     ) -> Result<BTreeMap<String, Value>, String> {
-        Err("CodeBuddy 此版本不提供第三方供应商接口接入；模型经官方网关访问".into())
+        Ok(BTreeMap::from([("settings".into(), json!({}))]))
     }
     fn write_connection_secret(
         &self,
@@ -586,6 +595,7 @@ mod tests {
                 model: "m".into(),
                 secret_ref: Some("connection-00000000-0000-0000-0000-000000000001".into()),
                 auth_env_var: Some("CODEBUDDY_WRONG_NAME".into()),
+                model_records: Vec::new(),
             }),
             native_credentials: BTreeMap::new(),
         };

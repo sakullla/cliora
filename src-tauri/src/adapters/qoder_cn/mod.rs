@@ -232,6 +232,17 @@ impl CliAdapter for QoderAdapter {
             Scope::Project => project?.join(self.directory).join("skills"),
         })
     }
+    fn connection_policy(&self, _scope: Scope) -> crate::native::adapter::ConnectionPolicy {
+        crate::native::adapter::ConnectionPolicy {
+            api_key: crate::native::adapter::api_key_unsupported(
+                "Qoder CN 凭据由产品登录态管理，Cliora 不读取或复制账号令牌",
+            ),
+            provider_address: crate::native::adapter::address_unsupported(
+                "Qoder 通过官方账号认证，settings.json 没有文档化的供应商连接字段",
+            ),
+            projection: "single_connection",
+        }
+    }
     fn connection_documents(
         &self,
         _connection: &Connection,
