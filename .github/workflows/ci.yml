@@ -43,6 +43,7 @@ jobs:
   rust:
     name: Rust tests and clippy
     runs-on: ubuntu-22.04
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -65,9 +66,11 @@ jobs:
           cache-bin: false
 
       - name: Test
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        timeout-minutes: 15
+        run: timeout --signal=TERM --kill-after=15s 12m cargo test --manifest-path src-tauri/Cargo.toml
 
       - name: Clippy
+        timeout-minutes: 10
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets
 
   rust-macos:
