@@ -500,6 +500,58 @@ test('subscription profiles are grouped apart and quota is added from the row me
   await expect(page.getByRole('dialog', { name: '额度查询设置' })).toBeVisible();
 });
 
+test('the profile row menu stays fully clickable past the card edge', async ({ page }) => {
+  await page.addInitScript(() => {
+    const connection = { providerId: 'p', interfaceFormat: 'openai_responses', baseUrl: 'https://cpa.example.test/v1', model: 'devin/swe-2', secretRef: null, authEnvVar: null };
+    const profiles = [{ id: 'live', tool: 'codex', name: '新配置', version: 1, revision: 'a', inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection }];
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_INTERNALS__: { invoke: async (command: string) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: ['openai_responses'] }], managedIds: ['codex'], preservedUnknown: [] };
+        if (command === 'list_projects' || command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_skill_recovery_issues' || command === 'scan_native_skills' || command === 'list_native_mcp' || command === 'list_usage_queries' || command === 'list_usage_cache') return [];
+        if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
+        if (command === 'get_tray_status') return { available: false, error: null };
+        if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+        if (command === 'get_registered_tool_workspace') return {
+          probe: { selectedPath: 'C:/codex.cmd', installations: [], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: ['openai_responses'], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '' },
+          profiles, binding: { scopeKey: 'global', tool: 'codex', profileId: 'live', profileVersion: 1, managed: {} }, snapshots: [], recoveryNeeded: [], common: null, customPath: null,
+        };
+        if (command === 'usage_presets') return [];
+        return null;
+      } },
+    });
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('button', { name: '新配置 更多操作' }).click();
+  const menu = page.getByRole('menu');
+  await expect(menu.getByRole('menuitem', { name: '修改配置' })).toBeVisible();
+  await expect(menu.getByRole('menuitem', { name: '删除配置' })).toBeVisible();
+  const hit = await menu.evaluate((node) => {
+    const menuRect = node.getBoundingClientRect();
+    const list = document.querySelector('[aria-label="配置列表"]');
+    const listRect = list?.getBoundingClientRect();
+    const points = [
+      [menuRect.left + menuRect.width / 2, menuRect.top + 8],
+      [menuRect.left + menuRect.width / 2, menuRect.top + menuRect.height / 2],
+      [menuRect.left + 12, menuRect.bottom - 8],
+      [menuRect.right - 12, menuRect.bottom - 8],
+    ];
+    return {
+      escapes: !!listRect && menuRect.bottom > listRect.bottom + 4,
+      covered: points.some(([x, y]) => {
+        const target = document.elementFromPoint(x, y);
+        return !target || !node.contains(target);
+      }),
+    };
+  });
+  expect(hit.escapes).toBe(true);
+  expect(hit.covered).toBe(false);
+  await menu.getByRole('menuitem', { name: '修改配置' }).click();
+  await expect(page.getByRole('dialog', { name: '修改配置' })).toBeVisible();
+});
+
 test('a long configuration list can be searched without growing the page', async ({ page }) => {
   await page.addInitScript(() => {
     const applied = { id: 'p0' };
