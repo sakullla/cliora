@@ -132,6 +132,15 @@ impl Preferences {
         &self.unknown_managed_tools
     }
 
+    /// Enum-managed and registered adapters share one string-ID view for registry consumers.
+    pub fn managed_tool_ids(&self) -> Vec<String> {
+        self.managed_tools
+            .iter()
+            .map(|tool| tool.stable_id().to_owned())
+            .chain(self.unknown_managed_tools.iter().cloned())
+            .collect()
+    }
+
     pub fn set_managed(&mut self, ids: &[CliId]) {
         self.managed_tools = CliId::ALL
             .into_iter()

@@ -969,3 +969,17 @@ fn copied_and_direct_resume_use_original_directory_after_project_relink() {
     }).unwrap();
     assert_eq!(direct.directory, original_dir.canonicalize().unwrap());
 }
+
+#[test]
+fn registered_string_tools_join_the_managed_history_scan() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("app.db")).unwrap();
+    let registry = Registry::builtins();
+    let reports = refresh_controlled(&db, &registry, temp.path(), &["kimi_code".to_string()], &|| false).unwrap();
+    let tools: Vec<&str> = reports.iter().map(|report| report.tool_id.as_str()).collect();
+    assert!(tools.contains(&"kimi_code"));
+    assert!(!tools.contains(&"codex"));
+    assert!(!tools.contains(&"qoder"));
+    let scanned = scans(&db).unwrap();
+    assert!(scanned.iter().any(|status| status.tool_id == "kimi_code"));
+}
