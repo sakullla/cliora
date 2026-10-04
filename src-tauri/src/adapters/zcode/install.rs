@@ -64,13 +64,20 @@ fn protocol_executable() -> Option<PathBuf> {
     parse_protocol_executable(&format!("REG_SZ {command}"))
 }
 
+// Registry output contains Windows paths even when sanitized fixtures are
+// parsed on another platform. Do not use the host's separator semantics.
+fn windows_parent(path: &str) -> Option<PathBuf> {
+    let end = path.rfind(['\\', '/'])?;
+    (end > 0).then(|| PathBuf::from(&path[..end]))
+}
+
 /// Marker 2: the per-user (or per-machine) uninstall entry. Returns the install
 /// directory plus `DisplayVersion` when the table provides one.
 fn uninstall_entry() -> Option<(PathBuf, Option<String>)> {
     let record = crate::windows_registry::application(|name| name.trim_start().starts_with("ZCode"))?;
     let command = record.uninstall?;
     let path = command.split('"').nth(1)?;
-    Some((Path::new(path).parent()?.to_path_buf(), record.version))
+    Some((windows_parent(path)?, record.version))
 }
 
 pub(crate) fn installations(home: &Path) -> Vec<crate::native::adapter::Installation> {
@@ -183,11 +190,10 @@ pub(crate) fn parse_uninstall_entry(output: &str) -> Option<(PathBuf, Option<Str
             continue;
         };
         // "C:\...\ZCode\Uninstall ZCode.exe" /currentuser -> install root.
-        let uninstaller = Path::new(&after[..end]);
-        let Some(directory) = uninstaller.parent() else {
+        let Some(directory) = windows_parent(&after[..end]) else {
             continue;
         };
-        return Some((directory.to_path_buf(), version));
+        return Some((directory, version));
     }
     None
 }

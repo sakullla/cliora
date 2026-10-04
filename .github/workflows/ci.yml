@@ -67,7 +67,7 @@ jobs:
 
       - name: Test
         timeout-minutes: 15
-        run: timeout --signal=TERM --kill-after=15s 12m cargo test --manifest-path src-tauri/Cargo.toml
+        run: /usr/bin/time -v timeout --signal=TERM --kill-after=15s 12m cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=4
 
       - name: Clippy
         timeout-minutes: 10
