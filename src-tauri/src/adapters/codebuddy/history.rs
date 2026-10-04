@@ -1,16 +1,20 @@
 use std::collections::HashSet;
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
 use crate::history::usage::{self, TokenCounts};
 use crate::history::{
-    discover_jsonl_controlled, raw_string_after, read_jsonl_filtered, text_content, timestamp,
-    valid_native_id, HistorySource, ParsedSession, UsageEvent,
+    check_cancelled, discover_jsonl_controlled, raw_string_after, read_jsonl_filtered,
+    source_fingerprint_controlled, text_content, timestamp, valid_native_id, HistorySource,
+    ParsedSession, UsageEvent,
 };
 
 /// Sessions live in `~/.codebuddy/projects/<workspace-slug>/<session-id>.jsonl`
-/// (verified on 2.161.1). The sibling `<session-id>/tool-results` directories
+/// (verified on 2.161.1). The session's subagent streams live in the sibling
+/// `<session-id>/subagents/agent-*.jsonl` wires and are folded into the parent
+/// session for usage. The sibling `<session-id>/tool-results` directories
 /// never hold session logs, and the top-level `history.jsonl` is a prompt
 /// history, not a session transcript, so only uuid-named files are accepted.
 pub fn sources(home: &Path) -> Result<Vec<HistorySource>, String> {
@@ -36,11 +40,65 @@ pub fn sources_controlled(
         cancelled,
     )?;
     // Adapter-local parser version: existing indexes are rebuilt once per
-    // parser change even when the native file itself has not changed.
+    // parser change even when the native file itself has not changed. The
+    // fingerprint also covers the session's subagent wires, so a later
+    // subagent run reindexes the parent session.
     for source in &mut sources {
-        source.fingerprint = format!("codebuddy-session-v1|{}", source.fingerprint);
+        let mut parts = vec![source.fingerprint.clone()];
+        let mut error = source.fingerprint_error.take();
+        for wire in subagent_wires(&source.path, cancelled)? {
+            match source_fingerprint_controlled(&wire, cancelled) {
+                Ok(stamp) => parts.push(stamp),
+                Err(message) => {
+                    error = Some(message);
+                    break;
+                }
+            }
+        }
+        if let Some(message) = error {
+            source.fingerprint = String::new();
+            source.fingerprint_error = Some(message);
+        } else {
+            source.fingerprint = format!("codebuddy-session-v2|{}", parts.join("|"));
+        }
     }
     Ok(sources)
+}
+
+/// Subagent wires of one session: `projects/<slug>/<session-id>/subagents/
+/// agent-*.jsonl`. Rows inside carry the subagent's own session id, so the
+/// parent linkage is positional (the session-id directory name).
+fn subagent_wires(session_file: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<PathBuf>, String> {
+    check_cancelled(cancelled)?;
+    let Some(stem) = session_file.file_stem().and_then(|value| value.to_str()) else {
+        return Ok(Vec::new());
+    };
+    let Some(directory) = session_file
+        .parent()
+        .map(|parent| parent.join(stem).join("subagents"))
+    else {
+        return Ok(Vec::new());
+    };
+    if !directory.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut wires = Vec::new();
+    for entry in fs::read_dir(&directory).map_err(|error| error.to_string())? {
+        check_cancelled(cancelled)?;
+        let entry = entry.map_err(|error| error.to_string())?;
+        let path = entry.path();
+        if entry.file_type().map_err(|error| error.to_string())?.is_file()
+            && path.extension().is_some_and(|value| value == "jsonl")
+            && path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("agent-"))
+        {
+            wires.push(path);
+        }
+    }
+    wires.sort();
+    Ok(wires)
 }
 
 pub fn parse(source: &HistorySource) -> Result<ParsedSession, String> {
@@ -194,6 +252,63 @@ pub fn parse_controlled(
         }
     })?;
     session.partial |= partial;
+    // Subagent wires carry their own session ids and conversations, so they
+    // never contribute transcript rows or identity; their billed calls join
+    // the parent session total under agent-scoped event ids.
+    for wire in subagent_wires(&source.path, cancelled)? {
+        check_cancelled(cancelled)?;
+        let agent = wire
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .unwrap_or("agent")
+            .to_owned();
+        let wire_source = HistorySource {
+            path: wire,
+            native_id: None,
+            fingerprint: String::new(),
+            fingerprint_error: None,
+        };
+        let read = read_jsonl_filtered(&wire_source, cancelled, skip_row, |line, row| {
+            if row.get("type").and_then(Value::as_str) != Some("message")
+                || row.get("role").and_then(Value::as_str) != Some("assistant")
+            {
+                return;
+            }
+            let provider = row.get("providerData");
+            let model = provider
+                .and_then(|data| data.get("model"))
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let counts = provider
+                .and_then(|data| data.get("usage"))
+                .and_then(usage_counts)
+                .map(usage::clamp_cache_inside_input);
+            if let Some(counts) = counts.filter(|counts| usage::active(*counts)) {
+                let message_id = row
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| format!("line-{line}"));
+                let event = format!("{agent}:message:{message_id}");
+                if records.insert(event.clone()) {
+                    session.usage.push(UsageEvent {
+                        id: event,
+                        model: model.or_else(|| session.model.clone()),
+                        timestamp: row.get("timestamp").and_then(timestamp),
+                        input: Some(counts.input),
+                        output: Some(counts.output),
+                        cache_read: Some(counts.read),
+                        cache_write: Some(counts.write),
+                        input_includes_cache: true,
+                    });
+                }
+            }
+        });
+        match read {
+            Ok(agent_partial) => session.partial |= agent_partial,
+            Err(_) => session.partial = true,
+        }
+    }
     session.finish(source)
 }
 
@@ -230,7 +345,7 @@ mod tests {
         fs::write(projects.join("scratch.txt"), "{}\n").unwrap();
         let sources = sources(home.path()).unwrap();
         assert_eq!(sources.len(), 1);
-        assert!(sources[0].fingerprint.starts_with("codebuddy-session-v1|"));
+        assert!(sources[0].fingerprint.starts_with("codebuddy-session-v2|"));
         assert!(sources[0]
             .path
             .file_name()
@@ -283,5 +398,90 @@ mod tests {
             br#"{"id":"x","type":"message","role":"user","content":[]}"#
         ));
         assert!(!skip_row(br#"{"id":"x"}"#));
+    }
+
+    #[test]
+    fn subagent_wire_usage_joins_the_parent_session_total() {
+        let temp = tempfile::tempdir().unwrap();
+        let projects = temp.path().join(".codebuddy/projects/demo-workspace");
+        let session_id = "0aa0fb40-0b9c-74c9-8d7c-cd5d630dc6f0";
+        fs::create_dir_all(projects.join(format!("{session_id}/subagents"))).unwrap();
+        fs::write(
+            projects.join(format!("{session_id}.jsonl")),
+            format!(
+                concat!(
+                    r#"{{"type":"ai-title","aiTitle":"主会话","sessionId":"{sid}"}}"#,
+                    "\n",
+                    r#"{{"id":"m1","type":"message","role":"user","timestamp":1789000000000,"sessionId":"{sid}","cwd":"c:\\work\\demo","content":[{{"type":"text","text":"查一下"}}]}}"#,
+                    "\n",
+                    r#"{{"id":"a1","type":"message","role":"assistant","timestamp":1789000001000,"sessionId":"{sid}","providerData":{{"model":"kimi-k3-2","usage":{{"requests":1,"inputTokens":1000,"outputTokens":50,"totalTokens":1050,"inputTokensDetails":[{{"cached_tokens":900}}],"outputTokensDetails":[]}}}},"content":[{{"type":"text","text":"结论"}}]}}"#,
+                    "\n",
+                ),
+                sid = session_id
+            ),
+        )
+        .unwrap();
+        // The subagent wire carries its own session id; only its usage folds in.
+        fs::write(
+            projects.join(format!("{session_id}/subagents/agent-0a2dcb4f1b794a44.jsonl")),
+            format!(
+                concat!(
+                    r#"{{"id":"s-user","type":"message","role":"user","timestamp":1789000002000,"sessionId":"subagent-own-id","cwd":"c:\\work\\demo","content":[{{"type":"text","text":"子代理输入不该进主会话"}}]}}"#,
+                    "\n",
+                    r#"{{"id":"s-a1","type":"message","role":"assistant","timestamp":1789000003000,"sessionId":"subagent-own-id","providerData":{{"model":"kimi-k3-2","usage":{{"requests":1,"inputTokens":2000,"outputTokens":80,"totalTokens":2080,"inputTokensDetails":[{{"cached_tokens":1500}}],"outputTokensDetails":[]}}}},"content":[{{"type":"text","text":"子代理输出"}}]}}"#,
+                    "\n",
+                    r#"{{"type":"turn-metrics","durationMs":9,"tokenDelta":99}}"#,
+                    "\n",
+                ),
+            ),
+        )
+        .unwrap();
+        let sources = sources(temp.path()).unwrap();
+        assert_eq!(sources.len(), 1);
+        assert!(sources[0].fingerprint.starts_with("codebuddy-session-v2|"));
+        let parsed = parse(&sources[0]).unwrap();
+        assert_eq!(
+            parsed.native_id.as_deref(),
+            Some("0aa0fb40-0b9c-74c9-8d7c-cd5d630dc6f0"),
+            "子代理自己的 sessionId 不得改写主会话身份"
+        );
+        assert_eq!(parsed.messages.len(), 2, "{:?}", parsed.messages);
+        assert!(parsed
+            .messages
+            .iter()
+            .all(|message| !message.text.contains("子代理")));
+        assert_eq!(parsed.usage.len(), 2, "{:?}", parsed.usage);
+        let mut ids: Vec<&str> = parsed.usage.iter().map(|event| event.id.as_str()).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), parsed.usage.len(), "子代理事件 id 不得与主会话冲突");
+        assert_eq!(
+            ids,
+            vec![
+                "agent-0a2dcb4f1b794a44:message:s-a1",
+                "codebuddy:message:a1"
+            ]
+        );
+        let total: u64 = parsed.usage.iter().map(|event| event.input.unwrap_or(0)).sum();
+        assert_eq!(total, 3000, "子代理 token 应计入会话总量");
+        assert!(parsed.usage.iter().all(|event| event.input_includes_cache));
+    }
+
+    #[test]
+    fn subagent_wire_change_flips_the_source_fingerprint() {
+        let temp = tempfile::tempdir().unwrap();
+        let projects = temp.path().join(".codebuddy/projects/demo-workspace");
+        let session_id = "0aa0fb40-0b9c-74c9-8d7c-cd5d630dc6f0";
+        fs::create_dir_all(&projects).unwrap();
+        fs::write(projects.join(format!("{session_id}.jsonl")), "{}\n").unwrap();
+        let before = sources(temp.path()).unwrap().remove(0).fingerprint;
+        fs::create_dir_all(projects.join(format!("{session_id}/subagents"))).unwrap();
+        fs::write(
+            projects.join(format!("{session_id}/subagents/agent-x.jsonl")),
+            "{}\n",
+        )
+        .unwrap();
+        let after = sources(temp.path()).unwrap().remove(0).fingerprint;
+        assert_ne!(before, after, "子代理线文件变化必须触发重扫");
     }
 }
