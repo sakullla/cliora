@@ -154,6 +154,7 @@ pub fn run() {
             commands::scan_native_agents,
             commands::operate_native_agent,
             commands::scan_native_plugins,
+            commands::preview_native_plugins,
             commands::operate_native_plugin,
             commands::get_managed_mcp_enabled,
             commands::preview_mcp_targets,

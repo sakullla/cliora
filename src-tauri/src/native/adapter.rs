@@ -654,6 +654,7 @@ fn installation_cache() -> &'static Mutex<HashMap<String, SummaryCacheEntry>> {
     &CACHE
 }
 
+#[cfg(test)]
 pub fn probe_registered_summary(
     registry: &Registry,
     id: &str,
@@ -662,11 +663,27 @@ pub fn probe_registered_summary(
     project: Option<&Path>,
     scope: Scope,
 ) -> Result<ToolProbe, String> {
+    probe_registered_summary_cached(registry, id, custom_path, home, project, scope, false)
+}
+
+pub fn probe_registered_summary_cached(
+    registry: &Registry,
+    id: &str,
+    custom_path: Option<&Path>,
+    home: &Path,
+    project: Option<&Path>,
+    scope: Scope,
+    fresh: bool,
+) -> Result<ToolProbe, String> {
+    #[cfg(test)]
+    let _ = fresh;
     #[cfg(not(test))]
     let key = summary_cache_key(id, custom_path, home, scope, project);
     #[cfg(not(test))]
-    if let Some(probe) = cached_probe(summary_cache(), &key) {
-        return Ok(probe);
+    if !fresh {
+        if let Some(probe) = cached_probe(summary_cache(), &key) {
+            return Ok(probe);
+        }
     }
     let probe = finish_probe(registry, id, custom_path, home, project, scope, true)?;
     #[cfg(not(test))]

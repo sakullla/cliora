@@ -64,7 +64,7 @@ if (mode === 'tools') {
     if (!present) { skipped.push(tab); continue; }
     await waitFor(`[...document.querySelectorAll('[role="tablist"][aria-label="当前任务"] [role="tab"][aria-selected="true"]')].some(item => item.textContent.trim() === ${JSON.stringify(tab)})`);
     if (label) await waitFor(`!!document.querySelector('[aria-label=${JSON.stringify(label)}]')`);
-    await waitFor(`![...document.querySelectorAll('[role="status"]')].some(item => /正在读取|正在处理/.test(item.textContent))`);
+    await waitFor(`![...document.querySelectorAll('[role="status"]')].some(item => /正在读取|正在处理|正在核对/.test(item.textContent))`);
     const path = resolve(out, `${name}.png`);
     await shot(path); captures.push({ tab, path });
     if (tab === '配置') {

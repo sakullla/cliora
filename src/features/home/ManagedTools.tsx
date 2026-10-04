@@ -17,7 +17,11 @@ type Notice = { tone: 'ok' | 'error' | 'pending'; text: string; title: string };
 type Activity = 'launch' | 'apply' | null;
 type Loaded = { workspace: RegisteredToolWorkspace | null; error: string | null; busy: boolean; activity: Activity; notice: Notice | null };
 
-const rememberedHome = new Map<string, RegisteredToolWorkspace>();
+const rememberedHome = new Map<string, { workspace: RegisteredToolWorkspace; at: number }>();
+function rememberHome(toolId: string, workspace: RegisteredToolWorkspace) {
+  if (workspace.probe.selectedPath) rememberedHome.set(toolId, { workspace, at: Date.now() });
+  else rememberedHome.delete(toolId);
+}
 const launchDirectories = new Map<string, string>();
 let lastLaunchDirectory = '';
 
@@ -79,13 +83,17 @@ function ProfileMenu({ label, profiles, selected, appliedCurrent, disabled, titl
 
 export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]; onOpenTool: (toolId: string) => void }) {
   const [states, setStates] = useState<Record<string, Loaded>>(() => Object.fromEntries(tools.flatMap((tool) => {
-    const workspace = rememberedHome.get(tool.id);
+    const cached = rememberedHome.get(tool.id);
+    const workspace = cached && Date.now() - cached.at < 60_000 ? cached.workspace : null;
     return workspace ? [[tool.id, { workspace, error: null, busy: false, activity: null, notice: null }]] : [];
   })));
   const [launchSettings, setLaunchSettings] = useState<LaunchSettings | null>(null);
   const [conflict, setConflict] = useState<{ toolId: string; toolName: string; profileName: string; comparison: ApplyComparison } | null>(null);
   const [conflictError, setConflictError] = useState('');
   const generation = useRef(0);
+  const requests = useRef(new Map<string, number>());
+  const recheck = useRef<(toolId: string) => void>(() => {});
+  const [checking, setChecking] = useState(new Set<string>());
   const acting = useRef(new Set<string>());
   const noticeTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
 
@@ -120,29 +128,60 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
     if (!nativeAvailable) return;
     let active = true;
     let unsubscribe: (() => void) | undefined;
-    const refresh = () => {
-      const current = ++generation.current;
-      for (const tool of tools) {
-        void native.getRegisteredToolWorkspace(tool.id, 'global', undefined, true).then((workspace) => {
-          rememberedHome.set(tool.id, workspace);
-          if (active && current === generation.current) setStates((old) => ({ ...old, [tool.id]: { workspace, error: null, busy: old[tool.id]?.busy ?? false, activity: old[tool.id]?.activity ?? null, notice: old[tool.id]?.notice ?? null } }));
-        }).catch((error) => {
-          rememberedHome.delete(tool.id);
-          if (active && current === generation.current) setStates((old) => ({ ...old, [tool.id]: { workspace: null, error: message(error), busy: false, activity: null, notice: null } }));
-        });
+    const timers = new Set<ReturnType<typeof setTimeout>>();
+    const clearRetries = () => { timers.forEach(timer => clearTimeout(timer)); timers.clear(); };
+    const retry = (toolId: string, current: number, attempt: number, request: number) => {
+      if (attempt >= 2 || !active || current !== generation.current) return;
+      const timer = setTimeout(() => { timers.delete(timer); if (requests.current.get(toolId) === request) void load(toolId, current, true, attempt + 1); }, 8500);
+      timers.add(timer);
+    };
+    const load = async (toolId: string, current: number, fresh = false, attempt = 0) => {
+      if (!active || current !== generation.current || acting.current.has(toolId)) return;
+      const request = (requests.current.get(toolId) ?? 0) + 1;
+      requests.current.set(toolId, request);
+      const valid = () => active && current === generation.current && requests.current.get(toolId) === request && !acting.current.has(toolId);
+      setChecking(old => new Set(old).add(toolId));
+      try {
+        const workspace = await native.getRegisteredToolWorkspace(toolId, 'global', undefined, true, fresh);
+        if (!valid()) return;
+        rememberHome(toolId, workspace);
+        setStates(old => ({ ...old, [toolId]: { workspace, error: null, busy: old[toolId]?.busy ?? false, activity: old[toolId]?.activity ?? null, notice: old[toolId]?.notice ?? null } }));
+        if (!workspace.probe.selectedPath && workspace.probe.installations.some(item => item.status === 'probe_failed')) retry(toolId, current, attempt, request);
+      } catch (error) {
+        if (!valid()) return;
+        rememberedHome.delete(toolId);
+        setStates(old => ({ ...old, [toolId]: { workspace: null, error: message(error), busy: false, activity: null, notice: null } }));
+        retry(toolId, current, attempt, request);
+      } finally {
+        if (active && requests.current.get(toolId) === request) setChecking(old => { const next = new Set(old); next.delete(toolId); return next; });
       }
+    };
+    recheck.current = toolId => { void load(toolId, generation.current, true); };
+    const refresh = () => {
+      clearRetries();
+      const current = ++generation.current;
+      let next = 0;
+      const worker = async () => {
+        while (active && current === generation.current && next < tools.length) {
+          const tool = tools[next++];
+          await load(tool.id, current);
+        }
+      };
+      for (let index = 0; index < Math.min(3, tools.length); index++) void worker();
     };
     refresh();
     void listen('cliora:bindings-changed', refresh).then((stop) => {
       if (active) unsubscribe = stop; else stop();
     }).catch(() => {});
-    return () => { active = false; generation.current++; unsubscribe?.(); };
+    return () => { active = false; generation.current++; clearRetries(); recheck.current = () => {}; unsubscribe?.(); };
   }, [tools.map((item) => item.id).join('|')]);
 
   async function launchTool(toolId: string, pickDirectory = false) {
     const previous = states[toolId];
     if (!previous || previous.busy || acting.current.has(toolId)) return;
     acting.current.add(toolId);
+    requests.current.set(toolId, (requests.current.get(toolId) ?? 0) + 1);
+    setChecking(old => { const next = new Set(old); next.delete(toolId); return next; });
     const toolName = tools.find((item) => item.id === toolId)?.name ?? toolId;
     setStates((old) => ({ ...old, [toolId]: { ...previous, busy: true, activity: 'launch', error: null, notice: null } }));
     try {
@@ -174,6 +213,8 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
     const previous = states[toolId];
     if (!previous?.workspace || previous.busy || acting.current.has(toolId)) return;
     acting.current.add(toolId);
+    requests.current.set(toolId, (requests.current.get(toolId) ?? 0) + 1);
+    setChecking(old => { const next = new Set(old); next.delete(toolId); return next; });
     const toolName = tools.find((item) => item.id === toolId)?.name ?? toolId;
     setStates((old) => ({ ...old, [toolId]: { ...previous, busy: true, activity: 'apply', error: null, notice: null } }));
     try {
@@ -184,7 +225,7 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
         if (!current?.workspace) return old;
         const version = current.workspace.profiles.find((item) => item.id === profileId)?.version ?? current.workspace.binding?.profileVersion ?? 0;
         const workspace = { ...current.workspace, binding: { scopeKey: 'global', tool: toolId, profileId, profileVersion: version, managed: {} } };
-        rememberedHome.set(toolId, workspace);
+        rememberHome(toolId, workspace);
         return { ...old, [toolId]: { ...current, busy: false, activity: null, error: null, notice, workspace } };
       });
       clearNoticeLater(toolId, notice);
@@ -215,6 +256,7 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
   async function useComparedFile() {
     if (!conflict) return;
     const { toolId, toolName, comparison } = conflict;
+    requests.current.set(toolId, (requests.current.get(toolId) ?? 0) + 1);
     const previous = states[toolId];
     setConflictError('');
     try {
@@ -226,7 +268,7 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
         if (!current?.workspace) return old;
         const version = current.workspace.profiles.find((item) => item.id === comparison.profile.id)?.version ?? comparison.profile.version;
         const workspace = { ...current.workspace, binding: { scopeKey: 'global', tool: toolId, profileId: comparison.profile.id, profileVersion: version, managed: {} } };
-        rememberedHome.set(toolId, workspace);
+        rememberHome(toolId, workspace);
         return { ...old, [toolId]: { ...current, busy: false, activity: null, error: null, notice, workspace } };
       });
       clearNoticeLater(toolId, notice);
@@ -245,21 +287,22 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
       const selected = profiles.find((item) => item.id === workspace?.binding?.profileId);
       const appliedCurrent = !!selected && workspace?.binding?.profileVersion === selected.version;
       const installed = !!workspace?.probe.selectedPath;
+      const probeFailed = workspace?.probe.installations.some(item => item.status === 'probe_failed');
       const writable = workspace?.probe.nativeWrites.state === 'supported';
       const launchMode = preferredLaunchMode(launchSettings, 'cli', !!tool.yoloAvailable);
       const desktop = tool.launchForm === 'desktop';
       const rememberedDir = launchDirectories.get(tool.id);
       const switchTitle = !workspace ? undefined : !writable ? workspace.probe.nativeWrites.reason || '当前不能写入这个工具的配置' : '点一下即切换，下次启动会读取这份配置';
-      const launchTitle = !installed && workspace ? '尚未确认安装，可在“工具与连接”中检查'
+      const launchTitle = !installed && workspace ? '请重新检测安装状态后启动'
         : desktop ? [rememberedDir ? `在 ${displayPath(rememberedDir)} 打开；右键更换目录` : '启动已安装的桌面应用'].join('；')
         : [rememberedDir ? `在 ${displayPath(rememberedDir)} 启动；右键更换目录` : '', launchMode === 'yolo' ? '按此 CLI 的原生参数跳过审批' : launchSettings?.cliMode === 'yolo' ? '此 CLI 未提供已确认的 YOLO 参数，将用普通模式启动' : ''].filter(Boolean).join('；') || undefined;
       const line = loaded?.error
-        ? lineNotice('error', `${tool.name} 检测失败。可编辑配置或重新进入本页重新读取。`, loaded.error)
+        ? lineNotice('error', `${tool.name} 检测失败。可重新检测或编辑配置。`, loaded.error)
         : loaded?.activity === 'apply'
           ? lineNotice('pending', `正在应用 ${tool.name} 的配置。`)
           : loaded?.notice ?? null;
       return <div className={styles.row} data-tool-row key={tool.id}>
-        <div className={styles.name}><ToolIcon toolId={tool.id} size={34} /><span><strong title={tool.name}>{tool.name}</strong><small className={styles.status} data-state={loaded?.error ? 'error' : !workspace ? 'loading' : installed ? 'ok' : 'warn'}>{loaded?.error ? '检测失败' : workspace ? installed ? workspace.probe.installations.find((item) => item.path === workspace.probe.selectedPath)?.version ?? '已安装' : '未确认安装' : '正在检测'}</small></span></div>
+        <div className={styles.name}><ToolIcon toolId={tool.id} size={34} /><span><strong title={tool.name}>{tool.name}</strong><small className={styles.status} data-state={loaded?.error ? 'error' : !workspace ? 'loading' : installed ? 'ok' : 'warn'}>{checking.has(tool.id) && !installed ? '正在检测' : loaded?.error ? '检测失败' : workspace ? installed ? workspace.probe.installations.find((item) => item.path === workspace.probe.selectedPath)?.version ?? '已安装' : probeFailed ? '版本检测失败' : '未发现安装' : '正在检测'}</small></span></div>
         <div className={styles.switch}>
           {loaded?.error ? null
             : !workspace ? (nativeAvailable ? <><span className="sr-only">正在读取配置</span><span className={styles.loadingBar} aria-hidden="true" /></> : null)
@@ -267,7 +310,7 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
             : profiles.length ? <div role="radiogroup" aria-label={`切换${tool.name}的配置`} title={switchTitle}>{profiles.map((item) => <button key={item.id} type="button" role="radio" aria-checked={item.id === selected?.id} className={item.id === selected?.id ? styles.activeConfig : ''} disabled={loaded?.busy || !writable} title={profileLabel(item.name, item.connection)} onClick={() => { if (item.id !== selected?.id || !appliedCurrent) void switchProfile(tool.id, item.id); }}>{item.name}{item.id === selected?.id && item.connection?.model?.trim() ? <em className={styles.modelHint}>{item.connection.model.trim()}</em> : null}</button>)}</div>
             : <button type="button" className={styles.addConfig} onClick={() => onOpenTool(tool.id)}>新建配置</button>}
         </div>
-        <div className={styles.rowActions}><button type="button" className={styles.launch} disabled={!installed || loaded?.busy} aria-busy={loaded?.activity === 'launch' || undefined} title={launchTitle} onClick={() => void launchTool(tool.id)} onContextMenu={(event) => { event.preventDefault(); void launchTool(tool.id, true); }}>{loaded?.activity === 'launch' ? '正在启动' : '启动'}</button><button type="button" onClick={() => onOpenTool(tool.id)}>编辑配置 →</button></div>
+        <div className={styles.rowActions}>{!installed && (workspace || loaded?.error) && <button type="button" disabled={checking.has(tool.id) || loaded?.busy} onClick={() => recheck.current(tool.id)}>{checking.has(tool.id) ? '正在检测' : '重新检测'}</button>}<button type="button" className={styles.launch} disabled={!installed || loaded?.busy} aria-busy={loaded?.activity === 'launch' || undefined} title={launchTitle} onClick={() => void launchTool(tool.id)} onContextMenu={(event) => { event.preventDefault(); void launchTool(tool.id, true); }}>{loaded?.activity === 'launch' ? '正在启动' : '启动'}</button><button type="button" onClick={() => onOpenTool(tool.id)}>编辑配置 →</button></div>
         {line && <div className={styles.note} data-tone={line.tone} role={line.tone === 'error' ? 'alert' : 'status'} title={line.title}>{line.text}</div>}
       </div>;
     })}

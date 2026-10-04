@@ -58,6 +58,7 @@ export const native = {
   scanNativeAgents: (target: PluginTarget) => command<AgentSnapshot>('scan_native_agents', { target }),
   operateNativeAgent: (request: AgentRequest) => command<AgentResult>('operate_native_agent', { request }),
   scanNativePlugins: (target: PluginTarget) => command<PluginSnapshot>('scan_native_plugins', { target }),
+  previewNativePlugins: (target: PluginTarget) => command<PluginSnapshot | null>('preview_native_plugins', { target }),
   operateNativePlugin: (request: PluginRequest) => command<PluginResult>('operate_native_plugin', { request }),
   accountCapabilities: () => command<AccountCapability[]>('account_capabilities'),
   discoverNativeLogins: (toolId: string) => command<NativeLoginSnapshot>('discover_native_logins', { toolId }),

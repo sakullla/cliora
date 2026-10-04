@@ -551,6 +551,20 @@ fn snapshot_with_packages(
 pub fn scan(db: &Database, home: &Path, target: &PluginTarget) -> Result<PluginSnapshot, String> {
     scan_with_packages(db, home, target, true)
 }
+/// Inventory can be shown while a native process builds the authoritative list.
+/// This snapshot has no operation baseline and grants no management actions.
+pub fn preview(db: &Database, home: &Path, target: &PluginTarget) -> Result<Option<PluginSnapshot>, String> {
+    let project = project(target)?;
+    let _context = selection::enter_bound(db, home, &target.tool_id, target.scope, project.as_deref())?;
+    selection::validate_expected(&target.tool_id, target.context_id.as_deref())?;
+    let adapter = adapters::plugins::get(&target.tool_id)?;
+    let mut capability = adapter.capability();
+    if target.scope == Scope::Project && !capability.project { return Ok(None); }
+    let Some(mut entries) = adapter.preview(home, target)? else { return Ok(None); };
+    for entry in &mut entries { entry.read_only = true; entry.enabled = None; entry.state = "inventory_pending".into(); }
+    capability.actions.clear();
+    Ok(Some(PluginSnapshot { target: target.clone(), capability, entries, baseline: String::new(), detail: "本机插件目录预览；完整列表、启停状态与管理操作正在核对。".into() }))
+}
 /// Agent definitions have their own content baseline; they never mutate plugin
 /// packages, so enumerating their resources needs no whole-package digest.
 pub(super) fn scan_resources(db: &Database, home: &Path, target: &PluginTarget) -> Result<PluginSnapshot, String> {
@@ -614,6 +628,7 @@ pub fn operate(
     home: &Path,
     request: &PluginRequest,
 ) -> Result<PluginResult, String> {
+    if request.baseline.is_empty() { return Err("插件状态尚未完成核对，请等待扫描完成后操作".into()); }
     let _operation = OPERATIONS
         .try_lock()
         .map_err(|_| "已有插件操作进行中，请等待后重新扫描")?;

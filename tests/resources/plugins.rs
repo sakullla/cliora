@@ -10,6 +10,31 @@ fn file_discovery_does_not_require_an_installed_executable() {
         if id != "deepseek" { assert!(crate::resources::agents::scan(&db, home.path(), &target).is_ok()); }
     }
 }
+
+#[test]
+fn zcode_preview_uses_native_catalog_but_never_grants_an_operation_baseline() {
+    let home = tempfile::tempdir().unwrap();
+    let db = Database::open(&home.path().join("preview.db")).unwrap();
+    let root = home.path().join(".zcode/cli/plugins");
+    let catalog = root.join("marketplaces/zcode-plugins-official/bundled-marketplace.json");
+    fs::create_dir_all(catalog.parent().unwrap()).unwrap();
+    assert!(preview(&db, home.path(), &target("zcode")).unwrap().is_none());
+    fs::write(&catalog, serde_json::to_string(&json!({"version":1,"manifest":{"plugins":[
+        {"name":"fixture","version":"0.9.0","cachePath":root.join("cache/fixture/0.9.0")},
+        {"name":"removed","version":"1.0.0","cachePath":root.join("cache/removed/1.0.0")}
+    ]}})).unwrap()).unwrap();
+    fs::write(root.parent().unwrap().join("config.json"), r#"{"plugins":{"suppressedBuiltins":["removed@zcode-plugins-official"]}}"#).unwrap();
+    let inventory = preview(&db, home.path(), &target("zcode")).unwrap().unwrap();
+    assert_eq!(inventory.entries.len(), 1);
+    assert_eq!(inventory.entries[0].id, "fixture@zcode-plugins-official");
+    assert_eq!(inventory.entries[0].version.as_deref(), Some("0.9.0"));
+    assert_eq!(inventory.entries[0].enabled, None);
+    assert!(inventory.entries[0].read_only && inventory.capability.actions.is_empty() && inventory.baseline.is_empty());
+    let req = request("zcode", "disable", "fixture@zcode-plugins-official");
+    assert!(operate(&db, &MemoryStore::default(), home.path(), &req).unwrap_err().contains("尚未完成核对"));
+    fs::write(catalog, r#"{"version":2,"manifest":{"plugins":[]}}"#).unwrap();
+    assert!(preview(&db, home.path(), &target("zcode")).is_err());
+}
 use std::collections::HashMap;
 #[derive(Default)]
 struct MemoryStore(Mutex<HashMap<String, String>>);

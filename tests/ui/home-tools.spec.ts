@@ -22,6 +22,8 @@ async function installHome(page: Page, detect = false) {
     };
     Object.assign(window, {
       isTauri: true,
+      __probeMode: failDetection ? 'error' : 'available',
+      __probeCalls: [] as unknown[],
       __launchRequests: [] as unknown[],
       __applyCalls: [] as unknown[],
       __resolveDialog: (value: string | null) => {
@@ -45,8 +47,12 @@ async function installHome(page: Page, detect = false) {
         if (command === 'get_tray_status') return { available: false, error: null };
         if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
         if (command === 'get_registered_tool_workspace') {
-          if (failDetection) throw { message: '找不到 Codex 可执行文件' };
-          return workspace();
+          const state = window as unknown as { __probeMode: string; __probeCalls: unknown[] };
+          state.__probeCalls.push(args);
+          if (state.__probeMode === 'error') throw { message: '找不到 Codex 可执行文件' };
+          const result = workspace();
+          if (state.__probeMode === 'failed' || state.__probeMode === 'absent') return { ...result, probe: { ...result.probe, selectedPath: null, nativeWrites: { state: 'unknown', reason: '未确认 CLI 身份' }, installations: state.__probeMode === 'absent' ? [] : [{ path: 'C:/codex.cmd', version: null, status: 'probe_failed', detail: '版本命令超时' }] } };
+          return result;
         }
         if (command === 'plugin:dialog|open') return new Promise((resolve) => dialogs.push(resolve));
         if (command === 'launch_cli') {
@@ -311,7 +317,7 @@ test('detection failure names the tool and points at edit or reread', async ({ p
   await page.goto('/');
   const tools = page.getByLabel('管理中的工具');
   const alert = tools.getByRole('alert');
-  await expect(alert).toHaveText('Codex 检测失败。可编辑配置或重新进入本页重新读取。 找不到 Codex 可执行文件');
+  await expect(alert).toHaveText('Codex 检测失败。可重新检测或编辑配置。 找不到 Codex 可执行文件');
   await expect(tools.getByRole('status')).toHaveCount(0);
   await expect(tools).not.toContainText('操作失败，请重试');
   await expect(tools.getByRole('button', { name: '编辑配置 →' })).toBeEnabled();
@@ -456,4 +462,36 @@ test('a short profile menu switches by step buttons and shows the model', async 
   await expect(menu).toContainText('deepseek-flash');
   const calls = await page.evaluate(() => (window as unknown as { __applyCalls: Array<{ profileId: string }> }).__applyCalls);
   expect(calls.map((call) => call.profileId)).toEqual(['cpa', 'zhipu', 'cpa', 'deepseek']);
+});
+
+
+test('a transient version failure automatically rechecks and enables launch', async ({ page }) => {
+  await installHome(page);
+  await page.clock.install();
+  await page.addInitScript(() => { (window as unknown as { __probeMode: string }).__probeMode = 'failed'; });
+  await page.goto('/');
+  const tools = page.getByLabel('管理中的工具');
+  await expect(tools).toContainText('版本检测失败');
+  await expect(tools.getByRole('button', { name: '启动', exact: true })).toBeDisabled();
+  await page.evaluate(() => { (window as unknown as { __probeMode: string }).__probeMode = 'available'; });
+  await page.clock.fastForward(8500);
+  await expect(tools.getByRole('button', { name: '启动', exact: true })).toBeEnabled();
+  await expect(tools).toContainText('1.0.0');
+  const calls = await page.evaluate(() => (window as unknown as { __probeCalls: Array<{ fresh: boolean; summary: boolean }> }).__probeCalls);
+  expect(calls.map(({ fresh, summary }) => ({ fresh, summary }))).toEqual([{ fresh: false, summary: true }, { fresh: true, summary: true }]);
+});
+
+test('missing installations do not loop and a manual recheck discovers a new install', async ({ page }) => {
+  await installHome(page);
+  await page.clock.install();
+  await page.addInitScript(() => { (window as unknown as { __probeMode: string }).__probeMode = 'absent'; });
+  await page.goto('/');
+  const tools = page.getByLabel('管理中的工具');
+  await expect(tools).toContainText('未发现安装');
+  await page.clock.fastForward(30_000);
+  expect(await page.evaluate(() => (window as unknown as { __probeCalls: unknown[] }).__probeCalls.length)).toBe(1);
+  await page.evaluate(() => { (window as unknown as { __probeMode: string }).__probeMode = 'available'; });
+  await tools.getByRole('button', { name: '重新检测', exact: true }).click();
+  await expect(tools.getByRole('button', { name: '启动', exact: true })).toBeEnabled();
+  expect(await page.evaluate(() => (window as unknown as { __probeCalls: Array<{ fresh: boolean }> }).__probeCalls[1].fresh)).toBe(true);
 });
