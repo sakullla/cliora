@@ -1,7 +1,8 @@
 //! Kimi Code session indexing: `sessions/<workDirKey>/<sessionId>/state.json`
 //! plus the append-only `agents/<agentId>/wire.jsonl` event streams. Field
 //! shapes verified on the local 0.31.1 install: state.json carries title,
-//! workDir and RFC3339 timestamps; the wire stream records user prompts as
+//! workDir (`cwd` in older schemas) and RFC3339 timestamps; the wire stream
+//! records user prompts as
 //! `context.append_message`, assistant text as `content.part` loop events and
 //! per-call token totals as `usage.record` with `inputOther`/`output`/
 //! `inputCacheRead`/`inputCacheCreation` (cache buckets separate from input).
@@ -66,10 +67,13 @@ fn sources_with(
             for wire in agent_wires(&path, cancelled)? {
                 parts.push(fingerprint(&wire));
             }
+            // Adapter-local parser version: existing indexes are rebuilt once
+            // per parser change even when the native files themselves have not
+            // changed.
             let checked = parts
                 .into_iter()
                 .collect::<Result<Vec<_>, _>>()
-                .map(|parts| parts.join("|"));
+                .map(|parts| format!("kimi-session-v2|{}", parts.join("|")));
             let native_id = path
                 .file_name()
                 .and_then(|value| value.to_str())
@@ -149,9 +153,14 @@ pub fn parse_controlled(
         .chars()
         .take(96)
         .collect();
+    // Older state.json schema recorded the working directory as `cwd` before
+    // the field was renamed to `workDir`; both shapes are accepted so legacy
+    // sessions do not list as unattributed.
     session.cwd = state
         .get("workDir")
         .and_then(Value::as_str)
+        .or_else(|| state.get("cwd").and_then(Value::as_str))
+        .filter(|cwd| !cwd.trim().is_empty())
         .map(str::to_owned);
     session.started_at = state.get("createdAt").and_then(timestamp);
     session.updated_at = state.get("updatedAt").and_then(timestamp);
@@ -397,5 +406,20 @@ mod tests {
             parsed.native_id.as_deref(),
             Some("session_930b8796-7d77-4e70-a8ba-6209ff1272e8")
         );
+    }
+
+    #[test]
+    fn legacy_state_schema_cwd_field_still_attributes_the_project() {
+        let temp = tempfile::tempdir().unwrap();
+        let session = session_tree(temp.path());
+        std::fs::write(
+            session.join("state.json"),
+            r#"{"id":"session_930b8796-7d77-4e70-a8ba-6209ff1272e8","version":1,"cwd":"C:/Legacy/project","createdAt":"2026-08-02T03:22:11.567Z","updatedAt":"2026-08-02T03:25:41.000Z","archived":false,"agents":{},"custom":{}}"#,
+        )
+        .unwrap();
+        let source = sources(temp.path()).unwrap().remove(0);
+        assert!(source.fingerprint.starts_with("kimi-session-v2|"));
+        let parsed = parse(&source).unwrap();
+        assert_eq!(parsed.cwd.as_deref(), Some("C:/Legacy/project"));
     }
 }
