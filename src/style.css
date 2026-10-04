@@ -275,6 +275,9 @@ details[open] > :not(summary) { animation: reveal var(--medium) var(--ease); }
   border-right: 1px solid var(--line);
 }
 .brand { display: flex; align-items: center; gap: 10px; padding: 2px 8px 22px; }
+.brand-name { min-width: 0; }
+.sidebar-toggle { flex: none; width: 28px; min-height: 28px; margin-left: auto; padding: 0; border: 0; background: transparent; color: var(--text-3); box-shadow: none; }
+.sidebar-toggle:hover { background: var(--surface-3); color: var(--text); }
 .brandmark {
   display: block;
   width: 32px;
@@ -340,7 +343,7 @@ details[open] > :not(summary) { animation: reveal var(--medium) var(--ease); }
   background: var(--bg);
 }
 .content-locked { display: flex; flex-direction: column; overflow: hidden; }
-.content-locked > .content-inner { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; padding-bottom: 16px; }
+.content-locked > .content-inner { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; padding-bottom: 16px; max-width: none; }
 .records-shell { display: flex; flex: 1; flex-direction: column; min-height: 0; }
 .records-shell[hidden] { display: none; }
 .content-inner { width: 100%; max-width: 1240px; margin: 0 auto; padding: 28px 36px 48px; }
@@ -657,12 +660,25 @@ details:not([open]) > :not(summary) { display: none !important; }
   .connection-layout { grid-template-columns: 130px minmax(0, 1fr); gap: 12px; }
   .file-conflict-columns { grid-template-columns: 1fr; }
 }
+@media (min-width: 681px) {
+  .shell[data-sidebar-collapsed="true"] { grid-template-columns: 68px minmax(0, 1fr); }
+  .shell[data-sidebar-collapsed="true"] .sidebar { padding-inline: 8px; }
+  .shell[data-sidebar-collapsed="true"] .brand { flex-direction: column; gap: 10px; padding: 2px 0 16px; }
+  .shell[data-sidebar-collapsed="true"] .sidebar-toggle { margin: 0; }
+  .shell[data-sidebar-collapsed="true"] .nav button { justify-content: center; padding: 0; min-height: 40px; }
+  .shell[data-sidebar-collapsed="true"] .theme-switch { grid-template-columns: 1fr; }
+  .shell[data-sidebar-collapsed="true"] .sidebar-status { justify-content: center; padding: 4px 0; }
+}
+.shell[data-sidebar-collapsed="true"] .brand-name,
+.shell[data-sidebar-collapsed="true"] .nav-text,
+.shell[data-sidebar-collapsed="true"] .nav-kbd,
+.shell[data-sidebar-collapsed="true"] .status-text { display: none; }
 @media (max-width: 680px) {
   .shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
   .sidebar { flex-flow: row wrap; align-items: center; gap: 8px; max-width: 100%; padding: 8px 10px; border-right: 0; border-bottom: 1px solid var(--line); }
   .brand { flex: none; padding: 0 4px 0 2px; }
   .brandmark { width: 28px; height: 28px; }
-  .brand > span:last-child, .nav-label, .nav .nav-kbd { display: none; }
+  .brand-name, .nav-label, .nav .nav-kbd { display: none; }
   /* Keep the full text in the DOM for assistive tech and tests; show only the short label visually. */
   .status-text { font-size: 0; line-height: 0; }
   .status-text::after { content: attr(data-short); font-size: 11px; line-height: normal; }

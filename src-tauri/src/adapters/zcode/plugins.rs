@@ -9,6 +9,33 @@ use serde_json::json;
 use std::path::{Path, PathBuf};
 
 impl PluginAdapter for ZCode {
+    fn preview(&self, home: &Path, target: &PluginTarget) -> Result<Option<Vec<PluginEntry>>, String> {
+        if target.scope != Scope::Global { return Ok(None); }
+        let storage = super::data_root(home).join("cli/plugins");
+        let text = crate::native::transaction::read_native(&storage.join("marketplaces/zcode-plugins-official/bundled-marketplace.json"))?;
+        if text.trim().is_empty() { return Ok(None); }
+        let catalog: Value = serde_json::from_str(&text).map_err(|_| "ZCode 内置插件目录格式无法识别")?;
+        if catalog.get("version").and_then(Value::as_u64) != Some(1) { return Err("ZCode 内置插件目录版本无法识别".into()); }
+        let rows = catalog.pointer("/manifest/plugins").and_then(Value::as_array).ok_or("ZCode 内置插件目录缺少条目")?;
+        if rows.len() > 20000 { return Err("ZCode 内置插件目录超过读取上限".into()); }
+        let config = crate::native::transaction::read_native(&super::data_root(home).join("cli/config.json"))?;
+        let config = crate::native::format::parse(FileKind::Json, &config)?;
+        let suppressed = config.pointer("/plugins/suppressedBuiltins").and_then(Value::as_array);
+        let mut entries = Vec::new();
+        for row in rows {
+            let name = row.get("name").and_then(Value::as_str).filter(|name| !name.is_empty()).ok_or("ZCode 内置插件目录缺少名称")?;
+            let id = format!("{name}@zcode-plugins-official");
+            if suppressed.is_some_and(|ids| ids.iter().any(|value| value.as_str() == Some(&id))) { continue; }
+            let Some(root) = row.get("cachePath").and_then(Value::as_str) else { continue; };
+            if !Path::new(root).is_absolute() { return Err("ZCode 内置插件缓存路径不是绝对路径".into()); }
+            entries.push(PluginEntry {
+                id: format!("{name}@zcode-plugins-official"), name: name.into(), source: format!("{name}@zcode-plugins-official"),
+                version: row.get("version").and_then(Value::as_str).map(str::to_owned), scope: "user".into(), enabled: None,
+                state: "state_unknown".into(), policy: "正在核对原生插件状态".into(), read_only: true, root: Some(root.into()), resources: vec![],
+            });
+        }
+        Ok(Some(entries))
+    }
     fn capability(&self) -> PluginCapability {
         PluginCapability {
             version: "3.14.4", sources: "已配置市场中的 plugin@marketplace",

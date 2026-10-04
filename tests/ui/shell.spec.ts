@@ -74,6 +74,8 @@ test('five full pages are navigable and browser mode never implies native data',
   await page.goto('/');
   await expect(page.getByRole('status')).toContainText('浏览器预览');
   await page.keyboard.press('Tab');
+  await expect(page.getByRole('button', { name: '折叠侧栏', exact: true })).toBeFocused();
+  await page.keyboard.press('Tab');
   await expect(page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始' })).toBeFocused();
   await expect(page.locator('.brandmark')).toBeVisible();
   await expect(page.locator('.brandmark')).toHaveAttribute('src', /128x128/);
@@ -416,3 +418,24 @@ test('desktop shell keeps on-device copy, first-screen actions, and no sideways 
   expect(narrowBox!.x + narrowBox!.width).toBeLessThanOrEqual(640 + 1);
 });
 
+
+
+test('sidebar collapse preserves navigation and records use the wide viewport', async ({ page }) => {
+  await installDesktop(page);
+  await page.setViewportSize({ width: 2560, height: 1440 });
+  await page.goto('/');
+  const sidebar = page.getByLabel('主导航');
+  await page.getByRole('button', { name: '折叠侧栏', exact: true }).click();
+  await expect(page.getByRole('button', { name: '展开侧栏', exact: true })).toHaveAttribute('aria-expanded', 'false');
+  expect((await sidebar.boundingBox())!.width).toBeLessThan(80);
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '使用记录', exact: true })).toBeVisible();
+  expect((await page.locator('.content-inner').boundingBox())!.width).toBeGreaterThan(2400);
+  await expectNoHorizontalScroll(page);
+  await page.reload();
+  await expect(page.getByRole('button', { name: '展开侧栏', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '展开侧栏', exact: true }).click();
+  expect((await sidebar.boundingBox())!.width).toBeGreaterThan(180);
+  await page.setViewportSize({ width: 640, height: 760 });
+  await expectNoHorizontalScroll(page);
+});

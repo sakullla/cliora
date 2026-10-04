@@ -35,6 +35,11 @@ pub async fn scan_native_plugins(app: AppHandle, target: resources::plugins::Plu
 }
 
 #[tauri::command]
+pub async fn preview_native_plugins(app: AppHandle, target: resources::plugins::PluginTarget) -> Result<Option<resources::plugins::PluginSnapshot>, ApiError> {
+    blocking(move || { let db = app.state::<AppState>().database(&app)?; resources::plugins::preview(&db, &home()?, &target).map_err(native_error) }).await
+}
+
+#[tauri::command]
 pub async fn operate_native_plugin(app: AppHandle, request: resources::plugins::PluginRequest) -> Result<resources::plugins::PluginResult, ApiError> {
     blocking(move || { let db = app.state::<AppState>().database(&app)?; resources::plugins::operate(&db, &SystemCredentialStore, &home()?, &request).map_err(native_error) }).await
 }
@@ -1257,13 +1262,14 @@ pub async fn get_registered_tool_workspace(
             // The quick-start page only needs the selected CLI version. Skip sibling shims,
             // native file reads, and pending-transaction recovery.
             let probe = if summary {
-                adapter::probe_registered_summary(
+                adapter::probe_registered_summary_cached(
                     &registry,
                     &tool_id,
                     custom.as_deref(),
                     &home,
                     project.as_deref(),
                     scope,
+                    fresh,
                 )
             } else {
                 adapter::probe_registered_cached(

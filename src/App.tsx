@@ -92,6 +92,14 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
   const [page, setPage] = useState<Page>('home');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try { return localStorage.getItem('cliora:sidebar-collapsed') === 'true'; } catch { return false; }
+  });
+  function toggleSidebar() {
+    const next = !sidebarCollapsed;
+    setSidebarCollapsed(next);
+    try { localStorage.setItem('cliora:sidebar-collapsed', String(next)); } catch { /* Layout remains usable without storage. */ }
+  }
   const [visited, setVisited] = useState<Set<string>>(() => new Set(['home']));
   const [tool, setTool] = useState<string>('');
   const [toolOpenSequence, setToolOpenSequence] = useState(0);
@@ -260,12 +268,12 @@ export default function App() {
     finally { setBusy(false); }
   }
 
-  return <ToolIconsContext value={bootstrap.preferences.tool_icons ?? {}}><div className="shell">
+  return <ToolIconsContext value={bootstrap.preferences.tool_icons ?? {}}><div className="shell" data-sidebar-collapsed={sidebarCollapsed}>
     <aside className="sidebar" aria-label="主导航">
-      <div className="brand"><img className="brandmark" src={brandIcon} alt="" /><span><strong>栖点</strong><small>CLIORA</small></span></div>
-      <nav className="nav" aria-label="页面">
-        {pages.map((item, index) => <button key={item.id} type="button" className={page === item.id ? 'active' : ''} aria-current={page === item.id ? 'page' : undefined} aria-keyshortcuts={`${modAria}+${index + 1}`} title={`${item.label}（${modLabel}+${index + 1}）`} onClick={() => go(item.id)}>
-          <span className="nav-glyph" aria-hidden="true"><Icon name={item.glyph} /></span>{item.label}<kbd className="nav-kbd" aria-hidden="true">{modLabel === '⌘' ? '⌘' : '^'}{index + 1}</kbd>
+      <div className="brand"><img className="brandmark" src={brandIcon} alt="" /><span className="brand-name"><strong>栖点</strong><small>CLIORA</small></span><button type="button" className="sidebar-toggle" aria-label={sidebarCollapsed ? '展开侧栏' : '折叠侧栏'} title={sidebarCollapsed ? '展开侧栏' : '折叠侧栏'} aria-expanded={!sidebarCollapsed} aria-controls="main-navigation" onClick={toggleSidebar}><Icon name={sidebarCollapsed ? 'sidebarOpen' : 'sidebarClose'} size={17} /></button></div>
+      <nav className="nav" id="main-navigation" aria-label="页面">
+        {pages.map((item, index) => <button key={item.id} type="button" className={page === item.id ? 'active' : ''} aria-label={item.label} aria-current={page === item.id ? 'page' : undefined} aria-keyshortcuts={`${modAria}+${index + 1}`} title={`${item.label}（${modLabel}+${index + 1}）`} onClick={() => go(item.id)}>
+          <span className="nav-glyph" aria-hidden="true"><Icon name={item.glyph} /></span><span className="nav-text">{item.label}</span><kbd className="nav-kbd" aria-hidden="true">{modLabel === '⌘' ? '⌘' : '^'}{index + 1}</kbd>
         </button>)}
       </nav>
       <div className="sidebar-foot">

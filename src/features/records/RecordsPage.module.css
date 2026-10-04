@@ -100,7 +100,7 @@
 @keyframes indeterminate { from { left: -35%; } to { left: 100%; } }
 
 /* Sessions */
-.columns { display: grid; flex: 1; grid-template-columns: minmax(280px, 31%) minmax(0, 1fr); gap: 0; min-height: 0; align-items: stretch; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--surface); box-shadow: var(--shadow-xs); }
+.columns { display: grid; flex: 1; grid-template-columns: clamp(280px, 30%, 360px) minmax(0, 1fr); gap: 0; min-height: 0; align-items: stretch; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--surface); box-shadow: var(--shadow-xs); }
 .sessionLibrary { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid var(--line); background: var(--surface-2); }
 .listToolbar { display: flex; flex: none; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 16px 2px; color: var(--text-3); font-size: 11px; }
 .listToolbar select { width: auto; min-height: 26px; padding: 0 24px 0 6px; border-color: transparent; background-color: transparent; box-shadow: none; font-size: 11px; }

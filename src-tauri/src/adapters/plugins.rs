@@ -35,6 +35,9 @@ pub(crate) fn npm_metadata(root: Option<&Path>) -> PluginPackage {
     }
 }
 pub trait PluginAdapter: Sync {
+    /// Optional fast, partial inventory. Shared services make it non-operable
+    /// until the authoritative native scan and package baseline finish.
+    fn preview(&self, _home: &Path, _target: &PluginTarget) -> Result<Option<Vec<PluginEntry>>, String> { Ok(None) }
     /// A desktop adapter may expose a separately bundled native command entry.
     /// The shared service owns spawning, context, cancellation and output bounds.
     fn command_program(&self, executable: &Path) -> Result<(PathBuf, Vec<String>), String> { Ok((executable.to_path_buf(), vec![])) }
