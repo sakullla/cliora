@@ -32,9 +32,9 @@ function language(format: CodeFormat) {
 }
 
 /** A format-driven editor shared by native files, structured previews and library text. */
-export function CodeEditor({ value, onChange, format = 'text', label, readOnly = false, placeholder = '', compact = false, errorLine }: {
+export function CodeEditor({ value, onChange, format = 'text', label, readOnly = false, placeholder = '', compact = false, errorLine, documentId }: {
   value: string; onChange?: (value: string) => void; format?: CodeFormat; label: string;
-  readOnly?: boolean; placeholder?: string; compact?: boolean; errorLine?: number;
+  readOnly?: boolean; placeholder?: string; compact?: boolean; errorLine?: number; documentId?: string;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const editor = useRef<EditorView | null>(null);
@@ -45,23 +45,32 @@ export function CodeEditor({ value, onChange, format = 'text', label, readOnly =
   callback.current = onChange;
   const configuration = useRef(new Compartment());
   const initialValue = useRef(value);
+  const activeDocument = useRef(documentId);
   const extensions = () => [language(format), EditorState.readOnly.of(readOnly), EditorView.editable.of(!readOnly),
     EditorView.contentAttributes.of({ role: 'textbox', 'aria-label': label, 'aria-multiline': 'true', 'aria-readonly': String(readOnly), spellcheck: 'false' }), editorPlaceholder(placeholder)];
-  useLayoutEffect(() => {
-    if (!host.current) return;
+  function createState(text: string) {
     // Tauri gives this bundled anchor a fresh style nonce for each document.
     const nonce = (document.getElementById('cliora-editor-nonce') as HTMLStyleElement | null)?.nonce ?? '';
-    const view = new EditorView({ parent: host.current, state: EditorState.create({ doc: initialValue.current, extensions: [
+    return EditorState.create({ doc: text, extensions: [
       configuration.current.of(extensions()), EditorView.cspNonce.of(nonce), lineNumbers(), history(), drawSelection(),
       highlightActiveLine(), bracketMatching(), indentOnInput(), EditorState.tabSize.of(2), EditorView.lineWrapping,
       keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap]), syntaxHighlighting(highlighting),
       EditorView.updateListener.of(update => {
         if (update.docChanged && !update.transactions.some(transaction => transaction.annotation(Transaction.addToHistory) === false)) callback.current?.(update.state.doc.toString());
       }),
-    ] }) });
+    ] });
+  }
+  useLayoutEffect(() => {
+    if (!host.current) return;
+    const view = new EditorView({ parent: host.current, state: createState(initialValue.current) });
     editor.current = view;
     return () => { editor.current = null; view.destroy(); };
   }, []);
+  useLayoutEffect(() => {
+    if (activeDocument.current === documentId) return;
+    activeDocument.current = documentId;
+    editor.current?.setState(createState(value));
+  }, [documentId]);
   useLayoutEffect(() => { editor.current?.dispatch({ effects: configuration.current.reconfigure(extensions()) }); }, [format, readOnly, label, placeholder]);
   useLayoutEffect(() => {
     const view = editor.current;
@@ -96,8 +105,9 @@ export function CodeEditor({ value, onChange, format = 'text', label, readOnly =
       else if (kind === 'redo') redo(view);
       else if (kind === 'all') selectAll(view);
       else if (kind === 'paste') {
+        const document = activeDocument.current;
         const text = await navigator.clipboard.readText();
-        if (editor.current !== view || readOnly) return;
+        if (editor.current !== view || activeDocument.current !== document || view.state.readOnly) return;
         view.dispatch(view.state.replaceSelection(text), { userEvent: 'input.paste', scrollIntoView: true });
       } else {
         const state = view.state;

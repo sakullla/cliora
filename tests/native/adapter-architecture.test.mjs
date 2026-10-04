@@ -32,7 +32,7 @@ test('adapter implementations have only the frontend and backend package roots',
   }
   // The five default-off additions ship backend adapters under the same
   // package root; they need no frontend package until custom controls exist.
-  for (const cli of ['zcode', 'qoder', 'kimi_code', 'deepseek', 'codebuddy']) {
+  for (const cli of ['zcode', 'qoder_cn', 'kimi_code', 'deepseek', 'codebuddy']) {
     await access(`src-tauri/src/adapters/${cli}/mod.rs`);
   }
 });

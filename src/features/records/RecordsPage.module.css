@@ -20,7 +20,9 @@
 .tabs button:hover { color: var(--text); }
 .tabs button[aria-selected="true"] { color: var(--accent); font-weight: 640; }
 .tabs button[aria-selected="true"]::after { transform: scaleX(1); }
-.refresh { margin-bottom: 8px; }
+.refresh { display: inline-flex; align-items: center; gap: 7px; min-height: 34px; margin-bottom: 8px; padding: 6px 11px; border-color: var(--line); border-radius: 9px; background: transparent; color: var(--accent); box-shadow: none; font-size: 13px; font-weight: 560; white-space: nowrap; }
+.refresh:hover:not(:disabled) { border-color: var(--accent); background: var(--surface-2); }
+.refresh:disabled { color: var(--text-3); opacity: 1; }
 
 .primary, .primary:hover:not(:disabled) { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
 .primary:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }

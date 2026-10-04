@@ -580,3 +580,52 @@ test('native file history replaces the editor instead of stacking a diff', async
   await history.getByRole('button', { name: '返回编辑' }).click();
   await expect(page.getByRole('dialog', { name: '修改正在使用的文件' })).toBeVisible();
 });
+
+
+test('native multi-file switching reuses the editor and separates undo history', async ({ page }) => {
+  await page.addInitScript(() => {
+    const state = { reads: [] as string[] };
+    Object.assign(window, { isTauri: true, multiFileHarness: state, __TAURI_INTERNALS__: { invoke: async (command: string, args?: { role?: string }) => {
+      if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['zcode'], theme: 'system' }, tools: [{ id: 'zcode', name: 'ZCode' }] };
+      if (command === 'list_cli_adapters') return { registered: [{ id: 'zcode', name: 'ZCode', interfaceFormats: [] }], managedIds: ['zcode'], preservedUnknown: [] };
+      if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
+      if (command === 'get_tray_status') return { available: false, error: null };
+      if (command.startsWith('plugin:event|')) return 1;
+      if (command.startsWith('list_') || command === 'scan_native_skills') return [];
+      if (command === 'get_registered_tool_workspace') return {
+        probe: { selectedPath: 'C:/pi.cmd', installations: [], nativeFiles: [
+          { role: 'settings', path: 'C:/fixture/settings.json', format: 'json', writable: true, sensitive: false },
+          { role: 'models', path: 'C:/fixture/models.json', format: 'json', writable: true, sensitive: false }],
+          nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: [], providerPresets: [], dependencies: [] },
+        profiles: [], common: null, binding: null, snapshots: [{ role: 'settings', fingerprint: 'a' }, { role: 'models', fingerprint: 'b' }], recoveryNeeded: [], customPath: null,
+      };
+      if (command === 'read_registered_native_file_for_edit') { state.reads.push(args?.role ?? ''); return args?.role === 'models' ? '{"models": []}' : '{"theme": "light"}'; }
+      return null;
+    } } });
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('button', { name: '修改正在使用的文件' }).click();
+  const dialog = page.getByRole('dialog', { name: '修改正在使用的文件' });
+  const settings = dialog.getByRole('textbox', { name: 'settings 配置草稿' });
+  await expect(settings).toContainText('light');
+  await settings.evaluate(element => { (window as any).firstEditor = element; });
+  await settings.fill('{"theme": "dark"}');
+  await dialog.getByRole('button', { name: 'models.json', exact: true }).click();
+  const confirm = page.getByRole('dialog', { name: '放弃未保存修改？' });
+  await confirm.getByRole('button', { name: '取消' }).click();
+  await expect(settings).toContainText('dark');
+  expect(await page.evaluate(() => (window as any).multiFileHarness.reads)).toEqual(['settings']);
+  await dialog.getByRole('button', { name: 'models.json', exact: true }).click();
+  await page.getByRole('dialog', { name: '放弃未保存修改？' }).getByRole('button', { name: '放弃修改' }).click();
+  const models = dialog.getByRole('textbox', { name: 'models 配置草稿' });
+  await expect(models).toContainText('"models"');
+  expect(await models.evaluate(element => element === (window as any).firstEditor)).toBe(true);
+  await models.press('Control+z');
+  await expect(models).toContainText('"models"');
+  await expect(models).not.toContainText('theme');
+  await dialog.getByRole('button', { name: 'settings.json', exact: true }).click();
+  await expect(settings).toContainText('light');
+  expect(await page.evaluate(() => (window as any).multiFileHarness.reads)).toEqual(['settings', 'models', 'settings']);
+  await page.screenshot({ path: 'test-results/native-multi-file.png' });
+});

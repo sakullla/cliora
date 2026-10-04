@@ -35,6 +35,13 @@ pub(crate) fn npm_metadata(root: Option<&Path>) -> PluginPackage {
     }
 }
 pub trait PluginAdapter: Sync {
+    /// A desktop adapter may expose a separately bundled native command entry.
+    /// The shared service owns spawning, context, cancellation and output bounds.
+    fn command_program(&self, executable: &Path) -> Result<(PathBuf, Vec<String>), String> { Ok((executable.to_path_buf(), vec![])) }
+    /// An adapter may keep plugin declarations in a different native document.
+    fn config_location(&self, _home: &Path, _target: &PluginTarget) -> Result<Option<(PathBuf, crate::native::format::FileKind)>, String> { Ok(None) }
+    /// Native records whose changes invalidate a scanned operation baseline.
+    fn snapshot_files(&self, _home: &Path, _target: &PluginTarget) -> Vec<PathBuf> { vec![] }
     /// A native ledger can be inspected without starting a CLI process.
     fn discovery_only(&self) -> bool { false }
     fn version_policy(&self) -> super::version::VersionPolicy {

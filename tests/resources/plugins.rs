@@ -4,10 +4,10 @@ use super::*;
 fn file_discovery_does_not_require_an_installed_executable() {
     let home = tempfile::tempdir().unwrap();
     let db = Database::open(&home.path().join("cliora.db")).unwrap();
-    for id in ["zcode", "kimi_code", "codebuddy"] {
+    for id in ["claude_code", "kimi_code", "codebuddy", "deepseek"] {
         let target = PluginTarget { tool_id: id.into(), scope: Scope::Global, project_path: None, context_id: None };
         assert!(scan(&db, home.path(), &target).unwrap().entries.is_empty());
-        assert!(crate::resources::agents::scan(&db, home.path(), &target).is_ok());
+        if id != "deepseek" { assert!(crate::resources::agents::scan(&db, home.path(), &target).is_ok()); }
     }
 }
 use std::collections::HashMap;
@@ -735,4 +735,56 @@ fn plugin_edits_preserve_restricted_secret_file_acl_under_permissive_parent() {
             .unwrap()
             .contains("synthetic-secret-only"));
     }
+}
+
+#[test]
+fn dsh_user_bundle_toggle_is_transactional_and_retains_official_layers() {
+    let home = tempfile::tempdir().unwrap();
+    let db = Database::open(&home.path().join("test.db")).unwrap();
+    let profile = home.path().join(".dsh/profiles/desktop");
+    let package = profile.join("node_modules/@fixture/user-plugin");
+    fs::create_dir_all(&package).unwrap();
+    fs::write(package.join("package.json"), r#"{"name":"@fixture/user-plugin","version":"1.0.0","dsh":{"bundle":{"patch":"./cordis.patch.yml"}}}"#).unwrap();
+    let config = profile.join("package.json");
+    fs::write(&config, r#"{"private":true,"dependencies":{"@fixture/user-plugin":"1.0.0"},"dsh":{"profile":{"bundles":["@deepseek-ai/dsh-base","@fixture/user-plugin"]}},"custom":"retain"}"#).unwrap();
+    let target = target("deepseek");
+    let before = scan(&db, home.path(), &target).unwrap();
+    assert_eq!(before.entries.len(), 1);
+    assert_eq!(before.entries[0].enabled, Some(true));
+    let mut req = request("deepseek", "disable", "@fixture/user-plugin");
+    req.baseline = before.baseline;
+    let store = MemoryStore::default();
+    let disabled = operate(&db, &store, home.path(), &req).unwrap();
+    assert_eq!(disabled.status, "configuration_written");
+    assert_eq!(disabled.snapshot.as_ref().unwrap().entries[0].enabled, Some(false));
+    let parsed: Value = serde_json::from_str(&fs::read_to_string(&config).unwrap()).unwrap();
+    assert_eq!(parsed["custom"], "retain");
+    assert_eq!(parsed.pointer("/dsh/profile/bundles").unwrap(), &json!(["@deepseek-ai/dsh-base"]));
+    assert!(package.join("package.json").is_file());
+    assert!(operate(&db, &store, home.path(), &req).is_err(), "old baseline must not write twice");
+    req.action = "enable".into(); req.baseline = disabled.snapshot.unwrap().baseline;
+    let enabled = operate(&db, &store, home.path(), &req).unwrap();
+    assert_eq!(enabled.snapshot.unwrap().entries[0].enabled, Some(true));
+    assert_eq!(transaction::recent_backups(&db, &config).unwrap().len(), 2);
+}
+
+#[test]
+fn claude_ledger_is_fast_file_discovery_with_scope_and_enablement_baselines() {
+    let home = tempfile::tempdir().unwrap();
+    let db = Database::open(&home.path().join("test.db")).unwrap();
+    let root = home.path().join(".claude"); fs::create_dir_all(root.join("plugins")).unwrap();
+    let project = home.path().join("project"); fs::create_dir_all(project.join(".claude")).unwrap();
+    let ledger = root.join("plugins/installed_plugins.json");
+    fs::write(&ledger, serde_json::to_string(&json!({"version":2,"plugins":{"fixture@custom":[{"scope":"user","version":"1"},{"scope":"project","projectPath":project.to_str().unwrap(),"version":"2"},{"scope":"project","projectPath":"/elsewhere","version":"3"}]}})).unwrap()).unwrap();
+    fs::write(root.join("settings.json"), r#"{"enabledPlugins":{"fixture@custom":true}}"#).unwrap();
+    fs::write(project.join(".claude/settings.local.json"), r#"{"enabledPlugins":{"fixture@custom":false}}"#).unwrap();
+    let user = scan(&db, home.path(), &target("claude_code")).unwrap();
+    assert_eq!(user.entries.len(), 1); assert_eq!(user.entries[0].enabled, Some(true));
+    let project_target = PluginTarget { scope: Scope::Project, project_path: Some(project.display().to_string()), ..target("claude_code") };
+    let local = scan(&db, home.path(), &project_target).unwrap();
+    assert_eq!(local.entries.len(), 1); assert_eq!(local.entries[0].enabled, Some(false));
+    fs::write(project.join(".claude/settings.local.json"), r#"{"enabledPlugins":{"fixture@custom":true}}"#).unwrap();
+    assert_ne!(local.baseline, scan(&db, home.path(), &project_target).unwrap().baseline);
+    fs::write(ledger, r#"{"version":3,"plugins":{}}"#).unwrap();
+    assert!(scan(&db, home.path(), &target("claude_code")).is_err());
 }

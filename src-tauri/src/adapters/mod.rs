@@ -14,7 +14,6 @@ pub(crate) mod opencode;
 pub(crate) mod pi;
 pub mod plugins;
 pub mod providers;
-pub(crate) mod qoder;
 pub(crate) mod qoder_cn;
 mod registry;
 pub mod version;
@@ -31,7 +30,6 @@ pub static OPENCODE: opencode::OpenCode = opencode::OpenCode;
 // Default-off additions registered with non-enumerated stable ids; honest
 // stubs until the dedicated adapter tasks deliver verified capabilities.
 pub static ZCODE: zcode::ZCode = zcode::ZCode;
-pub static QODER: qoder::Qoder = qoder::Qoder;
 pub static KIMI_CODE: kimi_code::KimiCode = kimi_code::KimiCode;
 pub static DEEPSEEK: deepseek::DeepSeek = deepseek::DeepSeek;
 pub static CODEBUDDY: codebuddy::CodeBuddy = codebuddy::CodeBuddy;

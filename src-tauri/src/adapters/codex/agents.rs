@@ -116,6 +116,7 @@ impl AgentAdapter for Codex {
                         content: file.as_ref().and_then(|p| read(p).ok()).unwrap_or_default(),
                         enabled: true,
                         read_only: true,
+                        builtin: false,
                         owner: "config.toml 显式引用".into(),
                         detail: "此兼容格式由配置编辑器管理；新增定义使用原生自动扫描格式".into(),
                     });

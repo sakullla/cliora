@@ -61,3 +61,36 @@ Windows 文件/账号目录的保护通过 Windows 安全 API 设置完整、受
 长会话“最新”定位回归：先显式渲染最后消息再即时定位，避免平滑滚动期间延迟 Markdown 改变高度而停在中途。最终完整浏览器回归 101 passed，命令 35.53s；核心集成是其中显式标记的五条流程，完整浏览器集合没有为了时限删除高价值用例。
 
 Qoder CN 本机 v2 安装索引包含 5 个存在的插件目录，原生 plugins list --json 返回其中 3 条。当前只读发现展示安装索引中的记录；另外两条的原生 CLI 管理操作没有实测，不将索引发现结果等同于原生列表完全一致。
+
+
+## 2026-10-04：0.2.7 配置、规则与插件补充
+
+只保留 Qoder CN 注册与适配器，国际版 Qoder 的旧管理记录保留为不支持项，不自动迁移到 CN。CN Agent 页显示本机 1.1.65 已核对的五个只读内置参考定义；同名用户定义可以覆盖参考条目，不读取或伪造内置提示词。
+
+原生配置只读编辑不再启动安装/版本探测，保存仍保留新鲜能力检查、文件基线比较与加密备份。编辑器悬停预加载，切换文件复用 EditorView 并隔离撤销历史；异步读取与粘贴拒绝已切换的文档。Kimi 增加 config.toml / tui.toml，ZCode 增加 setting.json / provider_config.json；模型文件按原生 schemaVersion 1 校验，未虚构其他 CLI 的文件角色。
+
+规则增加 Kimi、Qoder CN、DeepSeek、ZCode 的已确认默认 AGENTS.md 路径，Kimi 优先已有项目内嵌规则。作用域可用性由注册表声明。Qoder CN 的自定义规则文件名与 DeepSeek profile 禁用/定制指令仍由原生设置决定，当前管理默认路径；CodeBuddy 项目规则未确认，界面保留不可用原因。
+
+Kimi Windows MCP 将 npx shim 映射为绝对 node.exe 与 npm npx-cli.js，参数和环境变量按字面保留，不拼 shell 命令。settings 应用时迁移 loop_control.max_retries_per_step，已有 max_attempts_per_step 优先。本机现有一个 npx MCP 条目与旧字段通过共享加密事务修复，创建恢复备份；实际 kimi doctor 退出 0，未出现旧字段或 spawn npx ENOENT 提示。doctor 不等同于完整 MCP 工具调用验收。
+
+Claude Code 插件读取原生 v2 安装索引与作用域启停配置，避免 CLI 启动。Codex 保留原生列表与策略，不伪造文件索引；复用安装探测缓存。插件页面按工具/作用域/项目/账号缓存 30 秒，重新扫描绕过缓存，操作仍重新核对基线。ZCode 通过安装包内 zcode.cjs 管理原生插件；安装注册表改用共享 Windows 只读 API，避免 reg.exe 全表进程扫描。DSH 支持 desktop profile 内已安装用户 bundle 的启停，保留依赖、插件文件与官方层；安装、更新、卸载继续通过 DSH 原生页。
+
+实际 Windows 本机只读扫描，Rust debug profile、独立临时数据库，以下各两次观测不作为发布 GUI 耗时承诺：
+
+| 插件扫描 | 首次 | 再次 | 条目 |
+| --- | ---: | ---: | ---: |
+| Claude Code | 282 ms | 268 ms | 1 |
+| Codex | 1230 ms | 963 ms | 1 |
+| ZCode | 4258 ms | 3522 ms | 14 |
+| DeepSeek | 472 ms | 407 ms | 1 |
+| Qoder CN | 1294 ms | 935 ms | 5 |
+
+ZCode 注册表调整前同一调试诊断首次 7799 ms、再次 3704 ms；大插件内容摘要仍有成本。Kimi settings/tui 与 ZCode settings/models 的直接只读文件读取为 154–207 µs，不包含 IPC 与编辑器显示。
+
+资料页成功提示四秒自动消失，错误继续保留恢复入口；刷新记录按钮统一图标、悬停与忙碌状态。CLI 会话来源删除后，下一次完整成功刷新删除索引与级联用量，并重新计算统计；失败或取消的发现不会清理旧索引。扩展已有删除回归，校验会话数及所有 token 总量归零。
+
+界面回归 104 passed，完整浏览器命令约 50.09s；五条核心集成 5 passed，Playwright 5.1s、脚本 5.78s。浏览器使用 mock，实际原生读/诊断另列；没有新增 macOS/Linux 本机验收。
+
+最终缓存就绪验收：全量单元命令 9.40s，快速单元命令 9.26s；两者均运行相同完整集合，Rust 410 passed / 9 ignored，Node 20 passed。Rust 实际执行分别 8.00s / 7.80s，均未过滤新增回归。cargo clippy --all-targets 退出 0，保留已有警告；新增注册表范围判断警告已消除。TypeScript 检查与生产前端构建通过。
+
+本机 npm run tauri build -- --no-bundle 成功。已启动 Windows 原生 0.2.7 并检查进程响应；可执行文件 SHA-256 为 B7EB3BD8EF188D1E0E54EE5105D4BBAC3A90A14FC82BD6CD504A5DAED6AE5316。本条仅记录构建/启动，不升级完整平台验收矩阵。

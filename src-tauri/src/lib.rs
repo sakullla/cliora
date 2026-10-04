@@ -2,6 +2,7 @@ pub mod adapters;
 mod external;
 mod background_process;
 mod process_environment;
+mod windows_registry;
 #[cfg(windows)]
 mod windows_security;
 #[cfg(all(test, target_os = "macos"))]

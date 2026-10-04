@@ -2563,16 +2563,9 @@ pub async fn read_registered_native_file_for_edit(
         state.with_database(&app, |database| {
             let registry = adapters::Registry::builtins();
             let _context = crate::accounts::selection::enter_bound(database, &home, &tool_id, scope, project.as_deref()).map_err(native_error)?;
-            let custom = registered_tool_path(database, &tool_id).map_err(native_error)?;
-            let probe = adapter::probe_registered(
-                &registry,
-                &tool_id,
-                custom.as_deref(),
-                &home,
-                project.as_deref(),
-                scope,
-            )
-            .map_err(native_error)?;
+            // Reading a declared, non-sensitive file does not require starting
+            // every installed CLI to check its version. Saving still performs
+            // fresh capability checks and the native transaction comparison.
             adapters::read_registered_file(
                 &registry,
                 &tool_id,
@@ -2580,7 +2573,7 @@ pub async fn read_registered_native_file_for_edit(
                 scope,
                 &home,
                 project.as_deref(),
-                probe.native_writes.state == "supported",
+                false,
             )
             .map_err(native_error)
         })

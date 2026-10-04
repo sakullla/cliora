@@ -64,7 +64,10 @@ pub struct ManagementCapabilities {
     pub agents: bool,
     pub plugins: bool,
     pub project_plugins: bool,
+    pub rules: RuleSupport,
 }
+#[derive(Clone, Debug, Serialize)]
+pub struct RuleSupport { pub global: bool, pub project: bool }
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -403,6 +406,14 @@ pub trait CliAdapter: Sync {
     fn rule_path(&self, _scope: Scope, _home: &Path, _project: Option<&Path>) -> Option<PathBuf> {
         None
     }
+    fn rule_support(&self) -> RuleSupport {
+        let home = Path::new("/__cliora_capability_home__");
+        let project = Path::new("/__cliora_capability_project__");
+        RuleSupport {
+            global: self.rule_path(Scope::Global, home, None).is_some(),
+            project: self.rule_path(Scope::Project, home, Some(project)).is_some(),
+        }
+    }
     fn install_guidance(&self) -> (&'static str, &'static str);
     fn node_required_when_missing(&self) -> bool {
         true
@@ -461,6 +472,7 @@ pub trait CliAdapter: Sync {
                 agents: self.agents().is_some_and(|adapter| adapter.capability().supported),
                 plugins: self.plugins().is_some_and(|adapter| !adapter.capability().actions.is_empty()),
                 project_plugins: self.plugins().is_some_and(|adapter| adapter.capability().project),
+                rules: self.rule_support(),
             },
             login: self.login_args().map(|_| LoginCapability {
                 hint: self.login_hint(),

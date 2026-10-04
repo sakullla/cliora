@@ -468,3 +468,20 @@ test('Skill failed project stays visible and disabled while healthy global insta
   expect(writes[1]).toMatchObject({ toolId: 'codex', scope: 'global', projectPath: null, previewToken: 'isolated-token' });
   expect(await page.evaluate(() => (window as any).__isolatedInstalls)).toHaveLength(2);
 });
+
+
+test('library success notices expire after four seconds', async ({ page }) => {
+  await mockResources(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
+  await page.getByRole('button', { name: '＋ 新建提示词', exact: true }).click();
+  await page.getByRole('textbox', { name: '标题', exact: true }).fill('Notice fixture');
+  await page.getByRole('textbox', { name: '资料正文', exact: true }).fill('Fixture body');
+  await page.clock.install();
+  await page.getByRole('dialog').getByRole('button', { name: '保存', exact: true }).click();
+  const status = page.getByRole('status').filter({ hasText: '已保存在本机资料库' });
+  await expect(status).toBeVisible();
+  await page.clock.fastForward(4100);
+  await expect(status).toHaveCount(0);
+  await expect(page.getByText('Notice fixture', { exact: true })).toBeVisible();
+});

@@ -4,7 +4,7 @@
 //! installation is identified through the official Windows install markers
 //! (`zcode://` protocol registration, the per-user uninstall entry and the
 //! `.zcode-install-manifest` file; see `install`). The managed native config
-//! surface is `~/.zcode/v2/setting.json`; the product-owned encrypted
+//! surface includes `~/.zcode/v2/setting.json` and `provider_config.json`; the product-owned encrypted
 //! `~/.zcode/v2/credentials.json` is never read or written. MCP entries live in
 //! `~/.zcode/cli/config.json` under the nested `mcp.servers` key; Skills and
 //! agent definitions use the shared resource roots (`~/.zcode/skills`,
@@ -40,10 +40,18 @@ pub struct ZCode;
 /// ZCode relocates its whole data root through `ZCODE_DATA_BASE_DIR`
 /// (official packages/services/src/paths.ts); the default is `~/.zcode`.
 pub(crate) fn data_root(home: &Path) -> PathBuf {
+    if dirs::home_dir().as_deref() != Some(home) { return home.join(".zcode"); }
     std::env::var_os("ZCODE_DATA_BASE_DIR")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| home.join(".zcode"))
+}
+
+fn models_path(home: &Path) -> PathBuf {
+    if dirs::home_dir().as_deref() == Some(home) {
+        if let Some(path) = std::env::var_os("ZCODE_PERSONAL_PROVIDER_CONFIG_FILE").map(PathBuf::from).filter(|path| path.is_absolute()) { return path; }
+    }
+    data_root(home).join("v2/provider_config.json")
 }
 
 impl CliAdapter for ZCode {
@@ -93,17 +101,32 @@ impl CliAdapter for ZCode {
             known,
             None,
             false,
-        )]
+        ), file("models", models_path(home), FileKind::Json, known,
+            Some("ZCode 个人供应商与模型配置，原生 schemaVersion 1；凭据文件仍由 ZCode 管理"), false)]
     }
     fn interface_formats(&self) -> &'static [&'static str] {
         &[]
     }
     fn file_kind(&self, role: &str) -> Result<FileKind, String> {
-        if role == "settings" {
+        if matches!(role, "settings" | "models") {
             Ok(FileKind::Json)
         } else {
-            Err("ZCode 桌面端只管理 ~/.zcode/v2/setting.json".into())
+            Err("ZCode 没有此原生配置文件角色".into())
         }
+    }
+    fn validate_draft(&self, role: &str, parsed: &Value) -> Result<(), String> {
+        if role == "models" && (parsed.get("schemaVersion").and_then(Value::as_u64) != Some(1) || !parsed.get("config").is_some_and(Value::is_object)) {
+            return Err("ZCode provider_config.json 需要 schemaVersion 1 和 config 对象".into());
+        }
+        Ok(())
+    }
+    fn rule_path(&self, scope: Scope, home: &Path, project: Option<&Path>) -> Option<PathBuf> {
+        // Native instruction discovery uses the user home, independently of
+        // ZCODE_DATA_BASE_DIR (adapters/src/context/index.ts).
+        Some(match scope {
+            Scope::Global => home.join(".zcode/AGENTS.md"),
+            Scope::Project => project?.join("AGENTS.md"),
+        })
     }
     fn connection_documents(
         &self,
@@ -275,7 +298,7 @@ impl CliAdapter for ZCode {
             launch_form: self.launch_form(),
             native_config: Facet {
                 state: "available",
-                reason: "可编辑 ~/.zcode/v2/setting.json（JSON）",
+                reason: "可分别编辑 setting.json 与 provider_config.json（JSON）",
             },
             launch: Facet {
                 state: "available",
@@ -287,7 +310,7 @@ impl CliAdapter for ZCode {
             },
             resources: Facet {
                 state: "available",
-                reason: "MCP 经 ~/.zcode/cli/config.json（mcp.servers），Skills 与 Agents 走共享资源根，插件只读列举 installed_plugins.json",
+                reason: "MCP 经 ~/.zcode/cli/config.json（mcp.servers），Skills 与 Agents 走共享资源根，插件经安装包内 ZCode CLI 管理",
             },
             history: Facet {
                 state: "available",
@@ -301,6 +324,7 @@ impl CliAdapter for ZCode {
                 agents: true,
                 plugins: true,
                 project_plugins: false,
+                rules: self.rule_support(),
             },
         }
     }
@@ -351,11 +375,13 @@ mod tests {
     }
 
     #[test]
-    fn native_surface_is_the_desktop_setting_json_only() {
+    fn native_surface_separates_settings_and_models() {
         let home = Path::new("/home/example");
         let files = ZCode.native_files(Scope::Global, home, None, true);
-        assert_eq!(files.len(), 1);
+        assert_eq!(files.len(), 2);
         assert_eq!(files[0].role, "settings");
+        assert_eq!(files[1].role, "models");
+        assert!(files[1].path.replace('\\', "/").ends_with("v2/provider_config.json"));
         assert_eq!(files[0].format, "json");
         assert!(
             files[0]
@@ -553,6 +579,10 @@ mod tests {
 
     #[test]
     fn versioned_native_fixture_round_trips_as_json() {
+        assert!(ZCode.validate_draft("models", &json!({"schemaVersion":1,"config":{}})).is_ok());
+        for document in [json!({"schemaVersion":2,"config":{}}), json!({"schemaVersion":1,"config":[]}), json!({"config":{}})] {
+            assert!(ZCode.validate_draft("models", &document).is_err());
+        }
         let text = include_str!("../../../../tests/fixtures/native/zcode-3.14.4.json");
         let parsed = crate::native::format::parse(FileKind::Json, text).unwrap();
         assert_eq!(parsed["locale"], "zh-CN");

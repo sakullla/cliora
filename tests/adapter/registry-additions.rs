@@ -4,13 +4,13 @@
 //! enabled set, flow through the existing unknown-id management channel, and
 //! declare exactly the evidence-gated dimensions the adapter tasks delivered:
 //! no fabricated quota, accounts or login anywhere, and per-adapter gaps
-//! (qoder sessions, deepseek agents/plugins, read-only plugin listings) stay
+//! (Qoder CN sessions, DeepSeek agents, action-limited plugin management) stay
 //! absent or action-limited with recorded reasons.
 
 use crate::adapters::Registry;
 use crate::domain::{CliId, Preferences};
 
-const NEW_IDS: [&str; 5] = ["zcode", "qoder", "kimi_code", "deepseek", "codebuddy"];
+const NEW_IDS: [&str; 5] = ["zcode", "qoder_cn", "kimi_code", "deepseek", "codebuddy"];
 
 fn legacy_ids() -> Vec<String> {
     CliId::ALL
@@ -44,6 +44,7 @@ fn five_new_ids_register_once_without_redundant_aliases() {
     }
     // No redundant product alias such as "hernes" may ride along (R4).
     assert!(registry.get("hernes").is_none());
+    assert!(registry.get("qoder").is_none());
 }
 
 #[test]
@@ -71,12 +72,12 @@ fn checking_new_ids_flows_through_the_unknown_managed_channel() {
     let mut preferences = Preferences::default();
     let mut ids = legacy_ids();
     ids.push("zcode".into());
-    ids.push("qoder".into());
+    ids.push("qoder_cn".into());
     preferences.set_registered_managed(&ids, registered).unwrap();
     assert_eq!(preferences.managed_tools, CliId::ALL.to_vec());
     assert_eq!(
         preferences.unknown_managed_tools(),
-        &["zcode".to_string(), "qoder".to_string()]
+        &["zcode".to_string(), "qoder_cn".to_string()]
     );
     // Submitting an unregistered id is rejected by the existing guard.
     assert!(preferences
@@ -88,12 +89,12 @@ fn checking_new_ids_flows_through_the_unknown_managed_channel() {
     // A previously stored unregistered id stays preserved read-only while a
     // registered selection is applied (preserved_unknown semantics).
     let mut stored: Preferences = serde_json::from_str(
-        r#"{"schema_version":1,"managed_tools":["codex","hernes","kimi_code"],"theme":"system"}"#,
+        r#"{"schema_version":1,"managed_tools":["codex","qoder","kimi_code"],"theme":"system"}"#,
     )
     .unwrap();
     assert_eq!(
         stored.unknown_managed_tools(),
-        &["hernes".to_string(), "kimi_code".to_string()]
+        &["qoder".to_string(), "kimi_code".to_string()]
     );
     stored
         .set_registered_managed(&["pi".into(), "kimi_code".into()], registered)
@@ -103,7 +104,7 @@ fn checking_new_ids_flows_through_the_unknown_managed_channel() {
     // remains preserved there for the read-only catalog view.
     assert_eq!(
         stored.unknown_managed_tools(),
-        &["hernes".to_string(), "kimi_code".to_string()]
+        &["qoder".to_string(), "kimi_code".to_string()]
     );
 }
 
@@ -152,20 +153,20 @@ fn five_added_adapters_declare_their_delivered_dimensions() {
             }
         }
     }
-    // zcode: desktop form; sessions with token usage, read-only plugin
-    // listing, agents delivered; no resume contract and no verified YOLO.
+    // zcode: desktop form; sessions with token usage, native plugin
+    // management, agents delivered; no resume contract and no verified YOLO.
     let zcode = registry.get("zcode").unwrap();
     assert!(zcode.history_supported());
     assert!(zcode.agents().is_some());
-    assert_eq!(zcode.plugins().unwrap().capability().actions, ["list"]);
+    assert_eq!(zcode.plugins().unwrap().capability().actions, ["install", "update", "enable", "disable", "uninstall"]);
     assert!(!zcode.descriptor().management.project_plugins);
     assert_eq!(zcode.descriptor().resume.state, "unsupported");
     assert!(!zcode.descriptor().yolo_available);
     assert!(zcode.launch_args(None, crate::adapters::LaunchMode::Yolo).is_err());
-    // qoder: terminal CLI with full plugin verbs and project scope, agents and
+    // Qoder CN: terminal CLI with full plugin verbs and project scope, agents and
     // YOLO; the session dimension stays planned because the transcript fields
     // are undocumented and usage is metered in Credits only.
-    let qoder = registry.get("qoder").unwrap();
+    let qoder = registry.get("qoder_cn").unwrap();
     assert!(!qoder.history_supported());
     assert_eq!(qoder.descriptor().history.state, "planned");
     assert_eq!(qoder.descriptor().resume.state, "planned");
@@ -186,13 +187,13 @@ fn five_added_adapters_declare_their_delivered_dimensions() {
     assert_eq!(kimi.descriptor().resume.state, "available");
     assert!(kimi.descriptor().yolo_available);
     // deepseek: YAML patch editing, zstd sessions with TokenUsage, MCP/Skills;
-    // agents and plugins stay wholly absent (no verifiable contract).
+    // agents remain unavailable; installed user bundles support enable/disable.
     let deepseek = registry.get("deepseek").unwrap();
     assert!(deepseek.history_supported());
     assert!(deepseek.agents().is_none());
-    assert!(deepseek.plugins().is_none());
+    assert_eq!(deepseek.plugins().unwrap().capability().actions, ["enable", "disable"]);
     assert!(!deepseek.descriptor().management.agents);
-    assert!(!deepseek.descriptor().management.plugins);
+    assert!(deepseek.descriptor().management.plugins);
     assert_eq!(deepseek.descriptor().resume.state, "unsupported");
     assert!(!deepseek.descriptor().yolo_available);
     // codebuddy: resumable sessions with provider usage, agents, project-scope

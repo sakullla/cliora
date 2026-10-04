@@ -12,6 +12,7 @@
 
 pub(crate) mod agents;
 pub mod history;
+mod mcp_command;
 pub(crate) mod plugins;
 
 use std::collections::BTreeMap;
@@ -126,7 +127,7 @@ impl CliAdapter for KimiCode {
                 known,
                 None,
                 false,
-            )],
+            ), file("tui", config_dir(home).join("tui.toml"), FileKind::Toml, known, Some("Kimi Code 终端界面配置；新终端会话读取"), false)],
         }
     }
     fn interface_formats(&self) -> &'static [&'static str] {
@@ -137,7 +138,7 @@ impl CliAdapter for KimiCode {
         ]
     }
     fn file_kind(&self, role: &str) -> Result<FileKind, String> {
-        if role == "settings" {
+        if matches!(role, "settings" | "tui") {
             Ok(FileKind::Toml)
         } else {
             Err("Kimi Code 不支持此原生文件角色".into())
@@ -150,6 +151,14 @@ impl CliAdapter for KimiCode {
             &["default_model", "models"]
         } else {
             &[]
+        }
+    }
+    fn normalize_applied_document(&self, role: &str, document: &mut Value) {
+        if role != "settings" { return; }
+        if let Some(control) = document.get_mut("loop_control").and_then(Value::as_object_mut) {
+            if let Some(value) = control.remove("max_retries_per_step") {
+                control.entry("max_attempts_per_step").or_insert(value);
+            }
         }
     }
     fn mcp_location(
@@ -169,6 +178,16 @@ impl CliAdapter for KimiCode {
             child: None,
         })
     }
+    fn rule_path(&self, scope: Scope, home: &Path, project: Option<&Path>) -> Option<PathBuf> {
+        Some(match scope {
+            Scope::Global => config_dir(home).join("AGENTS.md"),
+            Scope::Project => {
+                let root = project?;
+                [root.join(".kimi-code/AGENTS.md"), root.join("AGENTS.md"), root.join("agents.md")]
+                    .into_iter().find(|path| path.is_file()).unwrap_or_else(|| root.join("AGENTS.md"))
+            }
+        })
+    }
     fn mcp_document(
         &self,
         definition: &McpDefinition,
@@ -179,6 +198,7 @@ impl CliAdapter for KimiCode {
             McpTransport::Stdio => mcp::stdio_doc(definition, existing),
             McpTransport::Http => mcp::http_doc(definition, existing, "headers"),
         };
+        if definition.transport == McpTransport::Stdio { mcp_command::normalize(&mut map)?; }
         map.insert("enabled".into(), json!(enabled));
         Ok(Some(Value::Object(map)))
     }
@@ -541,6 +561,7 @@ impl CliAdapter for KimiCode {
                 // and the shared surface hides all operation buttons.
                 plugins: true,
                 project_plugins: false,
+                rules: self.rule_support(),
             },
         }
     }
@@ -816,7 +837,7 @@ mod tests {
                 id: None,
                 name: "example".into(),
                 transport: McpTransport::Stdio,
-                command: "npx".into(),
+                command: "fixture-runner".into(),
                 args: vec!["-y".into(), "example-mcp".into()],
                 url: String::new(),
                 env: BTreeMap::from([("API_KEY".into(), "${EXAMPLE_KEY}".into())]),
@@ -879,12 +900,12 @@ mod tests {
         let text = std::fs::read_to_string(&user_file).unwrap();
         assert!(text.contains("\"mcpServers\""));
         assert!(text.contains("\"other\""), "原生既有条目应保留");
-        assert!(text.contains("\"command\": \"npx\""));
+        assert!(text.contains("\"command\": \"fixture-runner\""));
         assert!(text.contains("\"enabled\": true"));
         let listed = mcp::list_native(&db, &registry, temp.path(), &target(true)).unwrap();
         let example = listed.iter().find(|entry| entry.name == "example").unwrap();
         assert!(example.enabled);
-        assert_eq!(example.command, "npx");
+        assert_eq!(example.command, "fixture-runner");
         // Disabling keeps the native entry with the documented enabled flag;
         // the file changed, so a fresh preview is required first.
         let after = mcp::distribute(
@@ -899,6 +920,21 @@ mod tests {
         let disabled_text = std::fs::read_to_string(&user_file).unwrap();
         assert!(disabled_text.contains("\"enabled\": false"));
         assert!(disabled_text.contains("\"other\""));
+    }
+
+    #[test]
+    fn deprecated_loop_field_migrates_without_overwriting_current_value() {
+        let mut document = json!({"loop_control":{"max_retries_per_step":3,"other":true},"models":{}});
+        KimiCode.normalize_applied_document("settings", &mut document);
+        assert_eq!(document["loop_control"], json!({"max_attempts_per_step":3,"other":true}));
+        document["loop_control"]["max_retries_per_step"] = json!(8);
+        KimiCode.normalize_applied_document("settings", &mut document);
+        assert_eq!(document["loop_control"]["max_attempts_per_step"], 3);
+        assert!(document["loop_control"].get("max_retries_per_step").is_none());
+        let mut tui = json!({"loop_control":{"max_retries_per_step":8}});
+        let original = tui.clone();
+        KimiCode.normalize_applied_document("tui", &mut tui);
+        assert_eq!(tui, original);
     }
 
     #[test]

@@ -49,8 +49,8 @@ impl PluginAdapter for QoderAdapter {
 
     fn capability(&self) -> crate::adapters::plugins::PluginCapability {
         crate::adapters::plugins::PluginCapability {
-            version: "1.1.63",
-            sources: "插件 ID name@marketplace、name@local 或本地路径（qoder plugins install）",
+            version: "1.1.65",
+            sources: "插件 ID name@marketplace、name@local 或本地路径（qoderclicn plugins install）",
             actions: vec!["install", "update", "enable", "disable", "uninstall"],
             project: true,
             detail: "经所选 CLI 的 plugins 子命令管理（install 支持 -s user|project）；启停状态存于 settings.json enabledPlugins。重启会话后加载。",
@@ -119,7 +119,7 @@ mod tests {
 
     fn target(scope: Scope, project_path: Option<&str>) -> PluginTarget {
         PluginTarget {
-            tool_id: "qoder".into(),
+            tool_id: "qoder_cn".into(),
             scope,
             project_path: project_path.map(str::to_owned),
             context_id: None,
@@ -150,8 +150,8 @@ mod tests {
         );
         // The shared entry point still validates the action vocabulary and
         // refuses unlisted verbs or invalid sources.
-        assert!(crate::adapters::plugins::command_args("qoder", "validate", "x", false).is_err());
-        assert!(crate::adapters::plugins::command_args("qoder", "install", "--yes", false).is_err());
+        assert!(crate::adapters::plugins::command_args("qoder_cn", "validate", "x", false).is_err());
+        assert!(crate::adapters::plugins::command_args("qoder_cn", "install", "--yes", false).is_err());
     }
 
     #[test]

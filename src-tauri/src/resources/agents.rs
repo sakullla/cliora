@@ -31,6 +31,7 @@ pub struct AgentEntry {
     pub content: String,
     pub enabled: bool,
     pub read_only: bool,
+    pub builtin: bool,
     pub owner: String,
     pub detail: String,
 }
@@ -170,6 +171,7 @@ pub(crate) fn entry(
         content,
         enabled: enabled && !native_disabled,
         read_only: owner != "独立定义",
+        builtin: false,
         owner: owner.into(),
         detail,
     }
@@ -279,6 +281,16 @@ fn snapshot_inner(
             e.detail
                 .push_str(" · 同名定义存在多个来源；原生优先级/合并可能生效，请在原生配置解决冲突");
         }
+    }
+    for builtin in adapter.builtin_definitions() {
+        let overridden = entries.iter().any(|entry| entry.name == builtin.name && entry.enabled);
+        entries.push(AgentEntry {
+            id: format!("builtin://{}/{}", target.tool_id, builtin.name),
+            name: builtin.name.into(), description: builtin.description.into(),
+            path: String::new(), format: "markdown".into(), content: String::new(),
+            enabled: !overridden, read_only: true, builtin: true, owner: "CLI 内置".into(),
+            detail: format!("参考核验版本 {} 的内置目录；模型继承当前会话。完整提示词与加载状态由原生 CLI 管理。{}", capability.version, if overridden { "当前作用域存在同名定义，可能覆盖此内置项。" } else { "" }),
+        });
     }
     basis.push_str(&serde_json::to_string(&entries).map_err(|_| "无法序列化定义")?);
     Ok(AgentSnapshot { target:target.clone(),capability,entries,baseline:transaction::fingerprint(basis.as_bytes()),detail:"此页显示所选作用域的定义；启停只影响这一来源，其他作用域或内置同名项可能生效。已配置不表示当前会话已加载。导入不会转换 CLI 格式。".into() })
@@ -431,7 +443,7 @@ fn operate_inner(
             path.file_stem().unwrap_or_default().to_str().unwrap_or(""),
         ) {
             if before.entries.iter().any(|entry| {
-                entry.name == name
+                !entry.builtin && entry.name == name
                     && !preview
                         .affected_paths
                         .iter()
@@ -473,7 +485,7 @@ fn operate_inner(
                 &request.content,
                 &request.name,
             )?;
-            if before.entries.iter().any(|e| e.name == name) {
+            if before.entries.iter().any(|e| !e.builtin && e.name == name) {
                 return Err("同名定义已存在（包含禁用或插件定义）".into());
             }
             changes.push(FileMutation {
@@ -507,7 +519,7 @@ fn operate_inner(
                         if before
                             .entries
                             .iter()
-                            .any(|e| e.id != entry.id && e.name == name)
+                            .any(|e| !e.builtin && e.id != entry.id && e.name == name)
                         {
                             return Err("同名定义已存在".into());
                         }
@@ -560,7 +572,7 @@ fn operate_inner(
                                 || before
                                     .entries
                                     .iter()
-                                    .any(|e| e.id != entry.id && e.name == entry.name && e.enabled)
+                                    .any(|e| !e.builtin && e.id != entry.id && e.name == entry.name && e.enabled)
                             {
                                 return Err("启停目标已存在或同名定义冲突".into());
                             }

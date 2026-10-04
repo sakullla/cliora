@@ -345,9 +345,13 @@ fn refresh_is_stable_updates_deletes_and_keeps_favorites_and_failed_sources() {
         .messages
         .iter()
         .any(|message| message.text == "Updated reply."));
+    assert!(usage_report(&db, &HistoryFilter::default()).unwrap().totals.input > 0);
     fs::remove_file(source).unwrap();
     refresh(&db, &registry, &home).unwrap();
     assert!(list(&db, &HistoryFilter::default()).unwrap().is_empty());
+    let totals = usage_report(&db, &HistoryFilter::default()).unwrap().totals;
+    assert_eq!((totals.sessions, totals.input, totals.output, totals.cache_read, totals.cache_write), (0, 0, 0, 0, 0));
+
 }
 
 #[test]
