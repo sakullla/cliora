@@ -4,6 +4,11 @@ import { codexUiAdapter } from './codex';
 import { grokUiAdapter } from './grok';
 import { piUiAdapter } from './pi';
 import { opencodeUiAdapter } from './opencode';
+import { zcodeUiAdapter } from './zcode';
+import { qoderUiAdapter } from './qoder';
+import { kimiCodeUiAdapter } from './kimi_code';
+import { deepseekUiAdapter } from './deepseek';
+import { codebuddyUiAdapter } from './codebuddy';
 import type { ToolUiAdapter } from './contract';
 
 const specialized = new Map<string, ToolUiAdapter>([
@@ -12,6 +17,11 @@ const specialized = new Map<string, ToolUiAdapter>([
   [grokUiAdapter.id, grokUiAdapter],
   [piUiAdapter.id, piUiAdapter],
   [opencodeUiAdapter.id, opencodeUiAdapter],
+  [zcodeUiAdapter.id, zcodeUiAdapter],
+  [qoderUiAdapter.id, qoderUiAdapter],
+  [kimiCodeUiAdapter.id, kimiCodeUiAdapter],
+  [deepseekUiAdapter.id, deepseekUiAdapter],
+  [codebuddyUiAdapter.id, codebuddyUiAdapter],
 ]);
 
 export function uiAdapterFor(id: string): ToolUiAdapter {
