@@ -1,4 +1,78 @@
 pub mod adapters;
+mod path_policy {
+    use std::fs;
+    use std::path::{Component, Path};
+
+    /// macOS publishes `/var`, `/tmp`, and `/etc` as symlinks into `/private`.
+    /// Those three root aliases are operating-system directories, so ancestor
+    /// checks may cross them. A symlink anywhere else stays rejected.
+    pub fn is_platform_directory_alias(path: &Path) -> bool {
+        if path.parent() != Some(Path::new("/")) {
+            return false;
+        }
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            return false;
+        };
+        if !matches!(name, "var" | "tmp" | "etc") {
+            return false;
+        }
+        let Ok(metadata) = fs::symlink_metadata(path) else {
+            return false;
+        };
+        if !metadata.file_type().is_symlink() {
+            return false;
+        }
+        let Ok(target) = fs::read_link(path) else {
+            return false;
+        };
+        let parts: Vec<String> = target
+            .components()
+            .filter_map(|component| match component {
+                Component::RootDir | Component::CurDir => None,
+                Component::Normal(part) => part.to_str().map(str::to_owned),
+                _ => Some(String::new()),
+            })
+            .collect();
+        parts == ["private".to_owned(), name.to_owned()]
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[cfg(target_os = "macos")]
+        #[test]
+        fn macos_root_aliases_point_at_private_directories() {
+            for path in ["/var", "/tmp", "/etc"] {
+                assert!(
+                    is_platform_directory_alias(Path::new(path)),
+                    "{path} -> {:?}",
+                    fs::read_link(path)
+                );
+            }
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn a_symlink_inside_the_managed_tree_is_not_a_platform_alias() {
+            let temp = tempfile::tempdir().unwrap();
+            let real = temp.path().join("real");
+            fs::create_dir(&real).unwrap();
+            let link = temp.path().join("link");
+            std::os::unix::fs::symlink(&real, &link).unwrap();
+            assert!(!is_platform_directory_alias(&link));
+            let error = crate::accounts::context::check_path(&link).unwrap_err();
+            assert_eq!(error, "账号目录不可包含符号链接");
+        }
+
+        #[cfg(target_os = "macos")]
+        #[test]
+        fn a_temp_directory_under_the_var_alias_can_be_checked() {
+            let temp = tempfile::tempdir().unwrap();
+            crate::accounts::context::check_path(temp.path()).unwrap();
+        }
+    }
+}
 mod external;
 mod background_process;
 mod process_environment;

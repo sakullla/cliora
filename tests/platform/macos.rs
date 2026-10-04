@@ -37,7 +37,7 @@ fn registry() -> Registry {
         .with_fixture_installation("codex", "0.159.3")
         .with_fixture_installation("claude_code", "2.1.283")
         .with_fixture_installation("grok", "1.0.46")
-        .with_fixture_installation("pi", "0.87.1")
+        .with_fixture_installation("pi", "0.99.2")
         .with_fixture_installation("open_code", "1.18.33")
 }
 

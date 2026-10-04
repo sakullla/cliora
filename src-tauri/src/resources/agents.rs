@@ -91,7 +91,9 @@ fn safe_path(path: &Path) -> Result<(), String> {
                     return Err("重解析点只读，需在原生 CLI 管理".into());
                 }
             }
-            if meta.file_type().is_symlink() {
+            if meta.file_type().is_symlink()
+                && !crate::path_policy::is_platform_directory_alias(item)
+            {
                 return Err("链接定义只读，需在原生 CLI 管理".into());
             }
         }

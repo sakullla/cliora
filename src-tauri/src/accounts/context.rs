@@ -6,7 +6,9 @@ pub fn check_path(path: &Path) -> Result<(), String> {
     for component in path.ancestors() {
         match fs::symlink_metadata(component) {
             Ok(metadata) => {
-                if metadata.file_type().is_symlink() {
+                if metadata.file_type().is_symlink()
+                    && !crate::path_policy::is_platform_directory_alias(component)
+                {
                     return Err("账号目录不可包含符号链接".into());
                 }
                 #[cfg(windows)]

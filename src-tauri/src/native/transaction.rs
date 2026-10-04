@@ -948,7 +948,7 @@ where F: FnOnce(&rusqlite::Transaction<'_>) -> Result<(),String> {
             if let Ok(meta) = fs::symlink_metadata(ancestor) {
                 #[cfg(windows)]
                 { use std::os::windows::fs::MetadataExt; if meta.file_attributes() & 0x400 != 0 { return Err("不修改重解析点中的文件".into()); } }
-                if meta.file_type().is_symlink() { return Err("不修改符号链接中的文件".into()); }
+                if meta.file_type().is_symlink() && !crate::path_policy::is_platform_directory_alias(ancestor) { return Err("不修改符号链接中的文件".into()); }
             }
         }
         let current = read_native(&change.path)?;
