@@ -21,10 +21,11 @@ export function scopeLabel(scope: Scope, projectPath: string | null, projects: {
   return projects.find((item) => samePath(item.path, projectPath))?.name ?? projectPath?.split(/[\\/]/).filter(Boolean).at(-1) ?? '项目';
 }
 
-export function ScopeMarks<T extends { toolId: string; scope: Scope; projectPath: string | null; contextId?: string | null }>({ label, tools, places, projects, busy, mark, onToggle, accountContexts = false, contextLabel = () => '账号' }: {
+export function ScopeMarks<T extends { toolId: string; scope: Scope; projectPath: string | null; contextId?: string | null }>({ label, tools, places, projects, busy, mark, onToggle, accountContexts = false, contextLabel = () => '账号', unavailable }: {
   label: string;
   accountContexts?: boolean;
   contextLabel?: (id: string | null) => string;
+  unavailable?: (toolId: string, scope: Scope) => string | null;
   tools: { id: string; name: string }[];
   places: T[];
   projects: { name: string; path: string | null }[];
@@ -43,6 +44,7 @@ export function ScopeMarks<T extends { toolId: string; scope: Scope; projectPath
   });
   return <div className={styles.scopeLines}>{rows.map((row) => <div className={styles.scopeLine} key={row.key}><span className={styles.scopeName}>{row.name}</span><div className={styles.cliMarks} role="group" aria-label={`${label} · ${row.name}`}>{tools.filter((tool) => !row.contextId || row.items.some((place) => place.toolId === tool.id)).map((tool) => {
     const item = mark(row.items.find((place) => place.toolId === tool.id));
-    return <button type="button" key={tool.id} aria-pressed={item.pressed} aria-label={`${tool.name} · ${item.status}`} title={`${row.name} · ${tool.name} · ${item.status}`} data-state={item.state} disabled={busy} onClick={() => onToggle(tool.id, row.scope, row.projectPath, row.contextId)}><ToolIcon toolId={tool.id} size={20} /></button>;
+    const reason = unavailable?.(tool.id, row.scope);
+    return <button type="button" key={tool.id} aria-pressed={item.pressed} aria-label={`${tool.name} · ${reason ?? item.status}`} title={`${row.name} · ${tool.name} · ${reason ?? item.status}`} data-state={reason ? 'unavailable' : item.state} disabled={busy || !!reason} onClick={() => onToggle(tool.id, row.scope, row.projectPath, row.contextId)}><ToolIcon toolId={tool.id} size={20} /></button>;
   })}</div></div>)}</div>;
 }

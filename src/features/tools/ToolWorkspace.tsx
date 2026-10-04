@@ -27,7 +27,7 @@ import { displayPath, shortPath } from '../../lib/paths';
 import { writeClipboard } from '../../lib/clipboard';
 import { saveShortcutHint } from '../../lib/shortcut';
 import { navigateChoices } from '../../lib/choiceNavigation';
-import { CodeEditor } from '../../components/CodeEditor';
+import { CodeEditor, preloadCodeEditor } from '../../components/CodeEditor';
 import styles from './ToolWorkspace.module.css';
 
 type View = 'form' | 'native' | 'merged';
@@ -255,6 +255,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   async function closeGuide() {
     if ((dirty || mcpDirty || skillsDirty || agentsDirty) && !await confirmChange('当前草稿尚未保存，关闭后会丢失这些修改。继续吗？')) return;
     setHistoryOpen(false); setBackupPreview(null);
+    rawSequence.current++; setBusy(false);
     setGuide(false);
   }
   useLayoutEffect(() => { onDirtyChange?.(dirty || mcpDirty || skillsDirty || agentsDirty); }, [dirty, mcpDirty, skillsDirty, agentsDirty, onDirtyChange]);
@@ -293,6 +294,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
 
   useLayoutEffect(() => {
     loadSequence.current++; invalidateDraftRequest(); inspectionSequence.current++;
+    rawSequence.current++; setBusy(false);
     setFileConflict(null); setBackups([]); setBackupPreview(null); setHistoryOpen(false); setRawDisk(null);
     setGuide(false);
     setNotice(''); setError(''); setInspection(null); setNewSecret(''); setProfileQuery('');
@@ -799,6 +801,8 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     if (dirty && !abandonConfirmed && !await confirmChange('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return;
     if (!stillCurrent(started)) return;
     const sequence = ++rawSequence.current;
+    preloadCodeEditor();
+    setBusy(true); setError('');
     try {
       const text = await native.readRegisteredNativeFileForEdit(currentTool, scope, projectPath, nextRole);
       if (sequence !== rawSequence.current || !stillCurrent(started)) return;
@@ -806,6 +810,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
       setRawDisk({ context: JSON.stringify([currentTool, scope, projectPath, null, 'native']), role: nextRole, original: text, text });
       setNotice(''); setError('');
     } catch (value) { if (sequence === rawSequence.current && stillCurrent(started)) setError(errorText(value)); }
+    finally { if (sequence === rawSequence.current) setBusy(false); }
   }
 
   async function updateModel(model: string, longContext = primaryModel.longContext) {
@@ -921,7 +926,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   function nativeEditor() { return <div className={styles.nativeEditor}>
               {availableRoles.length > 1 && <div className={styles.fileTabs}>{availableRoles.map((name) => <button key={name} type="button" className={role === name ? styles.selected : ''} disabled={busy} onClick={() => { if (editor === 'native') void openCurrentFile(name); else { rawSequence.current++; setRole(name); } }}>{workspace?.probe.nativeFiles.find(file => file.role === name)?.path.split(/[\\/]/).at(-1) ?? name}</button>)}</div>}
               <div className={styles.pathLabel}><strong title={activeFile?.path}>{activeFile?.path.split(/[\\/]/).pop() ?? '原生文件尚未确定'}</strong><span>{activeFile?.format?.toUpperCase() ?? ''}</span>{activeFile && <small className={styles.pathValue} title={displayPath(activeFile.path)}>{displayPath(activeFile.path)}</small>}{activeFile && <button type="button" className={styles.secondary} onClick={() => void copyDisplayedPath(activeFile.path)}>{copiedPath === displayPath(activeFile.path) ? '已复制' : copiedPath === `fail:${displayPath(activeFile.path)}` ? '复制失败' : '复制路径'}</button>}</div>
-              <CodeEditor key={draftContext + role} format={activeFile?.format ?? 'text'} label={`${role} 配置草稿`} value={activeRaw?.text ?? (editor === 'common' ? commonDraft?.files[role] : draft?.files[role]) ?? ''} onChange={(text) => { if (activeRaw) { invalidateDraftRequest(); setRawDisk({ ...activeRaw, text }); } else if (editor === 'common') { invalidateDraftRequest(); if (commonDraft) setCommonDraft({ ...commonDraft, files: { ...commonDraft.files, [role]: text } }); } else if (draft) setDraft({ ...draft, files: { ...draft.files, [role]: text } }); }} placeholder="在这里编辑原生配置。留空表示本配置不覆盖该文件。" />
+              <CodeEditor key={draftContext} documentId={role} format={activeFile?.format ?? 'text'} label={`${role} 配置草稿`} value={activeRaw?.text ?? (editor === 'common' ? commonDraft?.files[role] : draft?.files[role]) ?? ''} onChange={(text) => { if (activeRaw) { invalidateDraftRequest(); setRawDisk({ ...activeRaw, text }); } else if (editor === 'common') { invalidateDraftRequest(); if (commonDraft) setCommonDraft({ ...commonDraft, files: { ...commonDraft.files, [role]: text } }); } else if (draft) setDraft({ ...draft, files: { ...draft.files, [role]: text } }); }} placeholder="在这里编辑原生配置。留空表示本配置不覆盖该文件。" />
 
             </div>; }
 
@@ -1019,7 +1024,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
         <p>还没有命名配置。新建一份，或先改通用配置。</p>
         <button type="button" className={styles.primary} disabled={busy || !currentTool} onClick={() => void createProfile()}>新建配置</button>
         <button type="button" className={styles.secondary} disabled={busy || !currentTool} onClick={() => void editCommon()}>通用配置</button>
-        <button type="button" className={styles.secondary} disabled={busy || !hasCurrentNative} onClick={() => void openCurrentFile()}>修改正在使用的文件</button>
+        <button type="button" className={styles.secondary} disabled={busy || !hasCurrentNative} onPointerEnter={preloadCodeEditor} onFocus={preloadCodeEditor} onClick={() => void openCurrentFile()}>修改正在使用的文件</button>
       </div>}
       <GuideDialog wide open={guide && (editor !== 'profile' || !!draft)} title={historyOpen && editor === 'native' ? '修改记录' : editor === 'native' ? '修改正在使用的文件' : editor === 'common' ? '修改通用配置' : draft?.id ? '修改配置' : '新建配置'} hint={historyOpen && editor === 'native' ? '最多 20 次。选一条查看当时的文件，确认后才会写回。' : profileEditorHint} onClose={() => void closeGuide()}>
         <div className={styles.editor}>

@@ -1,6 +1,8 @@
 import { lazy, Suspense, type ComponentProps } from 'react';
 
-const Editor = lazy(() => import('./CodeEditorImpl').then((module) => ({ default: module.CodeEditor })));
+const loadEditor = () => import('./CodeEditorImpl').then((module) => ({ default: module.CodeEditor }));
+const Editor = lazy(loadEditor);
+export function preloadCodeEditor() { void loadEditor().catch(() => {}); }
 export type { CodeFormat } from './CodeEditorImpl';
 
 export function CodeEditor(props: ComponentProps<typeof Editor>) {

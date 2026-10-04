@@ -26,12 +26,6 @@ const MANIFEST_NAME: &str = ".zcode-install-manifest";
 /// Product identity from the official desktop build (`productName: ZCode`);
 /// electron-builder derives the executable name from it.
 const EXE_NAME: &str = "ZCode.exe";
-const PROTOCOL_KEY: &str = r"HKCU\Software\Classes\zcode\shell\open\command";
-const UNINSTALL_ROOTS: [&str; 2] = [
-    r"HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall",
-    r"HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall",
-];
-
 /// Install roots backed by official markers, deduplicated, each verified to
 /// hold the desktop executable. Declared through the adapter's native-binary
 /// directories and desktop installation evidence.
@@ -66,20 +60,17 @@ fn directories_with_uninstall(home: &Path, uninstall: Option<&(PathBuf, Option<S
 /// Marker 1: the registered `zcode://` handler command, e.g.
 /// `"C:\Users\me\AppData\Local\Programs\ZCode\ZCode.exe" "%1"`.
 fn protocol_executable() -> Option<PathBuf> {
-    parse_protocol_executable(&reg_query(&[PROTOCOL_KEY, "/ve"])?)
+    let command = crate::windows_registry::user_value(r"Software\Classes\zcode\shell\open\command", "")?;
+    parse_protocol_executable(&format!("REG_SZ {command}"))
 }
 
 /// Marker 2: the per-user (or per-machine) uninstall entry. Returns the install
 /// directory plus `DisplayVersion` when the table provides one.
 fn uninstall_entry() -> Option<(PathBuf, Option<String>)> {
-    for root in UNINSTALL_ROOTS {
-        if let Some(output) = reg_query(&[root, "/s"]) {
-            if let Some(entry) = parse_uninstall_entry(&output) {
-                return Some(entry);
-            }
-        }
-    }
-    None
+    let record = crate::windows_registry::application(|name| name.trim_start().starts_with("ZCode"))?;
+    let command = record.uninstall?;
+    let path = command.split('"').nth(1)?;
+    Some((Path::new(path).parent()?.to_path_buf(), record.version))
 }
 
 pub(crate) fn installations(home: &Path) -> Vec<crate::native::adapter::Installation> {
@@ -115,21 +106,6 @@ fn manifest_verified(root: &Path) -> Option<PathBuf> {
         .then(|| root.to_path_buf())
 }
 
-fn reg_query(args: &[&str]) -> Option<String> {
-    if !cfg!(windows) {
-        return None;
-    }
-    let output = crate::background_process::command("reg")
-        .arg("query")
-        .args(args)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&output.stdout).into_owned())
-}
-
 /// Extracts the quoted executable path from a `reg query ... /ve` output line
 /// such as `    (默认)    REG_SZ    "C:\...\ZCode.exe" "%1"` (any value-name
 /// locale). Pure so tests can drive it with captured output.
@@ -162,6 +138,7 @@ pub(crate) fn parse_protocol_executable(output: &str) -> Option<PathBuf> {
 /// its install directory with `DisplayVersion` when present. Blocks are keyed
 /// by `HKEY_` header lines; a missing `DisplayVersion` yields `None` rather
 /// than a fabricated version.
+#[cfg(test)]
 pub(crate) fn parse_uninstall_entry(output: &str) -> Option<(PathBuf, Option<String>)> {
     let mut blocks: Vec<Vec<&str>> = Vec::new();
     for line in output.lines() {
@@ -217,6 +194,7 @@ pub(crate) fn parse_uninstall_entry(output: &str) -> Option<(PathBuf, Option<Str
 
 /// Splits `    DisplayName    REG_SZ    ZCode 3.14.4` into the value name and
 /// the value text after the type token.
+#[cfg(test)]
 fn reg_value(line: &str) -> Option<(&str, &str)> {
     let line = line.trim_start();
     let (name, rest) = line.split_once("    ")?;

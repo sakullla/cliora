@@ -697,3 +697,22 @@ fn claude_plugin_namespace_keeps_local_same_names_editable_and_nested_plugins_di
     assert_eq!(snapshot.entries.len(), 4);
     assert!(snapshot.entries.iter().all(|entry| entry.read_only));
 }
+
+#[test]
+fn qoder_cn_builtins_are_read_only_and_allow_custom_overrides() {
+    let temp = tempfile::tempdir().unwrap(); let home = temp.path();
+    let db = Database::open(&home.join("test.db")).unwrap();
+    let target = PluginTarget { tool_id: "qoder_cn".into(), scope: Scope::Global, project_path: None, context_id: None };
+    let first = snapshot_inner(home, &target, &[]).unwrap();
+    assert_eq!(first.entries.len(), 5);
+    assert!(first.entries.iter().all(|entry| entry.builtin && entry.read_only && entry.path.is_empty()));
+    let builtin = first.entries.iter().find(|entry| entry.name == "Explore").unwrap();
+    assert!(operate_inner(&db, &MemoryStore::default(), home, &request(home, &target, "delete", Some(builtin), ""), &[]).is_err());
+    let content = "---\nname: Explore\ndescription: Custom explorer\n---\nRead the project.";
+    let mut create = request(home, &target, "create", None, content); create.name = "Explore".into();
+    operate_inner(&db, &MemoryStore::default(), home, &create, &[]).unwrap();
+    let after = snapshot_inner(home, &target, &[]).unwrap();
+    let custom = after.entries.iter().find(|entry| !entry.builtin && entry.name == "Explore").unwrap();
+    assert!(custom.enabled && !custom.read_only);
+    assert!(!after.entries.iter().find(|entry| entry.builtin && entry.name == "Explore").unwrap().enabled);
+}

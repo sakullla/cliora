@@ -1,170 +1,73 @@
-//! Read-only listing of ZCode's installed plugin records.
-//!
-//! The install ledger `~/.zcode/cli/plugins/installed_plugins.json` holds
-//! `{plugins: [{id, installPath, marketplace}]}` (official
-//! packages/services/src/plugins/installedPluginRoots.ts). Installation,
-//! removal and enable/disable only exist as in-app protocol verbs handled by
-//! the bundled agent process; there is no external command contract, so every
-//! entry is read-only and the single capability action is the listing itself.
-
+//! Native plugin management through the desktop-bundled ZCode CLI.
 use super::ZCode;
 use crate::adapters::plugins::{PluginAdapter, PluginCapability};
 use crate::resources::plugins::{PluginEntry, PluginTarget};
+use crate::native::{adapter::Scope, format::FileKind};
 use serde_json::Value;
-use std::path::Path;
-
-const INSTALLED_PLUGINS_FILE: &str = "installed_plugins.json";
+#[cfg(test)]
+use serde_json::json;
+use std::path::{Path, PathBuf};
 
 impl PluginAdapter for ZCode {
-    fn discovery_only(&self) -> bool { true }
     fn capability(&self) -> PluginCapability {
         PluginCapability {
-            version: "3.14.4",
-            sources: "ZCode 应用内插件市场（只读列举 installed_plugins.json）",
-            // "list" keeps the tab visible without offering a native verb; the
-            // shared UI renders no install/enable/uninstall button for it.
-            actions: vec!["list"],
-            project: false,
-            detail: "只读列举已安装插件；安装/启停/卸载在 ZCode 应用内完成，无外部命令契约。",
+            version: "3.14.4", sources: "已配置市场中的 plugin@marketplace",
+            actions: vec!["install", "update", "enable", "disable", "uninstall"], project: false,
+            detail: "通过桌面安装包内的 ZCode CLI 管理插件；启停写入 cli/config.json，安装与更新需要 Node.js。现有会话需重启。",
         }
     }
-    fn command_args(
-        &self,
-        _action: &str,
-        _source: &str,
-        _project: bool,
-    ) -> Result<Vec<String>, String> {
-        Err("ZCode 插件管理动词在应用内提供，没有外部命令契约".into())
+    fn command_program(&self, executable: &Path) -> Result<(PathBuf, Vec<String>), String> {
+        let script = executable.parent().ok_or("ZCode 安装目录缺失")?.join("resources/glm/zcode.cjs");
+        if !script.is_file() { return Err("此 ZCode 安装包未包含已确认的插件 CLI，请更新 ZCode".into()); }
+        let name = if cfg!(windows) { "node.exe" } else { "node" };
+        let node = crate::process_environment::directories().into_iter().filter(|path| path.is_absolute())
+            .map(|path| path.join(name)).find(|path| path.is_file()).ok_or("ZCode 插件管理需要 Node.js，请安装后重试")?;
+        Ok((node, vec![script.display().to_string()]))
     }
-    fn list_rows<'a>(&self, value: &'a Value) -> Option<&'a Vec<Value>> {
-        value.get("plugins").and_then(Value::as_array)
+    fn config_location(&self, home: &Path, target: &PluginTarget) -> Result<Option<(PathBuf, FileKind)>, String> {
+        if target.scope != Scope::Global { return Err("ZCode 插件管理当前支持全局范围".into()); }
+        Ok(Some((super::data_root(home).join("cli/config.json"), FileKind::Json)))
     }
-    fn policy_read_only(&self, _install: &str, _auth: Option<&str>) -> bool {
-        true
+    fn snapshot_files(&self, home: &Path, _target: &PluginTarget) -> Vec<PathBuf> {
+        vec![super::data_root(home).join("cli/plugins/installed_plugins.json")]
     }
-    fn discover(
-        &self,
-        home: &Path,
-        _target: &PluginTarget,
-        _path: &Path,
-    ) -> Result<Vec<PluginEntry>, String> {
-        let file = super::data_root(home)
-            .join("cli")
-            .join("plugins")
-            .join(INSTALLED_PLUGINS_FILE);
-        let text = match std::fs::read_to_string(&file) {
-            Ok(text) => text,
-            Err(_) => return Ok(Vec::new()),
-        };
-        let value: Value =
-            serde_json::from_str(&text).map_err(|_| "installed_plugins.json 不是有效 JSON")?;
-        let rows = self
-            .list_rows(&value)
-            .ok_or("installed_plugins.json 缺少 plugins 数组")?;
-        rows.iter()
-            .map(|row| {
-                let id = row
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .filter(|id| !id.trim().is_empty())
-                    .ok_or("插件记录缺少 id")?;
-                let install_path = row.get("installPath").and_then(Value::as_str);
-                let marketplace = row
-                    .get("marketplace")
-                    .and_then(Value::as_str)
-                    .unwrap_or("marketplace");
-                let mut entry = PluginEntry {
-                    id: id.to_owned(),
-                    name: id.to_owned(),
-                    source: id.to_owned(),
-                    version: None,
-                    scope: "user".into(),
-                    enabled: None,
-                    state: "installed_load_unknown".into(),
-                    policy: format!("已安装记录 · 市场 {marketplace}；启停在 ZCode 应用内管理"),
-                    read_only: true,
-                    root: install_path.map(str::to_owned),
-                    resources: vec![],
-                };
-                crate::adapters::plugins::owned_resources(&mut entry);
-                Ok(entry)
-            })
-            .collect()
+    fn command_args(&self, action: &str, source: &str, _project: bool) -> Result<Vec<String>, String> {
+        if !self.capability().actions.contains(&action) { return Err("ZCode 插件操作未支持".into()); }
+        let mut args = vec!["plugins".into(), action.into(), source.into(), "--scope".into(), "user".into(), "--json".into()];
+        if action == "uninstall" { args.push("--force".into()); }
+        Ok(args)
     }
+    fn list_command_args(&self) -> Vec<String> { vec!["plugins".into(), "list".into(), "--json".into()] }
+    fn list_rows<'a>(&self, value: &'a Value) -> Option<&'a Vec<Value>> { value.as_array() }
+    fn parse_list(&self, value: &Value, _target: &PluginTarget) -> Result<Vec<PluginEntry>, String> {
+        value.as_array().ok_or("ZCode 原生插件列表不是数组")?.iter().map(|row| {
+            let id = row.get("id").and_then(Value::as_str).filter(|id| !id.is_empty()).ok_or("ZCode 插件缺少 id")?;
+            let enabled = row.get("enabled").and_then(Value::as_bool).ok_or("ZCode 插件缺少启停状态")?;
+            let mut entry = PluginEntry {
+                id: id.into(), name: row.get("name").and_then(Value::as_str).unwrap_or(id).into(), source: id.into(),
+                version: row.get("version").and_then(Value::as_str).map(str::to_owned), scope: "user".into(), enabled: Some(enabled),
+                state: if enabled { "installed_load_unknown" } else { "disabled" }.into(), policy: "由 ZCode 原生插件命令校验来源与安装策略".into(),
+                read_only: false, root: row.get("rootPath").and_then(Value::as_str).map(str::to_owned), resources: vec![],
+            };
+            crate::adapters::plugins::owned_resources(&mut entry); Ok(entry)
+        }).collect()
+    }
+    fn config_only(&self, _action: &str, _entry: Option<&PluginEntry>) -> bool { false }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::native::adapter::Scope;
-
-    // Shape captured from the official reader (records appear once plugins are
-    // installed from the in-app marketplace; sanitized paths).
-    const INSTALLED: &str = r#"{
-  "plugins": [
-    {
-      "id": "browser-use",
-      "installPath": "C:\\Users\\user\\.zcode\\cli\\plugins\\data\\browser-use@zcode-plugins-official",
-      "marketplace": "zcode-plugins-official"
-    },
-    {
-      "id": "pdf",
-      "installPath": "C:\\Users\\user\\.zcode\\cli\\plugins\\data\\pdf@zcode-plugins-official",
-      "marketplace": "zcode-plugins-official"
-    }
-  ]
-}"#;
-
     #[test]
-    fn installed_plugins_json_lists_read_only_entries() {
-        let value: Value = serde_json::from_str(INSTALLED).unwrap();
-        let target = PluginTarget {
-            tool_id: "zcode".into(),
-            scope: Scope::Global,
-            project_path: None,
-            context_id: None,
-        };
-        let entries = ZCode.parse_list(&value, &target).unwrap();
-        assert_eq!(entries.len(), 2);
-        let first = &entries[0];
-        assert_eq!(first.id, "browser-use");
-        assert_eq!(first.source, "browser-use");
-        assert_eq!(first.state, "installed_load_unknown");
-        assert!(first.read_only, "zcode 插件条目一律只读");
-        assert!(first
-            .root
-            .as_deref()
-            .is_some_and(|root| root.contains("browser-use")));
-        // The listing verb exists, but no native management command does.
-        assert!(ZCode.capability().actions == vec!["list"]);
-        assert!(ZCode.command_args("install", "x", false).is_err());
-    }
-
-    #[test]
-    fn discover_reads_the_ledger_and_reports_nothing_without_it() {
-        let temp = tempfile::tempdir().unwrap();
-        let target = PluginTarget {
-            tool_id: "zcode".into(),
-            scope: Scope::Global,
-            project_path: None,
-            context_id: None,
-        };
-        assert!(ZCode
-            .discover(temp.path(), &target, temp.path())
-            .unwrap()
-            .is_empty());
-        let ledger = temp.path().join(".zcode/cli/plugins/installed_plugins.json");
-        std::fs::create_dir_all(ledger.parent().unwrap()).unwrap();
-        std::fs::write(&ledger, INSTALLED).unwrap();
-        let entries = ZCode.discover(temp.path(), &target, temp.path()).unwrap();
-        assert_eq!(entries.len(), 2);
-        assert!(entries.iter().all(|entry| entry.read_only));
-        std::fs::write(&ledger, "{\"plugins\": []}").unwrap();
-        assert!(ZCode
-            .discover(temp.path(), &target, temp.path())
-            .unwrap()
-            .is_empty());
-        std::fs::write(&ledger, "not json").unwrap();
-        assert!(ZCode.discover(temp.path(), &target, temp.path()).is_err());
+    fn native_list_and_commands_keep_identity_status_and_arguments() {
+        let target = PluginTarget { tool_id: "zcode".into(), scope: Scope::Global, project_path: None, context_id: None };
+        let rows = json!([{"id":"fixture@custom","name":"fixture","enabled":false,"version":"1.2.0","rootPath":"/fixture/plugin"}]);
+        let entries = ZCode.parse_list(&rows, &target).unwrap();
+        assert_eq!(entries[0].enabled, Some(false)); assert!(!entries[0].read_only);
+        assert_eq!(entries[0].root.as_deref(), Some("/fixture/plugin"));
+        assert_eq!(ZCode.list_command_args(), ["plugins", "list", "--json"]);
+        assert_eq!(ZCode.command_args("enable", "fixture@custom", false).unwrap(), ["plugins", "enable", "fixture@custom", "--scope", "user", "--json"]);
+        assert!(ZCode.parse_list(&json!([{"id":"broken"}]), &target).is_err());
+        assert!(ZCode.command_args("invented", "x", false).is_err());
     }
 }

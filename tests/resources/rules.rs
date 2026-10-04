@@ -134,3 +134,28 @@ fn selected_rules_are_concatenated_and_an_external_file_is_kept() {
     assert!(!left.contains("# 测试"));
     assert!(left.contains("# 格式"));
 }
+
+#[test]
+fn new_adapter_rule_scopes_use_native_paths_and_shared_conflict_checks() {
+    let temp = tempfile::tempdir().unwrap(); let home = temp.path();
+    let project = home.join("project"); std::fs::create_dir_all(&project).unwrap();
+    let db = Database::open(&home.join("test.db")).unwrap();
+    let registry = Registry::builtins(); let store = MemoryStore(Mutex::new(HashMap::new()));
+    for (id, global) in [("kimi_code", ".kimi-code/AGENTS.md"), ("qoder_cn", ".qoder-cn/AGENTS.md"), ("deepseek", ".dsh/AGENTS.md"), ("zcode", ".zcode/AGENTS.md")] {
+        let adapter = registry.get(id).unwrap();
+        assert!(adapter.descriptor().management.rules.global && adapter.descriptor().management.rules.project);
+        for scope in [Scope::Global, Scope::Project] {
+            let target = RuleTarget { context_id: None, tool_id: id.into(), scope, project_path: if scope == Scope::Project { Some(project.display().to_string()) } else { None }, baseline_hash: None };
+            let expected = if scope == Scope::Project { project.join("AGENTS.md") } else { home.join(global) };
+            assert_eq!(path_for(&db, &registry, home, &target).unwrap(), if scope == Scope::Project { project.canonicalize().unwrap().join("AGENTS.md") } else { expected.clone() });
+            let before = read_current(&db, &registry, home, &target).unwrap();
+            let instructions = format!("native instructions for {id}");
+            save_current(&db, &store, &registry, home, &target, &before.text, &instructions).unwrap();
+            assert_eq!(std::fs::read_to_string(&expected).unwrap(), instructions);
+            assert!(save_current(&db, &store, &registry, home, &target, "old", "overwrite").is_err());
+        }
+    }
+    std::fs::create_dir_all(project.join(".kimi-code")).unwrap();
+    std::fs::write(project.join(".kimi-code/AGENTS.md"), "nested instructions").unwrap();
+    assert_eq!(registry.get("kimi_code").unwrap().rule_path(Scope::Project, home, Some(&project)).unwrap(), project.join(".kimi-code/AGENTS.md"));
+}

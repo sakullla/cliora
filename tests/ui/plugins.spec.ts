@@ -83,3 +83,17 @@ test('changing plugin scope clears the previous source trust before a project op
   await expect(page.getByRole('button', { name: '安装插件' })).toBeDisabled();
   expect(await page.evaluate(() => (window as any).pluginsHarness.calls.filter((call: any) => call.command === 'operate_native_plugin'))).toEqual([]);
 });
+
+
+test('returning to plugins uses the scoped snapshot and explicit scan refreshes it', async ({ page }) => {
+  await setup(page);
+  const scans = () => page.evaluate(() => (window as any).pluginsHarness.calls.filter((call: any) => call.command === 'scan_native_plugins').length);
+  const first = await scans();
+  await page.getByRole('tab', { name: '配置', exact: true }).click();
+  await page.getByRole('tab', { name: '插件', exact: true }).click();
+  await expect(page.getByText('Fixture plugin', { exact: true })).toBeVisible();
+  expect(await scans()).toBe(first);
+  await page.getByRole('button', { name: '重新扫描' }).click();
+  await expect(page.getByRole('button', { name: '重新扫描' })).toBeEnabled();
+  expect(await scans()).toBe(first + 1);
+});

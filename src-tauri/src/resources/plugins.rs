@@ -95,6 +95,7 @@ pub(crate) fn project(target: &PluginTarget) -> Result<Option<PathBuf>, String> 
     Ok(Some(path))
 }
 fn config(home: &Path, target: &PluginTarget) -> Result<(PathBuf, FileKind), String> {
+    if let Some(location) = adapters::plugins::get(&target.tool_id)?.config_location(home, target)? { return Ok(location); }
     let registry = Registry::builtins();
     let cli = registry.get(&target.tool_id).ok_or("未知 CLI")?;
     let project = project(target)?;
@@ -105,7 +106,7 @@ fn config(home: &Path, target: &PluginTarget) -> Result<(PathBuf, FileKind), Str
         .ok_or("没有此作用域的插件配置")?;
     Ok((PathBuf::from(&file.path), FileKind::for_name(&file.path)?))
 }
-fn executable(db: &Database, home: &Path, target: &PluginTarget) -> Result<PathBuf, String> {
+fn executable(db: &Database, home: &Path, target: &PluginTarget, fresh: bool) -> Result<PathBuf, String> {
     let custom: Option<String> = db.with_connection(|conn| {
         conn.query_row(
             "SELECT path FROM installation_choices WHERE tool=?1",
@@ -115,13 +116,14 @@ fn executable(db: &Database, home: &Path, target: &PluginTarget) -> Result<PathB
         .optional()
         .map_err(|_| "无法读取 CLI 路径".into())
     })?;
-    let probe = adapter::probe_registered_summary(
+    let probe = adapter::probe_registered_cached(
         &Registry::builtins(),
         &target.tool_id,
         custom.as_deref().map(Path::new),
         home,
         project(target)?.as_deref(),
         target.scope,
+        fresh,
     )?;
     let selected = probe.selected_path.ok_or("未找到 CLI 安装")?;
     let version = probe
@@ -147,7 +149,7 @@ fn run(
     target: &PluginTarget,
     args: &[String],
 ) -> Result<String, String> {
-    let mut path = executable.to_path_buf();
+    let (mut path, prefix) = adapters::plugins::get(&target.tool_id)?.command_program(executable)?;
     #[cfg(windows)]
     if path
         .extension()
@@ -173,6 +175,7 @@ fn run(
     } else {
         crate::background_process::command(&path)
     };
+    command.args(prefix);
     if let Some(context) = selection::current(&target.tool_id) {
         context.apply_to_command(&mut command)?;
         command.args(&context.cli_args);
@@ -509,6 +512,10 @@ fn snapshot_with_packages(
     let (path, _) = config(home, target)?;
     let mut basis = serde_json::to_string(&(target, &entries)).map_err(|_| "无法序列化插件")?;
     basis.push_str(&transaction::read_native(&path)?);
+    for file in adapter.snapshot_files(home, target) {
+        basis.push_str(&file.display().to_string());
+        basis.push_str(&transaction::read_native(&file)?);
+    }
     let mut budget = (0, 0);
     for entry in &mut entries {
         adapter.decorate(entry, &path)?;
@@ -560,7 +567,7 @@ fn scan_with_packages(db: &Database, home: &Path, target: &PluginTarget, verify_
     let exe = if adapter.discovery_only() || adapter.config_field().is_some() {
         None
     } else {
-        Some(executable(db, home, target)?)
+        Some(executable(db, home, target, false)?)
     };
     snapshot_with_packages(db, home, target, exe.as_deref(), verify_packages)
 }
@@ -615,8 +622,11 @@ pub fn operate(
     let _context =
         selection::enter_bound(db, home, &target.tool_id, target.scope, project.as_deref())?;
     selection::validate_expected(&target.tool_id, target.context_id.as_deref())?;
-    let exe = executable(db, home, target)?;
-    let before = snapshot_inner(db, home, target, Some(&exe))?;
+    let adapter = adapters::plugins::get(&target.tool_id)?;
+    let configured_operation = adapter.config_only(&request.action, None);
+    let needs_executable = !configured_operation || (!adapter.discovery_only() && adapter.config_field().is_none());
+    let exe = if needs_executable { Some(executable(db, home, target, true)?) } else { None };
+    let before = snapshot_inner(db, home, target, exe.as_deref())?;
     if before.baseline != request.baseline {
         return Err("插件配置或目录被外部修改，请重新扫描后重试；没有执行操作".into());
     }
@@ -658,7 +668,6 @@ pub fn operate(
     if fresh_context != target.context_id {
         return Err("扫描期间账号上下文已切换，请重新扫描".into());
     }
-    let adapter = adapters::plugins::get(&target.tool_id)?;
     let config_only = adapter.config_only(&request.action, entry);
     adapter.validate_operation(request, entry)?;
     let result = if config_only {
@@ -672,9 +681,10 @@ pub fn operate(
             &source,
             target.scope == Scope::Project,
         )?;
-        run(&exe, home, target, &args).map(|_| None)
+        let command_exe = match &exe { Some(exe) => exe.clone(), None => executable(db, home, target, true)? };
+        run(&command_exe, home, target, &args).map(|_| None)
     };
-    let snapshot = snapshot_inner(db, home, target, Some(&exe));
+    let snapshot = snapshot_inner(db, home, target, exe.as_deref());
     match result {
         Ok(transaction_id) => Ok(PluginResult {
             status: if config_only {

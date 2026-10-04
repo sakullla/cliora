@@ -13,6 +13,10 @@ pub struct AgentCapability {
     pub detail: &'static str,
     pub template: &'static str,
 }
+pub struct BuiltinAgent {
+    pub name: &'static str,
+    pub description: &'static str,
+}
 pub fn capability(tool: &str) -> Result<AgentCapability, String> {
     Ok(get(tool)?.capability())
 }
@@ -162,6 +166,8 @@ pub(crate) fn validate_markdown_fields(value: &Value) -> Result<(), String> {
 
 pub trait AgentAdapter: Sync {
     fn capability(&self) -> AgentCapability;
+    /// Adapter-owned reference catalog; runtime prompts stay owned by the CLI.
+    fn builtin_definitions(&self) -> &'static [BuiltinAgent] { &[] }
     fn root(&self, scope: Scope, home: &Path, project: Option<&Path>) -> Result<PathBuf, String>;
     fn extension(&self) -> &'static str {
         "md"

@@ -92,6 +92,11 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(''), 4000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
   const [dialogError, setDialogError] = useState('');
   const [dialogNotice, setDialogNotice] = useState('');
   const [tagText, setTagText] = useState('');
@@ -342,7 +347,7 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
           <button className={styles.cardTitle} type="button" onClick={() => choose(item)}>{item.title}</button>
           <p>{item.body ? item.body.length > 160 ? `${item.body.slice(0, 160)}…` : item.body : '正文为空'}</p>
           <div className={styles.cardBar}>
-            {kind === 'rule' ? <ScopeMarks label={`${item.title} 的 CLI`} tools={managedTools} places={rulePlacements.filter((entry) => entry.ruleId === item.id)} projects={projects} busy={busy} onToggle={(toolId, scope, projectPath) => void toggleRule(item, toolId, scope, projectPath)} mark={(place) => {
+            {kind === 'rule' ? <ScopeMarks label={`${item.title} 的 CLI`} tools={managedTools} places={rulePlacements.filter((entry) => entry.ruleId === item.id)} projects={projects} busy={busy} unavailable={(toolId, scope) => { const support = managedTools.find(tool => tool.id === toolId)?.management?.rules; return support && !support[scope] ? `当前${scope === 'global' ? '全局' : '项目'}范围不支持原生长期规则` : null; }} onToggle={(toolId, scope, projectPath) => void toggleRule(item, toolId, scope, projectPath)} mark={(place) => {
               if (!place) return { pressed: false, state: 'off', status: '未写入' };
               if (place.state === 'current') return { pressed: true, state: 'current', status: '已生效' };
               if (place.state === 'unavailable') return { pressed: true, state: 'unavailable', status: '未生效' };

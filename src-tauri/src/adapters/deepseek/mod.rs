@@ -7,16 +7,14 @@
 //! zstd-framed session logs (`sessions/*/session.v4.jsonl.zstd`, one frame per
 //! appended record) with token usage aggregation.
 //!
-//! Honestly not delivered: Agents (no declarative definition contract), resume
-//! (no session-restore contract for the desktop form), YOLO (no verified
-//! bypass flag on a desktop app), credentials (`.credentials.yaml` is owned by
-//! the official plugin and is write-only on the UI side) and plugin
-//! enable/disable (the field-level shape of plugin patch items could not be
-//! verified from official sources, so the whole dimension stays absent).
+//! User-installed profile bundles are listed from the desktop manifest and can
+//! be enabled or disabled through shared configuration transactions. Agents,
+//! session resume, YOLO and product credential management remain unavailable.
 
 pub(crate) mod detect;
 pub mod history;
 mod mcp;
+mod plugins;
 
 use std::collections::BTreeMap;
 use std::env;
@@ -50,6 +48,7 @@ pub(crate) fn dsh_home(home: &Path) -> PathBuf {
 }
 
 impl CliAdapter for DeepSeek {
+    fn plugins(&self) -> Option<&dyn crate::adapters::plugins::PluginAdapter> { Some(self) }
     fn supports_mcp(&self) -> bool {
         true
     }
@@ -284,6 +283,12 @@ impl CliAdapter for DeepSeek {
     fn node_required_when_missing(&self) -> bool {
         false
     }
+    fn rule_path(&self, scope: Scope, home: &Path, project: Option<&Path>) -> Option<PathBuf> {
+        Some(match scope {
+            Scope::Global => crate::accounts::selection::config_root(self.id(), || dsh_home(home)).join("AGENTS.md"),
+            Scope::Project => project?.join("AGENTS.md"),
+        })
+    }
     fn install_guidance(&self) -> (&'static str, &'static str) {
         (
             "https://github.com/deepseek-ai/deepseek-harness",
@@ -315,7 +320,7 @@ impl CliAdapter for DeepSeek {
             },
             resources: Facet {
                 state: "available",
-                reason: "MCP 以 cordis.patch.yml 的 insert 条目交付，Skills 走 .dsh/skills 目录；插件条目形状未核实，启停暂不交付",
+                reason: "MCP 以 cordis.patch.yml 的 insert 条目交付，Skills 走 .dsh/skills 目录；用户插件读取 desktop profile 依赖和 bundle 声明，支持启停",
             },
             history: Facet {
                 state: "available",
@@ -327,8 +332,9 @@ impl CliAdapter for DeepSeek {
                 mcp: self.supports_mcp(),
                 skills: self.supports_skills(),
                 agents: false,
-                plugins: false,
+                plugins: true,
                 project_plugins: false,
+                rules: self.rule_support(),
             },
         }
     }
@@ -497,7 +503,7 @@ mod tests {
     fn descriptor_and_ports_stay_honest() {
         assert!(DeepSeek.official_usage().is_none());
         assert!(DeepSeek.agents().is_none());
-        assert!(DeepSeek.plugins().is_none());
+        assert!(DeepSeek.plugins().is_some());
         assert!(DeepSeek.accounts().is_none());
         assert!(DeepSeek.supports_mcp());
         assert!(DeepSeek.supports_skills());
@@ -513,7 +519,7 @@ mod tests {
         assert!(management.mcp);
         assert!(management.skills);
         assert!(!management.agents);
-        assert!(!management.plugins);
+        assert!(management.plugins);
         assert!(!management.project_plugins);
         assert_ne!(descriptor.native_config.state, "planned");
         assert_ne!(descriptor.launch.state, "planned");
