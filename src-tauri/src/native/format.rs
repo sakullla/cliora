@@ -95,7 +95,7 @@ pub fn parse(kind: FileKind, text: &str) -> Result<Value, String> {
         FileKind::Yaml => serde_yaml::from_str::<Value>(text)
             .map_err(|e| format!("YAML 格式错误：{e}"))?,
     };
-    if !value.is_object() {
+    if !value.is_object() && !(kind == FileKind::Yaml && value.is_array()) {
         return Err("配置文件顶层必须是对象".into());
     }
     Ok(value)
@@ -172,7 +172,7 @@ fn prune_empty_tables(table: &mut Table, path: &[String]) {
 
 /// Render a document in the native file format so previews match what the CLI reads.
 pub fn render(kind: FileKind, value: &Value) -> Result<String, String> {
-    if !value.is_object() {
+    if !value.is_object() && !(kind == FileKind::Yaml && value.is_array()) {
         return Err("配置顶层必须是对象".into());
     }
     match kind {
@@ -202,6 +202,19 @@ pub fn set_path(
     }
     // Never use an invalid file as a blank starting point.
     let existing = parse(kind, text)?;
+    if kind == FileKind::Yaml && path.len() == 1 && (existing.is_array() || text.trim().is_empty()) {
+        if let Ok(index) = path[0].parse::<usize>() {
+            let mut rows = existing.as_array().cloned().unwrap_or_default();
+            if index > rows.len() { return Err("YAML 列表位置已变化，请重新读取".into()); }
+            match value {
+                Some(value) if index == rows.len() => rows.push(value.clone()),
+                Some(value) => rows[index] = value.clone(),
+                None if index < rows.len() => { rows.remove(index); }
+                None => {}
+            }
+            return render(kind, &Value::Array(rows));
+        }
+    }
     let mut parent = &existing;
     for segment in &path[..path.len() - 1] {
         match parent.get(segment) {

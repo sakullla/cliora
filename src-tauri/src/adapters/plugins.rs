@@ -35,6 +35,8 @@ pub(crate) fn npm_metadata(root: Option<&Path>) -> PluginPackage {
     }
 }
 pub trait PluginAdapter: Sync {
+    /// A native ledger can be inspected without starting a CLI process.
+    fn discovery_only(&self) -> bool { false }
     fn version_policy(&self) -> super::version::VersionPolicy {
         super::version::VersionPolicy::same_major(self.capability().version)
     }

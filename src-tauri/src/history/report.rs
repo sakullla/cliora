@@ -491,7 +491,7 @@ pub fn usage_report(db: &Database, filter: &HistoryFilter) -> Result<UsageReport
     let book = PriceBook::load(db)?;
     let scans: Vec<ScanStatus> = scans(db)?;
     let now = now_ms();
-    db.with_connection(|conn| {
+    db.with_read_connection(|conn| {
         let loaded = load_calls(conn, filter, filter.from_ms, filter.to_ms, &book)?;
         let dated = filter.from_ms.is_some() || filter.to_ms.is_some();
 

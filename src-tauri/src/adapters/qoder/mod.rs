@@ -34,17 +34,39 @@ use crate::native::format::FileKind;
 use crate::native::profile::{Connection, RegisteredProfile};
 use crate::resources::mcp::{self, McpDefinition, McpTransport};
 
-pub struct Qoder;
+pub struct QoderAdapter {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub command: &'static str,
+    pub directory: &'static str,
+    pub plugin_ledger: Option<&'static str>,
+    pub config_env: Option<&'static str>,
+    pub binary_directory: &'static str,
+    pub yolo_flag: &'static str,
+    pub npm: &'static str,
+    pub install_url: &'static str,
+    pub install_hint: &'static str,
+    pub install_script: Option<&'static str>,
+}
+pub type Qoder = QoderAdapter;
+#[allow(non_upper_case_globals)]
+pub const Qoder: QoderAdapter = QoderAdapter {
+    id: "qoder", name: "Qoder", command: "qoder", directory: ".qoder", plugin_ledger: None,
+    config_env: Some("QODER_CONFIG_DIR"), binary_directory: "bin/qodercli", yolo_flag: "--yolo",
+    npm: "@qoder-ai/qodercli", install_url: "https://docs.qoder.com/cli/installation",
+    install_hint: "官方推荐 irm https://qoder.com/install.ps1 | iex；npm @qoder-ai/qodercli 为 legacy 渠道（Node.js 20+）。",
+    install_script: Some("irm https://qoder.com/install.ps1 | iex"),
+};
 
 /// QODER_CONFIG_DIR relocates the whole native config root (settings.json,
 /// skills/, agents/, projects/). Adapters own the environment override.
-pub(crate) fn config_root(home: &Path) -> PathBuf {
-    env::var_os("QODER_CONFIG_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".qoder"))
+impl QoderAdapter {
+    pub(crate) fn config_root(&self, home: &Path) -> PathBuf {
+        self.config_env.and_then(env::var_os).map(PathBuf::from).unwrap_or_else(|| home.join(self.directory))
+    }
 }
 
-impl CliAdapter for Qoder {
+impl CliAdapter for QoderAdapter {
     fn supports_mcp(&self) -> bool {
         true
     }
@@ -58,21 +80,34 @@ impl CliAdapter for Qoder {
         Some(self)
     }
     fn id(&self) -> &'static str {
-        "qoder"
+        self.id
     }
     fn name(&self) -> &'static str {
-        "Qoder"
+        self.name
     }
     fn command(&self) -> &'static str {
-        "qoder"
+        self.command
     }
     fn npm_package(&self) -> &'static str {
         // Legacy but official channel; the recommended install is the native
         // installer at qoder.com/install.ps1.
-        "@qoder-ai/qodercli"
+        self.npm
     }
-    fn version_identity(&self, _basename: &str, output: &str) -> bool {
-        output.contains("qoder")
+    fn version_identity(&self, basename: &str, output: &str) -> bool {
+        (basename == self.command || basename.starts_with(&format!("{}-", self.command)))
+            && (output.contains(self.command) || semver::Version::parse(output.trim().trim_start_matches('v')).is_ok())
+    }
+    fn extra_binary_candidates(&self, home: &Path) -> Vec<PathBuf> {
+        let directory = home.join(self.directory).join(self.binary_directory);
+        let mut paths = Vec::new();
+        if let Ok(version) = std::fs::read_to_string(directory.join("version.txt")) {
+            let version = version.trim();
+            if semver::Version::parse(version).is_ok() {
+                paths.push(directory.join(format!("{}-{version}{}", self.command, if cfg!(windows) { ".exe" } else { "" })));
+            }
+        }
+        paths.push(directory.join(format!("{}{}", self.command, if cfg!(windows) { ".exe" } else { "" })));
+        paths.into_iter().filter(|path| path.metadata().is_ok_and(|m| m.is_file() && m.len() > 0)).collect()
     }
     fn native_files(
         &self,
@@ -88,7 +123,7 @@ impl CliAdapter for Qoder {
             Some(root) => vec![
                 file(
                     "settings",
-                    root.join(".qoder/settings.json"),
+                    root.join(self.directory).join("settings.json"),
                     FileKind::Json,
                     known,
                     Some("Qoder 项目配置参与 MCP、插件与本地覆盖；模型与账号在用户配置中设置"),
@@ -96,7 +131,7 @@ impl CliAdapter for Qoder {
                 ),
                 file(
                     "local_settings",
-                    root.join(".qoder/settings.local.json"),
+                    root.join(self.directory).join("settings.local.json"),
                     FileKind::Json,
                     known,
                     None,
@@ -105,7 +140,7 @@ impl CliAdapter for Qoder {
             ],
             None => vec![file(
                 "settings",
-                config_root(home).join("settings.json"),
+                self.config_root(home).join("settings.json"),
                 FileKind::Json,
                 known,
                 None,
@@ -142,8 +177,8 @@ impl CliAdapter for Qoder {
         // deliberately not driven so every change keeps the shared transaction
         // backup/CAS boundary.
         let path = match scope {
-            Scope::Global => config_root(home).join("settings.json"),
-            Scope::Project => project?.join(".qoder/settings.json"),
+            Scope::Global => self.config_root(home).join("settings.json"),
+            Scope::Project => project?.join(self.directory).join("settings.json"),
         };
         Some(McpLocation {
             path,
@@ -185,8 +220,8 @@ impl CliAdapter for Qoder {
         project: Option<&Path>,
     ) -> Option<PathBuf> {
         Some(match scope {
-            Scope::Global => config_root(home).join("skills"),
-            Scope::Project => project?.join(".qoder/skills"),
+            Scope::Global => self.config_root(home).join("skills"),
+            Scope::Project => project?.join(self.directory).join("skills"),
         })
     }
     fn connection_documents(
@@ -224,7 +259,7 @@ impl CliAdapter for Qoder {
             args.extend(["-r".into(), id.into()]);
         }
         if matches!(mode, LaunchMode::Yolo) {
-            args.push("--yolo".into());
+            args.push(self.yolo_flag.into());
         }
         Ok(args)
     }
@@ -234,10 +269,7 @@ impl CliAdapter for Qoder {
         version.starts_with("1.")
     }
     fn install_guidance(&self) -> (&'static str, &'static str) {
-        (
-            "https://docs.qoder.com/cli/installation",
-            "官方推荐 irm https://qoder.com/install.ps1 | iex；npm @qoder-ai/qodercli 为 legacy 渠道（Node.js 20+）。",
-        )
+        (self.install_url, self.install_hint)
     }
     fn node_required_when_missing(&self) -> bool {
         false
@@ -255,7 +287,7 @@ impl CliAdapter for Qoder {
     fn native_install_command(&self) -> Option<String> {
         // Only the Windows installer script is documented; other platforms fall
         // back to the legacy npm channel.
-        cfg!(windows).then(|| "irm https://qoder.com/install.ps1 | iex".into())
+        self.install_script.filter(|_| cfg!(windows)).map(str::to_owned)
     }
     fn descriptor(&self) -> super::AdapterDescriptor {
         super::AdapterDescriptor {
@@ -282,7 +314,7 @@ impl CliAdapter for Qoder {
             },
             launch: Facet {
                 state: "available",
-                reason: "可在外部终端启动；工作目录由终端会话提供，跳过审批使用 --yolo",
+                reason: "可在外部终端启动；工作目录与跳过审批参数由当前 CLI 适配器提供",
             },
             resume: Facet {
                 state: "planned",
@@ -469,7 +501,7 @@ mod tests {
         let home = Path::new("/home");
         assert_eq!(
             Qoder.skill_root(Scope::Global, home, None).unwrap(),
-            config_root(home).join("skills")
+            Qoder.config_root(home).join("skills")
         );
         assert_eq!(
             Qoder
@@ -503,7 +535,7 @@ mod tests {
         let home = Path::new("/home");
         assert_eq!(
             agent_port::root("qoder", Scope::Global, home, None).unwrap(),
-            config_root(home)
+            Qoder.config_root(home)
         );
         assert_eq!(
             agent_port::root("qoder", Scope::Project, home, Some(Path::new("/proj"))).unwrap(),

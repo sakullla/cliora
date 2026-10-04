@@ -1,4 +1,15 @@
 use super::*;
+
+#[test]
+fn file_discovery_does_not_require_an_installed_executable() {
+    let home = tempfile::tempdir().unwrap();
+    let db = Database::open(&home.path().join("cliora.db")).unwrap();
+    for id in ["zcode", "kimi_code", "codebuddy"] {
+        let target = PluginTarget { tool_id: id.into(), scope: Scope::Global, project_path: None, context_id: None };
+        assert!(scan(&db, home.path(), &target).unwrap().entries.is_empty());
+        assert!(crate::resources::agents::scan(&db, home.path(), &target).is_ok());
+    }
+}
 use std::collections::HashMap;
 #[derive(Default)]
 struct MemoryStore(Mutex<HashMap<String, String>>);
@@ -232,16 +243,16 @@ fn captured_native_shapes_and_snapshot_drift_are_checked() {
     let credentials = MemoryStore::default();
     let req = request("open_code", "install", "fixture@1");
     mutate_config(&db, &credentials, dir.path(), &req).unwrap();
-    let before = snapshot_inner(&db, dir.path(), &req.target, Path::new("unused")).unwrap();
+    let before = snapshot_inner(&db, dir.path(), &req.target, Some(Path::new("unused"))).unwrap();
     let (path, _) = config(dir.path(), &req.target).unwrap();
     fs::write(path, r#"{"plugin":["fixture@2"],"future":true}"#).unwrap();
-    let after = snapshot_inner(&db, dir.path(), &req.target, Path::new("unused")).unwrap();
+    let after = snapshot_inner(&db, dir.path(), &req.target, Some(Path::new("unused"))).unwrap();
     assert_ne!(before.baseline, after.baseline);
     let mut context = req.target.clone();
     context.context_id = Some("another-account".into());
     assert_ne!(
         after.baseline,
-        snapshot_inner(&db, dir.path(), &context, Path::new("unused"))
+        snapshot_inner(&db, dir.path(), &context, Some(Path::new("unused")))
             .unwrap()
             .baseline
     );
@@ -371,7 +382,7 @@ fn pi_npm_git_manifest_ownership_and_package_edits_change_baseline() {
         fs::write(package.join("custom-prompts/review.md"), "fixture").unwrap();
         fs::write(package.join("package.json"), serde_json::to_vec(&json!({"name":relative,"version":"1.2.3","pi":{"extensions":["custom-code/*.ts"],"prompts":["custom-prompts/review.md"],"themes":[]}})).unwrap()).unwrap();
     }
-    let before = snapshot_inner(&db, home, &target("pi"), Path::new("unused")).unwrap();
+    let before = snapshot_inner(&db, home, &target("pi"), Some(Path::new("unused"))).unwrap();
     assert_eq!(before.entries.len(), 2);
     for entry in &before.entries {
         assert!(!entry.read_only, "{}", entry.policy);
@@ -388,7 +399,7 @@ fn pi_npm_git_manifest_ownership_and_package_edits_change_baseline() {
         "// external edit",
     )
     .unwrap();
-    let npm_changed = snapshot_inner(&db, home, &target("pi"), Path::new("unused")).unwrap();
+    let npm_changed = snapshot_inner(&db, home, &target("pi"), Some(Path::new("unused"))).unwrap();
     assert_ne!(before.baseline, npm_changed.baseline);
     fs::write(
         base.join("git/github.com/team/pkg/custom-prompts/review.md"),
@@ -397,7 +408,7 @@ fn pi_npm_git_manifest_ownership_and_package_edits_change_baseline() {
     .unwrap();
     assert_ne!(
         npm_changed.baseline,
-        snapshot_inner(&db, home, &target("pi"), Path::new("unused"))
+        snapshot_inner(&db, home, &target("pi"), Some(Path::new("unused")))
             .unwrap()
             .baseline
     );

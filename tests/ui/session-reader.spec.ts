@@ -1,5 +1,19 @@
 import { expect, test } from '@playwright/test';
 
+test('large session lists render progressively and keyboard End reaches the final record', { tag: '@integration' }, async ({ page }) => {
+  await page.evaluate(() => {
+    const records = (window as any).__readerRecords;
+    for (let i = 0; i < 1000; i++) records.push({ ...records[0], id: `large-${i}`, title: `历史会话 ${i}`, updatedAt: 1700000000000 - i });
+  });
+  await page.getByRole('button', { name: '刷新本机记录' }).click();
+  const rows = page.getByLabel('会话列表').locator('button[data-session-id]');
+  await expect(rows).toHaveCount(80);
+  await rows.first().focus();
+  await page.keyboard.press('End');
+  await expect(page.locator('[data-session-id="large-999"]')).toBeFocused();
+  await expect(page.getByRole('heading', { name: '历史会话 999', exact: true })).toBeVisible();
+});
+
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     const control = { failDetail: false, copied: [] as string[], filters: [] as Array<Record<string, unknown>> };

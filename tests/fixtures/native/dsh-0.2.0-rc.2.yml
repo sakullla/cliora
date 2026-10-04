@@ -1,0 +1,16 @@
+# Sanitized sequence shape from the installed desktop profile. MCP insertion
+# follows the bundled dsh-app-boot applyEntryPatches contract, not a live server.
+- id: default-model
+  name: '@deepseek-ai/dsh-agent-default-model'
+  config:
+    model: fixture-model
+- insert:
+    - id: mcp:memory
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: memory
+        transport: stdio
+        command: npx
+        args: ['-y', '@modelcontextprotocol/server-memory']
+        env:
+          LOG_LEVEL: info

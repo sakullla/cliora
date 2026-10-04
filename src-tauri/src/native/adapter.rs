@@ -348,9 +348,7 @@ fn candidates(adapter: &dyn CliAdapter, home: &Path) -> Vec<PathBuf> {
     let mut directories = crate::process_environment::directories();
     let node = directories.iter().map(|dir| dir.join("node")).find(|candidate| candidate.is_file());
     directories.extend(npm_global_bin_dirs(node, Some(home.to_path_buf())));
-    if cfg!(target_os = "macos") {
-        directories.extend(adapter.native_binary_directories(home));
-    }
+    directories.extend(adapter.native_binary_directories(home));
     for dir in directories {
         for suffix in suffixes {
             let candidate = dir.join(format!("{name}{suffix}"));
@@ -358,6 +356,9 @@ fn candidates(adapter: &dyn CliAdapter, home: &Path) -> Vec<PathBuf> {
                 paths.push(candidate);
             }
         }
+    }
+    for candidate in adapter.extra_binary_candidates(home) {
+        if candidate.is_file() && !paths.contains(&candidate) { paths.push(candidate); }
     }
     paths
 }
@@ -378,6 +379,16 @@ fn version_from_output(adapter: &dyn CliAdapter, path: &Path, output: &str) -> O
 }
 
 fn run_version(path: &Path, adapter: &dyn CliAdapter) -> Installation {
+    if adapter.launch_form() == adapters::LaunchForm::Desktop {
+        let home = dirs::home_dir().unwrap_or_default();
+        return adapter.native_installations(&home).into_iter().find(|item| {
+            Path::new(&item.path) == path || Path::new(&item.path).canonicalize().ok()
+                .zip(path.canonicalize().ok()).is_some_and(|(a, b)| a == b)
+        }).unwrap_or_else(|| Installation {
+            path: path.display().to_string(), version: None, source: "unknown",
+            status: "probe_failed", detail: Some("路径未匹配桌面应用的安装记录".into()),
+        });
+    }
     let source = source_of(path, adapter);
     let mut command = if cfg!(windows)
         && path
@@ -604,9 +615,10 @@ fn summary_cache() -> &'static Mutex<HashMap<String, SummaryCacheEntry>> {
 }
 
 #[cfg(not(test))]
-fn summary_cache_key(id: &str, custom_path: Option<&Path>, scope: Scope, project: Option<&Path>) -> String {
+fn summary_cache_key(id: &str, custom_path: Option<&Path>, home: &Path, scope: Scope, project: Option<&Path>) -> String {
     format!(
-        "{id}|{}|{}|{}|{}",
+        "{id}|{}|{}|{}|{}|{}",
+        home.display(),
         crate::accounts::selection::current(id).map(|ctx|ctx.id).unwrap_or_default(),
         custom_path.map(|path| path.to_string_lossy().to_string()).unwrap_or_default(),
         match scope {
@@ -651,7 +663,7 @@ pub fn probe_registered_summary(
     scope: Scope,
 ) -> Result<ToolProbe, String> {
     #[cfg(not(test))]
-    let key = summary_cache_key(id, custom_path, scope, project);
+    let key = summary_cache_key(id, custom_path, home, scope, project);
     #[cfg(not(test))]
     if let Some(probe) = cached_probe(summary_cache(), &key) {
         return Ok(probe);
@@ -676,7 +688,7 @@ pub fn probe_registered_cached(
     #[cfg(test)]
     let _ = fresh;
     #[cfg(not(test))]
-    let key = summary_cache_key(id, custom_path, scope, project);
+    let key = summary_cache_key(id, custom_path, home, scope, project);
     #[cfg(not(test))]
     if !fresh {
         if let Some(probe) = cached_probe(installation_cache(), &key) {
@@ -712,23 +724,40 @@ fn finish_probe(
     let adapter = registry
         .get(id)
         .ok_or("未注册的 CLI 适配器，不能探测或写入")?;
-    let mut paths = candidates(adapter, home);
+    let markers = adapter.native_installations(home);
+    let mut paths = if adapter.launch_form() == adapters::LaunchForm::Desktop {
+        markers.iter().map(|item| PathBuf::from(&item.path)).collect()
+    } else {
+        candidates(adapter, home)
+    };
     if let Some(path) = custom_path {
         paths.retain(|candidate| candidate != path);
         paths.insert(0, path.to_path_buf());
     }
+    let discover = || {
+        if adapter.launch_form() == adapters::LaunchForm::Desktop {
+            // Marker discovery is performed once, without spawning the app.
+            paths.iter().map(|path| markers.iter().find(|item| Path::new(&item.path) == path || Path::new(&item.path).canonicalize().ok().zip(path.canonicalize().ok()).is_some_and(|(a, b)| a == b))
+                .cloned().unwrap_or_else(|| Installation {
+                    path: path.display().to_string(), version: None, source: "unknown",
+                    status: "probe_failed", detail: Some("路径未匹配桌面应用的安装记录".into()),
+                })).collect()
+        } else {
+            probe_installations(paths.clone(), adapter, stop_at_first)
+        }
+    };
     let installations = {
         #[cfg(test)]
         {
             if let Some(fixture) = registry.fixture_installations.get(id).cloned() {
                 collapse_sibling_shims(fixture)
             } else {
-                probe_installations(paths, adapter, stop_at_first)
+                discover()
             }
         }
         #[cfg(not(test))]
         {
-            probe_installations(paths, adapter, stop_at_first)
+            discover()
         }
     };
     let selected = installations.iter().find(|item| item.status == "available");

@@ -262,7 +262,7 @@ pub fn parse_controlled(
             .and_then(|name| name.to_str())
             .unwrap_or("agent")
             .to_owned();
-        let wire_source = HistorySource {
+        let wire_source = HistorySource { native_title: None,
             path: wire,
             native_id: None,
             fingerprint: String::new(),
@@ -323,7 +323,7 @@ mod tests {
     }
 
     fn fixture_source() -> HistorySource {
-        HistorySource {
+        HistorySource { native_title: None,
             path: fixtures().join("codebuddy-2.161.1-session.jsonl"),
             native_id: None,
             fingerprint: "test".into(),

@@ -6,7 +6,7 @@ fn fixtures() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/history")
 }
 fn file(name: &str) -> HistorySource {
-    HistorySource {
+    HistorySource { native_title: None,
         path: fixtures().join(name),
         native_id: None,
         fingerprint: "fixture".into(),
@@ -171,7 +171,7 @@ fn five_versioned_sources_extract_visible_messages_and_distinct_usage() {
         28
     );
 
-    let grok = grok::parse(&HistorySource {
+    let grok = grok::parse(&HistorySource { native_title: None,
         path: fixtures().join("grok-1.0"),
         native_id: Some("44444444-4444-4444-8444-444444444444".into()),
         fingerprint: "fixture".into(),
@@ -279,7 +279,7 @@ fn claude_counts_subagent_calls_without_replaying_snapshots() {
 ",
     )
     .unwrap();
-    let session = claude::parse(&HistorySource {
+    let session = claude::parse(&HistorySource { native_title: None,
         path: root.join(format!("{id}.jsonl")),
         native_id: None,
         fingerprint: "fixture".into(),
@@ -572,7 +572,7 @@ fn event(id: &str, model: Option<&str>, timestamp: i64, counts: (u64, u64, Optio
 
 /// Stores a synthetic session through the same path a scan uses.
 fn store_events(db: &Database, tool: &str, key: &str, model: Option<&str>, usage: Vec<UsageEvent>) -> String {
-    let source = HistorySource { path: PathBuf::from(key), native_id: None, fingerprint: "fixture".into(), fingerprint_error: None };
+    let source = HistorySource { native_title: None, path: PathBuf::from(key), native_id: None, fingerprint: "fixture".into(), fingerprint_error: None };
     let mut parsed = ParsedSession::new();
     parsed.title = key.into();
     parsed.model = model.map(str::to_owned);
@@ -752,7 +752,7 @@ fn codex_prefers_per_response_records_and_reads_past_old_row_limits() {
     }
     fs::write(&path, text).unwrap();
     assert!(fs::metadata(&path).unwrap().len() > 16 * 1024 * 1024);
-    let session = codex::parse(&HistorySource { path, native_id: None, fingerprint: "fixture".into(), fingerprint_error: None }).unwrap();
+    let session = codex::parse(&HistorySource { native_title: None, path, native_id: None, fingerprint: "fixture".into(), fingerprint_error: None }).unwrap();
     assert_eq!(session.usage.len(), 2, "records replace token_count and repeat ids collapse");
     assert!(session.usage.iter().all(|item| item.id.starts_with("codex:response:")));
     assert_eq!(session.usage.iter().map(|item| item.input.unwrap()).sum::<u64>(), 200);
@@ -768,7 +768,7 @@ fn pi_usage_ids_are_unique_per_file() {
     for name in ["a.jsonl", "b.jsonl"] {
         let path = temp.path().join(name);
         fs::copy(fixtures().join("pi-0.87-v3.jsonl"), &path).unwrap();
-        let session = pi::parse(&HistorySource { path, native_id: None, fingerprint: "fixture".into(), fingerprint_error: None }).unwrap();
+        let session = pi::parse(&HistorySource { native_title: None, path, native_id: None, fingerprint: "fixture".into(), fingerprint_error: None }).unwrap();
         for item in session.usage {
             assert!(ids.insert(item.id), "Pi row ids repeat across files and must not be merged");
         }
@@ -982,4 +982,48 @@ fn registered_string_tools_join_the_managed_history_scan() {
     assert!(!tools.contains(&"qoder"));
     let scanned = scans(&db).unwrap();
     assert!(scanned.iter().any(|status| status.tool_id == "kimi_code"));
+}
+
+#[test]
+fn native_titles_override_first_prompt_and_title_edits_invalidate_only_the_matching_source() {
+    let home = tempfile::tempdir().unwrap();
+    let root = home.path().join(".codex");
+    std::fs::create_dir_all(root.join("sessions")).unwrap();
+    let id = "11111111-2222-4333-8444-555555555555";
+    let log = format!("{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{id}\"}}}}\n{{\"type\":\"response_item\",\"payload\":{{\"type\":\"message\",\"role\":\"user\",\"content\":[{{\"type\":\"input_text\",\"text\":\"first prompt\"}}]}}}}\n");
+    std::fs::write(root.join("sessions").join(format!("rollout-2026-10-04-{id}.jsonl")), log).unwrap();
+    let other_id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    std::fs::write(root.join("sessions").join(format!("rollout-2026-10-04-{other_id}.jsonl")), "{\"type\":\"session_meta\",\"payload\":{\"id\":\"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee\"}}\n").unwrap();
+    let find = |needle: &str| codex::sources(home.path()).unwrap().into_iter().find(|source| source.path.to_string_lossy().contains(needle)).unwrap();
+    let other = find(other_id);
+    let index = root.join("session_index.jsonl");
+    let write_title = |title: &str| std::fs::write(&index, serde_json::json!({"id":id,"thread_name":title,"updated_at":"2026-10-04T00:00:00Z"}).to_string()).unwrap();
+    write_title("Native generated title");
+    let first = find(id);
+    assert_eq!(codex::parse(&first).unwrap().title, "Native generated title");
+    write_title("Renamed in CLI");
+    let updated = find(id);
+    assert_ne!(first.fingerprint, updated.fingerprint);
+    assert_eq!(other.fingerprint, find(other_id).fingerprint);
+    assert_eq!(codex::parse(&updated).unwrap().title, "Renamed in CLI");
+    std::fs::write(&index, "invalid row\n").unwrap();
+    let db = rusqlite::Connection::open(root.join("state_5.sqlite")).unwrap();
+    db.execute_batch("CREATE TABLE threads (id TEXT, title TEXT)").unwrap();
+    db.execute("INSERT INTO threads VALUES (?1, 'Database title')", [id]).unwrap();
+    assert_eq!(codex::parse(&find(id)).unwrap().title, "Database title");
+    for (tool, text, expected) in [
+        ("claude", r#"{"type":"user","message":{"content":"first prompt"}}
+{"type":"ai-title","aiTitle":"Generated Claude title"}
+"#, "Generated Claude title"),
+        ("pi", r#"{"type":"session","id":"native","version":3}
+{"type":"message","id":"u","message":{"role":"user","content":"first prompt"}}
+{"type":"session_info","name":"Native Pi title"}
+"#, "Native Pi title"),
+    ] {
+        let path = home.path().join(format!("{tool}.jsonl"));
+        std::fs::write(&path, text).unwrap();
+        let source = HistorySource { native_title: None, path, native_id: None, fingerprint: String::new(), fingerprint_error: None };
+        let parsed = if tool == "claude" { claude::parse(&source) } else { pi::parse(&source) }.unwrap();
+        assert_eq!(parsed.title, expected);
+    }
 }

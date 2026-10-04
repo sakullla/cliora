@@ -1,16 +1,59 @@
+use super::QoderAdapter;
+#[cfg(test)]
 use super::Qoder;
 use crate::adapters::plugins::PluginAdapter;
 use crate::{native::adapter::Scope, resources::plugins::PluginTarget};
 use serde_json::Value;
 
-impl PluginAdapter for Qoder {
+impl PluginAdapter for QoderAdapter {
+    fn discovery_only(&self) -> bool { self.plugin_ledger.is_some() }
+    fn discover(&self, home: &std::path::Path, target: &PluginTarget, _path: &std::path::Path) -> Result<Vec<crate::resources::plugins::PluginEntry>, String> {
+        let ledger = self.plugin_ledger.ok_or("此 CLI 使用原生插件查询命令")?;
+        let root = self.config_root(home);
+        let text = crate::native::transaction::read_native(&root.join(ledger))?;
+        if text.trim().is_empty() {
+            let legacy = crate::native::transaction::read_native(&root.join("plugins/installed_plugins.json"))?;
+            if !legacy.trim().is_empty() {
+                return Err("Qoder 当前只有旧版插件索引，请在原生 CLI 刷新插件后重试".into());
+            }
+            return Ok(Vec::new());
+        }
+        let ledger: Value = serde_json::from_str(&text).map_err(|_| "Qoder 插件索引不是有效 JSON")?;
+        if ledger.get("version").and_then(Value::as_u64) != Some(2) {
+            return Err("Qoder 插件索引版本无法识别，请更新适配器".into());
+        }
+        let records = ledger.get("plugins").and_then(Value::as_object).ok_or("Qoder 插件索引缺少 plugins")?;
+        let mut enabled = serde_json::Map::new();
+        let mut configs = vec![root.join("settings.json")];
+        if target.scope == Scope::Project {
+            let project = std::path::Path::new(target.project_path.as_deref().ok_or("请选择项目")?);
+            configs.extend([project.join(self.directory).join("settings.json"), project.join(self.directory).join("settings.local.json")]);
+        }
+        for path in configs {
+            let text = crate::native::transaction::read_native(&path)?;
+            let parsed = crate::native::format::parse(crate::native::format::FileKind::Json, &text)?;
+            if let Some(values) = parsed.get("enabledPlugins").and_then(Value::as_object) { enabled.extend(values.clone()); }
+        }
+        let mut rows = Vec::new();
+        for (id, records) in records {
+            for record in records.as_array().ok_or("Qoder 插件安装记录不是数组")? {
+                let mut row = record.as_object().cloned().ok_or("Qoder 插件安装记录无效")?;
+                row.insert("id".into(), serde_json::json!(id));
+                let active = enabled.get(id).cloned().or_else(|| row.get("enabled").cloned()).unwrap_or(Value::Bool(true));
+                row.insert("enabled".into(), active);
+                rows.push(Value::Object(row));
+            }
+        }
+        self.parse_list(&Value::Array(rows), target)
+    }
+
     fn capability(&self) -> crate::adapters::plugins::PluginCapability {
         crate::adapters::plugins::PluginCapability {
             version: "1.1.63",
             sources: "插件 ID name@marketplace、name@local 或本地路径（qoder plugins install）",
             actions: vec!["install", "update", "enable", "disable", "uninstall"],
             project: true,
-            detail: "经 qoder plugins 子命令管理（install 支持 -s user|project）；启停状态存于 settings.json enabledPlugins。重启会话后加载。",
+            detail: "经所选 CLI 的 plugins 子命令管理（install 支持 -s user|project）；启停状态存于 settings.json enabledPlugins。重启会话后加载。",
         }
     }
     fn command_args(

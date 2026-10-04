@@ -124,6 +124,14 @@ pub trait CliAdapter: Sync {
     fn command(&self) -> &'static str;
     fn npm_package(&self) -> &'static str;
     fn version_identity(&self, basename: &str, output: &str) -> bool;
+    /// Desktop installation evidence; never launch a GUI with `--version`.
+    /// Paths and product/version markers belong to the implementation.
+    fn native_installations(&self, _home: &Path) -> Vec<crate::native::adapter::Installation> {
+        Vec::new()
+    }
+    /// Adapter-owned versioned binaries outside PATH, validated by the shared
+    /// process probe just like ordinary candidates.
+    fn extra_binary_candidates(&self, _home: &Path) -> Vec<PathBuf> { Vec::new() }
     fn native_files(
         &self,
         scope: Scope,
@@ -344,6 +352,21 @@ pub trait CliAdapter: Sync {
     }
     fn mcp_requires_version(&self) -> bool {
         false
+    }
+    /// Enumerate logical MCP entries. Sequence/composition formats override this
+    /// together with mcp_change; shared transactions still own concurrency and backups.
+    fn mcp_entries(&self, parsed: &Value, location: &McpLocation) -> Result<serde_json::Map<String, Value>, String> {
+        let root = parsed.get(location.root);
+        Ok(root.and_then(|root| location.child.map_or(Some(root), |child| root.get(child)))
+            .and_then(Value::as_object).cloned().unwrap_or_default())
+    }
+    /// Normalize an entry for display, including its native enabled/disabled state.
+    fn mcp_entry_view(&self, entry: &Value) -> Value { entry.clone() }
+    fn mcp_change(&self, _parsed: &Value, location: &McpLocation, name: &str, value: Option<Value>) -> Result<crate::native::transaction::FieldChange, String> {
+        let mut path = vec![location.root.to_owned()];
+        if let Some(child) = location.child { path.push(child.to_owned()); }
+        path.push(name.to_owned());
+        Ok(crate::native::transaction::FieldChange { path, value })
     }
     fn mcp_location_for_version(
         &self,

@@ -129,7 +129,10 @@ test('native settings result drives the home list and empty management stays rec
   await expect(page.getByText('尚未管理工具')).toBeVisible();
   await page.getByRole('button', { name: '前往设置' }).click();
   await page.getByRole('checkbox', { name: /Codex/ }).check();
-  await page.getByRole('radiogroup', { name: '主题' }).getByRole('radio', { name: '深色' }).click();
+  const themes = page.getByRole('radiogroup', { name: '主题' });
+  await themes.getByRole('radio', { name: '浅色' }).focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(themes.getByRole('radio', { name: '深色' })).toBeFocused();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始' }).click();
   await expect(page.getByRole('button', { name: '编辑配置 →' })).toHaveCount(1);
@@ -220,16 +223,15 @@ test('home resumes with native session ID and explicit normal or YOLO mode', asy
   ]);
 });
 
-test('storage failure preserves an actionable page and retry loads repaired data', async ({ page }) => {
+test('storage failure preserves an actionable page and retry loads repaired data', { tag: '@integration' }, async ({ page }) => {
   await page.addInitScript(() => {
-    let bootstrapAttempts = 0;
+    (window as any).__storageRepaired = false;
     Object.assign(window, {
       isTauri: true,
       __TAURI_INTERNALS__: { invoke: async (command: string) => {
         if (command === 'list_projects') return [];
         if (command === 'get_bootstrap') {
-          bootstrapAttempts += 1;
-          if (bootstrapAttempts <= 2) throw { code: 'storage_unavailable', message: '无法打开本机数据库', action: '先备份原数据库，再检查磁盘和权限；修复后点击重试。', data_directory: 'C:\\Users\\test\\AppData\\Roaming\\Cliora' };
+          if (!(window as any).__storageRepaired) throw { code: 'storage_unavailable', message: '无法打开本机数据库', action: '先备份原数据库，再检查磁盘和权限；修复后点击重试。', data_directory: 'C:\\Users\\test\\AppData\\Roaming\\Cliora' };
         }
         if (command === 'list_cli_adapters') return {
           registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [] }],
@@ -253,6 +255,7 @@ test('storage failure preserves an actionable page and retry loads repaired data
   await expect(page.locator('.tool-row')).toHaveCount(0);
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置' }).click();
   await expect(page.getByRole('alert')).toBeVisible();
+  await page.evaluate(() => { (window as any).__storageRepaired = true; });
   await page.getByRole('button', { name: '重试读取' }).click();
   await expect(page.getByRole('checkbox', { name: /Codex/ })).toBeVisible();
   await expect(page.getByRole('alert')).toHaveCount(0);

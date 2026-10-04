@@ -200,7 +200,7 @@ fn target_authentication_redirect_and_dns_boundaries() {
 #[test]
 fn compute_stack_memory_output_and_request_limits() {
     for body in ["while(true){}", "function f(){return f()} f();", "const a=[];while(true)a.push(new Array(10000).fill(1));", "return {a:'x'.repeat(300000)};", "for(let i=0;i<9;i++)ctx.http({url:'https://quota.example.com/'}); await new Promise(()=>{});"] {
-        let start=Instant::now(); let report=execute(input(&script(body)));
+        let start=Instant::now(); let report=execute_with_budgets(input(&script(body)), RuntimeBudgets { compute: Duration::from_millis(100), ..RuntimeBudgets::default() });
         assert!(report.error.is_some(),"{body}"); assert!(start.elapsed()<Duration::from_secs(8));
     }
 }
@@ -215,12 +215,15 @@ fn response_limit_and_network_timeout() {
     );
     handle.join().unwrap();
     let (origin, handle) = server(1, |_| {
-        std::thread::sleep(HTTP_BUDGET + Duration::from_millis(100));
+        std::thread::sleep(Duration::from_millis(300));
         response("ok")
     });
     let mut value = input(&script(&format!("await ctx.http({{url:'{origin}/'}});")));
     local(&mut value, &origin);
-    assert_eq!(execute(value).error.unwrap().code, UsageErrorCode::Timeout);
+    assert_eq!(RuntimeBudgets::default().http, Duration::from_secs(10));
+    let report = execute_with_budgets(value, RuntimeBudgets { http: Duration::from_millis(100), ..RuntimeBudgets::default() });
+    assert_eq!(report.error.unwrap().code, UsageErrorCode::Timeout);
+    assert_eq!(report.stage, UsageStage::Http);
     handle.join().unwrap();
 }
 #[test]

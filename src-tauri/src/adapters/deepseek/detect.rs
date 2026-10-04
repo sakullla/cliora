@@ -8,7 +8,6 @@
 //! instead of a fabricated version string.
 
 use std::path::PathBuf;
-use std::sync::OnceLock;
 
 /// The product is published by DeepSeek; match the publisher name rather than
 /// a guessed bundle title so renamed installers still surface. A deliberately
@@ -154,26 +153,28 @@ mod table {
     }
 }
 
-/// Cached uninstall-table evidence: (InstallLocation, DisplayVersion).
-fn installation() -> Option<&'static (PathBuf, Option<String>)> {
-    static INSTALL: OnceLock<Option<(PathBuf, Option<String>)>> = OnceLock::new();
-    INSTALL
-        .get_or_init(|| {
-            #[cfg(windows)]
-            {
-                table::scan()
-            }
-            #[cfg(not(windows))]
-            {
-                None
-            }
-        })
-        .as_ref()
+/// Probe caching belongs to the shared installation service; refresh must also
+/// observe installs and upgrades made while Cliora is running.
+fn installation() -> Option<(PathBuf, Option<String>)> {
+    #[cfg(windows)]
+    { table::scan() }
+    #[cfg(not(windows))]
+    { None }
 }
 
 /// Official install root from the uninstall table, when the product is found.
 pub(crate) fn native_install_directory() -> Option<PathBuf> {
     installation().map(|(location, _)| location.clone())
+}
+
+pub(crate) fn installations() -> Vec<crate::native::adapter::Installation> {
+    installation().into_iter().filter_map(|(root, version)| {
+        let path = root.join("DeepSeek Harness.exe");
+        path.is_file().then(|| crate::native::adapter::Installation {
+            path: path.display().to_string(), version: version.clone(),
+            source: "native", status: "available", detail: None,
+        })
+    }).collect()
 }
 
 #[cfg(test)]

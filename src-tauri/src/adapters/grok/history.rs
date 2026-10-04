@@ -86,7 +86,7 @@ fn sources_with_control(
                 .and_then(|value| value.to_str())
                 .filter(|id| valid_native_id(id))
                 .map(str::to_owned);
-            result.push(HistorySource {
+            result.push(HistorySource { native_title: None,
                 path,
                 native_id,
                 fingerprint: checked
@@ -190,7 +190,7 @@ pub fn parse_controlled(
         .and_then(timestamp);
     let chat = source.path.join("chat_history.jsonl");
     if chat.is_file() && !chat.is_symlink() {
-        let chat_source = HistorySource {
+        let chat_source = HistorySource { native_title: None,
             path: chat,
             native_id: None,
             fingerprint: String::new(),

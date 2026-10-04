@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -10,11 +10,11 @@ import { ToolIcon, ToolIconsContext } from './components/ToolIcon';
 import { ToolIconSettings } from './features/settings/ToolIconSettings';
 import { ManagedTools } from './features/home/ManagedTools';
 import { ProjectLauncher } from './features/home/ProjectLauncher';
-import { LibraryPage } from './features/library/LibraryPage';
-import { RecordsPage } from './features/records/RecordsPage';
+const LibraryPage = lazy(() => import('./features/library/LibraryPage').then((module) => ({ default: module.LibraryPage })));
+const RecordsPage = lazy(() => import('./features/records/RecordsPage').then((module) => ({ default: module.RecordsPage })));
 import { TerminalSettings } from './features/settings/TerminalSettings';
-import { MigrationSettings } from './features/settings/MigrationSettings';
-import { ToolWorkspacePage } from './features/tools/ToolWorkspace';
+const MigrationSettings = lazy(() => import('./features/settings/MigrationSettings').then((module) => ({ default: module.MigrationSettings })));
+const ToolWorkspacePage = lazy(() => import('./features/tools/ToolWorkspace').then((module) => ({ default: module.ToolWorkspacePage })));
 import { native, nativeAvailable } from './lib/native';
 import { isEditableTarget, modAria, modLabel, withMod } from './lib/shortcut';
 import { navigateChoices } from './lib/choiceNavigation';
@@ -92,7 +92,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
   const [page, setPage] = useState<Page>('home');
-  const [connectionsVisited, setConnectionsVisited] = useState(false);
+  const [visited, setVisited] = useState<Set<string>>(() => new Set(['home']));
   const [tool, setTool] = useState<string>('');
   const [toolOpenSequence, setToolOpenSequence] = useState(0);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('general');
@@ -107,7 +107,9 @@ export default function App() {
     if (!dirty && pendingCatalog.current) { setCatalog(pendingCatalog.current); pendingCatalog.current = null; }
   }, []);
   const canLeave = useCallback((_next: Page) => true, []);
-  useEffect(() => { if (page === 'connections') setConnectionsVisited(true); }, [page]);
+  const section = page === 'settings' ? `${page}:${settingsTab}` : page;
+  useEffect(() => { setVisited((old) => old.has(section) ? old : new Set([...old, section])); }, [section]);
+  const hasVisited = (key: string) => section === key || visited.has(key);
 
   useEffect(() => {
     if (!nativeAvailable) return;
@@ -180,16 +182,30 @@ export default function App() {
 
   const goRef = useRef<(next: Page) => void>(() => {});
   useEffect(() => {
+    let pendingSearch = 0;
     const onKey = (event: KeyboardEvent) => {
+      cancelAnimationFrame(pendingSearch);
       const findShortcut = withMod(event) && event.key.toLowerCase() === 'f';
       const slashShortcut = event.key === '/' && !event.ctrlKey && !event.metaKey && !event.altKey && !isEditableTarget(event.target);
       if (findShortcut || slashShortcut) {
         if (document.querySelector('dialog[open]')) return;
         const input = [...document.querySelectorAll<HTMLInputElement>('main input[data-page-search]')].find((item) => item.getClientRects().length);
-        if (!input) return;
-        event.preventDefault();
-        input.focus();
-        input.select();
+        if (input) {
+          event.preventDefault();
+          input.focus();
+          input.select();
+        } else if (document.querySelector('main .skeleton-page') && ['library', 'records'].includes(activePage.current)) {
+          event.preventDefault();
+          const requestedPage = activePage.current;
+          const deadline = performance.now() + 5000;
+          const focusWhenLoaded = () => {
+            if (activePage.current !== requestedPage || performance.now() > deadline || document.querySelector('dialog[open]') || isEditableTarget(document.activeElement)) return;
+            const search = [...document.querySelectorAll<HTMLInputElement>('main input[data-page-search]')].find((item) => item.getClientRects().length);
+            if (search) { search.focus(); search.select(); }
+            else pendingSearch = requestAnimationFrame(focusWhenLoaded);
+          };
+          pendingSearch = requestAnimationFrame(focusWhenLoaded);
+        }
         return;
       }
       if (!withMod(event)) return;
@@ -199,7 +215,7 @@ export default function App() {
       goRef.current(pages[index].id);
     };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    return () => { cancelAnimationFrame(pendingSearch); window.removeEventListener('keydown', onKey); };
   }, []);
 
   const managed: string[] = nativeAvailable ? catalog?.managedIds ?? [] : bootstrap.preferences.managed_tools;
@@ -269,11 +285,11 @@ export default function App() {
           </section>
           {nativeAvailable ? <ProjectLauncher tools={visibleDescriptors} repair={trayRepair?.page === 'home' ? trayRepair : null} /> : <section className="home-secondary"><div className="section-heading"><h2>最近项目</h2></div><div className="subtle-panel"><strong>桌面应用中管理项目</strong><p>可以关联本机目录，并用选定的 CLI 在外部终端启动。</p></div></section>}
         </div>}
-        {(page === 'connections' || connectionsVisited) && <div hidden={page !== 'connections'}>
-          {selectedTool ? nativeAvailable ? <ToolWorkspacePage managedTools={visibleDescriptors} initialTool={selectedTool} openSequence={toolOpenSequence} active={page === 'connections'} repair={trayRepair?.page === 'connections' ? trayRepair : null} onDirtyChange={onWorkspaceDirtyChange} /> : <><div className="tool-tabs" role="tablist" aria-label="工具" onKeyDown={navigateChoices}>{visible.map((item) => <button key={item.id} type="button" role="tab" aria-selected={selectedTool === item.id} tabIndex={selectedTool === item.id ? 0 : -1} className={selectedTool === item.id ? 'active' : ''} onClick={() => setTool(item.id)}>{item.name}</button>)}</div><div className="connection-layout"><div className="profile-column"><div className="column-title">{selectedToolName} 配置</div><div className="muted-copy">浏览器预览不读取本机配置</div></div><div className="detail-panel"><div className="detail-header"><div><div className="eyebrow">配置</div><h2>{selectedToolName}</h2></div><span className="status-pill">预览</span></div><Empty title="请在桌面应用中编辑原生配置" detail="桌面应用可读取和保存 CLI 的 TOML / JSON 原文。" /></div></div></> : <Empty title="没有管理中的工具" detail="先在设置中勾选需要管理的 CLI。" action={<button className="button primary" type="button" onClick={() => go('settings')}>前往设置</button>} />}
+        {(page === 'connections' || hasVisited('connections')) && <div hidden={page !== 'connections'}>
+          {selectedTool ? nativeAvailable ? <Suspense fallback={<LoadingSkeleton />}><ToolWorkspacePage managedTools={visibleDescriptors} initialTool={selectedTool} openSequence={toolOpenSequence} active={page === 'connections'} repair={trayRepair?.page === 'connections' ? trayRepair : null} onDirtyChange={onWorkspaceDirtyChange} /></Suspense> : <><div className="tool-tabs" role="tablist" aria-label="工具" onKeyDown={navigateChoices}>{visible.map((item) => <button key={item.id} type="button" role="tab" aria-selected={selectedTool === item.id} tabIndex={selectedTool === item.id ? 0 : -1} className={selectedTool === item.id ? 'active' : ''} onClick={() => setTool(item.id)}>{item.name}</button>)}</div><div className="connection-layout"><div className="profile-column"><div className="column-title">{selectedToolName} 配置</div><div className="muted-copy">浏览器预览不读取本机配置</div></div><div className="detail-panel"><div className="detail-header"><div><div className="eyebrow">配置</div><h2>{selectedToolName}</h2></div><span className="status-pill">预览</span></div><Empty title="请在桌面应用中编辑原生配置" detail="桌面应用可读取和保存 CLI 的 TOML / JSON 原文。" /></div></div></> : <Empty title="没有管理中的工具" detail="先在设置中勾选需要管理的 CLI。" action={<button className="button primary" type="button" onClick={() => go('settings')}>前往设置</button>} />}
         </div>}
-        <div hidden={page !== 'library'}><LibraryPage managedTools={visibleDescriptors} active={page === 'library'} /></div>
-        <div className="records-shell" hidden={page !== 'records'}><RecordsPage active={page === 'records'} tools={visibleDescriptors} onOpenProjects={() => go('home')} /></div>
+        <div hidden={page !== 'library'}>{hasVisited('library') && <Suspense fallback={<LoadingSkeleton />}><LibraryPage managedTools={visibleDescriptors} active={page === 'library'} /></Suspense>}</div>
+        <div className="records-shell" hidden={page !== 'records'}>{hasVisited('records') && <Suspense fallback={<LoadingSkeleton />}><RecordsPage active={page === 'records'} tools={visibleDescriptors} onOpenProjects={() => go('home')} /></Suspense>}</div>
         {page === 'settings' && <PageTabs items={[["general", "常规"], ["migration", "迁移与同步"]]} value={settingsTab} onChange={setSettingsTab} />}
         {page === 'settings' && settingsTab === 'general' && <>
           <section className="settings-group"><div className="setting-intro"><h2>管理的 CLI</h2><p>首页、工具页与使用记录只显示勾选的工具。关闭管理不会删除已有配置。</p></div><div className="managed-checks">{(nativeAvailable ? catalog?.registered ?? [] : bootstrap.tools).map((item) => <label key={item.id}><input type="checkbox" checked={managed.includes(item.id)} disabled={!nativeAvailable || busy} onChange={(event) => updateManaged(item.id, event.target.checked)} /><ToolIcon toolId={item.id} size={24} /><span>{item.name}</span></label>)}</div><ToolIconSettings tools={nativeAvailable ? catalog?.registered ?? [] : bootstrap.tools} icons={bootstrap.preferences.tool_icons ?? {}} busy={busy} onChange={updateIcon} onError={(message) => setError({ code: 'icon_error', message, action: '请重新选择图片。' })} />{catalog?.preservedUnknown.map((item) => <div className="setting-row" key={item.id}><span><strong>{item.id}</strong><small>未安装适配器，保留 {item.profileCount} 份配置，只读</small></span></div>)}</section>
@@ -281,7 +297,7 @@ export default function App() {
           {nativeAvailable && <TerminalSettings />}
           <div className="setting-row migration-entry"><span><strong>换设备与备份</strong><small>导出加密配置包，或通过 WebDAV 同步</small></span><button className="button" type="button" onClick={() => setSettingsTab('migration')}>迁移与同步 →</button></div>
         </>}
-        <div hidden={page !== 'settings' || settingsTab !== 'migration'}><MigrationSettings active={page === 'settings' && settingsTab === 'migration'} onImported={() => void refreshAfterImport()} /></div>
+        <div hidden={page !== 'settings' || settingsTab !== 'migration'}>{hasVisited('settings:migration') && <Suspense fallback={<LoadingSkeleton />}><MigrationSettings active={page === 'settings' && settingsTab === 'migration'} onImported={() => void refreshAfterImport()} /></Suspense>}</div>
       </>}
     </div></main>
   </div><ConfirmationHost /></ToolIconsContext>;

@@ -32,6 +32,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OpenFlags};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use crate::history::usage::{self, RequestUsage};
 use crate::history::{
@@ -56,12 +57,12 @@ pub fn sources_controlled(
     // its real working directory and the complete billed usage.
     let database = root.join("cli").join("db").join("db.sqlite");
     if let Ok(index) = internal_index(&database, cancelled) {
-        for (id, updated) in index.sessions {
+        for (id, stamp) in index.sessions {
             if seen.insert(id.clone()) {
-                sources.push(HistorySource {
+                sources.push(HistorySource { native_title: None,
                     path: database.clone(),
                     native_id: Some(id),
-                    fingerprint: format!("zcode-session-v2|{}|{updated}", index.stamp),
+                    fingerprint: format!("zcode-session-v3|{stamp}"),
                     fingerprint_error: None,
                 });
                 if sources.len() > MAX_SOURCES {
@@ -126,8 +127,7 @@ fn rollout_native_id(path: &Path) -> Option<String> {
 }
 
 struct InternalIndex {
-    stamp: String,
-    sessions: Vec<(String, i64)>,
+    sessions: Vec<(String, String)>,
 }
 
 fn open_internal(database: &Path) -> Result<Connection, String> {
@@ -143,11 +143,11 @@ fn internal_index(database: &Path, cancelled: &dyn Fn() -> bool) -> Result<Inter
     if !database.is_file() {
         return Err("ZCode 内部数据库不存在".into());
     }
-    let stamp = source_fingerprint_controlled(database, cancelled)?;
     let connection = open_internal(database)?;
     connection
         .busy_timeout(std::time::Duration::from_millis(500))
         .map_err(|error| error.to_string())?;
+    let connection = connection.unchecked_transaction().map_err(|error| error.to_string())?;
     let tables = connection
         .query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('session','model_usage')",
@@ -159,26 +159,47 @@ fn internal_index(database: &Path, cancelled: &dyn Fn() -> bool) -> Result<Inter
         return Err("ZCode 内部数据库缺少 session/model_usage 表".into());
     }
     let mut statement = connection
-        .prepare("SELECT id, time_updated FROM session")
+        .prepare("SELECT id, json_array(directory,title,time_created,time_updated) FROM session ORDER BY id")
         .map_err(|error| format!("ZCode 内部数据库结构无法识别：{error}"))?;
     let rows = statement
         .query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
-                row.get::<_, Option<i64>>(1)?.unwrap_or(0),
+                row.get::<_, String>(1)?,
             ))
         })
         .map_err(|error| error.to_string())?;
-    let mut sessions = Vec::new();
+    let mut hashes = BTreeMap::<String, Sha256>::new();
     for row in rows {
         check_cancelled(cancelled)?;
-        let (id, updated) = row.map_err(|error| error.to_string())?;
+        let (id, metadata) = row.map_err(|error| error.to_string())?;
         if valid_native_id(&id) {
-            sessions.push((id, updated));
+            if hashes.len() >= MAX_SOURCES { return Err("ZCode 会话源超过 5000 个".into()); }
+            let mut hash = Sha256::new();
+            hash.update(metadata.as_bytes());
+            hashes.insert(id, hash);
         }
     }
-    sessions.sort();
-    Ok(InternalIndex { stamp, sessions })
+    // Read the consumed columns once, including committed WAL records. Changes
+    // to one session must not reparse every other session and its rollout.
+    let mut statement = connection.prepare(
+        "SELECT session_id, json_array(id,model_id,started_at,input_tokens,output_tokens,
+            cache_read_input_tokens,cache_creation_input_tokens) FROM model_usage ORDER BY session_id,id"
+    ).map_err(|error| error.to_string())?;
+    let rows = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+        .map_err(|error| error.to_string())?;
+    for row in rows {
+        check_cancelled(cancelled)?;
+        let (id, usage) = row.map_err(|error| error.to_string())?;
+        if let Some(hash) = hashes.get_mut(&id) { hash.update(usage.as_bytes()); }
+    }
+    let sessions = hashes.into_iter().map(|(id, mut hash)| {
+        if let Some(path) = rollout_sibling(database, &id).filter(|path| path.is_file()) {
+            hash.update(source_fingerprint_controlled(&path, cancelled)?.as_bytes());
+        }
+        Ok((id, format!("{:x}", hash.finalize())))
+    }).collect::<Result<Vec<_>, String>>()?;
+    Ok(InternalIndex { sessions })
 }
 
 pub fn parse(source: &HistorySource) -> Result<ParsedSession, String> {
@@ -375,7 +396,7 @@ fn rollout_transcript(
     cancelled: &dyn Fn() -> bool,
     session: &mut ParsedSession,
 ) -> Result<bool, String> {
-    let source = HistorySource {
+    let source = HistorySource { native_title: None,
         path: path.to_path_buf(),
         native_id: None,
         fingerprint: String::new(),
@@ -694,6 +715,28 @@ mod tests {
     }
 
     #[test]
+    fn fingerprints_isolate_sessions_and_notice_wal_usage_and_rollout_changes() {
+        let home = tempfile::tempdir().unwrap();
+        let database = home.path().join(".zcode/cli/db/db.sqlite");
+        std::fs::create_dir_all(database.parent().unwrap()).unwrap();
+        write_internal_db(&database);
+        let connection = Connection::open(&database).unwrap();
+        connection.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
+        let before = internal_index(&database, &|| false).unwrap().sessions;
+        connection.execute("UPDATE model_usage SET output_tokens = output_tokens + 7 WHERE id = 'usage_model_main_turn_first_0001'", []).unwrap();
+        let after = internal_index(&database, &|| false).unwrap().sessions;
+        let changed = "sess_fixture-2026_10_03-a1b2c3";
+        for ((id, old), (_, new)) in before.iter().zip(&after) {
+            assert_eq!(old != new, id == changed);
+        }
+        let rollout = rollout_sibling(&database, changed).unwrap();
+        std::fs::create_dir_all(rollout.parent().unwrap()).unwrap();
+        std::fs::write(&rollout, "{}\n").unwrap();
+        let newest = internal_index(&database, &|| false).unwrap().sessions;
+        assert_ne!(after.iter().find(|(id, _)| id == changed), newest.iter().find(|(id, _)| id == changed));
+    }
+
+    #[test]
     fn internal_db_lists_sessions_with_directory_usage_and_rollout_transcript() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join(".zcode");
@@ -713,7 +756,7 @@ mod tests {
         assert_eq!(sources.len(), 2, "{sources:?}");
         assert!(sources
             .iter()
-            .all(|source| source.fingerprint.starts_with("zcode-session-v2|")));
+            .all(|source| source.fingerprint.starts_with("zcode-session-v3|")));
         let source = sources
             .iter()
             .find(|source| source.native_id.as_deref() == Some("sess_fixture-2026_10_03-a1b2c3"))

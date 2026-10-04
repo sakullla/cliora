@@ -17,11 +17,13 @@ pub fn sources_controlled(
     home: &Path,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Vec<HistorySource>, String> {
-    discover_jsonl_controlled(
+    let mut sources = discover_jsonl_controlled(
         &crate::accounts::selection::history_root("pi", || home.join(".pi/agent/sessions")),
         |path| path.extension().is_some_and(|value| value == "jsonl"),
         cancelled,
-    )
+    )?;
+    for source in &mut sources { source.fingerprint = format!("pi-title-v1|{}", source.fingerprint); }
+    Ok(sources)
 }
 
 fn remember(
@@ -84,6 +86,9 @@ pub fn parse_controlled(
                     .map(str::to_owned);
                 session.cwd = row.get("cwd").and_then(Value::as_str).map(str::to_owned);
                 session.started_at = time;
+            }
+            Some("session_info") => {
+                if let Some(name) = row.get("name").and_then(Value::as_str).filter(|name| !name.trim().is_empty()) { session.title = name.trim().to_owned(); }
             }
             Some("model_change") => {
                 model = row

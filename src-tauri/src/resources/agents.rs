@@ -341,7 +341,7 @@ pub fn scan(db: &Database, home: &Path, target: &PluginTarget) -> Result<AgentSn
         return snapshot_inner(home, target, &[]);
     }
     // Do not lose package ownership when native discovery fails.
-    let plugins = plugins::scan(db, home, target)?;
+    let plugins = plugins::scan_resources(db, home, target)?;
     snapshot_inner(home, target, &plugins.entries)
 }
 pub fn operate(
@@ -360,7 +360,7 @@ pub fn operate(
         project(target)?.as_deref(),
     )?;
     selection::validate_expected(&target.tool_id, target.context_id.as_deref())?;
-    let plugins = plugins::scan(db, home, target)?;
+    let plugins = plugins::scan_resources(db, home, target)?;
     operate_inner(db, credentials, home, request, &plugins.entries)
 }
 fn operate_inner(

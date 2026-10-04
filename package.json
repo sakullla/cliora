@@ -1,17 +1,20 @@
 {
   "name": "cliora",
   "private": true,
-  "version": "0.2.5",
+  "version": "0.2.6",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "test": "playwright test",
+    "test": "node scripts/test-ui.mjs",
     "test:unit": "node --test tests/native/*.test.mjs",
     "test:unit:all": "node scripts/test-unit.mjs",
-    "test:e2e": "playwright test",
+    "test:e2e": "node scripts/test-ui.mjs",
     "verify": "npm run test:unit && npm run test && npm run build",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "test:integration": "node scripts/test-ui.mjs --grep @integration --workers=4",
+    "test:quick": "node scripts/test-unit.mjs",
+    "test:prepare": "npm run build && cargo test --manifest-path src-tauri/Cargo.toml --lib --no-run"
   },
   "dependencies": {
     "@codemirror/commands": "6.11.1",

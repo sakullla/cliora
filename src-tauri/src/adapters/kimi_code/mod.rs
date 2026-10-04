@@ -456,7 +456,9 @@ impl CliAdapter for KimiCode {
         true
     }
     fn history_resume_version_supported(&self, version: &str) -> bool {
-        version.trim().trim_start_matches('v').starts_with("0.")
+        // Both the original 0.x CLI and the locally verified 2.1.1 use -S.
+        semver::Version::parse(version.trim().trim_start_matches('v'))
+            .is_ok_and(|version| version.major <= 2)
     }
     fn install_guidance(&self) -> (&'static str, &'static str) {
         (

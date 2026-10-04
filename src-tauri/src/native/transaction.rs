@@ -448,7 +448,9 @@ pub fn read_native(path: &Path) -> Result<String, String> {
 
 fn value_at<'a>(root: &'a Value, path: &[String]) -> Option<&'a Value> {
     path.iter()
-        .try_fold(root, |value, segment| value.get(segment))
+        .try_fold(root, |value, segment| if value.is_array() {
+            segment.parse::<usize>().ok().and_then(|index| value.get(index))
+        } else { value.get(segment) })
 }
 
 fn prepare(
@@ -467,6 +469,11 @@ fn prepare(
         let baseline = format::parse(patch.kind, &patch.baseline)?;
         let current_text = read_native(&patch.path)?;
         let current = format::parse(patch.kind, &current_text)?;
+        // Positional sequence edits require the whole list to stay stable:
+        // insertions or reordering would otherwise target a different row.
+        if (baseline.is_array() || current.is_array()) && baseline != current {
+            return Err("原生 YAML 列表已被外部修改，请重新读取".into());
+        }
         let mut output = current_text.clone();
         for change in &patch.changes {
             if change.path.is_empty() {
@@ -553,48 +560,7 @@ fn decrypt(key: &[u8; 32], encrypted: &str, nonce: &str) -> Result<Vec<u8>, Stri
 
 #[cfg(windows)]
 fn restrict_windows_stage(stage: &Path) -> Result<(), String> {
-    let system32 =
-        PathBuf::from(std::env::var_os("SystemRoot").ok_or("无法定位 Windows 系统目录")?)
-            .join("System32");
-    let identity = crate::background_process::command(system32.join("whoami.exe"))
-        .args(["/user", "/fo", "csv", "/nh"])
-        .output()
-        .map_err(|_| "无法检查当前 Windows 用户身份")?;
-    if !identity.status.success() {
-        return Err("无法检查当前 Windows 用户身份".into());
-    }
-    let output = String::from_utf8(identity.stdout).map_err(|_| "Windows 用户身份编码异常")?;
-    let sid = output
-        .trim()
-        .rsplit(',')
-        .next()
-        .unwrap_or("")
-        .trim_matches('"');
-    if !sid.starts_with("S-1-") || !sid[4..].chars().all(|c| c.is_ascii_digit() || c == '-') {
-        return Err("Windows 用户 SID 无效，拒绝写入原生密钥".into());
-    }
-    // A newly created stage normally has only inherited entries, but reset
-    // also removes any explicit grants before the inheritance is removed.
-    let reset = crate::background_process::command(system32.join("icacls.exe"))
-        .arg(stage)
-        .arg("/reset")
-        .output()
-        .map_err(|_| "无法重设原生密钥文件的 Windows ACL")?;
-    if !reset.status.success() {
-        return Err("无法重设原生密钥文件的 Windows ACL，未写入密钥".into());
-    }
-    let user = format!("*{sid}:F");
-    let status = crate::background_process::command(system32.join("icacls.exe"))
-        .arg(stage)
-        .args(["/inheritance:r", "/grant:r"])
-        .arg(&user)
-        .args(["/grant:r", "*S-1-5-18:F"])
-        .output()
-        .map_err(|_| "无法限制原生密钥文件的 Windows ACL")?;
-    if !status.status.success() {
-        return Err("无法限制原生密钥文件的 Windows ACL，未写入密钥".into());
-    }
-    Ok(())
+    crate::windows_security::restrict(stage, false)
 }
 
 fn write_replacement(
@@ -1187,6 +1153,28 @@ mod tests {
         fn delete(&self, _id: &str) -> Result<(), String> {
             Err("locked".into())
         }
+    }
+
+    #[test]
+    fn sequence_patch_rejects_external_reordering_and_initializes_missing_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+        let store = MemoryStore::default();
+        let path = temp.path().join("patch.yml");
+        let initial = "- id: first\n- id: second\n";
+        let reordered = "- id: second\n- id: first\n";
+        fs::write(&path, reordered).unwrap();
+        let mut patch = FilePatch {
+            path: path.clone(), kind: FileKind::Yaml, baseline: initial.into(), sensitive: false, force_restrict: false,
+            changes: vec![FieldChange { path: vec!["0".into()], value: Some(serde_json::json!({"id":"updated"})) }],
+        };
+        assert!(apply(&db, &store, std::slice::from_ref(&patch), |_| Ok(())).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), reordered);
+        patch.path = temp.path().join("new.yml");
+        patch.baseline.clear();
+        apply(&db, &store, std::slice::from_ref(&patch), |_| Ok(())).unwrap();
+        let value = crate::native::format::parse(FileKind::Yaml, &fs::read_to_string(&patch.path).unwrap()).unwrap();
+        assert_eq!(value[0]["id"], "updated");
     }
 
     #[test]

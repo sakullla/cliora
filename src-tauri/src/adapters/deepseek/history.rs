@@ -19,7 +19,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
 use serde_json::Value;
@@ -56,7 +56,7 @@ pub fn sources_controlled(
     let root = crate::accounts::selection::history_root("deepseek", || super::dsh_home(home));
     // The sessions tree nests by workspace and session id, so discovery sniffs
     // the zstd magic instead of trusting a fixed depth or exact file name.
-    discover_jsonl_controlled(&root, session_file, cancelled)
+    discover_jsonl_controlled(&root.join("sessions"), session_file, cancelled)
 }
 
 pub fn parse(source: &HistorySource) -> Result<ParsedSession, String> {
@@ -68,21 +68,34 @@ pub fn parse_controlled(
     cancelled: &dyn Fn() -> bool,
 ) -> Result<ParsedSession, String> {
     check_cancelled(cancelled)?;
-    let bytes = fs::read(&source.path).map_err(|error| error.to_string())?;
-    check_cancelled(cancelled)?;
-    let plain = zstd::stream::decode_all(&bytes[..])
+    let file = fs::File::open(&source.path).map_err(|error| error.to_string())?;
+    let decoder = zstd::stream::read::Decoder::new(file)
         .map_err(|_| "dsh 会话文件不是有效的 zstd 帧流；原文件未更改".to_string())?;
+    let mut reader = BufReader::with_capacity(256 * 1024, decoder);
     let mut session = ParsedSession::new();
     let mut events = BTreeMap::<String, RequestUsage>::new();
     let mut seen = HashSet::<String>::new();
     let mut header = false;
     let mut partial = false;
-    for (index, line) in plain.split(|byte| *byte == b'\n').enumerate() {
+    let mut line = Vec::new();
+    let mut next_index = 0usize;
+    let mut total = 0u64;
+    loop {
         check_cancelled(cancelled)?;
+        line.clear();
+        let count = reader.by_ref().take(256 * 1024 * 1024 + 1).read_until(b'\n', &mut line)
+            .map_err(|_| "dsh 会话文件不是有效的 zstd 帧流；原文件未更改".to_string())?;
+        if count == 0 { break; }
+        total += count as u64;
+        if count > 256 * 1024 * 1024 || total > 8 * 1024 * 1024 * 1024 {
+            return Err("dsh 会话解压内容超过读取上限；原索引保留".into());
+        }
+        let index = next_index;
+        next_index += 1;
         if line.iter().all(u8::is_ascii_whitespace) {
             continue;
         }
-        let Ok(row) = serde_json::from_slice::<Value>(line) else {
+        let Ok(row) = serde_json::from_slice::<Value>(&line) else {
             partial = true;
             continue;
         };
@@ -299,7 +312,7 @@ mod tests {
     }
 
     fn fixture_source(name: &str) -> HistorySource {
-        HistorySource {
+        HistorySource { native_title: None,
             path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("..")
                 .join("tests")
@@ -382,7 +395,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let original = fs::read(fixture_source("dsh-0.2.1-v4.session.jsonl.zstd").path).unwrap();
         let path = directory.path().join("broken.session.jsonl.zstd");
-        let source = HistorySource {
+        let source = HistorySource { native_title: None,
             path: path.clone(),
             native_id: None,
             fingerprint: "fixture".into(),

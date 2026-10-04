@@ -6,6 +6,7 @@ import { piUiAdapter } from './pi';
 import { opencodeUiAdapter } from './opencode';
 import { zcodeUiAdapter } from './zcode';
 import { qoderUiAdapter } from './qoder';
+import { qoderCnUiAdapter } from './qoder_cn';
 import { kimiCodeUiAdapter } from './kimi_code';
 import { deepseekUiAdapter } from './deepseek';
 import { codebuddyUiAdapter } from './codebuddy';
@@ -19,6 +20,7 @@ const specialized = new Map<string, ToolUiAdapter>([
   [opencodeUiAdapter.id, opencodeUiAdapter],
   [zcodeUiAdapter.id, zcodeUiAdapter],
   [qoderUiAdapter.id, qoderUiAdapter],
+  [qoderCnUiAdapter.id, qoderCnUiAdapter],
   [kimiCodeUiAdapter.id, kimiCodeUiAdapter],
   [deepseekUiAdapter.id, deepseekUiAdapter],
   [codebuddyUiAdapter.id, codebuddyUiAdapter],

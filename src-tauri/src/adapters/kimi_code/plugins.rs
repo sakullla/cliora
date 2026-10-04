@@ -11,6 +11,7 @@ use crate::resources::plugins::{PluginEntry, PluginTarget};
 use std::path::Path;
 
 impl PluginAdapter for KimiCode {
+    fn discovery_only(&self) -> bool { true }
     fn capability(&self) -> PluginCapability {
         PluginCapability {
             version: "0.31.1",

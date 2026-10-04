@@ -135,7 +135,7 @@ test('launch names the tool, blocks a second click, and ignores a cancelled dire
   ]);
 });
 
-test('launch failure names the tool and replaces the previous success', async ({ page }) => {
+test('launch failure names the tool and replaces the previous success', { tag: '@integration' }, async ({ page }) => {
   await installHome(page);
   await page.goto('/');
   const tools = page.getByLabel('管理中的工具');

@@ -101,6 +101,15 @@ export function SessionReader({ detail, toolName }: { detail: HistoryDetail; too
     setCurrent(next);
     revealMatch(matches[next].item.id);
   }
+  function jumpLatest() {
+    const latest = visible[visible.length - 1]?.item;
+    if (!latest) return;
+    setRendered((old) => new Set([...old, latest.id]));
+    requestAnimationFrame(() => {
+      root.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(latest.id)}"]`)
+        ?.scrollIntoView({ block: 'end', behavior: 'instant' });
+    });
+  }
   useEffect(() => {
     setCurrent(0);
     if (search && matches.length) revealMatch(matches[0].item.id);
@@ -116,7 +125,7 @@ export function SessionReader({ detail, toolName }: { detail: HistoryDetail; too
         <label><input type="checkbox" checked={onlyQuestions} onChange={(event) => setOnlyQuestions(event.target.checked)} />只看提问</label>
         <label><input type="checkbox" checked={raw} onChange={(event) => setRaw(event.target.checked)} />显示原文</label>
         </div></details>
-        <button type="button" title="跳到最后一条消息" onClick={() => { const messages = root.current?.querySelectorAll('article'); messages?.[messages.length - 1]?.scrollIntoView({ block: 'end', behavior: 'smooth' }); }}><Icon name="arrowDown" size={13} />最新</button>
+        <button type="button" title="跳到最后一条消息" onClick={jumpLatest}><Icon name="arrowDown" size={13} />最新</button>
       </div>
       {findOpen && <div className={styles.find}>
         <Icon name="search" size={14} /><input autoFocus aria-label="查找本会话" placeholder="在当前会话中查找…" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => {

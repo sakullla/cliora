@@ -16,6 +16,7 @@ pub enum OpenError {
 /// Single owner for local application data. Future modules add tables through numbered migrations.
 pub struct Database {
     connection: Mutex<Connection>,
+    read_path: Option<std::path::PathBuf>,
 }
 
 impl Database {
@@ -411,8 +412,20 @@ impl Database {
 
         Ok(Self {
             connection: Mutex::new(connection),
+            read_path: (path != Path::new(":memory:") && !path.as_os_str().is_empty()).then(|| path.to_owned()),
         })
     }
+
+    /// An independent WAL snapshot lets history reports and session browsing
+    /// run while the scanner commits batches on the shared writer connection.
+    pub fn with_read_connection<T>(&self, action: impl FnOnce(&Connection) -> Result<T, String>) -> Result<T, String> {
+        let Some(path) = &self.read_path else { return self.with_connection(|conn| action(conn)); };
+        let mut conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|error| error.to_string())?;
+        let snapshot = conn.transaction().map_err(|error| error.to_string())?;
+        action(&snapshot)
+    }
+
 
     pub fn with_connection<T>(
         &self,
@@ -471,6 +484,26 @@ impl Database {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn history_snapshot_does_not_block_writer_and_remains_consistent() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = super::Database::open(&temp.path().join("snapshot.db")).unwrap();
+        db.with_read_connection(|reader| {
+            let count: i64 = reader.query_row("SELECT COUNT(*) FROM app_settings", [], |row| row.get(0)).unwrap();
+            db.with_connection(|writer| {
+                writer.execute("INSERT INTO app_settings VALUES ('snapshot-test', 'new')", []).unwrap();
+                Ok(())
+            })?;
+            let unchanged: i64 = reader.query_row("SELECT COUNT(*) FROM app_settings", [], |row| row.get(0)).unwrap();
+            assert_eq!(count, unchanged);
+            assert!(reader.execute("DELETE FROM app_settings", []).is_err());
+            Ok(())
+        }).unwrap();
+        db.with_read_connection(|reader| {
+            assert_eq!(reader.query_row("SELECT value FROM app_settings WHERE key='snapshot-test'", [], |row| row.get::<_, String>(0)).unwrap(), "new");
+            Ok(())
+        }).unwrap();
+    }
     use super::*;
     use crate::domain::{CliId, Theme};
 

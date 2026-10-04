@@ -31,6 +31,7 @@ pub fn sources_controlled(
         cancelled,
     )?;
     for source in &mut sources {
+        source.fingerprint = format!("claude-title-v1|{}", source.fingerprint);
         if source.fingerprint_error.is_some() {
             continue;
         }
@@ -112,6 +113,12 @@ pub fn parse_controlled(
     let mut seen = std::collections::HashSet::new();
     let partial = read_jsonl_filtered(source, cancelled, skip_row, |line, row| {
         let kind = row.get("type").and_then(Value::as_str).unwrap_or("");
+        if matches!(kind, "ai-title" | "custom-title") {
+            if let Some(title) = row.get("customTitle").or_else(|| row.get("aiTitle")).and_then(Value::as_str).filter(|title| !title.trim().is_empty()) {
+                session.title = title.trim().to_owned();
+            }
+            return;
+        }
         if kind != "user" && kind != "assistant" {
             return;
         }
@@ -152,7 +159,7 @@ pub fn parse_controlled(
                     .and_then(|value| value.to_str())
                     .unwrap_or("subagent")
                     .to_owned();
-                let nested = HistorySource {
+                let nested = HistorySource { native_title: None,
                     path,
                     native_id: None,
                     fingerprint: String::new(),

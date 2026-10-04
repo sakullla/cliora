@@ -267,15 +267,16 @@ pub fn remove_native(
     if name.is_empty() { return Err("请选择要删除的 MCP".into()); }
     let (location, scope_key) = target_location(db, registry, target, home)?;
     let (baseline, parsed) = parse_native(&location)?;
-    if entry_root(&parsed, &location).and_then(|root| root.get(name)).is_none() {
+    let adapter = registry.get(&target.tool_id).ok_or("此 CLI 尚无注册适配器")?;
+    if !adapter.mcp_entries(&parsed, &location)?.contains_key(name) {
         return Err("当前工具上已没有这个 MCP".into());
     }
-    let field = entry_path(&location, name);
+    let change = adapter.mcp_change(&parsed, &location, name, None)?;
     let name_owned = name.to_owned();
     let tool = target.tool_id.clone();
     transaction::apply(db, credentials, &[transaction::FilePatch {
         path: location.path.clone(), kind: location.kind, baseline,
-        changes: vec![transaction::FieldChange { path: field, value: None }],
+        changes: vec![change],
         sensitive: false, force_restrict: false,
     }], move |tx: &rusqlite::Transaction<'_>| {
         tx.execute("DELETE FROM mcp_targets WHERE tool = ?1 AND scope_key = ?2 AND definition_id IN (SELECT id FROM mcp_definitions WHERE name = ?3)",
@@ -382,20 +383,6 @@ fn parse_native(location: &McpLocation) -> Result<(String, Value), String> {
     Ok((text, parsed))
 }
 
-fn entry_root<'a>(parsed: &'a Value, location: &McpLocation) -> Option<&'a Value> {
-    let root = parsed.get(location.root)?;
-    location.child.map_or(Some(root), |child| root.get(child))
-}
-
-fn entry_path(location: &McpLocation, name: &str) -> Vec<String> {
-    let mut path = vec![location.root.to_owned()];
-    if let Some(child) = location.child {
-        path.push(child.to_owned());
-    }
-    path.push(name.to_owned());
-    path
-}
-
 fn entry_hash(value: Option<&Value>) -> Result<String, String> {
     Ok(transaction::fingerprint(
         &serde_json::to_vec(&value).map_err(|error| error.to_string())?,
@@ -481,13 +468,13 @@ pub fn list_native(
 ) -> Result<Vec<NativeMcpEntry>, String> {
     let (location, _) = target_location(db, registry, target, home)?;
     let (_, parsed) = parse_native(&location)?;
-    let Some(entries) = entry_root(&parsed, &location).and_then(Value::as_object) else {
-        return Ok(Vec::new());
-    };
+    let adapter = registry.get(&target.tool_id).ok_or("此 CLI 尚无注册适配器")?;
+    let entries = adapter.mcp_entries(&parsed, &location)?;
     Ok(entries
         .iter()
         .filter_map(|(name, raw)| {
-            let raw = raw.as_object()?;
+            let view = adapter.mcp_entry_view(raw);
+            let raw = view.as_object()?;
             let command = raw.get("command");
             let (command, args) = match command {
                 Some(Value::String(command)) => (
@@ -567,10 +554,11 @@ pub fn preview_targets(
                 let inspected = (|| {
                     let definition = definition.as_ref().map_err(Clone::clone)?;
                     let (_, parsed) = parse_native(&location)?;
-                    let existing = entry_root(&parsed, &location).and_then(|root| root.get(&definition.name));
+                    let adapter = registry.get(&target.tool_id).ok_or("此 CLI 尚无注册适配器")?;
+                    let entries = adapter.mcp_entries(&parsed, &location)?;
+                    let existing = entries.get(&definition.name);
                     let actual = entry_hash(existing)?;
                     let owned = managed_hash(db, definition_id, &target.tool_id, &scope_key)?;
-                    let adapter = registry.get(&target.tool_id).ok_or("此 CLI 尚无注册适配器")?;
                     let proposal = adapter.mcp_document_at(definition, target.enabled, existing, &location)?;
                     Ok::<_, String>((existing.is_some(), actual, owned, visible_entry(existing), visible_entry(proposal.as_ref()), preview_token(definition, &target, &location, &scope_key, &entry_hash(existing)?)?))
                 })();
@@ -615,9 +603,10 @@ pub fn distribute(
             let definition = definition.as_ref().map_err(Clone::clone)?;
             let (location, scope_key) = target_location(db, registry, &target, home)?;
             result.path = Some(location.path.display().to_string());
-            let adapter = registry.get(&target.tool_id).ok_or("此 CLI 尚无注册适配器")?;
             let (baseline, parsed) = parse_native(&location)?;
-            let existing = entry_root(&parsed, &location).and_then(|root| root.get(&definition.name));
+            let adapter = registry.get(&target.tool_id).ok_or("此 CLI 尚无注册适配器")?;
+            let entries = adapter.mcp_entries(&parsed, &location)?;
+            let existing = entries.get(&definition.name);
             let actual_hash = entry_hash(existing)?;
             result.baseline_hash = Some(actual_hash.clone());
             let token = preview_token(definition, &target, &location, &scope_key, &actual_hash)?;
@@ -632,7 +621,8 @@ pub fn distribute(
             }
             let document = adapter.mcp_document_at(definition, target.enabled, existing, &location)?;
             let written_hash = entry_hash(document.as_ref())?;
-            let change = transaction::FieldChange { path: entry_path(&location, &definition.name), value: document };
+            let unchanged = existing == document.as_ref();
+            let change = adapter.mcp_change(&parsed, &location, &definition.name, document)?;
             let commit = |tx: &rusqlite::Transaction<'_>| {
                 let current: i64 = tx.query_row("SELECT version FROM mcp_definitions WHERE id = ?1", [&definition.id], |row| row.get(0)).map_err(|error| error.to_string())?;
                 if current != definition.version as i64 { return Err("MCP 定义在预览后变化；请重新预览".into()); }
@@ -642,7 +632,7 @@ pub fn distribute(
                     .map_err(|error| error.to_string())?;
                 Ok(())
             };
-            let outcome = if existing == change.value.as_ref() {
+            let outcome = if unchanged {
                 transaction::commit_matching(db, &[(location.path.clone(), baseline)], commit)?
             } else {
                 transaction::apply(db, credentials, &[transaction::FilePatch {

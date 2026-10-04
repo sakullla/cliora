@@ -54,7 +54,7 @@ pub fn sources_controlled(
         if !valid_native_id(&id) {
             continue;
         }
-        result.push(HistorySource {
+        result.push(HistorySource { native_title: None,
             path: path.clone(),
             native_id: Some(id),
             fingerprint: updated.unwrap_or(0).to_string(),
