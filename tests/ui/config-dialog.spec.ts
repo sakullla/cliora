@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
 test('new configuration dialog has one save action', async ({ page }) => {
   await page.addInitScript(() => {
@@ -680,4 +680,261 @@ test('native multi-file switching reuses the editor and separates undo history',
   await expect(settings).toContainText('light');
   expect(await page.evaluate(() => (window as any).multiFileHarness.reads)).toEqual(['settings', 'models', 'settings']);
   await page.screenshot({ path: 'test-results/native-multi-file.png' });
+});
+
+const connectionTools = [
+  { id: 'pi', name: 'Pi' },
+  { id: 'open_code', name: 'OpenCode' },
+  { id: 'codex', name: 'Codex' },
+  { id: 'claude_code', name: 'Claude Code' },
+  { id: 'grok', name: 'Grok' },
+  { id: 'codebuddy', name: 'CodeBuddy' },
+  { id: 'zcode', name: 'ZCode' },
+];
+
+async function installConnectionHarness(page: Page) {
+  await page.addInitScript(({ tools }) => {
+    const connectionProfile = (partial: Record<string, unknown>) => ({ version: 1, revision: '', inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, ...partial });
+    const projectDenied: Record<string, string> = {
+      codex: 'Codex 项目层不能写入供应商密钥；请使用全局配置',
+      pi: 'Pi 项目层不能写入供应商密钥；请使用全局配置',
+      open_code: 'OpenCode 项目共享配置不能写入明文密钥；请使用全局配置或原生登录',
+      grok: 'Grok 项目层不能写入供应商密钥；请使用全局配置',
+    };
+    const unsupportedKey: Record<string, string> = { zcode: 'ZCode 凭据由产品加密保管（credentials.json），不提供凭据管理' };
+    const unsupportedAddress: Record<string, string> = {
+      codebuddy: 'CodeBuddy 此版本不提供第三方供应商接口接入；模型经官方网关访问',
+      zcode: 'ZCode 桌面端经产品内账号登录；setting.json 无文档化 API 连接字段',
+    };
+    const projectionFor = (id: string) => id === 'pi' || id === 'open_code' ? 'provider_models' : id === 'codex' ? 'current_model' : 'single_connection';
+    const policy = (id: string, scope: string) => {
+      const keyState = unsupportedKey[id] ? 'unsupported' : scope === 'project' && projectDenied[id] ? 'scope_denied' : 'writable';
+      return {
+        apiKey: { state: keyState, reason: keyState === 'writable' ? '' : unsupportedKey[id] || projectDenied[id] || '' },
+        providerAddress: { state: unsupportedAddress[id] ? 'unsupported' : 'configurable', reason: unsupportedAddress[id] || '' },
+        projection: projectionFor(id),
+      };
+    };
+    const connection = (providerId: string, model: string, baseUrl = 'https://api.example/v1') => ({ providerId, interfaceFormat: 'openai_responses', baseUrl, model, secretRef: null, authEnvVar: null });
+    const profiles = [
+      connectionProfile({ id: 'pi-models', tool: 'pi', name: 'Pi 多模型', files: { models: 'model-a' }, connection: connection('demo', 'model-a') }),
+      connectionProfile({ id: 'pi-empty', tool: 'pi', name: '无模型', connection: connection('demo', '') }),
+      connectionProfile({ id: 'oc-models', tool: 'open_code', name: 'OpenCode 模型', files: { models: 'm1' }, connection: connection('demo', 'm1') }),
+      connectionProfile({ id: 'codex-draft', tool: 'codex', name: 'Codex 草稿', files: { settings: 'model = "gpt"\nmodel_reasoning_effort = "high"\n' }, connection: connection('demo', 'gpt', 'https://api.openai.com/v1') }),
+      connectionProfile({ id: 'cb-official', tool: 'codebuddy', name: '官方网关', connection: { providerId: 'official', interfaceFormat: 'openai_responses', baseUrl: 'https://third.example/v1', model: 'auto', secretRef: null, authEnvVar: null } }),
+      connectionProfile({ id: 'zc-login', tool: 'zcode', name: '已有登录', authentication: { kind: 'api_key' }, connection: connection('zcode', 'z', 'https://hidden.example') }),
+    ];
+    const project = { id: 'demo', name: '示例项目', path: '/work/demo', available: true, preferredTool: null, lastOpened: 0, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {} };
+    const state = window as unknown as { __savedProfile: unknown };
+    Object.assign(window, {
+      isTauri: true,
+      __savedProfile: null,
+      __TAURI_INTERNALS__: { invoke: async (command: string, args?: Record<string, any>) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: tools.map(item => item.id), theme: 'system' }, tools };
+        if (command === 'list_cli_adapters') return { registered: tools.map(item => ({ ...item, interfaceFormats: ['openai_responses'] })), managedIds: tools.map(item => item.id), preservedUnknown: [] };
+        if (command === 'list_projects') return [project];
+        if (['list_mcp_definitions', 'list_skill_packages', 'list_skill_recovery_issues', 'scan_native_skills', 'list_native_mcp', 'list_accounts', 'account_capabilities', 'list_usage_queries', 'list_usage_cache', 'usage_presets'].includes(command)) return [];
+        if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
+        if (command === 'get_tray_status') return { available: false, error: null };
+        if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+        if (command === 'discover_native_logins') return { logins: [] };
+        if (command === 'get_registered_tool_workspace') {
+          const toolId = String(args?.toolId ?? '');
+          const scope = String(args?.scope ?? 'global');
+          return {
+            probe: {
+              selectedPath: 'C:/tool.cmd', installations: [], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: [toolId === 'claude_code' ? 'anthropic_messages' : 'openai_responses'],
+              providerPresets: toolId === 'codebuddy' || toolId === 'codex' ? [{ id: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', interfaceFormat: 'openai_responses', sourceUrl: 'https://platform.openai.com' }] : [],
+              dependencies: [], installUrl: '', upgradeHint: '', connectionPolicy: policy(toolId, scope),
+            },
+            profiles: profiles.filter(item => item.tool === toolId), common: null, binding: null, snapshots: [], recoveryNeeded: [], customPath: null,
+          };
+        }
+        if (command === 'inspect_registered_native_draft') {
+          const toolId = String(args?.toolId ?? '');
+          const files = args?.files ?? {};
+          if (toolId === 'pi' && String(files.models ?? '').includes('model-a')) return { providerId: 'demo', model: 'model-a', reasoningEffort: null, projectedModels: [{ id: 'model-a', fields: { contextWindow: 100, cost: { input: 1 } } }, { id: 'sibling', fields: { name: 'Keep' } }], connection: connection('demo', 'model-a') };
+          if (toolId === 'open_code') return { providerId: 'demo', model: 'm1', reasoningEffort: null, projectedModels: [{ id: 'm1', fields: { name: 'Custom', extra: true } }, { id: 'm2', fields: { name: 'Second' } }], connection: connection('demo', 'm1') };
+          if (toolId === 'codex') return { providerId: 'demo', model: 'gpt', reasoningEffort: 'low', projectedModels: null, connection: connection('demo', 'gpt', 'https://api.openai.com/v1') };
+          return { connection: null, reasoningEffort: null, projectedModels: null };
+        }
+        if (command === 'prepare_registered_native_import') return { files: args?.files ?? {}, inspection: { connection: null, reasoningEffort: null, projectedModels: null }, migratedSecret: false, nativeCredentials: {} };
+        if (command === 'save_registered_native_profile') {
+          state.__savedProfile = args?.profile ?? null;
+          const profile = args?.profile ?? {};
+          return { ...profile, id: profile.id || 'saved-1', version: (profile.version || 0) + 1 };
+        }
+        if (command === 'apply_registered_native_profile') return { transactionId: '1', changedFiles: [], status: 'written_for_next_session' };
+        if (command === 'set_codex_reasoning_effort') {
+          const text = String(args?.text ?? '');
+          const effort = args?.effort ? String(args.effort) : '';
+          const line = /^\s*model_reasoning_effort\s*=.*$/m;
+          if (!effort) return text.replace(line, '');
+          const next = `model_reasoning_effort = "${effort}"`;
+          return line.test(text) ? text.replace(line, next) : `${text.replace(/\s*$/, '')}\n${next}\n`;
+        }
+        return null;
+      } },
+    });
+  }, { tools: connectionTools });
+}
+
+async function openConnections(page: Page) {
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await expect(page.getByRole('heading', { name: '工具与连接' })).toBeVisible();
+}
+
+async function replaceNumber(field: ReturnType<Page['locator']>, value: string) {
+  await field.click();
+  await field.press('ControlOrMeta+A');
+  await field.pressSequentially(value);
+}
+
+test('projected model fields stay on the selected provider and codex effort comes from the draft', async ({ page }) => {
+  test.setTimeout(45_000);
+  await installConnectionHarness(page);
+  await openConnections(page);
+  await page.locator('[data-profile-id="pi-models"]').getByRole('button', { name: '修改' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByLabel('model-a contextWindow')).toHaveValue('100');
+  await expect(dialog.getByLabel('model-a cost.input')).toHaveValue('1');
+  await expect(dialog.getByLabel('sibling name')).toHaveValue('Keep');
+  await expect(dialog.getByRole('checkbox', { name: '1M 上下文' })).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: '获取模型' })).toHaveCount(0);
+  await expect(dialog.getByLabel('推理强度（Codex 原生）')).toHaveCount(0);
+  await replaceNumber(dialog.getByLabel('model-a contextWindow'), '128');
+  await expect(dialog.getByLabel('model-a contextWindow')).toHaveValue('128');
+  await dialog.getByLabel('sibling name').fill('Renamed');
+  await dialog.getByLabel('当前模型').selectOption('sibling');
+  await dialog.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  const saved = await page.evaluate(() => (window as unknown as { __savedProfile: { connection: { model: string; modelRecords: unknown } } }).__savedProfile);
+  expect(saved.connection.model).toBe('sibling');
+  expect(saved.connection.modelRecords).toEqual([
+    { id: 'model-a', fields: { contextWindow: 128, cost: { input: 1 } } },
+    { id: 'sibling', fields: { name: 'Renamed' } },
+  ]);
+
+  await page.locator('[data-profile-id="pi-empty"]').getByRole('button', { name: '修改' }).click();
+  await expect(dialog.getByLabel('模型', { exact: true })).toBeVisible();
+  await expect(dialog.getByLabel('当前模型')).toHaveCount(0);
+  await expect(dialog.getByLabel('已有模型字段')).toHaveCount(0);
+  await dialog.getByRole('button', { name: '关闭' }).click();
+
+  await page.getByRole('tab', { name: 'OpenCode' }).click();
+  await page.locator('[data-profile-id="oc-models"]').getByRole('button', { name: '修改' }).click();
+  await expect(dialog.getByLabel('m1 name')).toHaveValue('Custom');
+  await expect(dialog.getByRole('checkbox', { name: 'm1 extra' })).toBeChecked();
+  await expect(dialog.getByLabel('m2 name')).toHaveValue('Second');
+  await expect(dialog.getByLabel(/contextWindow/)).toHaveCount(0);
+  await expect(dialog.getByLabel('推理强度（Codex 原生）')).toHaveCount(0);
+  await dialog.getByLabel('当前模型').selectOption('m2');
+  await expect(dialog.getByLabel('当前模型')).toHaveValue('m2');
+  await dialog.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+
+  await page.getByRole('tab', { name: 'Codex' }).click();
+  await page.locator('[data-profile-id="codex-draft"]').getByRole('button', { name: '修改' }).click();
+  const effort = dialog.getByLabel('推理强度（Codex 原生）');
+  await expect(effort).toHaveValue('high');
+  await effort.selectOption('medium');
+  await expect(effort).toHaveValue('medium');
+  await expect(dialog.getByLabel('已有模型字段')).toHaveCount(0);
+  await expect(dialog.getByLabel('当前模型')).toHaveCount(0);
+  await expect(dialog.getByRole('checkbox', { name: '1M 上下文' })).toHaveCount(0);
+  await expect(dialog.getByLabel(/contextWindow/)).toHaveCount(0);
+  await expect(dialog.getByLabel('模型', { exact: true })).toBeVisible();
+});
+
+test('key entry follows the current scope and writable CLI without hiding provider fields', async ({ page }) => {
+  test.setTimeout(60_000);
+  await installConnectionHarness(page);
+  await openConnections(page);
+  await page.getByRole('button', { name: '配置范围' }).click();
+  await page.getByRole('option', { name: /示例项目/ }).click();
+  await page.locator('[data-profile-id="pi-models"]').getByRole('button', { name: '修改' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByLabel('model-a contextWindow')).toHaveValue('100');
+  await expect(dialog.locator('option', { hasText: 'API Key' })).toHaveCount(0);
+  await expect(dialog.getByLabel('API 密钥')).toHaveCount(0);
+  await expect(dialog).toContainText('Pi 项目层不能写入供应商密钥；请使用全局配置');
+  await expect(dialog).not.toContainText('不支持密钥');
+  await dialog.getByRole('button', { name: '关闭' }).click();
+  await page.getByRole('button', { name: '新建配置' }).click();
+  await expect(dialog.locator('option', { hasText: 'API Key' })).toHaveCount(0);
+  await expect(dialog.getByLabel('API 密钥')).toHaveCount(0);
+  await expect(dialog).toContainText('Pi 项目层不能写入供应商密钥；请使用全局配置');
+  await dialog.getByRole('button', { name: '关闭' }).click();
+
+  await page.getByRole('tab', { name: 'Claude Code' }).click();
+  await page.getByRole('button', { name: '新建配置' }).click();
+  await expect(dialog.getByLabel('API 密钥')).toBeVisible();
+  await expect(dialog.getByLabel('API 地址')).toBeVisible();
+  await expect(dialog.getByLabel('模型', { exact: true })).toBeVisible();
+  await expect(dialog.getByRole('checkbox', { name: '1M 上下文', exact: true })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: '所有角色使用当前模型' })).toBeVisible();
+  await dialog.getByRole('button', { name: '关闭' }).click();
+
+  await page.getByRole('tab', { name: 'Pi' }).click();
+  await page.getByRole('button', { name: '新建配置' }).click();
+  await expect(dialog.getByLabel('API 密钥')).toHaveCount(0);
+  await expect(dialog).toContainText('Pi 项目层不能写入供应商密钥；请使用全局配置');
+  await dialog.getByRole('button', { name: '关闭' }).click();
+
+  await page.getByRole('button', { name: '配置范围' }).click();
+  await page.getByRole('option', { name: '全局配置', exact: true }).click();
+  await page.getByRole('button', { name: '新建配置' }).click();
+  await expect(dialog.locator('option', { hasText: 'API Key' })).toHaveCount(1);
+  await expect(dialog.getByLabel('API 密钥')).toBeVisible();
+  await dialog.getByRole('button', { name: '关闭' }).click();
+
+  await page.getByRole('tab', { name: 'Grok' }).click();
+  await page.getByRole('button', { name: '新建配置' }).click();
+  await expect(dialog.getByLabel('API 地址')).toBeVisible();
+  await expect(dialog.getByLabel('API 密钥')).toBeVisible();
+  await expect(dialog.getByLabel('模型', { exact: true })).toBeVisible();
+  await expect(dialog.getByLabel('当前模型')).toHaveCount(0);
+  await expect(dialog.getByLabel('已有模型字段')).toHaveCount(0);
+  await expect(dialog.getByRole('checkbox', { name: '1M 上下文' })).toHaveCount(0);
+  await dialog.getByRole('button', { name: '关闭' }).click();
+  await page.getByRole('button', { name: '配置范围' }).click();
+  await page.getByRole('option', { name: /示例项目/ }).click();
+  await page.getByRole('button', { name: '新建配置' }).click();
+  await expect(dialog).toContainText('Grok 项目层不能写入供应商密钥；请使用全局配置');
+  await expect(dialog.getByLabel('API 密钥')).toHaveCount(0);
+  await expect(dialog.getByLabel('API 地址')).toBeVisible();
+  await expect(dialog.getByLabel('模型', { exact: true })).toBeVisible();
+  await expect(dialog).not.toContainText('不支持密钥');
+  await dialog.getByRole('button', { name: '关闭' }).click();
+
+  await page.getByRole('tab', { name: 'CodeBuddy' }).click();
+  await page.locator('[data-profile-id="cb-official"]').getByRole('button', { name: '修改' }).click();
+  await expect(dialog.getByLabel('API 密钥')).toBeVisible();
+  await expect(dialog.getByLabel('API 地址')).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: 'OpenAI' })).toHaveCount(0);
+  await expect(dialog).not.toContainText('https://third.example');
+  await dialog.getByText('更多选项', { exact: true }).click();
+  await dialog.getByText('高级连接选项', { exact: true }).click();
+  await expect(dialog.getByLabel('供应商 ID')).toHaveCount(1);
+  await expect(dialog.getByLabel('供应商 ID')).toHaveValue('official');
+  await dialog.getByLabel('认证环境变量名').fill('CODEBUDDY_API_KEY');
+  await expect(dialog.getByLabel('认证环境变量名')).toHaveValue('CODEBUDDY_API_KEY');
+  await dialog.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+
+  await page.getByRole('tab', { name: 'ZCode' }).click();
+  await page.getByRole('button', { name: '新建配置' }).click();
+  await expect(dialog.locator('option', { hasText: 'API Key' })).toHaveCount(0);
+  await expect(dialog.getByLabel('API 密钥')).toHaveCount(0);
+  await expect(dialog.getByLabel('API 地址')).toHaveCount(0);
+  await expect(dialog).not.toContainText('不支持密钥');
+  await expect(dialog).not.toContainText('凭据由产品加密保管');
+  await dialog.getByRole('button', { name: '关闭' }).click();
+  await page.locator('[data-profile-id="zc-login"]').getByRole('button', { name: '修改' }).click();
+  await expect(dialog.locator('option', { hasText: 'API Key' })).toHaveCount(0);
+  await expect(dialog.getByLabel('API 密钥')).toHaveCount(0);
+  await expect(dialog.getByLabel('API 地址')).toHaveCount(0);
+  await expect(dialog).not.toContainText('不支持密钥');
+  await expect(dialog).not.toContainText('https://hidden.example');
 });

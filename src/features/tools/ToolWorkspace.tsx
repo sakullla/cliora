@@ -11,7 +11,7 @@ import type { ModelRoleValue } from '../../adapters/contract';
 import type { DraftRequest } from '../../lib/draftGuard';
 import type { ApiError } from '../../types/domain';
 import type { Project, TrayRepairTarget } from '../../types/launch';
-import type { AdapterDescriptor, ApplyComparison, Connection, ConnectionCheck, ModelDirectory, NativeInspection, NativePreview, RegisteredCommon, RegisteredProfile, RegisteredToolWorkspace, Scope } from '../../types/native';
+import type { AdapterDescriptor, ApplyComparison, Connection, ConnectionCheck, ModelDirectory, ModelRecord, NativeInspection, NativePreview, RegisteredCommon, RegisteredProfile, RegisteredToolWorkspace, Scope } from '../../types/native';
 import { authEnvName, uiAdapterFor } from '../../adapters';
 import { AccountsPanel, accountStates, useAccounts } from './AccountsPanel';
 import { ProfileQuota, useUsageQuota } from './UsageQuota';
@@ -67,6 +67,65 @@ function profileFacts(item: RegisteredProfile): { label: string; title?: string 
 
 function connectionShape(value: Connection | null): string {
   return value ? JSON.stringify([value.providerId, value.interfaceFormat, value.baseUrl, value.model, value.authEnvVar]) : '';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** Keep only keys already stored on the projected model. Edits cannot add fields. */
+function mergeFields(base: Record<string, unknown>, edit?: Record<string, unknown>): Record<string, unknown> {
+  if (!edit) return base;
+  const next: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(base)) {
+    if (isRecord(value)) next[key] = mergeFields(value, isRecord(edit[key]) ? edit[key] : undefined);
+    else next[key] = Object.prototype.hasOwnProperty.call(edit, key) ? edit[key] : value;
+  }
+  return next;
+}
+
+function setField(fields: Record<string, unknown>, path: string[], value: unknown): Record<string, unknown> {
+  const [head, ...rest] = path;
+  if (!head) return fields;
+  if (!rest.length) return { ...fields, [head]: value };
+  const child = fields[head];
+  return { ...fields, [head]: setField(isRecord(child) ? child : {}, rest, value) };
+}
+
+function providerModelRecords(connection: Connection, inspection: NativeInspection | null, projection: string): ModelRecord[] | null {
+  if (projection !== 'provider_models') return null;
+  const selected = connection.providerId.trim();
+  const inspected = inspection?.providerId?.trim() ?? '';
+  const projected = inspection?.projectedModels;
+  if (projected && inspected && selected && inspected !== selected) return [];
+  if (!projected) return connection.modelRecords ?? [];
+  const edits = connection.modelRecords ?? [];
+  return projected.map((record) => {
+    const edit = edits.find((item) => item.id === record.id);
+    return { id: record.id, fields: mergeFields(record.fields, edit?.fields) };
+  });
+}
+
+function modelFieldControls(recordId: string, fields: Record<string, unknown>, onChange: (id: string, path: string[], value: unknown) => void, path: string[] = []): ReactNode[] {
+  return Object.entries(fields).map(([key, value]) => {
+    const next = [...path, key];
+    const label = next.join('.');
+    const aria = `${recordId} ${label}`;
+    if (isRecord(value)) return <div key={label} className={styles.modelFields}>{modelFieldControls(recordId, value, onChange, next)}</div>;
+    if (typeof value === 'boolean') return <label key={label} className={styles.check}><input type="checkbox" aria-label={aria} checked={value} onChange={(event) => onChange(recordId, next, event.target.checked)} />{label}</label>;
+    if (Array.isArray(value)) return <label key={label}>{label}<input aria-label={aria} value={JSON.stringify(value)} onChange={(event) => { try { const parsed = JSON.parse(event.target.value) as unknown; if (Array.isArray(parsed)) onChange(recordId, next, parsed); } catch { /* leave the stored array until the text is valid JSON */ } }} /></label>;
+    const text = value === null || value === undefined ? '' : String(value);
+    return <label key={label}>{label}<input aria-label={aria} value={text} onChange={(event) => {
+      const typed = event.target.value;
+      if (typeof value === 'number') {
+        if (!typed.trim()) return;
+        const parsed = Number(typed);
+        if (Number.isFinite(parsed)) onChange(recordId, next, parsed);
+        return;
+      }
+      onChange(recordId, next, typed);
+    }} /></label>;
+  });
 }
 
 function workspaceKey(toolId: string, scope: Scope, projectPath: string) {
@@ -506,6 +565,11 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     : (uiAdapter.modelMapping?.primaryRole ? roleModels[uiAdapter.modelMapping.primaryRole] : undefined) ?? {model:connection?.model ?? '',name:'',longContext:false};
   if (uiAdapter.modelMapping?.primaryRole && connection) roleModels[uiAdapter.modelMapping.primaryRole] = primaryModel;
   const modelOptions = useMemo(() => [...new Set([...(primaryModel.model ? [primaryModel.model] : []), ...(modelDirectory?.models ?? [])])], [modelDirectory, primaryModel.model]);
+  const connectionPolicy = workspace?.probe.connectionPolicy;
+  const apiKeyState = connectionPolicy?.apiKey?.state ?? 'writable';
+  const apiKeyWritable = apiKeyState === 'writable';
+  const addressConfigurable = (connectionPolicy?.providerAddress?.state ?? 'configurable') !== 'unsupported';
+  const projection = connectionPolicy?.projection ?? 'single_connection';
   const availableRoles = workspace?.probe.nativeFiles.filter((item) => !item.sensitive).map((item) => item.role) ?? ['settings'];
   const activeFile = workspace?.probe.nativeFiles.find((item) => item.role === role);
 
@@ -531,7 +595,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     let suffix = 1;
     while (used.has(suffix === 1 ? '新配置' : `新配置 ${suffix}`)) suffix++;
     next.name = suffix === 1 ? '新配置' : `新配置 ${suffix}`;
-    const preset = workspace?.probe.providerPresets[0];
+    const preset = addressConfigurable ? workspace?.probe.providerPresets[0] : undefined;
     next.connection = { ...defaultConnection(workspace?.probe.interfaceFormats ?? []), providerId: preset?.id ?? 'my-provider', baseUrl: preset?.baseUrl ?? '', interfaceFormat: preset?.interfaceFormat ?? workspace?.probe.interfaceFormats[0] ?? 'openai_responses' };
     setRawDisk(null); setEditor('profile'); setSelectedId(null); setDraft(next); savedDraft.current = JSON.stringify(next);
     setView('form'); setNewSecret(''); setError(''); setNotice(''); setApplyComparison(null); setGuide(true);
@@ -659,7 +723,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   }
 
   async function connectionWithSecret(source: Connection | null, started: DraftRequest<RegisteredProfile>): Promise<Connection | null> {
-    if (!newSecret) return source;
+    if (!newSecret || !apiKeyWritable) return source;
     if (!source) throw new Error('请先配置 API 地址，或返回常用设置填写连接。');
     const secretRef = await native.setConnectionSecret(newSecret);
     if (!stillCurrent(started)) return source;
@@ -891,7 +955,9 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     if (draft?.id) await deleteGiven(draft);
   }
 
-  const profileEditorHint = editor === 'profile' && draft ? `${toolName} · ${draft.name.trim() || '未命名'} · ${draft.authentication?.kind === 'api_key' ? 'API Key' : draft.authentication?.kind === 'oauth' ? 'OAuth 账号' : draft.authentication?.kind === 'rebind_required' ? '需要重新绑定账号' : '沿用原生认证'}。${draft.id && workspace?.binding?.profileId === draft.id ? '这份配置正在使用，保存会写入当前文件。' : workspace?.probe.nativeWrites.state === 'supported' ? '只保存不会替换正在使用的文件；要立即切换，请选“保存并启用”。' : '保存不会替换正在使用的文件。'}` : undefined;
+  const authKind = draft?.authentication?.kind;
+  const authLabel = authKind === 'api_key' ? (apiKeyWritable ? 'API Key' : apiKeyState === 'scope_denied' ? '当前范围不保存新密钥' : '不保存新密钥') : authKind === 'oauth' ? 'OAuth 账号' : authKind === 'rebind_required' ? '需要重新绑定账号' : '沿用原生认证';
+  const profileEditorHint = editor === 'profile' && draft ? `${toolName} · ${draft.name.trim() || '未命名'} · ${authLabel}。${draft.id && workspace?.binding?.profileId === draft.id ? '这份配置正在使用，保存会写入当前文件。' : workspace?.probe.nativeWrites.state === 'supported' ? '只保存不会替换正在使用的文件；要立即切换，请选“保存并启用”。' : '保存不会替换正在使用的文件。'}` : undefined;
   const saveState = dirty ? '未保存' : editor === 'profile' && draft?.id ? (workspace?.binding?.profileId === draft.id ? '正在使用' : '尚未启用') : '';
 
   if (!visibleTools.length) return <div className={styles.empty}>还没有管理中的 CLI。请先在设置里选择要管理的工具。</div>;
@@ -957,15 +1023,25 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
 
             </div>; }
 
-  const reasoningControl = draft && uiAdapter.reasoning ? <label>{uiAdapter.reasoning.label}<select aria-label={uiAdapter.reasoning.label} value={inspection?.reasoningEffort ?? ''} onChange={event => void changeReasoningEffort(event.target.value)}><option value="">跟随原生默认</option>{uiAdapter.reasoning.choices.map(([id, label]) => <option key={id} value={id}>{label}</option>)}{inspection?.reasoningEffort && !uiAdapter.reasoning.choices.some(([id]) => id === inspection.reasoningEffort) && <option value={inspection.reasoningEffort}>当前原生值：{inspection.reasoningEffort}</option>}</select></label> : null;
+  const reasoningValue = draft && uiAdapter.reasoning ? uiAdapter.reasoning.read(draft.files.settings ?? '') ?? '' : '';
+  const reasoningControl = draft && uiAdapter.reasoning ? <label>{uiAdapter.reasoning.label}<select aria-label={uiAdapter.reasoning.label} value={reasoningValue} onChange={event => void changeReasoningEffort(event.target.value)}><option value="">跟随原生默认</option>{uiAdapter.reasoning.choices.map(([id, label]) => <option key={id} value={id}>{label}</option>)}{reasoningValue && !uiAdapter.reasoning.choices.some(([id]) => id === reasoningValue) && <option value={reasoningValue}>当前原生值：{reasoningValue}</option>}</select></label> : null;
+  const listedModels = draft && connection && projection === 'provider_models' ? providerModelRecords(connection, inspection, projection) : null;
+  function editModelField(id: string, path: string[], value: unknown) {
+    if (!draft?.connection || !listedModels) return;
+    const modelRecords = listedModels.map((record) => record.id === id ? { id, fields: setField(record.fields, path, value) } : record);
+    setDraft({ ...draft, connection: { ...draft.connection, modelRecords } });
+  }
   const connectionForm = draft && connection ? <>
     <label className={styles.pair}>名称<input name="profile-name" aria-label="配置名称" value={draft.name} onChange={event => setDraft({ ...draft, name: event.target.value })} /></label>
     <div className={styles.sectionLabel}>连接</div>
-    <label>API 地址<input aria-label="API 地址" value={connection.baseUrl} onChange={event => setDraft({ ...draft, connection: { ...connection, baseUrl: event.target.value } })} placeholder="https://api.example.com/v1" /></label>
-    <label>API 密钥<div className={styles.secretField}><input aria-label="API 密钥" type={revealedSecret !== null ? "text" : "password"} autoComplete="off" value={revealedSecret ?? newSecret} onChange={event => { invalidateDraftRequest(); setNewSecret(event.target.value); modelSequence.current++; setModelDirectory(null); setModelLoading(false); }} placeholder={connection.secretRef ? '已保存' : 'sk-…'} /><button type="button" disabled={!newSecret && !connection.secretRef} onClick={() => void showSecret()}>{revealedSecret !== null ? '隐藏' : '显示'}</button></div></label>
+    {addressConfigurable && <label>API 地址<input aria-label="API 地址" value={connection.baseUrl} onChange={event => setDraft({ ...draft, connection: { ...connection, baseUrl: event.target.value } })} placeholder="https://api.example.com/v1" /></label>}
+    {apiKeyWritable && <label>API 密钥<div className={styles.secretField}><input aria-label="API 密钥" type={revealedSecret !== null ? "text" : "password"} autoComplete="off" value={revealedSecret ?? newSecret} onChange={event => { invalidateDraftRequest(); setNewSecret(event.target.value); modelSequence.current++; setModelDirectory(null); setModelLoading(false); }} placeholder={connection.secretRef ? '已保存' : 'sk-…'} /><button type="button" disabled={!newSecret && !connection.secretRef} onClick={() => void showSecret()}>{revealedSecret !== null ? '隐藏' : '显示'}</button></div></label>}
     <div className={styles.sectionLabel}>模型</div>
-    <div className={styles.modelPicker}><label>模型<ModelCombobox label="模型" value={primaryModel.model} placeholder="选择或输入模型" options={modelOptions} onChange={model => void updateModel(model)} /></label><button type="button" disabled={busy || modelLoading || !connection.baseUrl.trim()} onClick={() => void fetchModels()}>{modelLoading ? '获取中…' : '获取模型'}</button></div>
-    {modelDirectory && <p className={styles.hint} role="status">{modelDirectory.status === 'ready' ? '已获取 ' + modelDirectory.models.length + ' 个模型' : modelDirectory.status === 'empty' ? '目录为空，可手动输入模型。' : modelDirectory.status === 'stale' ? '显示旧目录：' + modelDirectory.error : modelDirectory.error}{modelDirectory.fetchedAt ? ' · 更新于 ' + new Date(modelDirectory.fetchedAt * 1000).toLocaleString() : ''}</p>}
+    {listedModels?.length ? <>
+      <label>当前模型<select aria-label="当前模型" value={connection.model} onChange={event => void updateModel(event.target.value)}>{!listedModels.some((record) => record.id === connection.model) && <option value={connection.model}>{connection.model || '选择已有模型'}</option>}{listedModels.map((record) => <option key={record.id} value={record.id}>{record.id}</option>)}</select></label>
+      <div className={styles.modelRecords} aria-label="已有模型字段">{listedModels.map((record) => <fieldset key={record.id} className={styles.modelRecord}><legend>{record.id}</legend>{modelFieldControls(record.id, record.fields, editModelField)}</fieldset>)}</div>
+    </> : <><div className={styles.modelPicker}><label>模型<ModelCombobox label="模型" value={primaryModel.model} placeholder="选择或输入模型" options={modelOptions} onChange={model => void updateModel(model)} /></label><button type="button" disabled={busy || modelLoading || !connection.baseUrl.trim()} onClick={() => void fetchModels()}>{modelLoading ? '获取中…' : '获取模型'}</button></div>
+    {modelDirectory && <p className={styles.hint} role="status">{modelDirectory.status === 'ready' ? '已获取 ' + modelDirectory.models.length + ' 个模型' : modelDirectory.status === 'empty' ? '目录为空，可手动输入模型。' : modelDirectory.status === 'stale' ? '显示旧目录：' + modelDirectory.error : modelDirectory.error}{modelDirectory.fetchedAt ? ' · 更新于 ' + new Date(modelDirectory.fetchedAt * 1000).toLocaleString() : ''}</p>}</>}
     {uiAdapter.incompleteConnectionText && (!connection.baseUrl.trim() || !primaryModel.model.trim()) && <p className={styles.hint}>{uiAdapter.incompleteConnectionText.replace(/^；/, '')}</p>}
     {uiAdapter.modelMapping?.primaryRole && <label className={styles.check}><input type="checkbox" checked={primaryModel.longContext} disabled={!primaryModel.model} onChange={event => updateModel(primaryModel.model,event.target.checked)} />1M 上下文</label>}
     {reasoningControl}
@@ -992,7 +1068,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   const moreOptions = workspace ? <details className={styles.moreOptions} aria-label="配置更多选项"><summary>更多选项</summary>
     {editor === 'profile' && draft && <label className={styles.check}><input type="checkbox" checked={draft.inheritCommon} onChange={event => setDraft({ ...draft, inheritCommon: event.target.checked })} />继承本工具通用配置</label>}
     {editor === 'profile' && connection && <details className={styles.connectionAdvanced}><summary>高级连接选项</summary>
-      {!!workspace.probe.providerPresets.length && <div className={styles.modelBar}><span>官方接口预设</span>{workspace.probe.providerPresets.map(item => <button key={item.id} type="button" title={item.sourceUrl} onClick={() => applyPreset(item.id, item.baseUrl, item.interfaceFormat)}>{item.label}</button>)}</div>}
+      {addressConfigurable && !!workspace.probe.providerPresets.length && <div className={styles.modelBar}><span>官方接口预设</span>{workspace.probe.providerPresets.map(item => <button key={item.id} type="button" title={item.sourceUrl} onClick={() => applyPreset(item.id, item.baseUrl, item.interfaceFormat)}>{item.label}</button>)}</div>}
       <div className={styles.formGrid}><label>供应商 ID<input value={connection.providerId} onChange={event => setDraft({ ...draft!, connection: { ...connection, providerId: event.target.value } })} /></label>{(workspace.probe.interfaceFormats.length > 1 || !workspace.probe.interfaceFormats.includes(connection.interfaceFormat as never)) && <label>接口格式<select value={connection.interfaceFormat} onChange={event => setDraft({ ...draft!, connection: { ...connection, interfaceFormat: event.target.value } })}>{!workspace.probe.interfaceFormats.includes(connection.interfaceFormat as never) && <option value={connection.interfaceFormat}>当前格式 · {formatLabel(connection.interfaceFormat)}</option>}{workspace.probe.interfaceFormats.map(item => <option key={item} value={item}>{formatLabel(item)}</option>)}</select></label>}<label>认证环境变量名<input value={connection.authEnvVar ?? ''} onChange={event => setDraft({ ...draft!, connection: { ...connection, authEnvVar: event.target.value || null } })} placeholder="可选" /></label></div>
       {effectiveEnvName && !connection.secretRef && <p className={styles.hint}>原生配置引用：<code>{effectiveEnvName}</code></p>}
       <div className={styles.diagnosticActions}><button type="button" disabled={checkingConnection || !!newSecret} onClick={() => void checkConnection(false)}>检查连接</button><details><summary>更多诊断</summary><button type="button" disabled={checkingConnection || !!newSecret} onClick={() => void checkConnection(true)}>发送最小请求（可能计费）</button></details></div>
@@ -1056,7 +1132,8 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
       <GuideDialog wide open={guide && (editor !== 'profile' || !!draft)} title={historyOpen && editor === 'native' ? '修改记录' : editor === 'native' ? '修改正在使用的文件' : editor === 'common' ? '修改通用配置' : draft?.id ? '修改配置' : '新建配置'} hint={historyOpen && editor === 'native' ? '最多 20 次。选一条查看当时的文件，确认后才会写回。' : profileEditorHint} onClose={() => void closeGuide()}>
         <div className={styles.editor}>
             {historyOpen && editor === 'native' ? <div className={styles.history}>{backups.length ? <ul className={styles.historyList} aria-label="修改记录">{backups.map((item, index) => <li key={item.transactionId}><button type="button" aria-pressed={backupPreview?.transactionId === item.transactionId} disabled={busy} onClick={() => void inspectBackup(item.transactionId)}>{formatBackupTime(item.createdAt, index)}</button></li>)}</ul> : <p className={styles.historyEmpty}>还没有可恢复的修改。</p>}{backups.length > 0 && <div className={styles.historyPreview}><CodeEditor label="当时的文件" readOnly format={activeFile?.format ?? 'text'} value={backupPreview?.original ?? ''} placeholder={backupPreview ? '' : '正在读取…'} /></div>}</div> : <div className={styles.editorScroll}>
-            {editor === 'profile' && draft && <div className={styles.form}><div className={styles.sectionLabel}>基本信息</div><label className={styles.pair}>认证方式<select aria-label="认证方式" value={draft.authentication?.kind ?? 'native'} onChange={event => { const kind = event.target.value; setNewSecret(''); setDraft({ ...draft, authentication: kind === 'oauth' ? { kind, accountId: accountState.accounts.find(account => account.state === 'signed_in')?.id ?? '' } : { kind: kind as 'native' | 'api_key' }, connection: kind === 'oauth' ? null : draft.connection, nativeCredentials: kind === 'oauth' ? {} : draft.nativeCredentials }); }}><option value="native">沿用原生认证（兼容）</option><option value="api_key">API Key</option>{supports.accounts && <option value="oauth">OAuth 账号</option>}{draft.authentication?.kind === 'rebind_required' && <option value="rebind_required">需要重新绑定</option>}</select></label>
+            {editor === 'profile' && draft && <div className={styles.form}><div className={styles.sectionLabel}>基本信息</div><label className={styles.pair}>认证方式<select aria-label="认证方式" value={draft.authentication?.kind === 'api_key' && !apiKeyWritable ? 'native' : draft.authentication?.kind ?? 'native'} onChange={event => { const kind = event.target.value; setNewSecret(''); setDraft({ ...draft, authentication: kind === 'oauth' ? { kind, accountId: accountState.accounts.find(account => account.state === 'signed_in')?.id ?? '' } : { kind: kind as 'native' | 'api_key' }, connection: kind === 'oauth' ? null : draft.connection, nativeCredentials: kind === 'oauth' ? {} : draft.nativeCredentials }); }}><option value="native">沿用原生认证（兼容）</option>{apiKeyWritable && <option value="api_key">API Key</option>}{supports.accounts && <option value="oauth">OAuth 账号</option>}{draft.authentication?.kind === 'rebind_required' && <option value="rebind_required">需要重新绑定</option>}</select></label>
+              {apiKeyState === 'scope_denied' && connectionPolicy?.apiKey.reason && <p className={styles.hint}>{connectionPolicy.apiKey.reason}</p>}
               {draft.authentication?.kind === 'oauth' ? <><label className={styles.pair}>配置名称<input aria-label="配置名称" value={draft.name} onChange={event => setDraft({ ...draft, name: event.target.value })} /></label><label>绑定账号<select aria-label="绑定账号" value={draft.authentication.accountId} onChange={event => setDraft({ ...draft, authentication: { kind: 'oauth', accountId: event.target.value } })}><option value="">请选择已登录账号</option>{accountState.accounts.map(account => <option key={account.id} value={account.id}>{account.label} · {accountStates[account.state]}</option>)}</select></label><p className={styles.hint}>账号在“账号”页管理。保存不会立刻切换；启用后，下次启动和资源页才会使用这个账号。</p><CodeEditor label="OAuth 配置内容" format={activeFile?.format ?? 'json'} value={draft.files.settings ?? ''} onChange={value => setDraft({ ...draft, files: { ...draft.files, settings: value } })} /></> : draft.authentication?.kind === 'rebind_required' ? <p role="alert">跨设备导入的 OAuth 配置需要重新选择此设备上的账号。</p> : connectionForm}</div>}
             {(editor === 'native' || editor === 'common') && nativeEditor()}
             {fileConflict?.context === draftContext && pendingRaw && <FileConflict current={fileConflict.current} edited={pendingRaw.text} format={activeFile?.format ?? 'text'} busy={busy} onKeep={() => { setRawDisk({ ...pendingRaw, original:fileConflict.current, text:fileConflict.current }); setFileConflict(null); setError(''); }} onUse={() => { setRawDisk({ ...pendingRaw, original:fileConflict.current }); setFileConflict(null); setError(''); setNotice('已保留本次修改，点击保存写入。'); }} />}
