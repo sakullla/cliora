@@ -849,9 +849,10 @@ fn history_fingerprints_match(cached: &str, current: &str) -> bool {
     cached == current
 }
 pub fn refresh(db: &Database, registry: &Registry, home: &Path) -> Result<Vec<ScanStatus>, String> {
-    refresh_controlled(db, registry, home, &CliId::ALL, &|| false)
+    let managed: Vec<String> = CliId::ALL.iter().map(|tool| tool.stable_id().to_owned()).collect();
+    refresh_controlled(db, registry, home, &managed, &|| false)
 }
-pub fn refresh_controlled(db: &Database, registry: &Registry, home: &Path, managed: &[CliId], cancelled: &(impl Fn() -> bool + Sync)) -> Result<Vec<ScanStatus>, String> {
+pub fn refresh_controlled(db: &Database, registry: &Registry, home: &Path, managed: &[String], cancelled: &(impl Fn() -> bool + Sync)) -> Result<Vec<ScanStatus>, String> {
     struct Finish;
     impl Drop for Finish { fn drop(&mut self) { let state = scan_progress(); set_scan_progress(false, &state.tool_id, state.completed_sources, state.total_sources); } }
     let _finish = Finish;
@@ -860,7 +861,7 @@ pub fn refresh_controlled(db: &Database, registry: &Registry, home: &Path, manag
         let Some(adapter) = registry.get(descriptor.id) else {
             continue;
         };
-        if !managed.iter().any(|tool| tool.stable_id() == descriptor.id) {
+        if !managed.iter().any(|tool| tool == &descriptor.id) {
             continue;
         }
         if !adapter.history_supported() {

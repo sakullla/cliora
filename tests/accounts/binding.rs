@@ -296,7 +296,7 @@ fn history_discovers_both_accounts_with_same_native_id_and_retired_root_without_
         &db,
         &Registry::builtins(),
         temp.path(),
-        &[crate::domain::CliId::Codex],
+        &["codex".to_string()],
         &|| false,
     )
     .unwrap();
@@ -316,7 +316,7 @@ fn history_discovers_both_accounts_with_same_native_id_and_retired_root_without_
         &db,
         &Registry::builtins(),
         temp.path(),
-        &[crate::domain::CliId::Codex],
+        &["codex".to_string()],
         &|| false,
     )
     .unwrap();
