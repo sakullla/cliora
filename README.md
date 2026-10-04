@@ -78,6 +78,8 @@ The desktop shell now mounts the tool workspace, project launcher, records, migr
 
 ## Run
 
+Windows settings offer CMD (Command Prompt), PowerShell and Windows Terminal as the preferred launch terminal. CMD opens an interactive console and keeps its prompt after the CLI exits; CLI launches, account login, installation and upgrades use the saved choice. Windows package manager commands use `npm.cmd` / `npx.cmd`, and extensionless CLI paths resolve an existing Windows sibling entry instead of the Unix shim. CMD uses the system PowerShell to prepare the CLI environment; commands exceeding CMD's length limit return an error with a terminal-switch recovery option.
+
 Install Node.js and Rust plus the [Tauri desktop prerequisites](https://v2.tauri.app/start/prerequisites/) for your OS.
 
 ```sh

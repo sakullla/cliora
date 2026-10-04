@@ -4,7 +4,7 @@ use std::{
     net::TcpListener,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Mutex,
+        Condvar, Mutex,
     },
 };
 
@@ -132,12 +132,22 @@ fn sequential_and_bounded_parallel_requests_with_secret_as_data() {
     let active = Arc::new(AtomicUsize::new(0));
     let peak = Arc::new(AtomicUsize::new(0));
     let records = Arc::new(Mutex::new(Vec::new()));
+    let parallel_arrivals = Arc::new((Mutex::new(0usize), Condvar::new()));
     let (a, p, r) = (active.clone(), peak.clone(), records.clone());
     let (origin, handle) = server(5, move |request| {
         let current = a.fetch_add(1, Ordering::SeqCst) + 1;
         p.fetch_max(current, Ordering::SeqCst);
+        if request.contains("application/x-www-form-urlencoded") {
+            let (arrivals, changed) = &*parallel_arrivals;
+            let mut arrived = arrivals.lock().unwrap();
+            *arrived += 1;
+            changed.notify_all();
+            // Require the first two parallel requests to overlap regardless of
+            // OS scheduling; a fixed sleep can finish before the other arrives.
+            let (arrived, timeout) = changed.wait_timeout_while(arrived, Duration::from_secs(2), |count| *count < 2).unwrap();
+            assert!(!timeout.timed_out() || *arrived >= 2, "parallel HTTP requests did not overlap");
+        }
         r.lock().unwrap().push(request);
-        std::thread::sleep(Duration::from_millis(40));
         a.fetch_sub(1, Ordering::SeqCst);
         response("{\"value\":7}")
     });

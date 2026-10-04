@@ -67,14 +67,7 @@ jobs:
 
       - name: Test
         timeout-minutes: 15
-        run: /usr/bin/time -v timeout --signal=TERM --kill-after=15s 12m strace -f -e trace=kill,tgkill -o "$RUNNER_TEMP/rust-signals.log" cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=4
-
-      - name: Test termination diagnostics
-        if: failure()
-        run: |
-          tail -100 "$RUNNER_TEMP/rust-signals.log" || true
-          cat /sys/fs/cgroup/memory.events /sys/fs/cgroup/memory.peak || true
-          sudo dmesg -T | grep -E 'oom-kill|Out of memory|Killed process' | tail -20 || true
+        run: /usr/bin/time -v timeout --signal=TERM --kill-after=15s 12m cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=4
 
       - name: Clippy
         timeout-minutes: 10

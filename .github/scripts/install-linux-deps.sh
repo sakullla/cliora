@@ -58,7 +58,6 @@ PACKAGES=(
   libayatana-appindicator3-dev
   librsvg2-dev
   patchelf
-  strace
 )
 
 # 124 = timeout(1) sent SIGTERM. apt's Timeout is unreliable (#14594).

@@ -1,5 +1,5 @@
 export type LaunchMode = 'normal' | 'yolo';
-export type TerminalId = 'auto' | 'windows_terminal' | 'power_shell' | 'mac_terminal' | 'custom' | 'gnome_terminal' | 'konsole' | 'xterm' | 'desktop';
+export type TerminalId = 'auto' | 'windows_terminal' | 'power_shell' | 'cmd' | 'mac_terminal' | 'custom' | 'gnome_terminal' | 'konsole' | 'xterm' | 'desktop';
 
 export type TerminalOption = { id: TerminalId; label: string; available: boolean };
 export type CustomTerminal = { program: string; args: string[] };

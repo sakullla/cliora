@@ -1,5 +1,96 @@
 use super::*;
 
+#[test]
+fn cmd_launch_rejects_oversized_commands_without_truncating_other_terminals() {
+    let mut plan = sample(TerminalId::Cmd);
+    plan.cli_args = vec!["x".repeat(4000)];
+    assert!(terminal_command(&plan).unwrap_err().contains("CMD 长度限制"));
+    assert!(shell_terminal(TerminalId::Cmd, &plan.directory, &"x".repeat(4000)).unwrap_err().contains("CMD 长度限制"));
+    plan.terminal = TerminalId::PowerShell;
+    assert!(terminal_command(&plan).is_ok());
+}
+
+#[cfg(windows)]
+#[test]
+fn cmd_runs_literal_arguments_in_project_and_retains_saved_selection() {
+    use std::os::windows::process::CommandExt;
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("中文 project [one] & ! %PATH%");
+    std::fs::create_dir(&directory).unwrap();
+    let cli = directory.join("test cli's.ps1");
+    std::fs::write(&cli, "[Console]::OutputEncoding = [Text.UTF8Encoding]::new(); @{ arguments = @($args); directory = $PWD.Path; marker = $env:CLIORA_TEST_SESSION; color = $env:NO_COLOR } | ConvertTo-Json -Compress\n").unwrap();
+    let mut plan = sample(TerminalId::Cmd);
+    plan.directory = directory.clone();
+    plan.executable = cli;
+    plan.session_markers = &["CLIORA_TEST_SESSION"];
+    plan.cli_args = vec!["--resume".into(), "会话 'one' %PATH% ! & \"quote\"".into(), "$(New-Item unwanted)\nline two".into()];
+    let terminal = terminal_command(&plan).unwrap();
+    let (program, line) = console_command_line(&terminal).unwrap();
+    let prefix = format!("\"{}\" ", terminal_path(&program).unwrap());
+    // Use the same /S quoting as the real console, but exit after the fixture.
+    let raw_args = line.strip_prefix(&prefix).unwrap().replacen("/S /K ", "/S /C ", 1);
+    let output = crate::background_process::command(&program).raw_arg(raw_args)
+        .current_dir(&directory).env("CLIORA_TEST_SESSION", "nested").env("NO_COLOR", "1").output().unwrap();
+    assert!(output.status.success(), "CMD failed: {}", String::from_utf8_lossy(&output.stderr));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["arguments"], serde_json::json!(plan.cli_args));
+    assert_eq!(value["directory"], directory.to_str().unwrap());
+    assert!(value["marker"].is_null());
+    assert!(value["color"].is_null());
+    assert!(!directory.join("unwanted").exists());
+    let copy = native_command(&plan).unwrap();
+    assert!(copy.contains("-EncodedCommand"));
+    assert!(!copy.contains("New-Item"));
+    let copied = crate::background_process::command(&program).raw_arg(format!("/D /V:OFF /S /C \"{copy}\""))
+        .current_dir(&directory).output().unwrap();
+    assert!(copied.status.success());
+    let copied: serde_json::Value = serde_json::from_slice(&copied.stdout).unwrap();
+    assert_eq!(copied["arguments"], value["arguments"]);
+    let db_path = temp.path().join("app.db");
+    let db = Database::open(&db_path).unwrap();
+    assert!(terminal_options().iter().any(|option| option.id == TerminalId::Cmd && option.available));
+    assert_eq!(set_terminal(&db, TerminalId::Cmd).unwrap().selected, TerminalId::Cmd);
+    set_default_mode(&db, "cli", LaunchMode::Yolo).unwrap();
+    drop(db);
+    let db = Database::open(&db_path).unwrap();
+    assert_eq!(selected_terminal(&db).unwrap(), TerminalId::Cmd);
+    assert_eq!(settings(&db).unwrap().cli_mode, LaunchMode::Yolo);
+}
+
+#[cfg(windows)]
+#[test]
+fn cmd_package_managers_and_extensionless_shims_use_windows_entrypoints() {
+    use std::os::windows::process::CommandExt;
+    let temp = tempfile::tempdir().unwrap();
+    for name in ["npm", "npx"] {
+        std::fs::write(temp.path().join(name), "#!/bin/sh\nexit 99\n").unwrap();
+        std::fs::write(temp.path().join(format!("{name}.ps1")), "throw 'wrong entrypoint'\n").unwrap();
+        std::fs::write(temp.path().join(format!("{name}.cmd")), format!("@echo off\r\necho {name}-batch:%~1\r\n")).unwrap();
+    }
+    let script = cmd_helper_script("npm --version; npx --version", &[temp.path().to_path_buf()]);
+    let terminal = shell_terminal(TerminalId::Cmd, temp.path(), &script).unwrap();
+    let (program, line) = console_command_line(&terminal).unwrap();
+    let prefix = format!("\"{}\" ", terminal_path(&program).unwrap());
+    let raw_args = line.strip_prefix(&prefix).unwrap().replacen("/S /K ", "/S /C ", 1);
+    let output = crate::background_process::command(&program).raw_arg(raw_args).current_dir(temp.path()).output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("npm-batch:--version"));
+    assert!(stdout.contains("npx-batch:--version"));
+    let mut plan = sample(TerminalId::Cmd);
+    plan.executable = temp.path().join("npm");
+    plan.directory = temp.path().into();
+    plan.cli_args = vec!["--version".into()];
+    let script = powershell_script(&plan).unwrap();
+    let output = crate::background_process::command(system_console_path(TerminalId::PowerShell).unwrap())
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", &encoded_powershell(&script)]).output().unwrap();
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("npm-batch:--version"));
+    std::fs::write(temp.path().join("npm.bat"), "@echo off\r\necho bat-entry\r\n").unwrap();
+    std::fs::remove_file(temp.path().join("npm.cmd")).unwrap();
+    assert_eq!(windows_cli_path(&plan.executable), temp.path().join("npm.bat"));
+}
+
 #[cfg(windows)]
 #[test]
 fn browser_bridge_streams_url_opens_once_and_rejects_untrusted_output() {

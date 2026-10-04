@@ -1,12 +1,13 @@
 import { expect, test } from '@playwright/test';
 
-for (const terminal of ['auto', 'mac_terminal']) {
-  test(`macOS can switch from Tabby to ${terminal} while retaining its saved command`, async ({ page }) => {
-    await page.addInitScript(() => {
-      const tabby = { id: 'tabby', label: 'Tabby', program: '/Applications/Tabby.app/Contents/MacOS/Tabby', args: ['run', '/bin/sh', '{script}'] };
+for (const terminal of ['auto', 'mac_terminal', 'cmd']) {
+  const program = terminal === 'cmd' ? 'C:/Program Files/Tabby/Tabby.exe' : '/Applications/Tabby.app/Contents/MacOS/Tabby';
+  test(`${terminal === 'cmd' ? 'Windows' : 'macOS'} can switch from Tabby to ${terminal} while retaining its saved command`, async ({ page }) => {
+    await page.addInitScript(({ terminal, program }) => {
+      const tabby = { id: 'tabby', label: 'Tabby', program, args: ['run', '/bin/sh', '{script}'] };
       const settings = JSON.parse(sessionStorage.getItem('test.launch') ?? 'null') ?? {
         selected: 'custom', custom: { program: tabby.program, args: tabby.args }, presets: [tabby],
-        terminals: [{ id: 'auto', label: '系统默认', available: true }, { id: 'mac_terminal', label: 'Terminal', available: true }],
+        terminals: [{ id: 'auto', label: '系统默认', available: true }, terminal === 'cmd' ? { id: 'cmd', label: 'CMD（命令提示符）', available: true } : { id: 'mac_terminal', label: 'Terminal', available: true }],
         cliMode: 'normal', projectMode: 'normal',
       };
       const control = { settings, failSave: false };
@@ -32,7 +33,7 @@ for (const terminal of ['auto', 'mac_terminal']) {
           return [];
         } },
       });
-    });
+    }, { terminal, program });
     await page.goto('/');
     await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
     const select = page.getByRole('combobox', { name: '启动终端', exact: true });
@@ -42,7 +43,7 @@ for (const terminal of ['auto', 'mac_terminal']) {
     expect(await page.evaluate(() => {
       const { settings } = (window as any).__terminalTest;
       return { selected: settings.selected, program: settings.custom.program };
-    })).toEqual({ selected: terminal, program: '/Applications/Tabby.app/Contents/MacOS/Tabby' });
+    })).toEqual({ selected: terminal, program });
     await page.getByRole('combobox', { name: 'CLI 默认启动模式' }).selectOption('yolo');
     await expect(select).toHaveValue(terminal);
     await page.reload();
