@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode, SetStateAction } from 'react';
+import { createPortal } from 'react-dom';
 import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import { native, nativeAvailable } from '../../lib/native';
@@ -97,10 +98,36 @@ function emptyProfile(tool: string): RegisteredProfile {
 
 function RowMenu({ label, children }: { label: string; children: ReactNode }) {
   const [open, setOpen] = useState(false);
+  const [box, setBox] = useState<{ top: number; left: number } | null>(null);
   const ref = useRef<HTMLDivElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const trigger = ref.current?.getBoundingClientRect();
+      const menu = panel.current;
+      if (!trigger || !menu) return;
+      const width = menu.offsetWidth;
+      const height = menu.offsetHeight;
+      const left = Math.max(8, Math.min(trigger.right - width, window.innerWidth - width - 8));
+      const spaceBelow = window.innerHeight - trigger.bottom - 8;
+      const top = spaceBelow >= height || trigger.top < height + 8
+        ? Math.min(trigger.bottom + 4, Math.max(8, window.innerHeight - height - 8))
+        : trigger.top - height - 4;
+      setBox({ top, left });
+    };
+    place();
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    return () => { window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true); };
+  }, [open]);
   useEffect(() => {
     if (!open) return;
-    const close = (event: MouseEvent) => { if (!ref.current?.contains(event.target as Node)) setOpen(false); };
+    const close = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (ref.current?.contains(target) || panel.current?.contains(target)) return;
+      setOpen(false);
+    };
     const key = (event: KeyboardEvent) => { if (event.key === 'Escape') setOpen(false); };
     document.addEventListener('mousedown', close);
     document.addEventListener('keydown', key);
@@ -108,7 +135,7 @@ function RowMenu({ label, children }: { label: string; children: ReactNode }) {
   }, [open]);
   return <div className={styles.rowMenu} ref={ref}>
     <button type="button" className={styles.rowMenuButton} aria-label={label} aria-expanded={open} aria-haspopup="menu" onClick={() => setOpen(value => !value)}>···</button>
-    {open && <div className={styles.rowMenuList} role="menu" onClick={() => setOpen(false)}>{children}</div>}
+    {open && createPortal(<div ref={panel} className={styles.rowMenuList} role="menu" style={box ? { top: box.top, left: box.left } : { top: 0, left: 0, visibility: 'hidden' }} onClick={() => setOpen(false)}>{children}</div>, document.body)}
   </div>;
 }
 

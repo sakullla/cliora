@@ -246,6 +246,21 @@ pub fn run() {
             commands::set_codex_reasoning_effort,
             commands::preview_native_profile
         ])
-        .run(tauri::generate_context!())
-        .expect("failed to run Cliora");
+        .build(tauri::generate_context!())
+        .expect("failed to run Cliora")
+        .run(handle_run_event);
+}
+
+/// Dock click on macOS. A hidden main window stays hidden unless we show it.
+fn handle_run_event(app: &tauri::AppHandle, event: tauri::RunEvent) {
+    #[cfg(target_os = "macos")]
+    if let tauri::RunEvent::Reopen {
+        has_visible_windows: false,
+        ..
+    } = event
+    {
+        tray::show_main(app);
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (app, event);
 }

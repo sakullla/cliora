@@ -287,10 +287,8 @@
 }
 .rowMenuButton:hover:not(:disabled) { color: var(--text); border-color: var(--text-3); }
 .rowMenuList {
-  position: absolute;
-  top: calc(100% + 4px);
-  right: 0;
-  z-index: 20;
+  position: fixed;
+  z-index: 70;
   display: grid;
   min-width: 140px;
   padding: 4px;
