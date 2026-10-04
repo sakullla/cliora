@@ -106,6 +106,53 @@ function providerModelRecords(connection: Connection, inspection: NativeInspecti
   });
 }
 
+/** A finished numeric literal. Trailing dots, a lone sign, and an unfinished exponent are not numbers yet. */
+function isCompleteNumber(text: string): boolean {
+  const trimmed = text.trim();
+  return /^[+-]?(?:\d+\.\d+|\d+|\.\d+)(?:[eE][+-]?\d+)?$/.test(trimmed) && Number.isFinite(Number(trimmed));
+}
+
+function completeJsonArray(text: string): unknown[] | null {
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function ModelNumberInput({ ariaLabel, value, onCommit }: { ariaLabel: string; value: number; onCommit: (next: number) => void }) {
+  const [text, setText] = useState(() => String(value));
+  const [seen, setSeen] = useState(value);
+  if (value !== seen) {
+    if (!(isCompleteNumber(text) && Number(text) === value)) setText(String(value));
+    setSeen(value);
+  }
+  return <input aria-label={ariaLabel} value={text} onChange={(event) => {
+    const typed = event.target.value;
+    setText(typed);
+    if (!isCompleteNumber(typed)) return;
+    onCommit(Number(typed.trim()));
+  }} />;
+}
+
+function ModelArrayInput({ ariaLabel, value, onCommit }: { ariaLabel: string; value: unknown[]; onCommit: (next: unknown[]) => void }) {
+  const serialized = JSON.stringify(value);
+  const [text, setText] = useState(serialized);
+  const [seen, setSeen] = useState(serialized);
+  if (serialized !== seen) {
+    const parsed = completeJsonArray(text);
+    if (!parsed || JSON.stringify(parsed) !== serialized) setText(serialized);
+    setSeen(serialized);
+  }
+  return <input aria-label={ariaLabel} value={text} onChange={(event) => {
+    const typed = event.target.value;
+    setText(typed);
+    const parsed = completeJsonArray(typed);
+    if (parsed) onCommit(parsed);
+  }} />;
+}
+
 function modelFieldControls(recordId: string, fields: Record<string, unknown>, onChange: (id: string, path: string[], value: unknown) => void, path: string[] = []): ReactNode[] {
   return Object.entries(fields).map(([key, value]) => {
     const next = [...path, key];
@@ -113,18 +160,10 @@ function modelFieldControls(recordId: string, fields: Record<string, unknown>, o
     const aria = `${recordId} ${label}`;
     if (isRecord(value)) return <div key={label} className={styles.modelFields}>{modelFieldControls(recordId, value, onChange, next)}</div>;
     if (typeof value === 'boolean') return <label key={label} className={styles.check}><input type="checkbox" aria-label={aria} checked={value} onChange={(event) => onChange(recordId, next, event.target.checked)} />{label}</label>;
-    if (Array.isArray(value)) return <label key={label}>{label}<input aria-label={aria} value={JSON.stringify(value)} onChange={(event) => { try { const parsed = JSON.parse(event.target.value) as unknown; if (Array.isArray(parsed)) onChange(recordId, next, parsed); } catch { /* leave the stored array until the text is valid JSON */ } }} /></label>;
+    if (Array.isArray(value)) return <label key={label}>{label}<ModelArrayInput ariaLabel={aria} value={value} onCommit={(parsed) => onChange(recordId, next, parsed)} /></label>;
+    if (typeof value === 'number') return <label key={label}>{label}<ModelNumberInput ariaLabel={aria} value={value} onCommit={(parsed) => onChange(recordId, next, parsed)} /></label>;
     const text = value === null || value === undefined ? '' : String(value);
-    return <label key={label}>{label}<input aria-label={aria} value={text} onChange={(event) => {
-      const typed = event.target.value;
-      if (typeof value === 'number') {
-        if (!typed.trim()) return;
-        const parsed = Number(typed);
-        if (Number.isFinite(parsed)) onChange(recordId, next, parsed);
-        return;
-      }
-      onChange(recordId, next, typed);
-    }} /></label>;
+    return <label key={label}>{label}<input aria-label={aria} value={text} onChange={(event) => onChange(recordId, next, event.target.value)} /></label>;
   });
 }
 

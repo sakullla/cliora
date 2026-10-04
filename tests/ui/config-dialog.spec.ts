@@ -753,7 +753,7 @@ async function installConnectionHarness(page: Page) {
         if (command === 'inspect_registered_native_draft') {
           const toolId = String(args?.toolId ?? '');
           const files = args?.files ?? {};
-          if (toolId === 'pi' && String(files.models ?? '').includes('model-a')) return { providerId: 'demo', model: 'model-a', reasoningEffort: null, projectedModels: [{ id: 'model-a', fields: { contextWindow: 100, cost: { input: 1 } } }, { id: 'sibling', fields: { name: 'Keep' } }], connection: connection('demo', 'model-a') };
+          if (toolId === 'pi' && String(files.models ?? '').includes('model-a')) return { providerId: 'demo', model: 'model-a', reasoningEffort: null, projectedModels: [{ id: 'model-a', fields: { contextWindow: 100, cost: { input: 1 }, modalities: ['text'] } }, { id: 'sibling', fields: { name: 'Keep' } }], connection: connection('demo', 'model-a') };
           if (toolId === 'open_code') return { providerId: 'demo', model: 'm1', reasoningEffort: null, projectedModels: [{ id: 'm1', fields: { name: 'Custom', extra: true } }, { id: 'm2', fields: { name: 'Second' } }], connection: connection('demo', 'm1') };
           if (toolId === 'codex') return { providerId: 'demo', model: 'gpt', reasoningEffort: 'low', projectedModels: null, connection: connection('demo', 'gpt', 'https://api.openai.com/v1') };
           return { connection: null, reasoningEffort: null, projectedModels: null };
@@ -799,10 +799,50 @@ test('projected model fields stay on the selected provider and codex effort come
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByLabel('model-a contextWindow')).toHaveValue('100');
   await expect(dialog.getByLabel('model-a cost.input')).toHaveValue('1');
+  await expect(dialog.getByLabel('model-a modalities')).toHaveValue('["text"]');
   await expect(dialog.getByLabel('sibling name')).toHaveValue('Keep');
   await expect(dialog.getByRole('checkbox', { name: '1M 上下文' })).toHaveCount(0);
   await expect(dialog.getByRole('button', { name: '获取模型' })).toHaveCount(0);
   await expect(dialog.getByLabel('推理强度（Codex 原生）')).toHaveCount(0);
+  const cost = dialog.getByLabel('model-a cost.input');
+  await cost.click();
+  await cost.press('End');
+  await cost.press('.');
+  await expect(cost).toHaveValue('1.');
+  await cost.press('5');
+  await expect(cost).toHaveValue('1.5');
+  const contextWindow = dialog.getByLabel('model-a contextWindow');
+  await contextWindow.click();
+  await contextWindow.press('End');
+  await contextWindow.press('.');
+  await expect(contextWindow).toHaveValue('100.');
+  await contextWindow.press('5');
+  await expect(contextWindow).toHaveValue('100.5');
+  const modalities = dialog.getByLabel('model-a modalities');
+  await modalities.click();
+  await modalities.press('End');
+  await modalities.press('x');
+  await expect(modalities).toHaveValue('["text"]x');
+  await modalities.press('ControlOrMeta+A');
+  await modalities.pressSequentially('[');
+  await expect(modalities).toHaveValue('[');
+  await modalities.pressSequentially('"voice"]');
+  await expect(modalities).toHaveValue('["voice"]');
+  await modalities.press('End');
+  await modalities.press('x');
+  await expect(modalities).toHaveValue('["voice"]x');
+  await dialog.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  const decimalSaved = await page.evaluate(() => (window as unknown as { __savedProfile: { connection: { modelRecords: unknown } } }).__savedProfile);
+  expect(decimalSaved.connection.modelRecords).toEqual([
+    { id: 'model-a', fields: { contextWindow: 100.5, cost: { input: 1.5 }, modalities: ['voice'] } },
+    { id: 'sibling', fields: { name: 'Keep' } },
+  ]);
+
+  await page.locator('[data-profile-id="pi-models"]').getByRole('button', { name: '修改' }).click();
+  await expect(dialog.getByLabel('model-a contextWindow')).toHaveValue('100');
+  await expect(dialog.getByLabel('model-a cost.input')).toHaveValue('1');
+  await expect(dialog.getByLabel('model-a modalities')).toHaveValue('["text"]');
   await replaceNumber(dialog.getByLabel('model-a contextWindow'), '128');
   await expect(dialog.getByLabel('model-a contextWindow')).toHaveValue('128');
   await dialog.getByLabel('sibling name').fill('Renamed');
@@ -812,7 +852,7 @@ test('projected model fields stay on the selected provider and codex effort come
   const saved = await page.evaluate(() => (window as unknown as { __savedProfile: { connection: { model: string; modelRecords: unknown } } }).__savedProfile);
   expect(saved.connection.model).toBe('sibling');
   expect(saved.connection.modelRecords).toEqual([
-    { id: 'model-a', fields: { contextWindow: 128, cost: { input: 1 } } },
+    { id: 'model-a', fields: { contextWindow: 128, cost: { input: 1 }, modalities: ['text'] } },
     { id: 'sibling', fields: { name: 'Renamed' } },
   ]);
 
