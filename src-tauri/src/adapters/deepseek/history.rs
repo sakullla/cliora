@@ -1,144 +1,48 @@
-//! dsh session logs: append-only JSONL compressed into checksum-chained
-//! Zstandard frames; the finalized (V4) and released (V3) frame versions
-//! coexist across the verified 0.2.x family.
+//! dsh session logs: append-only JSONL under
+//! `~/.dsh/sessions/<workspace>/session-<uuid>/session.v4.jsonl.zstd` where
+//! every appended record is compressed as its own zstd frame, so a finalized
+//! log is a stream of concatenated frames.
 //!
-//! Frame layout implemented here (the official docs describe "checksum-chained
-//! zstd frames" without a byte-level spec, so the concrete container below is
-//! the constructed contract proven by the versioned fixture pair; see the
-//! workflow evidence notes):
-//! - bytes `0..4`: magic `DSHF`
-//! - byte `4`: frame version, `3` (released) or `4` (finalized)
-//! - then frames until end of file, each:
-//!   - 32 bytes: SHA-256 of (previous digest || this frame's compressed bytes)
-//!   - 4 bytes little-endian u32: compressed length
-//!   - 4 bytes little-endian u32: uncompressed length
-//!   - the compressed zstd frame bytes
-//! - the seed digest is SHA-256(magic || version)
+//! Layout implemented from the first real machine sample (0.2.x line, header
+//! version 4):
+//! - row 0: `{"type":"session","version":4,"id","createdAt","cwd",...}`
+//! - every later row is an event envelope `{"type","seq","time","data"}`
+//! - conversation rides on `user/message` / `assistant/message` rows and
+//!   usage rides on the assistant payload itself (there is no separate usage
+//!   record); `session/title` rows carry the display title and
+//!   `agent/inbox/spliced` mirrors inbox mutations, folded only for messages
+//!   the canonical rows lack (both share the same message ids)
 //!
-//! A broken digest, length or decompressed size rejects the whole session
-//! file: the parser is read-only and never rewrites or truncates the log.
+//! Unknown event types are skipped. A header version outside the sampled
+//! family, a broken or torn frame stream or a missing header row rejects the
+//! whole session file: the parser is read-only and never rewrites the log.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io::Read;
 use std::path::Path;
 
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 
 use crate::history::usage::{self, RequestUsage};
 use crate::history::{
-    check_cancelled, discover_jsonl_controlled, text_content, timestamp, HistorySource,
-    ParsedSession, UsageEvent,
+    check_cancelled, discover_jsonl_controlled, text_content, timestamp, valid_native_id,
+    HistoryMessageKind, HistorySource, ParsedSession, UsageEvent,
 };
 
-const HEADER_BYTES: usize = 5;
-const MAGIC: [u8; 4] = *b"DSHF";
-const KNOWN_VERSIONS: [u8; 2] = [3, 4];
-
-fn seed_digest(version: u8) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(MAGIC);
-    hasher.update([version]);
-    hasher.finalize().into()
-}
-
-fn chain_digest(previous: &[u8; 32], compressed: &[u8]) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(previous);
-    hasher.update(compressed);
-    hasher.finalize().into()
-}
-
-/// Encodes the documented container. Production code only decodes; the
-/// test-only encoder exists so the committed fixtures and the parser provably
-/// share one format (run the ignored generator to rewrite the pair).
-#[cfg(test)]
-pub(crate) fn encode_frames(version: u8, jsonl: &str) -> Vec<u8> {
-    assert!(KNOWN_VERSIONS.contains(&version), "unverified frame version");
-    let mut out = Vec::new();
-    out.extend_from_slice(&MAGIC);
-    out.push(version);
-    let mut previous = seed_digest(version);
-    for line in jsonl.split('\n') {
-        if line.trim().is_empty() {
-            continue;
-        }
-        // One frame per append: dsh appends whole records to the log.
-        let record = format!("{line}\n");
-        let compressed =
-            zstd::bulk::compress(record.as_bytes(), 3).expect("zstd frame compression");
-        let digest = chain_digest(&previous, &compressed);
-        out.extend_from_slice(&digest);
-        out.extend_from_slice(&(compressed.len() as u32).to_le_bytes());
-        out.extend_from_slice(&(record.len() as u32).to_le_bytes());
-        out.extend_from_slice(&compressed);
-        previous = digest;
-    }
-    out
-}
-
-fn decode_frames(bytes: &[u8]) -> Result<Vec<Vec<u8>>, String> {
-    if bytes.len() < HEADER_BYTES || bytes[..4] != MAGIC {
-        return Err("dsh 会话文件缺少 DSHF 帧标记，不是已验证的会话格式；原文件未更改".into());
-    }
-    let version = bytes[4];
-    if !KNOWN_VERSIONS.contains(&version) {
-        return Err(format!(
-            "dsh 会话帧版本 {version} 不在已验证的 0.2.x 窄版本族内；原文件未更改"
-        ));
-    }
-    let read_u32 = |offset: usize| -> Option<u32> {
-        bytes
-            .get(offset..offset + 4)
-            .map(|slice| u32::from_le_bytes(slice.try_into().expect("four bytes")))
-    };
-    let mut previous = seed_digest(version);
-    let mut cursor = HEADER_BYTES;
-    let mut frames = Vec::new();
-    while cursor < bytes.len() {
-        let Some(expected) = bytes.get(cursor..cursor + 32) else {
-            return Err("dsh 会话帧头不完整；校验和链断裂，原文件未更改".into());
-        };
-        cursor += 32;
-        let Some(compressed_len) = read_u32(cursor) else {
-            return Err("dsh 会话帧长度字段不完整；校验和链断裂，原文件未更改".into());
-        };
-        cursor += 4;
-        let Some(plain_len) = read_u32(cursor) else {
-            return Err("dsh 会话帧长度字段不完整；校验和链断裂，原文件未更改".into());
-        };
-        cursor += 4;
-        let Some(compressed) = bytes.get(cursor..cursor + compressed_len as usize) else {
-            return Err("dsh 会话帧数据不完整；校验和链断裂，原文件未更改".into());
-        };
-        cursor += compressed_len as usize;
-        let actual = chain_digest(&previous, compressed);
-        if actual.as_slice() != expected {
-            return Err(format!(
-                "dsh 会话第 {} 帧校验和链断裂；整个会话拒绝解析，原文件未更改",
-                frames.len() + 1
-            ));
-        }
-        let plain = zstd::bulk::decompress(compressed, plain_len as usize)
-            .map_err(|_| "dsh 会话帧解压失败；原文件未更改".to_string())?;
-        if plain.len() != plain_len as usize {
-            return Err("dsh 会话帧解压长度与帧头不一致；校验和链断裂，原文件未更改".into());
-        }
-        previous = actual;
-        frames.push(plain);
-    }
-    Ok(frames)
-}
+const ZSTD_MAGIC: [u8; 4] = [0x28, 0xb5, 0x2f, 0xfd];
+const KNOWN_VERSIONS: [u64; 1] = [4];
 
 fn session_file(path: &Path) -> bool {
+    let name = path.file_name().and_then(|value| value.to_str()).unwrap_or("");
+    if !name.ends_with(".jsonl.zstd") {
+        return false;
+    }
     let Ok(mut file) = fs::File::open(path) else {
         return false;
     };
-    let mut header = [0u8; HEADER_BYTES];
-    file.read_exact(&mut header).is_ok()
-        && header[..4] == MAGIC
-        && KNOWN_VERSIONS.contains(&header[4])
+    let mut header = [0u8; 4];
+    file.read_exact(&mut header).is_ok() && header == ZSTD_MAGIC
 }
 
 pub fn sources(home: &Path) -> Result<Vec<HistorySource>, String> {
@@ -150,8 +54,8 @@ pub fn sources_controlled(
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Vec<HistorySource>, String> {
     let root = crate::accounts::selection::history_root("deepseek", || super::dsh_home(home));
-    // No file name or extension is documented, so discovery sniffs the frame
-    // header instead of trusting a guessable naming scheme.
+    // The sessions tree nests by workspace and session id, so discovery sniffs
+    // the zstd magic instead of trusting a fixed depth or exact file name.
     discover_jsonl_controlled(&root, session_file, cancelled)
 }
 
@@ -166,24 +70,84 @@ pub fn parse_controlled(
     check_cancelled(cancelled)?;
     let bytes = fs::read(&source.path).map_err(|error| error.to_string())?;
     check_cancelled(cancelled)?;
-    let frames = decode_frames(&bytes)?;
+    let plain = zstd::stream::decode_all(&bytes[..])
+        .map_err(|_| "dsh 会话文件不是有效的 zstd 帧流；原文件未更改".to_string())?;
     let mut session = ParsedSession::new();
     let mut events = BTreeMap::<String, RequestUsage>::new();
+    let mut seen = HashSet::<String>::new();
+    let mut header = false;
     let mut partial = false;
-    let mut index = 0usize;
-    for frame in frames {
+    for (index, line) in plain.split(|byte| *byte == b'\n').enumerate() {
         check_cancelled(cancelled)?;
-        for line in frame.split(|byte| *byte == b'\n') {
-            if line.iter().all(u8::is_ascii_whitespace) {
-                continue;
-            }
-            index += 1;
-            let Ok(row) = serde_json::from_slice::<Value>(line) else {
-                partial = true;
-                continue;
-            };
-            fold_row(&row, index, &mut session, &mut events);
+        if line.iter().all(u8::is_ascii_whitespace) {
+            continue;
         }
+        let Ok(row) = serde_json::from_slice::<Value>(line) else {
+            partial = true;
+            continue;
+        };
+        let kind = row.get("type").and_then(Value::as_str).unwrap_or("");
+        if !header {
+            if kind != "session" {
+                return Err(
+                    "dsh 会话日志缺少 session 头行，不是已验证的会话格式；原文件未更改".into(),
+                );
+            }
+            let version = row.get("version").and_then(Value::as_u64);
+            if !version.is_some_and(|value| KNOWN_VERSIONS.contains(&value)) {
+                return Err(format!(
+                    "dsh 会话日志版本 {version:?} 不在已验证的 0.2.x 样本族内；原文件未更改"
+                ));
+            }
+            header = true;
+            if let Some(id) = row.get("id").and_then(Value::as_str) {
+                if valid_native_id(id) {
+                    session.native_id = Some(id.to_owned());
+                }
+            }
+            session.started_at = row.get("createdAt").and_then(timestamp);
+            session.cwd = row.get("cwd").and_then(Value::as_str).map(str::to_owned);
+        }
+        let time = row.get("time").and_then(timestamp);
+        if time.is_some_and(|value| session.updated_at.is_none_or(|current| value > current)) {
+            session.updated_at = time;
+        }
+        match kind {
+            "session/title" => {
+                if let Some(title) = row.pointer("/data/title").and_then(Value::as_str) {
+                    if !title.trim().is_empty() {
+                        session.title = title.to_owned();
+                    }
+                }
+            }
+            "user/message" => {
+                fold_message(row.get("data").unwrap_or(&Value::Null), index, time, &mut session, &mut seen);
+            }
+            "assistant/message" => {
+                let data = row.get("data").unwrap_or(&Value::Null);
+                if let Some(message) = data.get("message") {
+                    fold_message(message, index, time, &mut session, &mut seen);
+                }
+                fold_usage(data, index, time, &mut session, &mut events);
+            }
+            "agent/inbox/spliced" => {
+                if let Some(inserted) = row.pointer("/data/inserted").and_then(Value::as_array) {
+                    for item in inserted {
+                        fold_message(item, index, time, &mut session, &mut seen);
+                    }
+                }
+            }
+            "request/context" if session.model.is_none() => {
+                session.model = row
+                    .pointer("/data/model")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+            }
+            _ => {}
+        }
+    }
+    if !header {
+        return Err("dsh 会话日志缺少 session 头行，不是已验证的会话格式；原文件未更改".into());
     }
     session.partial |= partial;
     session.usage = events
@@ -198,39 +162,68 @@ pub fn parse_controlled(
             cache_write: Some(event.counts.write),
             // TokenUsage semantics: inputTokens excludes cached input, so the
             // four buckets stay disjoint (billed input = input + cacheRead +
-            // cacheWrite; reasoningTokens are already inside outputTokens).
+            // cacheWrite; reasoning tokens are already inside outputTokens).
             input_includes_cache: false,
         })
         .collect();
     session.finish(source)
 }
 
-fn fold_row(
-    row: &Value,
+fn message_kind(item: &Value) -> HistoryMessageKind {
+    match item.pointer("/source/kind").and_then(Value::as_str) {
+        Some("runtime-context") => HistoryMessageKind::EnvironmentContext,
+        Some("skill-catalog") => HistoryMessageKind::ProjectContext,
+        _ => HistoryMessageKind::Conversation,
+    }
+}
+
+/// Canonical `user/message` rows and `agent/inbox/spliced` mirrors share the
+/// same message ids, so the first sighting of an id wins and replays never
+/// duplicate a message.
+fn fold_message(
+    item: &Value,
     index: usize,
+    time: Option<i64>,
     session: &mut ParsedSession,
-    events: &mut BTreeMap<String, RequestUsage>,
+    seen: &mut HashSet<String>,
 ) {
-    let kind = row.get("type").and_then(Value::as_str).unwrap_or("");
-    if kind != "user" && kind != "assistant" {
+    let role = item.get("role").and_then(Value::as_str).unwrap_or("");
+    if role != "user" && role != "assistant" {
         return;
     }
-    let message = row.get("message").unwrap_or(&Value::Null);
-    let body = message.get("content").map(text_content).unwrap_or_default();
-    let time = row.get("timestamp").and_then(timestamp);
-    session.add_message(format!("line-{index}"), kind, body, time);
+    let body = item.get("content").map(text_content).unwrap_or_default();
+    if body.trim().is_empty() {
+        return;
+    }
+    let id = item
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("line-{index}"));
+    if !seen.insert(id.clone()) {
+        return;
+    }
+    let kind = message_kind(item);
+    session.add_classified_message(id, role, body, time, kind);
     if session.model.is_none() {
-        session.model = message
-            .get("model")
+        session.model = item
+            .pointer("/source/model")
             .and_then(Value::as_str)
             .map(str::to_owned);
     }
-    if kind != "assistant" {
-        return;
-    }
-    // "There is no separate usage record": usage rides on the assistant
-    // message payload itself.
-    let Some(usage_value) = row.get("usage").or_else(|| message.get("usage")) else {
+}
+
+/// "There is no separate usage record": usage rides on the assistant message
+/// payload itself. Turn/step identify the request; replayed rows for one
+/// request keep the largest snapshot instead of double counting.
+fn fold_usage(
+    data: &Value,
+    index: usize,
+    time: Option<i64>,
+    session: &mut ParsedSession,
+    events: &mut BTreeMap<String, RequestUsage>,
+) {
+    let Some(usage_value) = data.get("usage") else {
         return;
     };
     let Some(counts) = usage::from_optional(
@@ -244,11 +237,9 @@ fn fold_row(
     if !usage::active(counts) {
         return;
     }
-    // Streaming snapshots repeat one turn/step and grow the output; keep the
-    // largest snapshot instead of double counting the request.
     let key = match (
-        row.get("turn").and_then(Value::as_u64),
-        row.get("step").and_then(Value::as_u64),
+        data.get("turn").and_then(Value::as_u64),
+        data.get("step").and_then(Value::as_u64),
     ) {
         (Some(turn), Some(step)) => format!("{turn}:{step}"),
         _ => format!("line-{index}"),
@@ -268,19 +259,44 @@ fn fold_row(
 mod tests {
     use super::*;
 
-    const V3_JSONL: &str = "\
-{\"type\":\"user\",\"turn\":1,\"timestamp\":\"2026-09-28T09:15:00Z\",\"message\":{\"role\":\"user\",\"content\":\"帮我把会话日志解析成表格\"}}
-{\"type\":\"assistant\",\"turn\":1,\"step\":0,\"stream\":false,\"interrupted\":false,\"timestamp\":\"2026-09-28T09:15:02Z\",\"message\":{\"role\":\"assistant\",\"model\":\"deepseek-chat\",\"content\":[{\"type\":\"text\",\"text\":\"可以，我先读取日志目录。\"}]},\"usage\":{\"inputTokens\":120,\"outputTokens\":35,\"totalTokens\":155}}
-{\"type\":\"user\",\"turn\":2,\"timestamp\":\"2026-09-28T09:16:10Z\",\"message\":{\"role\":\"user\",\"content\":\"统计每轮的 token 用量\"}}
-{\"type\":\"assistant\",\"turn\":2,\"step\":0,\"stream\":false,\"interrupted\":false,\"timestamp\":\"2026-09-28T09:16:12Z\",\"message\":{\"role\":\"assistant\",\"model\":\"deepseek-chat\",\"content\":[{\"type\":\"text\",\"text\":\"已统计完成。\"}]},\"usage\":{\"inputTokens\":210,\"outputTokens\":48,\"totalTokens\":258,\"cacheReadTokens\":64}}
+    // Desensitized from the first real machine sample: same envelope, event
+    // types and field shapes; ids, timestamps, cwd and token counts rewritten.
+    const SAMPLE_JSONL: &str = "\
+{\"type\":\"session\",\"version\":4,\"id\":\"session-00000000-0000-4000-8000-000000000001\",\"createdAt\":1791077550400,\"cwd\":\"C:\\\\work\\\\demo\",\"isSeeded\":false,\"delegationDepth\":0,\"agentPreset\":\"standard\"}
+{\"type\":\"permission/preset\",\"seq\":0,\"time\":1791077550401,\"data\":{\"preset\":\"workspace-write\"}}
+{\"type\":\"agent/inbox/spliced\",\"seq\":1,\"time\":1791077550418,\"data\":{\"target\":\"next-turn\",\"start\":0,\"inserted\":[{\"content\":[{\"type\":\"text\",\"text\":\"帮我把会话日志解析成表格\"}],\"source\":{\"kind\":\"user\"},\"role\":\"user\",\"id\":\"11111111-1111-4111-8111-111111111111\"}]}}
+{\"type\":\"turn/start\",\"seq\":2,\"time\":1791077550421,\"data\":{\"turn\":1}}
+{\"type\":\"system/message\",\"seq\":3,\"time\":1791077550481,\"surfaceOp\":\"append\",\"data\":{\"turn\":1,\"step\":1,\"message\":{\"role\":\"system\",\"content\":[{\"type\":\"text\",\"text\":\"You are an AI agent powered by DeepSeek Harness.\"}],\"source\":{\"kind\":\"system-prompt\"},\"id\":\"22222222-2222-4222-8222-222222222222\"}}}
+{\"type\":\"user/message\",\"seq\":4,\"time\":1791077550483,\"surfaceOp\":\"append\",\"data\":{\"content\":[{\"type\":\"text\",\"text\":\"帮我把会话日志解析成表格\"}],\"source\":{\"kind\":\"user\"},\"role\":\"user\",\"id\":\"11111111-1111-4111-8111-111111111111\"}}
+{\"type\":\"user/message\",\"seq\":5,\"time\":1791077550485,\"surfaceOp\":\"append\",\"data\":{\"content\":[{\"type\":\"text\",\"text\":\"Current runtime context. This snapshot supersedes earlier runtime-context snapshots.\"}],\"source\":{\"kind\":\"runtime-context\",\"form\":\"snapshot\"},\"role\":\"user\",\"id\":\"33333333-3333-4333-8333-333333333333\"}}
+{\"type\":\"user/message\",\"seq\":6,\"time\":1791077550486,\"surfaceOp\":\"append\",\"data\":{\"content\":[{\"type\":\"text\",\"text\":\"<system-reminder>\\nA skill is a reusable set of task-specific instructions.\\n</system-reminder>\"}],\"source\":{\"kind\":\"skill-catalog\",\"form\":\"catalog\"},\"role\":\"user\",\"id\":\"44444444-4444-4444-8444-444444444444\"}}
+{\"type\":\"request/context\",\"seq\":7,\"time\":1791077550490,\"data\":{\"provider\":\"deepseek-account\",\"model\":\"deepseek-flash\",\"contextWindow\":1000000,\"systemPromptUpdate\":\"in-history\"}}
+{\"type\":\"session/title\",\"seq\":8,\"time\":1791077550494,\"data\":{\"title\":\"帮我把会话日志解析成表格\",\"messageSeqs\":[4],\"source\":{\"kind\":\"fallback\"}}}
+{\"type\":\"assistant/message\",\"seq\":9,\"time\":1791077551380,\"surfaceOp\":\"append\",\"data\":{\"turn\":1,\"step\":1,\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"reasoning\",\"text\":\"\"},{\"type\":\"text\",\"text\":\"可以，我先读取日志目录。\"}],\"source\":{\"kind\":\"model\",\"provider\":\"deepseek-account\",\"model\":\"deepseek-flash\"},\"id\":\"55555555-5555-4555-8555-555555555555\"},\"usage\":{\"inputTokens\":120,\"outputTokens\":35,\"cacheReadTokens\":0,\"cacheWriteTokens\":0,\"totalTokens\":155}}}
+{\"type\":\"turn/end\",\"seq\":10,\"time\":1791077551382,\"data\":{\"turn\":1,\"reason\":{\"kind\":\"completed\"}}}
+{\"type\":\"agent/inbox/spliced\",\"seq\":11,\"time\":1791077560407,\"data\":{\"target\":\"next-turn\",\"start\":0,\"inserted\":[{\"content\":[{\"type\":\"text\",\"text\":\"统计每轮的 token 用量\"}],\"source\":{\"kind\":\"user\"},\"role\":\"user\",\"id\":\"66666666-6666-4666-8666-666666666666\"}]}}
+{\"type\":\"turn/start\",\"seq\":12,\"time\":1791077560421,\"data\":{\"turn\":2}}
+{\"type\":\"user/message\",\"seq\":13,\"time\":1791077560423,\"surfaceOp\":\"append\",\"data\":{\"content\":[{\"type\":\"text\",\"text\":\"统计每轮的 token 用量\"}],\"source\":{\"kind\":\"user\"},\"role\":\"user\",\"id\":\"66666666-6666-4666-8666-666666666666\"}}
+{\"type\":\"assistant/message\",\"seq\":14,\"time\":1791077562400,\"surfaceOp\":\"append\",\"data\":{\"turn\":2,\"step\":1,\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"已统计完成。\"}],\"source\":{\"kind\":\"model\",\"provider\":\"deepseek-account\",\"model\":\"deepseek-flash\"},\"id\":\"77777777-7777-4777-8777-777777777777\"},\"usage\":{\"inputTokens\":210,\"outputTokens\":48,\"cacheReadTokens\":64,\"cacheWriteTokens\":0,\"totalTokens\":322}}}
+{\"type\":\"session/title\",\"seq\":15,\"time\":1791077562600,\"data\":{\"title\":\"会话日志解析与用量统计\",\"messageSeqs\":[4,13],\"source\":{\"kind\":\"provider\",\"provider\":\"session-title-first-prompt-llm\",\"model\":{\"provider\":\"deepseek-account\",\"model\":\"deepseek-flash\"}}}}
+{\"type\":\"turn/end\",\"seq\":16,\"time\":1791077562602,\"data\":{\"turn\":2,\"reason\":{\"kind\":\"completed\"}}}
 ";
 
-    const V4_JSONL: &str = "\
-{\"type\":\"user\",\"turn\":1,\"timestamp\":\"2026-10-01T14:02:00Z\",\"message\":{\"role\":\"user\",\"content\":\"整理这个项目的 README\"}}
-{\"type\":\"assistant\",\"turn\":1,\"step\":0,\"stream\":true,\"interrupted\":false,\"timestamp\":\"2026-10-01T14:02:03Z\",\"message\":{\"role\":\"assistant\",\"model\":\"deepseek-reasoner\",\"content\":[{\"type\":\"text\",\"text\":\"整理中\"}]},\"usage\":{\"inputTokens\":80,\"outputTokens\":12,\"totalTokens\":92,\"cacheWriteTokens\":16,\"reasoningTokens\":4}}
-{\"type\":\"assistant\",\"turn\":1,\"step\":0,\"stream\":false,\"interrupted\":false,\"timestamp\":\"2026-10-01T14:02:09Z\",\"message\":{\"role\":\"assistant\",\"model\":\"deepseek-reasoner\",\"content\":[{\"type\":\"text\",\"text\":\"整理完成：README 已更新。\"}]},\"usage\":{\"inputTokens\":80,\"outputTokens\":57,\"totalTokens\":137,\"cacheReadTokens\":32,\"cacheWriteTokens\":16,\"reasoningTokens\":21}}
-{\"type\":\"assistant\",\"turn\":1,\"step\":1,\"stream\":false,\"interrupted\":true,\"timestamp\":\"2026-10-01T14:03:00Z\",\"message\":{\"role\":\"assistant\",\"model\":\"deepseek-reasoner\",\"content\":[{\"type\":\"text\",\"text\":\"（已中断）\"}]},\"usage\":{\"inputTokens\":20,\"outputTokens\":5,\"totalTokens\":25}}
-";
+    /// One zstd frame per appended record, concatenated: the real append
+    /// semantics observed on disk. Production code only decodes.
+    fn encode_session(jsonl: &str) -> Vec<u8> {
+        let mut out = Vec::new();
+        for line in jsonl.split('\n') {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let record = format!("{line}\n");
+            out.extend_from_slice(
+                &zstd::bulk::compress(record.as_bytes(), 3).expect("zstd frame compression"),
+            );
+        }
+        out
+    }
 
     fn fixture_source(name: &str) -> HistorySource {
         HistorySource {
@@ -297,140 +313,137 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "fixture generator: cargo test deepseek::history::tests::regenerate_pair_fixtures --manifest-path src-tauri/Cargo.toml -- --ignored rewrites the committed pair"]
-    fn regenerate_pair_fixtures() {
+    #[ignore = "fixture generator: cargo test deepseek::history::tests::regenerate_session_fixture --manifest-path src-tauri/Cargo.toml -- --ignored rewrites the committed sample"]
+    fn regenerate_session_fixture() {
         let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("..")
             .join("tests")
             .join("fixtures")
             .join("history");
-        fs::write(directory.join("dsh-0.2.1-v3.frames"), encode_frames(3, V3_JSONL)).unwrap();
-        fs::write(directory.join("dsh-0.2.1-v4.frames"), encode_frames(4, V4_JSONL)).unwrap();
+        fs::write(
+            directory.join("dsh-0.2.1-v4.session.jsonl.zstd"),
+            encode_session(SAMPLE_JSONL),
+        )
+        .unwrap();
     }
 
     #[test]
-    fn committed_fixtures_match_the_documented_encoder() {
-        let v3 = fs::read(fixture_source("dsh-0.2.1-v3.frames").path).unwrap();
-        assert_eq!(v3, encode_frames(3, V3_JSONL));
-        let v4 = fs::read(fixture_source("dsh-0.2.1-v4.frames").path).unwrap();
-        assert_eq!(v4, encode_frames(4, V4_JSONL));
+    fn committed_fixture_matches_the_encoder() {
+        let fixture = fs::read(fixture_source("dsh-0.2.1-v4.session.jsonl.zstd").path).unwrap();
+        assert_eq!(fixture, encode_session(SAMPLE_JSONL));
     }
 
     #[test]
-    fn v3_and_v4_frames_yield_sessions_and_token_usage() {
-        let v3 = parse(&fixture_source("dsh-0.2.1-v3.frames")).unwrap();
-        assert_eq!(v3.messages.len(), 4);
-        assert_eq!(v3.messages[0].role, "user");
-        assert_eq!(v3.title, "帮我把会话日志解析成表格");
-        assert_eq!(v3.model.as_deref(), Some("deepseek-chat"));
-        assert!(!v3.partial);
-        assert_eq!(v3.usage.len(), 2);
+    fn session_log_yields_title_context_messages_and_usage() {
+        let parsed = parse(&fixture_source("dsh-0.2.1-v4.session.jsonl.zstd")).unwrap();
         assert_eq!(
-            v3.usage.iter().map(|item| item.input.unwrap()).sum::<u64>(),
-            330
+            parsed.native_id.as_deref(),
+            Some("session-00000000-0000-4000-8000-000000000001")
         );
+        // The last session/title row (provider generated) wins over the
+        // fallback title and the first-message fallback.
+        assert_eq!(parsed.title, "会话日志解析与用量统计");
+        assert_eq!(parsed.cwd.as_deref(), Some("C:\\work\\demo"));
+        assert_eq!(parsed.model.as_deref(), Some("deepseek-flash"));
+        assert_eq!(parsed.started_at, Some(1791077550400));
+        assert_eq!(parsed.updated_at, Some(1791077562602));
+        // The spliced mirror shares ids with canonical rows: no duplicates,
+        // and the system prompt row never becomes a message.
+        assert_eq!(parsed.messages.len(), 6);
         assert_eq!(
-            v3.usage.iter().map(|item| item.output.unwrap()).sum::<u64>(),
-            83
-        );
-        assert_eq!(
-            v3.usage
+            parsed
+                .messages
                 .iter()
-                .map(|item| item.cache_read.unwrap())
-                .sum::<u64>(),
-            64
+                .filter(|message| message.role == "user")
+                .count(),
+            4
         );
-        assert!(v3.usage.iter().all(|item| !item.input_includes_cache));
-
-        let v4 = parse(&fixture_source("dsh-0.2.1-v4.frames")).unwrap();
-        assert_eq!(v4.messages.len(), 4);
-        assert_eq!(v4.model.as_deref(), Some("deepseek-reasoner"));
-        // The streamed snapshot pair collapses into one request event.
-        assert_eq!(v4.usage.len(), 2);
-        assert_eq!(v4.usage[0].id, "1:0");
-        assert_eq!(v4.usage[0].output, Some(57));
-        assert_eq!(v4.usage[0].input, Some(80));
-        assert_eq!(v4.usage[0].cache_write, Some(16));
-        assert_eq!(v4.usage[0].cache_read, Some(32));
-        assert_eq!(v4.usage[1].id, "1:1");
-        assert_eq!(
-            v4.usage.iter().map(|item| item.output.unwrap()).sum::<u64>(),
-            62
-        );
-        assert!(v4.started_at.is_some());
-        assert!(v4.updated_at.is_some());
+        assert_eq!(parsed.messages[0].text, "帮我把会话日志解析成表格");
+        // runtime-context and skill-catalog rows fold as context kinds.
+        assert_eq!(parsed.messages[1].kind, HistoryMessageKind::EnvironmentContext);
+        assert_eq!(parsed.messages[2].kind, HistoryMessageKind::ProjectContext);
+        // Reasoning blocks stay out of the assistant text.
+        assert_eq!(parsed.messages[3].text, "可以，我先读取日志目录。");
+        assert!(!parsed.partial);
+        assert_eq!(parsed.usage.len(), 2);
+        assert_eq!(parsed.usage[0].id, "1:1");
+        assert_eq!(parsed.usage[0].model.as_deref(), Some("deepseek-flash"));
+        assert_eq!(parsed.usage[0].input, Some(120));
+        assert_eq!(parsed.usage[0].output, Some(35));
+        assert_eq!(parsed.usage[1].id, "2:1");
+        assert_eq!(parsed.usage[1].input, Some(210));
+        assert_eq!(parsed.usage[1].output, Some(48));
+        assert_eq!(parsed.usage[1].cache_read, Some(64));
+        assert!(parsed.usage.iter().all(|event| !event.input_includes_cache));
     }
 
     #[test]
-    fn broken_checksum_chain_fails_closed_and_never_touches_the_file() {
+    fn broken_streams_fail_closed_and_never_touch_the_file() {
         let directory = tempfile::tempdir().unwrap();
-        let original = fs::read(fixture_source("dsh-0.2.1-v4.frames").path).unwrap();
-        let path = directory.path().join("broken.frames");
-        // Corrupt one payload byte inside the second frame's compressed body.
-        // Frame layout: header(5) | digest(32) compressed_len(4) plain_len(4) payload.
-        let mut damaged = original.clone();
-        let first_compressed_len =
-            u32::from_le_bytes(original[HEADER_BYTES + 32..HEADER_BYTES + 36].try_into().unwrap())
-                as usize;
-        let second_payload = HEADER_BYTES + 40 + first_compressed_len;
-        damaged[second_payload + 2] ^= 0xff;
-        assert_ne!(damaged, original);
-        fs::write(&path, &damaged).unwrap();
+        let original = fs::read(fixture_source("dsh-0.2.1-v4.session.jsonl.zstd").path).unwrap();
+        let path = directory.path().join("broken.session.jsonl.zstd");
         let source = HistorySource {
             path: path.clone(),
             native_id: None,
             fingerprint: "fixture".into(),
             fingerprint_error: None,
         };
-        let error = parse(&source).unwrap_err();
-        assert!(error.contains("校验和链断裂"), "{error}");
-        // Fail-closed means fail-untouched: the log on disk is byte-identical.
-        assert_eq!(fs::read(&path).unwrap(), damaged);
-
-        // A truncated tail, a bad version byte and a plain non-frame file are
-        // equally rejected without touching anything on disk.
-        let truncated = &original[..original.len() - 3];
-        fs::write(&path, truncated).unwrap();
-        assert!(parse(&source).is_err());
-        let mut bad_version = original.clone();
-        bad_version[4] = 5;
-        fs::write(&path, &bad_version).unwrap();
-        assert!(parse(&source).unwrap_err().contains("窄版本族"));
-        let plain_path = directory.path().join("notes.jsonl");
-        fs::write(&plain_path, "{\"type\":\"user\",\"message\":{\"content\":\"hello\"}}\n").unwrap();
-        let plain = parse(&HistorySource {
-            path: plain_path,
-            native_id: None,
-            fingerprint: "fixture".into(),
-            fingerprint_error: None,
-        })
-        .unwrap_err();
-        assert!(plain.contains("DSHF"), "{plain}");
+        let cases: Vec<(&str, Vec<u8>, &str)> = vec![
+            ("truncated tail", original[..original.len() - 5].to_vec(), "zstd"),
+            ("torn append", [original.as_slice(), b"\x00\x00".as_slice()].concat(), "zstd"),
+            (
+                "plain jsonl",
+                b"{\"type\":\"session\",\"version\":4}\n".to_vec(),
+                "zstd",
+            ),
+            (
+                "missing header row",
+                encode_session(
+                    "{\"type\":\"user/message\",\"seq\":0,\"time\":1791077550483,\"surfaceOp\":\"append\",\"data\":{\"content\":[{\"type\":\"text\",\"text\":\"hi\"}],\"source\":{\"kind\":\"user\"},\"role\":\"user\",\"id\":\"11111111-1111-4111-8111-111111111111\"}}\n",
+                ),
+                "头行",
+            ),
+            (
+                "unverified version",
+                encode_session(
+                    "{\"type\":\"session\",\"version\":5,\"id\":\"session-00000000-0000-4000-8000-000000000001\",\"createdAt\":1791077550400,\"cwd\":\"C:\\\\work\\\\demo\"}\n",
+                ),
+                "样本族",
+            ),
+        ];
+        for (name, damaged, marker) in cases {
+            fs::write(&path, &damaged).unwrap();
+            let error = parse(&source).unwrap_err();
+            assert!(error.contains(marker), "{name}: {error}");
+            // Fail-closed means fail-untouched: the log on disk is byte-identical.
+            assert_eq!(fs::read(&path).unwrap(), damaged, "{name}");
+        }
     }
 
     #[test]
-    fn discovery_sniffs_frame_headers_under_the_harness_home() {
+    fn discovery_sniffs_zstd_streams_under_the_harness_home() {
         let home = tempfile::tempdir().unwrap();
-        let sessions = home.path().join(".dsh").join("by-cwd").join("work-app");
+        let sessions = home
+            .path()
+            .join(".dsh")
+            .join("sessions")
+            .join("--C-work-demo--")
+            .join("session-00000000-0000-4000-8000-000000000001");
         fs::create_dir_all(&sessions).unwrap();
         fs::write(
-            sessions.join("session-a.frames"),
-            encode_frames(4, V4_JSONL),
+            sessions.join("session.v4.jsonl.zstd"),
+            encode_session(SAMPLE_JSONL),
         )
         .unwrap();
-        fs::write(
-            sessions.join("session-b.frames"),
-            encode_frames(3, V3_JSONL),
-        )
-        .unwrap();
-        fs::write(sessions.join("unrelated.txt"), "not a session").unwrap();
+        fs::write(sessions.join("notes.txt"), "not a session").unwrap();
+        // Right extension but not a zstd stream: rejected by the magic sniff.
+        fs::write(home.path().join(".dsh").join("plain.jsonl.zstd"), "{\"type\":\"session\"}\n").unwrap();
         let sources = sources(home.path()).unwrap();
-        let mut names: Vec<_> = sources
+        let names: Vec<_> = sources
             .iter()
             .map(|source| source.path.file_name().unwrap().to_string_lossy().into_owned())
             .collect();
-        names.sort();
-        assert_eq!(names, ["session-a.frames", "session-b.frames"]);
+        assert_eq!(names, ["session.v4.jsonl.zstd"]);
         assert!(sources.iter().all(|source| source.fingerprint.starts_with("m3:")));
     }
 }

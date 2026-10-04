@@ -4,7 +4,8 @@
 //! layer (`~/.dsh/profiles/desktop/cordis.patch.yml`, YAML through the shared
 //! format layer), bare desktop launches, MCP entries as `insert` patch items,
 //! skills in the ranked `.dsh/skills` directories and read-only parsing of the
-//! checksum-chained zstd session frames with `TokenUsage` aggregation.
+//! zstd-framed session logs (`sessions/*/session.v4.jsonl.zstd`, one frame per
+//! appended record) with token usage aggregation.
 //!
 //! Honestly not delivered: Agents (no declarative definition contract), resume
 //! (no session-restore contract for the desktop form), YOLO (no verified
@@ -325,7 +326,7 @@ impl CliAdapter for DeepSeek {
             },
             history: Facet {
                 state: "available",
-                reason: "可只读解析校验和串联的 zstd 会话帧（V3/V4）并统计 TokenUsage",
+                reason: "可只读解析 sessions/*/session.v4.jsonl.zstd 会话日志（逐记录 zstd 帧）并统计 TokenUsage",
             },
             login: None,
             management: super::ManagementCapabilities {
