@@ -34,38 +34,7 @@ fn private_directory(path: &Path) -> Result<(), String> {
             .map_err(|_| "无法限制账号目录权限")?;
     }
     #[cfg(windows)]
-    {
-        let system =
-            std::path::PathBuf::from(std::env::var_os("SystemRoot").ok_or("无法定位系统目录")?)
-                .join("System32");
-        let who = crate::background_process::command(system.join("whoami.exe"))
-            .args(["/user", "/fo", "csv", "/nh"])
-            .output()
-            .map_err(|_| "无法检查用户 SID")?;
-        if !who.status.success() {
-            return Err("无法检查用户 SID".into());
-        }
-        let text = String::from_utf8(who.stdout).map_err(|_| "用户 SID 格式异常")?;
-        let sid = text
-            .trim()
-            .rsplit(',')
-            .next()
-            .unwrap_or("")
-            .trim_matches('"');
-        if !sid.starts_with("S-1-") || !sid[4..].bytes().all(|b| b.is_ascii_digit() || b == b'-') {
-            return Err("用户 SID 格式异常".into());
-        }
-        let status = crate::background_process::command(system.join("icacls.exe"))
-            .arg(path)
-            .args(["/inheritance:r", "/grant:r"])
-            .arg(format!("*{sid}:(OI)(CI)F"))
-            .args(["/grant:r", "*S-1-5-18:(OI)(CI)F"])
-            .output()
-            .map_err(|_| "无法限制账号目录权限")?;
-        if !status.status.success() {
-            return Err("无法限制账号目录权限".into());
-        }
-    }
+    crate::windows_security::restrict(path, true)?;
     Ok(())
 }
 

@@ -1,4 +1,7 @@
 use std::path::Path;
+use std::collections::HashMap;
+use std::io::{BufRead, BufReader, Read};
+use sha2::{Digest, Sha256};
 
 use serde_json::Value;
 
@@ -16,8 +19,18 @@ pub fn sources_controlled(
     home: &Path,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Vec<HistorySource>, String> {
+    let root = crate::accounts::selection::config_root("codex", || {
+        if dirs::home_dir().as_deref() == Some(home) {
+            std::env::var_os("CODEX_HOME").map(Into::into).unwrap_or_else(|| home.join(".codex"))
+        } else { home.join(".codex") }
+    });
     let mut sources = discover_jsonl_controlled(
-        &crate::accounts::selection::history_root("codex", || home.join(".codex/sessions")),
+        &crate::accounts::selection::history_root("codex", || {
+            // Keep the established source path spelling so existing stable IDs
+            // and favorites survive the title-catalog upgrade on Windows.
+            if root == home.join(".codex") { home.join(".codex/sessions") }
+            else { root.join("sessions") }
+        }),
         |path| {
             path.extension().is_some_and(|value| value == "jsonl")
                 && path
@@ -38,10 +51,54 @@ pub fn sources_controlled(
     }
     // Adapter-local parser version: existing indexes are rebuilt once, even if
     // the original rollout has not changed. Other CLIs keep their own cache.
+    let titles = native_titles(&root, cancelled)?;
     for source in &mut sources {
-        source.fingerprint = format!("codex-context-v1|{}", source.fingerprint);
+        let id = source.path.file_stem().and_then(|stem| stem.to_str()).and_then(|stem| stem.get(stem.len().saturating_sub(36)..));
+        source.native_title = id.and_then(|id| titles.get(id)).cloned();
+        let title_hash = format!("{:x}", Sha256::digest(source.native_title.as_deref().unwrap_or("").as_bytes()));
+        source.fingerprint = format!("codex-context-v2|{title_hash}|{}", source.fingerprint);
     }
     Ok(sources)
+}
+
+// Native display names are stored outside rollouts. Read each catalog once,
+// and bind only the matching thread title into its incremental fingerprint.
+fn native_titles(root: &Path, cancelled: &dyn Fn() -> bool) -> Result<HashMap<String, String>, String> {
+    let mut titles = HashMap::new();
+    let mut databases = std::fs::read_dir(root).ok().into_iter().flatten().filter_map(Result::ok)
+        .map(|entry| entry.path()).filter(|path| !path.is_symlink()).filter(|path| path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with("state_") && name.ends_with(".sqlite"))).collect::<Vec<_>>();
+    databases.sort_by_key(|path| path.file_stem().and_then(|stem| stem.to_str()).and_then(|stem| stem.strip_prefix("state_")).and_then(|v| v.parse::<u32>().ok()).unwrap_or(0));
+    if let Some(path) = databases.last() {
+        if let Ok(db) = rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) {
+            let _ = db.busy_timeout(std::time::Duration::from_millis(100));
+            if let Ok(mut statement) = db.prepare("SELECT id,title FROM threads") {
+                if let Ok(rows) = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))) {
+                    for row in rows {
+                        crate::history::check_cancelled(cancelled)?;
+                        if let Ok((id, title)) = row { if valid_native_id(&id) && !title.trim().is_empty() { titles.insert(id, title); } }
+                    }
+                }
+            }
+        }
+    }
+    let path = root.join("session_index.jsonl");
+    if !path.is_symlink() {
+        if let Ok(file) = std::fs::File::open(path) {
+            let mut reader = BufReader::new(file);
+            let mut line = String::new();
+            loop {
+                crate::history::check_cancelled(cancelled)?;
+                line.clear();
+                let Ok(count) = reader.by_ref().take(1024 * 1024 + 1).read_line(&mut line) else { break; };
+                if count == 0 || count > 1024 * 1024 { break; }
+                let Ok(row) = serde_json::from_str::<Value>(&line) else { continue; };
+                if let (Some(id), Some(title)) = (row.get("id").and_then(Value::as_str), row.get("thread_name").and_then(Value::as_str)) {
+                    if valid_native_id(id) && !title.trim().is_empty() { titles.insert(id.into(), title.trim().into()); }
+                }
+            }
+        }
+    }
+    Ok(titles)
 }
 
 fn environment_context(text: &str) -> bool {

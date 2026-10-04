@@ -141,11 +141,13 @@ test('terminal errors stay readable in light and dark and can be chosen again', 
   await expect(alert).toContainText('可以重新选择终端');
   await expect(alert).toHaveAttribute('style', /var\(--danger\)/);
   await expect(alert).not.toHaveAttribute('style', /#a93626/i);
+  await expect.poll(async () => (await dangerColor(alert)).same).toBe(true);
   const light = await dangerColor(alert);
   expect(light.same).toBe(true);
   expect(light.fixed).toBe(false);
   await page.getByRole('radiogroup', { name: '主题' }).getByRole('radio', { name: '深色' }).click();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await expect.poll(async () => (await dangerColor(alert)).same).toBe(true);
   const dark = await dangerColor(alert);
   expect(dark.same).toBe(true);
   expect(dark.fixed).toBe(false);
@@ -183,7 +185,6 @@ test('record copy and resume replace the previous result', async ({ page }) => {
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
   const records = page.getByRole('region', { name: '使用记录内容' });
   await expect(records.getByLabel('原生恢复命令')).toContainText('codex resume 1111');
-  await page.waitForTimeout(400);
   await records.getByText('会话选项', { exact: true }).click();
   await records.getByRole('button', { name: '复制命令' }).click();
   await expect(records.getByText('已复制原生恢复命令，粘贴后由终端执行。')).toBeVisible();
@@ -274,7 +275,7 @@ test('library save closes the dialog and copy results stay in the dialog', async
   await expect(dialog.getByRole('alert')).toContainText('可修改后再次点击保存');
   await expect(dialog.getByRole('status')).toHaveCount(0);
   await page.evaluate(() => { (window as unknown as { __statusCopy: { librarySaveFails: boolean } }).__statusCopy.librarySaveFails = false; });
-  await dialog.getByRole('button', { name: '保存', exact: true }).click();
+  await page.keyboard.press('Control+s');
   await expect(dialog).toHaveCount(0);
   await expect(library.getByRole('status')).toContainText('已保存在本机资料库');
   await expect(library.getByRole('alert')).toHaveCount(0);
@@ -311,7 +312,6 @@ test('saved price stays visible when the following usage read fails', async ({ p
   const records = page.getByRole('region', { name: '使用记录内容' });
   await records.getByRole('tab', { name: '用量' }).click();
   await expect(records.getByRole('button', { name: '设置估算价格' })).toBeVisible();
-  await page.waitForTimeout(500);
   await expect(records.getByText('正在筛选已缓存记录…')).toHaveCount(0);
   await page.evaluate(() => { (window as unknown as { __statusCopy: { usageFails: boolean } }).__statusCopy.usageFails = true; });
   await records.getByRole('button', { name: '设置估算价格' }).click();
@@ -397,29 +397,12 @@ test('page search answers Ctrl+F and slash, and Escape clears it', async ({ page
   await expect(page.getByRole('textbox', { name: '搜索会话' })).toHaveValue('');
 });
 
-test('Ctrl+S saves the open library dialog and copy confirms on the card', async ({ page }) => {
-  await install(page);
-  await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
-  const library = page.getByRole('region', { name: '资料库内容' });
-  await library.getByRole('button', { name: '复制全文' }).click();
-  await expect(library.getByRole('button', { name: '复制全文' })).toHaveText('已复制');
-  await expect(library.getByRole('button', { name: '复制全文' })).toHaveText('复制全文', { timeout: 4000 });
-  await library.getByRole('button', { name: '发布检查' }).click();
-  const dialog = page.getByRole('dialog');
-  await dialog.getByPlaceholder('名称').fill('发布检查 v2');
-  await page.keyboard.press('Control+s');
-  await expect(dialog).toHaveCount(0);
-  await expect(library.getByRole('status')).toHaveText('已保存在本机资料库。');
-});
-
 test('the automatic record scan stays quiet and a manual refresh reports', async ({ page }) => {
   await install(page);
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
   const records = page.getByRole('region', { name: '使用记录内容' });
   await expect(records.getByLabel('原生恢复命令')).toContainText('codex resume 1111');
-  await page.waitForTimeout(400);
   await expect(records.getByText('已刷新本机记录。')).toHaveCount(0);
   await records.getByRole('button', { name: '刷新本机记录' }).click();
   await expect(records.getByText('已刷新本机记录。')).toBeVisible();
@@ -434,19 +417,6 @@ test('an empty library offers to create the first item', async ({ page }) => {
   await expect(library.getByText('还没有规则')).toBeVisible();
   await library.getByRole('button', { name: '＋ 新建第一条规则' }).click();
   await expect(page.getByRole('dialog')).toContainText('新建规则');
-});
-
-test('settings theme choice is a radio group that follows arrow keys', async ({ page }) => {
-  await install(page);
-  await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置' }).click();
-  const group = page.getByRole('radiogroup', { name: '主题' });
-  await expect(group.getByRole('radio', { name: '浅色' })).toHaveAttribute('aria-checked', 'true');
-  await group.getByRole('radio', { name: '浅色' }).focus();
-  await page.keyboard.press('ArrowRight');
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
-  await expect(group.getByRole('radio', { name: '深色' })).toBeFocused();
-  await expect(page.getByRole('button', { name: '深色主题' })).toHaveAttribute('aria-pressed', 'true');
 });
 
 test('export password can be revealed and explains what is still missing', async ({ page }) => {

@@ -18,6 +18,7 @@ impl Registry {
                 &OPENCODE,
                 &ZCODE,
                 &QODER,
+                &qoder_cn::QODER_CN,
                 &KIMI_CODE,
                 &DEEPSEEK,
                 &CODEBUDDY,

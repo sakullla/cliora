@@ -44,7 +44,7 @@ async function setup(page: Page) {
   await expect(page.getByText('Fixture plugin', { exact: true })).toBeVisible();
 }
 
-test('native plugin lifecycle retains context, policy, ownership and load distinction', async ({ page }) => {
+test('native plugin lifecycle retains context, policy, ownership and load distinction', { tag: '@integration' }, async ({ page }) => {
   await setup(page);
   const card = page.getByRole('listitem').filter({ has: page.getByText('Fixture plugin', { exact: true }) });
   await expect(card.getByText(/原生已安装 · 加载未验证/)).toBeVisible();

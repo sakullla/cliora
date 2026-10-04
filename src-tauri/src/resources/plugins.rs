@@ -115,7 +115,7 @@ fn executable(db: &Database, home: &Path, target: &PluginTarget) -> Result<PathB
         .optional()
         .map_err(|_| "无法读取 CLI 路径".into())
     })?;
-    let probe = adapter::probe_registered(
+    let probe = adapter::probe_registered_summary(
         &Registry::builtins(),
         &target.tool_id,
         custom.as_deref().map(Path::new),
@@ -480,17 +480,29 @@ fn snapshot_inner(
     db: &Database,
     home: &Path,
     target: &PluginTarget,
-    exe: &Path,
+    exe: Option<&Path>,
+) -> Result<PluginSnapshot, String> {
+    snapshot_with_packages(db, home, target, exe, true)
+}
+fn snapshot_with_packages(
+    db: &Database,
+    home: &Path,
+    target: &PluginTarget,
+    exe: Option<&Path>,
+    verify_packages: bool,
 ) -> Result<PluginSnapshot, String> {
     let capability = adapters::plugins::capability(&target.tool_id)?;
     if target.scope == Scope::Project && !capability.project {
         return Err(capability.detail.into());
     }
     let adapter = adapters::plugins::get(&target.tool_id)?;
-    let mut entries = if adapter.config_field().is_some() {
+    let mut entries = if adapter.discovery_only() {
+        let (path, _) = config(home, target)?;
+        adapter.discover(home, target, &path)?
+    } else if adapter.config_field().is_some() {
         config_entries(db, home, target)?
     } else {
-        let output = run(exe, home, target, &adapter.list_command_args())?;
+        let output = run(exe.ok_or("未找到 CLI 安装")?, home, target, &adapter.list_command_args())?;
         let value: Value = serde_json::from_str(&output).map_err(|_| "原生插件输出格式不兼容")?;
         parse_list(&target.tool_id, &value, target)?
     };
@@ -503,7 +515,7 @@ fn snapshot_inner(
         if entry.resources.is_empty() {
             adapter.fill_missing_resources(entry)?;
         }
-        if let Some(root) = &entry.root {
+        if let Some(root) = entry.root.as_ref().filter(|_| verify_packages && !entry.read_only) {
             // Native local installs intentionally link the package root (Grok).
             // Include the link identity and canonical destination in the baseline;
             // nested links remain unsupported and make this entry read-only.
@@ -530,12 +542,27 @@ fn snapshot_inner(
     Ok(PluginSnapshot { target: target.clone(), capability, entries, baseline: transaction::fingerprint(basis.as_bytes()), detail: "列表与本机文件快照；原生会话是否已加载无法从静态列表确认。配置事务可从配置页的原生备份恢复。".into() })
 }
 pub fn scan(db: &Database, home: &Path, target: &PluginTarget) -> Result<PluginSnapshot, String> {
+    scan_with_packages(db, home, target, true)
+}
+/// Agent definitions have their own content baseline; they never mutate plugin
+/// packages, so enumerating their resources needs no whole-package digest.
+pub(super) fn scan_resources(db: &Database, home: &Path, target: &PluginTarget) -> Result<PluginSnapshot, String> {
+    scan_with_packages(db, home, target, false)
+}
+fn scan_with_packages(db: &Database, home: &Path, target: &PluginTarget, verify_packages: bool) -> Result<PluginSnapshot, String> {
     let project = project(target)?;
     let _context =
         selection::enter_bound(db, home, &target.tool_id, target.scope, project.as_deref())?;
     selection::validate_expected(&target.tool_id, target.context_id.as_deref())?;
-    let exe = executable(db, home, target)?;
-    snapshot_inner(db, home, target, &exe)
+    // File-backed discovery validates native documents directly. It does not
+    // require a runnable CLI (desktop apps have no version command).
+    let adapter = adapters::plugins::get(&target.tool_id)?;
+    let exe = if adapter.discovery_only() || adapter.config_field().is_some() {
+        None
+    } else {
+        Some(executable(db, home, target)?)
+    };
+    snapshot_with_packages(db, home, target, exe.as_deref(), verify_packages)
 }
 
 fn mutate_config(
@@ -589,7 +616,7 @@ pub fn operate(
         selection::enter_bound(db, home, &target.tool_id, target.scope, project.as_deref())?;
     selection::validate_expected(&target.tool_id, target.context_id.as_deref())?;
     let exe = executable(db, home, target)?;
-    let before = snapshot_inner(db, home, target, &exe)?;
+    let before = snapshot_inner(db, home, target, Some(&exe))?;
     if before.baseline != request.baseline {
         return Err("插件配置或目录被外部修改，请重新扫描后重试；没有执行操作".into());
     }
@@ -647,7 +674,7 @@ pub fn operate(
         )?;
         run(&exe, home, target, &args).map(|_| None)
     };
-    let snapshot = snapshot_inner(db, home, target, &exe);
+    let snapshot = snapshot_inner(db, home, target, Some(&exe));
     match result {
         Ok(transaction_id) => Ok(PluginResult {
             status: if config_only {

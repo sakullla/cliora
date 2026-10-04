@@ -113,6 +113,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
   const [customTo, setCustomTo] = useState('');
   const [favoriteOnly, setFavoriteOnly] = useState(false);
   const [sort, setSort] = useState('recent');
+  const [visibleSessionCount, setVisibleSessionCount] = useState(80);
   const [detailError, setDetailError] = useState('');
   const [detailRetry, setDetailRetry] = useState(0);
   const [listError, setListError] = useState(false);
@@ -325,6 +326,8 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
 
   function focusSession(next: HistorySession | undefined) {
     if (!next) return;
+    const index = orderedSessions.findIndex((item) => item.id === next.id);
+    setVisibleSessionCount((count) => Math.max(count, index + 1));
     setSelectedId(next.id);
     requestAnimationFrame(() => {
       const target = document.querySelector<HTMLButtonElement>(`[data-session-id="${CSS.escape(next.id)}"]`);
@@ -373,7 +376,18 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
     return (['favorite', 'today', 'yesterday', 'week', 'earlier', 'unknown'] as const)
       .flatMap((group) => groups.has(group) ? [{ group, items: groups.get(group)! }] : []);
   }, [sessions, sort]);
-  const orderedSessions = groupedSessions.flatMap((group) => group.items);
+  const orderedSessions = useMemo(() => groupedSessions.flatMap((group) => group.items), [groupedSessions]);
+  useEffect(() => { setVisibleSessionCount(80); }, [filter, sort]);
+  useEffect(() => {
+    const index = orderedSessions.findIndex((item) => item.id === selectedId);
+    if (index >= 0) setVisibleSessionCount((count) => Math.max(count, Math.ceil((index + 1) / 80) * 80));
+  }, [orderedSessions, selectedId, filter, sort]);
+  let remainingSessions = visibleSessionCount;
+  const visibleGroups = groupedSessions.flatMap(({ group, items }) => {
+    const visible = items.slice(0, Math.max(0, remainingSessions));
+    remainingSessions -= items.length;
+    return visible.length ? [{ group, items: visible, total: items.length }] : [];
+  });
   const activeFilters = useMemo(() => {
     const items: Array<{ key: string; label: string; clear: () => void }> = [];
     if (toolId) items.push({ key: 'tool', label: `工具：${toolName(toolId)}`, clear: () => setToolId('') });
@@ -423,8 +437,11 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
       {activeFilters.length > 1 && <button type="button" className="text-button" onClick={clearAllFilters}>清除全部筛选</button>}
     </div>}
         <div className={styles.listToolbar}><span>{filterLoading ? '正在更新…' : activeFilters.length ? '筛选结果' : '全部会话'}</span><select aria-label="会话排序" value={sort} onChange={(event) => setSort(event.target.value)}><option value="recent">最近活跃</option><option value="oldest">最早活跃</option><option value="messages">消息最多</option></select></div>
-      <div className={styles.list} aria-label="会话列表" aria-busy={filterLoading || undefined}>{sessions.length ? groupedSessions.flatMap(({ group, items }, groupIndex) => [
-        <div key={`group-${groupIndex}-${group}`} className={styles.group} role="presentation" aria-hidden="true">{sort === 'recent' ? groupLabels[group] : sort === 'messages' ? '按消息数量' : '从早到晚'}<span>{items.length}</span></div>,
+      <div className={styles.list} aria-label="会话列表" aria-busy={filterLoading || undefined} onScroll={(event) => {
+        const list = event.currentTarget;
+        if (list.scrollHeight - list.scrollTop - list.clientHeight < 400) setVisibleSessionCount((count) => Math.min(sessions.length, count + 80));
+      }}>{sessions.length ? visibleGroups.flatMap(({ group, items, total }, groupIndex) => [
+        <div key={`group-${groupIndex}-${group}`} className={styles.group} role="presentation" aria-hidden="true">{sort === 'recent' ? groupLabels[group] : sort === 'messages' ? '按消息数量' : '从早到晚'}<span>{total}</span></div>,
         ...items.map((item) => <button type="button" key={item.id} data-session-id={item.id} aria-current={selectedId === item.id ? 'true' : undefined} className={selectedId === item.id ? styles.selected : ''} onClick={() => selectSession(item.id)} onKeyDown={(event) => { if (event.key === 'ArrowDown') { event.preventDefault(); moveSession(item, 1); } else if (event.key === 'ArrowUp') { event.preventDefault(); moveSession(item, -1); } else if (event.key === 'Home') { event.preventDefault(); focusSession(orderedSessions[0]); } else if (event.key === 'End') { event.preventDefault(); focusSession(orderedSessions[orderedSessions.length - 1]); } }}>
           <span className={styles.rowTop}><ToolIcon toolId={item.toolId} size={16} /><span>{toolName(item.toolId)}</span>{item.favorite && <span className={styles.favoriteMark} aria-label="已收藏">★</span>}<time title={day(item.updatedAt)}>{rowTime(item.updatedAt)}</time></span>
           <strong className={styles.rowTitle} title={item.title}>{item.title || '未命名会话'}</strong>

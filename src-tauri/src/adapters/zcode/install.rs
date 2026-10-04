@@ -34,9 +34,12 @@ const UNINSTALL_ROOTS: [&str; 2] = [
 
 /// Install roots backed by official markers, deduplicated, each verified to
 /// hold the desktop executable. Declared through the adapter's native-binary
-/// directories; the shared probe currently searches those on macOS only, so on
-/// Windows they surface once desktop install markers are wired into the probe.
+/// directories and desktop installation evidence.
 pub(crate) fn install_directories(home: &Path) -> Vec<PathBuf> {
+    directories_with_uninstall(home, uninstall_entry().as_ref())
+}
+
+fn directories_with_uninstall(home: &Path, uninstall: Option<&(PathBuf, Option<String>)>) -> Vec<PathBuf> {
     if !cfg!(windows) {
         return Vec::new();
     }
@@ -51,8 +54,8 @@ pub(crate) fn install_directories(home: &Path) -> Vec<PathBuf> {
             push(parent.to_path_buf());
         }
     }
-    if let Some((directory, _version)) = uninstall_entry() {
-        push(directory);
+    if let Some((directory, _version)) = uninstall {
+        push(directory.clone());
     }
     if let Some(root) = manifest_root(home) {
         push(root);
@@ -77,6 +80,18 @@ fn uninstall_entry() -> Option<(PathBuf, Option<String>)> {
         }
     }
     None
+}
+
+pub(crate) fn installations(home: &Path) -> Vec<crate::native::adapter::Installation> {
+    let uninstall = uninstall_entry();
+    directories_with_uninstall(home, uninstall.as_ref()).into_iter().map(|root| {
+        let version = uninstall.as_ref().filter(|(path, _)| path == &root || path.canonicalize().ok().zip(root.canonicalize().ok()).is_some_and(|(a, b)| a == b))
+            .and_then(|(_, version)| version.clone());
+        crate::native::adapter::Installation {
+            path: root.join(EXE_NAME).display().to_string(),
+            version, source: "native", status: "available", detail: None,
+        }
+    }).collect()
 }
 
 /// Marker 3: the install root confirmed by the manifest marker file, honoring
@@ -105,6 +120,7 @@ fn reg_query(args: &[&str]) -> Option<String> {
         return None;
     }
     let output = crate::background_process::command("reg")
+        .arg("query")
         .args(args)
         .output()
         .ok()?;

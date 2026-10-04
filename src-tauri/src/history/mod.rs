@@ -34,6 +34,7 @@ pub const EMPTY_SESSION: &str = "会话没有可展示的内容";
 
 #[derive(Clone, Debug)]
 pub struct HistorySource {
+    pub native_title: Option<String>,
     pub path: PathBuf,
     pub native_id: Option<String>,
     pub fingerprint: String,
@@ -147,6 +148,9 @@ impl ParsedSession {
         if self.native_id.is_none() {
             self.native_id = source.native_id.clone();
         }
+        if let Some(title) = source.native_title.as_deref().filter(|title| !title.trim().is_empty()) {
+            self.title = title.trim().to_owned();
+        }
         if self.title.is_empty() {
             self.title = "未命名会话".into();
         }
@@ -226,6 +230,48 @@ pub fn valid_native_id(id: &str) -> bool {
 
 pub fn source_fingerprint(path: &Path) -> Result<String, String> {
     source_fingerprint_controlled(path, &|| false)
+}
+
+#[test]
+#[ignore = "read-only local performance check; native files are read, index is temporary"]
+fn performance_readonly_local() {
+    let home = dirs::home_dir().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("performance.db")).unwrap();
+    let registry = Registry::builtins();
+    for adapter in registry.iter().filter(|adapter| adapter.history_supported()) {
+        for pass in ["cold", "warm"] {
+            let start = std::time::Instant::now();
+            let sources = adapter.history_sources(&home);
+            let discovery_ms = start.elapsed().as_millis();
+            let report = scan_adapter_sources(&db, adapter, sources);
+            eprintln!("history {} {pass}: discovery={discovery_ms}ms total={}ms sources={} failed={}",
+                adapter.id(), start.elapsed().as_millis(), report.source_count, report.failed_count);
+        }
+    }
+    let start = std::time::Instant::now();
+    let sessions = list(&db, &HistoryFilter::default()).unwrap();
+    eprintln!("session list: {}ms rows={}", start.elapsed().as_millis(), sessions.len());
+    let start = std::time::Instant::now();
+    let _ = usage_report(&db, &HistoryFilter::default()).unwrap();
+    eprintln!("usage report: {}ms", start.elapsed().as_millis());
+    for id in ["zcode", "deepseek", "qoder_cn", "kimi_code", "codebuddy"] {
+        let start = std::time::Instant::now();
+        let probe = crate::native::adapter::probe_registered_summary(&registry, id, None, &home, None, crate::native::adapter::Scope::Global).unwrap();
+        eprintln!("probe {id}: {}ms installed={} version={:?}", start.elapsed().as_millis(), probe.selected_path.is_some(), probe.installations.first().and_then(|i| i.version.as_deref()));
+        if registry.get(id).unwrap().plugins().is_none() { continue; }
+        let target = crate::resources::plugins::PluginTarget { tool_id: id.into(), scope: crate::native::adapter::Scope::Global, project_path: None, context_id: None };
+        let start = std::time::Instant::now();
+        let plugins = crate::resources::plugins::scan(&db, &home, &target);
+        eprintln!("plugins {id}: {}ms entries={:?}", start.elapsed().as_millis(), plugins.as_ref().ok().map(|p| p.entries.len()));
+        assert!(plugins.is_ok(), "plugin scan failed: {id}");
+        if registry.get(id).unwrap().agents().is_some() {
+            let start = std::time::Instant::now();
+            let agents = crate::resources::agents::scan(&db, &home, &target);
+            eprintln!("agents {id}: {}ms entries={:?}", start.elapsed().as_millis(), agents.as_ref().ok().map(|a| a.entries.len()));
+            assert!(agents.is_ok(), "agent scan failed: {id}");
+        }
+    }
 }
 
 pub fn check_cancelled(cancelled: &dyn Fn() -> bool) -> Result<(), String> {
@@ -321,7 +367,7 @@ pub(crate) fn discover_jsonl_with_control(root: &Path, accept: impl Fn(&Path) ->
             } else if file_type.is_file() && accept(&path) {
                 let checked = fingerprint(&path);
                 check_cancelled(cancelled)?;
-                sources.push(HistorySource {
+                sources.push(HistorySource { native_title: None,
                     fingerprint: checked.as_ref().cloned().unwrap_or_default(),
                     fingerprint_error: checked.err(),
                     path,
@@ -941,7 +987,7 @@ pub fn list(db: &Database, filter: &HistoryFilter) -> Result<Vec<HistorySession>
         });
     let model = filter.model.as_deref().filter(|model| !model.is_empty());
     let tools: Vec<&String> = filter.tools.as_ref().map(|list| list.iter().filter(|tool| !tool.is_empty()).collect()).unwrap_or_default();
-    db.with_connection(|conn| {
+    db.with_read_connection(|conn| {
         // A session belongs to a date range when it was last active there or when any
         // of its model calls happened there, so long sessions show up on every day used.
         let mut sql = String::from(
@@ -976,7 +1022,7 @@ pub fn list(db: &Database, filter: &HistoryFilter) -> Result<Vec<HistorySession>
 }
 
 pub fn detail(db: &Database, id: &str) -> Result<HistoryDetail, String> {
-    let session = db.with_connection(|conn| conn.query_row(
+    let session = db.with_read_connection(|conn| conn.query_row(
         "SELECT id,tool,native_id,title,cwd,model,project_id,started_at,updated_at,favorite,partial,stale,message_count,usage_count,messages_json,usage_json
          FROM history_sessions WHERE id = ?1",[id], |row| Ok((row_session(row)?,row.get::<_,String>(14)?,row.get::<_,String>(15)?)))
          .optional().map_err(|error| error.to_string()))?.ok_or("会话已从本机索引移除")?;
@@ -987,7 +1033,7 @@ pub fn detail(db: &Database, id: &str) -> Result<HistoryDetail, String> {
         .project_id
         .as_deref()
         .map(|project_id| {
-            db.with_connection(|conn| {
+            db.with_read_connection(|conn| {
                 conn.query_row(
                     "SELECT path FROM projects WHERE id = ?1",
                     [project_id],

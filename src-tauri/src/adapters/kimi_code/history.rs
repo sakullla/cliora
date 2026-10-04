@@ -15,7 +15,7 @@ use serde_json::Value;
 use super::config_dir;
 use crate::history::usage;
 use crate::history::{
-    check_cancelled, read_jsonl_controlled, source_fingerprint, source_fingerprint_controlled,
+    check_cancelled, read_jsonl_filtered, source_fingerprint, source_fingerprint_controlled,
     text_content, timestamp, valid_native_id, HistorySource, ParsedSession, UsageEvent,
     MAX_SOURCES,
 };
@@ -73,13 +73,13 @@ fn sources_with(
             let checked = parts
                 .into_iter()
                 .collect::<Result<Vec<_>, _>>()
-                .map(|parts| format!("kimi-session-v2|{}", parts.join("|")));
+                .map(|parts| format!("kimi-session-v3|{}", parts.join("|")));
             let native_id = path
                 .file_name()
                 .and_then(|value| value.to_str())
                 .filter(|id| valid_native_id(id))
                 .map(str::to_owned);
-            result.push(HistorySource {
+            result.push(HistorySource { native_title: None,
                 path,
                 native_id,
                 fingerprint: checked.as_ref().map(|value| value.as_str()).unwrap_or("").into(),
@@ -168,7 +168,7 @@ pub fn parse_controlled(
         check_cancelled(cancelled)?;
         let is_main = wire.parent().and_then(Path::file_name).and_then(|name| name.to_str())
             == Some("main");
-        let wire_source = HistorySource {
+        let wire_source = HistorySource { native_title: None,
             path: wire,
             native_id: None,
             fingerprint: String::new(),
@@ -176,8 +176,19 @@ pub fn parse_controlled(
         };
         let mut assistant_turns: Vec<AssistantTurn> = Vec::new();
         let mut usage_index = 0usize;
-        let read = read_jsonl_controlled(&wire_source, cancelled, |line, row| {
+        let read = read_jsonl_filtered(&wire_source, cancelled, |prefix| {
+            // Skip the known repeated request/context snapshots before JSON
+            // allocation; unknown and differently formatted rows still parse.
+            let prefix = prefix.trim_ascii_start();
+            let kind = prefix.strip_prefix(b"{\"type\":\"")
+                .and_then(|rest| rest.split(|byte| *byte == b'"').next());
+            matches!(kind, Some(b"llm.request" | b"llm.tools_snapshot" | b"mcp.tools_discovered"))
+        }, |line, row| {
             match row.get("type").and_then(Value::as_str) {
+                Some("profile.bind" | "config.update") if session.model.is_none() => {
+                    session.model = row.get("modelAlias").or_else(|| row.get("model"))
+                        .and_then(Value::as_str).map(str::to_owned);
+                }
                 // The user conversation lives in the main agent stream.
                 Some("context.append_message") if is_main => {
                     let message = row.get("message").unwrap_or(&Value::Null);
@@ -418,7 +429,7 @@ mod tests {
         )
         .unwrap();
         let source = sources(temp.path()).unwrap().remove(0);
-        assert!(source.fingerprint.starts_with("kimi-session-v2|"));
+        assert!(source.fingerprint.starts_with("kimi-session-v3|"));
         let parsed = parse(&source).unwrap();
         assert_eq!(parsed.cwd.as_deref(), Some("C:/Legacy/project"));
     }

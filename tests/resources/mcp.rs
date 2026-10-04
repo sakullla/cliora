@@ -62,6 +62,30 @@ fn target(tool: &str, enabled: bool) -> McpTargetRequest {
     }
 }
 
+#[test]
+fn deepseek_sequence_preview_write_remove_preserves_native_patches() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let registry = Registry::builtins();
+    let keys = MemoryStore::default();
+    let path = temp.path().join(".dsh/profiles/desktop/cordis.patch.yml");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let original = include_str!("../fixtures/native/dsh-0.2.0-rc.2.yml");
+    std::fs::write(&path, original).unwrap();
+    let definition = sample(&db);
+    let targets = previewed(&db, &registry, temp.path(), &definition.id, vec![target("deepseek", true)]);
+    let result = distribute(&db, &keys, &registry, temp.path(), &definition.id, targets);
+    assert_eq!(result[0].status, "written", "{:?}", result[0]);
+    let entries = list_native(&db, &registry, temp.path(), &target("deepseek", true)).unwrap();
+    assert!(entries.iter().any(|entry| entry.name == "example" && entry.command == "npx"));
+    let parsed = format::parse(format::FileKind::Yaml, &std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(parsed[0], format::parse(format::FileKind::Yaml, original).unwrap()[0]);
+    remove_native(&db, &keys, &registry, temp.path(), &target("deepseek", true), "example").unwrap();
+    let remaining = list_native(&db, &registry, temp.path(), &target("deepseek", true)).unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].name, "memory");
+}
+
 fn previewed(
     db: &Database,
     registry: &Registry,

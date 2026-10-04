@@ -71,7 +71,7 @@ test('definition edit import lifecycle keeps context and package ownership', asy
   expect(actions).toEqual(['save', 'disable', 'enable', 'create', 'delete']);
 });
 
-test('external conflict preserves draft and navigating prompts before discarding', async ({ page }) => {
+test('external conflict preserves draft and navigating prompts before discarding', { tag: '@integration' }, async ({ page }) => {
   await setup(page);
   await page.getByRole('listitem').filter({ has: page.getByText('reviewer', { exact: true }) }).getByRole('button', { name: '编辑', exact: true }).click();
   const editor = page.getByRole('textbox', { name: '原生 Agent 定义', exact: true }); await editor.fill('unsaved draft');

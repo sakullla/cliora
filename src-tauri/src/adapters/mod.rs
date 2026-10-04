@@ -15,6 +15,7 @@ pub(crate) mod pi;
 pub mod plugins;
 pub mod providers;
 pub(crate) mod qoder;
+pub(crate) mod qoder_cn;
 mod registry;
 pub mod version;
 pub(crate) mod zcode;

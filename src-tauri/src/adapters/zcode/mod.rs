@@ -71,6 +71,9 @@ impl CliAdapter for ZCode {
     fn version_identity(&self, _basename: &str, _output: &str) -> bool {
         false
     }
+    fn native_installations(&self, home: &Path) -> Vec<crate::native::adapter::Installation> {
+        install::installations(home)
+    }
     fn native_files(
         &self,
         scope: Scope,

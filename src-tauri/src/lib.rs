@@ -2,6 +2,8 @@ pub mod adapters;
 mod external;
 mod background_process;
 mod process_environment;
+#[cfg(windows)]
+mod windows_security;
 #[cfg(all(test, target_os = "macos"))]
 #[path = "../../tests/platform/macos.rs"]
 mod macos_tests;

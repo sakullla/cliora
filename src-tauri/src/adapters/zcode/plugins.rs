@@ -16,6 +16,7 @@ use std::path::Path;
 const INSTALLED_PLUGINS_FILE: &str = "installed_plugins.json";
 
 impl PluginAdapter for ZCode {
+    fn discovery_only(&self) -> bool { true }
     fn capability(&self) -> PluginCapability {
         PluginCapability {
             version: "3.14.4",

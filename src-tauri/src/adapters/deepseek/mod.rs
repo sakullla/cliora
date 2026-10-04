@@ -16,6 +16,7 @@
 
 pub(crate) mod detect;
 pub mod history;
+mod mcp;
 
 use std::collections::BTreeMap;
 use std::env;
@@ -29,22 +30,9 @@ use crate::native::adapter::{NativeFile, Scope};
 use crate::native::apply::NativeSecrets;
 use crate::native::format::FileKind;
 use crate::native::profile::{Connection, RegisteredProfile};
-use crate::resources::mcp::{self, McpDefinition, McpTransport};
+use crate::resources::mcp::{self as shared_mcp, McpDefinition, McpTransport};
 
 pub struct DeepSeek;
-
-/// dsh ships exclusively pre-release builds (the `0.2.1-alpha` line) with a
-/// documented compatibility-breaking history, so the verified family is the
-/// narrow 0.2.x line at or after the tested pre-release; future alphas of
-/// other patches stay outside until a stable release or a sampled fixture
-/// verifies them. `excluded` grows when a native response or frame format is
-/// verified broken (ADR-8 of the 2026-10-03 workflow).
-pub(crate) fn version_policy() -> super::version::VersionPolicy {
-    super::version::VersionPolicy {
-        requirement: ">=0.2.1-alpha.1, <0.3.0".into(),
-        excluded: &[],
-    }
-}
 
 /// `$DSH_HOME` relocates the harness home. A caller-supplied home that is not
 /// the real user home (tests, isolated profiles) stays under that home so CI
@@ -84,6 +72,9 @@ impl CliAdapter for DeepSeek {
     /// is the Windows uninstall table (see `detect`), never a version probe.
     fn version_identity(&self, _basename: &str, _output: &str) -> bool {
         false
+    }
+    fn native_installations(&self, _home: &Path) -> Vec<crate::native::adapter::Installation> {
+        detect::installations()
     }
     fn recognizes_native_install_path(&self, path: &Path) -> bool {
         detect::native_install_directory()
@@ -127,16 +118,21 @@ impl CliAdapter for DeepSeek {
         // The managed MCP port indexes `insert` entries by server name. A real
         // on-disk patch list with a different shape fails closed here instead
         // of being silently rewritten by later managed edits.
-        if parsed
-            .get("insert")
-            .is_some_and(|insert| !insert.is_object())
-        {
-            return Err(
-                "cordis.patch.yml 的 insert 段应为按名称索引的映射；当前文件形状与已核实契约不符，未保存"
-                    .into(),
-            );
-        }
+        mcp::rows(parsed)?;
         Ok(())
+    }
+    fn mcp_entries(&self, parsed: &Value, _location: &McpLocation) -> Result<serde_json::Map<String, Value>, String> {
+        mcp::entries(parsed)
+    }
+    fn mcp_entry_view(&self, entry: &Value) -> Value {
+        let mut config = entry.get("config").cloned().unwrap_or_default();
+        if let Some(object) = config.as_object_mut() {
+            object.insert("disabled".into(), json!(entry.get("disabled").and_then(Value::as_bool).unwrap_or(false)));
+        }
+        config
+    }
+    fn mcp_change(&self, parsed: &Value, _location: &McpLocation, name: &str, value: Option<Value>) -> Result<crate::native::transaction::FieldChange, String> {
+        mcp::change(parsed, name, value)
     }
     fn connection_documents(
         &self,
@@ -251,8 +247,8 @@ impl CliAdapter for DeepSeek {
         }
         let previous = existing.and_then(|entry| entry.get("config"));
         let mut config = match definition.transport {
-            McpTransport::Stdio => mcp::stdio_doc_with_env(definition, previous, "env"),
-            McpTransport::Http => mcp::http_doc(definition, previous, "headers"),
+            McpTransport::Stdio => shared_mcp::stdio_doc_with_env(definition, previous, "env"),
+            McpTransport::Http => shared_mcp::http_doc(definition, previous, "headers"),
         };
         config.insert("serverName".into(), json!(name));
         config.insert(
@@ -262,11 +258,12 @@ impl CliAdapter for DeepSeek {
                 McpTransport::Http => "streamable-http",
             }),
         );
-        Ok(Some(json!({
-            "id": format!("mcp:{name}"),
-            "package": "@deepseek-ai/dsh-mcp-client",
-            "config": Value::Object(config),
-        })))
+        let mut entry = existing.and_then(Value::as_object).cloned().unwrap_or_default();
+        entry.entry("id").or_insert_with(|| json!(format!("mcp:{name}")));
+        entry.insert("name".into(), json!("@deepseek-ai/dsh-mcp-client"));
+        entry.insert("config".into(), Value::Object(config));
+        entry.remove("disabled");
+        Ok(Some(Value::Object(entry)))
     }
     fn mcp_disabled_description(&self) -> Option<&'static str> {
         Some("停用即从 cordis.patch.yml 移除该 insert 条目")
@@ -282,19 +279,15 @@ impl CliAdapter for DeepSeek {
             Scope::Project => project?.join(".dsh/skills"),
         })
     }
-    fn explicitly_incompatible_native_version(&self, version: &str) -> bool {
-        !version_policy().accepts(version)
-    }
-    fn explicitly_incompatible_launch_version(&self, version: &str) -> bool {
-        !version_policy().accepts(version)
-    }
+    // Installation identity and native shape validation decide support. Tested
+    // releases are evidence, not a product-version allowlist.
     fn node_required_when_missing(&self) -> bool {
         false
     }
     fn install_guidance(&self) -> (&'static str, &'static str) {
         (
             "https://github.com/deepseek-ai/deepseek-harness",
-            "developer preview，破坏性变更频繁；Windows 安装器 https://download.deepseek.com/desktop/dsh-latest-windows-x64.exe，更新走应用内 nightly feeds。本适配按 0.2.x 窄版本族验证。",
+            "developer preview，破坏性变更频繁；Windows 安装器 https://download.deepseek.com/desktop/dsh-latest-windows-x64.exe，更新走应用内 nightly feeds。按实际原生配置和会话格式检查兼容性。",
         )
     }
     fn install_command(&self) -> Option<String> {
@@ -362,40 +355,32 @@ mod tests {
     }
 
     #[test]
+    fn native_disabled_mcp_is_visible_and_can_be_enabled() {
+        let existing = json!({"id":"native", "name":"@deepseek-ai/dsh-mcp-client", "disabled":true, "config":{"serverName":"memory", "transport":"stdio", "command":"node"}});
+        assert_eq!(DeepSeek.mcp_entry_view(&existing)["disabled"], true);
+        let enabled = DeepSeek.mcp_document(&definition("memory", McpTransport::Stdio), true, Some(&existing)).unwrap().unwrap();
+        assert_eq!(DeepSeek.mcp_entry_view(&enabled)["disabled"], false);
+    }
+
+    #[test]
     fn cordis_fixture_round_trips_managed_insert_entries() {
-        let text = include_str!("../../../../tests/fixtures/native/dsh-0.2.1.yml");
+        let text = include_str!("../../../../tests/fixtures/native/dsh-0.2.0-rc.2.yml");
         let before = crate::native::format::parse(FileKind::Yaml, text).unwrap();
+        DeepSeek.validate_draft("profile", &before).unwrap();
+        let location = DeepSeek.mcp_location(Scope::Global, Path::new("/fixture"), None).unwrap();
         let document = DeepSeek.mcp_document(&definition("fetch", McpTransport::Stdio), true, None).unwrap();
-        let edited = crate::native::format::set_path(
-            FileKind::Yaml,
-            text,
-            &["insert".into(), "fetch".into()],
-            document.as_ref(),
-        )
-        .unwrap();
+        let change = DeepSeek.mcp_change(&before, &location, "fetch", document).unwrap();
+        let edited = crate::native::format::set_path(FileKind::Yaml, text, &change.path, change.value.as_ref()).unwrap();
         let after = crate::native::format::parse(FileKind::Yaml, &edited).unwrap();
-        // The unmanaged memory entry survives a managed insert untouched.
-        assert_eq!(
-            after.pointer("/insert/memory/config/serverName"),
-            before.pointer("/insert/memory/config/serverName")
-        );
-        assert_eq!(
-            after.pointer("/insert/fetch/config/command"),
-            Some(&json!("npx"))
-        );
-        let removed = crate::native::format::set_path(
-            FileKind::Yaml,
-            &edited,
-            &["insert".into(), "fetch".into()],
-            None,
-        )
-        .unwrap();
-        assert!(crate::native::format::parse(FileKind::Yaml, &removed).unwrap()
-            .pointer("/insert/fetch")
-            .is_none());
-        assert!(crate::native::format::parse(FileKind::Yaml, &removed).unwrap()
-            .pointer("/insert/memory")
-            .is_some());
+        assert_eq!(before[0], after[0]);
+        assert_eq!(before[1], after[1]);
+        let entries = DeepSeek.mcp_entries(&after, &location).unwrap();
+        assert_eq!(entries["fetch"].pointer("/config/command"), Some(&json!("npx")));
+        let change = DeepSeek.mcp_change(&after, &location, "fetch", None).unwrap();
+        let removed = crate::native::format::set_path(FileKind::Yaml, &edited, &change.path, change.value.as_ref()).unwrap();
+        let remaining = DeepSeek.mcp_entries(&crate::native::format::parse(FileKind::Yaml, &removed).unwrap(), &location).unwrap();
+        assert!(!remaining.contains_key("fetch"));
+        assert!(remaining.contains_key("memory"));
     }
 
     #[test]
@@ -404,7 +389,7 @@ mod tests {
             .mcp_document(&definition("memory", McpTransport::Stdio), true, None)
             .unwrap()
             .unwrap();
-        assert_eq!(stdio.pointer("/package"), Some(&json!("@deepseek-ai/dsh-mcp-client")));
+        assert_eq!(stdio.pointer("/name"), Some(&json!("@deepseek-ai/dsh-mcp-client")));
         assert_eq!(stdio.pointer("/config/serverName"), Some(&json!("memory")));
         assert_eq!(stdio.pointer("/config/transport"), Some(&json!("stdio")));
         assert_eq!(stdio.pointer("/config/command"), Some(&json!("npx")));
@@ -462,7 +447,7 @@ mod tests {
     }
 
     #[test]
-    fn native_profile_file_declares_yaml_and_rejects_list_shaped_patch_layers() {
+    fn native_profile_file_declares_yaml_and_accepts_native_patch_sequence() {
         let home = Path::new("/home/example");
         let files = DeepSeek.native_files(Scope::Global, home, None, true);
         assert_eq!(files.len(), 1);
@@ -475,7 +460,7 @@ mod tests {
         assert!(DeepSeek.native_files(Scope::Project, home, Some(home), true).is_empty());
         assert_eq!(DeepSeek.file_kind("profile").unwrap(), FileKind::Yaml);
         DeepSeek
-            .validate_draft("profile", &json!({"insert": {"memory": {}}}))
+            .validate_draft("profile", &json!([{"insert": [{"id": "memory"}]}]))
             .unwrap();
         assert!(DeepSeek
             .validate_draft("profile", &json!({"insert": [{"id": "memory"}]}))
@@ -501,44 +486,11 @@ mod tests {
     }
 
     #[test]
-    fn narrow_version_family_gates_native_and_launch_versions() {
-        for version in [
-            "0.2.1-alpha.1",
-            "0.2.1-alpha.2",
-            "0.2.1-rc.1",
-            "0.2.1",
-            "0.2.2",
-            "0.2.9",
-            "v0.2.1",
-            "0.2.1+build.2",
-        ] {
-            assert!(version_policy().accepts(version), "{version}");
+    fn desktop_versions_are_not_a_tested_release_allowlist() {
+        for version in ["0.2.0-rc.2", "0.2.1-alpha.1", "0.2.5-alpha.1", "0.3.0", "1.0.0"] {
+            assert!(!DeepSeek.explicitly_incompatible_native_version(version));
+            assert!(!DeepSeek.explicitly_incompatible_launch_version(version));
         }
-        for version in [
-            "0.2.0",
-            "0.2.1-alpha.0",
-            // Unsampled alphas of other patches stay outside the family.
-            "0.2.5-alpha.1",
-            "0.3.0",
-            "0.3.0-alpha.1",
-            "1.0.0",
-            "beta",
-        ] {
-            assert!(!version_policy().accepts(version), "{version}");
-        }
-        // The excluded mechanism stays effective: an exactly excluded release
-        // is blocked under the same family once a breakage is verified.
-        let strict = crate::adapters::version::VersionPolicy {
-            requirement: version_policy().requirement.clone(),
-            excluded: &["0.2.1"],
-        };
-        assert!(!strict.accepts("0.2.1"));
-        assert!(!strict.accepts("v0.2.1"));
-        assert!(!strict.accepts("0.2.1+build.1"));
-        assert!(strict.accepts("0.2.2"));
-        assert!(DeepSeek.explicitly_incompatible_native_version("0.3.0"));
-        assert!(DeepSeek.explicitly_incompatible_launch_version("0.2.0"));
-        assert!(!DeepSeek.explicitly_incompatible_native_version("0.2.1"));
     }
 
     #[test]

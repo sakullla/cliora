@@ -373,10 +373,19 @@ const BRIDGE: &str = r#"(function(submit, data) {
   };
 })"#;
 
+#[derive(Clone, Copy)]
+struct RuntimeBudgets { compute: Duration, wall: Duration, http: Duration }
+impl Default for RuntimeBudgets {
+    fn default() -> Self { Self { compute: COMPUTE_BUDGET, wall: WALL_BUDGET, http: HTTP_BUDGET } }
+}
+
 pub(super) fn execute(input: HelperInput) -> RuntimeReport {
+    execute_with_budgets(input, RuntimeBudgets::default())
+}
+fn execute_with_budgets(input: HelperInput, budgets: RuntimeBudgets) -> RuntimeReport {
     let start = Instant::now();
     let mut request_origins = Vec::new();
-    let mut report = match run(&input, start, &mut request_origins) {
+    let mut report = match run(&input, start, &mut request_origins, budgets) {
         Ok(mut value) => {
             redact_value(&mut value, &input.secrets);
             match serde_json::from_value::<UsageResult>(value) {
@@ -423,7 +432,7 @@ pub(super) fn execute(input: HelperInput) -> RuntimeReport {
     report
 }
 
-fn run(input: &HelperInput, start: Instant, request_origins:&mut Vec<String>) -> Result<serde_json::Value, UsageError> {
+fn run(input: &HelperInput, start: Instant, request_origins:&mut Vec<String>, budgets: RuntimeBudgets) -> Result<serde_json::Value, UsageError> {
     input.config.validate()?;
     let source = match &input.config.program {
         QueryProgram::Official { .. } | QueryProgram::ProfileBuiltin { .. } => return Err(UsageError::configuration("配置关联查询必须先由原生服务解析")),
@@ -442,7 +451,7 @@ fn run(input: &HelperInput, start: Instant, request_origins:&mut Vec<String>) ->
     let interrupted = Rc::new(Cell::new(false));
     let (u, s, i) = (used.clone(), slice.clone(), interrupted.clone());
     runtime.set_interrupt_handler(Some(Box::new(move || {
-        let stop = u.get() + s.get().elapsed() >= COMPUTE_BUDGET || start.elapsed() >= WALL_BUDGET;
+        let stop = u.get() + s.get().elapsed() >= budgets.compute || start.elapsed() >= budgets.wall;
         if stop {
             i.set(true);
         }
@@ -494,9 +503,9 @@ fn run(input: &HelperInput, start: Instant, request_origins:&mut Vec<String>) ->
         let shared = Arc::new(input.clone());
         loop {
             if terminal_limit.get() { return Err(limit(UsageStage::Http)); }
-            if start.elapsed() >= WALL_BUDGET { return Err(error(UsageErrorCode::Timeout, UsageStage::Script, "查询墙钟超时")); }
-            if used.get() >= COMPUTE_BUDGET { return Err(vm_error()); }
-            if active.values().any(|began| began.elapsed() >= HTTP_BUDGET) {
+            if start.elapsed() >= budgets.wall { return Err(error(UsageErrorCode::Timeout, UsageStage::Script, "查询墙钟超时")); }
+            if used.get() >= budgets.compute { return Err(vm_error()); }
+            if active.values().any(|began| began.elapsed() >= budgets.http) {
                 return Err(error(UsageErrorCode::Timeout, UsageStage::Http, "HTTP 请求超时（含 DNS 与响应读取）"));
             }
             arm();
@@ -525,7 +534,7 @@ fn run(input: &HelperInput, start: Instant, request_origins:&mut Vec<String>) ->
                 let began = Instant::now();
                 active.insert(id, began);
                 std::thread::spawn(move || {
-                    let response = match http(&shared, &raw, (began + HTTP_BUDGET).min(start + WALL_BUDGET)) {
+                    let response = match http(&shared, &raw, (began + budgets.http).min(start + budgets.wall)) {
                         Ok(value) => serde_json::json!({"value":value}),
                         Err(error) => serde_json::json!({"error":error}),
                     };
