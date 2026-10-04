@@ -27,6 +27,28 @@ fn returns() -> String {
 fn script(body: &str) -> String {
     format!("async function query(ctx) {{{body}}}")
 }
+// A client can time out before connecting under load. Never leave a test
+// waiting forever in accept()/join(); report the missing fixture request.
+fn accept_fixture(listener: &TcpListener) -> std::net::TcpStream {
+    listener.set_nonblocking(true).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                stream.set_nonblocking(false).unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+                stream.set_write_timeout(Some(Duration::from_secs(3))).unwrap();
+                return stream;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                assert!(std::time::Instant::now() < deadline, "HTTP fixture did not receive the expected request within 3 seconds");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Err(error) => panic!("HTTP fixture accept failed: {error}"),
+        }
+    }
+}
+
 fn server(
     count: usize,
     reply: impl Fn(String) -> String + Send + Sync + 'static,
@@ -36,8 +58,8 @@ fn server(
     let reply = Arc::new(reply);
     let handle = std::thread::spawn(move || {
         let mut children = Vec::new();
-        for stream in listener.incoming().take(count) {
-            let mut stream = stream.unwrap();
+        for _ in 0..count {
+            let mut stream = accept_fixture(&listener);
             let reply = reply.clone();
             children.push(std::thread::spawn(move || {
                 stream
@@ -253,7 +275,7 @@ fn gzip_limit_is_applied_after_decompression() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
     let handle = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
+        let mut stream = accept_fixture(&listener);
         let mut buf = [0; 4096];
         let _ = stream.read(&mut buf);
         let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
