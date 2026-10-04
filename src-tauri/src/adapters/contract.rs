@@ -178,6 +178,13 @@ pub trait CliAdapter: Sync {
     }
     /// Drop or rewrite fields the CLI rejects after documents are merged.
     fn normalize_applied_document(&self, _role: &str, _document: &mut Value) {}
+    /// Top-level collections whose empty object entries are invalid native config.
+    /// Profile application removes only empty direct children, including residue
+    /// from earlier switches. Nonempty entries and other collections are preserved.
+    /// Adapters declare schema; shared services own patching, conflicts and backups.
+    fn empty_entry_collections(&self, _role: &str) -> &'static [&'static str] {
+        &[]
+    }
     fn preserve_native_fields(
         &self,
         _role: &str,

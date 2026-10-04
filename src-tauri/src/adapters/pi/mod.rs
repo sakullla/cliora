@@ -475,6 +475,12 @@ impl CliAdapter for Pi {
     fn connection_roles(&self) -> &'static [&'static str] {
         &["settings", "models"]
     }
+    fn empty_entry_collections(&self, role: &str) -> &'static [&'static str] {
+        match role {
+            "models" => &["providers"],
+            _ => &[],
+        }
+    }
     fn validate_role_scope(&self, role: &str, scope: Scope) -> Result<(), String> {
         if scope == Scope::Project && role == "models" {
             Err("Pi 项目层不支持自定义 models.json".into())
