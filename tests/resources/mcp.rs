@@ -652,6 +652,47 @@ fn one_invalid_target_does_not_prevent_another_and_can_be_retried() {
 }
 
 #[test]
+fn removing_an_externally_deleted_mcp_clears_placement_and_allows_reinstall() {
+    for missing_file in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+        let registry = fixture_registry();
+        let keys = MemoryStore::default();
+        let definition = sample(&db);
+        let request = target("codex", true);
+        let targets = previewed(&db, &registry, temp.path(), &definition.id,
+            vec![request.clone(), target("claude_code", true)]);
+        let results = distribute(&db, &keys, &registry, temp.path(), &definition.id, targets);
+        assert!(results.iter().all(|result| result.status == "written"), "{results:?}");
+        let path = temp.path().join(".codex/config.toml");
+        let unrelated = "# keep native settings\nmodel = 'gpt-6'\n[mcp_servers.other]\ncommand = 'stay'\n";
+        if missing_file {
+            std::fs::remove_file(&path).unwrap();
+        } else {
+            std::fs::write(&path, unrelated).unwrap();
+        }
+        assert_eq!(list_placements(&db).unwrap().len(), 2);
+        for _ in 0..2 {
+            remove_native(&db, &keys, &registry, temp.path(), &request, &definition.name).unwrap();
+            let remaining = list_placements(&db).unwrap();
+            assert_eq!(remaining.len(), 1);
+            assert_eq!(remaining[0].tool_id, "claude_code");
+            if missing_file {
+                assert!(!path.exists(), "reconciling an absent MCP must not create a native file");
+            } else {
+                assert_eq!(std::fs::read_to_string(&path).unwrap(), unrelated);
+            }
+        }
+        assert_eq!(get_definition(&db, &definition.id).unwrap().name, definition.name);
+        let targets = previewed(&db, &registry, temp.path(), &definition.id, vec![request.clone()]);
+        let result = distribute(&db, &keys, &registry, temp.path(), &definition.id, targets);
+        assert_eq!(result[0].status, "written", "{:?}", result[0]);
+        assert!(list_native(&db, &registry, temp.path(), &request).unwrap().iter().any(|entry| entry.name == definition.name));
+        assert_eq!(list_placements(&db).unwrap().len(), 2);
+    }
+}
+
+#[test]
 fn deleting_a_definition_checks_version_and_native_removal_keeps_other_entries() {
     let temp = tempfile::tempdir().unwrap();
     let db = Database::open(&temp.path().join("cliora.db")).unwrap();

@@ -268,20 +268,24 @@ pub fn remove_native(
     let (location, scope_key) = target_location(db, registry, target, home)?;
     let (baseline, parsed) = parse_native(&location)?;
     let adapter = registry.get(&target.tool_id).ok_or("此 CLI 尚无注册适配器")?;
-    if !adapter.mcp_entries(&parsed, &location)?.contains_key(name) {
-        return Err("当前工具上已没有这个 MCP".into());
-    }
-    let change = adapter.mcp_change(&parsed, &location, name, None)?;
     let name_owned = name.to_owned();
     let tool = target.tool_id.clone();
-    transaction::apply(db, credentials, &[transaction::FilePatch {
-        path: location.path.clone(), kind: location.kind, baseline,
-        changes: vec![change],
-        sensitive: false, force_restrict: false,
-    }], move |tx: &rusqlite::Transaction<'_>| {
+    let commit = move |tx: &rusqlite::Transaction<'_>| {
         tx.execute("DELETE FROM mcp_targets WHERE tool = ?1 AND scope_key = ?2 AND definition_id IN (SELECT id FROM mcp_definitions WHERE name = ?3)",
             params![tool, scope_key, name_owned]).map(|_| ()).map_err(|error| error.to_string())
-    })?;
+    };
+    if adapter.mcp_entries(&parsed, &location)?.contains_key(name) {
+        let change = adapter.mcp_change(&parsed, &location, name, None)?;
+        transaction::apply(db, credentials, &[transaction::FilePatch {
+            path: location.path.clone(), kind: location.kind, baseline,
+            changes: vec![change],
+            sensitive: false, force_restrict: false,
+        }], commit)?;
+    } else {
+        // An external deletion already achieved the requested native state.
+        // Recheck the baseline under the write lock before dropping stale ownership.
+        transaction::commit_matching(db, &[(location.path, baseline)], commit)?;
+    }
     Ok(())
 }
 

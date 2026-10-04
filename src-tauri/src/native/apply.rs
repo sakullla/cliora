@@ -194,6 +194,23 @@ pub(crate) fn set_json(root: &mut Value, path: &[&str], value: Value) {
         .insert(path.last().unwrap().to_string(), value);
 }
 
+fn prune_empty_entries(root: &mut Value, collections: &[&str]) -> Vec<Vec<String>> {
+    let mut removed = Vec::new();
+    for collection in collections {
+        if let Some(entries) = root.get_mut(*collection).and_then(Value::as_object_mut) {
+            entries.retain(|name, entry| {
+                if entry.as_object().is_some_and(serde_json::Map::is_empty) {
+                    removed.push(vec![(*collection).into(), name.clone()]);
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+    }
+    removed
+}
+
 #[cfg(test)]
 fn connection_documents(
     tool: CliId,
@@ -294,6 +311,7 @@ pub fn desired_registered_documents(
     }
     for (role, document) in &mut result {
         adapter.normalize_applied_document(role, document);
+        prune_empty_entries(document, adapter.empty_entry_collections(role));
     }
     adapter.validate_documents(scope, &result)?;
     Ok(result)
@@ -504,6 +522,18 @@ fn apply_registered_validated_compared(
                     path,
                     value: expected_new.cloned(),
                 });
+            }
+        }
+        let collections = adapter.empty_entry_collections(&role);
+        if !collections.is_empty() {
+            // Inspect the final candidate after all field edits. Removing an entry
+            // earlier could discard native fields or a provider being repopulated.
+            let candidate = changes.iter().try_fold(baseline.clone(), |text, change| {
+                format::set_path(kind, &text, &change.path, change.value.as_ref())
+            })?;
+            let mut candidate = format::parse(kind, &candidate)?;
+            for path in prune_empty_entries(&mut candidate, collections) {
+                changes.push(FieldChange { path, value: None });
             }
         }
         let sensitive = secrets
@@ -1310,6 +1340,48 @@ mod tests {
         assert!(!native.contains("old-native"));
         assert!(!native.contains("old-token"));
         assert!(native.contains("defaultMode"));
+    }
+
+    #[test]
+    fn pi_switch_removes_empty_providers_and_repairs_previous_switch_residue() {
+        for keep_override in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let db = Database::open(&temp.path().join("app.db")).unwrap();
+            let store = MemoryStore::default();
+            let id = "connection-00000000-0000-4000-8000-000000000001";
+            store.put(id, "test-pi-key").unwrap();
+            let settings = temp.path().join("settings.json");
+            let models = temp.path().join("models.json");
+            let files = [native_role("settings", &settings, "json"), native_role("models", &models, "jsonc")];
+            let first = secret_profile(CliId::Pi, "first", "anthropic", id);
+            let second = secret_profile(CliId::Pi, "second", "new/provider~name", id);
+            apply_fixture(&db, &store, &first, None, &files, "global", Scope::Global, false).unwrap();
+            let mut native = format::parse(format::FileKind::Jsonc, &fs::read_to_string(&models).unwrap()).unwrap();
+            native["providers"]["stale/provider~name"] = json!({});
+            native["providers"]["user-provider"] = json!({"baseUrl":"https://user.example.test", "headers":{"x-custom":"keep"}});
+            native["unrelated"] = json!({});
+            if keep_override {
+                native["providers"]["anthropic"]["headers"] = json!({"x-custom":"keep"});
+            }
+            fs::write(&models, format!("// keep this comment\n{}", serde_json::to_string_pretty(&native).unwrap())).unwrap();
+            apply_fixture(&db, &store, &second, None, &files, "global", Scope::Global, false).unwrap();
+            let text = fs::read_to_string(&models).unwrap();
+            let result = format::parse(format::FileKind::Jsonc, &text).unwrap();
+            assert!(text.contains("// keep this comment"));
+            assert!(result["providers"].get("stale/provider~name").is_none());
+            if keep_override {
+                assert_eq!(result["providers"]["anthropic"], json!({"headers":{"x-custom":"keep"}}));
+            } else {
+                assert!(result["providers"].get("anthropic").is_none(), "empty old provider breaks Pi: {result}");
+            }
+            assert_eq!(result["providers"]["user-provider"], native["providers"]["user-provider"]);
+            assert_eq!(result["unrelated"], json!({}));
+            assert_eq!(result["providers"]["new/provider~name"]["apiKey"], "test-pi-key");
+            apply_fixture(&db, &store, &first, None, &files, "global", Scope::Global, false).unwrap();
+            let switched_back = format::parse(format::FileKind::Jsonc, &fs::read_to_string(&models).unwrap()).unwrap();
+            assert!(switched_back["providers"].get("new/provider~name").is_none());
+            assert_eq!(switched_back["providers"]["anthropic"]["apiKey"], "test-pi-key");
+        }
     }
 
     #[test]

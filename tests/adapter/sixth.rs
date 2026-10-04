@@ -60,6 +60,9 @@ impl CliAdapter for Sixth {
             Err("unsupported role".into())
         }
     }
+    fn empty_entry_collections(&self, role: &str) -> &'static [&'static str] {
+        if role == "settings" { &["connections"] } else { &[] }
+    }
     fn connection_documents(
         &self,
         connection: &Connection,
@@ -169,7 +172,7 @@ fn sixth_adapter_uses_the_same_probe_native_transaction_and_launch_orchestration
     .unwrap();
     let path = Path::new(&native.path);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, "{\"untouched\":true,\"model\":\"old\"}\n").unwrap();
+    std::fs::write(path, r#"{"untouched":true,"model":"old","connections":{"stale":{},"keep":{"url":"https://example.test"}},"unrelated":{}}"#).unwrap();
     let baseline = read_registered_file(
         &registry,
         "sixth_fixture",
@@ -302,6 +305,9 @@ fn sixth_adapter_uses_the_same_probe_native_transaction_and_launch_orchestration
     assert_eq!(applied_value["model"], "named-from-connection");
     assert_eq!(applied_value["inherited"], true);
     assert_eq!(applied_value["untouched"], true);
+    assert!(applied_value["connections"].get("stale").is_none());
+    assert_eq!(applied_value["connections"]["keep"]["url"], "https://example.test");
+    assert_eq!(applied_value["unrelated"], json!({}));
     let binding = crate::native::apply::get_registered_binding(&db, "sixth_fixture", "global")
         .unwrap()
         .unwrap();
