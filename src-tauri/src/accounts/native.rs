@@ -148,7 +148,7 @@ impl Drop for Process {
         #[cfg(unix)]
         {
             let _ = crate::background_process::command("/bin/kill")
-                .args(["-KILL", &format!("-{}", self.0.id())])
+                .args(["-KILL", "--", &format!("-{}", self.0.id())])
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .status();
