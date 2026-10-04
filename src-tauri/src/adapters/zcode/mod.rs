@@ -8,11 +8,11 @@
 //! `~/.zcode/v2/credentials.json` is never read or written. MCP entries live in
 //! `~/.zcode/cli/config.json` under the nested `mcp.servers` key; Skills and
 //! agent definitions use the shared resource roots (`~/.zcode/skills`,
-//! `~/.zcode/agents`); sessions come from the bundled agent's model-io rollout
-//! logs plus legacy task snapshots (see `history`); plugins are listed read-only
-//! from `installed_plugins.json` (see `plugins`). Session resume, YOLO and
-//! credential management have no verified desktop contract and stay
-//! undelivered.
+//! `~/.zcode/agents`); sessions come from the internal session database (with
+//! model-io rollout logs and legacy task snapshots as fallback/carriers, see
+//! `history`); plugins are listed read-only from `installed_plugins.json` (see
+//! `plugins`). Session resume, YOLO and credential management have no verified
+//! desktop contract and stay undelivered.
 
 pub(crate) mod agents;
 pub mod history;
@@ -288,7 +288,7 @@ impl CliAdapter for ZCode {
             },
             history: Facet {
                 state: "available",
-                reason: "只读索引 ZCode 会话记录与 token 用量",
+                reason: "以内部会话数据库为准只读索引会话目录与 token 用量（不可读时回退 rollout 日志/任务快照）",
             },
             login: None,
             management: ManagementCapabilities {
