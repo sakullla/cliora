@@ -25,7 +25,7 @@ function Editor(props: ConfigurationEditorProps) {
     id={id} target={model ? target(model) : { kind: 'settings' }} value={model ? model.fields[id] : view.settings?.[id]} defaultSource={model?.kind === 'override' ? '跟随内置模型' : undefined}
     listChoices={id === 'input' ? [['text', '文本'], ['image', '图片']] : undefined} disabled={blocked || (id === 'defaultProvider' && action.hasInvalidExcept({ kind: 'settings' }, id))} />;
   return <section className={styles.editor} aria-label="Pi 专属配置">
-    <ProviderEditor key={`${draft.sessionId}:${provider}`} provider={provider} providers={view.providers ?? []} connection={view.connection}
+    <ProviderEditor key={`provider:${draft.sessionId}:${provider}`} provider={provider} providers={view.providers ?? []} connection={view.connection}
       protocol={view.connection?.protocol ? protocols[view.connection.protocol as keyof typeof protocols] ?? '' : ''}
       disabled={blocked || action.invalid} canConfigure={can('configure_provider')} canSelect={can('select_provider')}
       onConfigure={(id, value) => action.run({ kind: 'provider', provider: id }, 'configure_provider', value)}
@@ -42,7 +42,7 @@ function Editor(props: ConfigurationEditorProps) {
         <EntityActions id={model.id} target={target(model)} descriptor={descriptor} disabled={blocked} defaultModel={view.defaultModel === model.id} onRun={action.run} onRemove={() => setExpanded(null)} />
       </div>}
     </article>)}
-    {can('create') && <NewModelForm key={`${draft.sessionId}:${provider}`} props={action.props} provider={provider} disabled={blocked || !provider} label="模型 ID" fields={descriptor.fields.filter(item => !item.id.startsWith('default'))}
+    {can('create') && <NewModelForm key={`new-model:${draft.sessionId}:${provider}`} props={action.props} provider={provider} disabled={blocked || !provider} label="模型 ID" fields={descriptor.fields.filter(item => !item.id.startsWith('default'))}
       onCreate={async (id, values, kind) => { const success = await action.run({ kind, provider, id }, kind === 'override' ? 'create_override' : 'create', values); if (success) setExpanded(`${kind}:${id}`); return success; }} allowOverride={can('create_override')} listChoices={{ input: [['text', '文本'], ['image', '图片']] }} />}
     <details><summary>启动思考与默认设置</summary>{field('defaultProvider')}{field('defaultModel')}{field('defaultThinkingLevel')}
       {!descriptor.fields.some(item => item.id === 'defaultModel') && <button type="button" disabled={blocked || !can('reset')} onClick={() => { void action.run({ kind: 'settings' }, 'reset', null, 'defaultModel'); }}>恢复默认模型</button>}

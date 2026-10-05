@@ -23,7 +23,7 @@ function Editor(props: ConfigurationEditorProps) {
   const field = (id: string, model: Model) => <EditorField key={`${draft.sessionId}:${provider}:${model.id}:${id}`} props={action.props} id={id} target={target(model.id)} value={fieldValue(model.fields, id)} disabled={blocked}
     listChoices={id.startsWith('modalities.') ? [['text', '文本'], ['image', '图片'], ['audio', '音频'], ['video', '视频'], ['pdf', 'PDF']] : undefined} />;
   return <section className={styles.editor} aria-label="OpenCode 专属配置">
-    <ProviderEditor key={`${draft.sessionId}:${provider}`} provider={provider} providers={view.providers ?? []} connection={view.connection}
+    <ProviderEditor key={`provider:${draft.sessionId}:${provider}`} provider={provider} providers={view.providers ?? []} connection={view.connection}
       protocol={view.connection?.protocol ? protocols[view.connection.protocol as keyof typeof protocols] ?? '' : ''}
       disabled={blocked || action.invalid} canConfigure={can('configure_provider')} canSelect={can('select_provider')}
       onConfigure={(id, value) => action.run({ kind: 'provider', provider: id }, 'configure_provider', value)}
@@ -40,7 +40,7 @@ function Editor(props: ConfigurationEditorProps) {
         <EntityActions id={model.id} target={target(model.id)} descriptor={descriptor} disabled={blocked} defaultModel={view.defaultModel === model.id} smallModel={view.smallModel === model.id} onRun={action.run} onRemove={() => setExpanded(null)} />
       </div>}
     </article>)}
-    {can('create') && <NewModelForm key={`${draft.sessionId}:${provider}`} props={action.props} provider={provider} disabled={blocked || !provider} label="模型 ID" fields={descriptor.fields} listChoices={{ 'modalities.input': [['text', '文本'], ['image', '图片'], ['audio', '音频'], ['video', '视频'], ['pdf', 'PDF']], 'modalities.output': [['text', '文本'], ['image', '图片'], ['audio', '音频'], ['video', '视频'], ['pdf', 'PDF']] }}
+    {can('create') && <NewModelForm key={`new-model:${draft.sessionId}:${provider}`} props={action.props} provider={provider} disabled={blocked || !provider} label="模型 ID" fields={descriptor.fields} listChoices={{ 'modalities.input': [['text', '文本'], ['image', '图片'], ['audio', '音频'], ['video', '视频'], ['pdf', 'PDF']], 'modalities.output': [['text', '文本'], ['image', '图片'], ['audio', '音频'], ['video', '视频'], ['pdf', 'PDF']] }}
       onCreate={async (id, values) => { const success = await action.run(target(id), 'create', values); if (success) setExpanded(id); return success; }} />}
     <details><summary>默认模型设置</summary>
       <button type="button" disabled={blocked || !can('reset')} onClick={() => { void action.run({ kind: 'settings' }, 'reset', null, 'model'); }}>恢复默认模型</button>

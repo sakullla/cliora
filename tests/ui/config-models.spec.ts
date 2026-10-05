@@ -16,6 +16,7 @@ test.beforeAll(async () => {
     import { kimiCodeUiAdapter } from ${JSON.stringify(path.resolve('src/adapters/kimi_code/index.ts'))};
     const tool = new URL(location.href).searchParams.get('tool');
     const blank = new URL(location.href).searchParams.has('blank');
+    const initialProvider = new URL(location.href).searchParams.get('provider') ?? 'gateway';
     const pi = tool === 'pi', kimi = tool === 'kimi';
     const fields = (pi ? [
       ['name','显示名称','string'],['contextWindow','上下文上限','number'],['maxTokens','输出上限','number'],['reasoning','支持思考','boolean'],['input','输入类型','json',false,true],['thinkingLevelMap','模型思考档位映射','json',false,true],['defaultThinkingLevel','启动思考档位','string',false,true,['off','minimal','low','medium','high','xhigh','max']],
@@ -29,7 +30,7 @@ test.beforeAll(async () => {
     function nested(values,field,value,reset) { const keys=field.split('.');let node=values;for(const key of keys.slice(0,-1))node=node[key]??(node[key]={});if(reset)delete node[keys.at(-1)];else node[keys.at(-1)]=value; }
     const model = id => ({id,kind:'model',fields:kimi?{provider:'gateway',model:'request-'+id,max_context_size:128000,extension:{keep:true}}:pi?{id,name:id,contextWindow:128000,maxTokens:16384,input:['text'],extension:{keep:true}}:{name:id,limit:{context:128000,output:16384},modalities:{input:['text'],output:['text']},extension:{keep:true}}});
     function Harness() {
-      const [draft,setDraft]=React.useState({sessionId:'multi-editor-test',revision:0,scope:'global',profile:{},baselineFiles:{},issues:[],view:{providerId:blank?null:'gateway',providers:blank?[]:['gateway','other'],models:blank?[]:[model('first'),model('second')],defaultModel:null,smallModel:null,settings:{},connection:{baseUrl:blank?null:'https://example.test',protocol:pi?'openai-completions':kimi?'openai':'@ai-sdk/openai-compatible'},capabilityReason:'原生能力未核验'}});
+      const [draft,setDraft]=React.useState({sessionId:'multi-editor-test',revision:0,scope:'global',profile:{},baselineFiles:{},issues:[],view:{providerId:blank?null:initialProvider,providers:blank?[]:[initialProvider,'other'],models:blank?[]:[model('first'),model('second')],defaultModel:null,smallModel:null,settings:{},connection:{baseUrl:blank?null:'https://example.test',protocol:pi?'openai-completions':kimi?'openai':'@ai-sdk/openai-compatible'},capabilityReason:'原生能力未核验'}});
       const [valid,setValid]=React.useState(true);
       window.__replaceView=fn=>setDraft(old=>({...old,revision:old.revision+1,view:fn(structuredClone(old.view))}));
       window.__replaceSession=()=>setDraft(old=>({...old,sessionId:'another-session',revision:0}));
@@ -357,3 +358,78 @@ test('Kimi capability actions block pending saves and preserve values after fail
   await expect(capabilities.getByLabel('思考', { exact: true })).toBeChecked();
   await expect(page.getByRole('button', { name: '保存配置' })).toBeEnabled();
 });
+
+for (const tool of ['pi', 'opencode', 'kimi']) {
+  test(`${tool}: navigate from an existing default and use the browsed provider for new and edited model targets`, async ({ page }) => {
+    await page.goto(`/__multi_model_editor?tool=${tool}&provider=alpha`);
+    await page.evaluate(() => (window as unknown as { __replaceView: (fn: (view: any) => any) => void }).__replaceView(view => {
+      view.providers = ['alpha', 'beta']; view.defaultModel = 'first'; view.smallModel = 'first';
+      for (const model of view.models) if (model.fields.provider) model.fields.provider = 'alpha';
+      return view;
+    }));
+    await expect(page.getByLabel('当前供应商')).toHaveCount(1);
+    await expect(page.getByLabel('当前供应商')).toHaveValue('alpha');
+    await page.getByLabel('当前供应商').selectOption('beta');
+    await expect(page.getByLabel('当前供应商')).toHaveCount(1);
+    await expect(page.getByLabel('当前供应商')).toHaveValue('beta');
+    await page.getByRole('button', { name: '新增模型', exact: true }).click();
+    const form = page.getByRole('group', { name: '新增模型表单' });
+    await form.getByLabel(tool === 'kimi' ? '模型 alias' : '模型 ID', { exact: true }).fill('beta/new~model');
+    if (tool === 'kimi') await form.getByLabel('请求模型 ID').fill('request-beta-model');
+    await form.getByLabel('上下文上限').fill('100000');
+    await form.getByRole('button', { name: '创建模型' }).click();
+    const created = page.getByRole('article', { name: '模型 beta/new~model', exact: true });
+    await expect(created).toBeVisible();
+    await created.getByLabel('上下文上限').fill('222222');
+    await expect.poll(() => page.evaluate(() => (window as unknown as { __actions: unknown[] }).__actions.at(-1))).toMatchObject({
+      target: { kind: 'model', provider: 'beta', id: 'beta/new~model' }, operation: 'set', field: tool === 'pi' ? 'contextWindow' : tool === 'kimi' ? 'max_context_size' : 'limit.context', value: 222222,
+    });
+    await page.getByText('供应商连接', { exact: false }).first().click();
+    await page.getByLabel('供应商标识').fill('beta');
+    await page.getByLabel('连接地址').fill('https://beta.example/v1');
+    await page.getByLabel('接口协议').selectOption('openai_responses');
+    await page.getByRole('button', { name: '设置供应商连接' }).click();
+    await expect(page.getByLabel('当前供应商')).toHaveCount(1);
+    await expect(page.getByLabel('当前供应商')).toHaveValue('beta');
+    await page.getByLabel('当前供应商').selectOption('alpha');
+    await expect(page.getByLabel('当前供应商')).toHaveCount(1);
+    await expect(page.getByLabel('当前供应商')).toHaveValue('alpha');
+    await expect(page.getByRole('button', { name: '保存配置' })).toBeEnabled();
+    const actions = await page.evaluate(() => (window as unknown as { __actions: { operation: string; target: unknown }[] }).__actions);
+    expect(actions.find(action => action.operation === 'create')).toMatchObject({ target: { provider: 'beta', id: 'beta/new~model' } });
+    expect(actions.find(action => action.operation === 'configure_provider')).toMatchObject({ target: { kind: 'provider', provider: 'beta' } });
+    expect(actions.at(-1)).toMatchObject({ operation: 'select_provider', target: { provider: 'alpha' } });
+  });
+}
+
+
+for (const reuse of ['copy', 'rename']) {
+  test(`OpenCode ${reuse} reuses a deleted identity and dispatches default and small model actions to it`, async ({ page }) => {
+    await page.goto('/__multi_model_editor?tool=opencode');
+    await page.evaluate(() => (window as unknown as { __replaceView: (fn: (view: any) => any) => void }).__replaceView(view => {
+      view.providerId = 'alpha'; view.providers = ['alpha']; view.defaultModel = 'safe'; view.smallModel = 'safe';
+      view.models = ['safe', 'victim', 'source'].map(id => ({ id, kind: 'model', fields: { name: id, limit: { context: 64000, output: 1000 } } }));
+      return view;
+    }));
+    const victim = page.getByRole('article', { name: '模型 victim', exact: true });
+    await victim.getByRole('button', { name: /victim · victim/ }).click();
+    await victim.getByRole('button', { name: '删除模型', exact: true }).click();
+    await expect(victim).toHaveCount(0);
+    const source = page.getByRole('article', { name: '模型 source', exact: true });
+    await source.getByRole('button', { name: /source · source/ }).click();
+    await source.getByText('复制或修改模型标识', { exact: true }).click();
+    await source.getByLabel('新模型 ID').fill('victim');
+    await source.getByRole('button', { name: reuse === 'copy' ? '复制模型' : '修改模型标识', exact: true }).click();
+    const reused = page.getByRole('article', { name: '模型 victim', exact: true });
+    await reused.getByRole('button', { name: /source · victim/ }).click();
+    await reused.getByRole('button', { name: '设为默认模型', exact: true }).click();
+    await reused.getByRole('button', { name: '设为轻量模型', exact: true }).click();
+    await expect(reused.getByRole('button', { name: '当前默认模型' })).toBeDisabled();
+    await expect(reused.getByRole('button', { name: '当前轻量模型' })).toBeDisabled();
+    await expect(reused.getByRole('button', { name: '删除模型', exact: true })).toBeDisabled();
+    await expect(page.getByRole('button', { name: '保存配置' })).toBeEnabled();
+    const actions = await page.evaluate(() => (window as unknown as { __actions: unknown[] }).__actions);
+    expect(actions).toContainEqual({ version: 1, target: { kind: 'model', provider: 'alpha', id: 'source' }, operation: reuse, field: null, value: 'victim' });
+    for (const operation of ['default', 'small_default']) expect(actions).toContainEqual({ version: 1, target: { kind: 'model', provider: 'alpha', id: 'victim' }, operation, field: null, value: null });
+  });
+}
