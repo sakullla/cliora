@@ -1,5 +1,6 @@
 import icon from '../../assets/tools/claude.svg';
 import type { ToolUiAdapter, ModelMappingControl, ModelRoleValue } from '../contract';
+import { ClaudeConfigurationEditor } from './ConfigurationEditor';
 
 const roles = [
   { id:'default', label:'默认模型', displayName:false, longContext:true, key:'ANTHROPIC_MODEL' },
@@ -9,6 +10,7 @@ const roles = [
 function document(text: string): Record<string, unknown> {
   const parsed = text.trim() ? JSON.parse(text) : {};
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Claude 配置须为 JSON 对象');
+  if (parsed.env != null && (typeof parsed.env !== 'object' || Array.isArray(parsed.env))) throw new Error('Claude env 须为 JSON 对象');
   return parsed;
 }
 const modelMapping: ModelMappingControl = {
@@ -18,7 +20,7 @@ const modelMapping: ModelMappingControl = {
   read(text) {
     try {
       const parsed = document(text); const env = (parsed.env ?? {}) as Record<string, unknown>;
-      return Object.fromEntries(roles.map(role => { const raw = typeof env[role.key] === 'string' ? String(env[role.key]) : '';
+      return Object.fromEntries(roles.map(role => { const raw = typeof env[role.key] === 'string' ? String(env[role.key]) : role.id === 'default' && typeof parsed.model === 'string' ? parsed.model : '';
         return [role.id,{model:raw.replace(/\[1m\]$/i,''),name:typeof env[role.key+'_NAME'] === 'string' ? String(env[role.key+'_NAME']) : '',longContext:/\[1m\]$/i.test(raw)}]; }));
     } catch { return {}; }
   },
@@ -27,6 +29,7 @@ const modelMapping: ModelMappingControl = {
     const parsed = document(text); const env = { ...(parsed.env ?? {}) as Record<string, unknown> };
     const model = value.model.trim().replace(/(?:\[1m\])+$/ig,'');
     if (model) env[role.key] = model + (value.longContext ? '[1m]' : ''); else delete env[role.key];
+    if (role.id === 'default') { if (model) parsed.model = env[role.key]; else delete parsed.model; }
     if (role.displayName) { if (value.name.trim()) env[role.key+'_NAME'] = value.name.trim(); else delete env[role.key+'_NAME']; }
     return JSON.stringify({ ...parsed,env },null,2);
   },
@@ -40,6 +43,7 @@ const modelMapping: ModelMappingControl = {
 export const claudeUiAdapter: ToolUiAdapter = {
   icon: { light: icon, source: 'https://code.claude.com/docs/logo/light.svg' },
   id: 'claude_code',
+  configuration: { Editor: ClaudeConfigurationEditor },
   officialUsage: { accountRequired: false, automaticRefresh: false },
   modelMapping,
   authEnvName: () => 'ANTHROPIC_API_KEY',

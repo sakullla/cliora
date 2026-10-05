@@ -1,0 +1,15 @@
+{
+  "model": "claude-opus-4-8",
+  "effortLevel": "xhigh",
+  "env": {
+    "ANTHROPIC_MODEL": "claude-opus-4-8",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "gateway-sonnet[1m]",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME": "Sonnet gateway",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-4-5",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "gateway-subagent",
+    "ANTHROPIC_BASE_URL": "https://gateway.example.test/anthropic",
+    "USER_CUSTOM_OPTION": "preserve"
+  },
+  "permissions": { "allow": ["Read"] },
+  "modelPicker": { "options": [{ "model": "gateway-sonnet", "behavesAs": "claude-sonnet-4-6", "custom": true }] }
+}

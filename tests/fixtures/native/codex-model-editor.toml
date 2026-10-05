@@ -1,0 +1,21 @@
+model = "gpt-6.1-sol"
+model_provider = "gateway"
+model_reasoning_effort = "ultra"
+model_context_window = 262144
+model_reasoning_summary = "auto"
+model_verbosity = "medium"
+approval_policy = "on-request"
+
+[model_providers.gateway]
+name = "Test gateway"
+base_url = "https://gateway.example.test/v1"
+wire_api = "responses"
+env_key = "TEST_GATEWAY_KEY"
+
+[model_providers.untouched]
+name = "Other provider"
+base_url = "https://other.example.test/v1"
+wire_api = "responses"
+
+[features]
+user_defined_feature = true

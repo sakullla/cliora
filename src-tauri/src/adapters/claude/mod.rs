@@ -3,6 +3,7 @@ pub(crate) mod agents;
 pub mod history;
 pub(crate) mod plugins;
 pub(crate) mod usage;
+mod configuration;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -38,6 +39,9 @@ const SESSION_ENV_MARKERS: &[&str] = &[
 ];
 
 impl CliAdapter for Claude {
+    fn configuration(&self) -> Option<&dyn super::configuration::ConfigurationAdapter> {
+        Some(self)
+    }
     fn supports_mcp(&self) -> bool { true }
     fn supports_skills(&self) -> bool { true }
     fn official_usage(&self) -> Option<&dyn crate::adapters::official::OfficialUsageAdapter> {
@@ -119,7 +123,7 @@ impl CliAdapter for Claude {
     }
     fn portable_root_fields(&self, role: &str) -> &'static [&'static str] {
         if role == "settings" {
-            &["model", "env", "permissions", "alwaysThinkingEnabled"]
+            &["model", "env", "permissions", "alwaysThinkingEnabled", "effortLevel", "modelSettings", "modelPicker"]
         } else {
             &[]
         }
@@ -608,7 +612,7 @@ const CATALOG_ROLES: &[(&str, &str)] = &[
 
 fn strip_context_suffix(model: &str) -> &str {
     let mut id = model.trim();
-    while id.len() >= 4 && id[id.len() - 4..].eq_ignore_ascii_case("[1m]") {
+    while id.len() >= 4 && id.get(id.len() - 4..).is_some_and(|suffix| suffix.eq_ignore_ascii_case("[1m]")) {
         id = &id[..id.len() - 4];
     }
     id.trim()

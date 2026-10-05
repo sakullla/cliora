@@ -1,7 +1,7 @@
 use crate::native::format::{self, FileKind};
 use serde_json::json;
 pub fn set_codex_reasoning_effort(text: &str, effort: Option<&str>) -> Result<String, String> {
-    if effort.is_some_and(|value| !matches!(value, "minimal" | "low" | "medium" | "high" | "xhigh"))
+    if effort.is_some_and(|value| value.trim().is_empty() || value.chars().any(char::is_control))
     {
         return Err("不支持的 Codex 推理强度".into());
     }

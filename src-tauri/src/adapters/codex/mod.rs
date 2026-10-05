@@ -3,6 +3,7 @@ pub(crate) mod agents;
 pub mod history;
 pub(crate) mod plugins;
 pub(crate) mod settings;
+mod configuration;
 pub(crate) mod usage;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -60,6 +61,9 @@ fn skill_path_matches(item: &Value, skill_path: &Path) -> bool {
 }
 
 impl CliAdapter for Codex {
+    fn configuration(&self) -> Option<&dyn super::configuration::ConfigurationAdapter> {
+        Some(self)
+    }
     fn supports_mcp(&self) -> bool { true }
     fn supports_skills(&self) -> bool { true }
     fn official_usage(&self) -> Option<&dyn crate::adapters::official::OfficialUsageAdapter> {
@@ -126,6 +130,9 @@ impl CliAdapter for Codex {
                 "model",
                 "model_provider",
                 "model_reasoning_effort",
+                "model_context_window",
+                "model_reasoning_summary",
+                "model_verbosity",
                 "service_tier",
                 "features",
                 "model_providers",
