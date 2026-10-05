@@ -679,7 +679,7 @@ pub fn save_registered_common(
     mut common: RegisteredCommon,
     expected_version: Option<u64>,
 ) -> Result<RegisteredCommon, String> {
-    validate_registered_files(registry, &common.tool, &common.files)?;
+    super::workspace::validate_common(registry, &common)?;
     if let Some(port) = registry.get(&common.tool).and_then(|adapter| adapter.configuration()) {
         let adapter = registry.get(&common.tool).unwrap();
         let parsed = common.files.iter().map(|(role, text)| Ok((role.clone(), format::parse(adapter.file_kind(role)?, text)?))).collect::<Result<_, String>>()?;

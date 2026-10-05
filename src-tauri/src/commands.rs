@@ -49,6 +49,7 @@ use std::path::PathBuf;
 pub struct AppState {
     database: Mutex<Option<Arc<Database>>>,
     portable_draft: Mutex<Option<portable::ImportDraft>>,
+    workspace: crate::native::workspace::DraftSessions,
 }
 
 async fn usage_blocking<T: Send + 'static>(
@@ -1450,80 +1451,11 @@ pub async fn save_common_config(
 ) -> Result<CommonSaveResult, ApiError> {
     let notify = app.clone();
     let result = blocking(move || {
-        let state = app.state::<AppState>();
-        let home = home()?;
-        state.with_database(&app, |database| {
-            let saved =
-                profile::save_common(database, common, expected_version).map_err(native_error)?;
-            let tool = saved.tool;
-            let custom = tool_path(database, tool).map_err(native_error)?;
-            let targets: Vec<(String, String)> =
-                database
-                    .with_connection(|conn| {
-                        let mut statement = conn
-                    .prepare("SELECT scope_key, profile_id FROM applied_bindings WHERE tool = ?1 AND scope_key NOT LIKE 'context:%'")
-                    .map_err(|e| e.to_string())?;
-                        let rows = statement
-                            .query_map(
-                                [serde_json::to_value(tool).unwrap().as_str().unwrap()],
-                                |row| Ok((row.get(0)?, row.get(1)?)),
-                            )
-                            .map_err(|e| e.to_string())?;
-                        rows.map(|row| row.map_err(|e| e.to_string())).collect()
-                    })
-                    .map_err(native_error)?;
-            let mut applications = Vec::new();
-            for (scope_key, profile_id) in targets {
-                let profile = match profile::get_profile(database, &profile_id) {
-                    Ok(profile) => profile,
-                    Err(error) => {
-                        applications.push(CommonApplication {
-                            scope_key,
-                            status: "failed",
-                            detail: Some(error),
-                        });
-                        continue;
-                    }
-                };
-                if !profile.inherit_common {
-                    continue;
-                }
-                let (scope, project) = if let Some(path) = scope_key.strip_prefix("project:") {
-                    (Scope::Project, Some(PathBuf::from(path)))
-                } else {
-                    (Scope::Global, None)
-                };
-                let result = apply::apply_profile(
-                    database,
-                    &SystemCredentialStore,
-                    tool,
-                    &profile_id,
-                    scope,
-                    &home,
-                    project.as_deref(),
-                    custom.as_deref(),
-                    false,
-                );
-                applications.push(match result {
-                    Ok(outcome) => CommonApplication {
-                        scope_key,
-                        status: outcome.status,
-                        detail: None,
-                    },
-                    Err(error) => CommonApplication {
-                        scope_key,
-                        status: "failed",
-                        detail: Some(error),
-                    },
-                });
-            }
-            Ok(CommonSaveResult {
-                common: saved,
-                applications,
-            })
+        app.state::<AppState>().with_database(&app, |database| {
+            let saved = profile::save_common(database, common, expected_version).map_err(native_error)?;
+            Ok(CommonSaveResult { common: saved, applications: Vec::new() })
         })
-    })
-    .await?;
+    }).await?;
     let _ = notify.emit("cliora:bindings-changed", result.common.tool.stable_id());
     Ok(result)
 }
@@ -1876,80 +1808,11 @@ pub async fn save_registered_common_config(
 ) -> Result<RegisteredCommonSaveResult, ApiError> {
     let notify = app.clone();
     let result = blocking(move || {
-        let state = app.state::<AppState>();
-        let home = home()?;
-        state.with_database(&app, |database| {
-            let registry = adapters::Registry::builtins();
-            let saved =
-                profile::save_registered_common(database, &registry, common, expected_version)
-                    .map_err(native_error)?;
-            let custom = registered_tool_path(database, &saved.tool).map_err(native_error)?;
-            let targets: Vec<(String, String)> = database
-                .with_connection(|conn| {
-                    let mut statement = conn
-                        .prepare(
-                            "SELECT scope_key, profile_id FROM applied_bindings WHERE tool = ?1 AND scope_key NOT LIKE 'context:%'",
-                        )
-                        .map_err(|e| e.to_string())?;
-                    let rows = statement
-                        .query_map([&saved.tool], |row| Ok((row.get(0)?, row.get(1)?)))
-                        .map_err(|e| e.to_string())?;
-                    rows.map(|row| row.map_err(|e| e.to_string())).collect()
-                })
-                .map_err(native_error)?;
-            let mut applications = Vec::new();
-            for (scope_key, profile_id) in targets {
-                let profile = match profile::get_registered_profile(database, &profile_id) {
-                    Ok(profile) => profile,
-                    Err(error) => {
-                        applications.push(CommonApplication {
-                            scope_key,
-                            status: "failed",
-                            detail: Some(error),
-                        });
-                        continue;
-                    }
-                };
-                if !profile.inherit_common {
-                    continue;
-                }
-                let (scope, project) = if let Some(path) = scope_key.strip_prefix("project:") {
-                    (Scope::Project, Some(PathBuf::from(path)))
-                } else {
-                    (Scope::Global, None)
-                };
-                let result = apply::apply_registered_profile(
-                    &registry,
-                    database,
-                    &SystemCredentialStore,
-                    &saved.tool,
-                    &profile_id,
-                    scope,
-                    &home,
-                    project.as_deref(),
-                    custom.as_deref(),
-                    false,
-                );
-                applications.push(match result {
-                    Ok(outcome) => CommonApplication {
-                        scope_key,
-                        status: outcome.status,
-                        detail: None,
-                    },
-                    Err(error) => CommonApplication {
-                        scope_key,
-                        status: "failed",
-                        detail: Some(error),
-                    },
-                });
-            }
-            Ok(RegisteredCommonSaveResult {
-                common: saved,
-                applications,
-            })
+        app.state::<AppState>().with_database(&app, |database| {
+            let saved = profile::save_registered_common(database, &adapters::Registry::builtins(), common, expected_version).map_err(native_error)?;
+            Ok(RegisteredCommonSaveResult { common: saved, applications: Vec::new() })
         })
-    })
-    .await?;
+    }).await?;
     let _ = notify.emit("cliora:bindings-changed", result.common.tool.clone());
     Ok(result)
 }
@@ -2989,10 +2852,138 @@ pub fn open_configuration_draft(app: AppHandle, state: State<'_, AppState>, prof
     })
 }
 #[tauri::command]
-pub fn edit_configuration_draft(draft: crate::native::configuration::ConfigurationDraft, action: adapters::configuration::ConfigurationAction) -> Result<crate::native::configuration::ConfigurationDraft, ApiError> {
-    crate::native::configuration::edit(&adapters::Registry::builtins(), draft, action).map_err(native_error)
+pub fn edit_configuration_draft(app:AppHandle,draft: crate::native::configuration::ConfigurationDraft, action: adapters::configuration::ConfigurationAction) -> Result<crate::native::configuration::ConfigurationDraft, ApiError> {
+    if draft.subject.is_some(){app.state::<AppState>().workspace.edit(&adapters::Registry::builtins(),draft,action).map_err(native_error)}
+    else{crate::native::configuration::edit(&adapters::Registry::builtins(), draft, action).map_err(native_error)}
 }
 #[tauri::command]
-pub fn replace_configuration_text(draft: crate::native::configuration::ConfigurationDraft, files: std::collections::BTreeMap<String, String>) -> crate::native::configuration::ConfigurationDraft {
-    crate::native::configuration::replace_text(&adapters::Registry::builtins(), draft, files)
+pub fn replace_configuration_text(app:AppHandle,draft: crate::native::configuration::ConfigurationDraft, files: std::collections::BTreeMap<String, String>) -> Result<crate::native::configuration::ConfigurationDraft,ApiError> {
+    if draft.subject.is_some(){app.state::<AppState>().workspace.raw(&adapters::Registry::builtins(),draft,files).map_err(native_error)}
+    else{Ok(crate::native::configuration::replace_text(&adapters::Registry::builtins(), draft, files))}
+}
+
+#[tauri::command]
+pub async fn begin_configuration_draft(app:AppHandle,request:crate::native::workspace::ConfigurationBeginRequest)->Result<crate::native::configuration::ConfigurationDraft,ApiError>{
+    blocking(move||{
+        let home=home()?;let project=checked_project(request.scope,request.project_path.clone())?;
+        app.state::<AppState>().with_database(&app,|db|{
+            let registry=adapters::Registry::builtins();
+            let _context=if request.subject==adapters::configuration::ConfigurationSubject::Common {None}else{Some(crate::accounts::selection::enter_bound(db,&home,&request.tool_id,request.scope,project.as_deref()).map_err(native_error)?)};
+            let context_id=crate::accounts::selection::current(&request.tool_id).map(|context|context.id);
+            let files=if request.subject==adapters::configuration::ConfigurationSubject::Current {
+                registry.get(&request.tool_id).ok_or_else(||native_error("适配器未注册".into()))?.native_files(request.scope,&home,project.as_deref(),true)
+            }else{Vec::new()};
+            app.state::<AppState>().workspace.begin(&registry,db,request,context_id,files).map_err(native_error)
+        })
+    }).await
+}
+#[tauri::command]
+pub fn update_configuration_draft(app:AppHandle,draft:crate::native::configuration::ConfigurationDraft,profile:RegisteredProfile)->Result<crate::native::configuration::ConfigurationDraft,ApiError>{
+    app.state::<AppState>().workspace.update(&adapters::Registry::builtins(),draft,profile).map_err(native_error)
+}
+#[tauri::command]
+pub fn select_configuration_credential(app:AppHandle,draft:crate::native::configuration::ConfigurationDraft,credential:crate::native::workspace::ConfigurationCredential)->Result<crate::native::configuration::ConfigurationDraft,ApiError>{
+    app.state::<AppState>().with_database(&app,|db|app.state::<AppState>().workspace.select_credential(&adapters::Registry::builtins(),db,draft,credential).map_err(native_error))
+}
+#[tauri::command]
+pub fn set_configuration_draft_secret(app:AppHandle,draft:crate::native::configuration::ConfigurationDraft,secret:String)->Result<crate::native::configuration::ConfigurationDraft,ApiError>{
+    app.state::<AppState>().workspace.set_secret(&adapters::Registry::builtins(),draft,secret).map_err(native_error)
+}
+#[tauri::command]
+pub fn remove_configuration_draft_secret(app:AppHandle,draft:crate::native::configuration::ConfigurationDraft)->Result<crate::native::configuration::ConfigurationDraft,ApiError>{
+    app.state::<AppState>().workspace.remove_secret(&adapters::Registry::builtins(),draft).map_err(native_error)
+}
+#[tauri::command]
+pub fn reveal_configuration_draft_secret(app:AppHandle,draft:crate::native::configuration::ConfigurationDraft)->Result<String,ApiError>{
+    app.state::<AppState>().workspace.reveal_secret(&draft,&SystemCredentialStore).map_err(native_error)
+}
+#[tauri::command]
+pub fn cancel_configuration_draft(app:AppHandle,session_id:String)->Result<(),ApiError>{app.state::<AppState>().workspace.cancel(&session_id).map_err(native_error)}
+#[tauri::command]
+pub fn add_configuration_models(app:AppHandle,draft:crate::native::configuration::ConfigurationDraft,ids:Vec<String>)->Result<crate::native::configuration::ConfigurationDraft,ApiError>{app.state::<AppState>().workspace.add_models(&adapters::Registry::builtins(),draft,ids).map_err(native_error)}
+#[derive(serde::Serialize)]
+#[serde(rename_all="camelCase")]
+pub struct ConfigurationDirectoryResult {session_id:String,revision:u64,directory:models::ModelDirectory}
+#[tauri::command]
+pub async fn list_configuration_models(app:AppHandle,draft:crate::native::configuration::ConfigurationDraft,force:bool,query:String)->Result<ConfigurationDirectoryResult,ApiError>{
+    blocking(move||app.state::<AppState>().with_database(&app,|db|{
+        let workspace=&app.state::<AppState>().workspace;
+        let(connection,credential)=workspace.request(&draft,&SystemCredentialStore).map_err(native_error)?;
+        let directory=models::list_models_guarded(db,&credential,&connection,force,&query,||!workspace.is_current(&draft)).map_err(native_error)?;
+        workspace.finish_request(&draft).map_err(native_error)?;
+        Ok(ConfigurationDirectoryResult{session_id:draft.session_id,revision:draft.revision,directory})
+    })).await
+}
+#[derive(serde::Serialize)]
+#[serde(rename_all="camelCase")]
+pub struct ConfigurationCheckResult {session_id:String,revision:u64,check:models::ConnectionCheck}
+#[tauri::command]
+pub async fn check_configuration_connection(app:AppHandle,draft:crate::native::configuration::ConfigurationDraft,allow_model_request:bool)->Result<ConfigurationCheckResult,ApiError>{
+    blocking(move||{
+        let workspace=&app.state::<AppState>().workspace;
+        let(mut connection,credential)=workspace.request(&draft,&SystemCredentialStore).map_err(native_error)?;
+        if allow_model_request {
+            let actual=draft.profile.connection.as_ref().filter(|actual|actual.provider_id==connection.provider_id&&actual.base_url==connection.base_url&&actual.interface_format==connection.interface_format&&!actual.model.trim().is_empty()).ok_or_else(||native_error("请明确设置此连接的默认模型后再确认模型请求".into()))?;
+            connection.model=actual.model.clone();
+        }
+        let check=models::test_registered_connection_guarded(&adapters::Registry::builtins(),&draft.profile.tool,&connection,&credential,allow_model_request,||!workspace.is_current(&draft));
+        workspace.finish_request(&draft).map_err(native_error)?;
+        Ok(ConfigurationCheckResult{session_id:draft.session_id,revision:draft.revision,check})
+    }).await
+}
+#[tauri::command]
+pub async fn save_configuration_draft(app:AppHandle,draft:crate::native::configuration::ConfigurationDraft)->Result<crate::native::workspace::ConfigurationSaveResult,ApiError>{
+    let notify=app.clone();let tool=draft.profile.tool.clone();
+    let result=blocking(move||app.state::<AppState>().with_database(&app,|db|{
+        let registry=adapters::Registry::builtins();
+        if draft.subject==Some(adapters::configuration::ConfigurationSubject::Current){
+            let home=home()?;let project=checked_project(draft.scope,draft.project_path.clone())?;
+            let _context=crate::accounts::selection::enter_bound(db,&home,&draft.profile.tool,draft.scope,project.as_deref()).map_err(native_error)?;
+            crate::accounts::selection::validate_expected(&draft.profile.tool,draft.context_id.as_deref()).map_err(native_error)?;
+            let custom=registered_tool_path(db,&draft.profile.tool).map_err(native_error)?;
+            let probe=adapter::probe_registered(&registry,&draft.profile.tool,custom.as_deref(),&home,project.as_deref(),draft.scope).map_err(native_error)?;
+            if probe.native_writes.state!="supported"{return Err(native_error(probe.native_writes.reason.into()));}
+            app.state::<AppState>().workspace.save_current(&registry,db,&SystemCredentialStore,draft,&probe.native_files).map_err(native_error)
+        }else{app.state::<AppState>().workspace.save_database(&registry,db,&SystemCredentialStore,draft).map_err(native_error)}
+    })).await?;
+    let _=notify.emit("cliora:bindings-changed",tool);Ok(result)
+}
+#[tauri::command]
+pub fn common_influence(app:AppHandle,tool_id:String)->Result<crate::native::workspace::CommonInfluence,ApiError>{app.state::<AppState>().with_database(&app,|db|crate::native::workspace::common_influence(db,&tool_id).map_err(native_error))}
+#[tauri::command]
+pub async fn apply_common_configuration(app:AppHandle,common:RegisteredCommon,targets:Vec<crate::native::workspace::CommonInfluenceTarget>)->Result<Vec<crate::native::workspace::CommonApplicationResult>,ApiError>{
+    let notify=app.clone();let tool=common.tool.clone();
+    let result=blocking(move||app.state::<AppState>().with_database(&app,|db|{
+        crate::native::workspace::apply_common(&adapters::Registry::builtins(),db,&common,&targets,|target,profile,binding|{
+            let registry=adapters::Registry::builtins();let home=home().map_err(|error|error.message)?;
+            let project=checked_project(target.scope,target.project_path.clone()).map_err(|error|error.message)?;
+            crate::accounts::validate_reapply_profile(db,profile,target.scope,project.as_deref())?;
+            let _context=crate::accounts::selection::enter(crate::accounts::selection::for_profile(db,&home,profile)?);
+            crate::accounts::selection::validate_expected(&common.tool,target.context_id.as_deref())?;
+            let custom=registered_tool_path(db,&common.tool)?;
+            let probe=adapter::probe_registered(&registry,&common.tool,custom.as_deref(),&home,project.as_deref(),target.scope)?;
+            if probe.native_writes.state!="supported"{return Err(probe.native_writes.reason.into());}
+            apply::apply_registered_validated_expected(&registry,db,&SystemCredentialStore,profile,Some(&common),&probe.native_files,&apply::scope_key(target.scope,project.as_deref())?,target.scope,binding)
+        }).map_err(native_error)
+    })).await?;
+    let _=notify.emit("cliora:bindings-changed",tool);Ok(result)
+}
+
+#[tauri::command]
+pub async fn compare_configuration_current(app:AppHandle,draft:crate::native::configuration::ConfigurationDraft)->Result<crate::native::workspace::ConfigurationCurrentComparison,ApiError>{
+    blocking(move||app.state::<AppState>().with_database(&app,|db|{let home=home()?;let project=checked_project(draft.scope,draft.project_path.clone())?;let _context=crate::accounts::selection::enter_bound(db,&home,&draft.profile.tool,draft.scope,project.as_deref()).map_err(native_error)?;app.state::<AppState>().workspace.compare_current(&adapters::Registry::builtins(),draft).map_err(native_error)})).await
+}
+#[tauri::command]
+pub async fn rebase_configuration_current(app:AppHandle,draft:crate::native::configuration::ConfigurationDraft,comparison_id:String,files:std::collections::BTreeMap<String,String>)->Result<crate::native::configuration::ConfigurationDraft,ApiError>{
+    blocking(move||app.state::<AppState>().with_database(&app,|db|{let home=home()?;let project=checked_project(draft.scope,draft.project_path.clone())?;let _context=crate::accounts::selection::enter_bound(db,&home,&draft.profile.tool,draft.scope,project.as_deref()).map_err(native_error)?;app.state::<AppState>().workspace.rebase_current(&adapters::Registry::builtins(),draft,comparison_id,files).map_err(native_error)})).await
+}
+#[tauri::command]
+pub async fn preview_configuration_backup(app:AppHandle,draft:crate::native::configuration::ConfigurationDraft,role:String,transaction_id:String)->Result<crate::native::workspace::ConfigurationBackupPreview,ApiError>{
+    blocking(move||app.state::<AppState>().with_database(&app,|db|{let home=home()?;let project=checked_project(draft.scope,draft.project_path.clone())?;let _context=crate::accounts::selection::enter_bound(db,&home,&draft.profile.tool,draft.scope,project.as_deref()).map_err(native_error)?;app.state::<AppState>().workspace.preview_backup(&adapters::Registry::builtins(),db,&SystemCredentialStore,draft,role,transaction_id).map_err(native_error)})).await
+}
+#[tauri::command]
+pub async fn restore_configuration_backup(app:AppHandle,draft:crate::native::configuration::ConfigurationDraft,role:String,transaction_id:String)->Result<crate::native::workspace::ConfigurationSaveResult,ApiError>{
+    let notify=app.clone();let tool=draft.profile.tool.clone();
+    let result=blocking(move||app.state::<AppState>().with_database(&app,|db|{let home=home()?;let project=checked_project(draft.scope,draft.project_path.clone())?;let _context=crate::accounts::selection::enter_bound(db,&home,&draft.profile.tool,draft.scope,project.as_deref()).map_err(native_error)?;app.state::<AppState>().workspace.restore_backup(&adapters::Registry::builtins(),db,&SystemCredentialStore,draft,role,transaction_id).map_err(native_error)})).await?;
+    let _=notify.emit("cliora:bindings-changed",tool);Ok(result)
 }

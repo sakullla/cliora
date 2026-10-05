@@ -95,13 +95,13 @@ for (const tool of ['pi', 'opencode', 'kimi']) {
     await third.getByLabel(tool === 'kimi' ? '新 alias' : '新模型 ID').fill('copied');
     await third.getByRole('button', { name: '复制模型', exact: true }).click();
     const copied = page.getByRole('article', { name: '模型 copied', exact: true });
-    await copied.getByRole('button', { name: /copied · copied/ }).click();
+    await copied.getByRole('button', { name: /copied/ }).click();
     await copied.getByText('复制或修改模型标识', { exact: true }).click();
     await copied.getByLabel(tool === 'kimi' ? '新 alias' : '新模型 ID').fill('renamed');
     await copied.getByRole('button', { name: '修改模型标识', exact: true }).click();
     await expect(copied).toHaveCount(0);
     const renamed = page.getByRole('article', { name: '模型 renamed', exact: true });
-    await renamed.getByRole('button', { name: /renamed · renamed/ }).click();
+    await renamed.getByRole('button', { name: /renamed/ }).click();
     await renamed.getByRole('button', { name: '设为默认模型', exact: true }).click();
     await expect(renamed.getByRole('button', { name: '删除模型', exact: true })).toBeDisabled();
     if (tool === 'opencode') {
@@ -109,7 +109,7 @@ for (const tool of ['pi', 'opencode', 'kimi']) {
       await expect(renamed.getByRole('button', { name: '当前轻量模型' })).toBeDisabled();
     }
     const one = page.getByRole('article', { name: '模型 one', exact: true });
-    await one.getByRole('button', { name: /one · one/ }).click();
+    await one.getByRole('button', { name: /one/ }).click();
     await one.getByRole('button', { name: '删除模型', exact: true }).click();
     await expect(one).toHaveCount(0);
     await expect(page.getByRole('button', { name: '保存配置' })).toBeEnabled();
@@ -121,20 +121,20 @@ for (const tool of ['pi', 'opencode', 'kimi']) {
   test(`${tool}: invalid input survives model navigation and blocks provider switches`, async ({ page }) => {
     await page.goto(`/__multi_model_editor?tool=${tool}`);
     const first = page.getByRole('article', { name: '模型 first', exact: true });
-    await first.getByRole('button', { name: /first · first/ }).click();
+    await first.getByRole('button', { name: /^first(?: ·|$)/ }).click();
     const context = first.getByLabel('上下文上限');
     await context.fill('invalid-number');
     await expect(page.getByRole('button', { name: '保存配置' })).toBeDisabled();
-    await expect(page.getByLabel('当前供应商')).toBeDisabled();
+    await expect(page.getByLabel('查看供应商')).toBeDisabled();
     if (tool === 'kimi') await expect(first.getByLabel('供应商 ID')).toBeDisabled();
     const second = page.getByRole('article', { name: '模型 second', exact: true });
-    await second.getByRole('button', { name: /second · second/ }).click();
+    await second.getByRole('button', { name: /^second(?: ·|$)/ }).click();
     await expect(context).not.toBeVisible();
-    await first.getByRole('button', { name: /first · first/ }).click();
+    await first.getByRole('button', { name: /^first(?: ·|$)/ }).click();
     await expect(context).toHaveValue('invalid-number');
     await context.fill('262144');
     await expect(page.getByRole('button', { name: '保存配置' })).toBeEnabled();
-    await expect(page.getByLabel('当前供应商')).toBeEnabled();
+    await expect(page.getByLabel('查看供应商')).toBeEnabled();
     if (tool === 'kimi') await expect(first.getByLabel('供应商 ID')).toBeEnabled();
     await expect.poll(() => page.evaluate(() => (window as unknown as { __actions: { field: string; value: unknown }[] }).__actions.at(-1))).toMatchObject({ field: tool === 'pi' ? 'contextWindow' : tool === 'kimi' ? 'max_context_size' : 'limit.context', value: 262144 });
   });
@@ -175,7 +175,7 @@ test('OpenCode edits options and modalities while preserving unknown native choi
   await page.goto('/__multi_model_editor?tool=opencode');
   await page.evaluate(() => (window as unknown as { __replaceView: (fn: (view: any) => any) => void }).__replaceView(view => { view.models[0].fields.modalities.input.push('future-format'); return view; }));
   const first = page.getByRole('article', { name: '模型 first', exact: true });
-  await first.getByRole('button', { name: /first · first/ }).click();
+  await first.getByRole('button', { name: /^first(?: ·|$)/ }).click();
   const input = first.getByRole('group', { name: '输入模态' });
   await expect(input.getByLabel('future-format（原生值）')).toBeChecked();
   await input.getByLabel('图片', { exact: true }).check();
@@ -190,7 +190,7 @@ test('OpenCode edits options and modalities while preserving unknown native choi
 test('pending and failed actions retain input and recover by retry or explicit cancellation', async ({ page }) => {
   await page.goto('/__multi_model_editor?tool=kimi');
   const first = page.getByRole('article', { name: '模型 first', exact: true });
-  await first.getByRole('button', { name: /first · first/ }).click();
+  await first.getByRole('button', { name: /^first(?: ·|$)/ }).click();
   await page.evaluate(() => { (window as unknown as { __delay: boolean }).__delay = true; });
   await first.getByLabel('上下文上限').fill('262144');
   await expect(first.getByLabel('上下文上限')).toHaveValue('262144');
@@ -211,13 +211,13 @@ test('pending and failed actions retain input and recover by retry or explicit c
 test('deleting a model retires its invalid input; replacing a session retires old validity', async ({ page }) => {
   await page.goto('/__multi_model_editor?tool=pi');
   const first = page.getByRole('article', { name: '模型 first', exact: true });
-  await first.getByRole('button', { name: /first · first/ }).click();
+  await first.getByRole('button', { name: /^first(?: ·|$)/ }).click();
   await first.getByLabel('上下文上限').fill('bad');
   await first.getByRole('button', { name: '删除模型' }).click();
   await expect(first).toHaveCount(0);
   await expect(page.getByRole('button', { name: '保存配置' })).toBeEnabled();
   const second = page.getByRole('article', { name: '模型 second', exact: true });
-  await second.getByRole('button', { name: /second · second/ }).click();
+  await second.getByRole('button', { name: /^second(?: ·|$)/ }).click();
   await second.getByLabel('上下文上限').fill('bad');
   await page.evaluate(() => (window as unknown as { __replaceSession: () => void }).__replaceSession());
   await expect(page.getByRole('button', { name: '保存配置' })).toBeEnabled();
@@ -227,7 +227,7 @@ for (const tool of ['pi', 'opencode', 'kimi']) {
   test(`${tool}: malformed native model values stay recoverable and external projection updates fields`, async ({ page }) => {
     await page.goto(`/__multi_model_editor?tool=${tool}`);
     const first = page.getByRole('article', { name: '模型 first', exact: true });
-    await first.getByRole('button', { name: /first · first/ }).click();
+    await first.getByRole('button', { name: /^first(?: ·|$)/ }).click();
     await page.evaluate(() => {
       const state = window as unknown as { __replaceView: (fn: (view: any) => any) => void; __setIssues: (issues: unknown[]) => void };
       state.__replaceView(view => { view.models[0].fields = null; return view; });
@@ -264,7 +264,7 @@ test('Kimi effort options use model declarations and preserve an unknown native 
   await page.goto('/__multi_model_editor?tool=kimi');
   await page.evaluate(() => (window as unknown as { __replaceView: (fn: (view: any) => any) => void }).__replaceView(view => { view.models[0].fields.support_efforts = ['low', 'high']; view.models[0].fields.default_effort = 'future-effort'; return view; }));
   const first = page.getByRole('article', { name: '模型 first', exact: true });
-  await first.getByRole('button', { name: /first · first/ }).click();
+  await first.getByRole('button', { name: /^first(?: ·|$)/ }).click();
   await first.getByText('能力、思考与可选上限', { exact: true }).click();
   const effort = first.getByLabel('模型思考档位', { exact: true });
   await expect(effort).toHaveValue('future-effort');
@@ -308,7 +308,7 @@ test('Kimi edits native capabilities while preserving unknown values and resets 
     return view;
   }));
   const first = page.getByRole('article', { name: '模型 first', exact: true });
-  await first.getByRole('button', { name: /first · first/ }).click();
+  await first.getByRole('button', { name: /^first(?: ·|$)/ }).click();
   const capabilities = first.getByRole('group', { name: '原生能力声明' });
   await expect(capabilities).toBeVisible();
   await expect(capabilities.getByLabel('future-capability（原生值）', { exact: true })).toBeChecked();
@@ -323,8 +323,8 @@ test('Kimi edits native capabilities while preserving unknown values and resets 
   ]);
   await expect(capabilities.getByLabel('future-capability（原生值）', { exact: true })).toBeChecked();
   const second = page.getByRole('article', { name: '模型 second', exact: true });
-  await second.getByRole('button', { name: /second · second/ }).click();
-  await first.getByRole('button', { name: /first · first/ }).click();
+  await second.getByRole('button', { name: /^second(?: ·|$)/ }).click();
+  await first.getByRole('button', { name: /^first(?: ·|$)/ }).click();
   await expect(capabilities.getByLabel('future-capability（原生值）', { exact: true })).toBeChecked();
   await capabilities.getByRole('button', { name: '恢复默认', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as unknown as { __actions: unknown[] }).__actions.at(-1))).toEqual({ version: 1, target: { kind: 'model', provider: 'gateway', id: 'first' }, operation: 'reset', field: 'capabilities', value: null });
@@ -336,7 +336,7 @@ test('Kimi edits native capabilities while preserving unknown values and resets 
 test('Kimi capability actions block pending saves and preserve values after failures', async ({ page }) => {
   await page.goto('/__multi_model_editor?tool=kimi');
   const first = page.getByRole('article', { name: '模型 first', exact: true });
-  await first.getByRole('button', { name: /first · first/ }).click();
+  await first.getByRole('button', { name: /^first(?: ·|$)/ }).click();
   const capabilities = first.getByRole('group', { name: '原生能力声明' });
   await page.evaluate(() => { (window as unknown as { __delay: boolean }).__delay = true; });
   await capabilities.getByLabel('图片', { exact: true }).click();
@@ -367,11 +367,11 @@ for (const tool of ['pi', 'opencode', 'kimi']) {
       for (const model of view.models) if (model.fields.provider) model.fields.provider = 'alpha';
       return view;
     }));
-    await expect(page.getByLabel('当前供应商')).toHaveCount(1);
-    await expect(page.getByLabel('当前供应商')).toHaveValue('alpha');
-    await page.getByLabel('当前供应商').selectOption('beta');
-    await expect(page.getByLabel('当前供应商')).toHaveCount(1);
-    await expect(page.getByLabel('当前供应商')).toHaveValue('beta');
+    await expect(page.getByLabel('查看供应商')).toHaveCount(1);
+    await expect(page.getByLabel('查看供应商')).toHaveValue('alpha');
+    await page.getByLabel('查看供应商').selectOption('beta');
+    await expect(page.getByLabel('查看供应商')).toHaveCount(1);
+    await expect(page.getByLabel('查看供应商')).toHaveValue('beta');
     await page.getByRole('button', { name: '新增模型', exact: true }).click();
     const form = page.getByRole('group', { name: '新增模型表单' });
     await form.getByLabel(tool === 'kimi' ? '模型 alias' : '模型 ID', { exact: true }).fill('beta/new~model');
@@ -389,11 +389,11 @@ for (const tool of ['pi', 'opencode', 'kimi']) {
     await page.getByLabel('连接地址').fill('https://beta.example/v1');
     await page.getByLabel('接口协议').selectOption('openai_responses');
     await page.getByRole('button', { name: '设置供应商连接' }).click();
-    await expect(page.getByLabel('当前供应商')).toHaveCount(1);
-    await expect(page.getByLabel('当前供应商')).toHaveValue('beta');
-    await page.getByLabel('当前供应商').selectOption('alpha');
-    await expect(page.getByLabel('当前供应商')).toHaveCount(1);
-    await expect(page.getByLabel('当前供应商')).toHaveValue('alpha');
+    await expect(page.getByLabel('查看供应商')).toHaveCount(1);
+    await expect(page.getByLabel('查看供应商')).toHaveValue('beta');
+    await page.getByLabel('查看供应商').selectOption('alpha');
+    await expect(page.getByLabel('查看供应商')).toHaveCount(1);
+    await expect(page.getByLabel('查看供应商')).toHaveValue('alpha');
     await expect(page.getByRole('button', { name: '保存配置' })).toBeEnabled();
     const actions = await page.evaluate(() => (window as unknown as { __actions: { operation: string; target: unknown }[] }).__actions);
     expect(actions.find(action => action.operation === 'create')).toMatchObject({ target: { provider: 'beta', id: 'beta/new~model' } });

@@ -23,6 +23,9 @@ pub(super) struct BindingRow {
     pub version: u64,
     pub context: Option<String>,
     pub managed: String,
+    pub common_version: Option<u64>,
+    pub common_revision: Option<String>,
+    pub applied_profile: Option<String>,
 }
 
 fn storage() -> String {
@@ -70,7 +73,7 @@ pub(super) fn binding(
     tool: &str,
     key: &str,
 ) -> Result<Option<BindingRow>, String> {
-    conn.query_row("SELECT scope_key,tool,profile_id,profile_version,context_id,managed FROM applied_bindings WHERE tool=?1 AND scope_key=?2",[tool,key],read_binding).optional().map_err(|_|storage())
+    conn.query_row("SELECT scope_key,tool,profile_id,profile_version,context_id,managed,common_version,common_revision,applied_profile FROM applied_bindings WHERE tool=?1 AND scope_key=?2",[tool,key],read_binding).optional().map_err(|_|storage())
 }
 fn read_binding(row: &rusqlite::Row<'_>) -> rusqlite::Result<BindingRow> {
     Ok(BindingRow {
@@ -79,11 +82,11 @@ fn read_binding(row: &rusqlite::Row<'_>) -> rusqlite::Result<BindingRow> {
         profile_id: row.get(2)?,
         version: row.get::<_, i64>(3)?.max(0) as u64,
         context: row.get(4)?,
-        managed: row.get(5)?,
+        managed: row.get(5)?, common_version:row.get::<_,Option<i64>>(6)?.map(|value|value.max(0) as u64),common_revision:row.get(7)?,applied_profile:row.get(8)?,
     })
 }
 fn bindings(conn: &Connection) -> Result<Vec<BindingRow>, String> {
-    let mut statement=conn.prepare("SELECT scope_key,tool,profile_id,profile_version,context_id,managed FROM applied_bindings ORDER BY rowid").map_err(|_|storage())?;
+    let mut statement=conn.prepare("SELECT scope_key,tool,profile_id,profile_version,context_id,managed,common_version,common_revision,applied_profile FROM applied_bindings ORDER BY rowid").map_err(|_|storage())?;
     let rows = statement
         .query_map([], read_binding)
         .map_err(|_| storage())?;
@@ -96,7 +99,7 @@ pub(super) fn fingerprint(binding: &BindingRow) -> String {
         &binding.profile_id,
         binding.version,
         &binding.context,
-        &binding.managed,
+        &binding.managed,&binding.common_version,&binding.common_revision,&binding.applied_profile,
     );
     format!(
         "{:x}",
@@ -132,6 +135,16 @@ pub fn query(db: &Database, id: &str) -> Result<AccountImpact, String> {
         }
         let all_profiles=profiles(&tx)?;let referenced:Vec<_>=all_profiles.iter().filter(|profile|profile.account_id.as_deref()==Some(id)).collect();let profile_ids:BTreeSet<_>=referenced.iter().map(|profile|profile.summary.id.as_str()).collect();
         let all_bindings=bindings(&tx)?;let mut scopes=vec![];
+        let mut applied_references=Vec::new();
+        for row in &all_bindings {
+            if let Some(snapshot)=row.applied_profile.as_deref().and_then(|data|serde_json::from_str::<crate::native::apply::AppliedProfileSnapshot>(data).ok()) {
+                if matches!(&snapshot.runtime_profile.authentication,crate::native::profile::ProfileAuthentication::OAuth{account_id} if account_id==id)
+                    && !referenced.iter().any(|profile|profile.summary.id==snapshot.source_profile.id)
+                    && !applied_references.iter().any(|profile:&AccountImpactProfile|profile.id==snapshot.source_profile.id)
+                { applied_references.push(AccountImpactProfile{id:snapshot.source_profile.id,name:snapshot.source_profile.name,tool_id:snapshot.source_profile.tool,version:snapshot.source_profile.version,revision:snapshot.source_profile.revision}); }
+            }
+        }
+
         for row in &all_bindings {
             if !profile_ids.contains(row.profile_id.as_str()) && !row.context.as_ref().is_some_and(|id|known.contains_key(id)) {continue;}
             let (scope,project_path)=scope(&row.key);let (_,base)=super::selection::split_key(&row.key);
@@ -153,6 +166,6 @@ pub fn query(db: &Database, id: &str) -> Result<AccountImpact, String> {
             let needs_rebind=program.as_deref()==Some("official") && (account_id.as_deref()!=Some(id) || context_id.as_ref()!=current.as_ref() || current.is_none() || account.state!=AccountState::SignedIn || account.pending_login.is_some() || account.identity.is_none() || profile_id.as_deref().is_some_and(|id|!profile_ids.contains(id)));
             usage_references.push(AccountImpactUsageReference {id:query_id,label,version,enabled,account_id,context_kind:context_kind(context_id.as_deref(),&known),context_id,profile_id,needs_rebind});
         }}
-        let result=AccountImpact {account_id:account.id,account_version:account.version,tool_id:account.tool_id,current_context_id:current,contexts,profiles:referenced.into_iter().map(|profile|profile.summary.clone()).collect(),scopes,usage_references};tx.commit().map_err(|_|storage())?;Ok(result)
+        let result=AccountImpact {account_id:account.id,account_version:account.version,tool_id:account.tool_id,current_context_id:current,contexts,profiles:referenced.into_iter().map(|profile|profile.summary.clone()).chain(applied_references).collect(),scopes,usage_references};tx.commit().map_err(|_|storage())?;Ok(result)
     })
 }

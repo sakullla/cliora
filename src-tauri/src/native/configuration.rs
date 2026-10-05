@@ -28,6 +28,24 @@ pub struct ConfigurationDraft {
     pub common: Option<RegisteredCommon>,
     pub view: Value,
     pub issues: Vec<ConfigurationIssue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<crate::adapters::configuration::ConfigurationSubject>,
+    #[serde(default)]
+    pub context_id: Option<String>,
+    #[serde(default)]
+    pub project_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub descriptor: Option<ConfigurationDescriptor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draft_connection: Option<profile::Connection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential: Option<super::workspace::ConfigurationCredential>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog_support: Option<crate::adapters::configuration::CatalogSupport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_status: Option<String>,
+    #[serde(default)]
+    pub source_capabilities: Vec<super::workspace::SourceCapability>,
 }
 
 pub fn validate_state(state: &EditingState) -> Result<(), String> {
@@ -206,13 +224,23 @@ pub fn refresh(registry: &Registry, mut draft: ConfigurationDraft) -> Configurat
         // Prevent ordinary draft IPC from returning plaintext secrets.
         profile::validate_registered_files(registry, &draft.profile.tool, &draft.profile.files)?;
         let parsed = effective_documents(registry, &draft.profile, draft.common.as_ref())?;
-        let view = port.read(&parsed, state)?;
-        let mut issues = port.validate(&parsed, state, draft.scope);
+        let subject = draft.subject.unwrap_or_default();
+        let view = port.read_subject(&parsed, state, draft.scope, subject)?;
+        let mut issues = port.validate_subject(&parsed, state, draft.scope, subject);
         let mut baseline = draft.profile.clone();
         baseline.files = draft.baseline_files.clone();
         let baseline = effective_documents(registry, &baseline, draft.common.as_ref())?;
         issues.extend(port.validate_changes(Some(&baseline), &parsed, state, draft.scope));
-        derive_connection(registry, &mut draft.profile, &parsed)?;
+        if subject != crate::adapters::configuration::ConfigurationSubject::Common {
+            draft.draft_connection = port.draft_connection(&parsed, state)?;
+            derive_connection(registry, &mut draft.profile, &parsed)?;
+        }
+        if draft.subject.is_some() {
+            draft.descriptor = Some(port.describe_subject(draft.scope, subject));
+            draft.catalog_support = Some(if subject == crate::adapters::configuration::ConfigurationSubject::Common {
+                crate::adapters::configuration::CatalogSupport { available: false, multiple: false, reason: Some("通用配置不创建模型引用".into()) }
+            } else { port.catalog_support() });
+        }
         draft.view = view;
         draft.issues = issues;
         Ok::<_, String>(())
@@ -258,6 +286,8 @@ pub fn open_with_common(
             common,
             view: Value::Null,
             issues: Vec::new(),
+            subject: None, context_id: None, project_path: None, descriptor: None,
+            draft_connection: None, credential: None, catalog_support: None, credential_status: None, source_capabilities: Vec::new(),
         },
     ))
 }
@@ -318,7 +348,8 @@ pub fn edit(
     let port = adapter
         .configuration()
         .ok_or("此 CLI 尚无专属配置编辑能力")?;
-    let descriptor = port.describe(draft.scope);
+    let subject = draft.subject.unwrap_or_default();
+    let descriptor = port.describe_subject(draft.scope, subject);
     if descriptor.version != action.version || !descriptor.operations.contains(&action.operation) {
         return Err("配置适配器未声明此编辑动作或版本".into());
     }
@@ -326,7 +357,7 @@ pub fn edit(
     let mut parsed = documents(registry, &draft.profile)?;
     let mut next = draft;
     let state = next.profile.editing.as_mut().ok_or("缺少配置编辑版本")?;
-    port.edit_inherited(&mut parsed, &effective, state, &action)?;
+    port.edit_subject(&mut parsed, &effective, state, &action, next.scope, subject)?;
     // Compact obsolete values for the same logical field, stopping at entity
     // lifecycle actions because they can change the meaning of its identity.
     if matches!(action.operation.as_str(), "set" | "reset") {
@@ -350,7 +381,9 @@ pub fn edit(
     }
     state.intents.push(action);
     validate_state(state)?;
-    for change in port.suppression_changes(state.intents.last().unwrap())? {
+    let suppression_changes = if subject == crate::adapters::configuration::ConfigurationSubject::Common { Vec::new() }
+        else { port.suppression_changes(state.intents.last().unwrap())? };
+    for change in suppression_changes {
         let entries = next.profile.suppressed.entry(change.role).or_default();
         if change.suppressed {
             if !entries.contains(&change.path) {

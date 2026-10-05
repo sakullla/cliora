@@ -9,3 +9,5 @@
 .modelHeading { text-align: left; width: 100%; overflow-wrap: anywhere; }
 .editor fieldset { min-width: 0; display: grid; gap: 8px; }
 .editor button { max-width: 100%; white-space: normal; }
+
+.editor [hidden] { display: none !important; }

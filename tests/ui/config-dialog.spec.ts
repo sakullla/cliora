@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import { installConfigurationProtocol, setupConfigurationWorkspace } from './configuration-workspace-fixture';
 
 test('new configuration dialog has one save action', async ({ page }) => {
   await page.addInitScript(() => {
@@ -26,6 +27,7 @@ test('new configuration dialog has one save action', async ({ page }) => {
       } },
     });
   });
+  await installConfigurationProtocol(page);
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
   await expect(page.getByRole('heading', { name: '工具与连接' })).toBeVisible();
@@ -51,9 +53,9 @@ test('new configuration dialog has one save action', async ({ page }) => {
   await expect(dialog.getByText('先填写名称')).toHaveCount(0);
   await expect(dialog.getByRole('button', { name: '仅保存' })).toHaveCount(0);
   await expect(dialog.getByRole('button', { name: '保存并给这个工具使用' })).toHaveCount(0);
-  await expect(dialog.getByRole('button', { name: '保存', exact: true })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: '保存配置', exact: true })).toBeVisible();
   await expect(dialog.getByLabel('配置名称')).toBeVisible();
-  await expect(dialog.getByLabel('API 地址')).toHaveValue('https://api.openai.com/v1');
+  await expect(dialog.getByRole('combobox', { name: '凭据来源', exact: true })).toHaveValue('native');
   await dialog.getByRole('button', { name: '关闭' }).click();
   await expect(dialog).toHaveCount(0);
 });
@@ -90,6 +92,7 @@ test('install panel updates the active source and can switch to the native CLI',
       } },
     });
   });
+  await installConfigurationProtocol(page);
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
   await page.getByText('安装与更新').click();
@@ -135,6 +138,7 @@ test('a missing CLI asks which install channel to use', async ({ page }) => {
       } },
     });
   });
+  await installConfigurationProtocol(page);
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
   await page.getByText('安装与更新').click();
@@ -143,75 +147,6 @@ test('a missing CLI asks which install channel to use', async ({ page }) => {
   await page.getByRole('dialog').getByRole('button', { name: '安装', exact: true }).click();
   const maintain = await page.evaluate(() => (window as unknown as { __maintainCalls: Array<{ action: string; source: string | null }> }).__maintainCalls);
   expect(maintain).toEqual([{ toolId: 'codex', action: 'install', source: 'npm_shim' }]);
-});
-
-test('an unfinished tool load does not leave the empty configuration dialog open', async ({ page }) => {
-  await page.addInitScript(() => {
-    let release: () => void = () => {};
-    const gate = new Promise<void>((resolve) => { release = resolve; });
-    const workspace = {
-      probe: { selectedPath: 'C:/codex.cmd', installations: [], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: ['openai_responses'], providerPresets: [{ id: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', interfaceFormat: 'openai_responses', sourceUrl: '' }], dependencies: [], installUrl: '', upgradeHint: '' },
-      profiles: [], common: null, binding: null, snapshots: [], recoveryNeeded: [], customPath: null,
-    };
-    Object.assign(window, {
-      isTauri: true,
-      __releaseWorkspace: () => release(),
-      __TAURI_INTERNALS__: { invoke: async (command: string) => {
-        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex', 'grok'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }, { id: 'grok', name: 'Grok' }] };
-        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: ['openai_responses'] }, { id: 'grok', name: 'Grok', interfaceFormats: ['openai_responses'] }], managedIds: ['codex', 'grok'], preservedUnknown: [] };
-        if (command === 'list_projects' || command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_skill_recovery_issues' || command === 'scan_native_skills' || command === 'list_native_mcp') return [];
-        if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
-        if (command === 'get_tray_status') return { available: false, error: null };
-        if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
-        if (command === 'get_registered_tool_workspace') { await gate; return workspace; }
-        return null;
-      } },
-    });
-  });
-  await page.goto('/');
-  await page.getByRole('button', { name: '编辑配置 →' }).first().click();
-  await expect(page.getByRole('heading', { name: '工具与连接' })).toBeVisible();
-  await expect(page.getByText('正在准备配置')).toHaveCount(0);
-  await expect(page.getByRole('dialog')).toHaveCount(0);
-  await page.getByRole('tab', { name: 'Grok' }).click();
-  await expect(page.getByRole('dialog')).toHaveCount(0);
-  await page.getByRole('button', { name: '新建配置' }).click();
-  await expect(page.getByRole('dialog').getByLabel('配置名称')).toBeVisible();
-  await page.evaluate(() => (window as unknown as { __releaseWorkspace: () => void }).__releaseWorkspace());
-  await expect(page.getByText('正在准备配置')).toHaveCount(0);
-  await expect(page.getByRole('dialog').getByLabel('配置名称')).toBeVisible();
-});
-
-test('copy path writes the native file path and shows that it copied', async ({ page }) => {
-  await page.addInitScript(() => {
-    const clipboard: string[] = [];
-    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (value: string) => { clipboard.push(value); } } });
-    Object.assign(window, {
-      isTauri: true,
-      __copiedPaths: clipboard,
-      __TAURI_INTERNALS__: { invoke: async (command: string) => {
-        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }] };
-        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: ['openai_responses'] }], managedIds: ['codex'], preservedUnknown: [] };
-        if (command === 'list_projects' || command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_skill_recovery_issues' || command === 'scan_native_skills' || command === 'list_native_mcp') return [];
-        if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
-        if (command === 'get_tray_status') return { available: false, error: null };
-        if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
-        if (command === 'get_registered_tool_workspace') return {
-          probe: { selectedPath: 'C:/codex.cmd', installations: [{ path: 'C:/codex.cmd', version: '0.159.2', status: 'available' }], nativeFiles: [{ role: 'config', path: 'C:\\Users\\12976\\.codex\\config.toml', format: 'toml', writable: true, reason: null, sensitive: false }], nativeWrites: { state: 'supported', reason: '已确认 CLI 身份，原生配置可编辑' }, interfaceFormats: ['openai_responses'], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '' },
-          profiles: [], common: null, binding: null, snapshots: [], recoveryNeeded: [], customPath: null,
-        };
-        return null;
-      } },
-    });
-  });
-  await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
-  await page.getByRole('button', { name: '新建配置' }).click();
-  const dialog = page.getByRole('dialog');
-  await dialog.getByText('更多选项').click();
-  await dialog.getByRole('button', { name: '复制路径' }).click();
-  await expect(dialog.getByRole('button', { name: '已复制' })).toBeVisible();
-  await expect.poll(() => page.evaluate(() => (window as unknown as { __copiedPaths: string[] }).__copiedPaths)).toEqual(['C:\\Users\\12976\\.codex\\config.toml']);
 });
 
 test('saving a configuration closes the dialog', async ({ page }) => {
@@ -236,11 +171,12 @@ test('saving a configuration closes the dialog', async ({ page }) => {
       } },
     });
   });
+  await installConfigurationProtocol(page);
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
   await page.getByRole('button', { name: '新建配置' }).click();
   const dialog = page.getByRole('dialog');
-  await dialog.getByRole('button', { name: '保存', exact: true }).click();
+  await dialog.getByRole('button', { name: '保存配置', exact: true }).click();
   await expect(dialog).toHaveCount(0);
   await expect(page.getByRole('status')).toContainText('已保存');
 });
@@ -267,195 +203,17 @@ test('enabling a saved profile opens a comparison when the native file differs',
       } },
     });
   });
+  await installConfigurationProtocol(page);
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
-  await page.locator('[data-profile-id="saved-1"]').getByRole('button', { name: '启用' }).click();
+  await page.locator('[data-profile-id="saved-1"]').getByRole('button', { name: '使用' }).click();
   const comparison = page.getByRole('dialog', { name: '比较当前文件与本次配置' });
   await expect(comparison).toBeVisible();
   await expect(comparison.getByText('model = "old"')).toBeVisible();
   await expect(comparison.getByText('model = "new"')).toBeVisible();
   await expect(comparison.getByRole('button', { name: '保留当前文件' })).toBeVisible();
-  await expect(comparison.getByRole('button', { name: '使用本次配置' })).toBeVisible();
+  await expect(comparison.getByRole('button', { name: '使用本次内容' })).toBeVisible();
   await expect(page.locator('[data-profile-id="saved-1"]').getByText('正在使用')).toHaveCount(0);
-});
-
-test('claude role models sit in the form and copy the current model with 1M context', async ({ page }) => {
-  await page.addInitScript(() => {
-    Object.assign(window, {
-      isTauri: true,
-      __TAURI_INTERNALS__: { invoke: async (command: string) => {
-        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['claude_code'], theme: 'system' }, tools: [{ id: 'claude_code', name: 'Claude Code' }] };
-        if (command === 'list_cli_adapters') return { registered: [{ id: 'claude_code', name: 'Claude Code', interfaceFormats: ['anthropic_messages'] }], managedIds: ['claude_code'], preservedUnknown: [] };
-        if (command === 'list_projects' || command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_skill_recovery_issues' || command === 'scan_native_skills' || command === 'list_native_mcp') return [];
-        if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
-        if (command === 'get_tray_status') return { available: false, error: null };
-        if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
-        if (command === 'get_registered_tool_workspace') return {
-          probe: { selectedPath: 'C:/claude.cmd', installations: [], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: ['anthropic_messages'], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '' },
-          profiles: [], common: null, binding: null, snapshots: [], recoveryNeeded: [], customPath: null,
-        };
-        if (command === 'inspect_registered_native_draft') return { connection: null, reasoningEffort: null };
-        return null;
-      } },
-    });
-  });
-  await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
-  await page.getByRole('button', { name: '新建配置' }).click();
-  const dialog = page.getByRole('dialog');
-  await expect(dialog.getByRole('button', { name: '所有角色使用当前模型' })).toBeVisible();
-  await expect(dialog.getByText('模型角色映射')).toHaveCount(0);
-  await dialog.getByLabel('模型', { exact: true }).fill('glm-5.3');
-  await dialog.getByRole('checkbox', { name: '1M 上下文', exact: true }).check();
-  await dialog.getByRole('button', { name: '所有角色使用当前模型' }).click();
-  await expect(dialog.getByLabel('Sonnet 请求模型')).toHaveValue('glm-5.3');
-  await expect(dialog.getByLabel('Opus 请求模型')).toHaveValue('glm-5.3');
-  await expect(dialog.getByRole('checkbox', { name: 'Sonnet 1M 上下文' })).toBeChecked();
-  await expect(dialog.getByRole('checkbox', { name: 'Opus 1M 上下文' })).toBeChecked();
-  await expect(dialog.getByRole('checkbox', { name: 'Haiku 1M 上下文' })).toHaveCount(0);
-  await dialog.getByRole('checkbox', { name: 'Sonnet 1M 上下文' }).uncheck();
-  await expect(dialog.getByRole('checkbox', { name: 'Sonnet 1M 上下文' })).not.toBeChecked();
-  await dialog.getByRole('checkbox', { name: 'Sonnet 1M 上下文' }).check();
-  await expect(dialog.getByRole('checkbox', { name: 'Sonnet 1M 上下文' })).toBeChecked();
-});
-
-test('the model menu filters inside the dropdown', async ({ page }) => {
-  await page.addInitScript(() => {
-    Object.assign(window, {
-      isTauri: true,
-      __TAURI_INTERNALS__: { invoke: async (command: string) => {
-        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }] };
-        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: ['openai_responses'] }], managedIds: ['codex'], preservedUnknown: [] };
-        if (command === 'list_projects' || command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_skill_recovery_issues' || command === 'scan_native_skills' || command === 'list_native_mcp') return [];
-        if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
-        if (command === 'get_tray_status') return { available: false, error: null };
-        if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
-        if (command === 'get_registered_tool_workspace') return {
-          probe: { selectedPath: 'C:/codex.cmd', installations: [], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: ['openai_responses'], providerPresets: [{ id: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', interfaceFormat: 'openai_responses', sourceUrl: '' }], dependencies: [], installUrl: '', upgradeHint: '' },
-          profiles: [], common: null, binding: null, snapshots: [], recoveryNeeded: [], customPath: null,
-        };
-        if (command === 'list_provider_models') return { models: ['glm-5.3', 'glm-4.5', 'glm-5.3-flashx'], status: 'ready', fetchedAt: 1, error: null, source: 'provider_directory' };
-        return null;
-      } },
-    });
-  });
-  await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
-  await page.getByRole('button', { name: '新建配置' }).click();
-  const dialog = page.getByRole('dialog');
-  await dialog.getByRole('button', { name: '获取模型' }).click();
-  await dialog.getByLabel('模型', { exact: true }).click();
-  await expect(page.getByRole('option', { name: 'glm-4.5' })).toBeVisible();
-  await dialog.getByLabel('模型', { exact: true }).fill('flash');
-  await expect(page.getByRole('option', { name: 'glm-5.3-flashx' })).toBeVisible();
-  await expect(page.getByRole('option', { name: 'glm-4.5' })).toHaveCount(0);
-  await page.getByRole('option', { name: 'glm-5.3-flashx' }).click();
-  await expect(dialog.getByLabel('模型', { exact: true })).toHaveValue('glm-5.3-flashx');
-});
-
-test('clicking a saved profile switches the active configuration', async ({ page }) => {
-  await page.addInitScript(() => {
-    const applied = { id: 'kimi' };
-    const profiles = [
-      { id: 'kimi', tool: 'claude_code', name: 'Kimi For Coding', version: 1, revision: 'a', inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection: { providerId: 'kimi', interfaceFormat: 'anthropic_messages', baseUrl: 'https://api.kimi.com/coding', model: 'k3', secretRef: null, authEnvVar: null } },
-      { id: 'zhipu', tool: 'claude_code', name: 'Zhipu GLM', version: 1, revision: 'b', inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection: { providerId: 'zhipu', interfaceFormat: 'anthropic_messages', baseUrl: 'https://open.bigmodel.cn/api/anthropic', model: 'glm-5.3', secretRef: null, authEnvVar: null } },
-    ];
-    const workspace = () => {
-      const profile = profiles.find((item) => item.id === applied.id);
-      return {
-        probe: { selectedPath: 'C:/claude.cmd', installations: [{ path: 'C:/claude.cmd', version: '2.1.284', status: 'available' }], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: ['anthropic_messages'], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '' },
-        profiles, binding: { scopeKey: 'global', tool: 'claude_code', profileId: applied.id, profileVersion: profile?.version ?? 1, managed: {} }, snapshots: [], recoveryNeeded: [], common: null, customPath: null,
-      };
-    };
-    Object.assign(window, {
-      isTauri: true,
-      __applyCalls: [] as unknown[],
-      __TAURI_INTERNALS__: { invoke: async (command: string, args?: { profileId?: string }) => {
-        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['claude_code'], theme: 'system' }, tools: [{ id: 'claude_code', name: 'Claude Code' }] };
-        if (command === 'list_cli_adapters') return { registered: [{ id: 'claude_code', name: 'Claude Code', interfaceFormats: ['anthropic_messages'] }], managedIds: ['claude_code'], preservedUnknown: [] };
-        if (command === 'list_projects' || command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_skill_recovery_issues' || command === 'scan_native_skills' || command === 'list_native_mcp') return [];
-        if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
-        if (command === 'get_tray_status') return { available: false, error: null };
-        if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
-        if (command === 'get_registered_tool_workspace') return workspace();
-        if (command === 'apply_registered_native_profile') {
-          (window as unknown as { __applyCalls: unknown[] }).__applyCalls.push(args);
-          applied.id = args?.profileId ?? applied.id;
-          return { transactionId: '1', changedFiles: ['settings'], status: 'written_for_next_session' };
-        }
-        if (command === 'prepare_registered_native_import') return { files: {}, inspection: { connection: null, reasoningEffort: null }, migratedSecret: false, nativeCredentials: {} };
-        if (command === 'save_registered_native_profile') return profiles.find((item) => item.id === 'zhipu');
-        if (command === 'inspect_registered_native_draft') return { connection: null, reasoningEffort: null };
-        return null;
-      } },
-    });
-  });
-  await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
-  const kimi = page.locator('[data-profile-id="kimi"]');
-  const zhipu = page.locator('[data-profile-id="zhipu"]');
-  await expect(kimi.getByText('正在使用')).toBeVisible();
-  await zhipu.getByRole('button', { name: '修改' }).click();
-  await expect(page.getByRole('dialog', { name: '修改配置' })).toBeVisible();
-  await page.getByRole('dialog').getByRole('button', { name: '保存', exact: true }).click();
-  await expect(page.getByRole('dialog', { name: '修改配置' })).toHaveCount(0);
-  await expect(page.getByText('当前仍使用「Kimi For Coding」')).toBeVisible();
-  await expect(kimi.getByText('正在使用')).toBeVisible();
-  await zhipu.getByRole('button', { name: '启用' }).click();
-  await expect(zhipu.getByText('正在使用')).toBeVisible();
-  await expect(kimi.getByText('已保存')).toBeVisible();
-  await expect(page.getByText('已使用此配置，下次启动生效。')).toHaveCount(0);
-  const calls = await page.evaluate(() => (window as unknown as { __applyCalls: Array<{ profileId: string; scope: string; allowTakeover: boolean }> }).__applyCalls);
-  expect(calls).toEqual([{ toolId: 'claude_code', profileId: 'zhipu', scope: 'global', projectPath: null, allowTakeover: false }]);
-});
-
-test('save and enable switches to the edited profile from the dialog', async ({ page }) => {
-  await page.addInitScript(() => {
-    const applied = { id: 'kimi' };
-    const profiles = [
-      { id: 'kimi', tool: 'claude_code', name: 'Kimi For Coding', version: 1, revision: 'a', inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection: { providerId: 'kimi', interfaceFormat: 'anthropic_messages', baseUrl: 'https://api.kimi.com/coding', model: 'k3', secretRef: null, authEnvVar: null } },
-      { id: 'zhipu', tool: 'claude_code', name: 'Zhipu GLM', version: 1, revision: 'b', inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection: { providerId: 'zhipu', interfaceFormat: 'anthropic_messages', baseUrl: 'https://open.bigmodel.cn/api/anthropic', model: 'glm-5.3', secretRef: null, authEnvVar: null } },
-    ];
-    Object.assign(window, {
-      isTauri: true,
-      __applyCalls: [] as unknown[],
-      __TAURI_INTERNALS__: { invoke: async (command: string, args?: { profileId?: string }) => {
-        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['claude_code'], theme: 'system' }, tools: [{ id: 'claude_code', name: 'Claude Code' }] };
-        if (command === 'list_cli_adapters') return { registered: [{ id: 'claude_code', name: 'Claude Code', interfaceFormats: ['anthropic_messages'] }], managedIds: ['claude_code'], preservedUnknown: [] };
-        if (command === 'list_projects' || command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_skill_recovery_issues' || command === 'scan_native_skills' || command === 'list_native_mcp') return [];
-        if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
-        if (command === 'get_tray_status') return { available: false, error: null };
-        if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
-        if (command === 'get_registered_tool_workspace') return {
-          probe: { selectedPath: 'C:/claude.cmd', installations: [], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: ['anthropic_messages'], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '' },
-          profiles, binding: { scopeKey: 'global', tool: 'claude_code', profileId: applied.id, profileVersion: 1, managed: {} }, snapshots: [], recoveryNeeded: [], common: null, customPath: null,
-        };
-        if (command === 'apply_registered_native_profile') {
-          (window as unknown as { __applyCalls: unknown[] }).__applyCalls.push(args);
-          applied.id = args?.profileId ?? applied.id;
-          return { transactionId: '1', changedFiles: ['settings'], status: 'written_for_next_session' };
-        }
-        if (command === 'prepare_registered_native_import') return { files: {}, inspection: { connection: null, reasoningEffort: null }, migratedSecret: false, nativeCredentials: {} };
-        if (command === 'save_registered_native_profile') return profiles[1];
-        if (command === 'inspect_registered_native_draft') return { connection: null, reasoningEffort: null };
-        return null;
-      } },
-    });
-  });
-  await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
-  const zhipu = page.locator('[data-profile-id="zhipu"]');
-  await page.locator('[data-profile-id="kimi"]').getByRole('button', { name: '修改', exact: true }).click();
-  await expect(page.getByRole('dialog').getByRole('button', { name: '保存并启用' })).toHaveCount(0);
-  await page.keyboard.press('Escape');
-  await zhipu.getByRole('button', { name: '修改', exact: true }).click();
-  const dialog = page.getByRole('dialog', { name: '修改配置' });
-  await dialog.getByRole('button', { name: '保存并启用' }).click();
-  await expect(dialog).toHaveCount(0);
-  await expect(zhipu.getByText('正在使用')).toBeVisible();
-  await expect(page.getByRole('status')).toContainText('已保存并启用');
-  const calls = await page.evaluate(() => (window as unknown as { __applyCalls: Array<{ profileId: string }> }).__applyCalls);
-  expect(calls.map(call => call.profileId)).toEqual(['zhipu']);
 });
 
 test('subscription profiles are grouped apart and quota is added from the row menu', async ({ page }) => {
@@ -485,6 +243,7 @@ test('subscription profiles are grouped apart and quota is added from the row me
       } },
     });
   });
+  await installConfigurationProtocol(page);
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
   const subscription = page.locator('[data-group="subscription"]');
@@ -522,6 +281,7 @@ test('the profile row menu stays fully clickable past the card edge', async ({ p
       } },
     });
   });
+  await installConfigurationProtocol(page);
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
   await page.getByRole('button', { name: '新配置 更多操作' }).click();
@@ -576,6 +336,7 @@ test('a long configuration list can be searched without growing the page', async
       } },
     });
   });
+  await installConfigurationProtocol(page);
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
   const group = page.getByRole('list', { name: '配置项' });
@@ -584,102 +345,8 @@ test('a long configuration list can be searched without growing the page', async
   expect(overflow).toBe(true);
   await page.getByLabel('搜索配置').fill('配置 12');
   await expect(group.getByRole('listitem')).toHaveCount(1);
-  await group.getByRole('button', { name: '启用' }).click();
+  await group.getByRole('button', { name: '使用' }).click();
   await expect(group.getByText('正在使用')).toBeVisible();
-});
-
-test('native file history replaces the editor instead of stacking a diff', async ({ page }) => {
-  await page.addInitScript(() => {
-    Object.assign(window, {
-      isTauri: true,
-      __TAURI_INTERNALS__: { invoke: async (command: string, args?: { transactionId?: string }) => {
-        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }] };
-        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: ['openai_responses'] }], managedIds: ['codex'], preservedUnknown: [] };
-        if (command === 'list_projects' || command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_skill_recovery_issues' || command === 'scan_native_skills' || command === 'list_native_mcp') return [];
-        if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
-        if (command === 'get_tray_status') return { available: false, error: null };
-        if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
-        if (command === 'get_registered_tool_workspace') return {
-          probe: { selectedPath: 'C:/codex.cmd', installations: [{ path: 'C:/codex.cmd', version: '0.159.2', status: 'available' }], nativeFiles: [{ role: 'config', path: 'C:\\Users\\12976\\.codex\\config.toml', format: 'toml', writable: true, reason: null, sensitive: false }], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: ['openai_responses'], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '' },
-          profiles: [], common: null, binding: null, snapshots: [{ role: 'config', fingerprint: 'abc' }], recoveryNeeded: [], customPath: null,
-        };
-        if (command === 'read_registered_native_file_for_edit') return 'model = "now"\n';
-        if (command === 'list_native_backups') return [
-          { transactionId: 'newer', path: 'C:\\Users\\12976\\.codex\\config.toml', createdAt: 0 },
-          { transactionId: 'older', path: 'C:\\Users\\12976\\.codex\\config.toml', createdAt: 0 },
-        ];
-        if (command === 'preview_native_backup') return { transactionId: args?.transactionId, current: 'model = "now"\n', original: args?.transactionId === 'older' ? 'model = "older"\n' : 'model = "old"\n' };
-        return null;
-      } },
-    });
-  });
-  await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
-  await page.getByRole('button', { name: '修改正在使用的文件' }).click();
-  const dialog = page.getByRole('dialog', { name: '修改正在使用的文件' });
-  await dialog.getByRole('button', { name: '修改记录' }).click();
-  const history = page.getByRole('dialog', { name: '修改记录' });
-  const list = history.getByRole('list', { name: '修改记录' });
-  await expect(list.getByRole('button')).toHaveCount(2);
-  await expect(list.getByRole('button', { name: '最近一次', pressed: true })).toBeVisible();
-  await expect(history.getByRole('textbox', { name: '当时的文件' })).toContainText('model = "old"');
-  await expect(history.getByText('当前文件')).toHaveCount(0);
-  await list.getByRole('button', { name: '往前 1 次' }).click();
-  await expect(history.getByRole('textbox', { name: '当时的文件' })).toContainText('model = "older"');
-  await history.getByRole('button', { name: '恢复这个版本' }).click();
-  await expect(page.getByRole('dialog', { name: '恢复这个版本？' })).toBeVisible();
-  await page.getByRole('button', { name: '取消' }).click();
-  await history.getByRole('button', { name: '返回编辑' }).click();
-  await expect(page.getByRole('dialog', { name: '修改正在使用的文件' })).toBeVisible();
-});
-
-
-test('native multi-file switching reuses the editor and separates undo history', async ({ page }) => {
-  await page.addInitScript(() => {
-    const state = { reads: [] as string[] };
-    Object.assign(window, { isTauri: true, multiFileHarness: state, __TAURI_INTERNALS__: { invoke: async (command: string, args?: { role?: string }) => {
-      if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['zcode'], theme: 'system' }, tools: [{ id: 'zcode', name: 'ZCode' }] };
-      if (command === 'list_cli_adapters') return { registered: [{ id: 'zcode', name: 'ZCode', interfaceFormats: [] }], managedIds: ['zcode'], preservedUnknown: [] };
-      if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
-      if (command === 'get_tray_status') return { available: false, error: null };
-      if (command.startsWith('plugin:event|')) return 1;
-      if (command.startsWith('list_') || command === 'scan_native_skills') return [];
-      if (command === 'get_registered_tool_workspace') return {
-        probe: { selectedPath: 'C:/pi.cmd', installations: [], nativeFiles: [
-          { role: 'settings', path: 'C:/fixture/settings.json', format: 'json', writable: true, sensitive: false },
-          { role: 'models', path: 'C:/fixture/models.json', format: 'json', writable: true, sensitive: false }],
-          nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: [], providerPresets: [], dependencies: [] },
-        profiles: [], common: null, binding: null, snapshots: [{ role: 'settings', fingerprint: 'a' }, { role: 'models', fingerprint: 'b' }], recoveryNeeded: [], customPath: null,
-      };
-      if (command === 'read_registered_native_file_for_edit') { state.reads.push(args?.role ?? ''); return args?.role === 'models' ? '{"models": []}' : '{"theme": "light"}'; }
-      return null;
-    } } });
-  });
-  await page.goto('/');
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
-  await page.getByRole('button', { name: '修改正在使用的文件' }).click();
-  const dialog = page.getByRole('dialog', { name: '修改正在使用的文件' });
-  const settings = dialog.getByRole('textbox', { name: 'settings 配置草稿' });
-  await expect(settings).toContainText('light');
-  await settings.evaluate(element => { (window as any).firstEditor = element; });
-  await settings.fill('{"theme": "dark"}');
-  await dialog.getByRole('button', { name: 'models.json', exact: true }).click();
-  const confirm = page.getByRole('dialog', { name: '放弃未保存修改？' });
-  await confirm.getByRole('button', { name: '取消' }).click();
-  await expect(settings).toContainText('dark');
-  expect(await page.evaluate(() => (window as any).multiFileHarness.reads)).toEqual(['settings']);
-  await dialog.getByRole('button', { name: 'models.json', exact: true }).click();
-  await page.getByRole('dialog', { name: '放弃未保存修改？' }).getByRole('button', { name: '放弃修改' }).click();
-  const models = dialog.getByRole('textbox', { name: 'models 配置草稿' });
-  await expect(models).toContainText('"models"');
-  expect(await models.evaluate(element => element === (window as any).firstEditor)).toBe(true);
-  await models.press('Control+z');
-  await expect(models).toContainText('"models"');
-  await expect(models).not.toContainText('theme');
-  await dialog.getByRole('button', { name: 'settings.json', exact: true }).click();
-  await expect(settings).toContainText('light');
-  expect(await page.evaluate(() => (window as any).multiFileHarness.reads)).toEqual(['settings', 'models', 'settings']);
-  await page.screenshot({ path: 'test-results/native-multi-file.png' });
 });
 
 const connectionTools = [
@@ -791,6 +458,7 @@ async function installConnectionHarness(page: Page, options: { piPresets?: boole
 }
 
 async function openConnections(page: Page) {
+  await installConfigurationProtocol(page);
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
   await expect(page.getByRole('heading', { name: '工具与连接' })).toBeVisible();
@@ -801,194 +469,6 @@ async function replaceNumber(field: ReturnType<Page['locator']>, value: string) 
   await field.press('ControlOrMeta+A');
   await field.pressSequentially(value);
 }
-
-test('projected model fields stay on the selected provider and codex effort comes from the draft', async ({ page }) => {
-  test.setTimeout(45_000);
-  await installConnectionHarness(page);
-  await openConnections(page);
-  await page.locator('[data-profile-id="pi-models"]').getByRole('button', { name: '修改' }).click();
-  const dialog = page.getByRole('dialog');
-  await expect(dialog.getByLabel('model-a contextWindow')).toHaveValue('100');
-  await expect(dialog.getByLabel('model-a cost.input')).toHaveValue('1');
-  await expect(dialog.getByLabel('model-a modalities')).toHaveValue('["text"]');
-  await expect(dialog.getByLabel('sibling name')).toHaveValue('Keep');
-  await expect(dialog.getByRole('checkbox', { name: '1M 上下文' })).toHaveCount(0);
-  await expect(dialog.getByRole('button', { name: '获取模型' })).toHaveCount(0);
-  await expect(dialog.getByLabel('推理强度（Codex 原生）')).toHaveCount(0);
-  const cost = dialog.getByLabel('model-a cost.input');
-  await cost.click();
-  await cost.press('End');
-  await cost.press('.');
-  await expect(cost).toHaveValue('1.');
-  await cost.press('5');
-  await expect(cost).toHaveValue('1.5');
-  const contextWindow = dialog.getByLabel('model-a contextWindow');
-  await contextWindow.click();
-  await contextWindow.press('End');
-  await contextWindow.press('.');
-  await expect(contextWindow).toHaveValue('100.');
-  await contextWindow.press('5');
-  await expect(contextWindow).toHaveValue('100.5');
-  const modalities = dialog.getByLabel('model-a modalities');
-  await modalities.click();
-  await modalities.press('End');
-  await modalities.press('x');
-  await expect(modalities).toHaveValue('["text"]x');
-  await modalities.press('ControlOrMeta+A');
-  await modalities.pressSequentially('[');
-  await expect(modalities).toHaveValue('[');
-  await modalities.pressSequentially('"voice"]');
-  await expect(modalities).toHaveValue('["voice"]');
-  await modalities.press('End');
-  await modalities.press('x');
-  await expect(modalities).toHaveValue('["voice"]x');
-  await dialog.getByRole('button', { name: '保存', exact: true }).click();
-  await expect(dialog).toHaveCount(0);
-  const decimalSaved = await page.evaluate(() => (window as unknown as { __savedProfile: { connection: { modelRecords: unknown } } }).__savedProfile);
-  expect(decimalSaved.connection.modelRecords).toEqual([
-    { id: 'model-a', fields: { contextWindow: 100.5, cost: { input: 1.5 }, modalities: ['voice'] } },
-    { id: 'sibling', fields: { name: 'Keep' } },
-  ]);
-
-  await page.locator('[data-profile-id="pi-models"]').getByRole('button', { name: '修改' }).click();
-  await expect(dialog.getByLabel('model-a contextWindow')).toHaveValue('100');
-  await expect(dialog.getByLabel('model-a cost.input')).toHaveValue('1');
-  await expect(dialog.getByLabel('model-a modalities')).toHaveValue('["text"]');
-  await replaceNumber(dialog.getByLabel('model-a contextWindow'), '128');
-  await expect(dialog.getByLabel('model-a contextWindow')).toHaveValue('128');
-  await dialog.getByLabel('sibling name').fill('Renamed');
-  await dialog.getByLabel('当前模型').selectOption('sibling');
-  await dialog.getByRole('button', { name: '保存', exact: true }).click();
-  await expect(dialog).toHaveCount(0);
-  const saved = await page.evaluate(() => (window as unknown as { __savedProfile: { connection: { model: string; modelRecords: unknown } } }).__savedProfile);
-  expect(saved.connection.model).toBe('sibling');
-  expect(saved.connection.modelRecords).toEqual([
-    { id: 'model-a', fields: { contextWindow: 128, cost: { input: 1 }, modalities: ['text'] } },
-    { id: 'sibling', fields: { name: 'Renamed' } },
-  ]);
-
-  await page.locator('[data-profile-id="pi-empty"]').getByRole('button', { name: '修改' }).click();
-  await expect(dialog.getByLabel('模型', { exact: true })).toBeVisible();
-  await expect(dialog.getByLabel('当前模型')).toHaveCount(0);
-  await expect(dialog.getByLabel('已有模型字段')).toHaveCount(0);
-  await dialog.getByRole('button', { name: '关闭' }).click();
-
-  await page.getByRole('tab', { name: 'OpenCode' }).click();
-  await page.locator('[data-profile-id="oc-models"]').getByRole('button', { name: '修改' }).click();
-  await expect(dialog.getByLabel('m1 name')).toHaveValue('Custom');
-  await expect(dialog.getByRole('checkbox', { name: 'm1 extra' })).toBeChecked();
-  await expect(dialog.getByLabel('m2 name')).toHaveValue('Second');
-  await expect(dialog.getByLabel(/contextWindow/)).toHaveCount(0);
-  await expect(dialog.getByLabel('推理强度（Codex 原生）')).toHaveCount(0);
-  await dialog.getByLabel('当前模型').selectOption('m2');
-  await expect(dialog.getByLabel('当前模型')).toHaveValue('m2');
-  await dialog.getByRole('button', { name: '保存', exact: true }).click();
-  await expect(dialog).toHaveCount(0);
-
-  await page.getByRole('tab', { name: 'Codex' }).click();
-  await page.locator('[data-profile-id="codex-draft"]').getByRole('button', { name: '修改' }).click();
-  const effort = dialog.getByLabel('推理强度（Codex 原生）');
-  await expect(effort).toHaveValue('high');
-  await effort.selectOption('medium');
-  await expect(effort).toHaveValue('medium');
-  await expect(dialog.getByLabel('已有模型字段')).toHaveCount(0);
-  await expect(dialog.getByLabel('当前模型')).toHaveCount(0);
-  await expect(dialog.getByRole('checkbox', { name: '1M 上下文' })).toHaveCount(0);
-  await expect(dialog.getByLabel(/contextWindow/)).toHaveCount(0);
-  await expect(dialog.getByLabel('模型', { exact: true })).toBeVisible();
-});
-
-test('key entry follows the current scope and writable CLI without hiding provider fields', async ({ page }) => {
-  test.setTimeout(60_000);
-  await installConnectionHarness(page);
-  await openConnections(page);
-  await page.getByRole('button', { name: '配置范围' }).click();
-  await page.getByRole('option', { name: /示例项目/ }).click();
-  await page.locator('[data-profile-id="pi-models"]').getByRole('button', { name: '修改' }).click();
-  const dialog = page.getByRole('dialog');
-  await expect(dialog.getByLabel('model-a contextWindow')).toHaveValue('100');
-  await expect(dialog.locator('option', { hasText: 'API Key' })).toHaveCount(0);
-  await expect(dialog.getByLabel('API 密钥')).toHaveCount(0);
-  await expect(dialog).toContainText('Pi 项目层不能写入供应商密钥；请使用全局配置');
-  await expect(dialog).not.toContainText('不支持密钥');
-  await dialog.getByRole('button', { name: '关闭' }).click();
-  await page.getByRole('button', { name: '新建配置' }).click();
-  await expect(dialog.locator('option', { hasText: 'API Key' })).toHaveCount(0);
-  await expect(dialog.getByLabel('API 密钥')).toHaveCount(0);
-  await expect(dialog).toContainText('Pi 项目层不能写入供应商密钥；请使用全局配置');
-  await dialog.getByRole('button', { name: '关闭' }).click();
-
-  await page.getByRole('tab', { name: 'Claude Code' }).click();
-  await page.getByRole('button', { name: '新建配置' }).click();
-  await expect(dialog.getByLabel('API 密钥')).toBeVisible();
-  await expect(dialog.getByLabel('API 地址')).toBeVisible();
-  await expect(dialog.getByLabel('模型', { exact: true })).toBeVisible();
-  await expect(dialog.getByRole('checkbox', { name: '1M 上下文', exact: true })).toBeVisible();
-  await expect(dialog.getByRole('button', { name: '所有角色使用当前模型' })).toBeVisible();
-  await dialog.getByRole('button', { name: '关闭' }).click();
-
-  await page.getByRole('tab', { name: 'Pi' }).click();
-  await page.getByRole('button', { name: '新建配置' }).click();
-  await expect(dialog.getByLabel('API 密钥')).toHaveCount(0);
-  await expect(dialog).toContainText('Pi 项目层不能写入供应商密钥；请使用全局配置');
-  await dialog.getByRole('button', { name: '关闭' }).click();
-
-  await page.getByRole('button', { name: '配置范围' }).click();
-  await page.getByRole('option', { name: '全局配置', exact: true }).click();
-  await page.getByRole('button', { name: '新建配置' }).click();
-  await expect(dialog.locator('option', { hasText: 'API Key' })).toHaveCount(1);
-  await expect(dialog.getByLabel('API 密钥')).toBeVisible();
-  await dialog.getByRole('button', { name: '关闭' }).click();
-
-  await page.getByRole('tab', { name: 'Grok' }).click();
-  await page.getByRole('button', { name: '新建配置' }).click();
-  await expect(dialog.getByLabel('API 地址')).toBeVisible();
-  await expect(dialog.getByLabel('API 密钥')).toBeVisible();
-  await expect(dialog.getByLabel('模型', { exact: true })).toBeVisible();
-  await expect(dialog.getByLabel('当前模型')).toHaveCount(0);
-  await expect(dialog.getByLabel('已有模型字段')).toHaveCount(0);
-  await expect(dialog.getByRole('checkbox', { name: '1M 上下文' })).toHaveCount(0);
-  await dialog.getByRole('button', { name: '关闭' }).click();
-  await page.getByRole('button', { name: '配置范围' }).click();
-  await page.getByRole('option', { name: /示例项目/ }).click();
-  await page.getByRole('button', { name: '新建配置' }).click();
-  await expect(dialog).toContainText('Grok 项目层不能写入供应商密钥；请使用全局配置');
-  await expect(dialog.getByLabel('API 密钥')).toHaveCount(0);
-  await expect(dialog.getByLabel('API 地址')).toBeVisible();
-  await expect(dialog.getByLabel('模型', { exact: true })).toBeVisible();
-  await expect(dialog).not.toContainText('不支持密钥');
-  await dialog.getByRole('button', { name: '关闭' }).click();
-
-  await page.getByRole('tab', { name: 'CodeBuddy' }).click();
-  await page.locator('[data-profile-id="cb-official"]').getByRole('button', { name: '修改' }).click();
-  await expect(dialog.getByLabel('API 密钥')).toBeVisible();
-  await expect(dialog.getByLabel('API 地址')).toHaveCount(0);
-  await expect(dialog.getByRole('button', { name: 'OpenAI' })).toHaveCount(0);
-  await expect(dialog).not.toContainText('https://third.example');
-  await dialog.getByText('更多选项', { exact: true }).click();
-  await dialog.getByText('高级连接选项', { exact: true }).click();
-  await expect(dialog.getByLabel('供应商 ID')).toHaveCount(1);
-  await expect(dialog.getByLabel('供应商 ID')).toHaveValue('official');
-  await dialog.getByLabel('认证环境变量名').fill('CODEBUDDY_API_KEY');
-  await expect(dialog.getByLabel('认证环境变量名')).toHaveValue('CODEBUDDY_API_KEY');
-  await dialog.getByRole('button', { name: '保存', exact: true }).click();
-  await expect(dialog).toHaveCount(0);
-
-  await page.getByRole('tab', { name: 'ZCode' }).click();
-  await page.getByRole('button', { name: '新建配置' }).click();
-  await expect(dialog.locator('option', { hasText: 'API Key' })).toHaveCount(0);
-  await expect(dialog.getByLabel('API 密钥')).toHaveCount(0);
-  await expect(dialog.getByLabel('API 地址')).toHaveCount(0);
-  await expect(dialog).not.toContainText('不支持密钥');
-  await expect(dialog).not.toContainText('凭据由产品加密保管');
-  await dialog.getByRole('button', { name: '关闭' }).click();
-  await page.locator('[data-profile-id="zc-login"]').getByRole('button', { name: '修改' }).click();
-  await expect(dialog.locator('option', { hasText: 'API Key' })).toHaveCount(0);
-  await expect(dialog.getByLabel('API 密钥')).toHaveCount(0);
-  await expect(dialog.getByLabel('API 地址')).toHaveCount(0);
-  await expect(dialog).not.toContainText('不支持密钥');
-  await expect(dialog).not.toContainText('https://hidden.example');
-});
 
 async function setImportMode(page: Page, mode: string) {
   await page.evaluate((value) => { (window as unknown as { __importMode: string }).__importMode = value; }, mode);
@@ -1003,102 +483,291 @@ async function openAdvanced(dialog: Locator) {
   await dialog.getByText('高级连接选项', { exact: true }).click();
 }
 
-test('migrating a plaintext key keeps model edits only for the same provider', async ({ page }) => {
-  test.setTimeout(45_000);
-  await installConnectionHarness(page);
-  await openConnections(page);
-  await page.locator('[data-profile-id="pi-models"]').getByRole('button', { name: '修改' }).click();
-  const dialog = page.getByRole('dialog');
-  await replaceNumber(dialog.getByLabel('model-a contextWindow'), '128');
-  await dialog.getByLabel('sibling name').fill('Renamed');
-  await setImportMode(page, 'migrate-same');
-  await dialog.getByRole('button', { name: '保存', exact: true }).click();
-  await expect(dialog).toHaveCount(0);
-  const same = await savedConnection(page);
-  expect(same.providerId).toBe('demo');
-  expect(same.model).toBe('inspected-model');
-  expect(same.secretRef).toBe('migrated-ref');
-  expect(same.modelRecords).toEqual([
-    { id: 'model-a', fields: { contextWindow: 128, cost: { input: 1 }, modalities: ['text'] } },
-    { id: 'sibling', fields: { name: 'Renamed' } },
-  ]);
+for (const [width, height, name] of [[720, 560, 'minimum'], [1160, 780, 'default'], [1600, 960, 'wide']] as const) {
+  test(`unified Kimi editor keeps required fields and main controls reachable ${name}`, async ({ page }) => {
+    await page.setViewportSize({ width, height });
+    await setupConfigurationWorkspace(page);
+    await page.getByRole('button', { name: '修改', exact: true }).last().click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByRole('button', { name: /^one(?: ·|$)/ }).click();
+    await expect(dialog.getByLabel('上下文上限', { exact: false }).first()).toBeVisible();
+    await expect(dialog.getByRole('button', { name: /^two(?: ·|$)/ })).not.toBeVisible();
+    const primary = dialog.getByRole('button', { name: '保存配置', exact: true });
+    const box = await primary.boundingBox();
+    expect(box!.y + box!.height).toBeLessThanOrEqual(height);
+    expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+    await primary.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: `docs/verification/configuration-redesign-ui/kimi-${name}-${width}x${height}.png`, fullPage: true });
+    await dialog.getByRole('button', { name: /^返回模型列表/ }).click();
+    await expect(dialog.getByRole('button', { name: /^two(?: ·|$)/ })).toBeVisible();
+  });
+}
 
-  await setImportMode(page, 'migrate-other');
-  await page.locator('[data-profile-id="pi-models"]').getByRole('button', { name: '修改' }).click();
-  await replaceNumber(dialog.getByLabel('model-a contextWindow'), '64');
-  await dialog.getByRole('button', { name: '保存', exact: true }).click();
+test('active configuration save only updates DB; explicit use changes the binding', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'codex');
+  await page.getByRole('button', { name: '修改', exact: true }).last().click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('配置名称').fill('只保存的配置');
+  await expect(dialog.getByRole('button', { name: '保存配置', exact: true })).toBeEnabled();
+  await dialog.getByRole('button', { name: '保存配置', exact: true }).click();
   await expect(dialog).toHaveCount(0);
-  const other = await savedConnection(page);
-  expect(other.providerId).toBe('other');
-  expect(other.model).toBe('inspected-model');
-  expect(other.secretRef).toBe('migrated-ref');
-  expect(other.modelRecords).toBeUndefined();
+  const before = await page.evaluate(() => (window as any).workspaceFixture);
+  expect(before.binding.profileVersion).toBe(3);
+  expect(before.profiles[0].version).toBe(4);
+  expect(before.calls.filter((call: any) => call.command === 'apply_registered_native_profile')).toEqual([]);
+  await page.locator('[data-profile-id="existing"]').getByRole('button', { name: '使用新版本', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).workspaceFixture.binding.profileVersion)).toBe(4);
 });
 
-test('changing the provider or a preset drops the previous model snapshot', async ({ page }) => {
-  test.setTimeout(60_000);
-  await installConnectionHarness(page, { piPresets: true });
-  await openConnections(page);
-  await page.locator('[data-profile-id="pi-models"]').getByRole('button', { name: '修改' }).click();
+test('common save and explicit partial apply preserve each recovery target', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'codex');
+  await page.getByRole('button', { name: '通用配置', exact: true }).first().click();
   const dialog = page.getByRole('dialog');
-  await dialog.getByLabel('sibling name').fill('Renamed');
-  await openAdvanced(dialog);
-  await dialog.getByLabel('供应商 ID').fill('other');
-  await expect(dialog.getByLabel('已有模型字段')).toHaveCount(0);
-  await dialog.getByRole('button', { name: '保存', exact: true }).click();
-  await expect(dialog).toHaveCount(0);
-  const switched = await savedConnection(page);
-  expect(switched.providerId).toBe('other');
-  expect(switched.model).toBe('model-a');
-  expect(switched.modelRecords).toBeUndefined();
+  await expect(dialog.getByLabel('通用参数')).toBeVisible();
+  await expect(dialog.getByLabel('通用配置影响')).toContainText('/tmp/project');
+  await dialog.getByLabel('通用参数').fill('8');
+  await expect(dialog.getByRole('button', { name: '保存通用配置', exact: true })).toBeEnabled();
+  await dialog.getByText('更多保存操作', { exact: true }).click();
+  await dialog.getByRole('button', { name: '保存并应用到继承范围', exact: true }).click();
+  await expect(dialog.getByText('通用配置已保存；部分范围应用失败，可逐项重试。')).toBeVisible();
+  await expect(dialog.getByRole('alert').filter({ hasText: 'project:/tmp/project' })).toBeVisible();
+  await page.evaluate(() => { (window as any).configurationProtocol.commonFailures = []; });
+  await dialog.getByRole('button', { name: '重试此范围' }).click();
+  await expect(dialog.getByRole('status').filter({ hasText: 'project:/tmp/project' })).toContainText('written_for_next_session');
+  const calls = await page.evaluate(() => (window as any).configurationProtocol.calls);
+  expect(calls.filter((call: any) => call.command === 'apply_common_configuration').at(-1).args.targets).toHaveLength(1);
+});
 
-  await page.locator('[data-profile-id="pi-models"]').getByRole('button', { name: '修改' }).click();
-  await dialog.getByLabel('sibling name').fill('Renamed');
-  await openAdvanced(dialog);
-  await dialog.getByLabel('供应商 ID').fill('other');
-  await expect(dialog.getByLabel('已有模型字段')).toHaveCount(0);
-  await dialog.getByLabel('供应商 ID').fill('demo');
-  await expect(dialog.getByLabel('sibling name')).toHaveValue('Keep');
-  await dialog.getByLabel('sibling name').fill('Fresh');
-  await dialog.getByRole('button', { name: '保存', exact: true }).click();
-  await expect(dialog).toHaveCount(0);
-  const fresh = await savedConnection(page);
-  expect(fresh.providerId).toBe('demo');
-  expect(fresh.modelRecords).toEqual([
-    { id: 'model-a', fields: { contextWindow: 100, cost: { input: 1 }, modalities: ['text'] } },
-    { id: 'sibling', fields: { name: 'Fresh' } },
-  ]);
+test('invalid raw text survives subview switches and Escape protects the draft', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'codex');
+  const opener = page.getByRole('button', { name: '修改', exact: true }).last();
+  await opener.click(); const dialog = page.getByRole('dialog');
+  await dialog.getByRole('button', { name: '原生文本', exact: true }).click();
+  await dialog.getByRole('textbox', { name: 'settings 配置草稿' }).fill('{broken');
+  await expect(dialog.getByRole('alert').filter({ hasText: '原文语法无效' })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: '保存配置', exact: true })).toBeDisabled();
+  await dialog.getByRole('button', { name: '常用设置', exact: true }).click();
+  await dialog.getByRole('button', { name: '原生文本', exact: true }).click();
+  await expect(dialog.getByRole('textbox', { name: 'settings 配置草稿' })).toHaveText('{broken');
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog').filter({ hasText: '放弃未保存修改' })).toBeVisible();
+  await page.getByRole('dialog').filter({ hasText: '放弃未保存修改' }).getByRole('button', { name: '取消', exact: true }).click();
+  await expect(dialog.getByRole('textbox', { name: 'settings 配置草稿' })).toHaveText('{broken');
+});
 
-  await page.locator('[data-profile-id="pi-models"]').getByRole('button', { name: '修改' }).click();
-  await dialog.getByLabel('sibling name').fill('Renamed');
-  await openAdvanced(dialog);
-  await dialog.getByRole('button', { name: 'OpenAI' }).click();
-  await expect(dialog.getByLabel('供应商 ID')).toHaveValue('openai');
-  await expect(dialog.getByLabel('已有模型字段')).toHaveCount(0);
-  await dialog.getByRole('button', { name: '保存', exact: true }).click();
-  await expect(dialog).toHaveCount(0);
-  const preset = await savedConnection(page);
-  expect(preset.providerId).toBe('openai');
-  expect(preset.baseUrl).toBe('https://api.openai.com/v1');
-  expect(preset.secretRef).toBeNull();
-  expect(preset.authEnvVar).toBeNull();
-  expect(preset.model).toBe('model-a');
-  expect(preset.modelRecords).toBeUndefined();
+for (const tool of ['pi', 'open_code', 'kimi_code', 'codex', 'claude_code']) {
+  test(`registered ${tool} mounts its parameter editor for the current file`, async ({ page }) => {
+    await setupConfigurationWorkspace(page, tool);
+    await page.getByRole('button', { name: '正在使用的文件', exact: true }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByRole('button', { name: '保存到当前文件', exact: true })).toBeVisible();
+    await expect(dialog.getByRole('button', { name: '常用设置', exact: true })).toBeVisible();
+    await dialog.getByRole('button', { name: '常用设置', exact: true }).click();
+    await expect(dialog.getByRole('button', { name: '保存到当前文件', exact: true })).toBeEnabled();
+    await dialog.getByRole('button', { name: '保存到当前文件', exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    const calls = await page.evaluate(() => (window as any).configurationProtocol.calls);
+    expect(calls.find((call: any) => call.command === 'save_configuration_draft').args.draft.subject).toBe('current');
+    expect(calls.filter((call: any) => call.command === 'save_registered_native_profile')).toEqual([]);
+  });
+}
 
-  await page.locator('[data-profile-id="pi-models"]').getByRole('button', { name: '修改' }).click();
-  await dialog.getByLabel('sibling name').fill('Renamed');
-  await openAdvanced(dialog);
-  await dialog.getByRole('button', { name: 'Demo' }).click();
-  await expect(dialog.getByLabel('sibling name')).toHaveValue('Renamed');
-  await expect(dialog.getByLabel('API 地址')).toHaveValue('https://demo.example/v1');
-  await dialog.getByRole('button', { name: '保存', exact: true }).click();
+test('ordered field writes retain sequential typing and focus while IPC is delayed', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'codex');
+  await page.getByRole('button', { name: '修改', exact: true }).last().click();
+  const dialog = page.getByRole('dialog'); const input = dialog.getByLabel('当前模型', { exact: true });
+  await page.evaluate(() => { (window as any).configurationProtocol.delayEdit = true; });
+  await input.focus(); await input.press('ControlOrMeta+A');
+  await input.pressSequentially('long-new-model', { delay: 30 });
+  const observed = await page.evaluate(() => ({ values: (window as any).configurationProtocol.calls.filter((call: any) => call.command === 'edit_configuration_draft').map((call: any) => call.args.action.value), active: document.activeElement?.getAttribute('aria-label') }));
+  console.log('Delayed sequential input:', observed);
+  await expect.soft(input).toHaveValue('long-new-model');
+  await expect.soft(input).toBeFocused();
+  await page.evaluate(() => { const fixture = (window as any).configurationProtocol; fixture.delayEdit = false; fixture.releaseEdit(); });
+  await expect(dialog.getByRole('button', { name: '保存配置', exact: true })).toBeEnabled();
+  await dialog.getByRole('button', { name: '原生文本', exact: true }).click();
+  await expect(dialog.getByRole('textbox', { name: 'settings 配置草稿' })).toContainText('long-new-model');
+});
+
+test('numeric middle state and API input survive account source and login return without shortcut submission', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'codex');
+  await page.getByRole('button', { name: '修改', exact: true }).last().click(); const dialog = page.getByRole('dialog');
+  await dialog.getByText('密钥已保存到系统 · 空输入保留', { exact: true }).click();
+  await dialog.getByRole('button', { name: '替换密钥', exact: true }).click();
+  await dialog.getByLabel('API 密钥', { exact: true }).fill('synthetic-pending-key');
+  await dialog.getByRole('button', { name: '常用设置', exact: true }).click();
+  const number = dialog.getByLabel('上下文窗口（Token）', { exact: false });
+  await number.focus(); await number.press('ControlOrMeta+A'); await number.pressSequentially('1e', { delay: 35 });
+  await expect(number).toHaveValue('1e');
+  await expect(dialog.getByRole('button', { name: '保存配置', exact: true })).toBeDisabled();
+  await dialog.getByRole('button', { name: '连接与模型', exact: true }).click();
+  await dialog.getByRole('combobox', { name: '凭据来源', exact: true }).selectOption('account');
+  await expect(dialog.getByLabel('选择已管理账号')).toBeVisible();
+  await page.keyboard.press('ControlOrMeta+s');
+  expect(await page.evaluate(() => (window as any).configurationProtocol.calls.filter((call: any) => call.command === 'save_configuration_draft'))).toEqual([]);
+  await dialog.getByRole('button', { name: '登录新账号' }).click();
+  await dialog.getByLabel('账号名称').fill('新登录账号'); await dialog.getByRole('button', { name: '添加并登录' }).click();
+  const added = dialog.getByRole('listitem', { name: '新登录账号' });
+  await expect(added.getByRole('button', { name: '选择并返回' })).toBeDisabled();
+  await page.evaluate(() => { const value = (window as any).workspaceFixture.accounts.find((account: any) => account.id === 'new'); Object.assign(value, { state: 'signed_in', version: 3, pendingLogin: null, identity: { subject: 'new', email: 'new@example.test' }, context: { id: 'ctx-new' } }); });
+  await expect(added.getByRole('button', { name: '选择并返回' })).toBeEnabled();
+  await added.getByRole('button', { name: '选择并返回' }).click();
+  await expect(dialog.getByRole('combobox', { name: '凭据来源', exact: true })).toHaveValue('account');
+  await dialog.getByRole('button', { name: '常用设置', exact: true }).click();
+  await expect(number).toHaveValue('1e');
+  await expect(dialog.getByRole('button', { name: '保存配置', exact: true })).toBeDisabled();
+  await dialog.getByRole('button', { name: '连接与模型', exact: true }).click();
+  await dialog.getByRole('combobox', { name: '凭据来源', exact: true }).selectOption('api_key');
+  await expect(dialog.getByLabel('API 密钥', { exact: true })).toHaveValue('synthetic-pending-key');
+  await dialog.getByRole('button', { name: '常用设置', exact: true }).click(); await number.fill('16384');
+  await expect(dialog.getByRole('button', { name: '保存配置', exact: true })).toBeEnabled();
+  await page.keyboard.press('ControlOrMeta+s');
   await expect(dialog).toHaveCount(0);
-  const samePreset = await savedConnection(page);
-  expect(samePreset.providerId).toBe('demo');
-  expect(samePreset.baseUrl).toBe('https://demo.example/v1');
-  expect(samePreset.secretRef).toBeNull();
-  expect(samePreset.modelRecords).toEqual([
-    { id: 'model-a', fields: { contextWindow: 100, cost: { input: 1 }, modalities: ['text'] } },
-    { id: 'sibling', fields: { name: 'Renamed' } },
-  ]);
+  const calls = await page.evaluate(() => (window as any).configurationProtocol.calls);
+  const save = calls.find((call: any) => call.command === 'save_configuration_draft');
+  expect(save.args.draft.profile.files.settings).toContain('16384');
+  expect(save.args.draft.credential.source).toBe('api_key');
+  expect(calls.filter((call: any) => call.command.includes('apply_'))).toEqual([]);
+});
+
+test('draft key diagnosis preserves independent sources and explicit removal never restores a stored key', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'pi');
+  await page.getByRole('button', { name: '修改', exact: true }).last().click(); const dialog = page.getByRole('dialog');
+  await dialog.getByText('密钥已保存到系统 · 空输入保留', { exact: true }).click();
+  await dialog.getByRole('button', { name: '替换密钥' }).click(); await dialog.getByLabel('API 密钥', { exact: true }).fill('synthetic-directory-key');
+  await dialog.getByText('模型目录与连接检查', { exact: true }).click(); await dialog.getByRole('button', { name: '获取模型目录' }).click();
+  await expect(dialog.getByText('密钥在草稿中 · 尚未保存到系统')).toBeVisible();
+  const temporary = await page.evaluate(() => Object.keys((window as any).configurationProtocol.leases)[0]);
+  await dialog.getByRole('combobox', { name: '凭据来源', exact: true }).selectOption('native'); await expect(dialog.getByRole('combobox', { name: '凭据来源', exact: true })).toHaveValue('native');
+  await dialog.getByRole('combobox', { name: '凭据来源', exact: true }).selectOption('api_key');
+  await expect(dialog.getByText('密钥在草稿中 · 尚未保存到系统')).toBeVisible();
+  expect(await page.evaluate(() => Object.keys((window as any).configurationProtocol.leases))).toContain(temporary);
+  await dialog.getByText('密钥在草稿中 · 尚未保存到系统', { exact: true }).click();
+  await dialog.getByRole('button', { name: '移除密钥' }).click();
+  await expect(dialog.getByLabel('API 密钥', { exact: true })).toBeVisible();
+  const state = await page.evaluate(() => (window as any).configurationProtocol);
+  const latest = Object.values(state.sessions).at(-1) as any;
+  expect(latest.credential).toMatchObject({ source: 'api_key', secretRef: null, remove: true });
+  expect(latest.profile.connection.secretRef).toBeNull();
+  expect(state.calls.filter((call: any) => call.command === 'set_connection_secret')).toEqual([]);
+  await dialog.getByRole('button', { name: '关闭', exact: true }).click();
+  await page.getByRole('dialog').filter({ hasText: '放弃未保存修改' }).getByRole('button', { name: '放弃修改' }).click();
+  await expect.poll(() => page.evaluate(() => Object.keys((window as any).configurationProtocol.leases))).toEqual([]);
+  expect(await page.evaluate(() => (window as any).workspaceFixture.profiles[0].connection.secretRef)).toBe('saved-original');
+});
+
+test('directory multi-select keeps edited model parameters and missing Kimi metadata remains invalid', async ({ page }) => {
+  await setupConfigurationWorkspace(page);
+  await page.getByRole('button', { name: '修改', exact: true }).last().click(); const dialog = page.getByRole('dialog');
+  await dialog.getByRole('button', { name: /^one(?: ·|$)/ }).click(); await dialog.getByLabel('模型 one', { exact: true }).getByLabel('上下文上限', { exact: false }).fill('32768');
+  await expect(dialog.getByRole('button', { name: '保存配置', exact: true })).toBeEnabled();
+  await dialog.getByRole('button', { name: /^返回模型列表/ }).click();
+  await dialog.getByText('模型目录与连接检查', { exact: true }).click(); await dialog.getByRole('button', { name: '获取模型目录' }).click();
+  const directory = dialog.getByLabel('模型目录', { exact: true }); await directory.getByLabel('one', { exact: true }).check(); await directory.getByLabel('new-1', { exact: true }).check(); await directory.getByLabel('new-2', { exact: true }).check();
+  await directory.getByRole('button', { name: '添加所选模型' }).click();
+  await expect(dialog.getByRole('button', { name: '保存配置', exact: true })).toBeDisabled();
+  await expect(dialog.getByRole('alert').filter({ hasText: 'new-1 缺少必填上下文' })).toBeVisible();
+  await dialog.getByRole('button', { name: /^one(?: ·|$)/ }).click(); await expect(dialog.getByLabel('上下文上限', { exact: false }).first()).toHaveValue('32768');
+  await dialog.getByRole('button', { name: /^返回模型列表/ }).click();
+  for (const id of ['new-1','new-2']) { await dialog.getByRole('button', { name: new RegExp(`^${id}(?: ·|$)`) }).click(); await dialog.getByLabel(`模型 ${id}`, { exact: true }).getByLabel('上下文上限', { exact: false }).fill('8192'); await dialog.getByRole('button', { name: /^返回模型列表/ }).click(); }
+  await expect(dialog.getByRole('button', { name: '保存配置', exact: true })).toBeEnabled();
+});
+
+test('a cancelled directory request cannot replace a changed source and manual model creation stays available', async ({ page }) => {
+  await setupConfigurationWorkspace(page);
+  await page.getByRole('button', { name: '修改', exact: true }).last().click(); const dialog = page.getByRole('dialog');
+  await page.evaluate(() => { (window as any).configurationProtocol.delayDirectory = true; });
+  await dialog.getByText('模型目录与连接检查', { exact: true }).click(); await dialog.getByRole('button', { name: '获取模型目录' }).click();
+  await expect.poll(() => page.evaluate(() => !!(window as any).configurationProtocol.releaseDirectory)).toBe(true);
+  await dialog.getByRole('combobox', { name: '凭据来源', exact: true }).selectOption('native'); await page.evaluate(() => { (window as any).configurationProtocol.releaseDirectory(); });
+  await expect(dialog.getByLabel('模型目录', { exact: true })).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: '新增模型', exact: true })).toBeEnabled();
+});
+
+for (const choice of ['使用本次', '保留现有'] as const) {
+  test(`current conflict ${choice} rebases safely and preserves the rest of the draft`, async ({ page }) => {
+    await setupConfigurationWorkspace(page, 'codex'); await page.getByRole('button', { name: '正在使用的文件', exact: true }).click();
+    const dialog = page.getByRole('dialog'); await dialog.getByLabel('当前模型', { exact: true }).fill('my-edited-model');
+    await expect(dialog.getByRole('button', { name: '保存到当前文件' })).toBeEnabled();
+    await page.evaluate(() => { const state = (window as any).configurationProtocol; const view = JSON.parse(state.disk.settings); view.values.model = 'external-model'; view.values.external = 'preserve'; state.disk.settings = JSON.stringify(view); });
+    await dialog.getByRole('button', { name: '保存到当前文件' }).click();
+    const compare = dialog.getByRole('button', { name: choice === '使用本次' ? '使用本次修改' : '保留当前文件', exact: true });
+    await expect(compare).toBeVisible(); await compare.click();
+    await expect(dialog.getByRole('status')).toContainText('比较基线已更新');
+    await dialog.getByRole('button', { name: '保存到当前文件' }).click(); await expect(dialog).toHaveCount(0);
+    const disk = JSON.parse(await page.evaluate(() => (window as any).configurationProtocol.disk.settings));
+    expect(disk.values.model).toBe(choice === '使用本次' ? 'my-edited-model' : 'external-model');
+    expect(await page.evaluate(() => (window as any).configurationProtocol.calls.filter((call: any) => call.command === 'read_registered_native_file_for_edit'))).toEqual([]);
+  });
+}
+
+test('current comparison rejects a second external change and supports a fresh explicit recovery', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'codex'); await page.getByRole('button', { name: '正在使用的文件', exact: true }).click(); const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('当前模型', { exact: true }).fill('my-edited-model'); await expect(dialog.getByRole('button', { name: '保存到当前文件' })).toBeEnabled();
+  await page.evaluate(() => { const state = (window as any).configurationProtocol; const value = JSON.parse(state.disk.settings); value.values.model = 'external-one'; state.disk.settings = JSON.stringify(value); });
+  await dialog.getByRole('button', { name: '保存到当前文件' }).click();
+  await expect(dialog.getByRole('button', { name: '使用本次修改' })).toBeVisible();
+  await page.evaluate(() => { const state = (window as any).configurationProtocol; const value = JSON.parse(state.disk.settings); value.values.model = 'external-two'; state.disk.settings = JSON.stringify(value); });
+  await dialog.getByRole('button', { name: '使用本次修改' }).click();
+  await expect(dialog.getByRole('alert').filter({ hasText: '比较后文件再次变化' })).toBeVisible();
+  expect(JSON.parse(await page.evaluate(() => (window as any).configurationProtocol.disk.settings)).values.model).toBe('external-two');
+  await dialog.getByText('当前文件恢复', { exact: true }).click(); await dialog.getByRole('button', { name: '重新比较文件' }).click(); await dialog.getByRole('button', { name: '使用本次修改' }).click();
+  await expect(dialog.getByRole('status')).toContainText('比较基线已更新');
+  await dialog.getByRole('button', { name: '保存到当前文件' }).click();
+  expect(JSON.parse(await page.evaluate(() => (window as any).configurationProtocol.disk.settings)).values.model).toBe('my-edited-model');
+});
+
+test('history replaces the current editor with sanitized typed preview and guards later changes', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'codex'); await page.getByRole('button', { name: '正在使用的文件', exact: true }).click(); const dialog = page.getByRole('dialog');
+  await dialog.getByText('当前文件恢复', { exact: true }).click(); await dialog.getByRole('button', { name: '修改记录', exact: true }).click();
+  await dialog.getByLabel('修改记录').getByRole('button').filter({ hasNotText: '返回编辑' }).last().click();
+  await expect(dialog.getByRole('textbox', { name: '历史原文' })).toBeVisible();
+  await expect(dialog.getByLabel('当前模型', { exact: true })).not.toBeVisible();
+  await page.evaluate(() => { const state = (window as any).configurationProtocol; const value = JSON.parse(state.disk.settings); value.values.model = 'later-external'; state.disk.settings = JSON.stringify(value); });
+  await dialog.getByRole('button', { name: '恢复这个版本', exact: true }).click();
+  await expect(dialog.getByRole('alert').filter({ hasText: '历史比较后文件变化' })).toBeVisible();
+  expect(JSON.parse(await page.evaluate(() => (window as any).configurationProtocol.disk.settings)).values.model).toBe('later-external');
+  expect(await page.evaluate(() => (window as any).configurationProtocol.calls.filter((call: any) => ['preview_native_backup','restore_native_backup'].includes(call.command)))).toEqual([]);
+  await dialog.getByRole('button', { name: '返回编辑' }).click(); await expect(dialog.getByLabel('当前模型', { exact: true })).toBeVisible();
+});
+
+test('generic registered fallback uses temporary keys for directory and cancels without modifying the saved key', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'qoder_cn');
+  await page.getByRole('button', { name: '修改', exact: true }).last().click(); const dialog = page.getByRole('dialog');
+  await expect(dialog.getByLabel('兼容配置连接')).toBeVisible();
+  await dialog.getByText('密钥已保存到系统 · 空输入保留', { exact: true }).click();
+  await dialog.getByRole('button', { name: '替换密钥' }).click(); await dialog.getByLabel('API 密钥', { exact: true }).fill('synthetic-fallback-key');
+  await dialog.getByText('模型目录与连接检查', { exact: true }).click(); await dialog.getByRole('button', { name: '获取模型目录' }).click();
+  const directory = dialog.getByLabel('模型目录', { exact: true }); await directory.getByLabel('new-1', { exact: true }).check(); await directory.getByRole('button', { name: '添加所选模型' }).click();
+  await dialog.getByRole('button', { name: '关闭', exact: true }).click(); await page.getByRole('dialog').filter({ hasText: '放弃未保存修改' }).getByRole('button', { name: '放弃修改' }).click();
+  await expect.poll(() => page.evaluate(() => Object.keys((window as any).configurationProtocol.leases))).toEqual([]);
+  expect(await page.evaluate(() => (window as any).workspaceFixture.profiles[0].connection.secretRef)).toBe('saved-original');
+  expect(await page.evaluate(() => (window as any).configurationProtocol.calls.filter((call: any) => call.command === 'set_connection_secret'))).toEqual([]);
+});
+
+test('Kimi default first screen shows connection and compact model list', async ({ page }) => {
+  await page.setViewportSize({ width: 1160, height: 780 }); await setupConfigurationWorkspace(page);
+  await page.getByRole('button', { name: '修改', exact: true }).last().click(); const dialog = page.getByRole('dialog');
+  await expect(dialog.getByLabel('配置名称')).toBeVisible(); await expect(dialog.getByRole('button', { name: '保存配置', exact: true })).toBeVisible();
+  await expect(dialog.getByLabel('上下文上限', { exact: false }).first()).not.toBeVisible();
+  await page.screenshot({ path: 'docs/verification/configuration-redesign-ui/kimi-first-screen-1160x780.png', fullPage: true });
+});
+
+test('configuration list separates saved connection from frozen last-used source', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'codex', true, true);
+  const row = page.locator('[data-profile-id="existing"]');
+  await expect(row).toContainText('保存设置：API 密钥 · gateway.example.test');
+  await expect(row).toContainText('上次已使用：CLI 当前凭据 · old-provider · old.example.test · old-model');
+  await expect(row.getByRole('button', { name: '使用新版本', exact: true })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).workspaceFixture.calls.filter((call: any) => call.command.includes('apply')))).toEqual([]);
+});
+
+test('native field units and merged origin distinguish inherited and explicit values', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'codex'); await page.getByRole('button', { name: '修改', exact: true }).last().click(); const dialog = page.getByRole('dialog');
+  await dialog.getByRole('button', { name: '常用设置' }).click();
+  const number = dialog.getByLabel('上下文窗口（Token）', { exact: false }); await number.fill('8192');
+  await expect(dialog.getByText('本层显式值', { exact: true })).toBeVisible();
+  await dialog.getByRole('button', { name: '合并与来源' }).click();
+  await expect(dialog.getByText('继承 · 通用配置', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('本层显式 · 命名配置', { exact: true })).toBeVisible();
 });

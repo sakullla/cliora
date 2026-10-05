@@ -44,7 +44,7 @@ export type CommonConfig = { tool: CliId; version: number; revision?: string; fi
 export type RegisteredCommon = Omit<CommonConfig, 'tool'> & { tool: string };
 export type CommonSaveResult = { common: CommonConfig; applications: { scopeKey: string; status: string; detail: string | null }[] };
 export type RegisteredCommonSaveResult = Omit<CommonSaveResult, 'common'> & { common: RegisteredCommon };
-export type AppliedBinding = { contextId?: string | null; scopeKey: string; tool: string; profileId: string; profileVersion: number; managed: Record<string, Record<string, unknown>> };
+export type AppliedBinding = { contextId?: string | null; scopeKey: string; tool: string; profileId: string; profileVersion: number; managed: Record<string, Record<string, unknown>>; commonVersion?: number | null; commonRevision?: string | null; appliedProfileAvailable?: boolean; appliedSummary?: AppliedSummary | null };
 export type NativeSnapshot = { role: string; text: string | null; fingerprint: string | null; error: string | null };
 export type ApplyComparison = {contextId?: string | null;profile:RegisteredProfile;common:RegisteredCommon|null;files:{role:string;format:'json'|'jsonc'|'toml'|'yaml';current:string;proposed:unknown;proposedText:string}[]};
 export type NativePreview = { documents: Record<string, unknown>; rendered: Record<string, string>; sources: Record<string, Record<string, string>> };
@@ -64,3 +64,5 @@ export type NativeImport = { files: Record<string, string>; inspection: NativeIn
 export function emptyProfile(tool: CliId): NativeProfile {
   return { id: '', tool, name: '', version: 0, inheritCommon: false, files: {}, suppressed: {}, connection: null, nativeCredentials: {} };
 }
+
+export type AppliedSummary = { authentication: ProfileAuthentication; providerId: string | null; baseUrl: string | null; model: string | null; contextId: string | null; profileVersion: number; profileRevision: string };

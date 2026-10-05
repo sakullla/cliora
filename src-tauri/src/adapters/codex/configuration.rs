@@ -1011,6 +1011,28 @@ fn field(
 }
 
 impl ConfigurationAdapter for Codex {
+    fn credential_paths(&self,connection:&Connection)->Vec<(&'static str,Vec<String>)>{
+        ["experimental_bearer_token","env_key"].iter().map(|field|("settings",vec!["model_providers".into(),connection.provider_id.clone(),(*field).into()])).collect()
+    }
+
+    fn native_verification_module(&self) -> Option<&'static str> { Some("src-tauri/src/adapters/codex/native_verification.mjs") }
+    fn catalog_support(&self) -> CatalogSupport { CatalogSupport { available: true, multiple: false, reason: None } }
+    fn common_parameters(&self, scope: Scope) -> Vec<CommonParameter> {
+        self.describe(scope).fields.into_iter().filter(|field| ["model_reasoning_effort", "model_context_window", "model_reasoning_summary", "model_verbosity"].contains(&field.id.as_str()))
+            .map(|field| CommonParameter { path: field.id.split('.').map(str::to_owned).collect(), field, role: "settings", target: json!("configuration") }).collect()
+    }
+    fn common_forbidden_paths(&self) -> Vec<(&'static str, &'static str)> { vec![("settings","/model"), ("settings","/model_provider")] }
+    fn draft_connection(&self, documents: &Documents, state: &EditingState) -> Result<Option<Connection>, String> {
+        let mut documents = documents.clone(); let settings = documents.entry("settings".into()).or_insert_with(|| json!({}));
+        let missing = settings.get("model").is_none(); if missing { settings["model"] = json!("__cliora_draft__"); }
+        let mut connection = self.connection(&documents, state)?; if missing { if let Some(connection) = &mut connection { connection.model.clear(); } }
+        Ok(connection)
+    }
+    fn catalog_actions(&self, _documents: &Documents, _state: &EditingState, ids: &[String]) -> Result<Vec<ConfigurationAction>, String> {
+        if ids.len() != 1 { return Err("Codex 使用配置级单个模型，请选择一个模型".into()) }
+        Ok(vec![ConfigurationAction { version: EDITING_VERSION, target: json!("configuration"), operation: "set".into(), field: Some("model".into()), value: Some(json!(ids[0])) }])
+    }
+
     fn portable_reference_valid(&self, path: &[String], value: &Value) -> bool {
         matches!(path,[role,providers,id,field] if role=="settings" && providers=="model_providers" && !id.is_empty() && field=="env_key")
             && valid_environment_reference(value)

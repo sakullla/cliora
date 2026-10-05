@@ -91,3 +91,23 @@ test('a delayed form action becomes the baseline of the next text replacement', 
   assert.deepEqual(session.draft.profile.files, { newField: 'kept', raw: 'updated' });
   assert.equal(await session.update(async current => ({ ...current })), false);
 });
+
+test('saved identity is accepted only for the same idle live session without inventing a revision', async () => {
+  const session = createConfigurationSession(initial);
+  const wait = deferred(); const operation = session.edit(() => wait.promise);
+  assert.equal(session.acceptSaved({ ...initial, profile: { id: 'saved' } }), false);
+  wait.resolve({ ...initial, revision: 1 }); await operation;
+  assert.equal(session.acceptSaved({ ...initial, revision: 1, profile: { id: 'saved' } }), true);
+  assert.equal(session.draft.revision, 1);
+  assert.equal(session.draft.profile.id, 'saved');
+  assert.equal(session.acceptSaved({ ...initial, sessionId: 'foreign', revision: 2 }), false);
+  session.close(); assert.equal(session.acceptSaved({ ...initial, revision: 2 }), false);
+});
+
+test('unsubmitted connection input blocks submission and can be recovered independently', () => {
+  const session = createConfigurationSession(initial);
+  session.setFieldValidity('connection-form', false);
+  assert.equal(session.canSubmit, false); assert.equal(session.isFieldValid('connection-form'), false);
+  assert.equal(session.isFieldValid('unrelated'), true);
+  session.setFieldValidity('connection-form', true); assert.equal(session.canSubmit, true);
+});

@@ -5,3 +5,5 @@
 .editor label, .editor fieldset > div > div { grid-column: 1 / -1; }
 .editor input:not([type='checkbox']), .editor select { min-width: 0; width: 100%; box-sizing: border-box; }
 .note { font-size: 12px; color: var(--muted); line-height: 1.5; margin: 0; }
+
+.editor [hidden] { display: none !important; }

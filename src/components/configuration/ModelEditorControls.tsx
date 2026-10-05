@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
-import { ConfigurationField } from './ConfigurationField';
+import { ConfigurationField, type FieldPresentation } from './ConfigurationField';
+import type { ConfigurationContentProps } from '../../adapters/contract';
 import type { ConfigurationAction, ConfigurationDescriptor, ConfigurationEditorProps, ConfigurationField as Field } from '../../types/configuration';
 
 type Run = (target: unknown, operation: string, value?: unknown, field?: string | null) => Promise<boolean>;
@@ -31,7 +32,7 @@ function withField(values: Record<string, unknown>, id: string, value: unknown):
 }
 
 /** Entity operations and fields share the session's submit guard. */
-export function useEditorAction(props: ConfigurationEditorProps, name: string) {
+export function useEditorAction(props: ConfigurationContentProps, name: string) {
   const latest = useRef(props);
   latest.current = props;
   const generation = useRef(0);
@@ -74,7 +75,7 @@ export function useEditorAction(props: ConfigurationEditorProps, name: string) {
   return { run, pending, error, invalid, cancelFailure, hasInvalidExcept, props: { ...props, onValidityChange: report } };
 }
 
-export function EditorField({ props, id, target, value, disabled, defaultSource, listChoices, choices }: { props: ConfigurationEditorProps; id: string; target: unknown; value: unknown; disabled?: boolean; defaultSource?: string; choices?: string[]; listChoices?: readonly (readonly [string, string])[] }) {
+export function EditorField({ props, id, target, value, disabled, defaultSource, listChoices, choices, presentation }: { props: ConfigurationContentProps; id: string; target: unknown; value: unknown; disabled?: boolean; defaultSource?: string; choices?: string[]; presentation?: FieldPresentation; listChoices?: readonly (readonly [string, string])[] }) {
   const field = props.descriptor.fields.find(item => item.id === id);
   const targetKey = targetIdentity(target);
   const validityKey = `${props.draft.sessionId}:${targetKey}:${id}`;
@@ -91,7 +92,8 @@ export function EditorField({ props, id, target, value, disabled, defaultSource,
     issues={props.draft.issues.filter(issue => issue.field === id && targetIdentity(issue.target) === targetKey).map(issue => issue.message)}
     onChange={next => action('set', next)} onReset={() => action('reset')} onValidityChange={valid => props.onValidityChange(validityKey, valid)} />;
   const metadata = field.kind === 'string_list' ? { ...field, kind: 'json', choices: [] } : field;
-  return <ConfigurationField field={{ ...metadata, ...(defaultSource ? { defaultSource } : {}), ...(choices ? { choices } : {}) }} value={value} disabled={disabled}
+  const explicit = props.draft.profile.editing?.intents.some(action => action.operation === 'set' && action.field === id && targetIdentity(action.target) === targetKey);
+  return <ConfigurationField presentation={{ ...presentation, origin: explicit ? 'explicit' : presentation?.origin }} resetEpoch={props.rawResetEpoch} field={{ ...metadata, ...(defaultSource ? { defaultSource } : {}), ...(choices ? { choices } : {}) }} value={value} disabled={disabled}
     issues={props.draft.issues.filter(issue => issue.field === id && targetIdentity(issue.target) === targetKey)}
     onChange={next => next === '' && !field.required ? action('reset') : action('set', next)}
     onReset={props.descriptor.operations.includes('reset') ? () => action('reset') : undefined}
@@ -120,24 +122,30 @@ function StringListControl({ field, values, choices, disabled, issues, onChange,
   </fieldset>;
 }
 
-export function ProviderEditor({ provider, providers, connection, protocol, disabled, canConfigure, canSelect, onConfigure, onSelect }: {
+export function ProviderEditor({ provider, providers, connection, protocol, disabled, canConfigure, canSelect, onConfigure, onSelect, onDraftValidityChange }: {
   provider: string; providers: string[]; connection?: Connection; protocol: string; disabled?: boolean; canConfigure: boolean; canSelect: boolean;
   onConfigure: (id: string, value: { baseUrl: string; interfaceFormat: string }) => Promise<boolean>; onSelect: (id: string) => Promise<boolean>;
+  onDraftValidityChange?: (valid: boolean) => void;
 }) {
   const selectId = useId();
   const [id, setId] = useState(provider);
   const [baseUrl, setBaseUrl] = useState(connection?.baseUrl ?? '');
   const [format, setFormat] = useState(protocol);
   const readOnly = id === provider && Boolean(connection?.readOnlyReason);
+  const validity = useRef(onDraftValidityChange); validity.current = onDraftValidityChange;
+  useEffect(() => { validity.current?.(!canConfigure || id === provider && baseUrl === (connection?.baseUrl ?? '') && format === protocol); }, [id, provider, baseUrl, connection?.baseUrl, format, protocol, canConfigure]);
+  useEffect(() => () => validity.current?.(true), []);
   return <div>
-    {canSelect && providers.length > 0 && <label htmlFor={selectId}>当前供应商<select id={selectId} value={provider} disabled={disabled} onChange={event => { void onSelect(event.target.value); }}><option value="" disabled>请选择供应商</option>{providers.map(item => <option key={item} value={item}>{item}</option>)}</select></label>}
-    <details open={!provider}>
+
+    <details open={!provider || !connection?.baseUrl}>
       <summary>供应商连接{provider ? ` · ${provider}` : ''}{connection?.baseUrl ? ` · ${connection.baseUrl}` : ''}</summary>
+    {canSelect && providers.length > 0 && <label htmlFor={selectId}>查看供应商<select id={selectId} value={provider} disabled={disabled} onChange={event => { void onSelect(event.target.value); }}><option value="" disabled>请选择供应商</option>{providers.map(item => <option key={item} value={item}>{item}</option>)}</select></label>}
       {canConfigure ? <fieldset>
         <label>供应商标识<input value={id} maxLength={80} disabled={disabled} onChange={event => setId(event.target.value)} /></label>
         <label>连接地址<input value={baseUrl} disabled={disabled || readOnly} placeholder="https://…" onChange={event => setBaseUrl(event.target.value)} /></label>
         <label>接口协议<select value={format} disabled={disabled || readOnly} onChange={event => setFormat(event.target.value)}><option value="" disabled>{connection?.protocol ? `原生协议：${connection.protocol}` : '请选择协议'}</option><option value="openai_completions">OpenAI Chat Completions</option><option value="openai_responses">OpenAI Responses</option><option value="anthropic_messages">Anthropic Messages</option></select></label>
         <button type="button" disabled={disabled || readOnly || !validIdentity(id, 80) || !baseUrl.trim() || !format} onClick={() => { void onConfigure(id, { baseUrl: baseUrl.trim(), interfaceFormat: format }); }}>设置供应商连接</button>
+        <button type="button" disabled={disabled} onClick={() => { setId(provider); setBaseUrl(connection?.baseUrl ?? ''); setFormat(protocol); }}>取消连接修改</button>
         {connection?.readOnlyReason && <p>{connection.readOnlyReason}。使用不同供应商标识可创建独立连接。</p>}
       </fieldset> : <p>{provider || '当前范围不支持供应商连接编辑'}</p>}
     </details>

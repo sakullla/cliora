@@ -33,7 +33,6 @@ export function authEnvName(adapter: ToolUiAdapter, connection: Connection | nul
   if (connection.authEnvVar) return connection.authEnvVar;
   if (!connection.secretRef) return null;
   if (adapter.authEnvName) return adapter.authEnvName(connection);
-  const tool = toolId.toUpperCase().replace(/[^A-Z0-9]/g, '_');
-  const provider = connection.providerId.toUpperCase().replace(/[^A-Z0-9]/g, '_');
-  return `CLIORA_${tool}_${provider}_API_KEY`;
+  void toolId;
+  return null;
 }

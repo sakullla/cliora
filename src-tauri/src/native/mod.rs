@@ -10,3 +10,4 @@ pub mod transaction;
 pub mod registered;
 
 pub mod configuration;
+pub mod workspace;

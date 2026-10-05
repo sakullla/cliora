@@ -25,3 +25,14 @@ docs/verification/ui/
 !docs/architecture/
 docs/architecture/*
 !docs/architecture/configuration-adapters.md
+
+# Track this redesign's verification document and its dedicated UI captures only.
+!docs/verification/
+docs/verification/*
+!docs/verification/configuration-redesign.md
+!docs/verification/configuration-redesign-ui/
+docs/verification/configuration-redesign-ui/*
+!docs/verification/configuration-redesign-ui/kimi-minimum-720x560.png
+!docs/verification/configuration-redesign-ui/kimi-default-1160x780.png
+!docs/verification/configuration-redesign-ui/kimi-wide-1600x960.png
+!docs/verification/configuration-redesign-ui/kimi-first-screen-1160x780.png

@@ -30,7 +30,13 @@ export function createConfigurationSession(initial: ConfigurationDraft) {
     get draft() { return draft; },
     get pending() { return pending.size > 0; },
     get canSubmit() { return !closed && pending.size === 0 && draft.issues.length === 0 && invalidFields.size === 0; },
+    /** A successful save can update persisted identity without editing the document. */
+    acceptSaved(next: ConfigurationDraft) {
+      if (closed || pending.size || next.sessionId !== draft.sessionId || next.revision < draft.revision) return false;
+      draft = next; return true;
+    },
     setFieldValidity(field: string, valid: boolean) { if (valid) invalidFields.delete(field); else invalidFields.add(field); },
+    isFieldValid(field: string) { return !invalidFields.has(field); },
     invalidate() { epoch += 1; pending.clear(); sequence = Promise.resolve(); },
     close() { closed = true; epoch += 1; pending.clear(); },
     edit: enqueue,

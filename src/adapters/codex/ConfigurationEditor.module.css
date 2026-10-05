@@ -4,3 +4,5 @@
 .fields label, .fields > div > div { grid-column: 1 / -1; }
 .editor input, .editor select { min-width: 0; width: 100%; box-sizing: border-box; }
 .note { font-size: 12px; color: var(--muted); line-height: 1.5; margin: 0 0 10px; }
+
+.editor [hidden] { display: none !important; }

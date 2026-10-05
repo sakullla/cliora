@@ -1,11 +1,13 @@
+import { claudeFieldPresentation } from './fieldPresentation';
+import { CommonConfigurationFields } from '../../components/configuration/CommonConfigurationFields';
 import { useEffect, useRef, useState } from 'react';
 import { ConfigurationField } from '../../components/configuration/ConfigurationField';
-import type { ConfigurationEditorProps } from '../../types/configuration';
+import type { ConfigurationContentProps } from '../contract';
 import styles from './ConfigurationEditor.module.css';
 
 type View = { values?: Record<string, unknown>; editTarget?: string; effortChoices?: string[]; effortWarnings?: string[]; effortOverride?: unknown; modelEffortOverride?: unknown; modelEfforts?: Record<string, unknown>; modelEffortChoices?: Record<string, string[]>; currentEffortModel?: string | null; capabilitySource?: string };
 const roles = [['sonnet', 'Sonnet'], ['opus', 'Opus'], ['fable', 'Fable'], ['haiku', 'Haiku'], ['subagent', '子代理']] as const;
-export function ClaudeConfigurationEditor({ draft, descriptor, disabled, onAction, onValidityChange }: ConfigurationEditorProps) {
+function Editor({ draft, descriptor, disabled, onAction, onValidityChange, section, rawResetEpoch }: ConfigurationContentProps) {
   const view = draft.view as View | null;
   const values = view?.values ?? {};
   const [unifyError, setUnifyError] = useState<string | null>(null);
@@ -20,7 +22,7 @@ export function ClaudeConfigurationEditor({ draft, descriptor, disabled, onActio
     request.current += 1;
     for (const field of descriptor.fields) validity.current(field.id, true);
     validity.current('unify', true);
-  }, [draft.sessionId, descriptor]);
+  }, [draft.sessionId]);
   const render = (id: string) => {
     const field = descriptor.fields.find(field => field.id === id);
     if (!field) return null;
@@ -29,7 +31,7 @@ export function ClaudeConfigurationEditor({ draft, descriptor, disabled, onActio
     const action = (operation: string, value: unknown = null) => onAction({ version: descriptor.version, target, operation, field: id, value });
     const choices = id === 'modelEffortLevel' ? view?.modelEffortChoices?.[effortModel] : undefined;
     const metadata = choices?.length ? { ...field, choices } : field;
-    return <ConfigurationField key={`${draft.sessionId}:${id}:${target}`} field={metadata} value={id === 'modelEffortLevel' ? view?.modelEfforts?.[effortModel] : values[id]} disabled={disabled || unifying || (id === 'modelEffortLevel' && !effortModel.trim())}
+    return <ConfigurationField resetEpoch={rawResetEpoch} presentation={{ ...claudeFieldPresentation(id), origin: draft.profile.editing?.intents.some(action => action.operation === 'set' && action.field === id && action.target === target) ? 'explicit' : undefined }} key={`${draft.sessionId}:${id}:${target}`} field={metadata} value={id === 'modelEffortLevel' ? view?.modelEfforts?.[effortModel] : values[id]} disabled={disabled || unifying || (id === 'modelEffortLevel' && !effortModel.trim())}
       issues={draft.issues.filter(issue => issue.field === id)}
       onChange={value => value === '' ? action('reset') : action('set', value)}
       onReset={id.endsWith('.longContext') ? undefined : () => action('reset')}
@@ -48,9 +50,10 @@ export function ClaudeConfigurationEditor({ draft, descriptor, disabled, onActio
     }
   };
   return <section className={styles.editor} aria-label="Claude 专属配置">
-    {render('default.model')}
-    <details><summary>供应商连接</summary>{render('base_url')}</details>
-    <details><summary>角色、子代理与长上下文</summary><div className={styles.fields}>
+    <div hidden={section === 'settings'}>{render('default.model')}
+    <details open={draft.credential?.source === 'api_key' && !draft.draftConnection?.baseUrl}><summary>供应商连接</summary>{render('base_url')}</details>
+    </div>
+    <div hidden={section === 'models'}><details open={section === 'settings'}><summary>角色、子代理与长上下文</summary><div className={styles.fields}>
       {render('default.longContext')}
       {roles.map(([role, label]) => <fieldset key={role}><legend>{label}</legend>{render(`${role}.model`)}{render(`${role}.name`)}{render(`${role}.longContext`)}</fieldset>)}
       <p className={styles.note}>每个角色独立设置。统一会将默认模型用于 Sonnet、Opus、Fable、Haiku 和子代理，保留各角色显示名称。长上下文使用原生 [1m] 后缀，服务是否可用取决于模型与账号。</p>
@@ -68,5 +71,11 @@ export function ClaudeConfigurationEditor({ draft, descriptor, disabled, onActio
       {view?.effortOverride != null && <p className={styles.note}>原生环境变量 CLAUDE_CODE_EFFORT_LEVEL 当前优先于 effortLevel（{String(view.effortOverride)}）；可在原文中调整。</p>}
       {view?.modelEffortOverride != null && <p className={styles.note}>当前模型已有 modelSettings effort（{String(view.modelEffortOverride)}），优先于默认推理 effort；可在原文中调整。</p>}
     </details>
+    </div>
   </section>;
+}
+
+export function ClaudeConfigurationEditor(props: ConfigurationContentProps) {
+  if (props.mode === 'common') return <CommonConfigurationFields {...props} presentationFor={claudeFieldPresentation} />;
+  return <Editor key={props.draft.sessionId} {...props} />;
 }

@@ -74,6 +74,17 @@ pub fn test_registered_connection(
     credentials: &dyn CredentialStore,
     allow_model_request: bool,
 ) -> ConnectionCheck {
+    test_registered_connection_guarded(registry,tool_id,connection,credentials,allow_model_request,||false)
+}
+
+pub fn test_registered_connection_guarded<F:Fn()->bool>(
+    registry: &Registry,
+    tool_id: &str,
+    connection: &Connection,
+    credentials: &dyn CredentialStore,
+    allow_model_request: bool,
+    cancelled:F,
+) -> ConnectionCheck {
     let skipped = || step("skipped", "未发送模型请求");
     let Some(adapter) = registry.get(tool_id) else {
         return ConnectionCheck {
@@ -151,6 +162,7 @@ pub fn test_registered_connection(
         Some(secret) => request.header(AUTHORIZATION, format!("Bearer {secret}")),
         None => request,
     };
+    if cancelled(){return ConnectionCheck {format,connectivity:step("skipped","请求已取消"),model_request:skipped()};}
     let connectivity = match authorize(client.get(url.clone())).send() {
         Ok(response) if response.status().is_success() => step(
             "passed",
@@ -213,6 +225,7 @@ pub fn test_registered_connection(
             serde_json::json!({"model":request_model,"messages":[{"role":"user","content":"Reply OK"}],"max_tokens":16})
         }
     };
+    if cancelled(){return ConnectionCheck {format,connectivity,model_request:step("skipped","请求已取消，未发送模型请求")};}
     let model_request = match authorize(client.post(request_url).json(&body)).send() {
         Ok(response) if response.status().is_success() => {
             let mut bytes = Vec::new();
@@ -396,9 +409,10 @@ fn endpoint(connection: &Connection) -> Result<Url, String> {
     directory(connection).map(|(url, _)| url)
 }
 
-fn fetch(
+fn fetch_guarded<F:Fn()->bool>(
     connection: &Connection,
     credentials: &dyn CredentialStore,
+    cancelled:&F,
 ) -> Result<Vec<String>, String> {
     if connection
         .secret_ref
@@ -420,6 +434,7 @@ fn fetch(
     let mut models = BTreeSet::new();
     let mut seen_cursors = HashSet::new();
     for _ in 0..10 {
+        if cancelled(){return Err("模型目录请求已取消".into());}
         let mut request = client.get(url.clone()).header(ACCEPT, "application/json");
         if let Some(secret) = &secret {
             request = if auth == DirectoryAuth::Anthropic {
@@ -474,7 +489,7 @@ fn fetch(
         for item in data {
             if let Some(id) = item.get("id").and_then(serde_json::Value::as_str) {
                 if !id.trim().is_empty() {
-                    models.insert(id.to_string());
+                    if secret.as_ref().is_none_or(|secret|secret.is_empty()||!id.contains(secret)){models.insert(id.to_string());}
                 }
             }
         }
@@ -512,6 +527,18 @@ pub fn list_models(
     force: bool,
     query: &str,
 ) -> Result<ModelDirectory, String> {
+    list_models_guarded(db,credentials,connection,force,query,||false)
+}
+
+pub fn list_models_guarded<F:Fn()->bool>(
+    db: &Database,
+    credentials: &dyn CredentialStore,
+    connection: &Connection,
+    force: bool,
+    query: &str,
+    cancelled:F,
+) -> Result<ModelDirectory, String> {
+    if cancelled(){return Err("模型目录请求已取消".into());}
     let key = cache_key(connection);
     let previous = cached(db, &key)?;
     let fresh = previous
@@ -521,7 +548,7 @@ pub fn list_models(
     let mut directory = if fresh && !force {
         previous.unwrap()
     } else {
-        match fetch(connection, credentials) {
+        match fetch_guarded(connection, credentials, &cancelled) {
             Ok(models) => {
                 let result = ModelDirectory {
                     status: if models.is_empty() {
@@ -534,6 +561,7 @@ pub fn list_models(
                     error: None,
                     source: "provider_directory".into(),
                 };
+                if cancelled(){return Err("模型目录请求已取消，旧结果未缓存".into());}
                 save_cache(db, &key, &result)?;
                 result
             }
@@ -554,6 +582,7 @@ pub fn list_models(
             },
         }
     };
+    if cancelled(){return Err("模型目录请求已取消，旧结果已丢弃".into());}
     let needle = query.trim().to_lowercase();
     if !needle.is_empty() {
         directory

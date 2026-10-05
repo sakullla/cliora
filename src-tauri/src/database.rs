@@ -23,7 +23,7 @@ impl Database {
     pub fn open(path: &Path) -> Result<Self, OpenError> {
         let mut connection = Connection::open(path)?;
         let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 19 {
+        if version > 20 {
             return Err(OpenError::UnsupportedVersion(version));
         }
         connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
@@ -428,6 +428,16 @@ impl Database {
             tx.commit()?;
         }
 
+        if version < 20 {
+            let tx = connection.transaction()?;
+            let columns = { let mut statement=tx.prepare("PRAGMA table_info(applied_bindings)")?;
+                let rows=statement.query_map([],|row| row.get::<_,String>(1))?; rows.collect::<Result<Vec<_>,_>>()? };
+            for (name,kind) in [("common_version","INTEGER"),("common_revision","TEXT"),("applied_profile","TEXT")] {
+                if !columns.iter().any(|column|column==name) { tx.execute_batch(&format!("ALTER TABLE applied_bindings ADD COLUMN {name} {kind};"))?; }
+            }
+            tx.execute_batch("PRAGMA user_version = 20;")?;
+            tx.commit()?;
+        }
         Ok(Self {
             connection: Mutex::new(connection),
             read_path: (path != Path::new(":memory:") && !path.as_os_str().is_empty()).then(|| path.to_owned()),
@@ -660,7 +670,7 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
-            assert_eq!(version, 19);
+            assert_eq!(version, 20);
             let count: i64 = conn
                 .query_row("SELECT COUNT(*) FROM native_profiles", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
