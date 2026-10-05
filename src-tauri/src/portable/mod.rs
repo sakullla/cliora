@@ -220,8 +220,12 @@ fn scrub_value(value: Value, path: &str, pending: &mut Vec<String>, adapter: Opt
                 let semantic = adapter.map_or(Default::default(), |adapter| adapter.portable_field_kind(&field_path));
                 use crate::adapters::configuration::PortableFieldKind;
                 let exact_secret = matches!(key.to_ascii_lowercase().as_str(), "token" | "api_key" | "apikey" | "password" | "secret" | "authorization" | "cookie" | "credential" | "access_token" | "refresh_token");
-                if exact_secret || matches!(semantic, PortableFieldKind::Credential | PortableFieldKind::Local)
-                    || (semantic != PortableFieldKind::Parameter && unsafe_field(&key)) {
+                let public_reference = semantic == PortableFieldKind::CredentialReference
+                    && adapter.and_then(|adapter| adapter.configuration()).is_some_and(|port| port.portable_reference_valid(&field_path, &value));
+                if (semantic == PortableFieldKind::CredentialReference && !public_reference)
+                    || (exact_secret && !public_reference)
+                    || matches!(semantic, PortableFieldKind::Credential | PortableFieldKind::Local)
+                    || (!public_reference && semantic != PortableFieldKind::Parameter && unsafe_field(&key)) {
                     pending.push(location);
                     continue;
                 }
@@ -474,7 +478,10 @@ fn collect_snapshot_on(
                 let adapter = registry.get(&profile.tool);
                 if let Some(field) = &action.field {
                     let kind = adapter.map_or(Default::default(), |adapter| adapter.portable_field_kind(&[field.clone()]));
-                    if unsafe_field(field) && kind != crate::adapters::configuration::PortableFieldKind::Parameter {
+                    let public_reference = kind == crate::adapters::configuration::PortableFieldKind::CredentialReference
+                        && action.value.as_ref().is_some_and(|value| adapter.and_then(|adapter| adapter.configuration()).is_some_and(|port| port.portable_reference_valid(&[field.clone()], value)));
+                    if (kind == crate::adapters::configuration::PortableFieldKind::CredentialReference && action.value.is_some() && !public_reference)
+                        || (unsafe_field(field) && kind != crate::adapters::configuration::PortableFieldKind::Parameter && !public_reference) {
                         pending_fields.push(format!("editing.intent.{field}")); return false;
                     }
                 }

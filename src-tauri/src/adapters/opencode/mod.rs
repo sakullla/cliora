@@ -1,4 +1,5 @@
 pub mod accounts;
+pub(crate) mod configuration;
 pub(crate) mod agents;
 pub mod history;
 pub(crate) mod plugins;
@@ -132,6 +133,7 @@ fn config_base(home: &Path) -> PathBuf {
 }
 
 impl CliAdapter for OpenCode {
+    fn configuration(&self) -> Option<&dyn crate::adapters::configuration::ConfigurationAdapter> { Some(self) }
     fn supports_mcp(&self) -> bool { true }
     fn supports_skills(&self) -> bool { true }
     fn agents(&self) -> Option<&dyn crate::adapters::agents::AgentAdapter> {
@@ -203,7 +205,7 @@ impl CliAdapter for OpenCode {
     }
     fn portable_root_fields(&self, role: &str) -> &'static [&'static str] {
         if role == "settings" {
-            &["model", "provider", "agent", "permission", "mcp"]
+            &["model", "small_model", "provider", "agent", "permission", "mcp"]
         } else {
             &[]
         }

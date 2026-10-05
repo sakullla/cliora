@@ -332,7 +332,7 @@ pub fn merge_edits(kind: FileKind, original: &str, edited: &str, current: &str) 
         if base == own { return Ok(()); }
         if let (Some(Value::Object(a)), Some(Value::Object(b)), Some(Value::Object(c))) = (base, own, disk) {
             for key in a.keys().chain(b.keys()).collect::<std::collections::BTreeSet<_>>() {
-                check(a.get(key), b.get(key), c.get(key), &format!("{path}/{key}"))?;
+                check(a.get(key), b.get(key), c.get(key), &format!("{path}/{}",key.replace('~',"~0").replace('/',"~1")))?;
             }
             return Ok(());
         }
@@ -371,17 +371,17 @@ pub fn resolve(
     let mut result = common.clone();
     collect_sources(common, "", "通用配置", &mut sources);
     'suppression: for pointer in suppressed {
-        let parts: Vec<&str> = pointer.split('/').filter(|v| !v.is_empty()).collect();
+        let parts: Vec<String> = pointer.split('/').skip(1).map(|token| token.replace("~1", "/").replace("~0", "~")).collect();
         if let Some((last, parents)) = parts.split_last() {
             let mut cursor = &mut result;
             for parent in parents {
-                let Some(next) = cursor.get_mut(*parent) else {
+                let Some(next) = cursor.get_mut(parent) else {
                     continue 'suppression;
                 };
                 cursor = next;
             }
             if let Some(map) = cursor.as_object_mut() {
-                map.remove(*last);
+                map.remove(last);
             }
             sources.insert(pointer.clone(), "不应用通用字段".into());
         }
@@ -393,7 +393,7 @@ pub fn resolve(
 fn collect_sources(value: &Value, path: &str, label: &str, output: &mut BTreeMap<String, String>) {
     if let Value::Object(map) = value {
         for (key, value) in map {
-            let child = format!("{path}/{key}");
+            let child = format!("{path}/{}",key.replace('~',"~0").replace('/',"~1"));
             collect_sources(value, &child, label, output);
         }
     } else {
@@ -404,7 +404,7 @@ fn collect_sources(value: &Value, path: &str, label: &str, output: &mut BTreeMap
 fn merge_into(target: &mut Value, own: &Value, path: &str, sources: &mut BTreeMap<String, String>) {
     if let (Value::Object(target_map), Value::Object(own_map)) = (&mut *target, own) {
         for (key, value) in own_map {
-            let child = format!("{path}/{key}");
+            let child = format!("{path}/{}",key.replace('~',"~0").replace('/',"~1"));
             if let Some(existing) = target_map.get_mut(key) {
                 merge_into(existing, value, &child, sources);
             } else {

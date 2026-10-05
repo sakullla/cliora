@@ -277,6 +277,7 @@ pub fn replace_text(
             .ok_or("此 CLI 尚无专属配置编辑能力")?;
         let mut state = draft.profile.editing.clone().ok_or("缺少配置编辑版本")?;
         port.reconcile_text(previous.as_ref(), &next, &effective, &mut state)?;
+        port.reconcile_suppressions(previous.as_ref(), &next, &mut draft.profile.suppressed)?;
         validate_state(&state)?;
         draft.profile.editing = Some(state);
         Ok(())

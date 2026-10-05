@@ -1,0 +1,13 @@
+// Sanitized SDK/model semantics; this fixture contains public environment names only.
+{
+  "model": "alpha/family/a~one",
+  "small_model": "alpha/tiny",
+  "provider": {
+    "alpha": { "npm": "@ai-sdk/openai", "options": { "baseURL": "https://alpha.example/v1", "apiKey": "{env:alpha_key}" }, "models": {
+      "family/a~one": { "name": "Alpha One", "limit": { "context": 64000, "output": 32 }, "modalities": { "input": ["text", "image"], "output": ["text"] }, "reasoning": true, "options": { "temperature": 0.2 }, "variants": { "quiet": { "reasoningEffort": "low" } }, "extensionFlag": { "keep": true } },
+      "tiny": { "name": "Tiny", "limit": { "context": 16000, "output": 32 } }
+    } },
+    "beta": { "npm": "@ai-sdk/anthropic", "options": { "baseURL": "https://beta.example/v1", "apiKey": "{env:beta_key}" }, "models": { "b": { "name": "Beta" } } }
+  },
+  "unrelated": { "keep": true }
+}

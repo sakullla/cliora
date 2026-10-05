@@ -1,0 +1,11 @@
+.editor, .fields { display: grid; gap: 12px; min-width: 0; }
+.fields[hidden] { display: none; }
+.editor summary { cursor: pointer; padding: 8px 0; }
+.fields > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+.fields label, .fields > div > div { grid-column: 1 / -1; }
+.editor input:not([type="checkbox"]), .editor select { min-width: 0; width: 100%; box-sizing: border-box; }
+.note { font-size: 12px; color: var(--muted); line-height: 1.5; margin: 0; }
+.model { border: 1px solid var(--border); border-radius: 8px; padding: 8px; min-width: 0; }
+.modelHeading { text-align: left; width: 100%; overflow-wrap: anywhere; }
+.editor fieldset { min-width: 0; display: grid; gap: 8px; }
+.editor button { max-width: 100%; white-space: normal; }

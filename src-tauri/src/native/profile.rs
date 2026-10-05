@@ -226,9 +226,9 @@ pub(crate) fn validate_files(tool: CliId, files: &BTreeMap<String, String>) -> R
 pub(crate) fn valid_env_name(name: &str) -> bool {
     name.chars()
         .next()
-        .is_some_and(|first| first.is_ascii_uppercase() || first == '_')
+        .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
         && name.chars().all(|character| {
-            character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
+            character.is_ascii_alphanumeric() || character == '_'
         })
 }
 
@@ -331,15 +331,11 @@ pub fn resolve_registered_file(
     } else {
         serde_json::json!({})
     };
-    let (contents, source_by_path) = format::resolve(
-        &base,
-        &own,
-        profile
-            .suppressed
-            .get(role)
-            .map(Vec::as_slice)
-            .unwrap_or(&[]),
-    )?;
+    let suppressed = profile.suppressed.get(role).map(Vec::as_slice).unwrap_or(&[]);
+    let adapter = registry.get(&profile.tool).ok_or("未注册的 CLI 适配器")?;
+    let (contents, source_by_path) = if let Some(port) = adapter.configuration() {
+        port.resolve_file(role, &base, &own, suppressed)?
+    } else { format::resolve(&base, &own, suppressed)? };
     Ok(EffectiveFile {
         role: role.into(),
         contents,
@@ -440,7 +436,7 @@ pub(crate) fn validate_connection(connection: &Connection) -> Result<(), String>
         .as_deref()
         .is_some_and(|value| !valid_env_name(value))
     {
-        return Err("认证环境变量名称只能包含大写字母、数字和下划线".into());
+        return Err("认证环境变量名称须以字母或下划线开头，且只包含字母、数字和下划线".into());
     }
     if connection
         .secret_ref

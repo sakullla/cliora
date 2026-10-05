@@ -32,12 +32,16 @@ CLI 在 `CliAdapter::configuration` 返回端口即可接入，未声明该能�
 - `describe/read/edit/validate/connection` 提供专属字段、逻辑动作、后端约束及只读连接。
 - 必须实现 `reconcile_text(previous, next, effective, state)`：next 是本层原文，effective 是只读合并值；有效原文恢复实体或明确覆盖字段时撤销旧 delete/rename/reset 意图，仍缺席的显式删除继续保留。语法错误保留原文和旧意图，等待修正。
 - `suppression_changes(action)` 返回具体 role/path 的增加或清除；reset 必须清除该逻辑字段对应的旧 suppressed，保留其他排除记录。路径映射属于 CLI 适配器。
-- `portable_field_kind(path)` 声明 Parameter、Credential、Local 或 Unknown；文档与动作负载执行一致语义分类，maxTokens 这类模型上限不得作为认证 Token 删除。共享迁移继续拒绝明确凭据字段和本机绝对路径。
+- `reconcile_suppressions(previous, next, suppressed)` 在有效原文重新引入实体时撤销对应的旧排除；共享服务负责调用，CLI 负责映射身份。suppressed 和来源指针使用 JSON Pointer 的 `~0/~1` 转义，模型名中的斜杠和波浪号不能改变路径层级。
+- `portable_field_kind(path)` 声明 Parameter、Credential、CredentialReference、Local 或 Unknown；文档与动作负载执行一致语义分类，maxTokens 这类模型上限不得作为认证 Token 删除。CredentialReference 仅在 `portable_reference_valid(path, value)` 按原生语法验证后保留；验证不得读取环境变量、凭据或执行命令。共享迁移继续拒绝明确凭据字段和本机绝对路径。
+- `resolve_file(role, base, own, suppressed)` 可按稳定模型 ID 合并数组并返回字段来源；缺省实现沿用共享合并。Pi 用它保留稀疏模型覆盖，取消一个字段覆盖后其他字段仍跟随 common 的后续变化。
 - `managed_documents` 限定命名配置拥有的供应商和配置级字段。
 - `managed_fields` 基于当前磁盘、目标文档及持久编辑意图生成指针变更；值 None 是显式删除，released 是取消本层覆盖。
 - 数组按原生稳定身份合并；对象和其他供应商的未知字段必须保留。删除不能通过旧 preserve 方法补回。
 - 删除/改名实体须维护默认、轻量模型及其他原生引用；操作的解码和字段校验属于适配器。
 - reset 对已管理字段恢复合并后的继承值，或删除覆盖以使用原生默认；未被管理的原生值保留。旧 managed 值与磁盘不一致时依旧返回冲突。
+- `unmanaged_paths` 只解除切换前供应商路径的管理关系，保留其原生值与凭据；它与 reset 分开处理，不能覆盖共享凭据写入或清理计划。新选定目标仍执行文件 CAS。
+- `empty_deleted_entities` 只声明显式删除或改名实体的候选路径。共享 apply 在字段 CAS 后确认子树递归仅含空对象且未涉及已解除管理或凭据路径，才清理空壳；其他供应商和用户声明的 `{}` 保留。
 
 共享 apply 服务继续拥有 CAS、账户上下文检查、凭据策略、加密备份、事务和恢复。适配器不直接写文件、启动进程或访问 keyring。
 敏感字段变更在语义映射后再次经过共享凭据策略；取消覆盖不能撤销共享的凭据清理或写入。
@@ -50,6 +54,7 @@ CLI 在 `CliAdapter::configuration` 返回端口即可接入，未声明该能�
 `RegisteredProfile.editing` 保存 version、selectedProvider、intents，files 仍为唯一文档。
 旧 connection/modelRecords 通过 `normalize_legacy` 在编辑/迁移边界折入原文一次。升级后的 projection 不再覆盖 files，ID、revision、账号和未知原生值保持。
 旧不完整记录允许读取；完整保存和应用按注册能力执行兼容归一化及适配器验证，省略 editing 不能关闭校验。当前文件与 common 保存同样执行已注册端口的语义校验。
+旧 modelRecords 在本层原文缺少选定模型基线时，显式应用可从已声明原生角色的当前文件取得基线，再执行一次兼容折入与校验；查看和保存不触发原生文件写入，原 DB 快照独立用于 CAS。
 
 SQLite schema 19 声明对新编辑语义的支持，升级不批量改写 CLI 文件。
 Portable snapshot v2 和 WebDAV manifest v2 携带编辑状态；新客户端接受 v1，旧客户端因版本不支持拒绝 v2，避免丢弃新意图后回写。
@@ -58,4 +63,5 @@ Portable snapshot v2 和 WebDAV manifest v2 携带编辑状态；新客户端接
 
 开发证据：`tests/adapter/sixth.rs` 验证额外注册适配器的字段描述、三模型创建、改名、删除、默认引用、取消覆盖、非法草稿、旧数据归一化、DB/Portable 往返及事务冲突。
 `tests/native/configuration-draft.test.mjs` 验证会话过期响应、连续表单编辑和非法输入提交保护。
+`src-tauri/src/adapters/pi/configuration_tests.rs` 使用隔离目录和内存凭据覆盖三个 CLI 的模型生命周期、真实文件应用、稀疏继承、原文与排除对账、v2 凭据往返及 OpenCode 当前磁盘引用保护；`tests/ui/config-models.spec.ts` 覆盖三种专属编辑器。
 这些开发测试不替代五个 CLI 的真实原生加载和正式交付验证。

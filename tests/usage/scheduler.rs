@@ -213,7 +213,7 @@ fn v14_queries_without_cache_are_due_but_new_saves_wait_for_interval() {
         let version: u32 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(|e| e.to_string())?;
-        assert_eq!(version, 18);
+        assert_eq!(version, 19);
         Ok(())
     })
     .unwrap();
