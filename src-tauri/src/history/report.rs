@@ -1,4 +1,4 @@
-//! Usage dashboard aggregation. Every model call is normalized into four disjoint
+//! Usage dashboard aggregation. Every usage record is normalized into four disjoint
 //! buckets (fresh input, cache read, cache write, output) so totals can be added
 //! across CLIs whose logs disagree about whether input already includes cache.
 
@@ -21,8 +21,10 @@ const MAX_GROUPS: usize = 24;
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageTotals {
-    /// Model calls after de-duplication.
+    /// Known native model calls after de-duplication. Unknown aggregates add no calls.
     pub requests: u64,
+    pub usage_records: u64,
+    pub unknown_request_records: u64,
     pub sessions: u64,
     /// Prompt tokens that were neither read from nor written to cache.
     pub input: u64,
@@ -93,9 +95,9 @@ pub struct UsageReport {
     pub by_project: Vec<UsageGroup>,
     pub top_sessions: Vec<SessionUsage>,
     pub models: Vec<String>,
-    /// Calls without a timestamp cannot be placed in a date range and are left out of it.
+    /// Usage records without a timestamp, excluded from the selected date range.
     pub untimed_requests: u64,
-    /// Calls seen in more than one source file (resumed or forked sessions), counted once.
+    /// Duplicate usage records across sources, counted once (not native call counts).
     pub duplicate_requests: u64,
     pub partial_sessions: u64,
     pub stale_sessions: u64,
@@ -226,7 +228,7 @@ impl PriceBook {
             price.cache_write_per_million,
             price.output_per_million,
         );
-        if published && call.input + call.cache_read + call.cache_write > LONG_CONTEXT_PROMPT {
+        if published && call.request_count == Some(1) && call.input + call.cache_read + call.cache_write > LONG_CONTEXT_PROMPT {
             input *= 2.0;
             read *= 2.0;
             write *= 2.0;
@@ -249,10 +251,11 @@ impl PriceBook {
     }
 }
 
-/// One de-duplicated model call with disjoint token buckets.
+/// One de-duplicated usage record with disjoint token buckets.
 #[derive(Clone, Debug)]
 struct Call {
     session: usize,
+    request_count: Option<u64>,
     /// Index into `Loaded::tools`.
     tool: usize,
     model: Option<String>,
@@ -288,7 +291,9 @@ struct Tally {
 impl Tally {
     fn add(&mut self, call: &Call) {
         let totals = &mut self.totals;
-        totals.requests += 1;
+        totals.requests += call.request_count.unwrap_or(0);
+        totals.usage_records += 1;
+        totals.unknown_request_records += u64::from(call.request_count.is_none());
         totals.input += call.input;
         totals.cache_read += call.cache_read;
         totals.cache_write += call.cache_write;
@@ -327,6 +332,12 @@ fn conditions(filter: &HistoryFilter, from: Option<i64>, to: Option<i64>, untime
             bind("s.project_id = ?", SqlValue::Text(project.into()), &mut clauses);
         }
     }
+    if filter.favorite_only {
+        clauses.push("s.favorite = 1".into());
+    }
+    if let Some(search) = super::search_pattern(filter.search.as_deref()) {
+        bind("(s.title LIKE ? ESCAPE '\\' OR s.messages_json LIKE ? ESCAPE '\\')", SqlValue::Text(search), &mut clauses);
+    }
     if with_model {
         if let Some(model) = filter.model.as_deref().filter(|model| !model.is_empty()) {
             if model == "__unknown__" {
@@ -357,9 +368,9 @@ fn conditions(filter: &HistoryFilter, from: Option<i64>, to: Option<i64>, untime
     (clauses.join(" AND "), values)
 }
 
-/// Only project filters need the session row; skipping the join keeps catalog scans on the index.
+/// Session filters require the join; unfiltered catalog scans can use the usage index.
 fn usage_source(filter: &HistoryFilter) -> &'static str {
-    if filter.project_id.as_deref().is_some_and(|project| !project.is_empty()) {
+    if filter.favorite_only || super::search_pattern(filter.search.as_deref()).is_some() || filter.project_id.as_deref().is_some_and(|project| !project.is_empty()) {
         "history_usage u JOIN history_sessions s ON s.id = u.session_id"
     } else {
         "history_usage u"
@@ -374,11 +385,15 @@ struct Loaded {
     price_sources: Vec<String>,
 }
 
-fn load_calls(conn: &Connection, filter: &HistoryFilter, from: Option<i64>, to: Option<i64>, book: &PriceBook) -> Result<Loaded, String> {
-    let (clause, values) = conditions(filter, from, to, false, true);
+fn load_calls(conn: &Connection, filter: &HistoryFilter, from: Option<i64>, to: Option<i64>, book: &PriceBook, session_id: Option<&str>) -> Result<Loaded, String> {
+    let (mut clause, mut values) = conditions(filter, from, to, false, true);
+    if let Some(id) = session_id {
+        values.push(SqlValue::Text(id.into()));
+        clause.push_str(&format!(" AND u.session_id = ?{}", values.len()));
+    }
     let sql = format!(
         "SELECT u.session_id, u.event_id, u.tool, u.model, u.timestamp, u.input, u.output, u.cache_read, u.cache_write,
-                u.input_includes_cache, s.project_id, s.cwd, s.partial, s.stale
+                u.input_includes_cache, s.project_id, s.cwd, s.partial, s.stale, u.request_count
          FROM history_usage u JOIN history_sessions s ON s.id = u.session_id
          WHERE {clause}
          ORDER BY u.timestamp"
@@ -439,6 +454,7 @@ fn load_calls(conn: &Connection, filter: &HistoryFilter, from: Option<i64>, to: 
             input
         };
         let mut call = Call {
+            request_count: row.get::<_, Option<i64>>(14).map_err(|error| error.to_string())?.map(|value| value.max(0) as u64),
             session,
             tool,
             model,
@@ -492,7 +508,7 @@ pub fn usage_report(db: &Database, filter: &HistoryFilter) -> Result<UsageReport
     let scans: Vec<ScanStatus> = scans(db)?;
     let now = now_ms();
     db.with_read_connection(|conn| {
-        let loaded = load_calls(conn, filter, filter.from_ms, filter.to_ms, &book)?;
+        let loaded = load_calls(conn, filter, filter.from_ms, filter.to_ms, &book, None)?;
         let dated = filter.from_ms.is_some() || filter.to_ms.is_some();
 
         let mut totals = Tally::default();
@@ -612,7 +628,7 @@ pub fn usage_report(db: &Database, filter: &HistoryFilter) -> Result<UsageReport
         });
         let previous = match previous {
             Some((start, end)) => {
-                let earlier = load_calls(conn, filter, Some(start), Some(end), &book)?;
+                let earlier = load_calls(conn, filter, Some(start), Some(end), &book, None)?;
                 let mut tally = Tally::default();
                 for call in &earlier.calls {
                     tally.add(call);
@@ -625,7 +641,7 @@ pub fn usage_report(db: &Database, filter: &HistoryFilter) -> Result<UsageReport
         let untimed_requests = if dated {
             let (clause, values) = conditions(filter, None, None, true, true);
             conn.query_row(
-                &format!("SELECT COUNT(*) FROM {} WHERE {clause}", usage_source(filter)),
+                &format!("SELECT COUNT(*) FROM (SELECT DISTINCT u.tool, u.event_id FROM {} WHERE {clause})", usage_source(filter)),
                 rusqlite::params_from_iter(values),
                 |row| row.get::<_, i64>(0),
             )
@@ -634,7 +650,7 @@ pub fn usage_report(db: &Database, filter: &HistoryFilter) -> Result<UsageReport
             0
         };
         let catalog_filter = HistoryFilter { model: None, ..filter.clone() };
-        let (clause, values) = conditions(&catalog_filter, None, None, false, false);
+        let (clause, values) = conditions(&catalog_filter, filter.from_ms, filter.to_ms, false, false);
         let mut statement = conn
             .prepare(&format!(
                 "SELECT DISTINCT u.model FROM {} WHERE {clause} AND u.model IS NOT NULL ORDER BY u.model",
@@ -674,5 +690,16 @@ pub fn usage_report(db: &Database, filter: &HistoryFilter) -> Result<UsageReport
             price_sources: loaded.price_sources,
             scans,
         })
+    })
+}
+
+/// Details and dashboards use the same stored normalization and event de-duplication.
+pub fn session_totals(db: &Database, id: &str) -> Result<UsageTotals, String> {
+    let book = PriceBook::load(db)?;
+    db.with_read_connection(|conn| {
+        let loaded = load_calls(conn, &HistoryFilter::default(), None, None, &book, Some(id))?;
+        let mut tally = Tally::default();
+        for call in &loaded.calls { tally.add(call); }
+        Ok(tally.finish())
     })
 }

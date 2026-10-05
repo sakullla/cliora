@@ -1,8 +1,8 @@
 import { expect, test } from '@playwright/test';
 
-type Totals = { requests: number; sessions: number; input: number; cacheRead: number; cacheWrite: number; output: number; total: number; cost: number | null; unpricedTokens: number };
+type Totals = { requests: number; usageRecords: number; unknownRequestRecords: number; sessions: number; input: number; cacheRead: number; cacheWrite: number; output: number; total: number; cost: number | null; unpricedTokens: number };
 const totals = (input: number, cacheRead: number, cacheWrite: number, output: number, extra: Partial<Totals> = {}): Totals => ({
-  requests: 0, sessions: 0, input, cacheRead, cacheWrite, output, total: input + cacheRead + cacheWrite + output, cost: null, unpricedTokens: 0, ...extra,
+  requests: 0, usageRecords: extra.requests ?? 0, unknownRequestRecords: 0, sessions: 0, input, cacheRead, cacheWrite, output, total: input + cacheRead + cacheWrite + output, cost: null, unpricedTokens: 0, ...extra,
 });
 const emptyReport = () => ({
   generatedAt: 0, from: null, to: null, bucket: 'day', currency: 'USD', totals: totals(0, 0, 0, 0), previous: null, timeline: [],
@@ -218,7 +218,7 @@ test('records keep search, show native resume command and only launch on request
     const filters = (window as typeof window & { __reportFilters: Array<{ search: string | null; favoriteOnly: boolean }> }).__reportFilters;
     return filters[filters.length - 1];
   });
-  expect(reportFilter.search).toBeNull();
+  expect(reportFilter.search).toBe('Review');
   expect(reportFilter.favoriteOnly).toBe(false);
   const ranking = page.getByRole('list', { name: '按模型用量明细' });
   await expect(ranking.getByRole('listitem')).toHaveCount(2);
@@ -372,4 +372,77 @@ test('usage failure replaces stale data and can retry with the same filters', as
   await page.getByRole('button', { name: '重新加载用量' }).click();
   await expect(page.getByRole('region', { name: '用量概览' })).toContainText('940K');
   await expect(page.getByLabel('用量模型')).toContainText('gpt-6-astra');
+});
+
+test('Grok details preserve exact token buckets and show inferred clocks and unknown calls', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  const sum = totals(1234, 8000, 76, 690, { requests: 37, usageRecords: 4, unknownRequestRecords: 1, sessions: 1 });
+  await page.addInitScript(({ sum, report }) => {
+    const records = [
+      { id: 'grok-accuracy', toolId: 'grok', nativeId: null, title: 'Token 核对示例', cwd: null, model: 'grok-fixture', projectId: null, startedAt: 1790668800000, updatedAt: 1790672400000, favorite: true, partial: true, stale: false, messageCount: 2, usageCount: 4 },
+      { id: 'grok-empty', toolId: 'grok', nativeId: null, title: '没有用量的会话', cwd: null, model: null, projectId: null, startedAt: null, updatedAt: null, favorite: false, partial: false, stale: false, messageCount: 0, usageCount: 0 },
+    ];
+    Object.assign(window, {
+      isTauri: true, __accuracyFilters: [],
+      __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['grok'], theme: 'system' }, tools: [{ id: 'grok', name: 'Grok' }] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'grok', name: 'Grok', yoloAvailable: true }], managedIds: ['grok'], preservedUnknown: [] };
+        if (['list_projects', 'list_history_prices', 'refresh_history'].includes(command)) return [];
+        if (command === 'list_history_sessions') return records.filter((item) => (!args.filter.search || item.title.includes(args.filter.search)) && (!args.filter.favoriteOnly || item.favorite));
+        if (command === 'get_history_session') {
+          const session = records.find((item) => item.id === args.id)!;
+          return { session, usage: [], totals: session.id === 'grok-accuracy' ? sum : { ...sum, requests: 0, usageRecords: 0, total: 0 }, resumeReason: '原始记录没有可验证的恢复 ID', messages: session.id === 'grok-accuracy' ? [
+            { id: 'q', role: 'user', text: '请核对本轮 Token 用量。', timestamp: 1790668800000, timestampSource: 'native' },
+            { id: 'a', role: 'assistant', text: '已保留缓存与输出的独立计数。', timestamp: 1790672400000, timestampSource: 'turn' },
+          ] : [] };
+        }
+        if (command === 'get_usage_report') {
+          (window as typeof window & { __accuracyFilters: unknown[] }).__accuracyFilters.push(args.filter);
+          return report;
+        }
+        if (command === 'get_history_scan_progress') return { running: false, toolId: '', completedSources: 0, totalSources: 0 };
+        if (command === 'get_tray_status') return { available: false, error: null };
+        if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+        return null;
+      } },
+    });
+  }, { sum, report: { ...emptyReport(), totals: sum } });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
+  await page.getByRole('button', { name: /Token 核对示例/ }).click();
+  const usage = page.getByRole('region', { name: '会话 Token 用量' });
+  await expect(usage).toContainText('总 Token 10,000');
+  for (const text of ['新输入1,234', '缓存读取8,000', '缓存写入76', '输出690', '已知调用 37 次', '1 条记录次数未知']) {
+    await expect(usage).toContainText(text);
+  }
+  const inferred = page.locator('time[title*="按轮次开始时间推断"]');
+  await expect(inferred).toContainText('约');
+  await expect(page.locator('[data-message-id="q"] time')).not.toContainText('约');
+  await expect(page.getByText('已保留缓存与输出的独立计数。', { exact: true })).toBeVisible();
+  if (process.env.HISTORY_ACCURACY_SCREENSHOTS) {
+    await page.screenshot({ path: 'docs/verification/history-accuracy/grok-detail.png', fullPage: true });
+  }
+  await page.getByRole('button', { name: /没有用量的会话/ }).click();
+  await expect(usage).toHaveText('暂无用量数据');
+  await page.getByRole('textbox', { name: '搜索会话' }).fill('Token');
+  await page.locator('summary').filter({ hasText: /^筛选/ }).click();
+  await page.getByRole('checkbox', { name: '只看收藏' }).check();
+  await page.locator('summary').filter({ hasText: /^筛选/ }).click();
+  await page.getByRole('tab', { name: '用量' }).click();
+  const overview = page.getByRole('region', { name: '用量概览' });
+  await expect(overview).toContainText('已知模型调用');
+  await expect(overview).toContainText('1 条记录次数未知');
+  await expect(overview).not.toContainText('每次约');
+  await expect(page.getByText('筛选：搜索「Token」 · 只看收藏', { exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => {
+    const filters = (window as typeof window & { __accuracyFilters: Array<{ search: string; favoriteOnly: boolean }> }).__accuracyFilters;
+    return filters.at(-1);
+  })).toMatchObject({ search: 'Token', favoriteOnly: true });
+  if (process.env.HISTORY_ACCURACY_SCREENSHOTS) {
+    await page.screenshot({ path: 'docs/verification/history-accuracy/grok-usage.png', fullPage: true });
+  }
+  await page.getByRole('tab', { name: /^会话/ }).click();
+  await page.getByRole('button', { name: '清空搜索' }).click();
+  await page.getByRole('button', { name: '只看收藏', exact: true }).click();
+  await expect(page.getByRole('button', { name: /没有用量的会话/ })).toBeVisible();
 });

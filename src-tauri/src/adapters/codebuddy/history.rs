@@ -216,6 +216,7 @@ pub fn parse_controlled(
                         let event = format!("codebuddy:message:{id}");
                         if records.insert(event.clone()) {
                             session.usage.push(UsageEvent {
+                                request_count: Some(1),
                                 id: event,
                                 model: model.clone(),
                                 timestamp: time,
@@ -292,6 +293,7 @@ pub fn parse_controlled(
                 let event = format!("{agent}:message:{message_id}");
                 if records.insert(event.clone()) {
                     session.usage.push(UsageEvent {
+                        request_count: Some(1),
                         id: event,
                         model: model.or_else(|| session.model.clone()),
                         timestamp: row.get("timestamp").and_then(timestamp),

@@ -231,6 +231,7 @@ pub fn parse_controlled(
                     return;
                 }
                 session.usage.push(UsageEvent {
+                    request_count: Some(1),
                     id,
                     model: model.clone(),
                     timestamp: time,
@@ -280,6 +281,7 @@ pub fn parse_controlled(
                     return;
                 }
                 session.usage.push(UsageEvent {
+                    request_count: last.filter(|counts| usage::active(*counts)).map(|_| 1),
                     id: format!("{}:token-{line}", source.key()),
                     model: model.clone(),
                     timestamp: time,

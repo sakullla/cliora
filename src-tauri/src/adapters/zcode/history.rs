@@ -300,6 +300,7 @@ fn parse_internal(source: &HistorySource, cancelled: &dyn Fn() -> bool) -> Resul
                 session.model.clone_from(&model);
             }
             session.usage.push(UsageEvent {
+                request_count: Some(1),
                 id: usage_id,
                 timestamp: started,
                 model,
@@ -477,6 +478,7 @@ fn parse_rollout(source: &HistorySource, cancelled: &dyn Fn() -> bool) -> Result
     session.usage = events
         .into_iter()
         .map(|(id, event)| UsageEvent {
+            request_count: Some(1),
             id,
             model: event.model,
             timestamp: event.timestamp,

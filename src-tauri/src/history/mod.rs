@@ -59,7 +59,20 @@ pub struct HistoryMessage {
     pub text: String,
     pub timestamp: Option<i64>,
     #[serde(default)]
+    pub timestamp_source: MessageTimeSource,
+    #[serde(default)]
     pub kind: HistoryMessageKind,
+}
+
+/// Missing metadata in an old index must not imply a precise native clock.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MessageTimeSource {
+    Native,
+    Turn,
+    Session,
+    #[default]
+    Unknown,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,6 +87,9 @@ pub enum HistoryMessageKind {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageEvent {
+    /// Native calls represented by this record; None means aggregate/legacy unknown.
+    #[serde(default)]
+    pub request_count: Option<u64>,
     pub id: String,
     pub model: Option<String>,
     pub timestamp: Option<i64>,
@@ -141,6 +157,7 @@ impl ParsedSession {
             role: role.to_owned(),
             text,
             timestamp: time,
+            timestamp_source: if time.is_some() { MessageTimeSource::Native } else { MessageTimeSource::Unknown },
             kind,
         });
     }
@@ -554,6 +571,7 @@ pub struct HistoryDetail {
     pub messages: Vec<HistoryMessage>,
     pub usage: Vec<UsageEvent>,
     pub resume_reason: Option<String>,
+    pub totals: report::UsageTotals,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -659,12 +677,12 @@ fn store_encoded_session(
         .map_err(|error| error.to_string())?;
     let mut insert = conn
         .prepare_cached(
-            "INSERT OR REPLACE INTO history_usage (session_id,event_id,tool,model,timestamp,input,output,cache_read,cache_write,input_includes_cache)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+            "INSERT OR REPLACE INTO history_usage (session_id,event_id,tool,model,timestamp,input,output,cache_read,cache_write,input_includes_cache,request_count)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
         )
         .map_err(|error| error.to_string())?;
     for event in &parsed.usage {
-        let model = model_label(event.model.clone()).or_else(|| session_model.clone());
+        let model = model_label(event.model.clone());
         if !billable_usage_model(model.as_deref()) {
             continue;
         }
@@ -679,7 +697,8 @@ fn store_encoded_session(
                 event.output.map(|value| value as i64),
                 event.cache_read.map(|value| value as i64),
                 event.cache_write.map(|value| value as i64),
-                event.input_includes_cache as i64
+                event.input_includes_cache as i64,
+                event.request_count.map(|value| value.min(i64::MAX as u64) as i64)
             ])
             .map_err(|error| error.to_string())?;
     }
@@ -971,20 +990,14 @@ fn row_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistorySession> {
     })
 }
 
+pub(crate) fn search_pattern(search: Option<&str>) -> Option<String> {
+    search.filter(|text| !text.trim().is_empty()).map(|text| {
+        format!("%{}%", text.trim().replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"))
+    })
+}
+
 pub fn list(db: &Database, filter: &HistoryFilter) -> Result<Vec<HistorySession>, String> {
-    let search = filter
-        .search
-        .as_deref()
-        .filter(|text| !text.trim().is_empty())
-        .map(|text| {
-            format!(
-                "%{}%",
-                text.trim()
-                    .replace('\\', "\\\\")
-                    .replace('%', "\\%")
-                    .replace('_', "\\_")
-            )
-        });
+    let search = search_pattern(filter.search.as_deref());
     let model = filter.model.as_deref().filter(|model| !model.is_empty());
     let tools: Vec<&String> = filter.tools.as_ref().map(|list| list.iter().filter(|tool| !tool.is_empty()).collect()).unwrap_or_default();
     db.with_read_connection(|conn| {
@@ -1061,6 +1074,7 @@ pub fn detail(db: &Database, id: &str) -> Result<HistoryDetail, String> {
         messages,
         usage,
         resume_reason: reason,
+        totals: report::session_totals(db, id)?,
     })
 }
 

@@ -165,6 +165,7 @@ pub fn parse_controlled(
                 // Stored input already excludes cache. Reasoning is generated and is not inside output.
                 let cache = tokens.get("cache").unwrap_or(&Value::Null);
                 session.usage.push(UsageEvent {
+                    request_count: Some(1),
                     id: message_id,
                     model,
                     timestamp: time,
