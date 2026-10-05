@@ -28,7 +28,7 @@ test.beforeAll(async () => {
     const descriptor = { version:1,fields,operations:['set','reset','unify'] };
     window.__actions=[];window.__validity={};window.__fail=false;window.__delay=false;
     function Harness() {
-      const [draft,setDraft]=React.useState({sessionId:'editor-test',revision:0,scope:'global',profile:{},baselineFiles:{},issues:[],view:{
+      const [draft,setDraft]=React.useState({sessionId:'editor-test',revision:0,scope:'global',profile:{connection:{baseUrl:'https://api.openai.com/v1'}},baselineFiles:{},issues:[],view:{
         values:codex?{model:'gpt-6.1-sol',model_provider:'gateway',model_reasoning_effort:'ultra',model_context_window:262144}:{'default.model':'claude-opus-4-8','sonnet.model':'gateway-sonnet',effortLevel:'xhigh'},
         effortChoices:codex?['low','medium','high','xhigh','max','ultra']:['low','medium','high','xhigh'],
         currentEffortModel:'claude-opus-4-8',modelEfforts:{'claude-opus-4-8':'high'},modelEffortChoices:{'claude-opus-4-8':['low','medium','high','xhigh']},capabilitySource:'Native capability evidence',
@@ -96,6 +96,23 @@ test('Codex invalid and pending integer input blocks save and failure can recove
   await page.evaluate(() => { (window as unknown as { __fail: boolean }).__fail = false; });
   await context.fill('131072');
   await expect(page.getByRole('button', { name: '保存配置' })).toBeEnabled();
+});
+
+test('Codex omitted address stays empty and reset removes the override', async ({ page }) => {
+  await page.goto('/__configuration_editor_test?tool=codex');
+  await page.getByText('供应商连接', { exact: true }).click();
+  const address = page.getByLabel('Responses 地址');
+  await expect(address).toHaveValue('');
+  await expect(page.getByRole('button', { name: '保存配置' })).toBeEnabled();
+  await address.fill('https://api.openai.com/v1');
+  await expect(page.getByRole('button', { name: '保存配置' })).toBeEnabled();
+  await address.locator('..').getByRole('button', { name: '恢复默认' }).click();
+  await expect(address).toHaveValue('');
+  await expect(page.getByRole('button', { name: '保存配置' })).toBeEnabled();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __actions: unknown[] }).__actions)).toEqual([
+    { version: 1, target: 'gateway', operation: 'set', field: 'base_url', value: 'https://api.openai.com/v1' },
+    { version: 1, target: 'gateway', operation: 'reset', field: 'base_url', value: null },
+  ]);
 });
 
 test('Claude default model edits leave roles independent until explicit unify', async ({ page }) => {

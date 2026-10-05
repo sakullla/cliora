@@ -15,6 +15,25 @@ const PARAMETERS: &[&str] = &[
     "model_reasoning_summary",
     "model_verbosity",
 ];
+// Codex 0.160.0 ModelProviderInfo::to_api_provider uses this default for API-key
+// and unauthenticated requests. It is a read-only projection, never an overlay.
+const DEFAULT_API_BASE_URL: &str = "https://api.openai.com/v1";
+
+fn effective_api_base<'a>(provider: &str, definition: &'a Value) -> Option<&'a str> {
+    if let Some(base) = definition.get("base_url") {
+        return base.as_str();
+    }
+    if !definition.is_object()
+        || RESERVED_MODEL_PROVIDERS.contains(&provider)
+        || definition["requires_openai_auth"] == true
+        || ["auth", "aws", "gateway_oauth"]
+            .iter()
+            .any(|field| definition.get(*field).is_some())
+    {
+        return None;
+    }
+    Some(DEFAULT_API_BASE_URL)
+}
 fn valid_environment_reference(value: &Value) -> bool {
     value.as_str().is_some_and(|name| {
         let mut bytes = name.bytes();
@@ -82,6 +101,26 @@ mod tests {
     }
     fn profile() -> RegisteredProfile {
         serde_json::from_value(json!({"id":"","tool":"codex","name":"Native models","version":0,"inheritCommon":false,"files":{"settings":include_str!("../../../../tests/fixtures/native/codex-model-editor.toml")},"connection":null,"nativeCredentials":{}})).unwrap()
+    }
+    fn default_address_profile() -> RegisteredProfile {
+        let mut profile = profile();
+        let mut settings = format::parse(FileKind::Toml, &profile.files["settings"]).unwrap();
+        settings["model_provider"] = json!("native_default");
+        profile.files.insert(
+            "settings".into(),
+            format::render(FileKind::Toml, &settings).unwrap(),
+        );
+        profile
+    }
+    fn native_fixture_file(path: &std::path::Path) -> crate::native::adapter::NativeFile {
+        crate::native::adapter::NativeFile {
+            role: "settings",
+            path: path.display().to_string(),
+            format: "toml",
+            writable: true,
+            reason: None,
+            sensitive: false,
+        }
     }
     #[test]
     fn codex_native_parameters_round_trip_and_complete_save_rejects_invalid() {
@@ -580,6 +619,322 @@ mod tests {
         );
         assert_eq!(applied["unrelated"], 7);
     }
+    #[test]
+    fn codex_omitted_address_opens_saves_and_applies_with_native_environment_reference() {
+        let registry = Registry::with_adapters(vec![&Codex]).unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let db = crate::database::Database::open(&temp.path().join("test.db")).unwrap();
+        let draft = configuration::open(
+            &registry,
+            default_address_profile(),
+            Scope::Global,
+            "omitted-address".into(),
+        )
+        .unwrap();
+        assert!(draft.issues.is_empty());
+        assert!(draft.view["values"].get("base_url").is_none());
+        let connection = draft.profile.connection.as_ref().unwrap();
+        assert_eq!(connection.base_url, DEFAULT_API_BASE_URL);
+        assert_eq!(
+            connection.auth_env_var.as_deref(),
+            Some("CLIORA_TEST_CODEX_KEY")
+        );
+        assert!(connection.secret_ref.is_none());
+        let saved =
+            crate::native::profile::save_registered_profile(&db, &registry, draft.profile, None)
+                .unwrap();
+        let own = format::parse(FileKind::Toml, &saved.files["settings"]).unwrap();
+        assert!(own["model_providers"]["native_default"]
+            .get("base_url")
+            .is_none());
+        let path = temp.path().join("isolated-config.toml");
+        let file = native_fixture_file(&path);
+        let unrelated = json!({"model_providers":{"foreign":{"name":"Foreign","experimental_bearer_token":"fixture-only-unrelated-key"}},"unrelated":true});
+        std::fs::write(&path, format::render(FileKind::Toml, &unrelated).unwrap()).unwrap();
+        crate::native::apply::apply_registered_validated(
+            &registry,
+            &db,
+            &MemoryCredentials::default(),
+            &saved,
+            None,
+            std::slice::from_ref(&file),
+            "global",
+            Scope::Global,
+            false,
+        )
+        .unwrap();
+        let applied =
+            format::parse(FileKind::Toml, &std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(applied["model_provider"], "native_default");
+        assert!(applied["model_providers"]["native_default"]
+            .get("base_url")
+            .is_none());
+        assert_eq!(
+            applied["model_providers"]["native_default"]["env_key"],
+            "CLIORA_TEST_CODEX_KEY"
+        );
+        assert_eq!(
+            applied["model_providers"]["foreign"],
+            unrelated["model_providers"]["foreign"]
+        );
+        let projected = Codex
+            .connection(
+                &BTreeMap::from([("settings".into(), applied)]),
+                saved.editing.as_ref().unwrap(),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(projected.base_url, DEFAULT_API_BASE_URL);
+        assert_eq!(
+            projected.auth_env_var,
+            saved.connection.unwrap().auth_env_var
+        );
+    }
+    #[test]
+    fn codex_address_reset_keeps_same_identity_secret_reference_without_writing_default_override() {
+        use crate::credentials::CredentialStore;
+        let registry = Registry::with_adapters(vec![&Codex]).unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let db = crate::database::Database::open(&temp.path().join("test.db")).unwrap();
+        let credentials = MemoryCredentials::default();
+        let secret_id = "connection-00000000-0000-4000-8000-000000000020";
+        credentials
+            .put(secret_id, "fixture-only-managed-key")
+            .unwrap();
+        let mut profile = default_address_profile();
+        let mut settings = format::parse(FileKind::Toml, &profile.files["settings"]).unwrap();
+        settings["model_providers"]["native_default"]["base_url"] = json!(DEFAULT_API_BASE_URL);
+        settings["model_providers"]["native_default"]
+            .as_object_mut()
+            .unwrap()
+            .remove("env_key");
+        profile.files.insert(
+            "settings".into(),
+            format::render(FileKind::Toml, &settings).unwrap(),
+        );
+        profile.editing = Some(EditingState::default());
+        profile.authentication = crate::native::profile::ProfileAuthentication::ApiKey;
+        profile.connection = Codex
+            .connection(
+                &BTreeMap::from([("settings".into(), settings)]),
+                profile.editing.as_ref().unwrap(),
+            )
+            .unwrap();
+        profile.connection.as_mut().unwrap().secret_ref = Some(secret_id.into());
+        let draft =
+            configuration::open(&registry, profile, Scope::Global, "explicit-address".into())
+                .unwrap();
+        let first =
+            crate::native::profile::save_registered_profile(&db, &registry, draft.profile, None)
+                .unwrap();
+        let path = temp.path().join("isolated-config.toml");
+        let file = native_fixture_file(&path);
+        crate::native::apply::apply_registered_validated(
+            &registry,
+            &db,
+            &credentials,
+            &first,
+            None,
+            std::slice::from_ref(&file),
+            "global",
+            Scope::Global,
+            false,
+        )
+        .unwrap();
+        let draft = configuration::open(
+            &registry,
+            first.clone(),
+            Scope::Global,
+            "reset-address".into(),
+        )
+        .unwrap();
+        let mut reset = action("reset", "base_url", Value::Null);
+        reset.target = json!("native_default");
+        let draft = configuration::edit(&registry, draft, reset).unwrap();
+        assert!(draft.issues.is_empty());
+        assert!(draft.view["values"].get("base_url").is_none());
+        let projected = draft.profile.connection.as_ref().unwrap();
+        assert_eq!(projected.base_url, DEFAULT_API_BASE_URL);
+        assert_eq!(projected.secret_ref.as_deref(), Some(secret_id));
+        assert!(projected.auth_env_var.is_none());
+        let saved = crate::native::profile::save_registered_profile(
+            &db,
+            &registry,
+            draft.profile,
+            Some(first.version),
+        )
+        .unwrap();
+        assert_eq!(
+            saved.connection.as_ref().unwrap().secret_ref.as_deref(),
+            Some(secret_id)
+        );
+        assert!(
+            format::parse(FileKind::Toml, &saved.files["settings"]).unwrap()["model_providers"]
+                ["native_default"]
+                .get("base_url")
+                .is_none()
+        );
+        crate::native::apply::apply_registered_validated(
+            &registry,
+            &db,
+            &credentials,
+            &saved,
+            None,
+            std::slice::from_ref(&file),
+            "global",
+            Scope::Global,
+            false,
+        )
+        .unwrap();
+        let applied =
+            format::parse(FileKind::Toml, &std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(applied["model_providers"]["native_default"]
+            .get("base_url")
+            .is_none());
+        assert_eq!(
+            applied["model_providers"]["native_default"]["experimental_bearer_token"],
+            "fixture-only-managed-key"
+        );
+        assert!(applied["model_providers"]["native_default"]
+            .get("env_key")
+            .is_none());
+        assert_eq!(
+            credentials.get(secret_id).unwrap(),
+            "fixture-only-managed-key"
+        );
+    }
+    #[test]
+    fn codex_explicit_invalid_address_is_not_confused_with_absence() {
+        let mut settings =
+            format::parse(FileKind::Toml, &default_address_profile().files["settings"]).unwrap();
+        for invalid in [
+            Value::Null,
+            json!(7),
+            json!(false),
+            json!(""),
+            json!("not a url"),
+            json!("ftp://example.test"),
+        ] {
+            settings["model_providers"]["native_default"]["base_url"] = invalid;
+            assert!(Codex
+                .validate(
+                    &BTreeMap::from([("settings".into(), settings.clone())]),
+                    &EditingState::default(),
+                    Scope::Global
+                )
+                .iter()
+                .any(|issue| issue.field.as_deref() == Some("base_url")));
+        }
+        let registry = Registry::with_adapters(vec![&Codex]).unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let db = crate::database::Database::open(&temp.path().join("test.db")).unwrap();
+        settings["model_providers"]["native_default"]["base_url"] = json!("not a url");
+        let mut profile = default_address_profile();
+        profile.files.insert(
+            "settings".into(),
+            format::render(FileKind::Toml, &settings).unwrap(),
+        );
+        let draft =
+            configuration::open(&registry, profile, Scope::Global, "invalid-address".into())
+                .unwrap();
+        assert!(draft
+            .issues
+            .iter()
+            .any(|issue| issue.field.as_deref() == Some("base_url")));
+        assert!(crate::native::profile::save_registered_profile(
+            &db,
+            &registry,
+            draft.profile,
+            None
+        )
+        .is_err());
+        let valid = configuration::open(
+            &registry,
+            default_address_profile(),
+            Scope::Global,
+            "valid-address-baseline".into(),
+        )
+        .unwrap();
+        let mut invalid_snapshot =
+            crate::native::profile::save_registered_profile(&db, &registry, valid.profile, None)
+                .unwrap();
+        invalid_snapshot.files.insert(
+            "settings".into(),
+            format::render(FileKind::Toml, &settings).unwrap(),
+        );
+        let path = temp.path().join("isolated-invalid-address.toml");
+        let baseline = "unrelated = true\n";
+        std::fs::write(&path, baseline).unwrap();
+        let error = crate::native::apply::apply_registered_validated(
+            &registry,
+            &db,
+            &MemoryCredentials::default(),
+            &invalid_snapshot,
+            None,
+            &[native_fixture_file(&path)],
+            "global",
+            Scope::Global,
+            false,
+        )
+        .unwrap_err();
+        assert!(error.contains("base_url"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), baseline);
+    }
+    #[test]
+    fn codex_native_auth_default_address_remains_legal_without_guessing_connection() {
+        let registry = Registry::with_adapters(vec![&Codex]).unwrap();
+        let mut profile = default_address_profile();
+        let mut settings = format::parse(FileKind::Toml, &profile.files["settings"]).unwrap();
+        settings["model_providers"]["native_default"]["requires_openai_auth"] = json!(true);
+        settings["model_providers"]["native_default"]
+            .as_object_mut()
+            .unwrap()
+            .remove("env_key");
+        profile.files.insert(
+            "settings".into(),
+            format::render(FileKind::Toml, &settings).unwrap(),
+        );
+        let draft = configuration::open(
+            &registry,
+            profile,
+            Scope::Global,
+            "native-auth-default".into(),
+        )
+        .unwrap();
+        assert!(draft.issues.is_empty());
+        assert!(draft.profile.connection.is_none());
+        assert!(draft.view["defaultAddressReason"]
+            .as_str()
+            .unwrap()
+            .contains("原生登录"));
+        let temp = tempfile::tempdir().unwrap();
+        let db = crate::database::Database::open(&temp.path().join("test.db")).unwrap();
+        let saved =
+            crate::native::profile::save_registered_profile(&db, &registry, draft.profile, None)
+                .unwrap();
+        let path = temp.path().join("isolated-config.toml");
+        crate::native::apply::apply_registered_validated(
+            &registry,
+            &db,
+            &MemoryCredentials::default(),
+            &saved,
+            None,
+            &[native_fixture_file(&path)],
+            "global",
+            Scope::Global,
+            false,
+        )
+        .unwrap();
+        let applied =
+            format::parse(FileKind::Toml, &std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(applied["model_providers"]["native_default"]
+            .get("base_url")
+            .is_none());
+        assert_eq!(
+            applied["model_providers"]["native_default"]["requires_openai_auth"],
+            true
+        );
+    }
 }
 fn root(documents: &Documents) -> Value {
     documents
@@ -810,8 +1165,19 @@ impl ConfigurationAdapter for Codex {
             values.insert("base_url".into(), base.clone());
         }
         let choices = capabilities(settings["model"].as_str().unwrap_or(""));
+        let definition = &settings["model_providers"][provider];
+        let default_address_reason =
+            if definition.is_object() && definition.get("base_url").is_none() {
+                Some(if effective_api_base(provider, definition).is_some() {
+                    "未设置地址：跟随 Codex 原生 API 默认地址。"
+                } else {
+                    "未设置地址：由 Codex 原生登录或特殊认证决定，有效连接尚未核验。"
+                })
+            } else {
+                None
+            };
         Ok(
-            json!({"values":values,"effortChoices":choices,"capabilitySource":if choices.is_empty() {"未核验模型能力；允许手动原生值"} else {"Codex 公开原生模型目录（2026-10-05）"}}),
+            json!({"values":values,"defaultAddressReason":default_address_reason,"effortChoices":choices,"capabilitySource":if choices.is_empty() {"未核验模型能力；允许手动原生值"} else {"Codex 公开原生模型目录（2026-10-05）"}}),
         )
     }
     fn edit(
@@ -956,9 +1322,11 @@ impl ConfigurationAdapter for Codex {
             if !definition.is_object() {
                 issue("model_provider", "自定义供应商没有原生定义");
             }
-            if !definition["base_url"].as_str().is_some_and(|base| {
-                url::Url::parse(base).is_ok_and(|url| {
-                    matches!(url.scheme(), "http" | "https") && url.host_str().is_some()
+            if definition.get("base_url").is_some_and(|value| {
+                !value.as_str().is_some_and(|base| {
+                    url::Url::parse(base).is_ok_and(|url| {
+                        matches!(url.scheme(), "http" | "https") && url.host_str().is_some()
+                    })
                 })
             }) {
                 issue("base_url", "请输入有效 HTTP 或 HTTPS 供应商地址");
@@ -990,7 +1358,10 @@ impl ConfigurationAdapter for Codex {
         let provider = settings["model_provider"].as_str().unwrap_or("openai");
         let definition = &settings["model_providers"][provider];
         Ok(
-            match (definition["base_url"].as_str(), settings["model"].as_str()) {
+            match (
+                effective_api_base(provider, definition),
+                settings["model"].as_str(),
+            ) {
                 (Some(base), Some(model)) => Some(Connection {
                     provider_id: provider.into(),
                     interface_format: "openai_responses".into(),
