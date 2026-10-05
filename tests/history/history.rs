@@ -179,6 +179,9 @@ fn five_versioned_sources_extract_visible_messages_and_distinct_usage() {
     })
     .unwrap();
     assert_eq!(grok.messages.len(), 2);
+    assert_eq!(grok.messages[0].timestamp, grok.started_at);
+    assert_eq!(grok.messages[1].timestamp, grok.started_at);
+    assert!(grok.started_at.is_some());
     assert_eq!(
         grok.usage.len(),
         1,
@@ -448,6 +451,65 @@ fn jsonl_fingerprint_failure_isolated_then_recovered_without_losing_old_index() 
         .messages
         .iter()
         .any(|message| message.text == "Failed source changed."));
+}
+
+#[test]
+fn grok_chat_without_row_times_follows_turn_starts() {
+    let temp = tempfile::tempdir().unwrap();
+    let session = temp.path().join("session");
+    fs::create_dir_all(&session).unwrap();
+    fs::write(session.join("summary.json"), r#"{"info":{"id":"44444444-4444-4444-8444-444444444444","cwd":"/fixture"},"generated_title":"Turns","created_at":"2026-09-29T08:00:00Z","updated_at":"2026-09-29T10:00:00Z"}"#).unwrap();
+    fs::write(session.join("chat_history.jsonl"), [
+        r#"{"type":"user","synthetic_reason":"project_instructions","content":"preamble"}"#,
+        r#"{"type":"user","content":"first question"}"#,
+        r#"{"type":"assistant","content":"first answer","timestamp":"2026-09-29T08:12:00Z"}"#,
+        r#"{"type":"user","synthetic_reason":"system_reminder","content":"note"}"#,
+        r#"{"type":"user","content":"second question"}"#,
+        r#"{"type":"assistant","content":"second answer"}"#,
+    ].join("\n")).unwrap();
+    fs::write(session.join("events.jsonl"), [
+        r#"{"ts":"2026-09-29T08:00:01Z","type":"phase_changed","phase":"waiting"}"#,
+        r#"{"ts":"2026-09-29T08:10:00Z","type":"turn_started","turn_number":0}"#,
+        r#"{"ts":"2026-09-29T09:10:00Z","type":"turn_started","turn_number":1}"#,
+    ].join("\n")).unwrap();
+    let parsed = grok::parse(&HistorySource { native_title: None,
+        path: session.clone(),
+        native_id: None,
+        fingerprint: "fixture".into(),
+        fingerprint_error: None,
+    }).unwrap();
+    assert_eq!(parsed.messages.len(), 6);
+    let first = parsed.messages[0].timestamp;
+    let second = parsed.messages[4].timestamp;
+    assert!(first.is_some() && second.is_some() && first < second);
+    assert_eq!(parsed.messages[1].timestamp, first);
+    assert_eq!(parsed.messages[3].timestamp, first);
+    assert_ne!(parsed.messages[2].timestamp, first);
+    assert_eq!(parsed.messages[5].timestamp, second);
+    assert_ne!(first, parsed.started_at);
+
+    let compacted = temp.path().join("compacted");
+    fs::create_dir_all(&compacted).unwrap();
+    fs::write(compacted.join("summary.json"), r#"{"info":{"id":"55555555-5555-4555-8555-555555555555","cwd":"/fixture"},"generated_title":"Compacted","created_at":"2026-09-29T08:00:00Z","updated_at":"2026-09-29T10:00:00Z"}"#).unwrap();
+    fs::write(compacted.join("chat_history.jsonl"), [
+        r#"{"type":"user","synthetic_reason":"compaction_meta","content":"earlier context"}"#,
+        r#"{"type":"user","content":"latest question"}"#,
+        r#"{"type":"assistant","content":"latest answer"}"#,
+    ].join("\n")).unwrap();
+    fs::write(compacted.join("events.jsonl"), [
+        r#"{"ts":"2026-09-29T08:10:00Z","type":"turn_started"}"#,
+        r#"{"ts":"2026-09-29T09:10:00Z","type":"turn_started"}"#,
+        r#"{"ts":"2026-09-29T10:10:00Z","type":"turn_started"}"#,
+    ].join("\n")).unwrap();
+    let parsed = grok::parse(&HistorySource { native_title: None,
+        path: compacted,
+        native_id: None,
+        fingerprint: "fixture".into(),
+        fingerprint_error: None,
+    }).unwrap();
+    assert!(parsed.messages.iter().all(|message| message.timestamp == parsed.messages[0].timestamp));
+    assert_ne!(parsed.messages[0].timestamp, parsed.started_at);
+    assert_ne!(parsed.messages[0].timestamp, first);
 }
 
 #[test]

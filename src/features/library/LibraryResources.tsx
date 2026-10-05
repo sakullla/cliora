@@ -62,6 +62,11 @@ export function LibraryResources({ section, active, tools, projects }: { section
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(''), 4000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
   const [dialogError, setDialogError] = useState('');
   const [skillOpen, setSkillOpen] = useState(false);
   const [skillUrl, setSkillUrl] = useState('');

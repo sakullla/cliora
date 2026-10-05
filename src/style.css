@@ -265,6 +265,9 @@ details[open] > :not(summary) { animation: reveal var(--medium) var(--ease); }
   overflow: hidden;
   background: var(--bg);
 }
+html[data-native="macos"] .shell { padding-top: 38px; }
+.titlebar-drag { display: none; }
+html[data-native="macos"] .titlebar-drag { display: block; position: fixed; z-index: 5; top: 0; left: 0; right: 0; height: 38px; }
 
 .sidebar {
   display: flex;

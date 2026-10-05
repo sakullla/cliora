@@ -10,7 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [{ "title": "栖点 · Cliora", "width": 1160, "height": 780, "minWidth": 720, "minHeight": 560, "backgroundColor": "#F5F7F2" }],
+    "windows": [{ "title": "栖点 · Cliora", "width": 1160, "height": 780, "minWidth": 720, "minHeight": 560, "backgroundColor": "#F5F7F2", "titleBarStyle": "Overlay", "hiddenTitle": true }],
     "security": {
       "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' data:; style-src 'self'"
     }

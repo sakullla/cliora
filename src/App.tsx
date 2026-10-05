@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -178,10 +178,24 @@ export default function App() {
     } catch (value) { setError(value as ApiError); }
   }
 
+  useLayoutEffect(() => {
+    const internals = (window as Window & { __TAURI_INTERNALS__?: { metadata?: unknown } }).__TAURI_INTERNALS__;
+    if (!nativeAvailable || !internals?.metadata) return;
+    if (/Mac/i.test(navigator.userAgent)) document.documentElement.dataset.native = 'macos';
+  }, []);
   useEffect(() => {
     const mode = bootstrap.preferences.theme;
-    if (nativeAvailable) { try { void getCurrentWindow().setTheme(mode === 'system' ? null : mode).catch(() => {}); } catch { void 0; } }
-    const apply = () => { document.documentElement.dataset.theme = mode === 'system' ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : mode; };
+    const surface = { light: '#f4f5f1', dark: '#111513' } as const;
+    const apply = () => {
+      const resolved = mode === 'system' ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : mode;
+      document.documentElement.dataset.theme = resolved;
+      if (!nativeAvailable) return;
+      try {
+        const appWindow = getCurrentWindow();
+        void appWindow.setTheme(mode === 'system' ? null : mode).catch(() => {});
+        void appWindow.setBackgroundColor(surface[resolved]).catch(() => {});
+      } catch { void 0; }
+    };
     apply();
     const media = matchMedia('(prefers-color-scheme: dark)');
     media.addEventListener('change', apply);
@@ -268,7 +282,7 @@ export default function App() {
     finally { setBusy(false); }
   }
 
-  return <ToolIconsContext value={bootstrap.preferences.tool_icons ?? {}}><div className="shell" data-sidebar-collapsed={sidebarCollapsed}>
+  return <ToolIconsContext value={bootstrap.preferences.tool_icons ?? {}}><div className="titlebar-drag" data-tauri-drag-region /><div className="shell" data-sidebar-collapsed={sidebarCollapsed}>
     <aside className="sidebar" aria-label="主导航">
       <div className="brand"><img className="brandmark" src={brandIcon} alt="" /><span className="brand-name"><strong>栖点</strong><small>CLIORA</small></span><button type="button" className="sidebar-toggle" aria-label={sidebarCollapsed ? '展开侧栏' : '折叠侧栏'} title={sidebarCollapsed ? '展开侧栏' : '折叠侧栏'} aria-expanded={!sidebarCollapsed} aria-controls="main-navigation" onClick={toggleSidebar}><Icon name={sidebarCollapsed ? 'sidebarOpen' : 'sidebarClose'} size={17} /></button></div>
       <nav className="nav" id="main-navigation" aria-label="页面">

@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Cliora main window",
   "windows": ["main"],
-  "permissions": ["core:default", "core:window:allow-set-theme", "dialog:allow-open", "dialog:allow-save"]
+  "permissions": ["core:default", "core:window:allow-set-theme", "core:window:allow-set-background-color", "dialog:allow-open", "dialog:allow-save"]
 }
