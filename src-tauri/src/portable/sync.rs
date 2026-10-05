@@ -338,7 +338,7 @@ fn test_connection(dav: &Dav) -> Result<(), String> {
 }
 
 fn validate_manifest(manifest: &Manifest, space_id: &str) -> Result<(), String> {
-    if manifest.schema_version != 1
+    if !matches!(manifest.schema_version, 1 | 2)
         || manifest.space_id != space_id
         || manifest.heads.len() > 10_000
         || manifest.history.len() > 10_000
@@ -436,6 +436,9 @@ fn save_manifest(
     key: &[u8; 32],
     etag: Option<&str>,
 ) -> Result<bool, String> {
+    let mut upgraded = manifest.clone();
+    upgraded.schema_version = 2;
+    let manifest = &upgraded;
     validate_manifest(manifest, &manifest.space_id)?;
     let plain = serde_json::to_vec(manifest).map_err(|_| "无法整理同步清单".to_string())?;
     dav.put(
@@ -610,7 +613,7 @@ pub fn configure(
                 return Err("远端同步清单缺失；请先恢复远端备份，本机资料未改动".into());
             }
             let manifest = Manifest {
-                schema_version: 1,
+                schema_version: 2,
                 space_id: space_id.clone(),
                 heads: BTreeMap::new(),
                 history: BTreeMap::new(),
@@ -821,7 +824,7 @@ fn read_version(
             return Err("远端版本内容摘要不匹配".into());
         }
         super::validate_snapshot(&PortableSnapshot {
-            schema_version: 1,
+            schema_version: 2,
             entities: vec![entity.clone()],
         })?;
     }
@@ -979,7 +982,7 @@ fn apply_entity(
                 store,
                 registry,
                 PortableSnapshot {
-                    schema_version: 1,
+                    schema_version: 2,
                     entities: vec![entity],
                 },
             )?;

@@ -12,6 +12,10 @@ struct Sixth;
 static SIXTH: Sixth = Sixth;
 
 impl CliAdapter for Sixth {
+    fn configuration(&self) -> Option<&dyn crate::adapters::configuration::ConfigurationAdapter> { Some(self) }
+    fn portable_root_fields(&self, role: &str) -> &'static [&'static str] {
+        if role == "settings" { &["model", "models", "temperature", "provider", "baseUrl", "interfaceFormat", "unknown"] } else { &[] }
+    }
     fn accounts(&self)->Option<&dyn crate::adapters::accounts::AccountAdapter> {Some(self)}
     fn plugins(&self)->Option<&dyn crate::adapters::plugins::PluginAdapter> {Some(self)}
     fn agents(&self)->Option<&dyn crate::adapters::agents::AgentAdapter> {Some(self)}
@@ -61,7 +65,7 @@ impl CliAdapter for Sixth {
         }
     }
     fn empty_entry_collections(&self, role: &str) -> &'static [&'static str] {
-        if role == "settings" { &["connections"] } else { &[] }
+        if role == "settings" { &["connections", "models"] } else { &[] }
     }
     fn connection_documents(
         &self,
@@ -72,6 +76,17 @@ impl CliAdapter for Sixth {
             "settings".into(),
             json!({"model": connection.model}),
         )]))
+    }
+    fn connection_documents_for_existing(&self, connection: &Connection, scope: Scope, existing: &BTreeMap<String, Value>) -> Result<BTreeMap<String, Value>, String> {
+        let mut overlay = self.connection_documents(connection, scope)?;
+        if !connection.model_records.is_empty() {
+            let mut models = existing.get("settings").and_then(|root| root.get("models")).cloned().unwrap_or_else(|| json!({}));
+            for record in &connection.model_records {
+                if let Some(model) = models.get_mut(&record.id) { crate::adapters::assign_existing_fields(model, &record.fields); }
+            }
+            overlay.get_mut("settings").unwrap()["models"] = models;
+        }
+        Ok(overlay)
     }
     fn write_connection_secret(
         &self,
@@ -242,6 +257,7 @@ fn sixth_adapter_uses_the_same_probe_native_transaction_and_launch_orchestration
         &db,
         &registry,
         RegisteredProfile {
+            editing: None,
             revision: String::new(),
             id: String::new(),
             tool: "sixth_fixture".into(),
@@ -377,6 +393,7 @@ fn sixth_adapter_uses_the_same_probe_native_transaction_and_launch_orchestration
         &db,
         &registry,
         RegisteredProfile {
+            editing: None,
             revision: String::new(),
             id: String::new(),
             tool: "unregistered".into(),
@@ -463,4 +480,281 @@ fn management_descriptors_follow_adapter_ports_and_default_to_absent() {
     assert!(!registry.get("grok").unwrap().descriptor().management.accounts);
     assert!(!registry.get("pi").unwrap().descriptor().management.agents);
     assert!(registry.get("claude_code").unwrap().descriptor().management.agents);
+}
+
+impl crate::adapters::configuration::ConfigurationAdapter for Sixth {
+    fn describe(&self, _: Scope) -> crate::adapters::configuration::ConfigurationDescriptor {
+        use crate::adapters::configuration::*;
+        ConfigurationDescriptor { version: 1, operations: vec!["set", "reset", "create", "rename", "delete", "default"].into_iter().map(str::to_owned).collect(), fields: vec![ConfigurationField {
+            id: "window".into(), label: "Context window".into(), kind: "integer".into(), required: true, advanced: false, choices: vec![], minimum: Some(1.0), default_source: None, unavailable_reason: None,
+        }] }
+    }
+    fn read(&self, documents: &crate::adapters::configuration::Documents, _: &crate::adapters::configuration::EditingState) -> Result<Value, String> {
+        Ok(documents.get("settings").cloned().unwrap_or_else(|| json!({})))
+    }
+    fn edit(&self, documents: &mut crate::adapters::configuration::Documents, _: &mut crate::adapters::configuration::EditingState, action: &crate::adapters::configuration::ConfigurationAction) -> Result<(), String> {
+        let root = documents.entry("settings".into()).or_insert_with(|| json!({}));
+        let id = action.target.as_str().ok_or("fixture target must be a logical ID")?;
+        match action.operation.as_str() {
+            "create" => {
+                if root.get("models").and_then(|models| models.get(id)).is_some() { return Err("duplicate model".into()); }
+                if root.get("models").is_none() { root["models"] = json!({}); }
+                root["models"][id] = action.value.clone().ok_or("missing model")?;
+            }
+            "delete" => {
+                root["models"].as_object_mut().ok_or("missing models")?.remove(id);
+                if root["model"].as_str() == Some(id) { root.as_object_mut().unwrap().remove("model"); }
+            }
+            "rename" => {
+                let next = action.value.as_ref().and_then(Value::as_str).ok_or("missing new identity")?;
+                let models = root["models"].as_object_mut().ok_or("missing models")?;
+                if models.contains_key(next) { return Err("duplicate model".into()); }
+                let model = models.remove(id).ok_or("missing model")?;
+                models.insert(next.into(), model);
+                if root["model"].as_str() == Some(id) { root["model"] = json!(next); }
+            }
+            "default" => { if root["models"].get(id).is_none() { return Err("missing model".into()); } root["model"] = json!(id); }
+            "set" | "reset" => {
+                let field = action.field.as_deref().ok_or("missing field")?;
+                let target = if id == "configuration" { root } else { root["models"].get_mut(id).ok_or("missing model")? };
+                let map = target.as_object_mut().ok_or("invalid target")?;
+                if action.operation == "reset" { map.remove(field); } else { map.insert(field.into(), action.value.clone().unwrap_or(Value::Null)); }
+            }
+            _ => return Err("unsupported operation".into()),
+        }
+        Ok(())
+    }
+    fn validate(&self, documents: &crate::adapters::configuration::Documents, _: &crate::adapters::configuration::EditingState, _: Scope) -> Vec<crate::adapters::configuration::ConfigurationIssue> {
+        let mut issues = vec![];
+        if let Some(models) = documents.get("settings").and_then(|root| root.get("models")).and_then(Value::as_object) {
+            for (id, model) in models {
+                if !model.get("window").and_then(Value::as_u64).is_some_and(|value| value > 0) {
+                    issues.push(crate::adapters::configuration::ConfigurationIssue { target: json!(id), field: Some("window".into()), code: "positive_integer".into(), message: "window is required and must be positive".into() });
+                }
+            }
+            if let Some(default) = documents["settings"].get("model").and_then(Value::as_str) {
+                if !models.contains_key(default) { issues.push(crate::adapters::configuration::ConfigurationIssue { target: json!("configuration"), field: Some("model".into()), code: "invalid_reference".into(), message: "default model is missing".into() }); }
+            }
+        }
+        issues
+    }
+    fn connection(&self, documents: &crate::adapters::configuration::Documents, _: &crate::adapters::configuration::EditingState) -> Result<Option<Connection>, String> {
+        let root = documents.get("settings").cloned().unwrap_or_else(|| json!({}));
+        Ok(match (root["provider"].as_str(), root["baseUrl"].as_str(), root["model"].as_str()) {
+            (Some(provider), Some(base), Some(model)) => Some(Connection { provider_id: provider.into(), base_url: base.into(), model: model.into(), interface_format: "openai_responses".into(), secret_ref: None, auth_env_var: None, model_records: vec![] }),
+            _ => None,
+        })
+    }
+    fn managed_fields(&self, _: &str, current: &Value, desired: &Value, profile: &RegisteredProfile) -> Result<crate::adapters::configuration::ManagedConfiguration, String> {
+        let mut fields = BTreeMap::new();
+        crate::native::apply::flatten(desired, &mut Vec::new(), &mut fields);
+        let mut managed = crate::adapters::configuration::ManagedConfiguration { fields: fields.into_iter().map(|(path,value)| (path,Some(value))).collect(), released: vec![] };
+        for action in &profile.editing.as_ref().unwrap().intents {
+            let id = action.target.as_str().unwrap();
+            if action.operation == "delete" || action.operation == "rename" {
+                let path = format!("/models/{}", crate::adapters::pointer_token(id));
+                if let Some(model) = current.get("models").and_then(|models| models.get(id)) {
+                    let mut removed = BTreeMap::new();
+                    crate::native::apply::flatten(model, &mut vec!["models".into(), id.into()], &mut removed);
+                    for pointer in removed.keys() { managed.fields.insert(pointer.clone(), None); }
+                    if removed.is_empty() { managed.fields.insert(path, None); }
+                }
+            } else if action.operation == "reset" {
+                let field = crate::adapters::pointer_token(action.field.as_deref().unwrap());
+                managed.released.push(if id == "configuration" { format!("/{field}") } else { format!("/models/{}/{field}", crate::adapters::pointer_token(id)) });
+            }
+        }
+        Ok(managed)
+    }
+}
+
+#[test]
+fn sixth_configuration_port_round_trips_logical_edits_and_rejects_invalid_drafts() {
+    use crate::native::configuration;
+    use crate::adapters::configuration::ConfigurationAction;
+    let registry = Registry::with_adapters(vec![&SIXTH]).unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let db = crate::database::Database::open(&temp.path().join("app.db")).unwrap();
+    let credentials = MemoryCredentials::default();
+    let source = json!({"unknown":{"preserved":true},"temperature":0.5});
+    let profile: RegisteredProfile = serde_json::from_value(json!({"id":"","tool":"sixth_fixture","name":"models","version":0,"inheritCommon":false,"files":{"settings":source.to_string()},"connection":null,"nativeCredentials":{}})).unwrap();
+    let mut draft = configuration::open(&registry, profile, Scope::Global, "session".into()).unwrap();
+    let action = |operation: &str, target: &str, field: Option<&str>, value: Option<Value>| ConfigurationAction { version: 1, target: json!(target), operation: operation.into(), field: field.map(str::to_owned), value };
+    assert!(configuration::describe(&registry, "sixth_fixture", Scope::Global).unwrap().unwrap().fields[0].required);
+    for id in ["a", "b", "c"] { draft = configuration::edit(&registry, draft, action("create", id, None, Some(json!({"window":100,"unknown":true})))).unwrap(); }
+    draft = configuration::edit(&registry, draft, action("default", "a", None, None)).unwrap();
+    let before_invalid = draft.view.clone();
+    let invalid = configuration::replace_text(&registry, draft.clone(), BTreeMap::from([("settings".into(), "{broken".into())]));
+    assert_eq!(invalid.profile.files["settings"], "{broken");
+    assert_eq!(invalid.view, before_invalid);
+    assert!(!invalid.issues.is_empty());
+    assert!(crate::native::profile::save_registered_profile(&db, &registry, invalid.profile, None).is_err());
+    let bad = configuration::edit(&registry, draft.clone(), action("set", "b", Some("window"), Some(json!(0)))).unwrap();
+    assert_eq!(bad.view["models"]["b"]["window"], 0);
+    assert_eq!(bad.issues[0].field.as_deref(), Some("window"));
+    assert!(crate::native::profile::save_registered_profile(&db, &registry, bad.profile, None).is_err());
+    draft = configuration::edit(&registry, draft, action("rename", "c", None, Some(json!("renamed")))).unwrap();
+    let first = crate::native::profile::save_registered_profile(&db, &registry, draft.profile.clone(), None).unwrap();
+    assert_eq!(crate::native::profile::get_registered_profile(&db, &first.id).unwrap().editing, first.editing);
+    let files = SIXTH.native_files(Scope::Global, temp.path(), None, true);
+    std::fs::create_dir_all(temp.path().join(".sixth")).unwrap();
+    let target = temp.path().join(".sixth/settings.json");
+    std::fs::write(&target, source.to_string()).unwrap();
+    crate::native::apply::apply_registered_validated(&registry, &db, &credentials, &first, None, &files, "global", Scope::Global, true).unwrap();
+    draft.profile = first;
+    draft = configuration::edit(&registry, draft, action("delete", "b", None, None)).unwrap();
+    draft = configuration::edit(&registry, draft, action("reset", "configuration", Some("temperature"), None)).unwrap();
+    draft = configuration::edit(&registry, draft, action("set", "a", Some("window"), Some(json!(200)))).unwrap();
+    let saved = crate::native::profile::save_registered_profile(&db, &registry, draft.profile.clone(), Some(draft.profile.version)).unwrap();
+    crate::native::apply::apply_registered_validated(&registry, &db, &credentials, &saved, None, &files, "global", Scope::Global, false).unwrap();
+    let disk: Value = serde_json::from_str(&std::fs::read_to_string(&target).unwrap()).unwrap();
+    assert!(disk["models"].get("b").is_none());
+    assert_eq!(disk["models"]["a"]["window"], 200);
+    assert_eq!(disk["models"]["renamed"]["unknown"], true);
+    assert!(disk.get("temperature").is_none());
+    assert_eq!(disk["unknown"]["preserved"], true);
+    let snapshot = crate::portable::collect_snapshot(&db, &credentials, &registry).unwrap();
+    assert_eq!(snapshot.schema_version, 2);
+    let restored: crate::portable::PortableSnapshot = serde_json::from_str(&serde_json::to_string(&snapshot).unwrap()).unwrap();
+    let portable = restored.entities.iter().find_map(|entity| if let crate::portable::PortablePayload::Profile(value) = &entity.payload { Some(value) } else { None }).unwrap();
+    assert_eq!(portable.profile.editing, saved.editing);
+    assert_eq!(portable.profile.files, saved.files);
+    let destination = tempfile::tempdir().unwrap();
+    let imported_db = crate::database::Database::open(&destination.path().join("app.db")).unwrap();
+    let preview = crate::portable::preview_import(&imported_db, &credentials, &registry, restored).unwrap();
+    let selected = std::collections::BTreeSet::from([format!("profile:{}", saved.id)]);
+    crate::portable::apply_import(&imported_db, &credentials, &registry, &preview, &selected).unwrap();
+    let imported = crate::native::profile::get_registered_profile(&imported_db, &saved.id).unwrap();
+    assert_eq!(imported.editing, saved.editing);
+    assert_eq!(imported.files, saved.files);
+}
+
+#[test]
+fn sixth_configuration_projection_never_reuses_credentials_for_changed_connection_identity() {
+    let registry = Registry::with_adapters(vec![&SIXTH]).unwrap();
+    let mut profile: RegisteredProfile = serde_json::from_value(json!({"id":"","tool":"sixth_fixture","name":"credentials","version":0,"inheritCommon":false,"files":{"settings":json!({"provider":"one","baseUrl":"https://one.test/v1","model":"a"}).to_string()},"connection":{"providerId":"one","baseUrl":"https://one.test/v1","model":"a","interfaceFormat":"openai_responses","secretRef":"connection:test","authEnvVar":"FIRST_KEY"},"nativeCredentials":{}})).unwrap();
+    // Simulate an already upgraded profile; the legacy adapter overlays only model.
+    profile.editing = Some(Default::default());
+    let parsed = crate::native::configuration::documents(&registry, &profile).unwrap();
+    crate::native::configuration::derive_connection(&registry, &mut profile, &parsed).unwrap();
+    assert_eq!(profile.connection.as_ref().unwrap().secret_ref.as_deref(), Some("connection:test"));
+    for field in ["provider", "baseUrl"] {
+        let mut changed = parsed.clone();
+        changed.get_mut("settings").unwrap()[field] = if field == "provider" { json!("two") } else { json!("https://two.test/v1") };
+        let mut next = profile.clone();
+        crate::native::configuration::derive_connection(&registry, &mut next, &changed).unwrap();
+        assert!(next.connection.as_ref().unwrap().secret_ref.is_none());
+        assert!(next.connection.as_ref().unwrap().auth_env_var.is_none());
+    }
+}
+
+#[test]
+fn sixth_reset_restores_inheritance_and_checks_previous_owned_value() {
+    use crate::native::configuration;
+    use crate::adapters::configuration::ConfigurationAction;
+    let registry = Registry::with_adapters(vec![&SIXTH]).unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let db = crate::database::Database::open(&temp.path().join("app.db")).unwrap();
+    let credentials = MemoryCredentials::default();
+    let common = crate::native::profile::save_registered_common(&db, &registry, crate::native::profile::RegisteredCommon { tool: "sixth_fixture".into(), version: 0, revision: String::new(), files: BTreeMap::from([("settings".into(), json!({"temperature":0.2}).to_string())]) }, None).unwrap();
+    let profile: RegisteredProfile = serde_json::from_value(json!({"id":"","tool":"sixth_fixture","name":"inherit","version":0,"inheritCommon":true,"files":{"settings":json!({"temperature":0.8}).to_string()},"connection":null,"nativeCredentials":{}})).unwrap();
+    let mut draft = configuration::open_with_common(&registry, profile, Some(common.clone()), Scope::Global, "inherit-session".into()).unwrap();
+    let saved = crate::native::profile::save_registered_profile(&db, &registry, draft.profile.clone(), None).unwrap();
+    let files = SIXTH.native_files(Scope::Global, temp.path(), None, true);
+    std::fs::create_dir_all(temp.path().join(".sixth")).unwrap();
+    let target = temp.path().join(".sixth/settings.json");
+    std::fs::write(&target, "{}").unwrap();
+    crate::native::apply::apply_registered_validated(&registry, &db, &credentials, &saved, Some(&common), &files, "global", Scope::Global, false).unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&std::fs::read_to_string(&target).unwrap()).unwrap()["temperature"], 0.8);
+    draft.profile = saved;
+    draft = configuration::edit(&registry, draft, ConfigurationAction { version: 1, operation: "reset".into(), target: json!("configuration"), field: Some("temperature".into()), value: None }).unwrap();
+    assert_eq!(draft.view["temperature"], 0.2);
+    assert!(draft.profile.files["settings"].find("temperature").is_none());
+    let reset = crate::native::profile::save_registered_profile(&db, &registry, draft.profile.clone(), Some(draft.profile.version)).unwrap();
+    std::fs::write(&target, json!({"temperature":0.9,"unrelated":true}).to_string()).unwrap();
+    assert!(crate::native::apply::apply_registered_validated(&registry, &db, &credentials, &reset, Some(&common), &files, "global", Scope::Global, false).unwrap_err().contains("外部修改"));
+    assert_eq!(serde_json::from_str::<Value>(&std::fs::read_to_string(&target).unwrap()).unwrap()["temperature"], 0.9);
+    std::fs::write(&target, json!({"temperature":0.8,"unrelated":true}).to_string()).unwrap();
+    crate::native::apply::apply_registered_validated(&registry, &db, &credentials, &reset, Some(&common), &files, "global", Scope::Global, false).unwrap();
+    let result: Value = serde_json::from_str(&std::fs::read_to_string(&target).unwrap()).unwrap();
+    assert_eq!(result["temperature"], 0.2);
+    assert_eq!(result["unrelated"], true);
+}
+
+#[test]
+fn sixth_legacy_connection_model_records_normalize_once_and_new_projection_cannot_override_text() {
+    let registry = Registry::with_adapters(vec![&SIXTH]).unwrap();
+    let profile: RegisteredProfile = serde_json::from_value(json!({"id":"","tool":"sixth_fixture","name":"legacy","version":0,"inheritCommon":false,"files":{"settings":json!({"model":"old","models":{"new":{"window":10,"unknown":true}}}).to_string()},"connection":{"providerId":"one","interfaceFormat":"openai_responses","baseUrl":"https://one.test/v1","model":"new","secretRef":null,"authEnvVar":null,"modelRecords":[{"id":"new","fields":{"window":100}}]},"nativeCredentials":{}})).unwrap();
+    let draft = crate::native::configuration::open(&registry, profile, Scope::Global, "upgrade".into()).unwrap();
+    assert_eq!(draft.view["model"], "new");
+    assert_eq!(draft.view["models"]["new"]["window"], 100);
+    assert_eq!(draft.view["models"]["new"]["unknown"], true);
+    assert_eq!(draft.profile.editing.as_ref().unwrap().version, 1);
+    let mut profile = draft.profile;
+    profile.connection = Some(Connection { provider_id: "one".into(), interface_format: "openai_responses".into(), base_url: "https://one.test/v1".into(), model: "ignored".into(), secret_ref: None, auth_env_var: None, model_records: vec![] });
+    let normalized = profile.files.clone();
+    crate::native::configuration::normalize_legacy(&registry, &mut profile, Scope::Global).unwrap();
+    assert_eq!(profile.files, normalized);
+    let documents = crate::native::apply::desired_registered_documents(&registry, &profile, None, Scope::Global).unwrap();
+    assert_eq!(documents["settings"]["model"], "new");
+    let version_two = crate::adapters::configuration::EditingState { version: 2, ..Default::default() };
+    profile.editing = Some(version_two);
+    assert!(crate::native::configuration::normalize_legacy(&registry, &mut profile, Scope::Global).is_err());
+}
+
+#[test]
+fn sixth_field_intents_compact_obsolete_values_and_reject_plaintext_or_undeclared_actions() {
+    use crate::adapters::configuration::ConfigurationAction;
+    let registry = Registry::with_adapters(vec![&SIXTH]).unwrap();
+    let profile: RegisteredProfile = serde_json::from_value(json!({"id":"","tool":"sixth_fixture","name":"compact","version":0,"inheritCommon":false,"files":{"settings":"{}"},"connection":null,"nativeCredentials":{}})).unwrap();
+    let mut draft = crate::native::configuration::open(&registry, profile, Scope::Global, "compact".into()).unwrap();
+    let action = |field: &str, value: Value| ConfigurationAction { version: 1, target: json!("configuration"), operation: "set".into(), field: Some(field.into()), value: Some(value) };
+    for value in 0..100 { draft = crate::native::configuration::edit(&registry, draft, action("temperature", json!(value))).unwrap(); }
+    assert_eq!(draft.profile.editing.as_ref().unwrap().intents.len(), 1);
+    assert_eq!(draft.profile.editing.as_ref().unwrap().intents[0].value, Some(json!(99)));
+    assert!(crate::native::configuration::edit(&registry, draft.clone(), action("api_key", json!("paste-secret-by-mistake"))).unwrap_err().contains("明文密钥"));
+    let mut undeclared = action("temperature", json!(10)); undeclared.operation = "unregistered".into();
+    assert!(crate::native::configuration::edit(&registry, draft.clone(), undeclared).unwrap_err().contains("未声明"));
+    let mut huge = action("temperature", json!(0)); huge.value = Some(json!("x".repeat(512_001)));
+    assert!(crate::native::configuration::edit(&registry, draft.clone(), huge).unwrap_err().contains("安全限制"));
+    assert_eq!(draft.view["temperature"], 99);
+}
+
+#[test]
+fn sixth_oauth_and_rebind_profiles_keep_model_view_without_api_connection() {
+    let registry = Registry::with_adapters(vec![&SIXTH]).unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let db = crate::database::Database::open(&temp.path().join("app.db")).unwrap();
+    let account = json!({"id":"fixture-account","toolId":"sixth_fixture","provider":"fixture","label":"Fixture","version":1,"state":"signed_out","identity":null,"context":null,"pendingLogin":null,"checkedAt":null,"detail":null});
+    db.with_connection(|conn| { conn.execute("INSERT INTO auth_accounts(id,tool,version,data) VALUES('fixture-account','sixth_fixture',1,?1)", [account.to_string()]).unwrap(); Ok(()) }).unwrap();
+    for authentication in [json!({"kind":"oauth","accountId":"fixture-account"}), json!({"kind":"rebind_required"})] {
+        let profile: RegisteredProfile = serde_json::from_value(json!({"id":"","tool":"sixth_fixture","name":"OAuth model","version":0,"inheritCommon":false,"authentication":authentication,"files":{"settings":json!({"provider":"mine","baseUrl":"https://mine.test/v1","model":"a","models":{"a":{"window":100}}}).to_string()},"connection":null,"nativeCredentials":{}})).unwrap();
+        let draft = crate::native::configuration::open(&registry, profile, Scope::Global, "oauth-model".into()).unwrap();
+        assert_eq!(draft.view["model"], "a");
+        assert!(draft.issues.is_empty());
+        assert!(draft.profile.connection.is_none());
+        let saved = crate::native::profile::save_registered_profile(&db, &registry, draft.profile, None).unwrap();
+        assert!(saved.connection.is_none());
+        assert!(saved.files["settings"].contains("window"));
+    }
+}
+
+#[test]
+fn sixth_required_values_are_validated_from_effective_common_without_copying_into_own_files() {
+    let registry = Registry::with_adapters(vec![&SIXTH]).unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let db = crate::database::Database::open(&temp.path().join("app.db")).unwrap();
+    let common = crate::native::profile::save_registered_common(&db, &registry, crate::native::profile::RegisteredCommon { tool: "sixth_fixture".into(), version: 0, revision: String::new(), files: BTreeMap::from([("settings".into(), json!({"models":{"inherited":{"window":128}}}).to_string())]) }, None).unwrap();
+    let profile: RegisteredProfile = serde_json::from_value(json!({"id":"","tool":"sixth_fixture","name":"inherit required","version":0,"inheritCommon":true,"files":{"settings":json!({"models":{"inherited":{"name":"Own name"}}}).to_string()},"connection":null,"nativeCredentials":{}})).unwrap();
+    let draft = crate::native::configuration::open_with_common(&registry, profile, Some(common.clone()), Scope::Global, "required".into()).unwrap();
+    assert!(draft.issues.is_empty());
+    assert_eq!(draft.view["models"]["inherited"]["window"], 128);
+    assert!(!draft.profile.files["settings"].contains("window"));
+    let saved = crate::native::profile::save_registered_profile(&db, &registry, draft.profile, None).unwrap();
+    let effective = crate::native::apply::desired_registered_documents(&registry, &saved, Some(&common), Scope::Global).unwrap();
+    assert_eq!(effective["settings"]["models"]["inherited"]["window"], 128);
+    assert_eq!(effective["settings"]["models"]["inherited"]["name"], "Own name");
+    let mut invalid = common.clone();
+    invalid.files.insert("settings".into(), json!({"models":{"inherited":{"window":0}}}).to_string());
+    assert!(crate::native::profile::save_registered_common(&db, &registry, invalid, Some(common.version)).is_err());
 }

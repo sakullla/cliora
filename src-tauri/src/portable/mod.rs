@@ -20,7 +20,7 @@ use crate::native::format::{self, FileKind};
 use crate::native::profile::{RegisteredCommon, RegisteredProfile};
 use crate::resources::mcp::McpDefinition;
 
-const SNAPSHOT_VERSION: u32 = 1;
+const SNAPSHOT_VERSION: u32 = 2;
 const MAX_ENTITIES: usize = 10_000;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -456,9 +456,21 @@ fn collect_snapshot_on(
     for text in profiles {
         let mut profile: RegisteredProfile =
             serde_json::from_str(&text).map_err(|_| "命名配置格式错误")?;
+        if registry.get(&profile.tool).is_some() {
+            crate::native::configuration::normalize_legacy(registry, &mut profile, crate::native::adapter::Scope::Global)?;
+        }
         profile.revision.clear();
         let (files, mut pending_fields) = portable_files(registry, &profile.tool, &profile.files)?;
         profile.files = files;
+        if let Some(editing) = profile.editing.as_mut() {
+            editing.intents.retain_mut(|action| {
+                let Ok(value) = serde_json::to_value(&*action) else { return false; };
+                let Some(clean) = scrub_value(value, "editing.intent", &mut pending_fields) else { return false; };
+                if let Ok(safe) = serde_json::from_value(clean) { *action = safe; true } else {
+                    pending_fields.push("不适用本机的配置编辑意图".into()); false
+                }
+            });
+        }
         let connection_secret = if let Some(connection) = profile.connection.as_mut() {
             connection
                 .secret_ref
@@ -609,11 +621,19 @@ fn collect_snapshot_on(
 }
 
 pub fn validate_snapshot(snapshot: &PortableSnapshot) -> Result<(), String> {
-    if snapshot.schema_version != SNAPSHOT_VERSION || snapshot.entities.len() > MAX_ENTITIES {
+    if !matches!(snapshot.schema_version, 1 | SNAPSHOT_VERSION) || snapshot.entities.len() > MAX_ENTITIES {
         return Err("配置包资料版本或数量不受支持".into());
     }
     let mut keys = HashSet::new();
     for entity in &snapshot.entities {
+        if let PortablePayload::Profile(value) = &entity.payload {
+            if let Some(editing) = &value.profile.editing {
+                crate::native::configuration::validate_state(editing)?;
+                if snapshot.schema_version < 2 || editing.version != crate::adapters::configuration::EDITING_VERSION {
+                    return Err("配置包编辑语义版本不受支持".into());
+                }
+            }
+        }
         if entity.id.is_empty() || entity.id.len() > 256 || !keys.insert(entity.key()) {
             return Err("配置包资料 ID 重复或无效".into());
         }
@@ -812,6 +832,9 @@ pub fn apply_import(
             common.revision = Uuid::new_v4().to_string();
         }
         if let PortablePayload::Profile(portable) = &mut entity.payload {
+            if registry.get(&portable.profile.tool).is_some() {
+                crate::native::configuration::normalize_legacy(registry, &mut portable.profile, crate::native::adapter::Scope::Global)?;
+            }
             portable.profile.revision = Uuid::new_v4().to_string();
             if let Some(secret) = portable.connection_secret.as_ref() {
                 let id = credential_id();

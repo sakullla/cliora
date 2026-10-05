@@ -1,3 +1,5 @@
+import type { ComponentType } from 'react';
+import type { ConfigurationEditorProps } from '../types/configuration';
 import type { Connection } from '../types/native';
 
 export type ReasoningControl = {
@@ -21,6 +23,7 @@ export type ModelMappingControl = {
 };
 export type ToolUiAdapter = {
   id: string;
+  configuration?: { Editor: ComponentType<ConfigurationEditorProps> };
   primaryRole?: string;
   plugins?: { installLabel?: string; projectTrust?: boolean; projectUpdate?: boolean };
   officialUsage?: { accountRequired: boolean; automaticRefresh: boolean };

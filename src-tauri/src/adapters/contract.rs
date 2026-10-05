@@ -53,6 +53,7 @@ pub struct AdapterDescriptor {
     pub history: Facet,
     pub login: Option<LoginCapability>,
     pub management: ManagementCapabilities,
+    pub configuration: Option<super::configuration::ConfigurationDescriptor>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -108,6 +109,7 @@ pub type NativeCredentialRefs = BTreeMap<String, BTreeMap<String, String>>;
 pub type PendingSecrets = Vec<(String, String)>;
 
 pub trait CliAdapter: Sync {
+    fn configuration(&self) -> Option<&dyn super::configuration::ConfigurationAdapter> { None }
     fn supports_mcp(&self) -> bool { false }
     fn supports_skills(&self) -> bool { false }
     fn official_usage(&self) -> Option<&dyn super::official::OfficialUsageAdapter> {
@@ -502,6 +504,7 @@ pub trait CliAdapter: Sync {
     fn descriptor(&self) -> AdapterDescriptor {
         AdapterDescriptor {
             id: self.id(),
+            configuration: self.configuration().map(|port| port.describe(Scope::Global)),
             management: ManagementCapabilities {
                 accounts: self.accounts().is_some_and(|adapter| {
                     let capability = adapter.capability();

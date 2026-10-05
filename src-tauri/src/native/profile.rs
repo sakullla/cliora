@@ -53,6 +53,8 @@ pub fn auth_env_name(tool: CliId, connection: &Connection) -> Option<String> {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeProfile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editing: Option<crate::adapters::configuration::EditingState>,
     pub id: String,
     pub tool: CliId,
     pub name: String,
@@ -77,6 +79,8 @@ pub struct NativeProfile {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RegisteredProfile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editing: Option<crate::adapters::configuration::EditingState>,
     pub id: String,
     pub tool: String,
     pub name: String,
@@ -97,6 +101,7 @@ pub struct RegisteredProfile {
 impl From<NativeProfile> for RegisteredProfile {
     fn from(profile: NativeProfile) -> Self {
         Self {
+            editing: profile.editing,
             id: profile.id,
             tool: profile.tool.stable_id().into(),
             name: profile.name,
@@ -116,6 +121,7 @@ impl TryFrom<RegisteredProfile> for NativeProfile {
     type Error = String;
     fn try_from(profile: RegisteredProfile) -> Result<Self, Self::Error> {
         Ok(Self {
+            editing: profile.editing,
             id: profile.id,
             tool: CliId::from_stable_id(&profile.tool).ok_or("未注册 CLI 的配置只能只读保留")?,
             name: profile.name,
@@ -239,7 +245,7 @@ pub(crate) fn env_ref_name(value: &str) -> Option<&str> {
     valid_env_name(name).then_some(name)
 }
 
-fn reject_plaintext_secrets(value: &serde_json::Value) -> Result<(), String> {
+pub(crate) fn reject_plaintext_secrets(value: &serde_json::Value) -> Result<(), String> {
     fn visit(value: &serde_json::Value, path: &mut Vec<String>) -> Result<(), String> {
         match value {
             serde_json::Value::Object(map) => {
@@ -498,6 +504,13 @@ pub fn save_registered_profile(
     if profile.name.chars().count() > 100 {
         return Err("配置名称不能超过 100 个字符".into());
     }
+    if profile.editing.is_some() {
+        let common = get_registered_common(db, &profile.tool)?;
+        let mut roles: std::collections::BTreeSet<_> = profile.files.keys().cloned().collect();
+        if profile.inherit_common { if let Some(common) = &common { roles.extend(common.files.keys().cloned()); } }
+        let parsed = roles.into_iter().map(|role| Ok((role.clone(), resolve_registered_file(registry, &profile, common.as_ref(), &role)?.contents))).collect::<Result<_, String>>()?;
+        super::configuration::validate_documents(registry, &mut profile, &parsed, super::adapter::Scope::Global)?;
+    }
     match &profile.authentication {
         ProfileAuthentication::OAuth { account_id } => {
             let account = crate::accounts::get(db, account_id)?;
@@ -647,6 +660,12 @@ pub fn save_registered_common(
     expected_version: Option<u64>,
 ) -> Result<RegisteredCommon, String> {
     validate_registered_files(registry, &common.tool, &common.files)?;
+    if let Some(port) = registry.get(&common.tool).and_then(|adapter| adapter.configuration()) {
+        let adapter = registry.get(&common.tool).unwrap();
+        let parsed = common.files.iter().map(|(role, text)| Ok((role.clone(), format::parse(adapter.file_kind(role)?, text)?))).collect::<Result<_, String>>()?;
+        let issues = port.validate(&parsed, &Default::default(), super::adapter::Scope::Global);
+        if !issues.is_empty() { return Err(serde_json::to_string(&issues).map_err(|error| error.to_string())?); }
+    }
     db.with_connection(|conn| {
         let tx = conn.transaction().map_err(|e| e.to_string())?;
         let old: Option<(i64, String)> = tx.query_row("SELECT version,data FROM common_configs WHERE tool = ?1", [&common.tool], |row| Ok((row.get(0)?, row.get(1)?))).optional().map_err(|e| e.to_string())?;
@@ -681,6 +700,7 @@ mod tests {
 
     fn profile(tool: CliId, name: &str) -> NativeProfile {
         NativeProfile {
+            editing: None,
             revision: String::new(),
             id: String::new(),
             tool,
