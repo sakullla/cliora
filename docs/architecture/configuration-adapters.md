@@ -20,6 +20,7 @@ CLI 在 `CliAdapter::configuration` 返回端口即可接入，未声明该能�
 非法原文保留输入和最后可识别视图，返回 issues 并阻止保存；非法语义值保留在草稿中并返回字段问题。
 `ConfigurationField` 要求 `onValidityChange`，数字/JSON 的中间输入及待完成写入必须同时阻止上层提交。
 `ConfigurationEditorProps.onValidityChange(field, valid)` 将专属编辑器的字段状态接入共享提交保护；组件成功重试会恢复有效性，旧响应不能改变新状态。
+可选枚举的缺省选项调用 onReset，未提供 reset 时只能显示不可选择的未设置状态；待提交数字文本在 IPC 完成前保留，较旧投影不能覆盖新输入。
 
 `src/lib/configurationDraft.ts::createConfigurationSession` 的 `edit` 串行执行表单动作，避免丢失先前编辑；`update` 用于原文或整个文档替换，与 `edit` 使用同一个顺序队列；后续动作消费上一操作的结果。
 会话失效后旧请求不能提交，相同或倒退 revision 的响应被拒绝。
@@ -41,6 +42,8 @@ CLI 在 `CliAdapter::configuration` 返回端口即可接入，未声明该能�
 共享 apply 服务继续拥有 CAS、账户上下文检查、凭据策略、加密备份、事务和恢复。适配器不直接写文件、启动进程或访问 keyring。
 敏感字段变更在语义映射后再次经过共享凭据策略；取消覆盖不能撤销共享的凭据清理或写入。
 密钥引用只在 provider/interfaceFormat/baseUrl 相同的连接身份之间保留；改变目标需要重新选定凭据。
+兼容归一化只折入文档，保留待核对的旧引用；完整 effective 文档可用后再派生身份，避免 own 文档缺少继承地址时提前清空引用。
+实际应用以同一个已核对的工作投影生成文档与凭据计划，原 DB profile 快照独立用于 CAS；common 改变目标且旧引用仍绑定旧身份时拒绝应用，原文件保持原状。
 
 ## 存储和兼容
 

@@ -889,3 +889,81 @@ fn sixth_portable_preserves_declared_model_token_limits_in_documents_and_intents
     let imported=crate::native::profile::get_registered_profile(&target,&saved.id).unwrap();
     assert_eq!(serde_json::from_str::<Value>(&imported.files["settings"]).unwrap()["models"]["a"]["maxTokens"],32);
 }
+
+struct CredentialFixture;
+static CREDENTIAL_FIXTURE: CredentialFixture = CredentialFixture;
+impl CliAdapter for CredentialFixture {
+    fn configuration(&self)->Option<&dyn crate::adapters::configuration::ConfigurationAdapter>{Some(self)}
+    fn id(&self)->&'static str{"credential_fixture"}
+    fn name(&self)->&'static str{"Credential fixture"}
+    fn command(&self)->&'static str{"fixture"}
+    fn npm_package(&self)->&'static str{"fixture"}
+    fn version_identity(&self,_:&str,_:&str)->bool{true}
+    fn native_files(&self,_:Scope,home:&Path,_:Option<&Path>,known:bool)->Vec<NativeFile>{vec![file("settings",home.join("credential-fixture.toml"),FileKind::Toml,known,None,false)]}
+    fn file_kind(&self,role:&str)->Result<FileKind,String>{crate::adapters::CODEX.file_kind(role)}
+    fn interface_formats(&self)->&'static [&'static str]{&["openai_responses"]}
+    fn connection_documents(&self,connection:&Connection,_:Scope)->Result<BTreeMap<String,Value>,String>{Ok(BTreeMap::from([("settings".into(),json!({"model":connection.model}))]))}
+    fn write_connection_secret(&self,profile:&RegisteredProfile,scope:Scope,credentials:&dyn CredentialStore,secrets:&mut NativeSecrets)->Result<(),String>{crate::adapters::CODEX.write_connection_secret(profile,scope,credentials,secrets)}
+    fn has_native_secret(&self,role:&str,value:&Value)->bool{crate::adapters::CODEX.has_native_secret(role,value)}
+    fn inspect_values(&self,settings:&Value,local:&Value,models:&Value)->InspectionFields{crate::adapters::CODEX.inspect_values(settings,local,models)}
+    fn launch_args(&self,_:Option<&str>,_:LaunchMode)->Result<Vec<String>,String>{Ok(vec![])}
+    fn install_guidance(&self)->(&'static str,&'static str){("","fixture")}
+}
+impl crate::adapters::configuration::ConfigurationAdapter for CredentialFixture {
+    fn reconcile_text(&self,_:Option<&crate::adapters::configuration::Documents>,_:&crate::adapters::configuration::Documents,_:&crate::adapters::configuration::Documents,_:&mut crate::adapters::configuration::EditingState)->Result<(),String>{Ok(())}
+    fn describe(&self,_:Scope)->crate::adapters::configuration::ConfigurationDescriptor{crate::adapters::configuration::ConfigurationDescriptor{version:1,fields:vec![],operations:vec![]}}
+    fn read(&self,documents:&crate::adapters::configuration::Documents,_:&crate::adapters::configuration::EditingState)->Result<Value,String>{Ok(documents.get("settings").cloned().unwrap_or_else(||json!({})))}
+    fn edit(&self,_:&mut crate::adapters::configuration::Documents,_:&mut crate::adapters::configuration::EditingState,_:&crate::adapters::configuration::ConfigurationAction)->Result<(),String>{Err("fixture read only".into())}
+    fn validate(&self,_:&crate::adapters::configuration::Documents,_:&crate::adapters::configuration::EditingState,_:Scope)->Vec<crate::adapters::configuration::ConfigurationIssue>{vec![]}
+    fn connection(&self,documents:&crate::adapters::configuration::Documents,_:&crate::adapters::configuration::EditingState)->Result<Option<Connection>,String>{
+        let root=documents.get("settings").cloned().unwrap_or_else(||json!({}));
+        Ok(match(root["model_provider"].as_str(),root["model"].as_str()) {
+            (Some(provider),Some(model))=>root["model_providers"][provider]["base_url"].as_str().map(|base|Connection{provider_id:provider.into(),interface_format:"openai_responses".into(),base_url:base.into(),model:model.into(),secret_ref:None,auth_env_var:None,model_records:vec![]}),_=>None
+        })
+    }
+}
+fn inherited_credential_fixture(db:&crate::database::Database,registry:&Registry)->(RegisteredProfile,crate::native::profile::RegisteredCommon){
+    let common=crate::native::profile::save_registered_common(db,registry,crate::native::profile::RegisteredCommon {tool:"credential_fixture".into(),version:0,revision:String::new(),files:BTreeMap::from([("settings".into(),"model_provider = 'mine'\n[model_providers.mine]\nbase_url = 'https://old.example/v1'\nwire_api = 'responses'\n".into())])},None).unwrap();
+    let profile=serde_json::from_value(json!({"id":"","tool":"credential_fixture","name":"inherited credential","version":0,"inheritCommon":true,"authentication":{"kind":"api_key"},"files":{"settings":"model = 'a'"},"connection":{"providerId":"mine","interfaceFormat":"openai_responses","baseUrl":"https://old.example/v1","model":"a","secretRef":"connection-00000000-0000-4000-8000-000000000001","authEnvVar":"EXISTING_KEY"},"nativeCredentials":{}})).unwrap();
+    (profile,common)
+}
+
+#[test]
+fn inherited_connection_references_survive_legacy_open_and_save_when_identity_is_unchanged(){
+    let registry=Registry::with_adapters(vec![&CREDENTIAL_FIXTURE]).unwrap();
+    let temp=tempfile::tempdir().unwrap();let db=crate::database::Database::open(&temp.path().join("db")).unwrap();
+    let (profile,common)=inherited_credential_fixture(&db,&registry);
+    let original=profile.connection.as_ref().unwrap();
+    let draft=crate::native::configuration::open_with_common(&registry,profile.clone(),Some(common),Scope::Global,"refs".into()).unwrap();
+    let projected=draft.profile.connection.as_ref().unwrap();
+    assert_eq!(projected.secret_ref,original.secret_ref);assert_eq!(projected.auth_env_var,original.auth_env_var);
+    let saved=crate::native::profile::save_registered_profile(&db,&registry,profile,None).unwrap();
+    assert_eq!(saved.connection.as_ref().unwrap().secret_ref,projected.secret_ref);
+    assert_eq!(saved.connection.as_ref().unwrap().auth_env_var,projected.auth_env_var);
+}
+
+#[test]
+fn application_requires_rebinding_when_common_changes_the_effective_credential_destination(){
+    let registry=Registry::with_adapters(vec![&CREDENTIAL_FIXTURE]).unwrap();
+    let temp=tempfile::tempdir().unwrap();let db=crate::database::Database::open(&temp.path().join("db")).unwrap();let credentials=MemoryCredentials::default();
+    let (mut profile,common)=inherited_credential_fixture(&db,&registry);
+    credentials.put(profile.connection.as_ref().unwrap().secret_ref.as_deref().unwrap(),"synthetic-old-destination-marker").unwrap();
+    profile.editing=Some(Default::default());
+    let saved=crate::native::profile::save_registered_profile(&db,&registry,profile,None).unwrap();
+    let files=CREDENTIAL_FIXTURE.native_files(Scope::Global,temp.path(),None,true);
+    let target=temp.path().join("credential-fixture.toml");std::fs::write(&target,"").unwrap();
+    crate::native::apply::apply_registered_validated(&registry,&db,&credentials,&saved,Some(&common),&files,"global",Scope::Global,false).unwrap();
+    let original=std::fs::read_to_string(&target).unwrap();
+    let mut changed=common.clone();changed.files.insert("settings".into(),common.files["settings"].replace("old.example","new.example"));
+    let changed=crate::native::profile::save_registered_common(&db,&registry,changed,Some(common.version)).unwrap();
+    let error=crate::native::apply::apply_registered_validated(&registry,&db,&credentials,&saved,Some(&changed),&files,"global",Scope::Global,false).unwrap_err();
+    assert!(error.contains("重新选择"),"{error}");assert_eq!(std::fs::read_to_string(&target).unwrap(),original);
+    assert!(!original.contains("new.example"));
+    // A separately selected key for the new identity can be saved and applied,
+    // while the original DB version/revision still protects the transaction.
+    let mut rebound=saved.clone();let connection=rebound.connection.as_mut().unwrap();connection.base_url="https://new.example/v1".into();connection.secret_ref=Some("connection-00000000-0000-4000-8000-000000000002".into());connection.auth_env_var=Some("NEW_KEY".into());
+    credentials.put(connection.secret_ref.as_deref().unwrap(),"synthetic-new-destination-marker").unwrap();
+    let rebound=crate::native::profile::save_registered_profile(&db,&registry,rebound,Some(saved.version)).unwrap();
+    crate::native::apply::apply_registered_validated(&registry,&db,&credentials,&rebound,Some(&changed),&files,"global",Scope::Global,false).unwrap();
+    let written=std::fs::read_to_string(&target).unwrap();assert!(written.contains("new.example"));assert!(written.contains("synthetic-new-destination-marker"));assert!(!written.contains("synthetic-old-destination-marker"));
+}

@@ -279,8 +279,18 @@ pub fn desired_registered_documents(
     scope: Scope,
 ) -> Result<BTreeMap<String, Value>, String> {
     let mut normalized = profile.clone();
-    super::configuration::normalize_legacy(registry, &mut normalized, scope)?;
-    let profile = &normalized;
+    desired_documents_with_projection(registry, &mut normalized, common, scope)
+}
+
+/// The mutable projection and the document are resolved together. Application
+/// keeps its original DB snapshot separately for the final transaction CAS.
+fn desired_documents_with_projection(
+    registry: &crate::adapters::Registry,
+    profile: &mut RegisteredProfile,
+    common: Option<&RegisteredCommon>,
+    scope: Scope,
+) -> Result<BTreeMap<String, Value>, String> {
+    super::configuration::normalize_legacy(registry, profile, scope)?;
     let adapter = registry
         .get(&profile.tool)
         .ok_or("未注册的 CLI 适配器，不能应用")?;
@@ -320,8 +330,7 @@ pub fn desired_registered_documents(
     }
     adapter.validate_documents(scope, &result)?;
     if profile.editing.is_some() {
-        let mut validated = profile.clone();
-        super::configuration::validate_documents(registry, &mut validated, &result, scope)?;
+        super::configuration::validate_documents(registry, profile, &result, scope)?;
         return adapter.configuration().ok_or("配置编辑能力暂不可用")?.managed_documents(result, profile, scope);
     }
     Ok(result)
@@ -426,14 +435,24 @@ fn apply_registered_validated_compared(
     key: &str, scope: Scope, allow_takeover: bool, comparison: Option<&BTreeMap<String,String>>,
 ) -> Result<ApplyOutcome,String> {
     let snapshot_profile = profile;
-    let mut normalized = profile.clone();
-    super::configuration::normalize_legacy(registry, &mut normalized, scope)?;
-    let profile = &normalized;
     let adapter = registry
         .get(&profile.tool)
         .ok_or("未注册的 CLI 适配器，不能应用")?;
-    adapter.reject_new_secret(profile, scope)?;
-    let desired = desired_registered_documents(registry, profile, common, scope)?;
+    // Scope/credential policy runs before parsing or planning any native writes.
+    adapter.reject_new_secret(snapshot_profile, scope)?;
+    let mut normalized = profile.clone();
+    let desired = desired_documents_with_projection(registry, &mut normalized, common, scope)?;
+    let profile = &normalized;
+    if let Some(previous) = &snapshot_profile.connection {
+        let same_identity = profile.connection.as_ref().is_some_and(|current| {
+            current.provider_id == previous.provider_id
+                && current.interface_format == previous.interface_format
+                && current.base_url == previous.base_url
+        });
+        if !same_identity && (previous.secret_ref.is_some() || previous.auth_env_var.is_some()) {
+            return Err("连接身份已变化；请重新选择此目标的凭据后再应用".into());
+        }
+    }
     let secrets = native_secrets_for_documents(registry, profile, scope, credentials, &desired)?;
     let integrity = transaction::integrity_key(db, credentials)?;
     let context=crate::accounts::selection::current(&profile.tool);

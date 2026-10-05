@@ -117,7 +117,9 @@ pub fn normalize_legacy(
             .map(|connection| connection.provider_id.clone()),
         ..EditingState::default()
     });
-    derive_connection(registry, profile, &parsed)
+    // Keep the old opaque references until the complete effective identity is
+    // available. Own files alone may omit an inherited provider/address.
+    Ok(())
 }
 
 pub fn derive_connection(
