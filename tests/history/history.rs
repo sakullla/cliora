@@ -1267,3 +1267,62 @@ fn grok_native_accuracy_audit() {
     assert_eq!(report.totals.unknown_request_records, 0);
     println!("Native read-only audit: sessions={} records={} requests={} input={} output={} cache_read={} cache_write={}", sources.len(), report.totals.usage_records, report.totals.requests, expected[0], expected[1], expected[2], expected[3]);
 }
+
+#[test]
+fn grok_equal_snapshots_keep_known_model_calls_and_dates_in_either_order() {
+    let temp = tempfile::tempdir().unwrap();
+    let complete = serde_json::json!({
+        "turnNumber":1,"endedAt":"2026-09-29T08:00:00Z","inputTokens":200,"outputTokens":20,"modelCalls":12,
+        "modelUsage":{"a":{"inputTokens":100,"outputTokens":10,"modelCalls":5},"b":{"inputTokens":100,"outputTokens":10,"modelCalls":7}}
+    });
+    let incomplete = serde_json::json!({
+        "turnNumber":1,"inputTokens":200,"outputTokens":20,"modelCalls":12,
+        "modelUsage":{"a":{"inputTokens":100,"outputTokens":10},"b":{"inputTokens":100,"outputTokens":10}}
+    });
+    let total = serde_json::json!({"inputTokens":200,"outputTokens":20,"modelCalls":12});
+    for turns in [[complete.clone(), incomplete.clone()], [incomplete.clone(), complete.clone()]] {
+        let source = grok_fixture(temp.path(), serde_json::json!({"session":total,"turns":turns}));
+        let parsed = grok::parse(&source).unwrap();
+        assert!(!parsed.partial);
+        assert_eq!(parsed.usage.len(), 2);
+        assert_eq!(parsed.usage.iter().map(|event| event.request_count).collect::<Vec<_>>(), vec![Some(5), Some(7)]);
+        assert!(parsed.usage.iter().all(|event| event.timestamp == Some(FIXTURE_DAY)));
+        let db = Database::open(Path::new(":memory:")).unwrap();
+        db.with_connection(|conn| store_session(conn, "grok", &source, &parsed, &HashMap::new())).unwrap();
+        let report = usage_report(&db, &HistoryFilter { from_ms: Some(FIXTURE_DAY), to_ms: Some(FIXTURE_DAY+DAY), ..Default::default() }).unwrap();
+        assert_eq!((report.totals.requests, report.totals.unknown_request_records, report.totals.total), (12,0,220));
+        assert_eq!(report.untimed_requests, 0);
+        assert_eq!(report.by_model.iter().map(|group| group.totals.requests).sum::<u64>(), 12);
+        assert_eq!(detail(&db, &stable_id("grok", &source.key())).unwrap().totals, report.totals);
+    }
+
+    // Equal tokens with contradictory call counts or dates are not a reliable
+    // terminal snapshot. Retain known evidence and make the conflict visible.
+    for conflict_field in ["modelCalls", "endedAt"] {
+        let mut conflict = complete.clone();
+        if conflict_field == "modelCalls" {
+            conflict["modelUsage"]["a"]["modelCalls"] = serde_json::json!(6);
+            conflict["modelUsage"]["b"]["modelCalls"] = serde_json::json!(6);
+        } else {
+            conflict["endedAt"] = serde_json::json!("2026-09-30T08:00:00Z");
+        }
+        let source = grok_fixture(temp.path(), serde_json::json!({"session":total,"turns":[complete.clone(),conflict]}));
+        let parsed = grok::parse(&source).unwrap();
+        assert!(parsed.partial, "conflicting {conflict_field} must be visible");
+        assert_eq!(parsed.usage.iter().map(|event| event.request_count).collect::<Vec<_>>(), vec![Some(5),Some(7)]);
+        assert!(parsed.usage.iter().all(|event| event.timestamp == Some(FIXTURE_DAY)));
+    }
+
+    // A growing terminal snapshot still replaces earlier counts and timestamps.
+    let mut growing = complete.clone();
+    growing["endedAt"] = serde_json::json!("2026-09-30T08:00:00Z");
+    growing["inputTokens"] = serde_json::json!(220);
+    growing["outputTokens"] = serde_json::json!(22);
+    growing["modelCalls"] = serde_json::json!(13);
+    growing["modelUsage"]["a"] = serde_json::json!({"inputTokens":120,"outputTokens":12,"modelCalls":6});
+    let source = grok_fixture(temp.path(), serde_json::json!({"session":{"inputTokens":220,"outputTokens":22,"modelCalls":13},"turns":[complete,growing]}));
+    let parsed = grok::parse(&source).unwrap();
+    assert!(!parsed.partial);
+    assert_eq!(parsed.usage.iter().filter_map(|event| event.request_count).sum::<u64>(), 13);
+    assert!(parsed.usage.iter().all(|event| event.timestamp == Some(FIXTURE_DAY+DAY)));
+}

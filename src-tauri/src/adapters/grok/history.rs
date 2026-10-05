@@ -447,6 +447,39 @@ fn parse_usage(
                     continue;
                 }
             }
+            if let Some(previous) = snapshots
+                .get(&key)
+                .filter(|previous| sum(previous) == sum(&events))
+            {
+                // Equal totals are repeated evidence, not a newer terminal state.
+                // Preserve metadata only for the same model and token buckets;
+                // incompatible partitions cannot be merged without guessing.
+                if previous.len() != events.len()
+                    || events.iter().any(|next| {
+                        !previous.iter().any(|old| {
+                            old.id == next.id
+                                && sum(std::slice::from_ref(old)) == sum(std::slice::from_ref(next))
+                        })
+                    })
+                {
+                    session.partial = true;
+                    continue;
+                }
+                for next in &mut events {
+                    let old = previous
+                        .iter()
+                        .find(|old| old.id == next.id)
+                        .expect("matching snapshot event");
+                    if let Some(count) = old.request_count {
+                        session.partial |= next.request_count.is_some_and(|next| next != count);
+                        next.request_count = Some(count);
+                    }
+                    if let Some(time) = old.timestamp {
+                        session.partial |= next.timestamp.is_some_and(|next| next != time);
+                        next.timestamp = Some(time);
+                    }
+                }
+            }
             snapshots.insert(key, events);
         }
         session.usage = snapshots.into_values().flatten().collect();
