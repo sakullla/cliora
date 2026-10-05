@@ -79,7 +79,44 @@ pub struct ManagedConfiguration {
     pub released: Vec<String>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PortableFieldKind {
+    #[default]
+    Unknown,
+    Parameter,
+    Credential,
+    Local,
+}
+
+#[derive(Clone, Debug)]
+pub struct SuppressionChange {
+    pub role: String,
+    pub path: String,
+    pub suppressed: bool,
+}
+
 pub trait ConfigurationAdapter: Sync {
+    /// Classify native/model values, including action payloads, for migration.
+    fn portable_field_kind(&self, _path: &[String]) -> PortableFieldKind {
+        PortableFieldKind::Unknown
+    }
+    /// Native logical identities and field locations remain adapter-owned.
+    fn suppression_changes(
+        &self,
+        _action: &ConfigurationAction,
+    ) -> Result<Vec<SuppressionChange>, String> {
+        Ok(Vec::new())
+    }
+    /// A valid raw document is authoritative over prior logical edits. Keep
+    /// only intents that still describe its final entities and field ownership.
+    fn reconcile_text(
+        &self,
+        previous: Option<&Documents>,
+        next: &Documents,
+        effective: &Documents,
+        state: &mut EditingState,
+    ) -> Result<(), String>;
+
     fn describe(&self, scope: Scope) -> ConfigurationDescriptor;
     fn read(&self, documents: &Documents, state: &EditingState) -> Result<Value, String>;
     fn edit(

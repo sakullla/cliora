@@ -52,6 +52,7 @@ fn profile(db: &Database, a: &AuthAccount) -> RegisteredProfile {
         db,
         &Registry::builtins(),
         RegisteredProfile {
+            editing: None,
             id: String::new(),
             tool: "codex".into(),
             name: a.label.clone(),

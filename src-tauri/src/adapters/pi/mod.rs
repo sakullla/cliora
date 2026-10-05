@@ -62,6 +62,11 @@ mod compatibility_tests {
 }
 
 impl CliAdapter for Pi {
+    fn portable_field_kind(&self, path: &[String]) -> crate::adapters::configuration::PortableFieldKind {
+        if path.last().is_some_and(|field| field == "maxTokens") { crate::adapters::configuration::PortableFieldKind::Parameter }
+        else { self.configuration().map_or(Default::default(), |port| port.portable_field_kind(path)) }
+    }
+
     fn supports_mcp(&self) -> bool { true }
     fn supports_skills(&self) -> bool { true }
     fn agents(&self) -> Option<&dyn crate::adapters::agents::AgentAdapter> {

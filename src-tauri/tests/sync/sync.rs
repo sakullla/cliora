@@ -250,7 +250,7 @@ fn fresh_device_receives_non_default_preferences_and_common_changes_without_sync
     let common = profile::save_registered_common(&a, &registry, RegisteredCommon {
         tool: "codex".into(), version: 0, revision: String::new(), files: BTreeMap::from([("settings".into(), "model = \"first\"".into())]),
     }, None).unwrap();
-    let named = profile::save_registered_profile(&a, &registry, RegisteredProfile { authentication: crate::native::profile::ProfileAuthentication::Native,
+    let named = profile::save_registered_profile(&a, &registry, RegisteredProfile { editing: None, authentication: crate::native::profile::ProfileAuthentication::Native,
         id: String::new(), tool: "codex".into(), name: "Work".into(), version: 0, revision: String::new(),
         inherit_common: true, files: BTreeMap::new(), suppressed: BTreeMap::new(), connection: None, native_credentials: BTreeMap::new(),
     }, None).unwrap();
@@ -720,4 +720,63 @@ fn sync_space_and_object_authentication_reject_wrong_password_and_tampering() {
     let mut envelope: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     envelope["wrappedKey"] = serde_json::json!("corrupted");
     assert!(crypto::open_sync(&key, &space_id, &serde_json::to_vec(&envelope).unwrap()).is_err());
+}
+
+#[test]
+fn versioned_editing_intents_survive_webdav_roundtrip_without_native_application() {
+    let server = Server::new();
+    let temp = tempfile::tempdir().unwrap();
+    let a = database(&temp.path().join("editing-a"));
+    let b = database(&temp.path().join("editing-b"));
+    let credentials = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    // Transport must preserve versioned metadata even while a receiving adapter
+    // has no editor installed. Applying that profile is a separate capability check.
+    let source: crate::native::profile::RegisteredProfile = serde_json::from_value(serde_json::json!({
+        "id":"editing-profile", "tool":"codex", "name":"Editing transport", "version":1,
+        "revision":"source", "inheritCommon":false, "files":{"settings":"model = \"manual\""},
+        "connection":null, "nativeCredentials":{},
+        "editing":{"version":1,"selectedProvider":null,"intents":[{"version":1,"target":{"configuration":true},"operation":"reset","field":"model_reasoning_effort","value":null}]}
+    })).unwrap();
+    a.with_connection(|conn| {
+        conn.execute("INSERT INTO native_profiles(id,tool,version,data) VALUES (?1,?2,?3,?4)", rusqlite::params![source.id, source.tool, source.version as i64, serde_json::to_string(&source).unwrap()]).unwrap();
+        Ok(())
+    }).unwrap();
+    configure(&a, &credentials, setup(&server)).unwrap();
+    run(&a, &credentials, &registry, false).unwrap();
+    configure(&b, &credentials, setup(&server)).unwrap();
+    run(&b, &credentials, &registry, false).unwrap();
+    let incoming = crate::native::profile::get_registered_profile(&b, &source.id).unwrap();
+    assert_eq!(incoming.editing, source.editing);
+    assert_eq!(crate::native::format::parse(crate::native::format::FileKind::Toml, &incoming.files["settings"]).unwrap(), crate::native::format::parse(crate::native::format::FileKind::Toml, &source.files["settings"]).unwrap());
+    assert!(crate::native::apply::get_registered_binding(&b, &source.tool, "global").unwrap().is_none());
+    let before = server.state.lock().unwrap().files["/dav/manifest.cliora"].clone();
+    run(&b, &credentials, &registry, false).unwrap();
+    assert_eq!(server.state.lock().unwrap().files["/dav/manifest.cliora"], before);
+}
+
+#[test]
+fn model_token_limits_and_editing_values_survive_webdav_semantic_scrubbing() {
+    let server=Server::new();
+    let temp=tempfile::tempdir().unwrap();
+    let a=database(&temp.path().join("model-limit-a"));
+    let b=database(&temp.path().join("model-limit-b"));
+    let credentials=MemoryCredentials::default();
+    let registry=Registry::builtins();
+    let model=serde_json::json!({"id":"a","contextWindow":100,"maxTokens":32,"unknown":true,"cachePath":"/device/only","customAuthToken":"must-not-sync"});
+    let source:crate::native::profile::RegisteredProfile=serde_json::from_value(serde_json::json!({
+        "id":"model-limit-profile","tool":"pi","name":"Model limits","version":1,"revision":"source","inheritCommon":false,
+        "files":{"settings":serde_json::json!({"defaultProvider":"mine","defaultModel":"a"}).to_string(),"models":serde_json::json!({"providers":{"mine":{"models":[model.clone()]}}}).to_string()},
+        "connection":null,"nativeCredentials":{},"editing":{"version":1,"selectedProvider":"mine","intents":[{"version":1,"target":{"provider":"mine","model":"a"},"operation":"create","field":null,"value":model}]}
+    })).unwrap();
+    a.with_connection(|conn|{conn.execute("INSERT INTO native_profiles(id,tool,version,data) VALUES(?1,?2,?3,?4)",rusqlite::params![source.id,source.tool,source.version as i64,serde_json::to_string(&source).unwrap()]).unwrap();Ok(())}).unwrap();
+    configure(&a,&credentials,setup(&server)).unwrap();run(&a,&credentials,&registry,false).unwrap();
+    configure(&b,&credentials,setup(&server)).unwrap();run(&b,&credentials,&registry,false).unwrap();
+    let incoming=crate::native::profile::get_registered_profile(&b,&source.id).unwrap();
+    let document:serde_json::Value=serde_json::from_str(&incoming.files["models"]).unwrap();
+    assert_eq!(document["providers"]["mine"]["models"][0]["maxTokens"],32);
+    assert_eq!(document["providers"]["mine"]["models"][0]["unknown"],true);
+    assert_eq!(incoming.editing.as_ref().unwrap().intents[0].value.as_ref().unwrap()["maxTokens"],32);
+    let transported=serde_json::to_string(&incoming).unwrap();
+    assert!(!transported.contains("must-not-sync"));assert!(!transported.contains("/device/only"));
 }

@@ -24,4 +24,5 @@ export type ConfigurationEditorProps = {
   descriptor: ConfigurationDescriptor;
   disabled?: boolean;
   onAction: (action: ConfigurationAction) => Promise<void>;
+  onValidityChange: (field: string, valid: boolean) => void;
 };

@@ -36,7 +36,7 @@ fn encrypted_bundle_restores_on_fresh_device_without_identity_or_paths_and_is_id
     old_credentials
         .put("connection-original", "private-api-key")
         .unwrap();
-    let profile = RegisteredProfile { authentication: crate::native::profile::ProfileAuthentication::Native,
+    let profile = RegisteredProfile { editing: None, authentication: crate::native::profile::ProfileAuthentication::Native,
         revision: String::new(),
         id: "profile-1".into(),
         tool: "codex".into(),
@@ -192,7 +192,7 @@ fn same_version_profile_import_shows_content_and_marks_native_binding_pending() 
     let db = database(temp.path());
     let credentials = MemoryCredentials::default();
     let registry = Registry::builtins();
-    let profile = RegisteredProfile { authentication: crate::native::profile::ProfileAuthentication::Native,
+    let profile = RegisteredProfile { editing: None, authentication: crate::native::profile::ProfileAuthentication::Native,
         revision: String::new(),
         id: "profile-1".into(),
         tool: "codex".into(),
@@ -323,7 +323,7 @@ fn import_rechecks_digest_inside_the_write_transaction() {
     incoming.entities.push(PortableEntity {
         id: "secret-profile".into(),
         payload: PortablePayload::Profile(PortableProfile {
-            profile: RegisteredProfile { authentication: crate::native::profile::ProfileAuthentication::Native,
+            profile: RegisteredProfile { editing: None, authentication: crate::native::profile::ProfileAuthentication::Native,
                 revision: String::new(),
                 id: "secret-profile".into(),
                 tool: "codex".into(),
@@ -439,7 +439,7 @@ fn same_portable_version_replaces_local_revision_and_rejects_stale_saves_and_del
     let db = database(temp.path());
     let credentials = MemoryCredentials::default();
     let registry = Registry::builtins();
-    let old_profile = profile::save_registered_profile(&db, &registry, RegisteredProfile { authentication: crate::native::profile::ProfileAuthentication::Native,
+    let old_profile = profile::save_registered_profile(&db, &registry, RegisteredProfile { editing: None, authentication: crate::native::profile::ProfileAuthentication::Native,
         id: String::new(), tool: "codex".into(), name: "local".into(), version: 0, revision: String::new(),
         inherit_common: true, files: BTreeMap::new(), suppressed: BTreeMap::new(), connection: None, native_credentials: BTreeMap::new(),
     }, None).unwrap();
@@ -486,7 +486,7 @@ fn common_only_import_marks_inheriting_bindings_pending_and_notifies_partial_suc
     let credentials = MemoryCredentials::default();
     let registry = Registry::builtins();
     for inherit in [true, false] {
-        let profile = profile::save_registered_profile(&db, &registry, RegisteredProfile { authentication: crate::native::profile::ProfileAuthentication::Native,
+        let profile = profile::save_registered_profile(&db, &registry, RegisteredProfile { editing: None, authentication: crate::native::profile::ProfileAuthentication::Native,
             id: String::new(), tool: "codex".into(), name: inherit.to_string(), version: 0, revision: String::new(),
             inherit_common: inherit, files: BTreeMap::new(), suppressed: BTreeMap::new(), connection: None, native_credentials: BTreeMap::new(),
         }, None).unwrap();
@@ -535,7 +535,7 @@ fn incoming_content_never_becomes_automatic_project_directory_recovery() {
     let moved = temp.path().join("moved");
     fs::create_dir(&directory).unwrap();
     let project = projects::add(&db, &registry, directory.to_str().unwrap(), None, Some("codex")).unwrap();
-    let profile = profile::save_registered_profile(&db, &registry, RegisteredProfile { authentication: crate::native::profile::ProfileAuthentication::Native,
+    let profile = profile::save_registered_profile(&db, &registry, RegisteredProfile { editing: None, authentication: crate::native::profile::ProfileAuthentication::Native,
         id: String::new(), tool: "codex".into(), name: "Work".into(), version: 0, revision: String::new(),
         inherit_common: false, files: BTreeMap::new(), suppressed: BTreeMap::new(), connection: None, native_credentials: BTreeMap::new(),
     }, None).unwrap();

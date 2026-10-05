@@ -109,6 +109,10 @@ pub type NativeCredentialRefs = BTreeMap<String, BTreeMap<String, String>>;
 pub type PendingSecrets = Vec<(String, String)>;
 
 pub trait CliAdapter: Sync {
+    fn portable_field_kind(&self, path: &[String]) -> super::configuration::PortableFieldKind {
+        self.configuration().map_or(super::configuration::PortableFieldKind::Unknown, |port| port.portable_field_kind(path))
+    }
+
     fn configuration(&self) -> Option<&dyn super::configuration::ConfigurationAdapter> { None }
     fn supports_mcp(&self) -> bool { false }
     fn supports_skills(&self) -> bool { false }

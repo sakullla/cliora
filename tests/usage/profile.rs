@@ -21,6 +21,7 @@ impl CredentialStore for Keys {
 
 fn profile(base: &str) -> RegisteredProfile {
     RegisteredProfile {
+        editing: None,
         id: "quota-profile".into(),
         tool: "claude_code".into(),
         name: "自定义显示名称".into(),
