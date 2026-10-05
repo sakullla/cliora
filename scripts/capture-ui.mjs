@@ -19,6 +19,8 @@ if(process.argv.includes('--list')){console.log(selectedScenarios.join('\n'));pr
 const root=fileURLToPath(new URL('../',import.meta.url)).replace(/\\/g,'/').replace(/\/$/,'');
 const workflowsOnly=process.argv.includes('--workflows');
 const fullCapture=!process.argv.some(arg=>['--workflows','--records','--sessions','--connections'].includes(arg));
+const captureMode=workflowsOnly?'workflows':process.argv.includes('--sessions')?'sessions':process.argv.includes('--records')?'records':process.argv.includes('--connections')?'connections':'full';
+const manifestName=`capture-ui${['workflows','sessions','records'].includes(captureMode)?'-'+captureMode:''}-manifest.json`;
 const out=process.env.CLIORA_CAPTURE_OUT ?? root+(workflowsOnly?'/docs/verification/workflow-capture':'/docs/verification/ui'); fs.mkdirSync(out,{recursive:true});
 const browser=await chromium.launch();
 async function mock(initialTheme){
@@ -115,6 +117,18 @@ function findOverflow(){
   return right>left&&(right>innerWidth+1||left< -1);
  }).map(el=>({tag:el.tagName,text:el.textContent?.slice(0,60)}));
 }
+async function captureImage(page,name,theme,width,metadata={}){
+ await page.mouse.move(0,0);
+ await page.waitForTimeout(100);
+ await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);
+ const file=`${name}-${theme}-${width}.png`;
+ const path=`${out}/${file}`;
+ await page.screenshot({path});
+ captures.push({name,theme,width,height:page.viewportSize().height,path,file,category:'general_ui',state:name,...metadata});
+ const over=await page.evaluate(findOverflow);
+ if(over.length)failures.push({name,theme,width,over});
+ console.log(path);
+}
 async function captureWorkflows(){
  for(const width of widths)for(const theme of themes){
   const page=await browser.newPage({viewport:{width,height:1100}});
@@ -127,15 +141,7 @@ async function captureWorkflows(){
   const dialog=page.locator('dialog.guide-dialog');
   async function capture(name,workflow,state){
    if(!selectedScenarios.includes(name))return;
-   await page.mouse.move(0,0);
-   await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);
-   await page.waitForTimeout(100);
-   const path=`${out}/${name}-${theme}-${width}.png`;
-   await page.screenshot({path});
-   captures.push({name,theme,width,height:1100,path,file:path.slice(out.length+1),workflowRef:workflowRefs[workflow],state});
-   const over=await page.evaluate(findOverflow);
-   if(over.length)failures.push({name,theme,width,over});
-   console.log(path);
+   await captureImage(page,name,theme,width,{category:'workflow',workflowRef:workflowRefs[workflow],state});
   }
   async function closeDialog(){
    await page.keyboard.press('Escape');
@@ -228,32 +234,34 @@ async function captureWorkflows(){
  }
 }
 
-function writeWorkflowGallery(){
+function writeGallery(){
  const workflowCaptures=captures.filter(item=>item.workflowRef);
- if(!workflowsOnly&&!fullCapture)return;
+ const generalCaptures=captures.filter(item=>item.category==='general_ui');
+ const scopeLabel=item=>item.workflowRef?.split('/').at(-1)??'通用 UI';
+ const capturedWorkflows=[...new Set(workflowCaptures.map(item=>item.workflowRef))];
  const escape=value=>String(value).replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
- const workflowOptions=Object.values(workflowRefs).map(ref=>`<option value="${escape(ref)}">${escape(ref.split('/').at(-1))}</option>`).join('');
- const scenarioOptions=[...new Set(workflowCaptures.map(item=>item.name))].map(name=>`<option value="${escape(name)}">${escape(name)}</option>`).join('');
- const cards=workflowCaptures.map(item=>`<figure data-workflow="${escape(item.workflowRef)}" data-scenario="${escape(item.name)}" data-theme="${item.theme}" data-width="${item.width}" data-keywords="${escape((item.name+' '+item.state+' '+item.workflowRef).toLowerCase())}"><a href="${escape(item.file)}" target="_blank" rel="noopener"><img loading="lazy" src="${escape(item.file)}" alt="${escape(item.name)} ${item.theme} ${item.width}"></a><figcaption>${escape(item.name)}<small>${escape(item.workflowRef.split('/').at(-1))}</small><small>${item.theme} · ${item.width} × ${item.height}</small><small>${escape(item.state)}</small></figcaption></figure>`).join('');
- const missing=widths.flatMap(width=>themes.flatMap(theme=>selectedScenarios.filter(name=>!workflowCaptures.some(item=>item.name===name&&item.width===width&&item.theme===theme)).map(name=>({name,theme,width}))));
+ const workflowOptions=(generalCaptures.length?'<option value="general_ui">通用 UI</option>':'')+capturedWorkflows.map(ref=>`<option value="${escape(ref)}">${escape(ref.split('/').at(-1))}</option>`).join('');
+ const scenarioOptions=[...new Set(captures.map(item=>item.name))].map(name=>`<option value="${escape(name)}">${escape(name)}</option>`).join('');
+ const cards=captures.map(item=>`<figure data-workflow="${escape(item.workflowRef??'general_ui')}" data-scenario="${escape(item.name)}" data-theme="${item.theme}" data-width="${item.width}" data-keywords="${escape((item.name+' '+item.state+' '+scopeLabel(item)).toLowerCase())}"><a href="${escape(item.file)}" target="_blank" rel="noopener"><img loading="lazy" src="${escape(item.file)}" alt="${escape(item.name)} ${item.theme} ${item.width}"></a><figcaption>${escape(item.name)}<small>${escape(scopeLabel(item))}</small><small>${item.theme} · ${item.width} × ${item.height}</small><small>${escape(item.state)}</small></figcaption></figure>`).join('');
+ const missing=workflowsOnly||fullCapture?widths.flatMap(width=>themes.flatMap(theme=>selectedScenarios.filter(name=>!workflowCaptures.some(item=>item.name===name&&item.width===width&&item.theme===theme)).map(name=>({name,theme,width})))):[];
  if(missing.length)failures.push({type:'missing',missing});
- fs.writeFileSync(`${out}/index.html`,`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Cliora 工作流 UI 捕获</title><style>
-body{margin:0;background:#101114;color:#f5f2ec;font:15px system-ui}header{position:sticky;top:0;padding:20px 4vw;background:#191b20;z-index:2;border-bottom:1px solid #34363d}h1{font-size:24px;margin:0 0 8px}p{color:#b3afa6}.filters{display:flex;flex-wrap:wrap;gap:10px;align-items:end}label{display:grid;gap:5px;font-size:13px;color:#c9c6c0}select,input,button{font:inherit;padding:9px;border:1px solid #555;border-radius:8px;background:#25272d;color:#f5f2ec;max-width:100%;box-sizing:border-box}select{max-width:min(350px,80vw)}button{cursor:pointer}input{width:240px}.result{display:flex;gap:18px;flex-wrap:wrap;margin:12px 0 0}main{padding:24px 4vw;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr));gap:24px}figure{margin:0;padding:12px;border:1px solid #34363d;border-radius:12px;min-width:0}img{width:100%;height:340px;object-fit:contain;background:#070709}figcaption{padding:12px 0 0;overflow-wrap:anywhere}a{color:#b8d2ff}small{display:block;color:#b3afa6;margin-top:5px}#empty{padding:24px 4vw}[hidden]{display:none!important}</style></head><body><header><h1>Cliora 工作流 UI 捕获</h1><p>${failures.length?'捕获有失败，请查看清单':'捕获完成'} · ${workflowCaptures.length} 张 · 合成 IPC 数据，仅用于界面检查。</p><form class="filters" id="filters"><label>工作流<select id="workflow" aria-label="工作流"><option value="">全部工作流</option>${workflowOptions}</select></label><label>场景<select id="scenario" aria-label="场景"><option value="">全部场景</option>${scenarioOptions}</select></label><label>主题<select id="theme" aria-label="主题"><option value="">全部主题</option><option value="light">浅色 light</option><option value="dark">深色 dark</option></select></label><label>宽度<select id="width" aria-label="宽度"><option value="">全部宽度</option>${widths.map(width=>`<option>${width}</option>`).join('')}</select></label><label>关键词<input id="query" type="search" placeholder="如 Grok / Token / project" aria-label="场景或关键词"></label><button type="reset">重置筛选</button></form><div class="result"><output id="count" aria-live="polite"></output><a href="capture-ui-workflows-manifest.json">捕获清单</a>${Object.values(workflowRefs).map(ref=>`<a href="../../../${encodeURI(ref)}/03-execution-plan.md">${escape(ref.split('/').at(-1))}</a>`).join('')}</div></header><p id="empty" hidden>没有匹配的图片，请调整筛选或重置。</p><main>${cards}</main><script>
+ fs.writeFileSync(`${out}/index.html`,`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Cliora UI 捕获</title><style>
+body{margin:0;background:#101114;color:#f5f2ec;font:15px system-ui}header{position:sticky;top:0;padding:20px 4vw;background:#191b20;z-index:2;border-bottom:1px solid #34363d}h1{font-size:24px;margin:0 0 8px}p{color:#b3afa6}.filters{display:flex;flex-wrap:wrap;gap:10px;align-items:end}label{display:grid;gap:5px;font-size:13px;color:#c9c6c0}select,input,button{font:inherit;padding:9px;border:1px solid #555;border-radius:8px;background:#25272d;color:#f5f2ec;max-width:100%;box-sizing:border-box}select{max-width:min(350px,80vw)}button{cursor:pointer}input{width:240px}.result{display:flex;gap:18px;flex-wrap:wrap;margin:12px 0 0}main{padding:24px 4vw;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr));gap:24px}figure{margin:0;padding:12px;border:1px solid #34363d;border-radius:12px;min-width:0}img{width:100%;height:340px;object-fit:contain;background:#070709}figcaption{padding:12px 0 0;overflow-wrap:anywhere}a{color:#b8d2ff}small{display:block;color:#b3afa6;margin-top:5px}#empty{padding:24px 4vw}[hidden]{display:none!important}</style></head><body><header><h1>Cliora UI 捕获</h1><p>${failures.length?'捕获有失败，请查看清单':'捕获完成'} · ${captures.length} 张 · 合成 IPC 数据，仅用于界面检查。</p><form class="filters" id="filters"><label>工作流<select id="workflow" aria-label="工作流"><option value="">全部 UI</option>${workflowOptions}</select></label><label>场景<select id="scenario" aria-label="场景"><option value="">全部场景</option>${scenarioOptions}</select></label><label>主题<select id="theme" aria-label="主题"><option value="">全部主题</option><option value="light">浅色 light</option><option value="dark">深色 dark</option></select></label><label>宽度<select id="width" aria-label="宽度"><option value="">全部宽度</option>${widths.map(width=>`<option>${width}</option>`).join('')}</select></label><label>关键词<input id="query" type="search" placeholder="如 Grok / Token / project" aria-label="场景或关键词"></label><button type="reset">重置筛选</button></form><div class="result"><output id="count" aria-live="polite"></output><a href="${manifestName}">捕获清单</a>${capturedWorkflows.map(ref=>`<a href="../../../${encodeURI(ref)}/03-execution-plan.md">${escape(ref.split('/').at(-1))}</a>`).join('')}</div></header><p id="empty" hidden>没有匹配的图片，请调整筛选或重置。</p><main>${cards}</main><script>
 const ids=['workflow','scenario','theme','width','query'];const controls=ids.map(id=>document.getElementById(id));const cards=[...document.querySelectorAll('figure')];function filter(){let count=0;const query=controls[4].value.trim().toLowerCase();for(const card of cards){card.hidden=controls.slice(0,4).some((control,index)=>control.value&&card.dataset[ids[index]]!==control.value)||!card.dataset.keywords.includes(query);if(!card.hidden)count++;}document.getElementById('count').textContent='显示 '+count+' / '+cards.length+' 张';document.getElementById('empty').hidden=count!==0;}controls.forEach(control=>control.addEventListener('input',filter));document.getElementById('filters').addEventListener('submit',event=>event.preventDefault());document.getElementById('filters').addEventListener('reset',()=>setTimeout(filter,0));filter();
 </script></body></html>`);
- const rows=[...new Set(workflowCaptures.map(item=>item.name))].map(name=>{
-  const items=workflowCaptures.filter(item=>item.name===name);
-  return `| ${name} | ${items[0].workflowRef.split('/').at(-1)} | ${items.map(item=>`[${item.theme} ${item.width}](${item.file})`).join(' · ')} |`;
+ const rows=[...new Set(captures.map(item=>item.name))].map(name=>{
+  const items=captures.filter(item=>item.name===name);
+  return `| ${name} | ${scopeLabel(items[0])} | ${items.map(item=>`[${item.theme} ${item.width}](${item.file})`).join(' · ')} |`;
  });
- fs.writeFileSync(`${out}/README.md`,`# 工作流 UI 捕获\n\n[浏览图片画廊](index.html) · [机器可读清单](capture-ui-workflows-manifest.json)\n\n执行：\n\n\`\`\`sh\nCLIORA_PREVIEW_URL=http://127.0.0.1:14736 node scripts/capture-ui.mjs --workflows\n\`\`\`\n\nHTML 画廊沿用 Rillight UI 捕获的固定工具栏、响应式网格与原图入口，可按工作流、场景、主题、宽度和关键词筛选，显示匹配数量，支持重置及空结果提示。\n\n可选捕获参数：\`--theme light|dark|all\`、\`--size 1360,900,640\`、\`--only 'workflow-grok-*'\`、\`--list\`（只列工作流场景，不启动浏览器）。默认完整捕获也包含下面的工作流场景；可用 CLIORA_CAPTURE_OUT 指定输出目录。预览服务器需运行当前 frontend build。\n\n本次生成 ${workflowCaptures.length} 张图片，${failures.length} 项检查失败；本次主题 ${themes.join('/')}，宽度 ${widths.join('/')}，高度 1100。截图使用脱敏合成 IPC 数据，不构成原生平台、计费或凭据验收。Grok 样例的 3,729 次已知调用与 108 条用量记录用于检查两个计数口径；精确 Token 总量固定为 10,000，并含 1 条次数未知记录。\n\n来源工作流：\n\n- [单供应商多模型与密钥入口](../../../${workflowRefs.connections}/03-execution-plan.md)\n- [历史记录与 Token 统计准确度](../../../${workflowRefs.history}/03-execution-plan.md)\n\n| 场景 | 工作流 | 图片 |\n| --- | --- | --- |\n${rows.join('\n')}\n`);
- fs.writeFileSync(`${out}/capture-ui-workflows-manifest.json`,JSON.stringify({capturedAt:new Date().toISOString(),synthetic:true,invocation:['node','scripts/capture-ui.mjs',...process.argv.slice(2)].join(' '),previewUrl:process.env.CLIORA_PREVIEW_URL??'http://127.0.0.1:14736',workflows:Object.values(workflowRefs),matrix:{themes,widths,height:1100},selectedScenarios,missing,success:failures.length===0&&missing.length===0,imageCount:workflowCaptures.length,captures:workflowCaptures.map(({path,...item})=>item),failures},null,2)+'\n');
+ fs.writeFileSync(`${out}/README.md`,`# UI 捕获\n\n[浏览图片画廊](index.html) · [机器可读清单](${manifestName})\n\n执行：\n\n\`\`\`sh\nCLIORA_PREVIEW_URL=http://127.0.0.1:14736 ${['node','scripts/capture-ui.mjs',...process.argv.slice(2)].join(' ')}\n\`\`\`\n\nHTML 画廊沿用 Rillight UI 捕获的固定工具栏、响应式网格与原图入口，可按通用 UI／工作流、场景、主题、宽度和关键词筛选；所有捕获模式均收录本次全部图片，显示匹配数量，支持重置及空结果提示。\n\n可选捕获参数：\`--theme light|dark|all\`、\`--size 1360,900,640\`、\`--only 'workflow-grok-*'\`、\`--list\`（只列工作流场景，不启动浏览器）。默认完整捕获也包含下面的工作流场景；可用 CLIORA_CAPTURE_OUT 指定输出目录。预览服务器需运行当前 frontend build。\n\n本次生成 ${captures.length} 张图片（通用 UI ${generalCaptures.length}，工作流 ${workflowCaptures.length}），${failures.length} 项检查失败；本次主题 ${themes.join('/')}，宽度 ${widths.join('/')}。每张图片的实际高度记录于清单。截图使用脱敏合成 IPC 数据，不构成原生平台、计费或凭据验收。Grok 样例的 3,729 次已知调用与 108 条用量记录用于检查两个计数口径；精确 Token 总量固定为 10,000，并含 1 条次数未知记录。\n\n${capturedWorkflows.length?'来源工作流：\n\n'+capturedWorkflows.map(ref=>'- ['+ref.split('/').at(-1)+'](../../../'+ref+'/03-execution-plan.md)').join('\n'):'本次仅捕获通用 UI 场景。'}\n\n| 场景 | 工作流 | 图片 |\n| --- | --- | --- |\n${rows.join('\n')}\n`);
+ fs.writeFileSync(`${out}/${manifestName}`,JSON.stringify({capturedAt:new Date().toISOString(),synthetic:true,invocation:['node','scripts/capture-ui.mjs',...process.argv.slice(2)].join(' '),previewUrl:process.env.CLIORA_PREVIEW_URL??'http://127.0.0.1:14736',mode:captureMode,workflows:capturedWorkflows,matrix:{themes,widths},selectedScenarios:workflowsOnly||fullCapture?selectedScenarios:[],missing,success:failures.length===0&&missing.length===0,imageCount:captures.length,generalImageCount:generalCaptures.length,workflowImageCount:workflowCaptures.length,captures:captures.map(({path,...item})=>item),failures},null,2)+'\n');
 }
 
 if(!workflowsOnly){
 for(const width of widths)for(const theme of themes){
  const page=await browser.newPage({viewport:{width,height:1000}});page.on('pageerror',e=>failures.push(e.message));await page.addInitScript(mock,theme);await page.goto(process.env.CLIORA_PREVIEW_URL ?? 'http://127.0.0.1:14736');await page.getByText('正在读取本机设置').waitFor({state:'hidden'});await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);
  const nav=page.getByRole('navigation',{name:'页面'});
- async function capture(name){await page.mouse.move(0,0);await page.waitForTimeout(100);await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);const path=`${out}/${name}-${theme}-${width}.png`;await page.screenshot({path});captures.push({name,theme,width,path});const over=await page.evaluate(findOverflow);if(over.length)failures.push({name,theme,width,over});console.log(path);}
+ async function capture(name){await captureImage(page,name,theme,width);}
  if(process.argv.includes('--records') || process.argv.includes('--sessions')){
   await nav.getByRole('button',{name:'使用记录'}).click();
   await page.getByLabel('会话列表').getByRole('button').first().waitFor();if(width>760)await page.getByRole('button',{name:'复制代码',exact:true}).waitFor();await capture('sessions');
@@ -334,4 +342,4 @@ for(const width of widths)for(const theme of themes){
 }
 }
 if(workflowsOnly||fullCapture)await captureWorkflows();
-await browser.close();writeWorkflowGallery();if(!workflowsOnly)fs.writeFileSync(`${out}/capture-ui${process.argv.includes('--sessions')?'-sessions':process.argv.includes('--records')?'-records':workflowsOnly?'-workflows':''}-manifest.json`,JSON.stringify({capturedAt:new Date().toISOString(),synthetic:true,captures,failures},null,2)+'\n');console.log(JSON.stringify({failures},null,2));if(failures.length)process.exitCode=1;
+await browser.close();writeGallery();console.log(JSON.stringify({imageCount:captures.length,failures},null,2));if(failures.length)process.exitCode=1;
