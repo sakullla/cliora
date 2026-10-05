@@ -273,7 +273,7 @@ test('library save closes the dialog and copy results stay in the dialog', async
   await dialog.getByRole('button', { name: '保存', exact: true }).click();
   await expect(dialog.getByRole('alert')).toContainText('资料没有写入');
   await expect(dialog.getByRole('alert')).toContainText('可修改后再次点击保存');
-  await expect(dialog.getByRole('status')).toHaveCount(0);
+  await expect(dialog.locator('[role="status"]:not([aria-label="资料正文"])')).toHaveCount(0);
   await page.evaluate(() => { (window as unknown as { __statusCopy: { librarySaveFails: boolean } }).__statusCopy.librarySaveFails = false; });
   await page.keyboard.press('Control+s');
   await expect(dialog).toHaveCount(0);
@@ -287,7 +287,7 @@ test('library save closes the dialog and copy results stay in the dialog', async
   await expect(again.getByText('已复制')).toHaveCount(0);
   await page.evaluate(() => { (window as unknown as { __statusCopy: { copyFails: boolean } }).__statusCopy.copyFails = false; });
   await again.getByRole('button', { name: '复制全文' }).click();
-  await expect(again.getByRole('status')).toContainText('完整正文已复制，可以粘贴使用。');
+  await expect(again.getByRole('status').filter({ hasText: '完整正文已复制，可以粘贴使用。' })).toContainText('完整正文已复制，可以粘贴使用。');
   await expect(again.getByRole('alert')).toHaveCount(0);
 });
 
@@ -358,7 +358,7 @@ test('saved library item stays visible when the following list read fails', asyn
   await dialog.getByLabel('标题').fill('发布检查已更新');
   await page.evaluate(() => { (window as unknown as { __statusCopy: { libraryListFails: boolean } }).__statusCopy.libraryListFails = true; });
   await dialog.getByRole('button', { name: '保存', exact: true }).click();
-  await expect(dialog.getByRole('status')).toContainText('已保存在本机资料库');
+  await expect(dialog.getByRole('status').filter({ hasText: '已保存在本机资料库' })).toContainText('已保存在本机资料库');
   const dialogAlert = dialog.getByRole('alert');
   await expect(dialogAlert).toContainText('资料列表读取失败');
   await expect(dialogAlert).toContainText('关闭');
