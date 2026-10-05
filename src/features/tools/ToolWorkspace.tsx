@@ -6,7 +6,7 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { native, nativeAvailable } from '../../lib/native';
 import { confirmAction, type ConfirmationOptions } from '../../lib/confirm';
 import { sameDraftRequest } from '../../lib/draftGuard';
-import { importedConnection } from '../../lib/nativeDraft';
+import { importedConnection, retainSameProviderModelRecords } from '../../lib/nativeDraft';
 import type { ModelRoleValue } from '../../adapters/contract';
 import type { DraftRequest } from '../../lib/draftGuard';
 import type { ApiError } from '../../types/domain';
@@ -90,6 +90,12 @@ function setField(fields: Record<string, unknown>, path: string[], value: unknow
   if (!rest.length) return { ...fields, [head]: value };
   const child = fields[head];
   return { ...fields, [head]: setField(isRecord(child) ? child : {}, rest, value) };
+}
+
+function connectionForProvider(connection: Connection, providerId: string, patch: Partial<Connection> = {}): Connection {
+  const next: Connection = { ...connection, ...patch, providerId };
+  if (providerId !== connection.providerId) delete next.modelRecords;
+  return next;
 }
 
 function providerModelRecords(connection: Connection, inspection: NativeInspection | null, projection: string): ModelRecord[] | null {
@@ -690,7 +696,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
         const nativeCredentials = { ...draft.nativeCredentials };
         if (pendingRaw) delete nativeCredentials[pendingRaw.role];
         Object.assign(nativeCredentials, imported.nativeCredentials);
-        let editedConnection = pendingRaw ? imported.inspection.connection : imported.migratedSecret || !draft.connection ? importedConnection(imported, draft.connection) : draft.connection;
+        let editedConnection = pendingRaw ? retainSameProviderModelRecords(imported.inspection.connection, draft.connection) : imported.migratedSecret || !draft.connection ? importedConnection(imported, draft.connection) : draft.connection;
         editedConnection = await connectionWithSecret(editedConnection, started);
         if (!stillCurrent(started)) return;
         const oauth = draft.authentication?.kind === 'oauth';
@@ -890,7 +896,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
 
   function applyPreset(providerId: string, baseUrl: string, interfaceFormat: string) {
     if (!draft?.connection) return;
-    setDraft({ ...draft, connection: { ...draft.connection, providerId, baseUrl, interfaceFormat, secretRef: null, authEnvVar: null } });
+    setDraft({ ...draft, connection: connectionForProvider(draft.connection, providerId, { baseUrl, interfaceFormat, secretRef: null, authEnvVar: null }) });
     setConnectionCheck(null); setNotice('已填入官方接口地址与格式；模型和认证仍需确认。');
   }
 
@@ -1108,7 +1114,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     {editor === 'profile' && draft && <label className={styles.check}><input type="checkbox" checked={draft.inheritCommon} onChange={event => setDraft({ ...draft, inheritCommon: event.target.checked })} />继承本工具通用配置</label>}
     {editor === 'profile' && connection && <details className={styles.connectionAdvanced}><summary>高级连接选项</summary>
       {addressConfigurable && !!workspace.probe.providerPresets.length && <div className={styles.modelBar}><span>官方接口预设</span>{workspace.probe.providerPresets.map(item => <button key={item.id} type="button" title={item.sourceUrl} onClick={() => applyPreset(item.id, item.baseUrl, item.interfaceFormat)}>{item.label}</button>)}</div>}
-      <div className={styles.formGrid}><label>供应商 ID<input value={connection.providerId} onChange={event => setDraft({ ...draft!, connection: { ...connection, providerId: event.target.value } })} /></label>{(workspace.probe.interfaceFormats.length > 1 || !workspace.probe.interfaceFormats.includes(connection.interfaceFormat as never)) && <label>接口格式<select value={connection.interfaceFormat} onChange={event => setDraft({ ...draft!, connection: { ...connection, interfaceFormat: event.target.value } })}>{!workspace.probe.interfaceFormats.includes(connection.interfaceFormat as never) && <option value={connection.interfaceFormat}>当前格式 · {formatLabel(connection.interfaceFormat)}</option>}{workspace.probe.interfaceFormats.map(item => <option key={item} value={item}>{formatLabel(item)}</option>)}</select></label>}<label>认证环境变量名<input value={connection.authEnvVar ?? ''} onChange={event => setDraft({ ...draft!, connection: { ...connection, authEnvVar: event.target.value || null } })} placeholder="可选" /></label></div>
+      <div className={styles.formGrid}><label>供应商 ID<input value={connection.providerId} onChange={event => setDraft({ ...draft!, connection: connectionForProvider(connection, event.target.value) })} /></label>{(workspace.probe.interfaceFormats.length > 1 || !workspace.probe.interfaceFormats.includes(connection.interfaceFormat as never)) && <label>接口格式<select value={connection.interfaceFormat} onChange={event => setDraft({ ...draft!, connection: { ...connection, interfaceFormat: event.target.value } })}>{!workspace.probe.interfaceFormats.includes(connection.interfaceFormat as never) && <option value={connection.interfaceFormat}>当前格式 · {formatLabel(connection.interfaceFormat)}</option>}{workspace.probe.interfaceFormats.map(item => <option key={item} value={item}>{formatLabel(item)}</option>)}</select></label>}<label>认证环境变量名<input value={connection.authEnvVar ?? ''} onChange={event => setDraft({ ...draft!, connection: { ...connection, authEnvVar: event.target.value || null } })} placeholder="可选" /></label></div>
       {effectiveEnvName && !connection.secretRef && <p className={styles.hint}>原生配置引用：<code>{effectiveEnvName}</code></p>}
       <div className={styles.diagnosticActions}><button type="button" disabled={checkingConnection || !!newSecret} onClick={() => void checkConnection(false)}>检查连接</button><details><summary>更多诊断</summary><button type="button" disabled={checkingConnection || !!newSecret} onClick={() => void checkConnection(true)}>发送最小请求（可能计费）</button></details></div>
       {newSecret && <p className={styles.hint}>先获取模型或保存配置，再进行连接诊断。</p>}
