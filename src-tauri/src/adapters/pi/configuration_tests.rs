@@ -381,3 +381,125 @@ fn multi_native_a2_kimi_common_unknowns_use_authoritative_db_baselines_and_inher
     apply::apply_registered_validated(&registry, &db, &store, &saved, Some(&common), &files, "global", Scope::Global, false).unwrap();
     assert_eq!(disk(&files, "settings")["models"]["safe"]["capabilities"], json!(["future_common","thinking","image_in","tool_use"]));
 }
+
+fn save_reopen_with_common(
+    registry: &Registry,
+    db: &Database,
+    draft: configuration::ConfigurationDraft,
+    common: Option<&RegisteredCommon>,
+) -> configuration::ConfigurationDraft {
+    assert!(draft.issues.is_empty(), "{:?}", draft.issues);
+    let expected = (!draft.profile.id.is_empty()).then_some(draft.profile.version);
+    let saved = profile::save_registered_profile(db, registry, draft.profile, expected).unwrap();
+    let draft = configuration::open_with_common(registry,
+        profile::get_registered_profile(db, &saved.id).unwrap(), common.cloned(),
+        Scope::Global, "a3-reopened".into()).unwrap();
+    assert!(draft.issues.is_empty(), "{:?}", draft.issues);
+    draft
+}
+
+#[test]
+fn multi_native_a3_opencode_navigation_view_targets_the_browsed_provider_and_keeps_default_ownership() {
+    let registry = Registry::builtins(); let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("db")).unwrap(); let store = Store::default();
+    let mut draft = initialized("open_code");
+    draft = configuration::edit(&registry, draft, action("create", "beta", "safe", None,
+        Some(json!({"name":"Beta safe","limit":{"context":100000,"output":1000}})))).unwrap();
+    draft = configuration::edit(&registry, draft, action("small_default", "alpha", "safe", None, None)).unwrap();
+    let credential = "connection-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    store.put(credential, "synthetic-a3-alpha-key").unwrap();
+    draft.profile.authentication = profile::ProfileAuthentication::ApiKey;
+    draft.profile.connection.as_mut().unwrap().secret_ref = Some(credential.into());
+    let mut draft = save_reopen(&registry, &db, draft); let files = files(&registry, "open_code", temp.path());
+    apply_draft(&registry, &db, &store, &draft, &files);
+    let mut native = disk(&files, "settings");
+    native["provider"]["beta"] = json!({"npm":"@ai-sdk/openai-compatible",
+        "options":{"baseURL":"https://native-beta.example/v1","apiKey":"synthetic-foreign-beta-key"},
+        "models":{"foreign":{"name":"foreign-native-model"}},"user_empty":{}});
+    std::fs::write(&files[0].path, format::render(FileKind::Jsonc, &native).unwrap()).unwrap();
+    for operation in ["select_provider", "configure_provider"] {
+        draft = configuration::edit(&registry, draft, action(operation, "beta", "", None,
+            (operation == "configure_provider").then(|| json!({"baseUrl":"https://configured-beta.example/v1","interfaceFormat":"openai_responses"})))).unwrap();
+        assert_eq!(draft.view["providerId"], "beta", "{operation}");
+        assert_eq!(draft.view["models"][0]["fields"]["name"], "Beta safe");
+        assert!(draft.view["defaultModel"].is_null()); assert!(draft.view["smallModel"].is_null());
+        assert_eq!(draft.view["connection"]["baseUrl"], if operation == "select_provider" { "https://beta.example/v1" } else { "https://configured-beta.example/v1" });
+        assert_eq!(draft.profile.connection.as_ref().unwrap().provider_id, "alpha");
+        assert_eq!(draft.profile.connection.as_ref().unwrap().secret_ref.as_deref(), Some(credential));
+        let id = format!("{operation}/~created");
+        // The frontend constructs each model action from read.providerId.
+        let target_provider = draft.view["providerId"].as_str().unwrap().to_owned();
+        draft = configuration::edit(&registry, draft, action("create", &target_provider, &id, None,
+            Some(json!({"name":"new beta model","limit":{"context":32000}})))).unwrap();
+        draft = configuration::edit(&registry, draft, action("set", &target_provider, &id, Some("limit.context"), Some(json!(222222)))).unwrap();
+        let documents = configuration::documents(&registry, &draft.profile).unwrap();
+        assert_eq!(documents["settings"]["provider"]["beta"]["models"][&id]["limit"]["context"], 222222);
+        assert!(documents["settings"]["provider"]["alpha"]["models"].get(&id).is_none());
+        draft = save_reopen(&registry, &db, draft);
+        assert_eq!(draft.view["providerId"], "beta");
+        apply_draft(&registry, &db, &store, &draft, &files);
+        assert_eq!(disk(&files, "settings"), native, "navigation adopted foreign beta native values");
+        let binding = apply::get_registered_binding(&db, "open_code", "context:default:global").unwrap().unwrap();
+        assert!(!binding.managed["settings"].keys().any(|path| path.starts_with("/provider/beta/")));
+        draft = configuration::edit(&registry, draft, action("select_provider", "alpha", "", None, None)).unwrap();
+        assert_eq!(draft.view["providerId"], "alpha"); assert_eq!(draft.view["defaultModel"], "safe"); assert_eq!(draft.view["smallModel"], "safe");
+        assert_eq!(draft.profile.connection.as_ref().unwrap().secret_ref.as_deref(), Some(credential));
+        draft = save_reopen(&registry, &db, draft); apply_draft(&registry, &db, &store, &draft, &files);
+        assert_eq!(disk(&files, "settings"), native);
+    }
+}
+
+#[test]
+fn multi_native_a3_opencode_reuses_deleted_and_renamed_ids_for_default_and_small_model_after_reopen() {
+    let registry = Registry::builtins();
+    for prior_operation in ["delete", "rename"] {
+        for reuse in ["copy", "rename"] {
+            for inherit in [false, true] {
+                let temp = tempfile::tempdir().unwrap(); let db = Database::open(&temp.path().join("db")).unwrap(); let store = Store::default();
+                let mut draft = initialized("open_code");
+                draft = configuration::edit(&registry, draft, action("small_default", "alpha", "safe", None, None)).unwrap();
+                let common = if inherit { Some(profile::save_registered_common(&db, &registry, RegisteredCommon {
+                    tool: "open_code".into(), version: 0, revision: String::new(), files: draft.profile.files.clone(),
+                }, None).unwrap()) } else { None };
+                draft.profile.inherit_common = inherit;
+                draft = configuration::open_with_common(&registry, draft.profile, common.clone(), Scope::Global, "a3-id-reuse".into()).unwrap();
+                draft = save_reopen_with_common(&registry, &db, draft, common.as_ref());
+                let files = files(&registry, "open_code", temp.path());
+                apply::apply_registered_validated(&registry, &db, &store, &draft.profile, common.as_ref(), &files, "global", Scope::Global, false).unwrap();
+                draft = configuration::edit(&registry, draft, action("reset", "alpha", "slash/~victim", Some("limit.context"), None)).unwrap();
+                draft = configuration::edit(&registry, draft, action(prior_operation, "alpha", "slash/~victim", None,
+                    (prior_operation == "rename").then(|| json!("released")))).unwrap();
+                draft = save_reopen_with_common(&registry, &db, draft, common.as_ref());
+                draft = configuration::edit(&registry, draft, action(reuse, "alpha", "safe", None, Some(json!("slash/~victim")))).unwrap();
+                draft = configuration::edit(&registry, draft, action("default", "alpha", "slash/~victim", None, None)).unwrap();
+                draft = configuration::edit(&registry, draft, action("small_default", "alpha", "slash/~victim", None, None)).unwrap();
+                assert!(draft.issues.is_empty(), "{prior_operation}/{reuse}/{inherit}: {:?}", draft.issues);
+                assert!(!draft.profile.editing.as_ref().unwrap().intents.iter().any(|action|
+                    action.target["id"] == "slash/~victim" && matches!(action.operation.as_str(), "delete" | "rename" | "reset")));
+                assert!(!draft.profile.suppressed.values().flatten().any(|path| path == "/provider/alpha/models/slash~1~0victim"));
+                if reuse == "rename" { assert!(draft.profile.suppressed["settings"].contains(&"/provider/alpha/models/safe".into())); }
+                draft = save_reopen_with_common(&registry, &db, draft, common.as_ref());
+                assert_eq!(draft.view["defaultModel"], "slash/~victim"); assert_eq!(draft.view["smallModel"], "slash/~victim");
+                let original = std::fs::read_to_string(&files[0].path).unwrap();
+                let mut external = disk(&files, "settings"); external["provider"]["alpha"]["models"]["slash/~victim"]["limit"]["context"] = json!(999999);
+                let external = format::render(FileKind::Jsonc, &external).unwrap(); std::fs::write(&files[0].path, &external).unwrap();
+                let error = apply::apply_registered_validated(&registry, &db, &store, &draft.profile, common.as_ref(), &files, "global", Scope::Global, false).unwrap_err();
+                assert!(error.contains("外部修改"), "{error}"); assert_eq!(std::fs::read_to_string(&files[0].path).unwrap(), external);
+                std::fs::write(&files[0].path, original).unwrap();
+                apply::apply_registered_validated(&registry, &db, &store, &draft.profile, common.as_ref(), &files, "global", Scope::Global, false).unwrap();
+                let native = disk(&files, "settings"); assert_eq!(native["model"], "alpha/slash/~victim"); assert_eq!(native["small_model"], "alpha/slash/~victim");
+                assert_eq!(native["provider"]["alpha"]["models"]["slash/~victim"]["limit"]["context"], 64000);
+                assert_eq!(native["provider"]["alpha"]["models"].get("safe").is_some(), reuse == "copy");
+                assert_eq!(native["provider"]["alpha"]["models"].get("released").is_some(), prior_operation == "rename");
+                assert!(configuration::edit(&registry, draft.clone(), action("delete", "alpha", "slash/~victim", None, None)).is_err());
+                // Returning both references to safe permits a genuine deletion of the reused identity.
+                let mut draft = if reuse == "rename" { configuration::edit(&registry, draft, action("copy", "alpha", "slash/~victim", None, Some(json!("safe")))).unwrap() } else { draft };
+                for operation in ["default", "small_default"] { draft = configuration::edit(&registry, draft, action(operation, "alpha", "safe", None, None)).unwrap(); }
+                draft = configuration::edit(&registry, draft, action("delete", "alpha", "slash/~victim", None, None)).unwrap();
+                draft = save_reopen_with_common(&registry, &db, draft, common.as_ref());
+                apply::apply_registered_validated(&registry, &db, &store, &draft.profile, common.as_ref(), &files, "global", Scope::Global, false).unwrap();
+                assert!(disk(&files, "settings")["provider"]["alpha"]["models"].get("slash/~victim").is_none());
+            }
+        }
+    }
+}

@@ -232,9 +232,8 @@ impl ConfigurationAdapter for OpenCode {
     }
     fn read(&self, documents: &Documents, state: &EditingState) -> Result<Value, String> {
         let root = root(documents);
-        let provider = self.connection(&documents, state)?
-            .map(|connection| connection.provider_id)
-            .or_else(|| selected(&root, state));
+        // The editor browses independently of the CLI's default connection.
+        let provider = selected(&root, state);
         let entry = provider
             .as_ref()
             .and_then(|id| root.get("provider").and_then(|providers| providers.get(id)))
@@ -400,6 +399,7 @@ impl ConfigurationAdapter for OpenCode {
                     &path(provider, next, None),
                     Some(existing.ok_or("模型不存在")?.clone()),
                 )?;
+                retire_entity(state, kind, provider, next);
                 if action.operation == "rename" {
                     if effective
                         .get("agent")

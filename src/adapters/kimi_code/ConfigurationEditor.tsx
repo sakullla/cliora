@@ -30,7 +30,7 @@ function Editor(props: ConfigurationEditorProps) {
     choices={id === 'default_effort' && Array.isArray(model?.fields.support_efforts) && model.fields.support_efforts.every(value => typeof value === 'string') ? model.fields.support_efforts as string[] : undefined} />;
   const modelFields = descriptor.fields.filter(item => !item.id.startsWith('thinking.')).map(item => item.id === 'capabilities' ? { ...item, advanced: false } : item);
   return <section className={styles.editor} aria-label="Kimi 专属配置">
-    <ProviderEditor key={`${draft.sessionId}:${provider}`} provider={provider} providers={view.providers ?? []} connection={view.connection}
+    <ProviderEditor key={`provider:${draft.sessionId}:${provider}`} provider={provider} providers={view.providers ?? []} connection={view.connection}
       protocol={view.connection?.protocol ? protocols[view.connection.protocol as keyof typeof protocols] ?? '' : ''}
       disabled={blocked || action.invalid} canConfigure={can('configure_provider')} canSelect={can('select_provider')}
       onConfigure={(id, value) => action.run({ kind: 'provider', provider: id }, 'configure_provider', value)}
@@ -47,7 +47,7 @@ function Editor(props: ConfigurationEditorProps) {
         <EntityActions id={model.id} target={target(model)} descriptor={descriptor} disabled={blocked} defaultModel={view.defaultModel === model.id} renameLabel="新 alias" onRun={action.run} onRemove={() => setExpanded(null)} />
       </div>}
     </article>)}
-    {can('create') && <NewModelForm key={`${draft.sessionId}:${provider}`} props={action.props} provider={provider} disabled={blocked || !provider} label="模型 alias" fields={modelFields}
+    {can('create') && <NewModelForm key={`new-model:${draft.sessionId}:${provider}`} props={action.props} provider={provider} disabled={blocked || !provider} label="模型 alias" fields={modelFields}
       listChoices={{ capabilities: capabilityChoices }}
       initialValues={{ provider }} onCreate={async (id, values) => { const success = await action.run({ kind: 'model', provider, id }, 'create', values); if (success) setExpanded(id); return success; }} />}
     <details><summary>默认思考设置</summary>{descriptor.fields.filter(item => item.id.startsWith('thinking.')).map(item => field(item.id))}</details>
