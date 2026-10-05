@@ -540,6 +540,29 @@ pub fn save_registered_profile(
             if Some(current as u64) != expected_version || old.revision != profile.revision { return Err("命名配置已由其他操作修改，请重新读取".into()); }
             profile.version = current as u64 + 1;
         }
+        if let Some(port) = registry.get(&profile.tool).and_then(|adapter| adapter.configuration()) {
+            let old_profile = if profile.version > 1 {
+                let data: String = tx.query_row("SELECT data FROM native_profiles WHERE id=?1", [&profile.id], |row| row.get(0)).map_err(|e| e.to_string())?;
+                Some(serde_json::from_str::<RegisteredProfile>(&data).map_err(|e| e.to_string())?)
+            } else { None };
+            let common_data: Option<String> = tx.query_row("SELECT data FROM common_configs WHERE tool=?1", [&profile.tool], |row| row.get(0)).optional().map_err(|e| e.to_string())?;
+            let common: Option<RegisteredCommon> = common_data.as_deref().map(serde_json::from_str).transpose().map_err(|e| e.to_string())?;
+            let previous = if let Some(mut old) = old_profile {
+                // A newly selected common source is trusted DB data as well.
+                old.inherit_common = profile.inherit_common;
+                Some(if old.inherit_common && common.is_some() {
+                    super::configuration::effective_documents(registry, &old, common.as_ref())?
+                } else { super::configuration::documents(registry, &old)? })
+            } else if profile.inherit_common && common.is_some() {
+                let old = RegisteredProfile { files: BTreeMap::new(), ..profile.clone() };
+                Some(super::configuration::effective_documents(registry, &old, common.as_ref())?)
+            } else { None };
+            let next = if profile.inherit_common && common.is_some() {
+                super::configuration::effective_documents(registry, &profile, common.as_ref())?
+            } else { super::configuration::documents(registry, &profile)? };
+            let issues = port.validate_changes(previous.as_ref(), &next, profile.editing.as_ref().ok_or("缺少编辑版本")?, super::adapter::Scope::Global);
+            if !issues.is_empty() { return Err(serde_json::to_string(&issues).map_err(|e| e.to_string())?); }
+        }
         profile.revision = Uuid::new_v4().to_string();
         let json = serde_json::to_string(&profile).map_err(|e| e.to_string())?;
         tx.execute("INSERT INTO native_profiles (id, tool, version, data) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(id) DO UPDATE SET version = excluded.version, data = excluded.data", params![profile.id, profile.tool, profile.version as i64, json]).map_err(|e| e.to_string())?;
@@ -668,6 +691,17 @@ pub fn save_registered_common(
         let old: Option<(i64, String)> = tx.query_row("SELECT version,data FROM common_configs WHERE tool = ?1", [&common.tool], |row| Ok((row.get(0)?, row.get(1)?))).optional().map_err(|e| e.to_string())?;
         let old_revision = old.as_ref().map(|(_, data)| serde_json::from_str::<RegisteredCommon>(data).map(|value| value.revision)).transpose().map_err(|e| e.to_string())?;
         if old.as_ref().map(|(version, _)| *version as u64) != expected_version || old_revision.as_deref().unwrap_or("") != common.revision { return Err("通用配置已由其他操作修改，请重新读取".into()); }
+        if let Some(port) = registry.get(&common.tool).and_then(|adapter| adapter.configuration()) {
+            let adapter = registry.get(&common.tool).unwrap();
+            let parse = |files: &BTreeMap<String, String>| files.iter().map(|(role, text)| Ok((role.clone(), format::parse(adapter.file_kind(role)?, text)?))).collect::<Result<_, String>>();
+            let previous = old.as_ref().map(|(_, data)| {
+                let old: RegisteredCommon = serde_json::from_str(data).map_err(|e| e.to_string())?;
+                parse(&old.files)
+            }).transpose()?;
+            let next = parse(&common.files)?;
+            let issues = port.validate_changes(previous.as_ref(), &next, &Default::default(), super::adapter::Scope::Global);
+            if !issues.is_empty() { return Err(serde_json::to_string(&issues).map_err(|e| e.to_string())?); }
+        }
         common.version = old.map_or(1, |(version, _)| version as u64 + 1);
         common.revision = Uuid::new_v4().to_string();
         let json = serde_json::to_string(&common).map_err(|e| e.to_string())?;

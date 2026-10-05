@@ -64,3 +64,320 @@ fn fixture(tool:&str)->RegisteredProfile{let mut profile=blank(tool);match tool{
 #[test]fn multi_native_opencode_deleted_empty_tree_and_live_reference_do_not_touch_other_models(){let registry=Registry::builtins();let temp=tempfile::tempdir().unwrap();let db=Database::open(&temp.path().join("db")).unwrap();let store=Store::default();let mut draft=configuration::open(&registry,fixture("open_code"),Scope::Global,"delete-empty".into()).unwrap();draft=configuration::edit(&registry,draft,action("create","alpha","slash/~victim",None,Some(json!({"limit":{"context":64000,"output":32},"modalities":{"input":["text"]}})))).unwrap();let saved=profile::save_registered_profile(&db,&registry,draft.profile,None).unwrap();let files=files(&registry,"open_code",temp.path());apply::apply_registered_validated(&registry,&db,&store,&saved,None,&files,"global",Scope::Global,false).unwrap();let file=&files[0];let mut original=disk(&files,"settings");original["provider"]["beta"]=json!({"models":{"valid-empty":{}}});original["agent"]=json!({"consumer":{"model":"alpha/slash/~victim"}});std::fs::write(&file.path,original.to_string()).unwrap();let mut draft=configuration::open(&registry,saved.clone(),Scope::Global,"delete-live".into()).unwrap();draft=configuration::edit(&registry,draft,action("delete","alpha","slash/~victim",None,None)).unwrap();let updated=profile::save_registered_profile(&db,&registry,draft.profile,Some(saved.version)).unwrap();let error=apply::apply_registered_validated(&registry,&db,&store,&updated,None,&files,"global",Scope::Global,false).unwrap_err();assert!(error.contains("角色"));assert_eq!(disk(&files,"settings"),original);
     original.as_object_mut().unwrap().remove("agent");std::fs::write(&file.path,original.to_string()).unwrap();apply::apply_registered_validated(&registry,&db,&store,&updated,None,&files,"global",Scope::Global,false).unwrap();let result=disk(&files,"settings");assert!(result["provider"]["alpha"]["models"].get("slash/~victim").is_none());assert_eq!(result["provider"]["beta"]["models"]["valid-empty"],json!({}));
 }
+
+fn initialized(tool: &str) -> configuration::ConfigurationDraft {
+    let registry = Registry::builtins();
+    let mut draft = configuration::open(&registry, blank(tool), Scope::Global, format!("{tool}-a2")).unwrap();
+    for provider in ["alpha", "beta"] {
+        draft = configuration::edit(&registry, draft, action("configure_provider", provider, "", None,
+            Some(json!({"baseUrl":format!("https://{provider}.example/v1"),"interfaceFormat":"openai_completions"})))).unwrap();
+    }
+    for id in ["safe", "slash/~victim"] {
+        draft = configuration::edit(&registry, draft, action("create", "alpha", id, None, Some(create(tool, id)))).unwrap();
+    }
+    draft = configuration::edit(&registry, draft, action("default", "alpha", "safe", None, None)).unwrap();
+    configuration::edit(&registry, draft, action("select_provider", "alpha", "", None, None)).unwrap()
+}
+fn save_reopen(registry: &Registry, db: &Database, draft: configuration::ConfigurationDraft) -> configuration::ConfigurationDraft {
+    assert!(draft.issues.is_empty(), "{:?}", draft.issues);
+    let expected = (!draft.profile.id.is_empty()).then_some(draft.profile.version);
+    let saved = profile::save_registered_profile(db, registry, draft.profile, expected).unwrap();
+    let reopened = profile::get_registered_profile(db, &saved.id).unwrap();
+    let draft = configuration::open(registry, reopened, Scope::Global, "a2-reopened".into()).unwrap();
+    assert!(draft.issues.is_empty(), "{:?}", draft.issues);
+    draft
+}
+fn apply_draft(registry: &Registry, db: &Database, store: &Store, draft: &configuration::ConfigurationDraft, files: &[NativeFile]) {
+    apply::apply_registered_validated(registry, db, store, &draft.profile, None, files, "global", Scope::Global, false).unwrap();
+}
+fn model<'a>(document: &'a Value, tool: &str, id: &str) -> Option<&'a Value> {
+    match tool {
+        "pi" => document["providers"]["alpha"]["models"].as_array()?.iter().find(|model| model["id"] == id),
+        "open_code" => document["provider"]["alpha"]["models"].get(id),
+        _ => document["models"].get(id),
+    }
+}
+fn native_document(files: &[NativeFile], tool: &str) -> Value { disk(files, if tool == "pi" { "models" } else { "settings" }) }
+fn replace_documents(registry: &Registry, draft: configuration::ConfigurationDraft, documents: BTreeMap<String, Value>) -> configuration::ConfigurationDraft {
+    let adapter = registry.get(&draft.profile.tool).unwrap();
+    let files = documents.into_iter().map(|(role, value)| {
+        let text = format::render(adapter.file_kind(&role).unwrap(), &value).unwrap();
+        (role, text)
+    }).collect();
+    configuration::replace_text(registry, draft, files)
+}
+fn remove_model(documents: &mut BTreeMap<String, Value>, tool: &str, id: &str) {
+    match tool {
+        "pi" => documents.get_mut("models").unwrap()["providers"]["alpha"]["models"].as_array_mut().unwrap().retain(|model| model["id"] != id),
+        "open_code" => { documents.get_mut("settings").unwrap()["provider"]["alpha"]["models"].as_object_mut().unwrap().remove(id); },
+        _ => { documents.get_mut("settings").unwrap()["models"].as_object_mut().unwrap().remove(id); },
+    }
+}
+
+#[test]
+fn multi_native_a2_browsing_keeps_credentials_and_management_while_identity_edits_rebind() {
+    let registry = Registry::builtins();
+    for tool in ["pi", "open_code", "kimi_code"] {
+        let temp = tempfile::tempdir().unwrap(); let db = Database::open(&temp.path().join("db")).unwrap(); let store = Store::default();
+        let mut draft = initialized(tool);
+        let credential = "connection-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        store.put(credential, "synthetic-a2-credential").unwrap();
+        draft.profile.authentication = profile::ProfileAuthentication::ApiKey;
+        draft.profile.connection.as_mut().unwrap().secret_ref = Some(credential.into());
+        let mut draft = save_reopen(&registry, &db, draft); let files = files(&registry, tool, temp.path());
+        apply_draft(&registry, &db, &store, &draft, &files);
+        let before = native_document(&files, tool);
+        for provider in ["beta", "alpha"] {
+            draft = configuration::edit(&registry, draft, action("select_provider", provider, "", None, None)).unwrap();
+            assert_eq!(draft.profile.connection.as_ref().unwrap().secret_ref.as_deref(), Some(credential));
+            draft = save_reopen(&registry, &db, draft);
+            apply_draft(&registry, &db, &store, &draft, &files);
+            assert_eq!(native_document(&files, tool), before, "{tool} navigation changed native file");
+            let binding = apply::get_registered_binding(&db, tool, "context:default:global").unwrap().unwrap();
+            assert!(!binding.managed.values().flat_map(|fields| fields.keys()).any(|key| key.contains("/beta/")));
+        }
+        draft = configuration::edit(&registry, draft, action("configure_provider", "alpha", "", None,
+            Some(json!({"baseUrl":"https://changed.example/v1","interfaceFormat":"openai_completions"})))).unwrap();
+        assert!(draft.profile.connection.as_ref().unwrap().secret_ref.is_none());
+    }
+}
+
+#[test]
+fn multi_native_a2_reused_model_id_retires_delete_rename_and_reset_tombstones() {
+    let registry = Registry::builtins();
+    for tool in ["pi", "open_code", "kimi_code"] {
+        let temp = tempfile::tempdir().unwrap(); let db = Database::open(&temp.path().join("db")).unwrap(); let store = Store::default();
+        let mut draft = initialized(tool);
+        // Native extension containers must not leave a deleted entity's empty shell.
+        if tool != "pi" {
+            let mut raw = configuration::documents(&registry, &draft.profile).unwrap();
+            if tool == "open_code" { raw.get_mut("settings").unwrap()["provider"]["alpha"]["models"]["slash/~victim"]["extension"] = json!({"nested":{"flag":"keep"}}); }
+            else { raw.get_mut("settings").unwrap()["models"]["slash/~victim"]["extension"] = json!({"nested":{"flag":"keep"}}); }
+            draft = replace_documents(&registry, draft, raw);
+        }
+        let mut draft = save_reopen(&registry, &db, draft); let files = files(&registry, tool, temp.path());
+        apply_draft(&registry, &db, &store, &draft, &files);
+        draft = configuration::edit(&registry, draft, action("delete", "alpha", "slash/~victim", None, None)).unwrap();
+        draft = save_reopen(&registry, &db, draft);
+        let mut fields = create(tool, "slash/~victim");
+        match tool { "pi" => fields["contextWindow"] = json!(200000), "open_code" => fields["limit"]["context"] = json!(200000), _ => fields["max_context_size"] = json!(200000) }
+        draft = configuration::edit(&registry, draft, action("create", "alpha", "slash/~victim", None, Some(fields))).unwrap();
+        draft = save_reopen(&registry, &db, draft); apply_draft(&registry, &db, &store, &draft, &files);
+        let document = native_document(&files, tool); let native = model(&document, tool, "slash/~victim").unwrap();
+        let context = match tool { "pi" => &native["contextWindow"], "open_code" => &native["limit"]["context"], _ => &native["max_context_size"] };
+        assert_eq!(context, &json!(200000));
+        draft = configuration::edit(&registry, draft, action("rename", "alpha", "slash/~victim", None, Some(json!("renamed")))).unwrap();
+        draft = configuration::edit(&registry, draft, action("copy", "alpha", "safe", None, Some(json!("slash/~victim")))).unwrap();
+        draft = save_reopen(&registry, &db, draft); apply_draft(&registry, &db, &store, &draft, &files);
+        let document = native_document(&files, tool);
+        assert!(model(&document, tool, "slash/~victim").is_some()); assert!(model(&document, tool, "renamed").is_some());
+        draft = configuration::edit(&registry, draft, action("delete", "alpha", "slash/~victim", None, None)).unwrap();
+        draft = save_reopen(&registry, &db, draft); apply_draft(&registry, &db, &store, &draft, &files);
+        assert!(model(&native_document(&files, tool), tool, "slash/~victim").is_none());
+    }
+    let tool = "pi"; let temp = tempfile::tempdir().unwrap(); let db = Database::open(&temp.path().join("db")).unwrap(); let store = Store::default();
+    let mut draft = initialized(tool); let mut create_override = action("create_override", "alpha", "builtin/~id", None, Some(json!({"contextWindow":1000,"thinkingLevelMap":{"high":"high"}})));
+    create_override.target["kind"] = json!("override");
+    draft = configuration::edit(&registry, draft, create_override.clone()).unwrap();
+    draft = save_reopen(&registry, &db, draft); let files = files(&registry, tool, temp.path()); apply_draft(&registry, &db, &store, &draft, &files);
+    let mut delete = action("delete", "alpha", "builtin/~id", None, None); delete.target["kind"] = json!("override");
+    draft = configuration::edit(&registry, draft, delete).unwrap();
+    create_override.value = Some(json!({"contextWindow":2000}));
+    draft = configuration::edit(&registry, draft, create_override).unwrap();
+    draft = save_reopen(&registry, &db, draft); apply_draft(&registry, &db, &store, &draft, &files);
+    assert_eq!(disk(&files, "models")["providers"]["alpha"]["modelOverrides"]["builtin/~id"]["contextWindow"], 2000);
+    let mut delete = action("delete", "alpha", "builtin/~id", None, None); delete.target["kind"] = json!("override");
+    draft = configuration::edit(&registry, draft, delete).unwrap();
+    draft = save_reopen(&registry, &db, draft); apply_draft(&registry, &db, &store, &draft, &files);
+    assert!(disk(&files, "models")["providers"]["alpha"]["modelOverrides"].get("builtin/~id").is_none());
+}
+
+#[test]
+fn multi_native_a2_raw_delete_is_explicit_and_checks_current_native_cas_and_default_refs() {
+    let registry = Registry::builtins();
+    for tool in ["pi", "open_code", "kimi_code"] {
+        let temp = tempfile::tempdir().unwrap(); let db = Database::open(&temp.path().join("db")).unwrap(); let store = Store::default();
+        let draft = save_reopen(&registry, &db, initialized(tool)); let files = files(&registry, tool, temp.path());
+        apply_draft(&registry, &db, &store, &draft, &files);
+        let mut raw = configuration::documents(&registry, &draft.profile).unwrap(); remove_model(&mut raw, tool, "slash/~victim");
+        let mut deleted = replace_documents(&registry, draft, raw);
+        assert!(deleted.profile.editing.as_ref().unwrap().intents.iter().any(|action| action.operation == "delete"));
+        deleted = save_reopen(&registry, &db, deleted);
+        let native_file = files.iter().find(|file| file.role == if tool == "pi" {"models"} else {"settings"}).unwrap();
+        let original = std::fs::read_to_string(&native_file.path).unwrap();
+        let external = original.replace("request-slash/~victim", "external-request").replace("64000", "65000");
+        std::fs::write(&native_file.path, &external).unwrap();
+        let error = apply::apply_registered_validated(&registry, &db, &store, &deleted.profile, None, &files, "global", Scope::Global, false).unwrap_err();
+        assert!(error.contains("外部修改"), "{tool}: {error}"); assert_eq!(std::fs::read_to_string(&native_file.path).unwrap(), external);
+        std::fs::write(&native_file.path, original).unwrap(); apply_draft(&registry, &db, &store, &deleted, &files);
+        let document = native_document(&files, tool); assert!(model(&document, tool, "slash/~victim").is_none()); assert!(model(&document, tool, "safe").is_some());
+        let mut raw = configuration::documents(&registry, &deleted.profile).unwrap(); remove_model(&mut raw, tool, "safe");
+        let invalid = replace_documents(&registry, deleted.clone(), raw);
+        assert!(!invalid.issues.is_empty(), "{tool} dangling default accepted");
+        assert!(profile::save_registered_profile(&db, &registry, invalid.profile, Some(deleted.profile.version)).is_err());
+    }
+}
+
+#[test]
+fn multi_native_a2_kimi_default_reassociation_and_nondefault_recovery_survive_saved_apply() {
+    let registry = Registry::builtins();
+    for raw_mode in [false, true] {
+        let tool = "kimi_code"; let temp = tempfile::tempdir().unwrap(); let db = Database::open(&temp.path().join("db")).unwrap(); let store = Store::default();
+        let mut draft = initialized(tool);
+        draft = configuration::edit(&registry, draft, action("default", "alpha", "slash/~victim", None, None)).unwrap();
+        draft = save_reopen(&registry, &db, draft); let files = files(&registry, tool, temp.path()); apply_draft(&registry, &db, &store, &draft, &files);
+        let mut moved = if raw_mode {
+            let mut raw = configuration::documents(&registry, &draft.profile).unwrap(); raw.get_mut("settings").unwrap()["models"]["slash/~victim"]["provider"] = json!("beta");
+            replace_documents(&registry, draft, raw)
+        } else { configuration::edit(&registry, draft, action("set", "alpha", "slash/~victim", Some("provider"), Some(json!("beta")))).unwrap() };
+        assert_eq!(moved.profile.connection.as_ref().unwrap().provider_id, "beta");
+        moved = save_reopen(&registry, &db, moved); apply_draft(&registry, &db, &store, &moved, &files);
+        let native = disk(&files, "settings"); assert_eq!(native["default_model"], "slash/~victim"); assert_eq!(native["models"]["slash/~victim"]["provider"], "beta");
+        assert!(native["providers"].get("beta").is_some()); assert_eq!(native["models"]["safe"]["provider"], "alpha");
+        let mut raw = configuration::documents(&registry, &moved.profile).unwrap(); raw.get_mut("settings").unwrap()["models"]["safe"]["provider"] = json!("beta");
+        // This reassociation is now valid because beta is the active default supplier.
+        let migrated = save_reopen(&registry, &db, replace_documents(&registry, moved, raw));
+        let before = std::fs::read_to_string(&files[0].path).unwrap();
+        let error = apply::apply_registered_validated(&registry, &db, &store, &migrated.profile, None, &files, "global", Scope::Global, false).unwrap_err();
+        assert!(error.contains("接管"), "{error}");
+        assert_eq!(std::fs::read_to_string(&files[0].path).unwrap(), before);
+        apply::apply_registered_validated(&registry, &db, &store, &migrated.profile, None, &files, "global", Scope::Global, true).unwrap();
+        assert_eq!(disk(&files, "settings")["models"]["safe"]["provider"], "beta");
+    }
+    for raw_mode in [false, true] {
+        let tool = "kimi_code"; let temp = tempfile::tempdir().unwrap(); let db = Database::open(&temp.path().join("db")).unwrap();
+        let draft = save_reopen(&registry, &db, initialized(tool));
+        let mut invalid = if raw_mode { let mut raw = configuration::documents(&registry, &draft.profile).unwrap(); raw.get_mut("settings").unwrap()["models"]["slash/~victim"]["provider"] = json!("beta"); replace_documents(&registry, draft, raw) }
+            else { configuration::edit(&registry, draft, action("set", "alpha", "slash/~victim", Some("provider"), Some(json!("beta")))).unwrap() };
+        assert!(invalid.issues.iter().any(|issue| issue.field.as_deref() == Some("provider")));
+        let same_raw = invalid.profile.files.clone(); invalid = configuration::replace_text(&registry, invalid, same_raw);
+        assert!(invalid.issues.iter().any(|issue| issue.field.as_deref() == Some("provider")));
+        assert!(profile::save_registered_profile(&db, &registry, invalid.profile.clone(), Some(invalid.profile.version)).is_err());
+        invalid = configuration::edit(&registry, invalid, action("default", "beta", "slash/~victim", None, None)).unwrap();
+        let migrated = save_reopen(&registry, &db, invalid); let store = Store::default(); let files = files(&registry, tool, temp.path());
+        apply_draft(&registry, &db, &store, &migrated, &files);
+        assert_eq!(disk(&files, "settings")["models"]["slash/~victim"]["provider"], "beta");
+    }
+}
+
+#[test]
+fn multi_native_a2_pi_thinking_map_validates_native_known_keys_and_preserves_extensions() {
+    let registry = Registry::builtins(); let temp = tempfile::tempdir().unwrap(); let db = Database::open(&temp.path().join("db")).unwrap();
+    let draft = initialized("pi");
+    for level in ["off", "minimal", "low", "medium", "high", "xhigh", "max"] {
+        for value in [json!(42), json!(true), json!([]), json!({})] {
+            let invalid = configuration::edit(&registry, draft.clone(), action("set", "alpha", "safe", Some("thinkingLevelMap"), Some(json!({level:value})))).unwrap();
+            assert!(invalid.issues.iter().any(|issue| issue.field.as_deref() == Some("thinkingLevelMap")), "{level}");
+            assert!(profile::save_registered_profile(&db, &registry, invalid.profile, None).is_err());
+        }
+    }
+    let valid = configuration::edit(&registry, draft, action("set", "alpha", "safe", Some("thinkingLevelMap"), Some(json!({"high":"native-high","off":null,"future_extension":42})))).unwrap();
+    let valid = save_reopen(&registry, &db, valid); let store = Store::default(); let files = files(&registry, "pi", temp.path()); apply_draft(&registry, &db, &store, &valid, &files);
+    assert_eq!(model(&disk(&files, "models"), "pi", "safe").unwrap()["thinkingLevelMap"]["future_extension"], 42);
+}
+
+#[test]
+fn multi_native_a2_kimi_capabilities_reject_new_unknowns_even_when_ipc_baseline_is_forged() {
+    let registry = Registry::builtins(); let temp = tempfile::tempdir().unwrap(); let db = Database::open(&temp.path().join("db")).unwrap();
+    let mut draft = initialized("kimi_code");
+    let supported = json!(["image_in","video_in","audio_in","thinking","always_thinking","tool_use","dynamically_loaded_tools"]);
+    let descriptor = registry.get("kimi_code").unwrap().configuration().unwrap().describe(Scope::Global);
+    let field = descriptor.fields.iter().find(|field| field.id == "capabilities").unwrap(); assert_eq!(field.kind, "string_list"); assert!(!field.advanced); assert_eq!(json!(field.choices), supported);
+    draft = configuration::edit(&registry, draft, action("set", "alpha", "safe", Some("capabilities"), Some(supported.clone()))).unwrap();
+    let draft = save_reopen(&registry, &db, draft); let store = Store::default(); let files = files(&registry, "kimi_code", temp.path()); apply_draft(&registry, &db, &store, &draft, &files);
+    assert_eq!(disk(&files, "settings")["models"]["safe"]["capabilities"], supported);
+    let invalid = configuration::edit(&registry, draft.clone(), action("set", "alpha", "safe", Some("capabilities"), Some(json!(["text","image"])))).unwrap();
+    assert!(invalid.issues.iter().any(|issue| issue.field.as_deref() == Some("capabilities")));
+    assert!(profile::save_registered_profile(&db, &registry, invalid.profile.clone(), Some(invalid.profile.version)).is_err());
+    let mut raw = configuration::documents(&registry, &draft.profile).unwrap(); raw.get_mut("settings").unwrap()["models"]["safe"]["capabilities"] = json!(["future_new"]);
+    let mut invalid = replace_documents(&registry, draft, raw); assert!(invalid.issues.iter().any(|issue| issue.field.as_deref() == Some("capabilities")));
+    // An IPC caller cannot grant itself preservation by changing its draft baseline or metadata.
+    invalid.baseline_files = invalid.profile.files.clone(); invalid = configuration::refresh(&registry, invalid); assert!(invalid.issues.is_empty());
+    let mut forged = serde_json::to_value(&invalid.profile).unwrap(); forged["editing"]["preservedValues"] = json!({"/models/safe/capabilities":["future_new"]});
+    let forged: RegisteredProfile = serde_json::from_value(forged).unwrap();
+    assert!(profile::save_registered_profile(&db, &registry, forged.clone(), Some(forged.version)).is_err());
+    let mut forged_new = forged; forged_new.id.clear(); forged_new.version = 0; forged_new.revision.clear();
+    assert!(profile::save_registered_profile(&db, &registry, forged_new, None).is_err());
+    assert!(apply::apply_registered_validated(&registry, &db, &store, &invalid.profile, None, &files, "global", Scope::Global, false).is_err());
+    assert_eq!(disk(&files, "settings")["models"]["safe"]["capabilities"], supported);
+}
+
+#[test]
+fn multi_native_a2_kimi_legacy_unknown_capabilities_copy_rename_and_portable_remain_intact() {
+    let registry = Registry::builtins(); let temp = tempfile::tempdir().unwrap(); let db = Database::open(&temp.path().join("db")).unwrap(); let store = Store::default();
+    let draft = save_reopen(&registry, &db, initialized("kimi_code"));
+    // Seed a preexisting DB record, representing a legacy/native extension accepted before this editor.
+    let mut legacy = draft.profile; let mut raw = configuration::documents(&registry, &legacy).unwrap();
+    raw.get_mut("settings").unwrap()["models"]["safe"]["capabilities"] = json!(["future_native","thinking"]);
+    legacy.files.insert("settings".into(), format::render(FileKind::Toml, &raw["settings"]).unwrap());
+    db.with_connection(|conn| conn.execute("UPDATE native_profiles SET data=?1 WHERE id=?2", rusqlite::params![serde_json::to_string(&legacy).unwrap(), legacy.id]).map(|_|()).map_err(|error| error.to_string())).unwrap();
+    let mut draft = configuration::open(&registry, profile::get_registered_profile(&db, &legacy.id).unwrap(), Scope::Global, "legacy".into()).unwrap(); assert!(draft.issues.is_empty());
+    draft = configuration::edit(&registry, draft, action("set", "alpha", "safe", Some("capabilities"), Some(json!(["future_native","thinking","image_in"])))).unwrap();
+    draft = configuration::edit(&registry, draft, action("copy", "alpha", "safe", None, Some(json!("copied")))).unwrap();
+    draft = configuration::edit(&registry, draft, action("rename", "alpha", "copied", None, Some(json!("renamed")))).unwrap();
+    let same_raw = draft.profile.files.clone(); draft = configuration::replace_text(&registry, draft, same_raw);
+    draft = save_reopen(&registry, &db, draft); let files = files(&registry, "kimi_code", temp.path()); apply_draft(&registry, &db, &store, &draft, &files);
+    assert_eq!(disk(&files, "settings")["models"]["renamed"]["capabilities"], json!(["future_native","thinking","image_in"]));
+    let target = Database::open(&temp.path().join("target")).unwrap(); let snapshot = crate::portable::collect_snapshot(&db, &store, &registry).unwrap();
+    let preview = crate::portable::preview_import(&target, &store, &registry, snapshot).unwrap();
+    crate::portable::apply_import(&target, &store, &registry, &preview, &std::collections::BTreeSet::from([format!("profile:{}", draft.profile.id)])).unwrap();
+    let imported = profile::get_registered_profile(&target, &draft.profile.id).unwrap();
+    let imported = save_reopen(&registry, &target, configuration::open(&registry, imported, Scope::Global, "portable-legacy".into()).unwrap());
+    let native = temp.path().join("portable-native"); std::fs::create_dir_all(&native).unwrap(); let imported_files = self::files(&registry, "kimi_code", &native);
+    apply_draft(&registry, &target, &store, &imported, &imported_files);
+    assert_eq!(disk(&imported_files, "settings")["models"]["renamed"]["capabilities"], json!(["future_native","thinking","image_in"]));
+}
+
+#[test]
+fn multi_native_a2_raw_removal_suppresses_inherited_entities_without_changing_common() {
+    let registry = Registry::builtins();
+    for tool in ["pi", "open_code", "kimi_code"] {
+        let temp = tempfile::tempdir().unwrap(); let db = Database::open(&temp.path().join("db")).unwrap(); let store = Store::default();
+        let mut draft = initialized(tool);
+        let common = profile::save_registered_common(&db, &registry, RegisteredCommon {
+            tool: tool.into(), version: 0, revision: String::new(), files: draft.profile.files.clone(),
+        }, None).unwrap();
+        draft.profile.inherit_common = true;
+        draft = configuration::open_with_common(&registry, draft.profile, Some(common.clone()), Scope::Global, "a2-inherited".into()).unwrap();
+        let saved = profile::save_registered_profile(&db, &registry, draft.profile, None).unwrap(); let files = files(&registry, tool, temp.path());
+        apply::apply_registered_validated(&registry, &db, &store, &saved, Some(&common), &files, "global", Scope::Global, false).unwrap();
+        let mut draft = configuration::open_with_common(&registry, saved, Some(common.clone()), Scope::Global, "a2-inherited-raw".into()).unwrap();
+        let mut raw = configuration::documents(&registry, &draft.profile).unwrap(); remove_model(&mut raw, tool, "slash/~victim");
+        draft = replace_documents(&registry, draft, raw); assert!(draft.issues.is_empty(), "{tool}: {:?}", draft.issues);
+        let saved = profile::save_registered_profile(&db, &registry, draft.profile.clone(), Some(draft.profile.version)).unwrap();
+        let reopened = configuration::open_with_common(&registry, profile::get_registered_profile(&db, &saved.id).unwrap(), Some(common.clone()), Scope::Global, "a2-inherited-reopen".into()).unwrap();
+        assert!(reopened.issues.is_empty());
+        let effective = configuration::effective_documents(&registry, &reopened.profile, Some(&common)).unwrap();
+        assert!(model(&effective[if tool == "pi" {"models"} else {"settings"}], tool, "slash/~victim").is_none());
+        apply::apply_registered_validated(&registry, &db, &store, &saved, Some(&common), &files, "global", Scope::Global, false).unwrap();
+        assert!(model(&native_document(&files, tool), tool, "slash/~victim").is_none());
+        assert_eq!(profile::get_registered_common(&db, tool).unwrap().unwrap().files, common.files);
+    }
+}
+
+#[test]
+fn multi_native_a2_kimi_common_unknowns_use_authoritative_db_baselines_and_inherit_safely() {
+    let registry = Registry::builtins(); let temp = tempfile::tempdir().unwrap(); let db = Database::open(&temp.path().join("db")).unwrap();
+    let initial = initialized("kimi_code");
+    let mut common = profile::save_registered_common(&db, &registry, RegisteredCommon {
+        tool: "kimi_code".into(), version: 0, revision: String::new(), files: initial.profile.files.clone(),
+    }, None).unwrap();
+    let mut value = format::parse(FileKind::Toml, &common.files["settings"]).unwrap(); value["models"]["safe"]["capabilities"] = json!(["future_common","thinking"]);
+    common.files.insert("settings".into(), format::render(FileKind::Toml, &value).unwrap());
+    db.with_connection(|conn| conn.execute("UPDATE common_configs SET data=?1 WHERE tool=?2", rusqlite::params![serde_json::to_string(&common).unwrap(), common.tool]).map(|_|()).map_err(|error| error.to_string())).unwrap();
+    let mut retained = common.clone(); value["models"]["safe"]["capabilities"] = json!(["future_common","thinking","image_in"]);
+    retained.files.insert("settings".into(), format::render(FileKind::Toml, &value).unwrap());
+    common = profile::save_registered_common(&db, &registry, retained, Some(common.version)).unwrap();
+    let mut invalid = common.clone(); value["models"]["safe"]["capabilities"] = json!(["future_common","future_new"]);
+    invalid.files.insert("settings".into(), format::render(FileKind::Toml, &value).unwrap());
+    assert!(profile::save_registered_common(&db, &registry, invalid, Some(common.version)).is_err());
+    assert_eq!(profile::get_registered_common(&db, "kimi_code").unwrap().unwrap().files, common.files);
+    let mut source = blank("kimi_code"); source.inherit_common = true;
+    let mut draft = configuration::open_with_common(&registry, source, Some(common.clone()), Scope::Global, "inherited-unknown".into()).unwrap();
+    draft = configuration::edit(&registry, draft, action("set", "alpha", "safe", Some("capabilities"), Some(json!(["future_common","thinking","image_in","tool_use"])))).unwrap();
+    assert!(draft.issues.is_empty()); let saved = profile::save_registered_profile(&db, &registry, draft.profile, None).unwrap();
+    let reopened = configuration::open_with_common(&registry, saved.clone(), Some(common.clone()), Scope::Global, "inherited-unknown-reopen".into()).unwrap(); assert!(reopened.issues.is_empty());
+    let files = files(&registry, "kimi_code", temp.path()); let store = Store::default();
+    apply::apply_registered_validated(&registry, &db, &store, &saved, Some(&common), &files, "global", Scope::Global, false).unwrap();
+    assert_eq!(disk(&files, "settings")["models"]["safe"]["capabilities"], json!(["future_common","thinking","image_in","tool_use"]));
+}

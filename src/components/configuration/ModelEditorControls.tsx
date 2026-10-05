@@ -90,7 +90,8 @@ export function EditorField({ props, id, target, value, disabled, defaultSource,
   if (listChoices && (value == null || (Array.isArray(value) && value.every(item => typeof item === 'string')))) return <StringListControl field={field} values={value as string[] | null} choices={listChoices} disabled={disabled}
     issues={props.draft.issues.filter(issue => issue.field === id && targetIdentity(issue.target) === targetKey).map(issue => issue.message)}
     onChange={next => action('set', next)} onReset={() => action('reset')} onValidityChange={valid => props.onValidityChange(validityKey, valid)} />;
-  return <ConfigurationField field={{ ...field, ...(defaultSource ? { defaultSource } : {}), ...(choices ? { choices } : {}) }} value={value} disabled={disabled}
+  const metadata = field.kind === 'string_list' ? { ...field, kind: 'json', choices: [] } : field;
+  return <ConfigurationField field={{ ...metadata, ...(defaultSource ? { defaultSource } : {}), ...(choices ? { choices } : {}) }} value={value} disabled={disabled}
     issues={props.draft.issues.filter(issue => issue.field === id && targetIdentity(issue.target) === targetKey)}
     onChange={next => next === '' && !field.required ? action('reset') : action('set', next)}
     onReset={props.descriptor.operations.includes('reset') ? () => action('reset') : undefined}

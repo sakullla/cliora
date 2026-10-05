@@ -30,18 +30,21 @@ CLI 在 `CliAdapter::configuration` 返回端口即可接入，未声明该能�
 ## 适配器实现责任
 
 - `describe/read/edit/validate/connection` 提供专属字段、逻辑动作、后端约束及只读连接。
-- 必须实现 `reconcile_text(previous, next, effective, state)`：next 是本层原文，effective 是只读合并值；有效原文恢复实体或明确覆盖字段时撤销旧 delete/rename/reset 意图，仍缺席的显式删除继续保留。语法错误保留原文和旧意图，等待修正。
+- `validate_changes(previous, next, state, scope)` 校验新引入的原生声明，缺省无额外限制。草稿传入固定打开基线；profile/common 保存由共享服务在版本 CAS 的同一事务中提供旧 DB 文档与可信 common，不能信任 IPC 自报的基线或保留清单。Kimi 据此拒绝新未知能力，既有未知枚举、复制/改名来源及 Portable 导入的旧值可保留。
+- 必须实现 `reconcile_text(previous, next, effective, state)`：next 是本层原文，effective 是只读合并值；有效原文恢复实体或明确覆盖字段时撤销旧 delete/rename/reset 意图，仍缺席的显式删除继续保留。从 previous 到 next 消失的本层模型按稳定身份生成删除意图并排除继承；原文中的默认/轻量/关联引用也须满足删除约束。语法错误保留原文和旧意图，等待修正。
 - `suppression_changes(action)` 返回具体 role/path 的增加或清除；reset 必须清除该逻辑字段对应的旧 suppressed，保留其他排除记录。路径映射属于 CLI 适配器。
 - `reconcile_suppressions(previous, next, suppressed)` 在有效原文重新引入实体时撤销对应的旧排除；共享服务负责调用，CLI 负责映射身份。suppressed 和来源指针使用 JSON Pointer 的 `~0/~1` 转义，模型名中的斜杠和波浪号不能改变路径层级。
 - `portable_field_kind(path)` 声明 Parameter、Credential、CredentialReference、Local 或 Unknown；文档与动作负载执行一致语义分类，maxTokens 这类模型上限不得作为认证 Token 删除。CredentialReference 仅在 `portable_reference_valid(path, value)` 按原生语法验证后保留；验证不得读取环境变量、凭据或执行命令。共享迁移继续拒绝明确凭据字段和本机绝对路径。
 - `resolve_file(role, base, own, suppressed)` 可按稳定模型 ID 合并数组并返回字段来源；缺省实现沿用共享合并。Pi 用它保留稀疏模型覆盖，取消一个字段覆盖后其他字段仍跟随 common 的后续变化。
-- `managed_documents` 限定命名配置拥有的供应商和配置级字段。
+- `managed_documents` 限定命名配置拥有的供应商和配置级字段。Pi/OpenCode/Kimi 以真实默认引用的连接供应商为管理目标，缺少连接时回退编辑选择；`selectedProvider` 只控制浏览导航，浏览不能迁移管理身份或丢失 opaque 凭据引用。Kimi 默认 alias 关联另一供应商时跟随真实连接转移管理；非默认 alias 迁到管理范围外则保留可修正草稿并提示先选择目标供应商默认 alias。
 - `managed_fields` 基于当前磁盘、目标文档及持久编辑意图生成指针变更；值 None 是显式删除，released 是取消本层覆盖。
 - 数组按原生稳定身份合并；对象和其他供应商的未知字段必须保留。删除不能通过旧 preserve 方法补回。
 - 删除/改名实体须维护默认、轻量模型及其他原生引用；操作的解码和字段校验属于适配器。
+- create/copy/rename 重用身份时撤销该新实体的旧 delete/rename/reset 墓碑和排除；应用与空壳清理同时检查最终实体是否仍存在，不能用旧删除计划覆盖新定义。
 - reset 对已管理字段恢复合并后的继承值，或删除覆盖以使用原生默认；未被管理的原生值保留。旧 managed 值与磁盘不一致时依旧返回冲突。
 - `unmanaged_paths` 只解除切换前供应商路径的管理关系，保留其原生值与凭据；它与 reset 分开处理，不能覆盖共享凭据写入或清理计划。新选定目标仍执行文件 CAS。
 - `empty_deleted_entities` 只声明显式删除或改名实体的候选路径。共享 apply 在字段 CAS 后确认子树递归仅含空对象且未涉及已解除管理或凭据路径，才清理空壳；其他供应商和用户声明的 `{}` 保留。
+- `cleanup_removed_parents` 由 Pi/OpenCode/Kimi 启用，其他适配器缺省关闭。共享 apply 仅沿本次删除的旧 managed 叶字段清理空父对象，防止重建后留下无所有权的空壳、干扰下次 CAS；目标文档声明的 `{}`、未参与删除的空对象以及 detached/凭据路径均保留。
 
 共享 apply 服务继续拥有 CAS、账户上下文检查、凭据策略、加密备份、事务和恢复。适配器不直接写文件、启动进程或访问 keyring。
 敏感字段变更在语义映射后再次经过共享凭据策略；取消覆盖不能撤销共享的凭据清理或写入。
@@ -64,4 +67,5 @@ Portable snapshot v2 和 WebDAV manifest v2 携带编辑状态；新客户端接
 开发证据：`tests/adapter/sixth.rs` 验证额外注册适配器的字段描述、三模型创建、改名、删除、默认引用、取消覆盖、非法草稿、旧数据归一化、DB/Portable 往返及事务冲突。
 `tests/native/configuration-draft.test.mjs` 验证会话过期响应、连续表单编辑和非法输入提交保护。
 `src-tauri/src/adapters/pi/configuration_tests.rs` 使用隔离目录和内存凭据覆盖三个 CLI 的模型生命周期、真实文件应用、稀疏继承、原文与排除对账、v2 凭据往返及 OpenCode 当前磁盘引用保护；`tests/ui/config-models.spec.ts` 覆盖三种专属编辑器。
+A2 回归覆盖浏览后保存/重开/应用、身份重用、原文删除与外部 CAS、Kimi 关联迁移、Pi 思考映射值类型、伪造 IPC 基线拒绝、既有未知能力复制/改名/Portable 往返及 common 继承。Kimi 基础能力开关使用 npm 2.1.1 的 `image_in/video_in/audio_in/thinking/always_thinking/tool_use/dynamically_loaded_tools`；文本输入是原生基础语义。Pi 已知 thinkingLevelMap 档位仅接受字符串或 null，未识别扩展键保留。
 这些开发测试不替代五个 CLI 的真实原生加载和正式交付验证。

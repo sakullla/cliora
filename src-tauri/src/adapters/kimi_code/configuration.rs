@@ -20,6 +20,9 @@ const MODEL_FIELDS: &[&str] = &[
     "adaptive_thinking",
     "protocol",
 ];
+const CAPABILITIES: &[&str] = &[
+    "image_in", "video_in", "audio_in", "thinking", "always_thinking", "tool_use", "dynamically_loaded_tools",
+];
 const SETTINGS: &[&str] = &["thinking.enabled", "thinking.effort", "thinking.keep"];
 fn root(documents: &Documents) -> Value {
     documents
@@ -138,7 +141,7 @@ fn description(
         kind: kind.into(),
         required,
         advanced,
-        choices: vec![],
+        choices: if id == "capabilities" { CAPABILITIES.iter().map(|value| (*value).into()).collect() } else { vec![] },
         minimum: matches!(kind, "integer").then_some(1.0),
         default_source: (!required).then(|| "跟随原生默认".into()),
         unavailable_reason: (scope == Scope::Project)
@@ -146,7 +149,88 @@ fn description(
     }
 }
 
+fn entities(documents: &Documents) -> Result<Vec<(String, String, String)>, String> {
+    let root = root(documents);
+    Ok(root.get("models").and_then(Value::as_object).map(|models| {
+        models.iter().map(|(id, model)| ("model".into(),
+            model.get("provider").and_then(Value::as_str).unwrap_or("").into(), id.clone())).collect()
+    }).unwrap_or_default())
+}
+
+// Reusing an identity starts a new entity; obsolete deletions and resets cannot
+// erase its fields during application.
+fn retire_entity(state: &mut EditingState, entity_kind: &str, _provider: &str, id: &str) {
+    state.intents.retain(|action| {
+        let Ok((kind, _p, old_id)) = target(action) else { return true; };
+        !(matches!(action.operation.as_str(), "delete" | "rename" | "reset")
+            && kind == entity_kind && old_id == id)
+    });
+}
+
 impl ConfigurationAdapter for KimiCode {
+    fn cleanup_removed_parents(&self) -> bool { true }
+    fn validate_changes(
+        &self,
+        previous: Option<&Documents>,
+        next: &Documents,
+        state: &EditingState,
+        _: Scope,
+    ) -> Vec<ConfigurationIssue> {
+        let previous = previous.map(root).unwrap_or_else(|| json!({}));
+        let next = root(next);
+        let mut issues = vec![];
+        if let Some(models) = next.get("models").and_then(Value::as_object) {
+            let default_provider = next.get("default_model").and_then(Value::as_str)
+                .and_then(|alias| alias_provider(&next, alias));
+            for (alias, model) in models {
+                let provider = model.get("provider").and_then(Value::as_str).unwrap_or("");
+                let old = previous.get("models").and_then(|models| models.get(alias));
+                if old.and_then(|model| model.get("provider")).and_then(Value::as_str)
+                    .is_some_and(|old_provider| old_provider != provider)
+                    && default_provider.as_deref() != Some(provider)
+                {
+                    issues.push(issue(model_target(alias, provider), "provider",
+                        "跨供应商关联需先选择目标供应商的默认 alias；草稿保留，尚未应用"));
+                }
+                let Some(values) = model.get("capabilities").and_then(Value::as_array) else { continue; };
+                let mut sources = vec![alias.as_str()];
+                let mut index = 0;
+                while index < sources.len() {
+                    let source = sources[index];
+                    for action in &state.intents {
+                        if matches!(action.operation.as_str(), "copy" | "rename")
+                            && action.value.as_ref().and_then(Value::as_str) == Some(source)
+                        {
+                            if let Some(id) = action.target.get("id").and_then(Value::as_str) {
+                                if !sources.contains(&id) { sources.push(id); }
+                            }
+                        }
+                    }
+                    index += 1;
+                }
+                // Exact raw renaming of a removed alias also preserves its declarations.
+                if let Some(old_models) = previous.get("models").and_then(Value::as_object) {
+                    for (id, old_model) in old_models {
+                        if !models.contains_key(id) && old_model == model && !sources.contains(&id.as_str()) {
+                            sources.push(id);
+                        }
+                    }
+                }
+                let retained = |value: &Value| sources.iter().any(|source| {
+                    previous.get("models").and_then(|models| models.get(*source))
+                        .and_then(|model| model.get("capabilities")).and_then(Value::as_array)
+                        .is_some_and(|values| values.contains(value))
+                });
+                if values.iter().any(|value| value.as_str().is_some_and(|value| {
+                    !CAPABILITIES.contains(&value.trim().to_ascii_lowercase().as_str())
+                }) && !retained(value)) {
+                    issues.push(issue(model_target(alias, provider), "capabilities",
+                        "新增能力须使用 npm Kimi 的原生声明（如 image_in、thinking）；既有未知原生值可保留"));
+                }
+            }
+        }
+        issues
+    }
     fn portable_reference_valid(&self, path: &[String], value: &Value) -> bool {
         path.last().is_some_and(|field| field == "api_key_env")
             && value
@@ -189,7 +273,7 @@ impl ConfigurationAdapter for KimiCode {
                 description("display_name", "显示名称", "string", false, false, scope),
                 description("max_input_size", "输入上限", "integer", false, true, scope),
                 description("max_output_size", "输出上限", "integer", false, true, scope),
-                description("capabilities", "原生能力声明", "json", false, true, scope),
+                description("capabilities", "模型能力", "string_list", false, false, scope),
                 description(
                     "support_efforts",
                     "支持的思考档位",
@@ -381,6 +465,7 @@ impl ConfigurationAdapter for KimiCode {
                 }
                 fields.entry("provider").or_insert(json!(provider));
                 set(root, &["models".into(), id.into()], Some(value))?;
+                retire_entity(state, kind, provider, id);
             }
             "copy" | "rename" => {
                 let next = action
@@ -408,6 +493,7 @@ impl ConfigurationAdapter for KimiCode {
                     &["models".into(), next.into()],
                     Some(existing.ok_or("模型不存在")?.clone()),
                 )?;
+                retire_entity(state, kind, provider, next);
                 if action.operation == "rename" {
                     set(root, &["models".into(), id.into()], None)?;
                     if effective.get("default_model").and_then(Value::as_str) == Some(id) {
@@ -470,7 +556,7 @@ impl ConfigurationAdapter for KimiCode {
     fn validate(
         &self,
         documents: &Documents,
-        _: &EditingState,
+        state: &EditingState,
         scope: Scope,
     ) -> Vec<ConfigurationIssue> {
         let root = root(documents);
@@ -481,6 +567,20 @@ impl ConfigurationAdapter for KimiCode {
                 "scope",
                 "Kimi 用户模型配置不支持项目范围",
             ));
+        }
+        let default_provider = root.get("default_model").and_then(Value::as_str)
+            .and_then(|alias| alias_provider(&root, alias));
+        for action in &state.intents {
+            if action.operation == "set" && action.field.as_deref() == Some("provider") {
+                if let Ok((_, old_provider, id)) = target(action) {
+                    if let Some(provider) = alias_provider(&root, id) {
+                        if provider != old_provider && default_provider.as_deref() != Some(provider.as_str()) {
+                            issues.push(issue(model_target(id, &provider), "provider",
+                                "跨供应商关联需先选择目标供应商的默认 alias；草稿保留，尚未应用"));
+                        }
+                    }
+                }
+            }
         }
         if root.get("default_thinking").is_some() {
             issues.push(issue(
@@ -665,7 +765,7 @@ impl ConfigurationAdapter for KimiCode {
     fn connection(
         &self,
         documents: &Documents,
-        state: &EditingState,
+        _state: &EditingState,
     ) -> Result<Option<Connection>, String> {
         let root = root(documents);
         let Some(alias) = root.get("default_model").and_then(Value::as_str) else {
@@ -675,13 +775,6 @@ impl ConfigurationAdapter for KimiCode {
             return Ok(None);
         };
         let Some(provider) = model.get("provider").and_then(Value::as_str) else {
-            return Ok(None);
-        };
-        if state
-            .selected_provider
-            .as_ref()
-            .is_some_and(|selected| selected != provider)
-        {
             return Ok(None);
         };
         let entry = root
@@ -756,12 +849,13 @@ impl ConfigurationAdapter for KimiCode {
     }
     fn reconcile_text(
         &self,
-        _: Option<&Documents>,
+        previous: Option<&Documents>,
         next: &Documents,
         _: &Documents,
         state: &mut EditingState,
     ) -> Result<(), String> {
         let root = root(next);
+        let lifecycle = state.intents.clone();
         state.intents.retain(|action| {
             let Ok((kind, _, id)) = target(action) else {
                 return false;
@@ -771,6 +865,28 @@ impl ConfigurationAdapter for KimiCode {
                     .get("models")
                     .and_then(|models| models.get(id))
                     .is_none(),
+                "copy" => action.value.as_ref().and_then(Value::as_str).is_some_and(|alias| {
+                    let mut destinations = vec![alias];
+                    let mut index = 0;
+                    while index < destinations.len() {
+                        let source = destinations[index];
+                        if root.get("models").and_then(|models| models.get(source)).is_some() { return true; }
+                        for later in &lifecycle {
+                            if later.operation == "rename" && later.target.get("id").and_then(Value::as_str) == Some(source) {
+                                if let Some(destination) = later.value.as_ref().and_then(Value::as_str) {
+                                    if !destinations.contains(&destination) { destinations.push(destination); }
+                                }
+                            }
+                        }
+                        index += 1;
+                    }
+                    false
+                }),
+                "set" if action.field.as_deref() == Some("provider") => {
+                    alias_provider(&root, id).is_some_and(|provider| {
+                        action.target.get("provider").and_then(Value::as_str) != Some(provider.as_str())
+                    })
+                }
                 "reset" => {
                     let path = if kind == "settings" {
                         action
@@ -792,6 +908,31 @@ impl ConfigurationAdapter for KimiCode {
                 _ => false,
             }
         });
+        let next_entities = entities(next)?;
+        if let Some(previous) = previous {
+            for (kind, provider, id) in entities(previous)? {
+                if !(next_entities.iter().any(|(_, _, next_id)| next_id == &id))
+                    && !state.intents.iter().any(|action| {
+                        target(action).is_ok_and(|(k, p, i)| k == kind && p == provider && i == id)
+                            && matches!(action.operation.as_str(), "delete" | "rename")
+                    })
+                {
+                    state.intents.push(ConfigurationAction {
+                        version: EDITING_VERSION,
+                        target: json!({"kind":kind,"provider":provider,"id":id}),
+                        operation: "delete".into(), field: None, value: None,
+                    });
+                }
+                if let Some((_, next_provider, _)) = next_entities.iter().find(|(_, _, next_id)| next_id == &id) {
+                    if next_provider != &provider {
+                        state.intents.push(ConfigurationAction {
+                            version: EDITING_VERSION, target: model_target(&id, &provider),
+                            operation: "set".into(), field: Some("provider".into()), value: Some(json!(next_provider)),
+                        });
+                    }
+                }
+            }
+        }
         Ok(())
     }
     fn suppression_changes(
@@ -815,7 +956,7 @@ impl ConfigurationAdapter for KimiCode {
             path
         };
         let path = pointer(&path);
-        Ok(match action.operation.as_str() {
+        let mut changes = match action.operation.as_str() {
             "delete" | "rename" => vec![SuppressionChange {
                 role: "settings".into(),
                 path,
@@ -827,7 +968,17 @@ impl ConfigurationAdapter for KimiCode {
                 suppressed: false,
             }],
             _ => vec![],
-        })
+        };
+        if matches!(action.operation.as_str(), "copy" | "rename") {
+            if let Some(next) = action.value.as_ref().and_then(Value::as_str) {
+                changes.push(SuppressionChange {
+                    role: "settings".into(),
+                    path: pointer(&["models".into(), next.into()]),
+                    suppressed: false,
+                });
+            }
+        }
+        Ok(changes)
     }
     fn portable_field_kind(&self, path: &[String]) -> PortableFieldKind {
         match path.last().map(String::as_str) {
@@ -848,7 +999,10 @@ impl ConfigurationAdapter for KimiCode {
         _: Scope,
     ) -> Result<Documents, String> {
         let root = root(&documents);
-        let provider = selected(&root, profile.editing.as_ref().ok_or("缺少编辑版本")?);
+        let state = profile.editing.as_ref().ok_or("缺少编辑版本")?;
+        let provider = self.connection(&documents, state)?
+            .map(|connection| connection.provider_id)
+            .or_else(|| selected(&root, state));
         let mut managed = Map::new();
         for key in ["default_model", "thinking"] {
             if let Some(value) = root.get(key) {
@@ -921,12 +1075,31 @@ impl ConfigurationAdapter for KimiCode {
         }
         if let Some(models) = current.get("models").and_then(Value::as_object) {
             for (alias, model) in models {
-                if model.get("provider").and_then(Value::as_str) != selected.map(String::as_str) {
+                if desired.get("models").and_then(|models| models.get(alias)).is_none()
+                    && model.get("provider").and_then(Value::as_str) != selected.map(String::as_str) {
                     paths.push(format!("/models/{}", pointer_token(alias)));
                 }
             }
         }
         Ok(paths)
+    }
+    fn empty_deleted_entities(
+        &self,
+        role: &str,
+        profile: &RegisteredProfile,
+    ) -> Result<Vec<Vec<String>>, String> {
+        if role != "settings" { return Ok(vec![]); }
+        let own = profile.files.get("settings")
+            .map(|text| crate::native::format::parse(crate::native::format::FileKind::Toml, text))
+            .transpose()?.unwrap_or_else(|| json!({}));
+        let mut result = vec![];
+        for action in &profile.editing.as_ref().ok_or("缺少编辑版本")?.intents {
+            let (kind, _, id) = target(action)?;
+            if kind == "model" && matches!(action.operation.as_str(), "delete" | "rename")
+                && own.get("models").and_then(|models| models.get(id)).is_none()
+            { result.push(vec!["models".into(), id.into()]); }
+        }
+        Ok(result)
     }
     fn managed_fields(
         &self,
@@ -935,8 +1108,13 @@ impl ConfigurationAdapter for KimiCode {
         desired: &Value,
         profile: &RegisteredProfile,
     ) -> Result<ManagedConfiguration, String> {
+        let mut candidate = desired.clone();
+        if candidate.get("models").and_then(Value::as_object).is_some_and(Map::is_empty)
+            && profile.editing.as_ref().is_some_and(|state| state.intents.iter().any(|action|
+                matches!(action.operation.as_str(), "delete" | "rename")))
+        { candidate.as_object_mut().unwrap().remove("models"); }
         let mut fields = BTreeMap::new();
-        crate::native::apply::flatten(desired, &mut vec![], &mut fields);
+        crate::native::apply::flatten(&candidate, &mut vec![], &mut fields);
         let mut managed = ManagedConfiguration {
             fields: fields
                 .into_iter()
@@ -947,6 +1125,7 @@ impl ConfigurationAdapter for KimiCode {
         for action in &profile.editing.as_ref().ok_or("缺少编辑版本")?.intents {
             let (kind, _, id) = target(action)?;
             if matches!(action.operation.as_str(), "delete" | "rename") {
+                if desired.get("models").and_then(|models| models.get(id)).is_some() { continue; }
                 if association(current, id) {
                     return Err("原生 secondary_model 仍引用被删除/改名的 alias；未修改文件".into());
                 }
