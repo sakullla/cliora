@@ -1,0 +1,12 @@
+{
+  "providers": {
+    "alpha": {
+      "api": "openai-responses",
+      "baseUrl": "https://alpha.example/v1",
+      "apiKey": "${alpha_key}",
+      "models": [{ "id": "family/a~one", "name": "Alpha One", "contextWindow": 64000, "maxTokens": 32, "reasoning": true, "input": ["text", "image"], "extensionFlag": { "keep": true } }],
+      "modelOverrides": { "builtin/large": { "contextWindow": 256000, "reasoning": true, "extensionFlag": true } }
+    },
+    "beta": { "api": "anthropic-messages", "baseUrl": "https://beta.example/v1", "apiKey": "$beta_key", "models": [{ "id": "b", "name": "Beta", "contextWindow": 64000, "maxTokens": 64 }] }
+  }
+}

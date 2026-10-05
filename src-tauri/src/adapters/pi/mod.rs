@@ -1,4 +1,5 @@
 pub mod accounts;
+pub(crate) mod configuration;
 pub(crate) mod agents;
 pub mod history;
 pub(crate) mod plugins;
@@ -62,6 +63,7 @@ mod compatibility_tests {
 }
 
 impl CliAdapter for Pi {
+    fn configuration(&self) -> Option<&dyn crate::adapters::configuration::ConfigurationAdapter> { Some(self) }
     fn portable_field_kind(&self, path: &[String]) -> crate::adapters::configuration::PortableFieldKind {
         if path.last().is_some_and(|field| field == "maxTokens") { crate::adapters::configuration::PortableFieldKind::Parameter }
         else { self.configuration().map_or(Default::default(), |port| port.portable_field_kind(path)) }
@@ -434,7 +436,11 @@ impl CliAdapter for Pi {
         secrets.put(
             "models",
             &["providers", &connection.provider_id, "apiKey"],
-            read_secret(id, credentials)?,
+            {
+                let value = read_secret(id, credentials)?;
+                if value.starts_with('!') || value.starts_with('$') { return Err("Pi 会将 !/$ 前缀解释为命令或环境表达式；受管 API 密钥必须是字面值，请改用明确的原生环境引用".into()); }
+                value
+            },
         );
         Ok(())
     }
@@ -500,9 +506,8 @@ impl CliAdapter for Pi {
                 let Some(key) = provider.get("apiKey").and_then(Value::as_str) else {
                     continue;
                 };
-                if pi_env_name(key).is_some() {
-                    continue;
-                }
+                if pi_env_name(key).is_some() { continue; }
+                if key.starts_with('!') || key.starts_with('$') { return Err("Pi 原生凭据为命令或无效环境表达式，不能作为字面密钥导入；原文件未更改".into()); }
                 if found.provider_id.as_deref() != Some(name.as_str()) || found.connection.is_none()
                 {
                     return Err(format!("Pi 供应商 {name} 含字面 apiKey；请先在原生配置中选择完整的默认供应商与模型，再逐一安全接入。原文件未更改"));

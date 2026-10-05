@@ -10,6 +10,7 @@
 //! credentials resolve from `api_key` inside config.toml (no shell env). See
 //! docs/sakullla-workflow/2026-10-03-new-cli-adapters-default-off for sources.
 
+pub(crate) mod configuration;
 pub(crate) mod agents;
 pub mod history;
 mod mcp_command;
@@ -74,6 +75,7 @@ fn model_alias(provider: &str, model: &str) -> String {
 }
 
 impl CliAdapter for KimiCode {
+    fn configuration(&self) -> Option<&dyn crate::adapters::configuration::ConfigurationAdapter> { Some(self) }
     fn supports_mcp(&self) -> bool {
         true
     }
@@ -148,7 +150,7 @@ impl CliAdapter for KimiCode {
     /// `api_key`; portable data never contains the credential.
     fn portable_root_fields(&self, role: &str) -> &'static [&'static str] {
         if role == "settings" {
-            &["default_model", "models"]
+            &["default_model", "models", "providers", "thinking"]
         } else {
             &[]
         }
@@ -335,6 +337,8 @@ impl CliAdapter for KimiCode {
             &["providers", &connection.provider_id, "api_key"],
             read_secret(id, credentials)?,
         );
+        // An explicit managed key must not fall back to the old environment source.
+        secrets.remove("settings", &["providers", &connection.provider_id, "api_key_env"]);
         Ok(())
     }
     fn has_native_secret(&self, role: &str, root: &Value) -> bool {
@@ -668,12 +672,12 @@ mod tests {
         // The rendered draft never contains api_key; only the secret channel writes it.
         let text = format::render(FileKind::Toml, settings).unwrap();
         assert!(!text.contains("api_key"));
-        for field in KimiCode.portable_root_fields("settings") {
-            assert!(
-                !field.contains("provider"),
-                "可携带字段不得包含 providers（含 api_key）"
-            );
-        }
+        assert!(KimiCode.portable_root_fields("settings").contains(&"providers"));
+        let port = KimiCode.configuration().unwrap();
+        assert_eq!(port.portable_field_kind(&["api_key".into()]),crate::adapters::configuration::PortableFieldKind::Credential);
+        assert_eq!(port.portable_field_kind(&["api_key_env".into()]),crate::adapters::configuration::PortableFieldKind::CredentialReference);
+        assert!(port.portable_reference_valid(&["api_key_env".into()], &json!("lower_case_key")));
+        assert!(!port.portable_reference_valid(&["api_key_env".into()], &json!("$(command)")));
     }
 
     #[test]
@@ -699,7 +703,7 @@ mod tests {
                 version: 1,
                 revision: String::new(),
                 inherit_common: false,
-                files: BTreeMap::new(),
+                files: BTreeMap::from([("settings".into(), "[models.\"custom-openai/demo-model\"]\nprovider = \"custom-openai\"\nmodel = \"demo-model\"\nmax_context_size = 64000\n".into())]),
                 suppressed: BTreeMap::new(),
                 authentication: Default::default(),
                 connection: Some(connection()),

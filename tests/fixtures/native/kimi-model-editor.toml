@@ -1,0 +1,28 @@
+# npm Kimi Code 2.1.1: alias, provider and request ID are independent.
+default_model = "alias/a~one"
+[thinking]
+enabled = true
+effort = "high"
+[providers.alpha]
+type = "openai_responses"
+base_url = "https://alpha.example/v1"
+api_key_env = "alpha_key"
+[providers.beta]
+type = "anthropic"
+base_url = "https://beta.example/v1"
+api_key_env = "beta_key"
+[models."alias/a~one"]
+provider = "alpha"
+model = "request-family/a"
+max_context_size = 64000
+max_input_size = 62000
+max_output_size = 32
+capabilities = ["thinking", "image_in", "tool_use"]
+support_efforts = ["low", "high"]
+default_effort = "high"
+display_name = "Alpha One"
+extension_flag = "keep"
+[models."alias/b"]
+provider = "beta"
+model = "different-request-id"
+max_context_size = 16000

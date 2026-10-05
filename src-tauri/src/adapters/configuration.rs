@@ -85,6 +85,7 @@ pub enum PortableFieldKind {
     Unknown,
     Parameter,
     Credential,
+    CredentialReference,
     Local,
 }
 
@@ -96,6 +97,54 @@ pub struct SuppressionChange {
 }
 
 pub trait ConfigurationAdapter: Sync {
+    /// Raw reintroduction of an entity can revoke an older deletion exclusion.
+    /// Only the adapter maps logical identities to native suppression paths.
+    fn reconcile_suppressions(
+        &self,
+        _previous: Option<&Documents>,
+        _next: &Documents,
+        _suppressed: &mut BTreeMap<String, Vec<String>>,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    /// Cleanup only explicitly deleted logical entities after field CAS.
+    /// Shared code verifies that the candidate subtree contains only empty
+    /// objects and that no detached/credential path is being removed.
+    fn empty_deleted_entities(
+        &self,
+        _role: &str,
+        _profile: &RegisteredProfile,
+    ) -> Result<Vec<Vec<String>>, String> {
+        Ok(Vec::new())
+    }
+    /// Validate a declared public reference using this CLI's native syntax only;
+    /// never evaluate commands or read environment/credential values here.
+    fn portable_reference_valid(&self, _path: &[String], _value: &Value) -> bool {
+        false
+    }
+
+    /// Adapter-owned entity merge; the default retains ordinary object/array semantics.
+    fn resolve_file(
+        &self,
+        _role: &str,
+        base: &Value,
+        own: &Value,
+        suppressed: &[String],
+    ) -> Result<(Value, BTreeMap<String, String>), String> {
+        crate::native::format::resolve(base, own, suppressed)
+    }
+    /// Relinquish another provider's paths without deleting its native values.
+    /// This is separate from reset and cannot override shared credential plans.
+    fn unmanaged_paths(
+        &self,
+        _role: &str,
+        _current: &Value,
+        _desired: &Value,
+        _profile: &RegisteredProfile,
+    ) -> Result<Vec<String>, String> {
+        Ok(Vec::new())
+    }
+
     /// Classify native/model values, including action payloads, for migration.
     fn portable_field_kind(&self, _path: &[String]) -> PortableFieldKind {
         PortableFieldKind::Unknown

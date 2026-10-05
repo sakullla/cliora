@@ -441,6 +441,28 @@ fn apply_registered_validated_compared(
     // Scope/credential policy runs before parsing or planning any native writes.
     adapter.reject_new_secret(snapshot_profile, scope)?;
     let mut normalized = profile.clone();
+    // Legacy modelRecords meant edits to the selected supplier's existing
+    // native models. At explicit application, materialize that native baseline
+    // before the one-time document upgrade; never do this while viewing/saving.
+    if normalized.editing.is_none() && adapter.configuration().is_some() {
+        if let Some(connection) = &normalized.connection {
+            let mut existing = super::configuration::documents(registry, &normalized)?;
+            for role in adapter.connection_roles() {
+                if !existing.contains_key(*role) || existing.get(*role).is_some_and(|value|value.as_object().is_some_and(serde_json::Map::is_empty)) {
+                    if let Some(file) = native_files.iter().find(|file|file.role == *role && !file.sensitive) {
+                        let text = transaction::read_native(Path::new(&file.path))?;
+                        existing.insert((*role).into(), format::parse(adapter.file_kind(role)?, &text)?);
+                    }
+                }
+            }
+            for (role, overlay) in adapter.connection_documents_for_existing(connection, scope, &existing)? {
+                let own = format::parse(adapter.file_kind(&role)?, normalized.files.get(&role).map(String::as_str).unwrap_or(""))?;
+                let merged = format::resolve(&own, &overlay, &[])?.0;
+                normalized.files.insert(role.clone(), format::render(adapter.file_kind(&role)?, &merged)?);
+            }
+            profile::validate_registered_files(registry, &normalized.tool, &normalized.files)?;
+        }
+    }
     let desired = desired_documents_with_projection(registry, &mut normalized, common, scope)?;
     let profile = &normalized;
     if let Some(previous) = &snapshot_profile.connection {
@@ -533,6 +555,17 @@ fn apply_registered_validated_compared(
 
             }
         } else if let Some(fields) = new_managed.get_mut(&role) { adapter.preserve_native_fields(&role, &original, fields, profile)?; }
+        let detached = if profile.editing.is_some() {
+            adapter.configuration().ok_or("配置编辑能力暂不可用")?.unmanaged_paths(&role, &original, desired.get(&role).unwrap_or(&json!({})), profile)?
+        } else { Vec::new() };
+        for path in &detached {
+            let covers = |key: &String| key == path || key.starts_with(&format!("{path}/"));
+            if secrets.values.get(&role).is_some_and(|values| values.keys().any(covers))
+                || secrets.removals.get(&role).is_some_and(|values| values.iter().any(covers)) {
+                return Err("解除配置所有权不能绕过共享凭据策略".into());
+            }
+            if let Some(fields) = new_managed.get_mut(&role) { fields.retain(|key, _| !covers(key)); }
+        }
         let next_fields = new_managed.get(&role);
         let previous_fields = old_managed.and_then(|managed| managed.get(&role));
         let pointers: BTreeSet<_> = next_fields
@@ -543,6 +576,7 @@ fn apply_registered_validated_compared(
             .collect();
         let mut changes = Vec::new();
         for pointer in pointers {
+            if detached.iter().any(|path| &pointer == path || pointer.starts_with(&format!("{path}/"))) { continue; }
             let released_path = released.iter().any(|path| &pointer == path || pointer.starts_with(&format!("{path}/")));
             let path = path_from_pointer(&pointer);
             let current = path
@@ -593,6 +627,27 @@ fn apply_registered_validated_compared(
             let mut candidate = format::parse(kind, &candidate)?;
             for path in prune_empty_entries(&mut candidate, collections) {
                 changes.push(FieldChange { path, value: None });
+            }
+        }
+        if profile.editing.is_some() {
+            let empty_entities = adapter.configuration().ok_or("配置编辑能力暂不可用")?.empty_deleted_entities(&role, profile)?;
+            if !empty_entities.is_empty() {
+                let candidate = changes.iter().try_fold(baseline.clone(), |text, change| format::set_path(kind, &text, &change.path, change.value.as_ref()))?;
+                let candidate = format::parse(kind, &candidate)?;
+                fn empty_objects(value: &Value) -> bool { value.as_object().is_some_and(|object| object.values().all(empty_objects)) }
+                for path in empty_entities {
+                    if path.is_empty() { return Err("实体清理不能删除整个原生文档".into()); }
+                    let encoded = pointer(&path);
+                    let related = |other: &String| other == &encoded || other.starts_with(&format!("{encoded}/")) || encoded.starts_with(&format!("{other}/"));
+                    if detached.iter().any(related)
+                        || secrets.values.get(&role).is_some_and(|values| values.keys().any(related))
+                        || secrets.removals.get(&role).is_some_and(|values| values.iter().any(related)) {
+                        return Err("实体清理不能覆盖已解除的所有权或共享凭据计划".into());
+                    }
+                    if path.iter().try_fold(&candidate, |value, part| value.get(part)).is_some_and(empty_objects) {
+                        changes.push(FieldChange { path, value: None });
+                    }
+                }
             }
         }
         let sensitive = secrets
@@ -1406,7 +1461,7 @@ mod tests {
     }
 
     #[test]
-    fn pi_switch_removes_empty_providers_and_repairs_previous_switch_residue() {
+    fn pi_switch_preserves_prior_suppliers_and_repairs_empty_provider_residue() {
         for keep_override in [false, true] {
             let temp = tempfile::tempdir().unwrap();
             let db = Database::open(&temp.path().join("app.db")).unwrap();
@@ -1432,23 +1487,19 @@ mod tests {
             let result = format::parse(format::FileKind::Jsonc, &text).unwrap();
             assert!(text.contains("// keep this comment"));
             assert!(result["providers"].get("stale/provider~name").is_none());
-            if keep_override {
-                assert_eq!(result["providers"]["anthropic"], json!({"headers":{"x-custom":"keep"}}));
-            } else {
-                assert!(result["providers"].get("anthropic").is_none(), "empty old provider breaks Pi: {result}");
-            }
+            assert_eq!(result["providers"]["anthropic"], native["providers"]["anthropic"], "switching suppliers retains the previous native model and credential");
             assert_eq!(result["providers"]["user-provider"], native["providers"]["user-provider"]);
             assert_eq!(result["unrelated"], json!({}));
             assert_eq!(result["providers"]["new/provider~name"]["apiKey"], "test-pi-key");
             apply_fixture(&db, &store, &first, None, &files, "global", Scope::Global, false).unwrap();
             let switched_back = format::parse(format::FileKind::Jsonc, &fs::read_to_string(&models).unwrap()).unwrap();
-            assert!(switched_back["providers"].get("new/provider~name").is_none());
+            assert_eq!(switched_back["providers"]["new/provider~name"], result["providers"]["new/provider~name"]);
             assert_eq!(switched_back["providers"]["anthropic"]["apiKey"], "test-pi-key");
         }
     }
 
     #[test]
-    fn switching_profiles_removes_old_native_key_and_external_edit_is_a_conflict() {
+    fn switching_profiles_preserves_other_native_key_and_current_target_external_edit_is_a_conflict() {
         let temp = tempfile::tempdir().unwrap();
         let file = temp.path().join("config.toml");
         let db = Database::open(&temp.path().join("app.db")).unwrap();
@@ -1485,8 +1536,13 @@ mod tests {
         )
         .unwrap();
         let second_text = fs::read_to_string(&file).unwrap();
-        assert!(!second_text.contains("old-test-key"));
-        assert!(second_text.contains("new-test-key"));
+        let first_document = format::parse(format::FileKind::Toml, &first_text).unwrap();
+        let second_document = format::parse(format::FileKind::Toml, &second_text).unwrap();
+        assert_eq!(second_document["model_providers"]["old_provider"], first_document["model_providers"]["old_provider"]);
+        assert_eq!(second_document["model_providers"]["old_provider"]["experimental_bearer_token"], "old-test-key");
+        assert_eq!(second_document["model_providers"]["new_provider"]["experimental_bearer_token"], "new-test-key");
+        assert!(second_document["model_providers"]["new_provider"].get("env_key").is_none());
+        assert_eq!(second_document["model_provider"], "new_provider");
         assert_eq!(
             get_binding(&db, CliId::Codex, "global")
                 .unwrap()
@@ -1499,21 +1555,22 @@ mod tests {
             second_text.replace("new-test-key", "external-test-key"),
         )
         .unwrap();
-        assert!(apply_fixture(
+        let error = apply_fixture(
             &db,
             &store,
-            &first,
+            &second,
             None,
             &target,
             "global",
             Scope::Global,
-            false
+            false,
         )
-        .unwrap_err()
-        .contains("外部修改"));
-        assert!(fs::read_to_string(&file)
-            .unwrap()
-            .contains("external-test-key"));
+        .unwrap_err();
+        assert!(error.contains("外部修改"), "{error}");
+        assert_eq!(
+            fs::read_to_string(&file).unwrap(),
+            second_text.replace("new-test-key", "external-test-key")
+        );
         assert_eq!(
             get_binding(&db, CliId::Codex, "global")
                 .unwrap()
