@@ -5,9 +5,9 @@ use serde_json::Value;
 
 use crate::history::usage;
 use crate::history::{
-    check_cancelled, read_jsonl_controlled, source_fingerprint, source_fingerprint_controlled,
-    text_content, timestamp, valid_native_id, HistorySource, ParsedSession, UsageEvent,
-    MAX_SOURCES,
+    check_cancelled, read_jsonl_controlled, read_jsonl_filtered, source_fingerprint,
+    source_fingerprint_controlled, text_content, timestamp, valid_native_id, HistorySource,
+    ParsedSession, UsageEvent, MAX_SOURCES,
 };
 
 pub fn sources(home: &Path) -> Result<Vec<HistorySource>, String> {
@@ -68,7 +68,7 @@ fn sources_with_control(
             if !summary.is_file() || summary.is_symlink() {
                 continue;
             }
-            let checked = ["summary.json", "chat_history.jsonl", "usage.json"]
+            let checked = ["summary.json", "chat_history.jsonl", "usage.json", "events.jsonl"]
                 .iter()
                 .map(|name| {
                     check_cancelled(cancelled)?;
@@ -101,6 +101,79 @@ fn sources_with_control(
         }
     }
     Ok(result)
+}
+
+fn row_timestamp(row: &Value) -> Option<i64> {
+    ["timestamp", "created_at", "createdAt", "time"]
+        .iter()
+        .find_map(|key| row.get(*key).and_then(timestamp))
+}
+
+/// Grok's chat rows usually have no clock. `events.jsonl` records each user turn.
+/// Prompts line up with those starts from the end, so a compacted transcript keeps the
+/// latest turns instead of the session's first hour.
+fn assign_missing_message_times(
+    session: &mut ParsedSession,
+    dir: &Path,
+    stamps: &[(usize, bool)],
+    cancelled: &dyn Fn() -> bool,
+) {
+    if stamps.is_empty() || session.messages.iter().all(|message| message.timestamp.is_some()) {
+        return;
+    }
+    let turns = turn_starts(dir, cancelled);
+    let prompts = stamps.iter().filter(|(_, prompt)| *prompt).count();
+    let mut turn_index = if turns.is_empty() || prompts == 0 {
+        0
+    } else {
+        turns.len().saturating_sub(prompts)
+    };
+    let mut seen_prompt = false;
+    for &(index, prompt) in stamps {
+        if prompt {
+            if seen_prompt {
+                turn_index = turn_index.saturating_add(1);
+            }
+            seen_prompt = true;
+            if !turns.is_empty() {
+                turn_index = turn_index.min(turns.len() - 1);
+            }
+        }
+        if session.messages[index].timestamp.is_none() {
+            session.messages[index].timestamp = turns.get(turn_index).copied().or(session.started_at);
+        }
+    }
+}
+
+fn turn_starts(dir: &Path, cancelled: &dyn Fn() -> bool) -> Vec<i64> {
+    let path = dir.join("events.jsonl");
+    if !path.is_file() || path.is_symlink() {
+        return Vec::new();
+    }
+    let source = HistorySource {
+        native_title: None,
+        path,
+        native_id: None,
+        fingerprint: String::new(),
+        fingerprint_error: None,
+    };
+    let mut turns = Vec::new();
+    let _ = read_jsonl_filtered(
+        &source,
+        cancelled,
+        |prefix| !prefix.windows(b"turn_started".len()).any(|window| window == b"turn_started"),
+        |_line, row| {
+            if turns.len() >= 10_000 {
+                return;
+            }
+            if row.get("type").and_then(Value::as_str) == Some("turn_started") {
+                if let Some(time) = row.get("ts").or_else(|| row.get("timestamp")).and_then(timestamp) {
+                    turns.push(time);
+                }
+            }
+        },
+    );
+    turns
 }
 
 fn read_json(path: &Path) -> Result<Value, String> {
@@ -189,6 +262,7 @@ pub fn parse_controlled(
         .or_else(|| summary.get("last_active_at"))
         .and_then(timestamp);
     let chat = source.path.join("chat_history.jsonl");
+    let mut stamps = Vec::new();
     if chat.is_file() && !chat.is_symlink() {
         let chat_source = HistorySource { native_title: None,
             path: chat,
@@ -200,12 +274,18 @@ pub fn parse_controlled(
             let role = row.get("type").and_then(Value::as_str).unwrap_or("");
             if role == "user" || role == "assistant" {
                 let text = row.get("content").map(text_content).unwrap_or_default();
+                let before = session.messages.len();
                 session.add_message(
                     format!("line-{line}"),
                     role,
                     text,
-                    row.get("timestamp").and_then(timestamp),
+                    row_timestamp(&row),
                 );
+                if session.messages.len() > before {
+                    let prompt = role == "user"
+                        && row.get("synthetic_reason").and_then(Value::as_str).is_none();
+                    stamps.push((session.messages.len() - 1, prompt));
+                }
             }
         }) {
             Ok(partial) => session.partial |= partial,
@@ -214,6 +294,7 @@ pub fn parse_controlled(
     } else {
         session.partial = true;
     }
+    assign_missing_message_times(&mut session, &source.path, &stamps, cancelled);
     let usage_path = source.path.join("usage.json");
     check_cancelled(cancelled)?;
     if usage_path.is_file() {

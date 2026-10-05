@@ -161,6 +161,26 @@ test('editing an MCP starts from the CLIs already written and unchecking removes
   expect(writes).toEqual([expect.objectContaining({ command: 'remove_native_mcp' })]);
 });
 
+test('MCP removal notice expires after four seconds', async ({ page }) => {
+  await mockResources(page);
+  await page.goto('/');
+  await page.evaluate(() => {
+    const state = window as typeof window & { __resourceMcpDefinitions: Array<Record<string, unknown>>; __resourceMcpPlacements: Array<Record<string, unknown>> };
+    state.__resourceMcpDefinitions.push({ id: 'mcp-1', name: 'filesystem', transport: 'stdio', command: 'npx', args: [], url: '', env: {}, headers: {}, inLibrary: true, version: 1 });
+    state.__resourceMcpPlacements.push({ definitionId: 'mcp-1', toolId: 'codex', scope: 'global', projectPath: null, enabled: true });
+  });
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  await page.getByRole('button', { name: '修改' }).click();
+  await page.getByRole('checkbox', { name: 'Codex' }).uncheck();
+  await page.clock.install();
+  await page.getByRole('button', { name: '保存并分发' }).click();
+  const status = page.getByRole('status').filter({ hasText: '已从 Codex 移除。' });
+  await expect(status).toBeVisible();
+  await page.clock.fastForward(4100);
+  await expect(status).toHaveCount(0);
+});
+
 test('editing an MCP rewrites every CLI that already has it, including another scope', async ({ page }) => {
   await mockResources(page);
   await page.goto('/');
