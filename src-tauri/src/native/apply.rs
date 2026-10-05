@@ -278,6 +278,9 @@ pub fn desired_registered_documents(
     common: Option<&RegisteredCommon>,
     scope: Scope,
 ) -> Result<BTreeMap<String, Value>, String> {
+    let mut normalized = profile.clone();
+    super::configuration::normalize_legacy(registry, &mut normalized, scope)?;
+    let profile = &normalized;
     let adapter = registry
         .get(&profile.tool)
         .ok_or("未注册的 CLI 适配器，不能应用")?;
@@ -422,6 +425,10 @@ fn apply_registered_validated_compared(
     profile: &RegisteredProfile, common: Option<&RegisteredCommon>, native_files: &[NativeFile],
     key: &str, scope: Scope, allow_takeover: bool, comparison: Option<&BTreeMap<String,String>>,
 ) -> Result<ApplyOutcome,String> {
+    let snapshot_profile = profile;
+    let mut normalized = profile.clone();
+    super::configuration::normalize_legacy(registry, &mut normalized, scope)?;
+    let profile = &normalized;
     let adapter = registry
         .get(&profile.tool)
         .ok_or("未注册的 CLI 适配器，不能应用")?;
@@ -592,7 +599,7 @@ fn apply_registered_validated_compared(
     }
     if patches.is_empty() {
         return transaction::commit_matching(db, &matching_baselines, |tx| {
-            check_apply_snapshot(tx, profile, common)?;
+            check_apply_snapshot(tx, snapshot_profile, common)?;
             let json = serde_json::to_string(&new_managed).map_err(|e| e.to_string())?;
             let context = crate::accounts::selection::current(&profile.tool);
             for target_key in [&context_key, &key.to_owned()] {
@@ -609,7 +616,7 @@ fn apply_registered_validated_compared(
         credentials,
         &patches,
         |tx| {
-            check_apply_snapshot(tx, profile, common)?;
+            check_apply_snapshot(tx, snapshot_profile, common)?;
             let json = serde_json::to_string(&new_managed).map_err(|e| e.to_string())?;
             let context = crate::accounts::selection::current(&profile.tool);
             for target_key in [&context_key, &key.to_owned()] {

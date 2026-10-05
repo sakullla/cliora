@@ -209,17 +209,23 @@ fn unsafe_field(key: &str) -> bool {
     .any(|fragment| key.contains(fragment))
 }
 
-fn scrub_value(value: Value, path: &str, pending: &mut Vec<String>) -> Option<Value> {
+fn scrub_value(value: Value, path: &str, pending: &mut Vec<String>, adapter: Option<&dyn crate::adapters::CliAdapter>, native_path: &[String]) -> Option<Value> {
     match value {
         Value::Object(object) => {
             let mut clean = serde_json::Map::new();
             for (key, value) in object {
                 let location = format!("{path}.{key}");
-                if unsafe_field(&key) {
+                let mut field_path = native_path.to_vec();
+                field_path.push(key.clone());
+                let semantic = adapter.map_or(Default::default(), |adapter| adapter.portable_field_kind(&field_path));
+                use crate::adapters::configuration::PortableFieldKind;
+                let exact_secret = matches!(key.to_ascii_lowercase().as_str(), "token" | "api_key" | "apikey" | "password" | "secret" | "authorization" | "cookie" | "credential" | "access_token" | "refresh_token");
+                if exact_secret || matches!(semantic, PortableFieldKind::Credential | PortableFieldKind::Local)
+                    || (semantic != PortableFieldKind::Parameter && unsafe_field(&key)) {
                     pending.push(location);
                     continue;
                 }
-                if let Some(value) = scrub_value(value, &location, pending) {
+                if let Some(value) = scrub_value(value, &location, pending, adapter, &field_path) {
                     clean.insert(key, value);
                 }
             }
@@ -229,7 +235,7 @@ fn scrub_value(value: Value, path: &str, pending: &mut Vec<String>) -> Option<Va
             items
                 .into_iter()
                 .enumerate()
-                .filter_map(|(index, item)| scrub_value(item, &format!("{path}[{index}]"), pending))
+                .filter_map(|(index, item)| scrub_value(item, &format!("{path}[{index}]"), pending, adapter, &native_path.iter().cloned().chain([index.to_string()]).collect::<Vec<_>>()))
                 .collect(),
         )),
         Value::String(text) if looks_absolute(&text) => {
@@ -274,7 +280,7 @@ fn portable_files(
             }
             for key in allowed {
                 if let Some(value) = object.get(*key).cloned() {
-                    if let Some(value) = scrub_value(value, &format!("{role}.{key}"), &mut pending)
+                    if let Some(value) = scrub_value(value, &format!("{role}.{key}"), &mut pending, Some(adapter), &[role.clone(), (*key).into()])
                     {
                         clean.insert((*key).into(), value);
                     }
@@ -465,7 +471,14 @@ fn collect_snapshot_on(
         if let Some(editing) = profile.editing.as_mut() {
             editing.intents.retain_mut(|action| {
                 let Ok(value) = serde_json::to_value(&*action) else { return false; };
-                let Some(clean) = scrub_value(value, "editing.intent", &mut pending_fields) else { return false; };
+                let adapter = registry.get(&profile.tool);
+                if let Some(field) = &action.field {
+                    let kind = adapter.map_or(Default::default(), |adapter| adapter.portable_field_kind(&[field.clone()]));
+                    if unsafe_field(field) && kind != crate::adapters::configuration::PortableFieldKind::Parameter {
+                        pending_fields.push(format!("editing.intent.{field}")); return false;
+                    }
+                }
+                let Some(clean) = scrub_value(value, "editing.intent", &mut pending_fields, adapter, &[]) else { return false; };
                 if let Ok(safe) = serde_json::from_value(clean) { *action = safe; true } else {
                     pending_fields.push("不适用本机的配置编辑意图".into()); false
                 }

@@ -261,8 +261,28 @@ pub fn replace_text(
     mut draft: ConfigurationDraft,
     files: BTreeMap<String, String>,
 ) -> ConfigurationDraft {
+    let previous = documents(registry, &draft.profile).ok();
     draft.profile.files = files;
     draft.revision += 1;
+    let coordination = (|| {
+        profile::validate_registered_files(registry, &draft.profile.tool, &draft.profile.files)?;
+        let next = documents(registry, &draft.profile)?;
+        let effective = effective_documents(registry, &draft.profile, draft.common.as_ref())?;
+        let port = registry
+            .get(&draft.profile.tool)
+            .ok_or("未注册的 CLI 适配器")?
+            .configuration()
+            .ok_or("此 CLI 尚无专属配置编辑能力")?;
+        let mut state = draft.profile.editing.clone().ok_or("缺少配置编辑版本")?;
+        port.reconcile_text(previous.as_ref(), &next, &effective, &mut state)?;
+        validate_state(&state)?;
+        draft.profile.editing = Some(state);
+        Ok(())
+    })();
+    if let Err(error) = coordination {
+        draft.issues = vec![issue(error)];
+        return draft;
+    }
     refresh(registry, draft)
 }
 
@@ -312,6 +332,17 @@ pub fn edit(
     }
     state.intents.push(action);
     validate_state(state)?;
+    for change in port.suppression_changes(state.intents.last().unwrap())? {
+        let entries = next.profile.suppressed.entry(change.role).or_default();
+        if change.suppressed {
+            if !entries.contains(&change.path) {
+                entries.push(change.path);
+            }
+        } else {
+            entries.retain(|path| path != &change.path);
+        }
+    }
+    next.profile.suppressed.retain(|_, paths| !paths.is_empty());
     next.profile.files = parsed
         .iter()
         .map(|(role, value)| {
@@ -330,9 +361,6 @@ pub fn validate_profile(
     profile: &mut RegisteredProfile,
     scope: Scope,
 ) -> Result<(), String> {
-    if profile.editing.is_none() {
-        return Ok(());
-    }
     normalize_legacy(registry, profile, scope)?;
     let parsed = documents(registry, profile)?;
     validate_documents(registry, profile, &parsed, scope)
@@ -344,9 +372,17 @@ pub fn validate_documents(
     parsed: &Documents,
     scope: Scope,
 ) -> Result<(), String> {
-    let Some(state) = &profile.editing else {
-        return Ok(());
-    };
+    if profile.editing.is_none() {
+        if registry
+            .get(&profile.tool)
+            .is_some_and(|adapter| adapter.configuration().is_some())
+        {
+            profile.editing = Some(EditingState::default());
+        } else {
+            return Ok(());
+        }
+    }
+    let state = profile.editing.as_ref().unwrap();
     validate_state(state)?;
     let port = registry
         .get(&profile.tool)

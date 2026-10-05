@@ -20,3 +20,8 @@ test-results/
 docs/*
 docs/requirements/*
 docs/verification/ui/
+
+# Track only the configuration adapter extension contract.
+!docs/architecture/
+docs/architecture/*
+!docs/architecture/configuration-adapters.md

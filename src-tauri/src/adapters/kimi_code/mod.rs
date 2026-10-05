@@ -538,6 +538,7 @@ impl CliAdapter for KimiCode {
     fn descriptor(&self) -> AdapterDescriptor {
         AdapterDescriptor {
             id: self.id(),
+            configuration: self.configuration().map(|port| port.describe(Scope::Global)),
             name: self.name(),
             interface_formats: self.interface_formats(),
             project_model_override: false,
@@ -691,6 +692,7 @@ mod tests {
             &db,
             &crate::adapters::Registry::builtins(),
             RegisteredProfile {
+                editing: None,
                 id: String::new(),
                 tool: "kimi_code".into(),
                 name: "demo".into(),

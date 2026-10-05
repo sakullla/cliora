@@ -579,6 +579,7 @@ mod tests {
             "test-only-key".into(),
         )])));
         let profile = RegisteredProfile {
+            editing: None,
             id: "p".into(),
             tool: "codebuddy".into(),
             name: "接入".into(),
