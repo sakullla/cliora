@@ -19,6 +19,13 @@ export function readReasoningEffort(text: string): string | null {
 export const codexUiAdapter: ToolUiAdapter = {
   icon: { light: icon, tile: 'light', source: 'OpenAI.Codex 26.924.2738.0 / webview/assets/codex-new-f14177b03534.svg' },
   id: 'codex',
+  accounts: {
+    description: '选择 ChatGPT 账号；API 密钥连接在配置中单独填写。',
+    nativeDescription: '读取 Codex 当前登录的脱敏身份；沿用原生来源不会纳入账号管理。',
+    managedDescription: '独立账号使用各自的 Codex 登录与配置目录，凭据由原生 CLI 维护。',
+    defaultLabel: 'ChatGPT 账号',
+    methods: { browser: '浏览器登录 ChatGPT', device: 'ChatGPT 设备码登录' },
+  },
   configuration: { Editor: CodexConfigurationEditor },
   officialUsage: { accountRequired: true, automaticRefresh: true },
   reasoning: {

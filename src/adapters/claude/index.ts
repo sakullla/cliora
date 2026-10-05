@@ -43,6 +43,13 @@ const modelMapping: ModelMappingControl = {
 export const claudeUiAdapter: ToolUiAdapter = {
   icon: { light: icon, source: 'https://code.claude.com/docs/logo/light.svg' },
   id: 'claude_code',
+  accounts: {
+    description: '查看 Claude Code 当前凭据或选择已核验的 claude.ai 账号。',
+    nativeDescription: '观察 Claude Code 当前认证来源，API 密钥不视为订阅登录。',
+    managedDescription: '受管登录的可用性由当前平台能力决定；macOS 登录隔离尚未验收。',
+    defaultLabel: 'Claude 账号',
+    methods: { browser: 'Claude 原生登录' },
+  },
   configuration: { Editor: ClaudeConfigurationEditor },
   officialUsage: { accountRequired: false, automaticRefresh: false },
   modelMapping,

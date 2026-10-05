@@ -2,6 +2,8 @@
 pub mod context;
 pub mod discovery;
 pub mod selection;
+mod impact;
+mod reapply;
 mod contract;
 pub mod native;
 mod store;
@@ -10,6 +12,8 @@ pub use contract::*;
 use std::{path::Path, sync::Arc, time::Duration};
 pub use store::get;
 pub use store::delete;
+pub use impact::query as impact;
+pub use reapply::{enter as enter_reapply,validate_profile as validate_reapply_profile,validate_transaction as validate_reapply_transaction};
 
 pub fn now() -> i64 {
     chrono::Utc::now().timestamp()
@@ -384,6 +388,8 @@ pub fn start_login(
 
 pub fn check(db: &Database, home: &Path, id: &str) -> Result<AuthAccount, String> {
     let mut account = get(db, id)?;
+    reapply::before_check(&account)?;
+    let before_check = account.clone();
     let executable = native::executable(db, home, &account.tool_id)?;
     if let Some(pending) = account.pending_login.clone() {
         if now() >= pending.expires_at {
@@ -424,6 +430,7 @@ pub fn check(db: &Database, home: &Path, id: &str) -> Result<AuthAccount, String
     }
     account.checked_at = Some(now());
     store::replace(db, &mut account)?;
+    reapply::after_check(&before_check, &account)?;
     Ok(account)
 }
 

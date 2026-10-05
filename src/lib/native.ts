@@ -1,6 +1,6 @@
 import type { ConfigurationAction, ConfigurationDescriptor, ConfigurationDraft } from '../types/configuration';
 import { invoke, isTauri } from '@tauri-apps/api/core';
-import type { AccountCapability, AuthAccount, NativeLoginSnapshot } from '../types/accounts';
+import type { AccountCapability, AccountImpact, AccountReapplyRequest, AuthAccount, NativeLoginSnapshot } from '../types/accounts';
 import type { AgentSnapshot, AgentRequest, AgentResult, PluginTarget, PluginRequest, PluginSnapshot, PluginResult } from '../types/resources';
 import type { ApiError, Bootstrap, CliId, Theme } from '../types/domain';
 import type { AdapterCatalog, ApplyComparison, ApplyOutcome, CommonConfig, CommonSaveResult, Connection, ConnectionCheck, ModelDirectory, NativeImport, NativeInspection, NativePreview, NativeProfile, PreservedProfile, RegisteredCommon, RegisteredCommonSaveResult, RegisteredProfile, RegisteredToolWorkspace, Scope, ToolWorkspace } from '../types/native';
@@ -66,6 +66,8 @@ export const native = {
   adoptNativeCodexAccount: (label: string) => command<AuthAccount>('adopt_native_codex_account', { label }),
   adoptNativeAccount: (toolId: string, label: string) => command<AuthAccount>('adopt_native_account', { toolId, label }),
   listAccounts: () => command<AuthAccount[]>('list_accounts'),
+  accountImpact: (id: string) => command<AccountImpact>('account_impact', { id }),
+  reapplyAccountProfile: (request: AccountReapplyRequest) => command<ApplyOutcome>('reapply_account_profile', { request }),
   createAccount: (toolId: string, label: string) => command<AuthAccount>('create_account', { toolId, label }),
   renameAccount: (id: string, expectedVersion: number, label: string) => command<AuthAccount>('rename_account', { id, expectedVersion, label }),
   deleteAccount: (id: string, expectedVersion: number) => command<void>('delete_account', { id, expectedVersion }),

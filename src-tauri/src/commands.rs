@@ -92,6 +92,12 @@ pub async fn list_accounts(app: AppHandle) -> Result<Vec<crate::accounts::AuthAc
 }
 
 #[tauri::command]
+pub async fn account_impact(app: AppHandle, id: String) -> Result<crate::accounts::AccountImpact, ApiError> {
+    let db = app.state::<AppState>().database(&app)?;
+    blocking(move || crate::accounts::impact(&db, &id).map_err(native_error)).await
+}
+
+#[tauri::command]
 pub async fn create_account(app: AppHandle, tool_id: String, label: String) -> Result<crate::accounts::AuthAccount, ApiError> {
     let db = app.state::<AppState>().database(&app)?;
     blocking(move || crate::accounts::create(&db, &tool_id, &label).map_err(native_error)).await
@@ -1968,6 +1974,14 @@ pub async fn apply_registered_native_profile(
         )
     })
     .await
+}
+
+#[tauri::command]
+pub async fn reapply_account_profile(app:AppHandle,request:crate::accounts::AccountReapplyRequest)->Result<ApplyOutcome,ApiError> {
+    blocking(move || {
+        let _intent=crate::accounts::enter_reapply(request.clone()).map_err(native_error)?;
+        apply_registered_now(&app,&request.tool_id,&request.profile_id,request.scope,request.project_path,false)
+    }).await
 }
 
 #[tauri::command]
