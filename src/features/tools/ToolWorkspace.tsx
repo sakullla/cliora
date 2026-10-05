@@ -10,11 +10,13 @@ import { importedConnection } from '../../lib/nativeDraft';
 import type { ModelRoleValue } from '../../adapters/contract';
 import type { DraftRequest } from '../../lib/draftGuard';
 import type { ApiError } from '../../types/domain';
+import type { AccountImpactScope } from '../../types/accounts';
+import type { UsageQuery } from '../../types/usage';
 import type { Project, TrayRepairTarget } from '../../types/launch';
 import type { AdapterDescriptor, ApplyComparison, Connection, ConnectionCheck, ModelDirectory, ModelRecord, NativeInspection, NativePreview, RegisteredCommon, RegisteredProfile, RegisteredToolWorkspace, Scope } from '../../types/native';
 import { authEnvName, uiAdapterFor } from '../../adapters';
 import { AccountsPanel, accountStates, useAccounts } from './AccountsPanel';
-import { ProfileQuota, useUsageQuota } from './UsageQuota';
+import { ProfileQuota, QuotaEditor, useUsageQuota } from './UsageQuota';
 import { InstallPanel } from './InstallPanel';
 import { ModelCombobox } from './ModelCombobox';
 import { McpWorkspace, SkillsWorkspace } from './ResourceWorkspace';
@@ -256,6 +258,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   const [projects, setProjects] = useState<Project[]>([]);
   const quotaState = useUsageQuota(active);
   const [quotaAddFor, setQuotaAddFor] = useState<string | null>(null);
+  const [accountUsageQuery, setAccountUsageQuery] = useState<UsageQuery | null>(null);
   const clearQuotaAdd = useCallback(() => setQuotaAddFor(null), []);
   const accountState = useAccounts(tool, active);
   const [preferredProfileId, setPreferredProfileId] = useState<string | null>(repair?.profileId ?? null);
@@ -342,6 +345,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   useEffect(() => {
     if (!supports[resourceView]) setResourceView('config');
   }, [currentTool, resourceView, supports.accounts, supports.mcp, supports.skills, supports.agents, supports.plugins]);
+  useEffect(() => { if (resourceView !== 'accounts') setAccountUsageQuery(null); }, [resourceView]);
 
   const draftContext = JSON.stringify([currentTool, scope, projectPath, selectedId, editor]);
   const latestDraft = useRef<DraftRequest<RegisteredProfile>>({ context: draftContext, revision: draftRevision.current, draft });
@@ -358,6 +362,8 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   const dirty = (editor === 'profile' ? !!draft && JSON.stringify(draft) !== savedDraft.current : editor === 'common' && !!commonDraft && JSON.stringify(commonDraft) !== savedDraft.current) || !!pendingRaw && pendingRaw.text !== pendingRaw.original || !!newSecret;
   const refreshState = useRef({ currentTool, scope, projectPath, selectedId, editor, dirty, busy, mcpDirty, skillsDirty, agentsDirty });
   refreshState.current = { currentTool, scope, projectPath, selectedId, editor, dirty, busy, mcpDirty, skillsDirty, agentsDirty };
+  const accountNavigationContext = JSON.stringify([currentTool, scope, projectPath, resourceView]);
+  const latestAccountNavigation = useRef(accountNavigationContext); latestAccountNavigation.current = accountNavigationContext;
   const confirmationContext = JSON.stringify([draftContext, draft, commonDraft, rawDisk, newSecret, mcpDirty, skillsDirty, agentsDirty]);
   const latestConfirmation = useRef(confirmationContext); latestConfirmation.current = confirmationContext;
   const mounted = useRef(true);
@@ -433,7 +439,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     loadSequence.current++; invalidateDraftRequest(); inspectionSequence.current++;
     rawSequence.current++; setBusy(false);
     setFileConflict(null); setBackups([]); setBackupPreview(null); setHistoryOpen(false); setRawDisk(null);
-    setGuide(false);
+    setGuide(false); setAccountUsageQuery(null);
     setNotice(''); setError(''); setInspection(null); setNewSecret(''); setProfileQuery('');
     const cached = currentTool && (scope !== 'project' || projectPath.trim()) ? rememberedWorkspaces.get(workspaceKey(currentTool, scope, projectPath)) : undefined;
     if (cached && currentTool) {
@@ -626,8 +632,38 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
 
   async function selectProfile(profile: RegisteredProfile) {
     if (dirty && !await confirmChange('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return;
+    activateProfileEditor(profile);
+  }
+  function activateProfileEditor(profile: RegisteredProfile) {
     setRawDisk(null); setNewSecret(''); setEditor('profile'); setSelectedId(profile.id); setDraft(structuredClone(profile)); savedDraft.current = JSON.stringify(profile);
     setView('form'); setError(''); setNotice(''); setApplyComparison(null); setGuide(true);
+  }
+
+  async function openAccountProfile(profileId: string, target?: AccountImpactScope) {
+    const profile = workspace?.profiles.find(item => item.id === profileId);
+    if (!profile || target && (target.toolId !== currentTool || !target.scope || target.scope === 'project' && !target.projectPath)) { setError('关联配置或范围已变化，请刷新账号关联后重试。'); return; }
+    const started = latestAccountNavigation.current;
+    const hadUnsaved = dirty || mcpDirty || skillsDirty || agentsDirty;
+    if (hadUnsaved && !await confirmChange('当前草稿尚未保存，打开账号关联配置会丢失这些修改。继续吗？')) return;
+    if (hadUnsaved) await discardUnsavedDrafts();
+    if (!mounted.current || latestAccountNavigation.current !== started) return;
+    const nextScope = target?.scope ?? scope;
+    const nextProject = nextScope === 'project' ? target?.projectPath ?? projectPath : '';
+    setResourceView('config'); setProfileQuery(''); setError('');
+    if (nextScope !== scope || nextScope === 'project' && nextProject !== projectPath) {
+      invalidateDraftRequest(); pendingGuide.current = true; setPreferredProfileId(profileId); setScope(nextScope); setProjectPath(nextProject);
+      setNotice(`已打开关联配置的${nextScope === 'global' ? '全局' : '项目'}范围；尚未应用配置。`);
+    } else {
+      activateProfileEditor(profile);
+    }
+  }
+  async function openAccountUsage(queryId: string) {
+    const query = quotaState.queries.find(item => item.id === queryId);
+    if (!query) { setError('额度引用已变化，请刷新关联与额度数据后重试。'); void quotaState.reload(); return; }
+    const started = latestAccountNavigation.current;
+    if ((dirty || mcpDirty || skillsDirty || agentsDirty) && !await confirmChange('当前草稿尚未保存，打开账号关联额度设置会丢失这些修改。继续吗？')) return;
+    if (!mounted.current || latestAccountNavigation.current !== started) return;
+    setAccountUsageQuery(query);
   }
 
   async function switchResourceView(next: 'config' | 'mcp' | 'skills' | 'accounts' | 'plugins' | 'agents') {
@@ -1009,6 +1045,8 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   }
 
   const authKind = draft?.authentication?.kind;
+  const accountUsageAuthentication = workspace?.profiles.find(profile => profile.id === accountUsageQuery?.config.identity.profileId)?.authentication;
+  const accountUsageProfileAccountId = accountUsageAuthentication?.kind === 'oauth' ? accountUsageAuthentication.accountId : accountUsageQuery?.config.identity.profileId ? undefined : accountUsageQuery?.config.identity.accountId ?? undefined;
   const authLabel = authKind === 'api_key' ? (apiKeyWritable ? 'API Key' : apiKeyState === 'scope_denied' ? '当前范围不保存新密钥' : '不保存新密钥') : authKind === 'oauth' ? 'OAuth 账号' : authKind === 'rebind_required' ? '需要重新绑定账号' : '沿用原生认证';
   const profileEditorHint = editor === 'profile' && draft ? `${toolName} · ${draft.name.trim() || '未命名'} · ${authLabel}。${draft.id && workspace?.binding?.profileId === draft.id ? '这份配置正在使用，保存会写入当前文件。' : workspace?.probe.nativeWrites.state === 'supported' ? '只保存不会替换正在使用的文件；要立即切换，请选“保存并启用”。' : '保存不会替换正在使用的文件。'}` : undefined;
   const saveState = dirty ? '未保存' : editor === 'profile' && draft?.id ? (workspace?.binding?.profileId === draft.id ? '正在使用' : '尚未启用') : '';
@@ -1185,7 +1223,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
       <GuideDialog wide open={guide && (editor !== 'profile' || !!draft)} title={historyOpen && editor === 'native' ? '修改记录' : editor === 'native' ? '修改正在使用的文件' : editor === 'common' ? '修改通用配置' : draft?.id ? '修改配置' : '新建配置'} hint={historyOpen && editor === 'native' ? '最多 20 次。选一条查看当时的文件，确认后才会写回。' : profileEditorHint} onClose={() => void closeGuide()}>
         <div className={styles.editor}>
             {historyOpen && editor === 'native' ? <div className={styles.history}>{backups.length ? <ul className={styles.historyList} aria-label="修改记录">{backups.map((item, index) => <li key={item.transactionId}><button type="button" aria-pressed={backupPreview?.transactionId === item.transactionId} disabled={busy} onClick={() => void inspectBackup(item.transactionId)}>{formatBackupTime(item.createdAt, index)}</button></li>)}</ul> : <p className={styles.historyEmpty}>还没有可恢复的修改。</p>}{backups.length > 0 && <div className={styles.historyPreview}><CodeEditor label="当时的文件" readOnly format={activeFile?.format ?? 'text'} value={backupPreview?.original ?? ''} placeholder={backupPreview ? '' : '正在读取…'} /></div>}</div> : <div className={styles.editorScroll}>
-            {editor === 'profile' && draft && <div className={styles.form}><div className={styles.sectionLabel}>基本信息</div><label className={styles.pair}>认证方式<select aria-label="认证方式" value={draft.authentication?.kind === 'api_key' && !apiKeyWritable ? 'native' : draft.authentication?.kind ?? 'native'} onChange={event => { const kind = event.target.value; setNewSecret(''); setDraft({ ...draft, authentication: kind === 'oauth' ? { kind, accountId: accountState.accounts.find(account => account.state === 'signed_in')?.id ?? '' } : { kind: kind as 'native' | 'api_key' }, connection: kind === 'oauth' ? null : draft.connection, nativeCredentials: kind === 'oauth' ? {} : draft.nativeCredentials }); }}><option value="native">沿用原生认证（兼容）</option>{apiKeyWritable && <option value="api_key">API Key</option>}{supports.accounts && <option value="oauth">OAuth 账号</option>}{draft.authentication?.kind === 'rebind_required' && <option value="rebind_required">需要重新绑定</option>}</select></label>
+            {editor === 'profile' && draft && <div className={styles.form}><div className={styles.sectionLabel}>基本信息</div><label className={styles.pair}>认证方式<select aria-label="认证方式" value={draft.authentication?.kind === 'api_key' && !apiKeyWritable ? 'native' : draft.authentication?.kind ?? 'native'} onChange={event => { const kind = event.target.value; setNewSecret(''); setDraft({ ...draft, authentication: kind === 'oauth' ? { kind, accountId: '' } : { kind: kind as 'native' | 'api_key' }, connection: kind === 'oauth' ? null : draft.connection, nativeCredentials: kind === 'oauth' ? {} : draft.nativeCredentials }); }}><option value="native">沿用原生认证（兼容）</option>{apiKeyWritable && <option value="api_key">API Key</option>}{supports.accounts && <option value="oauth">OAuth 账号</option>}{draft.authentication?.kind === 'rebind_required' && <option value="rebind_required">需要重新绑定</option>}</select></label>
               {apiKeyState === 'scope_denied' && connectionPolicy?.apiKey.reason && <p className={styles.hint}>{connectionPolicy.apiKey.reason}</p>}
               {draft.authentication?.kind === 'oauth' ? <><label className={styles.pair}>配置名称<input aria-label="配置名称" value={draft.name} onChange={event => setDraft({ ...draft, name: event.target.value })} /></label><label>绑定账号<select aria-label="绑定账号" value={draft.authentication.accountId} onChange={event => setDraft({ ...draft, authentication: { kind: 'oauth', accountId: event.target.value } })}><option value="">请选择已登录账号</option>{accountState.accounts.map(account => <option key={account.id} value={account.id}>{account.label} · {accountStates[account.state]}</option>)}</select></label><p className={styles.hint}>账号在“账号”页管理。保存不会立刻切换；启用后，下次启动和资源页才会使用这个账号。</p><CodeEditor label="OAuth 配置内容" format={activeFile?.format ?? 'json'} value={draft.files.settings ?? ''} onChange={value => setDraft({ ...draft, files: { ...draft.files, settings: value } })} /></> : draft.authentication?.kind === 'rebind_required' ? <p role="alert">跨设备导入的 OAuth 配置需要重新选择此设备上的账号。</p> : connectionForm}</div>}
             {(editor === 'native' || editor === 'common') && nativeEditor()}
@@ -1214,7 +1252,8 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
       {editor === 'profile' && draft?.id && workspace && !dirty && (workspace.binding?.profileId !== draft.id || workspace.binding.profileVersion !== draft.version) && <div className={styles.quickApply}><span>这份配置已保存，但尚未应用到当前范围。</span><button type="button" onClick={() => void applySaved(draft)} disabled={busy || enablingId !== null || workspace.probe.nativeWrites.state !== 'supported'}>启用</button></div>}
     </>}
     </div>
-    {supports.accounts && resourceView === 'accounts' && currentTool && <AccountsPanel key={currentTool} toolId={currentTool} state={accountState} />}
+    {supports.accounts && resourceView === 'accounts' && currentTool && <AccountsPanel key={currentTool} toolId={currentTool} state={accountState} onOpenProfile={(profileId, target) => void openAccountProfile(profileId, target)} onOpenUsage={queryId => void openAccountUsage(queryId)} />}
+    {accountUsageQuery && resourceView === 'accounts' && <QuotaEditor key={accountUsageQuery.id} profileId={accountUsageQuery.config.identity.profileId ?? ''} profileAccountId={accountUsageProfileAccountId} toolId={currentTool ?? undefined} query={accountUsageQuery} presets={quotaState.presets} onClose={() => setAccountUsageQuery(null)} onSaved={() => { setAccountUsageQuery(null); void quotaState.reload(); }} />}
     {supports.agents && resourceView === 'agents' && currentTool && <AgentsWorkspace key={JSON.stringify([currentTool, scope, projectPath, resourceEpoch, workspace?.effectiveContextId])} toolId={currentTool} scope={scope} projectPath={projectPath} contextId={workspace?.effectiveContextId ?? null} onDirtyChange={setAgentsDirty} />}
     {supports.plugins && resourceView === 'plugins' && currentTool && <PluginsWorkspace key={JSON.stringify([currentTool, scope, projectPath, resourceEpoch, workspace?.effectiveContextId])} toolId={currentTool} scope={scope} projectPath={projectPath} contextId={workspace?.effectiveContextId ?? null} />}
     {supports.mcp && resourceView === 'mcp' && currentTool && <McpWorkspace key={JSON.stringify([currentTool, scope, projectPath, resourceEpoch, workspace?.effectiveContextId])} toolId={currentTool} scope={scope} projectPath={projectPath} contextId={workspace?.effectiveContextId ?? null} onDirtyChange={setMcpDirty} />}

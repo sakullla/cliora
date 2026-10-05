@@ -23,6 +23,14 @@ export type ModelMappingControl = {
 };
 export type ToolUiAdapter = {
   id: string;
+  /** Presentation only: native capability remains the authority for actions. */
+  accounts?: {
+    description: string;
+    nativeDescription: string;
+    managedDescription: string;
+    defaultLabel: string;
+    methods?: Partial<Record<'browser' | 'device', string>>;
+  };
   configuration?: { Editor: ComponentType<ConfigurationEditorProps> };
   primaryRole?: string;
   plugins?: { installLabel?: string; projectTrust?: boolean; projectUpdate?: boolean };

@@ -4,3 +4,12 @@
 .nativeIdentity > span { color: var(--text-2); font-size: 12px; }
 .nativeRow > details { grid-column: 1 / -1; font-size: 12px; color: var(--text-2); }
 .nativeRow summary { cursor: pointer; }
+.management { display: grid; gap: 12px; }
+.management summary { cursor: pointer; width: fit-content; }
+.management[open] { padding-top: 8px; border-top: 1px solid var(--line); }
+.management > .impact { margin: 12px 0; }
+.impact { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
+.impact ul { display: grid; gap: 8px; list-style: none; padding: 0; margin: 0; }
+.impact li { display: grid; gap: 6px; }
+.impactHeader { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+.contextSummary { font-size: 12px; color: var(--text-2); }

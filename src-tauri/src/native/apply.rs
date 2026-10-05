@@ -804,6 +804,7 @@ fn check_apply_snapshot(
     profile: &RegisteredProfile,
     common: Option<&RegisteredCommon>,
 ) -> Result<(), String> {
+    crate::accounts::validate_reapply_transaction(tx,profile)?;
     if let profile::ProfileAuthentication::OAuth { account_id } = &profile.authentication {
         let context = crate::accounts::selection::current(&profile.tool).ok_or("OAuth 应用缺少上下文")?;
         let data: String = tx.query_row("SELECT data FROM auth_accounts WHERE id=?1", [account_id], |row|row.get(0)).map_err(|_|"账号已被移除")?;
@@ -872,6 +873,7 @@ pub fn apply_registered_profile(
     allow_takeover: bool,
 ) -> Result<ApplyOutcome, String> {
     let profile = profile::get_registered_profile(db, profile_id)?;
+    crate::accounts::validate_reapply_profile(db,&profile,scope,project)?;
     let _context = crate::accounts::selection::enter(crate::accounts::selection::for_profile(db, home, &profile)?);
     if profile.tool != tool {
         return Err("配置属于另一个 CLI".into());

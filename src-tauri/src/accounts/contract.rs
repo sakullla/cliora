@@ -111,3 +111,94 @@ pub struct NativeLoginSnapshot {
     pub logins: Vec<NativeLogin>,
     pub checked_at: i64,
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountImpactContextKind {
+    Current,
+    Retained,
+    Pending,
+    Unknown,
+    None,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountImpactContext {
+    pub id: String,
+    pub kind: AccountImpactContextKind,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountImpactProfile {
+    pub id: String,
+    pub name: String,
+    pub tool_id: String,
+    pub version: u64,
+    pub revision: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AccountReapplyRequest {
+    pub account_id: String,
+    pub expected_account_version: u32,
+    pub expected_context_id: String,
+    pub tool_id: String,
+    pub profile_id: String,
+    pub expected_profile_version: u64,
+    pub expected_profile_revision: String,
+    pub scope: crate::native::adapter::Scope,
+    pub project_path: Option<String>,
+    pub expected_binding_fingerprint: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountImpactScope {
+    pub binding_id: String,
+    pub tool_id: String,
+    pub profile_id: String,
+    pub profile_name: Option<String>,
+    pub profile_version: u64,
+    pub scope: Option<crate::native::adapter::Scope>,
+    pub project_path: Option<String>,
+    pub project_name: Option<String>,
+    pub context_id: Option<String>,
+    pub context_kind: AccountImpactContextKind,
+    pub active: bool,
+    pub needs_reapply: bool,
+    pub can_reapply: bool,
+    pub reason: Option<String>,
+    pub reapply_request: Option<AccountReapplyRequest>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountImpactUsageReference {
+    pub id: String,
+    pub label: String,
+    pub version: u32,
+    pub enabled: bool,
+    pub account_id: Option<String>,
+    pub context_id: Option<String>,
+    pub profile_id: Option<String>,
+    pub context_kind: AccountImpactContextKind,
+    pub needs_rebind: bool,
+}
+
+/// DB-only summary. Native roots, environment, arguments, file contents, query
+/// programs and credential references are deliberately absent.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountImpact {
+    pub account_id: String,
+    pub account_version: u32,
+    pub tool_id: String,
+    pub current_context_id: Option<String>,
+    pub contexts: Vec<AccountImpactContext>,
+    pub profiles: Vec<AccountImpactProfile>,
+    pub scopes: Vec<AccountImpactScope>,
+    pub usage_references: Vec<AccountImpactUsageReference>,
+}
