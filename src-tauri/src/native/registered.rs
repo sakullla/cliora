@@ -274,7 +274,12 @@ pub fn save_registered_text(
     };
     let parsed = crate::native::format::parse(kind, &contents)?;
     adapter.validate_draft(role, &parsed)?;
-    adapter.validate_documents(scope, &BTreeMap::from([(role.to_owned(), parsed)]))?;
+    let documents = BTreeMap::from([(role.to_owned(), parsed)]);
+    adapter.validate_documents(scope, &documents)?;
+    if let Some(port) = adapter.configuration() {
+        let issues = port.validate(&documents, &Default::default(), scope);
+        if !issues.is_empty() { return Err(serde_json::to_string(&issues).map_err(|error| error.to_string())?); }
+    }
     // Direct edits retain native text; no profile owns credential references.
     // Never invoke the credential-writing import pipeline here. The transaction
     // encrypts backups and restricts the replacement file's permissions instead.

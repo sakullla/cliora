@@ -2845,6 +2845,7 @@ mod tests {
             &db,
             &adapters::Registry::builtins(),
             profile::RegisteredProfile {
+                editing: None,
                 revision: String::new(),
                 id: "future-1".into(),
                 tool: "future_cli".into(),
@@ -2961,3 +2962,23 @@ mod tests {
 
 #[tauri::command]
 pub async fn open_external_url(app:AppHandle,url:String)->Result<(),ApiError> {blocking(move || crate::external::open(&app,&url).map_err(native_error)).await}
+
+#[tauri::command]
+pub fn describe_configuration(tool_id: String, scope: Scope) -> Result<Option<adapters::configuration::ConfigurationDescriptor>, ApiError> {
+    crate::native::configuration::describe(&adapters::Registry::builtins(), &tool_id, scope).map_err(native_error)
+}
+#[tauri::command]
+pub fn open_configuration_draft(app: AppHandle, state: State<'_, AppState>, profile: RegisteredProfile, scope: Scope, session_id: String) -> Result<crate::native::configuration::ConfigurationDraft, ApiError> {
+    state.with_database(&app, |database| {
+        let common = profile::get_registered_common(database, &profile.tool).map_err(native_error)?;
+        crate::native::configuration::open_with_common(&adapters::Registry::builtins(), profile, common, scope, session_id).map_err(native_error)
+    })
+}
+#[tauri::command]
+pub fn edit_configuration_draft(draft: crate::native::configuration::ConfigurationDraft, action: adapters::configuration::ConfigurationAction) -> Result<crate::native::configuration::ConfigurationDraft, ApiError> {
+    crate::native::configuration::edit(&adapters::Registry::builtins(), draft, action).map_err(native_error)
+}
+#[tauri::command]
+pub fn replace_configuration_text(draft: crate::native::configuration::ConfigurationDraft, files: std::collections::BTreeMap<String, String>) -> crate::native::configuration::ConfigurationDraft {
+    crate::native::configuration::replace_text(&adapters::Registry::builtins(), draft, files)
+}

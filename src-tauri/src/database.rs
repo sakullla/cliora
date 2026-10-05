@@ -23,7 +23,7 @@ impl Database {
     pub fn open(path: &Path) -> Result<Self, OpenError> {
         let mut connection = Connection::open(path)?;
         let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 18 {
+        if version > 19 {
             return Err(OpenError::UnsupportedVersion(version));
         }
         connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
@@ -420,6 +420,14 @@ impl Database {
             tx.commit()?;
         }
 
+        if version < 19 {
+            let tx = connection.transaction()?;
+            // Native profile JSON now carries versioned editing intents. Legacy
+            // values normalize at adapter-aware editing/import boundaries only.
+            tx.execute_batch("PRAGMA user_version = 19;")?;
+            tx.commit()?;
+        }
+
         Ok(Self {
             connection: Mutex::new(connection),
             read_path: (path != Path::new(":memory:") && !path.as_os_str().is_empty()).then(|| path.to_owned()),
@@ -652,7 +660,7 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
-            assert_eq!(version, 18);
+            assert_eq!(version, 19);
             let count: i64 = conn
                 .query_row("SELECT COUNT(*) FROM native_profiles", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;

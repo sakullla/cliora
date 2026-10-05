@@ -161,7 +161,7 @@ fn path_from_pointer(pointer: &str) -> Vec<String> {
         .collect()
 }
 
-fn flatten(value: &Value, path: &mut Vec<String>, output: &mut BTreeMap<String, Value>) {
+pub(crate) fn flatten(value: &Value, path: &mut Vec<String>, output: &mut BTreeMap<String, Value>) {
     match value {
         Value::Object(map) if !map.is_empty() => {
             for (key, value) in map {
@@ -299,10 +299,12 @@ pub fn desired_registered_documents(
         result.insert(role, effective.contents);
     }
     if let Some(connection) = &profile.connection {
+        if profile.editing.is_none() {
         for (role, overlay) in adapter.connection_documents_for_existing(connection, scope, &result)? {
             let existing = result.entry(role).or_insert_with(|| json!({}));
             let (merged, _) = format::resolve(existing, &overlay, &[])?;
             *existing = merged;
+        }
         }
     }
     if matches!(profile.authentication, profile::ProfileAuthentication::OAuth { .. }) {
@@ -314,6 +316,11 @@ pub fn desired_registered_documents(
         prune_empty_entries(document, adapter.empty_entry_collections(role));
     }
     adapter.validate_documents(scope, &result)?;
+    if profile.editing.is_some() {
+        let mut validated = profile.clone();
+        super::configuration::validate_documents(registry, &mut validated, &result, scope)?;
+        return adapter.configuration().ok_or("配置编辑能力暂不可用")?.managed_documents(result, profile, scope);
+    }
     Ok(result)
 }
 
@@ -427,10 +434,10 @@ fn apply_registered_validated_compared(
     let old = get_registered_binding(db, &profile.tool, &context_key)?;
     let old = if old.is_none() && context.is_none() { get_registered_binding(db,&profile.tool,key)?.filter(|binding|binding.context_id.is_none()) } else { old };
     let mut new_managed = Managed::new();
-    for (role, root) in desired {
+    for (role, root) in &desired {
         let mut fields = BTreeMap::new();
         flatten(&root, &mut Vec::new(), &mut fields);
-        new_managed.insert(role, fields);
+        new_managed.insert(role.clone(), fields);
     }
     for (role, fields) in &secrets.values {
         for (pointer, secret) in fields {
@@ -478,7 +485,28 @@ fn apply_registered_validated_compared(
         }
         matching_baselines.push((file_path.to_path_buf(), baseline.clone()));
         let original = format::parse(kind, &baseline)?;
-        if let Some(fields) = new_managed.get_mut(&role) { adapter.preserve_native_fields(&role, &original, fields, profile)?; }
+        let mut released = Vec::new();
+        if profile.editing.is_some() {
+            let empty = json!({});
+            let managed = adapter.configuration().ok_or("配置编辑能力暂不可用")?.managed_fields(&role, &original, desired.get(&role).unwrap_or(&empty), profile)?;
+            released = managed.released;
+            let fields = new_managed.entry(role.clone()).or_default();
+            *fields = managed.fields.into_iter().map(|(path, value)| (path, value.unwrap_or_else(|| json!({REMOVED_FIELD: true})))).collect();
+            // Credential policy remains service-owned and is applied after adapter semantics.
+            if let Some(values) = secrets.values.get(&role) {
+                for (path, value) in values { fields.insert(path.clone(), json!({SECRET_HASH: transaction::keyed_fingerprint(&integrity, value.as_bytes())})); }
+            }
+            if let Some(paths) = secrets.removals.get(&role) {
+                for path in paths { fields.insert(path.clone(), json!({REMOVED_FIELD: true})); }
+            }
+            for path in &released {
+                if secrets.values.get(&role).is_some_and(|values| values.keys().any(|key| key == path || key.starts_with(&format!("{path}/"))))
+                    || secrets.removals.get(&role).is_some_and(|values| values.iter().any(|key| key == path || key.starts_with(&format!("{path}/")))) {
+                    return Err("配置取消覆盖不能绕过共享凭据策略".into());
+                }
+
+            }
+        } else if let Some(fields) = new_managed.get_mut(&role) { adapter.preserve_native_fields(&role, &original, fields, profile)?; }
         let next_fields = new_managed.get(&role);
         let previous_fields = old_managed.and_then(|managed| managed.get(&role));
         let pointers: BTreeSet<_> = next_fields
@@ -489,18 +517,22 @@ fn apply_registered_validated_compared(
             .collect();
         let mut changes = Vec::new();
         for pointer in pointers {
+            let released_path = released.iter().any(|path| &pointer == path || pointer.starts_with(&format!("{path}/")));
             let path = path_from_pointer(&pointer);
             let current = path
                 .iter()
                 .try_fold(&original, |value, part| value.get(part));
             let old_value = previous_fields.and_then(|fields| fields.get(&pointer));
             let new_value = next_fields.and_then(|fields| fields.get(&pointer));
+            // A reset restores the effective inherited value, or removes an
+            // owned override to use the CLI default. Never delete an unowned native value.
+            if released_path && old_value.is_none() && new_value.is_none() { continue; }
             let native_new = secrets
                 .values
                 .get(&role)
                 .and_then(|fields| fields.get(&pointer))
                 .map(|value| Value::String(value.clone()));
-            let removed = secrets
+            let removed = new_value.is_some_and(|value| value.get(REMOVED_FIELD) == Some(&Value::Bool(true))) || secrets
                 .removals
                 .get(&role)
                 .is_some_and(|pointers| pointers.contains(&pointer));
@@ -775,6 +807,7 @@ mod tests {
     }
     fn profile(name: &str, model: &str) -> NativeProfile {
         NativeProfile {
+            editing: None,
             revision: String::new(),
             id: name.into(),
             tool: CliId::Codex,
@@ -1178,6 +1211,7 @@ mod tests {
 
     fn secret_profile(tool: CliId, name: &str, provider: &str, id: &str) -> NativeProfile {
         NativeProfile {
+            editing: None,
             revision: String::new(),
             id: name.into(),
             tool,
@@ -1480,6 +1514,7 @@ mod tests {
         )
         .unwrap();
         let profile = NativeProfile {
+            editing: None,
             revision: String::new(),
             id: "imported".into(),
             tool: CliId::ClaudeCode,
@@ -1589,6 +1624,7 @@ mod tests {
         let db = Database::open(&temp.path().join("app.db")).unwrap();
         let store = MemoryStore::default();
         let profile = NativeProfile {
+            editing: None,
             revision: String::new(),
             id: "native-login".into(),
             tool: CliId::ClaudeCode,
@@ -1691,6 +1727,7 @@ mod tests {
         let db = Database::open(&temp.path().join("app.db")).unwrap();
         let store = MemoryStore::default();
         let profile = NativeProfile {
+            editing: None,
             revision: String::new(),
             id: String::new(),
             tool: CliId::ClaudeCode,
@@ -1756,6 +1793,7 @@ mod tests {
 
     fn registered(tool: &str, provider: &str, model: &str, secret: Option<&str>, records: Vec<profile::ModelRecord>) -> RegisteredProfile {
         RegisteredProfile {
+            editing: None,
             id: format!("{tool}-save"),
             tool: tool.into(),
             name: tool.into(),

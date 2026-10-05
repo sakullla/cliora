@@ -5,6 +5,7 @@ pub mod claude;
 pub mod codebuddy;
 pub mod codex;
 mod contract;
+pub mod configuration;
 pub(crate) mod deepseek;
 pub(crate) mod grok;
 pub(crate) mod kimi_code;

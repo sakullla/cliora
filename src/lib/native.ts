@@ -1,3 +1,4 @@
+import type { ConfigurationAction, ConfigurationDescriptor, ConfigurationDraft } from '../types/configuration';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import type { AccountCapability, AuthAccount, NativeLoginSnapshot } from '../types/accounts';
 import type { AgentSnapshot, AgentRequest, AgentResult, PluginTarget, PluginRequest, PluginSnapshot, PluginResult } from '../types/resources';
@@ -209,3 +210,8 @@ export const native = {
   setCodexReasoningEffort: (text: string, effort: string | null) => command<string>('set_codex_reasoning_effort', { text, effort }),
   previewNativeProfile: (profile: NativeProfile, scope: Scope) => command<NativePreview>('preview_native_profile', { profile, scope }),
 };
+
+export const describeConfiguration = (toolId: string, scope: Scope) => command<ConfigurationDescriptor | null>('describe_configuration', { toolId, scope });
+export const openConfigurationDraft = (profile: RegisteredProfile, scope: Scope, sessionId: string) => command<ConfigurationDraft>('open_configuration_draft', { profile, scope, sessionId });
+export const editConfigurationDraft = (draft: ConfigurationDraft, action: ConfigurationAction) => command<ConfigurationDraft>('edit_configuration_draft', { draft, action });
+export const replaceConfigurationText = (draft: ConfigurationDraft, files: Record<string, string>) => command<ConfigurationDraft>('replace_configuration_text', { draft, files });

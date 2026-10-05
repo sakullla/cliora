@@ -281,6 +281,7 @@ mod tests {
         let saved = profile::save_profile(
             &db,
             profile::NativeProfile {
+                editing: None,
                 revision: String::new(),
                 id: String::new(),
                 tool: CliId::ClaudeCode,
@@ -357,6 +358,7 @@ mod tests {
         assert!(profile::save_profile(
             &raw_db,
             profile::NativeProfile {
+                editing: None,
                 revision: String::new(),
                 id: String::new(),
                 tool: CliId::ClaudeCode,
@@ -373,6 +375,7 @@ mod tests {
         )
         .is_err());
         let profile = profile::NativeProfile {
+            editing: None,
             revision: String::new(),
             id: String::new(),
             tool: CliId::ClaudeCode,
@@ -448,6 +451,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let db = crate::database::Database::open(&temp.path().join("app.db")).unwrap();
         let profile = profile::NativeProfile {
+            editing: None,
             revision: String::new(),
             id: String::new(),
             tool: CliId::Pi,
@@ -622,6 +626,7 @@ mod tests {
         let mut edited = connection;
         edited.model = "new-model".into();
         let profile = profile::NativeProfile {
+            editing: None,
             revision: String::new(),
             id: String::new(),
             tool: CliId::Codex,

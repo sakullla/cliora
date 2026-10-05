@@ -8,3 +8,5 @@ pub mod profile;
 pub mod transaction;
 
 pub mod registered;
+
+pub mod configuration;

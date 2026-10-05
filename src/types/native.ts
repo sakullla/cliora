@@ -1,9 +1,11 @@
+import type { ConfigurationDescriptor, EditingState } from './configuration';
 import type { CliId } from './domain';
 
 export type Scope = 'global' | 'project';
 export type AdapterFacet = { state: 'available' | 'planned' | 'supported' | 'unsupported'; reason: string };
 export type AdapterDescriptor = {
   id: string;
+  configuration?: ConfigurationDescriptor | null;
   name: string;
   interfaceFormats: InterfaceFormat[];
   projectModelOverride: boolean;
@@ -36,7 +38,7 @@ export type ModelRecord = { id: string; fields: Record<string, unknown> };
 export type ToolProbe = { tool: CliId; installations: Installation[]; selectedPath: string | null; nativeFiles: NativeFile[]; nativeWrites: Capability; interfaceFormats: InterfaceFormat[]; installUrl: string; upgradeHint: string; dependencies: { name: string; status: 'found' | 'missing' | 'outdated'; detail: string; helpUrl: string }[]; installCommand: string | null; upgradeCommand: string | null; nativeInstallCommand: string | null; npmInstallCommand: string | null; providerPresets: { id: string; label: string; baseUrl: string; interfaceFormat: InterfaceFormat; sourceUrl: string }[]; connectionPolicy: ConnectionPolicy };
 export type Connection = { providerId: string; interfaceFormat: InterfaceFormat | string; baseUrl: string; model: string; secretRef: string | null; authEnvVar: string | null; modelRecords?: ModelRecord[] };
 export type ProfileAuthentication = { kind: 'native' | 'api_key' | 'rebind_required' } | { kind: 'oauth'; accountId: string };
-export type NativeProfile = { authentication?: ProfileAuthentication; id: string; tool: CliId; name: string; version: number; revision?: string; inheritCommon: boolean; files: Record<string, string>; suppressed: Record<string, string[]>; connection: Connection | null; nativeCredentials: Record<string, Record<string, string>> };
+export type NativeProfile = { editing?: EditingState; authentication?: ProfileAuthentication; id: string; tool: CliId; name: string; version: number; revision?: string; inheritCommon: boolean; files: Record<string, string>; suppressed: Record<string, string[]>; connection: Connection | null; nativeCredentials: Record<string, Record<string, string>> };
 export type RegisteredProfile = Omit<NativeProfile, 'tool'> & { tool: string };
 export type CommonConfig = { tool: CliId; version: number; revision?: string; files: Record<string, string> };
 export type RegisteredCommon = Omit<CommonConfig, 'tool'> & { tool: string };
