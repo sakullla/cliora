@@ -1,0 +1,7 @@
+.editor, .fields, .editor fieldset { display: grid; gap: 12px; min-width: 0; }
+.editor summary { cursor: pointer; padding: 8px 0; }
+.editor fieldset { border: 1px solid var(--border); border-radius: 8px; padding: 10px; }
+.editor fieldset > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+.editor label, .editor fieldset > div > div { grid-column: 1 / -1; }
+.editor input:not([type='checkbox']), .editor select { min-width: 0; width: 100%; box-sizing: border-box; }
+.note { font-size: 12px; color: var(--muted); line-height: 1.5; margin: 0; }
