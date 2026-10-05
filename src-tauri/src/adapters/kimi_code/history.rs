@@ -266,6 +266,7 @@ pub fn parse_controlled(
                     // would let one agent stream silently overwrite another's
                     // token events.
                     session.usage.push(UsageEvent {
+                        request_count: Some(1),
                         id: format!("{}:usage-{usage_index}", wire_source.key()),
                         model: row.get("model").and_then(Value::as_str).map(str::to_owned),
                         timestamp: row.get("time").and_then(timestamp),

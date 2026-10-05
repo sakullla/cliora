@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
-/// One model call, split into the four buckets every CLI can be normalized to.
+/// One usage record, split into the four buckets every CLI can be normalized to.
 /// `input` includes cache only when the source log says so; callers record that
 /// separately on the stored event.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

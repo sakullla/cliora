@@ -32,6 +32,8 @@ const Message = memo(function Message({ item, toolId, toolName, raw, query, curr
 }) {
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState('');
+  const approximate = item.timestampSource !== 'native';
+  const timeSource = item.timestampSource === 'turn' ? '按轮次开始时间推断' : item.timestampSource === 'session' ? '会话参考时间' : '时间来源未确认';
   const user = item.role === 'user';
   const context = item.kind === 'project_context' ? '项目说明' : item.kind === 'environment_context' ? '运行环境' : null;
   const collapsedContext = context && !expanded && !raw && !query;
@@ -48,7 +50,7 @@ const Message = memo(function Message({ item, toolId, toolName, raw, query, curr
     <div className={styles.avatar}>{user ? '你' : <ToolIcon toolId={toolId} size={22} />}</div>
     <div className={styles.messageContent}>
       <header className={styles.messageHead}><strong>{context ?? role}</strong>
-        <time title={item.timestamp === null ? '时间未知' : new Date(item.timestamp).toLocaleString()}>{item.timestamp === null ? '时间未知' : new Date(item.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</time>
+        <time title={item.timestamp === null ? '时间未知' : `${new Date(item.timestamp).toLocaleString()}${approximate ? ` · ${timeSource}` : ''}`}>{item.timestamp === null ? '时间未知' : `${approximate ? '约 ' : ''}${new Date(item.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`}</time>
         <button type="button" aria-label={copied || '复制这条消息'} title="复制这条消息" onClick={() => void writeClipboard(item.text).then((ok) => setCopied(ok ? '已复制这条消息' : '复制失败，请手动选择'))}>
           <Icon name={copied === '已复制这条消息' ? 'check' : 'copy'} size={14} />{copied && <span role="status">{copied}</span>}
         </button>
@@ -136,6 +138,13 @@ export function SessionReader({ detail, toolName }: { detail: HistoryDetail; too
       </div>}
       {search && <small className={styles.findHint}>查找时显示消息原文 · Enter 下一条 / Shift + Enter 上一条</small>}
     </div>
+    <section className={styles.usageSummary} aria-label="会话 Token 用量">
+      {detail.totals?.usageRecords ? <>
+        <strong>总 Token {detail.totals.total.toLocaleString()}</strong>
+        <dl>{([['新输入', detail.totals.input], ['缓存读取', detail.totals.cacheRead], ['缓存写入', detail.totals.cacheWrite], ['输出', detail.totals.output]] as const).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value.toLocaleString()}</dd></div>)}</dl>
+        <small>{detail.totals.unknownRequestRecords ? `已知调用 ${detail.totals.requests.toLocaleString()} 次 · ${detail.totals.unknownRequestRecords.toLocaleString()} 条记录次数未知` : `${detail.totals.requests.toLocaleString()} 次调用`} · {detail.totals.usageRecords.toLocaleString()} 条用量记录</small>
+      </> : <span>暂无用量数据</span>}
+    </section>
     <div className={styles.messages}>
       {visible.map(({ item }, visibleIndex) => {
         const previous = visible[visibleIndex - 1]?.item;

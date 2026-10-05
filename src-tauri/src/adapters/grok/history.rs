@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
@@ -5,9 +6,9 @@ use serde_json::Value;
 
 use crate::history::usage;
 use crate::history::{
-    check_cancelled, read_jsonl_controlled, read_jsonl_filtered, source_fingerprint,
-    source_fingerprint_controlled, text_content, timestamp, valid_native_id, HistorySource,
-    ParsedSession, UsageEvent, MAX_SOURCES,
+    check_cancelled, read_jsonl_controlled, source_fingerprint, source_fingerprint_controlled,
+    text_content, timestamp, valid_native_id, HistorySource, MessageTimeSource, ParsedSession,
+    UsageEvent, MAX_SOURCES,
 };
 
 pub fn sources(home: &Path) -> Result<Vec<HistorySource>, String> {
@@ -68,30 +69,36 @@ fn sources_with_control(
             if !summary.is_file() || summary.is_symlink() {
                 continue;
             }
-            let checked = ["summary.json", "chat_history.jsonl", "usage.json", "events.jsonl"]
-                .iter()
-                .map(|name| {
-                    check_cancelled(cancelled)?;
-                    let file = path.join(name);
-                    if file.exists() {
-                        fingerprint(&file)
-                    } else {
-                        Ok("missing".into())
-                    }
-                })
-                .collect::<Result<Vec<_>, _>>();
+            let checked = [
+                "summary.json",
+                "chat_history.jsonl",
+                "usage.json",
+                "events.jsonl",
+            ]
+            .iter()
+            .map(|name| {
+                check_cancelled(cancelled)?;
+                let file = path.join(name);
+                if file.exists() {
+                    fingerprint(&file)
+                } else {
+                    Ok("missing".into())
+                }
+            })
+            .collect::<Result<Vec<_>, _>>();
             check_cancelled(cancelled)?;
             let native_id = path
                 .file_name()
                 .and_then(|value| value.to_str())
                 .filter(|id| valid_native_id(id))
                 .map(str::to_owned);
-            result.push(HistorySource { native_title: None,
+            result.push(HistorySource {
+                native_title: None,
                 path,
                 native_id,
                 fingerprint: checked
                     .as_ref()
-                    .map(|parts| parts.join("|"))
+                    .map(|parts| format!("grok-accuracy-v2|{}", parts.join("|")))
                     .unwrap_or_default(),
                 fingerprint_error: checked.err(),
             });
@@ -109,46 +116,28 @@ fn row_timestamp(row: &Value) -> Option<i64> {
         .find_map(|key| row.get(*key).and_then(timestamp))
 }
 
-/// Grok's chat rows usually have no clock. `events.jsonl` records each user turn.
-/// Prompts line up with those starts from the end, so a compacted transcript keeps the
-/// latest turns instead of the session's first hour.
+// Chat prompt_index and event turn_number are zero-based. usage.turnNumber is
+// one-based and is deliberately not used to assign message clocks.
+struct MessageStamp {
+    index: usize,
+    prompt: bool,
+    turn: Option<u64>,
+    synthetic: bool,
+}
+
 fn assign_missing_message_times(
     session: &mut ParsedSession,
     dir: &Path,
-    stamps: &[(usize, bool)],
+    stamps: &[MessageStamp],
     cancelled: &dyn Fn() -> bool,
 ) {
-    if stamps.is_empty() || session.messages.iter().all(|message| message.timestamp.is_some()) {
+    let path = dir.join("events.jsonl");
+    if !path.exists() {
         return;
     }
-    let turns = turn_starts(dir, cancelled);
-    let prompts = stamps.iter().filter(|(_, prompt)| *prompt).count();
-    let mut turn_index = if turns.is_empty() || prompts == 0 {
-        0
-    } else {
-        turns.len().saturating_sub(prompts)
-    };
-    let mut seen_prompt = false;
-    for &(index, prompt) in stamps {
-        if prompt {
-            if seen_prompt {
-                turn_index = turn_index.saturating_add(1);
-            }
-            seen_prompt = true;
-            if !turns.is_empty() {
-                turn_index = turn_index.min(turns.len() - 1);
-            }
-        }
-        if session.messages[index].timestamp.is_none() {
-            session.messages[index].timestamp = turns.get(turn_index).copied().or(session.started_at);
-        }
-    }
-}
-
-fn turn_starts(dir: &Path, cancelled: &dyn Fn() -> bool) -> Vec<i64> {
-    let path = dir.join("events.jsonl");
-    if !path.is_file() || path.is_symlink() {
-        return Vec::new();
+    if path.is_symlink() {
+        session.partial = true;
+        return;
     }
     let source = HistorySource {
         native_title: None,
@@ -157,23 +146,82 @@ fn turn_starts(dir: &Path, cancelled: &dyn Fn() -> bool) -> Vec<i64> {
         fingerprint: String::new(),
         fingerprint_error: None,
     };
-    let mut turns = Vec::new();
-    let _ = read_jsonl_filtered(
-        &source,
-        cancelled,
-        |prefix| !prefix.windows(b"turn_started".len()).any(|window| window == b"turn_started"),
-        |_line, row| {
-            if turns.len() >= 10_000 {
-                return;
+    let mut turns = BTreeMap::<u64, Option<i64>>::new();
+    let mut legacy = Vec::new();
+    let mut overflow = false;
+    let result = read_jsonl_controlled(&source, cancelled, |_line, row| {
+        session.updated_at = session.updated_at.max(
+            row.get("ts")
+                .or_else(|| row.get("timestamp"))
+                .and_then(timestamp),
+        );
+        if row.get("type").and_then(Value::as_str) != Some("turn_started") {
+            return;
+        }
+        if turns.len() + legacy.len() >= 10_000 {
+            overflow = true;
+            return;
+        }
+        let time = row
+            .get("ts")
+            .or_else(|| row.get("timestamp"))
+            .and_then(timestamp);
+        session.updated_at = session.updated_at.max(time);
+        if let Some(number) = row.get("turn_number").and_then(Value::as_u64) {
+            turns
+                .entry(number)
+                .and_modify(|previous| {
+                    if *previous != time {
+                        *previous = None;
+                        overflow = true;
+                    }
+                })
+                .or_insert(time);
+        } else {
+            legacy.push(time);
+        }
+    });
+    session.partial |= result.unwrap_or(true) || overflow;
+    let prompts = stamps.iter().filter(|stamp| stamp.prompt).count();
+    // Old transcripts are inferred only when every turn is present and ordered.
+    // Compacted transcripts and mixed explicit/legacy references stay unknown.
+    let ordered: Vec<_> = if legacy.is_empty() && turns.keys().copied().eq(0..turns.len() as u64) {
+        turns.values().copied().collect()
+    } else if turns.is_empty() {
+        legacy
+    } else {
+        Vec::new()
+    };
+    let infer = !session.partial
+        && prompts > 0
+        && ordered.len() == prompts
+        && stamps.iter().all(|stamp| stamp.turn.is_none());
+    let mut prompt_index = 0;
+    let mut current = None;
+    for stamp in stamps {
+        if stamp.synthetic {
+            continue;
+        }
+        if stamp.prompt {
+            current = stamp
+                .turn
+                .and_then(|turn| turns.get(&turn).copied().flatten());
+            if infer {
+                current = ordered[prompt_index];
             }
-            if row.get("type").and_then(Value::as_str) == Some("turn_started") {
-                if let Some(time) = row.get("ts").or_else(|| row.get("timestamp")).and_then(timestamp) {
-                    turns.push(time);
-                }
-            }
-        },
-    );
-    turns
+            prompt_index += 1;
+        }
+        let time = if let Some(turn) = stamp.turn {
+            turns.get(&turn).copied().flatten()
+        } else {
+            current
+        };
+        let message = &mut session.messages[stamp.index];
+        if message.timestamp.is_none() && time.is_some() {
+            message.timestamp = time;
+            message.timestamp_source = MessageTimeSource::Turn;
+        }
+    }
 }
 
 fn read_json(path: &Path) -> Result<Value, String> {
@@ -185,41 +233,261 @@ fn read_json(path: &Path) -> Result<Value, String> {
         .map_err(|_| "Grok 会话资料格式无法识别".into())
 }
 
-fn token(value: &Value, key: &str) -> Option<u64> {
-    usage::field(value, key)
+fn counts(values: &Value) -> Option<usage::TokenCounts> {
+    // Missing/invalid primary counters cannot establish a complete subtotal.
+    let input = values.get("inputTokens").and_then(Value::as_u64)?;
+    let output = values.get("outputTokens").and_then(Value::as_u64)?;
+    let read = values
+        .get("cachedReadTokens")
+        .map(Value::as_u64)
+        .unwrap_or(Some(0))?;
+    let write = values
+        .get("cacheCreationTokens")
+        .map(Value::as_u64)
+        .unwrap_or(Some(0))?;
+    if read > input || write > input - read {
+        return None;
+    }
+    Some(usage::TokenCounts {
+        input: input - read - write,
+        output,
+        read,
+        write,
+    })
 }
 
-fn push_turn(
-    session: &mut ParsedSession,
+fn push_usage(
+    events: &mut Vec<UsageEvent>,
     id: String,
     model: Option<String>,
     time: Option<i64>,
     values: &Value,
+) -> bool {
+    let Some(counts) = counts(values) else {
+        return false;
+    };
+    let request_count = values
+        .get("modelCalls")
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0);
+    if usage::active(counts) || request_count.is_some() {
+        events.push(UsageEvent {
+            id,
+            model,
+            timestamp: time,
+            request_count,
+            input: Some(counts.input),
+            output: Some(counts.output),
+            cache_read: Some(counts.read),
+            cache_write: Some(counts.write),
+            input_includes_cache: false,
+        });
+    }
+    true
+}
+
+fn sum(events: &[UsageEvent]) -> [u64; 4] {
+    let mut total = [0u64; 4];
+    for event in events {
+        for (slot, value) in total.iter_mut().zip([
+            event.input,
+            event.cache_read,
+            event.cache_write,
+            event.output,
+        ]) {
+            *slot = slot.saturating_add(value.unwrap_or(0));
+        }
+    }
+    total
+}
+
+// Only a monotonic difference is knowable. Never assign a missing model or
+// session-level remainder to the current model or the session's last active day.
+fn reconcile(
+    events: &mut Vec<UsageEvent>,
+    total: &Value,
+    id: String,
+    time: Option<i64>,
+    partial: &mut bool,
 ) {
-    // Grok's inputTokens already include cache. reasoningTokens are already inside outputTokens.
-    // `usage.json` turns partition the session; summing `updates.jsonl` turn_completed snapshots would recount.
-    let Some(counts) = usage::from_optional(
-        token(values, "inputTokens"),
-        token(values, "outputTokens"),
-        token(values, "cachedReadTokens"),
-        token(values, "cacheCreationTokens"),
-    ) else {
+    let Some(counts) = counts(total) else {
+        if total.get("inputTokens").is_some() || total.get("outputTokens").is_some() {
+            *partial = true;
+        }
         return;
     };
-    let counts = usage::clamp_cache_inside_input(counts);
-    if !usage::active(counts) {
+    let expected = [counts.input, counts.read, counts.write, counts.output];
+    let actual = sum(events);
+    if actual
+        .iter()
+        .zip(expected)
+        .any(|(actual, total)| *actual > total)
+    {
+        *partial = true;
         return;
     }
-    session.usage.push(UsageEvent {
+    // A single missing count can be recovered from a complete native subtotal;
+    // multiple missing model counts cannot be distributed without guessing.
+    if actual == expected {
+        let unknown: Vec<_> = events
+            .iter()
+            .enumerate()
+            .filter(|(_, event)| event.request_count.is_none())
+            .map(|(index, _)| index)
+            .collect();
+        if unknown.len() == 1 {
+            let known = events
+                .iter()
+                .filter_map(|event| event.request_count)
+                .sum::<u64>();
+            if let Some(remaining) = total
+                .get("modelCalls")
+                .and_then(Value::as_u64)
+                .and_then(|count| count.checked_sub(known))
+                .filter(|count| *count > 0)
+            {
+                events[unknown[0]].request_count = Some(remaining);
+            }
+        }
+    }
+    let known_calls = events
+        .iter()
+        .try_fold(0u64, |sum, event| sum.checked_add(event.request_count?));
+    let total_calls = total.get("modelCalls").and_then(Value::as_u64);
+    let remaining_calls = total_calls
+        .zip(known_calls)
+        .and_then(|(total, known)| total.checked_sub(known));
+    if total_calls
+        .zip(known_calls)
+        .is_some_and(|(total, known)| total < known)
+    {
+        *partial = true;
+    }
+    if expected == actual && remaining_calls.unwrap_or(0) == 0 {
+        return;
+    }
+    *partial = true;
+    events.push(UsageEvent {
         id,
-        model,
+        model: None,
         timestamp: time,
-        input: Some(counts.input),
-        output: Some(counts.output),
-        cache_read: Some(counts.read),
-        cache_write: Some(counts.write),
-        input_includes_cache: true,
+        request_count: remaining_calls.filter(|value| *value > 0),
+        input: Some(expected[0] - actual[0]),
+        cache_read: Some(expected[1] - actual[1]),
+        cache_write: Some(expected[2] - actual[2]),
+        output: Some(expected[3] - actual[3]),
+        input_includes_cache: false,
     });
+}
+
+fn parse_usage(
+    session: &mut ParsedSession,
+    source: &HistorySource,
+    data: &Value,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(), String> {
+    let total = data.get("session").unwrap_or(&Value::Null);
+    session.updated_at = session
+        .updated_at
+        .max(data.get("updatedAt").and_then(timestamp));
+    let mut snapshots = BTreeMap::<String, Vec<UsageEvent>>::new();
+    if let Some(turns) = data
+        .get("turns")
+        .and_then(Value::as_array)
+        .filter(|turns| !turns.is_empty())
+    {
+        for (index, turn) in turns.iter().enumerate() {
+            check_cancelled(cancelled)?;
+            let time = turn.get("endedAt").and_then(timestamp);
+            session.updated_at = session.updated_at.max(time);
+            let key = turn
+                .get("turnNumber")
+                .and_then(Value::as_u64)
+                .map(|number| format!("turn-{number}"))
+                .unwrap_or_else(|| format!("row-{index}"));
+            let id = format!("{}:{key}", source.key());
+            let mut events = Vec::new();
+            if let Some(models) = turn
+                .get("modelUsage")
+                .and_then(Value::as_object)
+                .filter(|models| !models.is_empty())
+            {
+                for (model, values) in models {
+                    session.partial |= !push_usage(
+                        &mut events,
+                        format!("{id}:{model}"),
+                        Some(model.clone()),
+                        time,
+                        values,
+                    );
+                }
+                reconcile(
+                    &mut events,
+                    turn,
+                    format!("{id}:remainder"),
+                    time,
+                    &mut session.partial,
+                );
+            } else {
+                let model = turn
+                    .get("primaryModelId")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                session.partial |= !push_usage(&mut events, id.clone(), model, time, turn);
+            }
+            if let Some(previous) = snapshots.get(&key) {
+                // Repeated snapshots represent the same turn. Keep a monotonic
+                // terminal snapshot; incomparable snapshots retain reliable data.
+                if sum(&events)
+                    .iter()
+                    .zip(sum(previous))
+                    .any(|(next, old)| *next < old)
+                {
+                    session.partial = true;
+                    continue;
+                }
+            }
+            snapshots.insert(key, events);
+        }
+        session.usage = snapshots.into_values().flatten().collect();
+        reconcile(
+            &mut session.usage,
+            total,
+            format!("{}:session-remainder", source.key()),
+            None,
+            &mut session.partial,
+        );
+    } else if let Some(models) = total
+        .get("modelUsage")
+        .and_then(Value::as_object)
+        .filter(|models| !models.is_empty())
+    {
+        for (model, values) in models {
+            session.partial |= !push_usage(
+                &mut session.usage,
+                format!("{}:model-{model}", source.key()),
+                Some(model.clone()),
+                None,
+                values,
+            );
+        }
+        reconcile(
+            &mut session.usage,
+            total,
+            format!("{}:session-remainder", source.key()),
+            None,
+            &mut session.partial,
+        );
+    } else if total.is_object() {
+        session.partial |= !push_usage(
+            &mut session.usage,
+            format!("{}:session-total", source.key()),
+            None,
+            None,
+            total,
+        );
+    }
+    Ok(())
 }
 
 pub fn parse(source: &HistorySource) -> Result<ParsedSession, String> {
@@ -264,7 +532,8 @@ pub fn parse_controlled(
     let chat = source.path.join("chat_history.jsonl");
     let mut stamps = Vec::new();
     if chat.is_file() && !chat.is_symlink() {
-        let chat_source = HistorySource { native_title: None,
+        let chat_source = HistorySource {
+            native_title: None,
             path: chat,
             native_id: None,
             fingerprint: String::new(),
@@ -275,16 +544,19 @@ pub fn parse_controlled(
             if role == "user" || role == "assistant" {
                 let text = row.get("content").map(text_content).unwrap_or_default();
                 let before = session.messages.len();
-                session.add_message(
-                    format!("line-{line}"),
-                    role,
-                    text,
-                    row_timestamp(&row),
-                );
+                session.add_message(format!("line-{line}"), role, text, row_timestamp(&row));
                 if session.messages.len() > before {
                     let prompt = role == "user"
-                        && row.get("synthetic_reason").and_then(Value::as_str).is_none();
-                    stamps.push((session.messages.len() - 1, prompt));
+                        && row
+                            .get("synthetic_reason")
+                            .and_then(Value::as_str)
+                            .is_none();
+                    stamps.push(MessageStamp {
+                        index: session.messages.len() - 1,
+                        prompt,
+                        turn: row.get("prompt_index").and_then(Value::as_u64),
+                        synthetic: row.get("synthetic_reason").is_some(),
+                    });
                 }
             }
         }) {
@@ -299,78 +571,7 @@ pub fn parse_controlled(
     check_cancelled(cancelled)?;
     if usage_path.is_file() {
         match read_json(&usage_path) {
-            Ok(usage) => {
-                let total = usage.get("session").unwrap_or(&Value::Null);
-                let turns = usage
-                    .get("turns")
-                    .and_then(Value::as_array)
-                    .filter(|turns| !turns.is_empty());
-                if let Some(turns) = turns {
-                    for (index, turn) in turns.iter().enumerate() {
-                        check_cancelled(cancelled)?;
-                        let time = turn.get("endedAt").and_then(timestamp);
-                        let turn_id = turn
-                            .get("turnNumber")
-                            .and_then(Value::as_u64)
-                            .unwrap_or(index as u64);
-                        if let Some(models) = turn
-                            .get("modelUsage")
-                            .and_then(Value::as_object)
-                            .filter(|models| !models.is_empty())
-                        {
-                            for (model, values) in models {
-                                check_cancelled(cancelled)?;
-                                push_turn(
-                                    &mut session,
-                                    format!("{}:turn-{turn_id}:{model}", source.key()),
-                                    Some(model.clone()),
-                                    time,
-                                    values,
-                                );
-                            }
-                        } else {
-                            let model = turn
-                                .get("primaryModelId")
-                                .and_then(Value::as_str)
-                                .map(str::to_owned)
-                                .or_else(|| session.model.clone());
-                            push_turn(
-                                &mut session,
-                                format!("{}:turn-{turn_id}", source.key()),
-                                model,
-                                time,
-                                turn,
-                            );
-                        }
-                    }
-                } else if let Some(models) = total
-                    .get("modelUsage")
-                    .and_then(Value::as_object)
-                    .filter(|models| !models.is_empty())
-                {
-                    let updated = session.updated_at;
-                    for (model, values) in models {
-                        check_cancelled(cancelled)?;
-                        push_turn(
-                            &mut session,
-                            format!("{}:model-{model}", source.key()),
-                            Some(model.clone()),
-                            updated,
-                            values,
-                        );
-                    }
-                } else if total.is_object() {
-                    let model = session.model.clone();
-                    let updated = session.updated_at;
-                    push_turn(
-                        &mut session,
-                        format!("{}:session-total", source.key()),
-                        model,
-                        updated,
-                        total,
-                    );
-                }
-            }
+            Ok(usage) => parse_usage(&mut session, source, &usage, cancelled)?,
             Err(_) => session.partial = true,
         }
     }

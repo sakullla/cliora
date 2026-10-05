@@ -179,16 +179,17 @@ fn five_versioned_sources_extract_visible_messages_and_distinct_usage() {
     })
     .unwrap();
     assert_eq!(grok.messages.len(), 2);
-    assert_eq!(grok.messages[0].timestamp, grok.started_at);
-    assert_eq!(grok.messages[1].timestamp, grok.started_at);
+    assert_eq!(grok.messages[0].timestamp, None);
+    assert_eq!(grok.messages[1].timestamp, None);
     assert!(grok.started_at.is_some());
     assert_eq!(
         grok.usage.len(),
         1,
         "model usage replaces, rather than adds to, session total"
     );
-    assert_eq!(grok.usage[0].input, Some(40));
-    assert!(grok.usage[0].input_includes_cache);
+    assert_eq!(grok.usage[0].input, Some(18));
+    assert!(!grok.usage[0].input_includes_cache);
+    assert_eq!(grok.usage[0].request_count, Some(7));
 
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join(".local/share/opencode");
@@ -479,11 +480,14 @@ fn grok_chat_without_row_times_follows_turn_starts() {
         fingerprint_error: None,
     }).unwrap();
     assert_eq!(parsed.messages.len(), 6);
-    let first = parsed.messages[0].timestamp;
+    let first = parsed.messages[1].timestamp;
     let second = parsed.messages[4].timestamp;
     assert!(first.is_some() && second.is_some() && first < second);
     assert_eq!(parsed.messages[1].timestamp, first);
-    assert_eq!(parsed.messages[3].timestamp, first);
+    assert_eq!(parsed.messages[0].timestamp, None);
+    assert_eq!(parsed.messages[3].timestamp, None);
+    assert_eq!(parsed.messages[1].timestamp_source, MessageTimeSource::Turn);
+    assert_eq!(parsed.messages[2].timestamp_source, MessageTimeSource::Native);
     assert_ne!(parsed.messages[2].timestamp, first);
     assert_eq!(parsed.messages[5].timestamp, second);
     assert_ne!(first, parsed.started_at);
@@ -507,7 +511,7 @@ fn grok_chat_without_row_times_follows_turn_starts() {
         fingerprint: "fixture".into(),
         fingerprint_error: None,
     }).unwrap();
-    assert!(parsed.messages.iter().all(|message| message.timestamp == parsed.messages[0].timestamp));
+    assert!(parsed.messages.iter().all(|message| message.timestamp.is_none()));
     assert_ne!(parsed.messages[0].timestamp, parsed.started_at);
     assert_ne!(parsed.messages[0].timestamp, first);
 }
@@ -633,7 +637,7 @@ fn same_length_and_restored_mtime_still_refreshes_changed_content() {
 /// `counts` is (input, output, cache read, cache write).
 fn event(id: &str, model: Option<&str>, timestamp: i64, counts: (u64, u64, Option<u64>, Option<u64>), includes_cache: bool) -> UsageEvent {
     let (input, output, read, write) = counts;
-    UsageEvent { id: id.into(), model: model.map(str::to_owned), timestamp: Some(timestamp), input: Some(input), output: Some(output), cache_read: read, cache_write: write, input_includes_cache: includes_cache }
+    UsageEvent { request_count: Some(1), id: id.into(), model: model.map(str::to_owned), timestamp: Some(timestamp), input: Some(input), output: Some(output), cache_read: read, cache_write: write, input_includes_cache: includes_cache }
 }
 
 /// Stores a synthetic session through the same path a scan uses.
@@ -673,7 +677,7 @@ fn report_counts_disjoint_tokens_groups_models_and_filters() {
     // 150 prompt tokens of which 60 were cache reads: 90 fresh + 60 cached + 30 output.
     assert_eq!((report.totals.input, report.totals.cache_read, report.totals.cache_write, report.totals.output), (90, 60, 0, 30));
     assert_eq!(report.totals.total, 180);
-    assert_eq!((report.totals.requests, report.totals.sessions), (2, 1));
+    assert_eq!((report.totals.requests, report.totals.sessions, report.totals.unknown_request_records), (0, 1, 2));
     assert!(report.totals.cost.is_some());
     assert_eq!(report.totals.unpriced_tokens, 0);
     assert_eq!(report.by_model.len(), 1);
@@ -721,7 +725,7 @@ fn report_dates_follow_each_call_and_compare_the_same_elapsed_window() {
     assert!((published.totals.cost.unwrap() - 0.00246).abs() < 1e-9);
     assert!(published.price_sources.iter().any(|source| source.contains("OpenAI 公开价")));
     assert_eq!(published.bucket, "hour");
-    assert_eq!(published.timeline.iter().map(|bucket| bucket.totals.requests).sum::<u64>(), 2);
+    assert_eq!(published.timeline.iter().map(|bucket| bucket.totals.usage_records).sum::<u64>(), 2);
     let previous = published.previous.as_ref().unwrap();
     assert_eq!((previous.from, previous.to), (FIXTURE_DAY - DAY, FIXTURE_DAY));
     assert_eq!(previous.totals.requests, 0);
@@ -746,15 +750,16 @@ fn report_dates_follow_each_call_and_compare_the_same_elapsed_window() {
     assert_eq!(priced.price_sources.len(), 1);
     let next_day = usage_report(&db, &HistoryFilter { from_ms: Some(FIXTURE_DAY + DAY), to_ms: Some(FIXTURE_DAY + 2 * DAY), ..filter.clone() }).unwrap();
     assert_eq!(next_day.totals.requests, 0);
-    assert_eq!(next_day.previous.unwrap().totals.requests, 2, "the previous day holds the calls");
+    assert_eq!(next_day.previous.unwrap().totals.usage_records, 2, "the previous day holds the calls");
 
     // A long session last touched today must not move yesterday's calls onto today.
     store_events(&db, "codex", "long-session", Some("gpt-6-astra"), vec![
-        event("old", None, FIXTURE_DAY - DAY + 5_000, (999, 1, Some(0), Some(0)), true),
-        event("today", None, FIXTURE_DAY + 5_000, (10, 1, Some(0), Some(0)), true),
+        event("old", Some("gpt-6-astra"), FIXTURE_DAY - DAY + 5_000, (999, 1, Some(0), Some(0)), true),
+        event("today", Some("gpt-6-astra"), FIXTURE_DAY + 5_000, (10, 1, Some(0), Some(0)), true),
     ]);
     let today = usage_report(&db, &filter).unwrap();
-    assert_eq!(today.totals.requests, 3);
+    assert_eq!(today.totals.requests, 1);
+    assert_eq!(today.totals.unknown_request_records, 2);
     assert_eq!(today.totals.input, 90 + 10);
     assert_eq!(today.previous.unwrap().totals.input, 999);
     let sessions = list(&db, &HistoryFilter { from_ms: Some(FIXTURE_DAY - DAY), to_ms: Some(FIXTURE_DAY), ..Default::default() }).unwrap();
@@ -783,7 +788,7 @@ fn report_drops_placeholders_dedupes_copied_calls_and_keeps_known_cache() {
     assert!(!report.top_sessions.is_empty());
 
     store_events(&db, "open_code", "pickle", Some("{\"id\":\"big-pickle\",\"providerID\":\"opencode\"}"), vec![
-        event("msg_open", None, FIXTURE_DAY + 4000, (4, 1, Some(9), Some(2)), false),
+        event("msg_open", Some("{\"id\":\"big-pickle\",\"providerID\":\"opencode\"}"), FIXTURE_DAY + 4000, (4, 1, Some(9), Some(2)), false),
     ]);
     let open = usage_report(&db, &HistoryFilter { tool_id: Some("open_code".into()), ..Default::default() }).unwrap();
     assert!(open.models.iter().any(|model| model == "big-pickle"));
@@ -1092,4 +1097,173 @@ fn native_titles_override_first_prompt_and_title_edits_invalidate_only_the_match
         let parsed = if tool == "claude" { claude::parse(&source) } else { pi::parse(&source) }.unwrap();
         assert_eq!(parsed.title, expected);
     }
+}
+
+fn grok_fixture(dir: &Path, data: serde_json::Value) -> HistorySource {
+    fs::create_dir_all(dir).unwrap();
+    fs::write(dir.join("summary.json"), r#"{"info":{"id":"accuracy-fixture"},"current_model_id":"current-model","updated_at":"2026-09-30T00:00:00Z"}"#).unwrap();
+    fs::write(dir.join("chat_history.jsonl"), "{\"type\":\"user\",\"content\":\"Fixture question\"}\n").unwrap();
+    fs::write(dir.join("usage.json"), data.to_string()).unwrap();
+    HistorySource { native_title: None, path: dir.into(), native_id: None, fingerprint: "fixture".into(), fingerprint_error: None }
+}
+
+#[test]
+fn grok_calls_reconcile_missing_details_duplicates_and_unknown_dates() {
+    let temp = tempfile::tempdir().unwrap();
+    let model = serde_json::json!({"inputTokens":100,"outputTokens":20,"cachedReadTokens":40,"cacheCreationTokens":10,"reasoningTokens":15,"modelCalls":5});
+    let turn = serde_json::json!({"turnNumber":4,"endedAt":"2026-09-29T08:00:00Z","inputTokens":120,"outputTokens":30,"cachedReadTokens":40,"cacheCreationTokens":10,"modelCalls":7,"modelUsage":{"model-a":model,"broken":{"inputTokens":"invalid"}}});
+    let source = grok_fixture(temp.path(), serde_json::json!({
+        "session":{"inputTokens":150,"outputTokens":40,"cachedReadTokens":40,"cacheCreationTokens":10,"modelCalls":10},
+        "turns":[turn.clone(),turn]
+    }));
+    let parsed = grok::parse(&source).unwrap();
+    assert!(parsed.partial);
+    assert_eq!(parsed.usage.len(), 3);
+    assert_eq!(parsed.usage.iter().filter_map(|item| item.request_count).sum::<u64>(), 10);
+    assert!(parsed.usage.iter().any(|item| item.model.is_none() && item.timestamp.is_none()));
+    let db = Database::open(&temp.path().join("index.db")).unwrap();
+    db.with_connection(|conn| store_session(conn, "grok", &source, &parsed, &HashMap::new())).unwrap();
+    let all = usage_report(&db, &HistoryFilter::default()).unwrap();
+    assert_eq!((all.totals.input, all.totals.cache_read, all.totals.cache_write, all.totals.output, all.totals.total), (100,40,10,40,190));
+    assert_eq!((all.totals.requests, all.totals.usage_records, all.totals.unknown_request_records), (10,3,0));
+    assert_eq!(all.by_model.iter().map(|group| group.totals.total).sum::<u64>(), 190);
+    assert!(all.by_model.iter().any(|group| group.model.is_none()));
+    assert!(!all.models.contains(&"current-model".into()));
+    let id = stable_id("grok", &source.key());
+    assert_eq!(detail(&db, &id).unwrap().totals, all.totals);
+    let day = usage_report(&db, &HistoryFilter { from_ms: Some(FIXTURE_DAY), to_ms: Some(FIXTURE_DAY + DAY), ..Default::default() }).unwrap();
+    assert_eq!((day.totals.total, day.totals.requests, day.untimed_requests), (150,7,1));
+    assert_eq!(day.timeline.iter().map(|bucket| bucket.totals.total).sum::<u64>(), 150);
+}
+
+#[test]
+fn grok_unknown_calls_recover_only_unambiguous_native_subtotals() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = grok_fixture(temp.path(), serde_json::json!({"session":{"inputTokens":50,"outputTokens":10,"modelCalls":8,"modelUsage":{"a":{"inputTokens":50,"outputTokens":10}}}}));
+    let parsed = grok::parse(&source).unwrap();
+    assert_eq!(parsed.usage[0].request_count, Some(8));
+    assert_eq!(parsed.usage[0].timestamp, None);
+    let source = grok_fixture(temp.path(), serde_json::json!({"session":{"inputTokens":50,"outputTokens":10,"modelUsage":{"a":{"inputTokens":50,"outputTokens":10}}}}));
+    let parsed = grok::parse(&source).unwrap();
+    assert_eq!(parsed.usage[0].request_count, None);
+    let db = Database::open(&temp.path().join("index.db")).unwrap();
+    db.with_connection(|conn| store_session(conn, "grok", &source, &parsed, &HashMap::new())).unwrap();
+    let report = usage_report(&db, &HistoryFilter::default()).unwrap();
+    assert_eq!((report.totals.total,report.totals.requests,report.totals.unknown_request_records), (60,0,1));
+    // Contradictory parent counters cannot subtract valid detail or claim completeness.
+    let source = grok_fixture(temp.path(), serde_json::json!({"session":{"inputTokens":10,"outputTokens":1,"modelUsage":{"a":{"inputTokens":50,"outputTokens":10}}}}));
+    let parsed = grok::parse(&source).unwrap();
+    assert!(parsed.partial);
+    assert_eq!(parsed.usage.len(), 1);
+    assert_eq!(parsed.usage[0].input, Some(50));
+    let source = grok_fixture(temp.path(), serde_json::json!({"session":{"inputTokens":"bad","outputTokens":10,"modelUsage":{"a":{"inputTokens":50,"outputTokens":10}}}}));
+    assert!(grok::parse(&source).unwrap().partial);
+}
+
+#[test]
+fn grok_explicit_prompt_indices_survive_compaction_and_bad_events() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = grok_fixture(temp.path(), serde_json::json!({}));
+    fs::write(temp.path().join("chat_history.jsonl"), [
+        r#"{"type":"user","synthetic_reason":"compaction","prompt_index":4,"content":"context"}"#,
+        r#"{"type":"user","prompt_index":4,"content":"question"}"#,
+        r#"{"type":"assistant","prompt_index":4,"content":"answer"}"#,
+        r#"{"type":"user","prompt_index":9,"content":"missing turn"}"#,
+        r#"{"type":"assistant","content":"unknown answer"}"#,
+        r#"{"type":"assistant","prompt_index":4,"timestamp":"2026-09-29T10:00:00Z","content":"native clock"}"#,
+    ].join("\n")).unwrap();
+    fs::write(temp.path().join("events.jsonl"), [
+        r#"{"type":"turn_started","turn_number":0,"ts":"2026-09-29T08:00:00Z"}"#,
+        r#"{"type":"turn_started","turn_number":4,"ts":"2026-09-29T09:00:00Z"}"#,
+        r#"{"type":"turn_started","turn_number":4,"ts":"2026-09-29T09:00:00Z"}"#,
+        "broken row",
+    ].join("\n")).unwrap();
+    let parsed = grok::parse(&source).unwrap();
+    assert!(parsed.partial);
+    assert_eq!(parsed.messages[0].timestamp, None);
+    assert_eq!(parsed.messages[1].timestamp, Some(FIXTURE_DAY + 3_600_000));
+    assert_eq!(parsed.messages[2].timestamp_source, MessageTimeSource::Turn);
+    assert_eq!(parsed.messages[3].timestamp, None);
+    assert_eq!(parsed.messages[4].timestamp, None);
+    assert_eq!(parsed.messages[5].timestamp_source, MessageTimeSource::Native);
+}
+
+#[test]
+fn report_search_favorites_catalog_previous_and_untimed_share_filters() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("index.db")).unwrap();
+    let mut untimed = event("untimed", Some("included"), 0, (5,1,None,None), false);
+    untimed.timestamp = None;
+    let id = store_events(&db, "grok", "100%_literal", None, vec![
+        event("today", Some("included"), FIXTURE_DAY + 1000, (10,2,None,None), false),
+        event("yesterday", Some("included"), FIXTURE_DAY - DAY + 1000, (3,1,None,None), false), untimed,
+    ]);
+    set_favorite(&db, &id, true).unwrap();
+    store_events(&db, "grok", "100XXliteral", None, vec![event("excluded", Some("excluded"), FIXTURE_DAY + 1000, (999,999,None,None), false)]);
+    let filter = HistoryFilter { search: Some("100%_".into()), favorite_only: true, from_ms: Some(FIXTURE_DAY), to_ms: Some(FIXTURE_DAY+DAY), ..Default::default() };
+    assert_eq!(list(&db, &filter).unwrap().len(), 1);
+    let report = usage_report(&db, &filter).unwrap();
+    assert_eq!(report.totals.total, 12);
+    assert_eq!(report.previous.unwrap().totals.total, 4);
+    assert_eq!(report.untimed_requests, 1);
+    assert_eq!(report.models, vec!["included"]);
+    set_favorite(&db, &id, false).unwrap();
+    assert_eq!(usage_report(&db, &filter).unwrap().totals.total, 0);
+}
+
+#[test]
+fn v17_history_upgrade_rereads_unchanged_sources_and_preserves_associations() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join(".grok/sessions/project/session");
+    fs::create_dir_all(&root).unwrap();
+    for name in ["summary.json", "chat_history.jsonl", "usage.json"] {
+        fs::copy(fixtures().join("grok-1.0").join(name), root.join(name)).unwrap();
+    }
+    let db_path = temp.path().join("index.db");
+    let db = Database::open(&db_path).unwrap();
+    let registry = Registry::with_adapters(vec![&GROK]).unwrap();
+    refresh(&db, &registry, temp.path()).unwrap();
+    let id = list(&db, &HistoryFilter::default()).unwrap()[0].id.clone();
+    set_favorite(&db, &id, true).unwrap();
+    db.with_connection(|conn| {
+        conn.execute_batch("ALTER TABLE history_usage DROP COLUMN request_count;
+            UPDATE history_sessions SET project_id='linked-project', usage_json='[]';
+            PRAGMA user_version = 17;").map_err(|error| error.to_string())
+    }).unwrap();
+    drop(db);
+    let db = Database::open(&db_path).unwrap();
+    let old = detail(&db, &id).unwrap();
+    assert_eq!(old.totals.requests, 0);
+    assert_eq!(old.totals.unknown_request_records, 1);
+    refresh(&db, &registry, temp.path()).unwrap();
+    let restored = detail(&db, &id).unwrap();
+    assert!(restored.session.favorite);
+    assert_eq!(restored.session.project_id.as_deref(), Some("linked-project"));
+    assert_eq!(restored.totals.requests, 7);
+    refresh(&db, &registry, temp.path()).unwrap();
+    assert_eq!(detail(&db, &id).unwrap().totals, restored.totals);
+}
+
+#[test]
+#[ignore = "manual read-only native Grok audit; temporary index and aggregate output only"]
+fn grok_native_accuracy_audit() {
+    let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+    let sources: Vec<_> = grok::sources(&home).unwrap().into_iter().filter(|source| source.path.join("usage.json").is_file()).collect();
+    assert!(!sources.is_empty());
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("audit.db")).unwrap();
+    let mut expected = [0u64; 5];
+    for source in &sources {
+        let data: serde_json::Value = serde_json::from_slice(&fs::read(source.path.join("usage.json")).unwrap()).unwrap();
+        let total = &data["session"];
+        for (slot, field) in expected.iter_mut().zip(["inputTokens","outputTokens","cachedReadTokens","cacheCreationTokens","modelCalls"]) {
+            *slot += total[field].as_u64().unwrap();
+        }
+        let parsed = grok::parse(source).unwrap();
+        db.with_connection(|conn| store_session(conn, "grok", source, &parsed, &HashMap::new())).unwrap();
+    }
+    let report = usage_report(&db, &HistoryFilter::default()).unwrap();
+    assert_eq!([report.totals.input+report.totals.cache_read+report.totals.cache_write,report.totals.output,report.totals.cache_read,report.totals.cache_write,report.totals.requests], expected);
+    assert_eq!(report.totals.unknown_request_records, 0);
+    println!("Native read-only audit: sessions={} records={} requests={} input={} output={} cache_read={} cache_write={}", sources.len(), report.totals.usage_records, report.totals.requests, expected[0], expected[1], expected[2], expected[3]);
 }

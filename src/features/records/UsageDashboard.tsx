@@ -141,11 +141,11 @@ function TrendChart({ report, metric, now }: { report: UsageReport; metric: 'tok
       </div>
       {shown && active !== null && <div className={styles.tooltip} data-align={align} style={{ left: `${((active + 0.5) / buckets.length) * 100}%` }} role="status">
         <strong>{bucketLabel(shown, report.bucket, true, multiYear)}</strong>
-        {shown.totals.requests ? <>
+        {shown.totals.usageRecords ? <>
           <p><span>总 Token</span><b>{shown.totals.total.toLocaleString()}</b></p>
           {tokenParts.map((part) => shown.totals[part.key] > 0 && <p key={part.key}><span><i data-key={part.key} />{part.label}</span><b>{formatTokens(shown.totals[part.key])}</b></p>)}
           <p><span>估算费用</span><b>{formatMoney(shown.totals.cost, report.currency)}</b></p>
-          <p><span>请求</span><b>{shown.totals.requests.toLocaleString()} 次 · {shown.totals.sessions} 个会话</b></p>
+          <p><span>请求</span><b>{shown.totals.requests.toLocaleString()} 次{shown.totals.unknownRequestRecords > 0 ? '（部分次数未知）' : ''} · {shown.totals.sessions} 个会话</b></p>
         </> : <p><span>{shown.start > now ? '尚未到达' : '没有调用'}</span></p>}
       </div>}
     </div>
@@ -173,7 +173,7 @@ function Breakdown({ report, toolName, filter, onFilter, onPrice, view, onView }
     else if (view === 'tool' && row.toolId) onFilter({ toolId: isActive(row) ? '' : row.toolId });
     else if (view === 'project' && row.projectId) onFilter({ projectId: isActive(row) ? '' : row.projectId });
   };
-  const subtitle = (row: UsageGroup) => view === 'model' ? `${toolName(row.toolId ?? '')} · ${row.totals.requests.toLocaleString()} 次` : `${row.totals.sessions} 个会话 · ${row.totals.requests.toLocaleString()} 次`;
+  const subtitle = (row: UsageGroup) => view === 'model' ? `${toolName(row.toolId ?? '')} · ${row.totals.requests.toLocaleString()} 次${row.totals.unknownRequestRecords ? '（部分未知）' : ''}` : `${row.totals.sessions} 个会话 · ${row.totals.requests.toLocaleString()} 次${row.totals.unknownRequestRecords ? '（部分未知）' : ''}`;
   return <section className={styles.card} aria-labelledby="usage-breakdown-title">
     <header className={styles.cardHead}>
       <h3 id="usage-breakdown-title">用量分布</h3>
@@ -205,8 +205,8 @@ function Breakdown({ report, toolName, filter, onFilter, onPrice, view, onView }
 
 export type UsageNotify = { status: (text: string, protect?: boolean) => void; alert: (value: unknown) => void; readAlert: (value: unknown) => void; clear: () => void };
 
-export function UsageDashboard({ active, tools, projects, prices, onPricesChange, scanVersion, scanning, lastScanAt, onOpenSession, notify }: {
-  active: boolean; tools: AdapterDescriptor[]; projects: Project[]; prices: HistoryPrice[]; onPricesChange: (prices: HistoryPrice[]) => void;
+export function UsageDashboard({ search, favoriteOnly, active, tools, projects, prices, onPricesChange, scanVersion, scanning, lastScanAt, onOpenSession, notify }: {
+  search: string; favoriteOnly: boolean; active: boolean; tools: AdapterDescriptor[]; projects: Project[]; prices: HistoryPrice[]; onPricesChange: (prices: HistoryPrice[]) => void;
   scanVersion: number; scanning: boolean; lastScanAt: number | null; onOpenSession: (id: string) => void; notify: UsageNotify;
 }) {
   const [range, setRange] = useState<UsageRange>(storedRange);
@@ -243,9 +243,9 @@ export function UsageDashboard({ active, tools, projects, prices, onPricesChange
   const { fromMs, toMs } = useMemo(() => bounds(range, today, customFrom, customTo), [range, today, customFrom, customTo]);
   const toolKey = tools.map((item) => item.id).join('|');
   const filter = useMemo<HistoryFilter>(() => ({
-    toolId: toolId || null, model: model || null, projectId: projectId || null, search: null,
-    fromMs, toMs, favoriteOnly: false, tools: toolKey ? toolKey.split('|') : null,
-  }), [toolId, model, projectId, fromMs, toMs, toolKey]);
+    toolId: toolId || null, model: model || null, projectId: projectId || null, search: search.trim() || null,
+    fromMs, toMs, favoriteOnly, tools: toolKey ? toolKey.split('|') : null,
+  }), [toolId, model, projectId, fromMs, toMs, toolKey, search, favoriteOnly]);
 
   useEffect(() => {
     if (!active || !nativeAvailable) return;
@@ -267,7 +267,7 @@ export function UsageDashboard({ active, tools, projects, prices, onPricesChange
   const previous = report?.previous ?? null;
   const compare = previous ? comparisonLabel(range, previous) : '';
   const compareTitle = previous ? `对比 ${new Date(previous.from).toLocaleString()} – ${new Date(previous.to).toLocaleString()}` : '';
-  const empty = !!report && report.totals.requests === 0;
+  const empty = !!report && report.totals.usageRecords === 0;
   const pricedShare = totals ? ratio(totals.total - totals.unpricedTokens, totals.total) : 0;
   const multiDay = report?.bucket !== 'hour';
   const shownMetric = totals?.cost === null ? 'tokens' : metric;
@@ -311,7 +311,7 @@ export function UsageDashboard({ active, tools, projects, prices, onPricesChange
   const modelOptions = [{ value: '', label: '全部模型' }, ...(report?.models ?? []).map((item) => ({ value: item, label: item })), ...(model && !(report?.models ?? []).includes(model) ? [{ value: model, label: model }] : [])];
 
   return <div className={styles.dashboard} data-loading={loading || undefined} aria-busy={loading || undefined}>
-    <div className={styles.overviewHead}><div><h2>用量总览</h2><p>看清每一次调用，让消耗有迹可循。</p></div>
+    <div className={styles.overviewHead}><div><h2>用量总览</h2><p>{search.trim() || favoriteOnly ? `筛选：${[search.trim() ? `搜索「${search.trim()}」` : '', favoriteOnly ? '只看收藏' : ''].filter(Boolean).join(' · ')}` : '查看本机记录中的 Token 与调用次数。'}</p></div>
       <button type="button" onClick={() => openPrice()}><Icon name="settings" size={14} />设置估算价格</button>
     </div>
     <div className={styles.header}>
@@ -356,9 +356,9 @@ export function UsageDashboard({ active, tools, projects, prices, onPricesChange
             : <Delta current={totals.cost} previous={previous?.totals.cost ?? (previous ? 0 : undefined)} label={compare} title={compareTitle} />}
         </div>
         <div className={styles.metric}>
-          <small><Icon name="connections" size={15} />模型调用</small>
+          <small><Icon name="connections" size={15} />{totals.unknownRequestRecords ? '已知模型调用' : '模型调用'}</small>
           <strong>{totals.requests.toLocaleString()}</strong>
-          <span className={styles.metricNote}>{totals.sessions} 个会话 · 每次约 {formatTokens(totals.total / Math.max(1, totals.requests))}</span>
+          <span className={styles.metricNote}>{totals.sessions} 个会话 · {totals.unknownRequestRecords ? `${totals.unknownRequestRecords.toLocaleString()} 条记录次数未知` : totals.requests ? `每次约 ${formatTokens(totals.total / totals.requests)}` : '暂无调用次数'}</span>
         </div>
         <div className={styles.metric}>
           <small><Icon name="leaf" size={15} />缓存命中</small>
@@ -413,9 +413,9 @@ export function UsageDashboard({ active, tools, projects, prices, onPricesChange
       <summary>统计口径与数据来源</summary>
       <ul>
         <li><b>总 Token</b> = 新输入 + 缓存读取 + 缓存写入 + 输出。各 CLI 日志口径不同（有的把缓存算进输入），这里已统一拆开，不会重复计算。</li>
-        <li><b>时间</b>按每次模型调用实际发生的时刻归入时段；跨天的长会话会分摊到各自的日期，而不是全部算到最后活跃的那天。</li>
-        {report.duplicateRequests > 0 && <li>已合并 {report.duplicateRequests.toLocaleString()} 次在恢复或分叉会话里重复出现的同一调用。</li>}
-        {report.untimedRequests > 0 && <li>{report.untimedRequests.toLocaleString()} 次调用的原始记录缺少时间，未计入所选时间范围。</li>}
+        <li><b>时间</b>按原始调用或轮次记录的时刻归入时段；轮次汇总无法还原逐次调用时间。缺少时间的用量仅计入全部时间。</li>
+        {report.duplicateRequests > 0 && <li>已合并 {report.duplicateRequests.toLocaleString()} 条在恢复或分叉会话里重复出现的用量记录。</li>}
+        {report.untimedRequests > 0 && <li>{report.untimedRequests.toLocaleString()} 条用量记录缺少时间，未计入所选时间范围。</li>}
         {(report.partialSessions > 0 || report.staleSessions > 0) && <li>{report.partialSessions ? `${report.partialSessions} 个会话的原始记录不完整` : ''}{report.partialSessions && report.staleSessions ? '，' : ''}{report.staleSessions ? `${report.staleSessions} 个会话的源文件最近读取失败` : ''}；它们只计入已读取到的部分。</li>}
         <li><b>费用</b>为估算，不等于账单：优先使用你设置的价格，其次使用内置公开价；未定价模型的 token 不计入费用。{report.mixedCurrency ? `部分价格不是 ${report.currency}，未合并计入。` : ''}</li>
         {report.latestEventAt && <li>本机记录里最近一次调用：{new Date(report.latestEventAt).toLocaleString()}。</li>}

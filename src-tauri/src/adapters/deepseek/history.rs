@@ -166,6 +166,7 @@ pub fn parse_controlled(
     session.usage = events
         .into_iter()
         .map(|(id, event)| UsageEvent {
+            request_count: Some(1),
             id,
             model: event.model,
             timestamp: event.timestamp,
