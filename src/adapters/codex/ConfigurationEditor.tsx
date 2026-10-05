@@ -3,7 +3,7 @@ import { ConfigurationField } from '../../components/configuration/Configuration
 import type { ConfigurationEditorProps } from '../../types/configuration';
 import styles from './ConfigurationEditor.module.css';
 
-type View = { values?: Record<string, unknown>; effortChoices?: string[]; capabilitySource?: string };
+type View = { values?: Record<string, unknown>; defaultAddressReason?: string | null; effortChoices?: string[]; capabilitySource?: string };
 export function CodexConfigurationEditor({ draft, descriptor, disabled, onAction, onValidityChange }: ConfigurationEditorProps) {
   const view = draft.view as View | null;
   const values = view?.values ?? {};
@@ -24,7 +24,7 @@ export function CodexConfigurationEditor({ draft, descriptor, disabled, onAction
   };
   return <section className={styles.editor} aria-label="Codex 专属配置">
     {render('model')}
-    <details><summary>供应商连接</summary><div className={styles.fields}>{render('model_provider')}{render('base_url')}</div></details>
+    <details><summary>供应商连接</summary><div className={styles.fields}>{render('model_provider')}{render('base_url')}{view?.defaultAddressReason && <p className={styles.note}>{view.defaultAddressReason}</p>}</div></details>
     <details><summary>模型参数</summary><p className={styles.note}>{view?.capabilitySource}。这些参数作用于当前配置，不为每个模型单独生成记录。</p>
       <div className={styles.fields}>{['model_reasoning_effort', 'model_context_window', 'model_reasoning_summary', 'model_verbosity'].map(render)}</div>
     </details>

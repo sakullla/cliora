@@ -17,5 +17,10 @@ name = "Other provider"
 base_url = "https://other.example.test/v1"
 wire_api = "responses"
 
+[model_providers.native_default]
+name = "Native default"
+wire_api = "responses"
+env_key = "CLIORA_TEST_CODEX_KEY"
+
 [features]
 user_defined_feature = true
