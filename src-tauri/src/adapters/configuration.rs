@@ -97,6 +97,23 @@ pub struct SuppressionChange {
 }
 
 pub trait ConfigurationAdapter: Sync {
+    /// Remove only empty parents left by this apply's deletion of owned leaves.
+    /// Shared code protects declared empty objects, foreign values and credentials.
+    fn cleanup_removed_parents(&self) -> bool {
+        false
+    }
+    /// Validate newly introduced declarations against a trusted prior document.
+    /// Existing native extensions may remain without accepting new unsupported values.
+    /// Drafts use their fixed baseline; persistence supplies the old DB document.
+    fn validate_changes(
+        &self,
+        _previous: Option<&Documents>,
+        _next: &Documents,
+        _state: &EditingState,
+        _scope: Scope,
+    ) -> Vec<ConfigurationIssue> {
+        Vec::new()
+    }
     /// Raw reintroduction of an entity can revoke an older deletion exclusion.
     /// Only the adapter maps logical identities to native suppression paths.
     fn reconcile_suppressions(

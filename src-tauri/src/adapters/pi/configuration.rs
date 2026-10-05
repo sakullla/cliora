@@ -215,7 +215,33 @@ fn private_headers(model: &Value) -> bool {
         })
 }
 
+fn entities(documents: &Documents) -> Result<Vec<(String, String, String)>, String> {
+    let root = as_map(root(documents, "models"))?;
+    let mut result = vec![];
+    if let Some(providers) = root.get("providers").and_then(Value::as_object) {
+        for (provider, entry) in providers {
+            for (bucket, kind) in [("models", "model"), ("modelOverrides", "override")] {
+                if let Some(models) = entry.get(bucket).and_then(Value::as_object) {
+                    result.extend(models.keys().map(|id| (kind.into(), provider.clone(), id.clone())));
+                }
+            }
+        }
+    }
+    Ok(result)
+}
+
+// Reusing an identity starts a new entity; obsolete deletions and resets cannot
+// erase its fields during application.
+fn retire_entity(state: &mut EditingState, entity_kind: &str, provider: &str, id: &str) {
+    state.intents.retain(|action| {
+        let Ok((kind, p, old_id)) = target(action) else { return true; };
+        !(matches!(action.operation.as_str(), "delete" | "rename" | "reset")
+            && p == provider && kind == entity_kind && old_id == id)
+    });
+}
+
 impl ConfigurationAdapter for Pi {
+    fn cleanup_removed_parents(&self) -> bool { true }
     fn portable_reference_valid(&self, path: &[String], value: &Value) -> bool {
         path.last().is_some_and(|field| field == "apiKey")
             && value.as_str().and_then(super::pi_env_name).is_some()
@@ -457,6 +483,7 @@ impl ConfigurationAdapter for Pi {
                         fields.insert("id".into(), json!(id));
                     }
                     set(&mut models, &path(kind, provider, id, None), Some(model))?;
+                    retire_entity(state, kind, provider, id);
                 }
                 "copy" | "rename" => {
                     let next = action
@@ -480,6 +507,7 @@ impl ConfigurationAdapter for Pi {
                         model["id"] = json!(next);
                     }
                     set(&mut models, &path(kind, provider, next, None), Some(model))?;
+                    retire_entity(state, kind, provider, next);
                     if action.operation == "rename" {
                         set(&mut models, &path(kind, provider, id, None), None)?;
                         if settings.get("defaultProvider").and_then(Value::as_str) == Some(provider)
@@ -561,6 +589,8 @@ impl ConfigurationAdapter for Pi {
         state: &EditingState,
         scope: Scope,
     ) -> Vec<ConfigurationIssue> {
+        let managed_provider = self.connection(documents, state).ok().flatten()
+            .map(|connection| connection.provider_id);
         let mut issues = vec![];
         let native = root(documents, "models");
         let Ok(models) = as_map(native.clone()) else {
@@ -583,6 +613,7 @@ impl ConfigurationAdapter for Pi {
                 if selected
                     .as_ref()
                     .is_some_and(|selected| selected != provider)
+                    && managed_provider.as_deref() != Some(provider.as_str())
                 {
                     continue;
                 }
@@ -633,12 +664,18 @@ impl ConfigurationAdapter for Pi {
                                 }
                                 if model
                                     .get("thinkingLevelMap")
-                                    .is_some_and(|value| !value.is_object())
+                                    .is_some_and(|value| {
+                                        !value.as_object().is_some_and(|map| {
+                                            ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+                                                .iter().all(|key| map.get(*key)
+                                                    .is_none_or(|value| value.is_string() || value.is_null()))
+                                        })
+                                    })
                                 {
                                     issues.push(issue(
                                         target.clone(),
                                         "thinkingLevelMap",
-                                        "思考映射须为原生对象",
+                                        "思考映射须为对象，已知档位的值须为字符串或 null",
                                     ));
                                 }
                                 if private_headers(model) {
@@ -661,6 +698,18 @@ impl ConfigurationAdapter for Pi {
             }
         }
         let settings = root(documents, "settings");
+        for action in &state.intents {
+            if matches!(action.operation.as_str(), "delete" | "rename") {
+                if let Ok(("model", provider, id)) = target(action) {
+                    if settings.get("defaultProvider").and_then(Value::as_str) == Some(provider)
+                        && settings.get("defaultModel").and_then(Value::as_str) == Some(id)
+                    {
+                        issues.push(issue(json!({"kind":"settings"}), "defaultModel",
+                            "已删除的自定义模型仍被启动默认引用，请选择替代模型"));
+                    }
+                }
+            }
+        }
         for field in SETTINGS {
             if settings.get(*field).is_some_and(|value| !value.is_string()) {
                 issues.push(issue(
@@ -675,20 +724,13 @@ impl ConfigurationAdapter for Pi {
     fn connection(
         &self,
         documents: &Documents,
-        state: &EditingState,
+        _state: &EditingState,
     ) -> Result<Option<Connection>, String> {
         let settings = root(documents, "settings");
         let (Some(provider), Some(id)) = (
             settings.get("defaultProvider").and_then(Value::as_str),
             settings.get("defaultModel").and_then(Value::as_str),
         ) else {
-            return Ok(None);
-        };
-        if state
-            .selected_provider
-            .as_ref()
-            .is_some_and(|selected| selected != provider)
-        {
             return Ok(None);
         };
         let models = root(documents, "models");
@@ -768,7 +810,7 @@ impl ConfigurationAdapter for Pi {
     }
     fn reconcile_text(
         &self,
-        _: Option<&Documents>,
+        previous: Option<&Documents>,
         next: &Documents,
         _: &Documents,
         state: &mut EditingState,
@@ -797,6 +839,23 @@ impl ConfigurationAdapter for Pi {
                 _ => false,
             }
         });
+        let next_entities = entities(next)?;
+        if let Some(previous) = previous {
+            for (kind, provider, id) in entities(previous)? {
+                if !(next_entities.iter().any(|(next_kind, next_provider, next_id)| next_kind == &kind && next_provider == &provider && next_id == &id))
+                    && !state.intents.iter().any(|action| {
+                        target(action).is_ok_and(|(k, p, i)| k == kind && p == provider && i == id)
+                            && matches!(action.operation.as_str(), "delete" | "rename")
+                    })
+                {
+                    state.intents.push(ConfigurationAction {
+                        version: EDITING_VERSION,
+                        target: json!({"kind":kind,"provider":provider,"id":id}),
+                        operation: "delete".into(), field: None, value: None,
+                    });
+                }
+            }
+        }
         Ok(())
     }
     fn suppression_changes(
@@ -824,7 +883,7 @@ impl ConfigurationAdapter for Pi {
                 )),
             )
         };
-        Ok(match action.operation.as_str() {
+        let mut changes = match action.operation.as_str() {
             "delete" | "rename" => vec![SuppressionChange {
                 role: role.into(),
                 path,
@@ -836,7 +895,17 @@ impl ConfigurationAdapter for Pi {
                 suppressed: false,
             }],
             _ => vec![],
-        })
+        };
+        if matches!(action.operation.as_str(), "copy" | "rename") {
+            if let Some(next) = action.value.as_ref().and_then(Value::as_str) {
+                changes.push(SuppressionChange {
+                    role: "models".into(),
+                    path: pointer(&self::path(kind, provider, next, None)),
+                    suppressed: false,
+                });
+            }
+        }
+        Ok(changes)
     }
     fn managed_documents(
         &self,
@@ -845,7 +914,9 @@ impl ConfigurationAdapter for Pi {
         _: Scope,
     ) -> Result<Documents, String> {
         let state = profile.editing.as_ref().ok_or("缺少编辑版本")?;
-        let selected = selected(&documents, state);
+        let selected = self.connection(&documents, state)?
+            .map(|connection| connection.provider_id)
+            .or_else(|| selected(&documents, state));
         let settings = root(&documents, "settings");
         let mut managed_settings = Map::new();
         for field in SETTINGS {
@@ -909,6 +980,25 @@ impl ConfigurationAdapter for Pi {
         }
         Ok(paths)
     }
+    fn empty_deleted_entities(
+        &self,
+        role: &str,
+        profile: &RegisteredProfile,
+    ) -> Result<Vec<Vec<String>>, String> {
+        if role != "models" { return Ok(vec![]); }
+        let own = profile.files.get("models")
+            .map(|text| crate::native::format::parse(crate::native::format::FileKind::Jsonc, text))
+            .transpose()?.unwrap_or_else(|| json!({}));
+        let mut result = vec![];
+        for action in &profile.editing.as_ref().ok_or("缺少编辑版本")?.intents {
+            let (kind, provider, id) = target(action)?;
+            if kind == "override" && matches!(action.operation.as_str(), "delete" | "rename") {
+                let path = path(kind, provider, id, None);
+                if own.pointer(&pointer(&path)).is_none() { result.push(path); }
+            }
+        }
+        Ok(result)
+    }
     fn managed_fields(
         &self,
         role: &str,
@@ -932,6 +1022,7 @@ impl ConfigurationAdapter for Pi {
             if role == "models"
                 && kind == "override"
                 && matches!(action.operation.as_str(), "delete" | "rename")
+                && desired.pointer(&pointer(&path(kind, provider, id, None))).is_none()
             {
                 deletes.push(path(kind, provider, id, None));
             }
@@ -959,7 +1050,8 @@ impl ConfigurationAdapter for Pi {
                                 let (kind, p, id) = target(action).ok()?;
                                 (kind == "model"
                                     && p == provider
-                                    && matches!(action.operation.as_str(), "delete" | "rename"))
+                                    && matches!(action.operation.as_str(), "delete" | "rename")
+                                    && !target_models.iter().any(|model| model.get("id").and_then(Value::as_str) == Some(id)))
                                 .then(|| id.to_owned())
                             })
                             .collect::<Vec<_>>();
@@ -1013,6 +1105,14 @@ impl ConfigurationAdapter for Pi {
                         *target_models = next;
                     }
                 }
+            }
+        }
+        if let Some(providers) = candidate.get_mut("providers").and_then(Value::as_object_mut) {
+            for (provider, entry) in providers {
+                if entry.get("modelOverrides").and_then(Value::as_object).is_some_and(Map::is_empty)
+                    && state.intents.iter().any(|action| target(action).is_ok_and(|(kind, p, _)|
+                        kind == "override" && p == provider && matches!(action.operation.as_str(), "delete" | "rename")))
+                { entry.as_object_mut().unwrap().remove("modelOverrides"); }
             }
         }
         let mut fields = BTreeMap::new();

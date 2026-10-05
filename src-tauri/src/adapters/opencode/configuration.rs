@@ -140,7 +140,31 @@ fn issue(target: Value, field: &str, message: &str) -> ConfigurationIssue {
         message: message.into(),
     }
 }
+fn entities(documents: &Documents) -> Result<Vec<(String, String, String)>, String> {
+    let root = root(documents);
+    let mut result = vec![];
+    if let Some(providers) = root.get("provider").and_then(Value::as_object) {
+        for (provider, entry) in providers {
+            if let Some(models) = entry.get("models").and_then(Value::as_object) {
+                result.extend(models.keys().map(|id| ("model".into(), provider.clone(), id.clone())));
+            }
+        }
+    }
+    Ok(result)
+}
+
+// Reusing an identity starts a new entity; obsolete deletions and resets cannot
+// erase its fields during application.
+fn retire_entity(state: &mut EditingState, entity_kind: &str, provider: &str, id: &str) {
+    state.intents.retain(|action| {
+        let Ok((kind, p, old_id)) = target(action) else { return true; };
+        !(matches!(action.operation.as_str(), "delete" | "rename" | "reset")
+            && p == provider && kind == entity_kind && old_id == id)
+    });
+}
+
 impl ConfigurationAdapter for OpenCode {
+    fn cleanup_removed_parents(&self) -> bool { true }
     fn portable_reference_valid(&self, path: &[String], value: &Value) -> bool {
         path.last().is_some_and(|field| field == "apiKey")
             && value
@@ -208,7 +232,9 @@ impl ConfigurationAdapter for OpenCode {
     }
     fn read(&self, documents: &Documents, state: &EditingState) -> Result<Value, String> {
         let root = root(documents);
-        let provider = selected(&root, state);
+        let provider = self.connection(&documents, state)?
+            .map(|connection| connection.provider_id)
+            .or_else(|| selected(&root, state));
         let entry = provider
             .as_ref()
             .and_then(|id| root.get("provider").and_then(|providers| providers.get(id)))
@@ -347,6 +373,7 @@ impl ConfigurationAdapter for OpenCode {
                     return Err("新增模型含未声明字段；请使用原生文本保留扩展字段".into());
                 }
                 set(root, &path(provider, id, None), Some(value))?;
+                retire_entity(state, kind, provider, id);
             }
             "copy" | "rename" => {
                 let next = action
@@ -476,12 +503,15 @@ impl ConfigurationAdapter for OpenCode {
     ) -> Vec<ConfigurationIssue> {
         let root = root(documents);
         let selected = selected(&root, state);
+        let managed_provider = self.connection(documents, state).ok().flatten()
+            .map(|connection| connection.provider_id);
         let mut issues = vec![];
         if let Some(providers) = root.get("provider").and_then(Value::as_object) {
             for (provider, entry) in providers {
                 if selected
                     .as_ref()
                     .is_some_and(|selected| selected != provider)
+                    && managed_provider.as_deref() != Some(provider.as_str())
                 {
                     continue;
                 }
@@ -539,6 +569,18 @@ impl ConfigurationAdapter for OpenCode {
                 }
             }
         }
+        for action in &state.intents {
+            if matches!(action.operation.as_str(), "delete" | "rename") {
+                if let Ok(("model", provider, id)) = target(action) {
+                    for key in ["model", "small_model"] {
+                        if root.get(key).and_then(Value::as_str) == Some(&format!("{provider}/{id}")) {
+                            issues.push(issue(json!({"kind":"settings"}), key,
+                                "已删除的模型仍被引用，请选择替代模型"));
+                        }
+                    }
+                }
+            }
+        }
         for key in ["model", "small_model"] {
             if let Some(value) = root.get(key) {
                 if let Some(value) = value.as_str() {
@@ -567,7 +609,7 @@ impl ConfigurationAdapter for OpenCode {
     fn connection(
         &self,
         documents: &Documents,
-        state: &EditingState,
+        _state: &EditingState,
     ) -> Result<Option<Connection>, String> {
         let root = root(documents);
         let Some(full) = root.get("model").and_then(Value::as_str) else {
@@ -576,13 +618,6 @@ impl ConfigurationAdapter for OpenCode {
         let Some((provider, model)) = reference(&root, full) else {
             return Ok(None);
         };
-        if state
-            .selected_provider
-            .as_ref()
-            .is_some_and(|selected| selected != &provider)
-        {
-            return Ok(None);
-        }
         let entry = &root["provider"][&provider];
         let Some(base) = entry.pointer("/options/baseURL").and_then(Value::as_str) else {
             return Ok(None);
@@ -646,7 +681,7 @@ impl ConfigurationAdapter for OpenCode {
     }
     fn reconcile_text(
         &self,
-        _: Option<&Documents>,
+        previous: Option<&Documents>,
         next: &Documents,
         _: &Documents,
         state: &mut EditingState,
@@ -675,6 +710,23 @@ impl ConfigurationAdapter for OpenCode {
                 _ => false,
             }
         });
+        let next_entities = entities(next)?;
+        if let Some(previous) = previous {
+            for (kind, provider, id) in entities(previous)? {
+                if !(next_entities.iter().any(|(next_kind, next_provider, next_id)| next_kind == &kind && next_provider == &provider && next_id == &id))
+                    && !state.intents.iter().any(|action| {
+                        target(action).is_ok_and(|(k, p, i)| k == kind && p == provider && i == id)
+                            && matches!(action.operation.as_str(), "delete" | "rename")
+                    })
+                {
+                    state.intents.push(ConfigurationAction {
+                        version: EDITING_VERSION,
+                        target: json!({"kind":kind,"provider":provider,"id":id}),
+                        operation: "delete".into(), field: None, value: None,
+                    });
+                }
+            }
+        }
         Ok(())
     }
     fn suppression_changes(
@@ -709,6 +761,13 @@ impl ConfigurationAdapter for OpenCode {
                 suppressed: false,
             });
         }
+        if matches!(action.operation.as_str(), "copy" | "rename") {
+            if let Some(next) = action.value.as_ref().and_then(Value::as_str) {
+                changes.push(SuppressionChange {
+                    role: "settings".into(), path: pointer(&path(provider, next, None)), suppressed: false,
+                });
+            }
+        }
         Ok(changes)
     }
     fn portable_field_kind(&self, path: &[String]) -> PortableFieldKind {
@@ -729,7 +788,9 @@ impl ConfigurationAdapter for OpenCode {
     ) -> Result<Documents, String> {
         let state = profile.editing.as_ref().ok_or("缺少编辑版本")?;
         let mut root = root(&documents);
-        let provider = selected(&root, state);
+        let provider = self.connection(&documents, state)?
+            .map(|connection| connection.provider_id)
+            .or_else(|| selected(&root, state));
         let mut managed = Map::new();
         for key in ["model", "small_model"] {
             if let Some(value) = root.get(key) {
@@ -765,13 +826,17 @@ impl ConfigurationAdapter for OpenCode {
         if role != "settings" {
             return Ok(vec![]);
         }
+        let own = profile.files.get("settings")
+            .map(|text| crate::native::format::parse(crate::native::format::FileKind::Jsonc, text))
+            .transpose()?.unwrap_or_else(|| json!({}));
         profile
             .editing
             .as_ref()
             .ok_or("缺少编辑版本")?
             .intents
             .iter()
-            .filter(|action| matches!(action.operation.as_str(), "delete" | "rename"))
+            .filter(|action| matches!(action.operation.as_str(), "delete" | "rename")
+                && target(action).is_ok_and(|(_, provider, id)| own.pointer(&pointer(&path(provider, id, None))).is_none()))
             .map(|action| {
                 let (kind, provider, id) = target(action)?;
                 if kind != "model" {
@@ -788,8 +853,18 @@ impl ConfigurationAdapter for OpenCode {
         desired: &Value,
         profile: &RegisteredProfile,
     ) -> Result<ManagedConfiguration, String> {
+        let mut candidate = desired.clone();
+        if let Some(providers) = candidate.get_mut("provider").and_then(Value::as_object_mut) {
+            for (provider, entry) in providers {
+                if entry.get("models").and_then(Value::as_object).is_some_and(Map::is_empty)
+                    && profile.editing.as_ref().is_some_and(|state| state.intents.iter().any(|action|
+                        target(action).is_ok_and(|(kind, p, _)| kind == "model" && p == provider
+                            && matches!(action.operation.as_str(), "delete" | "rename"))))
+                { entry.as_object_mut().unwrap().remove("models"); }
+            }
+        }
         let mut fields = BTreeMap::new();
-        crate::native::apply::flatten(desired, &mut vec![], &mut fields);
+        crate::native::apply::flatten(&candidate, &mut vec![], &mut fields);
         let mut managed = ManagedConfiguration {
             fields: fields
                 .into_iter()
@@ -800,6 +875,7 @@ impl ConfigurationAdapter for OpenCode {
         for action in &profile.editing.as_ref().ok_or("缺少编辑版本")?.intents {
             let (kind, provider, id) = target(action)?;
             if matches!(action.operation.as_str(), "delete" | "rename") {
+                if desired.pointer(&pointer(&path(provider, id, None))).is_some() { continue; }
                 if current
                     .get("agent")
                     .and_then(Value::as_object)

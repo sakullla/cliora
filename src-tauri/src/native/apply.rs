@@ -617,6 +617,46 @@ fn apply_registered_validated_compared(
                 });
             }
         }
+        if profile.editing.is_some() && adapter.configuration()
+            .is_some_and(|port| port.cleanup_removed_parents())
+        {
+            let mut parents = BTreeSet::new();
+            for change in &changes {
+                if change.value.is_none() && previous_fields
+                    .is_some_and(|fields| fields.contains_key(&pointer(&change.path)))
+                {
+                    for length in 1..change.path.len() {
+                        parents.insert(change.path[..length].to_vec());
+                    }
+                }
+            }
+            let mut parents = parents.into_iter().collect::<Vec<_>>();
+            parents.sort_by_key(|path| std::cmp::Reverse(path.len()));
+            if !parents.is_empty() {
+                let candidate = changes.iter().try_fold(baseline.clone(), |text, change|
+                    format::set_path(kind, &text, &change.path, change.value.as_ref()))?;
+                let mut candidate = format::parse(kind, &candidate)?;
+                for path in parents {
+                    let encoded = pointer(&path);
+                    let related = |other: &String| other == &encoded
+                        || other.starts_with(&format!("{encoded}/"))
+                        || encoded.starts_with(&format!("{other}/"));
+                    if desired.get(&role).and_then(|root| root.pointer(&encoded)).is_some()
+                        || detached.iter().any(related)
+                        || secrets.values.get(&role).is_some_and(|values| values.keys().any(related))
+                        || secrets.removals.get(&role).is_some_and(|values| values.iter().any(related))
+                    { continue; }
+                    if candidate.pointer(&encoded).and_then(Value::as_object).is_some_and(|object| object.is_empty()) {
+                        let parent = if path.len() == 1 { Some(&mut candidate) }
+                            else { candidate.pointer_mut(&pointer(&path[..path.len() - 1])) };
+                        if let Some(parent) = parent.and_then(Value::as_object_mut) {
+                            parent.remove(path.last().unwrap());
+                        }
+                        changes.push(FieldChange { path, value: None });
+                    }
+                }
+            }
+        }
         let collections = adapter.empty_entry_collections(&role);
         if !collections.is_empty() {
             // Inspect the final candidate after all field edits. Removing an entry

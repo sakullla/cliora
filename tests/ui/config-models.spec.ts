@@ -20,7 +20,7 @@ test.beforeAll(async () => {
     const fields = (pi ? [
       ['name','显示名称','string'],['contextWindow','上下文上限','number'],['maxTokens','输出上限','number'],['reasoning','支持思考','boolean'],['input','输入类型','json',false,true],['thinkingLevelMap','模型思考档位映射','json',false,true],['defaultThinkingLevel','启动思考档位','string',false,true,['off','minimal','low','medium','high','xhigh','max']],
     ] : kimi ? [
-      ['model','请求模型 ID','string',true],['provider','供应商 ID','string',true],['max_context_size','上下文上限','integer',true],['display_name','显示名称','string'],['max_input_size','输入上限','integer',false,true],['max_output_size','输出上限','integer',false,true],['capabilities','原生能力声明','json',false,true],['support_efforts','支持的思考档位','json',false,true],['default_effort','模型思考档位','string',false,true],['adaptive_thinking','自适应思考','boolean',false,true],['protocol','模型协议','string',false,true],['thinking.enabled','默认启用思考','boolean',false,true],['thinking.effort','默认思考档位','string',false,true],['thinking.keep','思考内容保留','string',false,true],
+      ['model','请求模型 ID','string',true],['provider','供应商 ID','string',true],['max_context_size','上下文上限','integer',true],['display_name','显示名称','string'],['max_input_size','输入上限','integer',false,true],['max_output_size','输出上限','integer',false,true],['capabilities','原生能力声明','string_list',false,false,['image_in','video_in','audio_in','thinking','always_thinking','tool_use','dynamically_loaded_tools']],['support_efforts','支持的思考档位','json',false,true],['default_effort','模型思考档位','string',false,true],['adaptive_thinking','自适应思考','boolean',false,true],['protocol','模型协议','string',false,true],['thinking.enabled','默认启用思考','boolean',false,true],['thinking.effort','默认思考档位','string',false,true],['thinking.keep','思考内容保留','string',false,true],
     ] : [
       ['name','显示名称','string'],['limit.context','上下文上限','integer'],['limit.output','输出上限','integer'],['reasoning','支持推理','boolean'],['modalities.input','输入模态','json',false,true],['modalities.output','输出模态','json',false,true],['options','模型选项','json',false,true],['variants','推理变体','json',false,true],
     ]).map(([id,label,kind,required,advanced,choices]) => ({ id,label,kind,required:required ?? false,advanced:advanced ?? false,choices:choices ?? [],minimum:['number','integer'].includes(kind)?1:null,defaultSource:'跟随原生默认',unavailableReason:null }));
@@ -270,4 +270,90 @@ test('Kimi effort options use model declarations and preserve an unknown native 
   await expect(effort.locator('option')).toContainText(['跟随原生默认', 'future-effort（原生值）', 'low', 'high']);
   await effort.selectOption('high');
   await expect.poll(() => page.evaluate(() => (window as unknown as { __actions: unknown[] }).__actions.at(-1))).toMatchObject({ target: { kind: 'model', provider: 'gateway', id: 'first' }, operation: 'set', field: 'default_effort', value: 'high' });
+});
+
+test('Kimi creates models with native visual capability controls and text defaults', async ({ page }) => {
+  await page.goto('/__multi_model_editor?tool=kimi');
+  await expect(page.getByText(/文本是 Kimi 的原生默认能力，无需声明/)).toBeVisible();
+  await page.getByRole('button', { name: '新增模型', exact: true }).click();
+  const form = page.getByRole('group', { name: '新增模型表单' });
+  await form.getByLabel('模型 alias', { exact: true }).fill('visual');
+  await form.getByLabel('请求模型 ID').fill('native-request');
+  await form.getByLabel('上下文上限').fill('128000');
+  const capabilities = form.getByRole('group', { name: '原生能力声明' });
+  await expect(capabilities).toBeVisible();
+  await expect(capabilities.getByRole('checkbox')).toHaveCount(7);
+  for (const label of ['图片', '思考', '视频']) {
+    await expect(capabilities.getByLabel(label, { exact: true })).not.toBeChecked();
+    await capabilities.getByLabel(label, { exact: true }).check();
+  }
+  await capabilities.getByLabel('视频', { exact: true }).uncheck();
+  await form.getByRole('button', { name: '创建模型' }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __actions: unknown[] }).__actions.at(-1))).toEqual({
+    version: 1, target: { kind: 'model', provider: 'gateway', id: 'visual' }, operation: 'create', field: null,
+    value: { provider: 'gateway', model: 'native-request', max_context_size: 128000, capabilities: ['image_in', 'thinking'] },
+  });
+  const created = page.getByRole('article', { name: '模型 visual', exact: true }).getByRole('group', { name: '原生能力声明' });
+  await expect(created.getByLabel('图片', { exact: true })).toBeChecked();
+  await expect(created.getByLabel('思考', { exact: true })).toBeChecked();
+  await expect(created.getByLabel('视频', { exact: true })).not.toBeChecked();
+  await expect(page.getByRole('button', { name: '保存配置' })).toBeEnabled();
+});
+
+test('Kimi edits native capabilities while preserving unknown values and resets explicitly', async ({ page }) => {
+  await page.goto('/__multi_model_editor?tool=kimi');
+  await page.evaluate(() => (window as unknown as { __replaceView: (fn: (view: any) => any) => void }).__replaceView(view => {
+    view.models[0].fields.capabilities = ['image_in', 'future-capability'];
+    return view;
+  }));
+  const first = page.getByRole('article', { name: '模型 first', exact: true });
+  await first.getByRole('button', { name: /first · first/ }).click();
+  const capabilities = first.getByRole('group', { name: '原生能力声明' });
+  await expect(capabilities).toBeVisible();
+  await expect(capabilities.getByLabel('future-capability（原生值）', { exact: true })).toBeChecked();
+  await expect(capabilities.getByLabel('图片', { exact: true })).toBeChecked();
+  await capabilities.getByLabel('思考', { exact: true }).check();
+  await capabilities.getByLabel('图片', { exact: true }).uncheck();
+  await capabilities.getByLabel('视频', { exact: true }).check();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __actions: unknown[] }).__actions)).toEqual([
+    { version: 1, target: { kind: 'model', provider: 'gateway', id: 'first' }, operation: 'set', field: 'capabilities', value: ['image_in', 'future-capability', 'thinking'] },
+    { version: 1, target: { kind: 'model', provider: 'gateway', id: 'first' }, operation: 'set', field: 'capabilities', value: ['future-capability', 'thinking'] },
+    { version: 1, target: { kind: 'model', provider: 'gateway', id: 'first' }, operation: 'set', field: 'capabilities', value: ['future-capability', 'thinking', 'video_in'] },
+  ]);
+  await expect(capabilities.getByLabel('future-capability（原生值）', { exact: true })).toBeChecked();
+  const second = page.getByRole('article', { name: '模型 second', exact: true });
+  await second.getByRole('button', { name: /second · second/ }).click();
+  await first.getByRole('button', { name: /first · first/ }).click();
+  await expect(capabilities.getByLabel('future-capability（原生值）', { exact: true })).toBeChecked();
+  await capabilities.getByRole('button', { name: '恢复默认', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __actions: unknown[] }).__actions.at(-1))).toEqual({ version: 1, target: { kind: 'model', provider: 'gateway', id: 'first' }, operation: 'reset', field: 'capabilities', value: null });
+  await expect(capabilities.getByRole('checkbox')).toHaveCount(7);
+  for (const label of ['图片', '思考', '视频']) await expect(capabilities.getByLabel(label, { exact: true })).not.toBeChecked();
+  await expect(page.getByRole('button', { name: '保存配置' })).toBeEnabled();
+});
+
+test('Kimi capability actions block pending saves and preserve values after failures', async ({ page }) => {
+  await page.goto('/__multi_model_editor?tool=kimi');
+  const first = page.getByRole('article', { name: '模型 first', exact: true });
+  await first.getByRole('button', { name: /first · first/ }).click();
+  const capabilities = first.getByRole('group', { name: '原生能力声明' });
+  await page.evaluate(() => { (window as unknown as { __delay: boolean }).__delay = true; });
+  await capabilities.getByLabel('图片', { exact: true }).click();
+  await expect(page.getByRole('button', { name: '保存配置' })).toBeDisabled();
+  await expect(capabilities.getByLabel('思考', { exact: true })).toBeDisabled();
+  await page.evaluate(() => { const state = window as unknown as { __delay: boolean; __release: () => void }; state.__delay = false; state.__release(); });
+  await expect(capabilities.getByLabel('图片', { exact: true })).toBeChecked();
+  await expect(page.getByRole('button', { name: '保存配置' })).toBeEnabled();
+  await page.evaluate(() => { (window as unknown as { __fail: boolean }).__fail = true; });
+  await capabilities.getByLabel('思考', { exact: true }).click();
+  await expect(capabilities.getByRole('alert')).toContainText('模拟原生动作失败');
+  await expect(capabilities.getByLabel('图片', { exact: true })).toBeChecked();
+  await expect(capabilities.getByLabel('思考', { exact: true })).not.toBeChecked();
+  await expect(page.getByRole('button', { name: '保存配置' })).toBeDisabled();
+  await page.evaluate(() => { (window as unknown as { __fail: boolean }).__fail = false; });
+  await capabilities.getByLabel('思考', { exact: true }).check();
+  await expect(capabilities.getByRole('alert')).toHaveCount(0);
+  await expect(capabilities.getByLabel('图片', { exact: true })).toBeChecked();
+  await expect(capabilities.getByLabel('思考', { exact: true })).toBeChecked();
+  await expect(page.getByRole('button', { name: '保存配置' })).toBeEnabled();
 });

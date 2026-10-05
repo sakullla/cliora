@@ -207,7 +207,11 @@ pub fn refresh(registry: &Registry, mut draft: ConfigurationDraft) -> Configurat
         profile::validate_registered_files(registry, &draft.profile.tool, &draft.profile.files)?;
         let parsed = effective_documents(registry, &draft.profile, draft.common.as_ref())?;
         let view = port.read(&parsed, state)?;
-        let issues = port.validate(&parsed, state, draft.scope);
+        let mut issues = port.validate(&parsed, state, draft.scope);
+        let mut baseline = draft.profile.clone();
+        baseline.files = draft.baseline_files.clone();
+        let baseline = effective_documents(registry, &baseline, draft.common.as_ref())?;
+        issues.extend(port.validate_changes(Some(&baseline), &parsed, state, draft.scope));
         derive_connection(registry, &mut draft.profile, &parsed)?;
         draft.view = view;
         draft.issues = issues;
@@ -278,6 +282,17 @@ pub fn replace_text(
         let mut state = draft.profile.editing.clone().ok_or("缺少配置编辑版本")?;
         port.reconcile_text(previous.as_ref(), &next, &effective, &mut state)?;
         port.reconcile_suppressions(previous.as_ref(), &next, &mut draft.profile.suppressed)?;
+        // Raw removals use the same inheritance exclusions as form deletion.
+        for action in &state.intents {
+            if matches!(action.operation.as_str(), "delete" | "rename") {
+                for change in port.suppression_changes(action)? {
+                    let paths = draft.profile.suppressed.entry(change.role).or_default();
+                    if change.suppressed && !paths.contains(&change.path) {
+                        paths.push(change.path);
+                    }
+                }
+            }
+        }
         validate_state(&state)?;
         draft.profile.editing = Some(state);
         Ok(())
