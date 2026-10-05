@@ -446,3 +446,45 @@ test('Grok details preserve exact token buckets and show inferred clocks and unk
   await page.getByRole('button', { name: '只看收藏', exact: true }).click();
   await expect(page.getByRole('button', { name: /没有用量的会话/ })).toBeVisible();
 });
+
+test('all-time trend averages include only dated elapsed buckets for tokens and cost', async ({ page }) => {
+  const hour = 3_600_000;
+  const start = Date.now() - 3 * hour;
+  const report = {
+    ...emptyReport(), from: start, to: start + 5 * hour, bucket: 'hour',
+    // 980 tokens and $96 have no date. They belong in the overview, never in a time bucket.
+    totals: totals(1000, 0, 0, 0, { requests: 3, sessions: 1, cost: 100 }),
+    timeline: [
+      { start, end: start + hour, totals: totals(10, 0, 0, 0, { requests: 1, cost: 1 }) },
+      { start: start + hour, end: start + 2 * hour, totals: totals(10, 0, 0, 0, { requests: 1, cost: 3 }) },
+      { start: start + 4 * hour, end: start + 5 * hour, totals: totals(0, 0, 0, 0) },
+    ],
+  };
+  await page.addInitScript((report) => {
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_INTERNALS__: { invoke: async (command: string) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['grok'], theme: 'system' }, tools: [{ id: 'grok', name: 'Grok' }] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'grok', name: 'Grok' }], managedIds: ['grok'], preservedUnknown: [] };
+        if (['list_projects', 'list_history_prices', 'refresh_history', 'list_history_sessions'].includes(command)) return [];
+        if (command === 'get_usage_report') return report;
+        if (command === 'get_history_scan_progress') return { running: false, toolId: '', completedSources: 0, totalSources: 0 };
+        if (command === 'get_tray_status') return { available: false, error: null };
+        if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+        return null;
+      } },
+    });
+  }, report);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
+  await page.getByRole('tab', { name: '用量' }).click();
+  await page.getByRole('radio', { name: '全部', exact: true }).click();
+  const overview = page.getByRole('region', { name: '用量概览' });
+  await expect(overview).toContainText('1K');
+  await expect(overview).toContainText('$100.00');
+  const trend = page.getByRole('region', { name: /用量趋势/ });
+  await expect(trend.getByText(/平均每小时/)).toHaveText(/平均每小时\s*10$/);
+  await page.getByRole('tablist', { name: '趋势指标' }).getByRole('tab', { name: '费用', exact: true }).click();
+  await expect(trend.getByText(/平均每小时/)).toHaveText(/平均每小时\s*\$2.00$/);
+  await expect(overview).toContainText('$100.00');
+});

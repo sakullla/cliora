@@ -274,7 +274,7 @@ export function UsageDashboard({ search, favoriteOnly, active, tools, projects, 
   const timedBuckets = report?.timeline.filter((bucket) => bucket.start <= now) ?? [];
   const metricValue = (value: UsageTotals) => shownMetric === 'cost' ? value.cost ?? 0 : value.total;
   const metricFormat = (value: number) => shownMetric === 'cost' ? formatMoney(value, report?.currency ?? 'USD') : formatTokens(value);
-  const average = timedBuckets.length && totals ? metricValue(totals) / timedBuckets.length : 0;
+  const average = timedBuckets.length ? timedBuckets.reduce((sum, bucket) => sum + metricValue(bucket.totals), 0) / timedBuckets.length : 0;
   const peak = report?.timeline.reduce<UsageBucket | null>((best, bucket) => metricValue(bucket.totals) > (best ? metricValue(best.totals) : 0) ? bucket : best, null) ?? null;
 
   function openPrice(tool = '', name = '') {
