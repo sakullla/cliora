@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 
 test('new configuration dialog has one save action', async ({ page }) => {
   await page.addInitScript(() => {
@@ -692,8 +692,8 @@ const connectionTools = [
   { id: 'zcode', name: 'ZCode' },
 ];
 
-async function installConnectionHarness(page: Page) {
-  await page.addInitScript(({ tools }) => {
+async function installConnectionHarness(page: Page, options: { piPresets?: boolean } = {}) {
+  await page.addInitScript(({ tools, piPresets }) => {
     const connectionProfile = (partial: Record<string, unknown>) => ({ version: 1, revision: '', inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, ...partial });
     const projectDenied: Record<string, string> = {
       codex: 'Codex 项目层不能写入供应商密钥；请使用全局配置',
@@ -725,10 +725,11 @@ async function installConnectionHarness(page: Page) {
       connectionProfile({ id: 'zc-login', tool: 'zcode', name: '已有登录', authentication: { kind: 'api_key' }, connection: connection('zcode', 'z', 'https://hidden.example') }),
     ];
     const project = { id: 'demo', name: '示例项目', path: '/work/demo', available: true, preferredTool: null, lastOpened: 0, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {} };
-    const state = window as unknown as { __savedProfile: unknown };
+    const state = window as unknown as { __savedProfile: unknown; __importMode?: string };
     Object.assign(window, {
       isTauri: true,
       __savedProfile: null,
+      __importMode: '',
       __TAURI_INTERNALS__: { invoke: async (command: string, args?: Record<string, any>) => {
         if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: tools.map(item => item.id), theme: 'system' }, tools };
         if (command === 'list_cli_adapters') return { registered: tools.map(item => ({ ...item, interfaceFormats: ['openai_responses'] })), managedIds: tools.map(item => item.id), preservedUnknown: [] };
@@ -744,7 +745,9 @@ async function installConnectionHarness(page: Page) {
           return {
             probe: {
               selectedPath: 'C:/tool.cmd', installations: [], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: [toolId === 'claude_code' ? 'anthropic_messages' : 'openai_responses'],
-              providerPresets: toolId === 'codebuddy' || toolId === 'codex' ? [{ id: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', interfaceFormat: 'openai_responses', sourceUrl: 'https://platform.openai.com' }] : [],
+              providerPresets: toolId === 'pi' && piPresets
+                ? [{ id: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', interfaceFormat: 'openai_responses', sourceUrl: 'https://platform.openai.com' }, { id: 'demo', label: 'Demo', baseUrl: 'https://demo.example/v1', interfaceFormat: 'openai_responses', sourceUrl: 'https://demo.example' }]
+                : toolId === 'codebuddy' || toolId === 'codex' ? [{ id: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', interfaceFormat: 'openai_responses', sourceUrl: 'https://platform.openai.com' }] : [],
               dependencies: [], installUrl: '', upgradeHint: '', connectionPolicy: policy(toolId, scope),
             },
             profiles: profiles.filter(item => item.tool === toolId), common: null, binding: null, snapshots: [], recoveryNeeded: [], customPath: null,
@@ -758,7 +761,15 @@ async function installConnectionHarness(page: Page) {
           if (toolId === 'codex') return { providerId: 'demo', model: 'gpt', reasoningEffort: 'low', projectedModels: null, connection: connection('demo', 'gpt', 'https://api.openai.com/v1') };
           return { connection: null, reasoningEffort: null, projectedModels: null };
         }
-        if (command === 'prepare_registered_native_import') return { files: args?.files ?? {}, inspection: { connection: null, reasoningEffort: null, projectedModels: null }, migratedSecret: false, nativeCredentials: {} };
+        if (command === 'prepare_registered_native_import') {
+          const mode = state.__importMode ?? '';
+          const files = args?.files ?? {};
+          if (mode === 'migrate-same' || mode === 'migrate-other') {
+            const providerId = mode === 'migrate-other' ? 'other' : 'demo';
+            return { files, inspection: { providerId, model: 'inspected-model', reasoningEffort: null, projectedModels: null, connection: { providerId, interfaceFormat: 'openai_responses', baseUrl: 'https://api.example/v1', model: 'inspected-model', secretRef: 'migrated-ref', authEnvVar: null } }, migratedSecret: true, nativeCredentials: {} };
+          }
+          return { files, inspection: { connection: null, reasoningEffort: null, projectedModels: null }, migratedSecret: false, nativeCredentials: {} };
+        }
         if (command === 'save_registered_native_profile') {
           state.__savedProfile = args?.profile ?? null;
           const profile = args?.profile ?? {};
@@ -776,7 +787,7 @@ async function installConnectionHarness(page: Page) {
         return null;
       } },
     });
-  }, { tools: connectionTools });
+  }, { tools: connectionTools, piPresets: options.piPresets === true });
 }
 
 async function openConnections(page: Page) {
@@ -977,4 +988,117 @@ test('key entry follows the current scope and writable CLI without hiding provid
   await expect(dialog.getByLabel('API 地址')).toHaveCount(0);
   await expect(dialog).not.toContainText('不支持密钥');
   await expect(dialog).not.toContainText('https://hidden.example');
+});
+
+async function setImportMode(page: Page, mode: string) {
+  await page.evaluate((value) => { (window as unknown as { __importMode: string }).__importMode = value; }, mode);
+}
+
+async function savedConnection(page: Page) {
+  return page.evaluate(() => (window as unknown as { __savedProfile: { connection: { providerId: string; baseUrl: string; model: string; secretRef: string | null; authEnvVar: string | null; modelRecords?: { id: string; fields: Record<string, unknown> }[] } } }).__savedProfile.connection);
+}
+
+async function openAdvanced(dialog: Locator) {
+  await dialog.getByText('更多选项', { exact: true }).click();
+  await dialog.getByText('高级连接选项', { exact: true }).click();
+}
+
+test('migrating a plaintext key keeps model edits only for the same provider', async ({ page }) => {
+  test.setTimeout(45_000);
+  await installConnectionHarness(page);
+  await openConnections(page);
+  await page.locator('[data-profile-id="pi-models"]').getByRole('button', { name: '修改' }).click();
+  const dialog = page.getByRole('dialog');
+  await replaceNumber(dialog.getByLabel('model-a contextWindow'), '128');
+  await dialog.getByLabel('sibling name').fill('Renamed');
+  await setImportMode(page, 'migrate-same');
+  await dialog.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  const same = await savedConnection(page);
+  expect(same.providerId).toBe('demo');
+  expect(same.model).toBe('inspected-model');
+  expect(same.secretRef).toBe('migrated-ref');
+  expect(same.modelRecords).toEqual([
+    { id: 'model-a', fields: { contextWindow: 128, cost: { input: 1 }, modalities: ['text'] } },
+    { id: 'sibling', fields: { name: 'Renamed' } },
+  ]);
+
+  await setImportMode(page, 'migrate-other');
+  await page.locator('[data-profile-id="pi-models"]').getByRole('button', { name: '修改' }).click();
+  await replaceNumber(dialog.getByLabel('model-a contextWindow'), '64');
+  await dialog.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  const other = await savedConnection(page);
+  expect(other.providerId).toBe('other');
+  expect(other.model).toBe('inspected-model');
+  expect(other.secretRef).toBe('migrated-ref');
+  expect(other.modelRecords).toBeUndefined();
+});
+
+test('changing the provider or a preset drops the previous model snapshot', async ({ page }) => {
+  test.setTimeout(60_000);
+  await installConnectionHarness(page, { piPresets: true });
+  await openConnections(page);
+  await page.locator('[data-profile-id="pi-models"]').getByRole('button', { name: '修改' }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('sibling name').fill('Renamed');
+  await openAdvanced(dialog);
+  await dialog.getByLabel('供应商 ID').fill('other');
+  await expect(dialog.getByLabel('已有模型字段')).toHaveCount(0);
+  await dialog.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  const switched = await savedConnection(page);
+  expect(switched.providerId).toBe('other');
+  expect(switched.model).toBe('model-a');
+  expect(switched.modelRecords).toBeUndefined();
+
+  await page.locator('[data-profile-id="pi-models"]').getByRole('button', { name: '修改' }).click();
+  await dialog.getByLabel('sibling name').fill('Renamed');
+  await openAdvanced(dialog);
+  await dialog.getByLabel('供应商 ID').fill('other');
+  await expect(dialog.getByLabel('已有模型字段')).toHaveCount(0);
+  await dialog.getByLabel('供应商 ID').fill('demo');
+  await expect(dialog.getByLabel('sibling name')).toHaveValue('Keep');
+  await dialog.getByLabel('sibling name').fill('Fresh');
+  await dialog.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  const fresh = await savedConnection(page);
+  expect(fresh.providerId).toBe('demo');
+  expect(fresh.modelRecords).toEqual([
+    { id: 'model-a', fields: { contextWindow: 100, cost: { input: 1 }, modalities: ['text'] } },
+    { id: 'sibling', fields: { name: 'Fresh' } },
+  ]);
+
+  await page.locator('[data-profile-id="pi-models"]').getByRole('button', { name: '修改' }).click();
+  await dialog.getByLabel('sibling name').fill('Renamed');
+  await openAdvanced(dialog);
+  await dialog.getByRole('button', { name: 'OpenAI' }).click();
+  await expect(dialog.getByLabel('供应商 ID')).toHaveValue('openai');
+  await expect(dialog.getByLabel('已有模型字段')).toHaveCount(0);
+  await dialog.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  const preset = await savedConnection(page);
+  expect(preset.providerId).toBe('openai');
+  expect(preset.baseUrl).toBe('https://api.openai.com/v1');
+  expect(preset.secretRef).toBeNull();
+  expect(preset.authEnvVar).toBeNull();
+  expect(preset.model).toBe('model-a');
+  expect(preset.modelRecords).toBeUndefined();
+
+  await page.locator('[data-profile-id="pi-models"]').getByRole('button', { name: '修改' }).click();
+  await dialog.getByLabel('sibling name').fill('Renamed');
+  await openAdvanced(dialog);
+  await dialog.getByRole('button', { name: 'Demo' }).click();
+  await expect(dialog.getByLabel('sibling name')).toHaveValue('Renamed');
+  await expect(dialog.getByLabel('API 地址')).toHaveValue('https://demo.example/v1');
+  await dialog.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  const samePreset = await savedConnection(page);
+  expect(samePreset.providerId).toBe('demo');
+  expect(samePreset.baseUrl).toBe('https://demo.example/v1');
+  expect(samePreset.secretRef).toBeNull();
+  expect(samePreset.modelRecords).toEqual([
+    { id: 'model-a', fields: { contextWindow: 100, cost: { input: 1 }, modalities: ['text'] } },
+    { id: 'sibling', fields: { name: 'Renamed' } },
+  ]);
 });
