@@ -6,7 +6,7 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { native, nativeAvailable } from '../../lib/native';
 import { confirmAction, type ConfirmationOptions } from '../../lib/confirm';
 import { sameDraftRequest } from '../../lib/draftGuard';
-import { importedConnection, retainSameProviderModelRecords } from '../../lib/nativeDraft';
+import { importedConnection } from '../../lib/nativeDraft';
 import type { ModelRoleValue } from '../../adapters/contract';
 import type { DraftRequest } from '../../lib/draftGuard';
 import type { ApiError } from '../../types/domain';
@@ -96,6 +96,12 @@ function connectionForProvider(connection: Connection, providerId: string, patch
   const next: Connection = { ...connection, ...patch, providerId };
   if (providerId !== connection.providerId) delete next.modelRecords;
   return next;
+}
+
+/** Model edits belong to the provider on screen; a different provider must not inherit them. */
+function retainSameProviderModelRecords(next: Connection | null, current: Connection | null): Connection | null {
+  if (!next || !current?.modelRecords || current.providerId !== next.providerId) return next;
+  return { ...next, modelRecords: current.modelRecords };
 }
 
 function providerModelRecords(connection: Connection, inspection: NativeInspection | null, projection: string): ModelRecord[] | null {
@@ -696,7 +702,9 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
         const nativeCredentials = { ...draft.nativeCredentials };
         if (pendingRaw) delete nativeCredentials[pendingRaw.role];
         Object.assign(nativeCredentials, imported.nativeCredentials);
-        let editedConnection = pendingRaw ? retainSameProviderModelRecords(imported.inspection.connection, draft.connection) : imported.migratedSecret || !draft.connection ? importedConnection(imported, draft.connection) : draft.connection;
+        const usingReplacement = !!pendingRaw || imported.migratedSecret || !draft.connection;
+        const nextConnection = pendingRaw ? imported.inspection.connection : usingReplacement ? importedConnection(imported, draft.connection) : draft.connection;
+        let editedConnection = usingReplacement ? retainSameProviderModelRecords(nextConnection, draft.connection) : nextConnection;
         editedConnection = await connectionWithSecret(editedConnection, started);
         if (!stillCurrent(started)) return;
         const oauth = draft.authentication?.kind === 'oauth';
