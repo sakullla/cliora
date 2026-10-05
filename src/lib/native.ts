@@ -217,3 +217,22 @@ export const describeConfiguration = (toolId: string, scope: Scope) => command<C
 export const openConfigurationDraft = (profile: RegisteredProfile, scope: Scope, sessionId: string) => command<ConfigurationDraft>('open_configuration_draft', { profile, scope, sessionId });
 export const editConfigurationDraft = (draft: ConfigurationDraft, action: ConfigurationAction) => command<ConfigurationDraft>('edit_configuration_draft', { draft, action });
 export const replaceConfigurationText = (draft: ConfigurationDraft, files: Record<string, string>) => command<ConfigurationDraft>('replace_configuration_text', { draft, files });
+
+// Workspace drafts retain their source/baseline in Rust. Profile/common saves are DB only.
+export const beginConfigurationDraft = (request: import('../types/configuration').ConfigurationBeginRequest) => command<ConfigurationDraft>('begin_configuration_draft', { request });
+export const updateConfigurationDraft = (draft: ConfigurationDraft, profile: RegisteredProfile) => command<ConfigurationDraft>('update_configuration_draft', { draft, profile });
+export const selectConfigurationCredential = (draft: ConfigurationDraft, credential: import('../types/configuration').ConfigurationCredential) => command<ConfigurationDraft>('select_configuration_credential', { draft, credential });
+export const setConfigurationDraftSecret = (draft: ConfigurationDraft, secret: string) => command<ConfigurationDraft>('set_configuration_draft_secret', { draft, secret });
+export const cancelConfigurationDraft = (sessionId: string) => command<void>('cancel_configuration_draft', { sessionId });
+export const addConfigurationModels = (draft: ConfigurationDraft, ids: string[]) => command<ConfigurationDraft>('add_configuration_models', { draft, ids });
+export const listConfigurationModels = (draft: ConfigurationDraft, force = false, query = '') => command<import('../types/configuration').ConfigurationDirectoryResult>('list_configuration_models', { draft, force, query });
+export const checkConfigurationConnection = (draft: ConfigurationDraft, allowModelRequest = false) => command<import('../types/configuration').ConfigurationCheckResult>('check_configuration_connection', { draft, allowModelRequest });
+export const saveConfigurationDraft = (draft: ConfigurationDraft) => command<import('../types/configuration').ConfigurationSaveResult>('save_configuration_draft', { draft });
+export const commonInfluence = (toolId: string) => command<import('../types/configuration').CommonInfluence>('common_influence', { toolId });
+export const applyCommonConfiguration = (common: RegisteredCommon, targets: import('../types/configuration').CommonInfluenceTarget[]) => command<import('../types/configuration').CommonApplicationResult[]>('apply_common_configuration', { common, targets });
+export const removeConfigurationDraftSecret = (draft: ConfigurationDraft) => command<ConfigurationDraft>('remove_configuration_draft_secret', { draft });
+export const revealConfigurationDraftSecret = (draft: ConfigurationDraft) => command<string>('reveal_configuration_draft_secret', { draft });
+export const compareConfigurationCurrent = (draft: ConfigurationDraft) => command<import('../types/configuration').ConfigurationCurrentComparison>('compare_configuration_current', { draft });
+export const rebaseConfigurationCurrent = (draft: ConfigurationDraft, comparisonId: string, files: Record<string, string>) => command<ConfigurationDraft>('rebase_configuration_current', { draft, comparisonId, files });
+export const previewConfigurationBackup = (draft: ConfigurationDraft, role: string, transactionId: string) => command<import('../types/configuration').ConfigurationBackupPreview>('preview_configuration_backup', { draft, role, transactionId });
+export const restoreConfigurationBackup = (draft: ConfigurationDraft, role: string, transactionId: string) => command<import('../types/configuration').ConfigurationSaveResult>('restore_configuration_backup', { draft, role, transactionId });

@@ -1,213 +1,32 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { ReactNode, SetStateAction } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import { native, nativeAvailable } from '../../lib/native';
-import { confirmAction, type ConfirmationOptions } from '../../lib/confirm';
-import { sameDraftRequest } from '../../lib/draftGuard';
-import { importedConnection } from '../../lib/nativeDraft';
-import type { ModelRoleValue } from '../../adapters/contract';
-import type { DraftRequest } from '../../lib/draftGuard';
-import type { ApiError } from '../../types/domain';
+import { confirmAction } from '../../lib/confirm';
+import type { AdapterDescriptor, RegisteredProfile, RegisteredToolWorkspace, Scope, ApplyComparison } from '../../types/native';
+import type { ConfigurationDraft, ConfigurationSaveResult, ConfigurationSubject } from '../../types/configuration';
 import type { AccountImpactScope } from '../../types/accounts';
-import type { UsageQuery } from '../../types/usage';
 import type { Project, TrayRepairTarget } from '../../types/launch';
-import type { AdapterDescriptor, ApplyComparison, Connection, ConnectionCheck, ModelDirectory, ModelRecord, NativeInspection, NativePreview, RegisteredCommon, RegisteredProfile, RegisteredToolWorkspace, Scope } from '../../types/native';
-import { authEnvName, uiAdapterFor } from '../../adapters';
-import { AccountsPanel, accountStates, useAccounts } from './AccountsPanel';
+import type { UsageQuery } from '../../types/usage';
+import { AccountsPanel, useAccounts } from './AccountsPanel';
 import { ProfileQuota, QuotaEditor, useUsageQuota } from './UsageQuota';
 import { InstallPanel } from './InstallPanel';
-import { ModelCombobox } from './ModelCombobox';
+import { ConfigurationWorkspaceEditor } from './configuration/ConfigurationWorkspaceEditor';
 import { McpWorkspace, SkillsWorkspace } from './ResourceWorkspace';
 import { PluginsWorkspace } from './PluginsWorkspace';
 import { AgentsWorkspace } from './AgentsWorkspace';
 import { ToolIcon } from '../../components/ToolIcon';
-import { FileConflict } from '../../components/FileConflict';
 import { FilterSelect } from '../../components/FilterSelect';
 import { GuideDialog } from '../../components/GuideDialog';
-import { displayPath, shortPath } from '../../lib/paths';
-import { writeClipboard } from '../../lib/clipboard';
-import { saveShortcutHint } from '../../lib/shortcut';
+import { CodeEditor } from '../../components/CodeEditor';
+import { shortPath } from '../../lib/paths';
 import { navigateChoices } from '../../lib/choiceNavigation';
-import { CodeEditor, preloadCodeEditor } from '../../components/CodeEditor';
 import styles from './ToolWorkspace.module.css';
 
-type View = 'form' | 'native' | 'merged';
-type Editor = 'profile' | 'common' | 'native';
-
-function errorText(value: unknown): string {
-  if (value instanceof Error) return value.message;
-  if (value && typeof value === 'object' && 'message' in value) return String((value as ApiError).message);
-  return '操作失败，请重试。';
-}
-
-function defaultConnection(formats: string[]): Connection {
-  return { providerId: '', interfaceFormat: formats[0] ?? 'openai_responses', baseUrl: '', model: '', secretRef: null, authEnvVar: null };
-}
-
-function formatBackupTime(createdAt: number, index: number): string {
-  if (createdAt) return new Date(createdAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-  return index === 0 ? '最近一次' : `往前 ${index} 次`;
-}
-
-function formatLabel(value: string): string {
-  return ({ openai_completions: 'Chat Completions', openai_responses: 'Responses', anthropic_messages: 'Anthropic Messages' } as Record<string, string>)[value] ?? value;
-}
-
-function profileFacts(item: RegisteredProfile): { label: string; title?: string }[] {
-  const kind = item.authentication?.kind;
-  const auth = kind === 'api_key' ? 'API Key' : kind === 'oauth' ? 'OAuth' : kind === 'rebind_required' ? '需重新绑定' : '原生认证';
-  const url = item.connection?.baseUrl?.trim() ?? '';
-  let host = '';
-  if (url) {
-    try { host = new URL(url).host; }
-    catch { host = url.replace(/^https?:\/\//, '').split('/')[0] ?? ''; }
-  }
-  return [{ label: auth }, ...(host ? [{ label: host, title: url }] : [])];
-}
-
-function connectionShape(value: Connection | null): string {
-  return value ? JSON.stringify([value.providerId, value.interfaceFormat, value.baseUrl, value.model, value.authEnvVar]) : '';
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
-}
-
-/** Keep only keys already stored on the projected model. Edits cannot add fields. */
-function mergeFields(base: Record<string, unknown>, edit?: Record<string, unknown>): Record<string, unknown> {
-  if (!edit) return base;
-  const next: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(base)) {
-    if (isRecord(value)) next[key] = mergeFields(value, isRecord(edit[key]) ? edit[key] : undefined);
-    else next[key] = Object.prototype.hasOwnProperty.call(edit, key) ? edit[key] : value;
-  }
-  return next;
-}
-
-function setField(fields: Record<string, unknown>, path: string[], value: unknown): Record<string, unknown> {
-  const [head, ...rest] = path;
-  if (!head) return fields;
-  if (!rest.length) return { ...fields, [head]: value };
-  const child = fields[head];
-  return { ...fields, [head]: setField(isRecord(child) ? child : {}, rest, value) };
-}
-
-function connectionForProvider(connection: Connection, providerId: string, patch: Partial<Connection> = {}): Connection {
-  const next: Connection = { ...connection, ...patch, providerId };
-  if (providerId !== connection.providerId) delete next.modelRecords;
-  return next;
-}
-
-/** Model edits belong to the provider on screen; a different provider must not inherit them. */
-function retainSameProviderModelRecords(next: Connection | null, current: Connection | null): Connection | null {
-  if (!next || !current?.modelRecords || current.providerId !== next.providerId) return next;
-  return { ...next, modelRecords: current.modelRecords };
-}
-
-function providerModelRecords(connection: Connection, inspection: NativeInspection | null, projection: string): ModelRecord[] | null {
-  if (projection !== 'provider_models') return null;
-  const selected = connection.providerId.trim();
-  const inspected = inspection?.providerId?.trim() ?? '';
-  const projected = inspection?.projectedModels;
-  if (projected && inspected && selected && inspected !== selected) return [];
-  if (!projected) return connection.modelRecords ?? [];
-  const edits = connection.modelRecords ?? [];
-  return projected.map((record) => {
-    const edit = edits.find((item) => item.id === record.id);
-    return { id: record.id, fields: mergeFields(record.fields, edit?.fields) };
-  });
-}
-
-/** A finished numeric literal. Trailing dots, a lone sign, and an unfinished exponent are not numbers yet. */
-function isCompleteNumber(text: string): boolean {
-  const trimmed = text.trim();
-  return /^[+-]?(?:\d+\.\d+|\d+|\.\d+)(?:[eE][+-]?\d+)?$/.test(trimmed) && Number.isFinite(Number(trimmed));
-}
-
-function completeJsonArray(text: string): unknown[] | null {
-  try {
-    const parsed = JSON.parse(text) as unknown;
-    return Array.isArray(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function ModelNumberInput({ ariaLabel, value, onCommit }: { ariaLabel: string; value: number; onCommit: (next: number) => void }) {
-  const [text, setText] = useState(() => String(value));
-  const [seen, setSeen] = useState(value);
-  if (value !== seen) {
-    if (!(isCompleteNumber(text) && Number(text) === value)) setText(String(value));
-    setSeen(value);
-  }
-  return <input aria-label={ariaLabel} value={text} onChange={(event) => {
-    const typed = event.target.value;
-    setText(typed);
-    if (!isCompleteNumber(typed)) return;
-    onCommit(Number(typed.trim()));
-  }} />;
-}
-
-function ModelArrayInput({ ariaLabel, value, onCommit }: { ariaLabel: string; value: unknown[]; onCommit: (next: unknown[]) => void }) {
-  const serialized = JSON.stringify(value);
-  const [text, setText] = useState(serialized);
-  const [seen, setSeen] = useState(serialized);
-  if (serialized !== seen) {
-    const parsed = completeJsonArray(text);
-    if (!parsed || JSON.stringify(parsed) !== serialized) setText(serialized);
-    setSeen(serialized);
-  }
-  return <input aria-label={ariaLabel} value={text} onChange={(event) => {
-    const typed = event.target.value;
-    setText(typed);
-    const parsed = completeJsonArray(typed);
-    if (parsed) onCommit(parsed);
-  }} />;
-}
-
-function modelFieldControls(recordId: string, fields: Record<string, unknown>, onChange: (id: string, path: string[], value: unknown) => void, path: string[] = []): ReactNode[] {
-  return Object.entries(fields).map(([key, value]) => {
-    const next = [...path, key];
-    const label = next.join('.');
-    const aria = `${recordId} ${label}`;
-    if (isRecord(value)) return <div key={label} className={styles.modelFields}>{modelFieldControls(recordId, value, onChange, next)}</div>;
-    if (typeof value === 'boolean') return <label key={label} className={styles.check}><input type="checkbox" aria-label={aria} checked={value} onChange={(event) => onChange(recordId, next, event.target.checked)} />{label}</label>;
-    if (Array.isArray(value)) return <label key={label}>{label}<ModelArrayInput ariaLabel={aria} value={value} onCommit={(parsed) => onChange(recordId, next, parsed)} /></label>;
-    if (typeof value === 'number') return <label key={label}>{label}<ModelNumberInput ariaLabel={aria} value={value} onCommit={(parsed) => onChange(recordId, next, parsed)} /></label>;
-    const text = value === null || value === undefined ? '' : String(value);
-    return <label key={label}>{label}<input aria-label={aria} value={text} onChange={(event) => onChange(recordId, next, event.target.value)} /></label>;
-  });
-}
-
-function workspaceKey(toolId: string, scope: Scope, projectPath: string) {
-  return `${toolId}\0${scope}\0${projectPath}`;
-}
-
-const rememberedWorkspaces = new Map<string, RegisteredToolWorkspace>();
-const workspaceRequests = new Map<string, Promise<RegisteredToolWorkspace>>();
-
-function requestWorkspace(toolId: string, scope: Scope, projectPath: string, fresh: boolean) {
-  const key = workspaceKey(toolId, scope, projectPath);
-  if (!fresh) {
-    const pending = workspaceRequests.get(key);
-    if (pending) return pending;
-  }
-  const request = native.getRegisteredToolWorkspace(toolId, scope, projectPath, false, fresh).then((result) => {
-    rememberedWorkspaces.set(key, result);
-    return result;
-  }).finally(() => {
-    if (workspaceRequests.get(key) === request) workspaceRequests.delete(key);
-  });
-  if (!fresh) workspaceRequests.set(key, request);
-  return request;
-}
-
-function emptyProfile(tool: string): RegisteredProfile {
-  return { id: '', tool, name: '', version: 0, inheritCommon: false, files: {}, suppressed: {}, connection: null, nativeCredentials: {} };
-}
-
+const errorText = (value: unknown) => value && typeof value === 'object' && 'message' in value ? String(value.message) : '操作失败，请重试。';
+function host(address?: string) { try { return address ? new URL(address).host : ''; } catch { return '地址待核验'; } }
 function RowMenu({ label, children }: { label: string; children: ReactNode }) {
   const [open, setOpen] = useState(false);
   const [box, setBox] = useState<{ top: number; left: number } | null>(null);
@@ -251,1012 +70,176 @@ function RowMenu({ label, children }: { label: string; children: ReactNode }) {
   </div>;
 }
 
+
+type ResourceView = 'config' | 'accounts' | 'mcp' | 'skills' | 'plugins' | 'agents';
+type EditFrame = { key: string; subject: ConfigurationSubject; profile: RegisteredProfile | null; title: string };
 export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0, active = true, repair, onDirtyChange }: { active?: boolean; managedTools: AdapterDescriptor[]; initialTool?: string; openSequence?: number; repair?: TrayRepairTarget | null; onDirtyChange?: (dirty: boolean) => void }) {
-  const [tool, setTool] = useState<string>(repair?.toolId ?? initialTool ?? managedTools[0]?.id ?? '');
+  const [tool, setTool] = useState(repair?.toolId ?? initialTool ?? managedTools[0]?.id ?? '');
+  const descriptor = managedTools.find(item => item.id === tool) ?? managedTools[0];
+  const toolId = descriptor?.id ?? '';
   const [scope, setScope] = useState<Scope>(repair?.scope ?? 'global');
   const [projectPath, setProjectPath] = useState(repair?.projectPath ?? '');
   const [projects, setProjects] = useState<Project[]>([]);
-  const quotaState = useUsageQuota(active);
-  const [quotaAddFor, setQuotaAddFor] = useState<string | null>(null);
-  const [accountUsageQuery, setAccountUsageQuery] = useState<UsageQuery | null>(null);
-  const clearQuotaAdd = useCallback(() => setQuotaAddFor(null), []);
-  const accountState = useAccounts(tool, active);
-  const [preferredProfileId, setPreferredProfileId] = useState<string | null>(repair?.profileId ?? null);
-  const appliedRepair = useRef(repair?.sequence ?? 0);
-  const appliedOpenSequence = useRef(0);
   const [workspace, setWorkspace] = useState<RegisteredToolWorkspace | null>(null);
-  const [editor, setEditor] = useState<Editor>('profile');
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [profileQuery, setProfileQuery] = useState('');
-  const draftRevision = useRef(0);
-  const [draft, setDraftState] = useState<RegisteredProfile | null>(null);
-  const setDraft = (value: SetStateAction<RegisteredProfile | null>) => {
-    draftRevision.current++;
-    setDraftState(value);
-  };
-  const [commonDraft, setCommonDraft] = useState<RegisteredCommon | null>(null);
-  const [view, setView] = useState<View>('form');
-  const [resourceView, setResourceView] = useState<'config' | 'mcp' | 'skills' | 'accounts' | 'plugins' | 'agents'>(repair?.resourceView ?? 'config');
-  const [mcpDirty, setMcpDirty] = useState(false);
-  const [skillsDirty, setSkillsDirty] = useState(false);
-  const [agentsDirty, setAgentsDirty] = useState(false);
-  const [resourceEpoch, setResourceEpoch] = useState(0);
-  const [role, setRole] = useState('settings');
-  const [preview, setPreview] = useState<NativePreview | null>(null);
-  const [modelDirectory, setModelDirectory] = useState<ModelDirectory | null>(null);
-  const [modelLoading, setModelLoading] = useState(false);
-  const [connectionCheck, setConnectionCheck] = useState<ConnectionCheck | null>(null);
-  const [inspection, setInspection] = useState<NativeInspection | null>(null);
-  const [checkingConnection, setCheckingConnection] = useState(false);
-  const [newSecret, setNewSecret] = useState('');
-  const [revealedSecret, setRevealedSecret] = useState<string | null>(null);
-  const [rawDisk, setRawDisk] = useState<{ context: string; role: string; original: string; text: string } | null>(null);
-  const [customPath, setCustomPath] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [enablingId, setEnablingId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const [fileConflict, setFileConflict] = useState<{ context: string; current: string } | null>(null);
-  const [backups, setBackups] = useState<{ transactionId: string; path: string; createdAt: number }[]>([]);
-  const [backupPreview, setBackupPreview] = useState<{ transactionId: string; current: string; original: string } | null>(null);
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const [applyComparison, setApplyComparison] = useState<ApplyComparison | null>(null);
-  const [copiedPath, setCopiedPath] = useState('');
-  const copiedTimer = useRef(0);
-  const [guide, setGuide] = useState(false);
-  const pendingGuide = useRef(false);
-  const editRef = useRef({ guide: false, editor: 'profile' as Editor, draft: null as RegisteredProfile | null, loaded: false });
+  const [busy, setBusy] = useState(false);
+  const [applying, setApplying] = useState<string | null>(null);
+  const [resource, setResource] = useState<ResourceView>(repair?.resourceView ?? 'config');
+  const [frame, setFrame] = useState<EditFrame | null>(null);
+  const [dirty, setDirty] = useState(false);
+  const [resourceDirty, setResourceDirty] = useState({ mcp: false, skills: false, agents: false });
+  const [resourceEpoch, setResourceEpoch] = useState(0);
+  const mcpDirty = useCallback((value: boolean) => setResourceDirty(previous => previous.mcp === value ? previous : { ...previous, mcp: value }), []);
+  const skillsDirty = useCallback((value: boolean) => setResourceDirty(previous => previous.skills === value ? previous : { ...previous, skills: value }), []);
+  const agentsDirty = useCallback((value: boolean) => setResourceDirty(previous => previous.agents === value ? previous : { ...previous, agents: value }), []);
+  const [comparison, setComparison] = useState<ApplyComparison | null>(null);
+  const [filter, setFilter] = useState('');
+  const [customPath, setCustomPath] = useState('');
+  const [quotaAddFor, setQuotaAddFor] = useState<string | null>(null);
+  const [accountUsageQuery, setAccountUsageQuery] = useState<UsageQuery | null>(null);
+  const quota = useUsageQuota(active);
+  const accounts = useAccounts(toolId, active);
   const loadSequence = useRef(0);
-  const modelSequence = useRef(0);
-  const modelWrite = useRef(0);
-  const modelSource = useRef('');
-  const inspectionSequence = useRef(0);
-  const importSequence = useRef(0);
-  const rawSequence = useRef(0);
-  const editorContextId = useRef<string | null>(null);
-  const reasoningSequence = useRef(0);
-  const previewSequence = useRef(0);
-  const savedDraft = useRef('');
-  useEffect(() => {
-    if (!nativeAvailable || !active) return;
-    let live = true;
-    void native.listProjects().then(result => { if (live) setProjects(result); }).catch(value => { if (live) setError(errorText(value)); });
-    return () => { live = false; };
-  }, [active]);
-
-  const visibleTools = managedTools;
-  const prefetchIds = visibleTools.map((item) => item.id).join('\0');
-  const currentTool = visibleTools.some((item) => item.id === tool) ? tool : visibleTools[0]?.id;
-  useEffect(()=>setApplyComparison(null),[currentTool,scope,projectPath]);
-  const currentDescriptor = visibleTools.find((item) => item.id === currentTool);
-  editRef.current = { guide, editor, draft, loaded: workspace !== null };
-  const toolName = currentDescriptor?.name ?? currentTool ?? '';
-  const uiAdapter = uiAdapterFor(currentTool ?? '');
-  const management = currentDescriptor?.management;
-  const supports = {
-    config: true,
-    accounts: management?.accounts ?? true,
-    mcp: management?.mcp ?? true,
-    skills: management?.skills ?? true,
-    agents: management?.agents ?? true,
-    plugins: (management?.plugins ?? true) && (scope !== 'project' || (management?.projectPlugins ?? true)),
-  };
-  useEffect(() => {
-    if (!supports[resourceView]) setResourceView('config');
-  }, [currentTool, resourceView, supports.accounts, supports.mcp, supports.skills, supports.agents, supports.plugins]);
-  useEffect(() => { if (resourceView !== 'accounts') setAccountUsageQuery(null); }, [resourceView]);
-
-  const draftContext = JSON.stringify([currentTool, scope, projectPath, selectedId, editor]);
-  const latestDraft = useRef<DraftRequest<RegisteredProfile>>({ context: draftContext, revision: draftRevision.current, draft });
-  latestDraft.current = { context: draftContext, revision: draftRevision.current, draft };
-  const captureDraft = (): DraftRequest<RegisteredProfile> => ({ ...latestDraft.current });
-  const stillCurrent = (started: DraftRequest<RegisteredProfile>) => sameDraftRequest(started, { ...latestDraft.current, revision: draftRevision.current });
-  const invalidateDraftRequest = () => { draftRevision.current++; };
-  const connection = draft?.connection ?? (draft && editor === 'profile' ? { ...defaultConnection(workspace?.probe.interfaceFormats ?? []), providerId:'my-provider' } : null);
-  useEffect(() => { setRevealedSecret(null); }, [draftContext, connection?.secretRef, newSecret]);
-  const fileSignature = JSON.stringify(draft?.files ?? {});
-  const effectiveEnvName = authEnvName(uiAdapter, connection, currentTool ?? '');
-  const pendingRaw = rawDisk?.context === draftContext ? rawDisk : null;
-  const activeRaw = pendingRaw?.role === role ? pendingRaw : null;
-  const dirty = (editor === 'profile' ? !!draft && JSON.stringify(draft) !== savedDraft.current : editor === 'common' && !!commonDraft && JSON.stringify(commonDraft) !== savedDraft.current) || !!pendingRaw && pendingRaw.text !== pendingRaw.original || !!newSecret;
-  const refreshState = useRef({ currentTool, scope, projectPath, selectedId, editor, dirty, busy, mcpDirty, skillsDirty, agentsDirty });
-  refreshState.current = { currentTool, scope, projectPath, selectedId, editor, dirty, busy, mcpDirty, skillsDirty, agentsDirty };
-  const accountNavigationContext = JSON.stringify([currentTool, scope, projectPath, resourceView]);
-  const latestAccountNavigation = useRef(accountNavigationContext); latestAccountNavigation.current = accountNavigationContext;
-  const confirmationContext = JSON.stringify([draftContext, draft, commonDraft, rawDisk, newSecret, mcpDirty, skillsDirty, agentsDirty]);
-  const latestConfirmation = useRef(confirmationContext); latestConfirmation.current = confirmationContext;
-  const mounted = useRef(true);
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  useEffect(() => {
-    if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(''), 5000);
-    return () => window.clearTimeout(timer);
-  }, [notice]);
-  useEffect(() => {
-    const refresh = () => {
-      const state = refreshState.current;
-      if (!state.currentTool || state.dirty || state.busy || state.mcpDirty || state.skillsDirty || state.agentsDirty) return;
-      void native.getRegisteredToolWorkspace(state.currentTool, state.scope, state.projectPath, false, true).then((result) => {
-        if (!mounted.current) return;
-        const now = refreshState.current;
-        if (now.dirty || now.busy || now.currentTool !== state.currentTool) return;
-        const key = workspaceKey(state.currentTool, state.scope, state.projectPath);
-        const previous = rememberedWorkspaces.get(key);
-        if (previous) rememberedWorkspaces.set(key, { ...previous, probe: result.probe });
-        setWorkspace((current) => current ? { ...current, probe: result.probe } : current);
-      }).catch(() => undefined);
-    };
-    window.addEventListener('focus', refresh);
-    return () => window.removeEventListener('focus', refresh);
-  }, []);
-  async function confirmChange(message: string, options: ConfirmationOptions = { title: '放弃未保存修改？', confirmLabel: '放弃修改' }) {
-    const started = captureDraft();
-    const context = latestConfirmation.current;
-    return confirmAction(message, () => mounted.current && stillCurrent(started) && context === latestConfirmation.current, options);
-  }
-  async function closeGuide() {
-    if ((dirty || mcpDirty || skillsDirty || agentsDirty) && !await confirmChange('当前草稿尚未保存，关闭后会丢失这些修改。继续吗？')) return;
-    setHistoryOpen(false); setBackupPreview(null);
-    rawSequence.current++; setBusy(false);
-    setGuide(false);
-  }
-  useLayoutEffect(() => { onDirtyChange?.(dirty || mcpDirty || skillsDirty || agentsDirty); }, [dirty, mcpDirty, skillsDirty, agentsDirty, onDirtyChange]);
-  useEffect(() => () => { onDirtyChange?.(false); }, [onDirtyChange]);
-
-  const reload = useCallback(async (nextTool: string, nextScope: Scope, nextProject: string, preferredId?: string | null, fresh = false) => {
-    if (!nativeAvailable || (nextScope === 'project' && !nextProject.trim())) { loadSequence.current++; setWorkspace(null); return; }
-    const sequence = ++loadSequence.current;
-    const cached = fresh ? undefined : rememberedWorkspaces.get(workspaceKey(nextTool, nextScope, nextProject));
-    if (!cached) setLoading(true);
-    setError('');
+  const alive = useRef(true);
+  const epoch = useRef(0);
+  const context = JSON.stringify([toolId, scope, projectPath]);
+  const currentContext = useRef(context); currentContext.current = context;
+  const currentFrame = useRef(frame); currentFrame.current = frame;
+  const allDirty = dirty || Object.values(resourceDirty).some(Boolean);
+  const currentDirty = useRef(allDirty); currentDirty.current = allDirty;
+  const appliedRepair = useRef(0);
+  const appliedOpen = useRef(0);
+  const management = descriptor?.management;
+  const supported = { config: true, accounts: management?.accounts ?? true, mcp: management?.mcp ?? true, skills: management?.skills ?? true, agents: management?.agents ?? true, plugins: (management?.plugins ?? true) && (scope === 'global' || (management?.projectPlugins ?? true)) };
+  useEffect(() => { alive.current = true; return () => { alive.current = false; loadSequence.current++; }; }, []);
+  useLayoutEffect(() => { onDirtyChange?.(allDirty); }, [allDirty, onDirtyChange]);
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
+  useEffect(() => { if (!supported[resource]) setResource('config'); if (resource !== 'accounts') setAccountUsageQuery(null); }, [resource, supported.accounts, supported.mcp, supported.skills, supported.agents, supported.plugins]);
+  const reload = useCallback(async (nextTool: string, nextScope: Scope, nextProject: string) => {
+    if (!nativeAvailable || !nextTool || nextScope === 'project' && !nextProject) { setLoading(false); setWorkspace(null); return null; }
+    const request = ++loadSequence.current; setLoading(true); setError('');
     try {
-      const result = await requestWorkspace(nextTool, nextScope, nextProject, fresh);
-      if (sequence !== loadSequence.current) return;
-      const editing = editRef.current;
-      const openAfterLoad = pendingGuide.current;
-      pendingGuide.current = false;
-      const keepEdit = editing.guide && (editing.editor !== 'profile' || !!editing.draft);
-      setWorkspace(result);
-      setCustomPath(result.customPath ?? '');
-      if (keepEdit) return;
-      setRawDisk(null);
-      setEditor('profile');
-      const next = result.profiles.find((item) => item.id === preferredId) ?? result.profiles.find((item) => item.id === result.binding?.profileId) ?? result.profiles[0] ?? null;
-      setSelectedId(next?.id ?? null);
-      setDraft(next ? structuredClone(next) : null);
-      savedDraft.current = next ? JSON.stringify(next) : '';
-      if (openAfterLoad && next) setGuide(true);
-      else if (editing.guide && editing.editor === 'profile' && !editing.draft) setGuide(false);
-      setCommonDraft(result.common ? structuredClone(result.common) : { tool: nextTool, version: 0, files: {} });
-      setRole(result.probe.nativeFiles.find(item => !item.sensitive && item.role === uiAdapterFor(nextTool).primaryRole)?.role ?? result.probe.nativeFiles.find((item) => !item.sensitive)?.role ?? 'settings');
-    } catch (value) {
-      if (sequence === loadSequence.current) { setWorkspace(null); setError(errorText(value)); }
-    } finally { if (sequence === loadSequence.current) setLoading(false); }
+      const value = await native.getRegisteredToolWorkspace(nextTool, nextScope, nextProject, false, true);
+      if (!alive.current || request !== loadSequence.current) return null;
+      setWorkspace(value); setCustomPath(value.customPath ?? ''); return value;
+    } catch (failure) { if (alive.current && request === loadSequence.current) setError(errorText(failure)); return null; }
+    finally { if (alive.current && request === loadSequence.current) setLoading(false); }
   }, []);
-
-  useLayoutEffect(() => {
-    loadSequence.current++; invalidateDraftRequest(); inspectionSequence.current++;
-    rawSequence.current++; setBusy(false);
-    setFileConflict(null); setBackups([]); setBackupPreview(null); setHistoryOpen(false); setRawDisk(null);
-    setGuide(false); setAccountUsageQuery(null);
-    setNotice(''); setError(''); setInspection(null); setNewSecret(''); setProfileQuery('');
-    const cached = currentTool && (scope !== 'project' || projectPath.trim()) ? rememberedWorkspaces.get(workspaceKey(currentTool, scope, projectPath)) : undefined;
-    if (cached && currentTool) {
-      setWorkspace(cached);
-      setCustomPath(cached.customPath ?? '');
-      setEditor('profile');
-      const next = cached.profiles.find((item) => item.id === preferredProfileId) ?? cached.profiles.find((item) => item.id === cached.binding?.profileId) ?? cached.profiles[0] ?? null;
-      setSelectedId(next?.id ?? null);
-      setDraft(next ? structuredClone(next) : null);
-      savedDraft.current = next ? JSON.stringify(next) : '';
-      setCommonDraft(cached.common ? structuredClone(cached.common) : { tool: currentTool, version: 0, files: {} });
-      setRole(cached.probe.nativeFiles.find(item => !item.sensitive && item.role === uiAdapterFor(currentTool).primaryRole)?.role ?? cached.probe.nativeFiles.find((item) => !item.sensitive)?.role ?? 'settings');
-      setLoading(false);
-    } else {
-      setWorkspace(null); setDraft(null); setCommonDraft(null); setSelectedId(null); savedDraft.current = '';
-      setLoading(!!currentTool && (scope !== 'project' || !!projectPath.trim()));
-    }
-  }, [currentTool, scope, projectPath]);
-  useEffect(() => { if (active && currentTool) void reload(currentTool, scope, projectPath, preferredProfileId); }, [active, currentTool, scope, projectPath, preferredProfileId, reload]);
+  useEffect(() => { setWorkspace(null); setFrame(null); setDirty(false); setComparison(null); setFilter(''); setNotice(''); epoch.current++; if (active) void reload(toolId, scope, projectPath); }, [toolId, scope, projectPath, reload]);
+  useEffect(() => { if (active && !workspace) void reload(toolId, scope, projectPath); }, [active]);
+  useEffect(() => { if (nativeAvailable && active) void native.listProjects().then(value => { if (alive.current) setProjects(value); }).catch(failure => { if (alive.current) setError(errorText(failure)); }); }, [active]);
   useEffect(() => {
-    if (!active || !currentTool || !nativeAvailable || (scope === 'project' && !projectPath.trim())) return;
-    const others = prefetchIds.split('\0').filter((id) => id && id !== currentTool);
-    let cancel = false;
-    const timer = window.setTimeout(() => {
-      void (async () => {
-        for (const id of others) {
-          if (cancel || rememberedWorkspaces.has(workspaceKey(id, scope, projectPath))) continue;
-          try { await requestWorkspace(id, scope, projectPath, false); } catch { /* the click still loads this CLI and shows its error */ }
-        }
-      })();
-    }, 300);
-    return () => { cancel = true; window.clearTimeout(timer); };
-  }, [active, currentTool, scope, projectPath, prefetchIds]);
-
-  async function discardUnsavedDrafts() {
-    invalidateDraftRequest();
-    setRawDisk(null);
-    setNewSecret('');
-    setRevealedSecret(null);
-    setNotice('');
-    setMcpDirty(false);
-    setSkillsDirty(false);
-    setResourceEpoch((value) => value + 1);
-    if (currentTool) {
-      await reload(currentTool, scope, projectPath, selectedId);
-      return;
-    }
-    setDraft(null);
-    setCommonDraft(null);
-    setSelectedId(null);
-    setEditor('profile');
-    savedDraft.current = '';
+    if (!active || !nativeAvailable) return;
+    const refresh = () => { if (!currentDirty.current && !currentFrame.current) void reload(toolId, scope, projectPath); };
+    window.addEventListener('focus', refresh); let stop: (() => void) | undefined; let live = true;
+    void listen('cliora:bindings-changed', refresh).then(value => { if (live) stop = value; else value(); }).catch(() => {});
+    return () => { live = false; stop?.(); window.removeEventListener('focus', refresh); };
+  }, [toolId, scope, projectPath, active, reload]);
+  async function mayLeave(message = '当前草稿尚未保存，继续会丢失这些修改。是否放弃修改？') {
+    if (!currentDirty.current) return true;
+    const identity = currentContext.current; const revision = epoch.current;
+    return confirmAction(message, () => alive.current && currentContext.current === identity && epoch.current === revision, { title: '放弃未保存修改？', confirmLabel: '放弃修改' });
   }
-
-  useEffect(() => {
-    if (!openSequence || appliedOpenSequence.current === openSequence) return;
-    appliedOpenSequence.current = openSequence;
-    let live = true;
-    void (async () => {
-      const hadUnsaved = dirty || mcpDirty || skillsDirty || agentsDirty;
-      if (hadUnsaved && !await confirmChange('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return;
-      if (!live) return;
-      if (hadUnsaved) await discardUnsavedDrafts();
-      else invalidateDraftRequest();
-      if (!live) return;
-      if (initialTool && initialTool !== tool) {
-        pendingGuide.current = true;
-        setTool(initialTool);
-      } else if (editRef.current.draft?.id) setGuide(true);
-      else if (!editRef.current.loaded) pendingGuide.current = true;
-      setResourceView('config');
-      setNotice('');
-    })();
-    return () => { live = false; };
-  }, [openSequence]);
-
-  useEffect(() => {
-    if (!nativeAvailable) return;
-    let active = true;
-    let stop: (() => void) | undefined;
-    void listen('cliora:portable-changed', () => {
-      const started = refreshState.current;
-      if (!started.currentTool || started.scope === 'project' && !started.projectPath.trim()) return;
-      const sequence = ++loadSequence.current;
-      void native.getRegisteredToolWorkspace(started.currentTool, started.scope, started.projectPath).then((result) => {
-        if (!active || sequence !== loadSequence.current) return;
-        const current = refreshState.current;
-        if (current.currentTool !== started.currentTool || current.scope !== started.scope || current.projectPath !== started.projectPath) return;
-        setWorkspace(result);
-        setLoading(false);
-        if (current.dirty || current.busy || current.mcpDirty || current.skillsDirty || current.agentsDirty) {
-          setNotice('已收到资料更新；当前未保存草稿已保留，保存时会检查资料是否变化。');
-          return;
-        }
-        const common = result.common ? structuredClone(result.common) : { tool: started.currentTool!, version: 0, files: {} };
-        setCommonDraft(common);
-        if (current.editor === 'common') { savedDraft.current = JSON.stringify(common); return; }
-        if (current.editor === 'native') return;
-        const next = result.profiles.find((item) => item.id === current.selectedId) ?? result.profiles.find((item) => item.id === result.binding?.profileId) ?? result.profiles[0] ?? null;
-        setSelectedId(next?.id ?? null);
-        setDraft(next ? structuredClone(next) : null);
-        savedDraft.current = next ? JSON.stringify(next) : '';
-      }).catch((value) => { if (active && sequence === loadSequence.current) { setLoading(false); setError(errorText(value)); } });
-    }).then((unlisten) => { if (active) stop = unlisten; else unlisten(); }).catch(() => {});
-    return () => { active = false; stop?.(); };
-  }, []);
-
-  useEffect(() => {
-    if (!repair || repair.page !== 'connections' || appliedRepair.current === repair.sequence || !repair.toolId) return;
-    appliedRepair.current = repair.sequence;
-    let live = true;
-    void (async () => {
-      if ((dirty || mcpDirty || skillsDirty || agentsDirty) && !await confirmChange('当前草稿尚未保存，打开托盘指向的配置会丢失这些修改。继续吗？')) {
-        if (live) setNotice('当前草稿已保留；可保存后再从托盘打开修复位置。');
-        return;
-      }
-      if (!live) return;
-      invalidateDraftRequest();
-      setTool(repair.toolId!);
-      setScope(repair.scope ?? 'global');
-      setProjectPath(repair.projectPath ?? '');
-      setPreferredProfileId(repair.profileId);
-      setResourceView(repair.resourceView ?? 'config');
-      const samePlace = repair.toolId === tool && (repair.scope ?? 'global') === scope && (repair.projectPath ?? '') === projectPath && (repair.profileId ?? null) === preferredProfileId;
-      if (samePlace) {
-        if (editRef.current.draft?.id) setGuide(true);
-      } else pendingGuide.current = true;
-      setNotice('已打开托盘操作对应的配置位置。');
-      if (repair.toolId === currentTool && repair.scope === scope && (repair.projectPath ?? '') === projectPath && repair.profileId === preferredProfileId) {
-        void reload(repair.toolId!, repair.scope, repair.projectPath ?? '', repair.profileId);
-      }
-    })();
-    return () => { live = false; };
-  }, [repair?.sequence]);
-
-  useEffect(() => {
-    if (!nativeAvailable || view !== 'merged' || !draft || editor !== 'profile') return;
-    const sequence = ++previewSequence.current;
-    const timer = window.setTimeout(() => {
-      void native.previewRegisteredNativeProfile(draft, scope).then((result) => { if (sequence === previewSequence.current) { setPreview(result); setError(''); } }).catch((value) => { if (sequence === previewSequence.current) { setPreview(null); setError(errorText(value)); } });
-    }, 180);
-    return () => window.clearTimeout(timer);
-  }, [draft, editor, scope, view]);
-
-  const refreshModels = useCallback(async (source: Connection, force: boolean) => {
-    if (!nativeAvailable || !source.baseUrl.trim()) return;
-    const sequence = ++modelSequence.current;
-    setModelLoading(true);
-    try {
-      const result = await native.listProviderModels(source, force);
-      if (sequence === modelSequence.current) setModelDirectory(result);
-    } catch (value) {
-      if (sequence === modelSequence.current) setModelDirectory({ models: [], status: 'error', fetchedAt: null, source: 'provider_directory', error: errorText(value) });
-    } finally { if (sequence === modelSequence.current) setModelLoading(false); }
-  }, []);
-
-  useEffect(() => {
-    const source = connection ? JSON.stringify([connection.providerId, connection.interfaceFormat, connection.baseUrl, connection.secretRef]) : '';
-    if (source === modelSource.current) return;
-    modelSource.current = source;
-    modelSequence.current++;
-    setConnectionCheck(null);
-    setModelLoading(false);
-    if (!connection) { setModelDirectory(null); return; }
-    setModelDirectory(null);
-  }, [connection?.providerId, connection?.interfaceFormat, connection?.baseUrl, connection?.secretRef, refreshModels]);
-  useEffect(() => { setConnectionCheck(null); }, [connection?.model]);
-
-  useEffect(() => {
-    if (!draft || !currentTool || !nativeAvailable) { setInspection(null); return; }
-    const sequence = ++inspectionSequence.current;
-    const timer = window.setTimeout(() => {
-      void native.inspectRegisteredNativeDraft(currentTool, draft.files).then((result) => { if (sequence === inspectionSequence.current) setInspection(result); }).catch(() => { if (sequence === inspectionSequence.current) setInspection(null); });
-    }, 180);
-    return () => window.clearTimeout(timer);
-  }, [currentTool, fileSignature]);
-
-  const roleModels = uiAdapter.modelMapping?.read(draft?.files[uiAdapter.modelMapping.fileRole] ?? '') ?? {};
-  const primaryModel = draft?.connection ? uiAdapter.modelMapping?.decodeModel?.(connection?.model ?? '') ?? {model:connection?.model ?? '',name:'',longContext:false}
-    : (uiAdapter.modelMapping?.primaryRole ? roleModels[uiAdapter.modelMapping.primaryRole] : undefined) ?? {model:connection?.model ?? '',name:'',longContext:false};
-  if (uiAdapter.modelMapping?.primaryRole && connection) roleModels[uiAdapter.modelMapping.primaryRole] = primaryModel;
-  const modelOptions = useMemo(() => [...new Set([...(primaryModel.model ? [primaryModel.model] : []), ...(modelDirectory?.models ?? [])])], [modelDirectory, primaryModel.model]);
-  const connectionPolicy = workspace?.probe.connectionPolicy;
-  const apiKeyState = connectionPolicy?.apiKey?.state ?? 'writable';
-  const apiKeyWritable = apiKeyState === 'writable';
-  const addressConfigurable = (connectionPolicy?.providerAddress?.state ?? 'configurable') !== 'unsupported';
-  const projection = connectionPolicy?.projection ?? 'single_connection';
-  const availableRoles = workspace?.probe.nativeFiles.filter((item) => !item.sensitive).map((item) => item.role) ?? ['settings'];
-  const activeFile = workspace?.probe.nativeFiles.find((item) => item.role === role);
-
-  async function selectProfile(profile: RegisteredProfile) {
-    if (dirty && !await confirmChange('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return;
-    activateProfileEditor(profile);
+  function discard() { setFrame(null); setDirty(false); setResourceDirty({ mcp: false, skills: false, agents: false }); setResourceEpoch(value => value + 1); epoch.current++; }
+  async function closeFrame() { if (await mayLeave()) { discard(); } }
+  async function openFrame(subject: ConfigurationSubject, profile: RegisteredProfile | null = null, confirmed = false) {
+    if (!confirmed && !await mayLeave()) return;
+    discard(); setError(''); setNotice('');
+    setFrame({ key: crypto.randomUUID(), subject, profile, title: subject === 'current' ? '修改正在使用的文件' : subject === 'common' ? '修改通用配置' : profile?.id ? '修改配置' : '新建配置' });
   }
-  function activateProfileEditor(profile: RegisteredProfile) {
-    setRawDisk(null); setNewSecret(''); setEditor('profile'); setSelectedId(profile.id); setDraft(structuredClone(profile)); savedDraft.current = JSON.stringify(profile);
-    setView('form'); setError(''); setNotice(''); setApplyComparison(null); setGuide(true);
-  }
-
-  async function openAccountProfile(profileId: string, target?: AccountImpactScope) {
-    const profile = workspace?.profiles.find(item => item.id === profileId);
-    if (!profile || target && (target.toolId !== currentTool || !target.scope || target.scope === 'project' && !target.projectPath)) { setError('关联配置或范围已变化，请刷新账号关联后重试。'); return; }
-    const started = latestAccountNavigation.current;
-    const hadUnsaved = dirty || mcpDirty || skillsDirty || agentsDirty;
-    if (hadUnsaved && !await confirmChange('当前草稿尚未保存，打开账号关联配置会丢失这些修改。继续吗？')) return;
-    if (hadUnsaved) await discardUnsavedDrafts();
-    if (!mounted.current || latestAccountNavigation.current !== started) return;
-    const nextScope = target?.scope ?? scope;
-    const nextProject = nextScope === 'project' ? target?.projectPath ?? projectPath : '';
-    setResourceView('config'); setProfileQuery(''); setError('');
-    if (nextScope !== scope || nextScope === 'project' && nextProject !== projectPath) {
-      invalidateDraftRequest(); pendingGuide.current = true; setPreferredProfileId(profileId); setScope(nextScope); setProjectPath(nextProject);
-      setNotice(`已打开关联配置的${nextScope === 'global' ? '全局' : '项目'}范围；尚未应用配置。`);
-    } else {
-      activateProfileEditor(profile);
-    }
-  }
-  async function openAccountUsage(queryId: string) {
-    const query = quotaState.queries.find(item => item.id === queryId);
-    if (!query) { setError('额度引用已变化，请刷新关联与额度数据后重试。'); void quotaState.reload(); return; }
-    const started = latestAccountNavigation.current;
-    if ((dirty || mcpDirty || skillsDirty || agentsDirty) && !await confirmChange('当前草稿尚未保存，打开账号关联额度设置会丢失这些修改。继续吗？')) return;
-    if (!mounted.current || latestAccountNavigation.current !== started) return;
-    setAccountUsageQuery(query);
-  }
-
-  async function switchResourceView(next: 'config' | 'mcp' | 'skills' | 'accounts' | 'plugins' | 'agents') {
-    if (next === resourceView) return;
-    const hadUnsaved = dirty || mcpDirty || skillsDirty || agentsDirty;
-    if (hadUnsaved && !await confirmChange('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return;
-    if (hadUnsaved) await discardUnsavedDrafts();
-    setResourceView(next);
-  }
-
   async function createProfile() {
-    if (!currentTool) return;
-    if (dirty && !await confirmChange('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return;
-    const next = emptyProfile(currentTool);
-    const used = new Set(workspace?.profiles.map(profile => profile.name));
-    let suffix = 1;
-    while (used.has(suffix === 1 ? '新配置' : `新配置 ${suffix}`)) suffix++;
-    next.name = suffix === 1 ? '新配置' : `新配置 ${suffix}`;
-    const preset = addressConfigurable ? workspace?.probe.providerPresets[0] : undefined;
-    next.connection = { ...defaultConnection(workspace?.probe.interfaceFormats ?? []), providerId: preset?.id ?? 'my-provider', baseUrl: preset?.baseUrl ?? '', interfaceFormat: preset?.interfaceFormat ?? workspace?.probe.interfaceFormats[0] ?? 'openai_responses' };
-    setRawDisk(null); setEditor('profile'); setSelectedId(null); setDraft(next); savedDraft.current = JSON.stringify(next);
-    setView('form'); setNewSecret(''); setError(''); setNotice(''); setApplyComparison(null); setGuide(true);
+    let name = '新配置'; let suffix = 1;
+    while (workspace?.profiles.some(profile => profile.name === name)) name = `新配置 ${++suffix}`;
+    await openFrame('profile', { id: '', tool: toolId, name, version: 0, inheritCommon: false, files: {}, suppressed: {}, connection: null, nativeCredentials: {} });
   }
-
-  async function editCommon() {
-    if (!currentTool) return;
-    if (dirty && !await confirmChange('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return;
-    setApplyComparison(null);
-    invalidateDraftRequest();
-    const next = structuredClone(workspace?.common ?? { tool: currentTool, version: 0, files: {} });
-    setRawDisk(null); setNewSecret(''); setEditor('common'); setCommonDraft(next); savedDraft.current = JSON.stringify(next);
-    setView('native'); setError(''); setNotice(''); setGuide(true);
-  }
-
-  async function save(applyAfter: boolean, activate = false) {
-    if (!nativeAvailable || busy) return;
-    if (editor === 'profile' && draft && !draft.name.trim()) { setError('请输入配置名称。'); document.querySelector<HTMLInputElement>('[name="profile-name"]')?.focus(); return; }
-    const started = captureDraft();
-    setBusy(true); setError(''); setNotice('');
-    let savedForTakeover: RegisteredProfile | null = null;
-    try {
-      if (editor === 'native' && pendingRaw && currentTool) {
-        await native.saveRegisteredNativeFile(currentTool, scope, projectPath, pendingRaw.role, pendingRaw.original, pendingRaw.text, editorContextId.current);
-        if (!stillCurrent(started)) return;
-        const text = await native.readRegisteredNativeFileForEdit(currentTool, scope, projectPath, pendingRaw.role);
-        if (!stillCurrent(started)) return;
-        setRawDisk({ ...pendingRaw, original: text, text });
-        const updated = await native.getRegisteredToolWorkspace(currentTool, scope, projectPath);
-        if (!stillCurrent(started)) return;
-        setWorkspace(updated); setNotice('已保存到正在使用的文件。'); setGuide(false);
-      } else if (editor === 'common' && commonDraft) {
-        const result = await native.saveRegisteredCommonConfig(commonDraft, commonDraft.version || null);
-        if (!stillCurrent(started)) { setNotice('原通用草稿已保存；当前编辑内容已保留。'); return; }
-        const saved = result.common;
-        setCommonDraft(saved); savedDraft.current = JSON.stringify(saved);
-        const failed = result.applications.filter((item) => item.status === 'failed');
-        setNotice(failed.length ? `通用配置已保存；${failed.length} 个活动范围未能应用，请检查并重试。` : `通用配置已保存；${result.applications.length} 个活动范围已检查并应用。`);
-        if (currentTool) await reload(currentTool, scope, projectPath, selectedId);
-        setEditor('common');
-        setCommonDraft(saved); savedDraft.current = JSON.stringify(saved); setGuide(false);
-      } else if (draft && currentTool) {
-        let files = draft.files;
-        if (pendingRaw) {
-          const current = await native.readRegisteredNativeFileForEdit(currentTool, scope, projectPath, pendingRaw.role);
-          if (!stillCurrent(started)) return;
-          const text = current === pendingRaw.original ? pendingRaw.text : await native.mergeRegisteredNativeEdits(currentTool, pendingRaw.role, pendingRaw.original, pendingRaw.text, current);
-          if (!stillCurrent(started)) return;
-          files = { ...draft.files, [pendingRaw.role]: text };
-        }
-        const imported = await native.prepareRegisteredNativeImport(currentTool, files);
-        if (!stillCurrent(started)) return;
-        const nativeCredentials = { ...draft.nativeCredentials };
-        if (pendingRaw) delete nativeCredentials[pendingRaw.role];
-        Object.assign(nativeCredentials, imported.nativeCredentials);
-        const usingReplacement = !!pendingRaw || imported.migratedSecret || !draft.connection;
-        const nextConnection = pendingRaw ? imported.inspection.connection : usingReplacement ? importedConnection(imported, draft.connection) : draft.connection;
-        let editedConnection = usingReplacement ? retainSameProviderModelRecords(nextConnection, draft.connection) : nextConnection;
-        editedConnection = await connectionWithSecret(editedConnection, started);
-        if (!stillCurrent(started)) return;
-        const oauth = draft.authentication?.kind === 'oauth';
-        const edited = { ...draft, files: imported.files, nativeCredentials: oauth ? {} : nativeCredentials, connection: oauth ? null : editedConnection };
-        const saved = await native.saveRegisteredNativeProfile(edited, edited.version || null);
-        savedForTakeover = saved;
-        if (!stillCurrent(started)) { setNotice('原草稿已保存；当前继续编辑的内容已保留。'); return; }
-        const activeId = workspace?.binding?.profileId;
-        const activeName = workspace?.profiles.find((item) => item.id === activeId)?.name;
-        if (applyAfter && (saved.id === activeId || activate)) {
-          await native.applyRegisteredNativeProfile(currentTool, saved.id, scope, projectPath, false);
-          if (!stillCurrent(started)) return;
-          setNotice(saved.id === activeId ? '已保存。' : '已保存并启用，下次启动会读取这份配置。');
-        } else if (applyAfter && activeName) setNotice(`已保存。当前仍使用「${activeName}」。`);
-        else if (applyAfter) setNotice('已保存。点启用后，下次启动会读取这份配置。');
-        else setNotice('已保存。当前无法写入这个工具。');
-        setNewSecret(''); setDraft(saved); savedDraft.current = JSON.stringify(saved); setSelectedId(saved.id);
-        await reload(currentTool, scope, projectPath, saved.id);
-        setGuide(false);
-      }
-    } catch (value) {
-      if (!stillCurrent(started)) return;
-      const message = errorText(value);
-      setError(message);
-      if (editor === 'native' && pendingRaw && currentTool) {
-        const current = await native.readRegisteredNativeFileForEdit(currentTool, scope, projectPath, pendingRaw.role).catch(() => null);
-        if (stillCurrent(started) && current !== null && current !== pendingRaw.original) setFileConflict({ context: draftContext, current });
-      }
-      if ((message.includes('请确认接管') || message.includes('外部修改')) && savedForTakeover) await compareApplication(savedForTakeover);
-      if (savedForTakeover) { setDraft(savedForTakeover); setSelectedId(savedForTakeover.id); savedDraft.current = JSON.stringify(savedForTakeover); }
-    }
-    finally { setBusy(false); }
-  }
-
-  async function compareApplication(profile:RegisteredProfile) {
-    const started=captureDraft();
-    try {
-      const result=await native.compareRegisteredApplication(profile.id,scope,projectPath);
-      if (stillCurrent(started)) { setApplyComparison(result); setError(''); setGuide(false); }
-    }
-    catch(value){if(stillCurrent(started))setError(errorText(value));}
-  }
-  async function resolveApplication() {
-    if (!applyComparison || busy) return;
-    const started=captureDraft();setBusy(true);setError('');
-    try {await native.applyComparedApplication(applyComparison,scope,projectPath);if(stillCurrent(started)){setApplyComparison(null);setNotice('');await reload(applyComparison.profile.tool,scope,projectPath,applyComparison.profile.id);}}
-    catch(value){if(stillCurrent(started))setError(errorText(value));}
-    finally{setBusy(false);}
-  }
-  async function applySaved(profile: RegisteredProfile, allowTakeover = false) {
-    if (!currentTool || busy || enablingId) return;
-    const started = captureDraft();
-    const previousBinding = workspace?.binding ?? null;
-    setEnablingId(profile.id); setError('');
-    setWorkspace((current) => current ? { ...current, binding: { scopeKey: current.binding?.scopeKey ?? (scope === 'project' ? `project:${projectPath}` : 'global'), tool: currentTool, profileId: profile.id, profileVersion: profile.version, managed: {} } } : current);
-    try {
-      await native.applyRegisteredNativeProfile(currentTool, profile.id, scope, projectPath, allowTakeover);
-      if (!stillCurrent(started)) { setNotice('所选配置已应用，继续编辑的内容已保留。'); return; }
-      setApplyComparison(null);
-      setNotice('');
-    } catch (value) {
-      setWorkspace((current) => current ? { ...current, binding: previousBinding } : current);
-      setNotice('');
-      if (!stillCurrent(started)) return;
-      const message = errorText(value);
-      setError(message);
-      if (message.includes('请确认接管') || message.includes('外部修改')) await compareApplication(profile);
-    } finally { setEnablingId(null); }
-  }
-
-  async function connectionWithSecret(source: Connection | null, started: DraftRequest<RegisteredProfile>): Promise<Connection | null> {
-    if (!newSecret || !apiKeyWritable) return source;
-    if (!source) throw new Error('请先配置 API 地址，或返回常用设置填写连接。');
-    const secretRef = await native.setConnectionSecret(newSecret);
-    if (!stillCurrent(started)) return source;
-    return { ...source, secretRef };
-  }
-
-  async function showSecret() {
-    if (revealedSecret !== null) { setRevealedSecret(null); return; }
-    const started = captureDraft();
-    try {
-      const secret = newSecret || (connection?.secretRef ? await native.getConnectionSecret(connection.secretRef) : '');
-      if (stillCurrent(started)) setRevealedSecret(secret);
-    } catch (value) { if (stillCurrent(started)) setError(errorText(value)); }
-  }
-
-  async function duplicateGiven(item: RegisteredProfile) {
-    if (dirty && !await confirmChange('当前草稿尚未保存，复制前放弃这些修改？')) return;
-    setApplyComparison(null);
-    const names = workspace?.profiles.map(entry => entry.name) ?? [];
-    const base = `${item.name} 副本`; let name = base; let count = 2;
-    while (names.includes(name)) name = `${base} ${count++}`;
-    const copied = { ...structuredClone(item), id: '', name, version: 0, revision: undefined };
-    setDraft(copied); setSelectedId(null); setEditor('profile'); setView('form'); setRawDisk(null); savedDraft.current = ''; setNotice(''); setGuide(true);
-  }
-  async function duplicateProfile() {
-    if (draft) await duplicateGiven(draft);
-  }
-
-  async function fetchModels() {
-    if (!connection || busy || modelLoading) return;
-    const started = captureDraft();
-    setBusy(true); setError('');
-    try {
-      const source = await connectionWithSecret(connection, started);
-      if (!stillCurrent(started) || !source || !draft) return;
-      if (source.secretRef !== connection.secretRef) {
-        modelSource.current = JSON.stringify([source.providerId, source.interfaceFormat, source.baseUrl, source.secretRef]);
-        setDraft({ ...draft, connection: source }); setNewSecret('');
-      }
-      await refreshModels(source, true);
-    } catch (value) { if (stillCurrent(started)) setError(errorText(value)); }
-    finally { setBusy(false); }
-  }
-
-  async function switchProject(path: string) {
-    if (scope === 'project' && path === projectPath) return;
-    if ((dirty || mcpDirty || skillsDirty || agentsDirty) && !await confirmChange('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return;
-    invalidateDraftRequest(); setScope('project'); setProjectPath(path);
-  }
-
-  async function switchGlobal() {
-    if (scope === 'global') return;
-    if ((dirty || mcpDirty || skillsDirty || agentsDirty) && !await confirmChange('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return;
-    invalidateDraftRequest(); setScope('global');
-  }
-
-  async function chooseProjectFolder() {
-    const context = draftContext;
-    try {
-      const picked = await open({ directory: true, multiple: false, title: '选择配置项目文件夹' });
-      if (typeof picked === 'string' && latestDraft.current.context === context) switchProject(picked);
-    } catch (value) { if (latestDraft.current.context === context) setError(errorText(value)); }
-  }
-
-  async function checkConnection(allowModelRequest: boolean) {
-    if (!connection || checkingConnection) return;
-    const started = captureDraft();
-    if (allowModelRequest && !await confirmChange('这会向供应商发送一条最小模型请求，可能产生费用。', { title: '发送可能计费的请求？', confirmLabel: '发送请求' })) return;
-    if (!stillCurrent(started)) return;
-    setCheckingConnection(true); setConnectionCheck(null);
-    try { const result = await native.testRegisteredProviderConnection(currentTool, connection, allowModelRequest); if (stillCurrent(started)) setConnectionCheck(result); }
-    catch (value) { if (stillCurrent(started)) setError(errorText(value)); }
-    finally { setCheckingConnection(false); }
-  }
-
-  async function login() {
-    if (!currentTool || busy) return;
-    setBusy(true); setError('');
-    try { await native.launchCliLogin(currentTool); setNotice(currentDescriptor?.login?.hint ?? '在外部终端完成登录。'); }
-    catch (value) { setError(errorText(value)); }
-    finally { setBusy(false); }
-  }
-
-  async function choosePath() {
-    if (!currentTool || busy) return;
-    setBusy(true); setError('');
-    try { await native.setRegisteredCustomCliPath(currentTool, customPath.trim() || null); await reload(currentTool, scope, projectPath, selectedId); setNotice('CLI 路径已保存。'); }
-    catch (value) { setError(errorText(value)); }
-    finally { setBusy(false); }
-  }
-
-  async function useInstallation(path: string) {
-    if (!currentTool || busy) return;
-    setBusy(true); setError('');
-    try {
-      await native.setRegisteredCustomCliPath(currentTool, path);
-      setCustomPath(path);
-      await reload(currentTool, scope, projectPath, selectedId);
-      setNotice('已改用这个安装。');
-    } catch (value) { setError(errorText(value)); }
-    finally { setBusy(false); }
-  }
-
-  async function maintain(action: 'install' | 'upgrade' | 'install_native' | 'uninstall_npm', source?: string) {
-    if (!currentTool || busy) return;
-    const channel = source === 'npm_shim' ? 'npm' : source === 'native' || action === 'install_native' ? '原生' : '';
-    const label = action === 'uninstall_npm' ? '卸载' : action === 'upgrade' ? '更新' : '安装';
-    const message = action === 'uninstall_npm' ? '将在外部终端卸载 npm 全局包。' : channel ? `将在外部终端${label} ${channel} 版。` : `将在外部终端运行官方${label}命令。`;
-    if (!await confirmChange(message, { title: `开始${label}？`, confirmLabel: label })) return;
-    setBusy(true); setError('');
-    try {
-      await native.maintainRegisteredCli(currentTool, action, source);
-      setNotice('已在终端开始。回到这里后会重新读取版本。');
-    } catch (value) { setError(errorText(value)); }
-    finally { setBusy(false); }
-  }
-
-  async function copyDisplayedPath(path: string) {
-    const value = displayPath(path);
-    const copied = await writeClipboard(value);
-    window.clearTimeout(copiedTimer.current);
-    setCopiedPath(copied ? value : `fail:${value}`);
-    copiedTimer.current = window.setTimeout(() => setCopiedPath(''), 1600);
-  }
-
-  function applyPreset(providerId: string, baseUrl: string, interfaceFormat: string) {
-    if (!draft?.connection) return;
-    setDraft({ ...draft, connection: connectionForProvider(draft.connection, providerId, { baseUrl, interfaceFormat, secretRef: null, authEnvVar: null }) });
-    setConnectionCheck(null); setNotice('已填入官方接口地址与格式；模型和认证仍需确认。');
-  }
-
-  function adoptInspectedConnection() {
-    if (!draft || !inspection?.connection) return;
-    const found = inspection.connection;
-    const sameAccount = draft.connection?.providerId === found.providerId && draft.connection?.baseUrl === found.baseUrl && draft.connection?.interfaceFormat === found.interfaceFormat;
-    setDraft({ ...draft, connection: { ...found, secretRef: sameAccount ? draft.connection?.secretRef ?? null : null } });
-    setNotice('表单已按当前原生草稿更新；未识别字段仍保留在原文中。');
-  }
-
-  async function importCurrentNative(automatic = false, copy = false) {
-    if (!workspace || !currentTool) return;
-    const started = captureDraft();
-    if (dirty && !await confirmChange('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return;
-    if (!stillCurrent(started)) return;
-    const sequence = ++importSequence.current;
-    const roles = workspace.snapshots.filter((item) => item.fingerprint && !workspace.probe.nativeFiles.find((file) => file.role === item.role)?.sensitive).map((item) => item.role);
-    if (!roles.length) { setError('还没有可读取的原生配置文件。'); return; }
-    try {
-      const imported = await native.prepareRegisteredNativeImportFromDisk(currentTool, scope, projectPath, roles, {});
-      const primaryRole = roles.includes(role) ? role : roles[0];
-      const text = await native.readRegisteredNativeFileForEdit(currentTool, scope, projectPath, primaryRole);
-      if (sequence !== importSequence.current || !stillCurrent(started)) return;
-      const next = { ...emptyProfile(currentTool), name: '本机配置', files: imported.files, connection: imported.inspection.connection, nativeCredentials: imported.nativeCredentials };
-      setDraft(next); setSelectedId(null); setEditor('profile'); setNewSecret(''); savedDraft.current = automatic ? JSON.stringify(next) : '';
-      setRole(primaryRole);
-      setRawDisk(copy ? null : { context: JSON.stringify([currentTool, scope, projectPath, null, 'profile']), role: primaryRole, original: text, text });
-      setInspection(imported.inspection); setView(copy ? 'form' : 'native'); setError('');
-      setNotice('');
-    } catch (value) { if (sequence === importSequence.current && stillCurrent(started)) setError(errorText(value)); }
-  }
-
-  async function openCurrentFile(nextRole = role, abandonConfirmed = false) {
-    editorContextId.current = workspace?.effectiveContextId ?? null;
-    if (!currentTool) return;
-    const started = captureDraft();
-    if (dirty && !abandonConfirmed && !await confirmChange('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return;
-    if (!stillCurrent(started)) return;
-    const sequence = ++rawSequence.current;
-    preloadCodeEditor();
-    setBusy(true); setError('');
-    try {
-      const text = await native.readRegisteredNativeFileForEdit(currentTool, scope, projectPath, nextRole);
-      if (sequence !== rawSequence.current || !stillCurrent(started)) return;
-      setDraft(null); setSelectedId(null); setEditor('native'); setNewSecret(''); setRole(nextRole); setView('native'); savedDraft.current = ''; setGuide(true);
-      setRawDisk({ context: JSON.stringify([currentTool, scope, projectPath, null, 'native']), role: nextRole, original: text, text });
-      setNotice(''); setError('');
-    } catch (value) { if (sequence === rawSequence.current && stillCurrent(started)) setError(errorText(value)); }
-    finally { if (sequence === rawSequence.current) setBusy(false); }
-  }
-
-  async function updateModel(model: string, longContext = primaryModel.longContext) {
-    if (!draft || !connection) return;
-    const sequence = ++modelWrite.current;
-    const value = {model,name:'',longContext};
-    const mapping=uiAdapter.modelMapping;
-    const nextConnection={...connection,model:mapping?.encodeModel?.(value) ?? model};
-    if (!mapping?.primaryRole) { setDraft({...draft,connection:nextConnection}); return; }
-    const started=captureDraft();
-    try {
-      const text=await mapping.update(draft.files[mapping.fileRole] ?? '',mapping.primaryRole,value);
-      if (sequence === modelWrite.current && stillCurrent(started)) setDraft({...draft,connection:nextConnection,files:{...draft.files,[mapping.fileRole]:text}});
-    } catch (value) { if (sequence === modelWrite.current && stillCurrent(started)) setError(errorText(value)); }
-  }
-  async function updateRoleModel(id: string, value: ModelRoleValue, all = false) {
-    if (!draft || !uiAdapter.modelMapping) return;
-    const sequence = ++modelWrite.current;
-    const started = captureDraft();
-    try {
-      const fileRole=uiAdapter.modelMapping.fileRole;
-      const text = all ? await uiAdapter.modelMapping.useModelForAll(draft.files[fileRole] ?? '', primaryModel.model, primaryModel.longContext) : await uiAdapter.modelMapping.update(draft.files[fileRole] ?? '', id, value);
-      if (sequence === modelWrite.current && stillCurrent(started)) setDraft({ ...draft, files:{ ...draft.files,[fileRole]:text },connection: !all && id===uiAdapter.modelMapping.primaryRole && connection ? {...connection,model:uiAdapter.modelMapping.encodeModel?.(value) ?? value.model} : draft.connection });
-    } catch (value) { if (sequence === modelWrite.current && stillCurrent(started)) setError(errorText(value)); }
-  }
-
-  async function changeReasoningEffort(value: string) {
-    if (!draft || !uiAdapter.reasoning) return;
-    const started = captureDraft();
-    const sequence = ++reasoningSequence.current;
-    try {
-      const settings = await uiAdapter.reasoning.update(draft.files.settings ?? '', value || null);
-      if (sequence !== reasoningSequence.current || !stillCurrent(started)) return;
-      setDraft({ ...draft, files: { ...draft.files, settings } });
-    } catch (value) { if (sequence === reasoningSequence.current && stillCurrent(started)) setError(errorText(value)); }
-  }
-
-  async function deleteGiven(item: RegisteredProfile) {
-    if (!item.id || !currentTool || busy) return;
-    if (!await confirmChange(`删除命名配置“${item.name}”？已经写入的原生文件不会自动删除。`, { title: '删除配置', confirmLabel: '删除配置', destructive: true })) return;
-    setBusy(true); setError('');
-    try {
-      await native.deleteNativeProfile(item.id, item.version, item.revision ?? '');
-      await reload(currentTool, scope, projectPath);
-      setNotice('命名配置已删除，原生文件保持原样。');
-      setGuide(false);
-    } catch (value) { setError(errorText(value)); }
-    finally { setBusy(false); }
-  }
-  async function deleteCurrent() {
-    if (draft?.id) await deleteGiven(draft);
-  }
-
-  const authKind = draft?.authentication?.kind;
-  const accountUsageAuthentication = workspace?.profiles.find(profile => profile.id === accountUsageQuery?.config.identity.profileId)?.authentication;
-  const accountUsageProfileAccountId = accountUsageAuthentication?.kind === 'oauth' ? accountUsageAuthentication.accountId : accountUsageQuery?.config.identity.profileId ? undefined : accountUsageQuery?.config.identity.accountId ?? undefined;
-  const authLabel = authKind === 'api_key' ? (apiKeyWritable ? 'API Key' : apiKeyState === 'scope_denied' ? '当前范围不保存新密钥' : '不保存新密钥') : authKind === 'oauth' ? 'OAuth 账号' : authKind === 'rebind_required' ? '需要重新绑定账号' : '沿用原生认证';
-  const profileEditorHint = editor === 'profile' && draft ? `${toolName} · ${draft.name.trim() || '未命名'} · ${authLabel}。${draft.id && workspace?.binding?.profileId === draft.id ? '这份配置正在使用，保存会写入当前文件。' : workspace?.probe.nativeWrites.state === 'supported' ? '只保存不会替换正在使用的文件；要立即切换，请选“保存并启用”。' : '保存不会替换正在使用的文件。'}` : undefined;
-  const saveState = dirty ? '未保存' : editor === 'profile' && draft?.id ? (workspace?.binding?.profileId === draft.id ? '正在使用' : '尚未启用') : '';
-
-  if (!visibleTools.length) return <div className={styles.empty}>还没有管理中的 CLI。请先在设置里选择要管理的工具。</div>;
-
-  const hasCurrentNative = !!workspace?.snapshots.some(item => item.fingerprint && !workspace.probe.nativeFiles.find(file => file.role === item.role)?.sensitive);
-  const profileStatus = (item: RegisteredProfile) => {
-    if (editor === 'profile' && selectedId === item.id && dirty) return '有未保存修改';
-    if (workspace?.binding?.profileId === item.id) return workspace.binding.profileVersion === item.version ? '正在使用' : '已保存，尚未应用';
-    return '已保存';
+  async function switchScope(next: Scope, path = '') { if (next === scope && (next === 'global' || path === projectPath)) return; if (!await mayLeave()) return; discard(); setScope(next); setProjectPath(path); setResource('config'); }
+  async function switchTool(id: string) { if (id === toolId || !await mayLeave()) return; discard(); setTool(id); }
+  async function switchResource(next: ResourceView) { if (next === resource || !await mayLeave()) return; discard(); setResource(next); }
+  async function pickProject() { const started = currentContext.current; try { const value = await open({ directory: true, multiple: false, title: '选择配置项目文件夹' }); if (typeof value === 'string' && alive.current && started === currentContext.current) await switchScope('project', value); } catch (failure) { setError(errorText(failure)); } }
+  const openTarget = async (profileId: string, target?: AccountImpactScope) => {
+    if (!await mayLeave()) return;
+    if (target && (target.toolId !== toolId || !target.scope || target.scope === 'project' && !target.projectPath)) { setError('范围关联已变化，请刷新账号关联。'); return; }
+    const nextScope = target?.scope ?? scope; const nextPath = target?.projectPath ?? projectPath; const original = currentContext.current; const navigation = epoch.current;
+    const value = await native.getRegisteredToolWorkspace(toolId, nextScope, nextPath, false, true).catch(failure => { setError(errorText(failure)); return null; });
+    if (!alive.current || original !== currentContext.current || navigation !== epoch.current || !value) return;
+    const profile = value.profiles.find(item => item.id === profileId);
+    if (!profile) { setError('关联配置已不存在，请刷新。'); return; }
+    discard(); setScope(nextScope); setProjectPath(nextScope === 'global' ? '' : nextPath); setResource('config');
+    // Scope effects load the target first; open after that identity settles.
+    const targetContext = JSON.stringify([toolId, nextScope, nextScope === 'global' ? '' : nextPath]);
+    setTimeout(() => { if (alive.current && currentContext.current === targetContext) void openFrame('profile', profile, true); }, 0);
   };
-  const quotaProfileIds = new Set(quotaState.queries.map(query => query.config.identity.profileId).filter(Boolean));
-  const isSubscription = (item: RegisteredProfile) => quotaProfileIds.has(item.id) || item.authentication?.kind === 'oauth';
-  function profileRow(item: RegisteredProfile, probe: NonNullable<typeof workspace>['probe']) {
-    const status = profileStatus(item);
-    const current = status === '正在使用';
-    const writable = probe.nativeWrites.state === 'supported';
-    const model = item.connection?.model?.trim();
-    return <div className={styles.profileRow} role="listitem" data-profile-id={item.id} data-active={current || undefined} key={item.id}>
-      <span><button type="button" className={styles.profileName} onClick={() => void selectProfile(item)}>{item.name}</button><span className={styles.profileMeta}><span className={styles.badge} data-tone={status === '正在使用' ? 'ok' : status === '已保存' ? undefined : 'warn'}>{status}</span>{profileFacts(item).map(fact => <span className={styles.profileFact} title={fact.title} key={fact.label}>{fact.label}</span>)}{model ? <span className={styles.profileModel} title={model}>{model}</span> : null}</span></span>
-      <span className={styles.profileActions}>{!current && <button type="button" className={styles.primary} disabled={busy || enablingId !== null || !writable} title={writable ? '写入原生文件，下次启动读取这份配置' : probe.nativeWrites.reason || '当前不能写入这个工具的配置'} onClick={() => void applySaved(item)}>{enablingId === item.id ? '启用中' : '启用'}</button>}<button type="button" onClick={() => void selectProfile(item)}>修改</button><RowMenu label={`${item.name} 更多操作`}><button type="button" role="menuitem" onClick={() => void selectProfile(item)}>修改配置</button><button type="button" role="menuitem" disabled={busy} onClick={() => void duplicateGiven(item)}>复制配置</button><button type="button" role="menuitem" disabled={!nativeAvailable} onClick={() => setQuotaAddFor(item.id)}>添加额度查询</button><button type="button" role="menuitem" data-danger="true" disabled={busy} onClick={() => void deleteGiven(item)}>删除配置</button></RowMenu></span>
-      <ProfileQuota key={`${item.id}:${item.version}`} profileId={item.id} profileVersion={item.version} toolId={item.tool} profileAccountId={item.authentication?.kind === 'oauth' ? item.authentication.accountId : undefined} state={quotaState} addRequested={quotaAddFor === item.id} onAddHandled={clearQuotaAdd} />
+  useEffect(() => {
+    if (!repair || repair.page !== 'connections' || !repair.toolId || appliedRepair.current === repair.sequence) return;
+    appliedRepair.current = repair.sequence;
+    void (async () => { if (!await mayLeave()) return; discard(); setTool(repair.toolId!); setScope(repair.scope ?? 'global'); setProjectPath(repair.projectPath ?? ''); setResource(repair.resourceView ?? 'config'); if (repair.profileId) { const value = await native.getRegisteredToolWorkspace(repair.toolId!, repair.scope ?? 'global', repair.projectPath ?? '', false, true).catch(() => null); const profile = value?.profiles.find(item => item.id === repair.profileId); if (alive.current && profile) setTimeout(() => void openFrame('profile', profile, true), 0); } })();
+  }, [repair]);
+  useEffect(() => {
+    if (!openSequence || appliedOpen.current === openSequence) return; appliedOpen.current = openSequence;
+    void (async () => { if (!await mayLeave()) return; discard(); setResource('config'); if (initialTool) setTool(initialTool); })();
+  }, [openSequence]);
+  async function apply(profile: RegisteredProfile) {
+    if (!await mayLeave()) return;
+    const identity = currentContext.current; setApplying(profile.id); setError(''); setNotice('');
+    try { await native.applyRegisteredNativeProfile(toolId, profile.id, scope, projectPath || undefined, false); if (identity !== currentContext.current || !alive.current) return; await reload(toolId, scope, projectPath); setNotice('已使用保存的配置；下次会话读取新内容。'); }
+    catch (failure) { if (identity !== currentContext.current || !alive.current) return; setError(errorText(failure)); try { const value = await native.compareRegisteredApplication(profile.id, scope, projectPath); if (identity === currentContext.current) setComparison(value); } catch {} }
+    finally { if (identity === currentContext.current) setApplying(null); }
+  }
+  async function compareUse() {
+    if (!comparison) return; const value = comparison; const identity = currentContext.current; setBusy(true); setError('');
+    try { await native.applyComparedApplication(value, scope, projectPath); if (identity === currentContext.current && alive.current) { setComparison(null); await reload(toolId, scope, projectPath); setNotice('已使用保存的配置；下次会话读取。'); } }
+    catch (failure) { if (identity === currentContext.current) setError(errorText(failure)); }
+    finally { if (identity === currentContext.current) setBusy(false); }
+  }
+  async function duplicate(profile: RegisteredProfile) { if (!await mayLeave()) return; const copy = structuredClone(profile); copy.id = ''; copy.version = 0; delete copy.revision; copy.name += ' 副本'; await openFrame('profile', copy, true); }
+  async function remove(profile: RegisteredProfile) { const identity = currentContext.current; if (!await confirmAction(`删除“${profile.name}”的管理记录？当前原生文件保留。`, () => alive.current && identity === currentContext.current, { title: '删除配置', confirmLabel: '删除', destructive: true })) return; setBusy(true); try { await native.deleteNativeProfile(profile.id, profile.version, profile.revision ?? ''); if (identity === currentContext.current) await reload(toolId, scope, projectPath); } catch (failure) { setError(errorText(failure)); } finally { if (identity === currentContext.current) setBusy(false); } }
+  function stored(result: ConfigurationSaveResult) { if (result.profile) setWorkspace(value => value ? { ...value, profiles: [...value.profiles.filter(profile => profile.id !== result.profile!.id), result.profile!] } : value); if (result.common) setWorkspace(value => value ? { ...value, common: result.common } : value); }
+  function changed(_draft: ConfigurationDraft) { epoch.current++; }
+  async function maintain(action: 'install' | 'upgrade' | 'install_native' | 'uninstall_npm', source?: string) {
+    if (!await mayLeave() || !await confirmAction('将更新本机 CLI 安装。继续吗？', () => alive.current, { title: action === 'uninstall_npm' ? '卸载 npm 版' : action === 'install' || action === 'install_native' ? '安装 CLI' : '更新 CLI', confirmLabel: action === 'uninstall_npm' ? '卸载' : action === 'install' || action === 'install_native' ? '安装' : '更新' })) return;
+    setBusy(true); try { await native.maintainRegisteredCli(toolId, action, source); await reload(toolId, scope, projectPath); } catch (failure) { setError(errorText(failure)); } finally { if (alive.current) setBusy(false); }
+  }
+  async function savePath() { if (!await mayLeave()) return; setBusy(true); try { await native.setRegisteredCustomCliPath(toolId, customPath.trim() || null); await reload(toolId, scope, projectPath); } catch (failure) { setError(errorText(failure)); } finally { setBusy(false); } }
+  async function usePath(path: string) { if (!await mayLeave()) return; setBusy(true); try { await native.setRegisteredCustomCliPath(toolId, path); await reload(toolId, scope, projectPath); } catch (failure) { setError(errorText(failure)); } finally { setBusy(false); } }
+  async function openAccountQuota(queryId: string) { if (!await mayLeave()) return; const query = quota.queries.find(item => item.id === queryId); if (!query) { void quota.reload(); setError('额度引用已变化，请刷新后重试。'); return; } setAccountUsageQuery(query); }
+  const quotaIds = new Set(quota.queries.map(query => query.config.identity.profileId));
+  const currentFile = workspace?.snapshots.some(snapshot => snapshot.fingerprint && !workspace.probe.nativeFiles.find(file => file.role === snapshot.role)?.sensitive);
+  function row(profile: RegisteredProfile) {
+    const binding = workspace?.binding; const same = binding?.profileId === profile.id;
+    const commonPending = same && profile.inheritCommon && !!workspace?.common && (binding?.commonVersion !== workspace.common.version || binding?.commonRevision !== workspace.common.revision);
+    const applied = same && binding?.profileVersion === profile.version && !commonPending;
+    const state = same ? applied ? '正在使用' : '已保存，待使用' : '已保存';
+    const frozen = same ? binding?.appliedSummary : null;
+    const frozenSource = frozen?.authentication.kind === 'oauth' ? '已管理账号' : frozen?.authentication.kind === 'api_key' ? 'API 密钥' : 'CLI 当前凭据';
+    const authentication = profile.authentication;
+    const credential = authentication?.kind === 'oauth' ? `账号 ${accounts.accounts.find(account => account.id === authentication.accountId)?.label ?? authentication.accountId}` : profile.authentication?.kind === 'api_key' ? 'API 密钥' : profile.authentication?.kind === 'rebind_required' ? '需重新选择来源' : 'CLI 当前凭据';
+    return <div className={styles.profileRow} role="listitem" data-profile-id={profile.id} data-active={applied || undefined} key={profile.id}>
+      <span><button className={styles.profileName} onClick={() => void openFrame('profile', profile)}>{profile.name}</button><span className={styles.profileMeta}><span className={styles.badge} data-tone={applied ? 'ok' : same ? 'warn' : undefined}>{state}</span>{profile.connection?.model && <span>{profile.connection.model}</span>}<span>保存设置：{credential}{host(profile.connection?.baseUrl) && ` · ${host(profile.connection?.baseUrl)}`}</span>{same && <span>最后使用版本 {binding!.profileVersion} · 保存版本 {profile.version}{commonPending && ' · 通用配置待应用'}</span>}{same && <span>上次已使用：{frozen ? `${frozenSource}${frozen.providerId ? ' · '+frozen.providerId : ''}${host(frozen.baseUrl ?? undefined) ? ' · '+host(frozen.baseUrl ?? undefined) : ''}${frozen.model ? ' · '+frozen.model : ''}` : '来源快照未提供，以最后使用版本为准'}</span>}</span></span>
+      <span className={styles.profileActions}>{!applied && <button className={styles.primary} disabled={busy || !!applying || workspace?.probe.nativeWrites.state !== 'supported'} onClick={() => void apply(profile)}>{applying === profile.id ? '使用中' : same ? '使用新版本' : '使用'}</button>}<button onClick={() => void openFrame('profile', profile)}>修改</button><RowMenu label={`${profile.name} 更多操作`}><button role="menuitem" onClick={() => void openFrame('profile', profile)}>修改配置</button><button role="menuitem" onClick={() => void duplicate(profile)}>复制配置</button><button role="menuitem" onClick={() => setQuotaAddFor(profile.id)}>添加额度查询</button><button role="menuitem" data-danger="true" onClick={() => void remove(profile)}>删除配置</button></RowMenu></span>
+      <ProfileQuota profileId={profile.id} profileVersion={profile.version} toolId={toolId} profileAccountId={profile.authentication?.kind === 'oauth' ? profile.authentication.accountId : undefined} state={quota} addRequested={quotaAddFor === profile.id} onAddHandled={() => setQuotaAddFor(null)} />
     </div>;
   }
-  async function openHistory() {
-    if (!currentTool) return;
-    const context = draftContext;
-    setHistoryOpen(true); setBackupPreview(null); setError('');
-    try {
-      const rows = await native.listNativeBackups(currentTool, scope, projectPath, role);
-      if (latestDraft.current.context !== context) return;
-      setBackups(rows);
-      if (rows[0]) {
-        const result = await native.previewNativeBackup(currentTool, scope, projectPath, role, rows[0].transactionId);
-        if (latestDraft.current.context === context) setBackupPreview(result);
-      }
-    } catch (value) { if (latestDraft.current.context === context) setError(errorText(value)); }
-  }
-  async function inspectBackup(id: string) {
-    if (!currentTool) return;
-    const context = draftContext;
-    try { const result = await native.previewNativeBackup(currentTool, scope, projectPath, role, id); if (latestDraft.current.context === context) setBackupPreview(result); }
-    catch (value) { if (latestDraft.current.context === context) setError(errorText(value)); }
-  }
-  async function restoreBackup() {
-    if (!currentTool || !backupPreview || busy) return;
-    const started = captureDraft();
-    if (dirty && !await confirmChange('恢复前放弃当前未保存修改？')) return;
-    if (!stillCurrent(started)) return;
-    if (!await confirmChange('用这条记录替换当前文件。现在的内容会先留下一份备份。', { title: '恢复这个版本？', confirmLabel: '恢复' })) return;
-    if (!stillCurrent(started)) return;
-    setBusy(true); setError('');
-    try {
-      await native.restoreNativeBackup(currentTool, scope, projectPath, role, backupPreview.transactionId, backupPreview.current, editorContextId.current);
-      if (stillCurrent(started)) { setHistoryOpen(false); setBackupPreview(null); await openCurrentFile(role, true); setNotice('已恢复此文件。'); }
-    } catch (value) { if (stillCurrent(started)) setError(errorText(value)); }
-    finally { setBusy(false); }
-  }
-
-  function nativeEditor() { return <div className={styles.nativeEditor}>
-              {availableRoles.length > 1 && <div className={styles.fileTabs}>{availableRoles.map((name) => <button key={name} type="button" className={role === name ? styles.selected : ''} disabled={busy} onClick={() => { if (editor === 'native') void openCurrentFile(name); else { rawSequence.current++; setRole(name); } }}>{workspace?.probe.nativeFiles.find(file => file.role === name)?.path.split(/[\\/]/).at(-1) ?? name}</button>)}</div>}
-              <div className={styles.pathLabel}><strong title={activeFile?.path}>{activeFile?.path.split(/[\\/]/).pop() ?? '原生文件尚未确定'}</strong><span>{activeFile?.format?.toUpperCase() ?? ''}</span>{activeFile && <small className={styles.pathValue} title={displayPath(activeFile.path)}>{displayPath(activeFile.path)}</small>}{activeFile && <button type="button" className={styles.secondary} onClick={() => void copyDisplayedPath(activeFile.path)}>{copiedPath === displayPath(activeFile.path) ? '已复制' : copiedPath === `fail:${displayPath(activeFile.path)}` ? '复制失败' : '复制路径'}</button>}</div>
-              <CodeEditor key={draftContext} documentId={role} format={activeFile?.format ?? 'text'} label={`${role} 配置草稿`} value={activeRaw?.text ?? (editor === 'common' ? commonDraft?.files[role] : draft?.files[role]) ?? ''} onChange={(text) => { if (activeRaw) { invalidateDraftRequest(); setRawDisk({ ...activeRaw, text }); } else if (editor === 'common') { invalidateDraftRequest(); if (commonDraft) setCommonDraft({ ...commonDraft, files: { ...commonDraft.files, [role]: text } }); } else if (draft) setDraft({ ...draft, files: { ...draft.files, [role]: text } }); }} placeholder="在这里编辑原生配置。留空表示本配置不覆盖该文件。" />
-
-            </div>; }
-
-  const reasoningValue = draft && uiAdapter.reasoning ? uiAdapter.reasoning.read(draft.files.settings ?? '') ?? '' : '';
-  const reasoningControl = draft && uiAdapter.reasoning ? <label>{uiAdapter.reasoning.label}<select aria-label={uiAdapter.reasoning.label} value={reasoningValue} onChange={event => void changeReasoningEffort(event.target.value)}><option value="">跟随原生默认</option>{uiAdapter.reasoning.choices.map(([id, label]) => <option key={id} value={id}>{label}</option>)}{reasoningValue && !uiAdapter.reasoning.choices.some(([id]) => id === reasoningValue) && <option value={reasoningValue}>当前原生值：{reasoningValue}</option>}</select></label> : null;
-  const listedModels = draft && connection && projection === 'provider_models' ? providerModelRecords(connection, inspection, projection) : null;
-  function editModelField(id: string, path: string[], value: unknown) {
-    if (!draft?.connection || !listedModels) return;
-    const modelRecords = listedModels.map((record) => record.id === id ? { id, fields: setField(record.fields, path, value) } : record);
-    setDraft({ ...draft, connection: { ...draft.connection, modelRecords } });
-  }
-  const connectionForm = draft && connection ? <>
-    <label className={styles.pair}>名称<input name="profile-name" aria-label="配置名称" value={draft.name} onChange={event => setDraft({ ...draft, name: event.target.value })} /></label>
-    <div className={styles.sectionLabel}>连接</div>
-    {addressConfigurable && <label>API 地址<input aria-label="API 地址" value={connection.baseUrl} onChange={event => setDraft({ ...draft, connection: { ...connection, baseUrl: event.target.value } })} placeholder="https://api.example.com/v1" /></label>}
-    {apiKeyWritable && <label>API 密钥<div className={styles.secretField}><input aria-label="API 密钥" type={revealedSecret !== null ? "text" : "password"} autoComplete="off" value={revealedSecret ?? newSecret} onChange={event => { invalidateDraftRequest(); setNewSecret(event.target.value); modelSequence.current++; setModelDirectory(null); setModelLoading(false); }} placeholder={connection.secretRef ? '已保存' : 'sk-…'} /><button type="button" disabled={!newSecret && !connection.secretRef} onClick={() => void showSecret()}>{revealedSecret !== null ? '隐藏' : '显示'}</button></div></label>}
-    <div className={styles.sectionLabel}>模型</div>
-    {listedModels?.length ? <>
-      <label>当前模型<select aria-label="当前模型" value={connection.model} onChange={event => void updateModel(event.target.value)}>{!listedModels.some((record) => record.id === connection.model) && <option value={connection.model}>{connection.model || '选择已有模型'}</option>}{listedModels.map((record) => <option key={record.id} value={record.id}>{record.id}</option>)}</select></label>
-      <div className={styles.modelRecords} aria-label="已有模型字段">{listedModels.map((record) => <fieldset key={record.id} className={styles.modelRecord}><legend>{record.id}</legend>{modelFieldControls(record.id, record.fields, editModelField)}</fieldset>)}</div>
-    </> : <><div className={styles.modelPicker}><label>模型<ModelCombobox label="模型" value={primaryModel.model} placeholder="选择或输入模型" options={modelOptions} onChange={model => void updateModel(model)} /></label><button type="button" disabled={busy || modelLoading || !connection.baseUrl.trim()} onClick={() => void fetchModels()}>{modelLoading ? '获取中…' : '获取模型'}</button></div>
-    {modelDirectory && <p className={styles.hint} role="status">{modelDirectory.status === 'ready' ? '已获取 ' + modelDirectory.models.length + ' 个模型' : modelDirectory.status === 'empty' ? '目录为空，可手动输入模型。' : modelDirectory.status === 'stale' ? '显示旧目录：' + modelDirectory.error : modelDirectory.error}{modelDirectory.fetchedAt ? ' · 更新于 ' + new Date(modelDirectory.fetchedAt * 1000).toLocaleString() : ''}</p>}</>}
-    {uiAdapter.incompleteConnectionText && (!connection.baseUrl.trim() || !primaryModel.model.trim()) && <p className={styles.hint}>{uiAdapter.incompleteConnectionText.replace(/^；/, '')}</p>}
-    {uiAdapter.modelMapping?.primaryRole && <label className={styles.check}><input type="checkbox" checked={primaryModel.longContext} disabled={!primaryModel.model} onChange={event => updateModel(primaryModel.model,event.target.checked)} />1M 上下文</label>}
-    {reasoningControl}
-    {!!uiAdapter.modelMapping && <div className={styles.roleMapping}>
-      <div className={styles.roleHeading}><strong>其他角色</strong><button type="button" className="text-button" disabled={!primaryModel.model} onClick={() => void updateRoleModel('', { model: '', name: '', longContext: false }, true)}>所有角色使用当前模型</button></div>
-      {uiAdapter.modelMapping.roles.filter(item => item.id !== uiAdapter.modelMapping?.primaryRole).map(item => {
-        const value = roleModels[item.id] ?? { model: '', name: '', longContext: false };
-        return <div key={item.id} className={styles.roleRow}>
-          <strong>{item.label}</strong>
-          <ModelCombobox label={`${item.label} 请求模型`} value={value.model} placeholder="跟随默认，或直接输入" options={[...new Set([...(value.model ? [value.model] : []), ...modelOptions])]} onChange={model => void updateRoleModel(item.id, { ...value, model })} />
-          {item.longContext ? <label className={styles.check}><input type="checkbox" aria-label={`${item.label} 1M 上下文`} checked={value.longContext} disabled={!value.model} onChange={event => void updateRoleModel(item.id, { ...value, longContext: event.target.checked })} />1M</label> : <span className={styles.roleSlot} />}
-          {item.displayName && <input className={styles.roleName} aria-label={`${item.label} 显示名称`} placeholder="显示名称，可选" value={value.name} onChange={event => void updateRoleModel(item.id, { ...value, name: event.target.value })} />}
-        </div>;
-      })}
-    </div>}
-  </> : null;
-
-  const pathControl = workspace ? <InstallPanel key={currentTool ?? 'cli'} toolName={toolName} probe={workspace.probe} customPath={customPath} busy={busy} loading={loading} onCustomPath={setCustomPath} onSavePath={() => void choosePath()} onMaintain={(action, source) => void maintain(action, source)} onUsePath={(path) => void useInstallation(path)} /> : null;
-
-  const writeUnavailable = workspace && workspace.probe.nativeWrites.state === 'unsupported' ? <div className={`${styles.error} ${styles.writeUnavailable}`} role="alert" aria-label="原生写入不可用">
-    <p>{workspace.probe.nativeWrites.reason}</p>
-  </div> : null;
-
-  const moreOptions = workspace ? <details className={styles.moreOptions} aria-label="配置更多选项"><summary>更多选项</summary>
-    {editor === 'profile' && draft && <label className={styles.check}><input type="checkbox" checked={draft.inheritCommon} onChange={event => setDraft({ ...draft, inheritCommon: event.target.checked })} />继承本工具通用配置</label>}
-    {editor === 'profile' && connection && <details className={styles.connectionAdvanced}><summary>高级连接选项</summary>
-      {addressConfigurable && !!workspace.probe.providerPresets.length && <div className={styles.modelBar}><span>官方接口预设</span>{workspace.probe.providerPresets.map(item => <button key={item.id} type="button" title={item.sourceUrl} onClick={() => applyPreset(item.id, item.baseUrl, item.interfaceFormat)}>{item.label}</button>)}</div>}
-      <div className={styles.formGrid}><label>供应商 ID<input value={connection.providerId} onChange={event => setDraft({ ...draft!, connection: connectionForProvider(connection, event.target.value) })} /></label>{(workspace.probe.interfaceFormats.length > 1 || !workspace.probe.interfaceFormats.includes(connection.interfaceFormat as never)) && <label>接口格式<select value={connection.interfaceFormat} onChange={event => setDraft({ ...draft!, connection: { ...connection, interfaceFormat: event.target.value } })}>{!workspace.probe.interfaceFormats.includes(connection.interfaceFormat as never) && <option value={connection.interfaceFormat}>当前格式 · {formatLabel(connection.interfaceFormat)}</option>}{workspace.probe.interfaceFormats.map(item => <option key={item} value={item}>{formatLabel(item)}</option>)}</select></label>}<label>认证环境变量名<input value={connection.authEnvVar ?? ''} onChange={event => setDraft({ ...draft!, connection: { ...connection, authEnvVar: event.target.value || null } })} placeholder="可选" /></label></div>
-      {effectiveEnvName && !connection.secretRef && <p className={styles.hint}>原生配置引用：<code>{effectiveEnvName}</code></p>}
-      <div className={styles.diagnosticActions}><button type="button" disabled={checkingConnection || !!newSecret} onClick={() => void checkConnection(false)}>检查连接</button><details><summary>更多诊断</summary><button type="button" disabled={checkingConnection || !!newSecret} onClick={() => void checkConnection(true)}>发送最小请求（可能计费）</button></details></div>
-      {newSecret && <p className={styles.hint}>先获取模型或保存配置，再进行连接诊断。</p>}
-      {connectionCheck && <details className={styles.diagnosticResult}><summary>连接诊断 · {connectionCheck.connectivity.state === 'failed' ? '未通过' : connectionCheck.connectivity.state === 'passed' ? '已连接' : '部分完成'}</summary><p>{connectionCheck.format.message}</p><p>{connectionCheck.connectivity.message}</p><p>{connectionCheck.modelRequest.message}</p></details>}
-      {inspection?.connection && connectionShape(inspection.connection) !== connectionShape(connection) && <button type="button" onClick={adoptInspectedConnection}>使用原生配置中的连接</button>}
-    </details>}
-    {(editor === 'profile' && draft) && <>
-      <div className={styles.moreSection}><strong>原生文本</strong>{nativeEditor()}</div>
-      <div className={styles.merged}><button type="button" className={styles.previewButton} onClick={() => setView(view === 'merged' ? 'form' : 'merged')}>{view === 'merged' ? '隐藏合并结果' : '查看合并结果'}</button>{view === 'merged' && <><p>只读结构化预览：通用配置、命名配置和连接设置合并；CLI 仍可能受到环境变量、项目信任和更高优先级原生设置影响。</p><CodeEditor format={activeFile?.format ?? 'json'} label="合并配置预览" readOnly value={preview?.rendered?.[role] ?? ''} placeholder="等待有效配置…" />{preview && <details><summary>查看字段来源</summary><pre>{Object.entries(preview.sources[role] ?? {}).map(([path, source]) => `${path} ← ${source}`).join('\n') || '没有覆盖字段'}</pre></details>}</>}</div>
-    </>}
-    {editor !== 'common' && <button type="button" className={styles.secondary} onClick={() => void editCommon()}>通用配置</button>}
-  </details> : null;
-
+  const linkedAuthentication = workspace?.profiles.find(profile => profile.id === accountUsageQuery?.config.identity.profileId)?.authentication;
+  const queryAccount = linkedAuthentication?.kind === 'oauth' ? linkedAuthentication.accountId : accountUsageQuery?.config.identity.profileId ? undefined : accountUsageQuery?.config.identity.accountId ?? undefined;
+  if (!descriptor) return <p>还没有管理中的 CLI，请在设置中选择工具。</p>;
   return <section className={styles.workspace} aria-label="工具与连接">
-    <div className={styles.toolbar}>
-      <div className={styles.toolSwitcher} role="tablist" aria-label="CLI" onKeyDown={navigateChoices}>{visibleTools.map((item) => <button key={item.id} type="button" role="tab" aria-selected={currentTool === item.id} tabIndex={currentTool === item.id ? 0 : -1} title={item.name} className={currentTool === item.id ? styles.selected : ''} onClick={async () => { if (currentTool === item.id) return; if ((dirty || mcpDirty || skillsDirty || agentsDirty) && !await confirmChange('当前草稿尚未保存，切换后会丢失这些修改。继续吗？')) return; invalidateDraftRequest(); setTool(item.id); }}><ToolIcon toolId={item.id} size={23} />{item.name}</button>)}</div>
+    <div className={styles.toolbar}><div className={styles.toolSwitcher} role="tablist" aria-label="CLI" onKeyDown={navigateChoices}>{managedTools.map(item => <button key={item.id} role="tab" aria-selected={item.id === toolId} tabIndex={item.id === toolId ? 0 : -1} className={item.id === toolId ? styles.selected : ''} onClick={() => void switchTool(item.id)}><ToolIcon toolId={item.id} size={23} />{item.name}</button>)}</div></div>
+    <div className={styles.taskBar}><div className={styles.views} role="tablist" aria-label="当前任务" onKeyDown={navigateChoices}>{Object.entries({ config: '配置', accounts: '账号', mcp: 'MCP', skills: 'Skill', agents: 'Agents', plugins: '插件' }).filter(([id]) => supported[id as ResourceView]).map(([id, label]) => <button role="tab" key={id} aria-selected={resource === id} tabIndex={resource === id ? 0 : -1} className={resource === id ? styles.selected : ''} onClick={() => void switchResource(id as ResourceView)}>{label}</button>)}</div><div className={styles.scopeBar}><FilterSelect className={styles.projectSelect} label="配置范围" value={scope === 'global' ? '__global__' : projectPath} forceSearch searchLabel="搜索项目" options={[{ value: '__global__', label: '全局配置' }, ...projects.map(project => ({ value: project.path ?? project.id, label: project.name, detail: project.path ? shortPath(project.path) : undefined, disabled: !project.available || !project.path })), ...(projectPath && !projects.some(project => project.path === projectPath) ? [{ value: projectPath, label: projectPath.split(/[\\/]/).at(-1) ?? projectPath }] : [])]} onChange={value => void switchScope(value === '__global__' ? 'global' : 'project', value === '__global__' ? '' : value)} onPickFolder={() => void pickProject()} pickFolderLabel="选择文件夹…" /></div></div>
+    {error && <p role="alert" className={styles.error}>{error}</p>}{notice && <p role="status" className={styles.notice}>{notice}</p>}
+    <div hidden={resource !== 'config'}>
+      {workspace && <InstallPanel toolName={descriptor.name} probe={workspace.probe} customPath={customPath} busy={busy} loading={loading} onCustomPath={setCustomPath} onSavePath={() => void savePath()} onMaintain={(action, source) => void maintain(action, source)} onUsePath={path => void usePath(path)} />}
+      {workspace?.recoveryNeeded.length ? <p role="alert">有 {workspace.recoveryNeeded.length} 项文件事务需要恢复。<button onClick={() => { void native.recoverNativeTransactions().then(() => reload(toolId, scope, projectPath)).catch(failure => setError(errorText(failure))); }}>重试恢复</button></p> : null}
+      {!workspace ? <div className={styles.taskEmpty}>{loading ? <p role="status">正在读取配置…</p> : <><p>配置读取失败，已有记录未被删除。</p><button onClick={() => void reload(toolId, scope, projectPath)}>重试读取配置</button></>}</div> : <div className={styles.profileList} aria-label="配置列表"><div className={styles.listHeading}><strong>配置</strong><span className={styles.listActions}><button onClick={() => void openFrame('common')}>通用配置</button><button className={styles.primary} onClick={() => void createProfile()}>新建配置</button></span></div>{currentFile && <div className={styles.profileRow} data-kind="native"><span><button className={styles.profileName} onClick={() => void openFrame('current')}>正在使用的文件</button><small>直接编辑当前范围的原生文件</small></span><button onClick={() => void openFrame('current')}>修改</button></div>}{workspace.profiles.length > 6 && <label className={styles.profileFilter}><input aria-label="搜索配置" placeholder="搜索配置" value={filter} onChange={event => setFilter(event.target.value)} /></label>}{!workspace.profiles.length && <p className={styles.profileEmpty}>还没有命名配置。可新建配置或编辑已有当前文件。</p>}<div role="list" aria-label="配置项" className={workspace.profiles.length > 6 ? styles.profileScroll : undefined}>{[{ id: 'subscription', label: '订阅套餐', profiles: workspace.profiles.filter(profile => quotaIds.has(profile.id) || profile.authentication?.kind === 'oauth') }, { id: 'other', label: '其他配置', profiles: workspace.profiles.filter(profile => !quotaIds.has(profile.id) && profile.authentication?.kind !== 'oauth') }].filter(group => group.profiles.length).map(group => <div key={group.id} className={styles.profileGroup} data-group={group.id}><div className={styles.groupLabel}><strong>{group.label}</strong><span>{group.profiles.length}</span></div>{group.profiles.filter(profile => profile.name.toLowerCase().includes(filter.toLowerCase())).map(row)}</div>)}</div></div>}
+      <GuideDialog wide suspended={!active} open={!!frame} title={frame?.title ?? '配置'} hint={`${descriptor.name} · ${scope === 'global' ? '全局' : projectPath}。保存配置只入库，使用是独立操作。`} onClose={() => void closeFrame()}>{frame && !workspace && <p role="status">正在读取目标范围的配置…</p>}{frame && workspace && <ConfigurationWorkspaceEditor key={frame.key} toolId={toolId} subject={frame.subject} profile={frame.profile} scope={scope} projectPath={projectPath} workspace={workspace} accounts={accounts} onClose={() => void closeFrame()} onDirtyChange={value => { if (value) epoch.current++; setDirty(value); }} onDraftChange={changed} onStored={stored} onDone={(result, used) => { setFrame(null); setDirty(false); setNotice(result.application ? '当前文件已更新；下次会话读取。' : used ? '配置已保存并使用；下次会话读取。' : '配置已保存；正在使用的文件保持原版本。'); void reload(toolId, scope, projectPath); }} />}</GuideDialog>
+      <GuideDialog wide open={!!comparison} title="比较当前文件与本次配置" hint="当前文件和保存配置不同。先比较，再明确使用。" onClose={() => setComparison(null)}>{comparison && <div>{comparison.files.map(file => <section key={file.role}><strong>{file.role}</strong><CodeEditor label={`${file.role} 当前内容`} format={file.format} value={file.current} readOnly /><CodeEditor label={`${file.role} 本次内容`} format={file.format} value={file.proposedText} readOnly /></section>)}<button disabled={busy} onClick={() => void compareUse()}>使用本次内容</button><button onClick={() => setComparison(null)}>保留当前文件</button></div>}</GuideDialog>
     </div>
-    <div className={styles.taskBar}>
-      <div className={styles.views} role="tablist" aria-label="当前任务" onKeyDown={navigateChoices}>
-        <button type="button" role="tab" aria-selected={resourceView === 'config'} tabIndex={resourceView === 'config' ? 0 : -1} className={resourceView === 'config' ? styles.selected : ''} onClick={() => void switchResourceView('config')}>配置</button>
-        {supports.accounts && <button type="button" role="tab" aria-selected={resourceView === 'accounts'} tabIndex={resourceView === 'accounts' ? 0 : -1} className={resourceView === 'accounts' ? styles.selected : ''} onClick={() => void switchResourceView('accounts')}>账号</button>}
-        {supports.mcp && <button type="button" role="tab" aria-selected={resourceView === 'mcp'} tabIndex={resourceView === 'mcp' ? 0 : -1} className={resourceView === 'mcp' ? styles.selected : ''} onClick={() => void switchResourceView('mcp')}>MCP</button>}
-        {supports.skills && <button type="button" role="tab" aria-selected={resourceView === 'skills'} tabIndex={resourceView === 'skills' ? 0 : -1} className={resourceView === 'skills' ? styles.selected : ''} onClick={() => void switchResourceView('skills')}>Skill</button>}
-        {supports.agents && <button type="button" role="tab" aria-selected={resourceView === 'agents'} tabIndex={resourceView === 'agents' ? 0 : -1} className={resourceView === 'agents' ? styles.selected : ''} onClick={() => void switchResourceView('agents')}>Agents</button>}
-        {supports.plugins && <button type="button" role="tab" aria-selected={resourceView === 'plugins'} tabIndex={resourceView === 'plugins' ? 0 : -1} className={resourceView === 'plugins' ? styles.selected : ''} onClick={() => void switchResourceView('plugins')}>插件</button>}
-      </div>
-      <div className={styles.scopeBar}><FilterSelect className={styles.projectSelect} label="配置范围" triggerDetail={false} value={scope === 'global' ? '__global__' : projectPath} options={[{ value: '__global__', label: '全局配置' }, ...projects.map((project) => ({ value: project.path ?? project.id, label: project.name, detail: project.path ? shortPath(project.path) : undefined, note: project.available ? undefined : '目录不可用', disabled: !project.available || !project.path })), ...(projectPath && !projects.some((project) => project.path === projectPath) ? [{ value: projectPath, label: projectPath.split(/[\\/]/).filter(Boolean).at(-1) || projectPath, detail: shortPath(projectPath) }] : [])]} placeholder="选择项目…" forceSearch searchLabel="搜索项目" title={scope === 'global' ? '全局配置' : projectPath || '选择已有项目'} onChange={(value) => void (value === '__global__' ? switchGlobal() : switchProject(value))} onPickFolder={() => void chooseProjectFolder()} pickFolderLabel="选择文件夹…" /></div>
-    </div>
-    <div hidden={resourceView !== 'config'}>
-    {scope === 'project' && !projectPath.trim() && <p className={styles.hint}>选择已有项目，或选择一个本机文件夹后，再编辑配置。</p>}
-    {scope === 'project' && workspace?.probe.nativeFiles.find((item) => !item.sensitive && item.reason)?.reason && <p className={styles.hint}>{workspace.probe.nativeFiles.find((item) => !item.sensitive && item.reason)?.reason}</p>}
-    {loading && <p className={styles.hint} role="status">正在读取配置…</p>}
-    {error && <div className={styles.error} role="alert">{error}</div>}
-    <GuideDialog wide open={!!applyComparison} title="比较当前文件与本次配置" hint="原生文件里已有不同内容。可以保留现有文件，或改用这次保存的配置。" onClose={() => setApplyComparison(null)}>
-      {applyComparison && <div className="file-conflict" aria-label="配置应用冲突">{applyComparison.files.map(file=><div className="file-conflict-columns" key={file.role}><div><strong>当前文件</strong><CodeEditor label={`当前 ${file.role} 文件`} readOnly compact format={file.format} value={file.current}/></div><div><strong>本次配置</strong><CodeEditor label={`本次 ${file.role} 配置`} readOnly compact format={file.format} value={file.proposedText ?? ''}/></div></div>)}<div className="file-conflict-actions"><button type="button" onClick={()=>setApplyComparison(null)}>保留当前文件</button><button type="button" disabled={busy} onClick={()=>void resolveApplication()}>使用本次配置</button></div></div>}
-    </GuideDialog>
-    {notice && <div className={styles.notice} role="status">{notice}</div>}
-    {(scope !== 'project' || !!projectPath.trim()) && <>
-      {pathControl}
-      {!!workspace?.recoveryNeeded.length && <div className={styles.error}>有 {workspace.recoveryNeeded.length} 项原生文件事务需要恢复。请检查目标文件和本机凭据库后重试。<button type="button" onClick={() => { void native.recoverNativeTransactions().then(() => { if (currentTool) return reload(currentTool, scope, projectPath, selectedId); }); }}>重试恢复</button></div>}
-      {writeUnavailable}
-      {workspace && workspace.profiles.length ? <div className={styles.profileList} aria-label="配置列表">
-          <div className={styles.listHeading}><strong>配置</strong><span className={styles.listActions}><button type="button" onClick={() => void editCommon()}>通用配置</button><button type="button" className={styles.primary} onClick={() => void createProfile()}>新建配置</button></span></div>
-          <div className={styles.profileRow} data-kind="native"><span><button type="button" className={styles.profileName} onClick={() => void openCurrentFile()}>正在使用的文件</button><small>直接改 CLI 正在读取的文件</small></span><button type="button" onClick={() => void openCurrentFile()}>修改</button></div>
-          {workspace.profiles.length > 6 && <label className={styles.profileFilter}><input aria-label="搜索配置" placeholder="搜索配置" value={profileQuery} onChange={event => setProfileQuery(event.target.value)} /></label>}
-          <div role="list" aria-label="配置项" className={workspace.profiles.length > 6 ? styles.profileScroll : undefined}>{(() => {
-            const visible = workspace.profiles.filter(item => item.name.toLowerCase().includes(profileQuery.trim().toLowerCase()));
-            const groups = [{ id: 'subscription', label: '订阅套餐', hint: '带额度查询或 OAuth 账号', items: visible.filter(isSubscription) }, { id: 'other', label: '其他配置', hint: 'API Key 与原生认证', items: visible.filter(item => !isSubscription(item)) }].filter(group => group.items.length);
-            return groups.map(group => <div key={group.id} role="presentation" className={styles.profileGroup} data-group={group.id}>
-              {groups.length > 1 && <div role="presentation" className={styles.groupLabel}><strong>{group.label}</strong><span>{group.items.length}</span><small>{group.hint}</small></div>}
-              {group.items.map(item => profileRow(item, workspace.probe))}
-            </div>);
-          })()}{profileQuery.trim() && !workspace.profiles.some(item => item.name.toLowerCase().includes(profileQuery.trim().toLowerCase())) && <p className={styles.profileEmpty}>没有匹配的配置</p>}</div>
-        </div> : <div className={styles.taskEmpty}>
-        <p>还没有命名配置。新建一份，或先改通用配置。</p>
-        <button type="button" className={styles.primary} disabled={busy || !currentTool} onClick={() => void createProfile()}>新建配置</button>
-        <button type="button" className={styles.secondary} disabled={busy || !currentTool} onClick={() => void editCommon()}>通用配置</button>
-        <button type="button" className={styles.secondary} disabled={busy || !hasCurrentNative} onPointerEnter={preloadCodeEditor} onFocus={preloadCodeEditor} onClick={() => void openCurrentFile()}>修改正在使用的文件</button>
-      </div>}
-      <GuideDialog wide open={guide && (editor !== 'profile' || !!draft)} title={historyOpen && editor === 'native' ? '修改记录' : editor === 'native' ? '修改正在使用的文件' : editor === 'common' ? '修改通用配置' : draft?.id ? '修改配置' : '新建配置'} hint={historyOpen && editor === 'native' ? '最多 20 次。选一条查看当时的文件，确认后才会写回。' : profileEditorHint} onClose={() => void closeGuide()}>
-        <div className={styles.editor}>
-            {historyOpen && editor === 'native' ? <div className={styles.history}>{backups.length ? <ul className={styles.historyList} aria-label="修改记录">{backups.map((item, index) => <li key={item.transactionId}><button type="button" aria-pressed={backupPreview?.transactionId === item.transactionId} disabled={busy} onClick={() => void inspectBackup(item.transactionId)}>{formatBackupTime(item.createdAt, index)}</button></li>)}</ul> : <p className={styles.historyEmpty}>还没有可恢复的修改。</p>}{backups.length > 0 && <div className={styles.historyPreview}><CodeEditor label="当时的文件" readOnly format={activeFile?.format ?? 'text'} value={backupPreview?.original ?? ''} placeholder={backupPreview ? '' : '正在读取…'} /></div>}</div> : <div className={styles.editorScroll}>
-            {editor === 'profile' && draft && <div className={styles.form}><div className={styles.sectionLabel}>基本信息</div><label className={styles.pair}>认证方式<select aria-label="认证方式" value={draft.authentication?.kind === 'api_key' && !apiKeyWritable ? 'native' : draft.authentication?.kind ?? 'native'} onChange={event => { const kind = event.target.value; setNewSecret(''); setDraft({ ...draft, authentication: kind === 'oauth' ? { kind, accountId: '' } : { kind: kind as 'native' | 'api_key' }, connection: kind === 'oauth' ? null : draft.connection, nativeCredentials: kind === 'oauth' ? {} : draft.nativeCredentials }); }}><option value="native">沿用原生认证（兼容）</option>{apiKeyWritable && <option value="api_key">API Key</option>}{supports.accounts && <option value="oauth">OAuth 账号</option>}{draft.authentication?.kind === 'rebind_required' && <option value="rebind_required">需要重新绑定</option>}</select></label>
-              {apiKeyState === 'scope_denied' && connectionPolicy?.apiKey.reason && <p className={styles.hint}>{connectionPolicy.apiKey.reason}</p>}
-              {draft.authentication?.kind === 'oauth' ? <><label className={styles.pair}>配置名称<input aria-label="配置名称" value={draft.name} onChange={event => setDraft({ ...draft, name: event.target.value })} /></label><label>绑定账号<select aria-label="绑定账号" value={draft.authentication.accountId} onChange={event => setDraft({ ...draft, authentication: { kind: 'oauth', accountId: event.target.value } })}><option value="">请选择已登录账号</option>{accountState.accounts.map(account => <option key={account.id} value={account.id}>{account.label} · {accountStates[account.state]}</option>)}</select></label><p className={styles.hint}>账号在“账号”页管理。保存不会立刻切换；启用后，下次启动和资源页才会使用这个账号。</p><CodeEditor label="OAuth 配置内容" format={activeFile?.format ?? 'json'} value={draft.files.settings ?? ''} onChange={value => setDraft({ ...draft, files: { ...draft.files, settings: value } })} /></> : draft.authentication?.kind === 'rebind_required' ? <p role="alert">跨设备导入的 OAuth 配置需要重新选择此设备上的账号。</p> : connectionForm}</div>}
-            {(editor === 'native' || editor === 'common') && nativeEditor()}
-            {fileConflict?.context === draftContext && pendingRaw && <FileConflict current={fileConflict.current} edited={pendingRaw.text} format={activeFile?.format ?? 'text'} busy={busy} onKeep={() => { setRawDisk({ ...pendingRaw, original:fileConflict.current, text:fileConflict.current }); setFileConflict(null); setError(''); }} onUse={() => { setRawDisk({ ...pendingRaw, original:fileConflict.current }); setFileConflict(null); setError(''); setNotice('已保留本次修改，点击保存写入。'); }} />}
-            {moreOptions}
-            </div>}
-            {error && <div className={styles.error} role="alert">{error}</div>}
-            {notice && <div className={styles.notice} role="status">{notice}</div>}
-            <div className={styles.actions}>
-              {historyOpen && editor === 'native' ? <>
-                <button type="button" disabled={busy} onClick={() => { setHistoryOpen(false); setBackupPreview(null); }}>返回编辑</button>
-                <span />
-                <button type="button" className={styles.primary} disabled={busy || !backupPreview} onClick={() => void restoreBackup()}>恢复这个版本</button>
-              </> : <>
-              {editor === 'profile' && draft?.id && <><button type="button" disabled={busy} onClick={() => void duplicateProfile()}>复制</button><button type="button" disabled={busy} onClick={() => void deleteCurrent()}>删除</button></>}
-              {currentDescriptor?.login && draft?.authentication?.kind !== 'oauth' && <button type="button" disabled={busy} title={currentDescriptor.login.hint} onClick={() => void login()}>登录</button>}
-              {editor === 'native' && <button type="button" disabled={busy} onClick={() => void openHistory()}>修改记录</button>}
-              {editor === 'native' && hasCurrentNative && <button type="button" disabled={busy} onClick={() => void importCurrentNative(false, true)}>复制为配置</button>}
-              <span data-tone={dirty || saveState === '尚未启用' ? 'warn' : saveState ? 'ok' : undefined}>{saveState}</span>
-              {editor === 'profile' && draft && workspace?.probe.nativeWrites.state === 'supported' && workspace.binding?.profileId !== draft.id && <button type="button" title="保存后写入原生文件，下次启动读取这份配置" disabled={busy || !nativeAvailable || enablingId !== null} onClick={() => void save(true, true)}>保存并启用</button>}
-              <button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint} disabled={busy || !nativeAvailable || (editor === 'native' && workspace?.probe.nativeWrites.state !== 'supported')} onClick={() => void save(editor === 'profile' && workspace?.probe.nativeWrites.state === 'supported')}>保存</button>
-              </>}
-            </div>
-        </div>
-      </GuideDialog>
-      {editor === 'profile' && draft?.id && workspace && !dirty && (workspace.binding?.profileId !== draft.id || workspace.binding.profileVersion !== draft.version) && <div className={styles.quickApply}><span>这份配置已保存，但尚未应用到当前范围。</span><button type="button" onClick={() => void applySaved(draft)} disabled={busy || enablingId !== null || workspace.probe.nativeWrites.state !== 'supported'}>启用</button></div>}
-    </>}
-    </div>
-    {supports.accounts && resourceView === 'accounts' && currentTool && <AccountsPanel key={currentTool} toolId={currentTool} state={accountState} onOpenProfile={(profileId, target) => void openAccountProfile(profileId, target)} onOpenUsage={queryId => void openAccountUsage(queryId)} />}
-    {accountUsageQuery && resourceView === 'accounts' && <QuotaEditor key={accountUsageQuery.id} profileId={accountUsageQuery.config.identity.profileId ?? ''} profileAccountId={accountUsageProfileAccountId} toolId={currentTool ?? undefined} query={accountUsageQuery} presets={quotaState.presets} onClose={() => setAccountUsageQuery(null)} onSaved={() => { setAccountUsageQuery(null); void quotaState.reload(); }} />}
-    {supports.agents && resourceView === 'agents' && currentTool && <AgentsWorkspace key={JSON.stringify([currentTool, scope, projectPath, resourceEpoch, workspace?.effectiveContextId])} toolId={currentTool} scope={scope} projectPath={projectPath} contextId={workspace?.effectiveContextId ?? null} onDirtyChange={setAgentsDirty} />}
-    {supports.plugins && resourceView === 'plugins' && currentTool && <PluginsWorkspace key={JSON.stringify([currentTool, scope, projectPath, resourceEpoch, workspace?.effectiveContextId])} toolId={currentTool} scope={scope} projectPath={projectPath} contextId={workspace?.effectiveContextId ?? null} />}
-    {supports.mcp && resourceView === 'mcp' && currentTool && <McpWorkspace key={JSON.stringify([currentTool, scope, projectPath, resourceEpoch, workspace?.effectiveContextId])} toolId={currentTool} scope={scope} projectPath={projectPath} contextId={workspace?.effectiveContextId ?? null} onDirtyChange={setMcpDirty} />}
-    {supports.skills && resourceView === 'skills' && currentTool && <SkillsWorkspace key={JSON.stringify([currentTool, scope, projectPath, resourceEpoch, workspace?.effectiveContextId])} toolId={currentTool} scope={scope} projectPath={projectPath} contextId={workspace?.effectiveContextId ?? null} onDirtyChange={setSkillsDirty} />}
+    {resource === 'accounts' && supported.accounts && <AccountsPanel toolId={toolId} state={accounts} onOpenProfile={(id, target) => void openTarget(id, target)} onOpenUsage={id => void openAccountQuota(id)} />}
+    {resource === 'accounts' && accountUsageQuery && <QuotaEditor key={accountUsageQuery.id} query={accountUsageQuery} profileId={accountUsageQuery.config.identity.profileId ?? ''} profileAccountId={queryAccount} toolId={toolId} presets={quota.presets} onClose={() => setAccountUsageQuery(null)} onSaved={() => { setAccountUsageQuery(null); void quota.reload(); }} />}
+    {resource === 'mcp' && supported.mcp && <McpWorkspace key={`${context}:${resourceEpoch}:${workspace?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={workspace?.effectiveContextId ?? null} onDirtyChange={mcpDirty} />}
+    {resource === 'skills' && supported.skills && <SkillsWorkspace key={`${context}:${resourceEpoch}:${workspace?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={workspace?.effectiveContextId ?? null} onDirtyChange={skillsDirty} />}
+    {resource === 'agents' && supported.agents && <AgentsWorkspace key={`${context}:${resourceEpoch}:${workspace?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={workspace?.effectiveContextId ?? null} onDirtyChange={agentsDirty} />}
+    {resource === 'plugins' && supported.plugins && <PluginsWorkspace key={`${context}:${resourceEpoch}:${workspace?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={workspace?.effectiveContextId ?? null} />}
   </section>;
 }

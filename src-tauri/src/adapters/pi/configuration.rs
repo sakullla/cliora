@@ -241,6 +241,35 @@ fn retire_entity(state: &mut EditingState, entity_kind: &str, provider: &str, id
 }
 
 impl ConfigurationAdapter for Pi {
+    fn credential_paths(&self,connection:&Connection)->Vec<(&'static str,Vec<String>)>{
+        ["apiKey"].iter().map(|field|("models",vec!["providers".into(),connection.provider_id.clone(),(*field).into()])).collect()
+    }
+
+    fn native_verification_module(&self) -> Option<&'static str> { Some("src-tauri/src/adapters/pi/native_verification.mjs") }
+    fn catalog_support(&self) -> CatalogSupport { CatalogSupport { available: true, multiple: true, reason: None } }
+    fn common_parameters(&self, scope: Scope) -> Vec<CommonParameter> {
+        self.describe(scope).fields.into_iter().filter(|field| ["defaultThinkingLevel"].contains(&field.id.as_str()))
+            .map(|field| CommonParameter { path: field.id.split('.').map(str::to_owned).collect(), field, role: "settings", target: json!({"kind":"settings"}) }).collect()
+    }
+    fn common_forbidden_paths(&self) -> Vec<(&'static str, &'static str)> { vec![("settings","/defaultProvider"), ("settings","/defaultModel")] }
+    fn draft_connection(&self, documents: &Documents, state: &EditingState) -> Result<Option<Connection>, String> {
+        let mut documents = documents.clone();
+        let provider = selected(&documents, state);
+        let Some(provider) = provider else { return Ok(None); };
+        let model = root(&documents, "models")["providers"][&provider]["models"].as_array()
+            .and_then(|models| models.first()).and_then(|model| model.get("id")).and_then(Value::as_str).unwrap_or("").to_owned();
+        let settings = documents.entry("settings".into()).or_insert_with(|| json!({}));
+        settings["defaultProvider"] = json!(provider); settings["defaultModel"] = json!(model);
+        self.connection(&documents, state)
+    }
+    fn catalog_actions(&self, documents: &Documents, state: &EditingState, ids: &[String]) -> Result<Vec<ConfigurationAction>, String> {
+        let provider = selected(documents, state).ok_or("请先设置供应商连接")?;
+        let root = as_map(root(documents, "models"))?;
+        Ok(ids.iter().filter(|id| root.pointer(&pointer(&path("model", &provider, id, None))).is_none()).map(|id| ConfigurationAction {
+            version: EDITING_VERSION, target: model_target("model", &provider, id), operation: "create".into(), field: None, value: Some(json!({})),
+        }).collect())
+    }
+
     fn cleanup_removed_parents(&self) -> bool { true }
     fn portable_reference_valid(&self, path: &[String], value: &Value) -> bool {
         path.last().is_some_and(|field| field == "apiKey")

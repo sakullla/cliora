@@ -26,6 +26,11 @@ pub struct NativeSecrets {
 }
 
 impl NativeSecrets {
+    pub(crate) fn apply_text(&self, role:&str, kind:format::FileKind, mut text:String)->Result<String,String>{
+        if let Some(paths)=self.removals.get(role){for path in paths{text=format::set_path(kind,&text,&path_from_pointer(path),None)?;}}
+        if let Some(values)=self.values.get(role){for(path,value)in values{text=format::set_path(kind,&text,&path_from_pointer(path),Some(&Value::String(value.clone())))?;}}
+        Ok(text)
+    }
     pub(crate) fn put(&mut self, role: &str, path: &[&str], value: String) {
         let pointer = pointer(
             &path
@@ -137,6 +142,35 @@ pub struct AppliedBinding {
     pub profile_id: String,
     pub profile_version: u64,
     pub managed: Managed,
+    #[serde(default)]
+    pub common_version: Option<u64>,
+    #[serde(default)]
+    pub common_revision: Option<String>,
+    #[serde(default, skip_serializing)]
+    pub applied_profile: Option<AppliedProfileSnapshot>,
+    pub applied_profile_available: bool,
+    pub applied_summary: Option<AppliedSummary>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all="camelCase")]
+pub struct AppliedSummary {
+    pub authentication: profile::ProfileAuthentication,
+    pub provider_id: Option<String>,
+    pub base_url: Option<String>,
+    pub model: Option<String>,
+    pub context_id: Option<String>,
+    pub profile_version: u64,
+    pub profile_revision: String,
+}
+
+/// One last-success snapshot, never a profile history. Runtime fields are
+/// frozen effective values; source fields retain the original inheritance layer.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppliedProfileSnapshot {
+    pub source_profile: RegisteredProfile,
+    pub runtime_profile: RegisteredProfile,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -250,9 +284,16 @@ pub fn get_registered_binding(
     key: &str,
 ) -> Result<Option<AppliedBinding>, String> {
     db.with_connection(|conn| {
-        let row: Option<(String, i64, String, Option<String>)> = conn.query_row("SELECT profile_id, profile_version, managed, context_id FROM applied_bindings WHERE scope_key = ?1 AND tool = ?2", params![key, tool], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))).optional().map_err(|e| e.to_string())?;
-        row.map(|(profile_id, profile_version, managed, context_id)| {
-            Ok(AppliedBinding { context_id, scope_key: key.into(), tool: tool.into(), profile_id, profile_version: profile_version.max(0) as u64, managed: serde_json::from_str(&managed).map_err(|_| "活动配置记录损坏")? })
+        let row: Option<(String, i64, String, Option<String>,Option<i64>,Option<String>,Option<String>)> = conn.query_row("SELECT profile_id, profile_version, managed, context_id,common_version,common_revision,applied_profile FROM applied_bindings WHERE scope_key = ?1 AND tool = ?2", params![key, tool], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?))).optional().map_err(|e| e.to_string())?;
+        row.map(|(profile_id, profile_version, managed, context_id,common_version,common_revision,applied_profile)| {
+            let snapshot:Option<AppliedProfileSnapshot>=applied_profile.as_deref().map(serde_json::from_str).transpose().map_err(|_|"最后应用快照不兼容，请明确重新应用")?;
+            let applied_summary=snapshot.as_ref().map(|snapshot|{
+                let runtime=&snapshot.runtime_profile;
+                let authentication=if matches!(runtime.authentication,profile::ProfileAuthentication::Native)&&runtime.connection.as_ref().is_some_and(|connection|connection.secret_ref.is_some()) {profile::ProfileAuthentication::ApiKey}else{runtime.authentication.clone()};
+                AppliedSummary{authentication,provider_id:runtime.connection.as_ref().map(|connection|connection.provider_id.clone()),base_url:runtime.connection.as_ref().map(|connection|connection.base_url.clone()),model:runtime.connection.as_ref().map(|connection|connection.model.clone()),context_id:context_id.clone(),profile_version:snapshot.source_profile.version,profile_revision:snapshot.source_profile.revision.clone()}
+            });
+            Ok(AppliedBinding { context_id, scope_key: key.into(), tool: tool.into(), profile_id, profile_version: profile_version.max(0) as u64, managed: serde_json::from_str(&managed).map_err(|_| "活动配置记录损坏")?,common_version:common_version.map(|version|version.max(0) as u64),common_revision,
+                applied_profile_available:snapshot.is_some(),applied_summary,applied_profile:snapshot })
         }).transpose()
     })
 }
@@ -426,13 +467,22 @@ pub fn apply_registered_validated(
     scope: Scope,
     allow_takeover: bool,
 ) -> Result<ApplyOutcome, String> {
-    apply_registered_validated_compared(registry,db,credentials,profile,common,native_files,key,scope,allow_takeover,None)
+    apply_registered_validated_inner(registry,db,credentials,profile,common,native_files,key,scope,allow_takeover,None,None)
 }
 
 fn apply_registered_validated_compared(
+    registry:&crate::adapters::Registry,db:&Database,credentials:&dyn CredentialStore,
+    profile:&RegisteredProfile,common:Option<&RegisteredCommon>,native_files:&[NativeFile],
+    key:&str,scope:Scope,allow_takeover:bool,comparison:Option<&BTreeMap<String,String>>,
+)->Result<ApplyOutcome,String>{
+    apply_registered_validated_inner(registry,db,credentials,profile,common,native_files,key,scope,allow_takeover,comparison,None)
+}
+
+fn apply_registered_validated_inner(
     registry: &crate::adapters::Registry, db: &Database, credentials: &dyn CredentialStore,
     profile: &RegisteredProfile, common: Option<&RegisteredCommon>, native_files: &[NativeFile],
     key: &str, scope: Scope, allow_takeover: bool, comparison: Option<&BTreeMap<String,String>>,
+    binding_expectation: Option<&AppliedBinding>,
 ) -> Result<ApplyOutcome,String> {
     let snapshot_profile = profile;
     let adapter = registry
@@ -711,13 +761,20 @@ fn apply_registered_validated_compared(
             });
         }
     }
+    let mut runtime_profile=profile.clone();
+    runtime_profile.files=configuration_runtime_files(registry,profile,common,scope)?;
+    runtime_profile.inherit_common=false;runtime_profile.suppressed.clear();
+    let applied_profile=serde_json::to_string(&AppliedProfileSnapshot { source_profile:snapshot_profile.clone(),runtime_profile }).map_err(|error|error.to_string())?;
+    let common_version=if snapshot_profile.inherit_common {common.map(|common|common.version as i64)}else{None};
+    let common_revision=if snapshot_profile.inherit_common {common.map(|common|common.revision.as_str())}else{None};
     if patches.is_empty() {
         return transaction::commit_matching(db, &matching_baselines, |tx| {
             check_apply_snapshot(tx, snapshot_profile, common)?;
+            if let Some(expected)=binding_expectation {check_binding_snapshot(tx,expected)?;}
             let json = serde_json::to_string(&new_managed).map_err(|e| e.to_string())?;
             let context = crate::accounts::selection::current(&profile.tool);
             for target_key in [&context_key, &key.to_owned()] {
-                tx.execute("INSERT INTO applied_bindings (scope_key, tool, profile_id, profile_version, managed, context_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(scope_key, tool) DO UPDATE SET profile_id=excluded.profile_id, profile_version=excluded.profile_version, managed=excluded.managed, context_id=excluded.context_id", params![target_key, profile.tool, profile.id, profile.version as i64, json, context.as_ref().map(|ctx|&ctx.id)]).map_err(|e|e.to_string())?;
+                tx.execute("INSERT INTO applied_bindings (scope_key, tool, profile_id, profile_version, managed, context_id,common_version,common_revision,applied_profile) VALUES (?1, ?2, ?3, ?4, ?5, ?6,?7,?8,?9) ON CONFLICT(scope_key, tool) DO UPDATE SET profile_id=excluded.profile_id, profile_version=excluded.profile_version, managed=excluded.managed, context_id=excluded.context_id,common_version=excluded.common_version,common_revision=excluded.common_revision,applied_profile=excluded.applied_profile", params![target_key, profile.tool, profile.id, profile.version as i64, json, context.as_ref().map(|ctx|&ctx.id),common_version,common_revision,applied_profile]).map_err(|e|e.to_string())?;
             }
             Ok(())
         });
@@ -731,14 +788,46 @@ fn apply_registered_validated_compared(
         &patches,
         |tx| {
             check_apply_snapshot(tx, snapshot_profile, common)?;
+            if let Some(expected)=binding_expectation {check_binding_snapshot(tx,expected)?;}
             let json = serde_json::to_string(&new_managed).map_err(|e| e.to_string())?;
             let context = crate::accounts::selection::current(&profile.tool);
             for target_key in [&context_key, &key.to_owned()] {
-                tx.execute("INSERT INTO applied_bindings (scope_key, tool, profile_id, profile_version, managed, context_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(scope_key, tool) DO UPDATE SET profile_id=excluded.profile_id, profile_version=excluded.profile_version, managed=excluded.managed, context_id=excluded.context_id", params![target_key, profile.tool, profile.id, profile.version as i64, json, context.as_ref().map(|ctx|&ctx.id)]).map_err(|e|e.to_string())?;
+                tx.execute("INSERT INTO applied_bindings (scope_key, tool, profile_id, profile_version, managed, context_id,common_version,common_revision,applied_profile) VALUES (?1, ?2, ?3, ?4, ?5, ?6,?7,?8,?9) ON CONFLICT(scope_key, tool) DO UPDATE SET profile_id=excluded.profile_id, profile_version=excluded.profile_version, managed=excluded.managed, context_id=excluded.context_id,common_version=excluded.common_version,common_revision=excluded.common_revision,applied_profile=excluded.applied_profile", params![target_key, profile.tool, profile.id, profile.version as i64, json, context.as_ref().map(|ctx|&ctx.id),common_version,common_revision,applied_profile]).map_err(|e|e.to_string())?;
             }
             Ok(())
         },
     )
+}
+
+/// Common application supplies both trusted DB snapshots and an expected binding.
+pub fn apply_registered_validated_expected(
+    registry:&crate::adapters::Registry,db:&Database,credentials:&dyn CredentialStore,
+    profile:&RegisteredProfile,common:Option<&RegisteredCommon>,native_files:&[NativeFile],
+    key:&str,scope:Scope,expected:&AppliedBinding,
+)->Result<ApplyOutcome,String>{
+    apply_registered_validated_inner(registry,db,credentials,profile,common,native_files,key,scope,false,None,Some(expected))
+}
+fn check_binding_snapshot(tx:&rusqlite::Transaction<'_>,expected:&AppliedBinding)->Result<(),String>{
+    let row:Option<(String,i64,String,Option<String>,Option<i64>,Option<String>,Option<String>)>=tx.query_row(
+        "SELECT profile_id,profile_version,managed,context_id,common_version,common_revision,applied_profile FROM applied_bindings WHERE tool=?1 AND scope_key=?2",
+        params![expected.tool,expected.scope_key],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?))).optional().map_err(|error|error.to_string())?;
+    let Some((id,version,managed,context,common_version,common_revision,snapshot))=row else{return Err("应用范围已变化，请重新查看影响范围".into());};
+    let fields:Managed=serde_json::from_str(&managed).map_err(|_|"活动配置记录损坏")?;
+    let snapshot:Option<AppliedProfileSnapshot>=snapshot.as_deref().map(serde_json::from_str).transpose().map_err(|_|"应用快照不兼容")?;
+    if id!=expected.profile_id||version.max(0) as u64!=expected.profile_version||context!=expected.context_id
+        ||common_version.map(|value|value.max(0) as u64)!=expected.common_version||common_revision!=expected.common_revision||fields!=expected.managed
+        ||serde_json::to_value(snapshot).ok()!=serde_json::to_value(&expected.applied_profile).ok()
+    {return Err("应用范围在提交前已变化，修改已回滚".into());}
+    Ok(())
+}
+
+fn configuration_runtime_files(registry:&crate::adapters::Registry,profile:&RegisteredProfile,common:Option<&RegisteredCommon>,scope:Scope)->Result<BTreeMap<String,String>,String>{
+    let adapter=registry.get(&profile.tool).ok_or("适配器未注册")?;
+    let documents=if profile.inherit_common && common.is_none(){super::configuration::documents(registry,profile)?}
+        else{super::configuration::effective_documents(registry,profile,common)?};
+    let mut files=BTreeMap::new();
+    for(role,value)in documents {adapter.validate_role_scope(&role,scope)?;files.insert(role.clone(),format::render(adapter.file_kind(&role)?,&value)?);}
+    Ok(files)
 }
 
 #[derive(Clone,Debug,Serialize,Deserialize)]
@@ -998,18 +1087,18 @@ mod tests {
         let mut named = profile("", "initial");
         named.name = "Work".into();
         named.inherit_common = true;
-        named.files.clear();
-        let mut named = profile::save_profile(&db, named, None).unwrap();
+        named.files=BTreeMap::from([("settings".into(),"model = \"initial\"\n".into())]);
         let mut common = profile::save_common(&db, profile::CommonConfig {
             tool: CliId::Codex, version: 0, revision: String::new(),
-            files: BTreeMap::from([("settings".into(), "model = \"initial\"\n".into())]),
+            files: BTreeMap::from([("settings".into(), "model_reasoning_effort = \"low\"\n".into())]),
         }, None).unwrap();
+        let mut named = profile::save_profile(&db, named, None).unwrap();
         apply_profile(&db, &store, CliId::Codex, &named.id, Scope::Project, &home, Some(&project), Some(&executable), false).unwrap();
         let native = project.join(".codex/config.toml");
         let before = fs::read(&native).unwrap();
         if writes {
             if common_only {
-                common.files.insert("settings".into(), "model = \"captured\"\n".into());
+                common.files.insert("settings".into(), "model_reasoning_effort = \"medium\"\n".into());
                 common = profile::save_common(&db, common.clone(), Some(common.version)).unwrap();
             } else {
                 named.files.insert("settings".into(), "model = \"captured\"\n".into());
@@ -1022,7 +1111,7 @@ mod tests {
         let mut incoming = portable::collect_snapshot(&db, &store, &registry).unwrap();
         incoming.entities.retain(|entity| entity.kind() == if common_only { "common" } else { "profile" });
         match &mut incoming.entities[0].payload {
-            PortablePayload::Common(value) => { value.files.insert("settings".into(), "model = \"incoming\"\n".into()); },
+            PortablePayload::Common(value) => { value.files.insert("settings".into(), "model_reasoning_effort = \"high\"\n".into()); },
             PortablePayload::Profile(value) => { value.profile.files.insert("settings".into(), "model = \"incoming\"\n".into()); },
             _ => panic!("unexpected payload"),
         }
@@ -1065,7 +1154,7 @@ mod tests {
         }).unwrap();
         // Explicit application of the newly read snapshot succeeds after the rejected old one.
         apply_profile(&db, &store, CliId::Codex, &named.id, Scope::Project, &home, Some(&project), Some(&executable), false).unwrap();
-        assert!(fs::read_to_string(&native).unwrap().contains("incoming"));
+        assert!(fs::read_to_string(&native).unwrap().contains(if common_only {"high"} else {"incoming"}));
         assert_eq!(get_binding(&db, CliId::Codex, &scope_key(Scope::Project, Some(&project)).unwrap()).unwrap().unwrap().profile_version, current_profile.version);
     }
 

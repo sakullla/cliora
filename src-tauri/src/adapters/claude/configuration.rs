@@ -497,6 +497,29 @@ fn field(
     }
 }
 impl ConfigurationAdapter for Claude {
+    fn credential_paths(&self,_connection:&Connection)->Vec<(&'static str,Vec<String>)>{
+        ["settings","local_settings"].iter().flat_map(|role|["ANTHROPIC_API_KEY","ANTHROPIC_AUTH_TOKEN"].iter().map(move|field|(*role,vec!["env".into(),(*field).into()]))).collect()
+    }
+
+    fn native_verification_module(&self) -> Option<&'static str> { Some("src-tauri/src/adapters/claude/native_verification.mjs") }
+    fn catalog_support(&self) -> CatalogSupport { CatalogSupport { available: true, multiple: false, reason: None } }
+    fn common_parameters(&self, scope: Scope) -> Vec<CommonParameter> {
+        self.describe(scope).fields.into_iter().filter(|field| ["effort"].contains(&field.id.as_str()))
+            .map(|field| CommonParameter { path: vec!["effortLevel".into()], field, role: "settings", target: json!("configuration") }).collect()
+    }
+    fn common_forbidden_paths(&self) -> Vec<(&'static str, &'static str)> { vec![("settings","/model"), ("settings","/env/ANTHROPIC_MODEL"), ("settings","/env/ANTHROPIC_DEFAULT_SONNET_MODEL"), ("settings","/env/ANTHROPIC_DEFAULT_OPUS_MODEL"), ("settings","/env/ANTHROPIC_DEFAULT_FABLE_MODEL"), ("settings","/env/ANTHROPIC_DEFAULT_HAIKU_MODEL"), ("settings","/env/CLAUDE_CODE_SUBAGENT_MODEL")] }
+    fn draft_connection(&self, documents: &Documents, state: &EditingState) -> Result<Option<Connection>, String> {
+        let mut documents = documents.clone(); let settings = documents.entry("settings".into()).or_insert_with(|| json!({}));
+        let missing = settings.get("model").is_none() && settings.pointer("/env/ANTHROPIC_MODEL").is_none();
+        if missing { settings["model"] = json!("__cliora_draft__"); }
+        let mut connection = self.connection(&documents, state)?; if missing { if let Some(connection) = &mut connection { connection.model.clear(); } }
+        Ok(connection)
+    }
+    fn catalog_actions(&self, _documents: &Documents, _state: &EditingState, ids: &[String]) -> Result<Vec<ConfigurationAction>, String> {
+        if ids.len() != 1 { return Err("Claude 使用配置级默认模型，请选择一个模型".into()) }
+        Ok(vec![ConfigurationAction { version: EDITING_VERSION, target: json!("configuration"), operation: "set".into(), field: Some("model".into()), value: Some(json!(ids[0])) }])
+    }
+
     fn portable_field_kind(&self, path: &[String]) -> PortableFieldKind {
         match path.last().map(String::as_str) {
             Some("ANTHROPIC_API_KEY" | "ANTHROPIC_AUTH_TOKEN" | "CLAUDE_CODE_OAUTH_TOKEN") => {

@@ -11,6 +11,7 @@ export type ReasoningControl = {
 };
 
 export type ModelRoleValue = { model: string; name: string; longContext: boolean };
+export type ConfigurationContentProps = ConfigurationEditorProps & { section?: 'models' | 'settings'; mode?: 'profile' | 'current' | 'common'; pending?: boolean; rawResetEpoch?: number };
 export type ModelMappingControl = {
   fileRole: string;
   primaryRole?: string;
@@ -31,7 +32,9 @@ export type ToolUiAdapter = {
     defaultLabel: string;
     methods?: Partial<Record<'browser' | 'device', string>>;
   };
-  configuration?: { Editor: ComponentType<ConfigurationEditorProps> };
+  configuration?: {
+    Editor: ComponentType<ConfigurationContentProps>;
+  };
   primaryRole?: string;
   plugins?: { installLabel?: string; projectTrust?: boolean; projectUpdate?: boolean };
   officialUsage?: { accountRequired: boolean; automaticRefresh: boolean };

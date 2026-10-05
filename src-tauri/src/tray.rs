@@ -636,6 +636,11 @@ mod tests {
             profile_id: "daily".into(),
             profile_version: 1,
             managed: BTreeMap::new(),
+            common_version: None,
+            common_revision: None,
+            applied_profile: None,
+            applied_profile_available: false,
+            applied_summary: None,
         }
     }
 

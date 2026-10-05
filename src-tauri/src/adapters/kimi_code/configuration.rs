@@ -168,6 +168,32 @@ fn retire_entity(state: &mut EditingState, entity_kind: &str, _provider: &str, i
 }
 
 impl ConfigurationAdapter for KimiCode {
+    fn credential_paths(&self,connection:&Connection)->Vec<(&'static str,Vec<String>)>{
+        ["api_key","api_key_env"].iter().map(|field|("settings",vec!["providers".into(),connection.provider_id.clone(),(*field).into()])).collect()
+    }
+
+    fn native_verification_module(&self) -> Option<&'static str> { Some("src-tauri/src/adapters/kimi_code/native_verification.mjs") }
+    fn catalog_support(&self) -> CatalogSupport { CatalogSupport { available: true, multiple: true, reason: None } }
+    fn common_parameters(&self, scope: Scope) -> Vec<CommonParameter> {
+        self.describe(scope).fields.into_iter().filter(|field| ["thinking.enabled", "thinking.effort", "thinking.keep"].contains(&field.id.as_str()))
+            .map(|field| CommonParameter { path: field.id.split('.').map(str::to_owned).collect(), field, role: "settings", target: json!({"kind":"settings"}) }).collect()
+    }
+    fn common_forbidden_paths(&self) -> Vec<(&'static str, &'static str)> { vec![("settings","/default_model"), ("settings","/secondary_model")] }
+    fn draft_connection(&self, documents: &Documents, state: &EditingState) -> Result<Option<Connection>, String> {
+        let root = root(documents); let Some(provider) = selected(&root, state) else { return Ok(None); };
+        let entry = &root["providers"][&provider];
+        let (Some(base), Some(format)) = (entry["base_url"].as_str(), entry["type"].as_str().and_then(super::wire_format)) else { return Ok(None); };
+        let model = root["models"].as_object().and_then(|models| models.values().find(|model| model["provider"] == provider)).and_then(|model| model["model"].as_str()).unwrap_or("");
+        Ok(Some(Connection { provider_id: provider, interface_format: format.into(), base_url: base.into(), model: model.into(), secret_ref: None, auth_env_var: None, model_records: vec![] }))
+    }
+    fn catalog_actions(&self, documents: &Documents, state: &EditingState, ids: &[String]) -> Result<Vec<ConfigurationAction>, String> {
+        let root = root(documents); let provider = selected(&root, state).ok_or("请先设置供应商连接")?;
+        // Only IDs are known from this directory. Required context stays visibly unset.
+        Ok(ids.iter().filter(|id| root["models"].get(*id).is_none()).map(|id| ConfigurationAction {
+            version: EDITING_VERSION, target: model_target(id, &provider), operation: "create".into(), field: None, value: Some(json!({"provider":provider,"model":id})),
+        }).collect())
+    }
+
     fn cleanup_removed_parents(&self) -> bool { true }
     fn validate_changes(
         &self,

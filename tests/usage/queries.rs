@@ -380,7 +380,7 @@ fn v13_upgrade_keeps_existing_preferences_and_profiles() {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 19);
+        assert_eq!(version, 20);
         let data: String = conn
             .query_row(
                 "SELECT data FROM native_profiles WHERE id = 'legacy'",

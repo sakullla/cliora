@@ -69,3 +69,21 @@ Portable snapshot v2 和 WebDAV manifest v2 携带编辑状态；新客户端接
 `src-tauri/src/adapters/pi/configuration_tests.rs` 使用隔离目录和内存凭据覆盖三个 CLI 的模型生命周期、真实文件应用、稀疏继承、原文与排除对账、v2 凭据往返及 OpenCode 当前磁盘引用保护；`tests/ui/config-models.spec.ts` 覆盖三种专属编辑器。
 A2 回归覆盖浏览后保存/重开/应用、身份重用、原文删除与外部 CAS、Kimi 关联迁移、Pi 思考映射值类型、伪造 IPC 基线拒绝、既有未知能力复制/改名/Portable 往返及 common 继承。Kimi 基础能力开关使用 npm 2.1.1 的 `image_in/video_in/audio_in/thinking/always_thinking/tool_use/dynamically_loaded_tools`；文本输入是原生基础语义。Pi 已知 thinkingLevelMap 档位仅接受字符串或 null，未识别扩展键保留。
 这些开发测试不替代五个 CLI 的真实原生加载和正式交付验证。
+
+## 工作区会话、凭据与最后应用状态
+
+`native/workspace.rs::DraftSessions` 在 Rust 内保存会话对象、固定打开基线、版本及当前文件私有原文。每个编辑、原文、来源、目录和保存请求必须匹配服务端当前对象；取消移除会话，迟到请求不得写回新草稿。`ConfigurationSubject` 区分 profile/current/common，原有 pure profile API 保持兼容。
+
+适配器的 `describe_subject/read_subject/edit_subject/validate_subject` 定义各作用域行为；`common_parameters` 声明逻辑字段、原生位置和动作目标，`common_forbidden_paths` 拒绝不适用的模型引用。common 同样拒绝凭据与认证环境引用。未知合法参数保留；common 字段返回 explicit/unset 来源，false 不视为缺省。`draft_connection` 提供正在浏览的连接，和真正默认连接的持久投影分开。`catalog_support/catalog_actions` 映射目录选择到该 CLI 的原生动作，已有模型不覆盖；Kimi 仅有 ID 时不伪造必填上下文。无专属端口的 CLI 通过自己的既有 connection/intake 端口使用单模型和原文能力，不生成新 native 字段。
+
+新密钥是会话独占的内存 lease，引用只绑定 provider/protocol/baseUrl。它未进入系统凭据库，不得显示为系统已保存。切换来源保留 inactive lease，以便回到 API 来源；inactive 不授予请求权限。替换、明确移除和取消清理仅本次 lease。空输入保留当前引用；明确移除使用独立动作，API null 不回退旧 key。保存先验证连接身份，再把仍被选中使用的独立引用纳入系统凭据库及 DB；失败只清理新发布且无保存对象引用的凭据，旧引用不覆盖。reveal 是单独的受控用户动作。sourceCapabilities 取自注册端口及 scope，managed_login=false 不表示可选受管账号。
+
+诊断和目录入口只读取明确 API 来源的请求凭据，不复制 native/OAuth 登录，也不匿名或跨供应商回退。目录默认仅 GET；分页、缓存及可能的独立模型 POST 前检查会话失效，结果返回会话和版本。不计费诊断不发送推理。真实推理仍需单独明确确认及有效默认模型。
+
+profile/common 保存只入库。common influence 来自真实 applied_bindings，并按每个绑定及配置/common版本核查；pending 或未知命名配置不能借 common 应用激活新账号、连接或参数，失败按范围保留。common 应用采用原文件 CAS、加密备份和账号 reapply guard。
+
+SQLite schema 20 增 nullable common_version/common_revision 与一次 last-success applied_profile 快照；不建立版本历史表。显式 apply（包含 already_matching 成功事务）才写这三项。快照包含 sourceProfile 和冻结有效值的 runtimeProfile，只有脱敏文档及 opaque refs。仅保存新版本不会改变旧 active 身份；账号 selection 使用最后成功快照，不读取最新 pending auth。缺失旧快照且无法证实身份时返回恢复提示，不能猜测或返回默认账号目录。account binding 指纹包含新增三项；对外仅返回 appliedSummary，不返回快照文件或 nativeCredentials。
+
+current 读取去除保护凭据，私有原文留在会话；普通模型编辑不会纳入它们。公共字段差异用已有 native formatter 写到通过精确 CAS 的私有基线，显式 API 改动仍走 own adapter credential policy。比较两侧与备份预览均脱敏；明确采用本次/当前结果以服务端 comparisonId 核对版本、context及最新磁盘，再更新基线。比较后再次外改仍拒绝。当前文件写入/恢复失效配置所有权，但保留必要账号关联；项目继承的 global context 在直接编辑后保持关联。
+
+`native_verification_module` 是注册式验证入口，默认 None；已声明 CLI 返回 own module 相对 ref，通用脚本不维护第二套 CLI ID/协议 catalog。开发验证及正式候选验收分别记录。

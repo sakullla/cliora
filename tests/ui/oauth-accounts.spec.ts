@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { build } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'node:path';
+import { installConfigurationProtocol } from './configuration-workspace-fixture';
 
 async function setup(page: Page, inherited = false) {
   await page.addInitScript((inherited) => {
@@ -72,6 +73,7 @@ async function setup(page: Page, inherited = false) {
       return null;
     } } });
   }, inherited);
+  await installConfigurationProtocol(page);
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
 }
@@ -163,11 +165,11 @@ test('native discovery failure keeps managed accounts and offers a retry', async
 
 test('OAuth profile saves and applies the selected account without an API connection', async ({ page }) => {
   await setup(page); await page.getByRole('button', { name: '新建配置' }).click();
-  const dialog = page.getByRole('dialog'); await dialog.getByLabel('认证方式').selectOption('oauth');
-  await expect(dialog.getByLabel('绑定账号')).toHaveValue(''); await dialog.getByLabel('绑定账号').selectOption('b'); await dialog.getByLabel('配置名称').fill('个人订阅');
+  const dialog = page.getByRole('dialog'); await dialog.getByRole('combobox', { name: '凭据来源', exact: true }).selectOption('account');
+  await dialog.getByRole('listitem', { name: '个人账号' }).getByRole('button', { name: '选择并返回' }).click(); await dialog.getByLabel('配置名称').fill('个人订阅');
   await page.screenshot({ path: 'test-results/oauth-binding.png', fullPage: true });
-  await dialog.getByRole('button', { name: '保存', exact: true }).click(); await expect(dialog).toHaveCount(0);
-  await page.getByRole('button', { name: '启用', exact: true }).first().click();
+  await dialog.getByRole('button', { name: '保存配置', exact: true }).click(); await expect(dialog).toHaveCount(0);
+  await page.getByRole('button', { name: '使用', exact: true }).first().click();
   await expect.poll(() => page.evaluate(() => (window as any).oauthHarness.binding?.contextId)).toBe('ctx-b');
   const result = await page.evaluate(() => (window as any).oauthHarness);
   expect(result.profiles[0].authentication).toEqual({ kind: 'oauth', accountId: 'b' });
@@ -180,9 +182,10 @@ test('project without explicit binding edits and queries using its inherited eff
   await setup(page, true);
   await page.getByRole('button', { name: '配置范围' }).click();
   await page.getByRole('option', { name: '继承项目' }).click();
-  await page.getByRole('button', { name: '修改正在使用的文件', exact: true }).click();
-  await page.getByRole('textbox', { name: 'settings 配置草稿' }).fill('model = "after"');
-  await page.getByRole('dialog').getByRole('button', { name: '保存', exact: true }).click();
+  await page.getByRole('button', { name: '正在使用的文件', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '原生文本', exact: true }).click();
+  await page.getByRole('textbox', { name: 'settings 配置草稿' }).fill('{"values":{"model":"after"}}');
+  await page.getByRole('dialog').getByRole('button', { name: '保存到当前文件', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
   await expect(page.getByRole('button', { name: /project-server/ })).toBeVisible();
@@ -191,7 +194,8 @@ test('project without explicit binding edits and queries using its inherited eff
   await expect(page.getByRole('checkbox', { name: '启用 Skill' })).toBeChecked();
   await page.getByRole('checkbox', { name: '启用 Skill' }).uncheck();
   const calls = await page.evaluate(() => (window as any).oauthHarness.calls);
-  expect(calls.find((call: any) => call.command === 'save_registered_native_file').args).toMatchObject({ scope: 'project', expectedContextId: 'ctx-a' });
+  const configuration = await page.evaluate(() => (window as any).configurationProtocol.calls);
+  expect(configuration.find((call: any) => call.command === 'save_configuration_draft').args.draft).toMatchObject({ scope: 'project', contextId: 'ctx-a' });
   expect(calls.find((call: any) => call.command === 'set_skill_enabled').args).toMatchObject({ scope: 'project', expectedContextId: 'ctx-a' });
   expect(await page.evaluate(() => (window as any).oauthHarness.binding)).toBeNull();
 });

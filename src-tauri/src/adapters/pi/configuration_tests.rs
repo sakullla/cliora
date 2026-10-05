@@ -65,6 +65,20 @@ fn fixture(tool:&str)->RegisteredProfile{let mut profile=blank(tool);match tool{
     original.as_object_mut().unwrap().remove("agent");std::fs::write(&file.path,original.to_string()).unwrap();apply::apply_registered_validated(&registry,&db,&store,&updated,None,&files,"global",Scope::Global,false).unwrap();let result=disk(&files,"settings");assert!(result["provider"]["alpha"]["models"].get("slash/~victim").is_none());assert_eq!(result["provider"]["beta"]["models"]["valid-empty"],json!({}));
 }
 
+// A common layer may inherit model definitions, but not a profile's default references.
+fn suitable_common_files(tool: &str, files: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    let registry = Registry::builtins();
+    let adapter = registry.get(tool).unwrap();
+    files.iter().map(|(role, text)| {
+        let mut value = format::parse(adapter.file_kind(role).unwrap(), text).unwrap();
+        if role == "settings" {
+            let fields: &[&str] = match tool { "pi" => &["defaultProvider", "defaultModel"], "open_code" => &["model", "small_model"], _ => &["default_model"] };
+            for field in fields { value.as_object_mut().unwrap().remove(*field); }
+        }
+        (role.clone(), format::render(adapter.file_kind(role).unwrap(), &value).unwrap())
+    }).collect()
+}
+
 fn initialized(tool: &str) -> configuration::ConfigurationDraft {
     let registry = Registry::builtins();
     let mut draft = configuration::open(&registry, blank(tool), Scope::Global, format!("{tool}-a2")).unwrap();
@@ -335,7 +349,7 @@ fn multi_native_a2_raw_removal_suppresses_inherited_entities_without_changing_co
         let temp = tempfile::tempdir().unwrap(); let db = Database::open(&temp.path().join("db")).unwrap(); let store = Store::default();
         let mut draft = initialized(tool);
         let common = profile::save_registered_common(&db, &registry, RegisteredCommon {
-            tool: tool.into(), version: 0, revision: String::new(), files: draft.profile.files.clone(),
+            tool: tool.into(), version: 0, revision: String::new(), files: suitable_common_files(tool, &draft.profile.files),
         }, None).unwrap();
         draft.profile.inherit_common = true;
         draft = configuration::open_with_common(&registry, draft.profile, Some(common.clone()), Scope::Global, "a2-inherited".into()).unwrap();
@@ -360,7 +374,7 @@ fn multi_native_a2_kimi_common_unknowns_use_authoritative_db_baselines_and_inher
     let registry = Registry::builtins(); let temp = tempfile::tempdir().unwrap(); let db = Database::open(&temp.path().join("db")).unwrap();
     let initial = initialized("kimi_code");
     let mut common = profile::save_registered_common(&db, &registry, RegisteredCommon {
-        tool: "kimi_code".into(), version: 0, revision: String::new(), files: initial.profile.files.clone(),
+        tool: "kimi_code".into(), version: 0, revision: String::new(), files: suitable_common_files("kimi_code", &initial.profile.files),
     }, None).unwrap();
     let mut value = format::parse(FileKind::Toml, &common.files["settings"]).unwrap(); value["models"]["safe"]["capabilities"] = json!(["future_common","thinking"]);
     common.files.insert("settings".into(), format::render(FileKind::Toml, &value).unwrap());
@@ -372,7 +386,7 @@ fn multi_native_a2_kimi_common_unknowns_use_authoritative_db_baselines_and_inher
     invalid.files.insert("settings".into(), format::render(FileKind::Toml, &value).unwrap());
     assert!(profile::save_registered_common(&db, &registry, invalid, Some(common.version)).is_err());
     assert_eq!(profile::get_registered_common(&db, "kimi_code").unwrap().unwrap().files, common.files);
-    let mut source = blank("kimi_code"); source.inherit_common = true;
+    let mut source = blank("kimi_code"); source.inherit_common = true; source.files.insert("settings".into(), "default_model = \"safe\"\n".into());
     let mut draft = configuration::open_with_common(&registry, source, Some(common.clone()), Scope::Global, "inherited-unknown".into()).unwrap();
     draft = configuration::edit(&registry, draft, action("set", "alpha", "safe", Some("capabilities"), Some(json!(["future_common","thinking","image_in","tool_use"])))).unwrap();
     assert!(draft.issues.is_empty()); let saved = profile::save_registered_profile(&db, &registry, draft.profile, None).unwrap();
@@ -459,7 +473,7 @@ fn multi_native_a3_opencode_reuses_deleted_and_renamed_ids_for_default_and_small
                 let mut draft = initialized("open_code");
                 draft = configuration::edit(&registry, draft, action("small_default", "alpha", "safe", None, None)).unwrap();
                 let common = if inherit { Some(profile::save_registered_common(&db, &registry, RegisteredCommon {
-                    tool: "open_code".into(), version: 0, revision: String::new(), files: draft.profile.files.clone(),
+                    tool: "open_code".into(), version: 0, revision: String::new(), files: suitable_common_files("open_code", &draft.profile.files),
                 }, None).unwrap()) } else { None };
                 draft.profile.inherit_common = inherit;
                 draft = configuration::open_with_common(&registry, draft.profile, common.clone(), Scope::Global, "a3-id-reuse".into()).unwrap();

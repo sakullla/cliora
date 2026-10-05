@@ -91,7 +91,15 @@ pub fn bound(
     let Some(binding) = binding else {
         return Ok(None);
     };
-    let profile = crate::native::profile::get_registered_profile(db, &binding.profile_id)?;
+    let profile = if let Some(snapshot)=&binding.applied_profile {
+        &snapshot.runtime_profile
+    } else {
+        // A legacy native-directory binding proves its directory, not an old
+        // connection/key. No application credential is injected during launch.
+        if binding.context_id.is_none(){return Ok(None);}
+        return Err("最后应用的账号身份快照未知，请明确使用配置后重试；不会退回默认目录".into());
+    };
+    if profile.id!=binding.profile_id||profile.tool!=tool {return Err("应用快照与范围不一致，请重新应用".into());}
     match &profile.authentication {
         ProfileAuthentication::OAuth { account_id } => {
             let context_id = binding
