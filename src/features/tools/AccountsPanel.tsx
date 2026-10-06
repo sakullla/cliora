@@ -175,27 +175,35 @@ export function AccountsPanel({ toolId, state, onOpenProfile, onOpenUsage }: { t
       {account.pendingLogin && <div className={styles.actions}><button disabled={busy} onClick={() => void run(() => native.cancelAccountLogin(account.id, account.pendingLogin!.id), '已取消此尝试；外部登录终端需自行关闭，其迟到结果不会激活账号。')}>取消登录</button>{account.pendingLogin.operation === 'login' && state.capability?.browserLink && <button disabled={busy} onClick={() => void run(() => native.openAccountLoginLink(account.id, account.pendingLogin!.id), '已请求打开系统浏览器；请在浏览器完成授权。')}>打开授权页面</button>}</div>}
       {account.retiredContexts.length > 0 && <button onClick={() => setExpanded(previous => new Set(previous).add(account.id))}>查看重新认证后的待应用项</button>}
       <details className={accountStyles.management} open={expanded.has(account.id)} onToggle={event => { const open = event.currentTarget.open; setExpanded(previous => { const next = new Set(previous); if (open) next.add(account.id); else next.delete(account.id); return next; }); }}><summary>管理与关联</summary>
+      <div className={accountStyles.accountActions}>
+        <div className={styles.actions}>
+          <button disabled={busy} onClick={() => void run(() => native.checkAccount(account.id), '已核验原生状态。')}>检查状态</button>
+          <button disabled={busy} onClick={() => { setEditing(account.id); setRenamed(account.label); }}>重命名</button>
+          {!account.pendingLogin && state.capability?.managedLogin && <button disabled={busy || !state.capability.methods.length} onClick={() => void run(() => native.startAccountLogin(account.id, account.version, state.capability!.methods.includes(method) ? method : state.capability!.methods[0]), '已请求重新认证；完成后请重新应用绑定的配置。')}>{account.state === 'signed_in' ? '重新认证' : '登录'}</button>}
+        </div>
+        {editing === account.id && <label>新名称<input value={renamed} onChange={event => setRenamed(event.target.value)} /><button disabled={busy || !renamed.trim()} onClick={() => void run(async () => { await native.renameAccount(account.id, account.version, renamed); setEditing(null); }, '名称已更新。')}>保存名称</button><button disabled={busy} onClick={() => setEditing(null)}>取消重命名</button></label>}
+        <details className={accountStyles.moreActions}><summary>更多账号操作</summary>
+          <div className={styles.actions}>
+            {!account.pendingLogin && <button disabled={busy || account.state === 'signed_out'} onClick={() => void run(async () => {
+              const impact = await native.accountImpact(account.id);
+              if (!live.current || currentTool.current !== toolId) return;
+              if (!await confirmAction(`退出“${account.label}”的原生登录？关联配置可能无法启动，额度查询可能停止。${impactSummary(impact)}其他账号不受影响，管理记录仍保留。`, () => live.current && currentTool.current === toolId, { title: '退出此账号', confirmLabel: '退出此账号', destructive: true })) return false;
+              await native.logoutAccount(account.id, account.version);
+            }, '已请求原生退出。该账号绑定的配置不能再启动；其他账号不受影响。')}>退出此账号</button>}
+            <button className={styles.destructive} disabled={busy || !!account.pendingLogin} aria-describedby={account.pendingLogin ? `account-delete-hint-${account.id}` : undefined} title={account.pendingLogin ? '请先取消正在进行的账号操作' : '删除 Cliora 中的账号管理记录'} onClick={() => void (async () => {
+              await run(async () => {
+                const impact = await native.accountImpact(account.id);
+                if (!live.current || currentTool.current !== toolId) return;
+                if (!await confirmAction(`删除“${account.label}”的管理记录？原生登录文件、插件和历史记录会保留，不会退出或撤销授权。绑定的配置及额度查询需先解除关联。${impactSummary(impact)}`, () => live.current && currentTool.current === toolId, { title: '删除账号', confirmLabel: '删除账号', destructive: true })) return false;
+                await native.deleteAccount(account.id, account.version); if (editing === account.id) setEditing(null);
+              }, '账号管理记录已删除；原生登录文件与历史记录已保留。');
+            })()}>删除账号</button>
+          </div>
+        </details>
+        {account.pendingLogin && <p id={`account-delete-hint-${account.id}`} className={accountStyles.actionHint}>删除已停用：登录进行中，请先取消当前操作。</p>}
+      </div>
       <AccountImpactView account={account} active={expanded.has(account.id)} refreshAccounts={state.refresh} onOpenProfile={onOpenProfile} onOpenUsage={onOpenUsage} />
       {account.detail && <p>{account.detail}</p>}
-      {editing === account.id && <label>新名称<input value={renamed} onChange={event => setRenamed(event.target.value)} /><button disabled={busy || !renamed.trim()} onClick={() => void run(async () => { await native.renameAccount(account.id, account.version, renamed); setEditing(null); }, '名称已更新。')}>保存名称</button><button disabled={busy} onClick={() => setEditing(null)}>取消重命名</button></label>}
-      <div className={styles.actions}>
-        <button disabled={busy} onClick={() => void run(() => native.checkAccount(account.id), '已核验原生状态。')}>检查状态</button>
-        <button disabled={busy} onClick={() => { setEditing(account.id); setRenamed(account.label); }}>重命名</button>
-        {!account.pendingLogin && <>{state.capability?.managedLogin && <button disabled={busy || !state.capability.methods.length} onClick={() => void run(() => native.startAccountLogin(account.id, account.version, state.capability!.methods.includes(method) ? method : state.capability!.methods[0]), '已请求重新认证；完成后请重新应用绑定的配置。')}>{account.state === 'signed_in' ? '重新认证' : '登录'}</button>}<button disabled={busy || account.state === 'signed_out'} onClick={() => void run(async () => {
-          const impact = await native.accountImpact(account.id);
-          if (!live.current || currentTool.current !== toolId) return;
-          if (!await confirmAction(`退出“${account.label}”的原生登录？关联配置可能无法启动，额度查询可能停止。${impactSummary(impact)}其他账号不受影响，管理记录仍保留。`, () => live.current && currentTool.current === toolId, { title: '退出此账号', confirmLabel: '退出此账号', destructive: true })) return false;
-          await native.logoutAccount(account.id, account.version);
-        }, '已请求原生退出。该账号绑定的配置不能再启动；其他账号不受影响。')}>退出此账号</button></>}
-        <button className={styles.destructive} disabled={busy || !!account.pendingLogin} title={account.pendingLogin ? '请先取消正在进行的账号操作' : '删除 Cliora 中的账号管理记录'} onClick={() => void (async () => {
-          await run(async () => {
-            const impact = await native.accountImpact(account.id);
-            if (!live.current || currentTool.current !== toolId) return;
-            if (!await confirmAction(`删除“${account.label}”的管理记录？原生登录文件、插件和历史记录会保留，不会退出或撤销授权。绑定的配置及额度查询需先解除关联。${impactSummary(impact)}`, () => live.current && currentTool.current === toolId, { title: '删除账号', confirmLabel: '删除账号', destructive: true })) return false;
-            await native.deleteAccount(account.id, account.version); if (editing === account.id) setEditing(null);
-          }, '账号管理记录已删除；原生登录文件与历史记录已保留。');
-        })()}>删除账号</button>
-      </div>
       </details>
     </li>)}</ul>
     {state.capability && <details className={styles.compatibility}><summary>登录方式与兼容性</summary><p>{state.capability.reason}</p></details>}

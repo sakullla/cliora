@@ -93,6 +93,7 @@ test('account panel distinguishes pending, cancel, reauthentication, logout and 
   await work.getByRole('button', { name: '重新认证' }).click(); await expect(work.getByText('等待原生登录完成')).toBeVisible();
   await work.getByRole('button', { name: '取消登录' }).click();
   const personal = page.getByRole('listitem').filter({ has: page.getByText('个人账号', { exact: true }) }); await personal.getByText('管理与关联', { exact: true }).click(); await expect(personal.getByText('已登录', { exact: true })).toBeVisible();
+  await personal.getByText('更多账号操作', { exact: true }).click(); // 退出此账号移入次级"更多账号操作"折叠区，需先展开
   await personal.getByRole('button', { name: '退出此账号' }).click(); await page.getByRole('dialog').getByRole('button', { name: '退出此账号' }).click(); await expect(personal.getByText('已退出')).toBeVisible();
   await page.getByLabel('账号名称').fill('既有账号'); await page.getByRole('button', { name: '纳入现有原生账号' }).click();
   await expect(page.getByText('已将现有原生账号纳入管理；继续使用原目录，未复制令牌。')).toBeVisible();
@@ -105,12 +106,18 @@ test('account deletion confirms its scope, cancel makes no call and pending logi
   await setup(page); await page.getByRole('tab', { name: '账号', exact: true }).click();
   const work = page.getByRole('listitem').filter({ has: page.getByText('工作账号', { exact: true }) });
   await work.getByText('管理与关联', { exact: true }).click();
+  await work.getByText('更多账号操作', { exact: true }).click(); // 删除账号移入次级"更多账号操作"折叠区，需先展开
   await work.getByRole('button', { name: '删除账号', exact: true }).click();
   await expect(page.getByRole('dialog')).toContainText('原生登录文件、插件和历史记录会保留');
   await page.getByRole('dialog').getByRole('button', { name: '取消', exact: true }).click();
   expect(await page.evaluate(() => (window as any).oauthHarness.calls.filter((call: any) => call.command === 'delete_account').length)).toBe(0);
   await work.getByRole('button', { name: '重新认证' }).click();
-  await expect(work.getByRole('button', { name: '删除账号', exact: true })).toBeDisabled();
+  const disabledDelete = work.getByRole('button', { name: '删除账号', exact: true });
+  await expect(disabledDelete).toBeDisabled();
+  await expect(work.getByText('删除已停用：登录进行中，请先取消当前操作。')).toBeVisible(); // 新增：禁用原因以可见行内文案呈现，而非仅 title
+  const hintId = await disabledDelete.getAttribute('aria-describedby'); // 新增：禁用按钮通过 aria-describedby 指向可见原因文本
+  expect(hintId).toBeTruthy();
+  await expect(work.locator(`#${hintId}`)).toHaveText('删除已停用：登录进行中，请先取消当前操作。');
   await work.getByRole('button', { name: '取消登录' }).click();
   await work.getByRole('button', { name: '删除账号', exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: '删除账号', exact: true }).click();
@@ -430,6 +437,7 @@ test('account impact failure has retry and destructive operations explain refere
   await page.evaluate(() => { (window as any).oauthHarness.impactFailure = ''; });
   await impacts.getByRole('button', { name: '刷新关联' }).click();
   await expect(impacts.getByText('关联工作配置 · 全局', { exact: true })).toBeVisible();
+  await work.getByText('更多账号操作', { exact: true }).click(); // 退出此账号/删除账号在次级折叠区，需先展开
   await work.getByRole('button', { name: '退出此账号' }).click();
   await expect(page.getByRole('dialog')).toContainText('关联工作配置');
   await expect(page.getByRole('dialog')).toContainText('关联工作额度');
