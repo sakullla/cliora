@@ -122,7 +122,7 @@ export async function installConfigurationProtocol(page: Page) {
   });
 }
 
-export async function setupConfigurationWorkspace(page: Page, toolId = 'kimi_code', apiWritable = true, appliedOld = false, toolIds = [toolId]) {
+export async function installConfigurationWorkspace(page: Page, toolId = 'kimi_code', apiWritable = true, appliedOld = false, toolIds = [toolId]) {
   await page.addInitScript(({ toolId, apiWritable, appliedOld, toolIds }) => {
     const account = (id: string, owner = toolId) => ({ id, label: `${id}账号`, toolId: owner, version: 1, state: 'signed_in', identity: { subject: id, email: `${id}@example.test`, source: 'fixture' }, context: { id: `ctx-${id}` }, retiredContexts: [], pendingLogin: null, detail: null });
     const fixture = { profiles: [{ id: 'existing', tool: toolId, name: '工作配置', version: 3, revision: 'revision-3', files: {}, suppressed: {}, nativeCredentials: {}, inheritCommon: true, authentication: { kind: 'api_key' }, connection: { providerId: 'gateway', interfaceFormat: 'openai_completions', baseUrl: 'https://gateway.example.test/v1', model: 'one', secretRef: 'saved-original', authEnvVar: null } }], binding: { scopeKey: 'global', tool: toolId, profileId: 'existing', profileVersion: appliedOld ? 2 : 3, contextId: null, managed: {}, commonVersion: 1, commonRevision: 'common-1', appliedProfileAvailable: true, appliedSummary: appliedOld ? { authentication: { kind: 'native' }, providerId: 'old-provider', baseUrl: 'https://old.example.test', model: 'old-model', contextId: null, profileVersion: 2, profileRevision: 'old-revision' } : { authentication: { kind: 'api_key' }, providerId: 'gateway', baseUrl: 'https://gateway.example.test/v1', model: 'one', contextId: null, profileVersion: 3, profileRevision: 'revision-3' } }, accounts: [account('a'), account('b'), ...toolIds.filter(id => id !== toolId).map(id => account(`${id}-a`, id))], modelSummaries: {} as Record<string, any>, effectiveContextId: null as string | null, nativeContextError: null as string | null, delayAccountCheck: false, releaseAccountCheck: null as (() => void) | null, calls: [] as any[] };
@@ -151,6 +151,10 @@ export async function setupConfigurationWorkspace(page: Page, toolId = 'kimi_cod
     } } });
   }, { toolId, apiWritable, appliedOld, toolIds });
   await installConfigurationProtocol(page);
+}
+
+export async function setupConfigurationWorkspace(page: Page, toolId = 'kimi_code', apiWritable = true, appliedOld = false, toolIds = [toolId]) {
+  await installConfigurationWorkspace(page, toolId, apiWritable, appliedOld, toolIds);
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
 }

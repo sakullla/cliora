@@ -2,8 +2,10 @@
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { chromium, expect } from '@playwright/test';
-import { workflowFixtures, workflowRefs } from './capture-workflow-fixtures.mjs';
-const workflowScenarioNames=['workflow-pi-models','workflow-opencode-models','workflow-codex-draft-effort','workflow-global-key','workflow-project-key-denied','workflow-zcode-key-unsupported','workflow-codebuddy-official-address','workflow-grok-precise-detail','workflow-grok-inferred-time','workflow-grok-no-usage','workflow-grok-statistics','workflow-grok-statistics-details'];
+import { workflowFixtures } from './capture-workflow-fixtures.mjs';
+import { captureConfiguration, configurationScenarios, installCaptureConfigurationProtocol } from './capture-configuration.mjs';
+const historyScenarioNames=['grok-precise-detail','grok-inferred-time','grok-no-usage','grok-statistics','grok-statistics-details'];
+const scenarioNames=[...configurationScenarios.map(item=>item.name),...historyScenarioNames];
 const option=(flag,fallback)=>{const index=process.argv.indexOf(flag);if(index<0)return fallback;const value=process.argv[index+1];if(!value||value.startsWith('--'))throw new Error('Missing value for '+flag);return value;};
 const themeOption=option('--theme','all');
 if(!['all','light','dark'].includes(themeOption))throw new Error('Invalid --theme; use all, light or dark');
@@ -13,15 +15,23 @@ const widths=sizeOption==='all'?[1360,900,640]:[...new Set(sizeOption.split(',')
 if(!widths.length||widths.some(width=>![1360,900,640].includes(width)))throw new Error('Invalid --size; use 1360,900,640');
 const onlyOption=option('--only','*');
 const patterns=onlyOption.split(',').map(pattern=>new RegExp('^'+pattern.split('').map(char=>char==='*'?'.*':char==='?'?'.':char.replace(/[\\^$+.[\]{}()|]/g,'\\$&')).join('')+'$'));
-const selectedScenarios=workflowScenarioNames.filter(name=>patterns.some(pattern=>pattern.test(name)));
-if((process.argv.includes('--workflows')||process.argv.includes('--list')||process.argv.includes('--only'))&&!selectedScenarios.length)throw new Error('No matching workflow scenarios');
+const candidates=(process.argv.includes('--features')||process.argv.includes('--workflows'))&&!process.argv.includes('--only')?configurationScenarios.map(item=>item.name):scenarioNames;
+const selectedScenarios=candidates.filter(name=>patterns.some(pattern=>pattern.test(name)));
+if((process.argv.includes('--features')||process.argv.includes('--workflows')||process.argv.includes('--list')||process.argv.includes('--only'))&&!selectedScenarios.length)throw new Error('No matching feature scenarios');
 if(process.argv.includes('--list')){console.log(selectedScenarios.join('\n'));process.exit(0);}
 const root=fileURLToPath(new URL('../',import.meta.url)).replace(/\\/g,'/').replace(/\/$/,'');
-const workflowsOnly=process.argv.includes('--workflows');
-const fullCapture=!process.argv.some(arg=>['--workflows','--records','--sessions','--connections'].includes(arg));
-const captureMode=workflowsOnly?'workflows':process.argv.includes('--sessions')?'sessions':process.argv.includes('--records')?'records':process.argv.includes('--connections')?'connections':'full';
-const manifestName=`capture-ui${['workflows','sessions','records'].includes(captureMode)?'-'+captureMode:''}-manifest.json`;
-const out=process.env.CLIORA_CAPTURE_OUT ?? root+(workflowsOnly?'/docs/verification/workflow-capture':'/docs/verification/ui'); fs.mkdirSync(out,{recursive:true});
+const workflowsOnly=process.argv.includes('--features')||process.argv.includes('--workflows');
+const fullCapture=!process.argv.some(arg=>['--features','--workflows','--records','--sessions','--connections'].includes(arg));
+const captureMode=workflowsOnly?'features':process.argv.includes('--sessions')?'sessions':process.argv.includes('--records')?'records':process.argv.includes('--connections')?'connections':'full';
+const manifestName=`capture-ui${['features','sessions','records'].includes(captureMode)?'-'+captureMode:''}-manifest.json`;
+const out=process.env.CLIORA_CAPTURE_OUT ?? root+'/docs/verification/ui'; fs.mkdirSync(out,{recursive:true});
+const previewUrl=process.env.CLIORA_PREVIEW_URL??'http://127.0.0.1:14736';
+let previewReady=false;
+for(let attempt=0;attempt<50;attempt++){
+ try{const response=await fetch(previewUrl,{signal:AbortSignal.timeout(1000)});if(response.ok){previewReady=true;break;}}catch{}
+ await new Promise(resolve=>setTimeout(resolve,200));
+}
+if(!previewReady)throw new Error(`预览服务未就绪：${previewUrl}。请先构建并启动 Vite preview，再运行捕获。`);
 const browser=await chromium.launch();
 async function mock(initialTheme){
  const names={codex:'Codex',claude_code:'Claude Code',grok:'Grok',pi:'Pi',open_code:'OpenCode'};
@@ -129,7 +139,7 @@ async function captureImage(page,name,theme,width,metadata={}){
  if(over.length)failures.push({name,theme,width,over});
  console.log(path);
 }
-async function captureWorkflows(){
+async function captureHistoryFeatures(){
  for(const width of widths)for(const theme of themes){
   const page=await browser.newPage({viewport:{width,height:1100}});
   page.on('pageerror',error=>failures.push({type:'pageerror',theme,width,message:error.message}));
@@ -141,7 +151,7 @@ async function captureWorkflows(){
   const dialog=page.locator('dialog.guide-dialog');
   async function capture(name,workflow,state){
    if(!selectedScenarios.includes(name))return;
-   await captureImage(page,name,theme,width,{category:'workflow',workflowRef:workflowRefs[workflow],state});
+   await captureImage(page,name,theme,width,{category:'records',title:name.replace(/^grok-/, 'Grok · '),state});
   }
   async function closeDialog(){
    await page.keyboard.press('Escape');
@@ -152,55 +162,6 @@ async function captureWorkflows(){
   }
   async function edit(id){await page.locator(`[data-profile-id="${id}"]`).getByRole('button',{name:'修改',exact:true}).click();await dialog.waitFor();}
   try{
-   await nav.getByRole('button',{name:'工具与连接'}).click();
-   const region=page.getByRole('region',{name:'工具与连接'});
-   const tabs=region.getByRole('tablist',{name:'CLI'});
-   await tabs.getByRole('tab',{name:'Pi',exact:true}).click();
-   await edit('pi-models');
-   await expect(dialog.getByLabel('model-a contextWindow')).toHaveValue('100');
-   await expect(dialog.getByLabel('sibling name')).toHaveValue('Keep');
-   await dialog.getByLabel('sibling name').scrollIntoViewIfNeeded();
-   await capture('workflow-pi-models','connections','provider_models / two existing records');
-   await closeDialog();
-   await tabs.getByRole('tab',{name:'OpenCode',exact:true}).click();
-   await edit('oc-models');
-   await expect(dialog.getByLabel('m2 name')).toHaveValue('Second');
-   await dialog.getByLabel('当前模型').selectOption('m2');
-   await capture('workflow-opencode-models','connections','provider_models / switched current model to sibling');
-   await dialog.getByLabel('当前模型').selectOption('m1');
-   await closeDialog();
-   await tabs.getByRole('tab',{name:'Codex',exact:true}).click();
-   await edit('codex-draft');
-   await expect(dialog.getByLabel('推理强度（Codex 原生）')).toHaveValue('high');
-   await capture('workflow-codex-draft-effort','connections','draft effort high / inspected effort low');
-   await closeDialog();
-   await tabs.getByRole('tab',{name:'Pi',exact:true}).click();
-   await region.getByRole('button',{name:'新建配置',exact:true}).click();
-   await expect(dialog.getByLabel('API 密钥')).toBeVisible();
-   await capture('workflow-global-key','connections','global / writable API key');
-   await closeDialog();
-   await page.getByRole('button',{name:'配置范围',exact:true}).click();
-   await page.getByRole('option',{name:/示例项目/}).click();
-   await edit('pi-models');
-   await expect(dialog).toContainText('Pi 项目层不能写入供应商密钥；请使用全局配置');
-   await expect(dialog.getByLabel('API 密钥')).toHaveCount(0);
-   await capture('workflow-project-key-denied','connections','project / scope_denied / retained provider model fields');
-   await closeDialog();
-   await page.getByRole('button',{name:'配置范围',exact:true}).click();
-   await page.getByRole('option',{name:'全局配置',exact:true}).click();
-   await tabs.getByRole('tab',{name:'ZCode',exact:true}).click();
-   await edit('zc-login');
-   await expect(dialog.getByLabel('API 密钥')).toHaveCount(0);
-   await expect(dialog.getByLabel('API 地址')).toHaveCount(0);
-   await capture('workflow-zcode-key-unsupported','connections','unsupported key and provider address / existing login');
-   await closeDialog();
-   await tabs.getByRole('tab',{name:'CodeBuddy',exact:true}).click();
-   await edit('cb-official');
-   await expect(dialog.getByLabel('API 密钥')).toBeVisible();
-   await expect(dialog.getByLabel('API 地址')).toHaveCount(0);
-   await expect(dialog).not.toContainText('https://third.example');
-   await capture('workflow-codebuddy-official-address','connections','official gateway / unsupported third-party address / writable key');
-   await closeDialog();
    await nav.getByRole('button',{name:'使用记录'}).click();
    await page.getByRole('button',{name:/Grok · Token 核对示例/}).click();
    const usage=page.getByRole('region',{name:'会话 Token 用量'});
@@ -208,14 +169,14 @@ async function captureWorkflows(){
    await expect(usage).toContainText('已知调用 3,729 次');
    await expect(usage).toContainText('1 条记录次数未知');
    await expect(page.locator('time[title*="按轮次开始时间推断"]')).toContainText('约');
-   await capture('workflow-grok-precise-detail','history','10,000 disjoint tokens / 3,729 known calls / 108 usage records / one unknown count');
+   await capture('grok-precise-detail','history','10,000 disjoint tokens / 3,729 known calls / 108 usage records / one unknown count');
    await page.locator('[data-message-id="a"]').scrollIntoViewIfNeeded();
    await expect(page.locator('[data-message-id="u"]')).toContainText('没有可验证时间');
-   await capture('workflow-grok-inferred-time','history','native timestamp / inferred turn time / unknown message time');
+   await capture('grok-inferred-time','history','native timestamp / inferred turn time / unknown message time');
    if(width<=760)await page.getByRole('button',{name:'← 返回会话列表'}).click();
    await page.getByRole('button',{name:/Grok · 没有用量的会话/}).click();
    await expect(usage).toHaveText('暂无用量数据');
-   await capture('workflow-grok-no-usage','history','missing usage / preserved readable message');
+   await capture('grok-no-usage','history','missing usage / preserved readable message');
    if(width<=760)await page.getByRole('button',{name:'← 返回会话列表'}).click();
    await page.getByRole('textbox',{name:'搜索会话'}).fill('Token');
    await page.locator('summary').filter({hasText:/^筛选/}).click();
@@ -226,40 +187,33 @@ async function captureWorkflows(){
    await expect(overview).toContainText('1 条记录次数未知');
    await expect(overview).not.toContainText('每次约');
    await expect(page.getByText('筛选：搜索「Token」 · 只看收藏',{exact:true})).toBeVisible();
-   await capture('workflow-grok-statistics','history','search Token + favorite filter / known calls with unknown count / no misleading average');
+   await capture('grok-statistics','history','search Token + favorite filter / known calls with unknown count / no misleading average');
    await page.getByRole('region',{name:'消耗最多的会话'}).scrollIntoViewIfNeeded();
-   await capture('workflow-grok-statistics-details','history','consistent model/tool/project/session group totals');
+   await capture('grok-statistics-details','history','consistent model/tool/project/session group totals');
   }catch(error){failures.push({type:'scenario',theme,width,message:error.message});console.error(error.message);}
   finally{await page.close();}
  }
 }
 
 function writeGallery(){
- const workflowCaptures=captures.filter(item=>item.workflowRef);
- const generalCaptures=captures.filter(item=>item.category==='general_ui');
- const scopeLabel=item=>item.workflowRef?.split('/').at(-1)??'通用 UI';
- const capturedWorkflows=[...new Set(workflowCaptures.map(item=>item.workflowRef))];
  const escape=value=>String(value).replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
- const workflowOptions=(generalCaptures.length?'<option value="general_ui">通用 UI</option>':'')+capturedWorkflows.map(ref=>`<option value="${escape(ref)}">${escape(ref.split('/').at(-1))}</option>`).join('');
- const scenarioOptions=[...new Set(captures.map(item=>item.name))].map(name=>`<option value="${escape(name)}">${escape(name)}</option>`).join('');
- const cards=captures.map(item=>`<figure data-workflow="${escape(item.workflowRef??'general_ui')}" data-scenario="${escape(item.name)}" data-theme="${item.theme}" data-width="${item.width}" data-keywords="${escape((item.name+' '+item.state+' '+scopeLabel(item)).toLowerCase())}"><a href="${escape(item.file)}" target="_blank" rel="noopener"><img loading="lazy" src="${escape(item.file)}" alt="${escape(item.name)} ${item.theme} ${item.width}"></a><figcaption>${escape(item.name)}<small>${escape(scopeLabel(item))}</small><small>${item.theme} · ${item.width} × ${item.height}</small><small>${escape(item.state)}</small></figcaption></figure>`).join('');
- const missing=workflowsOnly||fullCapture?widths.flatMap(width=>themes.flatMap(theme=>selectedScenarios.filter(name=>!workflowCaptures.some(item=>item.name===name&&item.width===width&&item.theme===theme)).map(name=>({name,theme,width})))):[];
+ const label=item=>item.title??item.name;
+ const scenarioOptions=[...new Map(captures.map(item=>[item.name,label(item)]))].map(([name,title])=>`<option value="${escape(name)}">${escape(title)}</option>`).join('');
+ const cards=captures.map(item=>`<figure data-scenario="${escape(item.name)}" data-theme="${item.theme}" data-width="${item.width}" data-keywords="${escape((item.name+' '+item.state+' '+label(item)).toLowerCase())}"><a href="${escape(item.file)}" target="_blank" rel="noopener"><img loading="lazy" src="${escape(item.file)}" alt="${escape(label(item))} ${item.theme} ${item.width}"></a><figcaption>${escape(label(item))}<small>${item.theme} · ${item.width} × ${item.height}</small><small>${escape(item.state)}</small></figcaption></figure>`).join('');
+ const missing=workflowsOnly||fullCapture?widths.flatMap(width=>themes.flatMap(theme=>selectedScenarios.filter(name=>!captures.some(item=>item.name===name&&item.width===width&&item.theme===theme)).map(name=>({name,theme,width})))):[];
  if(missing.length)failures.push({type:'missing',missing});
  fs.writeFileSync(`${out}/index.html`,`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Cliora UI 捕获</title><style>
-body{margin:0;background:#101114;color:#f5f2ec;font:15px system-ui}header{position:sticky;top:0;padding:20px 4vw;background:#191b20;z-index:2;border-bottom:1px solid #34363d}h1{font-size:24px;margin:0 0 8px}p{color:#b3afa6}.filters{display:flex;flex-wrap:wrap;gap:10px;align-items:end}label{display:grid;gap:5px;font-size:13px;color:#c9c6c0}select,input,button{font:inherit;padding:9px;border:1px solid #555;border-radius:8px;background:#25272d;color:#f5f2ec;max-width:100%;box-sizing:border-box}select{max-width:min(350px,80vw)}button{cursor:pointer}input{width:240px}.result{display:flex;gap:18px;flex-wrap:wrap;margin:12px 0 0}main{padding:24px 4vw;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr));gap:24px}figure{margin:0;padding:12px;border:1px solid #34363d;border-radius:12px;min-width:0}img{width:100%;height:340px;object-fit:contain;background:#070709}figcaption{padding:12px 0 0;overflow-wrap:anywhere}a{color:#b8d2ff}small{display:block;color:#b3afa6;margin-top:5px}#empty{padding:24px 4vw}[hidden]{display:none!important}</style></head><body><header><h1>Cliora UI 捕获</h1><p>${failures.length?'捕获有失败，请查看清单':'捕获完成'} · ${captures.length} 张 · 合成 IPC 数据，仅用于界面检查。</p><form class="filters" id="filters"><label>工作流<select id="workflow" aria-label="工作流"><option value="">全部 UI</option>${workflowOptions}</select></label><label>场景<select id="scenario" aria-label="场景"><option value="">全部场景</option>${scenarioOptions}</select></label><label>主题<select id="theme" aria-label="主题"><option value="">全部主题</option><option value="light">浅色 light</option><option value="dark">深色 dark</option></select></label><label>宽度<select id="width" aria-label="宽度"><option value="">全部宽度</option>${widths.map(width=>`<option>${width}</option>`).join('')}</select></label><label>关键词<input id="query" type="search" placeholder="如 Grok / Token / project" aria-label="场景或关键词"></label><button type="reset">重置筛选</button></form><div class="result"><output id="count" aria-live="polite"></output><a href="${manifestName}">捕获清单</a>${capturedWorkflows.map(ref=>`<a href="../../../${encodeURI(ref)}/03-execution-plan.md">${escape(ref.split('/').at(-1))}</a>`).join('')}</div></header><p id="empty" hidden>没有匹配的图片，请调整筛选或重置。</p><main>${cards}</main><script>
-const ids=['workflow','scenario','theme','width','query'];const controls=ids.map(id=>document.getElementById(id));const cards=[...document.querySelectorAll('figure')];function filter(){let count=0;const query=controls[4].value.trim().toLowerCase();for(const card of cards){card.hidden=controls.slice(0,4).some((control,index)=>control.value&&card.dataset[ids[index]]!==control.value)||!card.dataset.keywords.includes(query);if(!card.hidden)count++;}document.getElementById('count').textContent='显示 '+count+' / '+cards.length+' 张';document.getElementById('empty').hidden=count!==0;}controls.forEach(control=>control.addEventListener('input',filter));document.getElementById('filters').addEventListener('submit',event=>event.preventDefault());document.getElementById('filters').addEventListener('reset',()=>setTimeout(filter,0));filter();
+body{margin:0;background:#101114;color:#f5f2ec;font:15px system-ui}header{position:sticky;top:0;padding:20px 4vw;background:#191b20;z-index:2;border-bottom:1px solid #34363d}h1{font-size:24px;margin:0 0 8px}p{color:#b3afa6}.filters{display:flex;flex-wrap:wrap;gap:10px;align-items:end}label{display:grid;gap:5px;font-size:13px;color:#c9c6c0}select,input,button{font:inherit;padding:9px;border:1px solid #555;border-radius:8px;background:#25272d;color:#f5f2ec;max-width:100%;box-sizing:border-box}select{max-width:min(350px,80vw)}button{cursor:pointer}input{width:240px}.result{display:flex;gap:18px;flex-wrap:wrap;margin:12px 0 0}main{padding:24px 4vw;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr));gap:24px}figure{margin:0;padding:12px;border:1px solid #34363d;border-radius:12px;min-width:0}img{width:100%;height:340px;object-fit:contain;background:#070709}figcaption{padding:12px 0 0;overflow-wrap:anywhere}a{color:#b8d2ff}small{display:block;color:#b3afa6;margin-top:5px}#empty{padding:24px 4vw}[hidden]{display:none!important}</style></head><body><header><h1>Cliora UI 捕获</h1><p>${failures.length?'捕获有失败，请查看清单':'捕获完成'} · ${captures.length} 张 · 合成 IPC 数据，仅用于界面检查。</p><form class="filters" id="filters"><label>场景<select id="scenario" aria-label="场景"><option value="">全部场景</option>${scenarioOptions}</select></label><label>主题<select id="theme" aria-label="主题"><option value="">全部主题</option><option value="light">浅色 light</option><option value="dark">深色 dark</option></select></label><label>宽度<select id="width" aria-label="宽度"><option value="">全部宽度</option>${widths.map(width=>`<option>${width}</option>`).join('')}</select></label><label>关键词<input id="query" type="search" placeholder="如 Kimi / 上下文 / 账号" aria-label="场景或关键词"></label><button type="reset">重置筛选</button></form><div class="result"><output id="count" aria-live="polite"></output><a href="${manifestName}">捕获清单</a></div></header><p id="empty" hidden>没有匹配的图片，请调整筛选或重置。</p><main>${cards}</main><script>
+const ids=['scenario','theme','width','query'];const controls=ids.map(id=>document.getElementById(id));const cards=[...document.querySelectorAll('figure')];function filter(){let count=0;const query=controls[3].value.trim().toLowerCase();for(const card of cards){card.hidden=controls.slice(0,3).some((control,index)=>control.value&&card.dataset[ids[index]]!==control.value)||!card.dataset.keywords.includes(query);if(!card.hidden)count++;}document.getElementById('count').textContent='显示 '+count+' / '+cards.length+' 张';document.getElementById('empty').hidden=count!==0;}controls.forEach(control=>control.addEventListener('input',filter));document.getElementById('filters').addEventListener('submit',event=>event.preventDefault());document.getElementById('filters').addEventListener('reset',()=>setTimeout(filter,0));filter();
 </script></body></html>`);
- const rows=[...new Set(captures.map(item=>item.name))].map(name=>{
-  const items=captures.filter(item=>item.name===name);
-  return `| ${name} | ${scopeLabel(items[0])} | ${items.map(item=>`[${item.theme} ${item.width}](${item.file})`).join(' · ')} |`;
- });
- fs.writeFileSync(`${out}/README.md`,`# UI 捕获\n\n[浏览图片画廊](index.html) · [机器可读清单](${manifestName})\n\n执行：\n\n\`\`\`sh\nCLIORA_PREVIEW_URL=http://127.0.0.1:14736 ${['node','scripts/capture-ui.mjs',...process.argv.slice(2)].join(' ')}\n\`\`\`\n\nHTML 画廊沿用 Rillight UI 捕获的固定工具栏、响应式网格与原图入口，可按通用 UI／工作流、场景、主题、宽度和关键词筛选；所有捕获模式均收录本次全部图片，显示匹配数量，支持重置及空结果提示。\n\n可选捕获参数：\`--theme light|dark|all\`、\`--size 1360,900,640\`、\`--only 'workflow-grok-*'\`、\`--list\`（只列工作流场景，不启动浏览器）。默认完整捕获也包含下面的工作流场景；可用 CLIORA_CAPTURE_OUT 指定输出目录。预览服务器需运行当前 frontend build。\n\n本次生成 ${captures.length} 张图片（通用 UI ${generalCaptures.length}，工作流 ${workflowCaptures.length}），${failures.length} 项检查失败；本次主题 ${themes.join('/')}，宽度 ${widths.join('/')}。每张图片的实际高度记录于清单。截图使用脱敏合成 IPC 数据，不构成原生平台、计费或凭据验收。Grok 样例的 3,729 次已知调用与 108 条用量记录用于检查两个计数口径；精确 Token 总量固定为 10,000，并含 1 条次数未知记录。\n\n${capturedWorkflows.length?'来源工作流：\n\n'+capturedWorkflows.map(ref=>'- ['+ref.split('/').at(-1)+'](../../../'+ref+'/03-execution-plan.md)').join('\n'):'本次仅捕获通用 UI 场景。'}\n\n| 场景 | 工作流 | 图片 |\n| --- | --- | --- |\n${rows.join('\n')}\n`);
- fs.writeFileSync(`${out}/${manifestName}`,JSON.stringify({capturedAt:new Date().toISOString(),synthetic:true,invocation:['node','scripts/capture-ui.mjs',...process.argv.slice(2)].join(' '),previewUrl:process.env.CLIORA_PREVIEW_URL??'http://127.0.0.1:14736',mode:captureMode,workflows:capturedWorkflows,matrix:{themes,widths},selectedScenarios:workflowsOnly||fullCapture?selectedScenarios:[],missing,success:failures.length===0&&missing.length===0,imageCount:captures.length,generalImageCount:generalCaptures.length,workflowImageCount:workflowCaptures.length,captures:captures.map(({path,...item})=>item),failures},null,2)+'\n');
+ const rows=[...new Map(captures.map(item=>[item.name,label(item)]))].map(([name,title])=>`| ${title} | ${captures.filter(item=>item.name===name).map(item=>`[${item.theme} ${item.width}](${item.file})`).join(' · ')} |`);
+ fs.writeFileSync(`${out}/README.md`,`# UI 捕获\n\n[浏览图片画廊](index.html) · [机器可读清单](${manifestName})\n\n按场景、主题、宽度或关键词浏览功能界面，支持重置、匹配数量和原图查看。\n\n执行：\n\n\`\`\`sh\nCLIORA_PREVIEW_URL=http://127.0.0.1:14736 ${['node','scripts/capture-ui.mjs',...process.argv.slice(2)].join(' ')}\n\`\`\`\n\n\`--features\` 捕获配置与账号功能；\`--theme light|dark|all\`、\`--size 1360,900,640\`、\`--only 'kimi-*'\` 可缩小范围，\`--list\` 列出场景。CLIORA_CAPTURE_OUT 可指定输出目录。预览服务器需运行当前 frontend build。\n\n本次生成 ${captures.length} 张图片，${failures.length} 项检查失败。合成 IPC 数据仅用于界面检查，不构成真实登录、计费或原生平台验收。\n\n| 功能场景 | 图片 |\n| --- | --- |\n${rows.join('\n')}\n`);
+ fs.writeFileSync(`${out}/${manifestName}`,JSON.stringify({capturedAt:new Date().toISOString(),synthetic:true,invocation:['node','scripts/capture-ui.mjs',...process.argv.slice(2)].join(' '),previewUrl:process.env.CLIORA_PREVIEW_URL??'http://127.0.0.1:14736',mode:captureMode,matrix:{themes,widths},selectedScenarios:workflowsOnly||fullCapture?selectedScenarios:[],missing,success:failures.length===0&&missing.length===0,imageCount:captures.length,captures:captures.map(({path,...item})=>item),failures},null,2)+'\n');
 }
 
 if(!workflowsOnly){
 for(const width of widths)for(const theme of themes){
- const page=await browser.newPage({viewport:{width,height:1000}});page.on('pageerror',e=>failures.push(e.message));await page.addInitScript(mock,theme);await page.goto(process.env.CLIORA_PREVIEW_URL ?? 'http://127.0.0.1:14736');await page.getByText('正在读取本机设置').waitFor({state:'hidden'});await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);
+ const page=await browser.newPage({viewport:{width,height:1000}});page.on('pageerror',e=>failures.push(e.message));await page.addInitScript(mock,theme);await installCaptureConfigurationProtocol(page);await page.goto(process.env.CLIORA_PREVIEW_URL ?? 'http://127.0.0.1:14736');await page.getByText('正在读取本机设置').waitFor({state:'hidden'});await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);
  const nav=page.getByRole('navigation',{name:'页面'});
  async function capture(name){await captureImage(page,name,theme,width);}
  if(process.argv.includes('--records') || process.argv.includes('--sessions')){
@@ -341,5 +295,8 @@ for(const width of widths)for(const theme of themes){
  await page.close();
 }
 }
-if(workflowsOnly||fullCapture)await captureWorkflows();
+if(workflowsOnly||fullCapture){
+ await captureConfiguration({browser,themes,widths,selected:selectedScenarios,url:process.env.CLIORA_PREVIEW_URL??'http://127.0.0.1:14736',capture:captureImage,failures});
+ if(selectedScenarios.some(name=>historyScenarioNames.includes(name)))await captureHistoryFeatures();
+}
 await browser.close();writeGallery();console.log(JSON.stringify({imageCount:captures.length,failures},null,2));if(failures.length)process.exitCode=1;

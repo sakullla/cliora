@@ -172,11 +172,13 @@ Populated visual captures use synthetic native-IPC fixtures; they do not represe
 ```powershell
 npm run dev -- --port 14736
 # In another terminal:
-node scripts/capture-ui.mjs
+node scripts/capture-ui.mjs --features
 # Optional alternative preview server:
 $env:CLIORA_PREVIEW_URL = 'http://127.0.0.1:1420'
-node scripts/capture-ui.mjs
+node scripts/capture-ui.mjs --features
 ```
+
+`--features` captures the current configuration and account flows for Pi, OpenCode, Kimi Code, Codex and Claude Code, including native parameters, model directories, credential sources, login return, save/apply separation and current-file comparison. The gallery filters by scene, theme, width and keyword. Use `--list` to list scenes, or `--only 'kimi-*' --theme light --size 1360` for a subset. `--workflows` remains an alias for this functional capture mode.
 
 ## Windows desktop candidate and installation
 
