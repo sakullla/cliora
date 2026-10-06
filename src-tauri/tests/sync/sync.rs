@@ -248,7 +248,7 @@ fn fresh_device_receives_non_default_preferences_and_common_changes_without_sync
     let registry = Registry::builtins();
     a.update_preferences(|value| { value.theme = crate::domain::Theme::Dark; value.set_managed(&[crate::domain::CliId::Pi]); }).unwrap();
     let common = profile::save_registered_common(&a, &registry, RegisteredCommon {
-        tool: "codex".into(), version: 0, revision: String::new(), files: BTreeMap::from([("settings".into(), "model = \"first\"".into())]),
+        tool: "codex".into(), version: 0, revision: String::new(), files: BTreeMap::from([("settings".into(), "model_reasoning_effort = \"low\"".into())]),
     }, None).unwrap();
     let named = profile::save_registered_profile(&a, &registry, RegisteredProfile { editing: None, authentication: crate::native::profile::ProfileAuthentication::Native,
         id: String::new(), tool: "codex".into(), name: "Work".into(), version: 0, revision: String::new(),
@@ -268,7 +268,7 @@ fn fresh_device_receives_non_default_preferences_and_common_changes_without_sync
         Ok(())
     }).unwrap();
     let mut updated = common.clone();
-    updated.files.insert("settings".into(), "model = \"second\"".into());
+    updated.files.insert("settings".into(), "model_reasoning_effort = \"high\"".into());
     profile::save_registered_common(&a, &registry, updated, Some(common.version)).unwrap();
     run(&a, &credentials, &registry, false).unwrap();
     run(&b, &credentials, &registry, false).unwrap();

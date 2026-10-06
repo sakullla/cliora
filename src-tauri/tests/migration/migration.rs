@@ -444,7 +444,7 @@ fn same_portable_version_replaces_local_revision_and_rejects_stale_saves_and_del
         inherit_common: true, files: BTreeMap::new(), suppressed: BTreeMap::new(), connection: None, native_credentials: BTreeMap::new(),
     }, None).unwrap();
     let old_common = profile::save_registered_common(&db, &registry, RegisteredCommon {
-        tool: "codex".into(), version: 0, revision: String::new(), files: BTreeMap::from([("settings".into(), "model = \"local\"".into())]),
+        tool: "codex".into(), version: 0, revision: String::new(), files: BTreeMap::from([("settings".into(), "model_reasoning_effort = \"low\"".into())]),
     }, None).unwrap();
     let mut snapshot = collect_snapshot(&db, &credentials, &registry).unwrap();
     let json = serde_json::to_string(&snapshot).unwrap();
@@ -453,7 +453,7 @@ fn same_portable_version_replaces_local_revision_and_rejects_stale_saves_and_del
     for entity in &mut snapshot.entities {
         match &mut entity.payload {
             PortablePayload::Profile(value) => value.profile.name = "remote".into(),
-            PortablePayload::Common(value) => value.files.insert("settings".into(), "model = \"remote\"\n".into()).map(|_| ()).unwrap_or(()),
+            PortablePayload::Common(value) => value.files.insert("settings".into(), "model_reasoning_effort = \"high\"\n".into()).map(|_| ()).unwrap_or(()),
             _ => {},
         }
     }
