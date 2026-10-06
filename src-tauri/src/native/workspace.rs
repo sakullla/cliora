@@ -384,6 +384,27 @@ impl DraftSessions {
             },
             _ => ConfigurationCredential::Native,
         };
+        // New profiles start with an explicit API key when the tool has no
+        // managed accounts and this scope accepts new keys; the source select
+        // still offers every supported source and the choice stays changeable.
+        let credential = if request.subject == ConfigurationSubject::Profile
+            && source.id.is_empty()
+            && matches!(credential, ConfigurationCredential::Native)
+            && registry
+                .get(&request.tool_id)
+                .map(|adapter| adapter.connection_policy(request.scope).api_key.state == "writable")
+                .unwrap_or(false)
+            && crate::accounts::list(db)
+                .map(|accounts| accounts.iter().all(|account| account.tool_id != request.tool_id))
+                .unwrap_or(false)
+        {
+            ConfigurationCredential::ApiKey {
+                secret_ref: None,
+                remove: false,
+            }
+        } else {
+            credential
+        };
         if request.subject != ConfigurationSubject::Profile {
             source.authentication = ProfileAuthentication::Native;
             source.connection = None;
@@ -810,15 +831,44 @@ impl DraftSessions {
         draft: &ConfigurationDraft,
         store: &dyn CredentialStore,
     ) -> Result<(Connection, RequestCredential), String> {
+        self.request_inner(draft, store, false)
+    }
+    /// Model directory lookups also run without credentials for native/account
+    /// sources: the provider either answers publicly or returns 401/403, which
+    /// is surfaced to the user. No credential is ever copied into the request.
+    pub fn request_directory(
+        &self,
+        draft: &ConfigurationDraft,
+        store: &dyn CredentialStore,
+    ) -> Result<(Connection, RequestCredential), String> {
+        self.request_inner(draft, store, true)
+    }
+    fn request_inner(
+        &self,
+        draft: &ConfigurationDraft,
+        store: &dyn CredentialStore,
+        allow_anonymous: bool,
+    ) -> Result<(Connection, RequestCredential), String> {
         let mut records = self.records.lock().map_err(|_| "草稿会话暂不可用")?;
         let record = Self::checked(&mut records, draft)?;
-        if draft.native_credential_target.is_some() {
+        let anonymous = allow_anonymous
+            && (draft.native_credential_target.is_some()
+                || !matches!(
+                    draft.credential,
+                    Some(ConfigurationCredential::ApiKey { .. })
+                ));
+        if draft.native_credential_target.is_some() && !anonymous {
             return Err("此来源仅写入原生密钥，不授权 HTTP 模型目录或诊断，请使用 CLI 原生能力".into());
         }
         let mut connection = draft
             .draft_connection
             .clone()
             .ok_or("请先完成当前草稿连接")?;
+        if anonymous {
+            connection.secret_ref = None;
+            connection.auth_env_var = None;
+            return Ok((connection, RequestCredential::anonymous()));
+        }
         let id=match &draft.credential {
             Some(ConfigurationCredential::ApiKey{secret_ref:Some(id),..})=>id,
             Some(ConfigurationCredential::ApiKey{secret_ref:None,..})=>return Err("请为当前连接提供 API 密钥，不会回退到原生登录或其它供应商凭据".into()),
@@ -862,6 +912,14 @@ impl DraftSessions {
 pub struct RequestCredential {
     id: String,
     secret: String,
+}
+impl RequestCredential {
+    fn anonymous() -> Self {
+        RequestCredential {
+            id: String::new(),
+            secret: String::new(),
+        }
+    }
 }
 impl CredentialStore for RequestCredential {
     fn put(&self, _: &str, _: &str) -> Result<(), String> {

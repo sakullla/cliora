@@ -5,7 +5,7 @@ import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, normalize } from 'node:path';
 import { pathToFileURL } from 'node:url';
 const [piRoot, fixtureRoot, declarationsFile, rootsFile] = process.argv.slice(2);
-assert.ok(['0.99.2', '1.0.0', '1.0.2'].includes(JSON.parse(readFileSync(join(piRoot, 'package.json'))).version), 'native acceptance must use a tested published reference');
+assert.ok(['0.99.2', '1.0.0', '1.0.2', '1.0.4'].includes(JSON.parse(readFileSync(join(piRoot, 'package.json'))).version), 'native acceptance must use a tested published reference');
 const { DefaultPackageManager } = await import(pathToFileURL(join(piRoot, 'dist/core/package-manager.js')).href);
 const packageRoot = join(fixtureRoot, 'package');
 mkdirSync(join(packageRoot, 'extensions'), { recursive: true });

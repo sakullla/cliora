@@ -124,7 +124,7 @@ export async function captureConfiguration({ browser, themes, widths, selected, 
         }
         if (action === 'new-model') { await dialog.getByRole('button', { name: '新增模型', exact: true }).click(); await dialog.getByLabel('模型 alias', { exact: true }).fill('work-model'); await dialog.getByLabel('模型 alias', { exact: true }).scrollIntoViewIfNeeded(); }
         if (['directory', 'directory-required', 'check'].includes(action)) {
-          await dialog.getByText('模型目录与连接检查', { exact: true }).click();
+          await dialog.getByText(action === 'check' ? '连接检查与诊断' : '模型目录与连接检查', { exact: true }).click();
           if (action === 'check') { await dialog.getByRole('button', { name: '检查连接', exact: true }).click(); await expect(dialog.getByText('未发送推理', { exact: true })).toBeVisible(); }
           else {
             await dialog.getByRole('button', { name: '获取模型目录', exact: true }).click();
@@ -133,10 +133,10 @@ export async function captureConfiguration({ browser, themes, widths, selected, 
             if (action === 'directory-required') { await directory.getByRole('button', { name: '添加所选模型', exact: true }).click(); await expect(dialog.getByRole('alert').filter({ hasText: 'new-1 缺少必填上下文' })).toBeVisible(); }
           }
         }
-        if (action === 'source') await dialog.getByRole('combobox', { name: '凭据来源', exact: true }).selectOption('native');
+        if (action === 'source') await dialog.getByRole('radio', { name: '使用 CLI 当前登录或凭据', exact: true }).click();
         if (['picker', 'login', 'login-return'].includes(action)) {
           await dialog.getByLabel('配置名称').fill('保留草稿 · 工作配置');
-          await dialog.getByRole('combobox', { name: '凭据来源', exact: true }).selectOption('account');
+          await dialog.getByRole('radio', { name: '选择已管理账号', exact: true }).click();
           await expect(page.getByRole('button', { name: '返回配置', exact: true })).toBeVisible();
           if (action !== 'picker') {
             await page.getByRole('button', { name: '登录新账号', exact: true }).click(); await page.getByLabel('账号名称').fill('新的工作账号'); await page.getByRole('button', { name: '添加并登录', exact: true }).click();

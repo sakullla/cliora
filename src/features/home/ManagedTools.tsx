@@ -5,7 +5,7 @@ import { native, nativeAvailable } from '../../lib/native';
 import type { LaunchSettings } from '../../types/launch';
 import { preferredLaunchMode } from '../../types/launch';
 import type { AdapterDescriptor, ApplyComparison, RegisteredToolWorkspace } from '../../types/native';
-import { CodeEditor } from '../../components/CodeEditor';
+import { ConflictCompare } from '../../components/configuration/ConflictCompare';
 import { FilterSelect } from '../../components/FilterSelect';
 import type { FilterSelectOption } from '../../components/FilterSelect';
 import { GuideDialog } from '../../components/GuideDialog';
@@ -314,8 +314,8 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
         {line && <div className={styles.note} data-tone={line.tone} role={line.tone === 'error' ? 'alert' : 'status'} title={line.title}>{line.text}</div>}
       </div>;
     })}
-    <GuideDialog open={!!conflict} title="比较当前文件与本次配置" hint={conflict ? `${conflict.toolName} 的文件和「${conflict.profileName}」不一致。可以保留现有文件，或改用这份配置。` : undefined} onClose={() => { setConflict(null); setConflictError(''); }}>
-      {conflict && <div className="file-conflict" aria-label="配置应用冲突">{conflict.comparison.files.map((file) => <div className="file-conflict-columns" key={file.role}><div><strong>当前文件</strong><CodeEditor label={`当前 ${file.role} 文件`} readOnly compact format={file.format} value={file.current} /></div><div><strong>本次配置</strong><CodeEditor label={`本次 ${file.role} 配置`} readOnly compact format={file.format} value={file.proposedText ?? ''} /></div></div>)}{conflictError && <p role="alert">{conflictError}</p>}<div className="file-conflict-actions"><button type="button" onClick={() => { setConflict(null); setConflictError(''); }}>保留当前文件</button><button type="button" onClick={() => void useComparedFile()}>使用本次配置</button></div></div>}
+    <GuideDialog open={!!conflict} title="比较当前文件与本次配置" hint={conflict ? `${conflict.toolName} 的文件和「${conflict.profileName}」不一致。` : undefined} onClose={() => { setConflict(null); setConflictError(''); }}>
+      {conflict && <div aria-label="配置应用冲突">{conflict.comparison.files.map((file, index) => <ConflictCompare key={file.role} title={file.role} banner={index === 0 ? '文件已在其他地方修改。请选择要保存的内容。' : undefined} currentContent={file.current} nextContent={file.proposedText ?? ''} format={file.format} actions={false} onKeepCurrent={() => { setConflict(null); setConflictError(''); }} onUseNext={() => void useComparedFile()} />)}{conflictError && <p role="alert">{conflictError}</p>}<div className="file-conflict-actions"><button type="button" onClick={() => { setConflict(null); setConflictError(''); }}>保留当前文件</button><button type="button" onClick={() => void useComparedFile()}>使用本次内容</button></div></div>}
     </GuideDialog>
   </div>;
 }

@@ -172,7 +172,7 @@ test('native discovery failure keeps managed accounts and offers a retry', async
 
 test('OAuth profile saves and applies the selected account without an API connection', async ({ page }) => {
   await setup(page); await page.getByRole('button', { name: '新建配置' }).click();
-  const dialog = page.getByRole('dialog'); await dialog.getByRole('combobox', { name: '凭据来源', exact: true }).selectOption('account');
+  const dialog = page.getByRole('dialog'); await dialog.getByRole('radio', { name: '选择已管理账号', exact: true }).click();
   await dialog.getByRole('listitem', { name: '个人账号' }).getByRole('button', { name: '选择并返回' }).click(); await dialog.getByLabel('配置名称').fill('个人订阅');
   await page.screenshot({ path: 'test-results/oauth-binding.png', fullPage: true });
   await dialog.getByRole('button', { name: '保存配置', exact: true }).click(); await expect(dialog).toHaveCount(0);

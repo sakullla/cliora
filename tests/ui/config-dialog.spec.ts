@@ -55,7 +55,7 @@ test('new configuration dialog has one save action', async ({ page }) => {
   await expect(dialog.getByRole('button', { name: '保存并给这个工具使用' })).toHaveCount(0);
   await expect(dialog.getByRole('button', { name: '保存配置', exact: true })).toBeVisible();
   await expect(dialog.getByLabel('配置名称')).toBeVisible();
-  await expect(dialog.getByRole('combobox', { name: '凭据来源', exact: true })).toHaveValue('native');
+  await expect(dialog.getByRole('radio', { name: '使用 CLI 当前登录或凭据', exact: true })).toBeChecked();
   await dialog.getByRole('button', { name: '关闭' }).click();
   await expect(dialog).toHaveCount(0);
 });
@@ -537,6 +537,7 @@ test('common save and explicit partial apply preserve each recovery target', asy
   await page.getByRole('button', { name: '通用配置', exact: true }).first().click();
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByLabel('通用参数')).toBeVisible();
+  await expect(dialog.getByRole('button', { name: '保存并使用', exact: true })).toHaveCount(0);
   await expect(dialog.getByLabel('通用配置影响')).toContainText('/tmp/project');
   await dialog.getByLabel('通用参数').fill('8');
   await expect(dialog.getByRole('button', { name: '保存通用配置', exact: true })).toBeEnabled();
@@ -624,7 +625,7 @@ test('numeric middle state and API input survive account source and login return
   await expect(number).toHaveValue('1e');
   await expect(dialog.getByRole('button', { name: '保存配置', exact: true })).toBeDisabled();
   await dialog.getByRole('button', { name: '连接与模型', exact: true }).click();
-  await dialog.getByRole('combobox', { name: '凭据来源', exact: true }).selectOption('account');
+  await dialog.getByRole('radio', { name: '选择已管理账号', exact: true }).click();
   await expect(dialog.getByLabel('选择已管理账号')).toBeVisible();
   await page.keyboard.press('ControlOrMeta+s');
   expect(await page.evaluate(() => (window as any).configurationProtocol.calls.filter((call: any) => call.command === 'save_configuration_draft'))).toEqual([]);
@@ -635,12 +636,12 @@ test('numeric middle state and API input survive account source and login return
   await page.evaluate(() => { const value = (window as any).workspaceFixture.accounts.find((account: any) => account.id === 'new'); Object.assign(value, { state: 'signed_in', version: 3, pendingLogin: null, identity: { subject: 'new', email: 'new@example.test' }, context: { id: 'ctx-new' } }); });
   await expect(added.getByRole('button', { name: '选择并返回' })).toBeEnabled();
   await added.getByRole('button', { name: '选择并返回' }).click();
-  await expect(dialog.getByRole('combobox', { name: '凭据来源', exact: true })).toHaveValue('account');
+  await expect(dialog.getByRole('radio', { name: '选择已管理账号', exact: true })).toBeChecked();
   await dialog.getByRole('button', { name: '常用设置', exact: true }).click();
   await expect(number).toHaveValue('1e');
   await expect(dialog.getByRole('button', { name: '保存配置', exact: true })).toBeDisabled();
   await dialog.getByRole('button', { name: '连接与模型', exact: true }).click();
-  await dialog.getByRole('combobox', { name: '凭据来源', exact: true }).selectOption('api_key');
+  await dialog.getByRole('radio', { name: '为此连接提供 API 密钥', exact: true }).click();
   await expect(dialog.getByLabel('API 密钥', { exact: true })).toHaveValue('synthetic-pending-key');
   await dialog.getByRole('button', { name: '常用设置', exact: true }).click(); await number.fill('16384');
   await expect(dialog.getByRole('button', { name: '保存配置', exact: true })).toBeEnabled();
@@ -661,8 +662,8 @@ test('draft key diagnosis preserves independent sources and explicit removal nev
   await dialog.getByText('模型目录与连接检查', { exact: true }).click(); await dialog.getByRole('button', { name: '获取模型目录' }).click();
   await expect(dialog.getByText('密钥在草稿中 · 尚未保存到系统')).toBeVisible();
   const temporary = await page.evaluate(() => Object.keys((window as any).configurationProtocol.leases)[0]);
-  await dialog.getByRole('combobox', { name: '凭据来源', exact: true }).selectOption('native'); await expect(dialog.getByRole('combobox', { name: '凭据来源', exact: true })).toHaveValue('native');
-  await dialog.getByRole('combobox', { name: '凭据来源', exact: true }).selectOption('api_key');
+  await dialog.getByRole('radio', { name: '使用 CLI 当前登录或凭据', exact: true }).click(); await expect(dialog.getByRole('radio', { name: '使用 CLI 当前登录或凭据', exact: true })).toBeChecked();
+  await dialog.getByRole('radio', { name: '为此连接提供 API 密钥', exact: true }).click();
   await expect(dialog.getByText('密钥在草稿中 · 尚未保存到系统')).toBeVisible();
   expect(await page.evaluate(() => Object.keys((window as any).configurationProtocol.leases))).toContain(temporary);
   await dialog.getByText('密钥在草稿中 · 尚未保存到系统', { exact: true }).click();
@@ -702,7 +703,7 @@ test('a cancelled directory request cannot replace a changed source and manual m
   await page.evaluate(() => { (window as any).configurationProtocol.delayDirectory = true; });
   await dialog.getByText('模型目录与连接检查', { exact: true }).click(); await dialog.getByRole('button', { name: '获取模型目录' }).click();
   await expect.poll(() => page.evaluate(() => !!(window as any).configurationProtocol.releaseDirectory)).toBe(true);
-  await dialog.getByRole('combobox', { name: '凭据来源', exact: true }).selectOption('native'); await page.evaluate(() => { (window as any).configurationProtocol.releaseDirectory(); });
+  await dialog.getByRole('radio', { name: '使用 CLI 当前登录或凭据', exact: true }).click(); await page.evaluate(() => { (window as any).configurationProtocol.releaseDirectory(); });
   await expect(dialog.getByLabel('模型目录', { exact: true })).toHaveCount(0);
   await expect(dialog.getByRole('button', { name: '新增模型', exact: true })).toBeEnabled();
 });
@@ -791,7 +792,7 @@ test('generic registered fallback uses temporary keys for directory and cancels 
   await dialog.getByText('密钥已保存到系统 · 空输入保留', { exact: true }).click();
   await dialog.getByRole('button', { name: '替换密钥' }).click(); await dialog.getByLabel('API 密钥', { exact: true }).fill('synthetic-fallback-key');
   await dialog.getByText('模型目录与连接检查', { exact: true }).click(); await dialog.getByRole('button', { name: '获取模型目录' }).click();
-  const directory = dialog.getByLabel('模型目录', { exact: true }); await directory.getByLabel('new-1', { exact: true }).check(); await directory.getByRole('button', { name: '添加所选模型' }).click();
+  await expect(dialog.getByText(/目录已获取 · \d+ 个模型可用/)).toBeVisible();
   await dialog.getByRole('button', { name: '关闭', exact: true }).click(); await page.getByRole('dialog').filter({ hasText: '放弃未保存修改' }).getByRole('button', { name: '放弃修改' }).click();
   await expect.poll(() => page.evaluate(() => Object.keys((window as any).configurationProtocol.leases))).toEqual([]);
   expect(await page.evaluate(() => (window as any).workspaceFixture.profiles[0].connection.secretRef)).toBe('saved-original');
@@ -826,6 +827,7 @@ test('native field units and merged origin distinguish inherited and explicit va
   await expect(info).toHaveAttribute('aria-expanded', 'true');
   await expect(field.getByText('本层显式值', { exact: true })).toBeVisible();
   await dialog.getByRole('button', { name: '合并与来源' }).click();
+  await dialog.getByText('字段来源', { exact: true }).click();
   await expect(dialog.getByText('继承 · 通用配置', { exact: true })).toBeVisible();
   await expect(dialog.getByText('本层显式 · 命名配置', { exact: true })).toBeVisible();
 });
@@ -866,12 +868,14 @@ test('cancel request button stops a delayed directory while keeping draft edits 
   await dialog.getByText('密钥已保存到系统 · 空输入保留', { exact: true }).click();
   await dialog.getByRole('button', { name: '替换密钥' }).click();
   await dialog.getByLabel('API 密钥', { exact: true }).fill('synthetic-cancel-key');
-  await dialog.getByText('模型目录与连接检查', { exact: true }).click();
+  await dialog.getByLabel('当前模型', { exact: true }).click();
   await dialog.getByRole('button', { name: '获取模型目录' }).click();
   await expect.poll(() => page.evaluate(() => !!(window as any).configurationProtocol.releaseDirectory)).toBe(true);
   const before = await page.evaluate(() => Object.values((window as any).configurationProtocol.sessions)[0]) as any;
+  await dialog.getByText('连接检查与诊断', { exact: true }).click();
   await expect(dialog.getByRole('button', { name: '取消请求', exact: true })).toBeEnabled();
   await dialog.getByRole('button', { name: '取消请求', exact: true }).click();
+  await dialog.getByLabel('当前模型', { exact: true }).click();
   await expect(dialog.getByRole('button', { name: '获取模型目录' })).toBeEnabled();
   await page.evaluate(() => { (window as any).configurationProtocol.releaseDirectory(); });
   await expect(dialog.getByLabel('模型目录', { exact: true })).toHaveCount(0);
@@ -890,12 +894,14 @@ test('cancel request error offers retry and suppresses the old response', async 
   await setupConfigurationWorkspace(page, 'codex');
   await page.evaluate(() => { const state = (window as any).configurationProtocol; state.delayDirectory = true; state.cancelRequestFailure = '暂时无法取消，请重试'; });
   await page.getByRole('button', { name: '修改', exact: true }).last().click(); const dialog = page.getByRole('dialog');
-  await dialog.getByText('模型目录与连接检查', { exact: true }).click(); await dialog.getByRole('button', { name: '获取模型目录' }).click();
+  await dialog.getByLabel('当前模型', { exact: true }).click(); await dialog.getByRole('button', { name: '获取模型目录' }).click();
+  await dialog.getByText('连接检查与诊断', { exact: true }).click();
   await expect(dialog.getByRole('button', { name: '取消请求', exact: true })).toBeEnabled(); await dialog.getByRole('button', { name: '取消请求', exact: true }).click();
   await expect(dialog.getByRole('alert').filter({ hasText: '暂时无法取消' })).toBeVisible();
   await expect(dialog.getByRole('button', { name: '取消请求', exact: true })).toBeEnabled();
   await page.evaluate(() => { (window as any).configurationProtocol.cancelRequestFailure = ''; });
   await dialog.getByRole('button', { name: '取消请求', exact: true }).click();
+  await dialog.getByLabel('当前模型', { exact: true }).click();
   await expect(dialog.getByRole('button', { name: '获取模型目录' })).toBeEnabled();
   await page.evaluate(() => { (window as any).configurationProtocol.releaseDirectory(); });
   await expect(dialog.getByLabel('模型目录', { exact: true })).toHaveCount(0);
@@ -904,12 +910,13 @@ test('cancel request error offers retry and suppresses the old response', async 
 test('API source buffers separate changed connection B from the stored A key and restore A', async ({ page }) => {
   await setupConfigurationWorkspace(page, 'qoder_cn');
   await page.getByRole('button', { name: '修改', exact: true }).last().click(); const dialog = page.getByRole('dialog');
-  const source = dialog.getByRole('combobox', { name: '凭据来源', exact: true });
-  await source.selectOption('native');
+  const sourceNative = dialog.getByRole('radio', { name: '使用 CLI 当前登录或凭据', exact: true });
+  const sourceApi = dialog.getByRole('radio', { name: '为此连接提供 API 密钥', exact: true });
+  await sourceNative.click();
   await dialog.getByText('连接 · gateway', { exact: true }).click();
-  await dialog.getByLabel('供应商 ID', { exact: true }).fill('b'); await expect(source).toBeEnabled();
-  await dialog.getByLabel('API 地址', { exact: true }).fill('https://b.example.test/v1'); await expect(source).toBeEnabled();
-  await source.selectOption('api_key');
+  await dialog.getByLabel('供应商 ID', { exact: true }).fill('b'); await expect(sourceNative).toBeEnabled();
+  await dialog.getByLabel('API 地址', { exact: true }).fill('https://b.example.test/v1'); await expect(sourceNative).toBeEnabled();
+  await sourceApi.click();
   await expect(dialog.getByLabel('API 密钥', { exact: true })).toBeVisible();
   const selected = await page.evaluate(() => (window as any).configurationProtocol.calls.filter((call: any) => call.command === 'select_configuration_credential').at(-1));
   expect(selected.args.credential).toEqual({ source: 'api_key', secretRef: null });
@@ -917,15 +924,15 @@ test('API source buffers separate changed connection B from the stored A key and
   await dialog.getByText('模型目录与连接检查', { exact: true }).click(); await dialog.getByRole('button', { name: '检查连接', exact: true }).click();
   await expect(dialog.getByText('合成非推理检查通过', { exact: true })).toBeVisible();
   const bRef = await page.evaluate(() => Object.keys((window as any).configurationProtocol.leases)[0]);
-  await source.selectOption('native');
-  await dialog.getByLabel('供应商 ID', { exact: true }).fill('gateway'); await expect(source).toBeEnabled();
-  await dialog.getByLabel('API 地址', { exact: true }).fill('https://gateway.example.test/v1'); await expect(source).toBeEnabled();
-  await source.selectOption('api_key');
+  await sourceNative.click();
+  await dialog.getByLabel('供应商 ID', { exact: true }).fill('gateway'); await expect(sourceNative).toBeEnabled();
+  await dialog.getByLabel('API 地址', { exact: true }).fill('https://gateway.example.test/v1'); await expect(sourceNative).toBeEnabled();
+  await sourceApi.click();
   await expect(dialog.getByText('密钥已保存到系统 · 空输入保留', { exact: true })).toBeVisible();
-  await source.selectOption('native');
-  await dialog.getByLabel('供应商 ID', { exact: true }).fill('b'); await expect(source).toBeEnabled();
-  await dialog.getByLabel('API 地址', { exact: true }).fill('https://b.example.test/v1'); await expect(source).toBeEnabled();
-  await source.selectOption('api_key');
+  await sourceNative.click();
+  await dialog.getByLabel('供应商 ID', { exact: true }).fill('b'); await expect(sourceNative).toBeEnabled();
+  await dialog.getByLabel('API 地址', { exact: true }).fill('https://b.example.test/v1'); await expect(sourceNative).toBeEnabled();
+  await sourceApi.click();
   await expect(dialog.getByText('密钥在草稿中 · 尚未保存到系统', { exact: true })).toBeVisible();
   await dialog.getByRole('button', { name: '保存配置', exact: true }).click();
   const save = await page.evaluate(() => (window as any).configurationProtocol.calls.find((call: any) => call.command === 'save_configuration_draft'));
@@ -944,18 +951,18 @@ for (const capability of ['writable', 'denied', 'missing', 'managed'] as const) 
     }, capability);
     await page.getByRole('button', { name: '正在使用的文件', exact: true }).click(); const dialog = page.getByRole('dialog');
     if (capability !== 'writable') {
-      await expect(dialog.getByRole('combobox', { name: '凭据来源', exact: true })).toHaveCount(0);
+      await expect(dialog.getByRole('radiogroup', { name: '凭据来源', exact: true })).toHaveCount(0);
       await expect(dialog.getByLabel('API 密钥', { exact: true })).toHaveCount(0);
       await expect(dialog.getByRole('button', { name: '移除当前密钥' })).toHaveCount(0);
       return;
     }
-    await dialog.getByRole('combobox', { name: '凭据来源', exact: true }).selectOption('api_key');
-    await expect(dialog.getByRole('option', { name: '选择已管理账号' })).toHaveCount(0);
+    await dialog.getByRole('radio', { name: '为此连接提供 API 密钥', exact: true }).click();
+    await expect(dialog.getByRole('radio', { name: '选择已管理账号' })).toHaveCount(0);
     await expect(dialog.getByRole('button', { name: '选择账号或登录新账号' })).toHaveCount(0);
     await dialog.getByLabel('API 密钥', { exact: true }).fill('synthetic-current-key');
     await dialog.getByRole('button', { name: '保存到当前文件', exact: true }).click(); await expect(dialog).toHaveCount(0);
     await page.getByRole('button', { name: '正在使用的文件', exact: true }).click();
-    await dialog.getByRole('combobox', { name: '凭据来源', exact: true }).selectOption('api_key');
+    await dialog.getByRole('radio', { name: '为此连接提供 API 密钥', exact: true }).click();
     await dialog.getByLabel('API 密钥', { exact: true }).fill('synthetic-input-discarded-by-remove');
     await dialog.getByRole('button', { name: '移除当前密钥' }).click();
     await expect(dialog.getByLabel('API 密钥', { exact: true })).toHaveValue('');
@@ -967,13 +974,26 @@ for (const capability of ['writable', 'denied', 'missing', 'managed'] as const) 
   });
 }
 
+test('model combobox keeps the fetched catalog filterable while typing edits the draft', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'codex');
+  await page.getByRole('button', { name: '修改', exact: true }).last().click(); const dialog = page.getByRole('dialog');
+  const model = dialog.getByLabel('当前模型', { exact: true });
+  await model.click(); await dialog.getByRole('button', { name: '获取模型目录' }).click();
+  await expect(dialog.getByText(/目录已获取 · \d+ 个模型已同步到模型选择框/)).toBeVisible();
+  await model.fill('new');
+  await expect(dialog.getByRole('option', { name: 'new-1', exact: true })).toBeVisible();
+  await expect(dialog.getByRole('option', { name: 'new-2', exact: true })).toBeVisible();
+  await expect(dialog.getByRole('option', { name: 'one', exact: true })).toHaveCount(0);
+});
+
 test('Claude directory writes its default model field and common edits native effortLevel', async ({ page }) => {
   await setupConfigurationWorkspace(page, 'claude_code');
   await page.getByRole('button', { name: '修改', exact: true }).last().click(); const dialog = page.getByRole('dialog');
-  await dialog.getByText('模型目录与连接检查', { exact: true }).click(); await dialog.getByRole('button', { name: '获取模型目录' }).click();
-  await dialog.getByLabel('模型目录', { exact: true }).getByLabel('new-1', { exact: true }).check();
-  await dialog.getByRole('button', { name: '添加所选模型' }).click();
-  await expect(dialog.getByLabel('默认模型', { exact: true })).toHaveValue('new-1');
+  const defaultModel = dialog.getByLabel('默认模型', { exact: true });
+  await defaultModel.click(); await dialog.getByRole('button', { name: '获取模型目录' }).click();
+  await expect(dialog.getByText(/目录已获取 · \d+ 个模型已同步到模型选择框/)).toBeVisible();
+  await defaultModel.fill('new-1');
+  await dialog.getByRole('option', { name: 'new-1', exact: true }).click();
   await dialog.getByRole('button', { name: '保存配置', exact: true }).click();
   await page.getByRole('button', { name: '通用配置', exact: true }).first().click();
   await dialog.getByLabel('默认推理 effort', { exact: true }).fill('xhigh');
@@ -1008,7 +1028,7 @@ test('current native key target permits replace and remove without inventing HTT
     state.nativeCredentialTarget = { identity: 'fixture-native-target', label: '原生环境密钥', role: 'settings', path: ['env', 'CODEBUDDY_API_KEY'], removePaths: [['env', 'CODEBUDDY_API_KEY'], ['env', 'CODEBUDDY_AUTH_TOKEN']] };
   });
   await page.getByRole('button', { name: '正在使用的文件', exact: true }).click(); const dialog = page.getByRole('dialog');
-  await dialog.getByRole('combobox', { name: '凭据来源', exact: true }).selectOption('api_key');
+  await dialog.getByRole('radio', { name: '为此连接提供 API 密钥', exact: true }).click();
   await expect(dialog.getByText('用于 原生环境密钥；保存后更新当前文件中的密钥。', { exact: true })).toBeVisible();
   await dialog.getByText('模型目录与连接检查', { exact: true }).click();
   await expect(dialog.getByRole('button', { name: '获取模型目录' })).toBeDisabled();
@@ -1016,7 +1036,7 @@ test('current native key target permits replace and remove without inventing HTT
   await dialog.getByLabel('API 密钥', { exact: true }).fill('synthetic-native-target-key');
   await dialog.getByRole('button', { name: '保存到当前文件', exact: true }).click(); await expect(dialog).toHaveCount(0);
   await page.getByRole('button', { name: '正在使用的文件', exact: true }).click();
-  await dialog.getByRole('combobox', { name: '凭据来源', exact: true }).selectOption('api_key');
+  await dialog.getByRole('radio', { name: '为此连接提供 API 密钥', exact: true }).click();
   await dialog.getByRole('button', { name: '移除当前密钥' }).click();
   await dialog.getByRole('button', { name: '保存到当前文件', exact: true }).click();
   const saves = await page.evaluate(() => (window as any).configurationProtocol.calls.filter((call: any) => call.command === 'save_configuration_draft'));
@@ -1062,8 +1082,9 @@ for (const originalKey of ['stored', 'lease'] as const) {
     test(`API-internal connection change keeps ${originalKey} A ref out of the new ${changed} B buffer`, async ({ page }) => {
       await setupConfigurationWorkspace(page, 'codex');
       await page.getByRole('button', { name: '修改', exact: true }).last().click(); const dialog = page.getByRole('dialog');
-      const source = dialog.getByRole('combobox', { name: '凭据来源', exact: true });
-      await dialog.getByText('模型目录与连接检查', { exact: true }).click();
+      const sourceNative = dialog.getByRole('radio', { name: '使用 CLI 当前登录或凭据', exact: true });
+      const sourceApi = dialog.getByRole('radio', { name: '为此连接提供 API 密钥', exact: true });
+      await dialog.getByText('连接检查与诊断', { exact: true }).click();
       if (originalKey === 'lease') {
         await dialog.getByText('密钥已保存到系统 · 空输入保留', { exact: true }).click();
         await dialog.getByRole('button', { name: '替换密钥' }).click();
@@ -1073,12 +1094,12 @@ for (const originalKey of ['stored', 'lease'] as const) {
       }
       const aRef = await page.evaluate(() => (Object.values((window as any).configurationProtocol.sessions)[0] as any).credential.secretRef);
       await dialog.getByText('供应商连接', { exact: true }).click();
-      if (changed === 'provider') { await dialog.getByLabel('供应商 ID', { exact: true }).fill('b'); await expect(source).toBeEnabled(); }
-      await dialog.getByLabel('Responses 地址', { exact: true }).fill('https://b.example.test/v1'); await expect(source).toBeEnabled();
-      await expect(source).toHaveValue('api_key');
-      await source.selectOption('native'); await expect(source).toBeEnabled();
-      await source.selectOption('api_key');
-      await expect(source).toHaveValue('api_key');
+      if (changed === 'provider') { await dialog.getByLabel('供应商 ID', { exact: true }).fill('b'); await expect(sourceNative).toBeEnabled(); }
+      await dialog.getByLabel('Responses 地址', { exact: true }).fill('https://b.example.test/v1'); await expect(sourceNative).toBeEnabled();
+      await expect(sourceApi).toBeChecked();
+      await sourceNative.click(); await expect(sourceNative).toBeEnabled();
+      await sourceApi.click();
+      await expect(sourceApi).toBeChecked();
       await expect(dialog.getByLabel('API 密钥', { exact: true })).toHaveValue('');
       const bSelection = await page.evaluate(() => (window as any).configurationProtocol.calls.filter((call: any) => call.command === 'select_configuration_credential').at(-1));
       expect(bSelection.args.credential).toEqual({ source: 'api_key', secretRef: null });
@@ -1088,15 +1109,15 @@ for (const originalKey of ['stored', 'lease'] as const) {
       await expect(dialog.getByText('合成非推理检查通过', { exact: true })).toBeVisible();
       const bRef = await page.evaluate(() => (Object.values((window as any).configurationProtocol.sessions)[0] as any).credential.secretRef);
       expect(bRef).not.toBe(aRef);
-      if (changed === 'provider') { await dialog.getByLabel('供应商 ID', { exact: true }).fill('gateway'); await expect(source).toBeEnabled(); }
-      await dialog.getByLabel('Responses 地址', { exact: true }).fill('https://gateway.example.test/v1'); await expect(source).toBeEnabled();
-      await source.selectOption('native'); await expect(source).toBeEnabled(); await source.selectOption('api_key');
+      if (changed === 'provider') { await dialog.getByLabel('供应商 ID', { exact: true }).fill('gateway'); await expect(sourceNative).toBeEnabled(); }
+      await dialog.getByLabel('Responses 地址', { exact: true }).fill('https://gateway.example.test/v1'); await expect(sourceNative).toBeEnabled();
+      await sourceNative.click(); await expect(sourceNative).toBeEnabled(); await sourceApi.click();
       await expect(dialog.getByText(originalKey === 'lease' ? '密钥在草稿中 · 尚未保存到系统' : '密钥已保存到系统 · 空输入保留', { exact: true })).toBeVisible();
       const restored = await page.evaluate(() => (Object.values((window as any).configurationProtocol.sessions)[0] as any).credential.secretRef);
       expect(restored).toBe(aRef);
-      if (changed === 'provider') { await dialog.getByLabel('供应商 ID', { exact: true }).fill('b'); await expect(source).toBeEnabled(); }
-      await dialog.getByLabel('Responses 地址', { exact: true }).fill('https://b.example.test/v1'); await expect(source).toBeEnabled();
-      await source.selectOption('native'); await expect(source).toBeEnabled(); await source.selectOption('api_key');
+      if (changed === 'provider') { await dialog.getByLabel('供应商 ID', { exact: true }).fill('b'); await expect(sourceNative).toBeEnabled(); }
+      await dialog.getByLabel('Responses 地址', { exact: true }).fill('https://b.example.test/v1'); await expect(sourceNative).toBeEnabled();
+      await sourceNative.click(); await expect(sourceNative).toBeEnabled(); await sourceApi.click();
       await expect(dialog.getByText('密钥在草稿中 · 尚未保存到系统', { exact: true })).toBeVisible();
       await dialog.getByRole('button', { name: '保存配置', exact: true }).click(); await expect(dialog).toHaveCount(0);
       const save = await page.evaluate(() => (window as any).configurationProtocol.calls.find((call: any) => call.command === 'save_configuration_draft'));
@@ -1110,32 +1131,80 @@ for (const originalKey of ['stored', 'lease'] as const) {
 
 test('unfinished A key is retained for A and cannot be submitted to a changed API connection B', async ({ page }) => {
   await setupConfigurationWorkspace(page, 'codex'); await page.getByRole('button', { name: '修改', exact: true }).last().click(); const dialog = page.getByRole('dialog');
-  const source = dialog.getByRole('combobox', { name: '凭据来源', exact: true });
+  const sourceNative = dialog.getByRole('radio', { name: '使用 CLI 当前登录或凭据', exact: true });
+  const sourceApi = dialog.getByRole('radio', { name: '为此连接提供 API 密钥', exact: true });
   await dialog.getByText('密钥已保存到系统 · 空输入保留', { exact: true }).click(); await dialog.getByRole('button', { name: '替换密钥' }).click();
   await dialog.getByLabel('API 密钥', { exact: true }).fill('synthetic-unfinished-a');
-  await dialog.getByText('供应商连接', { exact: true }).click(); await dialog.getByLabel('Responses 地址', { exact: true }).fill('https://b.example.test/v1'); await expect(source).toBeEnabled();
+  await dialog.getByText('供应商连接', { exact: true }).click(); await dialog.getByLabel('Responses 地址', { exact: true }).fill('https://b.example.test/v1'); await expect(sourceNative).toBeEnabled();
   await dialog.getByRole('button', { name: '保存配置', exact: true }).click();
   await expect(dialog.getByRole('alert').filter({ hasText: '此密钥输入属于先前连接' })).toBeVisible();
   expect(await page.evaluate(() => (window as any).configurationProtocol.calls.filter((call: any) => call.command === 'set_configuration_draft_secret'))).toEqual([]);
-  await source.selectOption('native'); await expect(source).toBeEnabled(); await source.selectOption('api_key');
+  await sourceNative.click(); await expect(sourceNative).toBeEnabled(); await sourceApi.click();
   await expect(dialog.getByLabel('API 密钥', { exact: true })).toHaveValue('');
-  await dialog.getByLabel('Responses 地址', { exact: true }).fill('https://gateway.example.test/v1'); await expect(source).toBeEnabled();
-  await source.selectOption('native'); await expect(source).toBeEnabled(); await source.selectOption('api_key');
+  await dialog.getByLabel('Responses 地址', { exact: true }).fill('https://gateway.example.test/v1'); await expect(sourceNative).toBeEnabled();
+  await sourceNative.click(); await expect(sourceNative).toBeEnabled(); await sourceApi.click();
   await expect(dialog.getByLabel('API 密钥', { exact: true })).toHaveValue('synthetic-unfinished-a');
 });
 
 test('explicit B key input while API still carries A ref is restored separately without changing A ownership', async ({ page }) => {
   await setupConfigurationWorkspace(page, 'codex'); await page.getByRole('button', { name: '修改', exact: true }).last().click(); const dialog = page.getByRole('dialog');
-  const source = dialog.getByRole('combobox', { name: '凭据来源', exact: true });
-  await dialog.getByText('供应商连接', { exact: true }).click(); await dialog.getByLabel('Responses 地址', { exact: true }).fill('https://b.example.test/v1'); await expect(source).toBeEnabled();
+  const sourceNative = dialog.getByRole('radio', { name: '使用 CLI 当前登录或凭据', exact: true });
+  const sourceApi = dialog.getByRole('radio', { name: '为此连接提供 API 密钥', exact: true });
+  await dialog.getByText('供应商连接', { exact: true }).click(); await dialog.getByLabel('Responses 地址', { exact: true }).fill('https://b.example.test/v1'); await expect(sourceNative).toBeEnabled();
   await dialog.getByText('密钥已保存到系统 · 空输入保留', { exact: true }).click(); await dialog.getByRole('button', { name: '替换密钥' }).click();
   await dialog.getByLabel('API 密钥', { exact: true }).fill('synthetic-unfinished-b');
-  await source.selectOption('native'); await expect(source).toBeEnabled(); await source.selectOption('api_key');
+  await sourceNative.click(); await expect(sourceNative).toBeEnabled(); await sourceApi.click();
   await expect(dialog.getByLabel('API 密钥', { exact: true })).toHaveValue('synthetic-unfinished-b');
   const selected = await page.evaluate(() => (window as any).configurationProtocol.calls.filter((call: any) => call.command === 'select_configuration_credential').at(-1));
   expect(selected.args.credential).toEqual({ source: 'api_key', secretRef: null });
-  await dialog.getByLabel('Responses 地址', { exact: true }).fill('https://gateway.example.test/v1'); await expect(source).toBeEnabled();
-  await source.selectOption('native'); await expect(source).toBeEnabled(); await source.selectOption('api_key');
+  await dialog.getByLabel('Responses 地址', { exact: true }).fill('https://gateway.example.test/v1'); await expect(sourceNative).toBeEnabled();
+  await sourceNative.click(); await expect(sourceNative).toBeEnabled(); await sourceApi.click();
   await expect(dialog.getByText('密钥已保存到系统 · 空输入保留', { exact: true })).toBeVisible();
   expect(await page.evaluate(() => (Object.values((window as any).configurationProtocol.sessions)[0] as any).credential.secretRef)).toBe('saved-original');
+});
+
+test('codex named configuration hides restore for inherited and unset descriptor fields', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'codex');
+  await page.evaluate(() => {
+    (window as any).configurationProtocol.fieldOrigins = {
+      'codex:model': 'explicit',
+      'codex:model_reasoning_summary': 'inherited',
+      'codex:model_verbosity': 'unset',
+    };
+  });
+  await page.getByRole('button', { name: '修改', exact: true }).last().click();
+  const dialog = page.getByRole('dialog');
+  const explicitField = dialog.getByLabel('当前模型', { exact: true }).locator('xpath=../..');
+  await expect(explicitField.getByRole('button', { name: '恢复默认', exact: true })).toBeVisible();
+  await dialog.getByRole('button', { name: '常用设置', exact: true }).click();
+  const inheritedField = dialog.getByLabel('推理摘要', { exact: true }).locator('..');
+  await expect(inheritedField.getByRole('button', { name: '恢复默认', exact: true })).toHaveCount(0);
+  const unsetField = dialog.getByLabel('回答详细程度', { exact: true }).locator('..');
+  await expect(unsetField.getByRole('button', { name: '恢复默认', exact: true })).toHaveCount(0);
+  // A field the descriptor does not classify keeps the conservative restore affordance.
+  const unknownField = dialog.getByLabel('推理强度（Codex 原生）', { exact: true }).locator('..');
+  await expect(unknownField.getByRole('button', { name: '恢复默认', exact: true })).toBeVisible();
+  // A session intent overrides the descriptor baseline back to explicit.
+  await dialog.getByLabel('推理摘要', { exact: true }).fill('concise');
+  await expect(inheritedField.getByRole('button', { name: '恢复默认', exact: true })).toBeVisible();
+});
+
+test('claude named configuration hides restore for inherited and unset descriptor fields', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'claude_code');
+  await page.evaluate(() => {
+    (window as any).configurationProtocol.fieldOrigins = {
+      'claude_code:default.model': 'explicit',
+      'claude_code:effortLevel': 'inherited',
+      'claude_code:opus.model': 'unset',
+    };
+  });
+  await page.getByRole('button', { name: '修改', exact: true }).last().click();
+  const dialog = page.getByRole('dialog');
+  const explicitField = dialog.getByLabel('默认模型', { exact: true }).locator('xpath=../..');
+  await expect(explicitField.getByRole('button', { name: '恢复默认', exact: true })).toBeVisible();
+  await dialog.getByRole('button', { name: '常用设置', exact: true }).click();
+  const inheritedField = dialog.getByLabel('默认推理 effort', { exact: true }).locator('..');
+  await expect(inheritedField.getByRole('button', { name: '恢复默认', exact: true })).toHaveCount(0);
+  const unsetField = dialog.getByLabel('opus 模型', { exact: true }).locator('xpath=../..');
+  await expect(unsetField.getByRole('button', { name: '恢复默认', exact: true })).toHaveCount(0);
 });

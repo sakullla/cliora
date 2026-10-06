@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { native } from '../../lib/native';
 import { confirmAction } from '../../lib/confirm';
 import { CodeEditor } from '../../components/CodeEditor';
-import { FileConflict } from '../../components/FileConflict';
+import { ConflictCompare } from '../../components/configuration/ConflictCompare';
 import { GuideDialog } from '../../components/GuideDialog';
 import { modLabel } from '../../lib/shortcut';
 import type { AdapterDescriptor, Scope } from '../../types/native';
@@ -78,7 +78,7 @@ export function NativeRuleEditor({ tools, projects }: { tools: AdapterDescriptor
       <label>范围<select aria-label="规则范围" value={scope} onChange={event => { const value = event.target.value as Scope; void change(() => setScope(value)); }}><option value="global">全局</option><option value="project">项目</option></select></label>
       {scope === 'project' && <label>项目<select aria-label="规则项目" value={project} onChange={event => { const value = event.target.value; void change(() => setProject(value)); }}><option value="">选择项目…</option>{projects.filter(item => item.available && item.path).map(item => <option key={item.id} value={item.path!}>{item.name}</option>)}</select></label>}</div>
     {loaded && <><label className="native-rule-enabled"><input type="checkbox" checked={enabled} disabled={busy} onChange={event => void toggle(event.target.checked)} />启用规则</label><p className="native-rule-path" title={loaded.path}><strong>{loaded.path.split(/[\\/]/).pop()}</strong><small>{loaded.path}</small></p><CodeEditor label="当前原生规则" value={text} onChange={setText} format="markdown" /><div className="native-rule-actions"><span>{dirty ? '未保存' : ''}</span><button type="button" className="button primary" data-dialog-save title={`保存规则（${modLabel}+S）`} disabled={busy || !dirty} onClick={() => void save()}>保存规则</button></div></>}
-    {conflict !== null && <FileConflict current={conflict} edited={text} format="markdown" busy={busy} onKeep={() => { setLoaded(old => old ? { ...old, text: conflict } : old); setText(conflict); setConflict(null); }} onUse={() => void save(conflict)} />}
+    {conflict !== null && <ConflictCompare title="规则文件" banner="文件已在其他地方修改。请选择要保存的内容。" currentContent={conflict} nextContent={text} format="markdown" busy={busy} onKeepCurrent={() => { setLoaded(old => old ? { ...old, text: conflict } : old); setText(conflict); setConflict(null); }} onUseNext={() => void save(conflict)} />}
     {failure && <p className="native-rule-message" role="alert" style={{ color: 'var(--danger)', borderColor: 'var(--danger-line)', background: 'var(--danger-soft)' }}>{failure}</p>}
     {status && <p className="native-rule-message" role="status">{status}</p>}
     </div>

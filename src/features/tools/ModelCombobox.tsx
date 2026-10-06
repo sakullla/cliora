@@ -2,11 +2,14 @@ import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent
 import { createPortal } from 'react-dom';
 import styles from './ModelCombobox.module.css';
 
-export function ModelCombobox({ label, value, placeholder, options, onChange }: {
+export function ModelCombobox({ id, label, value, placeholder, options, disabled, action, onChange }: {
+  id?: string;
   label: string;
   value: string;
   placeholder: string;
   options: string[];
+  disabled?: boolean;
+  action?: { label: string; busy: boolean; onClick: () => void };
   onChange: (model: string) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -76,12 +79,13 @@ export function ModelCombobox({ label, value, placeholder, options, onChange }: 
   }
 
   return <div className={styles.combo}>
-    <input ref={anchor} className={styles.trigger} role="combobox" aria-label={label} aria-expanded={open} aria-controls={open ? listId : undefined} aria-autocomplete="list" value={text} placeholder={placeholder} onFocus={() => { setFiltering(false); setOpen(true); }} onBlur={() => { setOpen(false); setFiltering(false); }} onChange={event => { const next = event.target.value; setText(next); setFiltering(true); setOpen(true); onChange(next); }} onKeyDown={onKeyDown} />
+    <input ref={anchor} id={id} className={styles.trigger} role="combobox" aria-label={label} aria-expanded={open} aria-controls={open ? listId : undefined} aria-autocomplete="list" value={text} placeholder={placeholder} disabled={disabled} onFocus={() => { setFiltering(false); setOpen(true); }} onBlur={() => { setOpen(false); setFiltering(false); }} onChange={event => { const next = event.target.value; setText(next); setFiltering(true); setOpen(true); onChange(next); }} onKeyDown={onKeyDown} />
     {open && box && createPortal(<div ref={panel} className={styles.panel} style={{ top: box.top, bottom: box.bottom, left: box.left, width: box.width, maxHeight: box.maxHeight }}>
       <div id={listId} className={styles.list} role="listbox" aria-label={`${label}列表`}>
         {matches.map((model, index) => <button key={model} type="button" role="option" aria-selected={model === value} data-active={index === active} onMouseDown={event => event.preventDefault()} onMouseEnter={() => setActive(index)} onClick={() => choose(model)}><span>{model}</span></button>)}
-        {!matches.length && <p>{text.trim() ? '使用输入的模型' : '可直接输入模型'}</p>}
       </div>
+      {!matches.length && <div className={styles.empty}><p>{filtering ? '没有匹配的目录模型，可直接使用输入值' : '尚未获取模型目录，可直接输入'}</p></div>}
+      {!filtering && action && <button className={styles.fetch} type="button" disabled={action.busy} onMouseDown={event => event.preventDefault()} onClick={() => action.onClick()}>{action.busy ? '获取中…' : action.label}</button>}
     </div>, anchor.current?.closest('dialog') ?? document.body)}
   </div>;
 }

@@ -28,6 +28,7 @@ fn field(id: &str, label: &str, kind: &str, advanced: bool) -> ConfigurationFiel
         minimum: matches!(kind, "integer").then_some(1.0),
         default_source: Some("跟随原生模型默认".into()),
         unavailable_reason: None,
+        origin: None,
     }
 }
 fn root(documents: &Documents) -> Value {

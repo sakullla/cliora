@@ -106,6 +106,7 @@ for (const tool of ['pi', 'opencode', 'kimi']) {
     await expect(renamed.locator('[data-default-badge]')).toHaveText('默认');
     await renamed.getByText('更多', { exact: true }).click();
     await expect(renamed.getByRole('button', { name: '删除模型', exact: true })).toBeDisabled();
+    await expect(renamed.getByText('先选择替代默认或轻量模型，再删除。')).toBeVisible();
     if (tool === 'opencode') {
       await renamed.getByRole('button', { name: '设为轻量模型' }).click();
       await expect(renamed.getByRole('button', { name: '当前轻量模型' })).toBeDisabled();
@@ -391,8 +392,6 @@ for (const tool of ['pi', 'opencode', 'kimi']) {
     await expect.poll(() => page.evaluate(() => (window as unknown as { __actions: unknown[] }).__actions.at(-1))).toMatchObject({
       target: { kind: 'model', provider: 'beta', id: 'beta/new~model' }, operation: 'set', field: tool === 'pi' ? 'contextWindow' : tool === 'kimi' ? 'max_context_size' : 'limit.context', value: 222222,
     });
-    const providerDetails = page.locator('details').filter({ has: page.getByLabel('供应商标识', { exact: true }) });
-    if (!await providerDetails.evaluate(element => (element as HTMLDetailsElement).open)) await page.getByText('供应商连接', { exact: false }).first().click();
     await page.getByLabel('供应商标识').fill('beta');
     await page.getByLabel('连接地址').fill('https://beta.example/v1');
     await page.getByLabel('接口协议').selectOption('openai_responses');
@@ -420,12 +419,12 @@ for (const reuse of ['copy', 'rename']) {
       return view;
     }));
     const victim = page.getByRole('article', { name: '模型 victim', exact: true });
-    await victim.getByRole('button', { name: /victim · victim/ }).click();
+    await victim.getByRole('button', { name: /^victim(?: ·|$)/ }).click();
     await victim.getByText('更多', { exact: true }).click();
     await victim.getByRole('button', { name: '删除模型', exact: true }).click();
     await expect(victim).toHaveCount(0);
     const source = page.getByRole('article', { name: '模型 source', exact: true });
-    await source.getByRole('button', { name: /source · source/ }).click();
+    await source.getByRole('button', { name: /^source(?: ·|$)/ }).click();
     await source.getByText('更多', { exact: true }).click();
     await source.getByLabel('新模型 ID').fill('victim');
     await source.getByRole('button', { name: reuse === 'copy' ? '复制模型' : '修改模型标识', exact: true }).click();

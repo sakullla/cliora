@@ -75,6 +75,8 @@ export function createConfigurationSession(initial: ConfigurationDraft) {
     },
     setFieldValidity(field: string, valid: boolean) { if (valid) invalidFields.delete(field); else invalidFields.add(field); },
     isFieldValid(field: string) { return !invalidFields.has(field); },
+    /** Opaque validity keys, surfaced so the dialog can name what blocks saving. */
+    get invalidFields(): readonly string[] { return [...invalidFields]; },
     invalidate() { epoch += 1; pending.clear(); sequence = Promise.resolve(); },
     close() { closed = true; epoch += 1; pending.clear(); },
     edit: enqueue,

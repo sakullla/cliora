@@ -146,6 +146,7 @@ fn description(
         default_source: (!required).then(|| "跟随原生默认".into()),
         unavailable_reason: (scope == Scope::Project)
             .then(|| "Kimi 模型配置只支持用户级 config.toml".into()),
+        origin: None,
     }
 }
 

@@ -2915,7 +2915,7 @@ pub struct ConfigurationDirectoryResult {session_id:String,revision:u64,request_
 pub async fn list_configuration_models(app:AppHandle,draft:crate::native::configuration::ConfigurationDraft,force:bool,query:String)->Result<ConfigurationDirectoryResult,ApiError>{
     blocking(move||app.state::<AppState>().with_database(&app,|db|{
         let workspace=&app.state::<AppState>().workspace;
-        let(connection,credential)=workspace.request(&draft,&SystemCredentialStore).map_err(native_error)?;
+        let(connection,credential)=workspace.request_directory(&draft,&SystemCredentialStore).map_err(native_error)?;
         let directory=models::list_models_guarded(db,&credential,&connection,force,&query,||!workspace.is_current(&draft)).map_err(native_error)?;
         workspace.finish_request(&draft).map_err(native_error)?;
         Ok(ConfigurationDirectoryResult{session_id:draft.session_id,revision:draft.revision,request_generation:draft.request_generation,directory})

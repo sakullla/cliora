@@ -143,6 +143,9 @@ test('字段信息入口展开显示来源状态、原生说明与字段说明',
   await expect(page.getByText('最大输出令牌数。')).toHaveCount(0);
   await toggle.click();
   await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  const controls = await toggle.getAttribute('aria-controls');
+  expect(controls).toBeTruthy();
+  await expect(page.locator(`#${controls}`)).toBeVisible();
   await expect(page.getByText('本层显式值', { exact: true })).toBeVisible();
   await expect(page.getByText('最大输出令牌数。')).toBeVisible();
   await expect(page.getByText(/原生字段：\s*MAX_TOKENS/)).toBeVisible();
