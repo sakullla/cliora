@@ -6,6 +6,7 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { native, nativeAvailable } from '../../lib/native';
 import { configurationApplicationState } from '../../lib/configurationDraft';
 import { confirmAction } from '../../lib/confirm';
+import { searchShortcutHint } from '../../lib/shortcut';
 import type { AdapterDescriptor, RegisteredProfile, RegisteredToolWorkspace, Scope, ApplyComparison } from '../../types/native';
 import type { ConfigurationDraft, ConfigurationSaveResult, ConfigurationSubject } from '../../types/configuration';
 import type { AccountImpactScope } from '../../types/accounts';
@@ -92,12 +93,20 @@ function RowMenu({ label, children }: { label: string; children: ReactNode }) {
 
 type ResourceView = 'config' | 'accounts' | 'mcp' | 'skills' | 'plugins' | 'agents';
 type EditFrame = { key: string; subject: ConfigurationSubject; profile: RegisteredProfile | null; title: string };
-export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0, active = true, repair, onDirtyChange }: { active?: boolean; managedTools: AdapterDescriptor[]; initialTool?: string; openSequence?: number; repair?: TrayRepairTarget | null; onDirtyChange?: (dirty: boolean) => void }) {
+export type WorkspaceOpenIntent = { resource?: ResourceView; create?: boolean };
+
+const resourceViews: Array<[ResourceView, string]> = [['config', '配置'], ['accounts', '账号'], ['mcp', 'MCP'], ['skills', 'Skill'], ['agents', 'Agents'], ['plugins', '插件']];
+const contextStoreKey = 'cliora:workspace-context';
+type StoredContext = { resource?: ResourceView; scope?: Scope; projectPath?: string };
+function readStoredContexts(): Record<string, StoredContext> {
+  try { return JSON.parse(localStorage.getItem(contextStoreKey) ?? '{}') as Record<string, StoredContext>; } catch { return {}; }
+}
+export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0, openIntent = null, active = true, repair, onDirtyChange, discardSignal = 0 }: { active?: boolean; managedTools: AdapterDescriptor[]; initialTool?: string; openSequence?: number; openIntent?: WorkspaceOpenIntent | null; repair?: TrayRepairTarget | null; onDirtyChange?: (dirty: boolean) => void; discardSignal?: number }) {
   const [tool, setTool] = useState(repair?.toolId ?? initialTool ?? managedTools[0]?.id ?? '');
   const descriptor = managedTools.find(item => item.id === tool) ?? managedTools[0];
   const toolId = descriptor?.id ?? '';
-  const [scope, setScope] = useState<Scope>(repair?.scope ?? 'global');
-  const [projectPath, setProjectPath] = useState(repair?.projectPath ?? '');
+  const [scope, setScope] = useState<Scope>(repair?.scope ?? readStoredContexts()[tool]?.scope ?? 'global');
+  const [projectPath, setProjectPath] = useState(repair?.projectPath ?? readStoredContexts()[tool]?.projectPath ?? '');
   const [projects, setProjects] = useState<Project[]>([]);
   const [workspace, setWorkspace] = useState<RegisteredToolWorkspace | null>(null);
   const [loading, setLoading] = useState(true);
@@ -105,7 +114,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const [applying, setApplying] = useState<string | null>(null);
-  const [resource, setResource] = useState<ResourceView>(repair?.resourceView ?? 'config');
+  const [resource, setResource] = useState<ResourceView>(repair?.resourceView ?? readStoredContexts()[tool]?.resource ?? 'config');
   const [frame, setFrame] = useState<EditFrame | null>(null);
   const [dirty, setDirty] = useState(false);
   const [resourceDirty, setResourceDirty] = useState({ mcp: false, skills: false, agents: false });
@@ -131,6 +140,8 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   const currentDirty = useRef(allDirty); currentDirty.current = allDirty;
   const appliedRepair = useRef(0);
   const appliedOpen = useRef(0);
+  const appliedDiscard = useRef(0);
+  const pendingCreate = useRef(false);
   const management = descriptor?.management;
   const supported = { config: true, accounts: management?.accounts ?? true, mcp: management?.mcp ?? true, skills: management?.skills ?? true, agents: management?.agents ?? true, plugins: (management?.plugins ?? true) && (scope === 'global' || (management?.projectPlugins ?? true)) };
   useEffect(() => { alive.current = true; return () => { alive.current = false; loadSequence.current++; }; }, []);
@@ -189,7 +200,14 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     await openFrame('profile', { id: '', tool: toolId, name, version: 0, inheritCommon: false, files: {}, suppressed: {}, connection: null, nativeCredentials: {} });
   }
   async function switchScope(next: Scope, path = '') { if (next === scope && (next === 'global' || path === projectPath)) return; if (!await mayLeave()) return; discard(); setScope(next); setProjectPath(path); }
-  async function switchTool(id: string) { if (id === toolId || !await mayLeave()) return; discard(); setTool(id); }
+  function restoreContext(id: string, forcedResource?: ResourceView) {
+    const stored = readStoredContexts()[id];
+    if (!stored) { if (forcedResource) setResource(forcedResource); return; }
+    setResource(forcedResource ?? stored.resource ?? 'config');
+    setScope(stored.scope ?? 'global');
+    setProjectPath(stored.projectPath ?? '');
+  }
+  async function switchTool(id: string) { if (id === toolId || !await mayLeave()) return; discard(); setTool(id); restoreContext(id); }
   async function switchResource(next: ResourceView) { if (next === resource || !await mayLeave()) return; discard(); setResource(next); }
   async function pickProject() { const started = currentContext.current; try { const value = await open({ directory: true, multiple: false, title: '选择配置项目文件夹' }); if (typeof value === 'string' && alive.current && started === currentContext.current) await switchScope('project', value); } catch (failure) { setError(errorText(failure)); } }
   const openTarget = async (profileId: string, target?: AccountImpactScope) => {
@@ -212,8 +230,55 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   }, [repair]);
   useEffect(() => {
     if (!openSequence || appliedOpen.current === openSequence) return; appliedOpen.current = openSequence;
-    void (async () => { if (!await mayLeave()) return; discard(); setResource('config'); if (initialTool) setTool(initialTool); })();
+    void (async () => {
+      if (!await mayLeave()) return;
+      discard();
+      const nextTool = initialTool ?? toolId;
+      const stored = readStoredContexts()[nextTool];
+      const nextScope = stored ? stored.scope ?? 'global' : scope;
+      const nextPath = stored ? stored.projectPath ?? '' : projectPath;
+      setResource(openIntent?.resource ?? stored?.resource ?? 'config');
+      setScope(nextScope); setProjectPath(nextPath);
+      if (initialTool) setTool(initialTool);
+      if (!openIntent?.create) return;
+      if (JSON.stringify([nextTool, nextScope, nextPath]) === context) await createProfile();
+      else pendingCreate.current = true;
+    })();
   }, [openSequence]);
+  useEffect(() => {
+    if (!pendingCreate.current || !workspace) return;
+    pendingCreate.current = false;
+    void createProfile();
+  }, [workspace]);
+  useEffect(() => {
+    if (!toolId) return;
+    try {
+      const all = readStoredContexts();
+      all[toolId] = { resource, scope, projectPath };
+      localStorage.setItem(contextStoreKey, JSON.stringify(all));
+    } catch { /* 布局与功能不依赖本地存储。 */ }
+  }, [toolId, resource, scope, projectPath]);
+  const supportedRef = useRef(supported); supportedRef.current = supported;
+  const switchResourceRef = useRef(switchResource); switchResourceRef.current = switchResource;
+  useEffect(() => {
+    if (!active) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      const index = Number(event.key) - 1;
+      if (!Number.isInteger(index) || index < 0 || index >= resourceViews.length) return;
+      const next = resourceViews[index][0];
+      if (!supportedRef.current[next] || document.querySelector('dialog[open]')) return;
+      event.preventDefault();
+      void switchResourceRef.current(next);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [active]);
+  useEffect(() => {
+    if (!discardSignal || appliedDiscard.current === discardSignal) return;
+    appliedDiscard.current = discardSignal;
+    discard();
+  }, [discardSignal]);
   async function apply(profile: RegisteredProfile) {
     if (!await mayLeave()) return;
     const identity = currentContext.current; setApplying(profile.id); setError(''); setNotice('');
@@ -269,7 +334,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   if (!descriptor) return <p>还没有管理中的 CLI，请在设置中选择工具。</p>;
   return <section className={styles.workspace} aria-label="工具与连接">
     <div className={styles.toolbar}><div className={styles.toolSwitcher} role="tablist" aria-label="CLI" onKeyDown={navigateChoices}>{managedTools.map(item => <button key={item.id} role="tab" aria-selected={item.id === toolId} tabIndex={item.id === toolId ? 0 : -1} className={item.id === toolId ? styles.selected : ''} onClick={() => void switchTool(item.id)}><ToolIcon toolId={item.id} size={23} />{item.name}</button>)}</div></div>
-    <div className={styles.taskBar}><div className={styles.views} role="tablist" aria-label="当前任务" onKeyDown={navigateChoices}>{Object.entries({ config: '配置', accounts: '账号', mcp: 'MCP', skills: 'Skill', agents: 'Agents', plugins: '插件' }).filter(([id]) => supported[id as ResourceView]).map(([id, label]) => <button role="tab" key={id} aria-selected={resource === id} tabIndex={resource === id ? 0 : -1} className={resource === id ? styles.selected : ''} onClick={() => void switchResource(id as ResourceView)}>{label}</button>)}</div><div className={styles.scopeBar}><FilterSelect className={styles.projectSelect} label="配置范围" value={scope === 'global' ? '__global__' : projectPath} forceSearch searchLabel="搜索项目" options={[{ value: '__global__', label: '全局配置' }, ...projects.map(project => ({ value: project.path ?? project.id, label: project.name, detail: project.path ? shortPath(project.path) : undefined, disabled: !project.available || !project.path })), ...(projectPath && !projects.some(project => project.path === projectPath) ? [{ value: projectPath, label: projectPath.split(/[\\/]/).at(-1) ?? projectPath }] : [])]} onChange={value => void switchScope(value === '__global__' ? 'global' : 'project', value === '__global__' ? '' : value)} onPickFolder={() => void pickProject()} pickFolderLabel="选择文件夹…" /></div></div>
+    <div className={styles.taskBar}><div className={styles.views} role="tablist" aria-label="当前任务" onKeyDown={navigateChoices}>{resourceViews.filter(([id]) => supported[id]).map(([id, label]) => { const shortcutIndex = resourceViews.findIndex(([view]) => view === id) + 1; return <button role="tab" key={id} aria-selected={resource === id} aria-keyshortcuts={`Alt+${shortcutIndex}`} tabIndex={resource === id ? 0 : -1} title={`${label}（Alt+${shortcutIndex}）`} className={resource === id ? styles.selected : ''} onClick={() => void switchResource(id)}>{label}</button>; })}</div><div className={styles.scopeBar}><FilterSelect className={styles.projectSelect} label="配置范围" value={scope === 'global' ? '__global__' : projectPath} forceSearch searchLabel="搜索项目" options={[{ value: '__global__', label: '全局配置' }, ...projects.map(project => ({ value: project.path ?? project.id, label: project.name, detail: project.path ? shortPath(project.path) : undefined, disabled: !project.available || !project.path })), ...(projectPath && !projects.some(project => project.path === projectPath) ? [{ value: projectPath, label: projectPath.split(/[\\/]/).at(-1) ?? projectPath }] : [])]} onChange={value => void switchScope(value === '__global__' ? 'global' : 'project', value === '__global__' ? '' : value)} onPickFolder={() => void pickProject()} pickFolderLabel="选择文件夹…" /></div></div>
     {(error || notice) && <div className={styles.feedback}>{error && <StatusBanner tone="error" onDismiss={() => setError('')}>{error}</StatusBanner>}{notice && <StatusBanner tone="success" autoDismissMs={8000} onDismiss={() => setNotice('')}>{notice}</StatusBanner>}</div>}
     <div hidden={resource !== 'config'}>
       {workspace && <InstallPanel toolName={descriptor.name} probe={workspace.probe} customPath={customPath} busy={busy} loading={loading} onCustomPath={setCustomPath} onSavePath={() => void savePath()} onMaintain={(action, source) => void maintain(action, source)} onUsePath={path => void usePath(path)} />}
@@ -281,12 +346,12 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
       : <div className={styles.profileList} aria-label="配置列表">
         <div className={styles.listHeading}><strong>配置{workspace.profiles.length > 0 && <span className="count-chip">{workspace.profiles.length}</span>}</strong><span className={styles.listActions}><button title={`在外部终端启动 ${descriptor.name}`} disabled={launching || !workspace} onClick={() => void launch()}><Icon name="play" size={13} strokeWidth={2} />{launching ? '正在启动…' : '启动'}</button><button title="所有命名配置可继承的共享设置" onClick={() => void openFrame('common')}><Icon name="settings" size={14} />通用配置</button><button className={styles.primary} onClick={() => void createProfile()}><Icon name="plus" size={14} strokeWidth={2.2} />新建配置</button></span></div>
         {currentFile && <div className={styles.profileRow} data-kind="native"><span><button className={styles.profileName} onClick={() => void openFrame('current')}>正在使用的文件</button><small>直接编辑当前范围的原生文件</small></span><button onClick={() => void openFrame('current')}>修改</button></div>}
-        {workspace.profiles.length > 6 && <label className={styles.profileFilter}><input type="search" aria-label="搜索配置" placeholder="按名称、模型或地址搜索配置" value={filter} onChange={event => setFilter(event.target.value)} onKeyDown={event => { if (event.key === 'Escape' && filter) { event.stopPropagation(); setFilter(''); } }} />{query && <span>{profileGroups.reduce((total, group) => total + group.visible.length, 0)} / {workspace.profiles.length}</span>}</label>}
+        {workspace.profiles.length > 6 && <label className={styles.profileFilter}><input type="search" aria-label="搜索配置" data-page-search title={searchShortcutHint} placeholder="按名称、模型或地址搜索配置" value={filter} onChange={event => setFilter(event.target.value)} onKeyDown={event => { if (event.key === 'Escape' && filter) { event.stopPropagation(); setFilter(''); } }} />{query && <span>{profileGroups.reduce((total, group) => total + group.visible.length, 0)} / {workspace.profiles.length}</span>}</label>}
         {!workspace.profiles.length && <div className={styles.profileEmpty}><strong>还没有命名配置</strong><span>命名配置可保存不同的供应商、模型和凭据，随时切换使用。{currentFile ? '也可以直接修改正在使用的文件。' : ''}</span><button className={styles.primary} onClick={() => void createProfile()}><Icon name="plus" size={14} strokeWidth={2.2} />新建第一个配置</button></div>}
         {query && !profileGroups.length && <div className={styles.profileEmpty}><span>没有匹配“{filter.trim()}”的配置。</span><button onClick={() => setFilter('')}>清除搜索</button></div>}
         <div role="list" aria-label="配置项" className={workspace.profiles.length > 6 ? styles.profileScroll : undefined}>{profileGroups.map(group => <div key={group.id} className={styles.profileGroup} data-group={group.id}><div className={styles.groupLabel}><strong>{group.label}</strong><span>{query ? `${group.visible.length}/${group.profiles.length}` : group.profiles.length}</span></div>{group.visible.map(row)}</div>)}</div>
       </div>}
-      <GuideDialog wide suspended={!active} open={!!frame} title={frame?.title ?? '配置'} hint={`${descriptor.name} · ${scope === 'global' ? '全局' : projectPath}。保存配置只入库，使用是独立操作。`} onClose={() => void closeFrame()}>{frame && !workspace && <p role="status">正在读取目标范围的配置…</p>}{frame && workspace && <ConfigurationWorkspaceEditor key={frame.key} toolId={toolId} subject={frame.subject} profile={frame.profile} scope={scope} projectPath={projectPath} workspace={workspace} accounts={accounts} onClose={() => void closeFrame()} onDirtyChange={value => { if (value) epoch.current++; setDirty(value); }} onDraftChange={changed} onStored={stored} onDone={(result, used) => { setFrame(null); setDirty(false); setNotice(result.application ? '当前文件已更新；下次会话读取。' : used ? '配置已保存并使用；下次会话读取。' : '配置已保存；正在使用的文件保持原版本。'); void reload(toolId, scope, projectPath); }} />}</GuideDialog>
+      <GuideDialog wide suspended={!active} open={!!frame} title={frame?.title ?? '配置'} hint={`${descriptor.name} · ${scope === 'global' ? '全局' : projectPath}。保存配置只入库，使用是独立操作。`} onClose={() => void closeFrame()} onBack={() => void closeFrame()}>{frame && !workspace && <p role="status">正在读取目标范围的配置…</p>}{frame && workspace && <ConfigurationWorkspaceEditor key={frame.key} toolId={toolId} subject={frame.subject} profile={frame.profile} scope={scope} projectPath={projectPath} workspace={workspace} accounts={accounts} onClose={() => void closeFrame()} onDirtyChange={value => { if (value) epoch.current++; setDirty(value); }} onDraftChange={changed} onStored={stored} onDone={(result, used) => { setFrame(null); setDirty(false); setNotice(result.application ? '当前文件已更新；下次会话读取。' : used ? '配置已保存并使用；下次会话读取。' : '配置已保存；正在使用的文件保持原版本。'); void reload(toolId, scope, projectPath); }} />}</GuideDialog>
       <GuideDialog wide open={!!comparison} title="比较当前文件与本次配置" onClose={() => setComparison(null)}>{comparison && <div>{comparison.files.map((file, index) => <ConflictCompare key={file.role} title={file.role} banner={index === 0 ? '当前文件和保存配置不同。先比较，再明确使用。' : undefined} actions={false} currentContent={file.current} nextContent={file.proposedText} format={file.format} onUseNext={() => void compareUse()} onKeepCurrent={() => setComparison(null)} />)}<div className="dialog-footer"><button onClick={() => setComparison(null)}>保留当前文件</button><span className="dialog-footer-gap" /><button className={styles.primary} disabled={busy} onClick={() => void compareUse()}>使用本次内容</button></div></div>}</GuideDialog>
     </div>
     {resource === 'accounts' && supported.accounts && <AccountsPanel key={toolId} toolId={toolId} state={accounts} onOpenProfile={(id, target) => void openTarget(id, target)} onOpenUsage={id => void openAccountQuota(id)} />}

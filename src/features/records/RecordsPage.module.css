@@ -123,6 +123,7 @@
 }
 .group:first-child { padding-top: 6px; }
 .group > span { font-weight: 500; font-variant-numeric: tabular-nums; }
+.listSentinel { padding: 10px; text-align: center; color: var(--text-3); font-size: 12px; }
 .list > button {
   content-visibility: auto;
   contain-intrinsic-size: auto 100px;

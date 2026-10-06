@@ -13,33 +13,15 @@ import { toolOptions } from '../../components/ToolIcon';
 import { Icon } from '../../components/Icon';
 import { shortPath } from '../../lib/paths';
 import { saveShortcutHint, searchShortcutHint } from '../../lib/shortcut';
+import { formatFailure } from '../../lib/feedback';
+import { useToasts } from '../../lib/toast';
+import { ToastStack } from '../../components/Toast';
+import { SkeletonRows } from '../../components/Skeleton';
 import { navigateChoices } from '../../lib/choiceNavigation';
 import { ScopeMarks, samePath, scopeLabel } from './CliMarks';
 import styles from './LibraryPage.module.css';
 
 const copiedText = '完整正文已复制，可以粘贴使用。';
-
-function formatFailure(error: unknown, objectText: string, nextText: string): string {
-  const fallback = `${objectText}。${nextText}`;
-  if (typeof error === 'string') {
-    const text = error.trim();
-    return !text || text.replace(/[。！？，,\s]/g, '') === '操作失败请重试' ? fallback : text;
-  }
-  if (!error || typeof error !== 'object') return fallback;
-  const value = error as { message?: unknown; action?: unknown };
-  const raw = 'message' in value && value.message != null ? String(value.message).trim() : '';
-  const action = typeof value.action === 'string' ? value.action.trim() : '';
-  if (!raw || raw.replace(/[。！？，,\s]/g, '') === '操作失败请重试' || /^操作失败[。！]?$/.test(raw)) {
-    const next = action && !/^请重试[。！]?$/.test(action) ? action : nextText;
-    const step = /[。！？]$/.test(next) ? next : `${next}。`;
-    return `${objectText}。${step}`;
-  }
-  const detail = raw.replace(/[。！？\s]+$/, '');
-  const next = action || nextText;
-  const bare = next.replace(/[。！？\s]+$/, '');
-  if (!bare || detail.includes(bare)) return /[。！？]$/.test(raw) ? raw : `${detail}。`;
-  return `${detail}。${/[。！？]$/.test(next) ? next : `${next}。`}`;
-}
 
 const libraryNext = '可调整搜索，或点击上方的新建。';
 const savedListNext = '可点击关闭后查看列表。';
@@ -90,13 +72,8 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
   const [draft, setDraft] = useState<LibraryDraft | null>(null);
   const [savedText, setSavedText] = useState('');
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
-  useEffect(() => {
-    if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(''), 4000);
-    return () => window.clearTimeout(timer);
-  }, [notice]);
+  const toasts = useToasts();
+  const [listLoading, setListLoading] = useState(nativeAvailable);
   const [dialogError, setDialogError] = useState('');
   const [dialogNotice, setDialogNotice] = useState('');
   const [tagText, setTagText] = useState('');
@@ -112,7 +89,7 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
     if (!copiedId) return;
     const timer = window.setTimeout(() => setCopiedId(null), 1800);
     return () => window.clearTimeout(timer);
-  }, [copiedId, notice]);
+  }, [copiedId, toasts.notice]);
   const dirty = !!draft && JSON.stringify(draft) !== savedText;
   const latest = useRef(''); latest.current = JSON.stringify([kind, draft, active]);
   const mounted = useRef(true);
@@ -122,8 +99,8 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
     return confirmAction(message, () => mounted.current && latest.current === started, options);
   }
 
-  function showError(text: string) { setNotice(''); setError(text); }
-  function showNotice(text: string) { setError(''); setNotice(text); }
+  function showError(text: string) { toasts.showError(text); }
+  function showNotice(text: string) { toasts.showNotice(text); }
   function showDialogError(text: string) { setDialogNotice(''); setDialogError(text); }
   function showDialogNotice(text: string) { setDialogError(''); setDialogNotice(text); }
   function clearDialogResult() { setDialogError(''); setDialogNotice(''); }
@@ -144,8 +121,9 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
   useEffect(() => {
     if (!nativeAvailable || !active) return;
     let live = true;
-    void native.listLibraryItems(kind, null, search).then((result) => { if (live) setItems(result); })
-      .catch((value) => { if (live) showError(formatFailure(value, '资料列表读取失败', libraryNext)); });
+    setListLoading(true);
+    void native.listLibraryItems(kind, null, search).then((result) => { if (live) { setItems(result); setListLoading(false); } })
+      .catch((value) => { if (live) { setListLoading(false); showError(formatFailure(value, '资料列表读取失败', libraryNext)); } });
     return () => { live = false; };
   }, [active, kind, search]);
 
@@ -157,16 +135,16 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
   async function choose(item: LibraryItem) {
     if (!await canReplace()) return;
     const next = edit(item);
-    setDraft(next); setSavedText(JSON.stringify(next)); setTagText(''); setError(''); setNotice(''); clearDialogResult();
+    setDraft(next); setSavedText(JSON.stringify(next)); setTagText(''); toasts.setError(null); toasts.setNotice(null); clearDialogResult();
   }
   async function start(kind: LibraryKind) {
     if (!await canReplace()) return;
     const next = empty(kind);
-    setDraft(next); setSavedText(JSON.stringify(next)); setTagText(''); setError(''); setNotice(''); clearDialogResult();
+    setDraft(next); setSavedText(JSON.stringify(next)); setTagText(''); toasts.setError(null); toasts.setNotice(null); clearDialogResult();
   }
   async function openSection(next: LibrarySection) {
     if (next === section || !await canReplace()) return;
-    setSection(next); setDraft(null); setSavedText(''); setNotice(''); setError(''); clearDialogResult();
+    setSection(next); setDraft(null); setSavedText(''); toasts.setNotice(null); toasts.setError(null); clearDialogResult();
     if (next === 'prompt' || next === 'rule') { setKind(next); setCategoryFilter('*'); }
   }
   async function refresh(nextKind = kind) { setItems(await native.listLibraryItems(nextKind, null, search)); }
@@ -185,8 +163,7 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
       catch (value) {
         keepSaved(saved);
         const failure = listFailureAfterSave(value);
-        setNotice('已保存在本机资料库。');
-        setError(failure);
+        toasts.showMixed('已保存在本机资料库。', failure);
         setDialogNotice('已保存在本机资料库。');
         setDialogError(failure);
         return;
@@ -234,7 +211,7 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
     const next = current.includes(toolId) ? current.filter((id) => id !== toolId) : [...current, toolId];
     const toolName = managedTools.find((tool) => tool.id === toolId)?.name ?? toolId;
     const where = scope === 'project' ? `${scopeLabel(scope, projectPath, projects)} 的 ` : '';
-    setBusy(true); setError(''); setNotice('');
+    setBusy(true); toasts.setError(null); toasts.setNotice(null);
     try {
       let rows = await native.syncRuleClients(item.id, item.version, { toolIds: next, scope, projectPath, allowReplace: false });
       rows = Array.isArray(rows) ? rows : [];
@@ -274,8 +251,7 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
       setDraft(null); setSavedText('');
       try { await refresh(); }
       catch (value) {
-        showNotice('已删除。');
-        setError(formatFailure(value, '资料列表读取失败', libraryNext));
+        toasts.showMixed('已删除。', formatFailure(value, '资料列表读取失败', libraryNext));
         return;
       }
       showNotice('已删除。');
@@ -284,7 +260,7 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
   }
   async function copy(text: string, surface: 'page' | 'dialog' = 'page', itemId: string | null = null) {
     if (surface === 'dialog') clearDialogResult();
-    else { setNotice(''); setError(''); setCopiedId(null); }
+    else { toasts.setNotice(null); toasts.setError(null); setCopiedId(null); }
     try {
       await navigator.clipboard.writeText(text);
       if (surface === 'dialog') showDialogNotice(copiedText);
@@ -334,17 +310,20 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
         ...categories.map((category) => ({ value: category, label: category })),
       ]} searchLabel="搜索标签" onChange={setCategoryFilter} />
     </div>
-    {error && <div className={styles.error} role="alert">{error}</div>}
-    {notice && <div className={styles.notice} role="status">{notice}</div>}
     <div className={styles.layout}>
       <div className={styles.list} aria-label={`${kind === 'prompt' ? '提示词' : '规则'}列表`}>
-        {shown.length ? shown.map((item) => <article className={styles.card} key={item.id}>
+        {listLoading && !items.length ? <SkeletonRows count={3} /> : shown.length ? shown.map((item) => <article className={styles.card} key={item.id}>
           <small className={styles.cardMeta}>
             {tagsOf(item.category).length ? tagsOf(item.category).map((tag) => <em className={styles.tagChip} key={tag}>{tag}</em>) : <em className={styles.tagChip} data-muted="true">无标签</em>}
             {item.projectId && <span className={styles.cardProject}>{projects.find((project) => project.id === item.projectId)?.name ?? '原项目'}</span>}
             {!!item.updatedAt && <span className={styles.cardTime} title={fullTime(item.updatedAt)}><Icon name="clock" size={11} />{shortTime(item.updatedAt)}</span>}
           </small>
-          <button className={styles.cardTitle} type="button" onClick={() => choose(item)}>{item.title}</button>
+          <button className={styles.cardTitle} type="button" data-card-title onClick={() => choose(item)} onKeyDown={(event) => {
+            if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+            const titles = Array.from(event.currentTarget.closest(`.${styles.list}`)?.querySelectorAll<HTMLElement>('[data-card-title]') ?? []);
+            const next = titles[titles.indexOf(event.currentTarget) + (event.key === 'ArrowDown' ? 1 : -1)];
+            if (next) { event.preventDefault(); next.focus(); }
+          }}>{item.title}</button>
           <p>{item.body ? item.body.length > 160 ? `${item.body.slice(0, 160)}…` : item.body : '正文为空'}</p>
           <div className={styles.cardBar}>
             {kind === 'rule' ? <ScopeMarks label={`${item.title} 的 CLI`} tools={managedTools} places={rulePlacements.filter((entry) => entry.ruleId === item.id)} projects={projects} busy={busy} unavailable={(toolId, scope) => { const support = managedTools.find(tool => tool.id === toolId)?.management?.rules; return support && !support[scope] ? `当前${scope === 'global' ? '全局' : '项目'}范围不支持原生长期规则` : null; }} onToggle={(toolId, scope, projectPath) => void toggleRule(item, toolId, scope, projectPath)} mark={(place) => {
@@ -353,7 +332,7 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
               if (place.state === 'unavailable') return { pressed: true, state: 'unavailable', status: '未生效' };
               return { pressed: true, state: 'drifted', status: '文件已变化' };
             }} /> : <span />}
-            <div className={styles.cardActions}>{copiedId === item.id && notice === copiedText
+            <div className={styles.cardActions}>{copiedId === item.id && toasts.notice?.text === copiedText
               ? <button type="button" aria-label="复制全文" data-copied="true" onClick={() => void copy(item.body, 'page', item.id)}><Icon name="check" size={13} strokeWidth={2.2} />已复制</button>
               : <button type="button" onClick={() => void copy(item.body, 'page', item.id)} disabled={!item.body}>复制全文</button>}{kind === 'prompt' && <button type="button" className={styles.cardLaunch} onClick={() => openLaunch(item)} disabled={!item.body}>启动会话</button>}<button type="button" onClick={() => choose(item)}>修改</button></div>
           </div>
@@ -394,5 +373,6 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
       </div>}
     </GuideDialog>
     </>}
+    <ToastStack status={toasts.notice} alert={toasts.error} onDismiss={toasts.dismiss} />
   </section>;
 }

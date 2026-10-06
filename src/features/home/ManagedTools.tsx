@@ -5,6 +5,7 @@ import { native, nativeAvailable } from '../../lib/native';
 import type { LaunchSettings } from '../../types/launch';
 import { preferredLaunchMode } from '../../types/launch';
 import type { AdapterDescriptor, ApplyComparison, RegisteredToolWorkspace } from '../../types/native';
+import type { WorkspaceOpenIntent } from '../tools/ToolWorkspace';
 import { ConflictCompare } from '../../components/configuration/ConflictCompare';
 import { FilterSelect } from '../../components/FilterSelect';
 import type { FilterSelectOption } from '../../components/FilterSelect';
@@ -81,7 +82,7 @@ function ProfileMenu({ label, profiles, selected, appliedCurrent, disabled, titl
   </div>;
 }
 
-export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]; onOpenTool: (toolId: string) => void }) {
+export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]; onOpenTool: (toolId: string, intent?: WorkspaceOpenIntent) => void }) {
   const [states, setStates] = useState<Record<string, Loaded>>(() => Object.fromEntries(tools.flatMap((tool) => {
     const cached = rememberedHome.get(tool.id);
     const workspace = cached && Date.now() - cached.at < 60_000 ? cached.workspace : null;
@@ -308,9 +309,9 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
             : !workspace ? (nativeAvailable ? <><span className="sr-only">正在读取配置</span><span className={styles.loadingBar} aria-hidden="true" /></> : null)
             : profiles.length > 4 ? <ProfileMenu label={`切换${tool.name}的配置`} profiles={profiles} selected={selected} appliedCurrent={appliedCurrent} disabled={!!loaded?.busy || !writable} title={switchTitle} onSwitch={(profileId) => void switchProfile(tool.id, profileId)} />
             : profiles.length ? <div role="radiogroup" aria-label={`切换${tool.name}的配置`} title={switchTitle}>{profiles.map((item) => <button key={item.id} type="button" role="radio" aria-checked={item.id === selected?.id} className={item.id === selected?.id ? styles.activeConfig : ''} disabled={loaded?.busy || !writable} title={profileLabel(item.name, item.connection)} onClick={() => { if (item.id !== selected?.id || !appliedCurrent) void switchProfile(tool.id, item.id); }}>{item.name}{item.id === selected?.id && item.connection?.model?.trim() ? <em className={styles.modelHint}>{item.connection.model.trim()}</em> : null}</button>)}</div>
-            : <button type="button" className={styles.addConfig} onClick={() => onOpenTool(tool.id)}>新建配置</button>}
+            : <button type="button" className={styles.addConfig} onClick={() => onOpenTool(tool.id, { create: true })}>新建配置</button>}
         </div>
-        <div className={styles.rowActions}>{!installed && (workspace || loaded?.error) && <button type="button" disabled={checking.has(tool.id) || loaded?.busy} onClick={() => recheck.current(tool.id)}>{checking.has(tool.id) ? '正在检测' : '重新检测'}</button>}<button type="button" className={styles.launch} disabled={!installed || loaded?.busy} aria-busy={loaded?.activity === 'launch' || undefined} title={launchTitle} onClick={() => void launchTool(tool.id)} onContextMenu={(event) => { event.preventDefault(); void launchTool(tool.id, true); }}>{loaded?.activity === 'launch' ? '正在启动' : '启动'}</button><button type="button" onClick={() => onOpenTool(tool.id)}>编辑配置 →</button></div>
+        <div className={styles.rowActions}>{!installed && (workspace || loaded?.error) && <button type="button" disabled={checking.has(tool.id) || loaded?.busy} onClick={() => recheck.current(tool.id)}>{checking.has(tool.id) ? '正在检测' : '重新检测'}</button>}<button type="button" className={styles.launch} disabled={!installed || loaded?.busy} aria-busy={loaded?.activity === 'launch' || undefined} title={launchTitle} onClick={() => void launchTool(tool.id)} onContextMenu={(event) => { event.preventDefault(); void launchTool(tool.id, true); }}>{loaded?.activity === 'launch' ? '正在启动' : '启动'}</button><button type="button" onClick={() => onOpenTool(tool.id, { resource: 'config' })}>编辑配置 →</button></div>
         {line && <div className={styles.note} data-tone={line.tone} role={line.tone === 'error' ? 'alert' : 'status'} title={line.title}>{line.text}</div>}
       </div>;
     })}

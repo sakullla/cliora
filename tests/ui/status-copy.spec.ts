@@ -226,7 +226,7 @@ test('native rule save failure is an alert and success stays a status', async ({
   await expect(alert).toContainText('规则保存失败');
   await expect(alert).toContainText('可以再次点击该 CLI 图标');
   await expect(library.getByRole('status')).toHaveCount(0);
-  const color = await dangerColor(alert);
+  const color = await dangerColor(alert.locator('.toast-icon').first());
   expect(color.same).toBe(true);
   expect(color.fixed).toBe(false);
   await page.evaluate(() => { (window as unknown as { __statusCopy: { ruleSaveFails: boolean } }).__statusCopy.ruleSaveFails = false; });
