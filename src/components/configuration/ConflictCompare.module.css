@@ -1,0 +1,12 @@
+/* Unified conflict comparison (ADR-5): one warning banner, a dual-pane
+   read-only diff and a single 使用本次/保留当前 action pair. */
+.compare { display: grid; gap: 10px; margin: 12px 0; padding: 12px; border: 1px solid var(--warning-line); border-radius: var(--radius-lg); background: var(--warning-soft); }
+.banner { margin: 0; padding: 8px 10px; border: 1px solid var(--warning-line); border-radius: var(--radius-sm); background: var(--surface); color: var(--warning); font-size: 12px; line-height: 1.6; }
+.title { font-size: 13px; overflow-wrap: anywhere; }
+.columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.columns > div { display: grid; gap: 6px; align-content: start; min-width: 0; }
+.columns strong { font-size: 12px; color: var(--text-2); }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.actions > button:last-child { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.actions > button:last-child:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+@media (max-width: 760px) { .columns { grid-template-columns: 1fr; } }
