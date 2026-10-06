@@ -693,7 +693,7 @@ for (const choice of ['使用本次', '保留现有'] as const) {
     await dialog.getByRole('button', { name: '保存到当前文件' }).click();
     const compare = dialog.getByRole('button', { name: choice === '使用本次' ? '使用本次修改' : '保留当前文件', exact: true });
     await expect(compare).toBeVisible(); await compare.click();
-    await expect(dialog.getByRole('status')).toContainText('比较基线已更新');
+    await expect(dialog.getByRole('status').filter({ hasText: '比较基线已更新' })).toContainText('比较基线已更新');
     await dialog.getByRole('button', { name: '保存到当前文件' }).click(); await expect(dialog).toHaveCount(0);
     const disk = JSON.parse(await page.evaluate(() => (window as any).configurationProtocol.disk.settings));
     expect(disk.values.model).toBe(choice === '使用本次' ? 'my-edited-model' : 'external-model');
@@ -712,7 +712,7 @@ test('current comparison rejects a second external change and supports a fresh e
   await expect(dialog.getByRole('alert').filter({ hasText: '比较后文件再次变化' })).toBeVisible();
   expect(JSON.parse(await page.evaluate(() => (window as any).configurationProtocol.disk.settings)).values.model).toBe('external-two');
   await dialog.getByText('当前文件恢复', { exact: true }).click(); await dialog.getByRole('button', { name: '重新比较文件' }).click(); await dialog.getByRole('button', { name: '使用本次修改' }).click();
-  await expect(dialog.getByRole('status')).toContainText('比较基线已更新');
+  await expect(dialog.getByRole('status').filter({ hasText: '比较基线已更新' })).toContainText('比较基线已更新');
   await dialog.getByRole('button', { name: '保存到当前文件' }).click();
   expect(JSON.parse(await page.evaluate(() => (window as any).configurationProtocol.disk.settings)).values.model).toBe('my-edited-model');
 });
