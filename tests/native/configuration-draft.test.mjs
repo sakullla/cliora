@@ -4,7 +4,7 @@ import test from 'node:test';
 import ts from 'typescript';
 const source = readFileSync(new URL('../../src/lib/configurationDraft.ts', import.meta.url), 'utf8');
 const javascript = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext } }).outputText;
-const { createConfigurationSession, configurationAction } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString('base64')}`);
+const { createConfigurationSession, configurationAction, configurationApplicationState, configurationConnectionIdentity, configurationRequestMatches } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString('base64')}`);
 const initial = { sessionId: 'one', revision: 0, issues: [], profile: { files: {} } };
 function deferred() { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; }
 
@@ -110,4 +110,47 @@ test('unsubmitted connection input blocks submission and can be recovered indepe
   assert.equal(session.canSubmit, false); assert.equal(session.isFieldValid('connection-form'), false);
   assert.equal(session.isFieldValid('unrelated'), true);
   session.setFieldValidity('connection-form', true); assert.equal(session.canSubmit, true);
+});
+
+
+test('application state requires a trusted full version/revision snapshot and matching common identity', () => {
+  const profile = { id:'p', version:3, revision:'r3', inheritCommon:true };
+  const common = { version:2, revision:'c2' };
+  const binding = { profileId:'p', profileVersion:3, commonVersion:2, commonRevision:'c2', appliedProfileAvailable:true, appliedSummary:{profileVersion:3,profileRevision:'r3'} };
+  assert.equal(configurationApplicationState(profile,binding,common).applied,true);
+  for (const altered of [ { ...binding, appliedProfileAvailable:false }, { ...binding, appliedSummary:null }, { ...binding, appliedSummary:{profileVersion:3,profileRevision:'old'} }, { ...binding, commonRevision:'old' }, { ...binding, commonRevision:null } ]) assert.equal(configurationApplicationState(profile,altered,common).applied,false);
+  assert.equal(configurationApplicationState({...profile,revision:'same-version-new'},binding,common).applied,false);
+  assert.equal(configurationApplicationState(profile,binding,null).applied,false);
+  assert.equal(configurationApplicationState(profile,{...binding,commonVersion:null,commonRevision:null},null).applied,true);
+  assert.equal(configurationApplicationState(profile,binding,{version:2}).applied,false);
+});
+
+test('API buffers are separated by provider, protocol and endpoint without using model names', () => {
+  const a = {providerId:'a',interfaceFormat:'openai_responses',baseUrl:'https://a.example.test',model:'one'};
+  const b = {...a,providerId:'b',baseUrl:'https://b.example.test'};
+  const buffers = new Map([[configurationConnectionIdentity(a),{credential:{source:'api_key',secretRef:'old-a'},input:'unfinished-a'}]]);
+  assert.equal(buffers.get(configurationConnectionIdentity(b)),undefined);
+  assert.equal(buffers.get(configurationConnectionIdentity({...a,model:'two'})).credential.secretRef,'old-a');
+  buffers.set(configurationConnectionIdentity(b),{credential:{source:'api_key',secretRef:null},input:'new-b'});
+  assert.equal(buffers.get(configurationConnectionIdentity(a)).input,'unfinished-a');
+  assert.equal(buffers.get(configurationConnectionIdentity(b)).credential.secretRef,null);
+});
+
+
+test('request cancellation advances generation without changing files, revision or invalid input', () => {
+  const draft = { ...initial, revision: 7, requestGeneration: 3, profile: { files: { settings: '{"model":"one"}' } } };
+  const session = createConfigurationSession(draft);
+  session.setFieldValidity('unsubmitted-number', false);
+  const result = { sessionId: draft.sessionId, revision: draft.revision, requestGeneration: 3 };
+  assert.equal(configurationRequestMatches(session.draft, draft, result), true);
+  assert.equal(session.acceptSaved({ ...draft, requestGeneration: 4 }), true);
+  assert.equal(session.draft.revision, 7);
+  assert.deepEqual(session.draft.profile.files, draft.profile.files);
+  assert.equal(session.canSubmit, false);
+  assert.equal(configurationRequestMatches(session.draft, draft, result), false);
+  assert.equal(configurationRequestMatches(session.draft, session.draft, { ...result, requestGeneration: 4 }), true);
+  assert.equal(configurationRequestMatches(session.draft, session.draft, { ...result, requestGeneration: 4, revision: 6 }), false);
+  assert.equal(configurationRequestMatches(session.draft, session.draft, { ...result, requestGeneration: 4, sessionId: 'foreign' }), false);
+  session.setFieldValidity('unsubmitted-number', true);
+  assert.equal(session.canSubmit, true);
 });

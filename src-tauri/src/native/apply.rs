@@ -171,6 +171,8 @@ pub struct AppliedSummary {
 pub struct AppliedProfileSnapshot {
     pub source_profile: RegisteredProfile,
     pub runtime_profile: RegisteredProfile,
+    #[serde(default)]
+    pub model_summary: Option<super::configuration::ModelSummary>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -289,8 +291,9 @@ pub fn get_registered_binding(
             let snapshot:Option<AppliedProfileSnapshot>=applied_profile.as_deref().map(serde_json::from_str).transpose().map_err(|_|"最后应用快照不兼容，请明确重新应用")?;
             let applied_summary=snapshot.as_ref().map(|snapshot|{
                 let runtime=&snapshot.runtime_profile;
+                let model_summary = snapshot.model_summary.clone().or_else(|| super::configuration::model_summary(&crate::adapters::Registry::builtins(), runtime, None).ok().flatten());
                 let authentication=if matches!(runtime.authentication,profile::ProfileAuthentication::Native)&&runtime.connection.as_ref().is_some_and(|connection|connection.secret_ref.is_some()) {profile::ProfileAuthentication::ApiKey}else{runtime.authentication.clone()};
-                AppliedSummary{authentication,provider_id:runtime.connection.as_ref().map(|connection|connection.provider_id.clone()),base_url:runtime.connection.as_ref().map(|connection|connection.base_url.clone()),model:runtime.connection.as_ref().map(|connection|connection.model.clone()),context_id:context_id.clone(),profile_version:snapshot.source_profile.version,profile_revision:snapshot.source_profile.revision.clone()}
+                AppliedSummary{authentication,provider_id:model_summary.as_ref().and_then(|summary|summary.provider_id.clone()).or_else(||runtime.connection.as_ref().map(|connection|connection.provider_id.clone())),base_url:runtime.connection.as_ref().map(|connection|connection.base_url.clone()),model:model_summary.map(|summary|summary.model),context_id:context_id.clone(),profile_version:snapshot.source_profile.version,profile_revision:snapshot.source_profile.revision.clone()}
             });
             Ok(AppliedBinding { context_id, scope_key: key.into(), tool: tool.into(), profile_id, profile_version: profile_version.max(0) as u64, managed: serde_json::from_str(&managed).map_err(|_| "活动配置记录损坏")?,common_version:common_version.map(|version|version.max(0) as u64),common_revision,
                 applied_profile_available:snapshot.is_some(),applied_summary,applied_profile:snapshot })
@@ -764,7 +767,8 @@ fn apply_registered_validated_inner(
     let mut runtime_profile=profile.clone();
     runtime_profile.files=configuration_runtime_files(registry,profile,common,scope)?;
     runtime_profile.inherit_common=false;runtime_profile.suppressed.clear();
-    let applied_profile=serde_json::to_string(&AppliedProfileSnapshot { source_profile:snapshot_profile.clone(),runtime_profile }).map_err(|error|error.to_string())?;
+    let model_summary = super::configuration::model_summary(registry, &runtime_profile, None)?;
+    let applied_profile=serde_json::to_string(&AppliedProfileSnapshot { source_profile:snapshot_profile.clone(),runtime_profile,model_summary }).map_err(|error|error.to_string())?;
     let common_version=if snapshot_profile.inherit_common {common.map(|common|common.version as i64)}else{None};
     let common_revision=if snapshot_profile.inherit_common {common.map(|common|common.revision.as_str())}else{None};
     if patches.is_empty() {

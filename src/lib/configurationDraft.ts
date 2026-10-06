@@ -1,4 +1,28 @@
 import type { ConfigurationAction, ConfigurationDraft } from '../types/configuration';
+import type { AppliedBinding, Connection, RegisteredCommon, RegisteredProfile } from '../types/native';
+
+/** Last-success identity is independent of the currently saved profile. */
+export function configurationApplicationState(profile: RegisteredProfile, binding: AppliedBinding | null | undefined, common: RegisteredCommon | null | undefined) {
+  const same = binding?.profileId === profile.id;
+  const commonPending = same && profile.inheritCommon && (common
+    ? !common.revision || binding?.commonVersion !== common.version || binding?.commonRevision !== common.revision
+    : binding?.commonVersion != null || binding?.commonRevision != null);
+  const trusted = binding?.appliedProfileAvailable === true && !!binding.appliedSummary
+    && binding.appliedSummary.profileVersion === binding.profileVersion;
+  const applied = same && trusted && binding?.profileVersion === profile.version
+    && !!profile.revision && binding.appliedSummary?.profileRevision === profile.revision && !commonPending;
+  return { same, commonPending, trusted, applied };
+}
+
+/** Opaque API refs can be restored only for the same connection identity. */
+export const configurationConnectionIdentity = (connection: Connection | null) => connection ? JSON.stringify([connection.providerId, connection.interfaceFormat, connection.baseUrl]) : '';
+
+/** Query results belong to both the document and the independent request generation. */
+export function configurationRequestMatches(current: ConfigurationDraft, started: ConfigurationDraft, result: { sessionId: string; revision: number; requestGeneration: number }) {
+  return current.sessionId === started.sessionId && current.revision === started.revision
+    && current.requestGeneration === started.requestGeneration && result.sessionId === started.sessionId
+    && result.revision === started.revision && result.requestGeneration === (started.requestGeneration ?? 0);
+}
 
 /** Text replacements and form actions share one order and consume the latest accepted draft. */
 export function createConfigurationSession(initial: ConfigurationDraft) {

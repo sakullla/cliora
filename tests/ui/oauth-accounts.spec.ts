@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { build } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'node:path';
-import { installConfigurationProtocol } from './configuration-workspace-fixture';
+import { installConfigurationProtocol, setupConfigurationWorkspace } from './configuration-workspace-fixture';
 
 async function setup(page: Page, inherited = false) {
   await page.addInitScript((inherited) => {
@@ -495,4 +495,25 @@ test('account scope link opens the explicitly selected project without applying 
   expect(fixture.calls.filter((call: any) => call.command === 'get_registered_tool_workspace' && call.args.scope === 'project').at(-1).args.projectPath).toBe('/tmp/previous-project');
   expect(fixture.calls.filter((call: any) => call.command.includes('apply'))).toEqual([]);
   expect(fixture.binding).toBeNull();
+});
+
+test('account tool identity suppresses delayed operations across A to B and back to A', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'codex', true, false, ['codex', 'pi']);
+  await page.getByRole('tab', { name: '账号', exact: true }).click();
+  const oldA = page.getByRole('listitem').filter({ has: page.getByText('a账号', { exact: true }) });
+  await oldA.getByText('管理与关联', { exact: true }).click();
+  await page.evaluate(() => { (window as any).workspaceFixture.delayAccountCheck = true; });
+  await oldA.getByRole('button', { name: '检查状态' }).click();
+  await expect.poll(() => page.evaluate(() => !!(window as any).workspaceFixture.releaseAccountCheck)).toBe(true);
+  await page.getByRole('tab', { name: 'pi', exact: true }).click();
+  const b = page.getByRole('listitem').filter({ has: page.getByText('pi-a账号', { exact: true }) });
+  await b.getByText('管理与关联', { exact: true }).click();
+  await expect(b.getByRole('button', { name: '检查状态' })).toBeEnabled();
+  await page.getByRole('tab', { name: 'codex', exact: true }).click();
+  const newA = page.getByRole('listitem').filter({ has: page.getByText('a账号', { exact: true }) });
+  await newA.getByText('管理与关联', { exact: true }).click();
+  await expect(newA.getByRole('button', { name: '检查状态' })).toBeEnabled();
+  await page.evaluate(() => { const state = (window as any).workspaceFixture; state.delayAccountCheck = false; state.releaseAccountCheck(); });
+  await expect(newA.getByRole('button', { name: '检查状态' })).toBeEnabled();
+  await expect(page.getByText('已核验原生状态。', { exact: true })).toHaveCount(0);
 });

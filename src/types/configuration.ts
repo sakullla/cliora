@@ -17,6 +17,9 @@ export type ConfigurationDescriptor = { version: number; fields: ConfigurationFi
 export type ConfigurationIssue = { target: unknown; field: string | null; code: string; message: string };
 export type ConfigurationDraft = {
   sessionId: string; revision: number; scope: Scope; profile: RegisteredProfile;
+  /** Request cancellation leaves the document revision and credentials intact. */
+  requestGeneration?: number;
+  nativeCredentialTarget?: NativeCredentialTarget;
   baselineFiles: Record<string, string>; common?: RegisteredCommon | null; view: unknown; issues: ConfigurationIssue[];
   subject?: ConfigurationSubject;
   contextId?: string | null;
@@ -38,6 +41,7 @@ export type ConfigurationEditorProps = {
 };
 
 export type ConfigurationSubject = 'profile' | 'current' | 'common';
+export type NativeCredentialTarget = { identity: string; label: string; role: string; path: string[]; removePaths: string[][] };
 export type ConfigurationCredential =
   | { source: 'native' }
   | { source: 'account'; accountId: string }
@@ -57,8 +61,8 @@ export type CommonInfluenceTarget = {
 };
 export type CommonInfluence = { toolId: string; commonVersion: number | null; commonRevision: string | null; targets: CommonInfluenceTarget[] };
 export type CommonApplicationResult = { scopeKey: string; profileId: string; status: string; detail: string | null };
-export type ConfigurationDirectoryResult = { sessionId: string; revision: number; directory: import('./native').ModelDirectory };
-export type ConfigurationCheckResult = { sessionId: string; revision: number; check: import('./native').ConnectionCheck };
+export type ConfigurationDirectoryResult = { sessionId: string; revision: number; requestGeneration: number; directory: import('./native').ModelDirectory };
+export type ConfigurationCheckResult = { sessionId: string; revision: number; requestGeneration: number; check: import('./native').ConnectionCheck };
 export type ConfigurationCurrentComparison = {
   comparisonId: string; sessionId: string; revision: number; contextId: string | null;
   files: { role: string; original: string; current: string; edited: string }[];

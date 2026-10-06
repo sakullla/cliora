@@ -330,6 +330,8 @@ fn sixth_adapter_uses_the_same_probe_native_transaction_and_launch_orchestration
         .unwrap();
     assert_eq!(binding.profile_id, named.id);
     assert_eq!(binding.tool, "sixth_fixture");
+    assert_eq!(binding.applied_summary.as_ref().unwrap().model.as_deref(), Some("named-from-connection"));
+    assert_eq!(binding.applied_profile.as_ref().unwrap().model_summary.as_ref().unwrap().model, "named-from-connection");
     let incompatible = Connection {
         provider_id: "fixture".into(),
         interface_format: "anthropic_messages".into(),

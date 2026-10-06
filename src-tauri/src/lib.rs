@@ -289,6 +289,7 @@ pub fn run() {
             commands::remove_configuration_draft_secret,
             commands::reveal_configuration_draft_secret,
             commands::cancel_configuration_draft,
+            commands::cancel_configuration_requests,
             commands::add_configuration_models,
             commands::list_configuration_models,
             commands::check_configuration_connection,
