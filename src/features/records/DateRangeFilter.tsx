@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { GuideDialog } from '../../components/GuideDialog';
 import { navigateChoices } from '../../lib/choiceNavigation';
+import { saveShortcutHint } from '../../lib/shortcut';
 import styles from './DateRangeFilter.module.css';
 
 export type RangeKey = 'all' | 'today' | 'yesterday' | '7' | '30' | 'month' | 'custom';
@@ -76,7 +77,7 @@ export function DateRangeFilter({ value, customFrom, customTo, presets, onChange
         <div className={styles.footer}>
           <button type="button" className="text-button" onClick={() => { setMonth(new Date()); setFocused(today); }}>回到本月</button>
           <button type="button" onClick={close}>取消</button>
-          <button type="button" className={styles.apply} data-dialog-save disabled={!from || !to} onClick={() => { onCustomRange(from, to); close(); }}>应用范围</button>
+          <button type="button" className={styles.apply} data-dialog-save title={saveShortcutHint} disabled={!from || !to} onClick={() => { onCustomRange(from, to); close(); }}>应用范围</button>
         </div>
       </div>
     </GuideDialog>

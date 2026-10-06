@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { native, nativeAvailable } from '../../lib/native';
 import { uiAdapterFor } from '../../adapters';
 import { confirmAction } from '../../lib/confirm';
+import { SkeletonRows } from '../../components/Skeleton';
 import type { AccountCapability, AccountImpact, AccountImpactContextKind, AccountImpactScope, AuthAccount, NativeLoginSnapshot } from '../../types/accounts';
 import styles from './ManagementPanel.module.css';
 import accountStyles from './AccountsPanel.module.css';
@@ -167,7 +168,7 @@ export function AccountsPanel({ toolId, state, onOpenProfile, onOpenUsage }: { t
     </div>}
     {(error || state.error) && <p role="alert">{error || state.error}</p>}{message && <p role="status">{message}</p>}
     <div className={styles.sectionTitle}><h3>独立账号</h3><span>{state.accounts.length} 个</span></div>
-    {state.loading ? <p role="status">正在读取账号…</p> : state.accounts.length === 0 && <p className={styles.empty}>{state.capability?.managedLogin ? '还没有独立账号。需要多账号切换时，点击“添加账号”完成登录并绑定配置。' : '还没有独立账号。可在配置中沿用当前 CLI 凭据；本机受管登录的限制见下方兼容性说明。'}</p>}
+    {state.loading ? <SkeletonRows count={2} /> : state.accounts.length === 0 && <p className={styles.empty}>{state.capability?.managedLogin ? '还没有独立账号。需要多账号切换时，点击“添加账号”完成登录并绑定配置。' : '还没有独立账号。可在配置中沿用当前 CLI 凭据；本机受管登录的限制见下方兼容性说明。'}</p>}
     <ul className={styles.list}>{state.accounts.map(account => <li key={account.id}>
       <div><strong>{account.label}</strong><span data-state={account.state === 'signed_in' && !account.identity ? 'unknown' : account.state}>{account.state === 'signed_in' && !account.identity ? '身份待核验' : accountStates[account.state]}</span></div>
       <p>{account.identity?.email ?? account.identity?.subject ?? '尚无已核验身份'}{account.identity?.plan ? ` · ${account.identity.plan}` : ''}</p>

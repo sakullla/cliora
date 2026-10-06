@@ -1,21 +1,26 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Icon } from './components/Icon';
 import type { IconName } from './components/Icon';
 import brandIcon from '../src-tauri/icons/128x128@2x.png';
 import { ConfirmationHost } from './components/ConfirmationHost';
+import { EmptyState } from './components/EmptyState';
+import { PageSkeleton } from './components/Skeleton';
+import { PageHeader } from './components/PageHeader';
+import { Tabs } from './components/Tabs';
+import { ShortcutHelp } from './components/ShortcutHelp';
 import { ToolIcon, ToolIconsContext } from './components/ToolIcon';
-import { ToolIconSettings } from './features/settings/ToolIconSettings';
+import { GeneralSettings } from './features/settings/GeneralSettings';
 import { ManagedTools } from './features/home/ManagedTools';
 import { ProjectLauncher } from './features/home/ProjectLauncher';
 const LibraryPage = lazy(() => import('./features/library/LibraryPage').then((module) => ({ default: module.LibraryPage })));
 const RecordsPage = lazy(() => import('./features/records/RecordsPage').then((module) => ({ default: module.RecordsPage })));
-import { TerminalSettings } from './features/settings/TerminalSettings';
 const MigrationSettings = lazy(() => import('./features/settings/MigrationSettings').then((module) => ({ default: module.MigrationSettings })));
 const ToolWorkspacePage = lazy(() => import('./features/tools/ToolWorkspace').then((module) => ({ default: module.ToolWorkspacePage })));
+import type { WorkspaceOpenIntent } from './features/tools/ToolWorkspace';
 import { native, nativeAvailable } from './lib/native';
+import { confirmAction } from './lib/confirm';
 import { isEditableTarget, modAria, modLabel, withMod } from './lib/shortcut';
 import { navigateChoices } from './lib/choiceNavigation';
 import { browserBootstrap } from './types/domain';
@@ -50,40 +55,6 @@ function titleFor(page: Page): [string, string] {
   }
 }
 
-function Empty({ title, detail, action, icon = 'leaf' }: { title: string; detail: string; action?: ReactNode; icon?: IconName }) {
-  return <div className="empty-state"><div className="empty-symbol" aria-hidden="true"><Icon name={icon} size={22} /></div><h2>{title}</h2><p>{detail}</p>{action}</div>;
-}
-
-function LoadingSkeleton() {
-  return <div className="skeleton-page" aria-busy="true">
-    <p className="muted-copy">正在读取本机设置</p>
-    <div className="skeleton-row"><div className="skeleton-page"><div className="skeleton-block" /><div className="skeleton-block" /><div className="skeleton-block" /></div><div className="skeleton-block tall" /></div>
-  </div>;
-}
-
-const themeChoices: { id: Theme; label: string; glyph: IconName }[] = [
-  { id: 'system', label: '跟随系统', glyph: 'monitor' },
-  { id: 'light', label: '浅色', glyph: 'sun' },
-  { id: 'dark', label: '深色', glyph: 'moon' },
-];
-
-function ThemeChoice({ value, disabled, onChange }: { value: Theme; disabled: boolean; onChange: (theme: Theme) => void }) {
-  const refs = useRef<(HTMLButtonElement | null)[]>([]);
-  function move(from: number, step: number) {
-    const next = (from + step + themeChoices.length) % themeChoices.length;
-    refs.current[next]?.focus();
-    onChange(themeChoices[next].id);
-  }
-  return <div className="theme-choice" role="radiogroup" aria-label="主题">{themeChoices.map((item, index) => <button key={item.id} ref={(element) => { refs.current[index] = element; }} type="button" role="radio" aria-checked={value === item.id} tabIndex={value === item.id ? 0 : -1} disabled={disabled} onClick={() => onChange(item.id)} onKeyDown={(event) => {
-    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') { event.preventDefault(); move(index, 1); }
-    if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') { event.preventDefault(); move(index, -1); }
-  }}><Icon name={item.glyph} size={15} />{item.label}</button>)}</div>;
-}
-
-function PageTabs<T extends string>({ items, value, onChange }: { items: [T, string][]; value: T; onChange: (value: T) => void }) {
-  return <div className="tabs" role="tablist" aria-label="设置分类" onKeyDown={navigateChoices}>{items.map(([id, text]) => <button key={id} type="button" role="tab" aria-selected={value === id} tabIndex={value === id ? 0 : -1} className={value === id ? 'active' : ''} onClick={() => onChange(id)}>{text}</button>)}</div>;
-}
-
 export default function App() {
   const [bootstrap, setBootstrap] = useState<Bootstrap>(() => browserBootstrap());
   const [catalog, setCatalog] = useState<AdapterCatalog | null>(null);
@@ -103,7 +74,9 @@ export default function App() {
   const [visited, setVisited] = useState<Set<string>>(() => new Set(['home']));
   const [tool, setTool] = useState<string>('');
   const [toolOpenSequence, setToolOpenSequence] = useState(0);
+  const [toolIntent, setToolIntent] = useState<WorkspaceOpenIntent | null>(null);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('general');
+  const [helpOpen, setHelpOpen] = useState(false);
   const [trayRepair, setTrayRepair] = useState<TrayRepairTarget | null>(null);
   const activePage = useRef<Page>(page);
   activePage.current = page;
@@ -114,7 +87,13 @@ export default function App() {
     workspaceDirty.current = dirty;
     if (!dirty && pendingCatalog.current) { setCatalog(pendingCatalog.current); pendingCatalog.current = null; }
   }, []);
-  const canLeave = useCallback((_next: Page) => true, []);
+  const [workspaceDiscard, setWorkspaceDiscard] = useState(0);
+  const canLeave = useCallback(async (_next: Page) => {
+    if (!workspaceDirty.current) return true;
+    const accepted = await confirmAction('工具与连接中有未保存的修改，离开将放弃这些修改。', () => true, { title: '放弃未保存修改？', confirmLabel: '放弃修改' });
+    if (accepted) setWorkspaceDiscard((value) => value + 1);
+    return accepted;
+  }, []);
   const section = page === 'settings' ? `${page}:${settingsTab}` : page;
   useEffect(() => { setVisited((old) => old.has(section) ? old : new Set([...old, section])); }, [section]);
   const hasVisited = (key: string) => section === key || visited.has(key);
@@ -137,10 +116,13 @@ export default function App() {
       if (active) stops.push(unlisten); else unlisten();
     }).catch(() => {});
     void listen<Omit<TrayRepairTarget, 'sequence'>>('cliora:tray-repair', (event) => {
-      if (!active || !['home', 'connections', 'settings'].includes(event.payload.page) || !canLeave(event.payload.page)) return;
-      setTrayRepair((old) => ({ ...event.payload, sequence: (old?.sequence ?? 0) + 1 }));
-      if (event.payload.page === 'settings') setSettingsTab('general');
-      setPage(event.payload.page);
+      if (!active || !['home', 'connections', 'settings'].includes(event.payload.page)) return;
+      void canLeave(event.payload.page).then((allowed) => {
+        if (!active || !allowed) return;
+        setTrayRepair((old) => ({ ...event.payload, sequence: (old?.sequence ?? 0) + 1 }));
+        if (event.payload.page === 'settings') setSettingsTab('general');
+        setPage(event.payload.page);
+      });
     }).then((unlisten) => {
       if (active) stops.push(unlisten); else unlisten();
     }).catch(() => {});
@@ -207,6 +189,12 @@ export default function App() {
     let pendingSearch = 0;
     const onKey = (event: KeyboardEvent) => {
       cancelAnimationFrame(pendingSearch);
+      if (event.key === '?' && !withMod(event) && !event.altKey && !isEditableTarget(event.target)) {
+        if (document.querySelector('dialog[open]')) return;
+        event.preventDefault();
+        setHelpOpen(true);
+        return;
+      }
       const findShortcut = withMod(event) && event.key.toLowerCase() === 'f';
       const slashShortcut = event.key === '/' && !event.ctrlKey && !event.metaKey && !event.altKey && !isEditableTarget(event.target);
       if (findShortcut || slashShortcut) {
@@ -247,8 +235,8 @@ export default function App() {
   const selectedToolName = visible.find((item) => item.id === selectedTool)?.name ?? selectedTool;
   const title = titleFor(page);
 
-  function go(next: Page) {
-    if (!canLeave(next)) return;
+  async function go(next: Page) {
+    if (!await canLeave(next)) return;
     setPage(next);
     if (loaded) setError(null);
     document.querySelector('main')?.scrollTo({ top: 0 });
@@ -278,7 +266,7 @@ export default function App() {
     if (!nativeAvailable || busy) return;
     setBusy(true); setError(null);
     try { setBootstrap(await native.setToolIcon(toolId, dataUrl)); }
-    catch (value) { setError(value as ApiError); }
+    catch (value) { setError(value as ApiError); throw value; }
     finally { setBusy(false); }
   }
 
@@ -298,29 +286,36 @@ export default function App() {
     <main className={`content${page === 'records' ? ' content-locked' : ''}`} id="main"><div className="content-inner">
       {!nativeAvailable && <div className="environment-banner" role="status"><span className="banner-icon"><Icon name="info" size={16} /></span><span>浏览器预览：原生配置、持久保存和系统凭据仅在桌面应用中可用。</span></div>}
       {error && <div className="error-banner" role="alert"><span className="banner-icon"><Icon name="alert" size={16} /></span><div className="error-copy"><strong>{error.message}</strong><span>{error.action}</span>{error.data_directory && <code>{error.data_directory}</code>}</div>{loaded && <button type="button" onClick={() => setError(null)} aria-label="关闭错误提示"><Icon name="close" size={14} /></button>}</div>}
-      <header className="page-head"><div><h1 tabIndex={-1}>{title[0]}</h1>{title[1] && <p>{title[1]}</p>}</div></header>
-      {loading ? <LoadingSkeleton /> : !loaded ? <Empty icon="alert" title="暂时无法读取本机资料" detail="原数据仍保留。请按上方提示处理后重试。" action={<button className="button primary" type="button" onClick={loadBootstrap}>重试读取</button>} /> : <>
+      <PageHeader title={title[0]} subtitle={title[1]} />
+      {loading ? <PageSkeleton /> : !loaded ? <EmptyState icon="alert" title="暂时无法读取本机资料" detail="原数据仍保留。请按上方提示处理后重试。" action={<button className="button primary" type="button" onClick={loadBootstrap}>重试读取</button>} /> : <>
         {page === 'home' && <div className="home-band">
           <section className="home-tools">
             <div className="section-heading"><h2>管理中的工具<span className="count-chip" aria-hidden="true">{visible.length}</span></h2><button className="text-button" type="button" onClick={() => go('settings')}>调整工具 <span aria-hidden="true">→</span></button></div>
-            {visible.length ? nativeAvailable ? <ManagedTools tools={visibleDescriptors} onOpenTool={(id) => { setTool(id); setToolOpenSequence((value) => value + 1); go('connections'); }} /> : <div className="tool-table"><div className="table-head"><span>工具</span><span>当前状态</span><span>操作</span></div>{visible.map((item) => <div className="tool-row" key={item.id}><div className="tool-identity"><span className="tool-icon" aria-hidden="true"><ToolIcon toolId={item.id} /></span><span><strong>{item.name}</strong><small>浏览器预览</small></span></div><div className="tool-state"><strong>尚未检测</strong><small>请在桌面应用中读取本机配置</small></div><button className="button" type="button" onClick={() => { setTool(item.id); go('connections'); }}>查看工具 <span aria-hidden="true">→</span></button></div>)}</div> : <Empty title="尚未管理工具" detail="可在设置中开启需要管理的 CLI。" action={<button className="button primary" type="button" onClick={() => go('settings')}>前往设置</button>} />}
+            {visible.length ? nativeAvailable ? <ManagedTools tools={visibleDescriptors} onOpenTool={(id, intent) => { setTool(id); setToolIntent(intent ?? null); setToolOpenSequence((value) => value + 1); void go('connections'); }} /> : <div className="tool-table"><div className="table-head"><span>工具</span><span>当前状态</span><span>操作</span></div>{visible.map((item) => <div className="tool-row" key={item.id}><div className="tool-identity"><span className="tool-icon" aria-hidden="true"><ToolIcon toolId={item.id} /></span><span><strong>{item.name}</strong><small>浏览器预览</small></span></div><div className="tool-state"><strong>尚未检测</strong><small>请在桌面应用中读取本机配置</small></div><button className="button" type="button" onClick={() => { setTool(item.id); go('connections'); }}>查看工具 <span aria-hidden="true">→</span></button></div>)}</div> : <EmptyState title="尚未管理工具" detail="可在设置中开启需要管理的 CLI。" action={<button className="button primary" type="button" onClick={() => go('settings')}>前往设置</button>} />}
           </section>
           {nativeAvailable ? <ProjectLauncher tools={visibleDescriptors} repair={trayRepair?.page === 'home' ? trayRepair : null} /> : <section className="home-secondary"><div className="section-heading"><h2>最近项目</h2></div><div className="subtle-panel"><strong>桌面应用中管理项目</strong><p>可以关联本机目录，并用选定的 CLI 在外部终端启动。</p></div></section>}
         </div>}
         {(page === 'connections' || hasVisited('connections')) && <div hidden={page !== 'connections'}>
-          {selectedTool ? nativeAvailable ? <Suspense fallback={<LoadingSkeleton />}><ToolWorkspacePage managedTools={visibleDescriptors} initialTool={selectedTool} openSequence={toolOpenSequence} active={page === 'connections'} repair={trayRepair?.page === 'connections' ? trayRepair : null} onDirtyChange={onWorkspaceDirtyChange} /></Suspense> : <><div className="tool-tabs" role="tablist" aria-label="工具" onKeyDown={navigateChoices}>{visible.map((item) => <button key={item.id} type="button" role="tab" aria-selected={selectedTool === item.id} tabIndex={selectedTool === item.id ? 0 : -1} className={selectedTool === item.id ? 'active' : ''} onClick={() => setTool(item.id)}>{item.name}</button>)}</div><div className="connection-layout"><div className="profile-column"><div className="column-title">{selectedToolName} 配置</div><div className="muted-copy">浏览器预览不读取本机配置</div></div><div className="detail-panel"><div className="detail-header"><div><div className="eyebrow">配置</div><h2>{selectedToolName}</h2></div><span className="status-pill">预览</span></div><Empty title="请在桌面应用中编辑原生配置" detail="桌面应用可读取和保存 CLI 的 TOML / JSON 原文。" /></div></div></> : <Empty title="没有管理中的工具" detail="先在设置中勾选需要管理的 CLI。" action={<button className="button primary" type="button" onClick={() => go('settings')}>前往设置</button>} />}
+          {selectedTool ? nativeAvailable ? <Suspense fallback={<PageSkeleton />}><ToolWorkspacePage managedTools={visibleDescriptors} initialTool={selectedTool} openSequence={toolOpenSequence} openIntent={toolIntent} active={page === 'connections'} repair={trayRepair?.page === 'connections' ? trayRepair : null} onDirtyChange={onWorkspaceDirtyChange} discardSignal={workspaceDiscard} /></Suspense> : <><div className="tool-tabs" role="tablist" aria-label="工具" onKeyDown={navigateChoices}>{visible.map((item) => <button key={item.id} type="button" role="tab" aria-selected={selectedTool === item.id} tabIndex={selectedTool === item.id ? 0 : -1} className={selectedTool === item.id ? 'active' : ''} onClick={() => setTool(item.id)}>{item.name}</button>)}</div><div className="connection-layout"><div className="profile-column"><div className="column-title">{selectedToolName} 配置</div><div className="muted-copy">浏览器预览不读取本机配置</div></div><div className="detail-panel"><div className="detail-header"><div><div className="eyebrow">配置</div><h2>{selectedToolName}</h2></div><span className="status-pill">预览</span></div><EmptyState title="请在桌面应用中编辑原生配置" detail="桌面应用可读取和保存 CLI 的 TOML / JSON 原文。" /></div></div></> : <EmptyState title="没有管理中的工具" detail="先在设置中勾选需要管理的 CLI。" action={<button className="button primary" type="button" onClick={() => go('settings')}>前往设置</button>} />}
         </div>}
-        <div hidden={page !== 'library'}>{hasVisited('library') && <Suspense fallback={<LoadingSkeleton />}><LibraryPage managedTools={visibleDescriptors} active={page === 'library'} /></Suspense>}</div>
-        <div className="records-shell" hidden={page !== 'records'}>{hasVisited('records') && <Suspense fallback={<LoadingSkeleton />}><RecordsPage active={page === 'records'} tools={visibleDescriptors} onOpenProjects={() => go('home')} /></Suspense>}</div>
-        {page === 'settings' && <PageTabs items={[["general", "常规"], ["migration", "迁移与同步"]]} value={settingsTab} onChange={setSettingsTab} />}
-        {page === 'settings' && settingsTab === 'general' && <>
-          <section className="settings-group"><div className="setting-intro"><h2>管理的 CLI</h2><p>首页、工具页与使用记录只显示勾选的工具。关闭管理不会删除已有配置。</p></div><div className="managed-checks">{(nativeAvailable ? catalog?.registered ?? [] : bootstrap.tools).map((item) => <label key={item.id}><input type="checkbox" checked={managed.includes(item.id)} disabled={!nativeAvailable || busy} onChange={(event) => updateManaged(item.id, event.target.checked)} /><ToolIcon toolId={item.id} size={24} /><span>{item.name}</span></label>)}</div><ToolIconSettings tools={nativeAvailable ? catalog?.registered ?? [] : bootstrap.tools} icons={bootstrap.preferences.tool_icons ?? {}} busy={busy} onChange={updateIcon} onError={(message) => setError({ code: 'icon_error', message, action: '请重新选择图片。' })} />{catalog?.preservedUnknown.map((item) => <div className="setting-row" key={item.id}><span><strong>{item.id}</strong><small>未安装适配器，保留 {item.profileCount} 份配置，只读</small></span></div>)}</section>
-          <section className="settings-group"><div className="setting-intro"><h2>外观</h2><p>跟随系统，或固定浅色、深色。</p></div><div className="setting-row"><span><strong>主题</strong><small>侧边栏底部也可以随时切换。</small></span><ThemeChoice value={bootstrap.preferences.theme} disabled={busy} onChange={(theme) => { if (theme !== bootstrap.preferences.theme) void updateTheme(theme); }} /></div></section>
-          {nativeAvailable && <TerminalSettings />}
-          <div className="setting-row migration-entry"><span><strong>换设备与备份</strong><small>导出加密配置包，或通过 WebDAV 同步</small></span><button className="button" type="button" onClick={() => setSettingsTab('migration')}>迁移与同步 →</button></div>
-        </>}
-        <div hidden={page !== 'settings' || settingsTab !== 'migration'}>{hasVisited('settings:migration') && <Suspense fallback={<LoadingSkeleton />}><MigrationSettings active={page === 'settings' && settingsTab === 'migration'} onImported={() => void refreshAfterImport()} /></Suspense>}</div>
+        <div hidden={page !== 'library'}>{hasVisited('library') && <Suspense fallback={<PageSkeleton />}><LibraryPage managedTools={visibleDescriptors} active={page === 'library'} /></Suspense>}</div>
+        <div className="records-shell" hidden={page !== 'records'}>{hasVisited('records') && <Suspense fallback={<PageSkeleton />}><RecordsPage active={page === 'records'} tools={visibleDescriptors} onOpenProjects={() => go('home')} /></Suspense>}</div>
+        {page === 'settings' && <Tabs label="设置分类" items={[['general', '常规'], ['migration', '迁移与同步']]} value={settingsTab} onChange={setSettingsTab} />}
+        {page === 'settings' && settingsTab === 'general' && <GeneralSettings
+          tools={nativeAvailable ? catalog?.registered ?? [] : bootstrap.tools}
+          managed={managed}
+          preservedUnknown={catalog?.preservedUnknown ?? []}
+          icons={bootstrap.preferences.tool_icons ?? {}}
+          busy={busy}
+          theme={bootstrap.preferences.theme}
+          onThemeChange={(next) => void updateTheme(next)}
+          onManagedChange={(id, checked) => void updateManaged(id, checked)}
+          onIconChange={updateIcon}
+          onIconError={(message) => setError({ code: 'icon_error', message, action: '请重新选择图片。' })}
+          onOpenMigration={() => setSettingsTab('migration')}
+        />}
+        <div hidden={page !== 'settings' || settingsTab !== 'migration'}>{hasVisited('settings:migration') && <Suspense fallback={<PageSkeleton />}><MigrationSettings active={page === 'settings' && settingsTab === 'migration'} onImported={() => void refreshAfterImport()} /></Suspense>}</div>
       </>}
     </div></main>
-  </div><ConfirmationHost /></ToolIconsContext>;
+  </div><ShortcutHelp open={helpOpen} onClose={() => setHelpOpen(false)} /><ConfirmationHost /></ToolIconsContext>;
 }

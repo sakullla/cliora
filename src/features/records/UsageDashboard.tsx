@@ -9,6 +9,7 @@ import { ToolIcon, toolOptions } from '../../components/ToolIcon';
 import { Icon } from '../../components/Icon';
 import { DAY_MS, bucketLabel, cacheHitRate, clockTime, exactMoney, formatMoney, formatPercent, formatTokens, niceScale, ratio, shortDate, tokenParts } from './usageFormat';
 import { navigateChoices } from '../../lib/choiceNavigation';
+import { saveShortcutHint } from '../../lib/shortcut';
 import { DateRangeFilter, type RangeKey } from './DateRangeFilter';
 import styles from './UsageDashboard.module.css';
 
@@ -436,7 +437,7 @@ export function UsageDashboard({ search, favoriteOnly, active, tools, projects, 
         <label>缓存写入<input aria-label="缓存写入单价" type="number" min="0" value={priceDraft.write} onChange={(event) => setPriceDraft({ ...priceDraft, write: event.target.value })} /></label>
         <label>来源<input aria-label="价格来源" value={priceDraft.source} onChange={(event) => setPriceDraft({ ...priceDraft, source: event.target.value })} placeholder="官方价格页或手动设置" /></label>
         {priceError && <p className={styles.error} role="alert">{priceError}</p>}
-        <div className="dialog-footer"><button type="button" className={styles.primaryButton} data-dialog-save onClick={() => void savePrice()}>保存价格</button></div>
+        <div className="dialog-footer"><button type="button" className={styles.primaryButton} data-dialog-save title={saveShortcutHint} onClick={() => void savePrice()}>保存价格</button></div>
       </div>
     </GuideDialog>
   </div>;

@@ -8,6 +8,7 @@ import type { CredentialDraft, DraftTestReport, QueryConfig, UsageCache, UsageMe
 import { GuideDialog } from '../../components/GuideDialog';
 import { CodeEditor } from '../../components/CodeEditor';
 import { usageAmount, usagePercent, usageReset, usageUnit } from './usageDisplay';
+import { saveShortcutHint } from '../../lib/shortcut';
 import styles from './UsageQuota.module.css';
 
 function message(e: unknown): string { return e && typeof e === 'object' && 'message' in e ? String(e.message) : '额度服务暂不可用'; }
@@ -231,7 +232,7 @@ export function QuotaEditor({ profileId, profileAccountId, toolId, query, preset
       </>}
       {error && <p role="alert" className={styles.error}>{error}</p>}
       {report && <section aria-label="草稿测试结果"><p>阶段：{report.stage} · 耗时 {report.elapsedMs} ms · 仅草稿测试</p>{!!report.requestOrigins?.length && <p>请求目标（不含路径及参数）：{report.requestOrigins.join('、')}</p>}{report.error && <p role="alert" className={styles.error}>{report.error.message}{line && `（第 ${line} 行）`}</p>}{report.result && <UsageMetrics result={report.result} program={draft.config.program} />}<details><summary>脱敏预览</summary><pre>{report.preview || '无返回数据'}</pre></details></section>}
-      <div className={`${styles.actions} ${styles.editorActions}`}><button type="button" disabled={testing} onClick={() => void test()}>{testing ? '测试中' : '测试当前草稿'}</button>{testing && <button type="button" onClick={invalidate}>取消测试</button>}<button type="button" className={styles.primary} data-dialog-save onClick={() => void save()}>保存查询</button>{query && <button type="button" onClick={() => void remove()}>删除查询</button>}</div>
+      <div className={`${styles.actions} ${styles.editorActions}`}><button type="button" disabled={testing} onClick={() => void test()}>{testing ? '测试中' : '测试当前草稿'}</button>{testing && <button type="button" onClick={invalidate}>取消测试</button>}<button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint} onClick={() => void save()}>保存查询</button>{query && <button type="button" onClick={() => void remove()}>删除查询</button>}</div>
     </fieldset>
   </GuideDialog>;
 }

@@ -12,34 +12,15 @@ import { FilterSelect } from '../../components/FilterSelect';
 import { Icon } from '../../components/Icon';
 import { ToolIcon, toolOptions } from '../../components/ToolIcon';
 import { GuideDialog } from '../../components/GuideDialog';
+import { SkeletonRows } from '../../components/Skeleton';
+import { formatFailure } from '../../lib/feedback';
 import styles from './ProjectLauncher.module.css';
-
-function formatFailure(error: unknown, objectText: string, nextText: string): string {
-  const fallback = `${objectText}。${nextText}`;
-  if (typeof error === 'string') {
-    const text = error.trim();
-    return !text || text.replace(/[。！？，,\s]/g, '') === '操作失败请重试' ? fallback : text;
-  }
-  if (!error || typeof error !== 'object') return fallback;
-  const value = error as { message?: unknown; action?: unknown };
-  const raw = 'message' in value && value.message != null ? String(value.message).trim() : '';
-  const action = typeof value.action === 'string' ? value.action.trim() : '';
-  if (!raw || raw.replace(/[。！？，,\s]/g, '') === '操作失败请重试' || /^操作失败[。！]?$/.test(raw)) {
-    const next = action && !/^请重试[。！]?$/.test(action) ? action : nextText;
-    const step = /[。！？]$/.test(next) ? next : `${next}。`;
-    return `${objectText}。${step}`;
-  }
-  const detail = raw.replace(/[。！？\s]+$/, '');
-  const next = action || nextText;
-  const bare = next.replace(/[。！？\s]+$/, '');
-  if (!bare || detail.includes(bare)) return /[。！？]$/.test(raw) ? raw : `${detail}。`;
-  return `${detail}。${/[。！？]$/.test(next) ? next : `${next}。`}`;
-}
 
 const projectNext = '可再次启动，或在设置中检查终端。';
 
 export function ProjectLauncher({ tools, repair }: { tools: AdapterDescriptor[]; repair?: TrayRepairTarget | null }) {
   const [projects, setProjects] = useState<Project[]>([]);
+  const [listLoading, setListLoading] = useState(nativeAvailable);
   const [projectQuery, setProjectQuery] = useState('');
   const [names, setNames] = useState<Record<string, string>>({});
   const [globalTool, setGlobalTool] = useState('');
@@ -101,6 +82,7 @@ export function ProjectLauncher({ tools, repair }: { tools: AdapterDescriptor[];
       setProjects(result);
     }
     catch (value) { setError((current) => current || formatFailure(value, '项目列表读取失败', projectNext)); }
+    finally { setListLoading(false); }
   }
 
   useEffect(() => {
@@ -246,7 +228,7 @@ export function ProjectLauncher({ tools, repair }: { tools: AdapterDescriptor[];
     </div></details>}
     <div className={styles.heading}><strong>最近项目{!!projects.length && <span className="count-chip" aria-hidden="true">{projects.length}</span>}</strong><button type="button" className={styles.secondary} disabled={!!busy} onClick={() => void chooseDirectory()}>＋ 添加项目</button></div>
     {projects.length > 4 && <div className={styles.projectSearch}><Icon name="search" size={14} /><input aria-label="搜索项目" value={projectQuery} placeholder="搜索项目名称或路径" onChange={(event) => setProjectQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape' && projectQuery) { event.preventDefault(); setProjectQuery(''); } }} /></div>}
-    {projects.length ? (visibleProjects.length ? <div className={styles.projectGrid}>
+    {listLoading && !projects.length ? <SkeletonRows count={2} /> : projects.length ? (visibleProjects.length ? <div className={styles.projectGrid}>
     {visibleProjects.map((project) => {
       const toolId = managed.some((tool) => tool.id === project.preferredTool) ? project.preferredTool! : '';
       const descriptor = managed.find((tool) => tool.id === toolId);
