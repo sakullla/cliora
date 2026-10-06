@@ -155,7 +155,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     while (workspace?.profiles.some(profile => profile.name === name)) name = `新配置 ${++suffix}`;
     await openFrame('profile', { id: '', tool: toolId, name, version: 0, inheritCommon: false, files: {}, suppressed: {}, connection: null, nativeCredentials: {} });
   }
-  async function switchScope(next: Scope, path = '') { if (next === scope && (next === 'global' || path === projectPath)) return; if (!await mayLeave()) return; discard(); setScope(next); setProjectPath(path); setResource('config'); }
+  async function switchScope(next: Scope, path = '') { if (next === scope && (next === 'global' || path === projectPath)) return; if (!await mayLeave()) return; discard(); setScope(next); setProjectPath(path); }
   async function switchTool(id: string) { if (id === toolId || !await mayLeave()) return; discard(); setTool(id); }
   async function switchResource(next: ResourceView) { if (next === resource || !await mayLeave()) return; discard(); setResource(next); }
   async function pickProject() { const started = currentContext.current; try { const value = await open({ directory: true, multiple: false, title: '选择配置项目文件夹' }); if (typeof value === 'string' && alive.current && started === currentContext.current) await switchScope('project', value); } catch (failure) { setError(errorText(failure)); } }
