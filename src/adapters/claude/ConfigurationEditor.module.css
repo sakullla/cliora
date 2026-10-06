@@ -17,4 +17,5 @@
 .roleCard > div:has(input[type='checkbox']) { grid-column: auto !important; }
 @media (max-width: 720px) { .roleGrid { grid-template-columns: 1fr; } }
 
+.editor > div:not([hidden]) { display: grid; gap: .86em; min-width: 0; }
 .editor [hidden] { display: none !important; }

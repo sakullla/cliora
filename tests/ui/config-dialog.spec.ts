@@ -759,10 +759,10 @@ test('diff editor loading states are explicit and a failed chunk can be retried'
   await page.getByRole('button', { name: '正在使用的文件', exact: true }).click();
   const dialog = page.getByRole('dialog');
   await dialog.getByRole('button', { name: '原生文本', exact: true }).click();
-  await expect(dialog.getByText('正在加载差异…')).toBeVisible();
+  await expect(dialog.getByText('正在准备编辑器…')).toBeVisible();
   mode = 'fail';
   release!();
-  const failed = dialog.getByRole('alert').filter({ hasText: '差异编辑器加载失败' });
+  const failed = dialog.getByRole('alert').filter({ hasText: '编辑器加载失败' });
   await expect(failed).toBeVisible();
   await expect(dialog.getByText('加载编辑器…')).toHaveCount(0);
   mode = 'allow';
@@ -872,6 +872,7 @@ test('cancel request button stops a delayed directory while keeping draft edits 
   await dialog.getByRole('button', { name: '获取模型目录' }).click();
   await expect.poll(() => page.evaluate(() => !!(window as any).configurationProtocol.releaseDirectory)).toBe(true);
   const before = await page.evaluate(() => Object.values((window as any).configurationProtocol.sessions)[0]) as any;
+  await dialog.getByLabel('配置名称').click();
   await dialog.getByText('连接检查与诊断', { exact: true }).click();
   await expect(dialog.getByRole('button', { name: '取消请求', exact: true })).toBeEnabled();
   await dialog.getByRole('button', { name: '取消请求', exact: true }).click();
@@ -895,6 +896,7 @@ test('cancel request error offers retry and suppresses the old response', async 
   await page.evaluate(() => { const state = (window as any).configurationProtocol; state.delayDirectory = true; state.cancelRequestFailure = '暂时无法取消，请重试'; });
   await page.getByRole('button', { name: '修改', exact: true }).last().click(); const dialog = page.getByRole('dialog');
   await dialog.getByLabel('当前模型', { exact: true }).click(); await dialog.getByRole('button', { name: '获取模型目录' }).click();
+  await dialog.getByLabel('配置名称').click();
   await dialog.getByText('连接检查与诊断', { exact: true }).click();
   await expect(dialog.getByRole('button', { name: '取消请求', exact: true })).toBeEnabled(); await dialog.getByRole('button', { name: '取消请求', exact: true }).click();
   await expect(dialog.getByRole('alert').filter({ hasText: '暂时无法取消' })).toBeVisible();

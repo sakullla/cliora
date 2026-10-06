@@ -5,4 +5,5 @@
 .editor input, .editor select { min-width: 0; width: 100%; box-sizing: border-box; }
 .note { font-size: .86em; color: var(--text-2); line-height: 1.5; margin: 0 0 10px; }
 
+.editor > div:not([hidden]) { display: grid; gap: .86em; min-width: 0; }
 .editor [hidden] { display: none !important; }

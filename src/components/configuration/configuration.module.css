@@ -39,8 +39,10 @@
 .disclosureCard[open] > summary { border-bottom: 1px solid var(--line); margin-bottom: 10px; }
 .entityPrimary { display: flex; gap: 8px; flex-wrap: wrap; grid-column: 1 / -1; }
 .entityMore { min-width: 0; grid-column: 1 / -1; }
-.entityPanel { display: grid; gap: 8px; margin-top: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); justify-items: start; }
-.entityPanel label { justify-self: stretch; }
+.entityPanel { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); }
+.entityPanel > label, .entityPanel > p { flex-basis: 100%; }
+.entityPanel > button { flex: none; }
+.controls .entityPanel > .danger { margin-left: auto; }
 .connectionTitle { font-size: .86em; color: var(--text-2); }
 .fields { display: grid; gap: .57em; min-width: 0; }
 .buttons { display: flex; gap: 8px; flex-wrap: wrap; }

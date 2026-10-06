@@ -373,6 +373,32 @@ html[data-native="macos"] .titlebar-drag { display: block; position: fixed; z-in
 .error-banner button { min-height: 26px; width: 26px; padding: 0; border: 0; background: transparent; color: inherit; box-shadow: none; }
 .error-banner button:hover:not(:disabled) { background: color-mix(in srgb, var(--danger) 12%, transparent); }
 
+.status-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  min-width: 0;
+  padding: 9px 8px 9px 12px;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12.5px;
+  line-height: 1.55;
+  animation: reveal var(--medium) var(--ease);
+}
+.status-banner[data-tone="error"] { border-color: var(--danger-line); background: var(--danger-soft); color: var(--danger); }
+.status-banner[data-tone="warning"] { border-color: var(--warning-line); background: var(--warning-soft); color: var(--warning); }
+.status-banner > .banner-icon { margin-top: 2px; }
+.status-banner > p { flex: 1; min-width: 0; margin: 0; padding: 0; border: 0; background: none; color: inherit; overflow-wrap: anywhere; }
+.status-banner > button:not(.status-banner-close) { flex: none; min-height: 26px; margin: -2px 0; padding: 0 10px; font-size: 12px; }
+.status-banner-close { flex: none; width: 24px; min-height: 24px !important; margin: -2px 0; padding: 0 !important; border: 0 !important; background: transparent !important; box-shadow: none !important; color: inherit !important; opacity: .7; }
+.status-banner-close:hover:not(:disabled) { opacity: 1; background: color-mix(in srgb, currentColor 12%, transparent) !important; }
+
+.code-editor-failed { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 12px 14px; border: 1px dashed var(--danger-line); border-radius: var(--radius); background: var(--danger-soft); color: var(--danger); font-size: 12.5px; }
+.code-editor-failed > span { flex: 1 1 220px; }
+.code-editor-failed > small { flex-basis: 100%; color: var(--text-2); font-family: var(--font-mono); font-size: 11px; overflow-wrap: anywhere; }
+
 /* ---------- Shared patterns ------------------------------------------- */
 
 .eyebrow { color: var(--text-3); font-size: 11px; letter-spacing: 1px; margin-bottom: 5px; text-transform: uppercase; }
