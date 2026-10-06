@@ -72,7 +72,15 @@ export async function installConfigurationProtocol(page: Page) {
         if (command === 'edit_configuration_draft') {
           const action = args.action; value.profile.editing.intents.push(clone(action));
           if (value.subject === 'common') value.view.commonFields[0].value = action.operation === 'reset' ? null : action.value;
-          else if (value.view.values) { if (action.operation === 'reset') delete value.view.values[action.field]; else value.view.values[action.field] = action.value; }
+          else if (value.view.values) {
+            if (action.operation === 'reset') delete value.view.values[action.field]; else value.view.values[action.field] = action.value;
+            if (value.profile.tool === 'codex' && value.draftConnection) {
+              value.draftConnection.providerId = value.view.values.model_provider ?? '';
+              value.draftConnection.baseUrl = value.view.values.base_url ?? '';
+              value.draftConnection.model = value.view.values.model ?? '';
+              value.profile.connection = value.credential.source === 'api_key' ? clone(value.draftConnection) : null;
+            }
+          }
           else if (action.operation === 'select_provider') value.view.providerId = action.target.provider;
           else if (action.operation === 'configure_provider') { value.view.providerId = action.target.provider; value.view.connection = { baseUrl: action.value.baseUrl, protocol: 'openai' }; value.draftConnection.baseUrl = action.value.baseUrl; }
           else if (action.operation === 'create') value.view.models.push({ id: action.target.id, kind: action.target.kind, fields: { ...action.value, provider: action.target.provider } });

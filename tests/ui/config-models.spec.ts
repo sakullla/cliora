@@ -275,6 +275,7 @@ test('Kimi effort options use model declarations and preserve an unknown native 
 
 test('Kimi creates models with native visual capability controls and text defaults', async ({ page }) => {
   await page.goto('/__multi_model_editor?tool=kimi');
+  await page.getByText('模型说明', { exact: true }).click();
   await expect(page.getByText(/文本是 Kimi 的原生默认能力，无需声明/)).toBeVisible();
   await page.getByRole('button', { name: '新增模型', exact: true }).click();
   const form = page.getByRole('group', { name: '新增模型表单' });
@@ -367,6 +368,7 @@ for (const tool of ['pi', 'opencode', 'kimi']) {
       for (const model of view.models) if (model.fields.provider) model.fields.provider = 'alpha';
       return view;
     }));
+    await page.getByText('供应商连接', { exact: false }).first().click();
     await expect(page.getByLabel('查看供应商')).toHaveCount(1);
     await expect(page.getByLabel('查看供应商')).toHaveValue('alpha');
     await page.getByLabel('查看供应商').selectOption('beta');
@@ -384,7 +386,8 @@ for (const tool of ['pi', 'opencode', 'kimi']) {
     await expect.poll(() => page.evaluate(() => (window as unknown as { __actions: unknown[] }).__actions.at(-1))).toMatchObject({
       target: { kind: 'model', provider: 'beta', id: 'beta/new~model' }, operation: 'set', field: tool === 'pi' ? 'contextWindow' : tool === 'kimi' ? 'max_context_size' : 'limit.context', value: 222222,
     });
-    await page.getByText('供应商连接', { exact: false }).first().click();
+    const providerDetails = page.locator('details').filter({ has: page.getByLabel('供应商标识', { exact: true }) });
+    if (!await providerDetails.evaluate(element => (element as HTMLDetailsElement).open)) await page.getByText('供应商连接', { exact: false }).first().click();
     await page.getByLabel('供应商标识').fill('beta');
     await page.getByLabel('连接地址').fill('https://beta.example/v1');
     await page.getByLabel('接口协议').selectOption('openai_responses');

@@ -4,7 +4,7 @@ import test from 'node:test';
 import ts from 'typescript';
 const source = readFileSync(new URL('../../src/lib/configurationDraft.ts', import.meta.url), 'utf8');
 const javascript = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext } }).outputText;
-const { createConfigurationSession, configurationAction, configurationApplicationState, configurationConnectionIdentity, configurationRequestMatches } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString('base64')}`);
+const { createConfigurationSession, configurationAction, configurationApplicationState, configurationConnectionIdentity, rememberConfigurationApiBuffer, configurationRequestMatches } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString('base64')}`);
 const initial = { sessionId: 'one', revision: 0, issues: [], profile: { files: {} } };
 function deferred() { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; }
 
@@ -153,4 +153,25 @@ test('request cancellation advances generation without changing files, revision 
   assert.equal(configurationRequestMatches(session.draft, session.draft, { ...result, requestGeneration: 4, sessionId: 'foreign' }), false);
   session.setFieldValidity('unsubmitted-number', true);
   assert.equal(session.canSubmit, true);
+});
+
+
+test('API edits cannot rebucket confirmed A references or A input under browsed B', () => {
+  const a = 'confirmed-A'; const b = 'browsed-B';
+  for (const secretRef of ['stored-a', 'lease-a']) {
+    const credential = { source: 'api_key', secretRef };
+    const buffers = new Map();
+    rememberConfigurationApiBuffer(buffers, a, credential, a, 'unfinished-a', true);
+    // The credential and input keep their acquired identity when the form browses B.
+    rememberConfigurationApiBuffer(buffers, a, credential, a, 'unfinished-a', true);
+    assert.equal(buffers.get(b), undefined);
+    assert.equal(buffers.get(a).credential.secretRef, secretRef);
+    // Explicit B input gets its own null-ref entry; the prior A input remains intact.
+    rememberConfigurationApiBuffer(buffers, a, credential, b, 'new-b', true);
+    assert.deepEqual(buffers.get(b), { credential: { source: 'api_key', secretRef: null }, input: 'new-b', replacing: true });
+    assert.deepEqual(buffers.get(a), { credential, input: 'unfinished-a', replacing: true });
+    rememberConfigurationApiBuffer(buffers, b, { source: 'api_key', secretRef: 'lease-b' }, b, '', false);
+    assert.equal(buffers.get(a).credential.secretRef, secretRef);
+    assert.equal(buffers.get(b).credential.secretRef, 'lease-b');
+  }
 });
