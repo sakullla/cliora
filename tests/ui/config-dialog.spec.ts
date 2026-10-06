@@ -503,6 +503,18 @@ for (const [width, height, name] of [[720, 560, 'minimum'], [1160, 780, 'default
   });
 }
 
+test('saved profile editor shows save-and-use directly without opening more actions', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'codex');
+  await page.getByRole('button', { name: '修改', exact: true }).last().click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('button', { name: '保存配置', exact: true })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: '保存并使用', exact: true })).toBeVisible();
+  await dialog.getByRole('button', { name: '保存并使用', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  const calls = await page.evaluate(() => (window as any).configurationProtocol.calls);
+  expect(calls.some((call: any) => call.command === 'apply_registered_native_profile')).toBe(true);
+});
+
 test('active configuration save only updates DB; explicit use changes the binding', async ({ page }) => {
   await setupConfigurationWorkspace(page, 'codex');
   await page.getByRole('button', { name: '修改', exact: true }).last().click();

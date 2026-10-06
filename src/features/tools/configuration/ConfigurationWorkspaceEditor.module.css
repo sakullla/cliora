@@ -12,8 +12,10 @@
 .secret > label { flex: 1; }
 .directory ul { display: grid; gap: 8px; padding: 0; list-style: none; max-height: 200px; overflow: auto; }
 .errors { border: 1px solid var(--danger-line); padding: 10px; border-radius: var(--radius); color: var(--danger) !important; background: var(--danger-soft); }
-.footer { flex: none; display: flex; align-items: center; gap: 10px; border-top: 1px solid var(--line); padding: 12px 0 4px; position: relative; background: var(--surface); }
-.footer > span { flex: 1; font-size: 11px; color: var(--text-2); }
+.footer { flex: none; display: flex; align-items: center; gap: 10px; border-top: 1px solid var(--line); padding: 12px 0 4px; position: relative; background: var(--surface); flex-wrap: nowrap; }
+.footer > span { flex: 1 1 auto; min-width: 0; font-size: 12px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.footer .actions { flex: none; display: flex; align-items: center; gap: 10px; min-width: 0; }
+.footer .actions button { white-space: nowrap; }
 .footer details[open] { position: absolute; bottom: 54px; right: 0; z-index: 3; padding: 12px; border: 1px solid var(--line); background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow-sm); }
 .footer details[open] button { display: block; margin-top: 8px; }
 .primary { background: var(--accent) !important; color: var(--on-accent) !important; }
