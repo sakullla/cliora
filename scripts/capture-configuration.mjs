@@ -96,6 +96,10 @@ export async function captureConfiguration({ browser, themes, widths, selected, 
       await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
       const action = scene.action;
       const dialog = page.locator('dialog.guide-dialog');
+      if (action === 'overview') {
+        // overview 分支没有其他场景的按钮 auto-wait；等配置列表渲染完成（workspace 加载完成后才出现），避免截到全局加载骨架。
+        await page.getByRole('region', { name: '工具与连接' }).getByLabel('配置列表').waitFor();
+      }
       if (['accounts', 'impact', 'account-create'].includes(action)) {
         await page.getByRole('tab', { name: '账号', exact: true }).click();
         await expect(page.getByRole('heading', { name: '账号与登录' })).toBeVisible();
@@ -115,7 +119,7 @@ export async function captureConfiguration({ browser, themes, widths, selected, 
         if (['capabilities', 'model-actions'].includes(action)) {
           await dialog.getByRole('button', { name: /^one(?: ·|$)/ }).click();
           const model = dialog.getByLabel('模型 one', { exact: true });
-          if (action === 'model-actions') { await model.getByText('复制或修改模型标识', { exact: true }).click(); await model.getByLabel('新模型 ID').fill('one-copy'); await model.getByLabel('新模型 ID').scrollIntoViewIfNeeded(); }
+          if (action === 'model-actions') { await model.getByText('更多', { exact: true }).click(); await model.getByLabel('新模型 ID').fill('one-copy'); await model.getByLabel('新模型 ID').scrollIntoViewIfNeeded(); }
           else await model.getByText(scene.tool === 'pi' ? '输入能力' : scene.tool === 'open_code' ? '输入模态' : '模型能力', { exact: true }).scrollIntoViewIfNeeded();
         }
         if (action === 'new-model') { await dialog.getByRole('button', { name: '新增模型', exact: true }).click(); await dialog.getByLabel('模型 alias', { exact: true }).fill('work-model'); await dialog.getByLabel('模型 alias', { exact: true }).scrollIntoViewIfNeeded(); }
@@ -150,7 +154,8 @@ export async function captureConfiguration({ browser, themes, widths, selected, 
           await dialog.getByLabel('当前模型', { exact: true }).fill('my-edited-model');
           await page.evaluate(() => { const state = window.configurationProtocol; const file = JSON.parse(state.disk.settings); file.values.model = 'external-model'; state.disk.settings = JSON.stringify(file); });
           await dialog.getByRole('button', { name: '保存到当前文件', exact: true }).click();
-          await expect(dialog.getByRole('button', { name: '使用本次修改', exact: true })).toBeVisible();
+          await expect(dialog.locator('[data-banner="conflict"]')).toBeVisible();
+          await expect(dialog.getByRole('button', { name: '使用本次内容', exact: true })).toBeVisible();
         }
         if (action === 'common-results') { await dialog.getByLabel('默认推理强度').selectOption('medium'); await dialog.getByText('更多保存操作', { exact: true }).click(); await dialog.getByRole('button', { name: '保存并应用到继承范围', exact: true }).click(); await expect(dialog.getByText('通用配置已保存；部分范围应用失败，可逐项重试。')).toBeVisible(); }
       }
