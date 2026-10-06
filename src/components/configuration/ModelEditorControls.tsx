@@ -160,14 +160,20 @@ export function EntityActions({ id, target, descriptor, disabled, defaultModel, 
   const can = (operation: string) => descriptor.operations.includes(operation);
   const identityValid = validIdentity(nextId) && nextId !== id;
   return <div className={styles.controls}>
-    {can('default') && <button type="button" disabled={disabled || defaultModel} onClick={() => { void onRun(target, 'default'); }}>{defaultModel ? '当前默认模型' : '设为默认模型'}</button>}
-    {can('small_default') && <button type="button" disabled={disabled || smallModel} onClick={() => { void onRun(target, 'small_default'); }}>{smallModel ? '当前轻量模型' : '设为轻量模型'}</button>}
-    {(can('copy') || can('rename')) && <details><summary>复制或修改模型标识</summary><label>{renameLabel}<input value={nextId} maxLength={200} disabled={disabled} onChange={event => setNextId(event.target.value)} /></label>
-      {can('copy') && <button type="button" disabled={disabled || !identityValid} onClick={() => { void onRun(target, 'copy', nextId).then(success => { if (success) setNextId(''); }); }}>复制模型</button>}
-      {can('rename') && <button type="button" disabled={disabled || !identityValid} onClick={() => { void onRun(target, 'rename', nextId).then(success => { if (success) onRemove(); }); }}>修改模型标识</button>}
-    </details>}
-    {can('delete') && <button type="button" disabled={disabled || defaultModel || smallModel} onClick={() => { void onRun(target, 'delete').then(success => { if (success) onRemove(); }); }}>删除模型</button>}
-    {(defaultModel || smallModel) && <p>先选择替代默认或轻量模型，再删除。</p>}
+    <div className={styles.entityPrimary}>
+      {can('default') && <button type="button" disabled={disabled || defaultModel} onClick={() => { void onRun(target, 'default'); }}>{defaultModel ? '当前默认模型' : '设为默认模型'}</button>}
+      {can('small_default') && <button type="button" disabled={disabled || smallModel} onClick={() => { void onRun(target, 'small_default'); }}>{smallModel ? '当前轻量模型' : '设为轻量模型'}</button>}
+    </div>
+    <details className={styles.entityMore}>
+      <summary>更多</summary>
+      <div className={styles.entityPanel}>
+        {(can('copy') || can('rename')) && <label>{renameLabel}<input value={nextId} maxLength={200} disabled={disabled} onChange={event => setNextId(event.target.value)} /></label>}
+        {can('copy') && <button type="button" disabled={disabled || !identityValid} onClick={() => { void onRun(target, 'copy', nextId).then(success => { if (success) setNextId(''); }); }}>复制模型</button>}
+        {can('rename') && <button type="button" disabled={disabled || !identityValid} onClick={() => { void onRun(target, 'rename', nextId).then(success => { if (success) onRemove(); }); }}>修改模型标识</button>}
+        {can('delete') && <button type="button" disabled={disabled || defaultModel || smallModel} onClick={() => { void onRun(target, 'delete').then(success => { if (success) onRemove(); }); }}>删除模型</button>}
+        {(defaultModel || smallModel) && <p>先选择替代默认或轻量模型，再删除。</p>}
+      </div>
+    </details>
   </div>;
 }
 

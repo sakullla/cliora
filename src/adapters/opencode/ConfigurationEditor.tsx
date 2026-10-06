@@ -37,8 +37,8 @@ function Editor(props: ConfigurationContentProps) {
     <p className={styles.note}>默认与轻量模型分别设置。恢复默认会取消本层覆盖，采用继承配置或 OpenCode 原生默认。</p>
     </div>
     {models.map(model => <article className={styles.model} key={`${provider}:${model.id}`} hidden={Boolean(props.section && expanded && expanded !== model.id)} aria-label={`模型 ${model.id}`}>
-      <button type="button" className={styles.modelHeading} disabled={structuralBlocked} aria-expanded={expanded === model.id} onClick={() => setExpanded(expanded === model.id ? null : model.id)}>
-        {props.section && expanded === model.id && '返回模型列表 · '}{typeof model.fields.name === 'string' ? model.fields.name : model.id} · {model.id}{view.defaultModel === model.id ? ' · 默认' : ''}{view.smallModel === model.id ? ' · 轻量' : ''}
+      <button type="button" className={styles.modelHeading} disabled={structuralBlocked} aria-expanded={expanded === model.id} aria-label={`${props.section && expanded === model.id ? '返回模型列表 · ' : ''}${typeof model.fields.name === 'string' ? model.fields.name : model.id} · ${model.id}${view.defaultModel === model.id ? ' · 默认' : ''}${view.smallModel === model.id ? ' · 轻量' : ''}`} onClick={() => setExpanded(expanded === model.id ? null : model.id)}>
+        {props.section && expanded === model.id && '返回模型列表 · '}{typeof model.fields.name === 'string' ? model.fields.name : model.id} · {model.id}{view.defaultModel === model.id && <span className={styles.modelBadge} data-default-badge>默认</span>}{view.smallModel === model.id ? ' · 轻量' : ''}
       </button>
       {<div className={styles.fields} hidden={expanded !== model.id}>
         {descriptor.fields.filter(item => !item.advanced).map(item => field(item.id, model))}
@@ -49,7 +49,8 @@ function Editor(props: ConfigurationContentProps) {
     </article>)}
     <div hidden={Boolean(props.section && expanded)}>{can('create') && <NewModelForm key={`new-model:${draft.sessionId}:${provider}`} props={action.props} provider={provider} disabled={structuralBlocked || !provider} label="模型 ID" fields={descriptor.fields} listChoices={{ 'modalities.input': [['text', '文本'], ['image', '图片'], ['audio', '音频'], ['video', '视频'], ['pdf', 'PDF']], 'modalities.output': [['text', '文本'], ['image', '图片'], ['audio', '音频'], ['video', '视频'], ['pdf', 'PDF']] }}
       onCreate={async (id, values) => { const success = await action.run(target(id), 'create', values); if (success) setExpanded(id); return success; }} />}
-    </div></div>
+    </div>
+    <div className={styles.modelSpacer} data-list-spacer /></div>
     <div hidden={props.section === 'models'}><details open={props.section === 'settings'}><summary>默认模型设置</summary>
       <button type="button" disabled={blocked || !can('reset')} onClick={() => { void action.run({ kind: 'settings' }, 'reset', null, 'model'); }}>恢复默认模型</button>
       <button type="button" disabled={blocked || !can('reset')} onClick={() => { void action.run({ kind: 'settings' }, 'reset', null, 'small_model'); }}>恢复轻量模型</button>

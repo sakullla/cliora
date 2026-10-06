@@ -91,18 +91,20 @@ for (const tool of ['pi', 'opencode', 'kimi']) {
       await expect(page.getByRole('article', { name: `模型 ${id}`, exact: true })).toBeVisible();
     }
     const third = page.getByRole('article', { name: '模型 three', exact: true });
-    await third.getByText('复制或修改模型标识', { exact: true }).click();
+    await third.getByText('更多', { exact: true }).click();
     await third.getByLabel(tool === 'kimi' ? '新 alias' : '新模型 ID').fill('copied');
     await third.getByRole('button', { name: '复制模型', exact: true }).click();
     const copied = page.getByRole('article', { name: '模型 copied', exact: true });
     await copied.getByRole('button', { name: /copied/ }).click();
-    await copied.getByText('复制或修改模型标识', { exact: true }).click();
+    await copied.getByText('更多', { exact: true }).click();
     await copied.getByLabel(tool === 'kimi' ? '新 alias' : '新模型 ID').fill('renamed');
     await copied.getByRole('button', { name: '修改模型标识', exact: true }).click();
     await expect(copied).toHaveCount(0);
     const renamed = page.getByRole('article', { name: '模型 renamed', exact: true });
     await renamed.getByRole('button', { name: /renamed/ }).click();
     await renamed.getByRole('button', { name: '设为默认模型', exact: true }).click();
+    await expect(renamed.locator('[data-default-badge]')).toHaveText('默认');
+    await renamed.getByText('更多', { exact: true }).click();
     await expect(renamed.getByRole('button', { name: '删除模型', exact: true })).toBeDisabled();
     if (tool === 'opencode') {
       await renamed.getByRole('button', { name: '设为轻量模型' }).click();
@@ -110,8 +112,10 @@ for (const tool of ['pi', 'opencode', 'kimi']) {
     }
     const one = page.getByRole('article', { name: '模型 one', exact: true });
     await one.getByRole('button', { name: /one/ }).click();
+    await one.getByText('更多', { exact: true }).click();
     await one.getByRole('button', { name: '删除模型', exact: true }).click();
     await expect(one).toHaveCount(0);
+    await expect(page.locator('[data-list-spacer]')).toHaveCount(1);
     await expect(page.getByRole('button', { name: '保存配置' })).toBeEnabled();
     const actions = await page.evaluate(() => (window as unknown as { __actions: { target: unknown; operation: string; value: unknown }[] }).__actions);
     expect(actions.filter(action => action.operation === 'create')).toHaveLength(3);
@@ -213,6 +217,7 @@ test('deleting a model retires its invalid input; replacing a session retires ol
   const first = page.getByRole('article', { name: '模型 first', exact: true });
   await first.getByRole('button', { name: /^first(?: ·|$)/ }).click();
   await first.getByLabel('上下文上限').fill('bad');
+  await first.getByText('更多', { exact: true }).click();
   await first.getByRole('button', { name: '删除模型' }).click();
   await expect(first).toHaveCount(0);
   await expect(page.getByRole('button', { name: '保存配置' })).toBeEnabled();
@@ -416,11 +421,12 @@ for (const reuse of ['copy', 'rename']) {
     }));
     const victim = page.getByRole('article', { name: '模型 victim', exact: true });
     await victim.getByRole('button', { name: /victim · victim/ }).click();
+    await victim.getByText('更多', { exact: true }).click();
     await victim.getByRole('button', { name: '删除模型', exact: true }).click();
     await expect(victim).toHaveCount(0);
     const source = page.getByRole('article', { name: '模型 source', exact: true });
     await source.getByRole('button', { name: /source · source/ }).click();
-    await source.getByText('复制或修改模型标识', { exact: true }).click();
+    await source.getByText('更多', { exact: true }).click();
     await source.getByLabel('新模型 ID').fill('victim');
     await source.getByRole('button', { name: reuse === 'copy' ? '复制模型' : '修改模型标识', exact: true }).click();
     const reused = page.getByRole('article', { name: '模型 victim', exact: true });
@@ -429,6 +435,7 @@ for (const reuse of ['copy', 'rename']) {
     await reused.getByRole('button', { name: '设为轻量模型', exact: true }).click();
     await expect(reused.getByRole('button', { name: '当前默认模型' })).toBeDisabled();
     await expect(reused.getByRole('button', { name: '当前轻量模型' })).toBeDisabled();
+    await reused.getByText('更多', { exact: true }).click();
     await expect(reused.getByRole('button', { name: '删除模型', exact: true })).toBeDisabled();
     await expect(page.getByRole('button', { name: '保存配置' })).toBeEnabled();
     const actions = await page.evaluate(() => (window as unknown as { __actions: unknown[] }).__actions);

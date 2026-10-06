@@ -1,6 +1,10 @@
 /* Shared configuration controls. Migrated from the ConfigurationWorkspaceEditor
    shell penetrating overrides so these components render standalone. */
 
+/* Editor footer height; multi-model lists pad their scroll end with a spacer
+   of the same height so the footer never covers the last model row. */
+:root { --config-footer-h: 54px; }
+
 .controls label { display: grid; gap: 7px; min-width: 0; font-size: 12px; }
 .controls label:has(> input[type='checkbox']), .controls label:has(> input[type='radio']) { display: flex; gap: 7px; align-items: center; }
 .controls input:not([type='checkbox']):not([type='radio']), .controls select { width: 100%; min-width: 0; box-sizing: border-box; padding: 8px 10px; color: inherit; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-sm); }
@@ -10,3 +14,6 @@
 .controls.group, .controls .group { border: 1px solid var(--line); border-radius: var(--radius-sm); }
 .controls details { min-width: 0; }
 .controls details summary { cursor: pointer; font-size: 12px; padding: 6px 0; }
+.entityPrimary { display: flex; gap: 8px; flex-wrap: wrap; grid-column: 1 / -1; }
+.entityMore { min-width: 0; grid-column: 1 / -1; }
+.entityPanel { display: grid; gap: 8px; margin-top: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); }
