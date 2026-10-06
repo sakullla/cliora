@@ -163,6 +163,7 @@ test('editing an MCP starts from the CLIs already written and unchecking removes
 
 test('MCP removal notice expires after four seconds', async ({ page }) => {
   await mockResources(page);
+  await page.clock.install();
   await page.goto('/');
   await page.evaluate(() => {
     const state = window as typeof window & { __resourceMcpDefinitions: Array<Record<string, unknown>>; __resourceMcpPlacements: Array<Record<string, unknown>> };
@@ -172,9 +173,14 @@ test('MCP removal notice expires after four seconds', async ({ page }) => {
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
   await page.getByRole('button', { name: '修改' }).click();
-  await page.getByRole('checkbox', { name: 'Codex' }).uncheck();
-  await page.clock.install();
+  const codex = page.getByRole('checkbox', { name: 'Codex' });
+  await expect(codex).toBeEnabled();
+  await expect(codex).toBeChecked();
+  await codex.uncheck();
+  await expect(codex).not.toBeChecked();
   await page.getByRole('button', { name: '保存并分发' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  expect(await page.evaluate(() => (window as typeof window & { __resourceWrites: Array<Record<string, unknown>> }).__resourceWrites)).toEqual([expect.objectContaining({ command: 'remove_native_mcp' })]);
   const status = page.getByRole('status').filter({ hasText: '已从 Codex 移除。' });
   await expect(status).toBeVisible();
   await page.clock.fastForward(4100);

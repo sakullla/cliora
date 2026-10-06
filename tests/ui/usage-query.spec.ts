@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import type { AccountCapability, AuthAccount } from '../../src/types/accounts';
 
 async function setup(page: Page, automatic = false) {
   await page.addInitScript((automatic) => {
@@ -29,7 +30,12 @@ async function setup(page: Page, automatic = false) {
         probe: { selectedPath: 'C:/codex.cmd', installations: [{ path: 'C:/codex.cmd', version: '1.0.0', status: 'available', source: 'npm_shim', detail: null }], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: ['openai_responses'], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '', installCommand: null, upgradeCommand: null, nativeInstallCommand: null },
         profiles: [{ id: 'p1', tool: 'codex', authentication: { kind: 'oauth', accountId: 'account-a' }, name: '主配置', version: 1, inheritCommon: true, files: {}, connection: { providerId: 'fixture', baseUrl: 'https://quota.example', interfaceFormat: 'openai_responses', model: 'gpt-test' } }], common: null, binding: null, snapshots: [], recoveryNeeded: [], customPath: null,
       };
-      if (command === 'list_accounts') return [{ id: 'account-a', toolId: 'codex', label: '工作账号', state: 'signed_in', context: { id: 'context-a' }, identity: { email: 'a@example.test' }, pendingLogin: null }, { id: 'account-b', toolId: 'codex', label: '其他账号', state: 'signed_in', context: { id: 'context-b' }, pendingLogin: null }];
+      if (command === 'list_accounts') return [
+        { id: 'account-a', toolId: 'codex', provider: 'openai', label: '工作账号', version: 1, state: 'signed_in', context: { id: 'context-a', toolId: 'codex', root: '/fixtures/accounts/a', configRoot: '/fixtures/accounts/a', authFiles: [], historyRoots: [], resourceRoot: '/fixtures/accounts/a', environment: {}, removeEnvironment: [], cliArgs: [] }, identity: { subject: 'account-a', email: 'a@example.test', plan: null, source: 'mock' }, retiredContexts: [], pendingLogin: null, checkedAt: null, detail: null },
+        { id: 'account-b', toolId: 'codex', provider: 'openai', label: '其他账号', version: 1, state: 'signed_in', context: { id: 'context-b', toolId: 'codex', root: '/fixtures/accounts/b', configRoot: '/fixtures/accounts/b', authFiles: [], historyRoots: [], resourceRoot: '/fixtures/accounts/b', environment: {}, removeEnvironment: [], cliArgs: [] }, identity: null, retiredContexts: [], pendingLogin: null, checkedAt: null, detail: null },
+      ] satisfies AuthAccount[];
+      if (command === 'account_capabilities') return [{ toolId: 'codex', provider: 'openai', version: '0.160.0', managedLogin: true, importNative: true, methods: ['browser', 'device'], reason: '隔离测试账号', identitySource: 'mock', refreshOwner: 'native_cli', acceptance: 'mock only' }] satisfies AccountCapability[];
+      if (command === 'discover_native_logins') return { toolId: args.toolId, checkedAt: 0, logins: [] };
       if (command === 'ensure_profile_usage') return automatic ? harness.queries[0] : null;
       if (command === 'list_usage_queries') return structuredClone(harness.queries);
       if (command === 'list_usage_cache') return structuredClone(harness.cache);

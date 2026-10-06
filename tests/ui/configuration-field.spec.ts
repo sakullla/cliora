@@ -99,7 +99,7 @@ test('corrected numeric input stays visible while its asynchronous edit is pendi
   await mount(page, 'number');
   const input = page.getByRole('textbox', { name: '推理' });
   await input.fill('invalid');
-  await expect(page.getByRole('alert')).toHaveText('请输入有效数值');
+  await expect(page.getByRole('alert')).toHaveText('请输入完整数值');
   await input.fill('123');
   await expect(input).toHaveValue('123');
   await expect(page.getByRole('button', { name: '保存草稿' })).toBeDisabled();
