@@ -1,6 +1,6 @@
-.editor, .fields, .editor fieldset { display: grid; gap: .86em; min-width: 0; }
+.editor, .fields, .editor fieldset { display: grid; gap: .57em; min-width: 0; }
 .editor summary { cursor: pointer; padding: .57em 0; }
-.editor fieldset { border: 1px solid var(--accent-line); border-radius: var(--radius); padding: 10px; }
+.editor fieldset { border: 1px solid var(--accent-line); border-radius: var(--radius); padding: .57em .71em; }
 .editor fieldset > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
 .editor label, .editor fieldset > div > div { grid-column: 1 / -1; }
 .editor input:not([type='checkbox']), .editor select { min-width: 0; width: 100%; box-sizing: border-box; }

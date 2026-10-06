@@ -39,8 +39,8 @@ function Editor(props: ConfigurationContentProps) {
     <p className={styles.note}>默认模型用于启动设置。恢复默认会取消本层覆盖，采用继承配置或 Pi 原生默认。</p>
     </div>
     {models.map(model => <article className={styles.model} key={`${provider}:${key(model)}`} hidden={Boolean(props.section && expanded && expanded !== key(model))} aria-label={`模型 ${model.id}`}>
-      <button type="button" className={styles.modelHeading} disabled={structuralBlocked} aria-expanded={expanded === key(model)} onClick={() => setExpanded(expanded === key(model) ? null : key(model))}>
-        {props.section && expanded === key(model) && '返回模型列表 · '}{typeof model.fields.name === 'string' ? model.fields.name : model.id} · {model.id}{model.kind === 'override' ? ' · 内置覆盖' : ''}{view.defaultModel === model.id ? ' · 启动默认' : ''}
+      <button type="button" className={styles.modelHeading} disabled={structuralBlocked} aria-expanded={expanded === key(model)} aria-label={`${props.section && expanded === key(model) ? '返回模型列表 · ' : ''}${typeof model.fields.name === 'string' ? model.fields.name : model.id} · ${model.id}${model.kind === 'override' ? ' · 内置覆盖' : ''}${view.defaultModel === model.id ? ' · 启动默认' : ''}`} onClick={() => setExpanded(expanded === key(model) ? null : key(model))}>
+        {props.section && expanded === key(model) && '返回模型列表 · '}{typeof model.fields.name === 'string' ? model.fields.name : model.id} · {model.id}{model.kind === 'override' ? ' · 内置覆盖' : ''}{view.defaultModel === model.id && <span className={styles.modelBadge} data-default-badge>默认</span>}
       </button>
       {<div className={styles.fields} hidden={expanded !== key(model)}>
         {descriptor.fields.filter(item => !item.advanced && !item.id.startsWith('default')).map(item => field(item.id, model))}
@@ -51,7 +51,8 @@ function Editor(props: ConfigurationContentProps) {
     </article>)}
     <div hidden={Boolean(props.section && expanded)}>{can('create') && <NewModelForm key={`new-model:${draft.sessionId}:${provider}`} props={action.props} provider={provider} disabled={structuralBlocked || !provider} label="模型 ID" fields={descriptor.fields.filter(item => !item.id.startsWith('default'))}
       onCreate={async (id, values, kind) => { const success = await action.run({ kind, provider, id }, kind === 'override' ? 'create_override' : 'create', values); if (success) setExpanded(`${kind}:${id}`); return success; }} allowOverride={can('create_override')} listChoices={{ input: [['text', '文本'], ['image', '图片']] }} />}
-    </div></div>
+    </div>
+    <div className={styles.modelSpacer} data-list-spacer /></div>
     <div hidden={props.section === 'models'}><details open={props.section === 'settings'}><summary>启动思考与默认设置</summary>{field('defaultProvider')}{field('defaultModel')}{field('defaultThinkingLevel')}
       {!descriptor.fields.some(item => item.id === 'defaultModel') && <button type="button" disabled={blocked || !can('reset')} onClick={() => { void action.run({ kind: 'settings' }, 'reset', null, 'defaultModel'); }}>恢复默认模型</button>}
       {!descriptor.fields.some(item => item.id === 'defaultProvider') && <button type="button" disabled={blocked || !can('reset')} onClick={() => { void action.run({ kind: 'settings' }, 'reset', null, 'defaultProvider'); }}>恢复默认供应商</button>}

@@ -45,8 +45,8 @@ function Editor(props: ConfigurationContentProps) {
     <p className={styles.note}>文本是 Kimi 的原生默认能力，无需声明；图片、思考等能力按模型实际支持情况选择。已有未知原生能力会保留。</p>
     </details></div>
     {models.map(model => <article className={styles.model} key={`${provider}:${model.id}`} hidden={Boolean(props.section && expanded && expanded !== model.id)} aria-label={`模型 ${model.id}`}>
-      <button type="button" className={styles.modelHeading} disabled={structuralBlocked} aria-expanded={expanded === model.id} onClick={() => setExpanded(expanded === model.id ? null : model.id)}>
-        {props.section && expanded === model.id && '返回模型列表 · '}{typeof model.fields.display_name === 'string' && model.fields.display_name !== model.id ? `${model.fields.display_name} · ${model.id}` : model.id}{typeof model.fields.model === 'string' && model.fields.model !== model.id ? ` · 请求 ${model.fields.model}` : ''}{view.defaultModel === model.id ? ' · 默认' : ''}
+      <button type="button" className={styles.modelHeading} disabled={structuralBlocked} aria-expanded={expanded === model.id} aria-label={`${props.section && expanded === model.id ? '返回模型列表 · ' : ''}${typeof model.fields.display_name === 'string' && model.fields.display_name !== model.id ? `${model.fields.display_name} · ${model.id}` : model.id}${typeof model.fields.model === 'string' && model.fields.model !== model.id ? ` · 请求 ${model.fields.model}` : ''}${view.defaultModel === model.id ? ' · 默认' : ''}`} onClick={() => setExpanded(expanded === model.id ? null : model.id)}>
+        {props.section && expanded === model.id && '返回模型列表 · '}{typeof model.fields.display_name === 'string' && model.fields.display_name !== model.id ? `${model.fields.display_name} · ${model.id}` : model.id}{typeof model.fields.model === 'string' && model.fields.model !== model.id ? ` · 请求 ${model.fields.model}` : ''}{view.defaultModel === model.id && <span className={styles.modelBadge} data-default-badge>默认</span>}
       </button>
       {<div className={styles.fields} hidden={expanded !== model.id}>
         {modelFields.filter(item => !item.advanced).map(item => field(item.id, model))}
@@ -57,7 +57,8 @@ function Editor(props: ConfigurationContentProps) {
     <div hidden={Boolean(props.section && expanded)}>{can('create') && <NewModelForm key={`new-model:${draft.sessionId}:${provider}`} props={action.props} provider={provider} disabled={structuralBlocked || !provider} label="模型 alias" fields={modelFields}
       listChoices={{ capabilities: capabilityChoices }}
       initialValues={{ provider }} onCreate={async (id, values) => { const success = await action.run({ kind: 'model', provider, id }, 'create', values); if (success) setExpanded(id); return success; }} />}
-    </div></div>
+    </div>
+    <div className={styles.modelSpacer} data-list-spacer /></div>
     <div hidden={props.section === 'models'}><details open={props.section === 'settings'}><summary>默认思考设置</summary>{descriptor.fields.filter(item => item.id.startsWith('thinking.')).map(item => field(item.id))}</details>
     </div>
     {view.capabilityReason && <details><summary>模型能力说明</summary><p className={styles.note}>{view.capabilityReason}</p></details>}
