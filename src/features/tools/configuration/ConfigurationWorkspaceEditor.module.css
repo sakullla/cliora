@@ -1,17 +1,52 @@
 .shell { display: flex; flex-direction: column; min-height: 0; height: min(640px, calc(100dvh - 200px)); gap: 0; color: var(--text); }
-.scroll { flex: 1; min-height: 0; overflow: auto; padding: 4px 4px 18px; overscroll-behavior: contain; }
+.scroll { flex: 1; min-height: 0; overflow: auto; padding: 0 4px 18px; overscroll-behavior: contain; }
 .scroll > div:not([hidden]) { display: grid; gap: 16px; }
 .shell [hidden] { display: none !important; }
 .tabs, .buttons { display: flex; gap: 8px; flex-wrap: wrap; }
-.tabs { position: sticky; top: 0; z-index: 2; padding: 4px 0 10px; background: var(--surface); }
+.tabs { position: sticky; top: 0; z-index: 2; padding: 8px 0 10px; background: var(--surface); box-shadow: 0 1px 0 var(--line); }
 .tabs button { border-color: transparent; background: transparent; box-shadow: none; color: var(--text-2); font-weight: 500; }
 .tabs button:hover:not(:disabled) { background: var(--surface-2); border-color: transparent; color: var(--text); }
 .tabs [aria-pressed='true'] { color: var(--accent); background: var(--accent-soft); }
 .name { max-width: 600px; }
 .scroll .name { display: flex; flex-direction: row; align-items: center; gap: 10px; max-width: none; }
 .scroll .name input { flex: 1; min-width: 0; }
-.sources, .connection, .diagnostics, .directory { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
-.diagnostics > summary { cursor: pointer; font-size: 13px; color: var(--text-2); }
+.name { font-weight: 560; }
+.name::after { content: '*'; order: 1; margin-left: -8px; color: var(--danger); font-weight: 600; }
+.name > input { order: 2; font-size: 13.5px; font-weight: 500; }
+.fileTabs { display: flex; flex-wrap: wrap; gap: 4px; width: fit-content; max-width: 100%; padding: 3px; border-radius: var(--radius); background: var(--surface-3); }
+.fileTabs button { min-height: 26px; padding: 0 11px; border: 0; background: transparent; box-shadow: none; color: var(--text-2); font-family: var(--font-mono); font-size: 11.5px; font-weight: 500; }
+.fileTabs button:hover:not(:disabled) { background: transparent; color: var(--text); }
+.fileTabs [aria-pressed='true'], .fileTabs [aria-pressed='true']:hover:not(:disabled) { background: var(--surface); color: var(--text); box-shadow: var(--shadow-xs); }
+.loading { display: grid; align-content: start; gap: 12px; flex: 1; padding: 6px 4px; }
+.loading > :global(.skeleton-block) { height: 44px; }
+.loading > :global(.skeleton-block.short) { width: 46%; height: 30px; }
+.loading > :global(.skeleton-block.tall) { height: 160px; }
+.loadFailed { display: grid; align-content: start; gap: 6px; flex: 1; padding: 18px 4px; }
+.loadFailed > strong { font-size: 14px; }
+.loadFailed > [role='alert'] { margin: 0; padding: 10px 12px; border: 1px solid var(--danger-line); border-radius: var(--radius); background: var(--danger-soft); color: var(--danger) !important; }
+.problems { display: grid; gap: 8px; min-width: 0; }
+.problems:empty { display: none; }
+.problems > p, .problems > div { margin: 0 !important; }
+.warning { padding: 10px 12px; border: 1px solid var(--warning-line); border-radius: var(--radius); background: var(--warning-soft); color: var(--warning) !important; }
+.success { padding: 10px 12px; border: 1px solid var(--accent-line); border-radius: var(--radius); background: var(--accent-soft); color: var(--accent) !important; }
+.status { display: inline-flex; align-items: center; gap: 7px; }
+.status::before { content: ''; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--line-strong); }
+.status[data-tone='ok']::before { background: var(--success); }
+.status[data-tone='warn'] { color: var(--warning) !important; }
+.status[data-tone='warn']::before { background: var(--warning); }
+.status[data-tone='error'] { color: var(--danger) !important; }
+.status[data-tone='error']::before { background: var(--danger); }
+.footer > button.status { flex: 0 1 auto; min-width: 0; min-height: 26px; padding: 0 8px; overflow: hidden; border: 0; background: transparent; box-shadow: none; font-size: 12px; font-weight: 560; text-overflow: ellipsis; white-space: nowrap; }
+.footer > button.status:hover:not(:disabled) { background: var(--warning-soft); }
+.footer > button.status + .actions { margin-left: auto; }
+.sources, .connection, .directory { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
+.diagnostics { display: block; padding: 0 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.diagnostics[open] { display: grid; gap: 10px; padding-bottom: 12px; }
+.diagnostics > summary { cursor: pointer; min-height: 30px; font-size: 13px; font-weight: 600; color: var(--text); }
+.diagnostics[open] > summary { border-bottom: 1px solid var(--line); }
+.diagnostics details > summary { font-size: 12px; color: var(--text-2); }
+.diagnostics details[open] > summary { margin-bottom: 8px; }
+.diagnostics [role='status'] { display: grid; gap: 4px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); }
 .sourcePicker { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .sourcePickerTitle { flex: none; font-size: 12px; color: var(--text-2); margin-right: 2px; }
 .sourcePicker [role='radio'] { min-height: var(--control-h-sm); padding: 0 12px; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--surface); box-shadow: none; font-size: 12.5px; color: var(--text-2); }
@@ -31,3 +66,9 @@
 .footer details[open] button { display: block; margin-top: 8px; }
 .primary { background: var(--accent) !important; color: var(--on-accent) !important; }
 @media (max-width: 760px) { .shell { height: calc(100dvh - 200px); } .tabs { gap: 4px; } .tabs button { padding: 7px 8px; } .footer { gap: 5px; } .footer button { padding: 8px; } }
+
+.influence { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
+.influenceHead { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.influenceHead > strong { display: inline-flex; align-items: center; font-size: 13px; }
+.influence ul { display: grid; gap: 4px; margin: 0; padding-left: 18px; color: var(--text-2); font-size: 12.5px; }
+.influence > p { margin: 0 !important; }

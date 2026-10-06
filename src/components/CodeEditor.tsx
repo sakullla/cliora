@@ -13,12 +13,14 @@ function moduleUrlOf(error: unknown) {
   return match?.[1] ?? null;
 }
 
-class EditorErrorBoundary extends Component<{ onRetry: () => void; children: ReactNode }, { failed: boolean }> {
-  state = { failed: false };
-  static getDerivedStateFromError() { return { failed: true }; }
+class EditorErrorBoundary extends Component<{ attempt: number; onRetry: () => void; children: ReactNode }, { failed: boolean; detail: string }> {
+  state = { failed: false, detail: '' };
+  static getDerivedStateFromError(error: unknown) { return { failed: true, detail: error instanceof Error ? error.message : String(error ?? '') }; }
+  componentDidCatch(error: unknown) { console.error('Code editor failed', error); }
   render() {
     if (this.state.failed) {
-      return <div role="alert">差异编辑器加载失败。<button type="button" onClick={() => { this.setState({ failed: false }); this.props.onRetry(); }}>重试</button></div>;
+      // A repeated failure usually means a stale bundle; a reload fetches a fresh one.
+      return <div role="alert" className="code-editor-failed"><span>编辑器加载失败，内容未受影响。</span><button type="button" onClick={() => { this.setState({ failed: false, detail: '' }); this.props.onRetry(); }}>重试</button>{this.props.attempt > 0 && <button type="button" title="重新加载会关闭当前弹窗，尚未保存的修改会丢失" onClick={() => window.location.reload()}>重新加载应用</button>}{this.state.detail && <small>{this.state.detail}</small>}</div>;
     }
     return this.props.children;
   }
@@ -40,7 +42,7 @@ export function CodeEditor(props: ComponentProps<typeof CodeEditorImpl>) {
       throw error;
     }
   }), [attempt]);
-  return <EditorErrorBoundary onRetry={() => setAttempt(value => value + 1)}>
-    <Suspense fallback={<div role="status" aria-label={props.label}>正在加载差异…</div>}><Editor {...props} /></Suspense>
+  return <EditorErrorBoundary attempt={attempt} onRetry={() => setAttempt(value => value + 1)}>
+    <Suspense fallback={<div role="status" aria-label={props.label}>正在准备编辑器…</div>}><Editor {...props} /></Suspense>
   </EditorErrorBoundary>;
 }

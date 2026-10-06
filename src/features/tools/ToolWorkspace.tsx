@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -20,6 +20,8 @@ import { McpWorkspace, SkillsWorkspace } from './ResourceWorkspace';
 import { PluginsWorkspace } from './PluginsWorkspace';
 import { AgentsWorkspace } from './AgentsWorkspace';
 import { ToolIcon } from '../../components/ToolIcon';
+import { Icon } from '../../components/Icon';
+import { StatusBanner } from '../../components/StatusBanner';
 import { FilterSelect } from '../../components/FilterSelect';
 import { GuideDialog } from '../../components/GuideDialog';
 import { ConflictCompare } from '../../components/configuration/ConflictCompare';
@@ -33,7 +35,22 @@ function RowMenu({ label, children }: { label: string; children: ReactNode }) {
   const [open, setOpen] = useState(false);
   const [box, setBox] = useState<{ top: number; left: number } | null>(null);
   const ref = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
+  const items = () => [...panel.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? []];
+  const dismiss = (restoreFocus: boolean) => { setOpen(false); if (restoreFocus) trigger.current?.focus(); };
+  // Keyboard users land on the first action once the menu has been placed.
+  useEffect(() => { if (open && box) items()[0]?.focus({ preventScroll: true }); }, [open, box !== null]);
+  useEffect(() => { if (!open) setBox(null); }, [open]);
+  function keyNavigate(event: ReactKeyboardEvent<HTMLDivElement>) {
+    const list = items(); if (!list.length) return;
+    const index = list.indexOf(document.activeElement as HTMLButtonElement);
+    if (event.key === 'Tab') { event.preventDefault(); dismiss(true); return; }
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? list.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + list.length) % list.length;
+    list[next].focus();
+  }
   useLayoutEffect(() => {
     if (!open) return;
     const place = () => {
@@ -61,14 +78,14 @@ function RowMenu({ label, children }: { label: string; children: ReactNode }) {
       if (ref.current?.contains(target) || panel.current?.contains(target)) return;
       setOpen(false);
     };
-    const key = (event: KeyboardEvent) => { if (event.key === 'Escape') setOpen(false); };
+    const key = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.stopPropagation(); dismiss(true); } };
     document.addEventListener('mousedown', close);
     document.addEventListener('keydown', key);
     return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', key); };
   }, [open]);
   return <div className={styles.rowMenu} ref={ref}>
-    <button type="button" className={styles.rowMenuButton} aria-label={label} aria-expanded={open} aria-haspopup="menu" onClick={() => setOpen(value => !value)}>···</button>
-    {open && createPortal(<div ref={panel} className={styles.rowMenuList} role="menu" style={box ? { top: box.top, left: box.left } : { top: 0, left: 0, visibility: 'hidden' }} onClick={() => setOpen(false)}>{children}</div>, document.body)}
+    <button ref={trigger} type="button" className={styles.rowMenuButton} aria-label={label} title="更多操作" aria-expanded={open} aria-haspopup="menu" onClick={() => setOpen(value => !value)} onKeyDown={event => { if (event.key === 'ArrowDown' && !open) { event.preventDefault(); setOpen(true); } }}><svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true" fill="currentColor"><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" /></svg></button>
+    {open && createPortal(<div ref={panel} className={styles.rowMenuList} role="menu" aria-label={label} style={box ? { top: box.top, left: box.left } : { top: 0, left: -10000 }} onKeyDown={keyNavigate} onClick={() => dismiss(true)}>{children}</div>, document.body)}
   </div>;
 }
 
@@ -147,10 +164,10 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   }
   function discard() { setFrame(null); setDirty(false); setResourceDirty({ mcp: false, skills: false, agents: false }); setResourceEpoch(value => value + 1); epoch.current++; }
   async function closeFrame() { if (await mayLeave()) { discard(); } }
-  async function openFrame(subject: ConfigurationSubject, profile: RegisteredProfile | null = null, confirmed = false) {
+  async function openFrame(subject: ConfigurationSubject, profile: RegisteredProfile | null = null, confirmed = false, title?: string) {
     if (!confirmed && !await mayLeave()) return;
     discard(); setError(''); setNotice('');
-    setFrame({ key: crypto.randomUUID(), subject, profile, title: subject === 'current' ? '修改正在使用的文件' : subject === 'common' ? '修改通用配置' : profile?.id ? '修改配置' : '新建配置' });
+    setFrame({ key: crypto.randomUUID(), subject, profile, title: title ?? (subject === 'current' ? '修改正在使用的文件' : subject === 'common' ? '修改通用配置' : profile?.id ? `修改配置 · ${profile.name}` : '新建配置') });
   }
   async function launch() {
     if (!nativeAvailable || launching) return;
@@ -210,7 +227,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     catch (failure) { if (identity === currentContext.current) setError(errorText(failure)); }
     finally { if (identity === currentContext.current) setBusy(false); }
   }
-  async function duplicate(profile: RegisteredProfile) { if (!await mayLeave()) return; const copy = structuredClone(profile); copy.id = ''; copy.version = 0; delete copy.revision; copy.name += ' 副本'; await openFrame('profile', copy, true); }
+  async function duplicate(profile: RegisteredProfile) { if (!await mayLeave()) return; const copy = structuredClone(profile); copy.id = ''; copy.version = 0; delete copy.revision; copy.name += ' 副本'; await openFrame('profile', copy, true, `复制配置 · 来自 ${profile.name}`); }
   async function remove(profile: RegisteredProfile) { const identity = currentContext.current; if (!await confirmAction(`删除“${profile.name}”的管理记录？当前原生文件保留。`, () => alive.current && identity === currentContext.current, { title: '删除配置', confirmLabel: '删除', destructive: true })) return; setBusy(true); try { await native.deleteNativeProfile(profile.id, profile.version, profile.revision ?? ''); if (identity === currentContext.current) await reload(toolId, scope, projectPath); } catch (failure) { setError(errorText(failure)); } finally { if (identity === currentContext.current) setBusy(false); } }
   function stored(result: ConfigurationSaveResult) { if (result.profile) setWorkspace(value => value ? { ...value, profiles: [...value.profiles.filter(profile => profile.id !== result.profile!.id), result.profile!] } : value); if (result.common) setWorkspace(value => value ? { ...value, common: result.common } : value); }
   function changed(_draft: ConfigurationDraft) { epoch.current++; }
@@ -223,17 +240,26 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   async function openAccountQuota(queryId: string) { if (!await mayLeave()) return; const query = quota.queries.find(item => item.id === queryId); if (!query) { void quota.reload(); setError('额度引用已变化，请刷新后重试。'); return; } setAccountUsageQuery(query); }
   const quotaIds = new Set(quota.queries.map(query => query.config.identity.profileId));
   const currentFile = workspace?.snapshots.some(snapshot => snapshot.fingerprint && !workspace.probe.nativeFiles.find(file => file.role === snapshot.role)?.sensitive);
+  const modelOf = (profile: RegisteredProfile) => workspace?.profileModelSummaries ? workspace.profileModelSummaries[profile.id]?.model : profile.connection?.model;
+  const query = filter.trim().toLocaleLowerCase();
+  const matches = (profile: RegisteredProfile) => !query || [profile.name, modelOf(profile), host(profile.connection?.baseUrl)].some(value => value?.toLocaleLowerCase().includes(query));
+  const profileGroups = (workspace ? [{ id: 'subscription', label: '订阅套餐', profiles: workspace.profiles.filter(profile => quotaIds.has(profile.id) || profile.authentication?.kind === 'oauth') }, { id: 'other', label: '其他配置', profiles: workspace.profiles.filter(profile => !quotaIds.has(profile.id) && profile.authentication?.kind !== 'oauth') }] : [])
+    .map(group => ({ ...group, visible: group.profiles.filter(matches) })).filter(group => group.visible.length);
   function row(profile: RegisteredProfile) {
     const binding = workspace?.binding;
     const { same, commonPending, trusted, applied } = configurationApplicationState(profile, binding, workspace?.common);
-    const model = workspace?.profileModelSummaries ? workspace.profileModelSummaries[profile.id]?.model : profile.connection?.model;
+    const model = modelOf(profile);
     const state = same ? applied ? '正在使用' : '已保存，待使用' : '已保存';
     const frozen = same && trusted ? binding?.appliedSummary : null;
     const frozenSource = frozen?.authentication.kind === 'oauth' ? '已管理账号' : frozen?.authentication.kind === 'api_key' ? 'API 密钥' : 'CLI 当前凭据';
     const authentication = profile.authentication;
     const credential = authentication?.kind === 'oauth' ? `账号 ${accounts.accounts.find(account => account.id === authentication.accountId)?.label ?? authentication.accountId}` : profile.authentication?.kind === 'api_key' ? 'API 密钥' : profile.authentication?.kind === 'rebind_required' ? '需重新选择来源' : 'CLI 当前凭据';
     return <div className={styles.profileRow} role="listitem" data-profile-id={profile.id} data-active={applied || undefined} key={profile.id}>
-      <span><button className={styles.profileName} onClick={() => void openFrame('profile', profile)}>{profile.name}</button><span className={styles.profileMeta}><span className={styles.badge} data-tone={applied ? 'ok' : same ? 'warn' : undefined}>{state}</span>{model && <span>{model}</span>}<span>保存设置：{credential}{host(profile.connection?.baseUrl) && ` · ${host(profile.connection?.baseUrl)}`}</span>{same && <span>最后使用版本 {binding!.profileVersion} · 保存版本 {profile.version}{commonPending && ' · 通用配置待应用'}</span>}{same && <span>上次已使用：{frozen ? `${frozenSource}${frozen.providerId ? ' · '+frozen.providerId : ''}${host(frozen.baseUrl ?? undefined) ? ' · '+host(frozen.baseUrl ?? undefined) : ''}${frozen.model ? ' · '+frozen.model : ''}` : '来源快照未提供，以最后使用版本为准'}</span>}</span></span>
+      <span className={styles.profileMain}>
+        <span className={styles.profileTitle}><button className={styles.profileName} title={profile.name} onClick={() => void openFrame('profile', profile)}>{profile.name}</button><span className={styles.badge} data-tone={applied ? 'ok' : same ? 'warn' : undefined}>{state}</span></span>
+        <span className={styles.profileMeta}>{model && <span className={styles.profileModel} title={model}>{model}</span>}<span data-tone={authentication?.kind === 'rebind_required' ? 'warn' : undefined}>保存设置：{credential}{host(profile.connection?.baseUrl) && ` · ${host(profile.connection?.baseUrl)}`}</span></span>
+        {same && <span className={styles.profileHistory}><span>最后使用版本 {binding!.profileVersion} · 保存版本 {profile.version}{commonPending && ' · 通用配置待应用'}</span><span>上次已使用：{frozen ? `${frozenSource}${frozen.providerId ? ' · '+frozen.providerId : ''}${host(frozen.baseUrl ?? undefined) ? ' · '+host(frozen.baseUrl ?? undefined) : ''}${frozen.model ? ' · '+frozen.model : ''}` : '来源快照未提供，以最后使用版本为准'}</span></span>}
+      </span>
       <span className={styles.profileActions}>{!applied && <button className={styles.primary} disabled={busy || !!applying || workspace?.probe.nativeWrites.state !== 'supported'} onClick={() => void apply(profile)}>{applying === profile.id ? '使用中' : same ? '使用新版本' : '使用'}</button>}<button onClick={() => void openFrame('profile', profile)}>修改</button><RowMenu label={`${profile.name} 更多操作`}><button role="menuitem" onClick={() => void openFrame('profile', profile)}>修改配置</button><button role="menuitem" onClick={() => void duplicate(profile)}>复制配置</button><button role="menuitem" onClick={() => setQuotaAddFor(profile.id)}>添加额度查询</button><button role="menuitem" data-danger="true" onClick={() => void remove(profile)}>删除配置</button></RowMenu></span>
       <ProfileQuota profileId={profile.id} profileVersion={profile.version} toolId={toolId} profileAccountId={profile.authentication?.kind === 'oauth' ? profile.authentication.accountId : undefined} state={quota} addRequested={quotaAddFor === profile.id} onAddHandled={() => setQuotaAddFor(null)} />
     </div>;
@@ -244,14 +270,24 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   return <section className={styles.workspace} aria-label="工具与连接">
     <div className={styles.toolbar}><div className={styles.toolSwitcher} role="tablist" aria-label="CLI" onKeyDown={navigateChoices}>{managedTools.map(item => <button key={item.id} role="tab" aria-selected={item.id === toolId} tabIndex={item.id === toolId ? 0 : -1} className={item.id === toolId ? styles.selected : ''} onClick={() => void switchTool(item.id)}><ToolIcon toolId={item.id} size={23} />{item.name}</button>)}</div></div>
     <div className={styles.taskBar}><div className={styles.views} role="tablist" aria-label="当前任务" onKeyDown={navigateChoices}>{Object.entries({ config: '配置', accounts: '账号', mcp: 'MCP', skills: 'Skill', agents: 'Agents', plugins: '插件' }).filter(([id]) => supported[id as ResourceView]).map(([id, label]) => <button role="tab" key={id} aria-selected={resource === id} tabIndex={resource === id ? 0 : -1} className={resource === id ? styles.selected : ''} onClick={() => void switchResource(id as ResourceView)}>{label}</button>)}</div><div className={styles.scopeBar}><FilterSelect className={styles.projectSelect} label="配置范围" value={scope === 'global' ? '__global__' : projectPath} forceSearch searchLabel="搜索项目" options={[{ value: '__global__', label: '全局配置' }, ...projects.map(project => ({ value: project.path ?? project.id, label: project.name, detail: project.path ? shortPath(project.path) : undefined, disabled: !project.available || !project.path })), ...(projectPath && !projects.some(project => project.path === projectPath) ? [{ value: projectPath, label: projectPath.split(/[\\/]/).at(-1) ?? projectPath }] : [])]} onChange={value => void switchScope(value === '__global__' ? 'global' : 'project', value === '__global__' ? '' : value)} onPickFolder={() => void pickProject()} pickFolderLabel="选择文件夹…" /></div></div>
-    {error && <p role="alert" className={styles.error}>{error}</p>}{notice && <p role="status" className={styles.notice}>{notice}</p>}
+    {(error || notice) && <div className={styles.feedback}>{error && <StatusBanner tone="error" onDismiss={() => setError('')}>{error}</StatusBanner>}{notice && <StatusBanner tone="success" autoDismissMs={8000} onDismiss={() => setNotice('')}>{notice}</StatusBanner>}</div>}
     <div hidden={resource !== 'config'}>
       {workspace && <InstallPanel toolName={descriptor.name} probe={workspace.probe} customPath={customPath} busy={busy} loading={loading} onCustomPath={setCustomPath} onSavePath={() => void savePath()} onMaintain={(action, source) => void maintain(action, source)} onUsePath={path => void usePath(path)} />}
-      {workspace?.nativeContextError && <p role="alert">{workspace.nativeContextError}</p>}
-      {workspace?.recoveryNeeded.length ? <p role="alert">有 {workspace.recoveryNeeded.length} 项文件事务需要恢复。<button onClick={() => { void native.recoverNativeTransactions().then(() => reload(toolId, scope, projectPath)).catch(failure => setError(errorText(failure))); }}>重试恢复</button></p> : null}
-      {!workspace ? <div className={styles.taskEmpty}>{loading ? <p role="status">正在读取配置…</p> : <><p>配置读取失败，已有记录未被删除。</p><button onClick={() => void reload(toolId, scope, projectPath)}>重试读取配置</button></>}</div> : <div className={styles.profileList} aria-label="配置列表"><div className={styles.listHeading}><strong>配置</strong><span className={styles.listActions}><button disabled={launching || !workspace} onClick={() => void launch()}>{launching ? '正在启动…' : '启动'}</button><button onClick={() => void openFrame('common')}>通用配置</button><button className={styles.primary} onClick={() => void createProfile()}>新建配置</button></span></div>{currentFile && <div className={styles.profileRow} data-kind="native"><span><button className={styles.profileName} onClick={() => void openFrame('current')}>正在使用的文件</button><small>直接编辑当前范围的原生文件</small></span><button onClick={() => void openFrame('current')}>修改</button></div>}{workspace.profiles.length > 6 && <label className={styles.profileFilter}><input aria-label="搜索配置" placeholder="搜索配置" value={filter} onChange={event => setFilter(event.target.value)} /></label>}{!workspace.profiles.length && <p className={styles.profileEmpty}>还没有命名配置。可新建配置或编辑已有当前文件。</p>}<div role="list" aria-label="配置项" className={workspace.profiles.length > 6 ? styles.profileScroll : undefined}>{[{ id: 'subscription', label: '订阅套餐', profiles: workspace.profiles.filter(profile => quotaIds.has(profile.id) || profile.authentication?.kind === 'oauth') }, { id: 'other', label: '其他配置', profiles: workspace.profiles.filter(profile => !quotaIds.has(profile.id) && profile.authentication?.kind !== 'oauth') }].filter(group => group.profiles.length).map(group => <div key={group.id} className={styles.profileGroup} data-group={group.id}><div className={styles.groupLabel}><strong>{group.label}</strong><span>{group.profiles.length}</span></div>{group.profiles.filter(profile => profile.name.toLowerCase().includes(filter.toLowerCase())).map(row)}</div>)}</div></div>}
+      {workspace?.nativeContextError && <div className={styles.feedback}><StatusBanner tone="error">{workspace.nativeContextError}</StatusBanner></div>}
+      {workspace?.recoveryNeeded.length ? <div className={styles.feedback}><StatusBanner tone="error" action={<button type="button" onClick={() => { void native.recoverNativeTransactions().then(() => reload(toolId, scope, projectPath)).catch(failure => setError(errorText(failure))); }}>重试恢复</button>}>有 {workspace.recoveryNeeded.length} 项文件事务需要恢复。</StatusBanner></div> : null}
+      {!workspace ? (loading && nativeAvailable
+        ? <div className={styles.loadingList} role="status" aria-label="正在读取配置"><span className="skeleton-block short" /><span className="skeleton-block" /><span className="skeleton-block" /></div>
+        : <div className={styles.taskEmpty} data-tone={nativeAvailable ? 'error' : undefined}><Icon name={nativeAvailable ? 'alert' : 'monitor'} size={22} strokeWidth={1.5} /><div><strong>{nativeAvailable ? '配置读取失败' : '需要桌面应用'}</strong><p>{nativeAvailable ? '已有记录未被删除，可以重新读取。' : '浏览器预览无法读取本机 CLI 的原生配置。'}</p></div>{nativeAvailable && <button className={styles.primary} onClick={() => void reload(toolId, scope, projectPath)}>重试读取配置</button>}</div>)
+      : <div className={styles.profileList} aria-label="配置列表">
+        <div className={styles.listHeading}><strong>配置{workspace.profiles.length > 0 && <span className="count-chip">{workspace.profiles.length}</span>}</strong><span className={styles.listActions}><button title={`在外部终端启动 ${descriptor.name}`} disabled={launching || !workspace} onClick={() => void launch()}><Icon name="play" size={13} strokeWidth={2} />{launching ? '正在启动…' : '启动'}</button><button title="所有命名配置可继承的共享设置" onClick={() => void openFrame('common')}><Icon name="settings" size={14} />通用配置</button><button className={styles.primary} onClick={() => void createProfile()}><Icon name="plus" size={14} strokeWidth={2.2} />新建配置</button></span></div>
+        {currentFile && <div className={styles.profileRow} data-kind="native"><span><button className={styles.profileName} onClick={() => void openFrame('current')}>正在使用的文件</button><small>直接编辑当前范围的原生文件</small></span><button onClick={() => void openFrame('current')}>修改</button></div>}
+        {workspace.profiles.length > 6 && <label className={styles.profileFilter}><input type="search" aria-label="搜索配置" placeholder="按名称、模型或地址搜索配置" value={filter} onChange={event => setFilter(event.target.value)} onKeyDown={event => { if (event.key === 'Escape' && filter) { event.stopPropagation(); setFilter(''); } }} />{query && <span>{profileGroups.reduce((total, group) => total + group.visible.length, 0)} / {workspace.profiles.length}</span>}</label>}
+        {!workspace.profiles.length && <div className={styles.profileEmpty}><strong>还没有命名配置</strong><span>命名配置可保存不同的供应商、模型和凭据，随时切换使用。{currentFile ? '也可以直接修改正在使用的文件。' : ''}</span><button className={styles.primary} onClick={() => void createProfile()}><Icon name="plus" size={14} strokeWidth={2.2} />新建第一个配置</button></div>}
+        {query && !profileGroups.length && <div className={styles.profileEmpty}><span>没有匹配“{filter.trim()}”的配置。</span><button onClick={() => setFilter('')}>清除搜索</button></div>}
+        <div role="list" aria-label="配置项" className={workspace.profiles.length > 6 ? styles.profileScroll : undefined}>{profileGroups.map(group => <div key={group.id} className={styles.profileGroup} data-group={group.id}><div className={styles.groupLabel}><strong>{group.label}</strong><span>{query ? `${group.visible.length}/${group.profiles.length}` : group.profiles.length}</span></div>{group.visible.map(row)}</div>)}</div>
+      </div>}
       <GuideDialog wide suspended={!active} open={!!frame} title={frame?.title ?? '配置'} hint={`${descriptor.name} · ${scope === 'global' ? '全局' : projectPath}。保存配置只入库，使用是独立操作。`} onClose={() => void closeFrame()}>{frame && !workspace && <p role="status">正在读取目标范围的配置…</p>}{frame && workspace && <ConfigurationWorkspaceEditor key={frame.key} toolId={toolId} subject={frame.subject} profile={frame.profile} scope={scope} projectPath={projectPath} workspace={workspace} accounts={accounts} onClose={() => void closeFrame()} onDirtyChange={value => { if (value) epoch.current++; setDirty(value); }} onDraftChange={changed} onStored={stored} onDone={(result, used) => { setFrame(null); setDirty(false); setNotice(result.application ? '当前文件已更新；下次会话读取。' : used ? '配置已保存并使用；下次会话读取。' : '配置已保存；正在使用的文件保持原版本。'); void reload(toolId, scope, projectPath); }} />}</GuideDialog>
-      <GuideDialog wide open={!!comparison} title="比较当前文件与本次配置" onClose={() => setComparison(null)}>{comparison && <div>{comparison.files.map((file, index) => <ConflictCompare key={file.role} title={file.role} banner={index === 0 ? '当前文件和保存配置不同。先比较，再明确使用。' : undefined} actions={false} currentContent={file.current} nextContent={file.proposedText} format={file.format} onUseNext={() => void compareUse()} onKeepCurrent={() => setComparison(null)} />)}<div><button disabled={busy} onClick={() => void compareUse()}>使用本次内容</button><button onClick={() => setComparison(null)}>保留当前文件</button></div></div>}</GuideDialog>
+      <GuideDialog wide open={!!comparison} title="比较当前文件与本次配置" onClose={() => setComparison(null)}>{comparison && <div>{comparison.files.map((file, index) => <ConflictCompare key={file.role} title={file.role} banner={index === 0 ? '当前文件和保存配置不同。先比较，再明确使用。' : undefined} actions={false} currentContent={file.current} nextContent={file.proposedText} format={file.format} onUseNext={() => void compareUse()} onKeepCurrent={() => setComparison(null)} />)}<div className="dialog-footer"><button onClick={() => setComparison(null)}>保留当前文件</button><span className="dialog-footer-gap" /><button className={styles.primary} disabled={busy} onClick={() => void compareUse()}>使用本次内容</button></div></div>}</GuideDialog>
     </div>
     {resource === 'accounts' && supported.accounts && <AccountsPanel key={toolId} toolId={toolId} state={accounts} onOpenProfile={(id, target) => void openTarget(id, target)} onOpenUsage={id => void openAccountQuota(id)} />}
     {resource === 'accounts' && accountUsageQuery && <QuotaEditor key={accountUsageQuery.id} query={accountUsageQuery} profileId={accountUsageQuery.config.identity.profileId ?? ''} profileAccountId={queryAccount} toolId={toolId} presets={quota.presets} onClose={() => setAccountUsageQuery(null)} onSaved={() => { setAccountUsageQuery(null); void quota.reload(); }} />}

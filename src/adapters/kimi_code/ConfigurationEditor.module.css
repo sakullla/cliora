@@ -5,7 +5,11 @@
 .fields label, .fields > div > div { grid-column: 1 / -1; }
 .editor input:not([type="checkbox"]), .editor select { min-width: 0; width: 100%; box-sizing: border-box; }
 .note { font-size: .86em; color: var(--text-2); line-height: 1.5; margin: 0; }
-.model { border: 1px solid var(--accent-line); border-radius: var(--radius); min-width: 0; overflow: hidden; }
+.model { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); min-width: 0; overflow: hidden; transition: border-color var(--fast) var(--ease); }
+.model > .fields { padding: 4px 12px 12px; border-top: 1px solid var(--line); }
+.model:hover { border-color: var(--line-strong); }
+.model:has(> div > [aria-expanded='true']) { border-color: var(--accent-line); }
+.editor > div:not([hidden]), .editor > div > div:not([hidden]) { display: grid; gap: .57em; min-width: 0; }
 .modelSpacer { height: var(--config-footer-h); }
 .editor fieldset { min-width: 0; display: grid; gap: .57em; }
 .editor button { max-width: 100%; white-space: normal; }

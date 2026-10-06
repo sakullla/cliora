@@ -8,6 +8,8 @@ import type { McpDefinition, McpDraft, McpTargetRequest, McpTargetResult, Native
 import { displayPath, shortPath } from '../../lib/paths';
 import { GuideDialog } from '../../components/GuideDialog';
 import { saveShortcutHint } from '../../lib/shortcut';
+import { Icon } from '../../components/Icon';
+import { StatusBanner } from '../../components/StatusBanner';
 import styles from './ResourceWorkspace.module.css';
 
 function errorText(error: unknown) {
@@ -175,24 +177,28 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
     finally { if (mounted.current) setBusy(false); }
   }
 
+  const head = (canAdd: boolean) => <div className={styles.workspaceHead}><div><h2>MCP 服务器</h2><p>只写入当前这个 CLI。远程服务用 HTTP，本机进程用 stdio；分发到多个 CLI 请到资料库。</p></div>{canAdd && <button type="button" className={styles.primary} disabled={busy || (scope === 'project' && !project)} onClick={() => void startNew()}><Icon name="plus" size={14} strokeWidth={2.2} />添加 MCP</button>}</div>;
+
   if (capabilityBlocked) {
-    return <div className={styles.taskEmpty}><p className={styles.error} role="alert">{capabilityBlocked}</p><p className={styles.muted}>当前工具不能添加可提交的 MCP，请查看上方原因。</p></div>;
+    return <section className={styles.workspaceSection} aria-label="MCP 服务器">{head(false)}<StatusBanner tone="error">{capabilityBlocked}</StatusBanner><p className={styles.muted}>当前工具不能添加可提交的 MCP，请查看上方原因。</p></section>;
   }
 
   if (empty) {
-    return <div className={styles.taskEmpty}>
-      {notice && <p className={styles.notice} role="status">{notice}</p>}
-      <button type="button" className={styles.primary} disabled={busy || (scope === 'project' && !project)} onClick={() => void startNew()}>添加 MCP</button>
-      <p>添加后只写进当前这个 CLI。要给其他 CLI 用，勾选快速同步，再到资料库分发。</p>
-      {scope === 'project' && !project && <p className={styles.muted}>请先选择项目目录。</p>}
-    </div>;
+    return <section className={styles.workspaceSection} aria-label="MCP 服务器">
+      {head(true)}
+      {notice && <StatusBanner tone="success" onDismiss={() => setNotice('')}>{notice}</StatusBanner>}
+      {error && <StatusBanner tone="error" onDismiss={() => setError('')}>{error}</StatusBanner>}
+      <div className={styles.emptyState}><Icon name="connections" size={26} strokeWidth={1.4} /><strong>这个 CLI 还没有生效的 MCP</strong><p>添加后只写进当前这个 CLI。要给其他 CLI 用，勾选快速同步，再到资料库分发。</p>{scope === 'project' && !project && <p className={styles.muted}>请先选择项目目录。</p>}</div>
+    </section>;
   }
 
-  return <>
-    {!composing && notice && <p className={styles.notice} role="status">{notice}</p>}
+  return <section className={styles.workspaceSection} aria-label="MCP 服务器">
+    {head(true)}
+    {!composing && notice && <StatusBanner tone="success" onDismiss={() => setNotice('')}>{notice}</StatusBanner>}
+    {!composing && error && <StatusBanner tone="error" onDismiss={() => setError('')}>{error}</StatusBanner>}
     <div className={styles.layout}>
     <aside className={styles.list}>
-      <div className={styles.listHead}><strong>当前生效 · {nativeEntries.length}</strong><button type="button" className={styles.primary} disabled={busy || (scope === 'project' && !project)} onClick={() => void startNew()}>添加</button></div>
+      <div className={styles.listHead}><strong>当前生效 · {nativeEntries.length}</strong></div>
       {nativeEntries.map((item) => <button key={`native-${item.name}`} type="button" title="点击修改" onClick={() => void importNative(item)}><strong>{item.name}<span className={styles.state} data-on={item.enabled || undefined}>{item.enabled ? '已启用' : '已停用'}</span></strong><small className={styles.mono}>{(item.transport === 'http' ? item.url : [item.command, ...item.args].join(' ')) || item.transport}{item.protectedValues ? ' · 凭据已隐藏' : ''}</small></button>)}
       {!nativeEntries.length && <p>这个 CLI 上还没有生效的 MCP。</p>}
     </aside>
@@ -217,7 +223,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
     </div>
     </GuideDialog>
   </div>
-  </>;
+  </section>;
 }
 
 export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirtyChange }: { toolId: string; scope: Scope; projectPath: string; contextId?: string | null; onDirtyChange?: (dirty: boolean) => void }) {
@@ -422,23 +428,26 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
     : installed?.state === 'missing' ? { label: '原生目录缺失', tone: 'warn' }
     : { label: '未安装', tone: undefined };
 
+  const head = <div className={styles.workspaceHead}><div><h2>Skill</h2><p>装进当前这个 CLI 的 Skill 包；勾选快速同步后，可在资料库分发到其他 CLI。</p></div><button type="button" className={styles.primary} disabled={busy || (scope === 'project' && !project)} onClick={() => { setAdding(true); setSyncLibrary(false); setExternal(null); setGuide(true); }}><Icon name="plus" size={14} strokeWidth={2.2} />添加 Skill</button></div>;
+
   if (empty) {
-    return <div className={styles.taskEmpty}>
+    return <section className={styles.workspaceSection} aria-label="Skill">
+      {head}
       {recovery}
-      {outcome && <p role="status" className={result?.status === 'failed' ? styles.error : styles.notice}>{outcome}</p>}
-      <button type="button" className={styles.primary} disabled={busy || (scope === 'project' && !project)} onClick={() => { setAdding(true); setSyncLibrary(false); setExternal(null); setGuide(true); }}>添加 Skill</button>
-      <p>添加后只装进当前这个 CLI。勾选快速同步后，可以在资料库里分发。</p>
-      {scope === 'project' && !project && <p className={styles.muted}>请先选择项目目录。</p>}
-      {error && <p className={styles.error} role="alert">{error}</p>}
-    </div>;
+      {outcome && <StatusBanner tone={result?.status === 'failed' ? 'warning' : 'success'} onDismiss={() => setResult(null)}>{outcome}</StatusBanner>}
+      {error && <StatusBanner tone="error" onDismiss={() => setError('')}>{error}</StatusBanner>}
+      <div className={styles.emptyState}><Icon name="sparkle" size={26} strokeWidth={1.4} /><strong>这个 CLI 还没有生效的 Skill</strong><p>添加后只装进当前这个 CLI。勾选快速同步后，可以在资料库里分发。</p>{scope === 'project' && !project && <p className={styles.muted}>请先选择项目目录。</p>}</div>
+    </section>;
   }
 
-  return <>
+  return <section className={styles.workspaceSection} aria-label="Skill">
+    {head}
     {recovery}
-    {!guide && outcome && <p role="status" className={result?.status === 'failed' ? styles.error : styles.notice}>{outcome}</p>}
+    {!guide && outcome && <StatusBanner tone={result?.status === 'failed' ? 'warning' : 'success'} onDismiss={() => setResult(null)}>{outcome}</StatusBanner>}
+    {!guide && error && <StatusBanner tone="error" onDismiss={() => setError('')}>{error}</StatusBanner>}
     <div className={styles.layout}>
     <aside className={styles.list}>
-      <div className={styles.listHead}><strong>当前生效 · {nativeEntries.length}</strong><button type="button" className={styles.primary} disabled={busy || (scope === 'project' && !project)} onClick={() => { setAdding(true); setSyncLibrary(false); setExternal(null); setGuide(true); }}>添加</button></div>
+      <div className={styles.listHead}><strong>当前生效 · {nativeEntries.length}</strong></div>
       {nativeEntries.map((entry) => <button type="button" key={entry.path} title={entry.state === 'unreadable' ? entry.detail : entry.path} onClick={() => void openNative(entry)}><strong>{entry.name}<span className={styles.state} data-on={entry.state === 'managed' || undefined} data-warn={entry.state === 'unreadable' || undefined}>{entry.state === 'managed' ? '已安装' : entry.state === 'external' ? '本机目录' : '暂不可读取'}</span></strong><small className={styles.mono}>{displayPath(entry.path)}</small></button>)}
       {!nativeEntries.length && <p>这个 CLI 上还没有生效的 Skill。</p>}
     </aside>
@@ -486,5 +495,5 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
     </div>
     </GuideDialog>
   </div>
-  </>;
+  </section>;
 }

@@ -79,6 +79,7 @@
 
 .panel [role="alert"] { padding: 12px; border: 1px solid var(--danger-line); border-radius: var(--radius); background: var(--danger-soft); color: var(--danger); }
 .panel [role="status"] { padding: 11px 13px; border-radius: var(--radius); background: var(--accent-soft); }
+.panel :global(.status-banner) > [role] { padding: 0; border: 0; border-radius: 0; background: none; color: inherit; font-size: inherit; }
 .empty { padding: 30px 20px; text-align: center; border: 1px dashed var(--line); border-radius: var(--radius-lg); color: var(--text-2); font-size: 12.5px; }
 
 /* ---------- Resource card list (agents / plugins) ---------- */
@@ -128,8 +129,10 @@
   border-radius: var(--radius-lg);
   background: var(--surface);
 }
-.listToolbar input { flex: 1 1 220px; min-width: 0; border: 0; background: transparent; box-shadow: none; }
-.listToolbar input:focus { box-shadow: none; }
+.listToolbar { transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease); }
+.listToolbar:focus-within:has(input:focus) { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
+.listToolbar input { flex: 1 1 220px; min-width: 0; padding-left: 32px; border: 0; background: transparent var(--search-icon) no-repeat 11px center; box-shadow: none; }
+.listToolbar input:focus, .listToolbar input:focus-visible { outline: none; box-shadow: none; }
 .listToolbar select { flex: 0 1 140px; }
 .listToolbar > span { color: var(--text-3); font-size: 12px; white-space: nowrap; margin-left: auto; }
 .listNote { color: var(--text-2); font-size: 12px; }
@@ -141,7 +144,7 @@
 @media (max-width: 760px) {
   .panel { padding: 16px 0; }
   .create { align-items: stretch; }
-  .create > button { flex: 1 1 auto; }
+  .create > button { flex: 1 1 auto; align-self: flex-end; min-height: var(--control-h); }
   .list > li { padding: 14px; }
   .resourceList > li { grid-template-columns: minmax(0, 1fr); }
   .resourceList > li > .actions { justify-content: flex-start; }
