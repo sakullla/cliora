@@ -1349,7 +1349,7 @@ pub async fn get_tool_workspace(
             };
             let custom = tool_path(database, tool).map_err(native_error)?;
             let mut probe = if context_error.is_some() {
-                adapter::probe_registered_summary(&adapters::Registry::builtins(), tool.stable_id(), custom.as_deref(), &home, project.as_deref(), scope).map_err(native_error)?
+                adapter::probe_registered_summary_cached(&adapters::Registry::builtins(), tool.stable_id(), custom.as_deref(), &home, project.as_deref(), scope, false).map_err(native_error)?
             } else { adapter::probe(tool, custom.as_deref(), &home, project.as_deref(), scope) };
             let key = match scope {
                 Scope::Global => "global".into(),

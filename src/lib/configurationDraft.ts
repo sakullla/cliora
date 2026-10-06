@@ -1,4 +1,4 @@
-import type { ConfigurationAction, ConfigurationDraft } from '../types/configuration';
+import type { ConfigurationAction, ConfigurationCredential, ConfigurationDraft } from '../types/configuration';
 import type { AppliedBinding, Connection, RegisteredCommon, RegisteredProfile } from '../types/native';
 
 /** Last-success identity is independent of the currently saved profile. */
@@ -16,6 +16,20 @@ export function configurationApplicationState(profile: RegisteredProfile, bindin
 
 /** Opaque API refs can be restored only for the same connection identity. */
 export const configurationConnectionIdentity = (connection: Connection | null) => connection ? JSON.stringify([connection.providerId, connection.interfaceFormat, connection.baseUrl]) : '';
+
+export type ConfigurationApiBuffer = { credential: Extract<ConfigurationCredential, { source: 'api_key' }>; input: string; replacing: boolean };
+export const configurationCredentialIdentity = (draft: ConfigurationDraft) => configurationConnectionIdentity(draft.draftConnection ?? draft.profile.connection) || draft.nativeCredentialTarget?.identity || '';
+
+/** Browsing a new connection cannot reassign an existing ref or unfinished key. */
+export function rememberConfigurationApiBuffer(buffers: Map<string, ConfigurationApiBuffer>, credentialIdentity: string, credential: ConfigurationApiBuffer['credential'], inputIdentity: string, input: string, replacing: boolean) {
+  const previous = buffers.get(credentialIdentity);
+  buffers.set(credentialIdentity, {
+    credential,
+    input: inputIdentity === credentialIdentity ? input : previous?.input ?? '',
+    replacing: inputIdentity === credentialIdentity ? replacing : previous?.replacing ?? false,
+  });
+  if (inputIdentity !== credentialIdentity) buffers.set(inputIdentity, { credential: buffers.get(inputIdentity)?.credential ?? { source: 'api_key', secretRef: null }, input, replacing });
+}
 
 /** Query results belong to both the document and the independent request generation. */
 export function configurationRequestMatches(current: ConfigurationDraft, started: ConfigurationDraft, result: { sessionId: string; revision: number; requestGeneration: number }) {

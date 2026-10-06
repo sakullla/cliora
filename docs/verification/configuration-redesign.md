@@ -47,9 +47,21 @@ Codex 的当前探针另要求 macOS `sandbox-exec` 的默认拒绝策略，只�
 
 正式 Delivery 须针对最终稳定候选重新运行执行计划中的验证入口；本开发记录不替代 Delivery 验收。未执行 Windows、Linux、真实账号、模型推理或热更新。
 
+A3 的追加开发结果由对应实现 worker 实际执行并报告，本 doc helper 只读取其结果与冻结截图，没有重跑套件：
+
+| 执行来源与命令 | 实际开发结果 | 证据边界 |
+| --- | --- | --- |
+| UI worker：`PLAYWRIGHT_PORT=14841 npm run test -- tests/ui/config-models.spec.ts tests/ui/config-specialized.spec.ts tests/ui/config-dialog.spec.ts tests/ui/oauth-accounts.spec.ts --workers=3` | exit 0，107/107，38.2 秒；包括原 101 项及 6 项新增 API 变体 | 使用合成 IPC，证明浏览器行为及交互回归，不是目标 CLI 加载或认证验收 |
+| UI worker：原 5 项 fixture／折叠交互用例与 6 项新增 API 变体定向回归；Node architecture 与 draft 回归 | 定向 11/11；Node 15/15（architecture 3 + draft 12） | 只记录当前用例通过，不把旧 MCP／Pi 暂态失败的未知根因写成已证实 |
+| UI worker：`npm run build` | 实际 exit 0，`tsc -b` 与 Vite 构建通过；源码与四张截图保持冻结 | 前端开发构建结果，不是桌面构建、原生平台接受或正式 Delivery 全检查 |
+| Backend worker：`cargo test --offline --manifest-path src-tauri/Cargo.toml --lib native:: --quiet` | 118 passed、0 failed、1 ignored；见 `/tmp/cliora-workspace-backend-a3-result.json` | Rust native 服务、合成文件／HTTP、注册扩展及 CAS／备份的开发测试，不是 Node 测试或实际 CLI 原生加载 |
+| Backend worker：`cargo build --offline --manifest-path src-tauri/Cargo.toml --lib` | 普通非 `cfg(test)` 产品库构建 exit 0；同一 backend 结果记录 | 证明当前普通产品库可编译；不代替正式 Delivery、clippy 或原生平台验收 |
+
+这些 A3 开发结果没有更新上方 A1 原生加载观测的中间源码／库指纹，也没有补齐 Codex、Claude、OpenCode 的原生证据。正式 Owner Delivery 仍需针对最终候选处理完整验证。
+
 ## 页面尺寸与截图
 
-UI worker 已在更新后的界面重新捕获三张模型详情 PNG，并新增默认首屏 PNG，报告集中 79 条 UI 回归及最终首屏相关 7 条回归通过。截图对应 `tests/ui/config-dialog.spec.ts` 中的 `Kimi default first screen shows connection and compact model list` 与 `unified Kimi editor keeps required fields and main controls reachable` 的 minimum、default、wide 案例。本 helper 核对当前四个文件及 PNG 实际像素尺寸，与对应 viewport 一致；没有重跑该 UI 套件。
+UI worker 已在 A3 集中 107/107 UI 回归中重新生成并冻结四张 PNG。截图对应 `tests/ui/config-dialog.spec.ts` 中的 `Kimi default first screen shows connection and compact model list` 与 `unified Kimi editor keeps required fields and main controls reachable` 的 minimum、default、wide 案例。本 helper 在收到冻结事实后核对当前四个文件及 PNG 实际像素尺寸，与对应 viewport 一致；没有生成图片或重跑该 UI 套件。
 
 | 场景 | 浏览器 viewport／PNG 尺寸 | 实际截图 |
 | --- | --- | --- |
@@ -60,14 +72,14 @@ UI worker 已在更新后的界面重新捕获三张模型详情 PNG，并新增
 
 首屏截图展示配置名称、密钥保存摘要、折叠的密钥操作与供应商摘要、紧凑模型列表以及底部保存操作；模型参数详情默认不展开。首屏案例检查配置名称与保存按钮可见、上下文详情未展开。三张详情截图展示打开单个模型后的必填上下文上限与底部保存操作；对应案例检查必填字段可见、保存按钮位于 viewport 内、dialog 无横向滚动，并检查返回列表后另一模型重新可见。测试使用合成 IPC，这些截图和交互断言只建立浏览器界面行为，不证明原生配置加载、账号认证或平台接受，也不等于正式 Delivery 对最终候选的验收。
 
-本次核对的当前 PNG 字节 SHA-256 如下；前三张模型详情已重新生成，先前 `/tmp/cliora-workspace-native-doc-a1-result.json` 的旧哈希保留其当时观测身份，不代表此版图像。
+本次 A3 冻结后核对的 PNG 字节 SHA-256 如下；三张模型详情已重新生成，首屏图片当前字节未变。先前 `/tmp/cliora-workspace-native-doc-a1-result.json` 与 `/tmp/cliora-workspace-native-doc-final-a1-result.json` 的哈希保留各自当时观测身份，不将旧结果改写为此版图像。
 
 | PNG | SHA-256 |
 | --- | --- |
 | kimi-first-screen-1160x780.png | `585377e918571fe4daaee81bc3379b78e508589830c89982e0320437ecc6a8ed` |
-| kimi-minimum-720x560.png | `293cc19533b5b76d5a97d0f449b5091806ff9590bd62e13a76763da60fa805bc` |
-| kimi-default-1160x780.png | `a3d0b3db16f7803f11c14354d176c313dfd68f4c212621a3d548e58e8b0df14f` |
-| kimi-wide-1600x960.png | `4373bbc1c9fd4cc0298d18371bfac6ee99af76db133a0dae2433b72f6f190338` |
+| kimi-minimum-720x560.png | `ed9008a640174f2e7c8b4d1b8c1cdcb57c050ed1f87daf906b32ecdc037a2b17` |
+| kimi-default-1160x780.png | `1c2dcc1733b45678b01ab52ff9e8e15bb4b6c2c869232c817c2fd086c38a194a` |
+| kimi-wide-1600x960.png | `174a11db350fceff0aaf30a14d73bad64f3864c284906e05d090cf8680a1b28d` |
 
 Git 忽略例外仅允许本文件和上述四个精确 PNG，仍忽略其它验证日志、通用 UI 截图目录、需求与 workflow 运行材料。原生开发观测的中间源码指纹及三项原生未验证事实保留，正式 Owner Delivery 会对最终稳定候选重跑原生入口。
 

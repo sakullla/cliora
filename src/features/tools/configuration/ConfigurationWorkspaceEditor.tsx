@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { uiAdapterFor } from '../../../adapters';
 import { native, beginConfigurationDraft, updateConfigurationDraft, editConfigurationDraft, replaceConfigurationText, selectConfigurationCredential, setConfigurationDraftSecret, removeConfigurationDraftSecret, revealConfigurationDraftSecret, cancelConfigurationDraft, cancelConfigurationRequests, addConfigurationModels, listConfigurationModels, checkConfigurationConnection, saveConfigurationDraft, commonInfluence, applyCommonConfiguration, compareConfigurationCurrent, rebaseConfigurationCurrent, previewConfigurationBackup, restoreConfigurationBackup } from '../../../lib/native';
-import { createConfigurationSession, configurationConnectionIdentity, configurationRequestMatches } from '../../../lib/configurationDraft';
+import { createConfigurationSession, configurationCredentialIdentity, rememberConfigurationApiBuffer, type ConfigurationApiBuffer, configurationRequestMatches } from '../../../lib/configurationDraft';
 import { confirmAction } from '../../../lib/confirm';
 import type { ConfigurationAction, ConfigurationCredential, ConfigurationDraft, ConfigurationSaveResult, ConfigurationSubject, CommonInfluence, CommonApplicationResult, ConfigurationCurrentComparison, ConfigurationBackupPreview } from '../../../types/configuration';
 import type { Connection, ConnectionCheck, ModelDirectory, NativePreview, RegisteredProfile, RegisteredToolWorkspace, Scope, ApplyComparison } from '../../../types/native';
@@ -71,7 +71,9 @@ export function ConfigurationWorkspaceEditor(props: Props) {
   const rawSequence = useRef(0);
   const latest = useRef(props); latest.current = props;
   const sourceBuffers = useRef<Partial<Record<ConfigurationCredential['source'], { credential: ConfigurationCredential; connection: Connection | null }>>>({});
-  const apiBuffers = useRef(new Map<string, { credential: ConfigurationCredential; input: string; replacing: boolean }>());
+  const apiBuffers = useRef(new Map<string, ConfigurationApiBuffer>());
+  const apiCredential = useRef<{ identity: string; credential: ConfigurationApiBuffer['credential'] } | null>(null);
+  const apiInputIdentity = useRef('');
   const focusReturn = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
@@ -86,7 +88,7 @@ export function ConfigurationWorkspaceEditor(props: Props) {
       if (value.credential) {
         const connection = value.draftConnection ?? value.profile.connection;
         sourceBuffers.current[value.credential.source] = { credential: value.credential, connection };
-        if (value.credential.source === 'api_key') apiBuffers.current.set(configurationConnectionIdentity(connection), { credential: value.credential, input: '', replacing: false });
+        if (value.credential.source === 'api_key') acceptApiCredential(value);
       }
     }).catch(failure => { if (alive.current && opening.current === generation) { setError(messageOf(failure)); setLoading(false); } });
     if (subject === 'common') void commonInfluence(toolId).then(value => { if (alive.current) setInfluence(value); }).catch(failure => { if (alive.current) setError(messageOf(failure)); });
@@ -138,18 +140,36 @@ export function ConfigurationWorkspaceEditor(props: Props) {
   const selectedAccountId = draft?.credential?.source === 'account' ? draft.credential.accountId : '';
   const selectedAccount = props.accounts.accounts.find(account => account.id === selectedAccountId);
 
+  function rememberApi() {
+    const confirmed = apiCredential.current;
+    if (confirmed) rememberConfigurationApiBuffer(apiBuffers.current, confirmed.identity, confirmed.credential, apiInputIdentity.current, secretInput, secretReplacing);
+  }
+  function acceptApiCredential(value: ConfigurationDraft, input = '', replacing = false) {
+    if (value.credential?.source !== 'api_key') return;
+    const identity = configurationCredentialIdentity(value);
+    apiCredential.current = { identity, credential: value.credential };
+    apiInputIdentity.current = identity;
+    apiBuffers.current.set(identity, { credential: value.credential, input, replacing });
+    setSecretInput(input); setSecretReplacing(replacing);
+  }
+  function startSecretInput() {
+    const current = session.current?.draft;
+    if (!current) return;
+    const identity = configurationCredentialIdentity(current);
+    if (apiInputIdentity.current !== identity) { rememberApi(); apiInputIdentity.current = identity; }
+  }
   async function chooseSource(next: ConfigurationCredential['source']) {
     if (!draft) return;
     if (draft.credential) sourceBuffers.current[draft.credential.source] = { credential: draft.credential, connection };
-    if (draft.credential?.source === 'api_key') apiBuffers.current.set(configurationConnectionIdentity(connection), { credential: draft.credential, input: secretInput, replacing: secretReplacing });
-    const api = next === 'api_key' ? apiBuffers.current.get(configurationConnectionIdentity(connection)) : undefined;
+    if (draft.credential?.source === 'api_key') rememberApi();
+    const api = next === 'api_key' ? apiBuffers.current.get(configurationCredentialIdentity(draft)) : undefined;
     const previous = next === 'api_key' ? undefined : sourceBuffers.current[next];
     const credential: ConfigurationCredential = api?.credential ?? previous?.credential ?? (next === 'account' ? { source: next, accountId: '' } : next === 'api_key' ? { source: next, secretRef: null } : { source: next });
     if (credential.source === 'account' && !credential.accountId) { setPicking(true); return; }
     try {
       await edit(current => selectConfigurationCredential(current, credential));
       if (alive.current && next === 'api_key' && session.current?.draft.credential?.source === 'api_key') {
-        setSecretInput(api?.input ?? ''); setSecretReplacing(api?.replacing ?? false);
+        acceptApiCredential(session.current.draft, api?.input ?? '', api?.replacing ?? false);
       }
     } catch {}
   }
@@ -160,18 +180,20 @@ export function ConfigurationWorkspaceEditor(props: Props) {
   }
   async function flushSecret() {
     if (source !== 'api_key' || !secretInput) return;
-    const value = secretInput;
+    const value = secretInput; const owner = session.current;
+    if (owner && apiInputIdentity.current !== configurationCredentialIdentity(owner.draft)) throw new Error('此密钥输入属于先前连接，请为当前连接提供新密钥。');
+    rememberApi();
     await edit(current => setConfigurationDraftSecret(current, value));
     // Empty input means keep. The server now owns an isolated temporary ref.
-    if (alive.current) { setSecretInput(''); setSecretReplacing(false); }
+    if (alive.current && session.current === owner && owner) acceptApiCredential(owner.draft);
   }
   async function removeSecret() {
     const owner = session.current;
+    rememberApi();
     try {
       await edit(current => removeConfigurationDraftSecret(current));
       if (!alive.current || session.current !== owner || owner?.draft.credential?.source !== 'api_key' || !owner.draft.credential.remove) return;
-      setSecretInput(''); setSecretReplacing(false);
-      apiBuffers.current.set(configurationConnectionIdentity(owner.draft.draftConnection ?? owner.draft.profile.connection), { credential: owner.draft.credential, input: '', replacing: false });
+      acceptApiCredential(owner.draft);
     } catch {}
   }
   async function query(kind: 'directory' | 'check', paid = false) {
@@ -241,7 +263,7 @@ export function ConfigurationWorkspaceEditor(props: Props) {
       await flushSecret(); if (!alive.current || owner !== session.current || !owner.canSubmit) return;
       const result = await saveConfigurationDraft(owner.draft);
       if (!alive.current || owner !== session.current) return;
-      if (!owner.acceptSaved(result.draft)) return; setDraft(owner.draft); setRawInputs(owner.draft.profile.files);
+      if (!owner.acceptSaved(result.draft)) return; acceptApiCredential(owner.draft); setDraft(owner.draft); setRawInputs(owner.draft.profile.files);
       baseline.current = JSON.stringify(owner.draft.profile); baselineRevision.current = owner.draft.revision; setSaved(result); latest.current.onStored(result); updateValidity();
       if (use && !await applyStored(result)) return;
       setNotice(subject === 'current' ? '当前文件已更新；下次会话读取新内容。' : use ? '已保存并使用；下次会话读取新内容。' : '已保存；正在使用的文件保持原版本。');
@@ -314,7 +336,7 @@ export function ConfigurationWorkspaceEditor(props: Props) {
           {subject === 'profile' || subject === 'current' && apiWritable ? <label>使用方式<select aria-label="凭据来源" value={source ?? ''} disabled={busy || pending || cancelling} onChange={event => { focusReturn.current = event.currentTarget; void chooseSource(event.target.value as ConfigurationCredential['source']); }}><option value="" disabled>请选择本次配置的凭据来源</option><option value="native">使用 CLI 当前登录或凭据</option>{subject === 'profile' && accountSupported ? <option value="account">选择已管理账号</option> : source === 'account' && <option value="account" disabled>已绑定账号 · 当前能力待确认</option>}{apiWritable ? <option value="api_key">为此连接提供 API 密钥</option> : source === 'api_key' && <option value="api_key" disabled>已存 API 密钥 · 当前不可新增</option>}</select></label> : <strong>当前文件 · {sourceLabel}</strong>}
           {source === 'native' && <><p>{adapter.accounts?.nativeDescription ?? '沿用当前原生上下文；查看和保存配置不会纳入账号管理或复制凭据。'}</p>{nativeLogins?.logins.map((login, index) => <p key={index}>{login.identity?.email ?? login.identity?.subject ?? (login.authKind === 'api_key' ? '当前 CLI 凭据：API 密钥' : '当前身份未提供')} · {login.state === 'signed_in' ? login.authKind === 'api_key' ? '已配置，身份未核验' : login.identity ? 'CLI 已登录' : '身份待核验' : login.state}</p>)}{nativeError && <p role="alert">{nativeError}</p>}</>}
           {subject === 'profile' && source === 'account' && <><p>{selectedAccount?.identity?.email ?? selectedAccount?.identity?.subject ?? '尚未选择已核验账号'} · {selectedAccount?.state === 'signed_in' && selectedAccount.identity && selectedAccount.context && !selectedAccount.pendingLogin ? '已核验登录' : '待选择或重新核验'}</p><button disabled={busy || pending || cancelling} onClick={event => { focusReturn.current = event.currentTarget; setPicking(true); }}>选择账号或登录新账号</button></>}
-          {source === 'api_key' && <><p>用于 {draft.nativeCredentialTarget?.label ?? (connection?.baseUrl || '当前连接')}；{subject === 'current' ? '保存后更新当前文件中的密钥。' : '密钥由系统凭据库保存。'}</p>{!apiWritable && <p role="alert">{apiReason ?? '当前范围不接受新密钥，请明确选择其他来源。'}</p>}{apiWritable && <div className={styles.secret}>{!secretReplacing && (draft.credential?.source === 'api_key' && draft.credential.secretRef) ? <><details><summary>{draft.credentialStatus === 'draft' ? '密钥在草稿中 · 尚未保存到系统' : draft.credentialStatus === 'stored' ? '密钥已保存到系统 · 空输入保留' : '已有密钥引用 · 保存状态待确认'}</summary><div className={styles.buttons}><button onClick={() => setSecretReplacing(true)}>替换密钥</button><button disabled={pending} onClick={() => void removeSecret()}>移除密钥</button><button onClick={() => { const ref = draft.credential?.source === 'api_key' ? draft.credential.secretRef : null; if (visibleSecret !== null) { setVisibleSecret(null); return; } const token = ++sequence.current; if (ref) void revealConfigurationDraftSecret(session.current!.draft).then(value => { if (alive.current && token === sequence.current) setVisibleSecret(value); }).catch(failure => setError(messageOf(failure))); }}>显示密钥</button>{visibleSecret !== null && <input aria-label="已保存密钥" type="text" readOnly value={visibleSecret} />}</div></details></> : <label>API 密钥<input aria-label="API 密钥" type="password" autoComplete="off" value={secretInput} disabled={busy || cancelling} placeholder="空输入保留已保存密钥" onChange={event => { sequence.current++; setDirectory(null); setCheck(null); setSecretInput(event.target.value); latest.current.onDirtyChange(true); }} /></label>}{subject === 'current' && draft.credential?.source === 'api_key' && !draft.credential.secretRef && <button disabled={busy || pending || cancelling} onClick={() => void removeSecret()}>移除当前密钥</button>}</div>}</>}
+          {source === 'api_key' && <><p>用于 {draft.nativeCredentialTarget?.label ?? (connection?.baseUrl || '当前连接')}；{subject === 'current' ? '保存后更新当前文件中的密钥。' : '密钥由系统凭据库保存。'}</p>{!apiWritable && <p role="alert">{apiReason ?? '当前范围不接受新密钥，请明确选择其他来源。'}</p>}{apiWritable && <div className={styles.secret}>{!secretReplacing && (draft.credential?.source === 'api_key' && draft.credential.secretRef) ? <><details><summary>{draft.credentialStatus === 'draft' ? '密钥在草稿中 · 尚未保存到系统' : draft.credentialStatus === 'stored' ? '密钥已保存到系统 · 空输入保留' : '已有密钥引用 · 保存状态待确认'}</summary><div className={styles.buttons}><button onClick={() => { startSecretInput(); setSecretReplacing(true); }}>替换密钥</button><button disabled={pending} onClick={() => void removeSecret()}>移除密钥</button><button onClick={() => { const ref = draft.credential?.source === 'api_key' ? draft.credential.secretRef : null; if (visibleSecret !== null) { setVisibleSecret(null); return; } const token = ++sequence.current; if (ref) void revealConfigurationDraftSecret(session.current!.draft).then(value => { if (alive.current && token === sequence.current) setVisibleSecret(value); }).catch(failure => setError(messageOf(failure))); }}>显示密钥</button>{visibleSecret !== null && <input aria-label="已保存密钥" type="text" readOnly value={visibleSecret} />}</div></details></> : <label>API 密钥<input aria-label="API 密钥" type="password" autoComplete="off" value={secretInput} disabled={busy || cancelling} placeholder="空输入保留已保存密钥" onChange={event => { sequence.current++; setDirectory(null); setCheck(null); startSecretInput(); setSecretInput(event.target.value); latest.current.onDirtyChange(true); }} /></label>}{subject === 'current' && draft.credential?.source === 'api_key' && !draft.credential.secretRef && <button disabled={busy || pending || cancelling} onClick={() => void removeSecret()}>移除当前密钥</button>}</div>}</>}
         </section>}
         {!accountSupported && accountSourceCapability?.reason && view === 'models' && <p>{accountSourceCapability.reason}</p>}
         {!apiWritable && apiReason && view === 'models' && <p>{apiReason}</p>}
