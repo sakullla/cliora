@@ -484,7 +484,7 @@ async function openAdvanced(dialog: Locator) {
 }
 
 for (const [width, height, name] of [[720, 560, 'minimum'], [1160, 780, 'default'], [1600, 960, 'wide']] as const) {
-  test(`unified Kimi editor keeps required fields and main controls reachable ${name}`, async ({ page }) => {
+  test(`unified Kimi editor keeps required fields and main controls reachable ${name}`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height });
     await setupConfigurationWorkspace(page);
     await page.getByRole('button', { name: '修改', exact: true }).last().click();
@@ -497,7 +497,7 @@ for (const [width, height, name] of [[720, 560, 'minimum'], [1160, 780, 'default
     expect(box!.y + box!.height).toBeLessThanOrEqual(height);
     expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
     await primary.scrollIntoViewIfNeeded();
-    await page.screenshot({ path: `docs/verification/configuration-redesign-ui/kimi-${name}-${width}x${height}.png`, fullPage: true });
+    await page.screenshot({ path: testInfo.outputPath(`kimi-${name}-${width}x${height}.png`), fullPage: true });
     await dialog.getByRole('button', { name: /^返回模型列表/ }).click();
     await expect(dialog.getByRole('button', { name: /^two(?: ·|$)/ })).toBeVisible();
   });
@@ -745,12 +745,12 @@ test('generic registered fallback uses temporary keys for directory and cancels 
   expect(await page.evaluate(() => (window as any).configurationProtocol.calls.filter((call: any) => call.command === 'set_connection_secret'))).toEqual([]);
 });
 
-test('Kimi default first screen shows connection and compact model list', async ({ page }) => {
+test('Kimi default first screen shows connection and compact model list', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1160, height: 780 }); await setupConfigurationWorkspace(page);
   await page.getByRole('button', { name: '修改', exact: true }).last().click(); const dialog = page.getByRole('dialog');
   await expect(dialog.getByLabel('配置名称')).toBeVisible(); await expect(dialog.getByRole('button', { name: '保存配置', exact: true })).toBeVisible();
   await expect(dialog.getByLabel('上下文上限', { exact: false }).first()).not.toBeVisible();
-  await page.screenshot({ path: 'docs/verification/configuration-redesign-ui/kimi-first-screen-1160x780.png', fullPage: true });
+  await page.screenshot({ path: testInfo.outputPath('kimi-first-screen-1160x780.png'), fullPage: true });
 });
 
 test('configuration list separates saved connection from frozen last-used source', async ({ page }) => {
