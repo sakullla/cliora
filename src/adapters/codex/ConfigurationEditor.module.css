@@ -1,8 +1,8 @@
-.editor, .fields { display: grid; gap: 12px; min-width: 0; }
-.editor summary { cursor: pointer; padding: 8px 0; }
+.editor, .fields { display: grid; gap: .86em; min-width: 0; }
+.editor summary { cursor: pointer; padding: .57em 0; }
 .fields > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
 .fields label, .fields > div > div { grid-column: 1 / -1; }
 .editor input, .editor select { min-width: 0; width: 100%; box-sizing: border-box; }
-.note { font-size: 12px; color: var(--muted); line-height: 1.5; margin: 0 0 10px; }
+.note { font-size: .86em; color: var(--text-2); line-height: 1.5; margin: 0 0 10px; }
 
 .editor [hidden] { display: none !important; }

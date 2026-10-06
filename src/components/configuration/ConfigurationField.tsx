@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import type { ConfigurationField as Field, ConfigurationIssue } from '../../types/configuration';
+import styles from './configuration.module.css';
 export type FieldPresentation = { unit?: string; description?: string; nativeField?: string; origin?: 'explicit' | 'inherited' | 'unset' | 'unknown' };
 
 type Props = {
@@ -78,7 +79,7 @@ export function ConfigurationField({ field, value, issues = [], disabled, resetE
     await commit(() => next === null && onReset ? onReset() : onChange(next), token);
   };
   const blocked = disabled || Boolean(field.unavailableReason);
-  return <div>
+  return <div className={styles.controls}>
     <label htmlFor={id}>{field.label}{presentation?.unit ? `（${presentation.unit}）` : ''}{field.required ? ' *' : ''}</label>
     {field.kind === 'boolean' ? <input id={id} type="checkbox" checked={value === true} disabled={blocked} aria-invalid={Boolean(error || issues.length)} aria-describedby={`${id}-issues`} onChange={event => { const next = event.target.checked; void commit(() => onChange(next)); }} />
       : field.choices.length ? <select id={id} value={input} disabled={blocked} onChange={event => { void change(event.target.value); }}>
