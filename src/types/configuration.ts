@@ -12,6 +12,8 @@ export type EditingState = { version: number; selectedProvider: string | null; i
 export type ConfigurationField = {
   id: string; label: string; kind: string; required: boolean; advanced: boolean;
   choices: string[]; minimum: number | null; defaultSource: string | null; unavailableReason: string | null;
+  /** Draft baseline origin projected by the backend; absent means unknown (conservative restore). */
+  origin?: 'explicit' | 'inherited' | 'unset';
 };
 export type ConfigurationDescriptor = { version: number; fields: ConfigurationField[]; operations: string[] };
 export type ConfigurationIssue = { target: unknown; field: string | null; code: string; message: string };

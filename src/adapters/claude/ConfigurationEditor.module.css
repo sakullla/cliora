@@ -5,5 +5,16 @@
 .editor label, .editor fieldset > div > div { grid-column: 1 / -1; }
 .editor input:not([type='checkbox']), .editor select { min-width: 0; width: 100%; box-sizing: border-box; }
 .note { font-size: .86em; color: var(--text-2); line-height: 1.5; margin: 0; }
+.unifyRow { display: flex; align-items: center; gap: .57em; flex-wrap: wrap; grid-column: 1 / -1; }
+.unifyRow .note { flex: 1 1 320px; }
+
+/* Role overrides as compact two-column cards: model + display name side by
+   side, long-context checkbox on its own row. */
+.roleGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; grid-column: 1 / -1; }
+.roleCard { display: grid; gap: .57em; min-width: 0; border: 1px solid var(--line) !important; border-radius: var(--radius); padding: .57em .71em .71em; }
+.roleCard legend { font-size: 12.5px; font-weight: 650; padding: 0 4px; }
+.roleCard > div { grid-template-columns: none !important; }
+.roleCard > div:has(input[type='checkbox']) { grid-column: auto !important; }
+@media (max-width: 720px) { .roleGrid { grid-template-columns: 1fr; } }
 
 .editor [hidden] { display: none !important; }

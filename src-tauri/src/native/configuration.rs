@@ -100,6 +100,36 @@ pub fn documents(registry: &Registry, profile: &RegisteredProfile) -> Result<Doc
         .collect()
 }
 
+/// Project each descriptor field's baseline origin for the current draft.
+/// Common fields classify from the shared common-parameter locations
+/// (explicit/unset only); profile and current subjects additionally classify
+/// inherited values through the adapter's field location mapping. Fields the
+/// adapter cannot locate keep their descriptor untouched, so editors fall
+/// back to their conservative restore affordance.
+fn annotate_field_origins(
+    port: &dyn crate::adapters::configuration::ConfigurationAdapter,
+    descriptor: &mut ConfigurationDescriptor,
+    own: &Documents,
+    effective: &Documents,
+    scope: Scope,
+    subject: crate::adapters::configuration::ConfigurationSubject,
+) {
+    use crate::adapters::configuration::{classify_origin, ConfigurationSubject};
+    let inheritable = subject != ConfigurationSubject::Common;
+    for field in &mut descriptor.fields {
+        let locations: Vec<(String, Vec<String>)> = if subject == ConfigurationSubject::Common {
+            port.common_parameters(scope)
+                .into_iter()
+                .filter(|parameter| parameter.field.id == field.id)
+                .map(|parameter| (parameter.role.into(), parameter.path))
+                .collect()
+        } else {
+            port.field_locations(&field.id, effective)
+        };
+        field.origin = classify_origin(own, effective, &locations, inheritable);
+    }
+}
+
 /// Upgrade at the editing/import boundary once. Connection is no longer an
 /// editable source after this function; its secret reference is retained.
 pub fn normalize_legacy(
@@ -272,7 +302,10 @@ pub fn refresh(registry: &Registry, mut draft: ConfigurationDraft) -> Configurat
             derive_connection(registry, &mut draft.profile, &parsed)?;
         }
         if draft.subject.is_some() {
-            draft.descriptor = Some(port.describe_subject(draft.scope, subject));
+            let mut descriptor = port.describe_subject(draft.scope, subject);
+            let own = documents(registry, &draft.profile)?;
+            annotate_field_origins(port, &mut descriptor, &own, &parsed, draft.scope, subject);
+            draft.descriptor = Some(descriptor);
             draft.catalog_support = Some(if subject == crate::adapters::configuration::ConfigurationSubject::Common {
                 crate::adapters::configuration::CatalogSupport { available: false, multiple: false, reason: Some("通用配置不创建模型引用".into()) }
             } else { port.catalog_support() });

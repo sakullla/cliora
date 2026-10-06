@@ -265,7 +265,7 @@ test('a home switch that differs from the file opens the comparison', async ({ p
   await expect(dialog.getByText('model = "new"')).toBeVisible();
   await expect(tools.getByRole('alert')).toHaveCount(0);
   await expect(tools.getByRole('radio', { name: '日常' })).toHaveAttribute('aria-checked', 'true');
-  await dialog.getByRole('button', { name: '使用本次配置' }).click();
+  await dialog.getByRole('button', { name: '使用本次内容' }).click();
   await expect(dialog).toHaveCount(0);
   await expect(tools.getByRole('status')).toHaveText('Codex 已写入原生文件，下次启动读取。');
   await expect(tools.getByRole('radio', { name: '工作' })).toHaveAttribute('aria-checked', 'true');

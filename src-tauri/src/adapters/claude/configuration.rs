@@ -60,6 +60,50 @@ mod tests {
         serde_json::from_value(json!({"id":"","tool":"claude_code","name":"Native roles","version":0,"inheritCommon":false,"files":{"settings":include_str!("../../../../tests/fixtures/native/claude-model-editor.json")},"connection":null,"nativeCredentials":{}})).unwrap()
     }
     #[test]
+    fn claude_descriptor_origin_tracks_roles_inheritance_and_unknown_fields() {
+        let registry = Registry::with_adapters(vec![&Claude]).unwrap();
+        let mut profile = profile();
+        profile.inherit_common = true;
+        let mut settings: Value = serde_json::from_str(&profile.files["settings"]).unwrap();
+        settings.as_object_mut().unwrap().remove("effortLevel");
+        profile
+            .files
+            .insert("settings".into(), settings.to_string());
+        let common = crate::native::profile::RegisteredCommon {
+            tool: "claude_code".into(),
+            version: 1,
+            revision: "common-1".into(),
+            files: BTreeMap::from([("settings".into(), "{\"effortLevel\":\"high\"}".into())]),
+        };
+        let draft = configuration::open_with_common(
+            &registry,
+            profile,
+            Some(common),
+            Scope::Global,
+            "claude-origin-session".into(),
+        )
+        .unwrap();
+        let mut draft = draft;
+        draft.subject = Some(ConfigurationSubject::Profile);
+        let draft = configuration::refresh(&registry, draft);
+        let fields = &draft.descriptor.as_ref().unwrap().fields;
+        let origin = |id: &str| {
+            fields
+                .iter()
+                .find(|field| field.id == id)
+                .unwrap()
+                .origin
+        };
+        assert_eq!(origin("default.model"), Some(FieldOrigin::Explicit));
+        assert_eq!(origin("base_url"), Some(FieldOrigin::Explicit));
+        assert_eq!(origin("sonnet.model"), Some(FieldOrigin::Explicit));
+        assert_eq!(origin("sonnet.name"), Some(FieldOrigin::Explicit));
+        assert_eq!(origin("opus.model"), Some(FieldOrigin::Unset));
+        assert_eq!(origin("effortLevel"), Some(FieldOrigin::Inherited));
+        // Dynamic per-model fields have no static location and stay unclassified.
+        assert_eq!(origin("modelEffortLevel"), None);
+    }
+    #[test]
     fn claude_roles_edit_independently_and_unify_is_explicit() {
         let registry = Registry::with_adapters(vec![&Claude]).unwrap();
         let mut draft =
@@ -333,6 +377,7 @@ mod tests {
             .released
             .contains(&"/modelSettings/gateway~1model~0variant/effortLevel".into()));
     }
+
 }
 fn paths(field: &str) -> Result<Vec<Vec<String>>, String> {
     if field == "effortLevel" {
@@ -494,7 +539,18 @@ fn field(
         minimum: None,
         default_source: Some("跟随 Claude 原生默认或继承值".into()),
         unavailable_reason: None,
+        origin: None,
     }
+}
+/// Claude settings and local settings share one schema; a field is backed by
+/// its role model locations in either file, so the shared draft projection
+/// can classify explicit, inherited and unset baselines for both.
+fn field_locations_for(field: &str) -> Vec<(String, Vec<String>)> {
+    let Ok(paths) = paths(field) else { return Vec::new() };
+    ["settings", "local_settings"]
+        .into_iter()
+        .flat_map(|role| paths.iter().cloned().map(move |path| (role.into(), path)))
+        .collect()
 }
 impl ConfigurationAdapter for Claude {
     fn credential_paths(&self,_connection:&Connection)->Vec<(&'static str,Vec<String>)>{
@@ -642,6 +698,9 @@ impl ConfigurationAdapter for Claude {
             fields,
             operations: vec!["set".into(), "reset".into(), "unify".into()],
         }
+    }
+    fn field_locations(&self, field: &str, _: &Documents) -> Vec<(String, Vec<String>)> {
+        field_locations_for(field)
     }
     fn read(&self, documents: &Documents, _: &EditingState) -> Result<Value, String> {
         let settings = root(documents)?;

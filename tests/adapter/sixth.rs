@@ -516,7 +516,7 @@ impl crate::adapters::configuration::ConfigurationAdapter for Sixth {
     fn describe(&self, _: Scope) -> crate::adapters::configuration::ConfigurationDescriptor {
         use crate::adapters::configuration::*;
         ConfigurationDescriptor { version: 1, operations: vec!["set", "reset", "create", "rename", "delete", "default"].into_iter().map(str::to_owned).collect(), fields: vec![ConfigurationField {
-            id: "window".into(), label: "Context window".into(), kind: "integer".into(), required: true, advanced: false, choices: vec![], minimum: Some(1.0), default_source: None, unavailable_reason: None,
+            id: "window".into(), label: "Context window".into(), kind: "integer".into(), required: true, advanced: false, choices: vec![], minimum: Some(1.0), default_source: None, unavailable_reason: None, origin: None,
         }] }
     }
     fn read(&self, documents: &crate::adapters::configuration::Documents, _: &crate::adapters::configuration::EditingState) -> Result<Value, String> {

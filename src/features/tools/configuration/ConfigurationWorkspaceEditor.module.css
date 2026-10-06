@@ -4,9 +4,20 @@
 .shell [hidden] { display: none !important; }
 .tabs, .buttons { display: flex; gap: 8px; flex-wrap: wrap; }
 .tabs { position: sticky; top: 0; z-index: 2; padding: 4px 0 10px; background: var(--surface); }
+.tabs button { border-color: transparent; background: transparent; box-shadow: none; color: var(--text-2); font-weight: 500; }
+.tabs button:hover:not(:disabled) { background: var(--surface-2); border-color: transparent; color: var(--text); }
 .tabs [aria-pressed='true'] { color: var(--accent); background: var(--accent-soft); }
 .name { max-width: 600px; }
+.scroll .name { display: flex; flex-direction: row; align-items: center; gap: 10px; max-width: none; }
+.scroll .name input { flex: 1; min-width: 0; }
 .sources, .connection, .diagnostics, .directory { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
+.diagnostics > summary { cursor: pointer; font-size: 13px; color: var(--text-2); }
+.sourcePicker { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.sourcePickerTitle { flex: none; font-size: 12px; color: var(--text-2); margin-right: 2px; }
+.sourcePicker [role='radio'] { min-height: var(--control-h-sm); padding: 0 12px; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--surface); box-shadow: none; font-size: 12.5px; color: var(--text-2); }
+.sourcePicker [role='radio'][aria-checked='true'] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.sourcePicker [role='radio']:disabled { opacity: .55; }
+.hint { margin: 0; font-size: 12px; color: var(--text-2); }
 .connectionSummary { overflow-wrap: anywhere; }
 .secret { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; }
 .secret > label { flex: 1; }
@@ -16,7 +27,7 @@
 .footer > span { flex: 1 1 auto; min-width: 0; font-size: 12px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .footer .actions { flex: none; display: flex; align-items: center; gap: 10px; min-width: 0; }
 .footer .actions button { white-space: nowrap; }
-.footer details[open] { position: absolute; bottom: 54px; right: 0; z-index: 3; padding: 12px; border: 1px solid var(--line); background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow-sm); }
+.footer details[open] { position: absolute; bottom: var(--config-footer-h); right: 0; z-index: 3; padding: 12px; border: 1px solid var(--line); background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow-sm); }
 .footer details[open] button { display: block; margin-top: 8px; }
 .primary { background: var(--accent) !important; color: var(--on-accent) !important; }
 @media (max-width: 760px) { .shell { height: calc(100dvh - 200px); } .tabs { gap: 4px; } .tabs button { padding: 7px 8px; } .footer { gap: 5px; } .footer button { padding: 8px; } }

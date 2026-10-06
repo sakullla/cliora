@@ -123,6 +123,90 @@ mod tests {
         }
     }
     #[test]
+    fn codex_descriptor_origin_tracks_own_common_and_unset_baselines() {
+        let registry = Registry::with_adapters(vec![&Codex]).unwrap();
+        let mut profile = profile();
+        profile.inherit_common = true;
+        let mut settings = format::parse(FileKind::Toml, &profile.files["settings"]).unwrap();
+        settings.as_object_mut().unwrap().remove("model_verbosity");
+        settings.as_object_mut().unwrap().remove("model_context_window");
+        profile.files.insert(
+            "settings".into(),
+            format::render(FileKind::Toml, &settings).unwrap(),
+        );
+        let common = crate::native::profile::RegisteredCommon {
+            tool: "codex".into(),
+            version: 1,
+            revision: "common-1".into(),
+            files: BTreeMap::from([(
+                "settings".into(),
+                "model_verbosity = \"high\"\n".into(),
+            )]),
+        };
+        let draft = configuration::open_with_common(
+            &registry,
+            profile,
+            Some(common),
+            Scope::Global,
+            "codex-origin-session".into(),
+        )
+        .unwrap();
+        let mut draft = draft;
+        draft.subject = Some(ConfigurationSubject::Profile);
+        let draft = configuration::refresh(&registry, draft);
+        let fields = &draft.descriptor.as_ref().unwrap().fields;
+        let origin = |id: &str| {
+            fields
+                .iter()
+                .find(|field| field.id == id)
+                .unwrap()
+                .origin
+        };
+        assert_eq!(origin("model"), Some(FieldOrigin::Explicit));
+        assert_eq!(origin("base_url"), Some(FieldOrigin::Explicit));
+        assert_eq!(origin("model_verbosity"), Some(FieldOrigin::Inherited));
+        assert_eq!(origin("model_context_window"), Some(FieldOrigin::Unset));
+        assert_eq!(origin("model_reasoning_effort"), Some(FieldOrigin::Explicit));
+    }
+    #[test]
+    fn codex_common_descriptor_origin_marks_explicit_and_unset_only() {
+        let registry = Registry::with_adapters(vec![&Codex]).unwrap();
+        let common = crate::native::profile::RegisteredCommon {
+            tool: "codex".into(),
+            version: 1,
+            revision: "common-1".into(),
+            files: BTreeMap::from([("settings".into(), "model_verbosity = \"high\"\n".into())]),
+        };
+        let mut profile = profile();
+        profile.inherit_common = false;
+        // A common draft's own layer is the common document itself.
+        profile.files = common.files.clone();
+        let mut draft = configuration::open_with_common(
+            &registry,
+            profile,
+            Some(common),
+            Scope::Global,
+            "codex-common-origin-session".into(),
+        )
+        .unwrap();
+        draft.subject = Some(ConfigurationSubject::Common);
+        let draft = configuration::refresh(&registry, draft);
+        let fields = &draft.descriptor.as_ref().unwrap().fields;
+        let origin = |id: &str| {
+            fields
+                .iter()
+                .find(|field| field.id == id)
+                .unwrap()
+                .origin
+        };
+        assert_eq!(origin("model_verbosity"), Some(FieldOrigin::Explicit));
+        assert_eq!(origin("model_reasoning_summary"), Some(FieldOrigin::Unset));
+        // Inherited is impossible for the common layer itself.
+        assert!(!fields
+            .iter()
+            .any(|field| field.origin == Some(FieldOrigin::Inherited)));
+    }
+    #[test]
     fn codex_native_parameters_round_trip_and_complete_save_rejects_invalid() {
         let registry = Registry::with_adapters(vec![&Codex]).unwrap();
         let mut draft =
@@ -1007,6 +1091,7 @@ fn field(
         minimum: (kind == "integer").then_some(1.0),
         default_source: Some("跟随 Codex 原生默认或继承值".into()),
         unavailable_reason: None,
+        origin: None,
     }
 }
 
@@ -1170,6 +1255,22 @@ impl ConfigurationAdapter for Codex {
             fields,
             operations: vec!["set".into(), "reset".into()],
         }
+    }
+    fn field_locations(&self, field: &str, documents: &Documents) -> Vec<(String, Vec<String>)> {
+        if PARAMETERS.contains(&field) {
+            return vec![("settings".into(), vec![field.into()])];
+        }
+        if field == "base_url" {
+            let provider = documents
+                .get("settings")
+                .and_then(|settings| settings["model_provider"].as_str())
+                .unwrap_or("openai");
+            return vec![(
+                "settings".into(),
+                vec!["model_providers".into(), provider.into(), "base_url".into()],
+            )];
+        }
+        Vec::new()
     }
     fn read(&self, documents: &Documents, _: &EditingState) -> Result<Value, String> {
         let settings = root(documents);

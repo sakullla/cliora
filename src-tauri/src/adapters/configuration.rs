@@ -35,6 +35,46 @@ pub struct CommonParameter {
     pub target: Value,
 }
 
+/// JSON pointer for a native path, shared by origin and suppression tracking.
+pub fn location_pointer(path: &[String]) -> String {
+    format!(
+        "/{}",
+        path.iter()
+            .map(|part| crate::adapters::pointer_token(part))
+            .collect::<Vec<_>>()
+            .join("/")
+    )
+}
+
+/// Classify a field's baseline origin from its native locations: explicit when
+/// any location holds a value in this layer's own documents, inherited when
+/// only the merged effective documents provide one, unset otherwise. Common
+/// subjects pass `inheritable = false` because they merge nothing. An empty
+/// location list means the field cannot be classified (origin omitted).
+pub fn classify_origin(
+    own: &Documents,
+    effective: &Documents,
+    locations: &[(String, Vec<String>)],
+    inheritable: bool,
+) -> Option<FieldOrigin> {
+    if locations.is_empty() {
+        return None;
+    }
+    let present = |documents: &Documents, (role, path): &(String, Vec<String>)| {
+        documents
+            .get(role)
+            .and_then(|root| root.pointer(&location_pointer(path)))
+            .is_some()
+    };
+    Some(if locations.iter().any(|location| present(own, location)) {
+        FieldOrigin::Explicit
+    } else if inheritable && locations.iter().any(|location| present(effective, location)) {
+        FieldOrigin::Inherited
+    } else {
+        FieldOrigin::Unset
+    })
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigurationAction {
@@ -65,6 +105,18 @@ impl Default for EditingState {
     }
 }
 
+/// Baseline source of a descriptor field's currently effective value.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FieldOrigin {
+    /// This layer sets the value explicitly in its own native files.
+    Explicit,
+    /// The effective value is inherited from the common layer's merge.
+    Inherited,
+    /// No layer sets the value; the CLI's native default applies.
+    Unset,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigurationField {
@@ -77,6 +129,10 @@ pub struct ConfigurationField {
     pub minimum: Option<f64>,
     pub default_source: Option<String>,
     pub unavailable_reason: Option<String>,
+    /// Draft baseline origin projected by shared refresh; absent when the
+    /// adapter cannot classify the field (editors fall back conservatively).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<FieldOrigin>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -273,6 +329,14 @@ pub trait ConfigurationAdapter: Sync {
     ) -> Result<(), String>;
 
     fn describe(&self, scope: Scope) -> ConfigurationDescriptor;
+    /// Native document locations backing a logical descriptor field in the
+    /// given (effective) documents, as (role, path) pairs. The shared draft
+    /// refresh classifies each descriptor field's baseline origin from these
+    /// locations; an empty result leaves the field without origin metadata so
+    /// editors keep their conservative restore affordance.
+    fn field_locations(&self, _field: &str, _documents: &Documents) -> Vec<(String, Vec<String>)> {
+        Vec::new()
+    }
     fn read(&self, documents: &Documents, state: &EditingState) -> Result<Value, String>;
     fn edit(
         &self,

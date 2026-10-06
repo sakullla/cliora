@@ -1,13 +1,14 @@
 import { claudeFieldPresentation } from './fieldPresentation';
 import { CommonConfigurationFields } from '../../components/configuration/CommonConfigurationFields';
 import { useEffect, useRef, useState } from 'react';
-import { ConfigurationField } from '../../components/configuration/ConfigurationField';
+import { ConfigurationField, type FieldPresentation } from '../../components/configuration/ConfigurationField';
+import sharedStyles from '../../components/configuration/configuration.module.css';
 import type { ConfigurationContentProps } from '../contract';
 import styles from './ConfigurationEditor.module.css';
 
 type View = { values?: Record<string, unknown>; editTarget?: string; effortChoices?: string[]; effortWarnings?: string[]; effortOverride?: unknown; modelEffortOverride?: unknown; modelEfforts?: Record<string, unknown>; modelEffortChoices?: Record<string, string[]>; currentEffortModel?: string | null; capabilitySource?: string };
 const roles = [['sonnet', 'Sonnet'], ['opus', 'Opus'], ['fable', 'Fable'], ['haiku', 'Haiku'], ['subagent', '子代理']] as const;
-function Editor({ draft, descriptor, disabled, onAction, onValidityChange, section, rawResetEpoch }: ConfigurationContentProps) {
+function Editor({ draft, descriptor, disabled, onAction, onValidityChange, section, rawResetEpoch, catalog }: ConfigurationContentProps) {
   const view = draft.view as View | null;
   const values = view?.values ?? {};
   const [unifyError, setUnifyError] = useState<string | null>(null);
@@ -30,8 +31,17 @@ function Editor({ draft, descriptor, disabled, onAction, onValidityChange, secti
     const target = id === 'modelEffortLevel' ? `${editTarget === 'local_configuration' ? 'local:' : ''}model:${effortModel}` : editTarget;
     const action = (operation: string, value: unknown = null) => onAction({ version: descriptor.version, target, operation, field: id, value });
     const choices = id === 'modelEffortLevel' ? view?.modelEffortChoices?.[effortModel] : undefined;
+    const isModel = id === 'default.model' || id.endsWith('.model');
     const metadata = choices?.length ? { ...field, choices } : field;
-    return <ConfigurationField resetEpoch={rawResetEpoch} presentation={{ ...claudeFieldPresentation(id), origin: draft.profile.editing?.intents.some(action => action.operation === 'set' && action.field === id && action.target === target) ? 'explicit' : undefined }} key={`${draft.sessionId}:${id}:${target}`} field={metadata} value={id === 'modelEffortLevel' ? view?.modelEfforts?.[effortModel] : values[id]} disabled={disabled || unifying || (id === 'modelEffortLevel' && !effortModel.trim())}
+    const role = roles.find(([key]) => id === `${key}.model` || id === `${key}.name`);
+    const roleModel = role ? values[`${role[0]}.model`] : undefined;
+    const presentation: FieldPresentation = {
+      ...claudeFieldPresentation(id),
+      origin: draft.profile.editing?.intents.some(action => action.operation === 'set' && action.field === id && action.target === target) ? 'explicit' : field?.origin,
+      ...(isModel ? { combobox: true, catalog: catalog ? { supported: catalog.supported, busy: catalog.busy, fetch: catalog.fetch } : undefined, suggestions: [...new Set([...(catalog?.models ?? []), ...roles.map(([key]) => values[`${key}.model`]), values['default.model']].filter((value): value is string => typeof value === 'string' && value.trim() !== ''))] } : {}),
+      ...(id.endsWith('.name') && typeof roleModel === 'string' && roleModel.trim() ? { placeholder: `与模型相同 · ${roleModel}` } : {}),
+    };
+    return <ConfigurationField resetEpoch={rawResetEpoch} presentation={presentation} key={`${draft.sessionId}:${id}:${target}`} field={metadata} value={id === 'modelEffortLevel' ? view?.modelEfforts?.[effortModel] : values[id]} disabled={disabled || unifying || (id === 'modelEffortLevel' && !effortModel.trim())}
       issues={draft.issues.filter(issue => issue.field === id)}
       onChange={value => value === '' ? action('reset') : action('set', value)}
       onReset={id.endsWith('.longContext') ? undefined : () => action('reset')}
@@ -51,16 +61,14 @@ function Editor({ draft, descriptor, disabled, onAction, onValidityChange, secti
   };
   return <section className={styles.editor} aria-label="Claude 专属配置">
     <div hidden={section === 'settings'}>{render('default.model')}
-    <details open={draft.credential?.source === 'api_key' && !draft.draftConnection?.baseUrl}><summary>供应商连接</summary>{render('base_url')}</details>
+    <details className={sharedStyles.disclosureCard} open={draft.credential?.source === 'api_key' && !draft.draftConnection?.baseUrl}><summary>供应商连接</summary>{render('base_url')}</details>
     </div>
-    <div hidden={section === 'models'}><details open={section === 'settings'}><summary>角色、子代理与长上下文</summary><div className={styles.fields}>
+    <div hidden={section === 'models'}><details className={sharedStyles.disclosureCard} open={section === 'settings'}><summary>角色、子代理与长上下文</summary><div className={styles.fields}>
+      <div className={styles.unifyRow}><button type="button" className={sharedStyles.accent} disabled={disabled || unifying || !values['default.model']} onClick={() => { void unify(); }}>{unifying ? '统一中…' : '将默认模型用于全部角色'}</button>{unifyError && <p role="alert">{unifyError}</p>}<p className={styles.note}>统一保留各角色显示名称；长上下文使用原生 [1m] 后缀，服务是否可用取决于模型与账号。</p></div>
       {render('default.longContext')}
-      {roles.map(([role, label]) => <fieldset key={role}><legend>{label}</legend>{render(`${role}.model`)}{render(`${role}.name`)}{render(`${role}.longContext`)}</fieldset>)}
-      <p className={styles.note}>每个角色独立设置。统一会将默认模型用于 Sonnet、Opus、Fable、Haiku 和子代理，保留各角色显示名称。长上下文使用原生 [1m] 后缀，服务是否可用取决于模型与账号。</p>
-      <button type="button" disabled={disabled || unifying || !values['default.model']} onClick={() => { void unify(); }}>将默认模型用于全部角色</button>
-      {unifyError && <p role="alert">{unifyError}</p>}
+      <div className={styles.roleGrid}>{roles.map(([role, label]) => <fieldset className={styles.roleCard} key={role}><legend>{label}</legend>{render(`${role}.model`)}{render(`${role}.name`)}{render(`${role}.longContext`)}</fieldset>)}</div>
     </div></details>
-    <details><summary>推理参数</summary><p className={styles.note}>{view?.capabilitySource}</p>{render('effortLevel')}
+    <details className={sharedStyles.disclosureCard}><summary>推理参数</summary><p className={styles.note}>{view?.capabilitySource}</p>{render('effortLevel')}
       {view?.effortWarnings?.map(message => <p key={message} className={styles.note}>{message}</p>)}
       <div className={styles.fields}>
         <label>模型 effort 的 canonical ID<input aria-label="模型 effort 的 canonical ID" value={effortModel} list="claude-existing-effort-models" disabled={disabled || unifying} onChange={event => setEffortModel(event.target.value)} /></label>

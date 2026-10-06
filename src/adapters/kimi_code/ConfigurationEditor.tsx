@@ -1,7 +1,8 @@
 import { kimiFieldPresentation } from './fieldPresentation';
 import { CommonConfigurationFields } from '../../components/configuration/CommonConfigurationFields';
 import { useState } from 'react';
-import { AdditionalIssues, objectFields, EntityActions, EditorField, ProviderEditor, NewModelForm, useEditorAction } from '../../components/configuration/ModelEditorControls';
+import { AdditionalIssues, objectFields, EntityActions, EditorField, ModelRow, ProviderEditor, NewModelForm, useEditorAction } from '../../components/configuration/ModelEditorControls';
+import sharedStyles from '../../components/configuration/configuration.module.css';
 import type { ConfigurationContentProps } from '../contract';
 import styles from './ConfigurationEditor.module.css';
 
@@ -41,13 +42,17 @@ function Editor(props: ConfigurationContentProps) {
       onDraftValidityChange={valid => props.onValidityChange('connection-form', valid)}
       onConfigure={(id, value) => action.run({ kind: 'provider', provider: id }, 'configure_provider', value)}
       onSelect={id => action.run({ kind: 'provider', provider: id }, 'select_provider')} />
-    <details><summary>模型说明</summary><p className={styles.note}>alias 是配置内的模型名称，请求模型 ID 单独填写。上下文上限必填；恢复默认仅取消本层覆盖，必填项仍需有效继承值。</p>
+    <details className={sharedStyles.disclosureCard}><summary>模型说明</summary><p className={styles.note}>alias 是配置内的模型名称，请求模型 ID 单独填写。上下文上限必填；恢复默认仅取消本层覆盖，必填项仍需有效继承值。</p>
     <p className={styles.note}>文本是 Kimi 的原生默认能力，无需声明；图片、思考等能力按模型实际支持情况选择。已有未知原生能力会保留。</p>
     </details></div>
     {models.map(model => <article className={styles.model} key={`${provider}:${model.id}`} hidden={Boolean(props.section && expanded && expanded !== model.id)} aria-label={`模型 ${model.id}`}>
-      <button type="button" className={styles.modelHeading} disabled={structuralBlocked} aria-expanded={expanded === model.id} aria-label={`${props.section && expanded === model.id ? '返回模型列表 · ' : ''}${typeof model.fields.display_name === 'string' && model.fields.display_name !== model.id ? `${model.fields.display_name} · ${model.id}` : model.id}${typeof model.fields.model === 'string' && model.fields.model !== model.id ? ` · 请求 ${model.fields.model}` : ''}${view.defaultModel === model.id ? ' · 默认' : ''}`} onClick={() => setExpanded(expanded === model.id ? null : model.id)}>
-        {props.section && expanded === model.id && '返回模型列表 · '}{typeof model.fields.display_name === 'string' && model.fields.display_name !== model.id ? `${model.fields.display_name} · ${model.id}` : model.id}{typeof model.fields.model === 'string' && model.fields.model !== model.id ? ` · 请求 ${model.fields.model}` : ''}{view.defaultModel === model.id && <span className={styles.modelBadge} data-default-badge>默认</span>}
-      </button>
+      <ModelRow id={model.id} name={typeof model.fields.display_name === 'string' ? model.fields.display_name : undefined}
+        sub={typeof model.fields.model === 'string' && model.fields.model !== model.id ? [`请求 ${model.fields.model}`] : []}
+        badges={view.defaultModel === model.id ? ['默认'] : []}
+        expanded={expanded === model.id} sectioned={Boolean(props.section)} disabled={structuralBlocked}
+        canDefault={can('default') && view.defaultModel !== model.id}
+        onToggle={() => setExpanded(expanded === model.id ? null : model.id)}
+        onSetDefault={() => void action.run(target(model), 'default')} />
       {<div className={styles.fields} hidden={expanded !== model.id}>
         {modelFields.filter(item => !item.advanced).map(item => field(item.id, model))}
         <details><summary>能力、思考与可选上限</summary>{modelFields.filter(item => item.advanced).map(item => field(item.id, model))}</details>
@@ -59,9 +64,9 @@ function Editor(props: ConfigurationContentProps) {
       initialValues={{ provider }} onCreate={async (id, values) => { const success = await action.run({ kind: 'model', provider, id }, 'create', values); if (success) setExpanded(id); return success; }} />}
     </div>
     <div className={styles.modelSpacer} data-list-spacer /></div>
-    <div hidden={props.section === 'models'}><details open={props.section === 'settings'}><summary>默认思考设置</summary>{descriptor.fields.filter(item => item.id.startsWith('thinking.')).map(item => field(item.id))}</details>
+    <div hidden={props.section === 'models'}><details className={sharedStyles.disclosureCard} open={props.section === 'settings'}><summary>默认思考设置</summary>{descriptor.fields.filter(item => item.id.startsWith('thinking.')).map(item => field(item.id))}</details>
     </div>
-    {view.capabilityReason && <details><summary>模型能力说明</summary><p className={styles.note}>{view.capabilityReason}</p></details>}
+    {view.capabilityReason && <details className={sharedStyles.disclosureCard}><summary>模型能力说明</summary><p className={styles.note}>{view.capabilityReason}</p></details>}
     {!descriptor.operations.length && <p role="status">Kimi 用户模型配置不支持项目范围。</p>}
     <AdditionalIssues props={props} />
     {action.error && <div role="alert">{action.error}<button type="button" onClick={action.cancelFailure}>取消本次操作</button></div>}

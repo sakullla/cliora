@@ -563,10 +563,6 @@ label.setting-row:hover { background: var(--surface-2); }
 .native-rule-message { padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); color: var(--text-2); font-size: 12.5px; }
 
 /* File conflict comparison */
-.file-conflict { margin: 16px 0; padding: 16px; border: 1px solid var(--warning-line); border-radius: var(--radius-lg); background: var(--warning-soft); }
-.file-conflict > strong { display: block; margin-bottom: 10px; color: var(--warning); }
-.file-conflict-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.file-conflict-columns strong { display: block; margin-bottom: 6px; font-size: 12px; color: var(--text-2); }
 .file-conflict-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .file-conflict-actions > button:last-child { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .file-conflict-actions > button:last-child:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
@@ -652,7 +648,6 @@ details:not([open]) > :not(summary) { display: none !important; }
   .shell { grid-template-columns: 188px minmax(0, 1fr); }
   .content-inner { padding: 24px 24px 40px; }
   .connection-layout { grid-template-columns: 130px minmax(0, 1fr); gap: 12px; }
-  .file-conflict-columns { grid-template-columns: 1fr; }
 }
 @media (min-width: 681px) {
   .shell[data-sidebar-collapsed="true"] { grid-template-columns: 68px minmax(0, 1fr); }

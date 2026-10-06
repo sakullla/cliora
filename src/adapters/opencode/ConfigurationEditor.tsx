@@ -1,7 +1,8 @@
 import { openCodeFieldPresentation } from './fieldPresentation';
 import { CommonConfigurationFields } from '../../components/configuration/CommonConfigurationFields';
 import { useState } from 'react';
-import { AdditionalIssues, objectFields, EntityActions, EditorField, ProviderEditor, NewModelForm, useEditorAction, fieldValue } from '../../components/configuration/ModelEditorControls';
+import { AdditionalIssues, objectFields, EntityActions, EditorField, ModelRow, ProviderEditor, NewModelForm, useEditorAction, fieldValue } from '../../components/configuration/ModelEditorControls';
+import sharedStyles from '../../components/configuration/configuration.module.css';
 import type { ConfigurationContentProps } from '../contract';
 import styles from './ConfigurationEditor.module.css';
 
@@ -37,9 +38,12 @@ function Editor(props: ConfigurationContentProps) {
     <p className={styles.note}>默认与轻量模型分别设置。恢复默认会取消本层覆盖，采用继承配置或 OpenCode 原生默认。</p>
     </div>
     {models.map(model => <article className={styles.model} key={`${provider}:${model.id}`} hidden={Boolean(props.section && expanded && expanded !== model.id)} aria-label={`模型 ${model.id}`}>
-      <button type="button" className={styles.modelHeading} disabled={structuralBlocked} aria-expanded={expanded === model.id} aria-label={`${props.section && expanded === model.id ? '返回模型列表 · ' : ''}${typeof model.fields.name === 'string' ? model.fields.name : model.id} · ${model.id}${view.defaultModel === model.id ? ' · 默认' : ''}${view.smallModel === model.id ? ' · 轻量' : ''}`} onClick={() => setExpanded(expanded === model.id ? null : model.id)}>
-        {props.section && expanded === model.id && '返回模型列表 · '}{typeof model.fields.name === 'string' ? model.fields.name : model.id} · {model.id}{view.defaultModel === model.id && <span className={styles.modelBadge} data-default-badge>默认</span>}{view.smallModel === model.id ? ' · 轻量' : ''}
-      </button>
+      <ModelRow id={model.id} name={typeof model.fields.name === 'string' ? model.fields.name : undefined}
+        badges={[view.defaultModel === model.id ? '默认' : '', view.smallModel === model.id ? '轻量' : ''].filter(Boolean)}
+        expanded={expanded === model.id} sectioned={Boolean(props.section)} disabled={structuralBlocked}
+        canDefault={can('default') && view.defaultModel !== model.id}
+        onToggle={() => setExpanded(expanded === model.id ? null : model.id)}
+        onSetDefault={() => void action.run(target(model.id), 'default')} />
       {<div className={styles.fields} hidden={expanded !== model.id}>
         {descriptor.fields.filter(item => !item.advanced).map(item => field(item.id, model))}
         {field('modalities.input', model)}{field('modalities.output', model)}
@@ -51,7 +55,7 @@ function Editor(props: ConfigurationContentProps) {
       onCreate={async (id, values) => { const success = await action.run(target(id), 'create', values); if (success) setExpanded(id); return success; }} />}
     </div>
     <div className={styles.modelSpacer} data-list-spacer /></div>
-    <div hidden={props.section === 'models'}><details open={props.section === 'settings'}><summary>默认模型设置</summary>
+    <div hidden={props.section === 'models'}><details className={sharedStyles.disclosureCard} open={props.section === 'settings'}><summary>默认模型设置</summary>
       <button type="button" disabled={blocked || !can('reset')} onClick={() => { void action.run({ kind: 'settings' }, 'reset', null, 'model'); }}>恢复默认模型</button>
       <button type="button" disabled={blocked || !can('reset')} onClick={() => { void action.run({ kind: 'settings' }, 'reset', null, 'small_model'); }}>恢复轻量模型</button>
     </details>

@@ -10,6 +10,7 @@ import type { AdapterDescriptor, RegisteredProfile, RegisteredToolWorkspace, Sco
 import type { ConfigurationDraft, ConfigurationSaveResult, ConfigurationSubject } from '../../types/configuration';
 import type { AccountImpactScope } from '../../types/accounts';
 import type { Project, TrayRepairTarget } from '../../types/launch';
+import { preferredLaunchMode } from '../../types/launch';
 import type { UsageQuery } from '../../types/usage';
 import { AccountsPanel, useAccounts } from './AccountsPanel';
 import { ProfileQuota, QuotaEditor, useUsageQuota } from './UsageQuota';
@@ -100,6 +101,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   const [customPath, setCustomPath] = useState('');
   const [quotaAddFor, setQuotaAddFor] = useState<string | null>(null);
   const [accountUsageQuery, setAccountUsageQuery] = useState<UsageQuery | null>(null);
+  const [launching, setLaunching] = useState(false);
   const quota = useUsageQuota(active);
   const accounts = useAccounts(toolId, active);
   const loadSequence = useRef(0);
@@ -150,8 +152,22 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     discard(); setError(''); setNotice('');
     setFrame({ key: crypto.randomUUID(), subject, profile, title: subject === 'current' ? '修改正在使用的文件' : subject === 'common' ? '修改通用配置' : profile?.id ? '修改配置' : '新建配置' });
   }
-  async function createProfile() {
-    let name = '新配置'; let suffix = 1;
+  async function launch() {
+    if (!nativeAvailable || launching) return;
+    setLaunching(true);
+    try {
+      const settings = await native.getLaunchSettings();
+      const directory = await open({ directory: true, multiple: false, title: `选择 ${descriptor?.name ?? toolId} 启动工作目录` });
+      if (typeof directory !== 'string') return;
+      await native.launchCli({ toolId, projectId: null, sessionId: null, mode: preferredLaunchMode(settings, 'cli', descriptor?.yoloAvailable ?? false), directory });
+      setNotice(`${descriptor?.name ?? toolId} 已向外部终端发出启动请求。`);
+    } catch (failure) {
+      setError(errorText(failure));
+    } finally {
+      setLaunching(false);
+    }
+  }
+  async function createProfile() {    let name = '新配置'; let suffix = 1;
     while (workspace?.profiles.some(profile => profile.name === name)) name = `新配置 ${++suffix}`;
     await openFrame('profile', { id: '', tool: toolId, name, version: 0, inheritCommon: false, files: {}, suppressed: {}, connection: null, nativeCredentials: {} });
   }
@@ -233,9 +249,9 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
       {workspace && <InstallPanel toolName={descriptor.name} probe={workspace.probe} customPath={customPath} busy={busy} loading={loading} onCustomPath={setCustomPath} onSavePath={() => void savePath()} onMaintain={(action, source) => void maintain(action, source)} onUsePath={path => void usePath(path)} />}
       {workspace?.nativeContextError && <p role="alert">{workspace.nativeContextError}</p>}
       {workspace?.recoveryNeeded.length ? <p role="alert">有 {workspace.recoveryNeeded.length} 项文件事务需要恢复。<button onClick={() => { void native.recoverNativeTransactions().then(() => reload(toolId, scope, projectPath)).catch(failure => setError(errorText(failure))); }}>重试恢复</button></p> : null}
-      {!workspace ? <div className={styles.taskEmpty}>{loading ? <p role="status">正在读取配置…</p> : <><p>配置读取失败，已有记录未被删除。</p><button onClick={() => void reload(toolId, scope, projectPath)}>重试读取配置</button></>}</div> : <div className={styles.profileList} aria-label="配置列表"><div className={styles.listHeading}><strong>配置</strong><span className={styles.listActions}><button onClick={() => void openFrame('common')}>通用配置</button><button className={styles.primary} onClick={() => void createProfile()}>新建配置</button></span></div>{currentFile && <div className={styles.profileRow} data-kind="native"><span><button className={styles.profileName} onClick={() => void openFrame('current')}>正在使用的文件</button><small>直接编辑当前范围的原生文件</small></span><button onClick={() => void openFrame('current')}>修改</button></div>}{workspace.profiles.length > 6 && <label className={styles.profileFilter}><input aria-label="搜索配置" placeholder="搜索配置" value={filter} onChange={event => setFilter(event.target.value)} /></label>}{!workspace.profiles.length && <p className={styles.profileEmpty}>还没有命名配置。可新建配置或编辑已有当前文件。</p>}<div role="list" aria-label="配置项" className={workspace.profiles.length > 6 ? styles.profileScroll : undefined}>{[{ id: 'subscription', label: '订阅套餐', profiles: workspace.profiles.filter(profile => quotaIds.has(profile.id) || profile.authentication?.kind === 'oauth') }, { id: 'other', label: '其他配置', profiles: workspace.profiles.filter(profile => !quotaIds.has(profile.id) && profile.authentication?.kind !== 'oauth') }].filter(group => group.profiles.length).map(group => <div key={group.id} className={styles.profileGroup} data-group={group.id}><div className={styles.groupLabel}><strong>{group.label}</strong><span>{group.profiles.length}</span></div>{group.profiles.filter(profile => profile.name.toLowerCase().includes(filter.toLowerCase())).map(row)}</div>)}</div></div>}
+      {!workspace ? <div className={styles.taskEmpty}>{loading ? <p role="status">正在读取配置…</p> : <><p>配置读取失败，已有记录未被删除。</p><button onClick={() => void reload(toolId, scope, projectPath)}>重试读取配置</button></>}</div> : <div className={styles.profileList} aria-label="配置列表"><div className={styles.listHeading}><strong>配置</strong><span className={styles.listActions}><button disabled={launching || !workspace} onClick={() => void launch()}>{launching ? '正在启动…' : '启动'}</button><button onClick={() => void openFrame('common')}>通用配置</button><button className={styles.primary} onClick={() => void createProfile()}>新建配置</button></span></div>{currentFile && <div className={styles.profileRow} data-kind="native"><span><button className={styles.profileName} onClick={() => void openFrame('current')}>正在使用的文件</button><small>直接编辑当前范围的原生文件</small></span><button onClick={() => void openFrame('current')}>修改</button></div>}{workspace.profiles.length > 6 && <label className={styles.profileFilter}><input aria-label="搜索配置" placeholder="搜索配置" value={filter} onChange={event => setFilter(event.target.value)} /></label>}{!workspace.profiles.length && <p className={styles.profileEmpty}>还没有命名配置。可新建配置或编辑已有当前文件。</p>}<div role="list" aria-label="配置项" className={workspace.profiles.length > 6 ? styles.profileScroll : undefined}>{[{ id: 'subscription', label: '订阅套餐', profiles: workspace.profiles.filter(profile => quotaIds.has(profile.id) || profile.authentication?.kind === 'oauth') }, { id: 'other', label: '其他配置', profiles: workspace.profiles.filter(profile => !quotaIds.has(profile.id) && profile.authentication?.kind !== 'oauth') }].filter(group => group.profiles.length).map(group => <div key={group.id} className={styles.profileGroup} data-group={group.id}><div className={styles.groupLabel}><strong>{group.label}</strong><span>{group.profiles.length}</span></div>{group.profiles.filter(profile => profile.name.toLowerCase().includes(filter.toLowerCase())).map(row)}</div>)}</div></div>}
       <GuideDialog wide suspended={!active} open={!!frame} title={frame?.title ?? '配置'} hint={`${descriptor.name} · ${scope === 'global' ? '全局' : projectPath}。保存配置只入库，使用是独立操作。`} onClose={() => void closeFrame()}>{frame && !workspace && <p role="status">正在读取目标范围的配置…</p>}{frame && workspace && <ConfigurationWorkspaceEditor key={frame.key} toolId={toolId} subject={frame.subject} profile={frame.profile} scope={scope} projectPath={projectPath} workspace={workspace} accounts={accounts} onClose={() => void closeFrame()} onDirtyChange={value => { if (value) epoch.current++; setDirty(value); }} onDraftChange={changed} onStored={stored} onDone={(result, used) => { setFrame(null); setDirty(false); setNotice(result.application ? '当前文件已更新；下次会话读取。' : used ? '配置已保存并使用；下次会话读取。' : '配置已保存；正在使用的文件保持原版本。'); void reload(toolId, scope, projectPath); }} />}</GuideDialog>
-      <GuideDialog wide open={!!comparison} title="比较当前文件与本次配置" hint="当前文件和保存配置不同。先比较，再明确使用。" onClose={() => setComparison(null)}>{comparison && <div>{comparison.files.map((file, index) => <ConflictCompare key={file.role} title={file.role} banner={index === 0 ? '当前文件和保存配置不同。先比较，再明确使用。' : undefined} actions={false} currentContent={file.current} nextContent={file.proposedText} format={file.format} onUseNext={() => void compareUse()} onKeepCurrent={() => setComparison(null)} />)}<div><button disabled={busy} onClick={() => void compareUse()}>使用本次内容</button><button onClick={() => setComparison(null)}>保留当前文件</button></div></div>}</GuideDialog>
+      <GuideDialog wide open={!!comparison} title="比较当前文件与本次配置" onClose={() => setComparison(null)}>{comparison && <div>{comparison.files.map((file, index) => <ConflictCompare key={file.role} title={file.role} banner={index === 0 ? '当前文件和保存配置不同。先比较，再明确使用。' : undefined} actions={false} currentContent={file.current} nextContent={file.proposedText} format={file.format} onUseNext={() => void compareUse()} onKeepCurrent={() => setComparison(null)} />)}<div><button disabled={busy} onClick={() => void compareUse()}>使用本次内容</button><button onClick={() => setComparison(null)}>保留当前文件</button></div></div>}</GuideDialog>
     </div>
     {resource === 'accounts' && supported.accounts && <AccountsPanel key={toolId} toolId={toolId} state={accounts} onOpenProfile={(id, target) => void openTarget(id, target)} onOpenUsage={id => void openAccountQuota(id)} />}
     {resource === 'accounts' && accountUsageQuery && <QuotaEditor key={accountUsageQuery.id} query={accountUsageQuery} profileId={accountUsageQuery.config.identity.profileId ?? ''} profileAccountId={queryAccount} toolId={toolId} presets={quota.presets} onClose={() => setAccountUsageQuery(null)} onSaved={() => { setAccountUsageQuery(null); void quota.reload(); }} />}

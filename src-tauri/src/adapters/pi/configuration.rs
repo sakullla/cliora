@@ -185,6 +185,7 @@ fn field(id: &str, label: &str, kind: &str, advanced: bool, scope: Scope) -> Con
         ),
         unavailable_reason: (scope == Scope::Project && !SETTINGS.contains(&id))
             .then(|| "Pi 项目层只支持启动设置，不能编辑自定义 models.json".into()),
+        origin: None,
     }
 }
 fn issue(target: Value, field: &str, message: &str) -> ConfigurationIssue {

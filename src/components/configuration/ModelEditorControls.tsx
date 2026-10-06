@@ -94,7 +94,7 @@ export function EditorField({ props, id, target, value, disabled, defaultSource,
     onChange={next => action('set', next)} onReset={() => action('reset')} onValidityChange={valid => props.onValidityChange(validityKey, valid)} />;
   const metadata = field.kind === 'string_list' ? { ...field, kind: 'json', choices: [] } : field;
   const explicit = props.draft.profile.editing?.intents.some(action => action.operation === 'set' && action.field === id && targetIdentity(action.target) === targetKey);
-  return <ConfigurationField presentation={{ ...presentation, origin: explicit ? 'explicit' : presentation?.origin }} resetEpoch={props.rawResetEpoch} field={{ ...metadata, ...(defaultSource ? { defaultSource } : {}), ...(choices ? { choices } : {}) }} value={value} disabled={disabled}
+  return <ConfigurationField presentation={{ ...presentation, origin: explicit ? 'explicit' : field?.origin ?? presentation?.origin }} resetEpoch={props.rawResetEpoch} field={{ ...metadata, ...(defaultSource ? { defaultSource } : {}), ...(choices ? { choices } : {}) }} value={value} disabled={disabled}
     issues={props.draft.issues.filter(issue => issue.field === id && targetIdentity(issue.target) === targetKey)}
     onChange={next => next === '' && !field.required ? action('reset') : action('set', next)}
     onReset={props.descriptor.operations.includes('reset') ? () => action('reset') : undefined}
@@ -117,10 +117,35 @@ function StringListControl({ field, values, choices, disabled, issues, onChange,
   };
   return <fieldset className={`${styles.controls} ${styles.group}`}><legend>{field.label}</legend>{entries.map(([id, label]) => <label key={id}><input type="checkbox" checked={(values ?? []).includes(id)} disabled={disabled || pending || Boolean(field.unavailableReason)}
     onChange={event => { const next = event.target.checked ? [...(values ?? []), id] : (values ?? []).filter(value => value !== id); void commit(() => onChange(next)); }} />{label}</label>)}
-    <button type="button" disabled={disabled || pending || Boolean(field.unavailableReason)} onClick={() => { void commit(onReset); }}>恢复默认</button>
+    <button type="button" className={styles.restore} disabled={disabled || pending || Boolean(field.unavailableReason)} onClick={() => { void commit(onReset); }}>恢复默认</button>
     {values == null && <p>{field.defaultSource ?? '跟随原生默认'}</p>}
     {error && <p role="alert">{error}</p>}{issues.map(message => <p role="alert" key={message}>{message}</p>)}{field.unavailableReason && <p>{field.unavailableReason}</p>}
   </fieldset>;
+}
+
+export function ModelRow({ id, name, sub = [], badges = [], expanded, sectioned, disabled, canDefault, onToggle, onSetDefault }: {
+  id: string; name?: string; sub?: string[]; badges?: string[]; expanded: boolean; sectioned?: boolean; disabled?: boolean;
+  canDefault?: boolean; onToggle: () => void; onSetDefault?: () => void;
+}) {
+  const display = name && name !== id ? name : id;
+  const subtitle = [...(name && name !== id ? [id] : []), ...sub];
+  const label = [display, ...subtitle, ...badges].join(' · ');
+  const chips = badges.map(badge => <span key={badge} className={styles.modelBadge} {...(badge === '默认' ? { 'data-default-badge': true } : {})}>{badge}</span>);
+  if (sectioned && expanded) return <div className={styles.modelBack}>
+    <button type="button" className={styles.modelBackButton} aria-label={`返回模型列表 · ${label}`} disabled={disabled} onClick={onToggle}><span aria-hidden="true">‹</span>返回模型列表</button>
+    <span className={styles.modelBackTitle}><span className={styles.modelRowName}>{display}</span>{chips}</span>
+  </div>;
+  return <div className={styles.modelRowHead}>
+    <button type="button" className={styles.modelRowButton} disabled={disabled} aria-expanded={expanded} aria-label={label} onClick={onToggle}>
+      <span className={styles.modelRowText}>
+        <span className={styles.modelRowName}>{display}</span>
+        {subtitle.length > 0 && <span className={styles.modelRowSub}>{subtitle.join(' · ')}</span>}
+      </span>
+      {chips}
+      <span className={styles.modelRowChevron} aria-hidden="true">›</span>
+    </button>
+    {canDefault && <button type="button" className={styles.modelRowDefault} disabled={disabled} onClick={onSetDefault}>设为默认</button>}
+  </div>;
 }
 
 export function ProviderEditor({ provider, providers, connection, protocol, disabled, canConfigure, canSelect, onConfigure, onSelect, onDraftValidityChange }: {
@@ -136,20 +161,17 @@ export function ProviderEditor({ provider, providers, connection, protocol, disa
   const validity = useRef(onDraftValidityChange); validity.current = onDraftValidityChange;
   useEffect(() => { validity.current?.(!canConfigure || id === provider && baseUrl === (connection?.baseUrl ?? '') && format === protocol); }, [id, provider, baseUrl, connection?.baseUrl, format, protocol, canConfigure]);
   useEffect(() => () => validity.current?.(true), []);
-  return <div className={styles.controls}>
-
-    <details open={!provider || !connection?.baseUrl}>
-      <summary>供应商连接{provider ? ` · ${provider}` : ''}{connection?.baseUrl ? ` · ${connection.baseUrl}` : ''}</summary>
+  return <div className={`${styles.controls} ${styles.providerCard}`}>
+    <strong className={styles.connectionTitle}>供应商连接{provider ? ` · ${provider}` : ''}{connection?.baseUrl ? ` · ${connection.baseUrl}` : ''}</strong>
     {canSelect && providers.length > 0 && <label htmlFor={selectId}>查看供应商<select id={selectId} value={provider} disabled={disabled} onChange={event => { void onSelect(event.target.value); }}><option value="" disabled>请选择供应商</option>{providers.map(item => <option key={item} value={item}>{item}</option>)}</select></label>}
-      {canConfigure ? <fieldset className={styles.group}>
-        <label>供应商标识<input value={id} maxLength={80} disabled={disabled} onChange={event => setId(event.target.value)} /></label>
-        <label>连接地址<input value={baseUrl} disabled={disabled || readOnly} placeholder="https://…" onChange={event => setBaseUrl(event.target.value)} /></label>
-        <label>接口协议<select value={format} disabled={disabled || readOnly} onChange={event => setFormat(event.target.value)}><option value="" disabled>{connection?.protocol ? `原生协议：${connection.protocol}` : '请选择协议'}</option><option value="openai_completions">OpenAI Chat Completions</option><option value="openai_responses">OpenAI Responses</option><option value="anthropic_messages">Anthropic Messages</option></select></label>
-        <button type="button" disabled={disabled || readOnly || !validIdentity(id, 80) || !baseUrl.trim() || !format} onClick={() => { void onConfigure(id, { baseUrl: baseUrl.trim(), interfaceFormat: format }); }}>设置供应商连接</button>
-        <button type="button" disabled={disabled} onClick={() => { setId(provider); setBaseUrl(connection?.baseUrl ?? ''); setFormat(protocol); }}>取消连接修改</button>
-        {connection?.readOnlyReason && <p>{connection.readOnlyReason}。使用不同供应商标识可创建独立连接。</p>}
-      </fieldset> : <p>{provider || '当前范围不支持供应商连接编辑'}</p>}
-    </details>
+    {canConfigure ? <div className={styles.fields}>
+      <label>供应商标识<input value={id} maxLength={80} disabled={disabled} onChange={event => setId(event.target.value)} /></label>
+      <label>连接地址<input value={baseUrl} disabled={disabled || readOnly} placeholder="https://…" onChange={event => setBaseUrl(event.target.value)} /></label>
+      <label>接口协议<select value={format} disabled={disabled || readOnly} onChange={event => setFormat(event.target.value)}><option value="" disabled>{connection?.protocol ? `原生协议：${connection.protocol}` : '请选择协议'}</option><option value="openai_completions">OpenAI Chat Completions</option><option value="openai_responses">OpenAI Responses</option><option value="anthropic_messages">Anthropic Messages</option></select></label>
+      <div className={styles.buttons}><button type="button" className={styles.accent} disabled={disabled || readOnly || !validIdentity(id, 80) || !baseUrl.trim() || !format} onClick={() => { void onConfigure(id, { baseUrl: baseUrl.trim(), interfaceFormat: format }); }}>设置供应商连接</button>
+      <button type="button" disabled={disabled} onClick={() => { setId(provider); setBaseUrl(connection?.baseUrl ?? ''); setFormat(protocol); }}>取消连接修改</button></div>
+      {connection?.readOnlyReason && <p>{connection.readOnlyReason}。使用不同供应商标识可创建独立连接。</p>}
+    </div> : <p>{provider || '当前范围不支持供应商连接编辑'}</p>}
   </div>;
 }
 
@@ -161,8 +183,8 @@ export function EntityActions({ id, target, descriptor, disabled, defaultModel, 
   const identityValid = validIdentity(nextId) && nextId !== id;
   return <div className={styles.controls}>
     <div className={styles.entityPrimary}>
-      {can('default') && <button type="button" disabled={disabled || defaultModel} onClick={() => { void onRun(target, 'default'); }}>{defaultModel ? '当前默认模型' : '设为默认模型'}</button>}
-      {can('small_default') && <button type="button" disabled={disabled || smallModel} onClick={() => { void onRun(target, 'small_default'); }}>{smallModel ? '当前轻量模型' : '设为轻量模型'}</button>}
+      {can('default') && <button type="button" className={styles.accent} disabled={disabled || defaultModel} onClick={() => { void onRun(target, 'default'); }}>{defaultModel ? '当前默认模型' : '设为默认模型'}</button>}
+      {can('small_default') && <button type="button" className={styles.accent} disabled={disabled || smallModel} onClick={() => { void onRun(target, 'small_default'); }}>{smallModel ? '当前轻量模型' : '设为轻量模型'}</button>}
     </div>
     <details className={styles.entityMore}>
       <summary>更多</summary>
@@ -170,7 +192,7 @@ export function EntityActions({ id, target, descriptor, disabled, defaultModel, 
         {(can('copy') || can('rename')) && <label>{renameLabel}<input value={nextId} maxLength={200} disabled={disabled} onChange={event => setNextId(event.target.value)} /></label>}
         {can('copy') && <button type="button" disabled={disabled || !identityValid} onClick={() => { void onRun(target, 'copy', nextId).then(success => { if (success) setNextId(''); }); }}>复制模型</button>}
         {can('rename') && <button type="button" disabled={disabled || !identityValid} onClick={() => { void onRun(target, 'rename', nextId).then(success => { if (success) onRemove(); }); }}>修改模型标识</button>}
-        {can('delete') && <button type="button" disabled={disabled || defaultModel || smallModel} onClick={() => { void onRun(target, 'delete').then(success => { if (success) onRemove(); }); }}>删除模型</button>}
+        {can('delete') && <button type="button" className={styles.danger} disabled={disabled || defaultModel || smallModel} onClick={() => { void onRun(target, 'delete').then(success => { if (success) onRemove(); }); }}>删除模型</button>}
         {(defaultModel || smallModel) && <p>先选择替代默认或轻量模型，再删除。</p>}
       </div>
     </details>

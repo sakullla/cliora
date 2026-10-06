@@ -127,6 +127,12 @@ fn workspace_leases_are_memory_owned_source_buffers_and_never_persistent_before_
         .select_credential(&registry, &db, draft, ConfigurationCredential::Native)
         .unwrap();
     assert!(sessions.request(&native, &store).is_err());
+    // Directory lookups get a best-effort anonymous attempt for native sources:
+    // no credential is copied, and providers that require auth answer 401/403.
+    let (anonymous_connection, anonymous_credential) =
+        sessions.request_directory(&native, &store).unwrap();
+    assert!(anonymous_connection.secret_ref.is_none());
+    assert!(anonymous_credential.get("any-ref").is_err());
     let returned = sessions
         .select_credential(
             &registry,
@@ -1201,6 +1207,38 @@ fn workspace_legacy_oauth_migration_opens_saved_draft_and_recovers_only_on_expli
 }
 
 #[test]
+fn workspace_new_profile_defaults_to_api_key_when_tool_has_no_accounts() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("db")).unwrap();
+    let registry = Registry::builtins();
+    let sessions = DraftSessions::default();
+    let draft = sessions
+        .begin(
+            &registry,
+            &db,
+            ConfigurationBeginRequest {
+                tool_id: "claude_code".into(),
+                scope: Scope::Global,
+                project_path: None,
+                session_id: "api-key-default".into(),
+                subject: ConfigurationSubject::Profile,
+                profile: Some(profile_from_files("claude_code", BTreeMap::new())),
+            },
+            None,
+            Vec::new(),
+        )
+        .unwrap();
+    assert!(
+        matches!(
+            draft.credential,
+            Some(ConfigurationCredential::ApiKey { secret_ref: None, .. })
+        ),
+        "无账号工具的新建配置应默认 API 密钥来源：{:?}",
+        draft.credential
+    );
+}
+
+#[test]
 fn workspace_claude_catalog_and_common_execute_real_edit_save_reopen_apply_chain() {
     let temp = tempfile::tempdir().unwrap();
     let db = Database::open(&temp.path().join("db")).unwrap();
@@ -1239,6 +1277,11 @@ fn workspace_claude_catalog_and_common_execute_real_edit_save_reopen_apply_chain
             .unwrap();
         assert!(d.issues.is_empty(), "{:?}", d.issues);
         assert_eq!(d.view["values"]["default.model"], "claude-sonnet-4-6");
+        // This chain predates the api_key default for account-less tools; keep
+        // it on the native source so it exercises catalog/save, not credentials.
+        let d = sessions
+            .select_credential(&registry, &db, d, ConfigurationCredential::Native)
+            .unwrap();
         let role = if local { "local_settings" } else { "settings" };
         assert_eq!(
             serde_json::from_str::<Value>(&d.profile.files[role]).unwrap()["model"],
@@ -1370,7 +1413,14 @@ fn workspace_claude_catalog_and_common_execute_real_edit_save_reopen_apply_chain
             &registry,
             &db,
             &store,
-            begin(&sessions, &registry, &db, p, "claude-inherited"),
+            sessions
+                .select_credential(
+                    &registry,
+                    &db,
+                    begin(&sessions, &registry, &db, p, "claude-inherited"),
+                    ConfigurationCredential::Native,
+                )
+                .unwrap(),
         )
         .unwrap()
         .profile

@@ -3,12 +3,16 @@
 
 /* Editor footer height; multi-model lists pad their scroll end with a spacer
    of the same height so the footer never covers the last model row. */
-:root { --config-footer-h: 54px; }
+:root { --config-footer-h: 56px; }
 
 .controls label { display: grid; gap: 7px; min-width: 0; font-size: 12px; }
 .controls label:has(> input[type='checkbox']), .controls label:has(> input[type='radio']) { display: flex; gap: 7px; align-items: center; }
-.controls input:not([type='checkbox']):not([type='radio']), .controls select { width: 100%; min-width: 0; box-sizing: border-box; padding: 8px 10px; color: inherit; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-sm); }
-.controls button { padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); color: inherit; background: var(--surface); max-width: 100%; white-space: normal; }
+.controls input:not([type='checkbox']):not([type='radio']):not([role='combobox']), .controls select { width: 100%; min-width: 0; box-sizing: border-box; padding: 8px 10px; color: inherit; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.controls button { max-width: 100%; white-space: normal; }
+.controls .accent { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); box-shadow: none; }
+.controls .accent:hover:not(:disabled) { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.controls .danger { color: var(--danger); border-color: var(--danger-line); }
+.controls .danger:hover:not(:disabled) { background: var(--danger-soft); border-color: var(--danger); color: var(--danger); }
 .controls button:disabled { opacity: .5; }
 .controls p, .message { color: var(--text-2); font-size: 12px; line-height: 1.6; margin: 6px 0; overflow-wrap: anywhere; }
 .controls.group, .controls .group { border: 1px solid var(--line); border-radius: var(--radius-sm); }
@@ -22,10 +26,41 @@
 .controls .infoToggle { flex: none; display: inline-grid; place-items: center; width: 20px; min-height: 20px; height: 20px; padding: 0; border: 0; border-radius: var(--radius-xs); background: transparent; box-shadow: none; color: var(--text-3); font-size: 12px; line-height: 1; }
 .controls .infoToggle:hover:not(:disabled) { background: var(--surface-3); color: var(--text-2); }
 .controls .infoToggle[aria-expanded='true'] { background: var(--accent-soft); color: var(--accent); }
-.controls .restore { justify-self: start; width: fit-content; min-height: 0; padding: 0; border: 0; background: none; box-shadow: none; color: var(--accent); font-size: 12px; }
+.controls .restore { flex: none; justify-self: start; width: fit-content; min-height: 0; padding: 0; border: 0; background: none; box-shadow: none; color: var(--accent); font-size: 12px; white-space: nowrap; }
 .controls .restore:hover:not(:disabled) { background: none; border: 0; color: var(--accent-hover); text-decoration: underline; text-underline-offset: 2px; }
 .infoPanel { display: grid; gap: 4px; min-width: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); }
 .infoPanel small { color: var(--text-2); font-size: 11.5px; line-height: 1.6; overflow-wrap: anywhere; }
+
+/* Bordered disclosure section: turns bare <details> groups into cards with a
+   header row. Summary text is unchanged so existing anchors keep working. */
+.disclosureCard { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); padding: 0 12px; }
+.disclosureCard[open] { padding-bottom: 12px; }
+.disclosureCard > summary { cursor: pointer; padding: 10px 0; font-size: 13px; font-weight: 600; }
+.disclosureCard[open] > summary { border-bottom: 1px solid var(--line); margin-bottom: 10px; }
 .entityPrimary { display: flex; gap: 8px; flex-wrap: wrap; grid-column: 1 / -1; }
 .entityMore { min-width: 0; grid-column: 1 / -1; }
-.entityPanel { display: grid; gap: 8px; margin-top: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); }
+.entityPanel { display: grid; gap: 8px; margin-top: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); justify-items: start; }
+.entityPanel label { justify-self: stretch; }
+.connectionTitle { font-size: .86em; color: var(--text-2); }
+.fields { display: grid; gap: .57em; min-width: 0; }
+.buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* Provider connection card shared by multi-model editors. */
+.providerCard { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
+
+/* Model list rows shared by multi-model editors: quiet text row with a chevron
+   instead of a boxed button; identity is de-duplicated (name shown once). */
+.modelRowHead { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.modelRowButton { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 7px 12px; text-align: left; justify-content: flex-start; border: 0; border-radius: var(--radius); background: transparent; box-shadow: none; }
+.modelRowButton:hover:not(:disabled) { background: var(--surface-2); border-color: transparent; }
+.modelRowText { display: grid; gap: 1px; flex: 1; min-width: 0; }
+.modelRowName { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.modelRowSub { font-size: 11.5px; color: var(--text-3); overflow-wrap: anywhere; }
+.modelBadge { flex: none; padding: 0 .57em; border-radius: var(--radius-xs); font-size: .78em; line-height: 1.6; color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent-line); }
+.modelRowChevron { flex: none; color: var(--text-3); transition: transform var(--fast) var(--ease); }
+.modelRowButton[aria-expanded='true'] .modelRowChevron { transform: rotate(90deg); }
+.modelRowDefault { flex: none; min-height: 26px; padding: 0 10px; font-size: 12px; white-space: nowrap; }
+.modelBack { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 4px; }
+.modelBackButton { flex: none; display: inline-flex; align-items: center; gap: 4px; min-height: 26px; padding: 0 8px; border: 0; border-radius: var(--radius-sm); background: none; box-shadow: none; color: var(--accent); font-size: 12.5px; font-weight: 560; }
+.modelBackButton:hover:not(:disabled) { background: var(--accent-soft); }
+.modelBackTitle { display: flex; align-items: center; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
