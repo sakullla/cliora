@@ -14,15 +14,20 @@ const sources = {
   field: component,
 };
 
-async function mount(page: Page, lateFailure: boolean | 'enum' | 'enum-no-reset' | 'number' | 'number-late-projection') {
+async function mount(page: Page, lateFailure: boolean | 'enum' | 'enum-no-reset' | 'number' | 'number-late-projection' | 'info' | 'restore' | 'required') {
   await page.setContent('<div id="field-fixture"></div>');
   await page.evaluate(({ sources, lateFailure }) => {
     const cache: Record<string, { exports: unknown }> = {};
     const require = (name: string): any => {
       if (cache[name]) return cache[name].exports;
-      const module = { exports: {} };
+      const module = { exports: {} as Record<string, unknown> };
       cache[name] = module;
-      new Function('module', 'exports', 'require', 'process', sources[name as keyof typeof sources])(module, module.exports, require, { env: { NODE_ENV: 'development' } });
+      // CSS module imports (e.g. './configuration.module.css') have no bundled
+      // source in this fixture; hand the component an empty default export so
+      // className lookups resolve to undefined instead of throwing.
+      const source = sources[name as keyof typeof sources];
+      if (source === undefined) module.exports = { default: {} };
+      else new Function('module', 'exports', 'require', 'process', source)(module, module.exports, require, { env: { NODE_ENV: 'development' } });
       return module.exports;
     };
     const React = require('react');
@@ -33,17 +38,22 @@ async function mount(page: Page, lateFailure: boolean | 'enum' | 'enum-no-reset'
     state.changedValues = []; state.resets = 0; state.completeNumber = []; state.publishNumber = [];
     const isNumber = lateFailure === 'number' || lateFailure === 'number-late-projection';
     const isEnum = lateFailure === 'enum' || lateFailure === 'enum-no-reset';
+    const isInfo = lateFailure === 'info';
+    const isRestore = lateFailure === 'restore';
+    const isRequired = lateFailure === 'required';
     function Fixture() {
-      const [value, setValue] = React.useState(isNumber ? 10 : isEnum ? 'high' : false);
+      const [value, setValue] = React.useState(isNumber ? 10 : isEnum ? 'high' : isInfo ? 1024 : null);
       const [valid, setValid] = React.useState(true);
+      const [origin, setOrigin] = React.useState('unset');
       return React.createElement('div', null,
         React.createElement(ConfigurationField, {
-          field: { id: 'reasoning', label: '推理', kind: isNumber ? 'integer' : isEnum ? 'enum' : 'boolean', required: false, advanced: false, choices: isEnum ? ['low', 'high'] : [], minimum: isNumber ? 1 : null, defaultSource: null, unavailableReason: null },
+          field: { id: isInfo ? 'maxTokens' : 'reasoning', label: isInfo ? '最大输出' : '推理', kind: isNumber || isInfo ? 'integer' : isEnum || isRestore ? 'enum' : isRequired ? 'string' : 'boolean', required: isRequired, advanced: false, choices: isEnum || isRestore ? ['low', 'high'] : [], minimum: isNumber || isInfo ? 1 : null, defaultSource: isInfo || isRestore ? '原生默认' : null, unavailableReason: null },
           value, onValidityChange: setValid,
-          onReset: lateFailure === 'enum' ? async () => { state.resets += 1; setValue(null); } : undefined,
+          presentation: isInfo ? { unit: 'tokens', description: '最大输出令牌数。', nativeField: 'MAX_TOKENS', origin: 'explicit' } : isRestore ? { nativeField: 'REASONING', origin } : undefined,
+          onReset: lateFailure === 'enum' || isRestore || isRequired ? async () => { state.resets += 1; setValue(null); if (isRestore) setOrigin('unset'); } : undefined,
           onChange: async (next: unknown) => {
             state.changedValues.push(next);
-            if (isEnum) { setValue(next); return; }
+            if (isEnum || isRestore || isRequired) { setValue(next); return; }
             if (isNumber) { await new Promise<void>(resolve => { state.completeNumber.push(resolve); }); if (lateFailure === 'number-late-projection') state.publishNumber.push(() => setValue(next)); else setValue(next); return; }
             attempts += 1;
             if (attempts === 1) {
@@ -52,6 +62,7 @@ async function mount(page: Page, lateFailure: boolean | 'enum' | 'enum-no-reset'
             } else setValue(next);
           },
         }),
+        isRestore ? React.createElement('button', { onClick: () => { setValue('low'); setOrigin('explicit'); } }, '设为显式') : null,
         React.createElement('button', { disabled: !valid }, '保存草稿'),
         React.createElement('button', { onClick: () => setValue(999) }, '外部原文变更'));
     }
@@ -124,6 +135,44 @@ test('rapid numeric edits retain the latest local text through an earlier comple
   await expect(input).toHaveValue('999');
 });
 
+
+test('字段信息入口展开显示来源状态、原生说明与字段说明', async ({ page }) => {
+  await mount(page, 'info');
+  const toggle = page.getByRole('button', { name: '字段信息' });
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByText('最大输出令牌数。')).toHaveCount(0);
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.getByText('本层显式值', { exact: true })).toBeVisible();
+  await expect(page.getByText('最大输出令牌数。')).toBeVisible();
+  await expect(page.getByText(/原生字段：\s*MAX_TOKENS/)).toBeVisible();
+  await expect(page.getByText(/未设置时：原生默认/)).toBeVisible();
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByText('最大输出令牌数。')).toHaveCount(0);
+});
+
+test('恢复默认仅在字段偏离默认时出现，点击后走现有 reset 语义', async ({ page }) => {
+  await mount(page, 'restore');
+  await expect(page.getByRole('button', { name: '恢复默认' })).toHaveCount(0);
+  await page.getByRole('button', { name: '设为显式' }).click();
+  const restore = page.getByRole('button', { name: '恢复默认' });
+  await expect(restore).toBeVisible();
+  await restore.click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { resets: number }).resets)).toBe(1);
+  await expect(page.getByRole('combobox', { name: '推理' })).toHaveValue('');
+  await expect(page.getByRole('button', { name: '恢复默认' })).toHaveCount(0);
+});
+
+test('必填校验错误保持原位可见，不折叠进字段信息面板', async ({ page }) => {
+  await mount(page, 'required');
+  const input = page.getByRole('textbox', { name: '推理 *' });
+  await input.fill('手动值');
+  await input.fill('');
+  await expect(page.getByRole('alert')).toHaveText('此项必填');
+  await expect(page.getByRole('button', { name: '保存草稿' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '字段信息' })).toHaveAttribute('aria-expanded', 'false');
+});
 
 test('successful numeric writes retain local text until the parent publishes the new projection', async ({ page }) => {
   await mount(page, 'number-late-projection');
