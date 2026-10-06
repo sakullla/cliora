@@ -2,15 +2,6 @@
 .scroll { flex: 1; min-height: 0; overflow: auto; padding: 4px 4px 18px; overscroll-behavior: contain; }
 .scroll > div:not([hidden]) { display: grid; gap: 16px; }
 .shell [hidden] { display: none !important; }
-.shell label { display: grid; gap: 7px; min-width: 0; font-size: 12px; }
-.shell label:has(> input[type='checkbox']), .shell label:has(> input[type='radio']) { display: flex; gap: 7px; align-items: center; }
-.shell input:not([type='checkbox']):not([type='radio']), .shell select { width: 100%; min-width: 0; box-sizing: border-box; padding: 8px 10px; color: inherit; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-sm); }
-.shell button { padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); color: inherit; background: var(--surface); max-width: 100%; white-space: normal; }
-.shell button:disabled { opacity: .5; }
-.shell p { color: var(--text-2); font-size: 12px; line-height: 1.6; margin: 6px 0; overflow-wrap: anywhere; }
-.shell fieldset { border: 1px solid var(--line); border-radius: var(--radius-sm); }
-.shell details { min-width: 0; }
-.shell summary { cursor: pointer; font-size: 12px; padding: 6px 0; }
 .tabs, .buttons { display: flex; gap: 8px; flex-wrap: wrap; }
 .tabs { position: sticky; top: 0; z-index: 2; padding: 4px 0 10px; background: var(--surface); }
 .tabs [aria-pressed='true'] { color: var(--accent); background: var(--accent-soft); }

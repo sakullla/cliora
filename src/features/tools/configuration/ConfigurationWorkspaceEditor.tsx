@@ -11,6 +11,7 @@ import { FileConflict } from '../../../components/FileConflict';
 import { AccountPicker } from '../AccountPicker';
 import type { useAccounts } from '../AccountsPanel';
 import styles from './ConfigurationWorkspaceEditor.module.css';
+import sharedStyles from '../../../components/configuration/configuration.module.css';
 
 type Session = ReturnType<typeof createConfigurationSession>;
 type Props = {
@@ -319,14 +320,14 @@ export function ConfigurationWorkspaceEditor(props: Props) {
     finally { if (alive.current) setBusy(false); }
   }
 
-  if (loading) return <div className={styles.shell}><p role="status">正在加载原生配置草稿…</p><button onClick={props.onClose}>取消</button></div>;
-  if (!draft || Editor && !draft.descriptor) return <div className={styles.shell}><p role="alert">{error || '专属编辑器不可用'}</p><button onClick={props.onClose}>返回配置列表</button></div>;
+  if (loading) return <div className={`${styles.shell} ${sharedStyles.controls}`}><p role="status">正在加载原生配置草稿…</p><button onClick={props.onClose}>取消</button></div>;
+  if (!draft || Editor && !draft.descriptor) return <div className={`${styles.shell} ${sharedStyles.controls}`}><p role="alert">{error || '专属编辑器不可用'}</p><button onClick={props.onClose}>返回配置列表</button></div>;
   const canSubmit = valid && !pending && !busy && !picking && !querying && !cancelling;
   const format = workspace.probe.nativeFiles.find(file => file.role === rawRole)?.format ?? 'json';
   const files = [...new Set([...workspace.probe.nativeFiles.filter(file => !file.sensitive).map(file => file.role), ...Object.keys(draft.profile.files)])];
   const sourceLabel = source === 'native' ? 'CLI 当前登录或凭据' : source === 'account' ? '已管理账号' : source === 'api_key' ? '此连接的 API 密钥' : '需要选择凭据来源';
   return <div className={styles.shell}>
-    <div className={styles.scroll}>
+    <div className={`${styles.scroll} ${sharedStyles.controls}`}>
       {picking && <AccountPicker toolId={toolId} selectedAccountId={selectedAccountId} onSelect={account => void selectAccount(account)} onBack={() => { setPicking(false); requestAnimationFrame(() => focusReturn.current?.focus()); }} />}
       {history && <section aria-label="修改记录"><button onClick={() => { setHistory(false); setBackup(null); }}>返回编辑</button><div className={styles.buttons}>{backups.map(row => <button key={row.transactionId} onClick={() => void selectBackup(row.transactionId)}>{row.createdAt ? new Date(row.createdAt * 1000).toLocaleString() : row.transactionId}</button>)}</div>{!backups.length && <p>没有可恢复的历史版本。</p>}{backup && <><CodeEditor label="历史原文" format={workspace.probe.nativeFiles.find(file => file.role === backup.role)?.format ?? 'json'} readOnly value={backup.original} /><details><summary>当前文件</summary><CodeEditor label="历史比较当前内容" format={workspace.probe.nativeFiles.find(file => file.role === backup.role)?.format ?? 'json'} readOnly value={backup.current} /></details><button disabled={busy || cancelling} onClick={() => void restoreBackup()}>恢复这个版本</button></>}</section>}
       <div hidden={picking || history}>
@@ -355,6 +356,6 @@ export function ConfigurationWorkspaceEditor(props: Props) {
       {!valid && !pending && !draft.issues.length && <p role="alert">有未完成或无效的字段输入，请返回对应模型或连接完成修改。输入会保留。</p>}
       {error && <p role="alert" className={styles.errors}>{error}</p>}{notice && <p role="status">{notice}</p>}
     </div>
-    <footer className={styles.footer}><button onClick={props.onClose}>取消</button><span>{picking ? '登录与选择不应用配置' : dirty ? '未保存' : '草稿已保存'}</span>{!picking && !history && <><details><summary>更多保存操作</summary>{subject !== 'current' && <button disabled={!canSubmit || subject === 'common' && !influence?.targets.length} onClick={() => void save(true)}>{subject === 'common' ? '保存并应用到继承范围' : '保存并使用'}</button>}{saved && <button disabled={busy || cancelling} onClick={() => { setBusy(true); void applyStored(saved).finally(() => { if (alive.current) setBusy(false); }); }}>重试使用已保存版本</button>}</details><button className={styles.primary} data-dialog-save disabled={!canSubmit || subject === 'current' && workspace.probe.nativeWrites.state !== 'supported'} onClick={() => void save()}>{subject === 'current' ? '保存到当前文件' : subject === 'common' ? '保存通用配置' : '保存配置'}</button></>}</footer>
+    <footer className={`${styles.footer} ${sharedStyles.controls}`}><button onClick={props.onClose}>取消</button><span>{picking ? '登录与选择不应用配置' : dirty ? '未保存' : '草稿已保存'}</span>{!picking && !history && <><details><summary>更多保存操作</summary>{subject !== 'current' && <button disabled={!canSubmit || subject === 'common' && !influence?.targets.length} onClick={() => void save(true)}>{subject === 'common' ? '保存并应用到继承范围' : '保存并使用'}</button>}{saved && <button disabled={busy || cancelling} onClick={() => { setBusy(true); void applyStored(saved).finally(() => { if (alive.current) setBusy(false); }); }}>重试使用已保存版本</button>}</details><button className={styles.primary} data-dialog-save disabled={!canSubmit || subject === 'current' && workspace.probe.nativeWrites.state !== 'supported'} onClick={() => void save()}>{subject === 'current' ? '保存到当前文件' : subject === 'common' ? '保存通用配置' : '保存配置'}</button></>}</footer>
   </div>;
 }

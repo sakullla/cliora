@@ -1,10 +1,11 @@
 import type { ConfigurationContentProps } from '../../adapters/contract';
 import { ConfigurationField, type FieldPresentation } from './ConfigurationField';
+import styles from './configuration.module.css';
 
 /** Targets and applicable fields come from the selected adapter's subject projection. */
 export function CommonConfigurationFields(props: ConfigurationContentProps & { presentationFor?: (id: string) => FieldPresentation }) {
   const fields = (props.draft.view as { commonFields?: { id: string; target: unknown; value: unknown }[] } | null)?.commonFields ?? [];
-  return <section aria-label="通用原生参数">{fields.map(item => {
+  return <section className={styles.controls} aria-label="通用原生参数">{fields.map(item => {
     const descriptor = props.descriptor.fields.find(field => field.id === item.id);
     if (!descriptor) return null;
     const run = (operation: string, value: unknown = null) => props.onAction({ version: props.descriptor.version, target: item.target, operation, field: item.id, value });

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { ConfigurationField, type FieldPresentation } from './ConfigurationField';
+import styles from './configuration.module.css';
 import type { ConfigurationContentProps } from '../../adapters/contract';
 import type { ConfigurationAction, ConfigurationDescriptor, ConfigurationEditorProps, ConfigurationField as Field } from '../../types/configuration';
 
@@ -12,7 +13,7 @@ export function objectFields(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 export function AdditionalIssues({ props }: { props: ConfigurationEditorProps }) {
-  return <>{props.draft.issues.filter(issue => !props.descriptor.fields.some(field => field.id === issue.field)).map((issue, index) => <p role="alert" key={`${issue.code}:${index}`}>{issue.message}</p>)}</>;
+  return <>{props.draft.issues.filter(issue => !props.descriptor.fields.some(field => field.id === issue.field)).map((issue, index) => <p role="alert" className={styles.message} key={`${issue.code}:${index}`}>{issue.message}</p>)}</>;
 }
 export function fieldValue(values: Record<string, unknown>, id: string): unknown {
   return id.split('.').reduce<unknown>((value, part) => value && typeof value === 'object' ? (value as Record<string, unknown>)[part] : undefined, values);
@@ -114,7 +115,7 @@ function StringListControl({ field, values, choices, disabled, issues, onChange,
     try { await operation(); if (active.current) { setPending(false); onValidityChange(true); } }
     catch (failure) { if (active.current) { setPending(false); setError(failure instanceof Error ? failure.message : '修改失败，请重试'); } }
   };
-  return <fieldset><legend>{field.label}</legend>{entries.map(([id, label]) => <label key={id}><input type="checkbox" checked={(values ?? []).includes(id)} disabled={disabled || pending || Boolean(field.unavailableReason)}
+  return <fieldset className={`${styles.controls} ${styles.group}`}><legend>{field.label}</legend>{entries.map(([id, label]) => <label key={id}><input type="checkbox" checked={(values ?? []).includes(id)} disabled={disabled || pending || Boolean(field.unavailableReason)}
     onChange={event => { const next = event.target.checked ? [...(values ?? []), id] : (values ?? []).filter(value => value !== id); void commit(() => onChange(next)); }} />{label}</label>)}
     <button type="button" disabled={disabled || pending || Boolean(field.unavailableReason)} onClick={() => { void commit(onReset); }}>恢复默认</button>
     {values == null && <p>{field.defaultSource ?? '跟随原生默认'}</p>}
@@ -135,12 +136,12 @@ export function ProviderEditor({ provider, providers, connection, protocol, disa
   const validity = useRef(onDraftValidityChange); validity.current = onDraftValidityChange;
   useEffect(() => { validity.current?.(!canConfigure || id === provider && baseUrl === (connection?.baseUrl ?? '') && format === protocol); }, [id, provider, baseUrl, connection?.baseUrl, format, protocol, canConfigure]);
   useEffect(() => () => validity.current?.(true), []);
-  return <div>
+  return <div className={styles.controls}>
 
     <details open={!provider || !connection?.baseUrl}>
       <summary>供应商连接{provider ? ` · ${provider}` : ''}{connection?.baseUrl ? ` · ${connection.baseUrl}` : ''}</summary>
     {canSelect && providers.length > 0 && <label htmlFor={selectId}>查看供应商<select id={selectId} value={provider} disabled={disabled} onChange={event => { void onSelect(event.target.value); }}><option value="" disabled>请选择供应商</option>{providers.map(item => <option key={item} value={item}>{item}</option>)}</select></label>}
-      {canConfigure ? <fieldset>
+      {canConfigure ? <fieldset className={styles.group}>
         <label>供应商标识<input value={id} maxLength={80} disabled={disabled} onChange={event => setId(event.target.value)} /></label>
         <label>连接地址<input value={baseUrl} disabled={disabled || readOnly} placeholder="https://…" onChange={event => setBaseUrl(event.target.value)} /></label>
         <label>接口协议<select value={format} disabled={disabled || readOnly} onChange={event => setFormat(event.target.value)}><option value="" disabled>{connection?.protocol ? `原生协议：${connection.protocol}` : '请选择协议'}</option><option value="openai_completions">OpenAI Chat Completions</option><option value="openai_responses">OpenAI Responses</option><option value="anthropic_messages">Anthropic Messages</option></select></label>
@@ -158,7 +159,7 @@ export function EntityActions({ id, target, descriptor, disabled, defaultModel, 
   const [nextId, setNextId] = useState('');
   const can = (operation: string) => descriptor.operations.includes(operation);
   const identityValid = validIdentity(nextId) && nextId !== id;
-  return <div>
+  return <div className={styles.controls}>
     {can('default') && <button type="button" disabled={disabled || defaultModel} onClick={() => { void onRun(target, 'default'); }}>{defaultModel ? '当前默认模型' : '设为默认模型'}</button>}
     {can('small_default') && <button type="button" disabled={disabled || smallModel} onClick={() => { void onRun(target, 'small_default'); }}>{smallModel ? '当前轻量模型' : '设为轻量模型'}</button>}
     {(can('copy') || can('rename')) && <details><summary>复制或修改模型标识</summary><label>{renameLabel}<input value={nextId} maxLength={200} disabled={disabled} onChange={event => setNextId(event.target.value)} /></label>
@@ -176,7 +177,7 @@ export function NewModelForm({ props, provider, disabled, label, fields, initial
   onCreate: (id: string, values: Record<string, unknown>, kind: 'model' | 'override') => Promise<boolean>;
 }) {
   const [open, setOpen] = useState(false);
-  return <div>{!open ? <button type="button" disabled={disabled} onClick={() => setOpen(true)}>新增模型</button>
+  return <div className={styles.controls}>{!open ? <button type="button" disabled={disabled} onClick={() => setOpen(true)}>新增模型</button>
     : <CreationFields props={props} provider={provider} disabled={disabled} label={label} fields={fields} initialValues={initialValues} allowOverride={allowOverride} listChoices={listChoices} onCreate={onCreate} onClose={() => setOpen(false)} />}</div>;
 }
 function CreationFields({ props, provider, disabled, label, fields, initialValues, allowOverride, listChoices, onCreate, onClose }: {
@@ -212,7 +213,7 @@ function CreationFields({ props, provider, disabled, label, fields, initialValue
       onReset={field.required ? undefined : async () => { setValues(previous => withField(previous, field.id, null)); }}
       onValidityChange={valid => reportField(field, valid)} />;
   };
-  return <fieldset aria-label="新增模型表单"><legend>新增模型</legend>
+  return <fieldset className={styles.group} aria-label="新增模型表单"><legend>新增模型</legend>
     <label>{label}<input value={id} maxLength={200} disabled={disabled || pending} onChange={event => setId(event.target.value)} /></label>
     {allowOverride && <label>模型定义<select value={kind} disabled={disabled || pending} onChange={event => setKind(event.target.value as 'model' | 'override')}><option value="model">自定义模型</option><option value="override">内置模型覆盖</option></select></label>}
     {fields.filter(field => !field.advanced || field.required).map(render)}
