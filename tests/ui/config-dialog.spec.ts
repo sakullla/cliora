@@ -778,7 +778,12 @@ test('native field units and merged origin distinguish inherited and explicit va
   await setupConfigurationWorkspace(page, 'codex'); await page.getByRole('button', { name: '修改', exact: true }).last().click(); const dialog = page.getByRole('dialog');
   await dialog.getByRole('button', { name: '常用设置' }).click();
   const number = dialog.getByLabel('上下文窗口（Token）', { exact: false }); await number.fill('8192');
-  await expect(dialog.getByText('本层显式值', { exact: true })).toBeVisible();
+  const field = number.locator('..');
+  const info = field.getByRole('button', { name: '字段信息' });
+  await expect(info).toHaveAttribute('aria-expanded', 'false');
+  await info.click();
+  await expect(info).toHaveAttribute('aria-expanded', 'true');
+  await expect(field.getByText('本层显式值', { exact: true })).toBeVisible();
   await dialog.getByRole('button', { name: '合并与来源' }).click();
   await expect(dialog.getByText('继承 · 通用配置', { exact: true })).toBeVisible();
   await expect(dialog.getByText('本层显式 · 命名配置', { exact: true })).toBeVisible();
