@@ -1,8 +1,4 @@
-/** Sanitized IPC fixtures for workflow screenshots; no native credentials or billing calls. */
-export const workflowRefs = {
-  connections: 'docs/sakullla-workflow/2026-10-04-单供应商多模型与密钥入口',
-  history: 'docs/sakullla-workflow/2026-10-05-历史记录与Token统计准确度',
-};
+/** Sanitized history UI fixtures; no native credentials or billing calls. */
 
 // Runs in the browser after the general capture harness has been installed.
 export function workflowFixtures() {
