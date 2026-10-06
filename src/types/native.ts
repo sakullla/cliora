@@ -48,12 +48,14 @@ export type AppliedBinding = { contextId?: string | null; scopeKey: string; tool
 export type NativeSnapshot = { role: string; text: string | null; fingerprint: string | null; error: string | null };
 export type ApplyComparison = {contextId?: string | null;profile:RegisteredProfile;common:RegisteredCommon|null;files:{role:string;format:'json'|'jsonc'|'toml'|'yaml';current:string;proposed:unknown;proposedText:string}[]};
 export type NativePreview = { documents: Record<string, unknown>; rendered: Record<string, string>; sources: Record<string, Record<string, string>> };
-export type ToolWorkspace = { effectiveContextId: string | null; probe: ToolProbe; customPath: string | null; profiles: NativeProfile[]; common: CommonConfig | null; binding: AppliedBinding | null; snapshots: NativeSnapshot[]; recoveryNeeded: string[] };
+export type ToolWorkspace = { effectiveContextId: string | null; nativeContextError?: string | null; probe: ToolProbe; customPath: string | null; profiles: NativeProfile[]; common: CommonConfig | null; binding: AppliedBinding | null; snapshots: NativeSnapshot[]; recoveryNeeded: string[] };
 export type RegisteredToolWorkspace = Omit<ToolWorkspace, 'probe' | 'profiles' | 'common'> & {
   probe: Omit<ToolProbe, 'tool'> & { tool: string };
   profiles: RegisteredProfile[];
   common: RegisteredCommon | null;
+  profileModelSummaries?: Record<string, ModelSummary | null>;
 };
+export type ModelSummary = { providerId: string | null; model: string };
 export type ApplyOutcome = { transactionId: string; changedFiles: string[]; status: 'written_for_next_session' | 'already_matching' };
 export type ModelDirectory = { models: string[]; status: 'ready' | 'empty' | 'stale' | 'error'; fetchedAt: number | null; error: string | null; source: string };
 export type CheckStep = { state: 'passed' | 'partial' | 'failed' | 'skipped'; message: string };

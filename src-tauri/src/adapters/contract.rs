@@ -108,7 +108,19 @@ pub struct InspectionFields {
 pub type NativeCredentialRefs = BTreeMap<String, BTreeMap<String, String>>;
 pub type PendingSecrets = Vec<(String, String)>;
 
+/// An explicitly writable native key channel grants no HTTP credential access.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeCredentialTarget {
+    pub identity: String,
+    pub label: String,
+    pub role: String,
+    pub path: Vec<String>,
+    pub remove_paths: Vec<Vec<String>>,
+}
+
 pub trait CliAdapter: Sync {
+    fn native_credential_target(&self, _scope: Scope) -> Option<NativeCredentialTarget> { None }
     fn portable_field_kind(&self, path: &[String]) -> super::configuration::PortableFieldKind {
         self.configuration().map_or(super::configuration::PortableFieldKind::Unknown, |port| port.portable_field_kind(path))
     }

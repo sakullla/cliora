@@ -21,6 +21,11 @@ use std::collections::BTreeMap;
 pub struct ConfigurationDraft {
     pub session_id: String,
     pub revision: u64,
+    /// Request invalidation is independent from document edits.
+    #[serde(default)]
+    pub request_generation: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_credential_target: Option<crate::adapters::NativeCredentialTarget>,
     pub scope: Scope,
     pub profile: RegisteredProfile,
     pub baseline_files: BTreeMap<String, String>,
@@ -211,6 +216,37 @@ pub fn effective_documents(
         .collect()
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelSummary {
+    pub provider_id: Option<String>,
+    pub model: String,
+}
+
+/// The adapter's native inspection owns model identity, even without an HTTP
+/// connection (for example, an OAuth or builtin provider configuration).
+pub fn model_summary(
+    registry: &Registry,
+    profile: &RegisteredProfile,
+    common: Option<&RegisteredCommon>,
+) -> Result<Option<ModelSummary>, String> {
+    let adapter = registry.get(&profile.tool).ok_or("适配器未注册")?;
+    let documents = effective_documents(registry, profile, common)?;
+    let files = documents.iter().map(|(role, value)| {
+        Ok((role.clone(), format::render(adapter.file_kind(role)?, value)?))
+    }).collect::<Result<_, String>>()?;
+    let inspection = super::intake::inspect_registered(registry, &profile.tool, &files)?;
+    // Legacy unnormalized records still apply their declared connection overlay.
+    let legacy = if profile.editing.is_none() { profile.connection.as_ref() } else { None };
+    let model = legacy.map(|connection| connection.model.clone()).or(inspection.model)
+        .or_else(|| profile.connection.as_ref().map(|connection| connection.model.clone()));
+    Ok(model.filter(|model| !model.trim().is_empty() && !model.chars().any(char::is_control)).map(|model| ModelSummary {
+        provider_id: legacy.map(|connection| connection.provider_id.clone()).or(inspection.provider_id)
+            .or_else(|| profile.connection.as_ref().map(|connection| connection.provider_id.clone())),
+        model,
+    }))
+}
+
 pub fn refresh(registry: &Registry, mut draft: ConfigurationDraft) -> ConfigurationDraft {
     let result = (|| {
         let adapter = registry
@@ -280,6 +316,8 @@ pub fn open_with_common(
         ConfigurationDraft {
             session_id,
             revision: 0,
+            request_generation: 0,
+            native_credential_target: None,
             scope,
             profile,
             baseline_files,

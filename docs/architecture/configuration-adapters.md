@@ -78,11 +78,17 @@ A2 回归覆盖浏览后保存/重开/应用、身份重用、原文删除与外
 
 新密钥是会话独占的内存 lease，引用只绑定 provider/protocol/baseUrl。它未进入系统凭据库，不得显示为系统已保存。切换来源保留 inactive lease，以便回到 API 来源；inactive 不授予请求权限。替换、明确移除和取消清理仅本次 lease。空输入保留当前引用；明确移除使用独立动作，API null 不回退旧 key。保存先验证连接身份，再把仍被选中使用的独立引用纳入系统凭据库及 DB；失败只清理新发布且无保存对象引用的凭据，旧引用不覆盖。reveal 是单独的受控用户动作。sourceCapabilities 取自注册端口及 scope，managed_login=false 不表示可选受管账号。
 
-诊断和目录入口只读取明确 API 来源的请求凭据，不复制 native/OAuth 登录，也不匿名或跨供应商回退。目录默认仅 GET；分页、缓存及可能的独立模型 POST 前检查会话失效，结果返回会话和版本。不计费诊断不发送推理。真实推理仍需单独明确确认及有效默认模型。
+诊断和目录入口只读取明确 API 来源的请求凭据，不复制 native/OAuth 登录，也不匿名或跨供应商回退。目录默认仅 GET；分页、缓存及可能的独立模型 POST 前检查会话失效，结果返回会话、文档 revision 与 requestGeneration。不计费诊断不发送推理。真实推理仍需单独明确确认及有效默认模型。`cancel_configuration_requests` 只推进 requestGeneration，保留文档 revision、会话、来源和 lease；关闭草稿才销毁会话。旧 generation 的请求不能继续分页、缓存或发后续模型 POST，也不能发布结果。
+
+无 HTTP Connection 的原生密钥通道可由 `CliAdapter::native_credential_target(scope)` 声明 identity、role/path、清除路径和说明。共享 current 会话仅在非受管上下文授予该目标，lease 按完整目标身份隔离，通过既有文件 CAS 和加密事务替换/移除；它不持久化为 HTTP Connection，也不授予目录或诊断凭据。CodeBuddy 的自身端口声明 env 原生通道及认证优先级。普通编辑继续拒绝覆盖隐藏凭据的父节点：无专属 configuration 端口时，由原文与自身纯 intake 脱敏结果的差异保留私有保护坐标，未纳入原生登录凭据。
 
 profile/common 保存只入库。common influence 来自真实 applied_bindings，并按每个绑定及配置/common版本核查；pending 或未知命名配置不能借 common 应用激活新账号、连接或参数，失败按范围保留。common 应用采用原文件 CAS、加密备份和账号 reapply guard。
 
 SQLite schema 20 增 nullable common_version/common_revision 与一次 last-success applied_profile 快照；不建立版本历史表。显式 apply（包含 already_matching 成功事务）才写这三项。快照包含 sourceProfile 和冻结有效值的 runtimeProfile，只有脱敏文档及 opaque refs。仅保存新版本不会改变旧 active 身份；账号 selection 使用最后成功快照，不读取最新 pending auth。缺失旧快照且无法证实身份时返回恢复提示，不能猜测或返回默认账号目录。account binding 指纹包含新增三项；对外仅返回 appliedSummary，不返回快照文件或 nativeCredentials。
+
+未知旧账号绑定不阻断 DB 配置列表、common 和命名草稿。工作区返回 `nativeContextError` 和保存记录，省略无法确认目录的当前文件快照；CLI 身份/格式探测结果仍支持明确使用目标配置恢复。current 原生读写和启动继续拒绝未知应用身份，不能回退默认目录。account impact 对缺失成功快照或同版本不同 revision 的活动绑定标记 needsReapply。
+
+列表的 `profileModelSummaries` 来自适配器已有 native inspection 对保存有效文档的模型投影，与认证及可选 HTTP Connection 独立。last-success 快照同时冻结该脱敏摘要，`appliedSummary.model/providerId` 使用冻结值；OAuth/内置供应商配置仍可展示模型。旧快照可通过自身注册适配器解析冻结文档补读；无法解析的摘要保持未知。UI 判定正在使用须核对 available、profile version/revision 及继承 common version/revision，不能仅比较版本数字。Claude 目录动作使用其 `default.model` 和实际角色目标；common effort 使用 `effortLevel`，两种 settings 角色均禁止传播模型引用。
 
 current 读取去除保护凭据，私有原文留在会话；普通模型编辑不会纳入它们。公共字段差异用已有 native formatter 写到通过精确 CAS 的私有基线，显式 API 改动仍走 own adapter credential policy。比较两侧与备份预览均脱敏；明确采用本次/当前结果以服务端 comparisonId 核对版本、context及最新磁盘，再更新基线。比较后再次外改仍拒绝。当前文件写入/恢复失效配置所有权，但保留必要账号关联；项目继承的 global context 在直接编辑后保持关联。
 

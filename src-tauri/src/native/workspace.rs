@@ -53,10 +53,52 @@ pub struct ConfigurationSaveResult {
     pub common: Option<RegisteredCommon>,
     pub application: Option<transaction::ApplyOutcome>,
 }
+
+pub struct SavedWorkspace {
+    pub profiles: Vec<RegisteredProfile>,
+    pub common: Option<RegisteredCommon>,
+    pub binding: Option<super::apply::AppliedBinding>,
+    pub profile_model_summaries: BTreeMap<String, Option<configuration::ModelSummary>>,
+}
+/// Recovery must remain reachable through DB records when a legacy binding
+/// cannot prove its native account directory. This operation performs no IO.
+pub fn saved_workspace(registry: &Registry, db: &Database, tool: &str, key: &str) -> Result<SavedWorkspace, String> {
+    let profiles = profile::list_registered_profiles(db, tool)?;
+    let common = profile::get_registered_common(db, tool)?;
+    let binding = super::apply::get_registered_binding(db, tool, key)?.map(|mut binding| {
+        binding.managed.clear();
+        binding
+    });
+    let profile_model_summaries = profiles.iter().map(|profile| {
+        (profile.id.clone(), configuration::model_summary(registry, profile, common.as_ref()).ok().flatten())
+    }).collect();
+    Ok(SavedWorkspace { profiles, common, binding, profile_model_summaries })
+}
 #[derive(Clone)]
 struct Lease {
     secret: String,
-    connection: Connection,
+    target: LeaseTarget,
+}
+#[derive(Clone)]
+enum LeaseTarget {
+    Connection(Connection),
+    Native(crate::adapters::NativeCredentialTarget),
+}
+impl LeaseTarget {
+    fn matches_connection(&self, connection: &Connection) -> bool {
+        matches!(self, Self::Connection(owned) if same_connection(owned, connection))
+    }
+    fn matches(&self, target: &Self) -> bool {
+        match (self, target) {
+            (Self::Connection(a), Self::Connection(b)) => same_connection(a, b),
+            (Self::Native(a), Self::Native(b)) => a == b,
+            _ => false,
+        }
+    }
+    fn from_draft(draft: &ConfigurationDraft) -> Result<Self, String> {
+        if let Some(target) = &draft.native_credential_target { return Ok(Self::Native(target.clone())); }
+        draft.draft_connection.clone().map(Self::Connection).ok_or_else(|| "请先完成连接，再提供 API 密钥".into())
+    }
 }
 struct Record {
     draft: ConfigurationDraft,
@@ -87,6 +129,9 @@ fn profile_from_files(tool: &str, files: BTreeMap<String, String>) -> Registered
     .expect("constant profile shape")
 }
 fn refresh(registry: &Registry, mut draft: ConfigurationDraft) -> ConfigurationDraft {
+    draft.native_credential_target = if draft.subject == Some(ConfigurationSubject::Current) && draft.context_id.is_none() {
+        registry.get(&draft.profile.tool).and_then(|adapter| adapter.native_credential_target(draft.scope))
+    } else { None };
     draft.source_capabilities = source_capabilities(registry, &draft);
     if registry
         .get(&draft.profile.tool)
@@ -162,7 +207,31 @@ fn redacted(
             &mut references,
         )?;
         profile::validate_registered_files(registry, tool, &files)?;
-        return Ok((files, BTreeMap::new()));
+        // Intake owns which values are removed. Preserve their coordinates in
+        // memory so public parent edits cannot erase a hidden private value.
+        fn protected_delta(original: &Value, public: Option<&Value>, path: &mut Vec<String>, out: &mut Vec<(Vec<String>, Value)>) {
+            match (original, public) {
+                (Value::Object(before), Some(Value::Object(after))) => {
+                    for (key, value) in before {
+                        path.push(key.clone());
+                        protected_delta(value, after.get(key), path, out);
+                        path.pop();
+                    }
+                }
+                (_, Some(public)) if original == public => {},
+                _ => out.push((path.clone(), original.clone())),
+            }
+        }
+        let mut protected = BTreeMap::new();
+        for (role, text) in raw {
+            let kind = adapter.file_kind(role)?;
+            let original = format::parse(kind, text)?;
+            let public = files.get(role).map(|text| format::parse(kind, text)).transpose()?;
+            let mut paths = Vec::new();
+            protected_delta(&original, public.as_ref(), &mut Vec::new(), &mut paths);
+            protected.insert(role.clone(), paths);
+        }
+        return Ok((files, protected));
     }
     let port = adapter.configuration().unwrap();
     fn scrub(
@@ -209,6 +278,25 @@ fn redacted(
     Ok((files, protected))
 }
 impl DraftSessions {
+    /// Saved subjects need only DB state. Resolve a native identity exclusively
+    /// for current-file access, retaining the unknown-binding refusal there.
+    pub fn begin_registered(
+        &self,
+        registry: &Registry,
+        db: &Database,
+        request: ConfigurationBeginRequest,
+        home: &std::path::Path,
+        project: Option<&std::path::Path>,
+    ) -> Result<ConfigurationDraft, String> {
+        let _context = if request.subject == ConfigurationSubject::Current {
+            Some(crate::accounts::selection::enter_bound(db, home, &request.tool_id, request.scope, project)?)
+        } else { None };
+        let (context_id, files) = if request.subject == ConfigurationSubject::Current {
+            (crate::accounts::selection::current(&request.tool_id).map(|context| context.id),
+             registry.get(&request.tool_id).ok_or("适配器未注册")?.native_files(request.scope, home, project, true))
+        } else { (None, Vec::new()) };
+        self.begin(registry, db, request, context_id, files)
+    }
     pub fn begin(
         &self,
         registry: &Registry,
@@ -319,6 +407,8 @@ impl DraftSessions {
         let mut draft = ConfigurationDraft {
             session_id: request.session_id.clone(),
             revision: 0,
+            request_generation: 0,
+            native_credential_target: None,
             scope: if request.subject == ConfigurationSubject::Common {
                 Scope::Global
             } else {
@@ -542,20 +632,17 @@ impl DraftSessions {
                 secret_ref: Some(id),
                 ..
             } => {
-                let connection = draft
-                    .draft_connection
-                    .as_ref()
-                    .ok_or("请先完成当前草稿连接")?;
+                let target = LeaseTarget::from_draft(&draft)?;
                 let own = record
                     .leases
                     .get(id)
-                    .is_some_and(|lease| same_connection(&lease.connection, connection));
+                    .is_some_and(|lease| lease.target.matches(&target));
                 let saved = record
                     .trusted_profile
                     .as_ref()
                     .and_then(|profile| profile.connection.as_ref())
                     .is_some_and(|saved| {
-                        saved.secret_ref.as_ref() == Some(id) && same_connection(saved, connection)
+                        saved.secret_ref.as_ref() == Some(id) && target.matches_connection(saved)
                     });
                 if !own && !saved {
                     return Err("此密钥引用不属于当前连接，请重新提供密钥".into());
@@ -606,17 +693,14 @@ impl DraftSessions {
         }
         let mut next = draft;
         if !secret.is_empty() {
-            let connection = next
-                .draft_connection
-                .clone()
-                .ok_or("请先完成连接，再提供 API 密钥")?;
+            let target = LeaseTarget::from_draft(&next)?;
             let id = format!("connection-{}", uuid::Uuid::new_v4());
             record
                 .leases
-                .retain(|_, lease| !same_connection(&lease.connection, &connection));
+                .retain(|_, lease| !lease.target.matches(&target));
             record
                 .leases
-                .insert(id.clone(), Lease { secret, connection });
+                .insert(id.clone(), Lease { secret, target });
             next.credential = Some(ConfigurationCredential::ApiKey {
                 secret_ref: Some(id),
                 remove: false,
@@ -634,6 +718,15 @@ impl DraftSessions {
             .map_err(|_| "草稿会话暂不可用")?
             .remove(session_id);
         Ok(())
+    }
+    pub fn cancel_requests(&self, draft: ConfigurationDraft) -> Result<ConfigurationDraft, String> {
+        let mut records = self.records.lock().map_err(|_| "草稿会话暂不可用")?;
+        let record = Self::checked(&mut records, &draft)?;
+        let mut next = draft;
+        next.request_generation = next.request_generation.checked_add(1).ok_or("请求代次已耗尽，请重新打开草稿")?;
+        // No document change, source switch, or lease cleanup occurs here.
+        record.publish(&next);
+        Ok(next)
     }
     pub fn add_models(
         &self,
@@ -719,6 +812,9 @@ impl DraftSessions {
     ) -> Result<(Connection, RequestCredential), String> {
         let mut records = self.records.lock().map_err(|_| "草稿会话暂不可用")?;
         let record = Self::checked(&mut records, draft)?;
+        if draft.native_credential_target.is_some() {
+            return Err("此来源仅写入原生密钥，不授权 HTTP 模型目录或诊断，请使用 CLI 原生能力".into());
+        }
         let mut connection = draft
             .draft_connection
             .clone()
@@ -729,7 +825,7 @@ impl DraftSessions {
             _=>return Err("当前原生/账号来源不提供 HTTP 模型目录凭据；不会复制登录凭据，请使用该来源的原生能力或明确选择 API 密钥".into()),
         };
         let secret = if let Some(lease) = record.leases.get(id) {
-            if !same_connection(&lease.connection, &connection) {
+            if !lease.target.matches_connection(&connection) {
                 return Err("连接已变化，请重新提供对应密钥".into());
             }
             lease.secret.clone()
@@ -829,6 +925,18 @@ fn apply_credential(
             Ok(None)
         }
         ConfigurationCredential::ApiKey { secret_ref, remove } => {
+            if let Some(target) = &draft.native_credential_target {
+                if draft.subject != Some(ConfigurationSubject::Current) || draft.context_id.is_some() {
+                    return Err("此原生密钥目标不适用于当前范围".into());
+                }
+                if *remove { return Ok(None); }
+                let id = secret_ref.as_ref().ok_or("请明确提供此原生目标的新密钥；不会沿用隐藏的原生密钥")?;
+                let lease = record.leases.get(id).ok_or("原生密钥临时引用已失效")?;
+                if !lease.target.matches(&LeaseTarget::Native(target.clone())) {
+                    return Err("原生密钥目标已变化，请重新提供".into());
+                }
+                return Ok(Some((id.clone(), lease.secret.clone())));
+            }
             let connection = draft
                 .profile
                 .connection
@@ -845,7 +953,7 @@ fn apply_credential(
                 .ok_or("请为此连接提供 API 密钥；空引用不会回退到旧密钥")?;
             let lease = record.leases.get(id);
             if let Some(lease) = lease {
-                if !same_connection(&lease.connection, connection) {
+                if !lease.target.matches_connection(connection) {
                     return Err("当前默认连接与新密钥目标不一致，请先设置对应默认模型".into());
                 }
             } else {
@@ -1046,21 +1154,30 @@ impl DraftSessions {
             draft.credential,
             Some(ConfigurationCredential::ApiKey { .. })
         ) {
-            adapter.reject_new_secret(&credential_profile.profile, draft.scope)?;
-            if matches!(
-                draft.credential,
-                Some(ConfigurationCredential::ApiKey { remove: true, .. })
-            ) {
-                clear_credential_references(registry, &mut credential_profile.profile)?;
+            if let Some(target) = &draft.native_credential_target {
+                for path in &target.remove_paths {
+                    secret_plan.remove(&target.role, &path.iter().map(String::as_str).collect::<Vec<_>>());
+                }
+                if let Some((_, secret)) = &lease {
+                    secret_plan.put(&target.role, &target.path.iter().map(String::as_str).collect::<Vec<_>>(), secret.clone());
+                }
+            } else {
+                adapter.reject_new_secret(&credential_profile.profile, draft.scope)?;
+                if matches!(
+                    draft.credential,
+                    Some(ConfigurationCredential::ApiKey { remove: true, .. })
+                ) {
+                    clear_credential_references(registry, &mut credential_profile.profile)?;
+                }
+                let documents = configuration::documents(registry, &credential_profile.profile)?;
+                adapter.write_connection_secret_for_documents(
+                    &credential_profile.profile,
+                    draft.scope,
+                    &credentials,
+                    &mut secret_plan,
+                    &documents,
+                )?;
             }
-            let documents = configuration::documents(registry, &credential_profile.profile)?;
-            adapter.write_connection_secret_for_documents(
-                &credential_profile.profile,
-                draft.scope,
-                &credentials,
-                &mut secret_plan,
-                &documents,
-            )?;
         }
         let mut patches = vec![];
         for (role, original) in &record.original_texts {
@@ -1398,6 +1515,16 @@ impl DraftSessions {
         draft: &ConfigurationDraft,
         store: &dyn CredentialStore,
     ) -> Result<String, String> {
+        if let Some(target) = &draft.native_credential_target {
+            let mut records = self.records.lock().map_err(|_| "草稿会话暂不可用")?;
+            let record = Self::checked(&mut records, draft)?;
+            let Some(ConfigurationCredential::ApiKey { secret_ref: Some(id), remove: false }) = &draft.credential else {
+                return Err("当前来源没有可显示的草稿密钥".into());
+            };
+            let lease = record.leases.get(id).ok_or("原生草稿密钥已失效")?;
+            if !lease.target.matches(&LeaseTarget::Native(target.clone())) { return Err("原生密钥目标已变化".into()); }
+            return Ok(lease.secret.clone());
+        }
         let (connection, credential) = self.request(draft, store)?;
         credential.get(
             connection

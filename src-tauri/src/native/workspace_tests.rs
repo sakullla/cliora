@@ -970,7 +970,7 @@ fn workspace_nonpaid_request_cancel_stops_pagination_and_secret_echo_never_enter
         .set_secret(&registry, d, "synthetic-request-secret".into())
         .unwrap();
     let server_sessions = sessions.clone();
-    let session_id = d.session_id.clone();
+    let server_draft = d.clone();
     let server = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
         let mut reader = BufReader::new(stream.try_clone().unwrap());
@@ -987,16 +987,25 @@ fn workspace_nonpaid_request_cancel_stops_pagination_and_secret_echo_never_enter
             headers.push_str(&line);
         }
         assert!(headers.contains("synthetic-request-secret"));
-        server_sessions.cancel(&session_id).unwrap();
+        let cancelled = server_sessions.cancel_requests(server_draft).unwrap();
         let body = r#"{"data":[{"id":"synthetic-request-secret"},{"id":"safe"}],"has_more":true,"last_id":"safe"}"#;
         write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",body.len(),body).unwrap();
+        (cancelled, listener)
     });
     let (c, credential) = sessions.request(&d, &store).unwrap();
     let result = super::super::models::list_models_guarded(&db, &credential, &c, true, "", || {
         !sessions.is_current(&d)
     });
     assert!(result.is_err());
-    server.join().unwrap();
+    let (cancelled, listener) = server.join().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    assert_eq!(listener.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+    assert_eq!(cancelled.revision, d.revision);
+    assert_eq!(cancelled.request_generation, d.request_generation + 1);
+    assert_eq!(cancelled.profile.files, d.profile.files);
+    assert_eq!(cancelled.credential, d.credential);
+    assert!(sessions.is_current(&cancelled));
+    assert!(sessions.request(&cancelled, &store).is_ok());
     assert!(sessions.finish_request(&d).is_err());
     assert!(store.values.lock().unwrap().is_empty());
     db.with_connection(|conn| {
@@ -1007,4 +1016,869 @@ fn workspace_nonpaid_request_cancel_stops_pagination_and_secret_echo_never_enter
         Ok(())
     })
     .unwrap();
+}
+
+#[test]
+fn workspace_request_only_cancel_between_get_and_confirmed_post_retains_editable_lease() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+    use std::sync::Arc;
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("db")).unwrap();
+    let registry = Registry::builtins();
+    let sessions = Arc::new(DraftSessions::default());
+    let store = Store::default();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let mut p = fixture();
+    let mut value: Value = serde_json::from_str(&p.files["settings"]).unwrap();
+    value["provider"]["alpha"]["options"]["baseURL"] = json!(format!("http://{address}/v1"));
+    p.files.insert("settings".into(), value.to_string());
+    let d = api(
+        &sessions,
+        &registry,
+        &db,
+        begin(&sessions, &registry, &db, p, "post-cancel"),
+    );
+    let d = sessions
+        .set_secret(&registry, d, "synthetic-confirmed-key".into())
+        .unwrap();
+    let server_sessions = sessions.clone();
+    let server_draft = d.clone();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        assert!(line.starts_with("GET /v1/models"));
+        loop {
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            if line == "\r\n" {
+                break;
+            }
+        }
+        let cancelled = server_sessions.cancel_requests(server_draft).unwrap();
+        let body = r#"{"data":[{"id":"safe"}]}"#;
+        write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",body.len(),body).unwrap();
+        (cancelled, listener)
+    });
+    let (connection, credential) = sessions.request(&d, &store).unwrap();
+    let result = super::super::models::test_registered_connection_guarded(
+        &registry,
+        "open_code",
+        &connection,
+        &credential,
+        true,
+        || !sessions.is_current(&d),
+    );
+    assert_eq!(result.model_request.state, "skipped");
+    assert!(result.model_request.message.contains("取消"));
+    assert!(sessions.finish_request(&d).is_err());
+    let (cancelled, listener) = server.join().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+    assert_eq!(cancelled.revision, d.revision);
+    assert_eq!(cancelled.credential, d.credential);
+    let next = sessions
+        .edit(&registry, cancelled, action(json!(70000)))
+        .unwrap();
+    assert_eq!(next.revision, d.revision + 1);
+    assert_eq!(
+        sessions.reveal_secret(&next, &store).unwrap(),
+        "synthetic-confirmed-key"
+    );
+    let saved = sessions
+        .save_database(&registry, &db, &store, next)
+        .unwrap();
+    assert!(saved
+        .profile
+        .unwrap()
+        .connection
+        .unwrap()
+        .secret_ref
+        .is_some());
+}
+
+#[test]
+fn workspace_legacy_oauth_migration_opens_saved_draft_and_recovers_only_on_explicit_apply() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("db");
+    let registry = Registry::builtins();
+    let (saved, context) = {
+        let db = Database::open(&path).unwrap();
+        let context = account(&db, &registry, temp.path(), "legacy");
+        let p: RegisteredProfile = serde_json::from_value(json!({"id":"","tool":"codex","name":"legacy","version":0,"inheritCommon":false,"authentication":{"kind":"oauth","accountId":"legacy"},"files":{"settings":"model = \"old-model\"\n"},"connection":null,"nativeCredentials":{}})).unwrap();
+        let p = profile::save_registered_profile(&db, &registry, p, None).unwrap();
+        db.with_connection(|conn| {
+            conn.execute("INSERT INTO applied_bindings(scope_key,tool,profile_id,profile_version,managed,context_id) VALUES('global','codex',?1,?2,'{}',?3)", rusqlite::params![p.id, p.version as i64, context.id]).map_err(|error|error.to_string())?;
+            conn.execute_batch("ALTER TABLE applied_bindings DROP COLUMN common_version;ALTER TABLE applied_bindings DROP COLUMN common_revision;ALTER TABLE applied_bindings DROP COLUMN applied_profile;PRAGMA user_version=19;").map_err(|error|error.to_string())
+        }).unwrap();
+        (p, context)
+    };
+    let db = Database::open(&path).unwrap();
+    let saved_workspace = saved_workspace(&registry, &db, "codex", "global").unwrap();
+    assert_eq!(saved_workspace.profiles[0].revision, saved.revision);
+    assert!(!saved_workspace.binding.unwrap().applied_profile_available);
+    let impact = crate::accounts::impact(&db, "legacy").unwrap();
+    assert!(impact.scopes[0].needs_reapply);
+    assert!(impact.scopes[0].can_reapply);
+    assert!(impact.scopes[0].reapply_request.is_some());
+    let sessions = DraftSessions::default();
+    let request = ConfigurationBeginRequest {
+        tool_id: "codex".into(),
+        scope: Scope::Global,
+        project_path: None,
+        session_id: "legacy-saved".into(),
+        subject: ConfigurationSubject::Profile,
+        profile: Some(saved.clone()),
+    };
+    let draft = sessions
+        .begin_registered(&registry, &db, request, temp.path(), None)
+        .unwrap();
+    assert!(draft.issues.is_empty());
+    assert!(draft.context_id.is_none());
+    let current = ConfigurationBeginRequest {
+        tool_id: "codex".into(),
+        scope: Scope::Global,
+        project_path: None,
+        session_id: "legacy-current".into(),
+        subject: ConfigurationSubject::Current,
+        profile: None,
+    };
+    assert!(sessions
+        .begin_registered(&registry, &db, current, temp.path(), None)
+        .unwrap_err()
+        .contains("不会退回默认目录"));
+    assert!(crate::accounts::selection::bound(
+        &db,
+        temp.path(),
+        "codex",
+        Scope::Global,
+        None,
+        false
+    )
+    .is_err());
+    let files = vec![crate::adapters::file(
+        "settings",
+        context.config_root.join("config.toml"),
+        format::FileKind::Toml,
+        true,
+        None,
+        false,
+    )];
+    let store = Store::default();
+    {
+        let _context = crate::accounts::selection::enter(Some(context.clone()));
+        super::super::apply::apply_registered_validated(
+            &registry,
+            &db,
+            &store,
+            &saved,
+            None,
+            &files,
+            "global",
+            Scope::Global,
+            false,
+        )
+        .unwrap();
+    }
+    let recovered =
+        crate::accounts::selection::bound(&db, temp.path(), "codex", Scope::Global, None, false)
+            .unwrap()
+            .unwrap();
+    assert_eq!(recovered.1.id, context.id);
+    assert!(!crate::accounts::impact(&db, "legacy").unwrap().scopes[0].needs_reapply);
+    assert!(
+        super::super::apply::get_registered_binding(&db, "codex", "global")
+            .unwrap()
+            .unwrap()
+            .applied_profile_available
+    );
+}
+
+#[test]
+fn workspace_claude_catalog_and_common_execute_real_edit_save_reopen_apply_chain() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("db")).unwrap();
+    let registry = Registry::builtins();
+    let sessions = DraftSessions::default();
+    let store = Store::default();
+    for local in [false, true] {
+        let mut p = profile_from_files(
+            "claude_code",
+            BTreeMap::from([("settings".into(), json!({"model":"global-old"}).to_string())]),
+        );
+        if local {
+            p.files.insert(
+                "local_settings".into(),
+                json!({"model":"local-old"}).to_string(),
+            );
+        }
+        let d = sessions
+            .begin(
+                &registry,
+                &db,
+                ConfigurationBeginRequest {
+                    tool_id: p.tool.clone(),
+                    scope: if local { Scope::Project } else { Scope::Global },
+                    project_path: None,
+                    session_id: format!("claude-catalog-{local}"),
+                    subject: ConfigurationSubject::Profile,
+                    profile: Some(p),
+                },
+                None,
+                Vec::new(),
+            )
+            .unwrap();
+        let d = sessions
+            .add_models(&registry, d, vec!["claude-sonnet-4-6".into()])
+            .unwrap();
+        assert!(d.issues.is_empty(), "{:?}", d.issues);
+        assert_eq!(d.view["values"]["default.model"], "claude-sonnet-4-6");
+        let role = if local { "local_settings" } else { "settings" };
+        assert_eq!(
+            serde_json::from_str::<Value>(&d.profile.files[role]).unwrap()["model"],
+            "claude-sonnet-4-6"
+        );
+        let saved = sessions
+            .save_database(&registry, &db, &store, d)
+            .unwrap()
+            .profile
+            .unwrap();
+        let reopened = begin(
+            &sessions,
+            &registry,
+            &db,
+            saved.clone(),
+            &format!("claude-reopen-{local}"),
+        );
+        assert_eq!(
+            reopened.view["values"]["default.model"],
+            "claude-sonnet-4-6"
+        );
+        let files = saved
+            .files
+            .keys()
+            .map(|role| {
+                crate::adapters::file(
+                    if role == "settings" {
+                        "settings"
+                    } else {
+                        "local_settings"
+                    },
+                    temp.path().join(format!("claude-{local}-{role}.json")),
+                    format::FileKind::Json,
+                    true,
+                    None,
+                    false,
+                )
+            })
+            .collect::<Vec<_>>();
+        super::super::apply::apply_registered_validated(
+            &registry,
+            &db,
+            &store,
+            &saved,
+            None,
+            &files,
+            &format!("catalog-{local}"),
+            if local { Scope::Project } else { Scope::Global },
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(
+                &std::fs::read_to_string(
+                    &files.iter().find(|file| file.role == role).unwrap().path
+                )
+                .unwrap()
+            )
+            .unwrap()["model"],
+            "claude-sonnet-4-6"
+        );
+    }
+    let common = sessions
+        .begin(
+            &registry,
+            &db,
+            ConfigurationBeginRequest {
+                tool_id: "claude_code".into(),
+                scope: Scope::Project,
+                project_path: None,
+                session_id: "claude-common".into(),
+                subject: ConfigurationSubject::Common,
+                profile: None,
+            },
+            None,
+            Vec::new(),
+        )
+        .unwrap();
+    assert!(common
+        .descriptor
+        .as_ref()
+        .unwrap()
+        .fields
+        .iter()
+        .any(|field| field.id == "effortLevel"));
+    assert_eq!(common.view["commonFields"][0]["id"], "effortLevel");
+    let common = sessions
+        .edit(
+            &registry,
+            common,
+            ConfigurationAction {
+                version: 1,
+                target: json!("configuration"),
+                operation: "set".into(),
+                field: Some("effortLevel".into()),
+                value: Some(json!("high")),
+            },
+        )
+        .unwrap();
+    let mut legal_files = common.profile.files.clone();
+    legal_files.insert(
+        "local_settings".into(),
+        json!({"effortLevel":"medium","permissions":{"allow":["Read"]}}).to_string(),
+    );
+    let common = sessions.raw(&registry, common, legal_files).unwrap();
+    assert!(common.issues.is_empty(), "{:?}", common.issues);
+    let saved_common = sessions
+        .save_database(&registry, &db, &store, common)
+        .unwrap()
+        .common
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&saved_common.files["settings"]).unwrap()["effortLevel"],
+        "high"
+    );
+    let reopened_common = sessions.begin(&registry, &db, ConfigurationBeginRequest {
+        tool_id: "claude_code".into(), scope: Scope::Global, project_path: None,
+        session_id: "claude-common-reopen".into(), subject: ConfigurationSubject::Common, profile: None,
+    }, None, Vec::new()).unwrap();
+    assert_eq!(reopened_common.view["commonFields"][0]["value"], "high");
+    assert_eq!(reopened_common.profile.revision, saved_common.revision);
+    let mut p = profile_from_files(
+        "claude_code",
+        BTreeMap::from([("settings".into(), json!({"model":"own-model"}).to_string())]),
+    );
+    p.inherit_common = true;
+    let saved = sessions
+        .save_database(
+            &registry,
+            &db,
+            &store,
+            begin(&sessions, &registry, &db, p, "claude-inherited"),
+        )
+        .unwrap()
+        .profile
+        .unwrap();
+    let reopened = begin(
+        &sessions,
+        &registry,
+        &db,
+        saved.clone(),
+        "claude-inherited-reopen",
+    );
+    assert_eq!(reopened.view["values"]["effortLevel"], "medium");
+    let files = vec![
+        crate::adapters::file(
+            "settings",
+            temp.path().join("inherited-settings.json"),
+            format::FileKind::Json,
+            true,
+            None,
+            false,
+        ),
+        crate::adapters::file(
+            "local_settings",
+            temp.path().join("inherited-local-settings.json"),
+            format::FileKind::Json,
+            true,
+            None,
+            false,
+        ),
+    ];
+    super::super::apply::apply_registered_validated(
+        &registry,
+        &db,
+        &store,
+        &saved,
+        Some(&saved_common),
+        &files,
+        "inherited",
+        Scope::Project,
+        false,
+    )
+    .unwrap();
+    let applied: Value =
+        serde_json::from_str(&std::fs::read_to_string(&files[0].path).unwrap()).unwrap();
+    assert_eq!(applied["effortLevel"], "high");
+    assert_eq!(applied["model"], "own-model");
+    let local: Value =
+        serde_json::from_str(&std::fs::read_to_string(&files[1].path).unwrap()).unwrap();
+    assert_eq!(local["effortLevel"], "medium");
+    assert_eq!(local["permissions"]["allow"], json!(["Read"]));
+    assert!(local.get("model").is_none());
+    for role in ["settings", "local_settings"] {
+        for reference in [
+            json!({"model":"sonnet"}),
+            json!({"env":{"ANTHROPIC_MODEL":"sonnet"}}),
+        ] {
+            let d = sessions
+                .begin(
+                    &registry,
+                    &db,
+                    ConfigurationBeginRequest {
+                        tool_id: "claude_code".into(),
+                        scope: Scope::Project,
+                        project_path: None,
+                        session_id: format!("invalid-{role}-{}", reference.get("env").is_some()),
+                        subject: ConfigurationSubject::Common,
+                        profile: None,
+                    },
+                    None,
+                    Vec::new(),
+                )
+                .unwrap();
+            let d = sessions
+                .raw(
+                    &registry,
+                    d,
+                    BTreeMap::from([(role.into(), reference.to_string())]),
+                )
+                .unwrap();
+            assert!(d.issues.iter().any(|issue| issue.code == "common_scope"));
+            assert!(sessions.save_database(&registry, &db, &store, d).is_err());
+        }
+    }
+    assert_eq!(
+        profile::get_registered_common(&db, "claude_code")
+            .unwrap()
+            .unwrap()
+            .revision,
+        saved_common.revision
+    );
+}
+
+#[test]
+fn workspace_generic_current_protects_parent_and_owns_explicit_native_key_target() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("db")).unwrap();
+    let registry = Registry::builtins();
+    let sessions = DraftSessions::default();
+    let store = Store::default();
+    let files = vec![crate::adapters::file(
+        "settings",
+        temp.path().join("codebuddy-settings.json"),
+        format::FileKind::Json,
+        true,
+        None,
+        false,
+    )];
+    let original=json!({"model":"m","apiKeyHelper":"keep-helper","env":{"CODEBUDDY_API_KEY":"synthetic-key","USER_OPTION":"x"}}).to_string();
+    std::fs::write(&files[0].path, &original).unwrap();
+    let d = sessions
+        .begin(
+            &registry,
+            &db,
+            ConfigurationBeginRequest {
+                tool_id: "codebuddy".into(),
+                scope: Scope::Global,
+                project_path: None,
+                session_id: "codebuddy-current".into(),
+                subject: ConfigurationSubject::Current,
+                profile: None,
+            },
+            None,
+            files.clone(),
+        )
+        .unwrap();
+    assert!(!serde_json::to_string(&d).unwrap().contains("synthetic-key"));
+    assert!(d.native_credential_target.is_some());
+    assert!(d.draft_connection.is_none());
+    assert!(!d.catalog_support.as_ref().unwrap().available);
+    assert!(store.values.lock().unwrap().is_empty());
+    let original_public = d.profile.files.clone();
+    let mut next = d;
+    for edited in [
+        json!({"model":"m","apiKeyHelper":"keep-helper"}),
+        json!({"model":"m","apiKeyHelper":"keep-helper","env":"overwrite"}),
+    ] {
+        next = sessions
+            .raw(
+                &registry,
+                next,
+                BTreeMap::from([("settings".into(), edited.to_string())]),
+            )
+            .unwrap();
+        assert!(sessions
+            .save_current(&registry, &db, &store, next.clone(), &files)
+            .unwrap_err()
+            .contains("受保护"));
+        assert_eq!(std::fs::read_to_string(&files[0].path).unwrap(), original);
+    }
+    next = sessions.raw(&registry, next, original_public).unwrap();
+    let mut public: Value = serde_json::from_str(&next.profile.files["settings"]).unwrap();
+    public["env"]["USER_OPTION"] = json!("edited");
+    next = sessions
+        .raw(
+            &registry,
+            next,
+            BTreeMap::from([("settings".into(), public.to_string())]),
+        )
+        .unwrap();
+    let saved = sessions
+        .save_current(&registry, &db, &store, next, &files)
+        .unwrap();
+    let file: Value =
+        serde_json::from_str(&std::fs::read_to_string(&files[0].path).unwrap()).unwrap();
+    assert_eq!(file["env"]["CODEBUDDY_API_KEY"], "synthetic-key");
+    assert_eq!(file["env"]["USER_OPTION"], "edited");
+    let d = api(&sessions, &registry, &db, saved.draft);
+    assert!(sessions
+        .request(&d, &store)
+        .err()
+        .unwrap()
+        .contains("不授权 HTTP"));
+    let mut forged = d.clone();
+    forged.native_credential_target.as_mut().unwrap().identity = "foreign-native-target".into();
+    assert!(sessions.set_secret(&registry, forged, "synthetic-forged-key".into()).is_err());
+    let replaced = sessions.set_secret(&registry, d, "synthetic-replacement-key".into()).unwrap();
+    let replaced = sessions.save_current(&registry, &db, &store, replaced, &files).unwrap();
+    let file: Value = serde_json::from_str(&std::fs::read_to_string(&files[0].path).unwrap()).unwrap();
+    assert_eq!(file["env"]["CODEBUDDY_AUTH_TOKEN"], "synthetic-replacement-key");
+    assert!(file["env"].get("CODEBUDDY_API_KEY").is_none());
+    assert_eq!(file["env"]["USER_OPTION"], "edited");
+    assert!(!serde_json::to_string(&replaced).unwrap().contains("synthetic-replacement-key"));
+    let d = sessions.remove_secret(&registry, replaced.draft).unwrap();
+    let saved = sessions
+        .save_current(&registry, &db, &store, d, &files)
+        .unwrap();
+    let file: Value =
+        serde_json::from_str(&std::fs::read_to_string(&files[0].path).unwrap()).unwrap();
+    assert!(file["env"].get("CODEBUDDY_API_KEY").is_none());
+    assert_eq!(file["apiKeyHelper"], "keep-helper");
+    let d = sessions
+        .set_secret(&registry, saved.draft, "synthetic-new-native-key".into())
+        .unwrap();
+    assert_eq!(
+        sessions.reveal_secret(&d, &store).unwrap(),
+        "synthetic-new-native-key"
+    );
+    assert!(!store
+        .values
+        .lock()
+        .unwrap()
+        .values()
+        .any(|secret| secret == "synthetic-new-native-key"));
+    let saved = sessions
+        .save_current(&registry, &db, &store, d, &files)
+        .unwrap();
+    assert!(!serde_json::to_string(&saved)
+        .unwrap()
+        .contains("synthetic-new-native-key"));
+    let file: Value =
+        serde_json::from_str(&std::fs::read_to_string(&files[0].path).unwrap()).unwrap();
+    assert_eq!(
+        file["env"]["CODEBUDDY_AUTH_TOKEN"],
+        "synthetic-new-native-key"
+    );
+    assert_eq!(file["env"]["USER_OPTION"], "edited");
+    let reopened = sessions
+        .begin(
+            &registry,
+            &db,
+            ConfigurationBeginRequest {
+                tool_id: "codebuddy".into(),
+                scope: Scope::Global,
+                project_path: None,
+                session_id: "codebuddy-reopen".into(),
+                subject: ConfigurationSubject::Current,
+                profile: None,
+            },
+            None,
+            files,
+        )
+        .unwrap();
+    assert!(!serde_json::to_string(&reopened)
+        .unwrap()
+        .contains("synthetic-new-native-key"));
+    assert_eq!(reopened.credential, Some(ConfigurationCredential::Native));
+    assert!(sessions.request(&reopened, &store).is_err());
+}
+
+#[test]
+fn workspace_saved_and_frozen_models_are_independent_of_oauth_or_builtin_http_connection() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("db")).unwrap();
+    let registry = Registry::builtins();
+    let sessions = DraftSessions::default();
+    let store = Store::default();
+    let context = account(&db, &registry, temp.path(), "summary-account");
+    for oauth in [false, true] {
+        let mut p = profile_from_files(
+            "codex",
+            BTreeMap::from([(
+                "settings".into(),
+                "model = \"model-first\"\nmodel_provider = \"openai\"\n".into(),
+            )]),
+        );
+        if oauth {
+            p.authentication = ProfileAuthentication::OAuth {
+                account_id: "summary-account".into(),
+            };
+        }
+        let d = begin(
+            &sessions,
+            &registry,
+            &db,
+            p.clone(),
+            &format!("summary-first-{oauth}"),
+        );
+        let saved = sessions
+            .save_database(&registry, &db, &store, d)
+            .unwrap()
+            .profile
+            .unwrap();
+        assert!(saved.connection.is_none());
+        let d = begin(
+            &sessions,
+            &registry,
+            &db,
+            saved.clone(),
+            &format!("summary-open-{oauth}"),
+        );
+        let mut twin = p;
+        twin.files.insert(
+            "settings".into(),
+            "model = \"model-twin\"\nmodel_provider = \"openai\"\n".into(),
+        );
+        let twin = sessions
+            .save_database(
+                &registry,
+                &db,
+                &store,
+                begin(
+                    &sessions,
+                    &registry,
+                    &db,
+                    twin,
+                    &format!("summary-twin-{oauth}"),
+                ),
+            )
+            .unwrap()
+            .profile
+            .unwrap();
+        let summaries = saved_workspace(&registry, &db, "codex", "global")
+            .unwrap()
+            .profile_model_summaries;
+        assert_eq!(summaries[&saved.id].as_ref().unwrap().model, "model-first");
+        assert_eq!(summaries[&twin.id].as_ref().unwrap().model, "model-twin");
+        let files = vec![crate::adapters::file(
+            "settings",
+            temp.path().join(format!("summary-{oauth}.toml")),
+            format::FileKind::Toml,
+            true,
+            None,
+            false,
+        )];
+        let _context =
+            crate::accounts::selection::enter(if oauth { Some(context.clone()) } else { None });
+        let key = format!("summary-{oauth}");
+        super::super::apply::apply_registered_validated(
+            &registry,
+            &db,
+            &store,
+            &saved,
+            None,
+            &files,
+            &key,
+            Scope::Global,
+            false,
+        )
+        .unwrap();
+        let edited = sessions
+            .raw(
+                &registry,
+                d,
+                BTreeMap::from([(
+                    "settings".into(),
+                    "model = \"model-pending\"\nmodel_provider = \"openai\"\n".into(),
+                )]),
+            )
+            .unwrap();
+        let pending = sessions
+            .save_database(&registry, &db, &store, edited)
+            .unwrap()
+            .profile
+            .unwrap();
+        let binding = super::super::apply::get_registered_binding(&db, "codex", &key)
+            .unwrap()
+            .unwrap();
+        let summary = binding.applied_summary.as_ref().unwrap();
+        assert_eq!(summary.model.as_deref(), Some("model-first"));
+        assert_eq!(summary.profile_version, saved.version);
+        assert_eq!(summary.profile_revision, saved.revision);
+        assert_eq!(summary.authentication, saved.authentication);
+        assert_eq!(
+            summary.context_id,
+            if oauth {
+                Some(context.id.clone())
+            } else {
+                None
+            }
+        );
+        assert!(binding.applied_profile_available);
+        assert!(binding.common_version.is_none());
+        assert!(binding.common_revision.is_none());
+        let mut replaced = pending.clone();
+        replaced.revision = "same-version-new-model".into();
+        replaced.files.insert(
+            "settings".into(),
+            "model = \"model-replaced\"\nmodel_provider = \"openai\"\n".into(),
+        );
+        db.with_connection(|conn| {
+            conn.execute(
+                "UPDATE native_profiles SET data=?1 WHERE id=?2",
+                rusqlite::params![serde_json::to_string(&replaced).unwrap(), replaced.id],
+            )
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+        })
+        .unwrap();
+        assert_eq!(
+            saved_workspace(&registry, &db, "codex", &key)
+                .unwrap()
+                .profile_model_summaries[&saved.id]
+                .as_ref()
+                .unwrap()
+                .model,
+            "model-replaced"
+        );
+        assert_eq!(
+            super::super::apply::get_registered_binding(&db, "codex", &key)
+                .unwrap()
+                .unwrap()
+                .applied_summary
+                .unwrap()
+                .model
+                .as_deref(),
+            Some("model-first")
+        );
+        assert_eq!(
+            format::parse(
+                format::FileKind::Toml,
+                &std::fs::read_to_string(&files[0].path).unwrap()
+            )
+            .unwrap()["model"],
+            "model-first"
+        );
+        super::super::apply::apply_registered_validated(
+            &registry,
+            &db,
+            &store,
+            &replaced,
+            None,
+            &files,
+            &key,
+            Scope::Global,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            super::super::apply::get_registered_binding(&db, "codex", &key)
+                .unwrap()
+                .unwrap()
+                .applied_summary
+                .unwrap()
+                .model
+                .as_deref(),
+            Some("model-replaced")
+        );
+    }
+}
+
+#[test]
+fn workspace_request_cancel_without_transport_keeps_lease_blocks_old_guards_and_saves() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("db")).unwrap();
+    let registry = Registry::builtins();
+    let sessions = DraftSessions::default();
+    let store = Store::default();
+    let d = api(
+        &sessions,
+        &registry,
+        &db,
+        begin(&sessions, &registry, &db, fixture(), "guard-only"),
+    );
+    let d = sessions
+        .set_secret(&registry, d, "synthetic-guard-key".into())
+        .unwrap();
+    let (connection, credential) = sessions.request(&d, &store).unwrap();
+    let cancelled = sessions.cancel_requests(d.clone()).unwrap();
+    assert_eq!(cancelled.revision, d.revision);
+    assert_eq!(cancelled.profile.files, d.profile.files);
+    assert_eq!(cancelled.credential, d.credential);
+    assert_eq!(cancelled.request_generation, d.request_generation + 1);
+    assert!(super::super::models::list_models_guarded(
+        &db,
+        &credential,
+        &connection,
+        true,
+        "",
+        || !sessions.is_current(&d)
+    )
+    .unwrap_err()
+    .contains("取消"));
+    let check = super::super::models::test_registered_connection_guarded(
+        &registry,
+        "open_code",
+        &connection,
+        &credential,
+        true,
+        || !sessions.is_current(&d),
+    );
+    assert_eq!(check.connectivity.state, "skipped");
+    assert_eq!(check.model_request.state, "skipped");
+    assert!(sessions.finish_request(&d).is_err());
+    assert!(sessions.finish_request(&cancelled).is_ok());
+    assert_eq!(
+        sessions.reveal_secret(&cancelled, &store).unwrap(),
+        "synthetic-guard-key"
+    );
+    db.with_connection(|conn| {
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM model_cache", [], |row| row
+                .get::<_, i64>(0))
+                .map_err(|error| error.to_string())?,
+            0
+        );
+        Ok(())
+    })
+    .unwrap();
+    let edited = sessions
+        .edit(&registry, cancelled, action(json!(70000)))
+        .unwrap();
+    let saved = sessions
+        .save_database(&registry, &db, &store, edited)
+        .unwrap()
+        .profile
+        .unwrap();
+    assert_eq!(
+        store
+            .get(
+                saved
+                    .connection
+                    .as_ref()
+                    .unwrap()
+                    .secret_ref
+                    .as_deref()
+                    .unwrap()
+            )
+            .unwrap(),
+        "synthetic-guard-key"
+    );
 }

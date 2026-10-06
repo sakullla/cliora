@@ -60,6 +60,16 @@ pub(crate) fn config_root(home: &Path) -> PathBuf {
 }
 
 impl CliAdapter for CodeBuddy {
+    fn native_credential_target(&self, scope: Scope) -> Option<super::contract::NativeCredentialTarget> {
+        Some(super::contract::NativeCredentialTarget {
+            identity: format!("codebuddy:{scope:?}:env-key"),
+            label: "CodeBuddy 原生 API 密钥（不提供 HTTP 目录或诊断）".into(),
+            role: "settings".into(),
+            // AUTH_TOKEN precedes apiKeyHelper and API_KEY in this native CLI.
+            path: vec!["env".into(), "CODEBUDDY_AUTH_TOKEN".into()],
+            remove_paths: CREDENTIAL_ENV_NAMES.iter().map(|name| vec!["env".into(), (*name).into()]).collect(),
+        })
+    }
     fn supports_mcp(&self) -> bool { true }
     fn supports_skills(&self) -> bool { true }
     fn agents(&self) -> Option<&dyn crate::adapters::agents::AgentAdapter> {

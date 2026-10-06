@@ -224,6 +224,7 @@ export const updateConfigurationDraft = (draft: ConfigurationDraft, profile: Reg
 export const selectConfigurationCredential = (draft: ConfigurationDraft, credential: import('../types/configuration').ConfigurationCredential) => command<ConfigurationDraft>('select_configuration_credential', { draft, credential });
 export const setConfigurationDraftSecret = (draft: ConfigurationDraft, secret: string) => command<ConfigurationDraft>('set_configuration_draft_secret', { draft, secret });
 export const cancelConfigurationDraft = (sessionId: string) => command<void>('cancel_configuration_draft', { sessionId });
+export const cancelConfigurationRequests = (draft: ConfigurationDraft) => command<ConfigurationDraft>('cancel_configuration_requests', { draft });
 export const addConfigurationModels = (draft: ConfigurationDraft, ids: string[]) => command<ConfigurationDraft>('add_configuration_models', { draft, ids });
 export const listConfigurationModels = (draft: ConfigurationDraft, force = false, query = '') => command<import('../types/configuration').ConfigurationDirectoryResult>('list_configuration_models', { draft, force, query });
 export const checkConfigurationConnection = (draft: ConfigurationDraft, allowModelRequest = false) => command<import('../types/configuration').ConfigurationCheckResult>('check_configuration_connection', { draft, allowModelRequest });

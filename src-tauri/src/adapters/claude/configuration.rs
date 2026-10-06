@@ -504,10 +504,14 @@ impl ConfigurationAdapter for Claude {
     fn native_verification_module(&self) -> Option<&'static str> { Some("src-tauri/src/adapters/claude/native_verification.mjs") }
     fn catalog_support(&self) -> CatalogSupport { CatalogSupport { available: true, multiple: false, reason: None } }
     fn common_parameters(&self, scope: Scope) -> Vec<CommonParameter> {
-        self.describe(scope).fields.into_iter().filter(|field| ["effort"].contains(&field.id.as_str()))
+        self.describe(scope).fields.into_iter().filter(|field| field.id == "effortLevel")
             .map(|field| CommonParameter { path: vec!["effortLevel".into()], field, role: "settings", target: json!("configuration") }).collect()
     }
-    fn common_forbidden_paths(&self) -> Vec<(&'static str, &'static str)> { vec![("settings","/model"), ("settings","/env/ANTHROPIC_MODEL"), ("settings","/env/ANTHROPIC_DEFAULT_SONNET_MODEL"), ("settings","/env/ANTHROPIC_DEFAULT_OPUS_MODEL"), ("settings","/env/ANTHROPIC_DEFAULT_FABLE_MODEL"), ("settings","/env/ANTHROPIC_DEFAULT_HAIKU_MODEL"), ("settings","/env/CLAUDE_CODE_SUBAGENT_MODEL")] }
+    fn common_forbidden_paths(&self) -> Vec<(&'static str, &'static str)> {
+        ["settings", "local_settings"].into_iter().flat_map(|role| {
+            ["/model", "/env/ANTHROPIC_MODEL", "/env/ANTHROPIC_DEFAULT_SONNET_MODEL", "/env/ANTHROPIC_DEFAULT_OPUS_MODEL", "/env/ANTHROPIC_DEFAULT_FABLE_MODEL", "/env/ANTHROPIC_DEFAULT_HAIKU_MODEL", "/env/CLAUDE_CODE_SUBAGENT_MODEL"].into_iter().map(move |path| (role, path))
+        }).collect()
+    }
     fn draft_connection(&self, documents: &Documents, state: &EditingState) -> Result<Option<Connection>, String> {
         let mut documents = documents.clone(); let settings = documents.entry("settings".into()).or_insert_with(|| json!({}));
         let missing = settings.get("model").is_none() && settings.pointer("/env/ANTHROPIC_MODEL").is_none();
@@ -515,9 +519,10 @@ impl ConfigurationAdapter for Claude {
         let mut connection = self.connection(&documents, state)?; if missing { if let Some(connection) = &mut connection { connection.model.clear(); } }
         Ok(connection)
     }
-    fn catalog_actions(&self, _documents: &Documents, _state: &EditingState, ids: &[String]) -> Result<Vec<ConfigurationAction>, String> {
+    fn catalog_actions(&self, documents: &Documents, _state: &EditingState, ids: &[String]) -> Result<Vec<ConfigurationAction>, String> {
         if ids.len() != 1 { return Err("Claude 使用配置级默认模型，请选择一个模型".into()) }
-        Ok(vec![ConfigurationAction { version: EDITING_VERSION, target: json!("configuration"), operation: "set".into(), field: Some("model".into()), value: Some(json!(ids[0])) }])
+        let target = if documents.get("local_settings").is_some_and(|local| local.get("model").is_some() || local.pointer("/env/ANTHROPIC_MODEL").is_some()) { "local_configuration" } else { "configuration" };
+        Ok(vec![ConfigurationAction { version: EDITING_VERSION, target: json!(target), operation: "set".into(), field: Some("default.model".into()), value: Some(json!(ids[0])) }])
     }
 
     fn portable_field_kind(&self, path: &[String]) -> PortableFieldKind {

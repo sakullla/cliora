@@ -1196,6 +1196,7 @@ pub struct ToolWorkspace {
     pub common: Option<CommonConfig>,
     pub binding: Option<AppliedBinding>,
     pub effective_context_id: Option<String>,
+    pub native_context_error: Option<String>,
     pub snapshots: Vec<NativeSnapshot>,
     pub recovery_needed: Vec<String>,
 }
@@ -1206,9 +1207,11 @@ pub struct RegisteredToolWorkspace {
     pub probe: ToolProbe,
     pub custom_path: Option<String>,
     pub profiles: Vec<RegisteredProfile>,
+    pub profile_model_summaries: std::collections::BTreeMap<String, Option<crate::native::configuration::ModelSummary>>,
     pub common: Option<RegisteredCommon>,
     pub binding: Option<AppliedBinding>,
     pub effective_context_id: Option<String>,
+    pub native_context_error: Option<String>,
     pub snapshots: Vec<NativeSnapshot>,
     pub recovery_needed: Vec<String>,
 }
@@ -1264,11 +1267,19 @@ pub async fn get_registered_tool_workspace(
         }
         let state = app.state::<AppState>();
         state.with_database(&app, |database| {
-            let _context = crate::accounts::selection::enter_bound(database, &home, &tool_id, scope, project.as_deref()).map_err(native_error)?;
+            let key = match scope {
+                Scope::Global => "global".into(),
+                Scope::Project => format!("project:{}", project.as_ref().unwrap().display()),
+            };
+            let saved = crate::native::workspace::saved_workspace(&registry, database, &tool_id, &key).map_err(native_error)?;
+            let (_context, context_error) = match crate::accounts::selection::enter_bound(database, &home, &tool_id, scope, project.as_deref()) {
+                Ok(context) => (Some(context), None),
+                Err(error) => (None, Some(error)),
+            };
             let custom = registered_tool_path(database, &tool_id).map_err(native_error)?;
             // The quick-start page only needs the selected CLI version. Skip sibling shims,
             // native file reads, and pending-transaction recovery.
-            let probe = if summary {
+            let mut probe = if summary || context_error.is_some() {
                 adapter::probe_registered_summary_cached(
                     &registry,
                     &tool_id,
@@ -1290,25 +1301,14 @@ pub async fn get_registered_tool_workspace(
                 )
             }
             .map_err(native_error)?;
-            let key = match scope {
-                Scope::Global => "global".into(),
-                Scope::Project => format!("project:{}", project.as_ref().unwrap().display()),
-            };
-            let profiles =
-                profile::list_registered_profiles(database, &tool_id).map_err(native_error)?;
-            let common =
-                profile::get_registered_common(database, &tool_id).map_err(native_error)?;
-            let recovery_needed = if summary {
+            let recovery_needed = if summary || context_error.is_some() {
                 Vec::new()
             } else {
                 transaction::recover_pending(database, &SystemCredentialStore).map_err(native_error)?
             };
-            let binding = apply::get_registered_binding(database, &tool_id, &key)
-                .map_err(native_error)?
-                .map(|mut binding| {
-                    binding.managed.clear();
-                    binding
-                });
+            if context_error.is_some() {
+                probe.native_files.clear();
+            }
             let snapshots = if summary {
                 Vec::new()
             } else {
@@ -1316,11 +1316,13 @@ pub async fn get_registered_tool_workspace(
             };
             Ok(RegisteredToolWorkspace {
                 effective_context_id: crate::accounts::selection::current(&tool_id).map(|context| context.id),
+                native_context_error: context_error,
                 probe,
                 custom_path: custom.map(|path| path.display().to_string()),
-                profiles,
-                common,
-                binding,
+                profiles: saved.profiles,
+                profile_model_summaries: saved.profile_model_summaries,
+                common: saved.common,
+                binding: saved.binding,
                 snapshots,
                 recovery_needed,
             })
@@ -1341,17 +1343,24 @@ pub async fn get_tool_workspace(
         let project = checked_project(scope, project_path)?;
         let state = app.state::<AppState>();
         state.with_database(&app, |database| {
-            let _context = crate::accounts::selection::enter_bound(database, &home, tool.stable_id(), scope, project.as_deref()).map_err(native_error)?;
+            let (_context, context_error) = match crate::accounts::selection::enter_bound(database, &home, tool.stable_id(), scope, project.as_deref()) {
+                Ok(context) => (Some(context), None),
+                Err(error) => (None, Some(error)),
+            };
             let custom = tool_path(database, tool).map_err(native_error)?;
-            let probe = adapter::probe(tool, custom.as_deref(), &home, project.as_deref(), scope);
+            let mut probe = if context_error.is_some() {
+                adapter::probe_registered_summary(&adapters::Registry::builtins(), tool.stable_id(), custom.as_deref(), &home, project.as_deref(), scope).map_err(native_error)?
+            } else { adapter::probe(tool, custom.as_deref(), &home, project.as_deref(), scope) };
             let key = match scope {
                 Scope::Global => "global".into(),
                 Scope::Project => format!("project:{}", project.as_ref().unwrap().display()),
             };
             let profiles = profile::list_profiles(database, tool).map_err(native_error)?;
             let common = profile::get_common(database, tool).map_err(native_error)?;
-            let recovery_needed = transaction::recover_pending(database, &SystemCredentialStore)
-                .map_err(native_error)?;
+            let recovery_needed = if context_error.is_some() { Vec::new() } else { transaction::recover_pending(database, &SystemCredentialStore).map_err(native_error)? };
+            if context_error.is_some() {
+                probe.native_files.clear();
+            }
             let binding = apply::get_binding(database, tool, &key)
                 .map_err(native_error)?
                 .map(|mut binding| {
@@ -1363,6 +1372,7 @@ pub async fn get_tool_workspace(
             let snapshots = probe.native_files.iter().map(native_snapshot).collect();
             Ok(ToolWorkspace {
                 effective_context_id: crate::accounts::selection::current(tool.stable_id()).map(|context| context.id),
+                native_context_error: context_error,
                 probe,
                 custom_path: custom.map(|path| path.display().to_string()),
                 profiles,
@@ -2868,12 +2878,7 @@ pub async fn begin_configuration_draft(app:AppHandle,request:crate::native::work
         let home=home()?;let project=checked_project(request.scope,request.project_path.clone())?;
         app.state::<AppState>().with_database(&app,|db|{
             let registry=adapters::Registry::builtins();
-            let _context=if request.subject==adapters::configuration::ConfigurationSubject::Common {None}else{Some(crate::accounts::selection::enter_bound(db,&home,&request.tool_id,request.scope,project.as_deref()).map_err(native_error)?)};
-            let context_id=crate::accounts::selection::current(&request.tool_id).map(|context|context.id);
-            let files=if request.subject==adapters::configuration::ConfigurationSubject::Current {
-                registry.get(&request.tool_id).ok_or_else(||native_error("适配器未注册".into()))?.native_files(request.scope,&home,project.as_deref(),true)
-            }else{Vec::new()};
-            app.state::<AppState>().workspace.begin(&registry,db,request,context_id,files).map_err(native_error)
+            app.state::<AppState>().workspace.begin_registered(&registry,db,request,&home,project.as_deref()).map_err(native_error)
         })
     }).await
 }
@@ -2900,10 +2905,12 @@ pub fn reveal_configuration_draft_secret(app:AppHandle,draft:crate::native::conf
 #[tauri::command]
 pub fn cancel_configuration_draft(app:AppHandle,session_id:String)->Result<(),ApiError>{app.state::<AppState>().workspace.cancel(&session_id).map_err(native_error)}
 #[tauri::command]
+pub fn cancel_configuration_requests(app:AppHandle,draft:crate::native::configuration::ConfigurationDraft)->Result<crate::native::configuration::ConfigurationDraft,ApiError>{app.state::<AppState>().workspace.cancel_requests(draft).map_err(native_error)}
+#[tauri::command]
 pub fn add_configuration_models(app:AppHandle,draft:crate::native::configuration::ConfigurationDraft,ids:Vec<String>)->Result<crate::native::configuration::ConfigurationDraft,ApiError>{app.state::<AppState>().workspace.add_models(&adapters::Registry::builtins(),draft,ids).map_err(native_error)}
 #[derive(serde::Serialize)]
 #[serde(rename_all="camelCase")]
-pub struct ConfigurationDirectoryResult {session_id:String,revision:u64,directory:models::ModelDirectory}
+pub struct ConfigurationDirectoryResult {session_id:String,revision:u64,request_generation:u64,directory:models::ModelDirectory}
 #[tauri::command]
 pub async fn list_configuration_models(app:AppHandle,draft:crate::native::configuration::ConfigurationDraft,force:bool,query:String)->Result<ConfigurationDirectoryResult,ApiError>{
     blocking(move||app.state::<AppState>().with_database(&app,|db|{
@@ -2911,12 +2918,12 @@ pub async fn list_configuration_models(app:AppHandle,draft:crate::native::config
         let(connection,credential)=workspace.request(&draft,&SystemCredentialStore).map_err(native_error)?;
         let directory=models::list_models_guarded(db,&credential,&connection,force,&query,||!workspace.is_current(&draft)).map_err(native_error)?;
         workspace.finish_request(&draft).map_err(native_error)?;
-        Ok(ConfigurationDirectoryResult{session_id:draft.session_id,revision:draft.revision,directory})
+        Ok(ConfigurationDirectoryResult{session_id:draft.session_id,revision:draft.revision,request_generation:draft.request_generation,directory})
     })).await
 }
 #[derive(serde::Serialize)]
 #[serde(rename_all="camelCase")]
-pub struct ConfigurationCheckResult {session_id:String,revision:u64,check:models::ConnectionCheck}
+pub struct ConfigurationCheckResult {session_id:String,revision:u64,request_generation:u64,check:models::ConnectionCheck}
 #[tauri::command]
 pub async fn check_configuration_connection(app:AppHandle,draft:crate::native::configuration::ConfigurationDraft,allow_model_request:bool)->Result<ConfigurationCheckResult,ApiError>{
     blocking(move||{
@@ -2928,7 +2935,7 @@ pub async fn check_configuration_connection(app:AppHandle,draft:crate::native::c
         }
         let check=models::test_registered_connection_guarded(&adapters::Registry::builtins(),&draft.profile.tool,&connection,&credential,allow_model_request,||!workspace.is_current(&draft));
         workspace.finish_request(&draft).map_err(native_error)?;
-        Ok(ConfigurationCheckResult{session_id:draft.session_id,revision:draft.revision,check})
+        Ok(ConfigurationCheckResult{session_id:draft.session_id,revision:draft.revision,request_generation:draft.request_generation,check})
     }).await
 }
 #[tauri::command]
