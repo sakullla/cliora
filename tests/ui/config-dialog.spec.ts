@@ -211,8 +211,9 @@ test('enabling a saved profile opens a comparison when the native file differs',
   await expect(comparison).toBeVisible();
   await expect(comparison.getByText('model = "old"')).toBeVisible();
   await expect(comparison.getByText('model = "new"')).toBeVisible();
-  await expect(comparison.getByRole('button', { name: '保留当前文件' })).toBeVisible();
-  await expect(comparison.getByRole('button', { name: '使用本次内容' })).toBeVisible();
+  await expect(comparison.locator('[data-banner="conflict"]')).toHaveCount(1);
+  await expect(comparison.getByRole('button', { name: '保留当前文件' })).toHaveCount(1);
+  await expect(comparison.getByRole('button', { name: '使用本次内容' })).toHaveCount(1);
   await expect(page.locator('[data-profile-id="saved-1"]').getByText('正在使用')).toHaveCount(0);
 });
 
@@ -703,7 +704,8 @@ for (const choice of ['使用本次', '保留现有'] as const) {
     await expect(dialog.getByRole('button', { name: '保存到当前文件' })).toBeEnabled();
     await page.evaluate(() => { const state = (window as any).configurationProtocol; const view = JSON.parse(state.disk.settings); view.values.model = 'external-model'; view.values.external = 'preserve'; state.disk.settings = JSON.stringify(view); });
     await dialog.getByRole('button', { name: '保存到当前文件' }).click();
-    const compare = dialog.getByRole('button', { name: choice === '使用本次' ? '使用本次修改' : '保留当前文件', exact: true });
+    await expect(dialog.locator('[data-banner="conflict"]')).toHaveCount(1);
+    const compare = dialog.getByRole('button', { name: choice === '使用本次' ? '使用本次内容' : '保留当前文件', exact: true });
     await expect(compare).toBeVisible(); await compare.click();
     await expect(dialog.getByRole('status').filter({ hasText: '比较基线已更新' })).toContainText('比较基线已更新');
     await dialog.getByRole('button', { name: '保存到当前文件' }).click(); await expect(dialog).toHaveCount(0);
@@ -718,15 +720,44 @@ test('current comparison rejects a second external change and supports a fresh e
   await dialog.getByLabel('当前模型', { exact: true }).fill('my-edited-model'); await expect(dialog.getByRole('button', { name: '保存到当前文件' })).toBeEnabled();
   await page.evaluate(() => { const state = (window as any).configurationProtocol; const value = JSON.parse(state.disk.settings); value.values.model = 'external-one'; state.disk.settings = JSON.stringify(value); });
   await dialog.getByRole('button', { name: '保存到当前文件' }).click();
-  await expect(dialog.getByRole('button', { name: '使用本次修改' })).toBeVisible();
+  await expect(dialog.locator('[data-banner="conflict"]')).toHaveCount(1);
+  await expect(dialog.getByRole('button', { name: '使用本次内容' })).toBeVisible();
   await page.evaluate(() => { const state = (window as any).configurationProtocol; const value = JSON.parse(state.disk.settings); value.values.model = 'external-two'; state.disk.settings = JSON.stringify(value); });
-  await dialog.getByRole('button', { name: '使用本次修改' }).click();
+  await dialog.getByRole('button', { name: '使用本次内容' }).click();
   await expect(dialog.getByRole('alert').filter({ hasText: '比较后文件再次变化' })).toBeVisible();
   expect(JSON.parse(await page.evaluate(() => (window as any).configurationProtocol.disk.settings)).values.model).toBe('external-two');
-  await dialog.getByText('当前文件恢复', { exact: true }).click(); await dialog.getByRole('button', { name: '重新比较文件' }).click(); await dialog.getByRole('button', { name: '使用本次修改' }).click();
+  await dialog.getByText('当前文件恢复', { exact: true }).click(); await dialog.getByRole('button', { name: '重新比较文件' }).click(); await dialog.getByRole('button', { name: '使用本次内容' }).click();
   await expect(dialog.getByRole('status').filter({ hasText: '比较基线已更新' })).toContainText('比较基线已更新');
   await dialog.getByRole('button', { name: '保存到当前文件' }).click();
   expect(JSON.parse(await page.evaluate(() => (window as any).configurationProtocol.disk.settings)).values.model).toBe('my-edited-model');
+});
+
+test('diff editor loading states are explicit and a failed chunk can be retried', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'codex');
+  let mode = 'hold';
+  let release: (() => void) | null = null;
+  await page.route(/\/assets\/CodeEditorImpl-[^?]*\.js(\?.*)?$/, async route => {
+    if (mode === 'hold') {
+      await new Promise<void>(resolve => { release = resolve; });
+      await route.abort();
+      return;
+    }
+    if (mode === 'fail') { await route.abort(); return; }
+    await route.continue();
+  });
+  await page.getByRole('button', { name: '正在使用的文件', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('button', { name: '原生文本', exact: true }).click();
+  await expect(dialog.getByText('正在加载差异…')).toBeVisible();
+  mode = 'fail';
+  release!();
+  const failed = dialog.getByRole('alert').filter({ hasText: '差异编辑器加载失败' });
+  await expect(failed).toBeVisible();
+  await expect(dialog.getByText('加载编辑器…')).toHaveCount(0);
+  mode = 'allow';
+  await failed.getByRole('button', { name: '重试', exact: true }).click();
+  await expect(dialog.getByRole('textbox', { name: 'settings 配置草稿' })).toBeVisible();
+  await expect(dialog.getByText('加载编辑器…')).toHaveCount(0);
 });
 
 test('history replaces the current editor with sanitized typed preview and guards later changes', async ({ page }) => {
