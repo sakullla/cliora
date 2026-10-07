@@ -1,0 +1,8 @@
+{
+  "modelProvider": "gemini",
+  "security": {
+    "auth": {
+      "selectedType": "oauth-personal"
+    }
+  }
+}
