@@ -9,6 +9,12 @@ import { qoderCnUiAdapter } from './qoder_cn';
 import { kimiCodeUiAdapter } from './kimi_code';
 import { deepseekUiAdapter } from './deepseek';
 import { codebuddyUiAdapter } from './codebuddy';
+import { mimoCodeUiAdapter } from './mimo_code';
+import { clineUiAdapter } from './cline';
+import { devinUiAdapter } from './devin';
+import { commandCodeUiAdapter } from './command_code';
+import { antigravityUiAdapter } from './antigravity';
+import { kiroUiAdapter } from './kiro';
 import type { ToolUiAdapter } from './contract';
 
 const specialized = new Map<string, ToolUiAdapter>([
@@ -22,6 +28,12 @@ const specialized = new Map<string, ToolUiAdapter>([
   [kimiCodeUiAdapter.id, kimiCodeUiAdapter],
   [deepseekUiAdapter.id, deepseekUiAdapter],
   [codebuddyUiAdapter.id, codebuddyUiAdapter],
+  [mimoCodeUiAdapter.id, mimoCodeUiAdapter],
+  [clineUiAdapter.id, clineUiAdapter],
+  [devinUiAdapter.id, devinUiAdapter],
+  [commandCodeUiAdapter.id, commandCodeUiAdapter],
+  [antigravityUiAdapter.id, antigravityUiAdapter],
+  [kiroUiAdapter.id, kiroUiAdapter],
 ]);
 
 export function uiAdapterFor(id: string): ToolUiAdapter {

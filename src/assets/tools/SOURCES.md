@@ -22,5 +22,11 @@ These assets render offline. Product symbols remain in their original colors; cu
   SHA-256: `012799424922a9b8dcfaa9e30a7596133bc8a99d10056d18fb8b16dbe0d199c3`.
 - `kimi_code.svg`: Official Kimi symbol: the K path extracted unchanged (white) from https://platform.kimi.com/kimi.svg and placed on the black rounded tile of the official https://www.kimi.com/pwa-192.png app icon. Only the symbol is separated from the wordmark; path and color are retained. The raster mark's blue accent dot is not reproduced (no official vector source).
   SHA-256: `c366c98f46d7ccac6826bda7474817e14cb977ac10e7fa7286196705943ec581`.
+- `mimo_code.svg`: neutral placeholder — no official vector source at hand; neutral rounded-tile monogram, not a product mark. To be replaced by the official MiMo Code symbol when available.
+- `cline.svg`: neutral placeholder — no official vector source at hand; neutral rounded-tile monogram, not a product mark. To be replaced by the official Cline symbol when available.
+- `devin.svg`: neutral placeholder — no official vector source at hand; neutral rounded-tile monogram, not a product mark. To be replaced by the official Devin symbol when available.
+- `command_code.svg`: neutral placeholder — no official vector source at hand; neutral rounded-tile monogram, not a product mark. To be replaced by the official Command Code symbol when available.
+- `antigravity.svg`: neutral placeholder — no official vector source at hand; neutral rounded-tile monogram, not a product mark. To be replaced by the official Antigravity symbol when available.
+- `kiro.svg`: neutral placeholder — no official vector source at hand; neutral rounded-tile monogram, not a product mark. To be replaced by the official Kiro symbol when available.
 
 Declare future icons in the independent `src/adapters/<tool>/index.ts` module using `ToolUiAdapter.icon` (`light`, optional `dark`, `fit`, `tile`, `scale`, and `source`) and register the module in `adapters/index.ts`. All pages use `src/components/ToolIcon.tsx`; tools without icon metadata receive a neutral SVG symbol beside their text name. No network requests are needed for ordinary icon rendering.
