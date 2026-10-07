@@ -1,0 +1,50 @@
+{
+  "description": "Cline 3.0 sessions.db sanitized row set (cline/cline@main 2026-10-07 source summary: sessions table with session_id and metadata_json carrying usage/aggregateUsage aggregates). Same column shapes, rewritten ids/titles/counts; no real keys or hosts. Tests synthesize the SQLite index deterministically from these rows (mimo/zcode in-test pattern). Per-message metrics semantics: inputTokens excludes cache read/write; both cache directions are explicit. The stale row proves an index entry without an on-disk session directory surfaces as a failed source instead of silently disappearing.",
+  "sessions": [
+    {
+      "session_id": "ses_20261007_1042_a1b2c3d4e5f6",
+      "title": "帮我把构建脚本改成跨平台版本",
+      "started_at": 1791000000000,
+      "ended_at": 1791000900000,
+      "metadata_json": {
+        "aggregateUsage": {
+          "inputTokens": 1900,
+          "outputTokens": 470,
+          "cacheReadTokens": 8000,
+          "cacheWriteTokens": 3000,
+          "totalCost": 0.0365
+        }
+      }
+    },
+    {
+      "session_id": "ses_20261007_1108_z9y8x7w6v5u4",
+      "title": "",
+      "started_at": 1791001200000,
+      "ended_at": 1791001260000,
+      "metadata_json": {
+        "usage": {
+          "inputTokens": 80,
+          "outputTokens": 20,
+          "cacheReadTokens": 0,
+          "cacheWriteTokens": 0,
+          "totalCost": 0.001
+        }
+      }
+    },
+    {
+      "session_id": "ses_stale_db_row_0000000001",
+      "title": "已被清理的陈旧行",
+      "started_at": 1791000000000,
+      "ended_at": 1791000001000,
+      "metadata_json": {
+        "aggregateUsage": {
+          "inputTokens": 1,
+          "outputTokens": 1,
+          "cacheReadTokens": 0,
+          "cacheWriteTokens": 0,
+          "totalCost": 0.0
+        }
+      }
+    }
+  ]
+}
