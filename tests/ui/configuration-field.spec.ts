@@ -5,12 +5,28 @@ import ts from 'typescript';
 const component = ts.transpileModule(readFileSync('src/components/configuration/ConfigurationField.tsx', 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022 },
 }).outputText;
+// The component resolves copy through react-i18next; the fixture serves the
+// real zh resources so assertions keep covering the shipped strings.
+const zhCommon = ts.transpileModule(readFileSync('src/i18n/locales/zh/common.ts', 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+}).outputText;
+const reactI18next = `
+  const zh = require('zh-common').default;
+  const lookup = (key) => key.split('.').slice(1).reduce((node, part) => node && node[part], zh);
+  module.exports = { useTranslation: () => ({ t: (key, options) => {
+    const value = lookup(key);
+    const text = typeof value === 'string' ? value : key;
+    return text.replace(/{{(\\w+)}}/g, (match, name) => (options && options[name] != null ? String(options[name]) : match));
+  } }) };
+`;
 const sources = {
   react: readFileSync('node_modules/react/cjs/react.development.js', 'utf8'),
   'react-dom': readFileSync('node_modules/react-dom/cjs/react-dom.development.js', 'utf8'),
   'react-dom/client': readFileSync('node_modules/react-dom/cjs/react-dom-client.development.js', 'utf8'),
   scheduler: readFileSync('node_modules/scheduler/cjs/scheduler.development.js', 'utf8'),
   'react/jsx-runtime': readFileSync('node_modules/react/cjs/react-jsx-runtime.development.js', 'utf8'),
+  'zh-common': zhCommon,
+  'react-i18next': reactI18next,
   field: component,
 };
 

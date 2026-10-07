@@ -1,5 +1,7 @@
 import { useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { UsageMetric, UsageSample } from '../../types/usage';
+import i18n from '../../i18n';
 import styles from './UsageQuota.module.css';
 
 interface Reading { t: number; value: number }
@@ -32,7 +34,11 @@ function segments(points: Reading[]): Reading[][] {
 function estimateDuration(seconds: number): string {
   const minutes = Math.ceil(seconds / 60);
   const days = Math.floor(minutes / 1440), hours = Math.floor(minutes % 1440 / 60), rest = minutes % 60;
-  return days ? `${days} 天${hours ? ` ${hours} 小时` : ''}` : hours ? `${hours} 小时${rest ? ` ${rest} 分钟` : ''}` : `${minutes} 分钟`;
+  return days
+    ? i18n.t(hours ? 'tools.usage.durationDaysHours' : 'tools.usage.durationDays', { days, hours })
+    : hours
+      ? i18n.t(rest ? 'tools.usage.durationHoursMinutes' : 'tools.usage.durationHours', { hours, rest })
+      : i18n.t('tools.usage.durationMinutes', { minutes });
 }
 
 /**
@@ -50,6 +56,7 @@ export function depletionEstimate(points: Reading[], now: number): number | null
 }
 
 export function BurnDown({ metric, label, samples, now }: { metric: UsageMetric; label: string; samples: UsageSample[]; now: number }) {
+  const { t, i18n: instance } = useTranslation();
   const points = useMemo(() => readings(metric.id, samples), [metric.id, samples]);
   if (points.length < 2) return null;
   const parts = segments(points);
@@ -62,12 +69,12 @@ export function BurnDown({ metric, label, samples, now }: { metric: UsageMetric;
   const estimate = depletionEstimate(points, nowSeconds);
   const last = points[points.length - 1];
   return <figure className={styles.burnDown}>
-    <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" role="img" aria-label={`${label}燃尽曲线`}>
+    <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" role="img" aria-label={t('tools.burnDown.aria', { label })}>
       {parts.map((part, index) => part.length > 1
         ? <polyline key={index} points={part.map(point => `${x(point.t)},${y(point.value)}`).join(' ')} />
         : <circle key={index} cx={x(part[0].t)} cy={y(part[0].value)} r={1.5} />)}
       <circle cx={x(last.t)} cy={y(last.value)} r={2} />
     </svg>
-    {estimate !== null && <figcaption><small title={new Date(estimate * 1000).toLocaleString('zh-CN')}>预计 {estimateDuration(estimate - nowSeconds)}后耗尽</small></figcaption>}
+    {estimate !== null && <figcaption><small title={new Date(estimate * 1000).toLocaleString(instance.language === 'en' ? 'en-US' : 'zh-CN')}>{t('tools.burnDown.depletion', { duration: estimateDuration(estimate - nowSeconds) })}</small></figcaption>}
   </figure>;
 }

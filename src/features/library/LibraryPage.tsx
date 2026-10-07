@@ -1,5 +1,6 @@
 import { CodeEditor } from '../../components/CodeEditor';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { native, nativeAvailable } from '../../lib/native';
 import { confirmAction, type ConfirmationOptions } from '../../lib/confirm';
 import type { Project } from '../../types/launch';
@@ -20,18 +21,18 @@ import { ToastStack } from '../../components/Toast';
 import { SkeletonRows } from '../../components/Skeleton';
 import { navigateChoices } from '../../lib/choiceNavigation';
 import { ScopeMarks, samePath, scopeLabel } from './CliMarks';
+import i18n from '../../i18n';
 import styles from './LibraryPage.module.css';
 
-const copiedText = '完整正文已复制，可以粘贴使用。';
-
-const libraryNext = '可调整搜索，或点击上方的新建。';
-const savedListNext = '可点击关闭后查看列表。';
+const copiedText = () => i18n.t('library.page.copied');
+const sentenceEnd = () => i18n.language === 'en' ? '. ' : '。';
 
 function listFailureAfterSave(value: unknown): string {
-  const formatted = formatFailure(value, '资料列表读取失败', savedListNext);
-  if (!/搜索|新建/.test(formatted)) return formatted;
-  const detail = formatted.replace(/可调整搜索[，,]?\s*或?\s*点击上方的新建[。！]?/g, '').replace(/[。！？\s]+$/g, '').trim();
-  return `${detail || '资料列表读取失败'}。${savedListNext}`;
+  const formatted = formatFailure(value, i18n.t('library.page.listFailed'), i18n.t('library.page.listNext'));
+  const advice = i18n.t('library.page.listNext');
+  if (!advice || !formatted.includes(advice)) return formatted;
+  const detail = formatted.replaceAll(advice, '').replace(/[。！？\s]+$/g, '').trim();
+  return `${detail || i18n.t('library.page.listFailed')}${sentenceEnd()}${i18n.t('library.page.savedListNext')}`;
 }
 
 function empty(kind: LibraryKind): LibraryDraft {
@@ -42,21 +43,23 @@ function tagsOf(category: string): string[] {
   return [...new Set(category.split(/[,，、]/).map((item) => item.trim()).filter(Boolean))];
 }
 
+function dateLocale() { return i18n.language === 'en' ? 'en-US' : 'zh-CN'; }
+
 function fullTime(value: number) {
-  return new Date(value * 1000).toLocaleString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return new Date(value * 1000).toLocaleString(dateLocale(), { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
 function shortTime(value: number) {
   const date = new Date(value * 1000);
   if (Number.isNaN(date.getTime())) return '';
-  const clock = date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  const clock = date.toLocaleTimeString(dateLocale(), { hour: '2-digit', minute: '2-digit' });
   const start = (day: Date) => new Date(day.getFullYear(), day.getMonth(), day.getDate()).getTime();
   const day = start(date);
   const today = start(new Date());
-  if (day === today) return `今天 ${clock}`;
-  if (day === today - 86_400_000) return `昨天 ${clock}`;
+  if (day === today) return i18n.t('library.page.today', { time: clock });
+  if (day === today - 86_400_000) return i18n.t('library.page.yesterday', { time: clock });
   const sameYear = date.getFullYear() === new Date().getFullYear();
-  const calendar = date.toLocaleDateString('zh-CN', sameYear ? { month: 'long', day: 'numeric' } : { year: 'numeric', month: 'long', day: 'numeric' });
+  const calendar = date.toLocaleDateString(dateLocale(), sameYear ? { month: 'long', day: 'numeric' } : { year: 'numeric', month: 'long', day: 'numeric' });
   return `${calendar} ${clock}`;
 }
 
@@ -71,6 +74,8 @@ function edit(item: LibraryItem): LibraryDraft {
 type LibrarySection = LibraryKind | 'mcp' | 'skill';
 
 export function LibraryPage({ managedTools = [], active = true }: { managedTools?: AdapterDescriptor[]; active?: boolean }) {
+  const { t } = useTranslation();
+  const kindName = (value: LibraryKind) => t(value === 'prompt' ? 'library.page.prompt' : 'library.page.ruleShort');
   const [section, setSection] = useState<LibrarySection>('prompt');
   const [kind, setKind] = useState<LibraryKind>('prompt');
   const [search, setSearch] = useState('');
@@ -105,7 +110,7 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
   const latest = useRef(''); latest.current = JSON.stringify([kind, draft, active]);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  async function confirmCurrent(message: string, options: ConfirmationOptions = { title: '放弃未保存修改？', confirmLabel: '放弃修改' }) {
+  async function confirmCurrent(message: string, options: ConfirmationOptions = { title: t('common.app.leaveDirtyTitle'), confirmLabel: t('common.app.leaveDirtyConfirm') }) {
     const started = latest.current;
     return confirmAction(message, () => mounted.current && latest.current === started, options);
   }
@@ -118,7 +123,7 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
 
   useEffect(() => {
     if (!nativeAvailable || !active) return;
-    void native.listProjects().then(setProjects).catch((value) => showError(formatFailure(value, '项目列表读取失败', '可先打开其他页面，再回到资料库重新读取。')));
+    void native.listProjects().then(setProjects).catch((value) => showError(formatFailure(value, t('library.page.projectsFailed'), t('library.page.projectsFailedNext'))));
     void native.listRulePlacements().then((rows) => setRulePlacements(Array.isArray(rows) ? rows : [])).catch(() => setRulePlacements([]));
   }, [active]);
   useEffect(() => {
@@ -134,7 +139,7 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
     let live = true;
     setListLoading(true);
     void native.listLibraryItems(kind, null, search).then((result) => { if (live) { setItems(result); setListLoading(false); } })
-      .catch((value) => { if (live) { setListLoading(false); showError(formatFailure(value, '资料列表读取失败', libraryNext)); } });
+      .catch((value) => { if (live) { setListLoading(false); showError(formatFailure(value, t('library.page.listFailed'), t('library.page.listNext'))); } });
     return () => { live = false; };
   }, [active, kind, search]);
 
@@ -142,7 +147,7 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
   const shown = items.filter((item) => (projectFilter === '*' || (projectFilter === 'global' ? !item.projectId : item.projectId === projectFilter))
     && (categoryFilter === '*' || tagsOf(item.category).includes(categoryFilter)));
 
-  async function canReplace() { return !dirty || confirmCurrent('当前资料草稿尚未保存，切换会丢失修改。继续吗？'); }
+  async function canReplace() { return !dirty || confirmCurrent(t('library.page.confirmDiscard')); }
   async function choose(item: LibraryItem) {
     if (!await canReplace()) return;
     const next = edit(item);
@@ -174,8 +179,8 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
       catch (value) {
         keepSaved(saved);
         const failure = listFailureAfterSave(value);
-        toasts.showMixed('已保存在本机资料库。', failure);
-        setDialogNotice('已保存在本机资料库。');
+        toasts.showMixed(t('library.page.saved'), failure);
+        setDialogNotice(t('library.page.saved'));
         setDialogError(failure);
         return;
       }
@@ -184,18 +189,18 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
         const distributed = await distributeRule(saved.id, saved.version, ids, false);
         if (!distributed) { setDraft(next); setSavedText(JSON.stringify(next)); return; }
         setDraft(null); setSavedText(''); clearDialogResult();
-        showNotice('规则已保存。');
+        showNotice(t('library.page.ruleSaved'));
         return;
       }
       setDraft(null); setSavedText(''); clearDialogResult();
-      showNotice('已保存在本机资料库。');
-    } catch (value) { showDialogError(formatFailure(value, '资料保存失败', '可修改后再次点击保存。')); }
+      showNotice(t('library.page.saved'));
+    } catch (value) { showDialogError(formatFailure(value, t('library.page.saveFailed'), t('library.page.saveFailedNext'))); }
     finally { setBusy(false); }
   }
-  function ruleFailure(value: unknown) {
-    const raw = value && typeof value === 'object' && 'message' in value ? String(value.message) : '写入没有完成';
-    const detail = raw.trim().replace(/[。！？\s]+$/, '') || '写入没有完成';
-    return `规则保存失败：${detail}。可以修改后再次点击保存并分发。`;
+  function ruleFailure(value: unknown, hint = t('library.page.ruleFailedHint')) {
+    const raw = value && typeof value === 'object' && 'message' in value ? String(value.message) : t('library.page.writeIncomplete');
+    const detail = raw.trim().replace(/[。！？\s]+$/, '') || t('library.page.writeIncomplete');
+    return t('library.page.ruleFailed', { detail, hint });
   }
   async function distributeRule(id: string, version: number, toolIds: string[], allowReplace: boolean) {
     try {
@@ -203,8 +208,8 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
       const rows = Array.isArray(synced) ? synced : [];
       if (!allowReplace && rows.some((item) => item.status === 'conflict')) {
         const started = latest.current;
-        if (!await confirmAction('规则文件已有外部修改。确认后用拼接结果替换。', () => mounted.current && latest.current === started, { title: '替换规则文件？', confirmLabel: '替换并写入' })) {
-          showDialogNotice('正文已保存。规则文件保持原样。');
+        if (!await confirmAction(t('library.page.confirmReplace'), () => mounted.current && latest.current === started, { title: t('library.page.replaceTitle'), confirmLabel: t('library.page.replaceAction') })) {
+          showDialogNotice(t('library.page.replaceKept'));
           return false;
         }
         return distributeRule(id, version, toolIds, true);
@@ -221,23 +226,23 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
     const current = rulePlacements.filter((place) => place.ruleId === item.id && place.scope === scope && (scope === 'global' || samePath(place.projectPath, projectPath))).map((place) => place.toolId);
     const next = current.includes(toolId) ? current.filter((id) => id !== toolId) : [...current, toolId];
     const toolName = managedTools.find((tool) => tool.id === toolId)?.name ?? toolId;
-    const where = scope === 'project' ? `${scopeLabel(scope, projectPath, projects)} 的 ` : '';
+    const where = scope === 'project' ? t('library.page.whereScope', { scope: scopeLabel(scope, projectPath, projects) }) : '';
     setBusy(true); toasts.setError(null); toasts.setNotice(null);
     try {
       let rows = await native.syncRuleClients(item.id, item.version, { toolIds: next, scope, projectPath, allowReplace: false });
       rows = Array.isArray(rows) ? rows : [];
       if (rows.some((row) => row.status === 'conflict')) {
         const started = latest.current;
-        if (!await confirmAction(`「${item.title}」要写入的 ${toolName} 规则文件已有外部修改。确认后用拼接结果替换。`, () => mounted.current && latest.current === started, { title: '替换规则文件？', confirmLabel: '替换并写入' })) return;
+        if (!await confirmAction(t('library.page.confirmReplaceTool', { title: item.title, tool: toolName }), () => mounted.current && latest.current === started, { title: t('library.page.replaceTitle'), confirmLabel: t('library.page.replaceAction') })) return;
         rows = await native.syncRuleClients(item.id, item.version, { toolIds: next, scope, projectPath, allowReplace: true });
         rows = Array.isArray(rows) ? rows : [];
       }
       const failed = rows.find((row) => row.status === 'failed');
-      if (failed) { showError(ruleFailure({ message: failed.detail }).replace('可以修改后再次点击保存并分发', '可以再次点击该 CLI 图标')); return; }
+      if (failed) { showError(ruleFailure({ message: failed.detail }, t('library.page.ruleFailedRetryIcon'))); return; }
       const listed = await native.listRulePlacements().catch(() => rulePlacements);
       setRulePlacements(Array.isArray(listed) ? listed : []);
-      showNotice(next.includes(toolId) ? `已写入 ${where}${toolName}。` : `已从 ${where}${toolName} 移除。`);
-    } catch (value) { showError(ruleFailure(value).replace('可以修改后再次点击保存并分发', '可以再次点击该 CLI 图标')); }
+      showNotice(next.includes(toolId) ? t('library.page.written', { where, tool: toolName }) : t('library.page.removed', { where, tool: toolName }));
+    } catch (value) { showError(ruleFailure(value, t('library.page.ruleFailedRetryIcon'))); }
     finally { setBusy(false); }
   }
   function openLaunch(item: LibraryItem) {
@@ -249,12 +254,12 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
     try {
       await native.launchCli({ toolId: launchTool, projectId: launchProject || null, sessionId: null, mode: 'normal', initialPrompt: launchText });
       setLaunchItem(null);
-      showNotice('已请求外部终端启动会话。');
-    } catch (value) { setLaunchError(formatFailure(value, '会话没有启动', '可以修改提示词后再次点击启动。')); }
+      showNotice(t('library.page.sessionStarted'));
+    } catch (value) { setLaunchError(formatFailure(value, t('library.page.sessionFailed'), t('library.page.sessionFailedNext'))); }
     finally { setLaunchBusy(false); }
   }
   async function remove() {
-    if (!draft?.id || draft.expectedVersion === null || busy || !await confirmCurrent(`删除“${draft.title}”？`, { title: '删除资料', confirmLabel: '删除资料', destructive: true })) return;
+    if (!draft?.id || draft.expectedVersion === null || busy || !await confirmCurrent(t('library.page.confirmDelete', { title: draft.title }), { title: t('library.page.deleteTitle'), confirmLabel: t('library.page.deleteAction'), destructive: true })) return;
     setBusy(true); clearDialogResult();
     try {
       await native.deleteLibraryItem(draft.id, draft.expectedVersion);
@@ -262,11 +267,11 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
       setDraft(null); setSavedText('');
       try { await refresh(); }
       catch (value) {
-        toasts.showMixed('已删除。', formatFailure(value, '资料列表读取失败', libraryNext));
+        toasts.showMixed(t('library.page.deleted'), formatFailure(value, t('library.page.listFailed'), t('library.page.listNext')));
         return;
       }
-      showNotice('已删除。');
-    } catch (value) { showDialogError(formatFailure(value, '资料删除失败', '可再次点击删除。')); }
+      showNotice(t('library.page.deleted'));
+    } catch (value) { showDialogError(formatFailure(value, t('library.page.deleteFailed'), t('library.page.deleteFailedNext'))); }
     finally { setBusy(false); }
   }
   async function copy(text: string, surface: 'page' | 'dialog' = 'page', itemId: string | null = null) {
@@ -274,11 +279,11 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
     else { toasts.setNotice(null); toasts.setError(null); setCopiedId(null); }
     try {
       await navigator.clipboard.writeText(text);
-      if (surface === 'dialog') showDialogNotice(copiedText);
-      else { showNotice(copiedText); setCopiedId(itemId); }
+      if (surface === 'dialog') showDialogNotice(copiedText());
+      else { showNotice(copiedText()); setCopiedId(itemId); }
     } catch {
-      if (surface === 'dialog') showDialogError('复制失败，正文仍在页面上，可以手动选择。');
-      else showError('复制失败，正文仍在页面上，可以手动选择。');
+      if (surface === 'dialog') showDialogError(t('library.page.copyFailed'));
+      else showError(t('library.page.copyFailed'));
     }
   }
   function addTag(raw: string) {
@@ -293,37 +298,37 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
     setTagText('');
   }
 
-  if (!nativeAvailable) return <div className={styles.empty}>资料库仅在桌面应用中读取和保存。</div>;
-  return <section className={styles.page} aria-label="资料库内容">
+  if (!nativeAvailable) return <div className={styles.empty}>{t('library.page.nativeOnly')}</div>;
+  return <section className={styles.page} aria-label={t('library.page.label')}>
     <div className={styles.toolbar}>
-      <div className={styles.tabs} role="tablist" aria-label="资料类型" onKeyDown={navigateChoices}>
-        <button type="button" role="tab" aria-selected={section === 'prompt'} tabIndex={section === 'prompt' ? 0 : -1} onClick={() => void openSection('prompt')}>提示词{counts.prompt != null && <span className={styles.tabCount} aria-hidden="true">{counts.prompt}</span>}</button>
-        <button type="button" role="tab" aria-selected={section === 'rule'} tabIndex={section === 'rule' ? 0 : -1} onClick={() => void openSection('rule')}>长期规则{counts.rule != null && <span className={styles.tabCount} aria-hidden="true">{counts.rule}</span>}</button>
+      <div className={styles.tabs} role="tablist" aria-label={t('library.page.typesAria')} onKeyDown={navigateChoices}>
+        <button type="button" role="tab" aria-selected={section === 'prompt'} tabIndex={section === 'prompt' ? 0 : -1} onClick={() => void openSection('prompt')}>{t('library.page.prompt')}{counts.prompt != null && <span className={styles.tabCount} aria-hidden="true">{counts.prompt}</span>}</button>
+        <button type="button" role="tab" aria-selected={section === 'rule'} tabIndex={section === 'rule' ? 0 : -1} onClick={() => void openSection('rule')}>{t('library.page.rule')}{counts.rule != null && <span className={styles.tabCount} aria-hidden="true">{counts.rule}</span>}</button>
         <button type="button" role="tab" aria-selected={section === 'mcp'} tabIndex={section === 'mcp' ? 0 : -1} onClick={() => void openSection('mcp')}>MCP</button>
         <button type="button" role="tab" aria-selected={section === 'skill'} tabIndex={section === 'skill' ? 0 : -1} onClick={() => void openSection('skill')}>Skill</button>
       </div>
-      {(section === 'prompt' || section === 'rule') && <button type="button" className={styles.primary} onClick={() => start(kind)}>＋ 新建{kind === 'prompt' ? '提示词' : '规则'}</button>}
+      {(section === 'prompt' || section === 'rule') && <button type="button" className={styles.primary} onClick={() => start(kind)}>{t('library.page.new', { kind: kindName(kind) })}</button>}
     </div>
     {(section === 'mcp' || section === 'skill') && <LibraryResources section={section} active={active} tools={managedTools} projects={projects} />}
     {(section === 'prompt' || section === 'rule') && <>
     <div className={styles.filters}>
-      <SearchField className={styles.searchBox} label="搜索资料" pageSearch title={searchShortcutHint} value={search} onChange={setSearch} placeholder="搜索标题、正文或标签" />
-      <FilterSelect className={styles.filterPick} label="项目筛选" value={projectFilter} options={[
-        { value: '*', label: '所有项目' },
-        { value: 'global', label: '全局资料' },
-        ...projects.map((project) => ({ value: project.id, label: project.name, detail: project.path ? shortPath(project.path) : undefined, note: project.available ? undefined : '目录失效' })),
-      ]} searchLabel="搜索项目" onChange={setProjectFilter} />
-      <FilterSelect className={styles.filterPick} label="标签筛选" value={categoryFilter} options={[
-        { value: '*', label: '所有标签' },
+      <SearchField className={styles.searchBox} label={t('library.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={setSearch} placeholder={t('library.page.searchPlaceholder')} />
+      <FilterSelect className={styles.filterPick} label={t('library.page.projectFilter')} value={projectFilter} options={[
+        { value: '*', label: t('library.page.allProjects') },
+        { value: 'global', label: t('library.page.globalItems') },
+        ...projects.map((project) => ({ value: project.id, label: project.name, detail: project.path ? shortPath(project.path) : undefined, note: project.available ? undefined : t('library.page.staleDir') })),
+      ]} searchLabel={t('home.launcher.searchLabel')} onChange={setProjectFilter} />
+      <FilterSelect className={styles.filterPick} label={t('library.page.tagFilter')} value={categoryFilter} options={[
+        { value: '*', label: t('library.page.allTags') },
         ...categories.map((category) => ({ value: category, label: category })),
-      ]} searchLabel="搜索标签" onChange={setCategoryFilter} />
+      ]} searchLabel={t('library.page.searchTags')} onChange={setCategoryFilter} />
     </div>
     <div className={styles.layout}>
-      <div className={styles.list} aria-label={`${kind === 'prompt' ? '提示词' : '规则'}列表`}>
+      <div className={styles.list} aria-label={t('library.page.listAria', { kind: kindName(kind) })}>
         {listLoading && !items.length ? <SkeletonRows count={3} /> : shown.length ? shown.map((item) => <article className={styles.card} key={item.id}>
           <small className={styles.cardMeta}>
-            {tagsOf(item.category).length ? tagsOf(item.category).map((tag) => <em className={styles.tagChip} key={tag}>{tag}</em>) : <em className={styles.tagChip} data-muted="true">无标签</em>}
-            {item.projectId && <span className={styles.cardProject}>{projects.find((project) => project.id === item.projectId)?.name ?? '原项目'}</span>}
+            {tagsOf(item.category).length ? tagsOf(item.category).map((tag) => <em className={styles.tagChip} key={tag}>{tag}</em>) : <em className={styles.tagChip} data-muted="true">{t('library.page.noTags')}</em>}
+            {item.projectId && <span className={styles.cardProject}>{projects.find((project) => project.id === item.projectId)?.name ?? t('library.page.originalProject')}</span>}
             {!!item.updatedAt && <span className={styles.cardTime} title={fullTime(item.updatedAt)}><Icon name="clock" size={11} />{shortTime(item.updatedAt)}</span>}
           </small>
           <button className={styles.cardTitle} type="button" data-card-title onClick={() => choose(item)} onKeyDown={(event) => {
@@ -332,52 +337,52 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
             const next = titles[titles.indexOf(event.currentTarget) + (event.key === 'ArrowDown' ? 1 : -1)];
             if (next) { event.preventDefault(); next.focus(); }
           }}>{item.title}</button>
-          <p>{item.body ? item.body.length > 160 ? `${item.body.slice(0, 160)}…` : item.body : '正文为空'}</p>
+          <p>{item.body ? item.body.length > 160 ? `${item.body.slice(0, 160)}…` : item.body : t('library.page.emptyBody')}</p>
           <div className={styles.cardBar}>
-            {kind === 'rule' ? <ScopeMarks label={`${item.title} 的 CLI`} tools={managedTools} places={rulePlacements.filter((entry) => entry.ruleId === item.id)} projects={projects} busy={busy} unavailable={(toolId, scope) => { const support = managedTools.find(tool => tool.id === toolId)?.management?.rules; return support && !support[scope] ? `当前${scope === 'global' ? '全局' : '项目'}范围不支持原生长期规则` : null; }} onToggle={(toolId, scope, projectPath) => void toggleRule(item, toolId, scope, projectPath)} mark={(place) => {
-              if (!place) return { pressed: false, state: 'off', status: '未写入' };
-              if (place.state === 'current') return { pressed: true, state: 'current', status: '已生效' };
-              if (place.state === 'unavailable') return { pressed: true, state: 'unavailable', status: '未生效' };
-              return { pressed: true, state: 'drifted', status: '文件已变化' };
+            {kind === 'rule' ? <ScopeMarks label={t('library.page.cliMarks', { title: item.title })} tools={managedTools} places={rulePlacements.filter((entry) => entry.ruleId === item.id)} projects={projects} busy={busy} unavailable={(toolId, scope) => { const support = managedTools.find(tool => tool.id === toolId)?.management?.rules; return support && !support[scope] ? t('library.page.ruleUnsupported', { scope: scope === 'global' ? t('tools.apply.global') : t('tools.accounts.scopeProject') }) : null; }} onToggle={(toolId, scope, projectPath) => void toggleRule(item, toolId, scope, projectPath)} mark={(place) => {
+              if (!place) return { pressed: false, state: 'off', status: t('library.page.markOff') };
+              if (place.state === 'current') return { pressed: true, state: 'current', status: t('library.page.markCurrent') };
+              if (place.state === 'unavailable') return { pressed: true, state: 'unavailable', status: t('library.page.markUnavailable') };
+              return { pressed: true, state: 'drifted', status: t('library.page.markDrifted') };
             }} /> : <span />}
-            <div className={styles.cardActions}>{copiedId === item.id && toasts.notice?.text === copiedText
-              ? <button type="button" aria-label="复制全文" data-copied="true" onClick={() => void copy(item.body, 'page', item.id)}><Icon name="check" size={13} strokeWidth={2.2} />已复制</button>
-              : <button type="button" onClick={() => void copy(item.body, 'page', item.id)} disabled={!item.body}>复制全文</button>}{kind === 'prompt' && <button type="button" className={styles.cardLaunch} onClick={() => openLaunch(item)} disabled={!item.body}>启动会话</button>}<button type="button" onClick={() => choose(item)}>修改</button></div>
+            <div className={styles.cardActions}>{copiedId === item.id && toasts.notice?.text === copiedText()
+              ? <button type="button" aria-label={t('library.page.copy')} data-copied="true" onClick={() => void copy(item.body, 'page', item.id)}><Icon name="check" size={13} strokeWidth={2.2} />{t('home.launcher.copied')}</button>
+              : <button type="button" onClick={() => void copy(item.body, 'page', item.id)} disabled={!item.body}>{t('library.page.copy')}</button>}{kind === 'prompt' && <button type="button" className={styles.cardLaunch} onClick={() => openLaunch(item)} disabled={!item.body}>{t('library.page.launch')}</button>}<button type="button" onClick={() => choose(item)}>{t('tools.workspace.edit')}</button></div>
           </div>
         </article>) : !items.length && !search.trim()
-          ? <div className={styles.empty}><Icon name="library" size={28} strokeWidth={1.3} /><strong>还没有{kind === 'prompt' ? '提示词' : '规则'}</strong>{kind === 'prompt' ? '把常用的提示词存在这里。保存后可以选择 CLI，直接开一场会话。' : '保存后，在卡片上点 CLI 图标即可写入。彩色表示已经生效，灰色表示还没写入。'}<button type="button" className={styles.primary} onClick={() => start(kind)}>＋ 新建第一条{kind === 'prompt' ? '提示词' : '规则'}</button></div>
-          : <div className={styles.empty}><Icon name="search" size={28} strokeWidth={1.3} />筛选结果为空，没有符合条件的{kind === 'prompt' ? '提示词' : '规则'}。请使用上方的「新建」。</div>}
+          ? <div className={styles.empty}><Icon name="library" size={28} strokeWidth={1.3} /><strong>{t('library.page.emptyTitle', { kind: kindName(kind) })}</strong>{kind === 'prompt' ? t('library.page.emptyPrompt') : t('library.page.emptyRule')}<button type="button" className={styles.primary} onClick={() => start(kind)}>{t('library.page.emptyCreate', { kind: kindName(kind) })}</button></div>
+          : <div className={styles.empty}><Icon name="search" size={28} strokeWidth={1.3} />{t('library.page.noResults', { kind: kindName(kind) })}</div>}
       </div>
     </div>
-    <GuideDialog open={!!draft} title={draft?.id ? `修改${kind === 'prompt' ? '提示词' : '规则'}` : `新建${kind === 'prompt' ? '提示词' : '规则'}`} hint={kind === 'rule' ? '填写标题和正文。分发到哪些 CLI，保存后回到列表点图标。' : '填写标题和正文，然后保存。'} onClose={() => { void (async () => { if (await canReplace()) { setDraft(null); setSavedText(''); clearDialogResult(); } })(); }}>
+    <GuideDialog open={!!draft} title={draft?.id ? t('library.page.editTitle', { kind: kindName(kind) }) : t('library.page.newTitle', { kind: kindName(kind) })} hint={kind === 'rule' ? t('library.page.ruleHint') : t('library.page.promptHint')} onClose={() => { void (async () => { if (await canReplace()) { setDraft(null); setSavedText(''); clearDialogResult(); } })(); }}>
       {draft && <div className={styles.editor}>
-        <div className={styles.editorHead}><div><small>{draft.id ? '编辑资料' : '新资料'}</small><h2>{draft.title || (kind === 'prompt' ? '提示词' : '长期规则')}</h2></div></div>
+        <div className={styles.editorHead}><div><small>{draft.id ? t('library.page.editing') : t('library.page.newItem')}</small><h2>{draft.title || (kind === 'prompt' ? t('library.page.prompt') : t('library.page.rule'))}</h2></div></div>
         {dialogError && <div className={styles.error} role="alert">{dialogError}</div>}
         {dialogNotice && <div className={styles.notice} role="status">{dialogNotice}</div>}
         <div className={styles.fields}>
-          <label>标题<input autoFocus={!draft.id} value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="名称" /></label>
-          <label>关联项目<FilterSelect label="关联项目" value={draft.projectId ?? ''} options={[{ value: '', label: '全局' }, ...projects.map((project) => ({ value: project.id, label: project.name, detail: project.path ? shortPath(project.path) : undefined, note: project.available ? undefined : '目录失效' }))]} searchLabel="搜索项目" onChange={(value) => setDraft({ ...draft, projectId: value || null })} /></label>
-          <div className={styles.tags}>标签
+          <label>{t('library.page.title')}<input autoFocus={!draft.id} value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder={t('library.page.titlePlaceholder')} /></label>
+          <label>{t('library.page.project')}<FilterSelect label={t('library.page.project')} value={draft.projectId ?? ''} options={[{ value: '', label: t('tools.apply.global') }, ...projects.map((project) => ({ value: project.id, label: project.name, detail: project.path ? shortPath(project.path) : undefined, note: project.available ? undefined : t('library.page.staleDir') }))]} searchLabel={t('home.launcher.searchLabel')} onChange={(value) => setDraft({ ...draft, projectId: value || null })} /></label>
+          <div className={styles.tags}>{t('library.page.tags')}
             <div className={styles.tagList}>
               {tagsOf(draft.category).map((tag) => <button type="button" key={tag} onClick={() => setDraft({ ...draft, category: categoryOf(tagsOf(draft.category).filter((item) => item !== tag)) })}>{tag} ×</button>)}
-              <input aria-label="添加标签" value={tagText} placeholder="输入后回车" onChange={(event) => setTagText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addTag(tagText); } }} />
+              <input aria-label={t('library.page.addTagAria')} value={tagText} placeholder={t('library.page.tagPlaceholder')} onChange={(event) => setTagText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addTag(tagText); } }} />
             </div>
             {!!categories.filter((tag) => !tagsOf(draft.category).includes(tag)).length && <div className={styles.tagSuggestions}>{categories.filter((tag) => !tagsOf(draft.category).includes(tag)).map((tag) => <button type="button" key={tag} onClick={() => addTag(tag)}>{tag}</button>)}</div>}
           </div>
         </div>
-        <label className={styles.body}><span className={styles.bodyHead}>完整正文<span className={styles.charCount}>{draft.body.length} 字</span></span><CodeEditor key={draft.id ?? 'new'} label="资料正文" format="markdown" value={draft.body} onChange={(body) => setDraft({ ...draft, body })} placeholder={kind === 'prompt' ? '写下可复制使用的提示词…' : '写下要保存或应用到 CLI 的规则…'} /></label>
-        <div className="dialog-footer"><span className={styles.saveState} data-dirty={dirty || undefined}>{dirty ? '草稿尚未保存' : '已保存'}</span><span className="dialog-footer-gap" /><button type="button" onClick={() => void copy(draft.body, 'dialog')} disabled={!draft.body}>复制全文</button>{draft.id && <button type="button" onClick={() => void remove()} disabled={busy}>删除</button>}<button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint} disabled={busy || !draft.title.trim()} onClick={() => void save()}>保存</button></div>
+        <label className={styles.body}><span className={styles.bodyHead}>{t('library.page.body')}<span className={styles.charCount}>{t('library.page.charCount', { count: draft.body.length })}</span></span><CodeEditor key={draft.id ?? 'new'} label={t('library.page.bodyEditorLabel')} format="markdown" value={draft.body} onChange={(body) => setDraft({ ...draft, body })} placeholder={kind === 'prompt' ? t('library.page.bodyPromptPlaceholder') : t('library.page.bodyRulePlaceholder')} /></label>
+        <div className="dialog-footer"><span className={styles.saveState} data-dirty={dirty || undefined}>{dirty ? t('library.page.dirtyState') : t('tools.config.statusSaved')}</span><span className="dialog-footer-gap" /><button type="button" onClick={() => void copy(draft.body, 'dialog')} disabled={!draft.body}>{t('library.page.copy')}</button>{draft.id && <button type="button" onClick={() => void remove()} disabled={busy}>{t('tools.agents.delete')}</button>}<button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint()} disabled={busy || !draft.title.trim()} onClick={() => void save()}>{t('home.launcher.save')}</button></div>
       </div>}
     </GuideDialog>
-    <GuideDialog open={!!launchItem} title="用这条提示词启动" hint="选择 CLI 和项目。提示词会作为第一条消息发出，启动前可以改。" onClose={() => { if (!launchBusy) setLaunchItem(null); }}>
+    <GuideDialog open={!!launchItem} title={t('library.page.launchTitle')} hint={t('library.page.launchHint')} onClose={() => { if (!launchBusy) setLaunchItem(null); }}>
       {launchItem && <div className={styles.editor}>
         {launchError && <div className={styles.error} role="alert">{launchError}</div>}
         <div className={styles.fields}>
-          <label>CLI<FilterSelect label="启动 CLI" value={launchTool} options={toolOptions(managedTools)} placeholder="还没有可启动的 CLI" disabled={!managedTools.length} searchLabel="搜索 CLI" onChange={setLaunchTool} /></label>
-          <label>项目<FilterSelect label="启动项目" value={launchProject} options={[{ value: '', label: '不指定项目' }, ...projects.map((project) => ({ value: project.id, label: project.name, detail: project.path ? shortPath(project.path) : undefined, note: project.available ? undefined : '目录失效' }))]} searchLabel="搜索项目" onChange={setLaunchProject} /></label>
+          <label>CLI<FilterSelect label={t('library.page.launchCli')} value={launchTool} options={toolOptions(managedTools)} placeholder={t('library.page.noCli')} disabled={!managedTools.length} searchLabel={t('library.page.searchCli')} onChange={setLaunchTool} /></label>
+          <label>{t('library.page.launchProjectLabel')}<FilterSelect label={t('library.page.launchProject')} value={launchProject} options={[{ value: '', label: t('library.page.noProject') }, ...projects.map((project) => ({ value: project.id, label: project.name, detail: project.path ? shortPath(project.path) : undefined, note: project.available ? undefined : t('library.page.staleDir') }))]} searchLabel={t('home.launcher.searchLabel')} onChange={setLaunchProject} /></label>
         </div>
-        <label className={styles.body}>第一条消息<textarea aria-label="启动提示词" rows={8} value={launchText} onChange={(event) => setLaunchText(event.target.value)} /></label>
-        <div className="dialog-footer"><span className="dialog-footer-gap" /><button type="button" onClick={() => setLaunchItem(null)} disabled={launchBusy}>取消</button><button type="button" className={styles.primary} disabled={launchBusy || !launchTool || !launchText.trim()} onClick={() => void startSession()}>在外部终端启动</button></div>
+        <label className={styles.body}>{t('library.page.firstMessage')}<textarea aria-label={t('library.page.launchPromptAria')} rows={8} value={launchText} onChange={(event) => setLaunchText(event.target.value)} /></label>
+        <div className="dialog-footer"><span className="dialog-footer-gap" /><button type="button" onClick={() => setLaunchItem(null)} disabled={launchBusy}>{t('common.dialog.cancel')}</button><button type="button" className={styles.primary} disabled={launchBusy || !launchTool || !launchText.trim()} onClick={() => void startSession()}>{t('library.page.launchSubmit')}</button></div>
       </div>}
     </GuideDialog>
     </>}

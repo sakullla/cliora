@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import { native, nativeAvailable } from '../../lib/native';
@@ -12,6 +13,7 @@ import type { FilterSelectOption } from '../../components/FilterSelect';
 import { GuideDialog } from '../../components/GuideDialog';
 import { ToolIcon } from '../../components/ToolIcon';
 import { displayPath } from '../../lib/paths';
+import i18n from '../../i18n';
 import styles from './ManagedTools.module.css';
 
 type Notice = { tone: 'ok' | 'error' | 'pending'; text: string; title: string };
@@ -27,11 +29,11 @@ const launchDirectories = new Map<string, string>();
 let lastLaunchDirectory = '';
 
 function message(value: unknown): string {
-  return value && typeof value === 'object' && 'message' in value ? String(value.message) : '操作失败，请重试';
+  return value && typeof value === 'object' && 'message' in value ? String(value.message) : i18n.t('home.tools.operationFailed');
 }
 
 function lineNotice(tone: Notice['tone'], text: string, detail = ''): Notice {
-  const extra = detail && detail !== '操作失败，请重试' ? detail.replace(/\s+/g, ' ').trim() : '';
+  const extra = detail && detail !== i18n.t('home.tools.operationFailed') ? detail.replace(/\s+/g, ' ').trim() : '';
   const full = extra ? `${text} ${extra}` : text;
   return { tone, text: full, title: full };
 }
@@ -60,7 +62,8 @@ function ProfileMenu({ label, profiles, selected, appliedCurrent, disabled, titl
   title?: string;
   onSwitch: (profileId: string) => void;
 }) {
-  const options: FilterSelectOption[] = profiles.map((item) => ({ value: item.id, label: item.name, detail: item.connection?.model?.trim() || undefined, note: item.id === selected?.id && !appliedCurrent ? '有未应用修改' : undefined }));
+  const { t } = useTranslation();
+  const options: FilterSelectOption[] = profiles.map((item) => ({ value: item.id, label: item.name, detail: item.connection?.model?.trim() || undefined, note: item.id === selected?.id && !appliedCurrent ? t('home.tools.pendingChanges') : undefined }));
   const selectedIndex = profiles.findIndex((item) => item.id === selected?.id);
 
   function move(direction: -1 | 1) {
@@ -76,13 +79,14 @@ function ProfileMenu({ label, profiles, selected, appliedCurrent, disabled, titl
   }
 
   return <div className={styles.switcher}>
-    <button type="button" className={styles.step} aria-label="上一个配置" disabled={disabled || profiles.length < 2} title="切换到上一个配置" onClick={() => move(-1)}><StepGlyph direction="left" /></button>
-    <FilterSelect className={styles.switchSelect} label={label} value={selected?.id ?? ''} options={options} placeholder="选择要使用的配置" disabled={disabled} title={title} variant="accent" searchLabel="搜索配置" searchPlaceholder="输入配置名称" onChange={(value) => { if (value !== selected?.id || !appliedCurrent) onSwitch(value); }} onTriggerKeyDown={onTriggerKey} />
-    <button type="button" className={styles.step} aria-label="下一个配置" disabled={disabled || profiles.length < 2} title="切换到下一个配置" onClick={() => move(1)}><StepGlyph direction="right" /></button>
+    <button type="button" className={styles.step} aria-label={t('home.tools.prevProfile')} disabled={disabled || profiles.length < 2} title={t('home.tools.prevProfileTitle')} onClick={() => move(-1)}><StepGlyph direction="left" /></button>
+    <FilterSelect className={styles.switchSelect} label={label} value={selected?.id ?? ''} options={options} placeholder={t('home.tools.pickProfile')} disabled={disabled} title={title} variant="accent" searchLabel={t('home.tools.searchProfile')} searchPlaceholder={t('home.tools.searchProfilePlaceholder')} onChange={(value) => { if (value !== selected?.id || !appliedCurrent) onSwitch(value); }} onTriggerKeyDown={onTriggerKey} />
+    <button type="button" className={styles.step} aria-label={t('home.tools.nextProfile')} disabled={disabled || profiles.length < 2} title={t('home.tools.nextProfileTitle')} onClick={() => move(1)}><StepGlyph direction="right" /></button>
   </div>;
 }
 
 export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]; onOpenTool: (toolId: string, intent?: WorkspaceOpenIntent) => void }) {
+  const { t } = useTranslation();
   const [states, setStates] = useState<Record<string, Loaded>>(() => Object.fromEntries(tools.flatMap((tool) => {
     const cached = rememberedHome.get(tool.id);
     const workspace = cached && Date.now() - cached.at < 60_000 ? cached.workspace : null;
@@ -189,7 +193,7 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
       const remembered = launchDirectories.get(toolId);
       let directory = pickDirectory ? undefined : remembered;
       if (!directory) {
-        const picked = await open({ directory: true, multiple: false, title: '选择启动工作目录', defaultPath: remembered || lastLaunchDirectory || undefined });
+        const picked = await open({ directory: true, multiple: false, title: t('home.tools.pickDirectoryTitle'), defaultPath: remembered || lastLaunchDirectory || undefined });
         if (typeof picked !== 'string') {
           setStates((old) => ({ ...old, [toolId]: settle(previous, null) }));
           return;
@@ -199,11 +203,11 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
         lastLaunchDirectory = picked;
       }
       await native.launchCli({ toolId, projectId: null, sessionId: null, mode: preferredLaunchMode(launchSettings, 'cli', !!tools.find((item) => item.id === toolId)?.yoloAvailable), directory });
-      const notice = lineNotice('ok', tools.find((item) => item.id === toolId)?.launchForm === 'desktop' ? `${toolName} 已请求启动桌面应用。` : `${toolName} 已向外部终端发出请求。`);
+      const notice = lineNotice('ok', tools.find((item) => item.id === toolId)?.launchForm === 'desktop' ? t('home.tools.launchedDesktop', { name: toolName }) : t('home.tools.launchedCli', { name: toolName }));
       setStates((old) => ({ ...old, [toolId]: settle(previous, notice) }));
       clearNoticeLater(toolId, notice);
     } catch (error) {
-      setStates((old) => ({ ...old, [toolId]: settle(previous, lineNotice('error', `${toolName} 启动失败。可再次启动或编辑配置。`, message(error))) }));
+      setStates((old) => ({ ...old, [toolId]: settle(previous, lineNotice('error', t('home.tools.launchFailed', { name: toolName }), message(error))) }));
     } finally {
       acting.current.delete(toolId);
     }
@@ -220,7 +224,7 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
     setStates((old) => ({ ...old, [toolId]: { ...previous, busy: true, activity: 'apply', error: null, notice: null } }));
     try {
       await native.applyRegisteredNativeProfile(toolId, profileId, 'global', undefined, false);
-      const notice = lineNotice('ok', `${toolName} 已写入原生文件，下次启动读取。`);
+      const notice = lineNotice('ok', t('home.tools.applied', { name: toolName }));
       setStates((old) => {
         const current = old[toolId];
         if (!current?.workspace) return old;
@@ -242,12 +246,12 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
           return;
         } catch (compareError) {
           const reason = message(compareError);
-          const text = `${toolName} 未能比较当前文件。${reason}`;
+          const text = t('home.tools.compareFailed', { name: toolName, reason });
           setStates((old) => ({ ...old, [toolId]: settle(previous, { tone: 'error', text, title: text }) }));
           return;
         }
       }
-      const text = `${toolName} 未切换：${detail}`;
+      const text = t('home.tools.notSwitched', { name: toolName, detail });
       setStates((old) => ({ ...old, [toolId]: settle(previous, { tone: 'error', text, title: text }) }));
     } finally {
       acting.current.delete(toolId);
@@ -263,7 +267,7 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
     try {
       await native.applyComparedApplication(comparison, 'global', '');
       setConflict(null);
-      const notice = lineNotice('ok', `${toolName} 已写入原生文件，下次启动读取。`);
+      const notice = lineNotice('ok', t('home.tools.applied', { name: toolName }));
       setStates((old) => {
         const current = old[toolId];
         if (!current?.workspace) return old;
@@ -279,8 +283,8 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
     }
   }
 
-  if (!tools.length) return <div className={styles.empty}>尚未管理工具。可在设置中选择需要的 CLI。</div>;
-  return <div className={styles.list} aria-label="管理中的工具">
+  if (!tools.length) return <div className={styles.empty}>{t('home.tools.empty')}</div>;
+  return <div className={styles.list} aria-label={t('home.managed.title')}>
     {tools.map((tool) => {
       const loaded = states[tool.id];
       const workspace = loaded?.workspace;
@@ -293,30 +297,30 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
       const launchMode = preferredLaunchMode(launchSettings, 'cli', !!tool.yoloAvailable);
       const desktop = tool.launchForm === 'desktop';
       const rememberedDir = launchDirectories.get(tool.id);
-      const switchTitle = !workspace ? undefined : !writable ? workspace.probe.nativeWrites.reason || '当前不能写入这个工具的配置' : '点一下即切换，下次启动会读取这份配置';
-      const launchTitle = !installed && workspace ? '请重新检测安装状态后启动'
-        : desktop ? [rememberedDir ? `在 ${displayPath(rememberedDir)} 打开；右键更换目录` : '启动已安装的桌面应用'].join('；')
-        : [rememberedDir ? `在 ${displayPath(rememberedDir)} 启动；右键更换目录` : '', launchMode === 'yolo' ? '按此 CLI 的原生参数跳过审批' : launchSettings?.cliMode === 'yolo' ? '此 CLI 未提供已确认的 YOLO 参数，将用普通模式启动' : ''].filter(Boolean).join('；') || undefined;
+      const switchTitle = !workspace ? undefined : !writable ? workspace.probe.nativeWrites.reason || t('home.tools.notWritable') : t('home.tools.switchHint');
+      const launchTitle = !installed && workspace ? t('home.tools.launchRelaunch')
+        : desktop ? [rememberedDir ? t('home.tools.launchOpenDir', { dir: displayPath(rememberedDir) }) : t('home.tools.launchDesktop')].join(t('home.tools.titleSeparator'))
+        : [rememberedDir ? t('home.tools.launchInDir', { dir: displayPath(rememberedDir) }) : '', launchMode === 'yolo' ? t('home.tools.launchYolo') : launchSettings?.cliMode === 'yolo' ? t('home.tools.launchYoloFallback') : ''].filter(Boolean).join(t('home.tools.titleSeparator')) || undefined;
       const line = loaded?.error
-        ? lineNotice('error', `${tool.name} 检测失败。可重新检测或编辑配置。`, loaded.error)
+        ? lineNotice('error', t('home.tools.probeFailedNotice', { name: tool.name }), loaded.error)
         : loaded?.activity === 'apply'
-          ? lineNotice('pending', `正在应用 ${tool.name} 的配置。`)
+          ? lineNotice('pending', t('home.tools.applying', { name: tool.name }))
           : loaded?.notice ?? null;
       return <div className={styles.row} data-tool-row key={tool.id}>
-        <div className={styles.name}><ToolIcon toolId={tool.id} size={34} /><span><strong title={tool.name}>{tool.name}</strong><small className={styles.status} data-state={loaded?.error ? 'error' : !workspace ? 'loading' : installed ? 'ok' : 'warn'}>{checking.has(tool.id) && !installed ? '正在检测' : loaded?.error ? '检测失败' : workspace ? installed ? workspace.probe.installations.find((item) => item.path === workspace.probe.selectedPath)?.version ?? '已安装' : probeFailed ? '版本检测失败' : '未发现安装' : '正在检测'}</small></span></div>
+        <div className={styles.name}><ToolIcon toolId={tool.id} size={34} /><span><strong title={tool.name}>{tool.name}</strong><small className={styles.status} data-state={loaded?.error ? 'error' : !workspace ? 'loading' : installed ? 'ok' : 'warn'}>{checking.has(tool.id) && !installed ? t('home.tools.statusChecking') : loaded?.error ? t('home.tools.statusFailed') : workspace ? installed ? workspace.probe.installations.find((item) => item.path === workspace.probe.selectedPath)?.version ?? t('home.tools.statusInstalled') : probeFailed ? t('home.tools.statusProbeFailed') : t('home.tools.statusNotFound') : t('home.tools.statusChecking')}</small></span></div>
         <div className={styles.switch}>
           {loaded?.error ? null
-            : !workspace ? (nativeAvailable ? <><span className="sr-only">正在读取配置</span><span className={styles.loadingBar} aria-hidden="true" /></> : null)
-            : profiles.length > 4 ? <ProfileMenu label={`切换${tool.name}的配置`} profiles={profiles} selected={selected} appliedCurrent={appliedCurrent} disabled={!!loaded?.busy || !writable} title={switchTitle} onSwitch={(profileId) => void switchProfile(tool.id, profileId)} />
-            : profiles.length ? <div role="radiogroup" aria-label={`切换${tool.name}的配置`} title={switchTitle}>{profiles.map((item) => <button key={item.id} type="button" role="radio" aria-checked={item.id === selected?.id} className={item.id === selected?.id ? styles.activeConfig : ''} disabled={loaded?.busy || !writable} title={profileLabel(item.name, item.connection)} onClick={() => { if (item.id !== selected?.id || !appliedCurrent) void switchProfile(tool.id, item.id); }}>{item.name}{item.id === selected?.id && item.connection?.model?.trim() ? <em className={styles.modelHint}>{item.connection.model.trim()}</em> : null}</button>)}</div>
-            : <button type="button" className={styles.addConfig} onClick={() => onOpenTool(tool.id, { create: true })}>新建配置</button>}
+            : !workspace ? (nativeAvailable ? <><span className="sr-only">{t('home.tools.loadingConfig')}</span><span className={styles.loadingBar} aria-hidden="true" /></> : null)
+            : profiles.length > 4 ? <ProfileMenu label={t('home.tools.switchProfileLabel', { name: tool.name })} profiles={profiles} selected={selected} appliedCurrent={appliedCurrent} disabled={!!loaded?.busy || !writable} title={switchTitle} onSwitch={(profileId) => void switchProfile(tool.id, profileId)} />
+            : profiles.length ? <div role="radiogroup" aria-label={t('home.tools.switchProfileLabel', { name: tool.name })} title={switchTitle}>{profiles.map((item) => <button key={item.id} type="button" role="radio" aria-checked={item.id === selected?.id} className={item.id === selected?.id ? styles.activeConfig : ''} disabled={loaded?.busy || !writable} title={profileLabel(item.name, item.connection)} onClick={() => { if (item.id !== selected?.id || !appliedCurrent) void switchProfile(tool.id, item.id); }}>{item.name}{item.id === selected?.id && item.connection?.model?.trim() ? <em className={styles.modelHint}>{item.connection.model.trim()}</em> : null}</button>)}</div>
+            : <button type="button" className={styles.addConfig} onClick={() => onOpenTool(tool.id, { create: true })}>{t('home.tools.newProfile')}</button>}
         </div>
-        <div className={styles.rowActions}>{!installed && (workspace || loaded?.error) && <button type="button" disabled={checking.has(tool.id) || loaded?.busy} onClick={() => recheck.current(tool.id)}>{checking.has(tool.id) ? '正在检测' : '重新检测'}</button>}<button type="button" className={styles.launch} disabled={!installed || loaded?.busy} aria-busy={loaded?.activity === 'launch' || undefined} title={launchTitle} onClick={() => void launchTool(tool.id)} onContextMenu={(event) => { event.preventDefault(); void launchTool(tool.id, true); }}>{loaded?.activity === 'launch' ? '正在启动' : '启动'}</button><button type="button" onClick={() => onOpenTool(tool.id, { resource: 'config' })}>编辑配置 →</button></div>
+        <div className={styles.rowActions}>{!installed && (workspace || loaded?.error) && <button type="button" disabled={checking.has(tool.id) || loaded?.busy} onClick={() => recheck.current(tool.id)}>{checking.has(tool.id) ? t('home.tools.statusChecking') : t('home.tools.recheck')}</button>}<button type="button" className={styles.launch} disabled={!installed || loaded?.busy} aria-busy={loaded?.activity === 'launch' || undefined} title={launchTitle} onClick={() => void launchTool(tool.id)} onContextMenu={(event) => { event.preventDefault(); void launchTool(tool.id, true); }}>{loaded?.activity === 'launch' ? t('home.tools.launching') : t('home.tools.launch')}</button><button type="button" onClick={() => onOpenTool(tool.id, { resource: 'config' })}>{t('home.tools.editConfig')}</button></div>
         {line && <div className={styles.note} data-tone={line.tone} role={line.tone === 'error' ? 'alert' : 'status'} title={line.title}>{line.text}</div>}
       </div>;
     })}
-    <GuideDialog open={!!conflict} title="比较当前文件与本次配置" hint={conflict ? `${conflict.toolName} 的文件和「${conflict.profileName}」不一致。` : undefined} onClose={() => { setConflict(null); setConflictError(''); }}>
-      {conflict && <div aria-label="配置应用冲突">{conflict.comparison.files.map((file, index) => <ConflictCompare key={file.role} title={file.role} banner={index === 0 ? '文件已在其他地方修改。请选择要保存的内容。' : undefined} currentContent={file.current} nextContent={file.proposedText ?? ''} format={file.format} actions={false} onKeepCurrent={() => { setConflict(null); setConflictError(''); }} onUseNext={() => void useComparedFile()} />)}{conflictError && <p role="alert">{conflictError}</p>}<div className="file-conflict-actions"><button type="button" onClick={() => { setConflict(null); setConflictError(''); }}>保留当前文件</button><button type="button" onClick={() => void useComparedFile()}>使用本次内容</button></div></div>}
+    <GuideDialog open={!!conflict} title={t('home.conflict.title')} hint={conflict ? t('home.conflict.hint', { tool: conflict.toolName, profile: conflict.profileName }) : undefined} onClose={() => { setConflict(null); setConflictError(''); }}>
+      {conflict && <div aria-label={t('home.conflict.label')}>{conflict.comparison.files.map((file, index) => <ConflictCompare key={file.role} title={file.role} banner={index === 0 ? t('home.conflict.banner') : undefined} currentContent={file.current} nextContent={file.proposedText ?? ''} format={file.format} actions={false} onKeepCurrent={() => { setConflict(null); setConflictError(''); }} onUseNext={() => void useComparedFile()} />)}{conflictError && <p role="alert">{conflictError}</p>}<div className="file-conflict-actions"><button type="button" onClick={() => { setConflict(null); setConflictError(''); }}>{t('common.conflict.keepCurrent')}</button><button type="button" onClick={() => void useComparedFile()}>{t('common.conflict.useNext')}</button></div></div>}
     </GuideDialog>
   </div>;
 }

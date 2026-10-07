@@ -1,5 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
+import { useTranslation } from 'react-i18next';
 import styles from './ModelCombobox.module.css';
 
 export function ModelCombobox({ id, label, value, placeholder, options, disabled, action, onChange }: {
@@ -12,6 +13,7 @@ export function ModelCombobox({ id, label, value, placeholder, options, disabled
   action?: { label: string; busy: boolean; onClick: () => void };
   onChange: (model: string) => void;
 }) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [text, setText] = useState(value);
   const [filtering, setFiltering] = useState(false);
@@ -81,11 +83,11 @@ export function ModelCombobox({ id, label, value, placeholder, options, disabled
   return <div className={styles.combo}>
     <input ref={anchor} id={id} className={styles.trigger} role="combobox" aria-label={label} aria-expanded={open} aria-controls={open ? listId : undefined} aria-autocomplete="list" value={text} placeholder={placeholder} disabled={disabled} onFocus={() => { setFiltering(false); setOpen(true); }} onBlur={() => { setOpen(false); setFiltering(false); }} onChange={event => { const next = event.target.value; setText(next); setFiltering(true); setOpen(true); onChange(next); }} onKeyDown={onKeyDown} />
     {open && box && createPortal(<div ref={panel} className={styles.panel} style={{ top: box.top, bottom: box.bottom, left: box.left, width: box.width, maxHeight: box.maxHeight }}>
-      <div id={listId} className={styles.list} role="listbox" aria-label={`${label}列表`}>
+      <div id={listId} className={styles.list} role="listbox" aria-label={t('tools.modelCombo.list', { label })}>
         {matches.map((model, index) => <button key={model} type="button" role="option" aria-selected={model === value} data-active={index === active} onMouseDown={event => event.preventDefault()} onMouseEnter={() => setActive(index)} onClick={() => choose(model)}><span>{model}</span></button>)}
       </div>
-      {!matches.length && <div className={styles.empty}><p>{filtering ? '没有匹配的目录模型，可直接使用输入值' : '尚未获取模型目录，可直接输入'}</p></div>}
-      {!filtering && action && <button className={styles.fetch} type="button" disabled={action.busy} onMouseDown={event => event.preventDefault()} onClick={() => action.onClick()}>{action.busy ? '获取中…' : action.label}</button>}
+      {!matches.length && <div className={styles.empty}><p>{filtering ? t('tools.modelCombo.noMatch') : t('tools.modelCombo.noCatalog')}</p></div>}
+      {!filtering && action && <button className={styles.fetch} type="button" disabled={action.busy} onMouseDown={event => event.preventDefault()} onClick={() => action.onClick()}>{action.busy ? t('tools.modelCombo.fetching') : action.label}</button>}
     </div>, anchor.current?.closest('dialog') ?? document.body)}
   </div>;
 }

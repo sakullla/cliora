@@ -9,6 +9,7 @@ import { markdown } from '@codemirror/lang-markdown';
 import { javascript, json as jsonWithComments } from '@codemirror/legacy-modes/mode/javascript';
 import { toml } from '@codemirror/legacy-modes/mode/toml';
 import { tags } from '@lezer/highlight';
+import { useTranslation } from 'react-i18next';
 import './CodeEditor.css';
 
 export type CodeFormat = 'json' | 'jsonc' | 'toml' | 'yaml' | 'markdown' | 'text' | 'javascript';
@@ -36,6 +37,7 @@ export function CodeEditor({ value, onChange, format = 'text', label, readOnly =
   value: string; onChange?: (value: string) => void; format?: CodeFormat; label: string;
   readOnly?: boolean; placeholder?: string; compact?: boolean; errorLine?: number; documentId?: string;
 }) {
+  const { t } = useTranslation();
   const host = useRef<HTMLDivElement>(null);
   const editor = useRef<EditorView | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
@@ -115,18 +117,18 @@ export function CodeEditor({ value, onChange, format = 'text', label, readOnly =
         if (kind === 'cut' && editor.current === view && view.state === state && !readOnly) view.dispatch(state.replaceSelection(''), { userEvent: 'delete.cut' });
       }
       view.focus();
-    } catch { setMenuError('系统剪贴板暂不可用，请使用键盘快捷键。'); }
+    } catch { setMenuError(t('common.editor.clipboardUnavailable')); }
   }
   const state = editor.current?.state;
   const hasSelection = state?.selection.ranges.some(range => !range.empty) ?? false;
   return <><div className={`code-editor${compact ? ' code-editor-compact' : ''}`} data-format={format} ref={host} onContextMenu={event => { event.preventDefault(); setMenu({ x:event.clientX, y:event.clientY }); }} />
     {menuError && <small className="code-menu-error" role="status">{menuError}</small>}
-    {menu && createPortal(<div ref={menuHost} className="code-menu" role="menu" aria-label="编辑菜单" onContextMenu={event => event.preventDefault()}>
-      <button role="menuitem" type="button" disabled={readOnly || !state || !undoDepth(state)} onClick={() => void action('undo')}>撤销<span>Ctrl+Z</span></button>
-      <button role="menuitem" type="button" disabled={readOnly || !state || !redoDepth(state)} onClick={() => void action('redo')}>重做<span>Ctrl+Y</span></button>
-      <hr /><button role="menuitem" type="button" disabled={readOnly || !hasSelection} onClick={() => void action('cut')}>剪切<span>Ctrl+X</span></button>
-      <button role="menuitem" type="button" disabled={!hasSelection} onClick={() => void action('copy')}>复制<span>Ctrl+C</span></button>
-      <button role="menuitem" type="button" disabled={readOnly} onClick={() => void action('paste')}>粘贴<span>Ctrl+V</span></button>
-      <hr /><button role="menuitem" type="button" onClick={() => void action('all')}>全选<span>Ctrl+A</span></button>
+    {menu && createPortal(<div ref={menuHost} className="code-menu" role="menu" aria-label={t('common.editor.menu')} onContextMenu={event => event.preventDefault()}>
+      <button role="menuitem" type="button" disabled={readOnly || !state || !undoDepth(state)} onClick={() => void action('undo')}>{t('common.editor.undo')}<span>Ctrl+Z</span></button>
+      <button role="menuitem" type="button" disabled={readOnly || !state || !redoDepth(state)} onClick={() => void action('redo')}>{t('common.editor.redo')}<span>Ctrl+Y</span></button>
+      <hr /><button role="menuitem" type="button" disabled={readOnly || !hasSelection} onClick={() => void action('cut')}>{t('common.editor.cut')}<span>Ctrl+X</span></button>
+      <button role="menuitem" type="button" disabled={!hasSelection} onClick={() => void action('copy')}>{t('common.editor.copy')}<span>Ctrl+C</span></button>
+      <button role="menuitem" type="button" disabled={readOnly} onClick={() => void action('paste')}>{t('common.editor.paste')}<span>Ctrl+V</span></button>
+      <hr /><button role="menuitem" type="button" onClick={() => void action('all')}>{t('common.editor.selectAll')}<span>Ctrl+A</span></button>
     </div>, document.body)}</>;
 }

@@ -1,5 +1,6 @@
 import { ToolIcon } from '../../components/ToolIcon';
 import type { Scope } from '../../types/native';
+import i18n from '../../i18n';
 import styles from './LibraryPage.module.css';
 
 export type CliMarkState = 'off' | 'current' | 'drifted' | 'unavailable';
@@ -17,11 +18,11 @@ export function samePath(left: string | null | undefined, right: string | null |
 }
 
 export function scopeLabel(scope: Scope, projectPath: string | null, projects: { name: string; path: string | null }[]) {
-  if (scope !== 'project') return '全局';
-  return projects.find((item) => samePath(item.path, projectPath))?.name ?? projectPath?.split(/[\\/]/).filter(Boolean).at(-1) ?? '项目';
+  if (scope !== 'project') return i18n.t('tools.apply.global');
+  return projects.find((item) => samePath(item.path, projectPath))?.name ?? projectPath?.split(/[\\/]/).filter(Boolean).at(-1) ?? i18n.t('tools.accounts.scopeProject');
 }
 
-export function ScopeMarks<T extends { toolId: string; scope: Scope; projectPath: string | null; contextId?: string | null }>({ label, tools, places, projects, busy, mark, onToggle, accountContexts = false, contextLabel = () => '账号', unavailable }: {
+export function ScopeMarks<T extends { toolId: string; scope: Scope; projectPath: string | null; contextId?: string | null }>({ label, tools, places, projects, busy, mark, onToggle, accountContexts = false, contextLabel = () => i18n.t('library.marks.account'), unavailable }: {
   label: string;
   accountContexts?: boolean;
   contextLabel?: (id: string | null) => string;

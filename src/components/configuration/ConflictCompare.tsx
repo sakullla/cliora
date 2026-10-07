@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { CodeEditor, type CodeFormat } from '../CodeEditor';
 import styles from './ConflictCompare.module.css';
 
@@ -17,13 +18,14 @@ export function ConflictCompare({ title, banner, status, currentContent, nextCon
   onUseNext: () => void;
   onKeepCurrent: () => void;
 }) {
-  return <section className={styles.compare} aria-label={title ?? '冲突比较'}>
+  const { t } = useTranslation();
+  return <section className={styles.compare} aria-label={title ?? t('common.conflict.label')}>
     {banner && <p className={styles.banner} data-banner="conflict">{banner}</p>}
     {title && <strong className={styles.title}>{title}{status ? ` · ${status}` : ''}</strong>}
     <div className={styles.columns}>
-      <div><strong>当前文件</strong><CodeEditor label={title ? `${title} 当前内容` : '当前文件内容'} value={currentContent} format={format} readOnly compact /></div>
-      <div><strong>本次内容</strong><CodeEditor label={title ? `${title} 本次内容` : '本次内容'} value={nextContent} format={format} readOnly compact /></div>
+      <div><strong>{t('common.conflict.current')}</strong><CodeEditor label={title ? t('common.conflict.currentContent', { title }) : t('common.conflict.currentFileContent')} value={currentContent} format={format} readOnly compact /></div>
+      <div><strong>{t('common.conflict.next')}</strong><CodeEditor label={title ? t('common.conflict.nextContent', { title }) : t('common.conflict.nextContentFallback')} value={nextContent} format={format} readOnly compact /></div>
     </div>
-    {actions && <div className={styles.actions}><button type="button" disabled={busy} onClick={onKeepCurrent}>保留当前文件</button><button type="button" disabled={busy} onClick={onUseNext}>使用本次内容</button></div>}
+    {actions && <div className={styles.actions}><button type="button" disabled={busy} onClick={onKeepCurrent}>{t('common.conflict.keepCurrent')}</button><button type="button" disabled={busy} onClick={onUseNext}>{t('common.conflict.useNext')}</button></div>}
   </section>;
 }

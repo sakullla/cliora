@@ -1,14 +1,16 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
+import { useTranslation } from 'react-i18next';
 import { Icon } from './Icon';
 import styles from './FilterSelect.module.css';
 
 export type FilterSelectOption = { value: string; label: string; detail?: string; note?: string; disabled?: boolean; icon?: ReactNode };
 
 const searchThreshold = 4;
-const searchInputLabel = (label: string) => `搜索${label.replace(/^(筛选|切换)/, '')}`;
+// Strip the leading verb so the search input label stays concise in both languages.
+const stripLabelVerb = (label: string) => label.replace(/^(筛选|切换|Filter\s+|Switch\s+)/, '');
 
-export function FilterSelect({ label, value, options, placeholder = '选择', disabled = false, title, searchable = true, forceSearch = false, searchLabel, searchPlaceholder = '输入名称', emptyText = '没有匹配的选项', onChange, variant = 'default', className, triggerRef, onTriggerKeyDown, onPickFolder, pickFolderLabel = '选择文件夹…', triggerDetail = true }: {
+export function FilterSelect({ label, value, options, placeholder, disabled = false, title, searchable = true, forceSearch = false, searchLabel, searchPlaceholder, emptyText, onChange, variant = 'default', className, triggerRef, onTriggerKeyDown, onPickFolder, pickFolderLabel, triggerDetail = true }: {
   label: string;
   value: string;
   options: FilterSelectOption[];
@@ -29,6 +31,7 @@ export function FilterSelect({ label, value, options, placeholder = '选择', di
   pickFolderLabel?: string;
   triggerDetail?: boolean;
 }) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
@@ -116,17 +119,17 @@ export function FilterSelect({ label, value, options, placeholder = '选择', di
 
   return <div ref={anchor} className={className ? `${styles.select} ${className}` : styles.select}>
     <button ref={triggerRef} type="button" className={styles.trigger} data-select-trigger="true" data-variant={variant} data-empty={!selected || undefined} data-open={open || undefined} aria-label={label} aria-haspopup="listbox" aria-expanded={open} aria-controls={listId} disabled={disabled} title={title ?? (selected ? [selected.label, selected.detail].filter(Boolean).join(' · ') : undefined)} onClick={() => setOpen((current) => !current)} onKeyDown={onTrigger}>
-      {selected?.icon && <span className={styles.triggerIcon}>{selected.icon}</span>}<span className={styles.triggerCopy}><span>{selected?.label ?? placeholder}</span>{triggerDetail && selected?.detail && <small>{selected.detail}</small>}</span>
+      {selected?.icon && <span className={styles.triggerIcon}>{selected.icon}</span>}<span className={styles.triggerCopy}><span>{selected?.label ?? placeholder ?? t('common.filterSelect.placeholder')}</span>{triggerDetail && selected?.detail && <small>{selected.detail}</small>}</span>
     </button>
     {open && box && createPortal(<div ref={panel} className={styles.panel} style={{ top: box.top, bottom: box.bottom, left: box.left, width: box.width }} tabIndex={-1} onKeyDown={onPanelKey}>
-      {showSearch && <input aria-label={searchLabel ?? searchInputLabel(label)} placeholder={searchPlaceholder} value={query} autoFocus onChange={(event) => setQuery(event.target.value)} />}
+      {showSearch && <input aria-label={searchLabel ?? t('common.filterSelect.search', { label: stripLabelVerb(label) })} placeholder={searchPlaceholder ?? t('common.filterSelect.searchPlaceholder')} value={query} autoFocus onChange={(event) => setQuery(event.target.value)} />}
       <div className={styles.list} id={listId} role="listbox" aria-label={label} style={{ maxHeight: Math.max(140, box.maxHeight - (showSearch ? 52 : 8) - (onPickFolder ? 40 : 0)) }}>
         {matches.length ? matches.map((option, index) => <button key={option.value || '__all'} type="button" role="option" aria-selected={option.value === value} aria-disabled={option.disabled || undefined} data-active={index === active || undefined} disabled={option.disabled} onMouseEnter={() => setActive(index)} onClick={() => choose(option)}>
           {option.icon && <span className={styles.optionIcon}>{option.icon}</span>}<span className={styles.optionCopy}><strong>{option.label}</strong>{option.detail && <small>{option.detail}</small>}</span>
           <span className={styles.optionMarks}>{option.note && <em>{option.note}</em>}{option.value === value && <Icon name="check" size={14} />}</span>
-        </button>) : <p>{emptyText}</p>}
+        </button>) : <p>{emptyText ?? t('common.filterSelect.empty')}</p>}
       </div>
-      {onPickFolder && <button type="button" className={styles.folderPick} onClick={() => { setOpen(false); setQuery(''); onPickFolder(); }}><Icon name="folder" size={14} />{pickFolderLabel}</button>}
+      {onPickFolder && <button type="button" className={styles.folderPick} onClick={() => { setOpen(false); setQuery(''); onPickFolder(); }}><Icon name="folder" size={14} />{pickFolderLabel ?? t('common.filterSelect.pickFolder')}</button>}
     </div>, portalTarget)}
   </div>;
 }

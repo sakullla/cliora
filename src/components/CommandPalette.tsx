@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Icon, type IconName } from './Icon';
 import { ToolIcon } from './ToolIcon';
 import { withMod } from '../lib/shortcut';
@@ -15,6 +16,7 @@ export type CommandItem = {
 };
 
 export function CommandPalette({ open, commands, onClose }: { open: boolean; commands: CommandItem[]; onClose: () => void }) {
+  const { t } = useTranslation();
   const dialog = useRef<HTMLDialogElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const returnFocus = useRef<HTMLElement | null>(null);
@@ -66,12 +68,12 @@ export function CommandPalette({ open, commands, onClose }: { open: boolean; com
     if (event.key === 'End') { event.preventDefault(); setActive(Math.max(0, shown.length - 1)); return; }
     if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); choose(shown[index]); }
   }}>
-    <h2 id="command-dialog-title" className="sr-only">快速前往</h2>
+    <h2 id="command-dialog-title" className="sr-only">{t('common.palette.title')}</h2>
     <div className="command-input-row">
       <Icon name="search" size={16} />
-      <input ref={input} role="combobox" aria-expanded="true" aria-controls="command-list" aria-autocomplete="list" aria-activedescendant={shown.length ? `command-option-${index}` : undefined} aria-label="搜索页面、工具或项目" placeholder="搜索页面、工具或项目" value={query} onChange={(event) => { setQuery(event.target.value); setActive(0); }} />
+      <input ref={input} role="combobox" aria-expanded="true" aria-controls="command-list" aria-autocomplete="list" aria-activedescendant={shown.length ? `command-option-${index}` : undefined} aria-label={t('common.palette.search')} placeholder={t('common.palette.search')} value={query} onChange={(event) => { setQuery(event.target.value); setActive(0); }} />
     </div>
-    <div id="command-list" className="command-list" role="listbox" aria-label="可前往的位置">
+    <div id="command-list" className="command-list" role="listbox" aria-label={t('common.palette.listLabel')}>
       {shown.length ? shown.map((item, itemIndex) => {
         const previous = shown[itemIndex - 1];
         return <div key={item.id} role="presentation">
@@ -82,8 +84,8 @@ export function CommandPalette({ open, commands, onClose }: { open: boolean; com
             {item.hint && <small>{item.hint}</small>}
           </button>
         </div>;
-      }) : <p className="command-empty" role="status">没有匹配「{query.trim()}」的页面、工具或项目。</p>}
+      }) : <p className="command-empty" role="status">{t('common.palette.empty', { query: query.trim() })}</p>}
     </div>
-    <div className="command-foot"><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>Enter</kbd> 打开</span><span><kbd>Esc</kbd> 关闭</span></div>
+    <div className="command-foot"><span><kbd>↑</kbd><kbd>↓</kbd> {t('common.palette.footChoose')}</span><span><kbd>Enter</kbd> {t('common.palette.footOpen')}</span><span><kbd>Esc</kbd> {t('common.palette.footClose')}</span></div>
   </dialog>;
 }

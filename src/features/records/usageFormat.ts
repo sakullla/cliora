@@ -1,4 +1,5 @@
 import type { UsageBucket, UsageTotals } from '../../types/history';
+import i18n from '../../i18n';
 
 export const DAY_MS = 86_400_000;
 
@@ -7,14 +8,14 @@ export const formatTokens = (value: number) => value < 1000 ? Math.round(value).
 
 const symbols: Record<string, string> = { USD: '$', CNY: '¥', EUR: '€', GBP: '£', JPY: '¥', HKD: 'HK$' };
 export function formatMoney(value: number | null, currency: string) {
-  if (value === null) return '未定价';
+  if (value === null) return i18n.t('records.format.unpriced');
   const symbol = symbols[currency] ?? `${currency} `;
   if (value === 0) return `${symbol}0`;
   if (value < 0.01) return `<${symbol}0.01`;
   const digits = value >= 1000 ? { maximumFractionDigits: 0 } : { minimumFractionDigits: 2, maximumFractionDigits: 2 };
   return `${symbol}${value.toLocaleString('en-US', digits)}`;
 }
-export const exactMoney = (value: number | null, currency: string) => value === null ? '没有可用价格' : `${currency} ${value.toFixed(4)}`;
+export const exactMoney = (value: number | null, currency: string) => value === null ? i18n.t('records.format.noPrice') : `${currency} ${value.toFixed(4)}`;
 
 export const ratio = (part: number, whole: number) => whole > 0 ? part / whole : 0;
 export function formatPercent(value: number) {
@@ -24,27 +25,35 @@ export function formatPercent(value: number) {
 }
 
 /** Token buckets in stacking order, bottom to top. */
-export const tokenParts = [
-  { key: 'input', label: '新输入', hint: '没有命中缓存的提示词 token' },
-  { key: 'cacheRead', label: '缓存读取', hint: '从缓存读取的提示词 token，通常按低价计费' },
-  { key: 'cacheWrite', label: '缓存写入', hint: '写入缓存的提示词 token' },
-  { key: 'output', label: '输出', hint: '模型生成的 token，包含推理' },
-] as const satisfies ReadonlyArray<{ key: keyof UsageTotals; label: string; hint: string }>;
+export function tokenParts(): ReadonlyArray<{ key: 'input' | 'cacheRead' | 'cacheWrite' | 'output'; label: string; hint: string }> {
+  return [
+    { key: 'input', label: i18n.t('records.format.tokenInput'), hint: i18n.t('records.format.tokenInputHint') },
+    { key: 'cacheRead', label: i18n.t('records.format.tokenCacheRead'), hint: i18n.t('records.format.tokenCacheReadHint') },
+    { key: 'cacheWrite', label: i18n.t('records.format.tokenCacheWrite'), hint: i18n.t('records.format.tokenCacheWriteHint') },
+    { key: 'output', label: i18n.t('records.format.tokenOutput'), hint: i18n.t('records.format.tokenOutputHint') },
+  ];
+}
 
 /** Share of prompt tokens served from cache. */
 export const cacheHitRate = (totals: UsageTotals) => ratio(totals.cacheRead, totals.input + totals.cacheRead + totals.cacheWrite);
 
-const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+const weekdayKeys = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const;
 const pad = (value: number) => String(value).padStart(2, '0');
 export function bucketLabel(bucket: Pick<UsageBucket, 'start' | 'end'>, kind: 'hour' | 'day' | 'month', long: boolean, multiYear = false) {
   const date = new Date(bucket.start);
+  const month = date.getMonth() + 1;
+  const day = date.getDate();
   if (kind === 'hour') {
     if (!long) return `${pad(date.getHours())}:00`;
     const end = new Date(bucket.end);
-    return `${date.getMonth() + 1}月${date.getDate()}日 ${pad(date.getHours())}:00–${pad(end.getHours() === 0 && end.getTime() > date.getTime() ? 24 : end.getHours())}:00`;
+    return i18n.t('records.format.hourLong', { month, day, start: pad(date.getHours()), end: pad(end.getHours() === 0 && end.getTime() > date.getTime() ? 24 : end.getHours()) });
   }
-  if (kind === 'day') return long ? `${date.getMonth() + 1}月${date.getDate()}日 ${weekdays[date.getDay()]}` : `${date.getMonth() + 1}/${date.getDate()}`;
-  return long || multiYear ? `${date.getFullYear()}年${date.getMonth() + 1}月` : `${date.getMonth() + 1}月`;
+  if (kind === 'day') return long
+    ? i18n.t('records.format.dayLong', { month, day, weekday: i18n.t(`records.format.weekday.${weekdayKeys[date.getDay()]}`) })
+    : i18n.t('records.format.dayShort', { month, day });
+  return long || multiYear
+    ? i18n.t('records.format.monthLong', { year: date.getFullYear(), month })
+    : i18n.t('records.format.monthShort', { month });
 }
 
 /** Axis top and gridlines for a maximum, using 1/2/2.5/5 steps. */
@@ -59,15 +68,16 @@ export function niceScale(max: number, lines = 4) {
   return { top, ticks };
 }
 
-export const clockTime = (ms: number) => new Date(ms).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+const timeLocale = () => i18n.language === 'en' ? 'en-US' : 'zh-CN';
+export const clockTime = (ms: number) => new Date(ms).toLocaleTimeString(timeLocale(), { hour: '2-digit', minute: '2-digit' });
 export function shortDate(ms: number | null) {
-  if (ms === null) return '时间未知';
+  if (ms === null) return i18n.t('records.format.timeUnknown');
   const date = new Date(ms);
   const now = new Date();
   const start = (value: Date) => new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime();
   const days = Math.round((start(now) - start(date)) / DAY_MS);
-  if (days <= 0) return `今天 ${clockTime(ms)}`;
-  if (days === 1) return `昨天 ${clockTime(ms)}`;
-  if (date.getFullYear() === now.getFullYear()) return `${date.getMonth() + 1}月${date.getDate()}日`;
+  if (days <= 0) return i18n.t('records.format.today', { time: clockTime(ms) });
+  if (days === 1) return i18n.t('records.format.yesterday', { time: clockTime(ms) });
+  if (date.getFullYear() === now.getFullYear()) return i18n.t('records.format.dayOfYear', { month: date.getMonth() + 1, day: date.getDate() });
   return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()}`;
 }

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { native } from '../../lib/native';
 import type { Scope } from '../../types/native';
+import i18n from '../../i18n';
 
 type Target = { toolId: string; scope: Scope; projectPath: string | null; contextId?: string | null };
 const scopeKey = (target: Target) => JSON.stringify([target.toolId, target.scope, target.projectPath]);
@@ -15,13 +16,13 @@ export function useAccountLabels() {
       for (const account of accounts) {
         const name = account.identity?.email ? `${account.label} (${account.identity.email})` : account.label;
         if (account.context) entries.push([account.context.id, name]);
-        for (const context of account.retiredContexts ?? []) entries.push([context.id, `${name} · 旧登录`]);
+        for (const context of account.retiredContexts ?? []) entries.push([context.id, i18n.t('library.contexts.retired', { name })]);
       }
       setLabels(Object.fromEntries(entries));
     }).catch(() => {});
     return () => { live = false; };
   }, []);
-  return (id?: string | null) => id ? labels[id] ?? `不可用上下文 ${id.slice(0, 8)}` : '默认配置';
+  return (id?: string | null) => id ? labels[id] ?? i18n.t('library.contexts.unavailable', { id: id.slice(0, 8) }) : i18n.t('library.contexts.default');
 }
 
 // Project files are shared by accounts. Their placement identity has no context,
@@ -48,10 +49,10 @@ export function useResourceContexts(tools: { id: string }[], placements: Target[
       };
       void native.getRegisteredToolWorkspace(toolId, scope, path ?? undefined, true)
         .then((workspace) => {
-          if (workspace.effectiveContextId !== null && typeof workspace.effectiveContextId !== 'string') throw new Error('工作区缺少有效账号上下文');
+          if (workspace.effectiveContextId !== null && typeof workspace.effectiveContextId !== 'string') throw new Error(i18n.t('library.contexts.missingContext'));
           publish({ status: 'resolved', contextId: workspace.effectiveContextId });
         })
-        .catch((error: unknown) => publish({ status: 'failed', error: error && typeof error === 'object' && 'message' in error ? String(error.message) : '无法读取账号上下文' }));
+        .catch((error: unknown) => publish({ status: 'failed', error: error && typeof error === 'object' && 'message' in error ? String(error.message) : i18n.t('library.contexts.readFailed') }));
     }
     return () => { live = false; };
   }, [stamp]);
@@ -63,7 +64,7 @@ export function useResourceContexts(tools: { id: string }[], placements: Target[
     result,
     context: (target: Target) => {
       const value = result(target);
-      if (value.status !== 'resolved') throw new Error('目标账号上下文尚不可用');
+      if (value.status !== 'resolved') throw new Error(i18n.t('library.contexts.notReady'));
       return value.contextId;
     },
     matches: (target: Target) => {
@@ -74,7 +75,7 @@ export function useResourceContexts(tools: { id: string }[], placements: Target[
       const [toolId, scope, projectPath] = JSON.parse(key) as [string, Scope, string | null];
       const target = { toolId, scope, projectPath };
       const value = result(target);
-      return value.status === 'resolved' ? [] : [{ key, ...target, detail: value.status === 'failed' ? value.error : '正在读取账号上下文…' }];
+      return value.status === 'resolved' ? [] : [{ key, ...target, detail: value.status === 'failed' ? value.error : i18n.t('library.contexts.loading') }];
     }),
   };
 }
