@@ -35,25 +35,8 @@
 .filters input:not([type=checkbox]), .filters select, .projectLink select { width: 100%; min-height: var(--control-h-sm); color: var(--text); font-weight: 400; }
 .filters .search { flex: 1 1 100%; min-width: 0; }
 .filters .filterSelect { flex: 1; min-width: 0; }
-.searchBox { position: relative; display: block; }
-.searchBox input { width: 100%; padding-right: 30px; }
-.clearSearch {
-  position: absolute;
-  top: 50%;
-  right: 4px;
-  transform: translateY(-50%);
-  display: grid;
-  place-items: center;
-  width: 22px;
-  min-height: 22px;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--text-3);
-  box-shadow: none;
-}
-.clearSearch:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
+.searchBox { display: block; min-width: 0; }
+.searchBox input { width: 100%; }
 
 .activeFilters { display: flex; flex: none; flex-wrap: wrap; align-items: center; gap: 6px; max-height: 100px; overflow: auto; padding: 10px 16px; border-bottom: 1px solid var(--line); animation: reveal var(--medium) var(--ease); }
 .filterChip {

@@ -8,6 +8,7 @@ import type { AdapterDescriptor, Scope } from '../../types/native';
 import type { RulePlacement } from '../../types/resources';
 import { LibraryResources } from './LibraryResources';
 import { FilterSelect } from '../../components/FilterSelect';
+import { SearchField } from '../../components/SearchField';
 import { GuideDialog } from '../../components/GuideDialog';
 import { toolOptions } from '../../components/ToolIcon';
 import { Icon } from '../../components/Icon';
@@ -46,7 +47,17 @@ function fullTime(value: number) {
 }
 
 function shortTime(value: number) {
-  return new Date(value * 1000).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const date = new Date(value * 1000);
+  if (Number.isNaN(date.getTime())) return '';
+  const clock = date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  const start = (day: Date) => new Date(day.getFullYear(), day.getMonth(), day.getDate()).getTime();
+  const day = start(date);
+  const today = start(new Date());
+  if (day === today) return `今天 ${clock}`;
+  if (day === today - 86_400_000) return `昨天 ${clock}`;
+  const sameYear = date.getFullYear() === new Date().getFullYear();
+  const calendar = date.toLocaleDateString('zh-CN', sameYear ? { month: 'long', day: 'numeric' } : { year: 'numeric', month: 'long', day: 'numeric' });
+  return `${calendar} ${clock}`;
 }
 
 function categoryOf(tags: string[]): string {
@@ -296,10 +307,7 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
     {(section === 'mcp' || section === 'skill') && <LibraryResources section={section} active={active} tools={managedTools} projects={projects} />}
     {(section === 'prompt' || section === 'rule') && <>
     <div className={styles.filters}>
-      <div className={styles.searchBox}>
-        <Icon name="search" size={14} />
-        <input aria-label="搜索资料" data-page-search title={searchShortcutHint} value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape' && search) { event.preventDefault(); setSearch(''); } }} placeholder="搜索标题、正文或标签" />
-      </div>
+      <SearchField className={styles.searchBox} label="搜索资料" pageSearch title={searchShortcutHint} value={search} onChange={setSearch} placeholder="搜索标题、正文或标签" />
       <FilterSelect className={styles.filterPick} label="项目筛选" value={projectFilter} options={[
         { value: '*', label: '所有项目' },
         { value: 'global', label: '全局资料' },

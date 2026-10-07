@@ -6,6 +6,7 @@ import type { Project } from '../../types/launch';
 import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, ScanStatus } from '../../types/history';
 import { displayPath } from '../../lib/paths';
 import { FilterSelect } from '../../components/FilterSelect';
+import { SearchField } from '../../components/SearchField';
 import { ToastStack, type Toast } from '../../components/Toast';
 import { ToolIcon, toolOptions } from '../../components/ToolIcon';
 import { Icon } from '../../components/Icon';
@@ -415,7 +416,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
     <div className={styles.columns} id="records-sessions-panel" role="tabpanel" aria-labelledby="records-sessions-tab" hidden={tab !== 'sessions'}>
       <aside className={styles.sessionLibrary} aria-label="会话库">
         <div className={styles.filters}>
-      <label className={styles.search}><span className="sr-only">搜索</span><span className={styles.searchBox}><input aria-label="搜索会话" data-page-search title={searchShortcutHint} value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape' && search) { event.preventDefault(); setSearch(''); } }} placeholder="搜索标题或正文" />{search && <button type="button" className={styles.clearSearch} aria-label="清空搜索" onClick={() => setSearch('')}><Icon name="close" size={12} strokeWidth={2.2} /></button>}</span></label>
+      <label className={styles.search}><span className="sr-only">搜索</span><SearchField className={styles.searchBox} label="搜索会话" pageSearch title={searchShortcutHint} value={search} onChange={setSearch} placeholder="搜索标题或正文" /></label>
       <label className={styles.filterSelect}><span className="sr-only">工具</span><FilterSelect label="筛选工具" value={toolId} options={[{ value: '', label: '全部工具' }, ...toolOptions(tools)]} onChange={setToolId} /></label>
       <details className={styles.moreFilters}><summary>筛选{[projectId, model, favoriteOnly, rangeKey !== 'all'].filter(Boolean).length ? ` · ${[projectId, model, favoriteOnly, rangeKey !== 'all'].filter(Boolean).length}` : ''}</summary><div className={styles.filters}>
       <label className={styles.favorite}><input type="checkbox" checked={favoriteOnly} onChange={(event) => setFavoriteOnly(event.target.checked)} />只看收藏</label>

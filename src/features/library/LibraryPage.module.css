@@ -46,8 +46,7 @@
   align-items: center;
   min-width: 0;
 }
-.searchBox > svg { position: absolute; left: 11px; color: var(--text-3); pointer-events: none; }
-.searchBox > input { width: 100%; padding-left: 32px; }
+.searchBox > input { width: 100%; }
 
 /* Cards */
 .layout { display: grid; align-content: start; gap: 16px; min-width: 0; }

@@ -30,8 +30,8 @@ async function expectFullyInFirstScreen(page: Page, locator: Locator) {
   await expect.poll(() => page.locator('main.content').evaluate((el) => el.scrollTop)).toBe(0);
 }
 
-async function installDesktop(page: Page) {
-  await page.addInitScript(() => {
+async function installDesktop(page: Page, projects: unknown[] = []) {
+  await page.addInitScript((seed) => {
     const names: Record<string, string> = { codex: 'Codex', claude_code: 'Claude Code', grok: 'Grok', pi: 'Pi', open_code: 'OpenCode' };
     const tools = Object.entries(names).map(([id, name]) => ({ id, name, installation: 'not_checked', configuration: 'not_checked' }));
     const workspace = () => ({
@@ -57,7 +57,8 @@ async function installDesktop(page: Page) {
             managedIds: Object.keys(names), preservedUnknown: [],
           };
           if (command === 'get_registered_tool_workspace') return workspace();
-          if (command === 'list_projects' || command === 'list_library_items' || command === 'list_history_sessions' || command === 'list_history_prices' || command === 'refresh_history' || command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_skill_recovery_issues' || command === 'scan_native_skills' || command === 'list_native_mcp' || command === 'list_portable_items') return [];
+          if (command === 'list_projects') return seed;
+          if (command === 'list_library_items' || command === 'list_history_sessions' || command === 'list_history_prices' || command === 'refresh_history' || command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_skill_recovery_issues' || command === 'scan_native_skills' || command === 'list_native_mcp' || command === 'list_portable_items') return [];
           if (command === 'get_usage_report') return usage();
           if (command === 'get_launch_settings') return { selected: 'auto', terminals: [{ id: 'auto', label: '系统默认', available: true }], cliMode: 'normal', projectMode: 'normal' };
           if (command === 'get_tray_status') return { available: false, error: null };
@@ -67,7 +68,7 @@ async function installDesktop(page: Page) {
         },
       },
     });
-  });
+  }, projects);
 }
 
 test('five full pages are navigable and browser mode never implies native data', async ({ page }) => {
@@ -439,4 +440,78 @@ test('sidebar collapse preserves navigation and records use the wide viewport', 
   await expect.poll(async () => (await sidebar.boundingBox())?.width ?? 0).toBeGreaterThan(180);
   await page.setViewportSize({ width: 640, height: 760 });
   await expectNoHorizontalScroll(page);
+});
+
+test('command palette jumps between pages and the sidebar shortcut collapses navigation', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: '快速开始', level: 1 })).toBeVisible();
+  await page.keyboard.press('Control+K');
+  const dialog = page.getByRole('dialog', { name: '快速前往' });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('combobox', { name: '搜索页面、工具或项目' }).fill('设置');
+  await dialog.getByRole('option', { name: '设置' }).click();
+  await expect(page.getByRole('heading', { name: '设置', level: 1 })).toBeVisible();
+  await expect(page.locator('dialog')).toHaveCount(0);
+
+  await page.keyboard.press('Control+K');
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('combobox', { name: '搜索页面、工具或项目' }).fill('没有这个页面');
+  await expect(dialog.getByRole('status')).toContainText('没有匹配');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('dialog')).toHaveCount(0);
+
+  await page.keyboard.press('Control+K');
+  await dialog.getByRole('combobox', { name: '搜索页面、工具或项目' }).fill('资料库');
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('heading', { name: '资料库', level: 1 })).toBeVisible();
+
+  await page.getByRole('button', { name: '键盘快捷键', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '键盘快捷键' })).toContainText('快速前往');
+  await page.keyboard.press('Escape');
+
+  await page.keyboard.press('Control+Backslash');
+  await expect(page.getByRole('button', { name: '展开侧栏', exact: true })).toBeVisible();
+  await page.keyboard.press('Control+Backslash');
+  await expect(page.getByRole('button', { name: '折叠侧栏', exact: true })).toBeVisible();
+});
+
+test('command palette scrolls a filtered project into view', async ({ page }) => {
+  const projects = Array.from({ length: 8 }, (_, index) => ({
+    id: `p${index}`,
+    name: `项目${index}`,
+    path: `/work/p${index}`,
+    available: true,
+    preferredTool: null,
+    lastOpened: index,
+    modelOverrides: {},
+    selectedProfiles: {},
+    appliedProfiles: {},
+    reapplyProfiles: {},
+  }));
+  await installDesktop(page, projects);
+  await page.setViewportSize({ width: 1100, height: 640 });
+  await page.goto('/');
+  const target = page.locator('[data-project-id="p7"]');
+  const search = page.getByRole('textbox', { name: '搜索项目' });
+  await search.fill('项目0');
+  await expect(target).toHaveCount(0);
+
+  await page.keyboard.press('Control+K');
+  const dialog = page.getByRole('dialog', { name: '快速前往' });
+  await dialog.getByRole('combobox', { name: '搜索页面、工具或项目' }).fill('项目7');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('dialog')).toHaveCount(0);
+  await expect(search).toHaveValue('');
+  await expect.poll(async () => target.evaluate((element) => {
+    const main = document.querySelector('main');
+    if (!main) return false;
+    const item = element.getBoundingClientRect();
+    const box = main.getBoundingClientRect();
+    return item.top >= box.top - 1 && item.bottom <= box.bottom + 1;
+  })).toBe(true);
+  await expect.poll(() => page.locator('main.content').evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await expect(target).toBeFocused();
+  await search.fill('项目0');
+  await expect(target).toHaveCount(0);
+  await expect(page.locator('[data-project-id="p0"]')).toHaveCount(1);
 });
