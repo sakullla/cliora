@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "example-stdio": {
+      "command": "npx",
+      "args": ["-y", "example-mcp"],
+      "env": {
+        "EXAMPLE_MODE": "fixture",
+        "API_KEY": "${EXAMPLE_KEY}"
+      },
+      "autoApprove": ["list_tools", "read_file"],
+      "disabled": false
+    },
+    "example-remote": {
+      "url": "https://mcp.example.com/mcp",
+      "headers": {
+        "X-Example": "fixture"
+      },
+      "oauth": true,
+      "disabled": true
+    }
+  }
+}
