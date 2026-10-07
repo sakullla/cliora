@@ -138,13 +138,6 @@ export function SessionReader({ detail, toolName }: { detail: HistoryDetail; too
       </div>}
       {search && <small className={styles.findHint}>查找时显示消息原文 · Enter 下一条 / Shift + Enter 上一条</small>}
     </div>
-    <section className={styles.usageSummary} aria-label="会话 Token 用量">
-      {detail.totals?.usageRecords ? <>
-        <strong>总 Token {detail.totals.total.toLocaleString()}</strong>
-        <dl>{([['新输入', detail.totals.input], ['缓存读取', detail.totals.cacheRead], ['缓存写入', detail.totals.cacheWrite], ['输出', detail.totals.output]] as const).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value.toLocaleString()}</dd></div>)}</dl>
-        <small>{detail.totals.unknownRequestRecords ? `已知调用 ${detail.totals.requests.toLocaleString()} 次 · ${detail.totals.unknownRequestRecords.toLocaleString()} 条记录次数未知` : `${detail.totals.requests.toLocaleString()} 次调用`} · {detail.totals.usageRecords.toLocaleString()} 条用量记录</small>
-      </> : <span>暂无用量数据</span>}
-    </section>
     <div className={styles.messages}>
       {visible.map(({ item }, visibleIndex) => {
         const previous = visible[visibleIndex - 1]?.item;
