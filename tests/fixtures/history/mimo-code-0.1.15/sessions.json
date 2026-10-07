@@ -1,0 +1,174 @@
+{
+  "description": "MiMo Code 0.1.15 mimocode.db sanitized row set. Desensitized from the schema at XiaomiMiMo/MiMo-Code packages/cli/src/session/session.sql.ts (session/message/part tables): same column shapes, rewritten ids/titles/directories/counts. Tests rebuild the sqlite database deterministically from these rows (zcode in-test pattern). Token semantics per session/session.ts getUsage: input excludes cache read/write, output excludes reasoning.",
+  "sessions": [
+    {
+      "id": "ses_root_2026_10_05_a1b2c3d4e5f6g7h8i9j0k1l2m",
+      "project_id": "prj_demo_000000000000000000000000001",
+      "parent_id": null,
+      "slug": "help-me-make-the-build-script-cross",
+      "directory": "C:\\Users\\example\\mimo-demo",
+      "title": "帮我把构建脚本改成跨平台版本",
+      "version": "0.1.15",
+      "time_created": 1791000000000,
+      "time_updated": 1791000900000
+    },
+    {
+      "id": "ses_actor_2026_10_05_z9y8x7w6v5u4t3s2r1q0p1o2n",
+      "project_id": "prj_demo_000000000000000000000000001",
+      "parent_id": "ses_root_2026_10_05_a1b2c3d4e5f6g7h8i9j0k1l2m",
+      "slug": "actor-explore",
+      "directory": "C:\\Users\\example\\mimo-demo",
+      "title": "actor: explore",
+      "version": "0.1.15",
+      "time_created": 1791000095000,
+      "time_updated": 1791000105000
+    }
+  ],
+  "messages": [
+    {
+      "id": "msg_root_user_000000000000000000001",
+      "session_id": "ses_root_2026_10_05_a1b2c3d4e5f6g7h8i9j0k1l2m",
+      "agent_id": "main",
+      "time_created": 1791000005000,
+      "data": { "role": "user" }
+    },
+    {
+      "id": "msg_root_assistant_main_00000001",
+      "session_id": "ses_root_2026_10_05_a1b2c3d4e5f6g7h8i9j0k1l2m",
+      "agent_id": "main",
+      "time_created": 1791000010000,
+      "data": {
+        "role": "assistant",
+        "modelID": "mimo-v2.5",
+        "providerID": "xiaomi",
+        "mode": "build",
+        "agent": "build",
+        "cost": 0.0123,
+        "tokens": {
+          "total": 1500,
+          "input": 1200,
+          "output": 288,
+          "reasoning": 12,
+          "cache": { "read": 0, "write": 0 }
+        }
+      }
+    },
+    {
+      "id": "msg_root_assistant_explore_02",
+      "session_id": "ses_root_2026_10_05_a1b2c3d4e5f6g7h8i9j0k1l2m",
+      "agent_id": "explore",
+      "time_created": 1791000020000,
+      "data": {
+        "role": "assistant",
+        "modelID": "mimo-v2.5",
+        "providerID": "xiaomi",
+        "mode": "build",
+        "agent": "explore",
+        "cost": 0.0008,
+        "tokens": {
+          "total": 250,
+          "input": 200,
+          "output": 50,
+          "reasoning": 0,
+          "cache": { "read": 0, "write": 0 }
+        }
+      }
+    },
+    {
+      "id": "msg_root_assistant_main_00000003",
+      "session_id": "ses_root_2026_10_05_a1b2c3d4e5f6g7h8i9j0k1l2m",
+      "agent_id": "main",
+      "time_created": 1791000030000,
+      "data": {
+        "role": "assistant",
+        "modelID": "mimo-v2.5",
+        "providerID": "xiaomi",
+        "mode": "build",
+        "agent": "build",
+        "cost": 0.0234,
+        "tokens": {
+          "input": 500,
+          "output": 100,
+          "reasoning": 20,
+          "cache": { "read": 8000, "write": 3000 }
+        }
+      }
+    },
+    {
+      "id": "msg_child_actor_000000000000001",
+      "session_id": "ses_actor_2026_10_05_z9y8x7w6v5u4t3s2r1q0p1o2n",
+      "agent_id": "explore",
+      "time_created": 1791000100000,
+      "data": {
+        "role": "assistant",
+        "modelID": "mimo-v2.5",
+        "providerID": "xiaomi",
+        "mode": "build",
+        "agent": "explore",
+        "cost": 0.0001,
+        "tokens": {
+          "total": 13,
+          "input": 11,
+          "output": 2,
+          "reasoning": 0,
+          "cache": { "read": 0, "write": 0 }
+        }
+      }
+    }
+  ],
+  "parts": [
+    {
+      "id": "prt_root_user_text_0000000001",
+      "message_id": "msg_root_user_000000000000000000001",
+      "session_id": "ses_root_2026_10_05_a1b2c3d4e5f6g7h8i9j0k1l2m",
+      "time_created": 1791000005000,
+      "data": { "type": "text", "text": "把 build.ps1 改成跨平台的 Node 脚本，保留原有的打包步骤。" }
+    },
+    {
+      "id": "prt_root_step_finish_000001",
+      "message_id": "msg_root_assistant_main_00000001",
+      "session_id": "ses_root_2026_10_05_a1b2c3d4e5f6g7h8i9j0k1l2m",
+      "time_created": 1791000010000,
+      "data": {
+        "type": "step-finish",
+        "reason": "stop",
+        "cost": 0.0123,
+        "tokens": {
+          "total": 1500,
+          "input": 1200,
+          "output": 288,
+          "reasoning": 12,
+          "cache": { "read": 0, "write": 0 }
+        }
+      }
+    },
+    {
+      "id": "prt_root_assistant_text_001",
+      "message_id": "msg_root_assistant_main_00000001",
+      "session_id": "ses_root_2026_10_05_a1b2c3d4e5f6g7h8i9j0k1l2m",
+      "time_created": 1791000011000,
+      "data": { "type": "text", "text": "已改为 scripts/build.js，打包步骤迁移到 node 脚本内。" }
+    },
+    {
+      "id": "prt_root_subagent_text_01",
+      "message_id": "msg_root_assistant_explore_02",
+      "session_id": "ses_root_2026_10_05_a1b2c3d4e5f6g7h8i9j0k1l2m",
+      "time_created": 1791000021000,
+      "data": { "type": "text", "text": "检查结论：仓库里还有两处 powershell 专有调用。" }
+    },
+    {
+      "id": "prt_root_assistant_text_003",
+      "message_id": "msg_root_assistant_main_00000003",
+      "session_id": "ses_root_2026_10_05_a1b2c3d4e5f6g7h8i9j0k1l2m",
+      "time_created": 1791000031000,
+      "data": { "type": "text", "text": "两处调用已换成跨平台写法，构建在 Windows 与 Linux 下都能跑。" }
+    },
+    {
+      "id": "prt_child_actor_text_0001",
+      "message_id": "msg_child_actor_000000000000001",
+      "session_id": "ses_actor_2026_10_05_z9y8x7w6v5u4t3s2r1q0p1o2n",
+      "time_created": 1791000101000,
+      "data": { "type": "text", "text": "子代理会话内文本，不并入父会话时间线。" }
+    }
+  ]
+}

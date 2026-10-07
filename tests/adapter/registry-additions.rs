@@ -22,6 +22,16 @@ const SIX_IDS: [&str; 6] = [
     "antigravity",
     "kiro",
 ];
+// mimo_code graduated from the scaffold set on 2026-10-07 (impl-mimo-code):
+// its dimensions are asserted in the delivered block below instead of the
+// honest-scaffold loop.
+const UNDELIVERED_SCAFFOLD_IDS: [&str; 5] = [
+    "cline",
+    "devin",
+    "command_code",
+    "antigravity",
+    "kiro",
+];
 
 fn legacy_ids() -> Vec<String> {
     CliId::ALL
@@ -219,6 +229,28 @@ fn five_added_adapters_declare_their_delivered_dimensions() {
     assert!(codebuddy.plugins().unwrap().capability().project);
     assert_eq!(codebuddy.descriptor().resume.state, "available");
     assert!(codebuddy.descriptor().yolo_available);
+    // mimo_code ([src] XiaomiMiMo/MiMo-Code 0.1.15): JSONC config editing with
+    // provider apiKey custody, --session resume (same contract as headless
+    // `mimo run -c/--session/--fork`), MCP (config `mcp` key), Skills, Agents
+    // (config `agent` key), read-only mimocode.db sessions with per-message
+    // token splits; plugins stay pending native `plug` verification, accounts
+    // are absent by design (auth.json not adopted), no quota interface.
+    let mimo = registry.get("mimo_code").unwrap();
+    assert!(mimo.history_supported());
+    assert!(mimo.supports_mcp());
+    assert!(mimo.supports_skills());
+    assert!(mimo.configuration().is_some());
+    assert!(mimo.agents().is_some());
+    assert!(mimo.plugins().is_none());
+    assert!(mimo.accounts().is_none());
+    assert!(mimo.official_usage().is_none());
+    assert!(mimo.descriptor().login.is_none());
+    assert_eq!(mimo.descriptor().resume.state, "available");
+    assert!(mimo
+        .launch_args(Some("ses_x"), crate::adapters::LaunchMode::Normal)
+        .is_ok());
+    assert!(mimo.descriptor().yolo_available);
+    assert!(!mimo.descriptor().management.plugins);
 }
 
 #[test]
@@ -313,7 +345,10 @@ fn checking_six_ids_flows_through_the_unknown_managed_channel() {
 #[test]
 fn six_scaffold_adapters_declare_only_the_mapped_native_files() {
     let registry = Registry::builtins();
-    for id in SIX_IDS {
+    // mimo_code left the honest-scaffold set when impl-mimo-code delivered its
+    // verified dimensions (asserted in the delivered block above); the loop
+    // keeps checking the remaining undelivered scaffolds.
+    for id in UNDELIVERED_SCAFFOLD_IDS {
         let adapter = registry.get(id).unwrap();
         let descriptor = adapter.descriptor();
         assert_eq!(descriptor.id, id);

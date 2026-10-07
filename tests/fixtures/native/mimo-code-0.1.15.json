@@ -1,0 +1,60 @@
+// MiMo Code 0.1.15 sanitized global config `mimocode.jsonc`.
+// Shapes desensitized from XiaomiMiMo/MiMo-Code packages/cli/src/config
+// (config.ts / mcp.ts / agent.ts / skills.ts): no real keys, ids or hosts.
+// JSONC on purpose: the native file allows comments and trailing commas.
+{
+  // model/small_model use the `provider/model` reference form.
+  "model": "custom-openai/demo-model",
+  "small_model": "xiaomi/mimo-v2.5-flash",
+  "default_agent": "build",
+  "disabled_providers": ["custom-anthropic-unused"],
+  "provider": {
+    "custom-openai": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        // apiKey is the only provider credential channel; managed profiles
+        // keep the value in the system credential store until apply writes it.
+        "baseURL": "https://api.example.com/v1"
+      },
+      "models": {
+        "demo-model": {
+          "name": "Demo Model",
+          "limit": { "context": 128000, "output": 8192 },
+          "reasoning": true,
+          "modalities": { "input": ["text"], "output": ["text"] }
+        }
+      }
+    }
+  },
+  "agent": {
+    "review": {
+      "description": "Review code and report findings",
+      "mode": "subagent",
+      "model": "xiaomi/mimo-v2.5",
+      "permission": { "edit": "deny", "bash": "ask" }
+    },
+    "legacy-helper": {
+      "description": "Disabled legacy helper",
+      "disable": true
+    }
+  },
+  "mcp": {
+    "example-local": {
+      "type": "local",
+      "command": ["npx", "-y", "example-mcp"],
+      "environment": { "EXAMPLE_MODE": "fixture" },
+      "enabled": true,
+      "timeout": 5000
+    },
+    "example-remote": {
+      "type": "remote",
+      "url": "https://mcp.example.com/sse",
+      "enabled": false,
+      "headers": { "X-Example": "fixture" },
+      "oauth": false
+    }
+  },
+  "skills": {
+    "paths": ["~/extra-skills"]
+  }
+}
