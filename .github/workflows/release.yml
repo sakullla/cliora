@@ -153,6 +153,8 @@ jobs:
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           releaseId: ${{ needs.prepare.outputs.release-id }}
           tagName: ${{ github.ref_name }}
@@ -291,6 +293,12 @@ jobs:
               exit 1
             fi
           done
+
+          # 应用内更新依赖 updater 清单；缺失时发布出去会导致所有客户端检查更新失败。
+          if ! grep -Eq '^latest\.json$' <<< "$ASSETS"; then
+            echo "::error::Release ${GITHUB_REF_NAME} is missing latest.json (updater manifest); check TAURI_SIGNING_PRIVATE_KEY secrets"
+            exit 1
+          fi
 
       - name: Publish verified release
         shell: bash
