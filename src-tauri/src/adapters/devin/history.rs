@@ -20,15 +20,26 @@
 //!   indexed transcript.
 //! * `final_metrics` — session aggregate counters.
 //!
-//! The usage dimension stays undelivered per the 2026-10-07 approved matrix
-//! (02-technical-solution ADR-2: "transcript 无 token 字段"). Implementation-
-//! time inspection of the local 3000.11.3 transcripts contradicts that survey
-//! premise — every agent step carries `metrics{prompt_tokens,
-//! completion_tokens, cached_tokens}` and each file ends with `final_metrics`
-//! token totals. The binding decision is honored (no usage events are emitted)
-//! and the contradiction is recorded in the adapter descriptor reason for the
-//! owner to amend the plan; the metrics shapes are still pinned here by the
-//! module tests so a future usage task starts from verified facts.
+//! Usage events come from the per-agent-step `metrics` and are cross-checked
+//! against `final_metrics`. The semantics were determined against all 8 real
+//! local 3000.11.3 transcripts (read-only, devin-usage 2026-10-08):
+//!
+//! * `prompt_tokens` is the FULL step context and INCLUDES `cached_tokens`:
+//!   in every file each step N+1's `cached_tokens` equals step N's
+//!   `prompt_tokens` minus a small constant (the previous context re-read from
+//!   cache), `cached_tokens <= prompt_tokens` holds on every step, and
+//!   Σ`prompt_tokens` == `final_metrics.total_prompt_tokens` exactly (8/8). So
+//!   events are stored OpenAI-style with `input_includes_cache = true`,
+//!   `input = prompt_tokens`, `cache_read = cached_tokens`; the report layer
+//!   carves the mutually exclusive buckets out of the inclusive input.
+//! * `metrics.extra.cache_creation_input_tokens` (present in 3/8 real files)
+//!   is always <= `prompt_tokens - cached_tokens` — the freshly written cache
+//!   inside the non-cached portion — and maps to `cache_write`; steps without
+//!   it store 0. `final_metrics` carries no creation total, so the write
+//!   bucket is pinned only by the per-step invariant.
+//! * Each agent step with well-formed metrics is one request
+//!   (`request_count = 1`); Σ per session equals the `final_metrics` totals
+//!   exactly in all 8 files.
 //!
 //! `credentials.toml`, `sessions.db` and every other file under the config
 //! root are never opened by this module.
@@ -40,7 +51,7 @@ use serde_json::Value;
 
 use crate::history::{
     check_cancelled, text_content, timestamp, valid_native_id, HistorySource, ParsedSession,
-    MAX_SOURCES,
+    UsageEvent, MAX_SOURCES,
 };
 
 /// The only verified ATIF protocol tag; protocol versions stay exact.
@@ -80,8 +91,10 @@ pub fn sources_controlled(
         if !valid_native_id(stem) {
             continue;
         }
+        // v2: the devin-usage task started emitting per-step usage events, so
+        // sessions indexed under v1 re-parse and backfill history_usage.
         let fingerprint = crate::history::source_fingerprint_controlled(&path, cancelled)
-            .map(|value| format!("devin-transcript-v1|{value}"));
+            .map(|value| format!("devin-transcript-v2|{value}"));
         let source = match &fingerprint {
             Ok(_) => HistorySource {
                 native_title: None,
@@ -104,6 +117,64 @@ pub fn sources_controlled(
         }
     }
     Ok(sources)
+}
+
+/// Emits one UsageEvent per agent step with well-formed metrics.
+///
+/// Verified semantics (8 real local 3000.11.3 transcripts): `prompt_tokens`
+/// is the full step context and includes `cached_tokens`, so the event is
+/// stored OpenAI-style (`input_includes_cache = true`) and the report layer
+/// derives the exclusive buckets; `metrics.extra.cache_creation_input_tokens`
+/// is the freshly written cache inside the non-cached portion and maps to
+/// `cache_write`. A malformed or self-inconsistent metrics object (or a
+/// cache-creation counter exceeding the fresh portion) degrades the session
+/// to partial instead of being guessed.
+fn add_usage(session: &mut ParsedSession, id: &str, time: Option<i64>, step: &Value) {
+    let Some(metrics) = step.get("metrics") else {
+        return;
+    };
+    let fields = metrics
+        .get("prompt_tokens")
+        .and_then(Value::as_u64)
+        .zip(metrics.get("completion_tokens").and_then(Value::as_u64))
+        .zip(metrics.get("cached_tokens").and_then(Value::as_u64));
+    let Some(((prompt, completion), cached)) = fields else {
+        session.partial = true;
+        return;
+    };
+    let cache_write = metrics
+        .get("extra")
+        .and_then(|extra| extra.get("cache_creation_input_tokens"));
+    let cache_write = match cache_write {
+        None => 0,
+        Some(value) => match value.as_u64() {
+            Some(value) => value,
+            None => {
+                session.partial = true;
+                return;
+            }
+        },
+    };
+    if cached > prompt || cache_write > prompt - cached {
+        session.partial = true;
+        return;
+    }
+    session.usage.push(UsageEvent {
+        request_count: Some(1),
+        id: format!("step-{id}"),
+        model: step
+            .get("model_name")
+            .and_then(Value::as_str)
+            .filter(|model| !model.is_empty())
+            .map(str::to_owned)
+            .or_else(|| session.model.clone()),
+        timestamp: time,
+        input: Some(prompt),
+        output: Some(completion),
+        cache_read: Some(cached),
+        cache_write: Some(cache_write),
+        input_includes_cache: true,
+    });
 }
 
 pub fn parse(source: &HistorySource) -> Result<ParsedSession, String> {
@@ -182,6 +253,7 @@ pub fn parse_controlled(
                     step.get("message").map(text_content).unwrap_or_default(),
                     time,
                 );
+                add_usage(&mut session, &id, time, step);
             }
             // System prompts (and any unknown source) stay out of the indexed
             // transcript; unknown sources only mark the session partial.
@@ -227,7 +299,7 @@ mod tests {
             .iter()
             .find(|source| source.native_id.as_deref() == Some("serene-example"))
             .unwrap();
-        assert!(example.fingerprint.starts_with("devin-transcript-v1|"));
+        assert!(example.fingerprint.starts_with("devin-transcript-v2|"));
         assert!(example.fingerprint.contains('m'), "指纹含元数据摘要");
         assert!(example.path.ends_with("cli/transcripts/serene-example.json"));
         // The non-transcript candidate fails parsing instead of being guessed.
@@ -263,36 +335,87 @@ mod tests {
         assert!(!session.partial);
     }
 
-    /// The binding 02 ADR-2 decision keeps Devin usage undelivered; the tests
-    /// below pin the token shapes actually present so a future usage task has
-    /// verified facts to build on.
+    /// The devin-usage task (2026-10-08) delivers the usage dimension: every
+    /// agent step with metrics becomes one inclusive-bucket UsageEvent and the
+    /// per-session sums must cross-check against `final_metrics` exactly.
     #[test]
-    fn fixture_carries_token_metrics_but_no_usage_events_are_emitted() {
+    fn fixture_usage_events_cross_check_against_final_metrics() {
         let root: Value = serde_json::from_str(TRANSCRIPT_FIXTURE).unwrap();
-        let agent_steps: Vec<&Value> = root["steps"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|step| step["source"].as_str() == Some("agent"))
-            .collect();
-        assert!(agent_steps
-            .iter()
-            .all(|step| step["metrics"]["prompt_tokens"].is_u64()
-                && step["metrics"]["completion_tokens"].is_u64()
-                && step["metrics"]["cached_tokens"].is_u64()));
-        assert_eq!(agent_steps.len(), 2);
-        assert_eq!(agent_steps[0]["metrics"]["prompt_tokens"], 1240);
-        assert_eq!(root["final_metrics"]["total_prompt_tokens"], 3550);
-        assert_eq!(root["final_metrics"]["total_completion_tokens"], 236);
-        assert_eq!(root["final_metrics"]["total_cached_tokens"], 2700);
         let home = tempfile::tempdir().unwrap();
         write_transcripts(home.path());
         let sources = sources(home.path()).unwrap();
         let session = parse(&sources[0]).unwrap();
-        assert!(
-            session.usage.is_empty(),
-            "按 2026-10-07 方案矩阵，Devin 用量维度不接入"
-        );
+        assert_eq!(session.usage.len(), 2, "每个带 metrics 的 agent step 一个事件");
+        let first = &session.usage[0];
+        assert_eq!(first.id, "step-4");
+        assert_eq!(first.request_count, Some(1));
+        assert_eq!(first.model.as_deref(), Some("example-swe-high"));
+        assert_eq!(first.timestamp, Some(1_791_364_544_521));
+        // Verified semantics: prompt_tokens is the full context and INCLUDES
+        // cached_tokens (step N+1's cached == step N's prompt in the real
+        // transcripts); cache_creation under metrics.extra maps to cache_write.
+        assert_eq!(first.input, Some(1240));
+        assert_eq!(first.output, Some(86));
+        assert_eq!(first.cache_read, Some(800));
+        assert_eq!(first.cache_write, Some(438), "extra.cache_creation_input_tokens");
+        assert!(first.input_includes_cache);
+        let second = &session.usage[1];
+        assert_eq!(second.cache_write, Some(0), "无 extra 时 cache_write 为 0");
+        assert_eq!(second.input, Some(2310));
+        assert_eq!(second.cache_read, Some(1900));
+        // Mutually exclusive buckets stay derivable: read + write <= input.
+        for event in &session.usage {
+            assert!(event.cache_read.unwrap() + event.cache_write.unwrap() <= event.input.unwrap());
+        }
+        // Cross-check against the session aggregate the transcript itself
+        // records (the same reconciliation passed on all 8 real transcripts).
+        let sum = |select: fn(&UsageEvent) -> u64| session.usage.iter().map(select).sum::<u64>();
+        assert_eq!(sum(|event| event.input.unwrap()), 3550, "Σinput == total_prompt_tokens");
+        assert_eq!(sum(|event| event.output.unwrap()), 236, "Σoutput == total_completion_tokens");
+        assert_eq!(sum(|event| event.cache_read.unwrap()), 2700, "Σcache_read == total_cached_tokens");
+        assert_eq!(root["final_metrics"]["total_prompt_tokens"], 3550);
+        assert_eq!(root["final_metrics"]["total_completion_tokens"], 236);
+        assert_eq!(root["final_metrics"]["total_cached_tokens"], 2700);
+        assert!(!session.partial);
+    }
+
+    #[test]
+    fn malformed_step_metrics_degrade_partial_without_events() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = write_transcripts(home.path());
+        // Non-numeric token fields, a cached counter above prompt (the real
+        // transcripts always keep cached <= prompt), and a cache-creation
+        // counter above the fresh portion all degrade instead of being guessed.
+        for (name, metrics) in [
+            ("broken", r#"{"prompt_tokens": "many", "completion_tokens": 5, "cached_tokens": 1}"#),
+            ("inverted", r#"{"prompt_tokens": 10, "completion_tokens": 5, "cached_tokens": 11}"#),
+            (
+                "overflowing-creation",
+                r#"{"prompt_tokens": 10, "completion_tokens": 5, "cached_tokens": 2, "extra": {"cache_creation_input_tokens": 9}}"#,
+            ),
+        ] {
+            let root: Value = serde_json::from_str(TRANSCRIPT_FIXTURE).unwrap();
+            if let Value::Object(mut map) = root {
+                map.insert("session_id".into(), Value::String(name.to_owned()));
+                if let Some(steps) = map.get_mut("steps").and_then(Value::as_array_mut) {
+                    steps[3]["metrics"] = serde_json::from_str::<Value>(metrics).unwrap();
+                }
+                std::fs::write(
+                    dir.join(format!("{name}.json")),
+                    serde_json::to_string(&Value::Object(map)).unwrap(),
+                )
+                .unwrap();
+            }
+        }
+        let listed = sources(home.path()).unwrap();
+        for source in listed
+            .iter()
+            .filter(|source| source.native_id.as_deref() != Some("serene-example"))
+        {
+            let session = parse(source).unwrap();
+            assert!(session.partial, "{} 降级 partial", source.native_id.as_deref().unwrap());
+            assert_eq!(session.usage.len(), 1, "{} 只保留完好 step 的事件", source.native_id.as_deref().unwrap());
+        }
     }
 
     #[test]

@@ -29,11 +29,13 @@
 //! * **History**: read-only index of the ATIF-v1.7 transcripts under
 //!   `cli/transcripts/<slug>.json` (see `history`); the slug is the session id
 //!   `--resume` accepts.
-//! * **Usage**: undelivered per the approved 2026-10-07 matrix, which recorded
-//!   "transcript 无 token 字段". Implementation-time inspection contradicts
-//!   that premise (per-step `metrics` and `final_metrics` token counters do
-//!   exist); the binding decision is honored and the contradiction is recorded
-//!   in the descriptor reason for the owner to amend the plan.
+//! * **Usage**: delivered (devin-usage 2026-10-08). Each agent step's
+//!   `metrics{prompt_tokens, completion_tokens, cached_tokens}` becomes one
+//!   inclusive-bucket usage event — `prompt_tokens` is the full step context
+//!   and includes `cached_tokens` (verified against all 8 real local
+//!   transcripts: step N+1's cached equals step N's prompt and Σ per session
+//!   matches `final_metrics` exactly); `metrics.extra
+//!   .cache_creation_input_tokens` (3/8 files) maps to `cache_write`.
 //! * **Credentials**: `credentials.toml` is the product-owned credential store
 //!   and is NEVER read or written; no managed credential port, no accounts
 //!   port, and no credential file appears in `native_files`. Skills/agents
@@ -348,7 +350,7 @@ impl CliAdapter for Devin {
             },
             history: Facet {
                 state: "available",
-                reason: "只读索引 cli/transcripts ATIF-v1.7 transcript（会话身份/模型/消息/时间）；用量维度未接入：方案记录'transcript 无 token 字段'与本机 3000.11.3 实测（逐 step metrics 与 final_metrics 含 token 计数）不符，待方案修订",
+                reason: "只读索引 cli/transcripts ATIF-v1.7 transcript（会话身份/模型/消息/时间）；用量已交付：逐 agent step metrics{prompt_tokens(含 cached_tokens),completion_tokens,cached_tokens} 按含缓存口径入账，extra.cache_creation_input_tokens 计 cache_write，8 个本机真实 transcript 与 final_metrics 总计逐一对账一致",
             },
             login: None,
             management: ManagementCapabilities {
@@ -632,7 +634,7 @@ mod tests {
     }
 
     #[test]
-    fn descriptor_states_available_dimensions_and_records_the_usage_reason() {
+    fn descriptor_states_available_dimensions_and_delivers_usage() {
         let descriptor = Devin.descriptor();
         for (facet, dimension) in [
             (&descriptor.native_config, "native_config"),
@@ -644,10 +646,11 @@ mod tests {
             assert_eq!(facet.state, "available", "devin 的 {dimension}");
             assert!(!facet.reason.trim().is_empty());
         }
-        // The binding decision keeps usage undelivered; the reason must record
-        // it, including the contradicting implementation-time evidence.
-        assert!(descriptor.history.reason.contains("用量维度未接入"));
-        assert!(descriptor.history.reason.contains("token"));
+        // The devin-usage task flipped the usage dimension from
+        // absence-with-reason to delivered with the verified semantics.
+        assert!(descriptor.history.reason.contains("用量已交付"));
+        assert!(descriptor.history.reason.contains("prompt_tokens"));
+        assert!(!descriptor.history.reason.contains("未接入"));
         assert!(descriptor.management.mcp);
         assert!(!descriptor.management.skills);
         assert!(!descriptor.management.agents);
