@@ -165,19 +165,14 @@ async function captureHistoryFeatures(){
   try{
    await nav.getByRole('button',{name:'使用记录'}).click();
    await page.getByRole('button',{name:/Grok · Token 核对示例/}).click();
-   const usage=page.getByRole('region',{name:'会话 Token 用量'});
-   await expect(usage).toContainText('总 Token 10,000');
-   await expect(usage).toContainText('已知调用 3,729 次');
-   await expect(usage).toContainText('1 条记录次数未知');
    await expect(page.locator('time[title*="按轮次开始时间推断"]')).toContainText('约');
-   await capture('grok-precise-detail','history','10,000 disjoint tokens / 3,729 known calls / 108 usage records / one unknown count');
+   await capture('grok-precise-detail','history','native timestamp / inferred turn time / no usage summary card');
    await page.locator('[data-message-id="a"]').scrollIntoViewIfNeeded();
    await expect(page.locator('[data-message-id="u"]')).toContainText('没有可验证时间');
    await capture('grok-inferred-time','history','native timestamp / inferred turn time / unknown message time');
    if(width<=760)await page.getByRole('button',{name:'← 返回会话列表'}).click();
    await page.getByRole('button',{name:/Grok · 没有用量的会话/}).click();
-   await expect(usage).toHaveText('暂无用量数据');
-   await capture('grok-no-usage','history','missing usage / preserved readable message');
+   await capture('grok-no-usage','history','session without usage records / preserved readable message');
    if(width<=760)await page.getByRole('button',{name:'← 返回会话列表'}).click();
    await page.getByRole('textbox',{name:'搜索会话'}).fill('Token');
    await page.locator('summary').filter({hasText:/^筛选/}).click();
