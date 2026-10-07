@@ -21,6 +21,12 @@ impl Registry {
                 &KIMI_CODE,
                 &DEEPSEEK,
                 &CODEBUDDY,
+                &MIMO_CODE,
+                &CLINE,
+                &DEVIN,
+                &COMMAND_CODE,
+                &ANTIGRAVITY,
+                &KIRO,
             ],
             #[cfg(test)]
             fixture_installations: BTreeMap::new(),
