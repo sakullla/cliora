@@ -316,11 +316,10 @@ export default function App() {
       <div className="brand"><img className="brandmark" src={brandIcon} alt="" /><span className="brand-name"><strong>栖点</strong><small>CLIORA</small></span><button type="button" className="sidebar-toggle" aria-label={sidebarCollapsed ? '展开侧栏' : '折叠侧栏'} title={sidebarCollapsed ? '展开侧栏' : '折叠侧栏'} aria-expanded={!sidebarCollapsed} aria-controls="main-navigation" onClick={toggleSidebar}><Icon name={sidebarCollapsed ? 'sidebarOpen' : 'sidebarClose'} size={17} /></button></div>
       <nav className="nav" id="main-navigation" aria-label="页面">
         {pages.map((item, index) => <button key={item.id} type="button" className={page === item.id ? 'active' : ''} aria-label={item.label} aria-current={page === item.id ? 'page' : undefined} aria-keyshortcuts={`${modAria}+${index + 1}`} title={`${item.label}（${modLabel}+${index + 1}）`} onClick={() => go(item.id)}>
-          <span className="nav-glyph" aria-hidden="true"><Icon name={item.glyph} /></span><span className="nav-text">{item.label}</span><kbd className="nav-kbd" aria-hidden="true">{modLabel === '⌘' ? '⌘' : '^'}{index + 1}</kbd>
+          <span className="nav-glyph" aria-hidden="true"><Icon name={item.glyph} /></span><span className="nav-text">{item.label}</span>
         </button>)}
       </nav>
       <div className="sidebar-foot">
-        <button type="button" className="sidebar-help" aria-label="键盘快捷键" title={`键盘快捷键（?），快速前往（${modLabel}+K）`} onClick={() => setHelpOpen(true)}><Icon name="info" size={15} /><span className="nav-text">快捷键</span></button>
         <div className="theme-switch" role="group" aria-label="切换主题">{themes.map((item) => <button key={item.id} type="button" aria-label={item.label} title={item.label} aria-pressed={bootstrap.preferences.theme === item.id} disabled={busy} onClick={() => { if (bootstrap.preferences.theme !== item.id) void updateTheme(item.id); }}><Icon name={item.glyph} size={14} /></button>)}</div>
         <div className="sidebar-status" title={nativeAvailable ? '本机资料仅存于此设备' : '浏览器预览，原生功能不可用'}><span className="status-dot" data-tone={nativeAvailable ? undefined : 'preview'} /><span className="status-text" data-short={nativeAvailable ? '本机' : '预览'}>{nativeAvailable ? '本机资料 · 仅存于此设备' : '浏览器预览'}</span></div>
       </div>
@@ -355,6 +354,7 @@ export default function App() {
           onIconChange={updateIcon}
           onIconError={(message) => setError({ code: 'icon_error', message, action: '请重新选择图片。' })}
           onOpenMigration={() => setSettingsTab('migration')}
+          onOpenShortcutHelp={() => setHelpOpen(true)}
         />}
         <div hidden={page !== 'settings' || settingsTab !== 'migration'}>{hasVisited('settings:migration') && <Suspense fallback={<PageSkeleton />}><MigrationSettings active={page === 'settings' && settingsTab === 'migration'} onImported={() => void refreshAfterImport()} /></Suspense>}</div>
       </>}

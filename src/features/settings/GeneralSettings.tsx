@@ -30,7 +30,7 @@ function ThemeChoice({ value, disabled, onChange }: { value: Theme; disabled: bo
   }}><Icon name={item.glyph} size={15} />{item.label}</button>)}</div>;
 }
 
-export function GeneralSettings({ tools, managed, preservedUnknown, icons, busy, theme, onThemeChange, onManagedChange, onIconChange, onIconError, onOpenMigration }: {
+export function GeneralSettings({ tools, managed, preservedUnknown, icons, busy, theme, onThemeChange, onManagedChange, onIconChange, onIconError, onOpenMigration, onOpenShortcutHelp }: {
   tools: ToolItem[];
   managed: string[];
   preservedUnknown: { id: string; profileCount: number }[];
@@ -42,6 +42,7 @@ export function GeneralSettings({ tools, managed, preservedUnknown, icons, busy,
   onIconChange: (toolId: string, dataUrl: string | null) => Promise<void>;
   onIconError: (message: string) => void;
   onOpenMigration: () => void;
+  onOpenShortcutHelp: () => void;
 }) {
   const toasts = useToasts();
   async function handleIconChange(toolId: string, dataUrl: string | null) {
@@ -62,6 +63,7 @@ export function GeneralSettings({ tools, managed, preservedUnknown, icons, busy,
       <div className="setting-row"><span><strong>主题</strong><small>侧边栏底部也可以随时切换。</small></span><ThemeChoice value={theme} disabled={busy} onChange={(next) => { if (next !== theme) onThemeChange(next); }} /></div>
     </section>
     {nativeAvailable && <TerminalSettings />}
+    <div className="setting-row"><span><strong>键盘快捷键</strong><small>全局与编辑时的按键说明，也可以随时按 ? 打开。</small></span><button className="button" type="button" aria-label="键盘快捷键" onClick={onOpenShortcutHelp}>查看</button></div>
     <div className="setting-row migration-entry"><span><strong>换设备与备份</strong><small>导出加密配置包，或通过 WebDAV 同步</small></span><button className="button" type="button" onClick={onOpenMigration}>迁移与同步 →</button></div>
     <ToastStack status={toasts.notice} alert={toasts.error} onDismiss={toasts.dismiss} />
   </>;
