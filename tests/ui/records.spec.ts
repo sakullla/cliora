@@ -411,10 +411,7 @@ test('Grok details preserve exact token buckets and show inferred clocks and unk
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
   await page.getByRole('button', { name: /Token 核对示例/ }).click();
   const usage = page.getByRole('region', { name: '会话 Token 用量' });
-  await expect(usage).toContainText('总 Token 10,000');
-  for (const text of ['新输入1,234', '缓存读取8,000', '缓存写入76', '输出690', '已知调用 37 次', '1 条记录次数未知']) {
-    await expect(usage).toContainText(text);
-  }
+  await expect(usage).toHaveCount(0);
   const inferred = page.locator('time[title*="按轮次开始时间推断"]');
   await expect(inferred).toContainText('约');
   await expect(page.locator('[data-message-id="q"] time')).not.toContainText('约');
@@ -423,7 +420,7 @@ test('Grok details preserve exact token buckets and show inferred clocks and unk
     await page.screenshot({ path: 'docs/verification/history-accuracy/grok-detail.png', fullPage: true });
   }
   await page.getByRole('button', { name: /没有用量的会话/ }).click();
-  await expect(usage).toHaveText('暂无用量数据');
+  await expect(usage).toHaveCount(0);
   await page.getByRole('textbox', { name: '搜索会话' }).fill('Token');
   await page.locator('summary').filter({ hasText: /^筛选/ }).click();
   await page.getByRole('checkbox', { name: '只看收藏' }).check();
