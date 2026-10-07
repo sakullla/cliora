@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "example-stdio": {
+      "command": "npx",
+      "args": ["-y", "example-mcp"],
+      "env": {
+        "EXAMPLE_MODE": "fixture"
+      },
+      "enabled": true
+    },
+    "example-remote": {
+      "url": "https://mcp.example.com/mcp",
+      "headers": {
+        "X-Example": "fixture"
+      },
+      "enabled": false
+    }
+  }
+}
