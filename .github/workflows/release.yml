@@ -317,10 +317,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          # 本 job 不 checkout 仓库，gh 必须显式指定 -R。
+          repo=(-R "$GITHUB_REPOSITORY")
           version="${GITHUB_REF_NAME#v}"
           work="$RUNNER_TEMP/updater-manifest"
           mkdir -p "$work"
-          gh release download "$GITHUB_REF_NAME" --pattern "*.sig" --dir "$work" --clobber
+          gh release download "$GITHUB_REF_NAME" "${repo[@]}" --pattern "*.sig" --dir "$work" --clobber
 
           win_sig="$work/Cliora_${version}_x64-setup.exe.sig"
           linux_sig="$work/Cliora_${version}_amd64.AppImage.sig"
@@ -330,7 +332,9 @@ jobs:
           done
 
           base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
-          notes="$(gh release view "$GITHUB_REF_NAME" --json body --jq '.body')"
+          notes="$(gh release view "$GITHUB_REF_NAME" "${repo[@]}" --json body --jq '.body')"
+          deb_sig="$work/Cliora_${version}_amd64.deb.sig"
+          test -f "$deb_sig"
           jq -n \
             --arg version "$version" \
             --arg notes "$notes" \
@@ -339,6 +343,8 @@ jobs:
             --arg win_url "$base/Cliora_${version}_x64-setup.exe" \
             --arg linux_sig "$(cat "$linux_sig")" \
             --arg linux_url "$base/Cliora_${version}_amd64.AppImage" \
+            --arg deb_sig "$(cat "$deb_sig")" \
+            --arg deb_url "$base/Cliora_${version}_amd64.deb" \
             --arg mac_sig "$(cat "$mac_sig")" \
             --arg mac_url "$base/Cliora_${version}_aarch64.app.tar.gz" \
             '{
@@ -350,11 +356,12 @@ jobs:
                 "windows-x86_64-nsis": { signature: $win_sig, url: $win_url },
                 "linux-x86_64": { signature: $linux_sig, url: $linux_url },
                 "linux-x86_64-appimage": { signature: $linux_sig, url: $linux_url },
+                "linux-x86_64-deb": { signature: $deb_sig, url: $deb_url },
                 "darwin-aarch64": { signature: $mac_sig, url: $mac_url },
                 "darwin-aarch64-app": { signature: $mac_sig, url: $mac_url }
               }
             }' > "$work/latest.json"
-          gh release upload "$GITHUB_REF_NAME" "$work/latest.json" --clobber
+          gh release upload "$GITHUB_REF_NAME" "${repo[@]}" "$work/latest.json" --clobber
 
       - name: Publish verified release
         shell: bash
