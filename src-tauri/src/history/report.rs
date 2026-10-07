@@ -10,7 +10,7 @@ use rusqlite::types::Value as SqlValue;
 use rusqlite::Connection;
 use serde::Serialize;
 
-use super::{now_ms, prices, published_rate, scans, HistoryFilter, HistoryPrice, ScanStatus};
+use super::{models_dev, now_ms, prices, published_rate, scans, HistoryFilter, HistoryPrice, ScanStatus};
 use crate::database::Database;
 
 /// Requests above this prompt size are billed at long-context public rates.
@@ -188,6 +188,7 @@ fn bucket_starts(from: i64, to: i64) -> (Bucket, Vec<i64>) {
 
 struct PriceBook {
     custom: HashMap<(String, String), HistoryPrice>,
+    imported: models_dev::ImportedPrices,
     currency: String,
     /// Set when a call had a price, but in another currency than `currency`.
     mixed: std::cell::Cell<bool>,
@@ -206,7 +207,16 @@ impl PriceBook {
             Some(only) if currencies.len() == 1 => (*only).to_owned(),
             _ => "USD".to_owned(),
         };
-        Ok(Self { custom, currency, mixed: std::cell::Cell::new(false) })
+        // models.dev 缓存过期时后台刷新，本次报表仍用现有缓存；读取失败该级为空。
+        let imported = models_dev::database_directory(db)
+            .map(|directory| {
+                models_dev::maybe_refresh(&directory);
+                models_dev::load(&models_dev::cache_path(&directory))
+                    .map(|cache| models_dev::ImportedPrices::index(cache.prices))
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
+        Ok(Self { custom, imported, currency, mixed: std::cell::Cell::new(false) })
     }
 
     /// Resolves the rate and its provenance, or `None` when unpriced.
@@ -215,6 +225,7 @@ impl PriceBook {
             .custom
             .get(&(tool.to_owned(), model.to_owned()))
             .cloned()
+            .or_else(|| self.imported.resolve(model))
             .map(|price| (price, false))
             .or_else(|| published_rate(tool, model).map(|price| (price, true)))?;
         if price.currency != self.currency {
