@@ -10,6 +10,7 @@ import { PageSkeleton } from './components/Skeleton';
 import { PageHeader } from './components/PageHeader';
 import { Tabs } from './components/Tabs';
 import { ShortcutHelp } from './components/ShortcutHelp';
+import { CommandPalette, type CommandItem } from './components/CommandPalette';
 import { ToolIcon, ToolIconsContext } from './components/ToolIcon';
 import { GeneralSettings } from './features/settings/GeneralSettings';
 import { ManagedTools } from './features/home/ManagedTools';
@@ -25,7 +26,7 @@ import { isEditableTarget, modAria, modLabel, withMod } from './lib/shortcut';
 import { navigateChoices } from './lib/choiceNavigation';
 import { browserBootstrap } from './types/domain';
 import type { ApiError, Bootstrap, Theme } from './types/domain';
-import type { TrayRepairTarget } from './types/launch';
+import type { Project, TrayRepairTarget } from './types/launch';
 import type { AdapterCatalog } from './types/native';
 
 type Page = 'home' | 'connections' | 'library' | 'records' | 'settings';
@@ -77,6 +78,9 @@ export default function App() {
   const [toolIntent, setToolIntent] = useState<WorkspaceOpenIntent | null>(null);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('general');
   const [helpOpen, setHelpOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteProjects, setPaletteProjects] = useState<Project[]>([]);
+  const [spotlight, setSpotlight] = useState<{ id: string; token: number } | null>(null);
   const [trayRepair, setTrayRepair] = useState<TrayRepairTarget | null>(null);
   const activePage = useRef<Page>(page);
   activePage.current = page;
@@ -102,6 +106,13 @@ export default function App() {
     if (!nativeAvailable) return;
     void loadBootstrap();
   }, []);
+
+  useEffect(() => {
+    if (!paletteOpen || !nativeAvailable) return;
+    let live = true;
+    void native.listProjects().then((result) => { if (live && Array.isArray(result)) setPaletteProjects(result); }).catch(() => {});
+    return () => { live = false; };
+  }, [paletteOpen]);
 
   useEffect(() => {
     if (!nativeAvailable) return;
@@ -189,6 +200,22 @@ export default function App() {
     let pendingSearch = 0;
     const onKey = (event: KeyboardEvent) => {
       cancelAnimationFrame(pendingSearch);
+      if (withMod(event) && event.key.toLowerCase() === 'k' && !event.repeat) {
+        if (document.querySelector('dialog[open]')) return;
+        event.preventDefault();
+        setPaletteOpen(true);
+        return;
+      }
+      if (withMod(event) && event.key === '\\' && !event.repeat) {
+        if (document.querySelector('dialog[open]') || isEditableTarget(event.target)) return;
+        event.preventDefault();
+        setSidebarCollapsed((value) => {
+          const next = !value;
+          try { localStorage.setItem('cliora:sidebar-collapsed', String(next)); } catch { /* Layout remains usable without storage. */ }
+          return next;
+        });
+        return;
+      }
       if (event.key === '?' && !withMod(event) && !event.altKey && !isEditableTarget(event.target)) {
         if (document.querySelector('dialog[open]')) return;
         event.preventDefault();
@@ -236,13 +263,27 @@ export default function App() {
   const title = titleFor(page);
 
   async function go(next: Page) {
-    if (!await canLeave(next)) return;
+    if (!await canLeave(next)) return false;
     setPage(next);
     if (loaded) setError(null);
     document.querySelector('main')?.scrollTo({ top: 0 });
-    requestAnimationFrame(() => document.querySelector<HTMLElement>('h1')?.focus());
+    requestAnimationFrame(() => document.querySelector<HTMLElement>('h1')?.focus({ preventScroll: true }));
+    return true;
   }
   goRef.current = go;
+
+  async function revealProject(id: string) {
+    if (await go('home')) setSpotlight({ id, token: Date.now() });
+  }
+
+  const commands: CommandItem[] = [
+    ...pages.map((item, index) => ({ id: `page-${item.id}`, group: '页面', label: item.label, hint: `${modLabel}+${index + 1}`, keywords: item.id, icon: item.glyph, run: () => { void go(item.id); } })),
+    ...visible.map((item) => ({ id: `tool-${item.id}`, group: '工具', label: item.name, hint: '打开配置', keywords: item.id, toolId: item.id, run: () => { setTool(item.id); setToolIntent(null); setToolOpenSequence((value) => value + 1); void go('connections'); } })),
+    ...paletteProjects.map((project) => ({ id: `project-${project.id}`, group: '项目', label: project.name, hint: project.available ? '在快速开始中定位' : '目录需要重新关联', keywords: project.path ?? '', icon: 'folder' as const, run: () => { void revealProject(project.id); } })),
+    { id: 'sidebar', group: '操作', label: sidebarCollapsed ? '展开侧栏' : '折叠侧栏', hint: `${modLabel}+\\`, icon: sidebarCollapsed ? 'sidebarOpen' : 'sidebarClose', run: toggleSidebar },
+    ...themes.map((item) => ({ id: `theme-${item.id}`, group: '操作', label: item.label, hint: bootstrap.preferences.theme === item.id ? '当前' : '切换主题', icon: item.glyph, run: () => { if (bootstrap.preferences.theme !== item.id) void updateTheme(item.id); } })),
+    { id: 'help', group: '操作', label: '键盘快捷键', hint: '?', icon: 'info', run: () => setHelpOpen(true) },
+  ];
 
   async function updateManaged(id: string, checked: boolean) {
     if (!nativeAvailable || busy) return;
@@ -279,6 +320,7 @@ export default function App() {
         </button>)}
       </nav>
       <div className="sidebar-foot">
+        <button type="button" className="sidebar-help" aria-label="键盘快捷键" title={`键盘快捷键（?），快速前往（${modLabel}+K）`} onClick={() => setHelpOpen(true)}><Icon name="info" size={15} /><span className="nav-text">快捷键</span></button>
         <div className="theme-switch" role="group" aria-label="切换主题">{themes.map((item) => <button key={item.id} type="button" aria-label={item.label} title={item.label} aria-pressed={bootstrap.preferences.theme === item.id} disabled={busy} onClick={() => { if (bootstrap.preferences.theme !== item.id) void updateTheme(item.id); }}><Icon name={item.glyph} size={14} /></button>)}</div>
         <div className="sidebar-status" title={nativeAvailable ? '本机资料仅存于此设备' : '浏览器预览，原生功能不可用'}><span className="status-dot" data-tone={nativeAvailable ? undefined : 'preview'} /><span className="status-text" data-short={nativeAvailable ? '本机' : '预览'}>{nativeAvailable ? '本机资料 · 仅存于此设备' : '浏览器预览'}</span></div>
       </div>
@@ -293,7 +335,7 @@ export default function App() {
             <div className="section-heading"><h2>管理中的工具<span className="count-chip" aria-hidden="true">{visible.length}</span></h2><button className="text-button" type="button" onClick={() => go('settings')}>调整工具 <span aria-hidden="true">→</span></button></div>
             {visible.length ? nativeAvailable ? <ManagedTools tools={visibleDescriptors} onOpenTool={(id, intent) => { setTool(id); setToolIntent(intent ?? null); setToolOpenSequence((value) => value + 1); void go('connections'); }} /> : <div className="tool-table"><div className="table-head"><span>工具</span><span>当前状态</span><span>操作</span></div>{visible.map((item) => <div className="tool-row" key={item.id}><div className="tool-identity"><span className="tool-icon" aria-hidden="true"><ToolIcon toolId={item.id} /></span><span><strong>{item.name}</strong><small>浏览器预览</small></span></div><div className="tool-state"><strong>尚未检测</strong><small>请在桌面应用中读取本机配置</small></div><button className="button" type="button" onClick={() => { setTool(item.id); go('connections'); }}>查看工具 <span aria-hidden="true">→</span></button></div>)}</div> : <EmptyState title="尚未管理工具" detail="可在设置中开启需要管理的 CLI。" action={<button className="button primary" type="button" onClick={() => go('settings')}>前往设置</button>} />}
           </section>
-          {nativeAvailable ? <ProjectLauncher tools={visibleDescriptors} repair={trayRepair?.page === 'home' ? trayRepair : null} /> : <section className="home-secondary"><div className="section-heading"><h2>最近项目</h2></div><div className="subtle-panel"><strong>桌面应用中管理项目</strong><p>可以关联本机目录，并用选定的 CLI 在外部终端启动。</p></div></section>}
+          {nativeAvailable ? <ProjectLauncher tools={visibleDescriptors} repair={trayRepair?.page === 'home' ? trayRepair : null} spotlight={page === 'home' ? spotlight : null} /> : <section className="home-secondary"><div className="section-heading"><h2>最近项目</h2></div><div className="subtle-panel"><strong>桌面应用中管理项目</strong><p>可以关联本机目录，并用选定的 CLI 在外部终端启动。</p></div></section>}
         </div>}
         {(page === 'connections' || hasVisited('connections')) && <div hidden={page !== 'connections'}>
           {selectedTool ? nativeAvailable ? <Suspense fallback={<PageSkeleton />}><ToolWorkspacePage managedTools={visibleDescriptors} initialTool={selectedTool} openSequence={toolOpenSequence} openIntent={toolIntent} active={page === 'connections'} repair={trayRepair?.page === 'connections' ? trayRepair : null} onDirtyChange={onWorkspaceDirtyChange} discardSignal={workspaceDiscard} /></Suspense> : <><div className="tool-tabs" role="tablist" aria-label="工具" onKeyDown={navigateChoices}>{visible.map((item) => <button key={item.id} type="button" role="tab" aria-selected={selectedTool === item.id} tabIndex={selectedTool === item.id ? 0 : -1} className={selectedTool === item.id ? 'active' : ''} onClick={() => setTool(item.id)}>{item.name}</button>)}</div><div className="connection-layout"><div className="profile-column"><div className="column-title">{selectedToolName} 配置</div><div className="muted-copy">浏览器预览不读取本机配置</div></div><div className="detail-panel"><div className="detail-header"><div><div className="eyebrow">配置</div><h2>{selectedToolName}</h2></div><span className="status-pill">预览</span></div><EmptyState title="请在桌面应用中编辑原生配置" detail="桌面应用可读取和保存 CLI 的 TOML / JSON 原文。" /></div></div></> : <EmptyState title="没有管理中的工具" detail="先在设置中勾选需要管理的 CLI。" action={<button className="button primary" type="button" onClick={() => go('settings')}>前往设置</button>} />}
@@ -317,5 +359,5 @@ export default function App() {
         <div hidden={page !== 'settings' || settingsTab !== 'migration'}>{hasVisited('settings:migration') && <Suspense fallback={<PageSkeleton />}><MigrationSettings active={page === 'settings' && settingsTab === 'migration'} onImported={() => void refreshAfterImport()} /></Suspense>}</div>
       </>}
     </div></main>
-  </div><ShortcutHelp open={helpOpen} onClose={() => setHelpOpen(false)} /><ConfirmationHost /></ToolIconsContext>;
+  </div><CommandPalette open={paletteOpen} commands={commands} onClose={() => setPaletteOpen(false)} /><ShortcutHelp open={helpOpen} onClose={() => setHelpOpen(false)} /><ConfirmationHost /></ToolIconsContext>;
 }

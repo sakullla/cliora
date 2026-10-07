@@ -5,7 +5,9 @@ export function ShortcutHelp({ open, onClose }: { open: boolean; onClose: () => 
   return <GuideDialog open={open} title="键盘快捷键" onClose={onClose}>
     <div className="shortcut-help">
       <section><h3>全局</h3><dl>
+        <div><dt><kbd>{modLabel}+K</kbd></dt><dd>快速前往页面、工具或项目</dd></div>
         <div><dt><kbd>{modLabel}+1…5</kbd></dt><dd>切换页面</dd></div>
+        <div><dt><kbd>{modLabel}+\</kbd></dt><dd>折叠或展开侧栏</dd></div>
         <div><dt><kbd>/</kbd> 或 <kbd>{modLabel}+F</kbd></dt><dd>聚焦当前页搜索</dd></div>
         <div><dt><kbd>Esc</kbd></dt><dd>清空搜索或关闭对话框</dd></div>
         <div><dt><kbd>?</kbd></dt><dd>打开本面板</dd></div>

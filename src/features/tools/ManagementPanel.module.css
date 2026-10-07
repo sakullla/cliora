@@ -131,6 +131,7 @@
 }
 .listToolbar { transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease); }
 .listToolbar:focus-within:has(input:focus) { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
+.listToolbar > :global(.search-field) { flex: 1 1 220px; min-width: 0; }
 .listToolbar input { flex: 1 1 220px; min-width: 0; padding-left: 32px; border: 0; background: transparent var(--search-icon) no-repeat 11px center; box-shadow: none; }
 .listToolbar input:focus, .listToolbar input:focus-visible { outline: none; box-shadow: none; }
 .listToolbar select { flex: 0 1 140px; }

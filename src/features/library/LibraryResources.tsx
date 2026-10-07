@@ -2,6 +2,7 @@ import { removalContext, useAccountLabels } from './resourceContexts';
 import { useEffect, useRef, useState } from 'react';
 import { open as pickPath } from '@tauri-apps/plugin-dialog';
 import { GuideDialog } from '../../components/GuideDialog';
+import { SearchField } from '../../components/SearchField';
 import { Icon } from '../../components/Icon';
 import { ScopeMarks, samePath, scopeLabel } from './CliMarks';
 import { ToolIcon } from '../../components/ToolIcon';
@@ -330,10 +331,7 @@ export function LibraryResources({ section, active, tools, projects }: { section
   if (section === 'skill') {
     return <div className={styles.layout}>
       <div className={styles.filters}>
-        <div className={styles.searchBox}>
-          <Icon name="search" size={14} />
-          <input aria-label="搜索资料" data-page-search title={searchShortcutHint} value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape' && search) { event.preventDefault(); setSearch(''); } }} placeholder="搜索名称或描述" />
-        </div>
+        <SearchField className={styles.searchBox} label="搜索资料" pageSearch title={searchShortcutHint} value={search} onChange={setSearch} placeholder="搜索名称或描述" />
         <button type="button" className={styles.primary} disabled={busy} onClick={() => { setDialogError(''); setSkillOpen(true); }}>添加 Skill</button>
       </div>
       {error && <div className={styles.error} role="alert">{error}</div>}
@@ -398,10 +396,7 @@ export function LibraryResources({ section, active, tools, projects }: { section
 
   return <div className={styles.layout}>
     <div className={styles.filters}>
-      <div className={styles.searchBox}>
-        <Icon name="search" size={14} />
-        <input aria-label="搜索资料" data-page-search title={searchShortcutHint} value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape' && search) { event.preventDefault(); setSearch(''); } }} placeholder="搜索名称、命令或网址" />
-      </div>
+      <SearchField className={styles.searchBox} label="搜索资料" pageSearch title={searchShortcutHint} value={search} onChange={setSearch} placeholder="搜索名称、命令或网址" />
       <button type="button" className={styles.primary} onClick={() => editMcp()}>＋ 新建 MCP</button>
     </div>
     {error && <div className={styles.error} role="alert">{error}</div>}

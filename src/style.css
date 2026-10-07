@@ -313,6 +313,8 @@ html[data-native="macos"] .titlebar-drag { display: block; position: fixed; z-in
 .nav button:hover .nav-glyph { color: var(--text-2); }
 
 .sidebar-foot { display: grid; gap: 10px; margin-top: 10px; padding: 12px 4px 0; border-top: 1px solid var(--line); }
+.sidebar-help { display: flex; align-items: center; justify-content: flex-start; gap: 8px; width: 100%; min-height: 32px; padding: 0 10px; border: 0; background: transparent; color: var(--text-3); font-size: 12px; font-weight: 540; box-shadow: none; }
+.sidebar-help:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
 .sidebar-status { display: flex; align-items: center; gap: 7px; padding: 0 6px; font-size: 11.5px; color: var(--text-3); }
 .status-dot { display: inline-block; width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 18%, transparent); }
 .status-dot[data-tone="preview"] { background: var(--warning); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 18%, transparent); }
@@ -608,7 +610,58 @@ label.setting-row:hover { background: var(--surface-2); }
 }
 .guide-dialog[open], .confirmation-dialog[open] { animation: dialog-in 220ms var(--ease); }
 .guide-dialog:focus, .guide-dialog:focus-visible, .confirmation-dialog:focus, .confirmation-dialog:focus-visible { outline: none; }
-.guide-dialog::backdrop, .confirmation-dialog::backdrop { background: var(--overlay); backdrop-filter: blur(2px); animation: fade-in 200ms var(--ease); }
+.guide-dialog::backdrop, .confirmation-dialog::backdrop, .command-dialog::backdrop { background: var(--overlay); backdrop-filter: blur(2px); animation: fade-in 200ms var(--ease); }
+
+.command-dialog {
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(640px, calc(100dvh - 48px));
+  margin: 12vh auto auto;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-xl);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+.command-dialog[open] { display: flex; flex-direction: column; animation: dialog-in 180ms var(--ease); }
+.command-dialog:focus, .command-dialog:focus-visible { outline: none; }
+.command-input-row { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--line); color: var(--text-3); }
+.command-input-row input { flex: 1; min-width: 0; min-height: 28px; padding: 0; border: 0; background: transparent; box-shadow: none; font-size: 15px; }
+.command-input-row input:hover, .command-input-row input:focus, .command-input-row input:focus-visible { border: 0; outline: none; box-shadow: none; }
+.command-list { min-height: 0; max-height: min(420px, 52dvh); padding: 6px; overflow: auto; }
+.command-group { padding: 8px 10px 4px; color: var(--text-3); font-size: 11px; font-weight: 650; letter-spacing: .3px; }
+.command-option { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 38px; padding: 0 10px; border: 0; border-radius: var(--radius-sm); background: transparent; box-shadow: none; color: var(--text); font-size: 13px; font-weight: 540; text-align: left; }
+.command-option:hover:not(:disabled) { background: transparent; border: 0; }
+.command-option[aria-selected="true"] { background: var(--accent-soft); }
+.command-option small { margin-left: auto; color: var(--text-3); font-size: 11.5px; font-weight: 500; }
+.command-glyph { display: grid; place-items: center; flex: none; width: 18px; color: var(--text-2); }
+.command-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.command-empty { margin: 0; padding: 28px 16px; color: var(--text-2); font-size: 13px; text-align: center; }
+.command-foot { display: flex; flex-wrap: wrap; gap: 8px 14px; padding: 8px 16px 10px; border-top: 1px solid var(--line); color: var(--text-3); font-size: 11px; }
+.command-foot kbd { margin-right: 3px; }
+
+.search-field { position: relative; display: flex; align-items: center; min-width: 0; }
+.search-field > input { width: 100%; min-width: 0; padding-right: 30px; }
+.search-field input[type="search"]::-webkit-search-cancel-button,
+.search-field input[type="search"]::-webkit-search-decoration { -webkit-appearance: none; appearance: none; }
+.search-clear {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  width: 22px;
+  min-height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-3);
+  box-shadow: none;
+}
+.search-clear:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
 
 .guide-dialog { width: min(760px, calc(100vw - 40px)); flex-direction: column; }
 .guide-dialog-wide { width: min(880px, calc(100vw - 32px)); }
@@ -690,7 +743,8 @@ details:not([open]) > :not(summary) { display: none !important; }
   .shell[data-sidebar-collapsed="true"] .sidebar { padding-inline: 8px; }
   .shell[data-sidebar-collapsed="true"] .brand { flex-direction: column; gap: 10px; padding: 2px 0 16px; }
   .shell[data-sidebar-collapsed="true"] .sidebar-toggle { margin: 0; }
-  .shell[data-sidebar-collapsed="true"] .nav button { justify-content: center; padding: 0; min-height: 40px; }
+  .shell[data-sidebar-collapsed="true"] .nav button,
+  .shell[data-sidebar-collapsed="true"] .sidebar-help { justify-content: center; padding: 0; min-height: 40px; }
   .shell[data-sidebar-collapsed="true"] .theme-switch { grid-template-columns: 1fr; }
   .shell[data-sidebar-collapsed="true"] .sidebar-status { justify-content: center; padding: 4px 0; }
 }
@@ -711,6 +765,8 @@ details:not([open]) > :not(summary) { display: none !important; }
   .nav button { width: auto; min-height: 32px; padding: 0 9px; gap: 6px; font-size: 12px; }
   .nav button:last-child { margin-top: 0; }
   .sidebar-foot { display: flex; flex-flow: row wrap; align-items: center; flex: 1 1 100%; min-width: 0; max-width: 100%; margin: 0; padding: 0; border: 0; }
+  .sidebar-help { width: auto; min-height: 32px; padding: 0 8px; }
+  .sidebar-help .nav-text { display: none; }
   .sidebar-status { flex: 1 1 auto; min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
   .theme-switch { flex: none; grid-template-columns: repeat(3, 26px); }
   .content-inner { padding: 20px 16px 32px; }
