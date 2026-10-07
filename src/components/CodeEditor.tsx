@@ -1,4 +1,6 @@
 import { Component, lazy, Suspense, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
+import i18n from '../i18n';
 
 const loadEditor = () => import('./CodeEditorImpl').then((module) => ({ default: module.CodeEditor }));
 export function preloadCodeEditor() { void loadEditor().catch(() => {}); }
@@ -20,13 +22,14 @@ class EditorErrorBoundary extends Component<{ attempt: number; onRetry: () => vo
   render() {
     if (this.state.failed) {
       // A repeated failure usually means a stale bundle; a reload fetches a fresh one.
-      return <div role="alert" className="code-editor-failed"><span>编辑器加载失败，内容未受影响。</span><button type="button" onClick={() => { this.setState({ failed: false, detail: '' }); this.props.onRetry(); }}>重试</button>{this.props.attempt > 0 && <button type="button" title="重新加载会关闭当前弹窗，尚未保存的修改会丢失" onClick={() => window.location.reload()}>重新加载应用</button>}{this.state.detail && <small>{this.state.detail}</small>}</div>;
+      return <div role="alert" className="code-editor-failed"><span>{i18n.t('common.editor.loadFailed')}</span><button type="button" onClick={() => { this.setState({ failed: false, detail: '' }); this.props.onRetry(); }}>{i18n.t('common.editor.retry')}</button>{this.props.attempt > 0 && <button type="button" title={i18n.t('common.editor.reloadTitle')} onClick={() => window.location.reload()}>{i18n.t('common.editor.reload')}</button>}{this.state.detail && <small>{this.state.detail}</small>}</div>;
     }
     return this.props.children;
   }
 }
 
 export function CodeEditor(props: ComponentProps<typeof CodeEditorImpl>) {
+  const { t } = useTranslation();
   const [attempt, setAttempt] = useState(0);
   const retryUrl = useRef<string | null>(null);
   // A fresh lazy instance per attempt so the retry re-imports the chunk.
@@ -43,6 +46,6 @@ export function CodeEditor(props: ComponentProps<typeof CodeEditorImpl>) {
     }
   }), [attempt]);
   return <EditorErrorBoundary attempt={attempt} onRetry={() => setAttempt(value => value + 1)}>
-    <Suspense fallback={<div role="status" aria-label={props.label}>正在准备编辑器…</div>}><Editor {...props} /></Suspense>
+    <Suspense fallback={<div role="status" aria-label={props.label}>{t('common.editor.preparing')}</div>}><Editor {...props} /></Suspense>
   </EditorErrorBoundary>;
 }

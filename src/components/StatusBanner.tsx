@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Icon } from './Icon';
 
 /**
@@ -8,6 +9,7 @@ import { Icon } from './Icon';
  * optional action and dismiss control sit beside it.
  */
 export function StatusBanner({ tone, children, onDismiss, autoDismissMs, action }: { tone: 'error' | 'success' | 'warning'; children: ReactNode; onDismiss?: () => void; autoDismissMs?: number; action?: ReactNode }) {
+  const { t } = useTranslation();
   const dismiss = useRef(onDismiss); dismiss.current = onDismiss;
   const message = typeof children === 'string' ? children : null;
   useEffect(() => {
@@ -19,6 +21,6 @@ export function StatusBanner({ tone, children, onDismiss, autoDismissMs, action 
     <span className="banner-icon"><Icon name={tone === 'success' ? 'check' : tone === 'warning' ? 'info' : 'alert'} size={15} strokeWidth={2} /></span>
     <p role={tone === 'error' ? 'alert' : 'status'}>{children}</p>
     {action}
-    {onDismiss && <button type="button" className="status-banner-close" aria-label="关闭提示" onClick={onDismiss}><Icon name="close" size={13} strokeWidth={2} /></button>}
+    {onDismiss && <button type="button" className="status-banner-close" aria-label={t('common.dismiss')} onClick={onDismiss}><Icon name="close" size={13} strokeWidth={2} /></button>}
   </div>;
 }

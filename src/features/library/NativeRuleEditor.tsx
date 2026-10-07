@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { native } from '../../lib/native';
 import { confirmAction } from '../../lib/confirm';
 import { CodeEditor } from '../../components/CodeEditor';
@@ -9,6 +10,7 @@ import type { AdapterDescriptor, Scope } from '../../types/native';
 import type { Project } from '../../types/launch';
 
 export function NativeRuleEditor({ tools, projects }: { tools: AdapterDescriptor[]; projects: Project[] }) {
+  const { t } = useTranslation();
   const [tool, setTool] = useState(tools[0]?.id ?? '');
   const [scope, setScope] = useState<Scope>('global');
   const [project, setProject] = useState('');
@@ -32,17 +34,17 @@ export function NativeRuleEditor({ tools, projects }: { tools: AdapterDescriptor
   function showFailure(value: unknown, summary: string, next: string) {
     const detail = errorText(value).trim().replace(/[。！？\s]+$/, '');
     setStatus('');
-    setFailure(detail ? `${summary}：${detail}。${next}` : `${summary}。${next}`);
+    setFailure(detail ? t('library.nativeRule.failureDetail', { summary, detail, next }) : t('library.nativeRule.failure', { summary, next }));
   }
   async function change(action: () => void) {
     const started = latest.current;
-    if (!dirty || await confirmAction('规则有未保存修改，切换后放弃这些修改？', () => isCurrent(started), { title: '放弃未保存修改？', confirmLabel: '放弃修改' })) action();
+    if (!dirty || await confirmAction(t('library.nativeRule.confirmDiscard'), () => isCurrent(started), { title: t('common.app.leaveDirtyTitle'), confirmLabel: t('common.app.leaveDirtyConfirm') })) action();
   }
   useEffect(() => {
     setLoaded(null); setText(''); setConflict(null); clearResult();
     if (!tool || scope === 'project' && !project) return;
     let live = true;
-    void native.readNativeRule(target).then(value => { if (live) { setLoaded(value); setText(value.text); setEnabled(!!value.text); } }).catch(value => { if (live) showFailure(value, '规则读取失败', '可以重新选择工具或范围。'); });
+    void native.readNativeRule(target).then(value => { if (live) { setLoaded(value); setText(value.text); setEnabled(!!value.text); } }).catch(value => { if (live) showFailure(value, t('library.nativeRule.readFailed'), t('library.nativeRule.readFailedNext')); });
     return () => { live = false; };
   }, [context]);
   async function save(original = loaded?.text) {
@@ -54,31 +56,31 @@ export function NativeRuleEditor({ tools, projects }: { tools: AdapterDescriptor
       const current = await native.readNativeRule(target);
       if (latest.current.context !== started.context) return;
       setLoaded(current); setEnabled(!!current.text); if (latest.current.text === started.text) { setText(current.text); setConflict(null); }
-      setFailure(''); setStatus('规则已保存。'); setOpen(false);
+      setFailure(''); setStatus(t('library.nativeRule.saved')); setOpen(false);
     } catch (value) {
       if (latest.current.context !== started.context) return;
-      showFailure(value, '规则保存失败', '可以修改后再次点击保存规则。');
+      showFailure(value, t('library.nativeRule.saveFailed'), t('library.nativeRule.saveFailedNext'));
       const current = await native.readNativeRule(target).catch(() => null);
       if (latest.current.context === started.context && current && current.text !== original) setConflict(current.text);
     } finally { setBusy(false); }
   }
   async function toggle(next: boolean) {
     const snapshot = latest.current;
-    if (dirty && !await confirmAction('切换规则前放弃未保存修改？', () => isCurrent(snapshot), { title: '放弃未保存修改？', confirmLabel: '放弃修改' })) return;
+    if (dirty && !await confirmAction(t('library.nativeRule.confirmToggle'), () => isCurrent(snapshot), { title: t('common.app.leaveDirtyTitle'), confirmLabel: t('common.app.leaveDirtyConfirm') })) return;
     const started=latest.current.context;setBusy(true);clearResult();
     try { await native.setNativeRuleEnabled({ ...target, contextId: loaded?.contextId },next); const value=await native.readNativeRule(target); if(latest.current.context===started){setLoaded(value);setText(value.text);setEnabled(!!value.text);} }
-    catch(value){if(latest.current.context===started)showFailure(value,'规则切换失败','可以再次切换启用规则。');}finally{setBusy(false);}
+    catch(value){if(latest.current.context===started)showFailure(value,t('library.nativeRule.toggleFailed'),t('library.nativeRule.toggleFailedNext'));}finally{setBusy(false);}
   }
   return <>
-    <button type="button" className="button native-rule-open" onClick={() => setOpen(true)}>修改当前 CLI 规则</button>
+    <button type="button" className="button native-rule-open" onClick={() => setOpen(true)}>{t('library.nativeRule.open')}</button>
     {status && !open && <p className="native-rule-message" role="status">{status}</p>}
-    <GuideDialog open={open} title="修改当前 CLI 规则" hint="选择工具和范围，改完后保存。保存会写入这个 CLI 正在读取的规则文件。" onClose={() => { void change(() => setOpen(false)); }}>
+    <GuideDialog open={open} title={t('library.nativeRule.open')} hint={t('library.nativeRule.hint')} onClose={() => { void change(() => setOpen(false)); }}>
     <div className="native-rule-editor">
-    <div className="native-rule-controls"><label>工具<select aria-label="规则工具" value={tool} onChange={event => { const value = event.target.value; void change(() => setTool(value)); }}>{tools.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-      <label>范围<select aria-label="规则范围" value={scope} onChange={event => { const value = event.target.value as Scope; void change(() => setScope(value)); }}><option value="global">全局</option><option value="project">项目</option></select></label>
-      {scope === 'project' && <label>项目<select aria-label="规则项目" value={project} onChange={event => { const value = event.target.value; void change(() => setProject(value)); }}><option value="">选择项目…</option>{projects.filter(item => item.available && item.path).map(item => <option key={item.id} value={item.path!}>{item.name}</option>)}</select></label>}</div>
-    {loaded && <><label className="native-rule-enabled"><input type="checkbox" checked={enabled} disabled={busy} onChange={event => void toggle(event.target.checked)} />启用规则</label><p className="native-rule-path" title={loaded.path}><strong>{loaded.path.split(/[\\/]/).pop()}</strong><small>{loaded.path}</small></p><CodeEditor label="当前原生规则" value={text} onChange={setText} format="markdown" /><div className="native-rule-actions"><span>{dirty ? '未保存' : ''}</span><button type="button" className="button primary" data-dialog-save title={`保存规则（${modLabel}+S）`} disabled={busy || !dirty} onClick={() => void save()}>保存规则</button></div></>}
-    {conflict !== null && <ConflictCompare title="规则文件" banner="文件已在其他地方修改。请选择要保存的内容。" currentContent={conflict} nextContent={text} format="markdown" busy={busy} onKeepCurrent={() => { setLoaded(old => old ? { ...old, text: conflict } : old); setText(conflict); setConflict(null); }} onUseNext={() => void save(conflict)} />}
+    <div className="native-rule-controls"><label>{t('library.nativeRule.tool')}<select aria-label={t('library.nativeRule.toolAria')} value={tool} onChange={event => { const value = event.target.value; void change(() => setTool(value)); }}>{tools.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+      <label>{t('library.nativeRule.scope')}<select aria-label={t('library.nativeRule.scopeAria')} value={scope} onChange={event => { const value = event.target.value as Scope; void change(() => setScope(value)); }}><option value="global">{t('tools.apply.global')}</option><option value="project">{t('tools.accounts.scopeProject')}</option></select></label>
+      {scope === 'project' && <label>{t('library.nativeRule.project')}<select aria-label={t('library.nativeRule.projectAria')} value={project} onChange={event => { const value = event.target.value; void change(() => setProject(value)); }}><option value="">{t('library.distribute.projectPlaceholder')}</option>{projects.filter(item => item.available && item.path).map(item => <option key={item.id} value={item.path!}>{item.name}</option>)}</select></label>}</div>
+    {loaded && <><label className="native-rule-enabled"><input type="checkbox" checked={enabled} disabled={busy} onChange={event => void toggle(event.target.checked)} />{t('library.nativeRule.enable')}</label><p className="native-rule-path" title={loaded.path}><strong>{loaded.path.split(/[\\/]/).pop()}</strong><small>{loaded.path}</small></p><CodeEditor label={t('library.nativeRule.editorLabel')} value={text} onChange={setText} format="markdown" /><div className="native-rule-actions"><span>{dirty ? t('library.nativeRule.unsaved') : ''}</span><button type="button" className="button primary" data-dialog-save title={t('library.nativeRule.saveTitle', { mod: modLabel })} disabled={busy || !dirty} onClick={() => void save()}>{t('library.nativeRule.save')}</button></div></>}
+    {conflict !== null && <ConflictCompare title={t('library.nativeRule.conflictTitle')} banner={t('home.conflict.banner')} currentContent={conflict} nextContent={text} format="markdown" busy={busy} onKeepCurrent={() => { setLoaded(old => old ? { ...old, text: conflict } : old); setText(conflict); setConflict(null); }} onUseNext={() => void save(conflict)} />}
     {failure && <p className="native-rule-message" role="alert" style={{ color: 'var(--danger)', borderColor: 'var(--danger-line)', background: 'var(--danger-soft)' }}>{failure}</p>}
     {status && <p className="native-rule-message" role="status">{status}</p>}
     </div>

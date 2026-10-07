@@ -1,10 +1,14 @@
 import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { HistoryDetail, HistoryMessage } from '../../types/history';
 import { Icon } from '../../components/Icon';
 import { ToolIcon } from '../../components/ToolIcon';
 import { writeClipboard } from '../../lib/clipboard';
 import { useDisclosure } from './useDisclosure';
+import i18n from '../../i18n';
 import styles from './SessionReader.module.css';
+
+const readerLocale = () => i18n.language === 'en' ? 'en-US' : 'zh-CN';
 
 const MessageMarkdown = lazy(() => import('./MessageMarkdown'));
 const CLAMP_LENGTH = 1800;
@@ -30,14 +34,15 @@ function Highlight({ text, query }: { text: string; query: string }) {
 const Message = memo(function Message({ item, toolId, toolName, raw, query, current, renderMarkdown }: {
   item: HistoryMessage; toolId: string; toolName: string; raw: boolean; query: string; current: boolean; renderMarkdown: boolean;
 }) {
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState('');
   const approximate = item.timestampSource !== 'native';
-  const timeSource = item.timestampSource === 'turn' ? '按轮次开始时间推断' : item.timestampSource === 'session' ? '会话参考时间' : '时间来源未确认';
+  const timeSource = item.timestampSource === 'turn' ? t('records.reader.timeTurn') : item.timestampSource === 'session' ? t('records.reader.timeSession') : t('records.reader.timeUnknown');
   const user = item.role === 'user';
-  const context = item.kind === 'project_context' ? '项目说明' : item.kind === 'environment_context' ? '运行环境' : null;
+  const context = item.kind === 'project_context' ? t('records.reader.contextProject') : item.kind === 'environment_context' ? t('records.reader.contextEnv') : null;
   const collapsedContext = context && !expanded && !raw && !query;
-  const role = user ? '你' : item.role === 'assistant' ? toolName : ({ system: '系统', tool: '工具' }[item.role] ?? item.role);
+  const role = user ? t('records.reader.you') : item.role === 'assistant' ? toolName : (item.role === 'system' ? t('records.reader.roleSystem') : item.role === 'tool' ? t('records.reader.roleTool') : item.role);
   const clamped = item.text.length > CLAMP_LENGTH && !expanded && !query && !raw;
   const text = clamped ? item.text.slice(0, CLAMP_LENGTH) : item.text;
   useEffect(() => {
@@ -46,26 +51,27 @@ const Message = memo(function Message({ item, toolId, toolName, raw, query, curr
     return () => window.clearTimeout(timer);
   }, [copied]);
   return <article className={styles.message} data-message-id={item.id} data-role={item.role} data-context={!!context || undefined} data-current-match={current || undefined}>
-    {collapsedContext ? <button type="button" className={styles.contextToggle} aria-expanded={false} onClick={() => setExpanded(true)}><Icon name="folder" size={14} /><span>{context}</span><span>展开</span></button> : <>
-    <div className={styles.avatar}>{user ? '你' : <ToolIcon toolId={toolId} size={22} />}</div>
+    {collapsedContext ? <button type="button" className={styles.contextToggle} aria-expanded={false} onClick={() => setExpanded(true)}><Icon name="folder" size={14} /><span>{context}</span><span>{t('records.reader.expand')}</span></button> : <>
+    <div className={styles.avatar}>{user ? t('records.reader.you') : <ToolIcon toolId={toolId} size={22} />}</div>
     <div className={styles.messageContent}>
       <header className={styles.messageHead}><strong>{context ?? role}</strong>
-        <time title={item.timestamp === null ? '时间未知' : `${new Date(item.timestamp).toLocaleString()}${approximate ? ` · ${timeSource}` : ''}`}>{item.timestamp === null ? '时间未知' : `${approximate ? '约 ' : ''}${new Date(item.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`}</time>
-        <button type="button" aria-label={copied || '复制这条消息'} title="复制这条消息" onClick={() => void writeClipboard(item.text).then((ok) => setCopied(ok ? '已复制这条消息' : '复制失败，请手动选择'))}>
-          <Icon name={copied === '已复制这条消息' ? 'check' : 'copy'} size={14} />{copied && <span role="status">{copied}</span>}
+        <time title={item.timestamp === null ? t('records.format.timeUnknown') : `${new Date(item.timestamp).toLocaleString(readerLocale())}${approximate ? ` · ${timeSource}` : ''}`}>{item.timestamp === null ? t('records.format.timeUnknown') : `${approximate ? t('records.reader.approxPrefix') : ''}${new Date(item.timestamp).toLocaleTimeString(readerLocale(), { hour: '2-digit', minute: '2-digit' })}`}</time>
+        <button type="button" aria-label={copied || t('records.reader.copy')} title={t('records.reader.copy')} onClick={() => void writeClipboard(item.text).then((ok) => setCopied(ok ? t('records.reader.copied') : t('records.reader.copyFailed')))}>
+          <Icon name={copied === t('records.reader.copied') ? 'check' : 'copy'} size={14} />{copied && <span role="status">{copied}</span>}
         </button>
       </header>
       <div className={`${styles.prose} ${clamped ? styles.clamped : ''}`}>
         {raw || user || query || !renderMarkdown ? <p className={styles.raw}><Highlight text={text} query={query} /></p>
           : <Suspense fallback={<MarkdownPending />}><MessageMarkdown text={text} /></Suspense>}
       </div>
-      {(context || item.text.length > CLAMP_LENGTH) && !query && !raw && <button type="button" className={styles.expand} aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>{expanded ? context ? '收起项目上下文' : '收起长消息' : `展开全文 · ${item.text.length.toLocaleString()} 字`}</button>}
+      {(context || item.text.length > CLAMP_LENGTH) && !query && !raw && <button type="button" className={styles.expand} aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>{expanded ? context ? t('records.reader.collapseContext') : t('records.reader.collapseLong') : t('records.reader.expandFull', { count: item.text.length.toLocaleString() })}</button>}
     </div>
     </>}
   </article>;
 });
 
 export function SessionReader({ detail, toolName }: { detail: HistoryDetail; toolName: string }) {
+  const { t } = useTranslation();
   const [query, setQuery] = useState('');
   const [findOpen, setFindOpen] = useState(false);
   const findButton = useRef<HTMLButtonElement>(null);
@@ -116,36 +122,36 @@ export function SessionReader({ detail, toolName }: { detail: HistoryDetail; too
     setCurrent(0);
     if (search && matches.length) revealMatch(matches[0].item.id);
   }, [search, onlyQuestions]);
-  return <div className={styles.reader} aria-label="会话正文" ref={root}>
+  return <div className={styles.reader} aria-label={t('records.reader.label')} ref={root}>
     <div className={styles.readerToolbar}>
-      <div className={styles.readerTitle}><strong>{onlyQuestions ? '只看提问' : '对话内容'}</strong><span>{visible.length.toLocaleString()} 条消息{raw ? ' · 原文' : ''}</span>
-        {detail.session.messageCount > detail.messages.length && <span title="目前可读取的正文少于索引消息数">已索引 {detail.session.messageCount.toLocaleString()} 条</span>}
+      <div className={styles.readerTitle}><strong>{onlyQuestions ? t('records.reader.onlyQuestions') : t('records.reader.allMessages')}</strong><span>{t('records.reader.messageCount', { count: visible.length.toLocaleString() })}{raw ? t('records.reader.rawSuffix') : ''}</span>
+        {detail.session.messageCount > detail.messages.length && <span title={t('records.reader.indexedTitle')}>{t('records.reader.indexed', { count: detail.session.messageCount.toLocaleString() })}</span>}
       </div>
       <div className={styles.readerOptions}>
-        <button type="button" ref={findButton} aria-label="查找本会话" aria-expanded={findOpen} onClick={() => { setFindOpen(!findOpen); setQuery(''); }}><Icon name="search" size={14} />查找</button>
-        <details className={styles.readingOptions} ref={optionsRef}><summary>阅读</summary><div>
-        <label><input type="checkbox" checked={onlyQuestions} onChange={(event) => setOnlyQuestions(event.target.checked)} />只看提问</label>
-        <label><input type="checkbox" checked={raw} onChange={(event) => setRaw(event.target.checked)} />显示原文</label>
+        <button type="button" ref={findButton} aria-label={t('records.reader.findAria')} aria-expanded={findOpen} onClick={() => { setFindOpen(!findOpen); setQuery(''); }}><Icon name="search" size={14} />{t('records.reader.find')}</button>
+        <details className={styles.readingOptions} ref={optionsRef}><summary>{t('records.reader.options')}</summary><div>
+        <label><input type="checkbox" checked={onlyQuestions} onChange={(event) => setOnlyQuestions(event.target.checked)} />{t('records.reader.onlyQuestions')}</label>
+        <label><input type="checkbox" checked={raw} onChange={(event) => setRaw(event.target.checked)} />{t('records.reader.showRaw')}</label>
         </div></details>
-        <button type="button" title="跳到最后一条消息" onClick={jumpLatest}><Icon name="arrowDown" size={13} />最新</button>
+        <button type="button" title={t('records.reader.latestTitle')} onClick={jumpLatest}><Icon name="arrowDown" size={13} />{t('records.reader.latest')}</button>
       </div>
       {findOpen && <div className={styles.find}>
-        <Icon name="search" size={14} /><input autoFocus aria-label="查找本会话" placeholder="在当前会话中查找…" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => {
+        <Icon name="search" size={14} /><input autoFocus aria-label={t('records.reader.findAria')} placeholder={t('records.reader.findPlaceholder')} value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => {
           if (event.key === 'Enter') { event.preventDefault(); jump(selected + (event.shiftKey ? -1 : 1)); }
           if (event.key === 'Escape') { event.stopPropagation(); setQuery(''); setFindOpen(false); findButton.current?.focus(); }
         }} />
-        {search && <><span role="status">{matches.length ? `${selected + 1} / ${matches.length} 条` : '无匹配'}</span><button type="button" disabled={!matches.length} aria-label="上一条匹配" onClick={() => jump(selected - 1)}>↑</button><button type="button" disabled={!matches.length} aria-label="下一条匹配" onClick={() => jump(selected + 1)}>↓</button><button type="button" aria-label="清空会话内查找" onClick={() => setQuery('')}><Icon name="close" size={13} /></button></>}
+        {search && <><span role="status">{matches.length ? t('records.reader.matchCount', { current: selected + 1, total: matches.length }) : t('records.reader.noMatch')}</span><button type="button" disabled={!matches.length} aria-label={t('records.reader.prevMatch')} onClick={() => jump(selected - 1)}>↑</button><button type="button" disabled={!matches.length} aria-label={t('records.reader.nextMatch')} onClick={() => jump(selected + 1)}>↓</button><button type="button" aria-label={t('records.reader.clearFind')} onClick={() => setQuery('')}><Icon name="close" size={13} /></button></>}
       </div>}
-      {search && <small className={styles.findHint}>查找时显示消息原文 · Enter 下一条 / Shift + Enter 上一条</small>}
+      {search && <small className={styles.findHint}>{t('records.reader.findHint')}</small>}
     </div>
     <div className={styles.messages}>
       {visible.map(({ item }, visibleIndex) => {
         const previous = visible[visibleIndex - 1]?.item;
-        const date = item.timestamp === null ? '日期未知' : new Date(item.timestamp).toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' });
+        const date = item.timestamp === null ? t('records.reader.dateUnknown') : new Date(item.timestamp).toLocaleDateString(readerLocale(), { year: 'numeric', month: 'long', day: 'numeric' });
         const changedDay = !previous || (previous.timestamp === null ? 'unknown' : new Date(previous.timestamp).toDateString()) !== (item.timestamp === null ? 'unknown' : new Date(item.timestamp).toDateString());
         return <div key={item.id}>{changedDay && <div className={styles.dayDivider}>{date}</div>}<Message item={item} toolId={detail.session.toolId} toolName={toolName} raw={raw} query={search} current={matches[selected]?.item.id === item.id} renderMarkdown={rendered.has(item.id)} /></div>;
       })}
-      {!visible.length && <div className={styles.empty}><Icon name="records" size={24} /><h3>{onlyQuestions ? '没有可读取的提问' : '此会话没有可读取的正文'}</h3><p>{onlyQuestions ? '切回完整对话，查看其他消息。' : '会话信息仍然保留，你可以尝试在原生 CLI 中继续。'}</p>{onlyQuestions && <button type="button" onClick={() => setOnlyQuestions(false)}>查看完整对话</button>}</div>}
+      {!visible.length && <div className={styles.empty}><Icon name="records" size={24} /><h3>{onlyQuestions ? t('records.reader.emptyQuestions') : t('records.reader.emptyTitle')}</h3><p>{onlyQuestions ? t('records.reader.emptyQuestionsHint') : t('records.reader.emptyHint')}</p>{onlyQuestions && <button type="button" onClick={() => setOnlyQuestions(false)}>{t('records.reader.viewAll')}</button>}</div>}
     </div>
   </div>;
 }

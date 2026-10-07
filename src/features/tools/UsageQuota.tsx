@@ -10,10 +10,13 @@ import { CodeEditor } from '../../components/CodeEditor';
 import { usageAmount, usagePercent, usageReset, usageUnit } from './usageDisplay';
 import { BurnDown } from './UsageBurnDown';
 import { saveShortcutHint } from '../../lib/shortcut';
+import i18n from '../../i18n';
+import { useTranslation } from 'react-i18next';
 import styles from './UsageQuota.module.css';
 
-function message(e: unknown): string { return e && typeof e === 'object' && 'message' in e ? String(e.message) : '额度服务暂不可用'; }
-const date = (value: string) => new Date(value).toLocaleString('zh-CN');
+function message(e: unknown): string { return e && typeof e === 'object' && 'message' in e ? String(e.message) : i18n.t('tools.quota.unavailable'); }
+const dateLocale = () => i18n.language === 'en' ? 'en-US' : 'zh-CN';
+const date = (value: string) => new Date(value).toLocaleString(dateLocale());
 export function useUsageQuota(active: boolean) {
   const [queries, setQueries] = useState<UsageQuery[]>([]);
   const [cache, setCache] = useState<UsageCache[]>([]);
@@ -65,31 +68,34 @@ export function useUsageQuota(active: boolean) {
 }
 type QuotaState = ReturnType<typeof useUsageQuota>;
 function MetricSummary({ metric, label, now, samples }: { metric: UsageMetric; label: string; now: number; samples: UsageSample[] }) {
+  const { t } = useTranslation();
   const percent = usagePercent(metric);
-  const amount = metric.remaining !== null ? `剩余 ${usageAmount(metric.remaining)} ${usageUnit(metric)}` : metric.used !== null ? `已用 ${usageAmount(metric.used)} ${usageUnit(metric)}` : metric.missingReason;
+  const amount = metric.remaining !== null ? t('tools.quota.remaining', { amount: usageAmount(metric.remaining), unit: usageUnit(metric) }) : metric.used !== null ? t('tools.quota.used', { amount: usageAmount(metric.used), unit: usageUnit(metric) }) : metric.missingReason;
   return <div className={styles.summaryMetric} data-warning={percent !== null && percent >= 90 || metric.remaining !== null && metric.remaining < 0}>
-    <div><span>{label}</span><strong>{metric.unlimited ? '无限额' : percent === null ? '比例未知' : `${new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 1 }).format(percent)}% 已用`}</strong></div>
-    {percent !== null && <progress aria-label={`${label}已用比例`} max={100} value={Math.min(100, Math.max(0, percent))} />}
-    <small className={styles.metricMeta}>{(metric.unlimited || amount) && <span>{metric.unlimited ? (metric.neverExpires ? '永不过期' : '不设上限') : amount}</span>}{!metric.unlimited && metric.window && (metric.window.resetsAt || metric.window.recovery !== 'unknown') && <span>{usageReset(metric, now)}</span>}</small>
+    <div><span>{label}</span><strong>{metric.unlimited ? t('tools.quota.unlimited') : percent === null ? t('tools.quota.percentUnknown') : t('tools.quota.percentUsed', { percent: new Intl.NumberFormat(dateLocale(), { maximumFractionDigits: 1 }).format(percent) })}</strong></div>
+    {percent !== null && <progress aria-label={t('tools.quota.percentAria', { label })} max={100} value={Math.min(100, Math.max(0, percent))} />}
+    <small className={styles.metricMeta}>{(metric.unlimited || amount) && <span>{metric.unlimited ? (metric.neverExpires ? t('tools.quota.neverExpires') : t('tools.quota.noLimit')) : amount}</span>}{!metric.unlimited && metric.window && (metric.window.resetsAt || metric.window.recovery !== 'unknown') && <span>{usageReset(metric, now)}</span>}</small>
     <BurnDown metric={metric} label={label} samples={samples} now={now} />
   </div>;
 }
 export function UsageMetrics({ result, now = Date.now(), program }: { result: UsageResult; now?: number; program?: QueryConfig['program'] }) {
+  const { t } = useTranslation();
   return <div className={styles.metrics}>{result.metrics.map(metric => {
     const percent = usagePercent(metric);
     const label = usageMetricLabel(program, metric);
     return <div className={styles.metric} key={metric.id}>
-      <div className={styles.heading}><strong>{label}</strong><span>{metric.unlimited ? '无限额' : percent === null ? '比例未知' : `${usageAmount(percent)}% 已用`}</span></div>
-      {percent !== null && <progress aria-label={`${label}已用比例`} max={100} value={Math.min(100, Math.max(0, percent))} />}
-      <small>{({ account: '账户', plan: '套餐', key: 'Key', extra: '额外资源' })[metric.subject]} · 单位：{usageUnit(metric)}</small>
-      <div className={styles.values}>{metric.used !== null && <span>已用 {usageAmount(metric.used)} {usageUnit(metric)}</span>}{metric.remaining !== null && <span>剩余 {usageAmount(metric.remaining)} {usageUnit(metric)}</span>}{metric.total !== null && <span>总量 {usageAmount(metric.total)} {usageUnit(metric)}</span>}</div>
+      <div className={styles.heading}><strong>{label}</strong><span>{metric.unlimited ? t('tools.quota.unlimited') : percent === null ? t('tools.quota.percentUnknown') : `${usageAmount(percent)}%${t('tools.quota.percentUsedSuffix')}`}</span></div>
+      {percent !== null && <progress aria-label={t('tools.quota.percentAria', { label })} max={100} value={Math.min(100, Math.max(0, percent))} />}
+      <small>{t(`tools.quota.subject.${metric.subject}`)}{t('tools.quota.unitSuffix', { unit: usageUnit(metric) })}</small>
+      <div className={styles.values}>{metric.used !== null && <span>{t('tools.quota.used', { amount: usageAmount(metric.used), unit: usageUnit(metric) })}</span>}{metric.remaining !== null && <span>{t('tools.quota.remaining', { amount: usageAmount(metric.remaining), unit: usageUnit(metric) })}</span>}{metric.total !== null && <span>{t('tools.quota.total', { amount: usageAmount(metric.total), unit: usageUnit(metric) })}</span>}</div>
       {metric.missingReason && <small>{metric.missingReason}</small>}
-      {metric.window && <small>{metric.window.durationSeconds ? `${usageAmount(metric.window.durationSeconds / 3600)} 小时窗口 · ` : ''}{usageReset(metric, now)}</small>}
-      {metric.expiresAt && <small>有效期至 {date(metric.expiresAt)}</small>}{metric.neverExpires && <small>永不过期</small>}
+      {metric.window && <small>{metric.window.durationSeconds ? t('tools.quota.windowHours', { hours: usageAmount(metric.window.durationSeconds / 3600) }) : ''}{usageReset(metric, now)}</small>}
+      {metric.expiresAt && <small>{t('tools.quota.expiresAt', { time: date(metric.expiresAt) })}</small>}{metric.neverExpires && <small>{t('tools.quota.neverExpires')}</small>}
     </div>;
   })}{result.errors.map((e, i) => <p className={styles.error} key={i}>{e.message}</p>)}</div>;
 }
 export function ProfileQuota({ profileId, profileVersion, profileAccountId, toolId, state, addRequested = false, onAddHandled }: { profileId: string; profileVersion: number; profileAccountId?: string; toolId?: string; state: QuotaState; addRequested?: boolean; onAddHandled?: () => void }) {
+  const { t } = useTranslation();
   const [editing, setEditing] = useState<UsageQuery | 'new' | null>(null);
   useEffect(() => {
     if (!addRequested) return;
@@ -107,8 +113,8 @@ export function ProfileQuota({ profileId, profileVersion, profileAccountId, tool
   async function refresh(q: UsageQuery, cancel = false) {
     try { setError(''); await (cancel ? native.cancelUsageRefresh(q.id) : native.refreshUsageQuery(q.id)); await state.reload(); } catch (e) { setError(message(e)); }
   }
-  return <section className={styles.quota} aria-label="套餐额度" data-empty={queries.length === 0}>
-    {!nativeAvailable && queries.length > 0 && <small>桌面服务不可用，无法保存或查询额度。</small>}
+  return <section className={styles.quota} aria-label={t('tools.quota.label')} data-empty={queries.length === 0}>
+    {!nativeAvailable && queries.length > 0 && <small>{t('tools.quota.nativeUnavailable')}</small>}
     {(error || state.error) && <p role="alert" className={styles.error}>{error || state.error}</p>}
     {queries.map((q, index) => {
       const cache = state.cache.find(c => c.queryId === q.id && c.generation === q.generation);
@@ -119,14 +125,14 @@ export function ProfileQuota({ profileId, profileVersion, profileAccountId, tool
       const metrics = snapshot?.result.metrics ?? [];
       const primary = [...metrics.filter(metric => metric.subject !== 'extra'), ...metrics.filter(metric => metric.subject === 'extra')].slice(0, 3);
       return <div className={styles.query} key={q.id}>
-        <div className={styles.heading}><div className={styles.queryTitle}><span title={q.config.label}>{q.config.program.kind === 'profile_builtin' ? '官方套餐' : q.config.label}</span>{!q.config.enabled ? <small>已停用</small> : stale ? <small className={styles.stale}>数据已过期</small> : snapshot?.measuredAt && <small title={date(snapshot.measuredAt)}>更新于 {new Date(snapshot.measuredAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</small>}</div><div className={styles.actions}><button className={styles.refresh} type="button" onClick={() => void refresh(q)} disabled={!q.config.enabled || cache?.refreshing || cooldown > 0}>{cache?.refreshing ? '刷新中' : cooldown > 0 ? `${cooldown} 秒后可刷新` : '刷新额度'}</button>{cache?.refreshing && <button type="button" onClick={() => void refresh(q, true)}>停止刷新</button>}<button className={styles.iconButton} type="button" aria-label="额度设置" title="额度设置" onClick={() => setEditing(q)}><Icon name="settings" size={16} /></button>{index === 0 && <button className={styles.iconButton} type="button" aria-label="添加额度查询" title="添加额度查询" disabled={!nativeAvailable} onClick={() => setEditing('new')}><Icon name="plus" size={16} /></button>}</div></div>
-        {snapshot ? <div className={styles.summaryMetrics}>{primary.map(metric => <MetricSummary key={metric.id} metric={metric} label={usageMetricLabel(q.config.program, metric)} now={now} samples={state.samples[q.id] ?? []} />)}</div> : <small>{cache?.refreshing ? '正在查询套餐额度…' : !q.config.enabled ? '启用查询后可获取套餐额度' : '尚无成功查询数据'}</small>}
-        {cache?.authPaused && <p className={styles.error}>认证失效，自动刷新已暂停；请检查配置凭据。</p>}
-        {!!cache?.errors.length && <p role="alert" className={styles.error}>{cache.errors.map(e => e.message).join('；')}</p>}
-        {!!snapshot?.result.errors.length && <p role="alert" className={styles.error}>{snapshot.result.errors.map(e => e.message).join('；')}</p>}
-        <details className={styles.quotaDetails} onToggle={event => { const open = event.currentTarget.open; setExpanded(previous => { const next = new Set(previous); if (open) next.add(q.id); else next.delete(q.id); return next; }); }}><summary>额度详情{metrics.length > primary.length && ` · 另有 ${metrics.length - primary.length} 项`}</summary>
+        <div className={styles.heading}><div className={styles.queryTitle}><span title={q.config.label}>{q.config.program.kind === 'profile_builtin' ? t('tools.quota.official') : q.config.label}</span>{!q.config.enabled ? <small>{t('tools.quota.disabled')}</small> : stale ? <small className={styles.stale}>{t('tools.quota.stale')}</small> : snapshot?.measuredAt && <small title={date(snapshot.measuredAt)}>{t('tools.quota.updatedAt', { time: new Date(snapshot.measuredAt).toLocaleTimeString(dateLocale(), { hour: '2-digit', minute: '2-digit' }) })}</small>}</div><div className={styles.actions}><button className={styles.refresh} type="button" onClick={() => void refresh(q)} disabled={!q.config.enabled || cache?.refreshing || cooldown > 0}>{cache?.refreshing ? t('tools.quota.refreshing') : cooldown > 0 ? t('tools.quota.cooldown', { seconds: cooldown }) : t('tools.quota.refresh')}</button>{cache?.refreshing && <button type="button" onClick={() => void refresh(q, true)}>{t('tools.quota.stop')}</button>}<button className={styles.iconButton} type="button" aria-label={t('tools.quota.settings')} title={t('tools.quota.settings')} onClick={() => setEditing(q)}><Icon name="settings" size={16} /></button>{index === 0 && <button className={styles.iconButton} type="button" aria-label={t('tools.quota.add')} title={t('tools.quota.add')} disabled={!nativeAvailable} onClick={() => setEditing('new')}><Icon name="plus" size={16} /></button>}</div></div>
+        {snapshot ? <div className={styles.summaryMetrics}>{primary.map(metric => <MetricSummary key={metric.id} metric={metric} label={usageMetricLabel(q.config.program, metric)} now={now} samples={state.samples[q.id] ?? []} />)}</div> : <small>{cache?.refreshing ? t('tools.quota.querying') : !q.config.enabled ? t('tools.quota.enableFirst') : t('tools.quota.noData')}</small>}
+        {cache?.authPaused && <p className={styles.error}>{t('tools.quota.authPaused')}</p>}
+        {!!cache?.errors.length && <p role="alert" className={styles.error}>{cache.errors.map(e => e.message).join(t('tools.quota.errorSeparator'))}</p>}
+        {!!snapshot?.result.errors.length && <p role="alert" className={styles.error}>{snapshot.result.errors.map(e => e.message).join(t('tools.quota.errorSeparator'))}</p>}
+        <details className={styles.quotaDetails} onToggle={event => { const open = event.currentTarget.open; setExpanded(previous => { const next = new Set(previous); if (open) next.add(q.id); else next.delete(q.id); return next; }); }}><summary>{t('tools.quota.detail')}{metrics.length > primary.length ? t('tools.quota.detailMore', { count: metrics.length - primary.length }) : ''}</summary>
           {snapshot && expanded.has(q.id) && <UsageMetrics result={snapshot.result} now={now} program={q.config.program} />}
-          <div className={styles.metadata}>{q.config.program.kind === 'profile_builtin' && <small className={styles.linked}>已关联官方套餐 · 使用此配置的 API Key</small>}<small>{!q.config.enabled ? '已停用' : q.config.refreshIntervalSeconds ? `每 ${q.config.refreshIntervalSeconds / 60} 分钟自动刷新` : '手动刷新'}</small>{snapshot?.measuredAt && <small>最近成功：{date(snapshot.measuredAt)}</small>}{cache?.attemptedAt && cache.errors.length > 0 && <small>最近尝试：{date(cache.attemptedAt)}</small>}<small>数据来源：{q.config.site}{snapshot && ` · ${snapshot.source}`}</small></div>
+          <div className={styles.metadata}>{q.config.program.kind === 'profile_builtin' && <small className={styles.linked}>{t('tools.quota.linked')}</small>}<small>{!q.config.enabled ? t('tools.quota.disabled') : q.config.refreshIntervalSeconds ? t('tools.quota.autoRefresh', { minutes: q.config.refreshIntervalSeconds / 60 }) : t('tools.quota.manual')}</small>{snapshot?.measuredAt && <small>{t('tools.quota.lastSuccess', { time: date(snapshot.measuredAt) })}</small>}{cache?.attemptedAt && cache.errors.length > 0 && <small>{t('tools.quota.lastAttempt', { time: date(cache.attemptedAt) })}</small>}<small>{t('tools.quota.source', { site: q.config.site })}{snapshot && ` · ${snapshot.source}`}</small></div>
         </details>
       </div>;
     })}
@@ -140,16 +146,17 @@ function fromPreset(p: UsagePreset, profileId: string): UsageQueryDraft {
   return { id: null, expectedVersion: null, config: { ...structuredClone(p.config), identity: { ...p.config.identity, profileId } }, credentials: p.credentials.map(c => ({ name: c.name, allowedOrigins: [...c.allowedOrigins], value: { kind: 'replace', secret: '' } })) };
 }
 function empty(profileId: string): UsageQueryDraft {
-  return { id: null, expectedVersion: null, config: { schemaVersion: 1, label: '自定义查询', site: 'https://your-site.example', identity: { accountId: null, contextId: null, profileId, subject: 'account', subjectId: null }, program: { kind: 'javascript', source: 'async function query(ctx) {\n  // 使用 ctx.http 查询已声明的目标，返回 schemaVersion/status/metrics/errors。\n  throw new Error("请填写额度查询脚本");\n}' }, parameters: {}, targets: [{ origin: 'https://your-site.example', allowPrivateNetwork: false }], enabled: true, refreshIntervalSeconds: 0 }, credentials: [] };
+  return { id: null, expectedVersion: null, config: { schemaVersion: 1, label: i18n.t('tools.quota.customLabel'), site: 'https://your-site.example', identity: { accountId: null, contextId: null, profileId, subject: 'account', subjectId: null }, program: { kind: 'javascript', source: i18n.t('tools.quota.customScript') }, parameters: {}, targets: [{ origin: 'https://your-site.example', allowPrivateNetwork: false }], enabled: true, refreshIntervalSeconds: 0 }, credentials: [] };
 }
 export function QuotaEditor({ profileId, profileAccountId, toolId, query, presets, onClose, onSaved }: { profileId: string; profileAccountId?: string; toolId?: string; query: UsageQuery | null; presets: UsagePreset[]; onClose: () => void; onSaved: () => void }) {
+  const { t } = useTranslation();
   const [draft, setDraft] = useState<UsageQueryDraft>(() => query ? fromQuery(query) : presets[0] ? fromPreset(presets[0], profileId) : empty(profileId));
   const [presetId, setPresetId] = useState(query ? '' : presets[0]?.id ?? 'custom');
   const [accounts, setAccounts] = useState<AuthAccount[]>([]);
   const official = draft.config.program.kind === 'official' ? draft.config.program : null;
   const profileLinked = draft.config.program.kind === 'profile_builtin';
   const officialUi = official ? uiAdapterFor(official.tool).officialUsage : null;
-  useEffect(() => { let live = true; if (official) void native.listAccounts().then(items => { if (live) setAccounts(items ?? []); }).catch(() => { if (live) setError('无法读取账号，请在账号管理检查状态后重试'); }); return () => { live = false; }; }, [official?.tool]);
+  useEffect(() => { let live = true; if (official) void native.listAccounts().then(items => { if (live) setAccounts(items ?? []); }).catch(() => { if (live) setError(t('tools.quota.accountsFailed')); }); return () => { live = false; }; }, [official?.tool]);
   const [parameters, setParameters] = useState(() => JSON.stringify(draft.config.parameters, null, 2));
   const [error, setError] = useState('');
   const [report, setReport] = useState<DraftTestReport | null>(null);
@@ -170,7 +177,7 @@ export function QuotaEditor({ profileId, profileAccountId, toolId, query, preset
   function credential(index: number, next: Partial<CredentialDraft>) { edit({ ...draft, credentials: draft.credentials.map((c, i) => i === index ? { ...c, ...next } : c) }); }
   function materialize(): UsageQueryDraft {
     const parsed: unknown = JSON.parse(parameters);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('普通参数必须是 JSON 对象');
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error(t('tools.quota.parametersInvalid'));
     return { ...draft, config: { ...draft.config, parameters: parsed as QueryConfig['parameters'] } };
   }
   async function test() {
@@ -207,45 +214,45 @@ export function QuotaEditor({ profileId, profileAccountId, toolId, query, preset
     catch (e) { if (mounted.current && rev === revision.current) setError(message(e)); }
   }
   const line = report?.error?.scriptLine;
-  return <GuideDialog open title="额度查询设置" hint="保存不会执行查询。测试当前草稿不会更新配置卡数据。" onClose={() => { if (!saving) { invalidate(); onClose(); } }}>
+  return <GuideDialog open title={t('tools.quota.editorTitle')} hint={t('tools.quota.editorHint')} onClose={() => { if (!saving) { invalidate(); onClose(); } }}>
     <fieldset className={styles.editor} disabled={saving || !nativeAvailable}>
-      <label>查询预设<select aria-label="查询预设" value={presetId} onChange={e => {
+      <label>{t('tools.quota.preset')}<select aria-label={t('tools.quota.preset')} value={presetId} onChange={e => {
         const id = e.target.value; const p = presets.find(p => p.id === id); const next = p ? fromPreset(p, profileId) : empty(profileId);
         edit({ ...next, id: draft.id, expectedVersion: draft.expectedVersion }); setParameters(JSON.stringify(next.config.parameters, null, 2)); setPresetId(id);
-      }}><option value="">已保存的查询</option>{presets.filter(p => p.config.program.kind !== 'official' || !toolId || p.config.program.tool === toolId).map(p => <option key={p.id} value={p.id}>{p.label}</option>)}<option value="custom">自定义 JavaScript</option></select></label>
+      }}><option value="">{t('tools.quota.presetSaved')}</option>{presets.filter(p => p.config.program.kind !== 'official' || !toolId || p.config.program.tool === toolId).map(p => <option key={p.id} value={p.id}>{p.label}</option>)}<option value="custom">{t('tools.quota.presetCustom')}</option></select></label>
       {preset && !official && <p>{preset.description}</p>}
-      {profileLinked && <p>自动关联官方套餐，复用此命名配置的 API Key。地址及凭据随配置更新；无需重复填写。选择其他预设可改为独立查询。</p>}
-      <label>查询名称<input aria-label="查询名称" value={draft.config.label} onChange={e => config({ label: e.target.value })} /></label>
-      {official && <><p>{presets.find(p => p.config.program.kind === 'official' && p.config.program.tool === official.tool)?.description}</p>{officialUi?.accountRequired && <label>官方查询账号<select aria-label="官方查询账号" value={draft.config.identity.accountId && draft.config.identity.contextId ? `${draft.config.identity.accountId}:${draft.config.identity.contextId}` : ''} onChange={e => { const account = accounts.find(a => `${a.id}:${a.context?.id}` === e.target.value); config({ identity: { ...draft.config.identity, accountId: account?.id ?? null, contextId: account?.context?.id ?? null } }); }}><option value="">请选择配置绑定的 OAuth 账号</option>{draft.config.identity.accountId && !accounts.some(a => a.id === draft.config.identity.accountId && a.context?.id === draft.config.identity.contextId && a.id === profileAccountId && a.state === 'signed_in') && <option value={`${draft.config.identity.accountId}:${draft.config.identity.contextId}`} disabled>原绑定已不可用，请重新选择</option>}{accounts.filter(a => a.toolId === official.tool && a.context && a.state === 'signed_in' && !a.pendingLogin && a.id === profileAccountId).map(a => <option key={a.id} value={`${a.id}:${a.context!.id}`}>{a.label}{a.identity?.email ? ` · ${a.identity.email}` : ''}</option>)}</select><small>需先在配置认证方式中选择对应 CLI 的 OAuth 账号。重新认证后重新选择当前上下文。</small></label>}</>}
-      {!official && !profileLinked && <label>站点地址<input aria-label="额度站点地址" value={draft.config.site} onChange={e => {
+      {profileLinked && <p>{t('tools.quota.linkedNote')}</p>}
+      <label>{t('tools.quota.queryName')}<input aria-label={t('tools.quota.queryName')} value={draft.config.label} onChange={e => config({ label: e.target.value })} /></label>
+      {official && <><p>{presets.find(p => p.config.program.kind === 'official' && p.config.program.tool === official.tool)?.description}</p>{officialUi?.accountRequired && <label>{t('tools.quota.officialAccount')}<select aria-label={t('tools.quota.officialAccount')} value={draft.config.identity.accountId && draft.config.identity.contextId ? `${draft.config.identity.accountId}:${draft.config.identity.contextId}` : ''} onChange={e => { const account = accounts.find(a => `${a.id}:${a.context?.id}` === e.target.value); config({ identity: { ...draft.config.identity, accountId: account?.id ?? null, contextId: account?.context?.id ?? null } }); }}><option value="">{t('tools.quota.officialAccountPlaceholder')}</option>{draft.config.identity.accountId && !accounts.some(a => a.id === draft.config.identity.accountId && a.context?.id === draft.config.identity.contextId && a.id === profileAccountId && a.state === 'signed_in') && <option value={`${draft.config.identity.accountId}:${draft.config.identity.contextId}`} disabled>{t('tools.quota.bindingLost')}</option>}{accounts.filter(a => a.toolId === official.tool && a.context && a.state === 'signed_in' && !a.pendingLogin && a.id === profileAccountId).map(a => <option key={a.id} value={`${a.id}:${a.context!.id}`}>{a.label}{a.identity?.email ? ` · ${a.identity.email}` : ''}</option>)}</select><small>{t('tools.quota.accountHint')}</small></label>}</>}
+      {!official && !profileLinked && <label>{t('tools.quota.site')}<input aria-label={t('tools.quota.siteAria')} value={draft.config.site} onChange={e => {
         const previous = draft.config.site, site = e.target.value;
         const next = { ...draft, config: { ...draft.config, site, targets: draft.config.targets.map(t => t.origin === previous ? { ...t, origin: site } : t) }, credentials: draft.credentials.map(c => ({ ...c, allowedOrigins: c.allowedOrigins.map(o => o === previous ? site : o) })) };
         try { const p = JSON.parse(parameters); if (p.site === previous) setParameters(JSON.stringify({ ...p, site }, null, 2)); } catch { /* Preserve invalid draft text. */ }
         edit(next);
       }} /></label>}
-      <label className={styles.check}><input type="checkbox" checked={draft.config.enabled} onChange={e => config({ enabled: e.target.checked })} />启用查询</label>
-      <label>自动刷新<select aria-label="自动刷新" disabled={!!official && !officialUi?.automaticRefresh} value={draft.config.refreshIntervalSeconds} onChange={e => config({ refreshIntervalSeconds: Number(e.target.value) })}><option value={0}>关闭，仅手动</option>{[60, 300, 900, 1800, 3600, ...(draft.config.refreshIntervalSeconds && ![60, 300, 900, 1800, 3600].includes(draft.config.refreshIntervalSeconds) ? [draft.config.refreshIntervalSeconds] : [])].map(n => <option key={n} value={n}>每 {n / 60} 分钟</option>)}</select></label>
+      <label className={styles.check}><input type="checkbox" checked={draft.config.enabled} onChange={e => config({ enabled: e.target.checked })} />{t('tools.quota.enableQuery')}</label>
+      <label>{t('tools.quota.autoRefreshLabel')}<select aria-label={t('tools.quota.autoRefreshLabel')} disabled={!!official && !officialUi?.automaticRefresh} value={draft.config.refreshIntervalSeconds} onChange={e => config({ refreshIntervalSeconds: Number(e.target.value) })}><option value={0}>{t('tools.quota.refreshOff')}</option>{[60, 300, 900, 1800, 3600, ...(draft.config.refreshIntervalSeconds && ![60, 300, 900, 1800, 3600].includes(draft.config.refreshIntervalSeconds) ? [draft.config.refreshIntervalSeconds] : [])].map(n => <option key={n} value={n}>{t('tools.quota.refreshEvery', { minutes: n / 60 })}</option>)}</select></label>
       {!official && !profileLinked && <>
-      {draft.config.program.kind === 'builtin' ? <button type="button" onClick={() => void copyScript()}>复制为自定义脚本</button> : draft.config.program.kind === 'javascript' ? <><label>JavaScript · async query(ctx)</label><CodeEditor format="javascript" label="额度查询脚本" value={draft.config.program.source} onChange={source => config({ program: { kind: 'javascript', source } })} readOnly={saving} errorLine={line} /><small>ctx.parameters 为普通参数；ctx.credentials 为命名引用。使用 ctx.http 的 auth 绑定凭据，结果包含 schemaVersion、status、metrics、errors。</small></> : null}
-      <details><summary>网络目标与统计对象</summary>
-        {draft.config.targets.map((target, i) => <div className={styles.target} key={i}><label>允许的 origin<input aria-label={`允许目标 ${i + 1}`} value={target.origin} onChange={e => config({ targets: draft.config.targets.map((t, j) => i === j ? { ...t, origin: e.target.value } : t) })} /></label><label className={styles.check}><input type="checkbox" checked={target.allowPrivateNetwork} onChange={e => config({ targets: draft.config.targets.map((t, j) => i === j ? { ...t, allowPrivateNetwork: e.target.checked } : t) })} />允许此目标访问私网</label><button type="button" onClick={() => config({ targets: draft.config.targets.filter((_, j) => j !== i) })}>移除目标</button></div>)}
-        <button type="button" onClick={() => config({ targets: [...draft.config.targets, { origin: '', allowPrivateNetwork: false }] })}>添加目标</button>
-        <label>统计对象<select value={draft.config.identity.subject} onChange={e => config({ identity: { ...draft.config.identity, subject: e.target.value as QueryConfig['identity']['subject'] } })}><option value="account">账户</option><option value="plan">套餐</option><option value="key">Key</option><option value="extra">额外资源</option></select></label>
-        <label>对象标识（可选）<input value={draft.config.identity.subjectId ?? ''} onChange={e => config({ identity: { ...draft.config.identity, subjectId: e.target.value || null } })} /></label>
+      {draft.config.program.kind === 'builtin' ? <button type="button" onClick={() => void copyScript()}>{t('tools.quota.copyScript')}</button> : draft.config.program.kind === 'javascript' ? <><label>JavaScript · async query(ctx)</label><CodeEditor format="javascript" label={t('tools.quota.scriptEditorLabel')} value={draft.config.program.source} onChange={source => config({ program: { kind: 'javascript', source } })} readOnly={saving} errorLine={line} /><small>{t('tools.quota.scriptHint')}</small></> : null}
+      <details><summary>{t('tools.quota.targetsSummary')}</summary>
+        {draft.config.targets.map((target, i) => <div className={styles.target} key={i}><label>{t('tools.quota.targetOrigin')}<input aria-label={t('tools.quota.targetAria', { index: i + 1 })} value={target.origin} onChange={e => config({ targets: draft.config.targets.map((t, j) => i === j ? { ...t, origin: e.target.value } : t) })} /></label><label className={styles.check}><input type="checkbox" checked={target.allowPrivateNetwork} onChange={e => config({ targets: draft.config.targets.map((t, j) => i === j ? { ...t, allowPrivateNetwork: e.target.checked } : t) })} />{t('tools.quota.targetPrivate')}</label><button type="button" onClick={() => config({ targets: draft.config.targets.filter((_, j) => j !== i) })}>{t('tools.quota.targetRemove')}</button></div>)}
+        <button type="button" onClick={() => config({ targets: [...draft.config.targets, { origin: '', allowPrivateNetwork: false }] })}>{t('tools.quota.targetAdd')}</button>
+        <label>{t('tools.quota.subjectLabel')}<select value={draft.config.identity.subject} onChange={e => config({ identity: { ...draft.config.identity, subject: e.target.value as QueryConfig['identity']['subject'] } })}><option value="account">{t('tools.quota.subject.account')}</option><option value="plan">{t('tools.quota.subject.plan')}</option><option value="key">{t('tools.quota.subject.key')}</option><option value="extra">{t('tools.quota.subject.extra')}</option></select></label>
+        <label>{t('tools.quota.subjectId')}<input value={draft.config.identity.subjectId ?? ''} onChange={e => config({ identity: { ...draft.config.identity, subjectId: e.target.value || null } })} /></label>
       </details>
-      <section aria-label="查询凭据"><h3>查询凭据</h3>{draft.credentials.map((c, i) => <div className={styles.credential} key={i}>
-        <label>凭据名称<input aria-label={`凭据名称 ${i + 1}`} value={c.name} onChange={e => credential(i, { name: e.target.value })} /></label>
+      <section aria-label={t('tools.quota.credentials')}><h3>{t('tools.quota.credentials')}</h3>{draft.credentials.map((c, i) => <div className={styles.credential} key={i}>
+        <label>{t('tools.quota.credentialName')}<input aria-label={t('tools.quota.credentialNameAria', { index: i + 1 })} value={c.name} onChange={e => credential(i, { name: e.target.value })} /></label>
         <small>{preset?.credentials.find(p => p.name === c.name)?.instructions}</small>
-        <label>{c.value.kind === 'keep' ? '已保存，留空保留；更改认证目标需重新填写' : '凭据值'}<input type="password" autoComplete="new-password" aria-label={`凭据值 ${i + 1}`} value={c.value.kind === 'replace' ? c.value.secret : ''} onChange={e => credential(i, { value: e.target.value === '' && query?.credentials.some(saved => saved.name === c.name) ? { kind: 'keep' } : { kind: 'replace', secret: e.target.value } })} /></label>
-        <label>此凭据允许发送到（每行一个 origin）<textarea aria-label={`凭据目标 ${i + 1}`} value={c.allowedOrigins.join('\n')} onChange={e => credential(i, { allowedOrigins: e.target.value.split('\n') })} /></label>
-        <button type="button" onClick={() => edit({ ...draft, credentials: draft.credentials.filter((_, j) => j !== i) })}>移除凭据</button>
-      </div>)}<button type="button" onClick={() => edit({ ...draft, credentials: [...draft.credentials, { name: `token_${draft.credentials.length + 1}`, allowedOrigins: [], value: { kind: 'replace', secret: '' } }] })}>添加凭据</button></section>
-      <label>普通参数（JSON，不含秘密）</label><CodeEditor format="json" label="额度查询普通参数" value={parameters} onChange={v => { invalidate(); setParameters(v); }} readOnly={saving} compact />
+        <label>{c.value.kind === 'keep' ? t('tools.quota.credentialKeep') : t('tools.quota.credentialValue')}<input type="password" autoComplete="new-password" aria-label={t('tools.quota.credentialValueAria', { index: i + 1 })} value={c.value.kind === 'replace' ? c.value.secret : ''} onChange={e => credential(i, { value: e.target.value === '' && query?.credentials.some(saved => saved.name === c.name) ? { kind: 'keep' } : { kind: 'replace', secret: e.target.value } })} /></label>
+        <label>{t('tools.quota.credentialOrigins')}<textarea aria-label={t('tools.quota.credentialOriginsAria', { index: i + 1 })} value={c.allowedOrigins.join('\n')} onChange={e => credential(i, { allowedOrigins: e.target.value.split('\n') })} /></label>
+        <button type="button" onClick={() => edit({ ...draft, credentials: draft.credentials.filter((_, j) => j !== i) })}>{t('tools.quota.credentialRemove')}</button>
+      </div>)}<button type="button" onClick={() => edit({ ...draft, credentials: [...draft.credentials, { name: `token_${draft.credentials.length + 1}`, allowedOrigins: [], value: { kind: 'replace', secret: '' } }] })}>{t('tools.quota.credentialAdd')}</button></section>
+      <label>{t('tools.quota.parameters')}</label><CodeEditor format="json" label={t('tools.quota.parametersEditorLabel')} value={parameters} onChange={v => { invalidate(); setParameters(v); }} readOnly={saving} compact />
 
       </>}
       {error && <p role="alert" className={styles.error}>{error}</p>}
-      {report && <section aria-label="草稿测试结果"><p>阶段：{report.stage} · 耗时 {report.elapsedMs} ms · 仅草稿测试</p>{!!report.requestOrigins?.length && <p>请求目标（不含路径及参数）：{report.requestOrigins.join('、')}</p>}{report.error && <p role="alert" className={styles.error}>{report.error.message}{line && `（第 ${line} 行）`}</p>}{report.result && <UsageMetrics result={report.result} program={draft.config.program} />}<details><summary>脱敏预览</summary><pre>{report.preview || '无返回数据'}</pre></details></section>}
-      <div className={`${styles.actions} ${styles.editorActions}`}><button type="button" disabled={testing} onClick={() => void test()}>{testing ? '测试中' : '测试当前草稿'}</button>{testing && <button type="button" onClick={invalidate}>取消测试</button>}<button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint} onClick={() => void save()}>保存查询</button>{query && <button type="button" onClick={() => void remove()}>删除查询</button>}</div>
+      {report && <section aria-label={t('tools.quota.reportLabel')}><p>{t('tools.quota.reportMeta', { stage: report.stage, ms: report.elapsedMs })}</p>{!!report.requestOrigins?.length && <p>{t('tools.quota.reportOrigins', { origins: report.requestOrigins.join('、') })}</p>}{report.error && <p role="alert" className={styles.error}>{report.error.message}{line ? t('tools.quota.reportLine', { line }) : ''}</p>}{report.result && <UsageMetrics result={report.result} program={draft.config.program} />}<details><summary>{t('tools.quota.reportPreview')}</summary><pre>{report.preview || t('tools.quota.reportEmpty')}</pre></details></section>}
+      <div className={`${styles.actions} ${styles.editorActions}`}><button type="button" disabled={testing} onClick={() => void test()}>{testing ? t('tools.quota.testing') : t('tools.quota.test')}</button>{testing && <button type="button" onClick={invalidate}>{t('tools.quota.cancelTest')}</button>}<button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint()} onClick={() => void save()}>{t('tools.quota.save')}</button>{query && <button type="button" onClick={() => void remove()}>{t('tools.quota.delete')}</button>}</div>
     </fieldset>
   </GuideDialog>;
 }

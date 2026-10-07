@@ -1,13 +1,15 @@
 import { ExternalLink } from '../../components/ExternalLink';
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { native } from '../../lib/native';
 import type { ToolProbe } from '../../types/native';
+import i18n from '../../i18n';
 import styles from './ToolWorkspace.module.css';
 
 function sourceLabel(source: string) {
   if (source === 'npm_shim') return 'npm';
-  if (source === 'native' || source === 'claude_native') return '原生';
-  return '其他';
+  if (source === 'native' || source === 'claude_native') return i18n.t('tools.install.sourceNative');
+  return i18n.t('tools.install.sourceOther');
 }
 
 function fileName(path: string) {
@@ -50,6 +52,7 @@ export function InstallPanel({ toolName, probe, customPath, busy, loading, onCus
   onMaintain: (action: 'install' | 'upgrade' | 'install_native' | 'uninstall_npm', source?: string) => void;
   onUsePath: (path: string) => void;
 }) {
+  const { t } = useTranslation();
   const available = probe.installations.filter(item => item.status === 'available');
   const failed = probe.installations.filter(item => item.status !== 'available');
   const selected = available.find(item => item.path === probe.selectedPath) ?? available[0];
@@ -78,45 +81,45 @@ export function InstallPanel({ toolName, probe, customPath, busy, loading, onCus
   const currentVersion = selected?.version?.trim() ?? '';
   const behind = Boolean(selected && currentVersion && latest.state === 'ready' && compareVersions(currentVersion, latest.version) < 0);
   const current = !selected || latest.state !== 'ready' || !currentVersion ? false : compareVersions(currentVersion, latest.version) >= 0;
-  const updateLabel = multiple ? (selected && isNative(selected.source) ? '更新原生' : '更新 npm') : '更新';
+  const updateLabel = multiple ? (selected && isNative(selected.source) ? t('tools.install.updateNative') : t('tools.install.updateNpm')) : t('tools.install.update');
   const summary = !selected
-    ? '未安装'
+    ? t('tools.install.notInstalled')
     : latest.state === 'ready'
-      ? (behind ? `当前 ${currentVersion} · 最新 ${latest.version}` : `当前 ${currentVersion} · 已是最新`)
+      ? (behind ? t('tools.install.currentLatest', { current: currentVersion, latest: latest.version }) : t('tools.install.currentUpToDate', { current: currentVersion }))
       : latest.state === 'loading'
-        ? `当前 ${currentVersion || '未知版本'} · 正在查看最新版本`
-        : `当前 ${currentVersion || '未知版本'} · 暂时查不到最新版本`;
+        ? t('tools.install.checkingLatest', { current: currentVersion || t('tools.install.unknownVersion') })
+        : t('tools.install.latestUnknown', { current: currentVersion || t('tools.install.unknownVersion') });
   return <details className={styles.pathControl}>
-    <summary><span className={styles.statusDot} data-ok={probe.nativeWrites.state === 'supported'} /><strong>{toolName}</strong><span>{selected || probe.nativeWrites.state === 'supported' ? summary : probe.nativeWrites.reason}</span><span className={styles.diagnosticLabel}>安装与更新</span></summary>
+    <summary><span className={styles.statusDot} data-ok={probe.nativeWrites.state === 'supported'} /><strong>{toolName}</strong><span>{selected || probe.nativeWrites.state === 'supported' ? summary : probe.nativeWrites.reason}</span><span className={styles.diagnosticLabel}>{t('tools.install.label')}</span></summary>
     {selected && <div className={styles.release}>
       <div>
-        <span>当前版本</span>
-        <strong>{currentVersion || '未知'}</strong>
+        <span>{t('tools.install.currentVersion')}</span>
+        <strong>{currentVersion || t('tools.install.unknown')}</strong>
         <small>{sourceLabel(selected.source)} · {fileName(selected.path)}</small>
       </div>
       <div data-state={behind ? 'behind' : current ? 'current' : undefined}>
-        <span>最新版本</span>
-        <strong>{latest.state === 'ready' ? latest.version : latest.state === 'loading' ? '…' : '查不到'}</strong>
-        <small>{behind ? `可以更新到 ${latest.version}` : current ? '已是最新版本' : latest.state === 'loading' ? '正在查询 npm 公开版本' : '暂时查不到公开版本'}</small>
+        <span>{t('tools.install.latestVersion')}</span>
+        <strong>{latest.state === 'ready' ? latest.version : latest.state === 'loading' ? '…' : t('tools.install.notFound')}</strong>
+        <small>{behind ? t('tools.install.canUpdate', { latest: latest.version }) : current ? t('tools.install.upToDate') : latest.state === 'loading' ? t('tools.install.querying') : t('tools.install.unavailable')}</small>
       </div>
     </div>}
     {available.filter(item => item.path !== selected?.path).map(item => <div className={styles.installRow} key={item.path}>
       <strong>{sourceLabel(item.source)}</strong>
-      <span title={item.path}>{item.version ?? '未知版本'} · {fileName(item.path)}</span>
-      <button type="button" disabled={busy} title="之后栖点启动使用这个文件" onClick={() => onUsePath(item.path)}>使用</button>
+      <span title={item.path}>{item.version ?? t('tools.install.unknownVersion')} · {fileName(item.path)}</span>
+      <button type="button" disabled={busy} title={t('tools.install.useTitle')} onClick={() => onUsePath(item.path)}>{t('tools.install.use')}</button>
     </div>)}
-    {failed.map(item => <p className={styles.installFail} key={item.path} title={item.detail ?? item.path}>未能运行 · {fileName(item.path)}</p>)}
-    {hasNpm && hasNative && <p className={styles.installNote}>两份都在。选择栖点启动用的那一份。</p>}
-    {problems.map(item => <p className={styles.installNote} key={item.name}>{item.name} {item.status === 'outdated' ? '版本过旧' : '缺失'}{item.helpUrl && <ExternalLink href={item.helpUrl}> 安装 ↗</ExternalLink>}</p>)}
+    {failed.map(item => <p className={styles.installFail} key={item.path} title={item.detail ?? item.path}>{t('tools.install.runFailed', { file: fileName(item.path) })}</p>)}
+    {hasNpm && hasNative && <p className={styles.installNote}>{t('tools.install.duplicatesNote')}</p>}
+    {problems.map(item => <p className={styles.installNote} key={item.name}>{item.name} {item.status === 'outdated' ? t('tools.install.outdated') : t('tools.install.missing')}{item.helpUrl && <ExternalLink href={item.helpUrl}>{t('tools.install.installLink')}</ExternalLink>}</p>)}
     <div className={styles.installActions}>
       {!selected && multiple && <>
-        <button type="button" disabled={busy} onClick={() => onMaintain('install_native', 'native')}>安装原生</button>
-        <button type="button" className={styles.primary} disabled={busy} onClick={() => onMaintain('install', 'npm_shim')}>安装 npm</button>
+        <button type="button" disabled={busy} onClick={() => onMaintain('install_native', 'native')}>{t('tools.install.installNative')}</button>
+        <button type="button" className={styles.primary} disabled={busy} onClick={() => onMaintain('install', 'npm_shim')}>{t('tools.install.installNpm')}</button>
       </>}
-      {!selected && !multiple && probe.installCommand && <button type="button" className={styles.primary} disabled={busy} onClick={() => onMaintain('install')}>安装</button>}
+      {!selected && !multiple && probe.installCommand && <button type="button" className={styles.primary} disabled={busy} onClick={() => onMaintain('install')}>{t('tools.install.install')}</button>}
       {behind && probe.upgradeCommand && <button type="button" className={styles.primary} disabled={busy || loading} onClick={() => onMaintain('upgrade', selected?.source)}>{updateLabel}</button>}
-      {probe.installUrl && <ExternalLink href={probe.installUrl}>官方安装说明 ↗</ExternalLink>}
+      {probe.installUrl && <ExternalLink href={probe.installUrl}>{t('tools.install.officialGuide')}</ExternalLink>}
     </div>
-    <details className={styles.pathCustom}><summary>指定路径</summary><div><input aria-label="CLI 可执行文件路径" value={customPath} onChange={event => onCustomPath(event.target.value)} placeholder="可执行文件完整路径" /><button type="button" disabled={busy} onClick={onSavePath}>保存并重检</button></div></details>
+    <details className={styles.pathCustom}><summary>{t('tools.install.customPath')}</summary><div><input aria-label={t('tools.install.pathAria')} value={customPath} onChange={event => onCustomPath(event.target.value)} placeholder={t('tools.install.pathPlaceholder')} /><button type="button" disabled={busy} onClick={onSavePath}>{t('tools.install.saveAndRecheck')}</button></div></details>
   </details>;
 }

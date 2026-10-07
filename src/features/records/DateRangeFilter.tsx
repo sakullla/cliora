@@ -1,13 +1,16 @@
 import { useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { GuideDialog } from '../../components/GuideDialog';
 import { navigateChoices } from '../../lib/choiceNavigation';
 import { saveShortcutHint } from '../../lib/shortcut';
+import i18n from '../../i18n';
 import styles from './DateRangeFilter.module.css';
 
 export type RangeKey = 'all' | 'today' | 'yesterday' | '7' | '30' | 'month' | 'custom';
 const iso = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 const parse = (value: string) => new Date(`${value}T12:00:00`);
-const caption = (value: string) => value ? value.replaceAll('-', '/') : '请选择';
+const caption = (value: string) => value ? value.replaceAll('-', '/') : i18n.t('records.range.choose');
+const weekdayNames = () => [1, 2, 3, 4, 5, 6, 0].map((day) => i18n.t(`records.range.weekday.${day}`));
 
 export function DateRangeFilter({ value, customFrom, customTo, presets, onChange, onCustomRange, variant = 'compact' }: {
   value: RangeKey; customFrom: string; customTo: string;
@@ -15,6 +18,7 @@ export function DateRangeFilter({ value, customFrom, customTo, presets, onChange
   onChange: (value: RangeKey) => void; onCustomRange: (from: string, to: string) => void;
   variant?: 'compact' | 'toolbar';
 }) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
@@ -45,25 +49,25 @@ export function DateRangeFilter({ value, customFrom, customTo, presets, onChange
     requestAnimationFrame(() => calendar.current?.querySelector<HTMLButtonElement>(`[data-day="${day}"]`)?.focus());
   }
   return <div className={styles.filter} data-variant={variant}>
-    {variant === 'compact' && <span className={styles.label}>时间范围</span>}
-    <div className={styles.presets} role={variant === 'toolbar' ? 'radiogroup' : undefined} aria-label={variant === 'toolbar' ? '统计时间' : '时间范围'} onKeyDown={variant === 'toolbar' ? navigateChoices : undefined}>
+    {variant === 'compact' && <span className={styles.label}>{t('records.range.label')}</span>}
+    <div className={styles.presets} role={variant === 'toolbar' ? 'radiogroup' : undefined} aria-label={variant === 'toolbar' ? t('records.range.statsAria') : t('records.range.label')} onKeyDown={variant === 'toolbar' ? navigateChoices : undefined}>
       {presets.map((preset) => <button key={preset.id} type="button" role={variant === 'toolbar' ? 'radio' : undefined} tabIndex={variant === 'toolbar' ? value === preset.id ? 0 : -1 : undefined} aria-checked={variant === 'toolbar' ? value === preset.id : undefined} aria-pressed={variant === 'compact' ? value === preset.id : undefined} onClick={() => preset.id === 'custom' ? show() : onChange(preset.id)}>{preset.label}</button>)}
     </div>
     {value === 'custom' && <button type="button" className={styles.selectedRange} onClick={show}>{caption(customFrom)} — {caption(customTo)}</button>}
-    <GuideDialog open={open} title="自定义时间范围" hint="选择起止日期，包含开始日与结束日。" onClose={close}>
+    <GuideDialog open={open} title={t('records.range.title')} hint={t('records.range.hint')} onClose={close}>
       <div className={styles.calendar} ref={calendar}>
         <div className={styles.edges}>
-          <button type="button" aria-pressed={edge === 'from'} onClick={() => setEdge('from')}><span>开始日期</span><strong>{caption(from)}</strong></button>
+          <button type="button" aria-pressed={edge === 'from'} onClick={() => setEdge('from')}><span>{t('records.range.from')}</span><strong>{caption(from)}</strong></button>
           <span>—</span>
-          <button type="button" disabled={!from} aria-pressed={edge === 'to'} onClick={() => setEdge('to')}><span>结束日期</span><strong>{caption(to)}</strong></button>
+          <button type="button" disabled={!from} aria-pressed={edge === 'to'} onClick={() => setEdge('to')}><span>{t('records.range.to')}</span><strong>{caption(to)}</strong></button>
         </div>
         <div className={styles.month}>
-          <button type="button" aria-label="上个月" onClick={() => setMonth(new Date(year, monthIndex - 1, 1))}>‹</button>
-          <strong aria-live="polite">{year} 年 {monthIndex + 1} 月</strong>
-          <button type="button" aria-label="下个月" onClick={() => setMonth(new Date(year, monthIndex + 1, 1))}>›</button>
+          <button type="button" aria-label={t('records.range.prevMonth')} onClick={() => setMonth(new Date(year, monthIndex - 1, 1))}>‹</button>
+          <strong aria-live="polite">{t('records.range.monthLabel', { year, month: monthIndex + 1 })}</strong>
+          <button type="button" aria-label={t('records.range.nextMonth')} onClick={() => setMonth(new Date(year, monthIndex + 1, 1))}>›</button>
         </div>
-        <div className={styles.grid} aria-label={`${year}年${monthIndex + 1}月日期`}>
-          {['一', '二', '三', '四', '五', '六', '日'].map((day) => <span key={day} className={styles.weekday}>{day}</span>)}
+        <div className={styles.grid} aria-label={t('records.range.gridAria', { year, month: monthIndex + 1 })}>
+          {weekdayNames().map((day, index) => <span key={index} className={styles.weekday}>{day}</span>)}
           {Array.from({ length: offset }, (_, index) => <span key={`blank-${index}`} />)}
           {Array.from({ length: days }, (_, index) => {
             const day = iso(new Date(year, monthIndex, index + 1));
@@ -73,11 +77,11 @@ export function DateRangeFilter({ value, customFrom, customTo, presets, onChange
             }}>{index + 1}</button>;
           })}
         </div>
-        <p className={styles.hint} role="status">{from && to ? `已选择 ${Math.round((parse(to).getTime() - parse(from).getTime()) / 86400000) + 1} 天` : edge === 'from' ? '请选择开始日期' : '请选择结束日期，可选择同一天'}</p>
+        <p className={styles.hint} role="status">{from && to ? t('records.range.selected', { count: Math.round((parse(to).getTime() - parse(from).getTime()) / 86400000) + 1 }) : edge === 'from' ? t('records.range.pickFrom') : t('records.range.pickTo')}</p>
         <div className={styles.footer}>
-          <button type="button" className="text-button" onClick={() => { setMonth(new Date()); setFocused(today); }}>回到本月</button>
-          <button type="button" onClick={close}>取消</button>
-          <button type="button" className={styles.apply} data-dialog-save title={saveShortcutHint} disabled={!from || !to} onClick={() => { onCustomRange(from, to); close(); }}>应用范围</button>
+          <button type="button" className="text-button" onClick={() => { setMonth(new Date()); setFocused(today); }}>{t('records.range.currentMonth')}</button>
+          <button type="button" onClick={close}>{t('common.dialog.cancel')}</button>
+          <button type="button" className={styles.apply} data-dialog-save title={saveShortcutHint()} disabled={!from || !to} onClick={() => { onCustomRange(from, to); close(); }}>{t('records.range.apply')}</button>
         </div>
       </div>
     </GuideDialog>

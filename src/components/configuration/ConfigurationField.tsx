@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { ConfigurationField as Field, ConfigurationIssue } from '../../types/configuration';
 import { ModelCombobox } from '../../features/tools/ModelCombobox';
 import styles from './configuration.module.css';
@@ -17,6 +18,7 @@ type Props = {
   onValidityChange: (valid: boolean) => void;
 };
 export function ConfigurationField({ field, value, issues = [], disabled, resetEpoch, presentation, onChange, onReset, onValidityChange }: Props) {
+  const { t } = useTranslation();
   const id = useId();
   const request = useRef(0);
   const display = typeof value === 'string' ? value : value == null ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value);
@@ -52,7 +54,7 @@ export function ConfigurationField({ field, value, issues = [], disabled, resetE
     } catch (failure) {
       if (token !== request.current) return;
       localInput.current = true;
-      setError(failure instanceof Error ? failure.message : '修改失败，请重试');
+      setError(failure instanceof Error ? failure.message : t('common.field.changeFailed'));
       onValidityChange(false);
     }
   };
@@ -62,22 +64,22 @@ export function ConfigurationField({ field, value, issues = [], disabled, resetE
     localInput.current = true;
     if (text === '' && field.choices.length && !field.required) {
       if (onReset) await commit(onReset, token);
-      else { setError('此字段不支持恢复默认'); onValidityChange(false); }
+      else { setError(t('common.field.resetUnsupported')); onValidityChange(false); }
       return;
     }
     let next: unknown = text;
     if (field.kind === 'number' || field.kind === 'integer') {
       if (text.trim() && !/^[+-]?(?:\d+|\d*\.\d+)(?:[eE][+-]?\d+)?$/.test(text.trim())) {
-        setError('请输入完整数值'); onValidityChange(false); return;
+        setError(t('common.field.invalidNumber')); onValidityChange(false); return;
       }
       next = text.trim() === '' ? null : Number(text);
       if (next !== null && (!Number.isFinite(next) || (field.kind === 'integer' && !Number.isInteger(next)) || (field.minimum != null && Number(next) < field.minimum))) {
-        setError('请输入有效数值'); onValidityChange(false); return;
+        setError(t('common.field.invalidValue')); onValidityChange(false); return;
       }
     } else if (field.kind === 'json') {
-      try { next = JSON.parse(text); } catch { setError('请输入有效 JSON'); onValidityChange(false); return; }
+      try { next = JSON.parse(text); } catch { setError(t('common.field.invalidJson')); onValidityChange(false); return; }
     }
-    if (field.required && (next == null || text.trim() === '')) { setError('此项必填'); onValidityChange(false); return; }
+    if (field.required && (next == null || text.trim() === '')) { setError(t('common.field.required')); onValidityChange(false); return; }
     await commit(() => next === null && onReset ? onReset() : onChange(next), token);
   };
   const blocked = disabled || Boolean(field.unavailableReason);
@@ -88,20 +90,20 @@ export function ConfigurationField({ field, value, issues = [], disabled, resetE
   return <div className={styles.controls}>
     <div className={styles.fieldHead}>
       <label htmlFor={id}>{field.label}{presentation?.unit ? `（${presentation.unit}）` : ''}{field.required ? ' *' : ''}</label>
-      {onReset && deviates && <button type="button" className={styles.restore} disabled={blocked} onClick={() => { void commit(onReset, undefined, true); }}>恢复默认</button>}
-      <button type="button" className={styles.infoToggle} aria-label="字段信息" aria-expanded={infoOpen} aria-controls={`${id}-info`} onClick={() => { setInfoOpen(open => !open); }}>ⓘ</button>
+      {onReset && deviates && <button type="button" className={styles.restore} disabled={blocked} onClick={() => { void commit(onReset, undefined, true); }}>{t('common.field.restoreDefault')}</button>}
+      <button type="button" className={styles.infoToggle} aria-label={t('common.field.info')} aria-expanded={infoOpen} aria-controls={`${id}-info`} onClick={() => { setInfoOpen(open => !open); }}>ⓘ</button>
     </div>
     {field.kind === 'boolean' ? <input id={id} type="checkbox" checked={value === true} disabled={blocked} aria-invalid={Boolean(error || issues.length)} aria-describedby={`${id}-issues`} onChange={event => { const next = event.target.checked; void commit(() => onChange(next)); }} />
-      : presentation?.combobox && field.kind === 'string' ? <ModelCombobox id={id} label={field.label} value={input} placeholder={presentation.placeholder ?? '选择或输入'} disabled={blocked} options={[...new Set([...field.choices, ...(presentation.suggestions ?? []), ...(input ? [input] : [])])]} action={presentation.catalog?.supported ? { label: '获取模型目录', busy: presentation.catalog.busy, onClick: () => presentation.catalog!.fetch() } : undefined} onChange={value => { void change(value); }} />
+      : presentation?.combobox && field.kind === 'string' ? <ModelCombobox id={id} label={field.label} value={input} placeholder={presentation.placeholder ?? t('common.field.pickOrType')} disabled={blocked} options={[...new Set([...field.choices, ...(presentation.suggestions ?? []), ...(input ? [input] : [])])]} action={presentation.catalog?.supported ? { label: t('common.field.fetchCatalog'), busy: presentation.catalog.busy, onClick: () => presentation.catalog!.fetch() } : undefined} onChange={value => { void change(value); }} />
       : field.choices.length ? <select id={id} value={input} disabled={blocked} onChange={event => { void change(event.target.value); }}>
-        <option value="" disabled={field.required || !onReset}>{field.required ? '请选择' : onReset ? field.defaultSource ?? '跟随默认' : '未设置'}</option>
-        {input && !field.choices.includes(input) && <option value={input}>{input}（原生值）</option>}
+        <option value="" disabled={field.required || !onReset}>{field.required ? t('common.field.choose') : onReset ? field.defaultSource ?? t('common.field.followDefault') : t('common.field.unset')}</option>
+        {input && !field.choices.includes(input) && <option value={input}>{t('common.field.nativeValue', { value: input })}</option>}
         {field.choices.map(choice => <option key={choice} value={choice}>{choice}</option>)}
       </select> : <><input id={id} value={input} disabled={blocked} placeholder={presentation?.placeholder} list={presentation?.suggestions?.length ? `${id}-suggestions` : undefined} inputMode={field.kind === 'number' || field.kind === 'integer' ? 'numeric' : undefined} aria-invalid={Boolean(error || issues.length)} aria-describedby={`${id}-issues`} onChange={event => { void change(event.target.value); }} />{presentation?.suggestions?.length ? <datalist id={`${id}-suggestions`}>{presentation.suggestions.map(suggestion => <option key={suggestion} value={suggestion} />)}</datalist> : null}</>}
     {infoOpen && <div id={`${id}-info`} className={styles.infoPanel}>
-      <small>{value == null ? `未设置 · ${field.defaultSource ?? '原生默认'}` : presentation?.origin === 'inherited' ? '继承自通用配置 · 在通用配置中修改' : presentation?.origin === 'explicit' ? field.kind === 'boolean' ? value ? '本层显式开启' : '本层显式关闭' : value === 0 ? '本层显式设置为 0' : '本层显式值' : field.kind === 'boolean' ? value ? '读取到开启值 · 来源见合并' : '读取到关闭值 · 来源见合并' : value === 0 ? '读取到 0 · 来源见合并' : '已读取值 · 来源见合并'}</small>
+      <small>{value == null ? t('common.field.unsetWithDefault', { source: field.defaultSource ?? t('common.field.nativeDefault') }) : presentation?.origin === 'inherited' ? t('common.field.inherited') : presentation?.origin === 'explicit' ? field.kind === 'boolean' ? value ? t('common.field.explicitOn') : t('common.field.explicitOff') : value === 0 ? t('common.field.explicitZero') : t('common.field.explicitValue') : field.kind === 'boolean' ? value ? t('common.field.readOn') : t('common.field.readOff') : value === 0 ? t('common.field.readZero') : t('common.field.readValue')}</small>
       {presentation?.description && <small>{presentation.description}</small>}
-      <small>原生字段：<code>{presentation?.nativeField ?? field.id}</code>{field.defaultSource && ` · 未设置时：${field.defaultSource}`}</small>
+      <small>{t('common.field.nativeField')}<code>{presentation?.nativeField ?? field.id}</code>{field.defaultSource && t('common.field.whenUnset', { source: field.defaultSource })}</small>
     </div>}
     <div id={`${id}-issues`} role={error || issues.length ? 'alert' : undefined}>{error}{issues.map(issue => <p key={`${issue.code}:${issue.message}`}>{issue.message}</p>)}{field.unavailableReason}</div>
   </div>;

@@ -1,5 +1,6 @@
 import { removalContext, useResourceContexts, useAccountLabels } from './resourceContexts';
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { CodeEditor } from '../../components/CodeEditor';
 import { FilterSelect } from '../../components/FilterSelect';
 import { ToolIcon } from '../../components/ToolIcon';
@@ -9,10 +10,11 @@ import type { Project } from '../../types/launch';
 import type { AdapterDescriptor, Scope } from '../../types/native';
 import type { McpDefinition, McpPlacement, McpTargetRequest, McpTargetResult } from '../../types/resources';
 import { samePath, scopeLabel } from './CliMarks';
+import i18n from '../../i18n';
 import styles from './LibraryPage.module.css';
 
 function text(error: unknown) {
-  return error && typeof error === 'object' && 'message' in error ? String(error.message) : '操作失败，请重试';
+  return error && typeof error === 'object' && 'message' in error ? String(error.message) : i18n.t('common.operationFailed');
 }
 
 export type McpDistributeOutcome = { status: 'written'; notice: string } | { status: 'pending' } | { status: 'failed'; message: string } | { status: 'stale' };
@@ -31,6 +33,7 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
   onWillDistribute: (active: boolean) => void;
   onConflictChange: (active: boolean) => void;
 }>(function McpDistribution({ definition, tools, projects, placements, formStamp, onWillDistribute, onConflictChange }, ref) {
+  const { t } = useTranslation();
   const placedFor = (nextScope: Scope, nextPath: string | null) => placements.filter((item) => item.definitionId === definition.id && contexts.matches(item) && item.scope === nextScope && (nextScope === 'global' || samePath(item.projectPath, nextPath)));
   const idsFor = (nextScope: Scope, nextPath: string | null) => placedFor(nextScope, nextPath).map((item) => item.toolId);
   const contextLabel = useAccountLabels();
@@ -95,13 +98,13 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
     return idsFor(scope, activePath).filter((id) => !ids.includes(id));
   }
   function placeLabel(toolId: string, nextScope: Scope, nextPath: string | null) {
-    const where = nextScope === 'project' ? `${scopeLabel(nextScope, nextPath, projects)} 的 ` : '';
+    const where = nextScope === 'project' ? t('library.page.whereScope', { scope: scopeLabel(nextScope, nextPath, projects) }) : '';
     return `${where}${toolName(toolId)}`;
   }
   function noticeFor(written: McpTargetResult[], removedIds: string[]) {
     const parts: string[] = [];
-    if (written.length) parts.push(`已写入 ${written.map((item) => placeLabel(item.toolId, item.scope, item.projectPath)).join('、')}。`);
-    if (removedIds.length) parts.push(`已从 ${scope === 'project' ? `${scopeLabel(scope, activePath, projects)} 的 ` : ''}${removedIds.map(toolName).join('、')} 移除。`);
+    if (written.length) parts.push(t('library.distribute.written', { targets: written.map((item) => placeLabel(item.toolId, item.scope, item.projectPath)).join('、') }));
+    if (removedIds.length) parts.push(t('library.distribute.removed', { where: scope === 'project' ? t('library.page.whereScope', { scope: scopeLabel(scope, activePath, projects) }) : '', names: removedIds.map(toolName).join('、') }));
     return parts.join('');
   }
   function targets(ids = selected): McpTargetRequest[] {
@@ -130,7 +133,7 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
     for (const toolId of ids) {
       try {
         const place = placedFor(scope, activePath).find((entry) => entry.toolId === toolId);
-        if (!place) throw new Error('安装位置已变化，请重新打开窗口');
+        if (!place) throw new Error(t('library.distribute.changedError'));
         await native.removeNativeMcp({ toolId, scope, projectPath: activePath, contextId: await removalContext(place), enabled }, saved.name);
       } catch (value) {
         failed.push(`${toolName(toolId)}：${text(value)}`);
@@ -142,15 +145,15 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
     const failedWrites = written.filter((item) => item.status !== 'written');
     if (failedWrites.length) {
       setResults(written);
-      const message = failedWrites.map((item) => `${placeLabel(item.toolId, item.scope, item.projectPath)}：${item.detail || '没有写入'}`).join('；');
+      const message = failedWrites.map((item) => t('library.distribute.writeEntry', { target: placeLabel(item.toolId, item.scope, item.projectPath), detail: item.detail || t('library.distribute.noWrite') })).join(t('tools.quota.errorSeparator'));
       setError(message);
       return { status: 'failed', message };
     }
     const failedRemoves = await removeDropped(saved, removed);
     if (!mounted.current) return { status: 'stale' };
     if (failedRemoves.length) {
-      setError(failedRemoves.join('；'));
-      return { status: 'failed', message: failedRemoves.join('；') };
+      setError(failedRemoves.join(t('tools.quota.errorSeparator')));
+      return { status: 'failed', message: failedRemoves.join(t('tools.quota.errorSeparator')) };
     }
     onConflictChange(false);
     return { status: 'written', notice: noticeFor(written, removed) };
@@ -158,10 +161,10 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
   async function inspect(saved: McpDefinition): Promise<McpDistributeOutcome> {
     const ids = selected.filter((id) => contexts.ready(targetFor(id)));
     const removed = droppedIds(ids);
-    if (!saved.id) return { status: 'failed', message: 'MCP 还没有保存，不能写入 CLI。' };
+    if (!saved.id) return { status: 'failed', message: t('library.distribute.unsaved') };
     const requested = targets(ids);
-    if (!requested.length && !removed.length) return { status: 'failed', message: '没有勾选要写入的 CLI。' };
-    if (scope === 'project' && !projectPath && ids.length) { setError('请先选择项目。'); return { status: 'failed', message: '请先选择项目。' }; }
+    if (!requested.length && !removed.length) return { status: 'failed', message: t('library.distribute.noneSelected') };
+    if (scope === 'project' && !projectPath && ids.length) { const message = t('tools.mcp.pickProject'); setError(message); return { status: 'failed', message }; }
     const epoch = epochRef.current.epoch;
     const request = ++requestRef.current;
     setPreview(null); setResults(null); setError('');
@@ -170,14 +173,14 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
       if (!requested.length) {
         const failed = await removeDropped(saved, removed);
         if (!mounted.current || request !== requestRef.current || epoch !== epochRef.current.epoch) return { status: 'stale' };
-        if (failed.length) { setError(failed.join('；')); return { status: 'failed', message: failed.join('；') }; }
+        if (failed.length) { setError(failed.join(t('tools.quota.errorSeparator'))); return { status: 'failed', message: failed.join(t('tools.quota.errorSeparator')) }; }
         return { status: 'written', notice: noticeFor([], removed) };
       }
       let items = await native.previewMcpTargets(saved.id, requested);
       if (!mounted.current || request !== requestRef.current || epoch !== epochRef.current.epoch) return { status: 'stale' };
       const writable = items.filter((item) => item.status === 'ready' || item.status === 'conflict');
       if (!writable.length) {
-        const message = items.map((item) => item.detail).filter(Boolean).join('；') || '没有可写入的目标。';
+        const message = items.map((item) => item.detail).filter(Boolean).join(t('tools.quota.errorSeparator')) || t('library.distribute.noWritable');
         setError(message);
         return { status: 'failed', message };
       }
@@ -218,7 +221,7 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
   }
   async function commit(): Promise<McpDistributeOutcome> {
     const current = preview;
-    if (!current) return { status: 'failed', message: '没有可替换的预览，请再点一次保存并分发。' };
+    if (!current) return { status: 'failed', message: t('library.distribute.noPreview') };
     const epoch = epochRef.current.epoch;
     const request = ++requestRef.current;
     const active = current.filter((item) => item.status === 'ready' || item.status === 'conflict');
@@ -249,26 +252,26 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
   const placedNow = new Set(idsFor(scope, activePath));
 
   return <div className={styles.distribute}>
-    <h3 className={styles.sectionTitle}>写入到 CLI</h3>
-    <p>当前生效账号下已经写入的 CLI 会预先勾上。其它账号的安装保持原样；修改前请先应用该账号的配置。保存时按勾选写入；取消勾选会从该 CLI 移除。同名内容不一致时，留在这里比较后再替换。</p>
-    <FilterSelect className={styles.scopePick} label="分发范围" triggerDetail={false} value={scope === 'global' ? '__global__' : projectPath ?? ''} options={[
-      { value: '__global__', label: '全局' },
-      ...projects.map((item) => ({ value: item.path ?? `id:${item.id}`, label: item.name, detail: item.path ? shortPath(item.path) : undefined, note: item.available && item.path ? undefined : '目录失效', disabled: !item.available || !item.path })),
-      ...(scope === 'project' && projectPath && !projects.some((item) => samePath(item.path, projectPath)) ? [{ value: projectPath, label: projectPath.split(/[\\/]/).filter(Boolean).at(-1) || projectPath, detail: shortPath(projectPath), note: '项目未关联' }] : []),
-    ]} placeholder="选择项目…" searchLabel="搜索项目" onChange={(value) => { if (value === '__global__') applyScope('global'); else applyScope('project', value); }} />
-    <label className={styles.choice}><input type="checkbox" checked={enabled} onChange={(event) => { setEnabled(event.target.checked); setPreview(null); setResults(null); onConflictChange(false); }} />写入后启用</label>
-    <div className={styles.targets}>{tools.map((item) => <label key={item.id} title={placedNow.has(item.id) ? '已写入。取消勾选并保存会从该 CLI 移除。' : '保存时写入这个 CLI'}><input type="checkbox" disabled={!contexts.ready(targetFor(item.id))} checked={selected.includes(item.id)} onChange={(event) => choose(event.target.checked ? [...selected, item.id] : selected.filter((id) => id !== item.id))} /><ToolIcon toolId={item.id} size={22} />{item.name}</label>)}</div>
-    {mine.filter((item) => contexts.ready(item) && !contexts.matches(item)).map((item) => <p key={JSON.stringify([item.toolId, item.scope, item.projectPath, item.contextId])}>{toolName(item.toolId)} · {scopeLabel(item.scope, item.projectPath, projects)} · {contextLabel(item.contextId)}（切换后可修改）</p>)}
-    {contexts.issues.map((issue) => <p key={issue.key} role="status">{toolName(issue.toolId)} · {scopeLabel(issue.scope, issue.projectPath, projects)}：{issue.detail}；已有安装保留。</p>)}
-    {preview && <div className={styles.distribute} role="group" aria-label="MCP 写入冲突">
-      <p><strong>这些 CLI 上已有同名内容。</strong>比较后可以选择替换，或保留当前文件。</p>
+    <h3 className={styles.sectionTitle}>{t('library.distribute.title')}</h3>
+    <p>{t('library.distribute.description')}</p>
+    <FilterSelect className={styles.scopePick} label={t('library.distribute.scopeLabel')} triggerDetail={false} value={scope === 'global' ? '__global__' : projectPath ?? ''} options={[
+      { value: '__global__', label: t('tools.apply.global') },
+      ...projects.map((item) => ({ value: item.path ?? `id:${item.id}`, label: item.name, detail: item.path ? shortPath(item.path) : undefined, note: item.available && item.path ? undefined : t('library.page.staleDir'), disabled: !item.available || !item.path })),
+      ...(scope === 'project' && projectPath && !projects.some((item) => samePath(item.path, projectPath)) ? [{ value: projectPath, label: projectPath.split(/[\\/]/).filter(Boolean).at(-1) || projectPath, detail: shortPath(projectPath), note: t('library.distribute.projectUnlinked') }] : []),
+    ]} placeholder={t('library.distribute.projectPlaceholder')} searchLabel={t('home.launcher.searchLabel')} onChange={(value) => { if (value === '__global__') applyScope('global'); else applyScope('project', value); }} />
+    <label className={styles.choice}><input type="checkbox" checked={enabled} onChange={(event) => { setEnabled(event.target.checked); setPreview(null); setResults(null); onConflictChange(false); }} />{t('library.distribute.enableAfterWrite')}</label>
+    <div className={styles.targets}>{tools.map((item) => <label key={item.id} title={placedNow.has(item.id) ? t('library.distribute.placedTitle') : t('library.distribute.unplacedTitle')}><input type="checkbox" disabled={!contexts.ready(targetFor(item.id))} checked={selected.includes(item.id)} onChange={(event) => choose(event.target.checked ? [...selected, item.id] : selected.filter((id) => id !== item.id))} /><ToolIcon toolId={item.id} size={22} />{item.name}</label>)}</div>
+    {mine.filter((item) => contexts.ready(item) && !contexts.matches(item)).map((item) => <p key={JSON.stringify([item.toolId, item.scope, item.projectPath, item.contextId])}>{toolName(item.toolId)} · {scopeLabel(item.scope, item.projectPath, projects)} · {contextLabel(item.contextId)}{t('library.distribute.otherAccountSuffix')}</p>)}
+    {contexts.issues.map((issue) => <p key={issue.key} role="status">{t('library.distribute.issue', { tool: toolName(issue.toolId), scope: scopeLabel(issue.scope, issue.projectPath, projects), detail: issue.detail })}</p>)}
+    {preview && <div className={styles.distribute} role="group" aria-label={t('tools.mcp.conflictLabel')}>
+      <p><strong>{t('library.distribute.conflictTitle')}</strong>{t('library.distribute.conflictHint')}</p>
       {preview.map((item) => <div key={JSON.stringify([item.toolId, item.scope, item.projectPath, item.contextId])}>
-        <p><strong>{toolName(item.toolId)}</strong> · {item.status === 'conflict' ? '同名冲突' : item.status === 'ready' ? '可写入' : '不可写入'}{item.path ? ` · ${item.path}` : ''}</p>
+        <p><strong>{toolName(item.toolId)}</strong> · {item.status === 'conflict' ? t('library.distribute.statusConflict') : item.status === 'ready' ? t('library.distribute.statusReady') : t('library.distribute.statusBlocked')}{item.path ? ` · ${item.path}` : ''}</p>
         <p>{item.detail}</p>
-        {(item.existing !== null || item.proposed !== null) && <div className={styles.fields}><CodeEditor compact label="当前 MCP" format="json" readOnly value={item.existing === null ? 'null' : JSON.stringify(item.existing, null, 2)} /><CodeEditor compact label="写入后 MCP" format="json" readOnly value={item.proposed === null ? 'null' : JSON.stringify(item.proposed, null, 2)} /></div>}
+        {(item.existing !== null || item.proposed !== null) && <div className={styles.fields}><CodeEditor compact label={t('tools.mcp.conflictCurrent')} format="json" readOnly value={item.existing === null ? 'null' : JSON.stringify(item.existing, null, 2)} /><CodeEditor compact label={t('library.distribute.writtenMcp')} format="json" readOnly value={item.proposed === null ? 'null' : JSON.stringify(item.proposed, null, 2)} /></div>}
       </div>)}
     </div>}
-    {results && <div role="status">{results.map((item) => <p key={JSON.stringify([item.toolId, item.scope, item.projectPath, item.contextId])}>{toolName(item.toolId)}：{item.status === 'written' ? '已写入' : item.detail}</p>)}</div>}
+    {results && <div role="status">{results.map((item) => <p key={JSON.stringify([item.toolId, item.scope, item.projectPath, item.contextId])}>{t('library.distribute.resultEntry', { tool: toolName(item.toolId), result: item.status === 'written' ? t('library.distribute.resultWritten') : item.detail })}</p>)}</div>}
     {error && <p className={styles.error} role="alert">{error}</p>}
   </div>;
 });
