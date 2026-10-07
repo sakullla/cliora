@@ -1,6 +1,7 @@
 import { openCodeFieldPresentation } from './fieldPresentation';
 import { CommonConfigurationFields } from '../../components/configuration/CommonConfigurationFields';
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { AdditionalIssues, objectFields, EntityActions, EditorField, ModelRow, ProviderEditor, NewModelForm, useEditorAction, fieldValue } from '../../components/configuration/ModelEditorControls';
 import sharedStyles from '../../components/configuration/configuration.module.css';
 import type { ConfigurationContentProps } from '../contract';
@@ -15,7 +16,9 @@ export function OpenCodeConfigurationEditor(props: ConfigurationContentProps) {
   return <Editor key={props.draft.sessionId} {...props} />;
 }
 function Editor(props: ConfigurationContentProps) {
+  const { t } = useTranslation();
   const { draft, descriptor } = props;
+  const modalityChoices = ((): readonly (readonly [string, string])[] => [['text', t('tools.adapters.shared.modality.text')], ['image', t('tools.adapters.shared.modality.image')], ['audio', t('tools.adapters.shared.modality.audio')], ['video', t('tools.adapters.shared.modality.video')], ['pdf', 'PDF']])();
   const view = (draft.view ?? {}) as View;
   const models = (view.models ?? []).map(model => ({ ...model, fields: objectFields(model.fields) }));
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -26,8 +29,8 @@ function Editor(props: ConfigurationContentProps) {
   const can = (operation: string) => descriptor.operations.includes(operation);
   const target = (id: string) => ({ kind: 'model', provider, id });
   const field = (id: string, model: Model) => <EditorField key={`${draft.sessionId}:${provider}:${model.id}:${id}`} props={action.props} id={id} presentation={openCodeFieldPresentation(id)} target={target(model.id)} value={fieldValue(model.fields, id)} disabled={blocked}
-    listChoices={id.startsWith('modalities.') ? [['text', '文本'], ['image', '图片'], ['audio', '音频'], ['video', '视频'], ['pdf', 'PDF']] : undefined} />;
-  return <section onKeyDown={event => { if (props.section && expanded && event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setExpanded(null); } }} className={styles.editor} aria-label="OpenCode 专属配置">
+    listChoices={id.startsWith('modalities.') ? modalityChoices : undefined} />;
+  return <section onKeyDown={event => { if (props.section && expanded && event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setExpanded(null); } }} className={styles.editor} aria-label={t('tools.adapters.opencode.label')}>
     <div hidden={props.section === 'settings'}>
     <div hidden={Boolean(props.section && expanded)}><ProviderEditor key={`provider:${draft.sessionId}:${provider}`} provider={provider} providers={view.providers ?? []} connection={view.connection}
       protocol={view.connection?.protocol ? protocols[view.connection.protocol as keyof typeof protocols] ?? '' : ''}
@@ -35,11 +38,11 @@ function Editor(props: ConfigurationContentProps) {
       onDraftValidityChange={valid => props.onValidityChange('connection-form', valid)}
       onConfigure={(id, value) => action.run({ kind: 'provider', provider: id }, 'configure_provider', value)}
       onSelect={id => action.run({ kind: 'provider', provider: id }, 'select_provider')} />
-    <p className={styles.note}>默认与轻量模型分别设置。恢复默认会取消本层覆盖，采用继承配置或 OpenCode 原生默认。</p>
+    <p className={styles.note}>{t('tools.adapters.opencode.defaultNote')}</p>
     </div>
-    {models.map(model => <article className={styles.model} key={`${provider}:${model.id}`} hidden={Boolean(props.section && expanded && expanded !== model.id)} aria-label={`模型 ${model.id}`}>
+    {models.map(model => <article className={styles.model} key={`${provider}:${model.id}`} hidden={Boolean(props.section && expanded && expanded !== model.id)} aria-label={t('tools.adapters.shared.modelAria', { id: model.id })}>
       <ModelRow id={model.id} name={typeof model.fields.name === 'string' ? model.fields.name : undefined}
-        badges={[view.defaultModel === model.id ? '默认' : '', view.smallModel === model.id ? '轻量' : ''].filter(Boolean)}
+        badges={[view.defaultModel === model.id ? t('common.models.defaultBadge') : '', view.smallModel === model.id ? t('tools.adapters.opencode.badgeSmall') : ''].filter(Boolean)}
         expanded={expanded === model.id} sectioned={Boolean(props.section)} disabled={structuralBlocked}
         canDefault={can('default') && view.defaultModel !== model.id}
         onToggle={() => setExpanded(expanded === model.id ? null : model.id)}
@@ -47,21 +50,21 @@ function Editor(props: ConfigurationContentProps) {
       {<div className={styles.fields} hidden={expanded !== model.id}>
         {descriptor.fields.filter(item => !item.advanced).map(item => field(item.id, model))}
         {field('modalities.input', model)}{field('modalities.output', model)}
-        <details><summary>模型选项与推理变体</summary>{field('options', model)}{field('variants', model)}</details>
+        <details><summary>{t('tools.adapters.opencode.optionsSummary')}</summary>{field('options', model)}{field('variants', model)}</details>
         <EntityActions id={model.id} target={target(model.id)} descriptor={descriptor} disabled={structuralBlocked} defaultModel={view.defaultModel === model.id} smallModel={view.smallModel === model.id} onRun={action.run} onRemove={() => setExpanded(null)} />
       </div>}
     </article>)}
-    <div hidden={Boolean(props.section && expanded)}>{can('create') && <NewModelForm key={`new-model:${draft.sessionId}:${provider}`} props={action.props} provider={provider} disabled={structuralBlocked || !provider} label="模型 ID" fields={descriptor.fields} listChoices={{ 'modalities.input': [['text', '文本'], ['image', '图片'], ['audio', '音频'], ['video', '视频'], ['pdf', 'PDF']], 'modalities.output': [['text', '文本'], ['image', '图片'], ['audio', '音频'], ['video', '视频'], ['pdf', 'PDF']] }}
+    <div hidden={Boolean(props.section && expanded)}>{can('create') && <NewModelForm key={`new-model:${draft.sessionId}:${provider}`} props={action.props} provider={provider} disabled={structuralBlocked || !provider} label={t('tools.adapters.shared.modelId')} fields={descriptor.fields} listChoices={{ 'modalities.input': modalityChoices, 'modalities.output': modalityChoices }}
       onCreate={async (id, values) => { const success = await action.run(target(id), 'create', values); if (success) setExpanded(id); return success; }} />}
     </div>
     <div className={styles.modelSpacer} data-list-spacer /></div>
-    <div hidden={props.section === 'models'}><details className={sharedStyles.disclosureCard} open={props.section === 'settings'}><summary>默认模型设置</summary>
-      <button type="button" disabled={blocked || !can('reset')} onClick={() => { void action.run({ kind: 'settings' }, 'reset', null, 'model'); }}>恢复默认模型</button>
-      <button type="button" disabled={blocked || !can('reset')} onClick={() => { void action.run({ kind: 'settings' }, 'reset', null, 'small_model'); }}>恢复轻量模型</button>
+    <div hidden={props.section === 'models'}><details className={sharedStyles.disclosureCard} open={props.section === 'settings'}><summary>{t('tools.adapters.opencode.defaultsSummary')}</summary>
+      <button type="button" disabled={blocked || !can('reset')} onClick={() => { void action.run({ kind: 'settings' }, 'reset', null, 'model'); }}>{t('tools.adapters.shared.resetDefaultModel')}</button>
+      <button type="button" disabled={blocked || !can('reset')} onClick={() => { void action.run({ kind: 'settings' }, 'reset', null, 'small_model'); }}>{t('tools.adapters.opencode.resetSmall')}</button>
     </details>
     </div>
     {view.capabilityReason && <p className={styles.note}>{view.capabilityReason}</p>}
     <AdditionalIssues props={props} />
-    {action.error && <div role="alert">{action.error}<button type="button" onClick={action.cancelFailure}>取消本次操作</button></div>}
+    {action.error && <div role="alert">{action.error}<button type="button" onClick={action.cancelFailure}>{t('tools.adapters.shared.cancelOperation')}</button></div>}
   </section>;
 }

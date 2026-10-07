@@ -1,6 +1,9 @@
 import type { UsageMetric } from '../../../types/usage';
+import i18n from '../../../i18n';
 
 export const minimaxUsagePresentation = {
   id: 'minimax',
-  metricLabel: (metric: UsageMetric) => metric.label.replace(/^general(?= · |$)/, '文本套餐').replace(/^video(?= · |$)/, '视频额度'),
+  metricLabel: (metric: UsageMetric) => metric.label
+    .replace(/^general(?= · |$)/, i18n.t('tools.adapters.minimax.metricGeneral'))
+    .replace(/^video(?= · |$)/, i18n.t('tools.adapters.minimax.metricVideo')),
 };
