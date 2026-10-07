@@ -214,7 +214,7 @@ kbd { display: inline-block; min-width: 18px; padding: 0 5px; border: 1px solid 
   cursor: pointer;
 }
 :where(select) option { background: var(--surface); color: var(--text); }
-:where(input[type="search"], input[aria-label^="搜索"]) {
+:where(input[type="search"], input[aria-label^="搜索"], input[aria-label^="Search"], .search-field > input) {
   padding-left: 32px;
   background-image: var(--search-icon);
   background-repeat: no-repeat;
@@ -441,7 +441,8 @@ html[data-native="macos"] .titlebar-drag { display: block; position: fixed; z-in
 .home-band > * { min-width: 0; }
 .home-tools { min-width: 0; container-type: inline-size; }
 @media (min-width: 1265px) {
-  .home-band > section[aria-label="项目与启动"] { position: sticky; top: 16px; padding-top: 40px; }
+  .home-band > section[aria-label="项目与启动"],
+  .home-band > .home-launcher { position: sticky; top: 16px; padding-top: 40px; }
 }
 .home-secondary { margin-top: 0; }
 .subtle-panel { padding: 18px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-xs); }

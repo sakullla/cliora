@@ -1,16 +1,17 @@
 import icon from '../../assets/tools/claude.svg';
 import type { ToolUiAdapter, ModelMappingControl, ModelRoleValue } from '../contract';
 import { ClaudeConfigurationEditor } from './ConfigurationEditor';
+import i18n from '../../i18n';
 
 const roles = [
-  { id:'default', label:'默认模型', displayName:false, longContext:true, key:'ANTHROPIC_MODEL' },
+  { id:'default', get label() { return i18n.t('tools.adapters.claude.roleDefault'); }, displayName:false, longContext:true, key:'ANTHROPIC_MODEL' },
   ...['SONNET','OPUS','FABLE','HAIKU'].map(role => ({id:role.toLowerCase(),label:role[0]+role.slice(1).toLowerCase(),displayName:true,longContext:role !== 'HAIKU',key:`ANTHROPIC_DEFAULT_${role}_MODEL`})),
   {id:'subagent',label:'Subagent',displayName:false,longContext:true,key:'CLAUDE_CODE_SUBAGENT_MODEL'},
 ];
 function document(text: string): Record<string, unknown> {
   const parsed = text.trim() ? JSON.parse(text) : {};
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Claude 配置须为 JSON 对象');
-  if (parsed.env != null && (typeof parsed.env !== 'object' || Array.isArray(parsed.env))) throw new Error('Claude env 须为 JSON 对象');
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error(i18n.t('tools.adapters.claude.errorJson'));
+  if (parsed.env != null && (typeof parsed.env !== 'object' || Array.isArray(parsed.env))) throw new Error(i18n.t('tools.adapters.claude.errorEnv'));
   return parsed;
 }
 const modelMapping: ModelMappingControl = {
@@ -25,7 +26,7 @@ const modelMapping: ModelMappingControl = {
     } catch { return {}; }
   },
   async update(text, id, value) {
-    const role = roles.find(item => item.id === id); if (!role) throw new Error('未知的 Claude 模型角色');
+    const role = roles.find(item => item.id === id); if (!role) throw new Error(i18n.t('tools.adapters.claude.errorUnknownRole'));
     const parsed = document(text); const env = { ...(parsed.env ?? {}) as Record<string, unknown> };
     const model = value.model.trim().replace(/(?:\[1m\])+$/ig,'');
     if (model) env[role.key] = model + (value.longContext ? '[1m]' : ''); else delete env[role.key];
@@ -44,15 +45,15 @@ export const claudeUiAdapter: ToolUiAdapter = {
   icon: { light: icon, source: 'https://code.claude.com/docs/logo/light.svg' },
   id: 'claude_code',
   accounts: {
-    description: '查看 Claude Code 当前凭据或选择已核验的 claude.ai 账号。',
-    nativeDescription: '观察 Claude Code 当前认证来源，API 密钥不视为订阅登录。',
-    managedDescription: '受管登录的可用性由当前平台能力决定；macOS 登录隔离尚未验收。',
-    defaultLabel: 'Claude 账号',
-    methods: { browser: 'Claude 原生登录' },
+    get description() { return i18n.t('tools.adapters.claude.accounts.description'); },
+    get nativeDescription() { return i18n.t('tools.adapters.claude.accounts.nativeDescription'); },
+    get managedDescription() { return i18n.t('tools.adapters.claude.accounts.managedDescription'); },
+    get defaultLabel() { return i18n.t('tools.adapters.claude.accounts.defaultLabel'); },
+    methods: { get browser() { return i18n.t('tools.adapters.claude.accounts.methodBrowser'); } },
   },
   configuration: { Editor: ClaudeConfigurationEditor },
   officialUsage: { accountRequired: false, automaticRefresh: false },
   modelMapping,
   authEnvName: () => 'ANTHROPIC_API_KEY',
-  incompleteConnectionText: '；未指定项沿用 Claude Code 默认值',
+  get incompleteConnectionText() { return i18n.t('tools.adapters.claude.incompleteConnection'); },
 };
