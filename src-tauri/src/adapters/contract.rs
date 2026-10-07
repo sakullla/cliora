@@ -181,6 +181,13 @@ pub trait CliAdapter: Sync {
             .collect::<String>();
         Some(format!("CLIORA_{tool}_{provider}_API_KEY"))
     }
+    /// Whether this CLI reads its managed connection key only from the OS
+    /// environment: application writes no key into native files, and the
+    /// shared launch service injects `auth_env_name` into the child process
+    /// at spawn time. Default false — the key travels through native files.
+    fn connection_secret_via_launch_env(&self) -> bool {
+        false
+    }
     fn connection_documents(
         &self,
         connection: &Connection,

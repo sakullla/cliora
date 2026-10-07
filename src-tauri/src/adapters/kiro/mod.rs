@@ -218,6 +218,11 @@ impl CliAdapter for Kiro {
             .as_ref()
             .map(|_| "KIRO_API_KEY".to_owned())
     }
+    fn connection_secret_via_launch_env(&self) -> bool {
+        // No native file carries the key; the shared launch service injects
+        // the frozen KIRO_API_KEY at spawn time.
+        true
+    }
     fn connection_policy(&self, scope: Scope) -> crate::native::adapter::ConnectionPolicy {
         crate::native::adapter::ConnectionPolicy {
             api_key: if scope == Scope::Project {

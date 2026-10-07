@@ -1,13 +1,15 @@
 use super::*;
+use std::collections::BTreeMap;
+use std::collections::HashMap;
 
 #[test]
 fn cmd_launch_rejects_oversized_commands_without_truncating_other_terminals() {
     let mut plan = sample(TerminalId::Cmd);
     plan.cli_args = vec!["x".repeat(4000)];
-    assert!(terminal_command(&plan).unwrap_err().contains("CMD 长度限制"));
+    assert!(terminal_command(&plan, None).unwrap_err().contains("CMD 长度限制"));
     assert!(shell_terminal(TerminalId::Cmd, &plan.directory, &"x".repeat(4000)).unwrap_err().contains("CMD 长度限制"));
     plan.terminal = TerminalId::PowerShell;
-    assert!(terminal_command(&plan).is_ok());
+    assert!(terminal_command(&plan, None).is_ok());
 }
 
 #[cfg(windows)]
@@ -24,7 +26,7 @@ fn cmd_runs_literal_arguments_in_project_and_retains_saved_selection() {
     plan.executable = cli;
     plan.session_markers = &["CLIORA_TEST_SESSION"];
     plan.cli_args = vec!["--resume".into(), "会话 'one' %PATH% ! & \"quote\"".into(), "$(New-Item unwanted)\nline two".into()];
-    let terminal = terminal_command(&plan).unwrap();
+    let terminal = terminal_command(&plan, None).unwrap();
     let (program, line) = console_command_line(&terminal).unwrap();
     let prefix = format!("\"{}\" ", terminal_path(&program).unwrap());
     // Use the same /S quoting as the real console, but exit after the fixture.
@@ -81,7 +83,7 @@ fn cmd_package_managers_and_extensionless_shims_use_windows_entrypoints() {
     plan.executable = temp.path().join("npm");
     plan.directory = temp.path().into();
     plan.cli_args = vec!["--version".into()];
-    let script = powershell_script(&plan).unwrap();
+    let script = powershell_script(&plan, None).unwrap();
     let output = crate::background_process::command(system_console_path(TerminalId::PowerShell).unwrap())
         .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", &encoded_powershell(&script)]).output().unwrap();
     assert!(output.status.success());
@@ -112,7 +114,7 @@ fn macos_terminal_receives_path_directory_and_escaped_cli_arguments() {
     plan.directory = PathBuf::from("/Users/test/项目 'one'");
     plan.executable = PathBuf::from("/Users/test/.nvm/bin/codex");
     plan.cli_args = vec!["prompt with \"quotes\", \\slashes and\nnewlines $(touch unwanted)".into()];
-    let terminal = terminal_command(&plan).unwrap();
+    let terminal = terminal_command(&plan, None).unwrap();
     assert_eq!(terminal.program, "/usr/bin/open");
     assert_eq!(terminal.args, ["-a", "Terminal"]);
     let script = terminal.mac_script.unwrap();
@@ -143,7 +145,7 @@ fn custom_terminal_keeps_one_script_placeholder_and_presets_are_templates() {
     assert!(presets.iter().all(|preset| preset.args.iter().filter(|arg| arg.as_str() == "{script}").count() == 1));
     let mut plan = sample(TerminalId::Custom);
     plan.cli_args = vec!["y".repeat(2000)];
-    let terminal = terminal_command(&plan).unwrap();
+    let terminal = terminal_command(&plan, None).unwrap();
     assert!(terminal.args.iter().map(String::len).sum::<usize>() < 1024);
     assert!(terminal.mac_script.unwrap().contains(&"y".repeat(2000)));
 }
@@ -152,7 +154,7 @@ fn custom_terminal_keeps_one_script_placeholder_and_presets_are_templates() {
 fn macos_launch_keeps_long_commands_out_of_the_tty_input_buffer() {
     let mut plan = sample(TerminalId::MacTerminal);
     plan.cli_args = vec!["resume".into(), "x".repeat(2000)];
-    let terminal = terminal_command(&plan).unwrap();
+    let terminal = terminal_command(&plan, None).unwrap();
     let script = terminal.mac_script.unwrap();
     assert!(script.contains(&"x".repeat(2000)));
     assert!(terminal.args.iter().map(String::len).sum::<usize>() < 1024);
@@ -177,7 +179,7 @@ fn macos_launch_script_runs_in_the_original_directory_with_literal_arguments() {
         cli_args: vec!["--resume".into(), "session 'one'".into(), "\"quote\" \\slash\nnewline $(touch unwanted)".into()],
         ..sample(TerminalId::MacTerminal)
     };
-    let terminal = terminal_command(&plan).unwrap();
+    let terminal = terminal_command(&plan, None).unwrap();
     let script = terminal.mac_script.unwrap();
     let output = Command::new("/bin/sh").args(["-c", &script])
         .env_clear().env("PATH", "/usr/bin:/bin").output().unwrap();
@@ -216,12 +218,13 @@ fn sample(terminal: TerminalId) -> LaunchPlan {
         directory: PathBuf::from("C:/用户/我的 project [one]"),
         terminal,
         session_markers: &[],
+        credential: None,
     }
 }
 
 #[test]
 fn terminal_plans_quote_unicode_spaces_and_shell_metacharacters_as_data() {
-    let ps = terminal_command(&sample(TerminalId::PowerShell)).unwrap();
+    let ps = terminal_command(&sample(TerminalId::PowerShell), None).unwrap();
     let command = ps.args.last().unwrap();
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(command)
@@ -240,7 +243,7 @@ fn terminal_plans_quote_unicode_spaces_and_shell_metacharacters_as_data() {
     assert!(command.contains("Remove-Item Env:NO_COLOR"));
     assert!(command.contains("$env:TERM -eq 'dumb'"));
     assert!(!command.contains("CLAUDE_CODE_CHILD_SESSION"));
-    let shell = terminal_command(&sample(TerminalId::GnomeTerminal)).unwrap();
+    let shell = terminal_command(&sample(TerminalId::GnomeTerminal), None).unwrap();
     let command = shell.args.last().unwrap();
     assert!(command.contains("unset NO_COLOR"));
     assert!(!command.contains("CLAUDE_CODE_CHILD_SESSION"));
@@ -250,7 +253,7 @@ fn terminal_plans_quote_unicode_spaces_and_shell_metacharacters_as_data() {
     let mut claude = sample(TerminalId::PowerShell);
     claude.tool_id = "claude_code".into();
     claude.session_markers = markers;
-    let claude_ps = terminal_command(&claude).unwrap();
+    let claude_ps = terminal_command(&claude, None).unwrap();
     let bytes = base64::engine::general_purpose::STANDARD.decode(claude_ps.args.last().unwrap()).unwrap();
     let decoded = String::from_utf16(&bytes.chunks_exact(2).map(|value| u16::from_le_bytes([value[0], value[1]])).collect::<Vec<_>>()).unwrap();
     assert!(decoded.contains("'CLAUDE_CODE_CHILD_SESSION'"));
@@ -258,7 +261,7 @@ fn terminal_plans_quote_unicode_spaces_and_shell_metacharacters_as_data() {
     assert_eq!(claude_ps.session_markers, markers);
     let mut claude_sh = sample(TerminalId::GnomeTerminal);
     claude_sh.session_markers = markers;
-    let claude_shell = terminal_command(&claude_sh).unwrap();
+    let claude_shell = terminal_command(&claude_sh, None).unwrap();
     assert!(claude_shell.args.last().unwrap().contains("unset CLAUDECODE CLAUDE_CODE_CHILD_SESSION"));
     let maintenance = shell_terminal(TerminalId::PowerShell, Path::new("C:/Users/me"), "irm https://chatgpt.com/codex/install.ps1 | iex").unwrap();
     let encoded = maintenance.args.last().unwrap();
@@ -554,7 +557,7 @@ fn project_launch_plan_uses_real_probe_and_project_model_without_shell_expansion
         planned.cli_args,
         ["--resume", "session 1", "--yolo", "-m", "grok-4.7"]
     );
-    let command = terminal_command(&planned).unwrap();
+    let command = terminal_command(&planned, None).unwrap();
     assert_eq!(
         command.directory,
         PathBuf::from(terminal_path(&planned.directory).unwrap())
@@ -612,4 +615,196 @@ fn default_launch_modes_start_normal_and_save_cli_and_project_separately() {
     })
     .unwrap();
     assert!(settings(&db).unwrap_err().contains("默认启动模式格式无法识别"));
+}
+
+struct MemoryCredentialStore(HashMap<String, String>);
+impl CredentialStore for MemoryCredentialStore {
+    fn put(&self, _: &str, _: &str) -> Result<(), String> {
+        unreachable!()
+    }
+    fn get(&self, id: &str) -> Result<String, String> {
+        self.0.get(id).cloned().ok_or("missing".into())
+    }
+    fn delete(&self, _: &str) -> Result<(), String> {
+        unreachable!()
+    }
+}
+
+fn registered_profile(
+    tool: &str,
+    secret_ref: Option<&str>,
+) -> crate::native::profile::RegisteredProfile {
+    crate::native::profile::RegisteredProfile {
+        editing: None,
+        id: format!("{tool}-profile"),
+        tool: tool.into(),
+        name: "测试".into(),
+        version: 1,
+        revision: String::new(),
+        inherit_common: false,
+        files: BTreeMap::new(),
+        suppressed: BTreeMap::new(),
+        authentication: crate::native::profile::ProfileAuthentication::ApiKey,
+        connection: secret_ref.map(|id| crate::native::profile::Connection {
+            provider_id: "official".into(),
+            interface_format: "openai_responses".into(),
+            base_url: "https://example.test/v1".into(),
+            model: "model".into(),
+            secret_ref: Some(id.into()),
+            auth_env_var: None,
+            model_records: Vec::new(),
+        }),
+        native_credentials: BTreeMap::new(),
+    }
+}
+
+fn insert_applied_binding(db: &Database, tool: &str, key: &str, secret_ref: Option<&str>) {
+    let profile = registered_profile(tool, secret_ref);
+    let snapshot = serde_json::to_string(&crate::native::apply::AppliedProfileSnapshot {
+        source_profile: profile.clone(),
+        runtime_profile: profile,
+        model_summary: None,
+    })
+    .unwrap();
+    db.with_connection(|conn| {
+        conn.execute(
+            "INSERT INTO applied_bindings (scope_key, tool, profile_id, profile_version, managed, context_id, applied_profile) VALUES (?1, ?2, ?3, 1, '{}', NULL, ?4)",
+            params![key, tool, format!("{tool}-profile"), snapshot],
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+    })
+    .unwrap();
+}
+
+#[test]
+fn launch_credential_port_is_gated_to_env_channel_adapters() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("app.db")).unwrap();
+    let registry = Registry::builtins();
+    let reference = "connection-00000000-0000-4000-8000-000000000011";
+    insert_applied_binding(&db, "kiro", "global", Some(reference));
+    insert_applied_binding(&db, "codex", "global", Some(reference));
+    insert_applied_binding(&db, "cline", "global", Some(reference));
+    let kiro = registry.get("kiro").unwrap();
+    let resolved =
+        launch_credential_binding(&db, kiro, "kiro", Scope::Global, temp.path())
+            .unwrap()
+            .unwrap();
+    assert_eq!(resolved.env_name, "KIRO_API_KEY");
+    assert_eq!(resolved.secret_ref, reference);
+    // A project-scoped launch falls back to the globally applied key.
+    let project = temp.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    assert_eq!(
+        launch_credential_binding(&db, kiro, "kiro", Scope::Project, &project)
+            .unwrap()
+            .as_ref(),
+        Some(&resolved)
+    );
+    // File-channel adapters (the legacy enum five included) stay unchanged.
+    let codex = registry.get("codex").unwrap();
+    assert!(
+        launch_credential_binding(&db, codex, "codex", Scope::Global, temp.path())
+            .unwrap()
+            .is_none()
+    );
+    // Tools without a managed env key are unchanged.
+    let cline = registry.get("cline").unwrap();
+    assert!(
+        launch_credential_binding(&db, cline, "cline", Scope::Global, temp.path())
+            .unwrap()
+            .is_none()
+    );
+    // No applied binding means no credential and no launch failure.
+    let antigravity = registry.get("antigravity").unwrap();
+    assert!(
+        launch_credential_binding(&db, antigravity, "antigravity", Scope::Global, temp.path())
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn credential_value_resolves_at_spawn_time_and_never_enters_the_plan() {
+    let reference = "connection-00000000-0000-4000-8000-000000000012";
+    let store =
+        MemoryCredentialStore(HashMap::from([(reference.into(), "gemini-test-31".into())]));
+    let mut plan = sample(TerminalId::PowerShell);
+    assert_eq!(resolve_credential(&plan, &store).unwrap(), None);
+    plan.credential = Some(LaunchCredential {
+        env_name: "GEMINI_API_KEY".into(),
+        secret_ref: reference.into(),
+    });
+    assert_eq!(
+        resolve_credential(&plan, &store).unwrap(),
+        Some(("GEMINI_API_KEY".into(), "gemini-test-31".into()))
+    );
+    // The plan carries only the adapter-owned name and store reference.
+    assert!(!format!("{plan:?}").contains("gemini-test-31"));
+    let missing = MemoryCredentialStore(HashMap::new());
+    assert!(resolve_credential(&plan, &missing)
+        .unwrap_err()
+        .contains("重新保存"));
+}
+
+fn decode_encoded_command(encoded: &str) -> String {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .unwrap();
+    String::from_utf16(
+        &bytes
+            .chunks_exact(2)
+            .map(|value| u16::from_le_bytes([value[0], value[1]]))
+            .collect::<Vec<_>>(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn terminal_scripts_carry_the_resolved_key_but_copyable_commands_do_not() {
+    let credential = ("KIRO_API_KEY".to_owned(), "ksk-test-917".to_owned());
+    let plan = sample(TerminalId::PowerShell);
+    let ps = terminal_command(&plan, Some(&credential)).unwrap();
+    let decoded = decode_encoded_command(ps.args.last().unwrap());
+    assert!(decoded.contains("$env:KIRO_API_KEY = 'ksk-test-917'"));
+    let shell = terminal_command(&sample(TerminalId::GnomeTerminal), Some(&credential)).unwrap();
+    assert!(shell
+        .args
+        .last()
+        .unwrap()
+        .contains("export KIRO_API_KEY='ksk-test-917'"));
+    // Without a planned credential the script is byte-identical to before.
+    let plain = terminal_command(&plan, None).unwrap();
+    assert!(!decode_encoded_command(plain.args.last().unwrap()).contains("ksk-test-917"));
+    // The copyable resume command never embeds the stored key.
+    let copy = native_command(&plan).unwrap();
+    assert!(!copy.contains("ksk-test-917"));
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_child_process_environment_receives_the_resolved_credential() {
+    let temp = tempfile::tempdir().unwrap();
+    let cli = temp.path().join("cli.ps1");
+    std::fs::write(
+        &cli,
+        "[Console]::OutputEncoding = [Text.UTF8Encoding]::new(); Write-Output \"key=$env:CLIORA_TEST_LAUNCH_KEY\"\n",
+    )
+    .unwrap();
+    let mut plan = sample(TerminalId::PowerShell);
+    plan.executable = cli;
+    plan.directory = temp.path().to_path_buf();
+    plan.cli_args.clear();
+    let credential = (
+        "CLIORA_TEST_LAUNCH_KEY".to_owned(),
+        "ksk-test-917".to_owned(),
+    );
+    let script = powershell_script(&plan, Some(&credential)).unwrap();
+    let output = crate::background_process::command(system_console_path(TerminalId::PowerShell).unwrap())
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", &encoded_powershell(&script)])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("key=ksk-test-917"));
 }

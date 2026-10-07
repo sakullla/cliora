@@ -224,6 +224,11 @@ impl CliAdapter for CommandCode {
             .as_ref()
             .map(|_| CREDENTIAL_ENV_NAME.to_owned())
     }
+    fn connection_secret_via_launch_env(&self) -> bool {
+        // providers.json accepts only `$VAR` references; the shared launch
+        // service injects the frozen COMMAND_CODE_API_KEY at spawn time.
+        true
+    }
     fn connection_policy(&self, scope: Scope) -> crate::native::adapter::ConnectionPolicy {
         crate::native::adapter::ConnectionPolicy {
             api_key: if scope == Scope::Project {
