@@ -23,7 +23,7 @@ impl Database {
     pub fn open(path: &Path) -> Result<Self, OpenError> {
         let mut connection = Connection::open(path)?;
         let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 20 {
+        if version > 21 {
             return Err(OpenError::UnsupportedVersion(version));
         }
         connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
@@ -438,6 +438,14 @@ impl Database {
             tx.execute_batch("PRAGMA user_version = 20;")?;
             tx.commit()?;
         }
+
+        if version < 21 {
+            let tx = connection.transaction()?;
+            // Automatic-refresh quota readings stay local: no sync triggers register
+            // this table as an entity, and deleting a query drops its samples.
+            tx.execute_batch("CREATE TABLE IF NOT EXISTS usage_samples (query_id TEXT NOT NULL REFERENCES usage_queries(id) ON DELETE CASCADE, measured_at INTEGER NOT NULL, payload TEXT NOT NULL); CREATE INDEX IF NOT EXISTS idx_usage_samples_query_time ON usage_samples(query_id, measured_at); PRAGMA user_version = 21;")?;
+            tx.commit()?;
+        }
         Ok(Self {
             connection: Mutex::new(connection),
             read_path: (path != Path::new(":memory:") && !path.as_os_str().is_empty()).then(|| path.to_owned()),
@@ -670,7 +678,7 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
-            assert_eq!(version, 20);
+            assert_eq!(version, 21);
             let count: i64 = conn
                 .query_row("SELECT COUNT(*) FROM native_profiles", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;

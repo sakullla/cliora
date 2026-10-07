@@ -9,7 +9,7 @@ mod scheduler;
 mod official;
 mod profile;
 pub use profile::ensure_profile_query;
-pub use scheduler::{UsageCache, list_cache, refresh_query, cancel_refresh, scheduler_tick};
+pub use scheduler::{UsageCache, UsageSample, list_cache, list_samples, refresh_query, cancel_refresh, scheduler_tick};
 pub use providers::{builtin_script, usage_presets};
 pub use presets::{PresetCredential, UsagePreset};
 pub use helper::{helper_entry, create_test_execution, cancel_test_execution, test_draft, DraftTestReport};

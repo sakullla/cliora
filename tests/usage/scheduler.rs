@@ -83,7 +83,7 @@ fn persisted_cache_isolated_and_old_generation_cannot_publish() {
     let db = Database::open(&path).unwrap();
     let q = save_query(&db, &NoSecrets, draft(None)).unwrap().query;
     let other = save_query(&db, &NoSecrets, draft(None)).unwrap().query;
-    publish(&db, &q, result()).unwrap();
+    publish(&db, &q, result(), false).unwrap();
     drop(db);
     let db = Database::open(&path).unwrap();
     let cache = list_cache(&db).unwrap();
@@ -100,13 +100,13 @@ fn persisted_cache_isolated_and_old_generation_cannot_publish() {
         .success
         .is_none());
     let updated = save_query(&db, &NoSecrets, draft(Some(&q))).unwrap().query;
-    publish(&db, &q, result()).unwrap();
+    publish(&db, &q, result(), false).unwrap();
     let cache = list_cache(&db).unwrap();
     let current = cache.iter().find(|c| c.query_id == q.id).unwrap();
     assert_eq!(current.generation, updated.generation);
     assert!(current.success.is_none());
     delete_query(&db, &NoSecrets, &updated.id, updated.version).unwrap();
-    publish(&db, &q, result()).unwrap();
+    publish(&db, &q, result(), false).unwrap();
     assert_eq!(list_cache(&db).unwrap().len(), 1);
 }
 #[test]
@@ -187,7 +187,7 @@ fn v14_queries_without_cache_are_due_but_new_saves_wait_for_interval() {
     let cache = list_cache(&db).unwrap();
     assert!(!due(&cache[0], &q, false, now()));
     db.with_connection(|c| {
-        c.execute_batch("DROP TABLE auth_accounts; ALTER TABLE applied_bindings DROP COLUMN context_id; ALTER TABLE history_usage DROP COLUMN request_count; DROP TABLE usage_cache; PRAGMA user_version=14;")
+        c.execute_batch("DROP TABLE auth_accounts; ALTER TABLE applied_bindings DROP COLUMN context_id; ALTER TABLE history_usage DROP COLUMN request_count; DROP TABLE usage_cache; DROP TABLE usage_samples; PRAGMA user_version=14;")
             .map_err(|e| e.to_string())
     })
     .unwrap();
@@ -213,7 +213,7 @@ fn v14_queries_without_cache_are_due_but_new_saves_wait_for_interval() {
         let version: u32 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(|e| e.to_string())?;
-        assert_eq!(version, 20);
+        assert_eq!(version, 21);
         Ok(())
     })
     .unwrap();
@@ -222,7 +222,7 @@ fn v14_queries_without_cache_are_due_but_new_saves_wait_for_interval() {
     assert!(cache[0].success.is_none());
     assert_eq!(get_query(&db, &q.id).unwrap(), q);
     let updated = save_query(&db, &NoSecrets, draft(Some(&q))).unwrap().query;
-    publish(&db, &updated, result()).unwrap();
+    publish(&db, &updated, result(), false).unwrap();
     assert!(list_cache(&db).unwrap()[0].success.is_some());
     drop(db);
     let db = Database::open(&path).unwrap();
@@ -304,7 +304,7 @@ fn explicit_cancel_between_execution_and_publication_never_publishes_success() {
     let dir = tempfile::tempdir().unwrap();
     let db = Arc::new(Database::open(&dir.path().join("db")).unwrap());
     let q = save_query(&db, &NoSecrets, draft(None)).unwrap().query;
-    publish(&db, &q, result()).unwrap();
+    publish(&db, &q, result(), false).unwrap();
     let previous = list_cache(&db).unwrap()[0].success.clone();
     let (send, receive) = std::sync::mpsc::channel();
     refresh_with(db.clone(), &q.id, true, move |_, _, _| {

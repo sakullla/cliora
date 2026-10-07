@@ -10,7 +10,7 @@ import type { LibraryDraft, LibraryItem, LibraryKind } from '../types/library';
 import type { McpDefinition, McpDraft, McpPlacement, McpTargetRequest, McpTargetResult, NativeMcpEntry, RuleTarget, RulePreview, RuleApplyResult, RulePlacement, RuleClientSelection, RuleSyncResult, SkillPackage, SkillImportPreview, SkillInstallation, SkillTargetResult, NativeSkillEntry, SkillTargetPreview, SkillRecoveryIssue } from '../types/resources';
 import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, ScanStatus, UsageReport } from '../types/history';
 import type { ConflictPreview, PortableApplyTarget, PortableImportReport, PortableItem, PortablePreview, PortableProjectLink, SyncStatus, WebdavSetup } from '../types/portable';
-import type { QueryConfig, UsageCache, UsagePreset, DeleteQueryResult, DraftTestReport, SaveQueryResult, UsageError, UsageQuery, UsageQueryDraft } from '../types/usage';
+import type { QueryConfig, UsageCache, UsagePreset, UsageSample, DeleteQueryResult, DraftTestReport, SaveQueryResult, UsageError, UsageQuery, UsageQueryDraft } from '../types/usage';
 
 export const nativeAvailable = isTauri();
 
@@ -108,6 +108,7 @@ export const native = {
   ensureProfileUsage: (profileId: string, expectedProfileVersion: number) => usageCommand<UsageQuery | null>('ensure_profile_usage', { profileId, expectedProfileVersion }),
   usageBuiltinScript: (config: QueryConfig) => usageCommand<string>('usage_builtin_script', { config }),
   listUsageCache: () => usageCommand<UsageCache[]>('list_usage_cache'),
+  listUsageSamples: (queryId: string) => usageCommand<UsageSample[]>('list_usage_samples', { queryId }),
   cancelUsageRefresh: (id: string) => usageCommand<void>('cancel_usage_refresh', { id }),
   refreshUsageQuery: (id: string) => usageCommand<void>('refresh_usage_query', { id }),
   listUsageQueries: () => usageCommand<UsageQuery[]>('list_usage_queries'),
