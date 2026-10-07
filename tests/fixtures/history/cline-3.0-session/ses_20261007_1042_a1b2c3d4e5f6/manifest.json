@@ -1,0 +1,18 @@
+{
+  "session_id": "ses_20261007_1042_a1b2c3d4e5f6",
+  "source": "cli",
+  "pid": 4242,
+  "started_at": 1791000000000,
+  "ended_at": 1791000900000,
+  "exit_code": 0,
+  "status": "completed",
+  "interactive": true,
+  "provider": "anthropic",
+  "model": "claude-sonnet-4-5",
+  "cwd": "C:\\Users\\example\\cline-demo",
+  "workspace_root": "C:\\Users\\example\\cline-demo",
+  "prompt": "把构建脚本改成跨平台版本",
+  "metadata": { "schema": "1" },
+  "messages_path": "ses_20261007_1042_a1b2c3d4e5f6.messages.json",
+  "compaction_path": "ses_20261007_1042_a1b2c3d4e5f6.compaction.json"
+}

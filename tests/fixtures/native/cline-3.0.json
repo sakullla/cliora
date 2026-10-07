@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "example-local": {
+      "command": "npx",
+      "args": ["-y", "example-mcp"],
+      "env": { "EXAMPLE_MODE": "fixture" },
+      "autoApprove": ["example_tool"],
+      "timeout": 5000
+    },
+    "example-remote": {
+      "url": "https://mcp.example.com/sse",
+      "headers": { "X-Example": "fixture" }
+    },
+    "unverified-shape": {
+      "transport": { "kind": "stdio", "argv": ["example-runner"] }
+    }
+  }
+}

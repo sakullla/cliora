@@ -1,0 +1,18 @@
+{
+  "session_id": "ses_20261007_1108_z9y8x7w6v5u4",
+  "source": "cli",
+  "pid": 4545,
+  "started_at": 1791001200000,
+  "ended_at": 1791001260000,
+  "exit_code": 0,
+  "status": "completed",
+  "interactive": true,
+  "provider": "anthropic",
+  "model": "claude-sonnet-4-5",
+  "cwd": "C:\\Users\\example\\cline-demo",
+  "workspace_root": "C:\\Users\\example\\cline-demo",
+  "prompt": "快速核对一个依赖版本",
+  "metadata": { "schema": "1" },
+  "messages_path": "ses_20261007_1108_z9y8x7w6v5u4.messages.json",
+  "compaction_path": "ses_20261007_1108_z9y8x7w6v5u4.compaction.json"
+}

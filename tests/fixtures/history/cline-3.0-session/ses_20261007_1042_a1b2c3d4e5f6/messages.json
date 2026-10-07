@@ -1,0 +1,46 @@
+[
+  {
+    "id": "msg_0001",
+    "ts": 1791000005000,
+    "role": "user",
+    "text": "把构建脚本改成跨平台版本，保留原有的打包步骤。"
+  },
+  {
+    "id": "msg_0002",
+    "ts": 1791000010000,
+    "role": "assistant",
+    "text": "已改为 scripts/build.js，打包步骤迁移到 node 脚本内。",
+    "metrics": {
+      "inputTokens": 1200,
+      "outputTokens": 300,
+      "cacheReadTokens": 0,
+      "cacheWriteTokens": 0,
+      "cost": 0.0123
+    }
+  },
+  {
+    "id": "msg_0003",
+    "ts": 1791000030000,
+    "role": "assistant",
+    "text": "两处 powershell 专有调用已换成跨平台写法。",
+    "metrics": {
+      "inputTokens": 500,
+      "outputTokens": 120,
+      "cacheReadTokens": 8000,
+      "cacheWriteTokens": 3000,
+      "cost": 0.0234
+    }
+  },
+  {
+    "id": "msg_0004",
+    "ts": 1791000040000,
+    "role": "user",
+    "text": "再补一个 Linux 下的冒烟说明。"
+  },
+  {
+    "id": "msg_0005",
+    "ts": 1791000050000,
+    "role": "assistant",
+    "text": "已在 README 增补 Linux 冒烟步骤。"
+  }
+]
