@@ -465,6 +465,8 @@ test('command palette jumps between pages and the sidebar shortcut collapses nav
   await page.keyboard.press('Enter');
   await expect(page.getByRole('heading', { name: '资料库', level: 1 })).toBeVisible();
 
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '设置', level: 1 })).toBeVisible();
   await page.getByRole('button', { name: '键盘快捷键', exact: true }).click();
   await expect(page.getByRole('dialog', { name: '键盘快捷键' })).toContainText('快速前往');
   await page.keyboard.press('Escape');
