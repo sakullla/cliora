@@ -798,6 +798,96 @@ fn report_drops_placeholders_dedupes_copied_calls_and_keeps_known_cache() {
 }
 
 #[test]
+fn models_dev_parse_drops_entries_without_cost_and_rejects_garbage() {
+    let body = serde_json::json!({
+        "fixture": {"id": "fixture", "models": {
+            "alpha": {"id": "alpha", "cost": {"input": 1.5, "output": 6}},
+            "free": {"id": "free"},
+            "broken": {"id": "broken", "cost": {"input": "lots"}}
+        }},
+        "empty": {"id": "empty"}
+    })
+    .to_string();
+    let prices = models_dev::parse_prices(&body, 42).unwrap();
+    assert_eq!(prices.len(), 1);
+    let alpha = &prices[0];
+    assert_eq!((alpha.tool_id.as_str(), alpha.model.as_str()), ("fixture", "alpha"));
+    assert_eq!((alpha.input_per_million, alpha.output_per_million), (1.5, 6.0));
+    assert_eq!((alpha.cache_read_per_million, alpha.cache_write_per_million), (0.0, 0.0));
+    assert_eq!((alpha.source.as_str(), alpha.updated_at), ("models.dev", 42));
+    assert_eq!(alpha.currency, "USD");
+    assert!(models_dev::parse_prices("not json", 0).is_err());
+    assert!(models_dev::parse_prices("[]", 0).is_err());
+    assert!(models_dev::parse_prices("{}", 0).is_err(), "a response without prices must not replace the cache");
+}
+
+#[test]
+fn models_dev_model_matching_is_exact_then_normalized() {
+    assert_eq!(models_dev::normalize_model("OpenAI/GPT-4O"), "gpt-4o");
+    assert_eq!(models_dev::normalize_model(" claude-Sonnet-4-5 "), "claude-sonnet-4-5");
+    assert_eq!(models_dev::normalize_model("custom/x"), "custom/x", "unknown prefixes are kept");
+    let imported = models_dev::ImportedPrices::index(vec![
+        HistoryPrice { tool_id: "fixture".into(), model: "vendor-nine".into(), currency: "USD".into(),
+            input_per_million: 1.0, output_per_million: 2.0, cache_read_per_million: 0.1, cache_write_per_million: 0.0,
+            source: "models.dev".into(), updated_at: 1 },
+        HistoryPrice { tool_id: "fixture".into(), model: "Vendor-Ten".into(), currency: "USD".into(),
+            input_per_million: 3.0, output_per_million: 4.0, cache_read_per_million: 0.0, cache_write_per_million: 0.0,
+            source: "models.dev".into(), updated_at: 1 },
+    ]);
+    assert_eq!(imported.resolve("vendor-nine").unwrap().input_per_million, 1.0, "exact match wins");
+    assert_eq!(imported.resolve("VENDOR-NINE").unwrap().output_per_million, 2.0, "case is normalized");
+    assert_eq!(imported.resolve("openai/vendor-ten").unwrap().input_per_million, 3.0, "provider prefix is stripped");
+    assert!(imported.resolve("vendor-eleven").is_none());
+}
+
+#[test]
+fn models_dev_prices_fill_the_gap_between_custom_and_published_rates() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let registry = Registry::with_adapters(vec![&CODEX]).unwrap();
+    let fetched = now_ms();
+    let cache = models_dev::PriceCache {
+        fetched_at: fetched,
+        prices: vec![
+            HistoryPrice { tool_id: "fixture".into(), model: "vendor-nine".into(), currency: "USD".into(),
+                input_per_million: 2.0, output_per_million: 8.0, cache_read_per_million: 0.2, cache_write_per_million: 2.5,
+                source: "models.dev".into(), updated_at: fetched },
+        ],
+    };
+    fs::write(models_dev::cache_path(temp.path()), serde_json::to_string(&cache).unwrap()).unwrap();
+    store_events(&db, "codex", "imported", None, vec![
+        // 100 input includes 40 cache read + 5 cache write: 55 fresh.
+        event("call-nine", Some("vendor-nine"), FIXTURE_DAY + 1000, (100, 10, Some(40), Some(5)), true),
+        event("call-prefixed", Some("openai/vendor-nine"), FIXTURE_DAY + 2000, (10, 2, Some(0), Some(0)), false),
+        event("call-unknown", Some("never-priced"), FIXTURE_DAY + 3000, (30, 3, Some(0), Some(0)), false),
+    ]);
+    let report = usage_report(&db, &HistoryFilter::default()).unwrap();
+    // call-nine: 55*2 + 40*0.2 + 5*2.5 + 10*8 = 210.5; call-prefixed: 10*2 + 2*8 = 36 (per million).
+    assert!((report.totals.cost.unwrap() - 0.0002465).abs() < 1e-9);
+    assert_eq!(report.totals.unpriced_tokens, 33, "models the table lacks stay unpriced");
+    let source = report.price_sources.iter().find(|source| source.contains("models.dev")).expect("the imported source is labeled");
+    assert!(source.contains("vendor-nine"));
+
+    // A custom price still wins over the imported rate for the same model string.
+    save_price(&db, &registry, HistoryPrice {
+        tool_id: "codex".into(), model: "vendor-nine".into(), currency: "USD".into(),
+        input_per_million: 100.0, output_per_million: 100.0, cache_read_per_million: 100.0, cache_write_per_million: 100.0,
+        source: "Manual fixture rate".into(), updated_at: 0,
+    }).unwrap();
+    let overridden = usage_report(&db, &HistoryFilter { model: Some("vendor-nine".into()), ..Default::default() }).unwrap();
+    assert!((overridden.totals.cost.unwrap() - 0.011).abs() < 1e-9);
+    assert_eq!(overridden.price_sources.len(), 1);
+    assert!(overridden.price_sources[0].contains("Manual fixture rate"));
+
+    // The published fallback still applies to models absent from the cache.
+    store_events(&db, "codex", "fallback", None, vec![
+        event("call-astra", Some("gpt-6-astra"), FIXTURE_DAY + 4000, (100, 10, Some(0), Some(0)), false),
+    ]);
+    let fallback = usage_report(&db, &HistoryFilter { model: Some("gpt-6-astra".into()), ..Default::default() }).unwrap();
+    assert!(fallback.price_sources.iter().any(|source| source.contains("OpenAI 公开价")));
+}
+
+#[test]
 fn codex_prefers_per_response_records_and_reads_past_old_row_limits() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("rollout-records.jsonl");

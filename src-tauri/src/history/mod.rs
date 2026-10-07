@@ -15,6 +15,7 @@ use crate::database::Database;
 use crate::domain::CliId;
 use crate::adapters::{CliAdapter, Registry};
 
+pub(crate) mod models_dev;
 mod report;
 pub(crate) mod usage;
 
