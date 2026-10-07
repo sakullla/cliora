@@ -1,0 +1,29 @@
+// Devin CLI 3000.11.3 sanitized global config `%APPDATA%\devin\config.json`.
+// Shapes desensitized from a local install (2026-10-07, structure only):
+// no real org ids, model selections or hosts. The file is read as JSONC by
+// the CLI even though it ships with a .json name.
+{
+  "version": 1,
+  // Account-scoped org binding (value sanitized; shape is a 8-4-4-4-hex tail
+  // similar to a UUID-derived id).
+  "devin": {
+    "org_id": "org-04d1e2x3a4b5c6d7e8f9a0b1c2d3e4f5"
+  },
+  "shell": {
+    "setup_complete": true
+  },
+  "theme_mode": "dark",
+  "agent": {
+    "model": "example-opus-medium",
+    "preferred_family_models": {
+      "example-opus": "example-opus-medium",
+      "example-swe": "example-swe-high"
+    }
+  },
+  // Keys below are documented in the official CLI configuration reference but
+  // were absent from the inspected local file; values stay neutral placeholders.
+  "permissions": {
+    "default_mode": "auto"
+  },
+  "subagents_enabled": true
+}
