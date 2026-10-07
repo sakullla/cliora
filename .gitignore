@@ -30,6 +30,7 @@ docs/architecture/*
 !docs/verification/
 docs/verification/*
 !docs/verification/configuration-redesign.md
+!docs/verification/usage-audit-2026-10.md
 !docs/verification/configuration-redesign-ui/
 docs/verification/configuration-redesign-ui/*
 !docs/verification/configuration-redesign-ui/kimi-minimum-720x560.png
