@@ -27,8 +27,10 @@
     "@lezer/highlight": "1.2.5",
     "@tauri-apps/api": "2.12.0",
     "@tauri-apps/plugin-dialog": "^2.8.0",
+    "i18next": "^26.4.2",
     "react": "19.3.0",
     "react-dom": "19.3.0",
+    "react-i18next": "^17.0.16",
     "react-markdown": "10.1.0",
     "remark-gfm": "4.0.1"
   },
