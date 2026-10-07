@@ -1,5 +1,9 @@
-import { useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { getVersion } from '@tauri-apps/api/app';
+import { listen } from '@tauri-apps/api/event';
+import { relaunch } from '@tauri-apps/plugin-process';
+import { check, type Update } from '@tauri-apps/plugin-updater';
 import { Icon } from '../../components/Icon';
 import type { IconName } from '../../components/Icon';
 import { ToolIcon } from '../../components/ToolIcon';
@@ -16,6 +20,110 @@ type ToolItem = { id: string; name: string };
 
 const themeGlyphs: Record<Theme, IconName> = { system: 'monitor', light: 'sun', dark: 'moon' };
 const themeOrder: Theme[] = ['system', 'light', 'dark'];
+
+type UpdateOffer = { version: string; notes: string | null };
+
+// ADR-4：Rust 端启动延迟自动检查的结果事件。模块级订阅（App 静态引入本模块）保证
+// 任意页面都能收到，设置页挂载时读取最新结果；未收到即无待提示更新。
+let autoCheckOffer: UpdateOffer | null = null;
+if (nativeAvailable) {
+  void listen<UpdateOffer>('cliora:update-available', (event) => { autoCheckOffer = event.payload; });
+}
+
+function formatMb(bytes: number): string {
+  return (bytes / 1048576).toFixed(1);
+}
+
+type UpdateStage = 'idle' | 'checking' | 'latest' | 'available' | 'downloading' | 'installed' | 'failed';
+
+// 文案 key settings.update.* 由 T7 统一抽取至 src/i18n/locales/{zh,en}/settings.ts；
+// 此处先以 defaultValue 中文兜底，符合缺翻译回退中文的约定。
+function UpdateSettings({ busy }: { busy: boolean }) {
+  const { t } = useTranslation();
+  const [version, setVersion] = useState('');
+  const [stage, setStage] = useState<UpdateStage>(autoCheckOffer ? 'available' : 'idle');
+  const [offer, setOffer] = useState<(UpdateOffer & { update: Update | null }) | null>(autoCheckOffer ? { ...autoCheckOffer, update: null } : null);
+  const [progress, setProgress] = useState<{ downloaded: number; total: number | null }>({ downloaded: 0, total: null });
+  const [failure, setFailure] = useState('');
+  const installing = useRef(false);
+
+  useEffect(() => { void getVersion().then(setVersion, () => setVersion('')); }, []);
+  useEffect(() => {
+    const unlisten = listen<UpdateOffer>('cliora:update-available', (event) => {
+      setOffer((current) => current?.update ? current : { ...event.payload, update: null });
+      setStage((current) => current === 'idle' || current === 'latest' || current === 'failed' ? 'available' : current);
+    });
+    return () => { void unlisten.then((off) => off()); };
+  }, []);
+
+  async function handleCheck() {
+    if (installing.current) return;
+    setFailure('');
+    setStage('checking');
+    try {
+      const update = await check();
+      if (update) {
+        setOffer({ version: update.version, notes: update.body ?? null, update });
+        setStage('available');
+      } else {
+        setOffer(null);
+        setStage('latest');
+      }
+    } catch (error) {
+      setFailure(error instanceof Error ? error.message : String(error));
+      setStage('failed');
+    }
+  }
+
+  async function handleInstall() {
+    if (installing.current) return;
+    installing.current = true;
+    setFailure('');
+    try {
+      let update = offer?.update ?? null;
+      if (!update) {
+        // 自动检查只带回版本信息，安装前重新取回更新句柄。
+        setStage('checking');
+        update = await check();
+        if (!update) {
+          setOffer(null);
+          setStage('latest');
+          return;
+        }
+        setOffer({ version: update.version, notes: update.body ?? null, update });
+      }
+      setProgress({ downloaded: 0, total: null });
+      setStage('downloading');
+      // 插件在写入前强制验签；验签/下载/安装失败都会抛错，当前版本保持可用（ADR-4）。
+      await update.downloadAndInstall((event) => {
+        if (event.event === 'Started') {
+          setProgress({ downloaded: 0, total: event.data.contentLength ?? null });
+        } else if (event.event === 'Progress') {
+          setProgress((current) => ({ ...current, downloaded: current.downloaded + event.data.chunkLength }));
+        }
+      });
+      setStage('installed');
+      try {
+        await relaunch();
+      } catch { /* 重启失败时保留“已安装”提示，用户手动重新打开即可。 */ }
+    } catch (error) {
+      setFailure(error instanceof Error ? error.message : String(error));
+      setStage('failed');
+    } finally {
+      installing.current = false;
+    }
+  }
+
+  return <section className="settings-group">
+    <div className="setting-intro"><h2>{t('settings.update.title', { defaultValue: '更新' })}</h2><p>{t('settings.update.description', { defaultValue: '检查新版本，确认后下载、校验并安装。' })}</p></div>
+    <div className="setting-row"><span><strong>{t('settings.update.current', { defaultValue: '当前版本' })}</strong><small>{version || '—'}</small></span><button className="button" type="button" disabled={busy || stage === 'checking' || stage === 'downloading'} onClick={handleCheck}>{stage === 'checking' ? t('settings.update.checking', { defaultValue: '检查中…' }) : t('settings.update.check', { defaultValue: '检查更新' })}</button></div>
+    {stage === 'latest' && <div className="setting-row"><span><small>{t('settings.update.latest', { defaultValue: '已是最新版本。' })}</small></span></div>}
+    {stage === 'available' && offer && <div className="setting-row"><span><strong>{t('settings.update.available', { defaultValue: '发现新版本 {{version}}', version: offer.version })}</strong><small>{offer.notes || t('settings.update.confirmHint', { defaultValue: '确认后下载并校验签名，完成后自动重启进入新版本。' })}</small></span><button className="button" type="button" disabled={busy} onClick={handleInstall}>{t('settings.update.install', { defaultValue: '下载并安装' })}</button></div>}
+    {stage === 'downloading' && <div className="setting-row"><span><strong>{t('settings.update.downloading', { defaultValue: '正在下载更新…' })}</strong><small>{progress.total ? t('settings.update.progress', { defaultValue: '已下载 {{downloaded}} / {{total}} MB', downloaded: formatMb(progress.downloaded), total: formatMb(progress.total) }) : t('settings.update.progressUnknown', { defaultValue: '已下载 {{downloaded}} MB', downloaded: formatMb(progress.downloaded) })}</small></span><div className={styles.updateProgress}><div className={progress.total ? '' : styles.indeterminate} style={progress.total ? { width: `${Math.min(100, Math.round((progress.downloaded / progress.total) * 100))}%` } : undefined} /></div></div>}
+    {stage === 'installed' && <div className="setting-row"><span><small>{t('settings.update.installed', { defaultValue: '更新已安装，正在重启；若未自动重启请手动重新打开。' })}</small></span></div>}
+    {stage === 'failed' && <div className="setting-row"><span><small className={styles.updateError}>{t('settings.update.failed', { defaultValue: '更新失败，已保持当前版本：' })}{failure}</small></span></div>}
+  </section>;
+}
 
 function ThemeChoice({ value, disabled, onChange }: { value: Theme; disabled: boolean; onChange: (theme: Theme) => void }) {
   const { t } = useTranslation();
@@ -86,6 +194,7 @@ export function GeneralSettings({ tools, managed, preservedUnknown, icons, busy,
       <div className="setting-intro"><h2>{t('settings.language.title')}</h2><p>{t('settings.language.description')}</p></div>
       <div className="setting-row"><span><strong>{t('settings.language.label')}</strong><small>{t('settings.language.hint')}</small></span><LanguageChoice value={language} disabled={busy} /></div>
     </section>
+    {nativeAvailable && <UpdateSettings busy={busy} />}
     {nativeAvailable && <TerminalSettings />}
     <div className="setting-row"><span><strong>{t('settings.shortcuts.label')}</strong><small>{t('settings.shortcuts.hint')}</small></span><button className="button" type="button" aria-label={t('settings.shortcuts.label')} onClick={onOpenShortcutHelp}>{t('settings.shortcuts.action')}</button></div>
     <div className="setting-row migration-entry"><span><strong>{t('settings.migration.label')}</strong><small>{t('settings.migration.hint')}</small></span><button className="button" type="button" onClick={onOpenMigration}>{t('settings.migration.action')}</button></div>
