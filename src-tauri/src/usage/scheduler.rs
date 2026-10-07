@@ -36,6 +36,17 @@ fn flights() -> &'static Mutex<Flights> {
 fn now() -> i64 {
     chrono::Utc::now().timestamp()
 }
+/// Automatic-refresh readings are kept per query for a rolling 90-day window.
+const SAMPLE_RETENTION_SECONDS: i64 = 90 * 24 * 60 * 60;
+/// One sampled reading of a successful automatic refresh, in measurement order.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageSample {
+    pub query_id: String,
+    /// Unix seconds when the host measured the reading.
+    pub measured_at: i64,
+    pub snapshot: UsageSnapshot,
+}
 impl UsageCache {
     fn empty(q: &UsageQuery, time: i64) -> Self {
         Self {
@@ -174,28 +185,93 @@ fn update(cache: &mut UsageCache, q: &UsageQuery, result: UsageResult, time: i64
         .max(cache.next_allowed_at);
     cache.refreshing = false;
 }
-fn publish(db: &Database, q: &UsageQuery, result: UsageResult) -> Result<(), UsageError> {
-    db.with_connection(|conn| {
+/// Sampling failure is logged only; it must never roll back the refresh result.
+fn record_sample(db: &Database, query_id: &str, snapshot: &UsageSnapshot) {
+    let measured_at = now();
+    let outcome = db.with_connection(|conn| {
         let tx = conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
-        let generation: Option<u32> = tx
-            .query_row(
-                "SELECT generation FROM usage_queries WHERE id=?1",
-                [&q.id],
-                |r| r.get(0),
-            )
-            .optional()
-            .map_err(|e| e.to_string())?;
-        if generation != Some(q.generation) {
-            return Ok(());
-        }
-        let mut cache = read(&tx, q)?;
-        update(&mut cache, q, result, now());
-        write(&tx, &cache)?;
+        let payload = serde_json::to_string(snapshot).map_err(|e| e.to_string())?;
+        tx.execute(
+            "INSERT INTO usage_samples(query_id,measured_at,payload) VALUES(?1,?2,?3)",
+            params![query_id, measured_at, payload],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.execute(
+            "DELETE FROM usage_samples WHERE query_id=?1 AND measured_at<?2",
+            params![query_id, measured_at - SAMPLE_RETENTION_SECONDS],
+        )
+        .map_err(|e| e.to_string())?;
         tx.commit().map_err(|e| e.to_string())
+    });
+    if let Err(error) = outcome {
+        eprintln!("usage sample for {query_id} not recorded: {error}");
+    }
+}
+pub fn list_samples(db: &Database, query_id: &str) -> Result<Vec<UsageSample>, UsageError> {
+    db.with_read_connection(|conn| {
+        let mut statement = conn
+            .prepare(
+                "SELECT measured_at,payload FROM usage_samples WHERE query_id=?1 ORDER BY measured_at ASC",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = statement
+            .query_map([query_id], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| e.to_string())?;
+        let mut samples = Vec::new();
+        for row in rows {
+            let (measured_at, payload) = row.map_err(|e| e.to_string())?;
+            match serde_json::from_str::<UsageSnapshot>(&payload) {
+                Ok(snapshot) => samples.push(UsageSample {
+                    query_id: query_id.into(),
+                    measured_at,
+                    snapshot,
+                }),
+                Err(error) => {
+                    eprintln!("usage sample for {query_id} at {measured_at} unreadable: {error}")
+                }
+            }
+        }
+        Ok(samples)
     })
     .map_err(|_| UsageError::storage())
+}
+/// `sample` is set for automatic refreshes only; manual refresh never samples.
+fn publish(db: &Database, q: &UsageQuery, result: UsageResult, sample: bool) -> Result<(), UsageError> {
+    // Only a fresh non-failed reading becomes a sample; a preserved older
+    // success after a failed refresh must not be recorded again.
+    let sample = sample && result.status != UsageStatus::Failed;
+    let snapshot = db
+        .with_connection(|conn| {
+            let tx = conn
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .map_err(|e| e.to_string())?;
+            let generation: Option<u32> = tx
+                .query_row(
+                    "SELECT generation FROM usage_queries WHERE id=?1",
+                    [&q.id],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(|e| e.to_string())?;
+            if generation != Some(q.generation) {
+                return Ok(None);
+            }
+            let mut cache = read(&tx, q)?;
+            update(&mut cache, q, result, now());
+            write(&tx, &cache)?;
+            let snapshot = cache.success.clone();
+            tx.commit().map_err(|e| e.to_string())?;
+            Ok(snapshot)
+        })
+        .map_err(|_| UsageError::storage())?;
+    if let (true, Some(snapshot)) = (sample, snapshot) {
+        record_sample(db, &q.id, &snapshot);
+    }
+    Ok(())
 }
 /// Returns immediately; repeated requests coalesce by persisted query identity.
 pub fn refresh_query(db: Arc<Database>, id: &str, manual: bool) -> Result<(), UsageError> {
@@ -295,7 +371,7 @@ fn refresh_with(
                         )],
                     };
                 }
-                let _ = publish(&db, &q, result);
+                let _ = publish(&db, &q, result, !manual);
             }
         });
     if spawn.is_err() {
@@ -321,3 +397,6 @@ pub fn scheduler_tick(db: Arc<Database>) -> Result<(), UsageError> {
 #[cfg(test)]
 #[path = "../../../tests/usage/scheduler.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "../../../tests/usage/samples.rs"]
+mod sample_tests;

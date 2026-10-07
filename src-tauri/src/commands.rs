@@ -170,6 +170,11 @@ pub async fn list_usage_cache(app: AppHandle) -> Result<Vec<crate::usage::UsageC
 }
 
 #[tauri::command]
+pub async fn list_usage_samples(app: AppHandle, query_id: String) -> Result<Vec<crate::usage::UsageSample>, crate::usage::UsageError> {
+    usage_blocking(app, move |db| crate::usage::list_samples(db, &query_id)).await
+}
+
+#[tauri::command]
 pub async fn refresh_usage_query(app: AppHandle, id: String) -> Result<(), crate::usage::UsageError> {
     let db=app.state::<AppState>().database(&app).map_err(|_|crate::usage::UsageError::storage())?;
     tauri::async_runtime::spawn_blocking(move ||crate::usage::refresh_query(db,&id,true)).await.map_err(|_|crate::usage::UsageError::storage())?

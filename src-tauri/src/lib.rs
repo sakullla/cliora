@@ -183,6 +183,7 @@ pub fn run() {
             commands::ensure_profile_usage,
             commands::usage_builtin_script,
             commands::list_usage_cache,
+            commands::list_usage_samples,
             commands::refresh_usage_query,
             commands::cancel_usage_refresh,
             commands::list_usage_queries,

@@ -160,6 +160,14 @@ export interface DraftTestReport {
   requestOrigins: string[];
 }
 
+/** One sampled reading of a successful automatic refresh; local only, never synced. */
+export interface UsageSample {
+  queryId: string;
+  /** Unix seconds when the host measured the reading. */
+  measuredAt: number;
+  snapshot: UsageSnapshot;
+}
+
 export interface UsageCache {
   queryId: string;
   generation: number;
