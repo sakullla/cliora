@@ -15,7 +15,7 @@
       "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' data:; style-src 'self'"
     }
   },
-  "bundle": { "active": true, "targets": ["nsis", "dmg", "appimage", "deb"], "icon": ["icons/icon.png", "icons/icon.ico", "icons/icon.icns"], "macOS": { "entitlements": "entitlements.plist" } },
+  "bundle": { "active": true, "targets": ["nsis", "dmg", "appimage", "deb"], "createUpdaterArtifacts": true, "icon": ["icons/icon.png", "icons/icon.ico", "icons/icon.icns"], "macOS": { "entitlements": "entitlements.plist" } },
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDgxMTNBM0VCRjdGM0M4NEUKUldST3lQUDM2Nk1UZ1o5bnRwaFhCTHJySkFzaHlnRG1kR1VnSTBwbk4zRDdnelQ4eXcwM2lmNkIK",
