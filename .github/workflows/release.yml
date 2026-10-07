@@ -161,6 +161,8 @@ jobs:
           releaseDraft: true
           prerelease: false
           retryAttempts: 3
+          # latest.json 由 verify-release 在三平台产物齐全后统一生成，避免并行任务互相覆盖。
+          uploadUpdaterJson: false
           args: ${{ matrix.args }}
 
       - name: Build and sign macOS disk image
@@ -169,6 +171,7 @@ jobs:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
@@ -220,6 +223,11 @@ jobs:
           rm -f "$dmg"
           hdiutil convert "$rw" -format UDZO -o "$dmg"
           security delete-keychain "$keychain"
+          # 应用内更新归档：内容必须是从 DMG 里取出、已完成重签名的 .app
+          updater_tgz="src-tauri/target/$TARGET/release/bundle/macos/Cliora_${version}_${arch}.app.tar.gz"
+          tar -czf "$updater_tgz" -C "$RUNNER_TEMP" Cliora.app
+          npm run tauri -- signer sign "$updater_tgz" --app-version "$version"
+          test -f "$updater_tgz.sig"
 
       - name: Verify macOS self-signed signature
         if: matrix.platform == 'macos'
@@ -260,7 +268,8 @@ jobs:
           version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
           arch="${TARGET%%-*}"
           dmg="src-tauri/target/$TARGET/release/bundle/dmg/Cliora_${version}_${arch}.dmg"
-          gh release upload "$RELEASE_TAG" "$dmg" --clobber
+          updater_tgz="src-tauri/target/$TARGET/release/bundle/macos/Cliora_${version}_${arch}.app.tar.gz"
+          gh release upload "$RELEASE_TAG" "$dmg" "$updater_tgz" "$updater_tgz.sig" --clobber
 
   verify-release:
     name: Verify and publish release
@@ -294,11 +303,58 @@ jobs:
             fi
           done
 
-          # 应用内更新依赖 updater 清单；缺失时发布出去会导致所有客户端检查更新失败。
-          if ! grep -Eq '^latest\.json$' <<< "$ASSETS"; then
-            echo "::error::Release ${GITHUB_REF_NAME} is missing latest.json (updater manifest); check TAURI_SIGNING_PRIVATE_KEY secrets"
-            exit 1
-          fi
+          # 应用内更新依赖各平台更新包及签名；缺失时发布出去会导致客户端检查更新失败。
+          for PATTERN in '_x64-setup\.exe\.sig$' '_amd64\.AppImage\.sig$' '_aarch64\.app\.tar\.gz$' '_aarch64\.app\.tar\.gz\.sig$'; do
+            if ! grep -Eq "$PATTERN" <<< "$ASSETS"; then
+              echo "::error::Release ${GITHUB_REF_NAME} is missing an updater artifact matching ${PATTERN}; check TAURI_SIGNING_PRIVATE_KEY secrets"
+              exit 1
+            fi
+          done
+
+      - name: Generate and upload updater manifest
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          work="$RUNNER_TEMP/updater-manifest"
+          mkdir -p "$work"
+          gh release download "$GITHUB_REF_NAME" --pattern "*.sig" --dir "$work" --clobber
+
+          win_sig="$work/Cliora_${version}_x64-setup.exe.sig"
+          linux_sig="$work/Cliora_${version}_amd64.AppImage.sig"
+          mac_sig="$work/Cliora_${version}_aarch64.app.tar.gz.sig"
+          for file in "$win_sig" "$linux_sig" "$mac_sig"; do
+            test -f "$file"
+          done
+
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
+          notes="$(gh release view "$GITHUB_REF_NAME" --json body --jq '.body')"
+          jq -n \
+            --arg version "$version" \
+            --arg notes "$notes" \
+            --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg win_sig "$(cat "$win_sig")" \
+            --arg win_url "$base/Cliora_${version}_x64-setup.exe" \
+            --arg linux_sig "$(cat "$linux_sig")" \
+            --arg linux_url "$base/Cliora_${version}_amd64.AppImage" \
+            --arg mac_sig "$(cat "$mac_sig")" \
+            --arg mac_url "$base/Cliora_${version}_aarch64.app.tar.gz" \
+            '{
+              version: $version,
+              notes: $notes,
+              pub_date: $pub_date,
+              platforms: {
+                "windows-x86_64": { signature: $win_sig, url: $win_url },
+                "windows-x86_64-nsis": { signature: $win_sig, url: $win_url },
+                "linux-x86_64": { signature: $linux_sig, url: $linux_url },
+                "linux-x86_64-appimage": { signature: $linux_sig, url: $linux_url },
+                "darwin-aarch64": { signature: $mac_sig, url: $mac_url },
+                "darwin-aarch64-app": { signature: $mac_sig, url: $mac_url }
+              }
+            }' > "$work/latest.json"
+          gh release upload "$GITHUB_REF_NAME" "$work/latest.json" --clobber
 
       - name: Publish verified release
         shell: bash
