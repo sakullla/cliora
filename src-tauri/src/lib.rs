@@ -105,6 +105,8 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::Builder::new().open_js_links_on_click(false).build())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             use tauri::{Listener, Manager};
             // The window must remain available when local storage needs repair.
@@ -119,6 +121,12 @@ pub fn run() {
             std::thread::spawn(move || loop {
                 let _ = commands::sync_background_tick(&sync_handle);
                 std::thread::sleep(std::time::Duration::from_secs(60));
+            });
+            // ADR-4：启动后延迟自动检查一次更新，失败（网络/渠道不可用）静默忽略。
+            let update_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(20));
+                tauri::async_runtime::block_on(auto_check_update(update_handle));
             });
             let handle = app.handle().clone();
             app.listen("cliora:bindings-changed", move |_| {
@@ -349,6 +357,21 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("failed to run Cliora")
         .run(handle_run_event);
+}
+
+/// 自动更新检查（ADR-4）：发现更新时广播事件由前端提示；无更新或失败均静默。
+async fn auto_check_update(handle: tauri::AppHandle) {
+    use tauri::Emitter;
+    use tauri_plugin_updater::UpdaterExt;
+    let Ok(updater) = handle.updater() else {
+        return;
+    };
+    if let Ok(Some(update)) = updater.check().await {
+        let _ = handle.emit(
+            "cliora:update-available",
+            serde_json::json!({ "version": update.version, "notes": update.body }),
+        );
+    }
 }
 
 /// Dock click on macOS. A hidden main window stays hidden unless we show it.
