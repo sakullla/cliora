@@ -234,6 +234,11 @@ impl CliAdapter for Antigravity {
         }
         None
     }
+    fn connection_secret_via_launch_env(&self) -> bool {
+        // settings.json never carries the key; the shared launch service
+        // injects the headless GEMINI_API_KEY at spawn time.
+        true
+    }
     fn connection_documents(
         &self,
         _connection: &crate::native::profile::Connection,

@@ -1,14 +1,36 @@
 use std::process::Command;
 
 use super::profile::{self, auth_env_name, Connection, NativeProfile};
+use crate::adapters::Registry;
 use crate::credentials::CredentialStore;
-use crate::domain::CliId;
 
-/// T3's launcher calls this in Rust before spawning a child. The value is
-/// never serialized or returned to the frontend.
+/// Resolve a launch credential value from the system credential store at
+/// injection time. The value exists only in the child process environment.
+pub fn stored_launch_credential(
+    secret_ref: &str,
+    credentials: &dyn CredentialStore,
+) -> Result<String, String> {
+    if !profile::valid_connection_secret_ref(secret_ref) {
+        return Err("连接密钥标识无效".into());
+    }
+    let secret = credentials
+        .get(secret_ref)
+        .map_err(|_| "系统凭据库中找不到此连接的密钥；请重新保存密钥")?;
+    if secret.is_empty() {
+        return Err("连接密钥为空；请重新保存".into());
+    }
+    Ok(secret)
+}
+
+/// The launcher calls this in Rust before spawning a child. The tool is a
+/// registry string ID, so every registered adapter — including the open
+/// string-ID clients — resolves its environment name through
+/// `CliAdapter::auth_env_name`; the five legacy enum tools resolve to the
+/// same statics `adapters::known` maps, keeping their names byte-identical.
+/// The value is never serialized or returned to the frontend.
 pub fn inject_child_credential(
     command: &mut Command,
-    tool: CliId,
+    tool_id: &str,
     connection: &Connection,
     credentials: &dyn CredentialStore,
 ) -> Result<bool, String> {
@@ -18,13 +40,13 @@ pub fn inject_child_credential(
     if !profile::valid_connection_secret_ref(secret_ref) {
         return Err("连接密钥标识无效".into());
     }
-    let name = auth_env_name(tool, connection).ok_or("无法确定 CLI 认证环境变量")?;
-    let secret = credentials
-        .get(secret_ref)
-        .map_err(|_| "系统凭据库中找不到此连接的密钥；请重新保存密钥")?;
-    if secret.is_empty() {
-        return Err("连接密钥为空；请重新保存".into());
-    }
+    let adapter = Registry::builtins()
+        .get(tool_id)
+        .ok_or("未注册的 CLI 不能注入启动凭据")?;
+    let name = adapter
+        .auth_env_name(connection)
+        .ok_or("无法确定 CLI 认证环境变量")?;
+    let secret = stored_launch_credential(secret_ref, credentials)?;
     command.env(name, secret);
     Ok(true)
 }
@@ -107,6 +129,7 @@ fn read_secret(id: &str, credentials: &dyn CredentialStore) -> Result<String, St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::CliId;
     use std::collections::BTreeMap;
     use std::collections::HashMap;
 
@@ -151,7 +174,7 @@ mod tests {
             c.args(["-c", "printf %s \"$CLIORA_CODEX_EXAMPLE_API_KEY\""]);
             c
         };
-        assert!(inject_child_credential(&mut child, CliId::Codex, &connection, &store).unwrap());
+        assert!(inject_child_credential(&mut child, "codex", &connection, &store).unwrap());
         let output = child.output().unwrap();
         assert!(output.status.success());
         assert!(String::from_utf8_lossy(&output.stdout).contains("test-secret-827"));
@@ -161,12 +184,82 @@ mod tests {
         let missing = MemoryStore(HashMap::new());
         assert!(inject_child_credential(
             &mut Command::new("cmd"),
-            CliId::Codex,
+            "codex",
             &connection,
             &missing
         )
         .unwrap_err()
         .contains("重新保存"));
+        assert!(inject_child_credential(
+            &mut Command::new("cmd"),
+            "unregistered",
+            &connection,
+            &store
+        )
+        .unwrap_err()
+        .contains("未注册"));
+    }
+
+    #[test]
+    fn string_id_adapter_receives_its_frozen_env_key_from_the_registry_port() {
+        // command_code/antigravity/kiro have no CliId enum entry; the registry
+        // string-ID port still resolves their frozen environment names.
+        let reference = "connection-00000000-0000-4000-8000-000000000003";
+        let store = MemoryStore(HashMap::from([(
+            reference.into(),
+            "ksk-test-917".into(),
+        )]));
+        for (tool, env_name) in [
+            ("command_code", "COMMAND_CODE_API_KEY"),
+            ("antigravity", "GEMINI_API_KEY"),
+            ("kiro", "KIRO_API_KEY"),
+        ] {
+            let connection = Connection {
+                provider_id: "official".into(),
+                interface_format: "openai_responses".into(),
+                base_url: "https://example.test/v1".into(),
+                model: "model".into(),
+                secret_ref: Some(reference.into()),
+                auth_env_var: None,
+                model_records: Vec::new(),
+            };
+            #[cfg(windows)]
+            let mut child = {
+                let mut c = Command::new("cmd.exe");
+                c.args(["/C", &format!("echo %{env_name}%")]);
+                c
+            };
+            #[cfg(not(windows))]
+            let mut child = {
+                let mut c = Command::new("sh");
+                c.args(["-c", &format!("printf %s \"${env_name}\"")]);
+                c
+            };
+            assert!(inject_child_credential(&mut child, tool, &connection, &store).unwrap());
+            let output = child.output().unwrap();
+            assert!(output.status.success());
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(stdout.contains("ksk-test-917"), "{tool}: {stdout}");
+            assert!(!stdout.contains(reference));
+        }
+    }
+
+    #[test]
+    fn launch_credential_value_resolves_only_from_a_valid_store_reference() {
+        let reference = "connection-00000000-0000-4000-8000-000000000004";
+        let store = MemoryStore(HashMap::from([(reference.into(), "value-1".into())]));
+        assert_eq!(stored_launch_credential(reference, &store).unwrap(), "value-1");
+        let missing = MemoryStore(HashMap::new());
+        assert!(stored_launch_credential(reference, &missing)
+            .unwrap_err()
+            .contains("重新保存"));
+        let empty = MemoryStore(HashMap::from([(reference.into(), String::new())]));
+        assert!(stored_launch_credential(reference, &empty)
+            .unwrap_err()
+            .contains("为空"));
+        assert!(stored_launch_credential("not-a-reference", &store)
+            .unwrap_err()
+            .contains("无效"));
     }
 
     #[test]

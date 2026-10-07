@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::database::Database;
 use crate::native::adapter::{self, Scope};
-use crate::adapters::{self, LaunchForm, LaunchMode, Registry};
+use crate::adapters::{self, CliAdapter, LaunchForm, LaunchMode, Registry};
+use crate::credentials::{CredentialStore, SystemCredentialStore};
 use crate::projects;
 use crate::resources::skills;
 
@@ -149,6 +150,17 @@ pub struct LaunchResult {
     pub status: &'static str,
 }
 
+/// A managed connection key the CLI reads only from the OS environment
+/// (adapter-declared via `connection_secret_via_launch_env`). The plan carries
+/// the adapter-owned environment name and the credential-store reference; the
+/// value is resolved from the system credential store at spawn time and never
+/// serialized, logged, or returned through IPC.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LaunchCredential {
+    pub env_name: String,
+    pub secret_ref: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct LaunchPlan {
     pub account_version: Option<u32>,
@@ -161,6 +173,7 @@ pub struct LaunchPlan {
     pub directory: PathBuf,
     pub terminal: TerminalId,
     pub session_markers: &'static [&'static str],
+    pub credential: Option<LaunchCredential>,
 }
 
 #[derive(Clone, Debug)]
@@ -528,6 +541,79 @@ pub fn plan(
     plan_with_stage(db, registry, home, request).map_err(|error| error.message)
 }
 
+/// Resolve the launch credential for adapters whose managed connection key is
+/// delivered only through the child environment. File-channel adapters (the
+/// legacy enum five included) and tools without a managed env key stay
+/// unchanged; only the environment name and store reference are planned —
+/// the stored value is read at spawn time.
+fn launch_credential_binding(
+    db: &Database,
+    adapter: &dyn CliAdapter,
+    tool_id: &str,
+    scope: Scope,
+    directory: &Path,
+) -> Result<Option<LaunchCredential>, String> {
+    if !adapter.connection_secret_via_launch_env() {
+        return Ok(None);
+    }
+    // Env-channel keys are global by adapter policy; a project-scoped launch
+    // still receives the globally applied connection when its own scope has
+    // no key binding. Lookup keys mirror apply's scope_key canonicalization.
+    let mut keys = Vec::new();
+    if scope == Scope::Project {
+        let canonical = directory
+            .canonicalize()
+            .unwrap_or_else(|_| directory.to_path_buf());
+        keys.push(format!("project:{}", canonical.display()));
+    }
+    keys.push("global".into());
+    for key in keys {
+        let Some(binding) = crate::native::apply::get_registered_binding(db, tool_id, &key)? else {
+            continue;
+        };
+        let Some(connection) = binding
+            .applied_profile
+            .as_ref()
+            .and_then(|snapshot| snapshot.runtime_profile.connection.as_ref())
+        else {
+            continue;
+        };
+        let Some(secret_ref) = connection
+            .secret_ref
+            .as_deref()
+            .filter(|id| !id.is_empty())
+        else {
+            continue;
+        };
+        let env_name = adapter
+            .auth_env_name(connection)
+            .ok_or("无法确定 CLI 认证环境变量")?;
+        if !crate::native::profile::valid_env_name(&env_name) {
+            return Err("CLI 认证环境变量名称无效".into());
+        }
+        return Ok(Some(LaunchCredential {
+            env_name,
+            secret_ref: secret_ref.to_owned(),
+        }));
+    }
+    Ok(None)
+}
+
+/// Read the planned credential value from the system credential store at
+/// injection time. The returned pair exists only to reach the child process
+/// environment; it is never placed in the plan, a log line, or an IPC payload.
+fn resolve_credential(
+    plan: &LaunchPlan,
+    credentials: &dyn CredentialStore,
+) -> Result<Option<(String, String)>, String> {
+    let Some(spec) = &plan.credential else {
+        return Ok(None);
+    };
+    let value = crate::native::auth::stored_launch_credential(&spec.secret_ref, credentials)
+        .map_err(|message| format!("无法注入托管连接密钥：{message}"))?;
+    Ok(Some((spec.env_name.clone(), value)))
+}
+
 pub fn plan_with_stage(
     db: &Database,
     registry: &Registry,
@@ -644,6 +730,14 @@ fn plan_with_stage_at(
         "global".to_owned()
     } else {
         format!("project:{}", directory.display())
+    };
+    // One credential source per launch: a bound native account context keeps
+    // its own environment and never mixes with a stored connection key.
+    let credential = if account_context.is_some() {
+        None
+    } else {
+        launch_credential_binding(db, adapter, &request.tool_id, scope, &directory)
+            .map_err(|message| LaunchPlanError::new(LaunchStage::Configuration, message))?
     };
     if let Some(issue) = skill_issues
         .iter()
@@ -763,6 +857,7 @@ fn plan_with_stage_at(
         } else {
             adapter.session_env_markers()
         },
+        credential,
         terminal: match launch_form {
             LaunchForm::Terminal => selected_terminal(db)
                 .map_err(|message| LaunchPlanError::new(LaunchStage::Terminal, message))?,
@@ -778,7 +873,7 @@ pub fn login_plan(db: &Database, registry: &Registry, home: &Path, tool: &str, c
     let probe = adapter::probe_registered(registry, tool, custom, home, None, Scope::Global)?;
     let selected = probe.selected_path.ok_or("未找到可验证的 CLI，先安装或重新检测")?;
     Ok(LaunchPlan {account_version:None,account_context:None,tool_id:tool.into(),project_id:None,mode:LaunchMode::Normal,executable:PathBuf::from(selected),cli_args,
-        directory:projects::checked_directory(&home.display().to_string())?,session_markers:adapter.session_env_markers(),terminal:selected_terminal(db)?})
+        directory:projects::checked_directory(&home.display().to_string())?,session_markers:adapter.session_env_markers(),terminal:selected_terminal(db)?,credential:None})
 }
 
 fn quote_powershell(value: &str) -> String {
@@ -809,28 +904,50 @@ fn encoded_powershell(script: &str) -> String {
     base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
+/// A copyable resume command runs outside Cliora's credential injection, so
+/// it never embeds a stored connection key; only a real spawn does.
 pub fn native_command(plan: &LaunchPlan) -> Result<String, String> {
+    native_script(plan, None)
+}
+
+fn native_script(
+    plan: &LaunchPlan,
+    credential: Option<&(String, String)>,
+) -> Result<String, String> {
     #[cfg(windows)]
     if plan.terminal == TerminalId::Cmd {
-        let args = cmd_arguments(&powershell_script(plan)?)?;
+        let args = cmd_arguments(&powershell_script(plan, credential)?)?;
         return Ok(format!("\"{}\" {}", terminal_path(&system_console_path(TerminalId::PowerShell)?)?, args[4..].join(" ")));
     }
     if cfg!(windows) {
-        powershell_script(plan)
+        powershell_script(plan, credential)
     } else {
-        shell_script(plan)
+        shell_script(plan, credential)
     }
 }
 
-fn context_script(plan: &LaunchPlan, windows: bool) -> String {
-    let Some((_,context))=&plan.account_context else {return String::new();};
-    let mut parts=Vec::new();
-    for key in &context.remove_environment { parts.push(if windows {format!("Remove-Item -LiteralPath 'Env:{key}' -ErrorAction SilentlyContinue")} else {format!("unset {key}")}); }
-    for (key,value) in &context.environment { parts.push(if windows {format!("$env:{key} = {}",quote_powershell(value))} else {format!("export {key}={}",quote_shell(value))}); }
-    format!("{}; ",parts.join("; "))
+fn context_script(
+    plan: &LaunchPlan,
+    windows: bool,
+    credential: Option<&(String, String)>,
+) -> String {
+    let mut parts = Vec::new();
+    if let Some((_,context))=&plan.account_context {
+        for key in &context.remove_environment { parts.push(if windows {format!("Remove-Item -LiteralPath 'Env:{key}' -ErrorAction SilentlyContinue")} else {format!("unset {key}")}); }
+        for (key,value) in &context.environment { parts.push(if windows {format!("$env:{key} = {}",quote_powershell(value))} else {format!("export {key}={}",quote_shell(value))}); }
+    }
+    if let Some((name, value)) = credential {
+        // The managed connection key for env-channel CLIs; same quoting rules
+        // as an account context environment entry.
+        parts.push(if windows {format!("$env:{name} = {}",quote_powershell(value))} else {format!("export {name}={}",quote_shell(value))});
+    }
+    if parts.is_empty() { String::new() } else { format!("{}; ",parts.join("; ")) }
 }
 
-fn powershell_script(plan: &LaunchPlan) -> Result<String, String> {
+fn powershell_script(
+    plan: &LaunchPlan,
+    credential: Option<&(String, String)>,
+) -> Result<String, String> {
     let directory = terminal_path(&plan.directory)?;
     #[cfg(windows)]
     let executable = terminal_path(&windows_cli_path(&plan.executable))?;
@@ -840,7 +957,7 @@ fn powershell_script(plan: &LaunchPlan) -> Result<String, String> {
     parts.extend(plan.cli_args.iter().map(|arg| quote_powershell(arg)));
     Ok(format!(
         "{}Set-Location -LiteralPath {}; {}",
-        context_script(plan,true),
+        context_script(plan,true,credential),
         quote_powershell(&directory),
         parts.join(" ")
     ))
@@ -872,20 +989,26 @@ fn cmd_helper_script(script: &str, directories: &[PathBuf]) -> String {
     format!("{prelude}{script}")
 }
 
-fn shell_script(plan: &LaunchPlan) -> Result<String, String> {
+fn shell_script(
+    plan: &LaunchPlan,
+    credential: Option<&(String, String)>,
+) -> Result<String, String> {
     let directory = plan.directory.to_str().ok_or("项目目录文字编码无法识别")?;
     let executable = plan.executable.to_str().ok_or("CLI 路径文字编码无法识别")?;
     let mut parts = vec![quote_shell(executable)];
     parts.extend(plan.cli_args.iter().map(|arg| quote_shell(arg)));
     Ok(format!(
         "{}cd -- {} && exec {}",
-        context_script(plan,false),
+        context_script(plan,false,credential),
         quote_shell(directory),
         parts.join(" ")
     ))
 }
 
-fn interactive_powershell_script(plan: &LaunchPlan) -> Result<String, String> {
+fn interactive_powershell_script(
+    plan: &LaunchPlan,
+    credential: Option<&(String, String)>,
+) -> Result<String, String> {
     let cleanup = if plan.session_markers.is_empty() {
         String::new()
     } else {
@@ -894,14 +1017,17 @@ fn interactive_powershell_script(plan: &LaunchPlan) -> Result<String, String> {
     };
     Ok(format!(
         "if ($null -ne $env:NO_COLOR) {{ Remove-Item Env:NO_COLOR -ErrorAction SilentlyContinue }}; if ($env:TERM -eq 'dumb') {{ Remove-Item Env:TERM -ErrorAction SilentlyContinue }}; if ($env:FORCE_COLOR -in '0','false') {{ Remove-Item Env:FORCE_COLOR -ErrorAction SilentlyContinue }}; {cleanup}{}",
-        powershell_script(plan)?
+        powershell_script(plan, credential)?
     ))
 }
-fn interactive_shell_script(plan: &LaunchPlan) -> Result<String, String> {
+fn interactive_shell_script(
+    plan: &LaunchPlan,
+    credential: Option<&(String, String)>,
+) -> Result<String, String> {
     let cleanup = if plan.session_markers.is_empty() { String::new() } else { format!("unset {}; ", plan.session_markers.join(" ")) };
     Ok(format!(
         "unset NO_COLOR; if [ \"${{TERM-}}\" = dumb ]; then unset TERM; fi; if [ \"${{FORCE_COLOR-}}\" = 0 ] || [ \"${{FORCE_COLOR-}}\" = false ]; then unset FORCE_COLOR; fi; {cleanup}{}",
-        shell_script(plan)?
+        shell_script(plan, credential)?
     ))
 }
 
@@ -931,11 +1057,14 @@ fn cmd_arguments(script: &str) -> Result<Vec<String>, String> {
     Ok(vec!["/D".into(), "/V:OFF".into(), "/K".into(), "powershell.exe".into(), "-NoProfile".into(), "-ExecutionPolicy".into(), "Bypass".into(), "-EncodedCommand".into(), encoded])
 }
 
-pub fn terminal_command(plan: &LaunchPlan) -> Result<TerminalCommand, String> {
+pub fn terminal_command(
+    plan: &LaunchPlan,
+    credential: Option<&(String, String)>,
+) -> Result<TerminalCommand, String> {
     let directory = terminal_path(&plan.directory)?;
-    let powershell = || interactive_powershell_script(plan).map(|script| encoded_powershell(&script));
+    let powershell = || interactive_powershell_script(plan, credential).map(|script| encoded_powershell(&script));
     let mac_script = if matches!(plan.terminal, TerminalId::MacTerminal | TerminalId::Custom) {
-        Some(mac_terminal_shell_body(&directory, &interactive_shell_script(plan)?))
+        Some(mac_terminal_shell_body(&directory, &interactive_shell_script(plan, credential)?))
     } else {
         None
     };
@@ -963,7 +1092,7 @@ pub fn terminal_command(plan: &LaunchPlan) -> Result<TerminalCommand, String> {
                 powershell()?,
             ],
         ),
-        TerminalId::Cmd => ("cmd.exe", cmd_arguments(&interactive_powershell_script(plan)?)?),
+        TerminalId::Cmd => ("cmd.exe", cmd_arguments(&interactive_powershell_script(plan, credential)?)?),
         TerminalId::MacTerminal => ("/usr/bin/open", vec!["-a".into(), "Terminal".into()]),
         TerminalId::Custom => ("", Vec::new()),
         TerminalId::GnomeTerminal => (
@@ -973,7 +1102,7 @@ pub fn terminal_command(plan: &LaunchPlan) -> Result<TerminalCommand, String> {
                 "--".into(),
                 "sh".into(),
                 "-lc".into(),
-                interactive_shell_script(plan)?,
+                interactive_shell_script(plan, credential)?,
             ],
         ),
         TerminalId::Konsole => (
@@ -984,12 +1113,12 @@ pub fn terminal_command(plan: &LaunchPlan) -> Result<TerminalCommand, String> {
                 "-e".into(),
                 "sh".into(),
                 "-lc".into(),
-                interactive_shell_script(plan)?,
+                interactive_shell_script(plan, credential)?,
             ],
         ),
         TerminalId::Xterm => (
             "xterm",
-            vec!["-e".into(), "sh".into(), "-lc".into(), interactive_shell_script(plan)?],
+            vec!["-e".into(), "sh".into(), "-lc".into(), interactive_shell_script(plan, credential)?],
         ),
         TerminalId::Desktop => return Err("桌面应用启动不经过终端".into()),
         TerminalId::Auto => return Err("请先选择可用的终端".into()),
@@ -1260,11 +1389,14 @@ fn browser_login_invocation(invocation: &str, endpoint: &str, receipt: &Path) ->
 
 pub fn spawn(db: &Database, plan: LaunchPlan) -> Result<LaunchResult, String> {
     if let Some((id,context))=&plan.account_context { if Some(crate::accounts::get(db,id)?.version)!=plan.account_version {return Err("账号在计划后发生变化，请重新启动".into());} crate::accounts::validate_selected_context(db,id,&context.id)?; crate::accounts::context::check_path(&context.root)?; }
+    // The stored connection key is read here, at injection time, and only
+    // travels into the child process environment.
+    let credential = resolve_credential(&plan, &SystemCredentialStore)?;
     if plan.terminal == TerminalId::Desktop {
-        return spawn_desktop(&plan);
+        return spawn_desktop(&plan, credential.as_ref());
     }
     let terminal_id = plan.terminal;
-    let terminal = terminal_command(&plan)?;
+    let terminal = terminal_command(&plan, credential.as_ref())?;
     spawn_terminal(db, terminal_id, terminal)?;
     Ok(LaunchResult {
         tool_id: plan.tool_id,
@@ -1278,7 +1410,7 @@ pub fn spawn(db: &Database, plan: LaunchPlan) -> Result<LaunchResult, String> {
 /// Desktop launches start the installed application directly: detached from
 /// any terminal, owning its own windows and lifetime. The status only reports
 /// that the start was requested, never that the application came up.
-fn spawn_desktop(plan: &LaunchPlan) -> Result<LaunchResult, String> {
+fn spawn_desktop(plan: &LaunchPlan, credential: Option<&(String, String)>) -> Result<LaunchResult, String> {
     if !plan.executable.is_file() {
         return Err("桌面应用可执行文件不存在，请在工具页重新检测".into());
     }
@@ -1304,6 +1436,9 @@ fn spawn_desktop(plan: &LaunchPlan) -> Result<LaunchResult, String> {
         for (key, value) in &context.environment {
             command.env(key, value);
         }
+    }
+    if let Some((name, value)) = credential {
+        command.env(name, value);
     }
     command
         .spawn()
@@ -1474,7 +1609,7 @@ mod desktop_launch {
             plan.cli_args,
             [format!("--open-workspace={}", plan.directory.display())]
         );
-        assert!(terminal_command(&plan).is_err());
+        assert!(terminal_command(&plan, None).is_err());
     }
 
     #[test]
@@ -1545,6 +1680,7 @@ mod desktop_launch {
             directory: std::env::temp_dir(),
             terminal: TerminalId::Desktop,
             session_markers: &[],
+            credential: None,
         }
     }
 
