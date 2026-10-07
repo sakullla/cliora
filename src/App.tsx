@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Icon } from './components/Icon';
@@ -32,31 +33,22 @@ import type { AdapterCatalog } from './types/native';
 type Page = 'home' | 'connections' | 'library' | 'records' | 'settings';
 type SettingsTab = 'general' | 'migration';
 
-const pages: { id: Page; label: string; glyph: IconName }[] = [
-  { id: 'home', label: '快速开始', glyph: 'home' },
-  { id: 'connections', label: '工具与连接', glyph: 'connections' },
-  { id: 'library', label: '资料库', glyph: 'library' },
-  { id: 'records', label: '使用记录', glyph: 'records' },
-  { id: 'settings', label: '设置', glyph: 'settings' },
+const pages: { id: Page; glyph: IconName }[] = [
+  { id: 'home', glyph: 'home' },
+  { id: 'connections', glyph: 'connections' },
+  { id: 'library', glyph: 'library' },
+  { id: 'records', glyph: 'records' },
+  { id: 'settings', glyph: 'settings' },
 ];
 
-const themes: { id: Theme; label: string; glyph: IconName }[] = [
-  { id: 'system', label: '跟随系统主题', glyph: 'monitor' },
-  { id: 'light', label: '浅色主题', glyph: 'sun' },
-  { id: 'dark', label: '深色主题', glyph: 'moon' },
+const themes: { id: Theme; glyph: IconName }[] = [
+  { id: 'system', glyph: 'monitor' },
+  { id: 'light', glyph: 'sun' },
+  { id: 'dark', glyph: 'moon' },
 ];
-
-function titleFor(page: Page): [string, string] {
-  switch (page) {
-    case 'home': return ['快速开始', '选择工具与项目，一键在外部终端启动。'];
-    case 'connections': return ['工具与连接', '管理每个 CLI 的配置、账号、插件、Agent 定义、MCP 与 Skill。'];
-    case 'library': return ['资料库', '统一保存提示词、规则、MCP 与 Skill。'];
-    case 'records': return ['使用记录', '查看本机会话与用量。'];
-    case 'settings': return ['设置', '只保留日常需要的选项。'];
-  }
-}
 
 export default function App() {
+  const { t } = useTranslation();
   const [bootstrap, setBootstrap] = useState<Bootstrap>(() => browserBootstrap());
   const [catalog, setCatalog] = useState<AdapterCatalog | null>(null);
   const [loading, setLoading] = useState(nativeAvailable);
@@ -94,10 +86,10 @@ export default function App() {
   const [workspaceDiscard, setWorkspaceDiscard] = useState(0);
   const canLeave = useCallback(async (_next: Page) => {
     if (!workspaceDirty.current) return true;
-    const accepted = await confirmAction('工具与连接中有未保存的修改，离开将放弃这些修改。', () => true, { title: '放弃未保存修改？', confirmLabel: '放弃修改' });
+    const accepted = await confirmAction(t('common.app.leaveDirtyMessage'), () => true, { title: t('common.app.leaveDirtyTitle'), confirmLabel: t('common.app.leaveDirtyConfirm') });
     if (accepted) setWorkspaceDiscard((value) => value + 1);
     return accepted;
-  }, []);
+  }, [t]);
   const section = page === 'settings' ? `${page}:${settingsTab}` : page;
   useEffect(() => { setVisited((old) => old.has(section) ? old : new Set([...old, section])); }, [section]);
   const hasVisited = (key: string) => section === key || visited.has(key);
@@ -119,7 +111,7 @@ export default function App() {
     let active = true;
     const stops: Array<() => void> = [];
     void listen<string>('cliora:tray-error', (event) => {
-      if (active) setError({ code: 'tray_error', message: event.payload, action: '请检查项目目录、工具配置或外部终端后重试。' });
+      if (active) setError({ code: 'tray_error', message: event.payload, action: t('common.app.trayErrorAction') });
     }).then((unlisten) => {
       if (active) stops.push(unlisten); else unlisten();
     }).catch(() => {});
@@ -260,7 +252,7 @@ export default function App() {
   const visibleDescriptors = (catalog?.registered ?? []).filter((item) => managed.includes(item.id));
   const selectedTool = visible.some((item) => item.id === tool) ? tool : visible[0]?.id;
   const selectedToolName = visible.find((item) => item.id === selectedTool)?.name ?? selectedTool;
-  const title = titleFor(page);
+  const title: [string, string] = [t(`common.pages.${page}.title`), t(`common.pages.${page}.subtitle`)];
 
   async function go(next: Page) {
     if (!await canLeave(next)) return false;
@@ -277,12 +269,12 @@ export default function App() {
   }
 
   const commands: CommandItem[] = [
-    ...pages.map((item, index) => ({ id: `page-${item.id}`, group: '页面', label: item.label, hint: `${modLabel}+${index + 1}`, keywords: item.id, icon: item.glyph, run: () => { void go(item.id); } })),
-    ...visible.map((item) => ({ id: `tool-${item.id}`, group: '工具', label: item.name, hint: '打开配置', keywords: item.id, toolId: item.id, run: () => { setTool(item.id); setToolIntent(null); setToolOpenSequence((value) => value + 1); void go('connections'); } })),
-    ...paletteProjects.map((project) => ({ id: `project-${project.id}`, group: '项目', label: project.name, hint: project.available ? '在快速开始中定位' : '目录需要重新关联', keywords: project.path ?? '', icon: 'folder' as const, run: () => { void revealProject(project.id); } })),
-    { id: 'sidebar', group: '操作', label: sidebarCollapsed ? '展开侧栏' : '折叠侧栏', hint: `${modLabel}+\\`, icon: sidebarCollapsed ? 'sidebarOpen' : 'sidebarClose', run: toggleSidebar },
-    ...themes.map((item) => ({ id: `theme-${item.id}`, group: '操作', label: item.label, hint: bootstrap.preferences.theme === item.id ? '当前' : '切换主题', icon: item.glyph, run: () => { if (bootstrap.preferences.theme !== item.id) void updateTheme(item.id); } })),
-    { id: 'help', group: '操作', label: '键盘快捷键', hint: '?', icon: 'info', run: () => setHelpOpen(true) },
+    ...pages.map((item, index) => ({ id: `page-${item.id}`, group: t('common.palette.groupPages'), label: t(`common.nav.${item.id}`), hint: `${modLabel}+${index + 1}`, keywords: item.id, icon: item.glyph, run: () => { void go(item.id); } })),
+    ...visible.map((item) => ({ id: `tool-${item.id}`, group: t('common.palette.groupTools'), label: item.name, hint: t('common.palette.hintOpenConfig'), keywords: item.id, toolId: item.id, run: () => { setTool(item.id); setToolIntent(null); setToolOpenSequence((value) => value + 1); void go('connections'); } })),
+    ...paletteProjects.map((project) => ({ id: `project-${project.id}`, group: t('common.palette.groupProjects'), label: project.name, hint: project.available ? t('common.palette.hintLocateProject') : t('common.palette.hintRebindProject'), keywords: project.path ?? '', icon: 'folder' as const, run: () => { void revealProject(project.id); } })),
+    { id: 'sidebar', group: t('common.palette.groupActions'), label: sidebarCollapsed ? t('common.shell.sidebarExpand') : t('common.shell.sidebarCollapse'), hint: `${modLabel}+\\`, icon: sidebarCollapsed ? 'sidebarOpen' : 'sidebarClose', run: toggleSidebar },
+    ...themes.map((item) => ({ id: `theme-${item.id}`, group: t('common.palette.groupActions'), label: t(`common.theme.${item.id}`), hint: bootstrap.preferences.theme === item.id ? t('common.theme.current') : t('common.theme.switch'), icon: item.glyph, run: () => { if (bootstrap.preferences.theme !== item.id) void updateTheme(item.id); } })),
+    { id: 'help', group: t('common.palette.groupActions'), label: t('common.shortcuts.title'), hint: '?', icon: 'info', run: () => setHelpOpen(true) },
   ];
 
   async function updateManaged(id: string, checked: boolean) {
@@ -312,36 +304,36 @@ export default function App() {
   }
 
   return <ToolIconsContext value={bootstrap.preferences.tool_icons ?? {}}><div className="titlebar-drag" data-tauri-drag-region /><div className="shell" data-sidebar-collapsed={sidebarCollapsed}>
-    <aside className="sidebar" aria-label="主导航">
-      <div className="brand"><img className="brandmark" src={brandIcon} alt="" /><span className="brand-name"><strong>栖点</strong><small>CLIORA</small></span><button type="button" className="sidebar-toggle" aria-label={sidebarCollapsed ? '展开侧栏' : '折叠侧栏'} title={sidebarCollapsed ? '展开侧栏' : '折叠侧栏'} aria-expanded={!sidebarCollapsed} aria-controls="main-navigation" onClick={toggleSidebar}><Icon name={sidebarCollapsed ? 'sidebarOpen' : 'sidebarClose'} size={17} /></button></div>
-      <nav className="nav" id="main-navigation" aria-label="页面">
-        {pages.map((item, index) => <button key={item.id} type="button" className={page === item.id ? 'active' : ''} aria-label={item.label} aria-current={page === item.id ? 'page' : undefined} aria-keyshortcuts={`${modAria}+${index + 1}`} title={`${item.label}（${modLabel}+${index + 1}）`} onClick={() => go(item.id)}>
-          <span className="nav-glyph" aria-hidden="true"><Icon name={item.glyph} /></span><span className="nav-text">{item.label}</span>
-        </button>)}
+    <aside className="sidebar" aria-label={t('common.nav.mainLabel')}>
+      <div className="brand"><img className="brandmark" src={brandIcon} alt="" /><span className="brand-name"><strong>{t('common.shell.brand')}</strong><small>CLIORA</small></span><button type="button" className="sidebar-toggle" aria-label={sidebarCollapsed ? t('common.shell.sidebarExpand') : t('common.shell.sidebarCollapse')} title={sidebarCollapsed ? t('common.shell.sidebarExpand') : t('common.shell.sidebarCollapse')} aria-expanded={!sidebarCollapsed} aria-controls="main-navigation" onClick={toggleSidebar}><Icon name={sidebarCollapsed ? 'sidebarOpen' : 'sidebarClose'} size={17} /></button></div>
+      <nav className="nav" id="main-navigation" aria-label={t('common.nav.label')}>
+        {pages.map((item, index) => { const label = t(`common.nav.${item.id}`); return <button key={item.id} type="button" className={page === item.id ? 'active' : ''} aria-label={label} aria-current={page === item.id ? 'page' : undefined} aria-keyshortcuts={`${modAria}+${index + 1}`} title={t('common.nav.itemTitle', { label, shortcut: `${modLabel}+${index + 1}` })} onClick={() => go(item.id)}>
+          <span className="nav-glyph" aria-hidden="true"><Icon name={item.glyph} /></span><span className="nav-text">{label}</span>
+        </button>; })}
       </nav>
       <div className="sidebar-foot">
-        <div className="theme-switch" role="group" aria-label="切换主题">{themes.map((item) => <button key={item.id} type="button" aria-label={item.label} title={item.label} aria-pressed={bootstrap.preferences.theme === item.id} disabled={busy} onClick={() => { if (bootstrap.preferences.theme !== item.id) void updateTheme(item.id); }}><Icon name={item.glyph} size={14} /></button>)}</div>
-        <div className="sidebar-status" title={nativeAvailable ? '本机资料仅存于此设备' : '浏览器预览，原生功能不可用'}><span className="status-dot" data-tone={nativeAvailable ? undefined : 'preview'} /><span className="status-text" data-short={nativeAvailable ? '本机' : '预览'}>{nativeAvailable ? '本机资料 · 仅存于此设备' : '浏览器预览'}</span></div>
+        <div className="theme-switch" role="group" aria-label={t('common.theme.switch')}>{themes.map((item) => { const label = t(`common.theme.${item.id}`); return <button key={item.id} type="button" aria-label={label} title={label} aria-pressed={bootstrap.preferences.theme === item.id} disabled={busy} onClick={() => { if (bootstrap.preferences.theme !== item.id) void updateTheme(item.id); }}><Icon name={item.glyph} size={14} /></button>; })}</div>
+        <div className="sidebar-status" title={nativeAvailable ? t('common.shell.statusLocalTitle') : t('common.shell.statusPreviewTitle')}><span className="status-dot" data-tone={nativeAvailable ? undefined : 'preview'} /><span className="status-text" data-short={nativeAvailable ? t('common.shell.statusLocalShort') : t('common.shell.statusPreviewShort')}>{nativeAvailable ? t('common.shell.statusLocal') : t('common.shell.statusPreview')}</span></div>
       </div>
     </aside>
     <main className={`content${page === 'records' ? ' content-locked' : ''}`} id="main"><div className="content-inner">
-      {!nativeAvailable && <div className="environment-banner" role="status"><span className="banner-icon"><Icon name="info" size={16} /></span><span>浏览器预览：原生配置、持久保存和系统凭据仅在桌面应用中可用。</span></div>}
-      {error && <div className="error-banner" role="alert"><span className="banner-icon"><Icon name="alert" size={16} /></span><div className="error-copy"><strong>{error.message}</strong><span>{error.action}</span>{error.data_directory && <code>{error.data_directory}</code>}</div>{loaded && <button type="button" onClick={() => setError(null)} aria-label="关闭错误提示"><Icon name="close" size={14} /></button>}</div>}
+      {!nativeAvailable && <div className="environment-banner" role="status"><span className="banner-icon"><Icon name="info" size={16} /></span><span>{t('common.shell.previewBanner')}</span></div>}
+      {error && <div className="error-banner" role="alert"><span className="banner-icon"><Icon name="alert" size={16} /></span><div className="error-copy"><strong>{error.message}</strong><span>{error.action}</span>{error.data_directory && <code>{error.data_directory}</code>}</div>{loaded && <button type="button" onClick={() => setError(null)} aria-label={t('common.dismissError')}><Icon name="close" size={14} /></button>}</div>}
       <PageHeader title={title[0]} subtitle={title[1]} />
-      {loading ? <PageSkeleton /> : !loaded ? <EmptyState icon="alert" title="暂时无法读取本机资料" detail="原数据仍保留。请按上方提示处理后重试。" action={<button className="button primary" type="button" onClick={loadBootstrap}>重试读取</button>} /> : <>
+      {loading ? <PageSkeleton /> : !loaded ? <EmptyState icon="alert" title={t('common.shell.loadFailedTitle')} detail={t('common.shell.loadFailedDetail')} action={<button className="button primary" type="button" onClick={loadBootstrap}>{t('common.shell.loadFailedRetry')}</button>} /> : <>
         {page === 'home' && <div className="home-band">
           <section className="home-tools">
-            <div className="section-heading"><h2>管理中的工具<span className="count-chip" aria-hidden="true">{visible.length}</span></h2><button className="text-button" type="button" onClick={() => go('settings')}>调整工具 <span aria-hidden="true">→</span></button></div>
-            {visible.length ? nativeAvailable ? <ManagedTools tools={visibleDescriptors} onOpenTool={(id, intent) => { setTool(id); setToolIntent(intent ?? null); setToolOpenSequence((value) => value + 1); void go('connections'); }} /> : <div className="tool-table"><div className="table-head"><span>工具</span><span>当前状态</span><span>操作</span></div>{visible.map((item) => <div className="tool-row" key={item.id}><div className="tool-identity"><span className="tool-icon" aria-hidden="true"><ToolIcon toolId={item.id} /></span><span><strong>{item.name}</strong><small>浏览器预览</small></span></div><div className="tool-state"><strong>尚未检测</strong><small>请在桌面应用中读取本机配置</small></div><button className="button" type="button" onClick={() => { setTool(item.id); go('connections'); }}>查看工具 <span aria-hidden="true">→</span></button></div>)}</div> : <EmptyState title="尚未管理工具" detail="可在设置中开启需要管理的 CLI。" action={<button className="button primary" type="button" onClick={() => go('settings')}>前往设置</button>} />}
+            <div className="section-heading"><h2>{t('home.managed.title')}<span className="count-chip" aria-hidden="true">{visible.length}</span></h2><button className="text-button" type="button" onClick={() => go('settings')}>{t('home.managed.adjust')} <span aria-hidden="true">→</span></button></div>
+            {visible.length ? nativeAvailable ? <ManagedTools tools={visibleDescriptors} onOpenTool={(id, intent) => { setTool(id); setToolIntent(intent ?? null); setToolOpenSequence((value) => value + 1); void go('connections'); }} /> : <div className="tool-table"><div className="table-head"><span>{t('home.preview.tool')}</span><span>{t('home.preview.state')}</span><span>{t('home.preview.actions')}</span></div>{visible.map((item) => <div className="tool-row" key={item.id}><div className="tool-identity"><span className="tool-icon" aria-hidden="true"><ToolIcon toolId={item.id} /></span><span><strong>{item.name}</strong><small>{t('common.shell.statusPreview')}</small></span></div><div className="tool-state"><strong>{t('home.preview.unchecked')}</strong><small>{t('home.preview.hint')}</small></div><button className="button" type="button" onClick={() => { setTool(item.id); go('connections'); }}>{t('home.preview.open')} <span aria-hidden="true">→</span></button></div>)}</div> : <EmptyState title={t('home.empty.title')} detail={t('home.empty.detail')} action={<button className="button primary" type="button" onClick={() => go('settings')}>{t('common.goSettings')}</button>} />}
           </section>
-          {nativeAvailable ? <ProjectLauncher tools={visibleDescriptors} repair={trayRepair?.page === 'home' ? trayRepair : null} spotlight={page === 'home' ? spotlight : null} /> : <section className="home-secondary"><div className="section-heading"><h2>最近项目</h2></div><div className="subtle-panel"><strong>桌面应用中管理项目</strong><p>可以关联本机目录，并用选定的 CLI 在外部终端启动。</p></div></section>}
+          {nativeAvailable ? <ProjectLauncher tools={visibleDescriptors} repair={trayRepair?.page === 'home' ? trayRepair : null} spotlight={page === 'home' ? spotlight : null} /> : <section className="home-secondary"><div className="section-heading"><h2>{t('home.projects.title')}</h2></div><div className="subtle-panel"><strong>{t('home.projects.panelTitle')}</strong><p>{t('home.projects.panelDetail')}</p></div></section>}
         </div>}
         {(page === 'connections' || hasVisited('connections')) && <div hidden={page !== 'connections'}>
-          {selectedTool ? nativeAvailable ? <Suspense fallback={<PageSkeleton />}><ToolWorkspacePage managedTools={visibleDescriptors} initialTool={selectedTool} openSequence={toolOpenSequence} openIntent={toolIntent} active={page === 'connections'} repair={trayRepair?.page === 'connections' ? trayRepair : null} onDirtyChange={onWorkspaceDirtyChange} discardSignal={workspaceDiscard} /></Suspense> : <><div className="tool-tabs" role="tablist" aria-label="工具" onKeyDown={navigateChoices}>{visible.map((item) => <button key={item.id} type="button" role="tab" aria-selected={selectedTool === item.id} tabIndex={selectedTool === item.id ? 0 : -1} className={selectedTool === item.id ? 'active' : ''} onClick={() => setTool(item.id)}>{item.name}</button>)}</div><div className="connection-layout"><div className="profile-column"><div className="column-title">{selectedToolName} 配置</div><div className="muted-copy">浏览器预览不读取本机配置</div></div><div className="detail-panel"><div className="detail-header"><div><div className="eyebrow">配置</div><h2>{selectedToolName}</h2></div><span className="status-pill">预览</span></div><EmptyState title="请在桌面应用中编辑原生配置" detail="桌面应用可读取和保存 CLI 的 TOML / JSON 原文。" /></div></div></> : <EmptyState title="没有管理中的工具" detail="先在设置中勾选需要管理的 CLI。" action={<button className="button primary" type="button" onClick={() => go('settings')}>前往设置</button>} />}
+          {selectedTool ? nativeAvailable ? <Suspense fallback={<PageSkeleton />}><ToolWorkspacePage managedTools={visibleDescriptors} initialTool={selectedTool} openSequence={toolOpenSequence} openIntent={toolIntent} active={page === 'connections'} repair={trayRepair?.page === 'connections' ? trayRepair : null} onDirtyChange={onWorkspaceDirtyChange} discardSignal={workspaceDiscard} /></Suspense> : <><div className="tool-tabs" role="tablist" aria-label={t('tools.preview.tabsLabel')} onKeyDown={navigateChoices}>{visible.map((item) => <button key={item.id} type="button" role="tab" aria-selected={selectedTool === item.id} tabIndex={selectedTool === item.id ? 0 : -1} className={selectedTool === item.id ? 'active' : ''} onClick={() => setTool(item.id)}>{item.name}</button>)}</div><div className="connection-layout"><div className="profile-column"><div className="column-title">{t('tools.preview.configTitle', { name: selectedToolName })}</div><div className="muted-copy">{t('tools.preview.note')}</div></div><div className="detail-panel"><div className="detail-header"><div><div className="eyebrow">{t('tools.preview.eyebrow')}</div><h2>{selectedToolName}</h2></div><span className="status-pill">{t('tools.preview.pill')}</span></div><EmptyState title={t('tools.preview.emptyTitle')} detail={t('tools.preview.emptyDetail')} /></div></div></> : <EmptyState title={t('tools.empty.title')} detail={t('tools.empty.detail')} action={<button className="button primary" type="button" onClick={() => go('settings')}>{t('common.goSettings')}</button>} />}
         </div>}
         <div hidden={page !== 'library'}>{hasVisited('library') && <Suspense fallback={<PageSkeleton />}><LibraryPage managedTools={visibleDescriptors} active={page === 'library'} /></Suspense>}</div>
         <div className="records-shell" hidden={page !== 'records'}>{hasVisited('records') && <Suspense fallback={<PageSkeleton />}><RecordsPage active={page === 'records'} tools={visibleDescriptors} onOpenProjects={() => go('home')} /></Suspense>}</div>
-        {page === 'settings' && <Tabs label="设置分类" items={[['general', '常规'], ['migration', '迁移与同步']]} value={settingsTab} onChange={setSettingsTab} />}
+        {page === 'settings' && <Tabs label={t('settings.tabs.label')} items={[['general', t('settings.tabs.general')], ['migration', t('settings.tabs.migration')]]} value={settingsTab} onChange={setSettingsTab} />}
         {page === 'settings' && settingsTab === 'general' && <GeneralSettings
           tools={nativeAvailable ? catalog?.registered ?? [] : bootstrap.tools}
           managed={managed}
@@ -352,7 +344,7 @@ export default function App() {
           onThemeChange={(next) => void updateTheme(next)}
           onManagedChange={(id, checked) => void updateManaged(id, checked)}
           onIconChange={updateIcon}
-          onIconError={(message) => setError({ code: 'icon_error', message, action: '请重新选择图片。' })}
+          onIconError={(message) => setError({ code: 'icon_error', message, action: t('settings.icons.repick') })}
           onOpenMigration={() => setSettingsTab('migration')}
           onOpenShortcutHelp={() => setHelpOpen(true)}
         />}

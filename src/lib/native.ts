@@ -11,23 +11,24 @@ import type { McpDefinition, McpDraft, McpPlacement, McpTargetRequest, McpTarget
 import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, ScanStatus, UsageReport } from '../types/history';
 import type { ConflictPreview, PortableApplyTarget, PortableImportReport, PortableItem, PortablePreview, PortableProjectLink, SyncStatus, WebdavSetup } from '../types/portable';
 import type { QueryConfig, UsageCache, UsagePreset, UsageSample, DeleteQueryResult, DraftTestReport, SaveQueryResult, UsageError, UsageQuery, UsageQueryDraft } from '../types/usage';
+import i18n from '../i18n';
 
 export const nativeAvailable = isTauri();
 
 function readError(error: unknown): ApiError {
   if (typeof error === 'string') {
-    return { code: 'native_error', message: error, action: '请检查本机状态后重试。' };
+    return { code: 'native_error', message: error, action: i18n.t('common.nativeError.checkAndRetry') };
   }
   if (typeof error === 'object' && error !== null && 'message' in error) {
     const value = error as Partial<ApiError>;
     return {
       code: typeof value.code === 'string' ? value.code : 'native_error',
-      message: typeof value.message === 'string' ? value.message : '操作失败',
-      action: typeof value.action === 'string' ? value.action : '请重试。',
+      message: typeof value.message === 'string' ? value.message : i18n.t('common.nativeError.operationFailed'),
+      action: typeof value.action === 'string' ? value.action : i18n.t('common.nativeError.retry'),
       data_directory: typeof value.data_directory === 'string' ? value.data_directory : null,
     };
   }
-  return { code: 'native_error', message: '原生服务暂时不可用', action: '请重新打开桌面应用。' };
+  return { code: 'native_error', message: i18n.t('common.nativeError.unavailable'), action: i18n.t('common.nativeError.reopen') };
 }
 
 async function command<T>(name: string, args?: Record<string, unknown>): Promise<T> {
