@@ -745,7 +745,11 @@ pub fn probe_registered_cached(
     let key = summary_cache_key(id, custom_path, home, scope, project);
     #[cfg(not(test))]
     if !fresh {
-        if let Some(probe) = cached_probe(installation_cache(), &key) {
+        if let Some(mut probe) = cached_probe(installation_cache(), &key) {
+            // Only installation evidence is cached. Adapters may select paths
+            // by file existence, so resolve native documents on every read.
+            let adapter = registry.get(id).ok_or("未注册的 CLI 适配器")?;
+            probe.native_files = adapter.native_files(scope, home, project, probe.native_writes.state == "supported");
             return Ok(probe);
         }
     }

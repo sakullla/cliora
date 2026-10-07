@@ -1,4 +1,5 @@
 import type { ConfigurationAction, ConfigurationDescriptor, ConfigurationDraft } from '../types/configuration';
+import type { RegisteredToolContext } from '../types/native';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import type { AccountCapability, AccountImpact, AccountReapplyRequest, AuthAccount, NativeLoginSnapshot } from '../types/accounts';
 import type { AgentSnapshot, AgentRequest, AgentResult, PluginTarget, PluginRequest, PluginSnapshot, PluginResult } from '../types/resources';
@@ -35,6 +36,33 @@ async function command<T>(name: string, args?: Record<string, unknown>): Promise
   } catch (error) {
     throw readError(error);
   }
+}
+
+// Share only overlapping reads. Settled workspace data is always read again so
+// external configuration edits and account bindings remain visible.
+const workspaceReads = new Map<string, Promise<RegisteredToolWorkspace>>();
+const contextReads = new Map<string, Promise<RegisteredToolContext>>();
+function readToolContext(toolId: string, scope: Scope, projectPath?: string, fresh = false) {
+  const args = { toolId, scope, projectPath: projectPath || null };
+  if (fresh) return command<RegisteredToolContext>('get_registered_tool_context', args);
+  const key = JSON.stringify(args);
+  const existing = contextReads.get(key);
+  if (existing) return existing;
+  const request = command<RegisteredToolContext>('get_registered_tool_context', args)
+    .finally(() => { if (contextReads.get(key) === request) contextReads.delete(key); });
+  contextReads.set(key, request);
+  return request;
+}
+function readWorkspace(toolId: string, scope: Scope, projectPath?: string, summary = false, fresh = false) {
+  const args = { toolId, scope, projectPath: projectPath || null, summary, fresh };
+  if (fresh) return command<RegisteredToolWorkspace>('get_registered_tool_workspace', args);
+  const key = JSON.stringify(args);
+  const existing = workspaceReads.get(key);
+  if (existing) return existing;
+  const request = command<RegisteredToolWorkspace>('get_registered_tool_workspace', args)
+    .finally(() => { if (workspaceReads.get(key) === request) workspaceReads.delete(key); });
+  workspaceReads.set(key, request);
+  return request;
 }
 
 /** Preserve quota-specific stage and retry metadata instead of reducing to ApiError. */
@@ -165,7 +193,8 @@ export const native = {
   quitApp: () => command<void>('quit_app'),
   listCliAdapters: () => command<AdapterCatalog>('list_cli_adapters'),
   setRegisteredManagedTools: (managedIds: string[]) => command<AdapterCatalog>('set_registered_managed_tools', { managedIds }),
-  getRegisteredToolWorkspace: (toolId: string, scope: Scope, projectPath?: string, summary = false, fresh = false) => command<RegisteredToolWorkspace>('get_registered_tool_workspace', { toolId, scope, projectPath: projectPath || null, summary, fresh }),
+  getRegisteredToolWorkspace: readWorkspace,
+  getRegisteredToolContext: readToolContext,
   setRegisteredCustomCliPath: (toolId: string, path: string | null) => command<void>('set_registered_custom_cli_path', { toolId, path }),
   saveRegisteredNativeProfile: (profile: RegisteredProfile, expectedVersion: number | null) => command<RegisteredProfile>('save_registered_native_profile', { profile, expectedVersion }),
   saveRegisteredCommonConfig: (common: RegisteredCommon, expectedVersion: number | null) => command<RegisteredCommonSaveResult>('save_registered_common_config', { common, expectedVersion }),

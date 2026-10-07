@@ -46,14 +46,17 @@ fn profile_query_and_active_context_references_block_deletion() {
 }
 
 #[test]
-fn authorization_link_is_allowlisted_and_bound_to_a_live_attempt() {
+fn interactive_login_does_not_accept_a_forced_provider_browser_link() {
     let (temp, db) = fixture();
     let a = create(&db, "open_code", "Browser").unwrap();
     let a = prepare_login(&db, temp.path(), &a.id, a.version).unwrap();
     let pending = a.pending_login.as_ref().unwrap();
     let link = "https://auth.openai.com/oauth/authorize?state=synthetic&code_challenge=synthetic";
     std::fs::write(pending.context.root.join(".cliora-auth-url"), format!("\u{feff}{link}\n")).unwrap();
-    assert_eq!(native::login_url(&db, &a.id, &pending.id).unwrap(), link);
+    assert!(native::login_url(&db, &a.id, &pending.id).is_err());
+    let adapter = crate::adapters::accounts::get("open_code").unwrap();
+    assert!(!adapter.capability().browser_link);
+    assert!(adapter.browser_login_endpoint().is_none());
     assert!(native::login_url(&db, &a.id, "old-attempt").is_err());
     for invalid in ["https://auth.openai.com.evil.test/oauth/authorize", "https://auth.openai.com/other", "https://secret@auth.openai.com/oauth/authorize", "http://auth.openai.com/oauth/authorize", "https://auth.openai.com/oauth/authorize#fragment"] {
         assert!(native::validated_login_url("open_code", invalid).is_err());
@@ -393,9 +396,8 @@ fn unsupported_methods_and_grok_do_not_create_pseudo_accounts() {
     let (_temp, db) = fixture();
     assert!(create(&db, "grok", "Grok").is_err());
     assert!(native::login_args("claude_code", "device").is_err());
-    assert!(native::login_args("open_code", "browser")
-        .unwrap()
-        .contains(&"ChatGPT Pro/Plus (browser)".into()));
+    assert_eq!(native::login_args("open_code", "browser").unwrap(), ["auth", "login", "--pure"]);
+    assert!(native::login_args("open_code", "device").is_err());
     assert!(list(&db).unwrap().is_empty());
 }
 

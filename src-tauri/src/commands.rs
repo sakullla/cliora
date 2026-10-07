@@ -1248,6 +1248,34 @@ fn native_snapshot(file: &adapter::NativeFile) -> NativeSnapshot {
 }
 
 #[tauri::command]
+pub async fn get_registered_tool_context(
+    app: AppHandle,
+    tool_id: String,
+    scope: Scope,
+    project_path: Option<String>,
+) -> Result<RegisteredToolContext, ApiError> {
+    blocking(move || {
+        let home = home()?;
+        let project = checked_project(scope, project_path)?;
+        if adapters::Registry::builtins().get(&tool_id).is_none() {
+            return Err(native_error("此 CLI 适配器未注册".into()));
+        }
+        let database = app.state::<AppState>().database(&app)?;
+        match crate::accounts::selection::bound(&database, &home, &tool_id, scope, project.as_deref(), false) {
+            Ok(context) => Ok(RegisteredToolContext { effective_context_id: context.map(|(_, context)| context.id), native_context_error: None }),
+            Err(error) => Ok(RegisteredToolContext { effective_context_id: None, native_context_error: Some(error) }),
+        }
+    }).await
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegisteredToolContext {
+    pub effective_context_id: Option<String>,
+    pub native_context_error: Option<String>,
+}
+
+#[tauri::command]
 pub async fn get_registered_tool_workspace(
     app: AppHandle,
     tool_id: String,

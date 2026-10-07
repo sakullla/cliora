@@ -4,6 +4,8 @@
 CLI 在 `CliAdapter::configuration` 返回端口即可接入，未声明该能力的 CLI 继续使用既有配置和原文功能。
 前端在 `ToolUiAdapter.configuration.Editor` 注册专属组件；共享工作区通过 descriptor 和 capability 挂载，不能添加 CLI ID 分支。
 
+工具资源页使用 `get_registered_tool_context(toolId, scope, projectPath)` 先读取生效账号上下文，返回 `effectiveContextId` 和 `nativeContextError`，无需等待完整工作区的安装探测。该 IPC 只调用共享绑定选择，不核验或刷新认证。完整工作区仍包含配置、探测和恢复信息；前端按工具/作用域/项目隔离请求，完整结果返回后拒绝迟到的轻量结果。资源读写继续核对上下文，新增适配器无需修改此入口。
+
 ## 草稿和编辑动作
 
 `src-tauri/src/native/configuration.rs` 与 `src/types/configuration.ts` 定义相同 IPC。

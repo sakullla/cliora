@@ -209,9 +209,8 @@ impl PriceBook {
         Ok(Self { custom, currency, mixed: std::cell::Cell::new(false) })
     }
 
-    /// Returns the cost and the label of the price used, or `None` when unpriced.
-    fn cost(&self, tool: &str, model: Option<&str>, call: &Call) -> Option<(f64, String)> {
-        let model = model?;
+    /// Resolves the rate and its provenance, or `None` when unpriced.
+    fn resolve(&self, tool: &str, model: &str) -> Option<PricedModel> {
         let (price, published) = self
             .custom
             .get(&(tool.to_owned(), model.to_owned()))
@@ -222,23 +221,6 @@ impl PriceBook {
             self.mixed.set(true);
             return None;
         }
-        let (mut input, mut read, mut write, mut output) = (
-            price.input_per_million,
-            price.cache_read_per_million,
-            price.cache_write_per_million,
-            price.output_per_million,
-        );
-        if published && call.request_count == Some(1) && call.input + call.cache_read + call.cache_write > LONG_CONTEXT_PROMPT {
-            input *= 2.0;
-            read *= 2.0;
-            write *= 2.0;
-            output *= 1.5;
-        }
-        let cost = (call.input as f64 * input
-            + call.cache_read as f64 * read
-            + call.cache_write as f64 * write
-            + call.output as f64 * output)
-            / 1_000_000.0;
         let label = if price.updated_at == 0 {
             format!("{} / {} · {}", price.tool_id, price.model, price.source)
         } else {
@@ -247,7 +229,35 @@ impl PriceBook {
                 .unwrap_or_default();
             format!("{} / {} · {} · {updated}", price.tool_id, price.model, price.source)
         };
-        Some((cost, label))
+        Some(PricedModel { price, published, label })
+    }
+}
+
+// A report resolves each tool/model rate and formats its provenance once.
+struct PricedModel {
+    price: HistoryPrice,
+    published: bool,
+    label: String,
+}
+impl PricedModel {
+    fn cost(&self, call: &Call) -> f64 {
+        let (mut input, mut read, mut write, mut output) = (
+            self.price.input_per_million,
+            self.price.cache_read_per_million,
+            self.price.cache_write_per_million,
+            self.price.output_per_million,
+        );
+        if self.published && call.request_count == Some(1) && call.input + call.cache_read + call.cache_write > LONG_CONTEXT_PROMPT {
+            input *= 2.0;
+            read *= 2.0;
+            write *= 2.0;
+            output *= 1.5;
+        }
+        (call.input as f64 * input
+            + call.cache_read as f64 * read
+            + call.cache_write as f64 * write
+            + call.output as f64 * output)
+            / 1_000_000.0
     }
 }
 
@@ -393,10 +403,10 @@ fn load_calls(conn: &Connection, filter: &HistoryFilter, from: Option<i64>, to: 
     }
     let sql = format!(
         "SELECT u.session_id, u.event_id, u.tool, u.model, u.timestamp, u.input, u.output, u.cache_read, u.cache_write,
-                u.input_includes_cache, s.project_id, s.cwd, s.partial, s.stale, u.request_count
-         FROM history_usage u JOIN history_sessions s ON s.id = u.session_id
+                u.input_includes_cache, u.request_count
+         FROM {}
          WHERE {clause}
-         ORDER BY u.timestamp"
+         ORDER BY u.timestamp", usage_source(filter)
     );
     let mut statement = conn.prepare(&sql).map_err(|error| error.to_string())?;
     let mut rows = statement
@@ -404,9 +414,24 @@ fn load_calls(conn: &Connection, filter: &HistoryFilter, from: Option<i64>, to: 
         .map_err(|error| error.to_string())?;
     let mut loaded = Loaded { tools: Vec::new(), calls: Vec::new(), sessions: Vec::new(), duplicates: 0, price_sources: Vec::new() };
     let mut session_index = HashMap::<String, usize>::new();
+    // Session bodies can occupy thousands of SQLite pages. Load metadata once
+    // per session instead of joining that large table for every model call.
+    let mut session_metadata = conn.prepare(
+        "SELECT id, project_id, cwd, partial, stale FROM history_sessions INDEXED BY idx_history_list
+         WHERE (?1 IS NULL OR id = ?1)"
+    ).map_err(|error| error.to_string())?;
+    let mut known_sessions = session_metadata.query_map([session_id], |row| {
+        let id: String = row.get(0)?;
+        Ok((id.clone(), SessionRow {
+            id, project_id: row.get(1)?, cwd: row.get(2)?,
+            partial: row.get::<_, i64>(3)? != 0, stale: row.get::<_, i64>(4)? != 0,
+        }))
+    }).map_err(|error| error.to_string())?
+        .collect::<Result<HashMap<_, _>, _>>().map_err(|error| error.to_string())?;
     // Hashed (tool, event id) keys keep de-duplication cheap over hundreds of thousands of calls.
     let mut seen = HashSet::<u64>::new();
     let mut sources = std::collections::BTreeSet::new();
+    let mut rates: HashMap<usize, HashMap<String, Option<PricedModel>>> = HashMap::new();
     let count = |value: Option<i64>| value.unwrap_or(0).max(0) as u64;
     while let Some(row) = rows.next().map_err(|error| error.to_string())? {
         let session_id: String = row.get(0).map_err(|error| error.to_string())?;
@@ -428,13 +453,7 @@ fn load_calls(conn: &Connection, filter: &HistoryFilter, from: Option<i64>, to: 
         let session = match session_index.get(&session_id) {
             Some(index) => *index,
             None => {
-                loaded.sessions.push(SessionRow {
-                    id: session_id.clone(),
-                    project_id: row.get(10).map_err(|error| error.to_string())?,
-                    cwd: row.get(11).map_err(|error| error.to_string())?,
-                    partial: row.get::<_, i64>(12).map_err(|error| error.to_string())? != 0,
-                    stale: row.get::<_, i64>(13).map_err(|error| error.to_string())? != 0,
-                });
+                loaded.sessions.push(known_sessions.remove(&session_id).ok_or("用量所属会话不存在")?);
                 session_index.insert(session_id, loaded.sessions.len() - 1);
                 loaded.sessions.len() - 1
             }
@@ -454,7 +473,7 @@ fn load_calls(conn: &Connection, filter: &HistoryFilter, from: Option<i64>, to: 
             input
         };
         let mut call = Call {
-            request_count: row.get::<_, Option<i64>>(14).map_err(|error| error.to_string())?.map(|value| value.max(0) as u64),
+            request_count: row.get::<_, Option<i64>>(10).map_err(|error| error.to_string())?.map(|value| value.max(0) as u64),
             session,
             tool,
             model,
@@ -465,9 +484,14 @@ fn load_calls(conn: &Connection, filter: &HistoryFilter, from: Option<i64>, to: 
             output,
             cost: None,
         };
-        if let Some((cost, label)) = book.cost(&loaded.tools[call.tool], call.model.as_deref(), &call) {
-            call.cost = Some(cost);
-            sources.insert(label);
+        if let Some(model) = call.model.as_ref() {
+            let prices = rates.entry(call.tool).or_default();
+            if !prices.contains_key(model) {
+                let price = book.resolve(&loaded.tools[call.tool], model);
+                if let Some(price) = &price { sources.insert(price.label.clone()); }
+                prices.insert(model.clone(), price);
+            }
+            call.cost = prices.get(model).and_then(Option::as_ref).map(|price| price.cost(&call));
         }
         loaded.calls.push(call);
     }

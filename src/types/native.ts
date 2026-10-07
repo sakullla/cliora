@@ -56,6 +56,8 @@ export type RegisteredToolWorkspace = Omit<ToolWorkspace, 'probe' | 'profiles' |
   profileModelSummaries?: Record<string, ModelSummary | null>;
 };
 export type ModelSummary = { providerId: string | null; model: string };
+/** Lightweight scope lookup; does not probe installations or read native documents. */
+export type RegisteredToolContext = { effectiveContextId: string | null; nativeContextError: string | null };
 export type ApplyOutcome = { transactionId: string; changedFiles: string[]; status: 'written_for_next_session' | 'already_matching' };
 export type ModelDirectory = { models: string[]; status: 'ready' | 'empty' | 'stale' | 'error'; fetchedAt: number | null; error: string | null; source: string };
 export type CheckStep = { state: 'passed' | 'partial' | 'failed' | 'skipped'; message: string };

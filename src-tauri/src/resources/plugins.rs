@@ -341,6 +341,14 @@ fn config_entries(
     home: &Path,
     target: &PluginTarget,
 ) -> Result<Vec<PluginEntry>, String> {
+    config_entries_with_recovery(db, home, target, true)
+}
+fn config_entries_with_recovery(
+    db: &Database,
+    home: &Path,
+    target: &PluginTarget,
+    reconcile: bool,
+) -> Result<Vec<PluginEntry>, String> {
     let (path, kind) = config(home, target)?;
     let baseline = transaction::read_native(&path)?;
     let parsed = format::parse(kind, &baseline)?;
@@ -351,7 +359,8 @@ fn config_entries(
         Some(value) => value.as_array().ok_or("插件配置不是数组")?,
         None => &empty,
     };
-    let saved = reconcile_disabled(db, target, &path, &baseline, entries)?;
+    let saved = if reconcile { reconcile_disabled(db, target, &path, &baseline, entries)? }
+        else { disabled(db, target)? };
     let source_of = |item: &Value| {
         item.as_str()
             .map(str::to_owned)
@@ -436,12 +445,17 @@ fn config_entries(
 }
 // Bound complete package trees, including directory membership. Never follow
 // symlinks/reparse points into another package or account.
-fn digest_path(path: &Path, output: &mut String, budget: &mut (usize, u64)) -> Result<(), String> {
-    if !path.exists() {
-        output.push_str("missing");
-        return Ok(());
-    }
-    let meta = fs::symlink_metadata(path).map_err(|_| "无法检查插件文件")?;
+// Enumerate once, preserving deterministic path order and the shared scan budget.
+// Only content reads run concurrently; every scan still hashes the complete package.
+fn digest_entries(path: &Path, entries: &mut Vec<(PathBuf, bool)>, budget: &mut (usize, u64)) -> Result<(), String> {
+    let meta = match fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            entries.push((PathBuf::new(), false));
+            return Ok(());
+        }
+        Err(_) => return Err("无法检查插件文件".into()),
+    };
     if meta.file_type().is_symlink() {
         return Err("插件含符号链接；请在原生 CLI 中管理，未跟随链接".into());
     }
@@ -452,12 +466,15 @@ fn digest_path(path: &Path, output: &mut String, budget: &mut (usize, u64)) -> R
             return Err("插件含重解析点；未跟随链接".into());
         }
     }
+    if !meta.is_file() && !meta.is_dir() {
+        return Err("插件含非普通文件；请在原生 CLI 中管理".into());
+    }
     budget.0 += 1;
-    budget.1 += if meta.is_file() { meta.len() } else { 0 };
+    budget.1 = budget.1.saturating_add(if meta.is_file() { meta.len() } else { 0 });
     if budget.0 > 20000 || budget.1 > 128 * 1024 * 1024 {
         return Err("插件目录超过校验上限；请在原生 CLI 管理".into());
     }
-    output.push_str(&path.display().to_string());
+    entries.push((path.to_owned(), meta.is_file()));
     if meta.is_dir() {
         let mut children = fs::read_dir(path)
             .map_err(|_| "无法读取插件目录")?
@@ -466,15 +483,54 @@ fn digest_path(path: &Path, output: &mut String, budget: &mut (usize, u64)) -> R
             .map_err(|_| "无法读取插件目录")?;
         children.sort();
         for child in children {
-            digest_path(&child, output, budget)?;
+            digest_entries(&child, entries, budget)?;
         }
-    } else {
-        output.push_str(&transaction::fingerprint(
-            &fs::read(path).map_err(|_| "无法读取插件文件")?,
-        ));
     }
     Ok(())
 }
+
+fn digest_path(path: &Path, output: &mut String, budget: &mut (usize, u64)) -> Result<(), String> {
+    use sha2::{Digest, Sha256};
+    let mut entries = Vec::new();
+    digest_entries(path, &mut entries, budget)?;
+    let read = |entries: &[(PathBuf, bool)]| -> Result<String, String> {
+        let mut part = String::new();
+        let mut buffer = [0u8; 64 * 1024];
+        for (path, file) in entries {
+            if path.as_os_str().is_empty() { part.push_str("missing"); continue; }
+            part.push_str(&path.display().to_string());
+            if *file {
+                let mut input = fs::File::open(path).map_err(|_| "无法读取插件文件")?.take(128 * 1024 * 1024 + 1);
+                let mut digest = Sha256::new();
+                let mut size = 0;
+                loop {
+                    let count = input.read(&mut buffer).map_err(|_| "无法读取插件文件")?;
+                    if count == 0 { break; }
+                    size += count;
+                    if size > 128 * 1024 * 1024 { return Err("插件文件超过校验上限".into()); }
+                    digest.update(&buffer[..count]);
+                }
+                part.push_str(&format!("{:x}", digest.finalize()));
+            }
+        }
+        Ok(part)
+    };
+    if entries.len() < 8 {
+        output.push_str(&read(&entries)?);
+    } else {
+        std::thread::scope(|scope| -> Result<(), String> {
+            let workers = std::thread::available_parallelism().map_or(2, |count| count.get()).min(4);
+            let handles: Vec<_> = entries.chunks(entries.len().div_ceil(workers))
+                .map(|chunk| scope.spawn(move || read(chunk))).collect();
+            for handle in handles {
+                output.push_str(&handle.join().map_err(|_| "插件文件校验中断")??);
+            }
+            Ok(())
+        })?;
+    }
+    Ok(())
+}
+
 fn snapshot_inner(
     db: &Database,
     home: &Path,
@@ -556,7 +612,16 @@ pub fn preview(db: &Database, home: &Path, target: &PluginTarget) -> Result<Opti
     let adapter = adapters::plugins::get(&target.tool_id)?;
     let mut capability = adapter.capability();
     if target.scope == Scope::Project && !capability.project { return Ok(None); }
-    let Some(mut entries) = adapter.preview(home, target)? else { return Ok(None); };
+    let mut entries = if let Some(entries) = adapter.preview(home, target)? {
+        entries
+    } else if adapter.discovery_only() {
+        let (path, _) = config(home, target)?;
+        adapter.discover(home, target, &path)?
+    } else if adapter.config_field().is_some() {
+        config_entries_with_recovery(db, home, target, false)?
+    } else {
+        return Ok(None);
+    };
     for entry in &mut entries { entry.read_only = true; entry.enabled = None; entry.state = "inventory_pending".into(); }
     capability.actions.clear();
     Ok(Some(PluginSnapshot { target: target.clone(), capability, entries, baseline: String::new(), detail: "本机插件目录预览；完整列表、启停状态与管理操作正在核对。".into() }))
