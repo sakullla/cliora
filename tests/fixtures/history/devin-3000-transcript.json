@@ -118,7 +118,7 @@
           }
         ]
       },
-      "metrics": { "prompt_tokens": 1240, "completion_tokens": 86, "cached_tokens": 800 },
+      "metrics": { "prompt_tokens": 1240, "completion_tokens": 86, "cached_tokens": 800, "extra": { "cache_creation_input_tokens": 438 } },
       "extra": { "generation_model": "example-swe-high", "telemetry": { "source": "assistant", "operation": "inference" } }
     },
     {

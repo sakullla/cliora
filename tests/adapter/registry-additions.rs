@@ -11,6 +11,8 @@
 //! for five of the six, Plugins for all six) stay absent with recorded
 //! reasons instead of silent holes.
 
+use std::path::Path;
+
 use crate::adapters::Registry;
 use crate::domain::{CliId, Preferences};
 
@@ -420,11 +422,11 @@ fn six_added_adapters_declare_their_delivered_dimensions() {
         .is_empty());
     // devin (local verified 3000.11.3): config.json JSONC editing (project
     // .devin/config.json as the secondary role), --resume/-c, MCP
-    // (mcp_config.json), ATIF-v1.7 transcript index; the usage dimension stays
-    // hidden because the binding matrix recorded "transcript 无 token 字段" —
-    // the descriptor notes the contradicting per-step metrics finding and the
-    // pending solution revision; credentials.toml is never touched, so no
-    // credential channel exists at all.
+    // (mcp_config.json), ATIF-v1.7 transcript index with the usage dimension
+    // delivered (devin-usage 2026-10-08): per-agent-step metrics as inclusive
+    // bucket events reconciled against final_metrics on all 8 real local
+    // transcripts; credentials.toml is never touched, so no credential
+    // channel exists at all.
     let devin = registry.get("devin").unwrap();
     assert!(!devin.supports_skills());
     assert!(devin.configuration().is_none());
@@ -437,7 +439,36 @@ fn six_added_adapters_declare_their_delivered_dimensions() {
         .descriptor()
         .history
         .reason
-        .contains("待方案修订"));
+        .contains("用量已交付"));
+    // The delivered usage assertion runs the registry adapter over the
+    // sanitized transcript fixture: two inclusive-bucket events whose session
+    // sums cross-check the fixture's final_metrics totals.
+    let transcript = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("tests/fixtures/history/devin-3000-transcript.json");
+    let parsed = devin
+        .parse_history(&crate::history::HistorySource {
+            native_title: None,
+            path: transcript,
+            native_id: Some("serene-example".into()),
+            fingerprint: String::new(),
+            fingerprint_error: None,
+        })
+        .unwrap();
+    assert_eq!(parsed.usage.len(), 2, "devin 用量事件应交付");
+    assert!(parsed
+        .usage
+        .iter()
+        .all(|event| event.input_includes_cache && event.request_count == Some(1)));
+    assert_eq!(
+        parsed.usage.iter().map(|event| event.input.unwrap()).sum::<u64>(),
+        3550
+    );
+    assert_eq!(
+        parsed.usage.iter().map(|event| event.cache_read.unwrap()).sum::<u64>(),
+        2700
+    );
     assert!(devin
         .connection_documents(&env_key_connection(), crate::native::adapter::Scope::Global)
         .is_err());
