@@ -59,7 +59,7 @@ pub fn sources_controlled(
             source.fingerprint = String::new();
             source.fingerprint_error = Some(message);
         } else {
-            source.fingerprint = format!("codebuddy-session-v2|{}", parts.join("|"));
+            source.fingerprint = format!("codebuddy-session-v3|{}", parts.join("|"));
         }
     }
     Ok(sources)
@@ -105,24 +105,60 @@ pub fn parse(source: &HistorySource) -> Result<ParsedSession, String> {
     parse_controlled(source, &|| false)
 }
 
-/// Rows that never carry conversation text or per-message usage: tool calls and
-/// results, reasoning blobs, file snapshots, per-turn metrics and duplicate
-/// summaries. `turn-metrics.tokenDelta` is not a billing counter (it exceeds the
-/// summed provider usage on verified sessions), so usage comes only from the
-/// assistant messages' normalized `providerData.usage`.
+/// Rows that never carry conversation text or per-call usage on any verified
+/// 2.161.1 session (6.4k+ usage rows sampled locally): tool results, reasoning
+/// blobs, file snapshots, per-turn aggregates and duplicate summaries.
+/// `function_call` rows MUST be parsed: the tool loop's intermediate API calls
+/// log their `providerData.usage` only there, while assistant messages carry
+/// the turn-final call. `turn-metrics.tokenDelta` equals the sum of all usage
+/// rows (parent plus subagent wires) on verified sessions, but stays a
+/// cross-check only: it is an aggregate without per-call model/cache detail.
 fn skip_row(raw: &[u8]) -> bool {
     let Some(kind) = raw_string_after(raw, b"\"type\":\"") else {
         return false;
     };
     matches!(
         kind,
-        b"function_call"
-            | b"function_call_result"
+        b"function_call_result"
             | b"reasoning"
             | b"file-history-snapshot"
             | b"turn-metrics"
             | b"summary"
     )
+}
+
+/// Usage is per API call and may sit on any row carrying `providerData.usage`
+/// (assistant messages and `function_call` rows). Row ids are unique per call,
+/// so forked copies of the same row collapse to one usage event.
+fn record_usage(
+    session: &mut ParsedSession,
+    records: &mut HashSet<String>,
+    event: String,
+    provider: Option<&Value>,
+    model: Option<String>,
+    time: Option<i64>,
+) {
+    let Some(counts) = provider
+        .and_then(|data| data.get("usage"))
+        .and_then(usage_counts)
+        .map(usage::clamp_cache_inside_input)
+        .filter(|counts| usage::active(*counts))
+    else {
+        return;
+    };
+    if records.insert(event.clone()) {
+        session.usage.push(UsageEvent {
+            request_count: Some(1),
+            id: event,
+            model,
+            timestamp: time,
+            input: Some(counts.input),
+            output: Some(counts.output),
+            cache_read: Some(counts.read),
+            cache_write: Some(counts.write),
+            input_includes_cache: true,
+        });
+    }
 }
 
 /// Normalized provider usage on assistant messages (verified shape):
@@ -166,6 +202,28 @@ pub fn parse_controlled(
     let mut records = HashSet::<String>::new();
     let partial = read_jsonl_filtered(source, cancelled, skip_row, |line, row| {
         let time = row.get("timestamp").and_then(timestamp);
+        let provider = row.get("providerData");
+        // Per-call usage is counted from every row carrying providerData.usage,
+        // not only assistant messages: the tool loop's intermediate calls log
+        // their usage on the function_call rows.
+        let id = row
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("line-{line}"));
+        let row_model = provider
+            .and_then(|data| data.get("model"))
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| model.clone());
+        record_usage(
+            &mut session,
+            &mut records,
+            format!("codebuddy:usage:{id}"),
+            provider,
+            row_model,
+            time,
+        );
         match row.get("type").and_then(Value::as_str) {
             Some("message") => {
                 let role = row.get("role").and_then(Value::as_str).unwrap_or("");
@@ -174,8 +232,7 @@ pub fn parse_controlled(
                 }
                 // providerData.skipRun marks local command echoes (for example
                 // /model round trips), not conversation turns.
-                if row
-                    .get("providerData")
+                if provider
                     .and_then(|data| data.get("skipRun"))
                     .and_then(Value::as_bool)
                     == Some(true)
@@ -192,42 +249,12 @@ pub fn parse_controlled(
                 if let Some(cwd) = row.get("cwd").and_then(Value::as_str) {
                     session.cwd = Some(cwd.to_owned());
                 }
-                let provider = row.get("providerData");
                 if let Some(current) = provider
                     .and_then(|data| data.get("model"))
                     .and_then(Value::as_str)
                 {
                     model = Some(current.to_owned());
                     session.model = model.clone();
-                }
-                let id = row
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| format!("line-{line}"));
-                if role == "assistant" {
-                    let counts = provider
-                        .and_then(|data| data.get("usage"))
-                        .and_then(usage_counts)
-                        .map(usage::clamp_cache_inside_input);
-                    if let Some(counts) = counts.filter(|counts| usage::active(*counts)) {
-                        // Message ids are unique per response, so forked copies
-                        // of the same call collapse to one usage event.
-                        let event = format!("codebuddy:message:{id}");
-                        if records.insert(event.clone()) {
-                            session.usage.push(UsageEvent {
-                                request_count: Some(1),
-                                id: event,
-                                model: model.clone(),
-                                timestamp: time,
-                                input: Some(counts.input),
-                                output: Some(counts.output),
-                                cache_read: Some(counts.read),
-                                cache_write: Some(counts.write),
-                                input_includes_cache: true,
-                            });
-                        }
-                    }
                 }
                 let body = row.get("content").map(text_content).unwrap_or_default();
                 session.add_message(id, role, body, time);
@@ -255,7 +282,9 @@ pub fn parse_controlled(
     session.partial |= partial;
     // Subagent wires carry their own session ids and conversations, so they
     // never contribute transcript rows or identity; their billed calls join
-    // the parent session total under agent-scoped event ids.
+    // the parent session total under agent-scoped event ids. Inside a wire the
+    // same all-rows usage rule applies (assistant messages plus function_call
+    // rows).
     for wire in subagent_wires(&source.path, cancelled)? {
         check_cancelled(cancelled)?;
         let agent = wire
@@ -270,41 +299,25 @@ pub fn parse_controlled(
             fingerprint_error: None,
         };
         let read = read_jsonl_filtered(&wire_source, cancelled, skip_row, |line, row| {
-            if row.get("type").and_then(Value::as_str) != Some("message")
-                || row.get("role").and_then(Value::as_str) != Some("assistant")
-            {
-                return;
-            }
             let provider = row.get("providerData");
-            let model = provider
+            let row_model = provider
                 .and_then(|data| data.get("model"))
                 .and_then(Value::as_str)
-                .map(str::to_owned);
-            let counts = provider
-                .and_then(|data| data.get("usage"))
-                .and_then(usage_counts)
-                .map(usage::clamp_cache_inside_input);
-            if let Some(counts) = counts.filter(|counts| usage::active(*counts)) {
-                let message_id = row
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| format!("line-{line}"));
-                let event = format!("{agent}:message:{message_id}");
-                if records.insert(event.clone()) {
-                    session.usage.push(UsageEvent {
-                        request_count: Some(1),
-                        id: event,
-                        model: model.or_else(|| session.model.clone()),
-                        timestamp: row.get("timestamp").and_then(timestamp),
-                        input: Some(counts.input),
-                        output: Some(counts.output),
-                        cache_read: Some(counts.read),
-                        cache_write: Some(counts.write),
-                        input_includes_cache: true,
-                    });
-                }
-            }
+                .map(str::to_owned)
+                .or_else(|| session.model.clone());
+            let id = row
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("line-{line}"));
+            record_usage(
+                &mut session,
+                &mut records,
+                format!("{agent}:usage:{id}"),
+                provider,
+                row_model,
+                row.get("timestamp").and_then(timestamp),
+            );
         });
         match read {
             Ok(agent_partial) => session.partial |= agent_partial,
@@ -347,7 +360,7 @@ mod tests {
         fs::write(projects.join("scratch.txt"), "{}\n").unwrap();
         let sources = sources(home.path()).unwrap();
         assert_eq!(sources.len(), 1);
-        assert!(sources[0].fingerprint.starts_with("codebuddy-session-v2|"));
+        assert!(sources[0].fingerprint.starts_with("codebuddy-session-v3|"));
         assert!(sources[0]
             .path
             .file_name()
@@ -357,41 +370,111 @@ mod tests {
     }
 
     #[test]
-    fn fixture_session_parses_identity_title_messages_and_usage() {
+    fn fixture_session_counts_usage_from_all_usage_rows() {
         let parsed = parse(&fixture_source()).unwrap();
         assert_eq!(
             parsed.native_id.as_deref(),
-            Some("0aa0fb40-0b9c-74c9-8d7c-cd5d630dc6f0")
+            Some("01a0c8f7-ef95-76a2-9503-6dbc8341a38f")
         );
-        assert_eq!(parsed.title, "梳理模块结构并给出重构建议");
+        assert_eq!(parsed.title, "调整表格展示样式");
         assert_eq!(parsed.model.as_deref(), Some("kimi-k3-2"));
         assert_eq!(
             parsed.cwd.as_deref(),
             Some(r"c:\Users\example\project\demo")
         );
         let roles: Vec<&str> = parsed.messages.iter().map(|m| m.role.as_str()).collect();
-        // The two skipRun local-command echoes stay out of the transcript.
-        assert_eq!(roles, vec!["user", "assistant", "user", "assistant"]);
-        assert!(parsed.messages[0].text.contains("梳理"));
-        assert_eq!(parsed.usage.len(), 2);
-        let first = &parsed.usage[0];
-        assert_eq!(first.input, Some(134819));
-        assert_eq!(first.output, Some(364));
-        assert_eq!(first.cache_read, Some(134656));
-        assert_eq!(first.cache_write, Some(0));
-        assert!(first.input_includes_cache);
-        assert_eq!(first.model.as_deref(), Some("kimi-k3-2"));
-        let second = &parsed.usage[1];
-        assert_eq!(second.input, Some(268917));
-        assert_eq!(second.cache_read, Some(268706));
+        // The three skipRun local-command echoes stay out of the transcript.
+        assert_eq!(
+            roles,
+            vec!["user", "user", "assistant", "assistant", "user", "assistant"]
+        );
+        // The fixture (real 2.161.1 session, sanitized) holds one full turn:
+        // 17 parent usage rows (16 function_call + the turn-final assistant
+        // message) plus 7 rows from the Explore subagent wire (6 function_call
+        // + the wire-final assistant message).
+        assert_eq!(parsed.usage.len(), 24);
+        let parent = parsed
+            .usage
+            .iter()
+            .filter(|event| event.id.starts_with("codebuddy:usage:"))
+            .count();
+        let wire = parsed
+            .usage
+            .iter()
+            .filter(|event| event.id.starts_with("agent-f46656a6963a4e4c:usage:"))
+            .count();
+        assert_eq!(parent, 17);
+        assert_eq!(wire, 7);
+        let mut ids: Vec<&str> = parsed.usage.iter().map(|event| event.id.as_str()).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), parsed.usage.len(), "行 id 去重后不得有重复事件");
+        // First tool-loop call: usage sits on a function_call row.
+        let first_call = parsed
+            .usage
+            .iter()
+            .find(|event| event.id == "codebuddy:usage:01a0c8f8-b32c-702b-905f-9ed485e0289c")
+            .unwrap();
+        assert_eq!(first_call.input, Some(27523));
+        assert_eq!(first_call.output, Some(139));
+        assert_eq!(first_call.cache_read, Some(14336));
+        assert_eq!(first_call.cache_write, Some(0));
+        assert!(first_call.input_includes_cache);
+        assert_eq!(first_call.request_count, Some(1));
+        assert_eq!(first_call.model.as_deref(), Some("kimi-k3-2"));
+        // Turn-final assistant message usage.
+        let turn_final = parsed
+            .usage
+            .iter()
+            .find(|event| event.id == "codebuddy:usage:01a0c900-74dc-77e3-8554-f459260e97ce")
+            .unwrap();
+        assert_eq!(turn_final.input, Some(47092));
+        assert_eq!(turn_final.output, Some(123));
+        assert_eq!(turn_final.cache_read, Some(46336));
+        // Subagent wire's first intermediate call.
+        let wire_call = parsed
+            .usage
+            .iter()
+            .find(|event| event.id == "agent-f46656a6963a4e4c:usage:01a0c8f9-0dc8-73c5-90ee-1443977196ff")
+            .unwrap();
+        assert_eq!(wire_call.input, Some(17617));
+        assert_eq!(wire_call.output, Some(241));
+        assert_eq!(wire_call.cache_read, Some(512));
+        assert_eq!(wire_call.model.as_deref(), Some("kimi-k3-2"));
+        // Cross-check against turn-metrics: the sum over ALL usage rows
+        // (parent + subagent wire, input + output) equals tokenDelta.
+        let total: u64 = parsed
+            .usage
+            .iter()
+            .map(|event| event.input.unwrap_or(0) + event.output.unwrap_or(0))
+            .sum();
+        assert_eq!(total, fixture_token_delta_sum(), "全 usage 行和必须与 tokenDelta 相等");
         assert!(!parsed.partial);
+    }
+
+    /// `turn-metrics.tokenDelta` values of the fixture session, used only as a
+    /// cross-check of the all-rows usage sum.
+    fn fixture_token_delta_sum() -> u64 {
+        let raw = fs::read_to_string(fixtures().join("codebuddy-2.161.1-session.jsonl")).unwrap();
+        raw.lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter(|row| row.get("type").and_then(Value::as_str) == Some("turn-metrics"))
+            .filter_map(|row| row.get("tokenDelta").and_then(Value::as_u64))
+            .sum()
     }
 
     #[test]
     fn tool_and_metric_rows_are_skipped_without_parsing() {
-        assert!(skip_row(
+        // function_call rows carry the tool loop's per-call usage and must be
+        // parsed; only rows that never carry usage are skipped raw.
+        assert!(!skip_row(
             br#"{"id":"x","type":"function_call","name":"read_file","arguments":"{}"}"#
         ));
+        assert!(skip_row(
+            br#"{"id":"x","type":"function_call_result","callId":"c","output":"{}"}"#
+        ));
+        assert!(skip_row(br#"{"id":"x","type":"reasoning","rawContent":[]}"#));
+        assert!(skip_row(br#"{"type":"file-history-snapshot","snapshot":{}}"#));
         assert!(skip_row(
             br#"{"type":"turn-metrics","durationMs":1,"tokenDelta":6}"#
         ));
@@ -416,6 +499,8 @@ mod tests {
                     "\n",
                     r#"{{"id":"m1","type":"message","role":"user","timestamp":1789000000000,"sessionId":"{sid}","cwd":"c:\\work\\demo","content":[{{"type":"text","text":"查一下"}}]}}"#,
                     "\n",
+                    r#"{{"id":"f1","type":"function_call","timestamp":1789000000500,"name":"Grep","arguments":{{}},"providerData":{{"model":"kimi-k3-2","usage":{{"requests":1,"inputTokens":500,"outputTokens":25,"totalTokens":525,"inputTokensDetails":[{{"cached_tokens":100}}],"outputTokensDetails":[]}}}},"sessionId":"{sid}","cwd":"c:\\work\\demo"}}"#,
+                    "\n",
                     r#"{{"id":"a1","type":"message","role":"assistant","timestamp":1789000001000,"sessionId":"{sid}","providerData":{{"model":"kimi-k3-2","usage":{{"requests":1,"inputTokens":1000,"outputTokens":50,"totalTokens":1050,"inputTokensDetails":[{{"cached_tokens":900}}],"outputTokensDetails":[]}}}},"content":[{{"type":"text","text":"结论"}}]}}"#,
                     "\n",
                 ),
@@ -423,12 +508,16 @@ mod tests {
             ),
         )
         .unwrap();
-        // The subagent wire carries its own session id; only its usage folds in.
+        // The subagent wire carries its own session id; only its usage folds
+        // in, and the wire follows the same all-rows rule (its function_call
+        // rows carry the subagent's intermediate calls' usage).
         fs::write(
             projects.join(format!("{session_id}/subagents/agent-0a2dcb4f1b794a44.jsonl")),
             format!(
                 concat!(
                     r#"{{"id":"s-user","type":"message","role":"user","timestamp":1789000002000,"sessionId":"subagent-own-id","cwd":"c:\\work\\demo","content":[{{"type":"text","text":"子代理输入不该进主会话"}}]}}"#,
+                    "\n",
+                    r#"{{"id":"s-f1","type":"function_call","timestamp":1789000002400,"name":"Read","arguments":{{}},"providerData":{{"model":"kimi-k3-2","usage":{{"requests":1,"inputTokens":300,"outputTokens":40,"totalTokens":340,"inputTokensDetails":[{{"cached_tokens":60}}],"outputTokensDetails":[]}}}},"sessionId":"subagent-own-id","cwd":"c:\\work\\demo"}}"#,
                     "\n",
                     r#"{{"id":"s-a1","type":"message","role":"assistant","timestamp":1789000003000,"sessionId":"subagent-own-id","providerData":{{"model":"kimi-k3-2","usage":{{"requests":1,"inputTokens":2000,"outputTokens":80,"totalTokens":2080,"inputTokensDetails":[{{"cached_tokens":1500}}],"outputTokensDetails":[]}}}},"content":[{{"type":"text","text":"子代理输出"}}]}}"#,
                     "\n",
@@ -440,7 +529,7 @@ mod tests {
         .unwrap();
         let sources = sources(temp.path()).unwrap();
         assert_eq!(sources.len(), 1);
-        assert!(sources[0].fingerprint.starts_with("codebuddy-session-v2|"));
+        assert!(sources[0].fingerprint.starts_with("codebuddy-session-v3|"));
         let parsed = parse(&sources[0]).unwrap();
         assert_eq!(
             parsed.native_id.as_deref(),
@@ -452,7 +541,7 @@ mod tests {
             .messages
             .iter()
             .all(|message| !message.text.contains("子代理")));
-        assert_eq!(parsed.usage.len(), 2, "{:?}", parsed.usage);
+        assert_eq!(parsed.usage.len(), 4, "{:?}", parsed.usage);
         let mut ids: Vec<&str> = parsed.usage.iter().map(|event| event.id.as_str()).collect();
         ids.sort_unstable();
         ids.dedup();
@@ -460,12 +549,26 @@ mod tests {
         assert_eq!(
             ids,
             vec![
-                "agent-0a2dcb4f1b794a44:message:s-a1",
-                "codebuddy:message:a1"
+                "agent-0a2dcb4f1b794a44:usage:s-a1",
+                "agent-0a2dcb4f1b794a44:usage:s-f1",
+                "codebuddy:usage:a1",
+                "codebuddy:usage:f1"
             ]
         );
-        let total: u64 = parsed.usage.iter().map(|event| event.input.unwrap_or(0)).sum();
-        assert_eq!(total, 3000, "子代理 token 应计入会话总量");
+        let parent_input: u64 = parsed
+            .usage
+            .iter()
+            .filter(|event| event.id.starts_with("codebuddy:"))
+            .map(|event| event.input.unwrap_or(0))
+            .sum();
+        let wire_input: u64 = parsed
+            .usage
+            .iter()
+            .filter(|event| event.id.starts_with("agent-"))
+            .map(|event| event.input.unwrap_or(0))
+            .sum();
+        assert_eq!(parent_input, 1500, "父会话取全 usage 行(含 function_call)");
+        assert_eq!(wire_input, 2300, "子代理线内同样取全 usage 行");
         assert!(parsed.usage.iter().all(|event| event.input_includes_cache));
     }
 
