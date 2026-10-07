@@ -1,0 +1,133 @@
+{
+  "description": "Antigravity CLI (agy) 1.3 sanitized row set. Hand-built from the documented [RE] schema (codeburn reverse engineering of agy 1.2.x; the local machine runs agy 1.3.1 but has never produced data, so there is no real sample to desensitize). Tests rebuild conversation_summaries.db, conversations/<id>.db (gen_metadata protobuf blobs) and brain/<id>/.system_generated/logs/transcript_full.jsonl deterministically from these rows (mimo_code in-test pattern). Usage semantics: ModelUsageStats field 2 input_tokens excludes cache read/write, field 3 output_tokens = field 9 thinking + field 10 response (includes thinking), dedupe by field 11 response_id.",
+  "conversations": [
+    {
+      "id": "conv_root_20261005_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6",
+      "title": "帮我把部署脚本改成幂等版本",
+      "workspace": "C:\\Users\\example\\agy-demo",
+      "status": "active",
+      "parent_conversation_id": null,
+      "transcript": [
+        {
+          "step_index": 0,
+          "source": "user",
+          "type": "USER_INPUT",
+          "status": "COMPLETED",
+          "created_at": 1791000005000,
+          "content": "把 deploy.ps1 改成幂等的：重复执行不能产生副作用。"
+        },
+        {
+          "step_index": 1,
+          "source": "planner",
+          "type": "PLANNER_RESPONSE",
+          "status": "COMPLETED",
+          "created_at": 1791000010000,
+          "content": "计划：先检查外层资源存在性，再把创建步骤改成 PATCH 语义。"
+        },
+        {
+          "step_index": 2,
+          "source": "agent",
+          "type": "AGENT_RESPONSE",
+          "status": "COMPLETED",
+          "created_at": 1791000030000,
+          "content": "已改为先查询再创建，重复执行只会更新时间戳，脚本输出保持一致。"
+        },
+        {
+          "step_index": 2,
+          "source": "agent",
+          "type": "TOOL_CALL",
+          "status": "COMPLETED",
+          "created_at": 1791000020000,
+          "content": "powershell Get-AzResource（未文档化行类型，不进入时间线）"
+        }
+      ],
+      "generations": [
+        {
+          "generation_uuid": "cascade_0001:resp_0001_agy_fixture",
+          "response_id": "resp_0001_agy_fixture",
+          "input_tokens": 1200,
+          "output_tokens": 300,
+          "thinking_output_tokens": 24,
+          "response_output_tokens": 276,
+          "cache_write_tokens": 3000,
+          "cache_read_tokens": 8000,
+          "model_id": "gemini-3-pro-preview",
+          "display_name": "Gemini 3 Pro Preview",
+          "timestamp": 1791000010000,
+          "step_indices": [1]
+        },
+        {
+          "generation_uuid": "cascade_0001:resp_0001_agy_fixture",
+          "response_id": "resp_0001_agy_fixture",
+          "input_tokens": 1200,
+          "output_tokens": 300,
+          "thinking_output_tokens": 24,
+          "response_output_tokens": 276,
+          "cache_write_tokens": 3000,
+          "cache_read_tokens": 8000,
+          "model_id": "gemini-3-pro-preview",
+          "display_name": "Gemini 3 Pro Preview",
+          "timestamp": 1791000010000,
+          "step_indices": [1],
+          "note": "同一 response_id 的重复存储行：按去重键跳过，不重复计数"
+        },
+        {
+          "generation_uuid": "cascade_0002:resp_drift_wrongwire",
+          "malformed": "wrong_wire",
+          "note": "文档字段 2 应为 varint 却按 length-delimited 编码 → 跳过并降级 partial"
+        },
+        {
+          "generation_uuid": "cascade_0002:resp_drift_truncated",
+          "malformed": "truncated",
+          "response_id": "resp_trunc_agy_fixture",
+          "input_tokens": 77,
+          "output_tokens": 21,
+          "thinking_output_tokens": 1,
+          "response_output_tokens": 20,
+          "cache_write_tokens": 0,
+          "cache_read_tokens": 0,
+          "model_id": "gemini-3-pro-preview",
+          "timestamp": 1791000025000,
+          "note": "protobuf 截断 → 跳过并降级 partial"
+        },
+        {
+          "generation_uuid": "cascade_0002:resp_meta_only",
+          "display_name": "Gemini 3 Pro Preview",
+          "no_stats": true,
+          "note": "无 ModelUsageStats 子消息的元数据行：静默跳过，不算用量也不降级"
+        },
+        {
+          "generation_uuid": "cascade_0003:resp_0002_agy_fixture",
+          "response_id": "resp_0002_agy_fixture",
+          "input_tokens": 500,
+          "output_tokens": 150,
+          "thinking_output_tokens": 30,
+          "response_output_tokens": 120,
+          "cache_write_tokens": 0,
+          "cache_read_tokens": 0,
+          "display_name": "Gemini 3 Pro",
+          "timestamp": 1791000030000,
+          "step_indices": [2],
+          "note": "无 field 19 配置 id：回退 field 21 显示名作为模型标识"
+        }
+      ]
+    },
+    {
+      "id": "conv_child_20261005_z9y8x7w6v5u4t3s2r1q0p1o2n3m2l1k0",
+      "title": "task: 检查重复资源",
+      "workspace": "C:\\Users\\example\\agy-demo",
+      "status": "active",
+      "parent_conversation_id": "conv_root_20261005_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6",
+      "transcript": [
+        {
+          "step_index": 0,
+          "source": "agent",
+          "type": "AGENT_RESPONSE",
+          "status": "COMPLETED",
+          "created_at": 1791000040000,
+          "content": "子会话时间线，不并入父会话展示。"
+        }
+      ]
+    }
+  ]
+}
