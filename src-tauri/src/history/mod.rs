@@ -291,6 +291,27 @@ fn performance_readonly_local() {
     }
 }
 
+#[test]
+#[ignore = "read-only local refresh benchmark; writes only a temporary index"]
+fn performance_refresh_readonly_local() {
+    let home = dirs::home_dir().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("refresh.db")).unwrap();
+    let registry = Registry::builtins();
+    let managed: Vec<_> = registry.iter().map(|adapter| adapter.id().to_owned()).collect();
+    for pass in ["cold-index", "unchanged", "unchanged-repeat"] {
+        let start = std::time::Instant::now();
+        let reports = refresh_controlled(&db, &registry, &home, &managed, &|| false).unwrap();
+        eprintln!("refresh {pass}: {}ms sources={} failed={}", start.elapsed().as_millis(),
+            reports.iter().map(|report| report.source_count).sum::<usize>(),
+            reports.iter().map(|report| report.failed_count).sum::<usize>());
+        let start = std::time::Instant::now();
+        let report = usage_report(&db, &HistoryFilter::default()).unwrap();
+        eprintln!("report {pass}: {}ms records={} sessions={}", start.elapsed().as_millis(),
+            report.totals.usage_records, report.totals.sessions);
+    }
+}
+
 pub fn check_cancelled(cancelled: &dyn Fn() -> bool) -> Result<(), String> {
     if cancelled() { Err("扫描已取消，原索引已保留".into()) } else { Ok(()) }
 }
@@ -316,11 +337,16 @@ pub fn source_fingerprint_controlled(path: &Path, cancelled: &dyn Fn() -> bool) 
 fn source_change_time(_path: &Path, metadata: &fs::Metadata, _cancelled: &dyn Fn() -> bool) -> Result<String, String> {
     #[cfg(windows)] {
         use std::os::windows::io::AsRawHandle;
+        use std::os::windows::fs::OpenOptionsExt;
         #[repr(C)] struct BasicInfo { creation:i64, accessed:i64, written:i64, changed:i64, attributes:u32 }
         #[link(name="kernel32")] unsafe extern "system" {
             fn GetFileInformationByHandleEx(handle:*mut std::ffi::c_void, class:i32, info:*mut std::ffi::c_void, size:u32) -> i32;
         }
-        let file = fs::File::open(_path).map_err(|e| e.to_string())?;
+        // Query change-time without opening the log for content reads. On
+        // Windows a data-access open can trigger antivirus work for each log.
+        let file = fs::OpenOptions::new().access_mode(0x80) // FILE_READ_ATTRIBUTES
+            .custom_flags(0x0020_0000) // FILE_FLAG_OPEN_REPARSE_POINT
+            .open(_path).map_err(|e| e.to_string())?;
         let mut info = BasicInfo {creation:0,accessed:0,written:0,changed:0,attributes:0};
         if unsafe { GetFileInformationByHandleEx(file.as_raw_handle(), 0, (&mut info as *mut BasicInfo).cast(), std::mem::size_of::<BasicInfo>() as u32) } != 0 {
             return Ok(info.changed.to_string());
@@ -778,9 +804,16 @@ fn parse_and_store(
         let mut aborted = false;
         while let Ok(first) = receiver.recv() {
             let mut batch = vec![first];
-            while batch.len() < WRITE_BATCH {
-                match receiver.try_recv() {
-                    Ok(item) => batch.push(item),
+            // Give concurrent parsers a short, bounded window to fill a write
+            // batch instead of fsyncing a separate transaction for each file.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(4);
+            let encoded_size = |item: &(usize, Result<(ParsedSession, String, String), String>)| {
+                item.1.as_ref().map_or(0, |(_, messages, usage)| messages.len() + usage.len())
+            };
+            let mut bytes = encoded_size(&batch[0]);
+            while batch.len() < WRITE_BATCH && bytes < 16 * 1024 * 1024 && !cancelled() {
+                match receiver.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())) {
+                    Ok(item) => { bytes += encoded_size(&item); batch.push(item); }
                     Err(_) => break,
                 }
             }
@@ -921,41 +954,54 @@ pub fn refresh_controlled(db: &Database, registry: &Registry, home: &Path, manag
     struct Finish;
     impl Drop for Finish { fn drop(&mut self) { let state = scan_progress(); set_scan_progress(false, &state.tool_id, state.completed_sources, state.total_sources); } }
     let _finish = Finish;
+    let accounts = crate::accounts::list(db)?;
+    let adapters: Vec<_> = registry.descriptors().into_iter()
+        .filter(|descriptor| managed.iter().any(|tool| tool == descriptor.id))
+        .filter_map(|descriptor| registry.get(descriptor.id))
+        .filter(|adapter| adapter.history_supported())
+        .collect();
     let mut reports = Vec::new();
-    for descriptor in registry.descriptors() {
-        let Some(adapter) = registry.get(descriptor.id) else {
-            continue;
-        };
-        if !managed.iter().any(|tool| tool == &descriptor.id) {
-            continue;
-        }
-        if !adapter.history_supported() {
-            continue;
-        }
-        if cancelled() { return Err("扫描已取消".into()); }
-        set_scan_progress(true, adapter.id(), 0, 0);
-        let all_sources = (|| {
-            let mut sources=adapter.history_sources_controlled(home,cancelled)?;
-            for account in crate::accounts::list(db)?.into_iter().filter(|account|account.tool_id==adapter.id()) {
-                for context in account.context.iter().chain(&account.retired_contexts) {
-                    crate::accounts::context::check_path(&context.root)?;
-                    let _scope=crate::accounts::selection::enter(Some(context.clone()));
-                    sources.extend(adapter.history_sources_controlled(home,cancelled)?);
-                }
+    // Overlap independent native-directory reads with indexing. Keep only three
+    // discoveries in flight and retain one database writer / bounded parser pool.
+    for batch in adapters.chunks(3) {
+        check_cancelled(cancelled)?;
+        set_scan_progress(true, batch[0].id(), 0, 0);
+        std::thread::scope(|scope| -> Result<(), String> {
+            let handles: Vec<_> = batch.iter().map(|&adapter| {
+                let accounts = &accounts;
+                scope.spawn(move || -> Result<Vec<HistorySource>, String> {
+                    check_cancelled(cancelled)?;
+                    let _native = crate::accounts::selection::enter(None);
+                    let mut sources = adapter.history_sources_controlled(home, cancelled)?;
+                    for account in accounts.iter().filter(|account| account.tool_id == adapter.id()) {
+                        for context in account.context.iter().chain(&account.retired_contexts) {
+                            check_cancelled(cancelled)?;
+                            crate::accounts::context::check_path(&context.root)?;
+                            let _context = crate::accounts::selection::enter(Some(context.clone()));
+                            sources.extend(adapter.history_sources_controlled(home, cancelled)?);
+                        }
+                    }
+                    let mut seen = HashSet::new();
+                    sources.retain(|source| seen.insert(source.key()));
+                    Ok(sources)
+                })
+            }).collect();
+            for (&adapter, handle) in batch.iter().zip(handles) {
+                set_scan_progress(true, adapter.id(), 0, 0);
+                let sources = handle.join().unwrap_or_else(|_| Err("会话来源读取中断，原索引已保留".into()));
+                check_cancelled(cancelled)?;
+                let report = scan_adapter_sources_controlled(db, adapter, sources, cancelled);
+                check_cancelled(cancelled)?;
+                db.with_connection(|conn| conn.execute(
+                    "INSERT INTO history_scan_state (tool,scanned_at,source_count,failed_count,incomplete,detail) VALUES (?1,?2,?3,?4,?5,?6)
+                     ON CONFLICT(tool) DO UPDATE SET scanned_at=excluded.scanned_at, source_count=excluded.source_count,
+                     failed_count=excluded.failed_count, incomplete=excluded.incomplete, detail=excluded.detail",
+                    params![report.tool_id,report.scanned_at,report.source_count as i64,report.failed_count as i64,report.incomplete as i64,report.detail])
+                    .map(|_| ()).map_err(|error| error.to_string()))?;
+                reports.push(report);
             }
-            let mut seen=std::collections::HashSet::new();
-            sources.retain(|source|seen.insert(source.key()));
-            Ok(sources)
-        })();
-        let report = scan_adapter_sources_controlled(db, adapter, all_sources, cancelled);
-        if cancelled() { return Err("扫描已取消".into()); }
-        db.with_connection(|conn| conn.execute(
-            "INSERT INTO history_scan_state (tool,scanned_at,source_count,failed_count,incomplete,detail) VALUES (?1,?2,?3,?4,?5,?6)
-             ON CONFLICT(tool) DO UPDATE SET scanned_at=excluded.scanned_at, source_count=excluded.source_count,
-             failed_count=excluded.failed_count, incomplete=excluded.incomplete, detail=excluded.detail",
-            params![report.tool_id,report.scanned_at,report.source_count as i64,report.failed_count as i64,report.incomplete as i64,report.detail])
-            .map(|_| ()).map_err(|error| error.to_string()))?;
-        reports.push(report);
+            Ok(())
+        })?;
     }
     Ok(reports)
 }

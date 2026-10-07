@@ -7,7 +7,7 @@ import { native, nativeAvailable } from '../../lib/native';
 import { configurationApplicationState } from '../../lib/configurationDraft';
 import { confirmAction } from '../../lib/confirm';
 import { searchShortcutHint } from '../../lib/shortcut';
-import type { AdapterDescriptor, RegisteredProfile, RegisteredToolWorkspace, Scope, ApplyComparison } from '../../types/native';
+import type { AdapterDescriptor, RegisteredProfile, RegisteredToolWorkspace, RegisteredToolContext, Scope, ApplyComparison } from '../../types/native';
 import type { ConfigurationDraft, ConfigurationSaveResult, ConfigurationSubject } from '../../types/configuration';
 import type { AccountImpactScope } from '../../types/accounts';
 import type { Project, TrayRepairTarget } from '../../types/launch';
@@ -110,6 +110,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   const [projectPath, setProjectPath] = useState(repair?.projectPath ?? readStoredContexts()[tool]?.projectPath ?? '');
   const [projects, setProjects] = useState<Project[]>([]);
   const [workspace, setWorkspace] = useState<RegisteredToolWorkspace | null>(null);
+  const [scopedContext, setScopedContext] = useState<{ key: string; value: RegisteredToolContext } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -149,15 +150,22 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   useLayoutEffect(() => { onDirtyChange?.(allDirty); }, [allDirty, onDirtyChange]);
   useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
   useEffect(() => { if (!supported[resource]) setResource('config'); if (resource !== 'accounts') setAccountUsageQuery(null); }, [resource, supported.accounts, supported.mcp, supported.skills, supported.agents, supported.plugins]);
-  const reload = useCallback(async (nextTool: string, nextScope: Scope, nextProject: string) => {
+  const reload = useCallback(async (nextTool: string, nextScope: Scope, nextProject: string, fresh = false) => {
     if (!nativeAvailable || !nextTool || nextScope === 'project' && !nextProject) { setLoading(false); setWorkspace(null); return null; }
     const request = ++loadSequence.current; setLoading(true); setError('');
+    const key = JSON.stringify([nextTool, nextScope, nextProject]);
+    let completed = false;
+    // Resource pages need the binding, not CLI version processes. A full
+    // workspace result remains authoritative if it finishes first.
+    void native.getRegisteredToolContext(nextTool, nextScope, nextProject, fresh).then(value => {
+      if (value && !completed && alive.current && request === loadSequence.current) setScopedContext({ key, value });
+    }).catch(() => { /* The workspace read supplies the final error/retry state. */ });
     try {
-      const value = await native.getRegisteredToolWorkspace(nextTool, nextScope, nextProject, false, true);
+      const value = await native.getRegisteredToolWorkspace(nextTool, nextScope, nextProject, false, fresh);
       if (!alive.current || request !== loadSequence.current) return null;
-      setWorkspace(value); setCustomPath(value.customPath ?? ''); return value;
+      setWorkspace(value); setScopedContext({ key, value: { effectiveContextId: value.effectiveContextId, nativeContextError: value.nativeContextError ?? null } }); setCustomPath(value.customPath ?? ''); return value;
     } catch (failure) { if (alive.current && request === loadSequence.current) setError(errorText(failure)); return null; }
-    finally { if (alive.current && request === loadSequence.current) setLoading(false); }
+    finally { completed = true; if (alive.current && request === loadSequence.current) setLoading(false); }
   }, []);
   useEffect(() => { setWorkspace(null); setFrame(null); setDirty(false); setComparison(null); setFilter(''); setNotice(''); epoch.current++; if (active) void reload(toolId, scope, projectPath); }, [toolId, scope, projectPath, reload]);
   useEffect(() => { if (active && !workspace) void reload(toolId, scope, projectPath); }, [active]);
@@ -283,26 +291,26 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   async function apply(profile: RegisteredProfile) {
     if (!await mayLeave()) return;
     const identity = currentContext.current; setApplying(profile.id); setError(''); setNotice('');
-    try { await native.applyRegisteredNativeProfile(toolId, profile.id, scope, projectPath || undefined, false); if (identity !== currentContext.current || !alive.current) return; await reload(toolId, scope, projectPath); setNotice('已使用保存的配置；下次会话读取新内容。'); }
+    try { await native.applyRegisteredNativeProfile(toolId, profile.id, scope, projectPath || undefined, false); if (identity !== currentContext.current || !alive.current) return; await reload(toolId, scope, projectPath, true); setNotice('已使用保存的配置；下次会话读取新内容。'); }
     catch (failure) { if (identity !== currentContext.current || !alive.current) return; setError(errorText(failure)); try { const value = await native.compareRegisteredApplication(profile.id, scope, projectPath); if (identity === currentContext.current) setComparison(value); } catch {} }
     finally { if (identity === currentContext.current) setApplying(null); }
   }
   async function compareUse() {
     if (!comparison) return; const value = comparison; const identity = currentContext.current; setBusy(true); setError('');
-    try { await native.applyComparedApplication(value, scope, projectPath); if (identity === currentContext.current && alive.current) { setComparison(null); await reload(toolId, scope, projectPath); setNotice('已使用保存的配置；下次会话读取。'); } }
+    try { await native.applyComparedApplication(value, scope, projectPath); if (identity === currentContext.current && alive.current) { setComparison(null); await reload(toolId, scope, projectPath, true); setNotice('已使用保存的配置；下次会话读取。'); } }
     catch (failure) { if (identity === currentContext.current) setError(errorText(failure)); }
     finally { if (identity === currentContext.current) setBusy(false); }
   }
   async function duplicate(profile: RegisteredProfile) { if (!await mayLeave()) return; const copy = structuredClone(profile); copy.id = ''; copy.version = 0; delete copy.revision; copy.name += ' 副本'; await openFrame('profile', copy, true, `复制配置 · 来自 ${profile.name}`); }
-  async function remove(profile: RegisteredProfile) { const identity = currentContext.current; if (!await confirmAction(`删除“${profile.name}”的管理记录？当前原生文件保留。`, () => alive.current && identity === currentContext.current, { title: '删除配置', confirmLabel: '删除', destructive: true })) return; setBusy(true); try { await native.deleteNativeProfile(profile.id, profile.version, profile.revision ?? ''); if (identity === currentContext.current) await reload(toolId, scope, projectPath); } catch (failure) { setError(errorText(failure)); } finally { if (identity === currentContext.current) setBusy(false); } }
+  async function remove(profile: RegisteredProfile) { const identity = currentContext.current; if (!await confirmAction(`删除“${profile.name}”的管理记录？当前原生文件保留。`, () => alive.current && identity === currentContext.current, { title: '删除配置', confirmLabel: '删除', destructive: true })) return; setBusy(true); try { await native.deleteNativeProfile(profile.id, profile.version, profile.revision ?? ''); if (identity === currentContext.current) await reload(toolId, scope, projectPath, true); } catch (failure) { setError(errorText(failure)); } finally { if (identity === currentContext.current) setBusy(false); } }
   function stored(result: ConfigurationSaveResult) { if (result.profile) setWorkspace(value => value ? { ...value, profiles: [...value.profiles.filter(profile => profile.id !== result.profile!.id), result.profile!] } : value); if (result.common) setWorkspace(value => value ? { ...value, common: result.common } : value); }
   function changed(_draft: ConfigurationDraft) { epoch.current++; }
   async function maintain(action: 'install' | 'upgrade' | 'install_native' | 'uninstall_npm', source?: string) {
     if (!await mayLeave() || !await confirmAction('将更新本机 CLI 安装。继续吗？', () => alive.current, { title: action === 'uninstall_npm' ? '卸载 npm 版' : action === 'install' || action === 'install_native' ? '安装 CLI' : '更新 CLI', confirmLabel: action === 'uninstall_npm' ? '卸载' : action === 'install' || action === 'install_native' ? '安装' : '更新' })) return;
-    setBusy(true); try { await native.maintainRegisteredCli(toolId, action, source); await reload(toolId, scope, projectPath); } catch (failure) { setError(errorText(failure)); } finally { if (alive.current) setBusy(false); }
+    setBusy(true); try { await native.maintainRegisteredCli(toolId, action, source); await reload(toolId, scope, projectPath, true); } catch (failure) { setError(errorText(failure)); } finally { if (alive.current) setBusy(false); }
   }
-  async function savePath() { if (!await mayLeave()) return; setBusy(true); try { await native.setRegisteredCustomCliPath(toolId, customPath.trim() || null); await reload(toolId, scope, projectPath); } catch (failure) { setError(errorText(failure)); } finally { setBusy(false); } }
-  async function usePath(path: string) { if (!await mayLeave()) return; setBusy(true); try { await native.setRegisteredCustomCliPath(toolId, path); await reload(toolId, scope, projectPath); } catch (failure) { setError(errorText(failure)); } finally { setBusy(false); } }
+  async function savePath() { if (!await mayLeave()) return; setBusy(true); try { await native.setRegisteredCustomCliPath(toolId, customPath.trim() || null); await reload(toolId, scope, projectPath, true); } catch (failure) { setError(errorText(failure)); } finally { setBusy(false); } }
+  async function usePath(path: string) { if (!await mayLeave()) return; setBusy(true); try { await native.setRegisteredCustomCliPath(toolId, path); await reload(toolId, scope, projectPath, true); } catch (failure) { setError(errorText(failure)); } finally { setBusy(false); } }
   async function openAccountQuota(queryId: string) { if (!await mayLeave()) return; const query = quota.queries.find(item => item.id === queryId); if (!query) { void quota.reload(); setError('额度引用已变化，请刷新后重试。'); return; } setAccountUsageQuery(query); }
   const quotaIds = new Set(quota.queries.map(query => query.config.identity.profileId));
   const currentFile = workspace?.snapshots.some(snapshot => snapshot.fingerprint && !workspace.probe.nativeFiles.find(file => file.role === snapshot.role)?.sensitive);
@@ -332,6 +340,8 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   }
   const linkedAuthentication = workspace?.profiles.find(profile => profile.id === accountUsageQuery?.config.identity.profileId)?.authentication;
   const queryAccount = linkedAuthentication?.kind === 'oauth' ? linkedAuthentication.accountId : accountUsageQuery?.config.identity.profileId ? undefined : accountUsageQuery?.config.identity.accountId ?? undefined;
+  const resourceContext = scopedContext?.key === context ? scopedContext.value : null;
+  const resourcesReady = resourceContext !== null && !resourceContext.nativeContextError;
   if (!descriptor) return <p>还没有管理中的 CLI，请在设置中选择工具。</p>;
   return <section className={styles.workspace} aria-label="工具与连接">
     <div className={styles.chrome}>
@@ -342,7 +352,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     <div hidden={resource !== 'config'}>
       {workspace && <InstallPanel toolName={descriptor.name} probe={workspace.probe} customPath={customPath} busy={busy} loading={loading} onCustomPath={setCustomPath} onSavePath={() => void savePath()} onMaintain={(action, source) => void maintain(action, source)} onUsePath={path => void usePath(path)} />}
       {workspace?.nativeContextError && <div className={styles.feedback}><StatusBanner tone="error">{workspace.nativeContextError}</StatusBanner></div>}
-      {workspace?.recoveryNeeded.length ? <div className={styles.feedback}><StatusBanner tone="error" action={<button type="button" onClick={() => { void native.recoverNativeTransactions().then(() => reload(toolId, scope, projectPath)).catch(failure => setError(errorText(failure))); }}>重试恢复</button>}>有 {workspace.recoveryNeeded.length} 项文件事务需要恢复。</StatusBanner></div> : null}
+      {workspace?.recoveryNeeded.length ? <div className={styles.feedback}><StatusBanner tone="error" action={<button type="button" onClick={() => { void native.recoverNativeTransactions().then(() => reload(toolId, scope, projectPath, true)).catch(failure => setError(errorText(failure))); }}>重试恢复</button>}>有 {workspace.recoveryNeeded.length} 项文件事务需要恢复。</StatusBanner></div> : null}
       {!workspace ? (loading && nativeAvailable
         ? <div className={styles.loadingList} role="status" aria-label="正在读取配置"><span className="skeleton-block short" /><span className="skeleton-block" /><span className="skeleton-block" /></div>
         : <div className={styles.taskEmpty} data-tone={nativeAvailable ? 'error' : undefined}><Icon name={nativeAvailable ? 'alert' : 'monitor'} size={22} strokeWidth={1.5} /><div><strong>{nativeAvailable ? '配置读取失败' : '需要桌面应用'}</strong><p>{nativeAvailable ? '已有记录未被删除，可以重新读取。' : '浏览器预览无法读取本机 CLI 的原生配置。'}</p></div>{nativeAvailable && <button className={styles.primary} onClick={() => void reload(toolId, scope, projectPath)}>重试读取配置</button>}</div>)
@@ -354,14 +364,15 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
         {query && !profileGroups.length && <div className={styles.profileEmpty}><span>没有匹配“{filter.trim()}”的配置。</span><button onClick={() => setFilter('')}>清除搜索</button></div>}
         <div role="list" aria-label="配置项" className={workspace.profiles.length > 6 ? styles.profileScroll : undefined}>{profileGroups.map(group => <div key={group.id} className={styles.profileGroup} data-group={group.id}><div className={styles.groupLabel}><strong>{group.label}</strong><span>{query ? `${group.visible.length}/${group.profiles.length}` : group.profiles.length}</span></div>{group.visible.map(row)}</div>)}</div>
       </div>}
-      <GuideDialog wide suspended={!active} open={!!frame} title={frame?.title ?? '配置'} hint={`${descriptor.name} · ${scope === 'global' ? '全局' : projectPath}。保存配置只入库，使用是独立操作。`} onClose={() => void closeFrame()} onBack={() => void closeFrame()}>{frame && !workspace && <p role="status">正在读取目标范围的配置…</p>}{frame && workspace && <ConfigurationWorkspaceEditor key={frame.key} toolId={toolId} subject={frame.subject} profile={frame.profile} scope={scope} projectPath={projectPath} workspace={workspace} accounts={accounts} onClose={() => void closeFrame()} onDirtyChange={value => { if (value) epoch.current++; setDirty(value); }} onDraftChange={changed} onStored={stored} onDone={(result, used) => { setFrame(null); setDirty(false); setNotice(result.application ? '当前文件已更新；下次会话读取。' : used ? '配置已保存并使用；下次会话读取。' : '配置已保存；正在使用的文件保持原版本。'); void reload(toolId, scope, projectPath); }} />}</GuideDialog>
+      <GuideDialog wide suspended={!active} open={!!frame} title={frame?.title ?? '配置'} hint={`${descriptor.name} · ${scope === 'global' ? '全局' : projectPath}。保存配置只入库，使用是独立操作。`} onClose={() => void closeFrame()} onBack={() => void closeFrame()}>{frame && !workspace && <p role="status">正在读取目标范围的配置…</p>}{frame && workspace && <ConfigurationWorkspaceEditor key={frame.key} toolId={toolId} subject={frame.subject} profile={frame.profile} scope={scope} projectPath={projectPath} workspace={workspace} accounts={accounts} onClose={() => void closeFrame()} onDirtyChange={value => { if (value) epoch.current++; setDirty(value); }} onDraftChange={changed} onStored={stored} onDone={(result, used) => { setFrame(null); setDirty(false); setNotice(result.application ? '当前文件已更新；下次会话读取。' : used ? '配置已保存并使用；下次会话读取。' : '配置已保存；正在使用的文件保持原版本。'); void reload(toolId, scope, projectPath, true); }} />}</GuideDialog>
       <GuideDialog wide open={!!comparison} title="比较当前文件与本次配置" onClose={() => setComparison(null)}>{comparison && <div>{comparison.files.map((file, index) => <ConflictCompare key={file.role} title={file.role} banner={index === 0 ? '当前文件和保存配置不同。先比较，再明确使用。' : undefined} actions={false} currentContent={file.current} nextContent={file.proposedText} format={file.format} onUseNext={() => void compareUse()} onKeepCurrent={() => setComparison(null)} />)}<div className="dialog-footer"><button onClick={() => setComparison(null)}>保留当前文件</button><span className="dialog-footer-gap" /><button className={styles.primary} disabled={busy} onClick={() => void compareUse()}>使用本次内容</button></div></div>}</GuideDialog>
     </div>
     {resource === 'accounts' && supported.accounts && <AccountsPanel key={toolId} toolId={toolId} state={accounts} onOpenProfile={(id, target) => void openTarget(id, target)} onOpenUsage={id => void openAccountQuota(id)} />}
     {resource === 'accounts' && accountUsageQuery && <QuotaEditor key={accountUsageQuery.id} query={accountUsageQuery} profileId={accountUsageQuery.config.identity.profileId ?? ''} profileAccountId={queryAccount} toolId={toolId} presets={quota.presets} onClose={() => setAccountUsageQuery(null)} onSaved={() => { setAccountUsageQuery(null); void quota.reload(); }} />}
-    {resource === 'mcp' && supported.mcp && <McpWorkspace key={`${context}:${resourceEpoch}:${workspace?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={workspace?.effectiveContextId ?? null} onDirtyChange={mcpDirty} />}
-    {resource === 'skills' && supported.skills && <SkillsWorkspace key={`${context}:${resourceEpoch}:${workspace?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={workspace?.effectiveContextId ?? null} onDirtyChange={skillsDirty} />}
-    {resource === 'agents' && supported.agents && <AgentsWorkspace key={`${context}:${resourceEpoch}:${workspace?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={workspace?.effectiveContextId ?? null} onDirtyChange={agentsDirty} />}
-    {resource === 'plugins' && supported.plugins && <PluginsWorkspace key={`${context}:${resourceEpoch}:${workspace?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={workspace?.effectiveContextId ?? null} />}
+    {!['config', 'accounts'].includes(resource) && !resourcesReady && <div role="status"><p>{resourceContext?.nativeContextError ?? (loading ? '正在读取工具上下文…' : workspace?.nativeContextError ?? '工具上下文读取失败。')}</p>{!loading && <button onClick={() => void reload(toolId, scope, projectPath, true)}>重新读取</button>}</div>}
+    {resourcesReady && resource === 'mcp' && supported.mcp && <McpWorkspace key={`${context}:${resourceEpoch}:${resourceContext?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={resourceContext?.effectiveContextId ?? null} onDirtyChange={mcpDirty} />}
+    {resourcesReady && resource === 'skills' && supported.skills && <SkillsWorkspace key={`${context}:${resourceEpoch}:${resourceContext?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={resourceContext?.effectiveContextId ?? null} onDirtyChange={skillsDirty} />}
+    {resourcesReady && resource === 'agents' && supported.agents && <AgentsWorkspace key={`${context}:${resourceEpoch}:${resourceContext?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={resourceContext?.effectiveContextId ?? null} onDirtyChange={agentsDirty} />}
+    {resourcesReady && resource === 'plugins' && supported.plugins && <PluginsWorkspace key={`${context}:${resourceEpoch}:${resourceContext?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={resourceContext?.effectiveContextId ?? null} />}
   </section>;
 }

@@ -214,6 +214,31 @@ fn directory_fingerprint_detects_external_content_and_membership() {
     fs::create_dir(dir.path().join("agents")).unwrap();
     assert_ne!(second, hash());
 }
+
+#[test]
+fn parallel_package_reads_preserve_order_and_detect_same_size_edits() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut expected = dir.path().display().to_string();
+    for index in 0..16 {
+        let path = dir.path().join(format!("{index:02}.txt"));
+        let content = format!("fixture {index:02}");
+        fs::write(&path, &content).unwrap();
+        expected.push_str(&path.display().to_string());
+        expected.push_str(&transaction::fingerprint(content.as_bytes()));
+    }
+    let mut actual = String::new();
+    digest_path(dir.path(), &mut actual, &mut (0, 0)).unwrap();
+    assert_eq!(actual, expected);
+    let path = dir.path().join("07.txt");
+    let modified = fs::metadata(&path).unwrap().modified().unwrap();
+    fs::write(&path, "changed 07").unwrap();
+    fs::File::options().write(true).open(&path).unwrap()
+        .set_times(fs::FileTimes::new().set_modified(modified)).unwrap();
+    actual.clear();
+    digest_path(dir.path(), &mut actual, &mut (0, 0)).unwrap();
+    assert_ne!(actual, expected);
+    assert!(digest_path(dir.path(), &mut String::new(), &mut (20000, 0)).is_err());
+}
 #[test]
 fn opencode_configuration_is_not_reported_as_installed() {
     let dir = tempfile::tempdir().unwrap();
@@ -228,6 +253,10 @@ fn opencode_configuration_is_not_reported_as_installed() {
     .unwrap();
     let entries = config_entries(&db, dir.path(), &target("open_code")).unwrap();
     assert_eq!(entries[0].state, "configured_load_unknown");
+    let inventory = preview(&db, dir.path(), &target("open_code")).unwrap().unwrap();
+    assert_eq!(inventory.entries.len(), entries.len());
+    assert!(inventory.baseline.is_empty() && inventory.capability.actions.is_empty());
+    assert!(inventory.entries.iter().all(|entry| entry.read_only && entry.enabled.is_none()));
     mutate_config(
         &db,
         &credentials,

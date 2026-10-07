@@ -276,6 +276,7 @@ pub fn run() {
             commands::quit_app,
             commands::set_registered_managed_tools,
             commands::get_registered_tool_workspace,
+            commands::get_registered_tool_context,
             commands::set_registered_custom_cli_path,
             commands::save_registered_native_profile,
             commands::compare_configuration_current,

@@ -1056,6 +1056,35 @@ fn registered_string_tools_join_the_managed_history_scan() {
 }
 
 #[test]
+fn concurrent_discovery_keeps_tool_failures_isolated_and_cancellation_preserves_index() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("app.db")).unwrap();
+    for (directory, file_name, fixture) in [
+        (".codex/sessions", "rollout-fixture.jsonl", "codex-0.158.jsonl"),
+        (".pi/agent/sessions", "fixture.jsonl", "pi-0.87-v3.jsonl"),
+    ] {
+        let root = temp.path().join(directory);
+        fs::create_dir_all(&root).unwrap();
+        fs::copy(fixtures().join(fixture), root.join(file_name)).unwrap();
+    }
+    fs::create_dir_all(temp.path().join(".claude")).unwrap();
+    fs::write(temp.path().join(".claude/projects"), "not a directory").unwrap();
+    let registry = Registry::with_adapters(vec![&CODEX, &crate::adapters::CLAUDE, &crate::adapters::PI]).unwrap();
+    let managed = vec!["codex".into(), "claude_code".into(), "pi".into()];
+    let reports = refresh_controlled(&db, &registry, temp.path(), &managed, &|| false).unwrap();
+    assert_eq!(reports.iter().map(|report| report.tool_id.as_str()).collect::<Vec<_>>(), ["codex", "claude_code", "pi"]);
+    assert!(!reports[0].incomplete && reports[1].incomplete && !reports[2].incomplete);
+    let before = list(&db, &HistoryFilter::default()).unwrap();
+    assert_eq!(before.len(), 2);
+    fs::remove_file(temp.path().join(".codex/sessions/rollout-fixture.jsonl")).unwrap();
+    let checks = AtomicUsize::new(0);
+    assert!(refresh_controlled(&db, &registry, temp.path(), &managed, &|| checks.fetch_add(1, Ordering::SeqCst) > 2).is_err());
+    let after = list(&db, &HistoryFilter::default()).unwrap();
+    assert_eq!(before.iter().map(|session| &session.id).collect::<Vec<_>>(), after.iter().map(|session| &session.id).collect::<Vec<_>>());
+    assert!(after.iter().all(|session| !session.stale));
+}
+
+#[test]
 fn native_titles_override_first_prompt_and_title_edits_invalidate_only_the_matching_source() {
     let home = tempfile::tempdir().unwrap();
     let root = home.path().join(".codex");

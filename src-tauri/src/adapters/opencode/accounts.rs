@@ -9,11 +9,8 @@ use std::{
 };
 
 impl AccountAdapter for OpenCode {
-    fn browser_login_endpoint(&self) -> Option<&'static str> {
-        Some("https://auth.openai.com/oauth/authorize")
-    }
     fn login_detail(&self) -> &'static str {
-        "请在隔离终端完成原生登录。浏览器授权页会尝试自动打开；未打开时，可在账号卡片点击“打开授权页面”，或复制终端中的 Go to 链接。取消后请自行关闭终端。"
+        "请在 OpenCode 原生登录菜单中选择提供方和登录方式。目前独立账号核验支持 OpenAI ChatGPT OAuth；其他提供方请通过原生 CLI 管理。取消后请自行关闭终端。"
     }
     fn native_environment_keys(&self) -> &'static [&'static str] {
         &[
@@ -97,7 +94,7 @@ impl AccountAdapter for OpenCode {
         let (provider, version, supported, reason, identity) = ("openai", "1.18.34", true,
             "仅内置 OpenAI ChatGPT OAuth：同时隔离 XDG data/config/state/cache；原生 auth.json 的 accountId 核验本地身份。其他提供方未核验。", "OpenCode native OpenAI OAuth accountId");
         AccountCapability {
-            browser_link: cfg!(windows),
+            browser_link: false,
             tool_id: "open_code",
             provider,
             version,
@@ -106,7 +103,7 @@ impl AccountAdapter for OpenCode {
             methods: if !supported {
                 vec![]
             } else {
-                vec!["browser", "device"]
+                vec!["browser"]
             },
             reason,
             identity_source: identity,
@@ -166,20 +163,9 @@ impl AccountAdapter for OpenCode {
             crate::accounts::now(),
         ))
     }
-    fn login_args(&self, method: &str) -> Result<Vec<String>, String> {
-        Ok((vec![
-            "auth",
-            "login",
-            "--pure",
-            "--provider",
-            "openai",
-            "--method",
-            if method == "device" {
-                "ChatGPT Pro/Plus (headless)"
-            } else {
-                "ChatGPT Pro/Plus (browser)"
-            },
-        ])
+    fn login_args(&self, _method: &str) -> Result<Vec<String>, String> {
+        // Keep the terminal interactive: OpenCode owns provider/method selection.
+        Ok((vec!["auth", "login", "--pure"])
         .into_iter()
         .map(str::to_owned)
         .collect())
