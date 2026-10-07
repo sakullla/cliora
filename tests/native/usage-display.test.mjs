@@ -2,9 +2,31 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import ts from 'typescript';
-const source = readFileSync(new URL('../../src/features/tools/usageDisplay.ts', import.meta.url), 'utf8');
-const js = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext } }).outputText;
-const { usagePercent, usageReset, usageUnit } = await import(`data:text/javascript;base64,${Buffer.from(js).toString('base64')}`);
+
+const root = new URL('../../', import.meta.url);
+
+function moduleFrom(source) {
+  const js = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
+  return import(`data:text/javascript;base64,${Buffer.from(js).toString('base64')}`);
+}
+
+function lookup(bundle, key) {
+  let node = bundle;
+  for (const part of key.split('.')) node = node?.[part];
+  return typeof node === 'string' ? node : key;
+}
+
+const tools = { tools: (await moduleFrom(readFileSync(new URL('src/i18n/locales/zh/tools.ts', root), 'utf8'))).default };
+globalThis.__clioraUsageI18n = {
+  language: 'zh',
+  t(key, options) {
+    const text = lookup(tools, key);
+    return text.replace(/\{\{(\w+)\}\}/g, (_, name) => (options && options[name] != null ? String(options[name]) : ''));
+  },
+};
+const source = readFileSync(new URL('src/features/tools/usageDisplay.ts', root), 'utf8')
+  .replace("import i18n from '../../i18n';", 'const i18n = globalThis.__clioraUsageI18n;');
+const { usagePercent, usageReset, usageUnit } = await moduleFrom(source);
 const metric = { used: null, remaining: null, total: null, sourcePercent: null, unlimited: false, unit: { kind: 'credits' }, window: null };
 test('missing, zero, overage and unlimited remain distinct', () => {
   assert.equal(usagePercent(metric), null);
