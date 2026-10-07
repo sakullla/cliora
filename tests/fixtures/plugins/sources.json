@@ -12,7 +12,13 @@
     "qoder": "1.1.63",
     "kimi_code": "0.31.1",
     "deepseek": "0.2.1-alpha line (plugins dimension not delivered)",
-    "codebuddy": "2.161.1"
+    "codebuddy": "2.161.1",
+    "mimo_code": "0.1.15 (plugins dimension not delivered)",
+    "cline": "3.0.69 (plugins dimension not delivered)",
+    "devin": "3000.11.3 (plugins dimension not delivered)",
+    "command_code": "1.73.4 (plugins dimension not delivered)",
+    "antigravity": "1.3.1 (plugins dimension not delivered)",
+    "kiro": "kiro-cli (plugins dimension not delivered)"
   },
   "sources": [
     "https://raw.githubusercontent.com/openai/codex/rust-v0.160.0/codex-rs/config/src/plugin_edit.rs",
@@ -28,8 +34,15 @@
     "ZCode 3.14.4 desktop sources: github.com/zai-org/ZCode installedPluginRoots.ts and officialPluginCache.ts (installed_plugins.json read-only listing; install/uninstall verbs belong to the bundled zcode-cli agent process)",
     "Qoder 1.1.63: https://docs.qoder.com/cli/plugins and https://docs.qoder.com/cli/plugin-marketplaces (qoder plugins subcommands)",
     "Kimi Code 0.31.1: https://www.kimi.com/code/docs/customization/plugins (managed plugins directory and in-session /plugins management)",
-    "CodeBuddy 2.161.1: https://www.codebuddy.ai/docs/zh/cli/plugins and https://www.codebuddy.ai/docs/zh/cli/plugins-reference"
+    "CodeBuddy 2.161.1: https://www.codebuddy.ai/docs/zh/cli/plugins and https://www.codebuddy.ai/docs/zh/cli/plugins-reference",
+    "MiMo Code 0.1.15 [src]: github.com/XiaomiMiMo/MiMo-Code — the source ships a `plug` command but its on-disk plugin layout was not verified; the plugins dimension stays absent with the descriptor reason recorded",
+    "Cline 3.0.69 [src]: github.com/cline/cline @main 2026-10-07 — no plugin contract found in the source summary; dimension absent",
+    "Devin 3000.11.3 (local verified): devin --help — no plugin management surface documented; dimension absent",
+    "Command Code 1.73.4 (local verified, npm command-code): shipped bundle — no plugin layout evidence; dimension absent",
+    "Antigravity 1.3.1 (local probes + [RE] codeburn): `agy plugin` exists but its storage is undocumented in every evidence class; dimension absent",
+    "Kiro ([RE] agentsview/threadle + cli.kiro.dev docs): no plugin contract in any evidence class; dimension absent"
   ],
+  "pluginDimension20261007": "None of the six 2026-10-07 default-off additions (docs/sakullla-workflow/2026-10-07-新增客户端完整支持与用量统计修复) delivers a plugins dimension: every adapter declares no plugin port and the per-client reasons above record the missing evidence. No plugin fixtures were added for the six.",
   "nativeSequences": {
     "claude_code": "marketplace add local --json; install fixture@market --scope user --json; list --json; disable --scope user --json; list enabled=false; enable --scope user --json; update --scope user --json; uninstall --scope user --json; list empty. All exit 0.",
     "codex": "marketplace add local; add fixture@market --json; list --json; remove --json; list empty. All exit 0.",

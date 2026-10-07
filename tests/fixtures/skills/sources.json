@@ -1,7 +1,7 @@
 {
   "checkedAt": "2026-10-04",
   "platform": "Windows",
-  "purpose": "Evidence sources for the Skills dimension of the five default-off CLI additions (docs/sakullla-workflow/2026-10-03-new-cli-adapters-default-off). The shared Skills pipeline imports packages into each adapter's native discovery directory; these entries record where each directory contract comes from.",
+  "purpose": "Evidence sources for the Skills dimension of the five 2026-10-03 default-off CLI additions (docs/sakullla-workflow/2026-10-03-new-cli-adapters-default-off) and the six 2026-10-07 additions (docs/sakullla-workflow/2026-10-07-新增客户端完整支持与用量统计修复). The shared Skills pipeline imports packages into each adapter's native discovery directory; these entries record where each directory contract comes from.",
   "sources": {
     "zcode": {
       "version": "3.14.4",
@@ -27,11 +27,54 @@
       "version": "2.161.1",
       "ref": "https://www.codebuddy.ai/docs/zh/cli/skills",
       "format": "Skills directory under the CODEBUDDY_CONFIG_DIR root; npm @tencent-ai/codebuddy-code 2.161.1 verified locally."
+    },
+    "mimo_code": {
+      "version": "0.1.15",
+      "checkedAt": "2026-10-07",
+      "evidence": "[src] official open-source repo",
+      "ref": "https://github.com/XiaomiMiMo/MiMo-Code (skill/index.ts)",
+      "format": "Project .mimocode/skills and personal ~/.config/mimocode/skills ({skill,skills}/**/SKILL.md); the open-standard ~/.agents/skills the CLI also reads stays with the product. Delivered with the 2026-10-07 workflow."
+    },
+    "cline": {
+      "version": "3.0.69",
+      "checkedAt": "2026-10-07",
+      "evidence": "[src] official open-source repo",
+      "ref": "https://github.com/cline/cline @main 2026-10-07",
+      "format": "Brand root ~/.cline/skills plus the open-standard project .agents/skills directory. CLI not installed locally; directory contract from source."
+    },
+    "devin": {
+      "version": "3000.11.3",
+      "checkedAt": "2026-10-07",
+      "evidence": "local verified install",
+      "ref": "devin --help and config/transcript layout inspection on 3000.11.3",
+      "limitation": "No Skills directory documented in official docs or the inspected layout; the skills dimension stays absent with the descriptor reason recorded."
+    },
+    "command_code": {
+      "version": "1.73.4",
+      "checkedAt": "2026-10-07",
+      "evidence": "local verified install (npm command-code) + shipped bundle",
+      "ref": "cmdc --version 1.73.4 and bundle path constants",
+      "format": "Personal ~/.commandcode/skills and project .commandcode/skills (SKILL.md frontmatter); the open-standard ~/.agents/skills the CLI also reads stays with the product."
+    },
+    "antigravity": {
+      "version": "1.3.1",
+      "checkedAt": "2026-10-07",
+      "evidence": "local probes + [RE] codeburn (agy 1.2.x)",
+      "ref": "agy --help (local 1.3.1); codeburn reverse engineering for the ~/.gemini layout",
+      "format": "Personal antigravity-cli/skills/<dir>/SKILL.md under ~/.gemini plus the open-standard project .agents/skills."
+    },
+    "kiro": {
+      "version": "kiro-cli (data root verified locally)",
+      "checkedAt": "2026-10-07",
+      "evidence": "[RE] agentsview/threadle + official docs + local data root",
+      "ref": "agentsview kiro.go / threadle; cli.kiro.dev docs; %LOCALAPPDATA%\\kiro-cli inspected read-only",
+      "limitation": "No Skills directory name appears in any evidence class; the skills dimension stays absent with the descriptor reason recorded."
     }
   },
   "acceptanceLimits": [
     "Directory contracts verified from official documentation or desktop sources; no live skill execution acceptance performed.",
     "Windows development host only; macOS/Linux not exercised.",
-    "Skill package install/update/remove flows through the shared pipeline are covered by the existing synthetic fixtures, not per-CLI live samples."
+    "Skill package install/update/remove flows through the shared pipeline are covered by the existing synthetic fixtures, not per-CLI live samples.",
+    "The 2026-10-07 six were checked on Windows only; skills are delivered for mimo_code/cline/command_code/antigravity, while devin and kiro stay absent for lack of a documented directory contract."
   ]
 }

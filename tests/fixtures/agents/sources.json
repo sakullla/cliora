@@ -59,6 +59,48 @@
       "checkedAt": "2026-10-04",
       "ref": "https://www.codebuddy.ai/docs/zh/cli/sub-agents",
       "format": "Native sub-agent definitions under the CODEBUDDY_CONFIG_DIR root; npm @tencent-ai/codebuddy-code 2.161.1 verified locally."
+    },
+    "mimo_code": {
+      "version": "0.1.15",
+      "checkedAt": "2026-10-07",
+      "evidence": "[src] official open-source repo",
+      "ref": "https://github.com/XiaomiMiMo/MiMo-Code (config/agent.ts)",
+      "format": "Config `agent` key (Record<string, AgentConfig>) plus {agent,agents}/**/*.md definition files under the config/data roots; the only agents dimension delivered among the 2026-10-07 six."
+    },
+    "cline": {
+      "version": "3.0.69",
+      "checkedAt": "2026-10-07",
+      "evidence": "[src] official open-source repo",
+      "ref": "https://github.com/cline/cline @main 2026-10-07",
+      "limitation": "No custom sub-agent definition contract found in the source summary; the agents dimension stays absent with the descriptor reason recorded."
+    },
+    "devin": {
+      "version": "3000.11.3",
+      "checkedAt": "2026-10-07",
+      "evidence": "local verified install",
+      "ref": "devin --help and config/transcript layout inspection on 3000.11.3",
+      "limitation": "Agent definition directories undocumented; the agents dimension stays absent with the descriptor reason recorded."
+    },
+    "command_code": {
+      "version": "1.73.4",
+      "checkedAt": "2026-10-07",
+      "evidence": "local verified install (npm command-code) + shipped bundle",
+      "ref": "cmdc --version 1.73.4 and bundle inspection",
+      "limitation": "The mods command exists but its on-disk definition layout is unverified; the agents dimension stays absent with the descriptor reason recorded."
+    },
+    "antigravity": {
+      "version": "1.3.1",
+      "checkedAt": "2026-10-07",
+      "evidence": "local probes + [RE] codeburn (agy 1.2.x)",
+      "ref": "agy --help (local 1.3.1); codeburn reverse engineering",
+      "limitation": "Subagent definition format not obtained from any evidence class; the agents dimension stays absent with the descriptor reason recorded."
+    },
+    "kiro": {
+      "version": "kiro-cli (data root verified locally)",
+      "checkedAt": "2026-10-07",
+      "evidence": "[RE] agentsview/threadle + official docs + local data root",
+      "ref": "agentsview kiro.go / threadle; cli.kiro.dev docs",
+      "limitation": "No agent-definition directory name appears in any evidence class; the agents dimension stays absent with the descriptor reason recorded."
     }
   },
   "acceptanceLimits": [
@@ -66,6 +108,7 @@
     "Claude/Codex definition loading is not yet verified against a live CLI session.",
     "macOS/Linux not exercised.",
     "Static definition state is distinct from an existing session loaded state.",
-    "The five default-off additions (zcode/qoder/kimi_code/deepseek/codebuddy) were checked on Windows only; deepseek delivers no agents dimension by evidence gate."
+    "The five default-off additions (zcode/qoder/kimi_code/deepseek/codebuddy) were checked on Windows only; deepseek delivers no agents dimension by evidence gate.",
+    "The 2026-10-07 six were checked on Windows only; only mimo_code delivers an agents dimension (config `agent` key plus .md files), the other five stay absent by evidence gate."
   ]
 }
