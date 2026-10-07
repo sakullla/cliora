@@ -12,6 +12,7 @@ async function setup(page: Page, automatic = false) {
       queries: [{ id: 'q1', version: 1, generation: 1, config, credentials: [{ name: 'api_key', secretRef: 'hidden', revision: 1, allowedOrigins: ['https://quota.example'] }] }],
       cache: [{ queryId: 'q1', generation: 1, success: { execution: { kind: 'saved', queryId: 'q1', generation: 1, identity: config.identity }, source: 'builtin:glm:1', attemptedAt: '2026-01-01T00:00:00Z', measuredAt: '2026-01-01T00:00:00Z', result }, attemptedAt: '2026-01-01T00:00:00Z', errors: [] as any[], nextAllowedAt: 0, nextAutoAt: 0, failures: 0, authPaused: false, refreshing: false }],
       holdReserve: false, holdTest: false, releaseReserve: null as null | (() => void), releaseTest: null as null | (() => void), testCount: 0,
+      samples: [] as any[],
     };
     if (automatic) {
       harness.queries[0].config.program = { kind: 'profile_builtin', provider: 'glm', templateVersion: 1, profileVersion: 1 } as any;
@@ -39,6 +40,7 @@ async function setup(page: Page, automatic = false) {
       if (command === 'ensure_profile_usage') return automatic ? harness.queries[0] : null;
       if (command === 'list_usage_queries') return structuredClone(harness.queries);
       if (command === 'list_usage_cache') return structuredClone(harness.cache);
+      if (command === 'list_usage_samples') return structuredClone(harness.samples.filter((sample: any) => sample.queryId === args.queryId));
       if (command === 'usage_presets') return [{ id: 'official-codex', label: 'Codex 官方订阅', description: '由原生 CLI 查询，同一账号上下文；不推测 token 总量。', config: officialConfig, credentials: [] }, { id: 'glm-cn', label: 'GLM 中国大陆', description: '查询 Coding Plan', config, credentials: [{ name: 'api_key', label: '套餐 Key', instructions: '填写套餐查询凭据', allowedOrigins: ['https://quota.example'] }] }, { id: 'custom-example', label: 'JavaScript 示例', description: '复制为自己的脚本', config: { ...config, program: { kind: 'javascript', source: 'async function query(ctx) {\n  throw new Error("测试错误");\n}' } }, credentials: [] }];
       if (command === 'usage_builtin_script') return 'async function query(ctx) {\n  throw new Error("测试错误");\n}';
       if (automatic && command === 'refresh_usage_query') { harness.cache = [{ queryId: 'q1', generation: 1, success: { execution: { kind: 'saved', queryId: 'q1', generation: 1, identity: config.identity }, source: 'profile:glm:1:1', attemptedAt: '2026-01-01T00:00:00Z', measuredAt: '2026-01-01T00:00:00Z', result }, attemptedAt: '2026-01-01T00:00:00Z', errors: [], nextAllowedAt: 0, nextAutoAt: 0, failures: 0, authPaused: false, refreshing: false }]; return; }
@@ -57,6 +59,16 @@ async function setup(page: Page, automatic = false) {
   await expect(page.getByText(automatic ? '官方套餐' : '测试套餐', { exact: true })).toBeVisible();
 }
 const harness = (page: Page, action: string) => page.evaluate(action);
+/** Seed usage samples as [hoursAgo, remaining] pairs (ascending time) for the primary metric. */
+const seedSamples = (page: Page, readings: Array<[number, number]>) => page.evaluate((readings) => {
+  const harness = (window as any).quotaHarness;
+  const metric = harness.cache[0].success.result.metrics[0];
+  const now = Math.floor(Date.now() / 1000);
+  harness.samples = readings.map(([hoursAgo, remaining]) => {
+    const at = now - hoursAgo * 3600;
+    return { queryId: 'q1', measuredAt: at, snapshot: { execution: { kind: 'saved', queryId: 'q1', generation: 1, identity: harness.queries[0].config.identity }, source: 'builtin:glm:1', attemptedAt: new Date(at * 1000).toISOString(), measuredAt: new Date(at * 1000).toISOString(), result: { schemaVersion: 1, status: 'success', metrics: [{ ...metric, used: 100 - remaining, remaining }], errors: [] } } };
+  });
+}, readings);
 
 test('profile quota preserves overage, missing values, expiry and last success after rate limit', async ({ page }) => {
   await setup(page);
@@ -214,4 +226,30 @@ test('official supplier profile displays a first result without a second key set
   expect(draft.credentials).toEqual([]);
   expect(draft.config.program.kind).toBe('profile_builtin');
   expect(await harness(page, `window.quotaHarness.calls.filter(c => c.command === 'read_native_secret').length`)).toBe(0);
+});
+
+test('burn-down curve shows sampled history and a linear depletion estimate', async ({ page }) => {
+  await setup(page);
+  await expect(page.getByRole('img', { name: /燃尽曲线/ })).toHaveCount(0);
+  await expect(page.getByText(/预计 .*后耗尽/)).toHaveCount(0);
+  await seedSamples(page, [[3, 70], [2, 60], [1, 50]]);
+  await expect(page.getByRole('img', { name: /燃尽曲线/ })).toHaveCount(1);
+  await expect(page.getByText('预计 4 小时后耗尽', { exact: true })).toBeVisible();
+  await page.screenshot({ path: 'test-results/quota-burn-down.png', fullPage: true });
+});
+
+test('depletion estimate stays hidden with short segments, resets or no consumption', async ({ page }) => {
+  await setup(page);
+  // Two readings draw a curve but are below the three-point estimate threshold.
+  await seedSamples(page, [[2, 80], [1, 70]]);
+  await expect(page.getByRole('img', { name: /燃尽曲线/ })).toHaveCount(1);
+  await expect(page.getByText(/后耗尽/)).toHaveCount(0);
+  // A rising reading marks a reset; the latest segment restarts with two points.
+  await seedSamples(page, [[5, 90], [4, 80], [3, 70], [2, 95], [1, 90]]);
+  await expect(page.getByRole('img', { name: /燃尽曲线/ })).toHaveCount(1);
+  await expect(page.getByText(/后耗尽/)).toHaveCount(0);
+  // Flat readings mean no recent consumption; no estimate is claimed.
+  await seedSamples(page, [[3, 60], [2, 60], [1, 60]]);
+  await expect(page.getByRole('img', { name: /燃尽曲线/ })).toHaveCount(1);
+  await expect(page.getByText(/后耗尽/)).toHaveCount(0);
 });

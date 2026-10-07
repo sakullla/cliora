@@ -4,10 +4,11 @@ import { Icon } from '../../components/Icon';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { native, nativeAvailable } from '../../lib/native';
 import type { AuthAccount } from '../../types/accounts';
-import type { CredentialDraft, DraftTestReport, QueryConfig, UsageCache, UsageMetric, UsagePreset, UsageQuery, UsageQueryDraft, UsageResult } from '../../types/usage';
+import type { CredentialDraft, DraftTestReport, QueryConfig, UsageCache, UsageMetric, UsagePreset, UsageQuery, UsageQueryDraft, UsageResult, UsageSample } from '../../types/usage';
 import { GuideDialog } from '../../components/GuideDialog';
 import { CodeEditor } from '../../components/CodeEditor';
 import { usageAmount, usagePercent, usageReset, usageUnit } from './usageDisplay';
+import { BurnDown } from './UsageBurnDown';
 import { saveShortcutHint } from '../../lib/shortcut';
 import styles from './UsageQuota.module.css';
 
@@ -17,6 +18,7 @@ export function useUsageQuota(active: boolean) {
   const [queries, setQueries] = useState<UsageQuery[]>([]);
   const [cache, setCache] = useState<UsageCache[]>([]);
   const [presets, setPresets] = useState<UsagePreset[]>([]);
+  const [samples, setSamples] = useState<Record<string, UsageSample[]>>({});
   const [error, setError] = useState('');
   const sequence = useRef(0);
   const initialQueries = useRef(new Map<string, Promise<void>>());
@@ -25,8 +27,18 @@ export function useUsageQuota(active: boolean) {
     const current = ++sequence.current;
     try {
       const [q, c, p] = await Promise.all([native.listUsageQueries(), native.listUsageCache(), native.usagePresets()]);
+      // Sampling failures must not break the quota cards; keep the previous readings.
+      const history = await Promise.all((q ?? []).map(async query => {
+        try { return { id: query.id, samples: await native.listUsageSamples(query.id) ?? [] }; }
+        catch { return { id: query.id, samples: null as UsageSample[] | null }; }
+      }));
       if (current !== sequence.current) return;
       setQueries(q ?? []); setCache(c ?? []); setPresets(p ?? []); setError('');
+      setSamples(previous => {
+        const next: Record<string, UsageSample[]> = {};
+        for (const entry of history) next[entry.id] = entry.samples ?? previous[entry.id] ?? [];
+        return next;
+      });
     } catch (e) { if (current === sequence.current) setError(message(e)); }
   }, [active]);
   useEffect(() => { void reload(); const timer = setInterval(() => void reload(), 3000); return () => { clearInterval(timer); sequence.current++; }; }, [reload]);
@@ -49,16 +61,17 @@ export function useUsageQuota(active: boolean) {
     initialQueries.current.set(key, task);
     return task;
   }, [reload]);
-  return { queries, cache, presets, error, reload, ensureProfile };
+  return { queries, cache, presets, samples, error, reload, ensureProfile };
 }
 type QuotaState = ReturnType<typeof useUsageQuota>;
-function MetricSummary({ metric, label, now }: { metric: UsageMetric; label: string; now: number }) {
+function MetricSummary({ metric, label, now, samples }: { metric: UsageMetric; label: string; now: number; samples: UsageSample[] }) {
   const percent = usagePercent(metric);
   const amount = metric.remaining !== null ? `剩余 ${usageAmount(metric.remaining)} ${usageUnit(metric)}` : metric.used !== null ? `已用 ${usageAmount(metric.used)} ${usageUnit(metric)}` : metric.missingReason;
   return <div className={styles.summaryMetric} data-warning={percent !== null && percent >= 90 || metric.remaining !== null && metric.remaining < 0}>
     <div><span>{label}</span><strong>{metric.unlimited ? '无限额' : percent === null ? '比例未知' : `${new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 1 }).format(percent)}% 已用`}</strong></div>
     {percent !== null && <progress aria-label={`${label}已用比例`} max={100} value={Math.min(100, Math.max(0, percent))} />}
     <small className={styles.metricMeta}>{(metric.unlimited || amount) && <span>{metric.unlimited ? (metric.neverExpires ? '永不过期' : '不设上限') : amount}</span>}{!metric.unlimited && metric.window && (metric.window.resetsAt || metric.window.recovery !== 'unknown') && <span>{usageReset(metric, now)}</span>}</small>
+    <BurnDown metric={metric} label={label} samples={samples} now={now} />
   </div>;
 }
 export function UsageMetrics({ result, now = Date.now(), program }: { result: UsageResult; now?: number; program?: QueryConfig['program'] }) {
@@ -107,7 +120,7 @@ export function ProfileQuota({ profileId, profileVersion, profileAccountId, tool
       const primary = [...metrics.filter(metric => metric.subject !== 'extra'), ...metrics.filter(metric => metric.subject === 'extra')].slice(0, 3);
       return <div className={styles.query} key={q.id}>
         <div className={styles.heading}><div className={styles.queryTitle}><span title={q.config.label}>{q.config.program.kind === 'profile_builtin' ? '官方套餐' : q.config.label}</span>{!q.config.enabled ? <small>已停用</small> : stale ? <small className={styles.stale}>数据已过期</small> : snapshot?.measuredAt && <small title={date(snapshot.measuredAt)}>更新于 {new Date(snapshot.measuredAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</small>}</div><div className={styles.actions}><button className={styles.refresh} type="button" onClick={() => void refresh(q)} disabled={!q.config.enabled || cache?.refreshing || cooldown > 0}>{cache?.refreshing ? '刷新中' : cooldown > 0 ? `${cooldown} 秒后可刷新` : '刷新额度'}</button>{cache?.refreshing && <button type="button" onClick={() => void refresh(q, true)}>停止刷新</button>}<button className={styles.iconButton} type="button" aria-label="额度设置" title="额度设置" onClick={() => setEditing(q)}><Icon name="settings" size={16} /></button>{index === 0 && <button className={styles.iconButton} type="button" aria-label="添加额度查询" title="添加额度查询" disabled={!nativeAvailable} onClick={() => setEditing('new')}><Icon name="plus" size={16} /></button>}</div></div>
-        {snapshot ? <div className={styles.summaryMetrics}>{primary.map(metric => <MetricSummary key={metric.id} metric={metric} label={usageMetricLabel(q.config.program, metric)} now={now} />)}</div> : <small>{cache?.refreshing ? '正在查询套餐额度…' : !q.config.enabled ? '启用查询后可获取套餐额度' : '尚无成功查询数据'}</small>}
+        {snapshot ? <div className={styles.summaryMetrics}>{primary.map(metric => <MetricSummary key={metric.id} metric={metric} label={usageMetricLabel(q.config.program, metric)} now={now} samples={state.samples[q.id] ?? []} />)}</div> : <small>{cache?.refreshing ? '正在查询套餐额度…' : !q.config.enabled ? '启用查询后可获取套餐额度' : '尚无成功查询数据'}</small>}
         {cache?.authPaused && <p className={styles.error}>认证失效，自动刷新已暂停；请检查配置凭据。</p>}
         {!!cache?.errors.length && <p role="alert" className={styles.error}>{cache.errors.map(e => e.message).join('；')}</p>}
         {!!snapshot?.result.errors.length && <p role="alert" className={styles.error}>{snapshot.result.errors.map(e => e.message).join('；')}</p>}
