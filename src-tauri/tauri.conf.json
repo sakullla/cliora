@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Cliora",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "identifier": "com.cliora.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -18,8 +18,8 @@
   "bundle": { "active": true, "targets": ["nsis", "dmg", "appimage", "deb"], "icon": ["icons/icon.png", "icons/icon.ico", "icons/icon.icns"], "macOS": { "entitlements": "entitlements.plist" } },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDlBRjY0MTNGODBCNzA1OTMKUldSSnpYd3FKWHMzRVhnSUVGQ2piMnVaNnF5THp5Vks4OG9IS0pPV0FyOTdxd1pGY1kzc0NqYnAK",
-      "endpoints": ["https://updates.cliora.example/{{target}}/{{arch}}/{{current_version}}"]
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDgxMTNBM0VCRjdGM0M4NEUKUldST3lQUDM2Nk1UZ1o5bnRwaFhCTHJySkFzaHlnRG1kR1VnSTBwbk4zRDdnelQ4eXcwM2lmNkIK",
+      "endpoints": ["https://github.com/sakullla/cliora/releases/latest/download/latest.json"]
     }
   }
 }
