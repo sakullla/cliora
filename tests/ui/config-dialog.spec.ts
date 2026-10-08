@@ -1116,13 +1116,32 @@ test('unknown old applied context retains saved configurations and explicit reco
   expect(await page.evaluate(() => (window as any).workspaceFixture.calls.filter((call: any) => call.command.includes('apply_')))).toEqual([]);
 });
 
+test('step progress marks finished steps and jumps to the matching card', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'codex');
+  await page.getByRole('button', { name: '新建配置' }).click();
+  const dialog = page.getByRole('dialog');
+  const chain = dialog.getByRole('list', { name: '连接顺序' });
+  await expect(chain.locator('li[data-done]')).toHaveCount(3);
+  await dialog.getByRole('radio', { name: '为此连接提供 API 密钥', exact: true }).click();
+  await expect(chain.getByRole('button', { name: '登录', exact: true })).toBeVisible();
+  await expect(chain.locator('li[data-done]')).toHaveCount(2);
+  const key = dialog.getByLabel('API 密钥', { exact: true });
+  await key.fill('synthetic-step-key');
+  await expect(chain.getByRole('button', { name: '登录（已完成）', exact: true })).toBeVisible();
+  await expect(key).toHaveAttribute('type', 'password');
+  await dialog.getByRole('button', { name: '显示', exact: true }).click();
+  await expect(key).toHaveAttribute('type', 'text');
+  await chain.getByRole('button', { name: /^模型/ }).click();
+  await expect(dialog.getByLabel('模型', { exact: true })).toBeFocused();
+});
+
 test('connection fields follow provider, address, sign-in, then model', async ({ page }) => {
   await setupConfigurationWorkspace(page, 'codex');
   await page.getByRole('button', { name: '新建配置' }).click();
   const dialog = page.getByRole('dialog');
   await dialog.getByRole('radio', { name: '为此连接提供 API 密钥', exact: true }).click();
   await expect(dialog.getByLabel('API 密钥', { exact: true })).toBeVisible();
-  await expect(dialog.getByRole('list', { name: '连接顺序' }).locator('li')).toHaveText(['供应商', '请求地址', '登录', '模型']);
+  await expect(dialog.getByRole('list', { name: '连接顺序' }).locator('li')).toHaveText(['供应商与地址', '登录', '模型']);
   const top = async (locator: ReturnType<typeof dialog.getByLabel>) => (await locator.boundingBox())!.y;
   const provider = await top(dialog.getByText('供应商连接', { exact: true }));
   const providerId = await top(dialog.getByLabel('供应商 ID', { exact: true }));
@@ -1144,7 +1163,7 @@ test('compatible connection keeps sign-in between the address and the model', as
   const top = async (locator: ReturnType<typeof dialog.getByLabel>) => (await locator.boundingBox())!.y;
   await expect(dialog.getByLabel('兼容配置连接')).toBeVisible();
   await expect(dialog.getByLabel('供应商 ID', { exact: true })).toBeVisible();
-  await expect(dialog.getByRole('list', { name: '连接顺序' }).locator('li')).toHaveText(['供应商', '请求地址', '登录', '模型']);
+  await expect(dialog.getByRole('list', { name: '连接顺序' }).locator('li')).toHaveText(['供应商与地址', '登录', '模型']);
   const providerId = await top(dialog.getByLabel('供应商 ID', { exact: true }));
   const address = await top(dialog.getByLabel('请求地址', { exact: true }));
   const method = await top(dialog.getByRole('radio', { name: '为此连接提供 API 密钥', exact: true }));
@@ -1154,13 +1173,28 @@ test('compatible connection keeps sign-in between the address and the model', as
   expect(method).toBeLessThan(model);
 });
 
+test('a CLI without a managed provider connection drops the connection step entirely', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'devin', false, false, ['devin'], true);
+  await page.getByRole('button', { name: '新建配置' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByLabel('兼容配置连接')).toBeVisible();
+  await expect(dialog.getByLabel('供应商 ID', { exact: true })).toHaveCount(0);
+  await expect(dialog.getByLabel('接口协议', { exact: true })).toHaveCount(0);
+  await expect(dialog.getByLabel('请求地址', { exact: true })).toHaveCount(0);
+  await expect(dialog.getByText('高级连接', { exact: true })).toHaveCount(0);
+  await expect(dialog.getByRole('list', { name: '连接顺序' }).locator('li')).toHaveText(['登录', '模型']);
+  await expect(dialog.getByRole('radio', { name: '为此连接提供 API 密钥', exact: true })).toHaveCount(0);
+  await expect(dialog.getByRole('radio', { name: '使用 CLI 当前登录或凭据', exact: true })).toBeVisible();
+  await expect(dialog.getByLabel('模型', { exact: true })).toBeVisible();
+});
+
 test('sign-in sits between the request address and the model for every dedicated editor', async ({ page }) => {
   for (const tool of ['claude_code', 'kimi_code', 'pi', 'open_code'] as const) {
     await setupConfigurationWorkspace(page, tool);
     await page.getByRole('button', { name: '新建配置' }).click();
     const dialog = page.getByRole('dialog');
     const top = async (locator: ReturnType<typeof dialog.getByLabel>) => (await locator.boundingBox())!.y;
-    await expect(dialog.getByRole('list', { name: '连接顺序' }).locator('li')).toHaveText(['供应商', '请求地址', '登录', '模型']);
+    await expect(dialog.getByRole('list', { name: '连接顺序' }).locator('li')).toHaveText(['供应商与地址', '登录', '模型']);
     const address = await top(dialog.getByLabel('请求地址', { exact: true }));
     const method = await top(dialog.getByRole('radio', { name: '为此连接提供 API 密钥', exact: true }));
     const model = await top(tool === 'claude_code' ? dialog.getByLabel('默认模型', { exact: true }) : dialog.getByRole('article', { name: '模型 one', exact: true }));

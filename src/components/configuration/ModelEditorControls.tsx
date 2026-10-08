@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ConfigurationField, type FieldPresentation } from './ConfigurationField';
+import { StepHead } from './ConfigurationStep';
 import styles from './configuration.module.css';
-import type { ConfigurationContentProps } from '../../adapters/contract';
+import type { CatalogControls, ConfigurationContentProps } from '../../adapters/contract';
 import type { ConfigurationAction, ConfigurationDescriptor, ConfigurationEditorProps, ConfigurationField as Field } from '../../types/configuration';
 
 type Run = (target: unknown, operation: string, value?: unknown, field?: string | null) => Promise<boolean>;
@@ -164,20 +165,44 @@ export function ProviderEditor({ provider, providers, connection, protocol, disa
   const [format, setFormat] = useState(protocol);
   const readOnly = id === provider && Boolean(connection?.readOnlyReason);
   const validity = useRef(onDraftValidityChange); validity.current = onDraftValidityChange;
-  useEffect(() => { validity.current?.(!canConfigure || id === provider && baseUrl === (connection?.baseUrl ?? '') && format === protocol); }, [id, provider, baseUrl, connection?.baseUrl, format, protocol, canConfigure]);
+  const dirty = canConfigure && !(id === provider && baseUrl === (connection?.baseUrl ?? '') && format === protocol);
+  useEffect(() => { validity.current?.(!dirty); }, [dirty]);
   useEffect(() => () => validity.current?.(true), []);
-  return <div className={`${styles.controls} ${styles.providerCard}`}>
-    <strong className={styles.connectionTitle}>{t('common.provider.title')}{provider ? ` · ${provider}` : ''}{connection?.baseUrl ? ` · ${connection.baseUrl}` : ''}</strong>
-    {canSelect && providers.length > 0 && <label htmlFor={selectId}>{t('common.provider.view')}<select id={selectId} value={provider} disabled={disabled} onChange={event => { void onSelect(event.target.value); }}><option value="" disabled>{t('common.provider.choose')}</option>{providers.map(item => <option key={item} value={item}>{item}</option>)}</select></label>}
-    {canConfigure ? <div className={styles.fields}>
-      <label>{t('common.provider.id')}<input value={id} maxLength={80} disabled={disabled} onChange={event => setId(event.target.value)} /></label>
-      <label>{t('common.provider.baseUrl')}<input value={baseUrl} disabled={disabled || readOnly} placeholder="https://…" onChange={event => setBaseUrl(event.target.value)} /></label>
-      <label>{t('common.provider.protocol')}<select value={format} disabled={disabled || readOnly} onChange={event => setFormat(event.target.value)}><option value="" disabled>{connection?.protocol ? t('common.provider.nativeProtocol', { protocol: connection.protocol }) : t('common.provider.chooseProtocol')}</option><option value="openai_completions">OpenAI Chat Completions</option><option value="openai_responses">OpenAI Responses</option><option value="anthropic_messages">Anthropic Messages</option></select></label>
-      <div className={styles.buttons}><button type="button" className={styles.accent} disabled={disabled || readOnly || !validIdentity(id, 80) || !baseUrl.trim() || !format} onClick={() => { void onConfigure(id, { baseUrl: baseUrl.trim(), interfaceFormat: format }); }}>{t('common.provider.configure')}</button>
-      <button type="button" disabled={disabled} onClick={() => { setId(provider); setBaseUrl(connection?.baseUrl ?? ''); setFormat(protocol); }}>{t('common.provider.cancel')}</button></div>
-      {connection?.readOnlyReason && <p>{t('common.provider.readOnlyHint', { reason: connection.readOnlyReason })}</p>}
-    </div> : <p>{provider || t('common.provider.unsupported')}</p>}
-  </div>;
+  const reset = () => { setId(provider); setBaseUrl(connection?.baseUrl ?? ''); setFormat(protocol); };
+  const summary = provider || connection?.baseUrl ? <>{provider && <code>{provider}</code>}{provider && connection?.baseUrl ? ' · ' : ''}{connection?.baseUrl}</> : t('common.provider.metaEmpty');
+  return <section data-config-step="connection" className={`${styles.controls} ${styles.step}`}>
+    <StepHead step="connection" title={t('common.provider.title')} meta={summary} actions={canSelect && providers.length > 0 ? <select id={selectId} aria-label={t('common.provider.view')} title={t('common.provider.view')} value={provider} disabled={disabled} onChange={event => { void onSelect(event.target.value); }}><option value="" disabled>{t('common.provider.choose')}</option>{providers.map(item => <option key={item} value={item}>{item}</option>)}</select> : undefined} />
+    {canConfigure ? <>
+      <div className={styles.fieldGrid}>
+        <label>{t('common.provider.id')}<input value={id} maxLength={80} disabled={disabled} placeholder={t('common.provider.idPlaceholder')} spellCheck={false} onChange={event => setId(event.target.value)} /></label>
+        <label>{t('common.provider.protocol')}<select value={format} disabled={disabled || readOnly} onChange={event => setFormat(event.target.value)}><option value="" disabled>{connection?.protocol ? t('common.provider.nativeProtocol', { protocol: connection.protocol }) : t('common.provider.chooseProtocol')}</option><option value="openai_completions">OpenAI Chat Completions</option><option value="openai_responses">OpenAI Responses</option><option value="anthropic_messages">Anthropic Messages</option></select></label>
+        <label className={styles.span}>{t('common.provider.baseUrl')}<input value={baseUrl} disabled={disabled || readOnly} placeholder="https://api.example.com/v1" spellCheck={false} inputMode="url" onChange={event => setBaseUrl(event.target.value)} /></label>
+      </div>
+      {connection?.readOnlyReason && <p className={styles.stepNote}>{t('common.provider.readOnlyHint', { reason: connection.readOnlyReason })}</p>}
+      {dirty && <div className={styles.pendingBar}>
+        <span>{!validIdentity(id, 80) || !baseUrl.trim() || !format ? t('common.provider.pendingIncomplete') : t('common.provider.pending')}</span>
+        <div className={styles.buttons}>
+          <button type="button" disabled={disabled} onClick={reset}>{t('common.provider.cancel')}</button>
+          <button type="button" className={styles.accent} disabled={disabled || readOnly || !validIdentity(id, 80) || !baseUrl.trim() || !format} onClick={() => { void onConfigure(id, { baseUrl: baseUrl.trim(), interfaceFormat: format }); }}>{t('common.provider.configure')}</button>
+        </div>
+      </div>}
+    </> : <p className={styles.stepNote}>{provider || t('common.provider.unsupported')}</p>}
+  </section>;
+}
+
+/** Model step of multi-model editors: count, catalog entry point and an explicit empty state. */
+export function ModelStep({ count, collapsed, defaultModel, note, catalog, disabled, children }: {
+  count: number; collapsed?: boolean; defaultModel?: string | null; note?: ReactNode; catalog?: CatalogControls; disabled?: boolean; children: ReactNode;
+}) {
+  const { t } = useTranslation();
+  if (collapsed) return <section data-config-step="model" className={styles.modelList}>{children}</section>;
+  const fetch = catalog?.supported ? <button type="button" className={styles.catalogButton} disabled={disabled || catalog.busy} onClick={() => catalog.fetch()}>{catalog.busy ? t('common.models.fetching') : t('common.models.fromCatalog')}</button> : undefined;
+  return <section data-config-step="model" className={`${styles.controls} ${styles.step}`}>
+    <StepHead step="model" title={<>{t('common.models.title')}{count > 0 && <span className="count-chip">{count}</span>}</>} meta={defaultModel ? t('common.models.defaultMeta', { model: defaultModel }) : count ? t('common.models.noDefaultMeta') : undefined} actions={fetch} />
+    {note}
+    {count === 0 && <div className={styles.modelEmpty}><strong>{t('common.models.emptyTitle')}</strong><span>{catalog?.supported ? t('common.models.emptyCatalog') : t('common.models.empty')}</span></div>}
+    <div className={styles.modelList}>{children}</div>
+  </section>;
 }
 
 export function EntityActions({ id, target, descriptor, disabled, defaultModel, smallModel, renameLabel, onRun, onRemove }: {
@@ -212,7 +237,7 @@ export function NewModelForm({ props, provider, disabled, label, fields, initial
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
-  return <div className={styles.controls}>{!open ? <button type="button" disabled={disabled} onClick={() => setOpen(true)}>{t('common.models.add')}</button>
+  return <div className={styles.controls}>{!open ? <button type="button" className={styles.addModel} disabled={disabled} onClick={() => setOpen(true)}><span aria-hidden="true">＋</span>{t('common.models.add')}</button>
     : <CreationFields props={props} provider={provider} disabled={disabled} label={label} fields={fields} initialValues={initialValues} allowOverride={allowOverride} listChoices={listChoices} onCreate={onCreate} onClose={() => setOpen(false)} />}</div>;
 }
 function CreationFields({ props, provider, disabled, label, fields, initialValues, allowOverride, listChoices, onCreate, onClose }: {
@@ -249,14 +274,16 @@ function CreationFields({ props, provider, disabled, label, fields, initialValue
       onReset={field.required ? undefined : async () => { setValues(previous => withField(previous, field.id, null)); }}
       onValidityChange={valid => reportField(field, valid)} />;
   };
-  return <fieldset className={styles.group} aria-label={t('common.models.formLabel')}><legend>{t('common.models.add')}</legend>
-    <label>{label}<input value={id} maxLength={200} disabled={disabled || pending} onChange={event => setId(event.target.value)} /></label>
+  return <fieldset className={styles.createForm} aria-label={t('common.models.formLabel')}><legend>{t('common.models.add')}</legend>
+    <label>{label}<input value={id} maxLength={200} disabled={disabled || pending} spellCheck={false} autoFocus onChange={event => setId(event.target.value)} /></label>
     {allowOverride && <label>{t('common.models.definition')}<select value={kind} disabled={disabled || pending} onChange={event => setKind(event.target.value as 'model' | 'override')}><option value="model">{t('common.models.custom')}</option><option value="override">{t('common.models.override')}</option></select></label>}
     {fields.filter(field => !field.advanced || field.required).map(render)}
     {fields.some(field => field.advanced && !field.required) && <details><summary>{t('common.models.optionalParams')}</summary>{fields.filter(field => field.advanced && !field.required).map(render)}</details>}
-    <button type="button" disabled={disabled || pending || !validIdentity(id) || !requiredValid || invalidFields.size > 0} onClick={() => {
+    <div className={styles.createActions}>
+    <button type="button" disabled={disabled || pending} onClick={onClose}>{t('common.models.cancelAdd')}</button>
+    <button type="button" className={styles.accent} disabled={disabled || pending || !validIdentity(id) || !requiredValid || invalidFields.size > 0} onClick={() => {
       setPending(true); void onCreate(id, values, kind).then(success => { if (!active.current) return; setPending(false); if (success) onClose(); });
     }}>{t('common.models.create')}</button>
-    <button type="button" disabled={disabled || pending} onClick={onClose}>{t('common.models.cancelAdd')}</button>
+    </div>
   </fieldset>;
 }

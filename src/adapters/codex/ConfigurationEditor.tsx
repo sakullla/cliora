@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ConfigurationField } from '../../components/configuration/ConfigurationField';
 import { ConnectionCredential } from '../../components/configuration/ConnectionCredential';
+import { ConfigurationStep, connectionMeta } from '../../components/configuration/ConfigurationStep';
 import sharedStyles from '../../components/configuration/configuration.module.css';
 import type { ConfigurationContentProps } from '../contract';
 import styles from './ConfigurationEditor.module.css';
@@ -30,13 +31,14 @@ function Editor({ draft, descriptor, disabled, onAction, onValidityChange, secti
   };
   return <section className={styles.editor} aria-label={t('tools.adapters.codex.label')}>
     <div hidden={section === 'settings'}>
-      <section className={sharedStyles.providerCard} aria-label={t('common.provider.title')}>
-        <strong className={sharedStyles.sectionTitle}>{t('common.provider.title')}</strong>
+      <ConfigurationStep step="connection" label={t('common.provider.title')} title={t('common.provider.title')} meta={connectionMeta(values.model_provider, values.base_url)}>
         <div className={styles.fields}>{render('model_provider')}{render('base_url')}</div>
         {view?.defaultAddressReason && <p className={styles.note}>{view.defaultAddressReason}</p>}
-      </section>
+      </ConfigurationStep>
       <ConnectionCredential />
-      {render('model')}
+      <ConfigurationStep step="model" title={t('tools.config.modelStepTitle')} meta={t('tools.config.modelStepHint')}>
+        <div className={styles.fields}>{render('model')}</div>
+      </ConfigurationStep>
     </div>
     <div hidden={section === 'models'}><details className={sharedStyles.disclosureCard} open={section === 'settings'}><summary>{t('tools.adapters.codex.paramsSummary')}</summary><p className={styles.note}>{t('tools.adapters.codex.paramsNote', { source: view?.capabilitySource })}</p>
       <div className={styles.fields}>{['model_reasoning_effort', 'model_context_window', 'model_reasoning_summary', 'model_verbosity'].map(render)}</div>

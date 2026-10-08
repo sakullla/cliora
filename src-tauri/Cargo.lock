@@ -676,7 +676,7 @@ dependencies = [
 
 [[package]]
 name = "cliora"
-version = "0.4.7"
+version = "0.4.8"
 dependencies = [
  "argon2",
  "base64 0.22.1",

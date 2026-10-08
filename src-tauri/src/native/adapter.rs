@@ -1232,6 +1232,9 @@ mod tests {
             ("zcode", "unsupported", "unsupported", "ZCode 凭据由产品加密保管（credentials.json），不提供凭据管理", "unsupported", "ZCode 桌面端经产品内账号登录；setting.json 无文档化 API 连接字段", "single_connection"),
             ("qoder_cn", "unsupported", "unsupported", "Qoder CN 凭据由产品登录态管理，Cliora 不读取或复制账号令牌", "unsupported", "Qoder 通过官方账号认证，settings.json 没有文档化的供应商连接字段", "single_connection"),
             ("deepseek", "unsupported", "unsupported", "DeepSeek Harness 凭据管理不交付：.credentials.yaml 由官方 dsh-credentials-local 插件管理，适配器不读取也不改写", "unsupported", "DeepSeek Harness 原生连接写入不交付：凭据由官方插件经 .credentials.yaml 管理（UI 只写），适配器不触碰", "single_connection"),
+            ("devin", "unsupported", "unsupported", "Devin 无托管连接通道：登录凭据由 credentials.toml 保管，Cliora 绝不读写", "unsupported", "Devin 固定走官方服务，config.json 无文档化的供应商连接字段", "single_connection"),
+            ("cline", "unsupported", "unsupported", "Cline 密钥存于系统 keychain 与明文 providers.json，Cliora 绝不写入", "unsupported", "Cline 连接与凭据由产品登录态（keychain 与 providers.json）保管，Cliora 不接管", "single_connection"),
+            ("antigravity", "unsupported", "unsupported", "Antigravity 不向 settings.json 写入密钥；headless GEMINI_API_KEY 只在启动时注入，Cliora 暂不接管", "unsupported", "Antigravity 连接编辑面暂不交付：settings.json 以原生 JSON 编辑", "single_connection"),
         ];
         for (id, global_key, project_key, key_reason, address, address_reason, projection) in cases {
             let registry = Registry::builtins().with_fixture_installation(id, "1.0.0");

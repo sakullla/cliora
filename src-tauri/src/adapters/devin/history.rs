@@ -111,6 +111,15 @@ pub fn sources_controlled(
     if !root.is_dir() {
         return Ok(Vec::new());
     }
+    // read_dir order is filesystem-dependent; sort by path so listings (and
+    // their tests) are deterministic on every platform.
+    let mut paths = Vec::new();
+    for entry in fs::read_dir(&root).map_err(|error| error.to_string())? {
+        check_cancelled(cancelled)?;
+        let entry = entry.map_err(|error| error.to_string())?;
+        paths.push(entry.path());
+    }
+    paths.sort();
     let directories = root
         .parent()
         .map(|cli| cli.join("sessions.db"))
@@ -118,10 +127,8 @@ pub fn sources_controlled(
         .map(|path| working_directories(&path))
         .unwrap_or_default();
     let mut sources = Vec::new();
-    for entry in fs::read_dir(&root).map_err(|error| error.to_string())? {
+    for path in paths {
         check_cancelled(cancelled)?;
-        let entry = entry.map_err(|error| error.to_string())?;
-        let path = entry.path();
         if !path.is_file()
             || path.extension().and_then(|value| value.to_str()) != Some("json")
             || path.is_symlink()

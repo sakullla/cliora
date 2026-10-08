@@ -145,6 +145,20 @@ for (const tool of ['pi', 'opencode', 'kimi']) {
   });
 }
 
+test('blank provider shows the empty model state and offers apply only after an edit', async ({ page }) => {
+  await page.goto('/__multi_model_editor?tool=pi&blank');
+  await expect(page.getByText('还没有模型', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '设置供应商连接' })).toHaveCount(0);
+  await page.getByLabel('供应商标识').fill('gateway');
+  await expect(page.getByText('填写供应商标识、请求地址与接口协议后应用', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '设置供应商连接' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '保存配置' })).toBeDisabled();
+  await page.getByRole('button', { name: '取消连接修改' }).click();
+  await expect(page.getByLabel('供应商标识')).toHaveValue('');
+  await expect(page.getByRole('button', { name: '设置供应商连接' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '保存配置' })).toBeEnabled();
+});
+
 test('Kimi requires context at creation, rejects fractional values and cancels local validity', async ({ page }) => {
   await page.goto('/__multi_model_editor?tool=kimi');
   await page.getByRole('button', { name: '新增模型', exact: true }).click();

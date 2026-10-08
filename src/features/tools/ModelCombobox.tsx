@@ -3,6 +3,14 @@ import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import styles from './ModelCombobox.module.css';
 
+function scrollParent(node: HTMLElement | null) {
+  for (let element = node?.parentElement ?? null; element && element !== document.body; element = element.parentElement) {
+    const overflow = getComputedStyle(element).overflowY;
+    if (overflow === 'auto' || overflow === 'scroll') return element;
+  }
+  return null;
+}
+
 export function ModelCombobox({ id, label, value, placeholder, options, disabled, action, onChange }: {
   id?: string;
   label: string;
@@ -34,8 +42,10 @@ export function ModelCombobox({ id, label, value, placeholder, options, disabled
       if (!rect) return;
       const width = Math.max(rect.width, 220);
       const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
-      const below = window.innerHeight - rect.bottom - 12;
-      const above = rect.top - 12;
+      // Stay inside the scrolling form so the list never covers a dialog footer.
+      const bounds = scrollParent(anchor.current)?.getBoundingClientRect();
+      const below = Math.min(window.innerHeight, bounds?.bottom ?? Infinity) - rect.bottom - 12;
+      const above = rect.top - Math.max(0, bounds?.top ?? 0) - 12;
       const upward = below < 180 && above > below;
       setBox({
         left,
