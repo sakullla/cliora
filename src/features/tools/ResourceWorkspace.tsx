@@ -26,6 +26,9 @@ function draftOf(item: McpDefinition): McpDraft {
 function lines(value: Record<string, string>): string {
   return Object.entries(value).map(([key, item]) => `${key}=${item}`).join('\n');
 }
+function keptArgs(args: string[]) {
+  return args.map((item) => item.trim()).filter((item) => item.length > 0);
+}
 function parseLines(value: string): Record<string, string> {
   const output: Record<string, string> = {};
   for (const line of value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)) {
@@ -107,7 +110,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
     setSavedFingerprint(JSON.stringify([next, lines(item.env), lines(item.headers),item.enabled]));
     setDraft(next);
     setEnvText(lines(item.env)); setHeaderText(lines(item.headers)); setEnabled(item.enabled);
-    setNotice(item.protectedValues ? t('tools.mcp.protectedNotice') : t('tools.mcp.importedNotice'));
+    setNotice(t('tools.mcp.importedNotice'));
   }
   async function startNew() {
     if (!await canReplace()) return;
@@ -142,7 +145,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
     const inLibrary = editing ? linked?.inLibrary !== false : syncLibrary || linked?.inLibrary === true;
     setBusy(true); setError(''); setNotice('');
     try {
-      const saved = await native.saveMcpDefinition({ ...draft, id: linked?.id ?? draft.id, expectedVersion: linked?.version ?? draft.expectedVersion, inLibrary, env: parseLines(envText), headers: parseLines(headerText) });
+      const saved = await native.saveMcpDefinition({ ...draft, args: keptArgs(draft.args), id: linked?.id ?? draft.id, expectedVersion: linked?.version ?? draft.expectedVersion, inLibrary, env: parseLines(envText), headers: parseLines(headerText) });
       setDefinitions(await native.listMcpDefinitions());
       if (!mounted.current || started !== latestForm.current) { setNotice(t('tools.mcp.dirtyAgain')); return; }
       select(saved,enabled);
@@ -202,7 +205,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
     <div className={styles.layout}>
     <aside className={styles.list}>
       <div className={styles.listHead}><strong>{t('tools.mcp.activeCount', { count: nativeEntries.length })}</strong></div>
-      {nativeEntries.map((item) => <button key={`native-${item.name}`} type="button" title={t('tools.mcp.clickEdit')} onClick={() => void importNative(item)}><strong>{item.name}<span className={styles.state} data-on={item.enabled || undefined}>{item.enabled ? t('tools.plugins.enabled') : t('tools.quota.disabled')}</span></strong><small className={styles.mono}>{(item.transport === 'http' ? item.url : [item.command, ...item.args].join(' ')) || item.transport}{item.protectedValues ? t('tools.mcp.credentialsHidden') : ''}</small></button>)}
+      {nativeEntries.map((item) => <button key={`native-${item.name}`} type="button" title={t('tools.mcp.clickEdit')} onClick={() => void importNative(item)}><strong>{item.name}<span className={styles.state} data-on={item.enabled || undefined}>{item.enabled ? t('tools.plugins.enabled') : t('tools.quota.disabled')}</span></strong><small className={styles.mono}>{(item.transport === 'http' ? item.url : [item.command, ...item.args].join(' ')) || item.transport}</small></button>)}
       {!nativeEntries.length && <p>{t('tools.mcp.listEmpty')}</p>}
     </aside>
     <GuideDialog open={composing} title={draft.id || nativeOrigin ? t('tools.mcp.editTitle') : t('tools.mcp.add')} hint={t('tools.mcp.dialogHint')} onClose={() => void closeCompose()}>
@@ -211,7 +214,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
       <div className={styles.typeField}><span>{t('tools.mcp.type')}</span><div className={styles.typeSwitch} role="radiogroup" aria-label={t('tools.mcp.transport')}>{([['http', 'HTTP'], ['stdio', 'stdio']] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={draft.transport === value} onClick={() => setDraft({ ...draft, transport: value })}>{label}</button>)}</div></div>
       {draft.transport === 'stdio' ? <>
         <label>{t('tools.mcp.command')}<input aria-label={t('tools.mcp.command')} value={draft.command} onChange={(event) => setDraft({ ...draft, command: event.target.value })} placeholder="npx" /></label>
-        <label>{t('tools.mcp.args')}<textarea rows={3} value={draft.args.join('\n')} onChange={(event) => setDraft({ ...draft, args: event.target.value.split('\n').filter(Boolean) })} placeholder={'-y\nchrome-devtools-mcp@latest'} /></label>
+        <label>{t('tools.mcp.args')}<textarea rows={3} value={draft.args.join('\n')} onChange={(event) => setDraft({ ...draft, args: event.target.value.split(/\r?\n/) })} placeholder={'-y\nchrome-devtools-mcp@latest'} /></label>
         <label>{t('tools.mcp.env')}<textarea rows={4} value={envText} onChange={(event) => setEnvText(event.target.value)} placeholder={'KEY=value\nAPI_TOKEN=${API_TOKEN}'} /></label>
       </> : <>
         <label>URL<input aria-label={t('tools.mcp.urlAria')} value={draft.url} onChange={(event) => setDraft({ ...draft, url: event.target.value })} placeholder="https://example.com/mcp" /></label>
@@ -246,7 +249,11 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
   const [guide, setGuide] = useState(false);
   const [syncLibrary, setSyncLibrary] = useState(false);
   const [external, setExternal] = useState<NativeSkillEntry | null>(null);
-  useLayoutEffect(() => { onDirtyChange?.(!!url.trim() || !!archiveSelection || !!pendingImport || adding); }, [url, archiveSelection, pendingImport, adding, onDirtyChange]);
+  const [skillDoc, setSkillDoc] = useState<{ path: string; baseline: string; draft: string } | null>(null);
+  const [skillLoading, setSkillLoading] = useState(false);
+  const skillRequest = useRef(0);
+  const skillDirty = !!skillDoc && skillDoc.draft !== skillDoc.baseline;
+  useLayoutEffect(() => { onDirtyChange?.(!!url.trim() || !!archiveSelection || !!pendingImport || adding || skillDirty); }, [url, archiveSelection, pendingImport, adding, skillDirty, onDirtyChange]);
   useEffect(() => () => { onDirtyChange?.(false); }, [onDirtyChange]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -261,6 +268,14 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
   const visibleIssues = recoveryIssues.filter((issue) => issue.toolId === toolId && (issue.scope === 'project' || (issue.contextId ?? null) === (contextId ?? null)));
   const empty = !nativeEntries.length && !adding && !guide && !pendingImport && !archiveSelection;
   useEffect(() => { setPendingTarget(null); }, [toolId, scope, project, selectedId]);
+  useEffect(() => {
+    skillRequest.current += 1;
+    setGuide(false);
+    setAdding(false);
+    setExternal(null);
+    setSkillDoc(null);
+    setSkillLoading(false);
+  }, [toolId, scope, project]);
   useEffect(() => {
     let live = true;
     void native.listSkillRecoveryIssues().then((issues) => { if (live) setRecoveryIssues(issues); })
@@ -371,12 +386,52 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
     } catch (value) { setError(errorText(value)); }
     finally { setBusy(false); }
   }
-  async function openNative(entry: NativeSkillEntry) {
-    if (entry.state === 'unreadable') { setError(entry.detail); return; }
+  function closeGuide() {
+    skillRequest.current += 1;
+    setGuide(false);
     setAdding(false);
+    setSyncLibrary(false);
+    setExternal(null);
+    setArchiveSelection(null);
+    setPendingImport(null);
+    setSkillDoc(null);
+    setSkillLoading(false);
+  }
+  async function openNative(entry: NativeSkillEntry) {
+    const request = ++skillRequest.current;
+    setAdding(false);
+    setError('');
     setExternal(entry.packageId ? null : entry);
     setSelectedId(entry.packageId);
+    setSkillDoc(null);
+    setSkillLoading(true);
     setGuide(true);
+    try {
+      const document = await native.readNativeSkill(toolId, scope, project, entry.path);
+      if (skillRequest.current !== request) return;
+      setSkillDoc({ path: entry.path, baseline: document.content, draft: document.content });
+    } catch (value) {
+      if (skillRequest.current === request) setError(errorText(value));
+    } finally {
+      if (skillRequest.current === request) setSkillLoading(false);
+    }
+  }
+  async function saveSkill() {
+    if (!skillDoc || skillDoc.draft === skillDoc.baseline) return;
+    const request = skillRequest.current;
+    const saved = skillDoc;
+    setBusy(true); setError('');
+    try {
+      await native.saveNativeSkill(toolId, scope, project, saved.path, saved.baseline, saved.draft);
+      if (skillRequest.current !== request) return;
+      setSkillDoc({ ...saved, baseline: saved.draft });
+      setNativeEntries(await native.scanNativeSkills(toolId, scope, project));
+      setResult({ toolId, scope, projectPath: project, path: saved.path, status: 'installed', detail: t('tools.skills.saved') });
+    } catch (value) {
+      if (skillRequest.current === request) setError(errorText(value));
+    } finally {
+      if (skillRequest.current === request) setBusy(false);
+    }
   }
   async function syncExternal() {
     if (!external) return;
@@ -424,7 +479,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
   }
 
   const recovery = !!visibleIssues.length && <div className={styles.error} role="alert"><strong>{t('tools.skills.recoveryTitle')}</strong><p>{t('tools.skills.recoveryDetail')}</p>{visibleIssues.map((issue) => <div key={issue.operationId} className={styles.fileChange}><strong>{issue.scope === 'global' ? t('tools.apply.global') : t('tools.skills.recoveryProject', { path: issue.projectPath ?? '' })}</strong><p>{issue.detail}</p><p>{t('tools.skills.recoveryTarget', { path: issue.targetPath })}</p><p>{t('tools.skills.recoveryBackup', { path: issue.backupPath })}</p><button type="button" onClick={() => void navigator.clipboard.writeText(issue.backupPath).catch((value) => setError(errorText(value)))}>{t('tools.skills.recoveryCopy')}</button></div>)}<button type="button" onClick={() => void checkRecovery()}>{t('tools.skills.recoveryRecheck')}</button></div>;
-  const outcome = result && (result.status === 'failed' ? result.detail : result.detail === t('tools.skills.addedToLibrary') ? t('tools.skills.addedToLibraryNote') : result.status === 'removed' ? t('tools.skills.removed', { path: result.path ?? '' }) : t('tools.skills.installed', { path: result.path ?? '' }));
+  const outcome = result && (result.status === 'failed' || result.detail === t('tools.skills.saved') ? result.detail : result.detail === t('tools.skills.addedToLibrary') ? t('tools.skills.addedToLibraryNote') : result.status === 'removed' ? t('tools.skills.removed', { path: result.path ?? '' }) : t('tools.skills.installed', { path: result.path ?? '' }));
   const installState: { label: string; tone: 'on' | 'warn' | undefined } = installed?.state === 'current' ? { label: t('tools.skills.stateInstalled'), tone: 'on' }
     : installed?.state === 'update_available' ? { label: t('tools.skills.stateUpdate'), tone: 'warn' }
     : installed?.state === 'conflict' ? { label: t('tools.skills.stateConflict'), tone: 'warn' }
@@ -455,9 +510,9 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
       {nativeEntries.map((entry) => <button type="button" key={entry.path} title={entry.state === 'unreadable' ? entry.detail : entry.path} onClick={() => void openNative(entry)}><strong>{entry.name}<span className={styles.state} data-on={entry.state === 'managed' || undefined} data-warn={entry.state === 'unreadable' || undefined}>{entry.state === 'managed' ? t('tools.skills.stateInstalled') : entry.state === 'external' ? t('tools.skills.stateExternal') : t('tools.skills.stateUnreadable')}</span></strong><small className={styles.mono}>{displayPath(entry.path)}</small></button>)}
       {!nativeEntries.length && <p>{t('tools.skills.listEmpty')}</p>}
     </aside>
-    <GuideDialog open={guide} title={adding ? t('tools.skills.add') : t('tools.skills.currentTitle')} hint={adding ? t('tools.skills.addHint') : t('tools.skills.currentHint')} onClose={() => { setGuide(false); setAdding(false); setSyncLibrary(false); setExternal(null); setArchiveSelection(null); setPendingImport(null); }}>
+    <GuideDialog wide={!adding} open={guide} title={adding ? t('tools.skills.add') : t('tools.skills.currentTitle')} hint={adding ? t('tools.skills.addHint') : t('tools.skills.currentHint')} onClose={closeGuide}>
     <div className={styles.panel}>
-      {!adding && <div className={styles.heading}><div><small>Skill</small><h2>{selected?.name ?? 'Skill'}</h2></div></div>}
+      {!adding && <div className={styles.heading}><div><small>Skill</small><h2>{selected?.name ?? external?.name ?? t('tools.skills.currentTitle')}</h2></div></div>}
       {adding && <>
         <label className={styles.inline}><input type="checkbox" checked={syncLibrary} onChange={(event) => setSyncLibrary(event.target.checked)} />{t('tools.mcp.quickSync')}<small className={styles.fieldHint}>{t('tools.mcp.quickSyncHint')}</small></label>
         <div className={styles.sources}>
@@ -466,7 +521,8 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
         </div>
         <label className={styles.urlField}>{t('tools.skills.zipUrl')}<span className={styles.urlRow}><input aria-label={t('tools.skills.zipUrlAria')} value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://example.com/skill.zip" /><button type="button" disabled={busy || !url.trim()} onClick={() => void archive(url.trim(), false)}>{t('tools.skills.importUrl')}</button></span></label>
       </>}
-      {external && !adding && <div className={styles.addChooser}><p className={styles.muted}>{t('tools.skills.externalNote')}</p><button type="button" className={styles.primary} disabled={busy} onClick={() => void syncExternal()}>{t('tools.skills.addToLibrary')}</button></div>}
+      {!adding && skillLoading && <p className={styles.muted} role="status">{t('tools.skills.loading')}</p>}
+      {!adding && skillDoc && <><p className={styles.muted}>{t('tools.skills.editorNote')}</p><CodeEditor format="markdown" label={t('tools.skills.editorLabel')} documentId={skillDoc.path} value={skillDoc.draft} onChange={(value) => setSkillDoc((current) => current ? { ...current, draft: value } : current)} readOnly={busy} /></>}
       {outcome && <p role="status" className={result?.status === 'failed' ? styles.error : styles.notice}>{outcome}</p>}
       {error && <p className={styles.error} role="alert">{error}</p>}
       {selected && !adding && <>
@@ -478,8 +534,8 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
           {pendingTarget.changes.map((change) => <details key={change.path} className={styles.fileChange}><summary>{change.path}</summary><div className={styles.fileDiff}><div><strong>{t('tools.skills.currentLabel')}</strong>{change.before !== null ? <pre>{change.before}</pre> : <small>{change.beforeSize === null ? t('tools.skills.notExists') : t('tools.skills.fileMeta', { size: change.beforeSize, digest: change.beforeDigest })}</small>}</div><div><strong>{t('tools.skills.afterLabel')}</strong>{change.after !== null ? <pre>{change.after}</pre> : <small>{change.afterSize === null ? t('tools.agents.delete') : t('tools.skills.fileMeta', { size: change.afterSize, digest: change.afterDigest })}</small>}</div></div></details>)}
           <div className={styles.actions}><button type="button" onClick={() => setPendingTarget(null)}>{t('common.dialog.cancel')}</button><button type="button" className={styles.primary} disabled={busy} onClick={() => void change(false)}>{pendingTarget.status === 'conflict' ? t('tools.skills.confirmTakeover') : t('tools.skills.confirmInstall')}</button></div>
         </div>}
-        <div className="dialog-footer">{installed && <button type="button" disabled={busy} onClick={() => void change(true)}>{t('tools.mcp.removeFromTool')}</button>}<span className="dialog-footer-gap" />{installed?.state === 'update_available' && <button type="button" className={styles.primary} disabled={busy || (scope === 'project' && !project)} onClick={() => void change(false)}>{t('tools.skills.updateToScope')}</button>}</div>
       </>}
+      {!adding && (skillDoc || selected) && <div className="dialog-footer">{external && <button type="button" disabled={busy} onClick={() => void syncExternal()}>{t('tools.skills.addToLibrary')}</button>}{installed && <button type="button" disabled={busy} onClick={() => void change(true)}>{t('tools.mcp.removeFromTool')}</button>}<span className="dialog-footer-gap" />{installed?.state === 'update_available' && <button type="button" disabled={busy || (scope === 'project' && !project)} onClick={() => void change(false)}>{t('tools.skills.updateToScope')}</button>}<button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint()} disabled={busy || !skillDoc || skillDoc.draft === skillDoc.baseline} onClick={() => void saveSkill()}>{t('tools.skills.save')}</button></div>}
       {archiveSelection && <div className={styles.distribution}><label>{t('tools.skills.archiveLabel')}<select aria-label={t('tools.skills.archiveAria')} value={archiveSelection.chosen ?? '__choose__'} onChange={event => setArchiveSelection({ ...archiveSelection, chosen: event.target.value === '__choose__' ? null : event.target.value })}><option value="__choose__">{t('tools.skills.archivePlaceholder')}</option>{archiveSelection.entries.map(entry => <option key={entry} value={entry}>{entry || t('tools.skills.archiveRoot')}</option>)}</select></label><div className={styles.actions}><button type="button" onClick={() => setArchiveSelection(null)}>{t('common.dialog.cancel')}</button><button type="button" disabled={busy || archiveSelection.chosen === null} onClick={() => void archive(archiveSelection.source, archiveSelection.local, archiveSelection.chosen ?? undefined)}>{t('tools.skills.archiveImport')}</button></div></div>}
       {pendingImport && <div className={styles.resultList} role="group" aria-label={t('tools.skills.importLabel')}>
         <strong>{t('tools.skills.importTitle', { name: pendingImport.preview.name })}</strong>

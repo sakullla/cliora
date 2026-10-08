@@ -140,7 +140,7 @@ function TrendChart({ report, metric, now }: { report: UsageReport; metric: 'tok
       {shown && active !== null && <div className={styles.tooltip} data-align={align} style={{ left: `${((active + 0.5) / buckets.length) * 100}%` }} role="status">
         <strong>{bucketLabel(shown, report.bucket, true, multiYear)}</strong>
         {shown.totals.usageRecords ? <>
-          <p><span>{i18n.t('records.usage.totalTokens')}</span><b>{shown.totals.total.toLocaleString()}</b></p>
+          <p><span>{i18n.t('records.usage.totalTokens')}</span><b>{formatTokens(shown.totals.total)}</b></p>
           {tokenParts().map((part) => shown.totals[part.key] > 0 && <p key={part.key}><span><i data-key={part.key} />{part.label}</span><b>{formatTokens(shown.totals[part.key])}</b></p>)}
           <p><span>{i18n.t('records.usage.estCost')}</span><b>{formatMoney(shown.totals.cost, report.currency)}</b></p>
           <p><span>{i18n.t('records.usage.requests')}</span><b>{i18n.t('records.usage.requestCount', { count: shown.totals.requests.toLocaleString() })}{shown.totals.unknownRequestRecords > 0 ? i18n.t('records.usage.partialUnknown') : ''}{i18n.t('records.usage.sessionCount', { count: shown.totals.sessions })}</b></p>

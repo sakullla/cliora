@@ -3,6 +3,7 @@ import { CommonConfigurationFields } from '../../components/configuration/Common
 import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ConfigurationField } from '../../components/configuration/ConfigurationField';
+import { ConnectionCredential } from '../../components/configuration/ConnectionCredential';
 import sharedStyles from '../../components/configuration/configuration.module.css';
 import type { ConfigurationContentProps } from '../contract';
 import styles from './ConfigurationEditor.module.css';
@@ -22,14 +23,20 @@ function Editor({ draft, descriptor, disabled, onAction, onValidityChange, secti
     const action = (operation: string, value: unknown = null) => onAction({ version: descriptor.version, target, operation, field: id, value });
     const metadata = id === 'model_reasoning_effort' ? { ...field, choices: view?.effortChoices ?? [] } : field;
     const builtinAddress = id === 'base_url' && ['openai', 'ollama', 'lmstudio'].includes(target);
-    return <ConfigurationField resetEpoch={rawResetEpoch} presentation={{ ...codexFieldPresentation(id), origin: draft.profile.editing?.intents.some(action => action.operation === 'set' && action.field === id && action.target === target) ? 'explicit' : field?.origin, ...(id === 'model' ? { combobox: true, catalog: catalog ? { supported: catalog.supported, busy: catalog.busy, fetch: catalog.fetch } : undefined, suggestions: [...new Set([...(catalog?.models ?? []), values.model].filter((value): value is string => typeof value === 'string' && value.trim() !== ''))] } : {}) }} key={`${draft.sessionId}:${id}:${target}`} field={builtinAddress ? { ...metadata, unavailableReason: t('tools.adapters.codex.builtinAddress') } : metadata}
+    return <ConfigurationField resetEpoch={rawResetEpoch} presentation={{ ...codexFieldPresentation(id), ...(builtinAddress ? { placeholder: undefined } : {}), origin: draft.profile.editing?.intents.some(action => action.operation === 'set' && action.field === id && action.target === target) ? 'explicit' : field?.origin, ...(id === 'model' ? { combobox: true, catalog: catalog ? { supported: catalog.supported, busy: catalog.busy, fetch: catalog.fetch } : undefined, suggestions: [...new Set([...(catalog?.models ?? []), values.model].filter((value): value is string => typeof value === 'string' && value.trim() !== ''))] } : {}) }} key={`${draft.sessionId}:${id}:${target}`} field={builtinAddress ? { ...metadata, unavailableReason: t('tools.adapters.codex.builtinAddress') } : metadata}
       value={values[id]} disabled={disabled} issues={draft.issues.filter(issue => issue.field === id)}
       onChange={value => value === '' ? action('reset') : action('set', value)} onReset={() => action('reset')}
       onValidityChange={valid => onValidityChange(id, valid)} />;
   };
   return <section className={styles.editor} aria-label={t('tools.adapters.codex.label')}>
-    <div hidden={section === 'settings'}>{render('model')}
-    <details className={sharedStyles.disclosureCard} open={draft.credential?.source === 'api_key' && !draft.draftConnection?.baseUrl}><summary>{t('common.provider.title')}</summary><div className={styles.fields}>{render('model_provider')}{render('base_url')}{view?.defaultAddressReason && <p className={styles.note}>{view.defaultAddressReason}</p>}</div></details>
+    <div hidden={section === 'settings'}>
+      <section className={sharedStyles.providerCard} aria-label={t('common.provider.title')}>
+        <strong className={sharedStyles.sectionTitle}>{t('common.provider.title')}</strong>
+        <div className={styles.fields}>{render('model_provider')}{render('base_url')}</div>
+        {view?.defaultAddressReason && <p className={styles.note}>{view.defaultAddressReason}</p>}
+      </section>
+      <ConnectionCredential />
+      {render('model')}
     </div>
     <div hidden={section === 'models'}><details className={sharedStyles.disclosureCard} open={section === 'settings'}><summary>{t('tools.adapters.codex.paramsSummary')}</summary><p className={styles.note}>{t('tools.adapters.codex.paramsNote', { source: view?.capabilitySource })}</p>
       <div className={styles.fields}>{['model_reasoning_effort', 'model_context_window', 'model_reasoning_summary', 'model_verbosity'].map(render)}</div>

@@ -21,9 +21,9 @@ if((process.argv.includes('--features')||process.argv.includes('--workflows')||p
 if(process.argv.includes('--list')){console.log(selectedScenarios.join('\n'));process.exit(0);}
 const root=fileURLToPath(new URL('../',import.meta.url)).replace(/\\/g,'/').replace(/\/$/,'');
 const workflowsOnly=process.argv.includes('--features')||process.argv.includes('--workflows');
-const fullCapture=!process.argv.some(arg=>['--features','--workflows','--records','--sessions','--connections'].includes(arg));
-const captureMode=workflowsOnly?'features':process.argv.includes('--sessions')?'sessions':process.argv.includes('--records')?'records':process.argv.includes('--connections')?'connections':'full';
-const manifestName=`capture-ui${['features','sessions','records'].includes(captureMode)?'-'+captureMode:''}-manifest.json`;
+const fullCapture=!process.argv.some(arg=>['--features','--workflows','--records','--sessions','--connections','--skills'].includes(arg));
+const captureMode=workflowsOnly?'features':process.argv.includes('--sessions')?'sessions':process.argv.includes('--records')?'records':process.argv.includes('--connections')?'connections':process.argv.includes('--skills')?'skills':'full';
+const manifestName=`capture-ui${['features','sessions','records','connections','skills'].includes(captureMode)?'-'+captureMode:''}-manifest.json`;
 const out=process.env.CLIORA_CAPTURE_OUT ?? root+'/docs/verification/ui'; fs.mkdirSync(out,{recursive:true});
 const previewUrl=process.env.CLIORA_PREVIEW_URL??'http://127.0.0.1:14736';
 let previewReady=false;
@@ -67,7 +67,9 @@ async function mock(initialTheme){
  const accounts=ids.map(toolId=>({id:'account-'+toolId,toolId,provider:toolId,version:1,label:'开发账号',state:'signed_in',identity:{subject:'fixture-'+toolId,email:'developer@example.test',plan:'订阅套餐',source:'synthetic'},context:{id:'context-'+toolId},retiredContexts:[],pendingLogin:null,detail:null,checkedAt:1790992800}));
  const pluginEntry={id:'code-review@official',name:'Code Review',source:'code-review@official',version:'1.2.0',scope:'user',enabled:true,state:'installed_load_unknown',policy:'AVAILABLE',readOnly:false,root:'C:/fixture/plugins/code-review',resources:[{kind:'agents',path:'C:/fixture/plugins/code-review/agents',ownerId:'code-review@official'}]};
  const agentEntry={id:'reviewer',name:'reviewer',description:'审查正确性、安全与边界条件',path:'C:/fixture/agents/reviewer.md',format:'markdown',content:'---\nname: reviewer\ndescription: 审查正确性、安全与边界条件\ntools: Read, Grep, Glob\nmodel: inherit\n---\n检查改动影响，引用具体证据并说明验证范围。\n',enabled:true,readOnly:false,owner:'独立定义',detail:'下一次委派读取此定义'};
- Object.assign(window,{isTauri:true,__uiCalls:[],__TAURI_INTERNALS__:{invoke:async(command,args={})=>{
+ const callbacks=new Map(); let callbackId=0;
+ window.__TAURI_EVENT_PLUGIN_INTERNALS__={unregisterListener(_event,id){callbacks.delete(id);}};
+ Object.assign(window,{isTauri:true,__uiCalls:[],__TAURI_INTERNALS__:{transformCallback(callback){const id=++callbackId;callbacks.set(id,callback);return id;},unregisterCallback(id){callbacks.delete(id);},runCallback(id,data){callbacks.get(id)?.(data);},callbacks,invoke:async(command,args={})=>{
   window.__uiCalls.push({command,args});
   if(command.startsWith('plugin:event|'))return 1;
   if(command==='get_bootstrap'||command==='set_theme'||command==='set_tool_icon'){if(command==='set_theme')theme=args.theme;if(command==='set_tool_icon'){if(args.dataUrl)tool_icons[args.toolId]=args.dataUrl;else delete tool_icons[args.toolId];}return {preferences:{schema_version:1,managed_tools:ids,theme,tool_icons},tools:ids.map(id=>({id,name:names[id],installation:'not_checked',configuration:'not_checked'}))};}
@@ -98,7 +100,11 @@ async function mock(initialTheme){
   if(command==='list_skill_packages')return skills;
   if(command==='list_skill_installations')return [{packageId:'skill-1',toolId:'codex',scope:'global',projectPath:null,targetPath:'C:/Users/local/.codex/skills/code-review',state:'current'}];
   if(command==='list_skill_recovery_issues')return [];
-  if(command==='scan_native_skills')return [{name:'code-review',path:'C:/Users/local/.codex/skills/code-review',description:'审查代码变更',managed:true}];
+  // Directory name is the skill. A mismatched or empty frontmatter name/description stays readable.
+  if(command==='scan_native_skills')return [{name:'code-review',path:'C:/Users/local/.codex/skills/code-review',digest:'abc',state:'managed',detail:'审查代码变更',packageId:'skill-1'},{name:'crud-page',path:'C:/Users/local/.codex/skills/crud-page',digest:'def',state:'external',detail:'',packageId:null},{name:'lark-apps',path:'C:/Users/local/.codex/skills/lark-apps',digest:'ghi',state:'external',detail:'',packageId:null}];
+  if(command==='read_native_skill'){const docs={'C:/Users/local/.codex/skills/code-review':'---\nname: code-review\ndescription: 审查代码变更\n---\n# 代码审查\n\n检查变更中的正确性、边界条件与可维护性。\n','C:/Users/local/.codex/skills/crud-page':'---\nname: other-name\ndescription:\n---\n# page\n','C:/Users/local/.codex/skills/lark-apps':'# just markdown\n'};const content=docs[args.directory];if(content==null)throw '无法读取原生配置';return {name:String(args.directory).split('/').pop(),path:args.directory+'/SKILL.md',content};}
+  if(command==='save_native_skill')return null;
+  if(command==='get_skill_enabled')return true;
   if(command==='refresh_history')return scans;
   if(command==='list_history_sessions')return records.filter(i=>!args.filter.search||i.title.includes(args.filter.search));
   if(command==='get_usage_report')return usageReport(args.filter);
@@ -139,6 +145,51 @@ async function captureImage(page,name,theme,width,metadata={}){
  const over=await page.evaluate(findOverflow);
  if(over.length)failures.push({name,theme,width,over});
  console.log(path);
+}
+async function captureSkillViews(page,capture){
+ const region=page.getByRole('region',{name:'工具与连接'});
+ await region.getByRole('tablist',{name:'CLI'}).getByRole('tab',{name:'Codex',exact:true}).click();
+ await page.getByRole('tab',{name:'Skill',exact:true}).click();
+ const list=page.getByRole('region',{name:'Skill'});
+ const dialog=page.getByRole('dialog',{name:'当前 Skill'});
+ await list.getByRole('button',{name:/code-review/}).waitFor();
+ await expect(list.getByRole('button',{name:/code-review/})).toContainText('已安装');
+ await expect(list.getByRole('button',{name:/crud-page/})).toContainText('本机目录');
+ await expect(list.getByRole('button',{name:/lark-apps/})).toContainText('本机目录');
+ await expect(list.getByText('暂不可读取')).toHaveCount(0);
+ await capture('skills');
+ async function openSkill(name,sample){
+  await list.getByRole('button',{name:new RegExp(name)}).click();
+  const editor=dialog.getByRole('textbox',{name:'SKILL.md'});
+  await editor.waitFor();
+  await expect(editor).toContainText(sample);
+  return editor;
+ }
+ async function closeSkill(){
+  await dialog.getByRole('button',{name:'关闭',exact:true}).click();
+  const confirmation=page.getByRole('dialog',{name:'放弃未保存修改？'});
+  if(await confirmation.isVisible())await confirmation.getByRole('button',{name:'放弃修改',exact:true}).click();
+  await dialog.waitFor({state:'hidden'});
+ }
+ const loose=await openSkill('crud-page','# page');
+ await expect(dialog).toContainText('目录名就是这份 Skill');
+ await expect(dialog.getByRole('heading',{name:'crud-page',exact:true})).toBeVisible();
+ await expect(dialog.getByRole('button',{name:'放进资料库',exact:true})).toBeVisible();
+ await expect(dialog.getByRole('button',{name:'保存',exact:true})).toBeDisabled();
+ await loose.click();
+ await page.keyboard.type('编辑过');
+ await expect(dialog.getByRole('button',{name:'保存',exact:true})).toBeEnabled();
+ await capture('skill-editor');
+ await closeSkill();
+ await openSkill('lark-apps','# just markdown');
+ await expect(dialog.getByRole('button',{name:'放进资料库',exact:true})).toBeVisible();
+ await closeSkill();
+ await openSkill('code-review','# 代码审查');
+ await expect(dialog.getByRole('checkbox',{name:'启用 Skill'})).toBeVisible();
+ await expect(dialog.getByRole('button',{name:'放进资料库',exact:true})).toHaveCount(0);
+ await expect(dialog.getByRole('button',{name:'保存',exact:true})).toBeVisible();
+ await capture('skill-editor-managed');
+ await closeSkill();
 }
 async function captureHistoryFeatures(){
  for(const width of widths)for(const theme of themes){
@@ -253,6 +304,13 @@ for(const width of widths)for(const theme of themes){
   }
   await page.close(); continue;
  }
+ if(process.argv.includes('--skills')){
+  await page.setViewportSize({width,height:Math.max(1100,page.viewportSize()?.height??1000)});
+  await nav.getByRole('button',{name:'工具与连接'}).click();
+  await page.getByRole('region',{name:'工具与连接'}).getByLabel('配置列表').waitFor();
+  await captureSkillViews(page,capture);
+  await page.close(); continue;
+ }
  await capture('home');
  await nav.getByRole('button',{name:'工具与连接'}).click();const profiles=page.getByRole('region',{name:'工具与连接'}).getByLabel('配置列表');await profiles.waitFor();await capture('tools');
  await profiles.getByRole('button',{name:'修改'}).first().click();await page.getByRole('dialog').waitFor();await capture('native-config');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
@@ -275,7 +333,7 @@ for(const width of widths)for(const theme of themes){
  await page.getByRole('tab',{name:'Pi',exact:true}).click();await page.getByRole('tab',{name:'配置',exact:true}).waitFor();if(await page.getByRole('tab',{name:'Agents',exact:true}).count())throw new Error('Unsupported Pi agents tab is visible');await capture('pi-capabilities');
  await page.getByRole('tab',{name:'Codex',exact:true}).click();
  await page.getByRole('tab',{name:'MCP',exact:true}).click();await page.getByRole('button',{name:/filesystem/}).first().waitFor();await capture('mcp');
- await page.getByRole('tab',{name:'Skill',exact:true}).click();await page.getByRole('button',{name:/code-review/}).first().waitFor();await capture('skills');
+ await captureSkillViews(page,capture);
  await nav.getByRole('button',{name:'资料库'}).click();await page.getByRole('button',{name:'代码审查',exact:true}).waitFor();await capture('library');
  await page.getByRole('tab',{name:/^长期规则/}).click();await page.getByRole('button',{name:'项目协作约定',exact:true}).waitFor();await capture('library-rules');
  await page.getByRole('tab',{name:'MCP',exact:true}).click();await page.getByLabel('MCP 列表').getByRole('button',{name:'filesystem',exact:true}).waitFor();await capture('library-mcp');

@@ -28,7 +28,8 @@
 //!   with the product).
 //! * **History**: read-only index of the ATIF-v1.7 transcripts under
 //!   `cli/transcripts/<slug>.json` (see `history`); the slug is the session id
-//!   `--resume` accepts.
+//!   `--resume` accepts. The transcript has no cwd; `cli/sessions.db`
+//!   `sessions.working_directory` supplies it (those two columns only).
 //! * **Usage**: delivered (devin-usage 2026-10-08). Each agent step's
 //!   `metrics{prompt_tokens, completion_tokens, cached_tokens}` becomes one
 //!   inclusive-bucket usage event — `prompt_tokens` is the full step context
@@ -36,10 +37,16 @@
 //!   transcripts: step N+1's cached equals step N's prompt and Σ per session
 //!   matches `final_metrics` exactly); `metrics.extra
 //!   .cache_creation_input_tokens` (3/8 files) maps to `cache_write`.
+//! * **Skills** (docs.devin.ai CLI skills overview): global
+//!   `%APPDATA%\devin\skills/<name>/SKILL.md` (`~/.config/devin/skills` off
+//!   Windows) and project `.devin/skills/<name>/SKILL.md`. The CLI also reads
+//!   `.agents/skills`, `.windsurf/skills`, `~/.agents/skills`, and
+//!   `~/.codeium/<channel>/skills`; those stay with the product. Only the two
+//!   brand roots are managed here.
 //! * **Credentials**: `credentials.toml` is the product-owned credential store
 //!   and is NEVER read or written; no managed credential port, no accounts
-//!   port, and no credential file appears in `native_files`. Skills/agents
-//!   directories are undocumented and stay undelivered.
+//!   port, and no credential file appears in `native_files`. Agents have no
+//!   separate directory contract and stay undelivered.
 
 pub(crate) mod history;
 
@@ -279,6 +286,22 @@ impl CliAdapter for Devin {
     fn mcp_disabled_description(&self) -> Option<&'static str> {
         Some("停用会按 devin mcp disable 写入 disabled 标记，Cliora 中的定义仍保留")
     }
+    fn supports_skills(&self) -> bool {
+        true
+    }
+    fn skill_root(
+        &self,
+        scope: Scope,
+        home: &Path,
+        project: Option<&Path>,
+    ) -> Option<PathBuf> {
+        Some(match scope {
+            // Official global root: %APPDATA%\devin\skills, or
+            // ~/.config/devin/skills when the home is not the real profile.
+            Scope::Global => config_root(home).join("skills"),
+            Scope::Project => project?.join(".devin").join("skills"),
+        })
+    }
     fn history_sources(
         &self,
         home: &Path,
@@ -342,21 +365,21 @@ impl CliAdapter for Devin {
             },
             resume: Facet {
                 state: "available",
-                reason: "可用原生会话 slug 以 --resume <id> 恢复（-c 继续最近会话）；索引来自 cli/transcripts",
+                reason: "可用原生会话 slug 以 --resume <id> 恢复（-c 继续最近会话）；工作目录来自 cli/sessions.db 的 working_directory",
             },
             resources: Facet {
                 state: "available",
-                reason: "MCP 由 %APPDATA%/devin/mcp_config.json（mcpServers，stdio/http + disabled 标记）提供；Skills/Agents 目录未文档化暂不交付",
+                reason: "MCP 由 %APPDATA%/devin/mcp_config.json（mcpServers，stdio/http + disabled 标记）提供；Skills 写入 %APPDATA%/devin/skills 与项目 .devin/skills（SKILL.md）。.agents/skills、.windsurf/skills、~/.agents/skills 与 ~/.codeium/<channel>/skills 由 CLI 另读，不在此代管；Agents 无独立目录契约暂不交付",
             },
             history: Facet {
                 state: "available",
-                reason: "只读索引 cli/transcripts ATIF-v1.7 transcript（会话身份/模型/消息/时间）；用量已交付：逐 agent step metrics{prompt_tokens(含 cached_tokens),completion_tokens,cached_tokens} 按含缓存口径入账，extra.cache_creation_input_tokens 计 cache_write，8 个本机真实 transcript 与 final_metrics 总计逐一对账一致",
+                reason: "只读索引 cli/transcripts ATIF-v1.7 transcript（会话身份/模型/消息/时间）；工作目录只读 sessions.working_directory，消息与凭据不读；用量已交付：逐 agent step metrics{prompt_tokens(含 cached_tokens),completion_tokens,cached_tokens} 按含缓存口径入账，extra.cache_creation_input_tokens 计 cache_write，8 个本机真实 transcript 与 final_metrics 总计逐一对账一致",
             },
             login: None,
             management: ManagementCapabilities {
                 accounts: false,
                 mcp: true,
-                skills: false,
+                skills: true,
                 agents: false,
                 plugins: false,
                 project_plugins: false,
@@ -570,18 +593,34 @@ mod tests {
     }
 
     #[test]
+    fn skill_roots_follow_the_official_brand_directories() {
+        let home = Path::new("/home/example");
+        let global = Devin.skill_root(Scope::Global, home, None).unwrap();
+        let global = global.to_string_lossy().replace('\\', "/");
+        assert!(global.ends_with("devin/skills"), "{global}");
+        assert!(!global.contains("codeium") && !global.contains(".agents"));
+        let project = Devin
+            .skill_root(Scope::Project, home, Some(Path::new("/work/p")))
+            .unwrap();
+        assert!(project
+            .to_string_lossy()
+            .replace('\\', "/")
+            .ends_with("/work/p/.devin/skills"));
+        assert!(Devin.skill_root(Scope::Project, home, None).is_none());
+    }
+
+    #[test]
     fn delivered_dimensions_stay_within_the_verified_surface() {
         assert!(Devin.history_supported());
         assert!(Devin.supports_mcp());
-        // No managed credential port, no accounts port, no configuration port;
-        // skills/agents directories are undocumented.
+        // No managed credential port, no accounts port, no configuration port.
+        // Agents stay undelivered; skills use the documented brand directories.
         assert!(Devin.configuration().is_none());
-        assert!(!Devin.supports_skills());
+        assert!(Devin.supports_skills());
         assert!(Devin.agents().is_none());
         assert!(Devin.plugins().is_none());
         assert!(Devin.accounts().is_none());
         assert!(Devin.official_usage().is_none());
-        assert!(Devin.skill_root(Scope::Global, Path::new("/h"), None).is_none());
         assert!(Devin
             .connection_documents_for_existing(
                 &Connection {
@@ -652,7 +691,8 @@ mod tests {
         assert!(descriptor.history.reason.contains("prompt_tokens"));
         assert!(!descriptor.history.reason.contains("未接入"));
         assert!(descriptor.management.mcp);
-        assert!(!descriptor.management.skills);
+        assert!(descriptor.management.skills);
+        assert!(descriptor.resources.reason.contains(".devin/skills"));
         assert!(!descriptor.management.agents);
         assert!(!descriptor.management.plugins);
         assert!(!descriptor.management.accounts);

@@ -117,6 +117,32 @@ async function startLibraryMcp(page: Page) {
   await page.getByRole('textbox', { name: '命令' }).fill('npx');
 }
 
+test('MCP argument and environment fields keep new lines and literal values', async ({ page }) => {
+  await mockResources(page);
+  await page.goto('/');
+  await startLibraryMcp(page);
+  const dialog = page.getByRole('dialog');
+  const args = dialog.getByRole('textbox', { name: '参数，每行一项' });
+  await args.fill('chrome-devtools-mcp@latest');
+  await args.press('Enter');
+  await args.pressSequentially('--stdio');
+  await expect(args).toHaveValue('chrome-devtools-mcp@latest\n--stdio');
+  const env = dialog.getByRole('textbox', { name: '环境变量' });
+  await env.fill('MYSQL_PORT=3216');
+  await env.press('Enter');
+  await env.pressSequentially('MYSQL_PASSWORD=local-secret');
+  await expect(env).toHaveValue('MYSQL_PORT=3216\nMYSQL_PASSWORD=local-secret');
+  await dialog.getByRole('button', { name: 'HTTP', exact: true }).click();
+  const headers = dialog.getByRole('textbox', { name: '请求头' });
+  await headers.fill('Authorization=Bearer local-secret');
+  await headers.press('Enter');
+  await headers.pressSequentially('X-Team=desk');
+  await expect(headers).toHaveValue('Authorization=Bearer local-secret\nX-Team=desk');
+  await dialog.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByText('请使用环境变量引用')).toHaveCount(0);
+});
+
 test('MCP replacement shows both native entries and can be canceled', async ({ page }) => {
   await mockResources(page);
   await page.goto('/');

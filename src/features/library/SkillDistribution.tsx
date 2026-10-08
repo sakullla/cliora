@@ -10,6 +10,7 @@ import type { Project } from '../../types/launch';
 import type { AdapterDescriptor, Scope } from '../../types/native';
 import type { SkillInstallation, SkillPackage, SkillTargetPreview } from '../../types/resources';
 import { samePath, scopeLabel } from './CliMarks';
+import { CliTargetGrid } from './CliTargetGrid';
 import i18n from '../../i18n';
 import styles from './LibraryPage.module.css';
 
@@ -112,7 +113,7 @@ export function SkillDistribution({ item, tools, projects, installations, initia
           setPending([]);
         }} />
       </div>
-      <div className={styles.targets}>{tools.map((tool) => <label key={tool.id}><input type="checkbox" disabled={!contexts.ready(targetFor(tool.id))} checked={selected.includes(tool.id)} onChange={(event) => { setSelected(event.target.checked ? [...selected, tool.id] : selected.filter((id) => id !== tool.id)); setPending([]); }} /><ToolIcon toolId={tool.id} size={18} />{tool.name}</label>)}</div>
+      <CliTargetGrid tools={tools} selected={selected} disabled={(id) => !contexts.ready(targetFor(id))} onToggle={(id, checked) => { setSelected(checked ? [...selected, id] : selected.filter((item) => item !== id)); setPending([]); }} />
       <div className={styles.actions}><button type="button" className={styles.primary} disabled={busy || !selected.some((id) => contexts.ready(targetFor(id)))} onClick={() => void install(false)}>{selected.some((id) => mine.some((entry) => entry.toolId === id && entry.scope === scope && contexts.matches(entry) && (scope === 'global' || samePath(entry.projectPath, activePath)) && (entry.state === 'update_available' || entry.state === 'missing'))) ? t('library.skillDist.syncSelected') : t('library.skillDist.installSelected')}</button></div>
     </section>
     {!!pending.length && <section className={styles.skillSection}>

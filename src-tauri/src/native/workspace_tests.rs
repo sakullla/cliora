@@ -528,6 +528,80 @@ fn workspace_common_save_retains_versions_and_apply_rejects_pending_named_change
     assert!(results.iter().all(|result| result.status == "failed"));
 }
 
+#[test]
+fn common_save_locks_on_document_version_when_column_is_stale() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("db")).unwrap();
+    let registry = Registry::builtins();
+    let common = profile::save_registered_common(
+        &db,
+        &registry,
+        RegisteredCommon {
+            tool: "open_code".into(),
+            version: 0,
+            revision: String::new(),
+            files: BTreeMap::from([("settings".into(), json!({"theme":"system"}).to_string())]),
+        },
+        None,
+    )
+    .unwrap();
+    let mut drifted = common.clone();
+    drifted.version = 2;
+    db.with_connection(|conn| {
+        conn.execute(
+            "UPDATE common_configs SET data=?1 WHERE tool=?2",
+            rusqlite::params![serde_json::to_string(&drifted).unwrap(), drifted.tool],
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+    })
+    .unwrap();
+    let column = |db: &Database| {
+        db.with_connection(|conn| {
+            conn.query_row(
+                "SELECT version FROM common_configs WHERE tool='open_code'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|error| error.to_string())
+        })
+        .unwrap()
+    };
+    assert_eq!(column(&db), 1);
+    assert_eq!(
+        profile::get_registered_common(&db, "open_code")
+            .unwrap()
+            .unwrap()
+            .version,
+        2
+    );
+    let rejected = profile::save_registered_common(&db, &registry, drifted.clone(), Some(1)).unwrap_err();
+    assert_eq!(rejected, "通用配置已由其他操作修改，请重新读取");
+    assert_eq!(column(&db), 1);
+    let saved = profile::save_registered_common(&db, &registry, drifted.clone(), Some(2)).unwrap();
+    assert_eq!(saved.version, 3);
+    assert_ne!(saved.revision, drifted.revision);
+    assert_eq!(column(&db), 3);
+    assert_eq!(
+        profile::get_registered_common(&db, "open_code").unwrap().unwrap().files,
+        saved.files
+    );
+    let stale = profile::save_registered_common(&db, &registry, saved.clone(), Some(2)).unwrap_err();
+    assert_eq!(stale, "通用配置已由其他操作修改，请重新读取");
+    let mut wrong_revision = saved.clone();
+    wrong_revision.revision = "other-revision".into();
+    let conflict = profile::save_registered_common(&db, &registry, wrong_revision, Some(saved.version)).unwrap_err();
+    assert_eq!(conflict, "通用配置已由其他操作修改，请重新读取");
+    assert_eq!(column(&db), 3);
+    assert_eq!(
+        profile::get_registered_common(&db, "open_code")
+            .unwrap()
+            .unwrap()
+            .version,
+        3
+    );
+}
+
 fn account(
     db: &Database,
     registry: &Registry,

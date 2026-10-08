@@ -1,12 +1,51 @@
-/* Unified conflict comparison (ADR-5): one warning banner, a dual-pane
-   read-only diff and a single 使用本次/保留当前 action pair. */
-.compare { display: grid; gap: 10px; margin: 12px 0; padding: 12px; border: 1px solid var(--warning-line); border-radius: var(--radius-lg); background: var(--warning-soft); }
-.banner { margin: 0; padding: 8px 10px; border: 1px solid var(--warning-line); border-radius: var(--radius-sm); background: var(--surface); color: var(--warning); font-size: 12px; line-height: 1.6; }
+/* Comparison: the field change is the answer; the line diff is the evidence. */
+.compare { display: grid; gap: 12px; min-width: 0; margin: 4px 0 8px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); }
+.banner { margin: 0; padding: 8px 10px; border: 1px solid var(--warning-line); border-radius: var(--radius-sm); background: var(--warning-soft); color: var(--warning); font-size: 12px; line-height: 1.6; }
+.head { display: grid; gap: 4px; min-width: 0; }
+.titleRow { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
 .title { font-size: 13px; overflow-wrap: anywhere; }
-.columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.columns > div { display: grid; gap: 6px; align-content: start; min-width: 0; }
-.columns strong { font-size: 12px; color: var(--text-2); }
+.stats { display: flex; gap: 6px; margin: 0; font-family: var(--font-mono); font-size: 12px; font-weight: 650; }
+.statRemove, .statAdd { padding: 1px 6px; border-radius: 999px; }
+.statRemove { color: var(--danger); background: var(--danger-soft); }
+.statAdd { color: var(--accent); background: var(--accent-soft); }
+.counts { margin: 0; color: var(--text-2); font-size: 12.5px; }
+.what { display: grid; gap: 6px; min-width: 0; }
+.what h3 { margin: 0; color: var(--text); font-size: 13px; font-weight: 660; }
+.what ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.what li { display: grid; gap: 6px; min-width: 0; padding: 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); }
+.changeHead { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; min-width: 0; }
+.compare code { padding: 0; background: transparent; }
+.changeHead code, .pair code { font-family: var(--font-mono); font-size: 13px; overflow-wrap: anywhere; }
+.kind { flex: none; padding: 0 6px; border-radius: 999px; background: var(--surface-3); color: var(--text-2); font-size: 11px; line-height: 18px; }
+.kind[data-kind='add'] { color: var(--accent); background: var(--accent-soft); }
+.kind[data-kind='remove'] { color: var(--danger); background: var(--danger-soft); }
+.pair { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 8px; align-items: baseline; min-width: 0; padding: 5px 8px; border-radius: 6px; }
+.pair span { color: var(--text-2); font-size: 12px; }
+.pair[data-side='current'] { background: var(--danger-soft); }
+.pair[data-side='next'] { background: var(--accent-soft); }
+.before { color: var(--danger); text-decoration: line-through; text-decoration-thickness: 1px; }
+.after { color: var(--text); font-weight: 650; }
+.more { color: var(--text-3); background: transparent; border: 0; padding: 0 2px; }
+.raw { min-width: 0; }
+.raw summary { width: fit-content; color: var(--text-2); font-size: 12.5px; cursor: pointer; }
+.raw[open] summary { margin-bottom: 8px; }
+.diffBlock { display: grid; gap: 8px; min-width: 0; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 0; color: var(--text-2); font-size: 12px; }
+.legend span[data-side='current'] { color: var(--danger); }
+.legend span[data-side='next'] { color: var(--accent); }
+.diff { min-width: 0; max-height: 240px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); font-family: var(--font-mono); font-size: 12px; line-height: 1.55; }
+.row { display: grid; grid-template-columns: 22px minmax(0, 1fr); min-width: max-content; }
+.row[data-kind='delete'] { background: var(--danger-soft); box-shadow: inset 3px 0 0 var(--danger); }
+.row[data-kind='insert'] { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.mark { color: var(--text-3); text-align: center; user-select: none; }
+.row[data-kind='delete'] .mark { color: var(--danger); }
+.row[data-kind='insert'] .mark { color: var(--accent); }
+.code { white-space: pre; padding-right: 12px; }
+.code i { color: var(--text-3); font-style: normal; }
+.row mark { padding: 0 1px; border-radius: 2px; color: inherit; font-weight: 700; background: transparent; }
+.row[data-kind='delete'] mark { background: color-mix(in srgb, var(--danger) 28%, transparent); }
+.row[data-kind='insert'] mark { background: color-mix(in srgb, var(--accent) 28%, transparent); }
+.skip { padding: 4px 10px; color: var(--text-3); background: var(--surface-3); font-family: inherit; font-size: 11.5px; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .actions > button:last-child { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .actions > button:last-child:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
-@media (max-width: 760px) { .columns { grid-template-columns: 1fr; } }

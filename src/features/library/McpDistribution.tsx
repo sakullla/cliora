@@ -3,13 +3,13 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 're
 import { useTranslation } from 'react-i18next';
 import { CodeEditor } from '../../components/CodeEditor';
 import { FilterSelect } from '../../components/FilterSelect';
-import { ToolIcon } from '../../components/ToolIcon';
 import { native } from '../../lib/native';
 import { shortPath } from '../../lib/paths';
 import type { Project } from '../../types/launch';
 import type { AdapterDescriptor, Scope } from '../../types/native';
 import type { McpDefinition, McpPlacement, McpTargetRequest, McpTargetResult } from '../../types/resources';
 import { samePath, scopeLabel } from './CliMarks';
+import { CliTargetGrid } from './CliTargetGrid';
 import i18n from '../../i18n';
 import styles from './LibraryPage.module.css';
 
@@ -260,7 +260,7 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
       ...(scope === 'project' && projectPath && !projects.some((item) => samePath(item.path, projectPath)) ? [{ value: projectPath, label: projectPath.split(/[\\/]/).filter(Boolean).at(-1) || projectPath, detail: shortPath(projectPath), note: t('library.distribute.projectUnlinked') }] : []),
     ]} placeholder={t('library.distribute.projectPlaceholder')} searchLabel={t('home.launcher.searchLabel')} onChange={(value) => { if (value === '__global__') applyScope('global'); else applyScope('project', value); }} />
     <label className={styles.choice}><input type="checkbox" checked={enabled} onChange={(event) => { setEnabled(event.target.checked); setPreview(null); setResults(null); onConflictChange(false); }} />{t('library.distribute.enableAfterWrite')}</label>
-    <div className={styles.targets}>{tools.map((item) => <label key={item.id} title={placedNow.has(item.id) ? t('library.distribute.placedTitle') : t('library.distribute.unplacedTitle')}><input type="checkbox" disabled={!contexts.ready(targetFor(item.id))} checked={selected.includes(item.id)} onChange={(event) => choose(event.target.checked ? [...selected, item.id] : selected.filter((id) => id !== item.id))} /><ToolIcon toolId={item.id} size={22} />{item.name}</label>)}</div>
+    <CliTargetGrid tools={tools} selected={selected} disabled={(id) => !contexts.ready(targetFor(id))} titleFor={(id) => placedNow.has(id) ? t('library.distribute.placedTitle') : t('library.distribute.unplacedTitle')} onToggle={(id, checked) => choose(checked ? [...selected, id] : selected.filter((item) => item !== id))} />
     {mine.filter((item) => contexts.ready(item) && !contexts.matches(item)).map((item) => <p key={JSON.stringify([item.toolId, item.scope, item.projectPath, item.contextId])}>{toolName(item.toolId)} · {scopeLabel(item.scope, item.projectPath, projects)} · {contextLabel(item.contextId)}{t('library.distribute.otherAccountSuffix')}</p>)}
     {contexts.issues.map((issue) => <p key={issue.key} role="status">{t('library.distribute.issue', { tool: toolName(issue.toolId), scope: scopeLabel(issue.scope, issue.projectPath, projects), detail: issue.detail })}</p>)}
     {preview && <div className={styles.distribute} role="group" aria-label={t('tools.mcp.conflictLabel')}>

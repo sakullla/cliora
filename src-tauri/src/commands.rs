@@ -1055,6 +1055,61 @@ pub async fn scan_native_skills(
 }
 
 #[tauri::command]
+pub async fn read_native_skill(
+    app: AppHandle,
+    tool_id: String,
+    scope: Scope,
+    project_path: Option<String>,
+    directory: String,
+) -> Result<resources::skills::NativeSkillDocument, ApiError> {
+    blocking(move || {
+        let home = home()?;
+        let db = app.state::<AppState>().database(&app)?;
+        resources::skills::read_document(
+            &db,
+            &adapters::Registry::builtins(),
+            &home,
+            &tool_id,
+            scope,
+            project_path.as_deref(),
+            &directory,
+        )
+        .map_err(native_error)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn save_native_skill(
+    app: AppHandle,
+    tool_id: String,
+    scope: Scope,
+    project_path: Option<String>,
+    directory: String,
+    baseline: String,
+    content: String,
+) -> Result<(), ApiError> {
+    blocking(move || {
+        let home = home()?;
+        let db = app.state::<AppState>().database(&app)?;
+        resources::skills::save_document(
+            &db,
+            &SystemCredentialStore,
+            &adapters::Registry::builtins(),
+            &home,
+            &tool_id,
+            scope,
+            project_path.as_deref(),
+            &directory,
+            &baseline,
+            &content,
+        )
+        .map_err(native_error)
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn preview_skill_target(
     app: AppHandle,
     package_id: String,

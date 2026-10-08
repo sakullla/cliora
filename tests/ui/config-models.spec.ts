@@ -75,7 +75,7 @@ for (const tool of ['pi', 'opencode', 'kimi']) {
   test(`${tool}: create three models from a blank provider, copy, rename, defaults and delete`, async ({ page }) => {
     await page.goto(`/__multi_model_editor?tool=${tool}&blank`);
     await page.getByLabel('供应商标识').fill('gateway');
-    await page.getByLabel('连接地址').fill('https://example.test');
+    await page.getByLabel('请求地址').fill('https://example.test');
     await page.getByLabel('接口协议').selectOption('openai_completions');
     await page.getByRole('button', { name: '设置供应商连接' }).click();
     for (const id of ['one', 'two', 'three']) {
@@ -393,7 +393,7 @@ for (const tool of ['pi', 'opencode', 'kimi']) {
       target: { kind: 'model', provider: 'beta', id: 'beta/new~model' }, operation: 'set', field: tool === 'pi' ? 'contextWindow' : tool === 'kimi' ? 'max_context_size' : 'limit.context', value: 222222,
     });
     await page.getByLabel('供应商标识').fill('beta');
-    await page.getByLabel('连接地址').fill('https://beta.example/v1');
+    await page.getByLabel('请求地址').fill('https://beta.example/v1');
     await page.getByLabel('接口协议').selectOption('openai_responses');
     await page.getByRole('button', { name: '设置供应商连接' }).click();
     await expect(page.getByLabel('查看供应商')).toHaveCount(1);

@@ -413,6 +413,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
 
   if (!nativeAvailable) return <div className={styles.empty}><h2>{t('records.page.nativeTitle')}</h2><p>{t('records.page.nativeDetail')}</p></div>;
   return <section className={styles.page} aria-label={t('records.page.label')} data-mobile-detail={mobileDetail || undefined}>
+    <div className={styles.board}>
     <div className={styles.toolbar}><div className={styles.tabs} role="tablist" aria-label={t('records.page.typesAria')} onKeyDown={navigateChoices}>
       <button type="button" role="tab" id="records-sessions-tab" aria-controls="records-sessions-panel" tabIndex={tab === 'sessions' ? 0 : -1} aria-selected={tab === 'sessions'} onClick={() => setTab('sessions')}><Icon name="records" size={15} />{t('records.page.sessions')}{initialized.current ? <span className="count-chip">{sessions.length}</span> : null}</button>
       <button type="button" role="tab" id="records-usage-tab" aria-controls="records-usage-panel" tabIndex={tab === 'usage' ? 0 : -1} aria-selected={tab === 'usage'} onClick={() => setTab('usage')}><Icon name="connections" size={15} />{t('records.page.usage')}</button>
@@ -474,5 +475,6 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
     </div>
     <div className={styles.usagePane} id="records-usage-panel" role="tabpanel" aria-labelledby="records-usage-tab" hidden={tab !== 'usage'}><UsageDashboard search={search} favoriteOnly={favoriteOnly} active={active && tab === 'usage'} tools={tools} projects={projects} prices={prices} onPricesChange={setPrices}
       scanVersion={scanVersion} scanning={scanning} lastScanAt={lastScanAt} onOpenSession={openSession} notify={notify} /></div>
+    </div>
   </section>;
 }

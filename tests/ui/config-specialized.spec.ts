@@ -66,7 +66,7 @@ test.beforeEach(async ({ page }) => {
 
 test('Codex keeps parameters collapsed and uses model efforts including ultra', async ({ page }) => {
   await page.goto('/__configuration_editor_test?tool=codex');
-  await expect(page.getByLabel('当前模型')).toBeVisible();
+  await expect(page.getByLabel('模型', { exact: true })).toBeVisible();
   await expect(page.getByLabel('推理强度（Codex 原生）')).not.toBeVisible();
   await page.getByText('模型参数', { exact: true }).click();
   const effort = page.getByLabel('推理强度（Codex 原生）');
@@ -100,8 +100,11 @@ test('Codex invalid and pending integer input blocks save and failure can recove
 
 test('Codex omitted address stays empty and reset removes the override', async ({ page }) => {
   await page.goto('/__configuration_editor_test?tool=codex');
+  const address = page.getByLabel('请求地址', { exact: true });
+  const model = page.getByLabel('模型', { exact: true });
+  await expect(address).toBeVisible();
+  expect((await address.boundingBox())!.y).toBeLessThan((await model.boundingBox())!.y);
   await page.getByText('供应商连接', { exact: true }).click();
-  const address = page.getByLabel('Responses 地址');
   await expect(address).toHaveValue('');
   await expect(page.getByRole('button', { name: '保存配置' })).toBeEnabled();
   await address.fill('https://api.openai.com/v1');
@@ -120,6 +123,7 @@ test('Claude default model edits leave roles independent until explicit unify', 
   await expect(page.getByLabel('默认模型', { exact: true })).toBeVisible();
   await expect(page.getByLabel('sonnet 模型', { exact: true })).not.toBeVisible();
   await page.getByLabel('默认模型', { exact: true }).fill('gateway-default');
+  await page.getByText('供应商连接', { exact: true }).click();
   await page.getByText('角色、子代理与长上下文', { exact: true }).click();
   await expect(page.getByLabel('sonnet 模型', { exact: true })).toHaveValue('gateway-sonnet');
   await page.getByRole('button', { name: '将默认模型用于全部角色' }).click();

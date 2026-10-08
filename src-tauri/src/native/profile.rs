@@ -688,21 +688,21 @@ pub fn save_registered_common(
     }
     db.with_connection(|conn| {
         let tx = conn.transaction().map_err(|e| e.to_string())?;
-        let old: Option<(i64, String)> = tx.query_row("SELECT version,data FROM common_configs WHERE tool = ?1", [&common.tool], |row| Ok((row.get(0)?, row.get(1)?))).optional().map_err(|e| e.to_string())?;
-        let old_revision = old.as_ref().map(|(_, data)| serde_json::from_str::<RegisteredCommon>(data).map(|value| value.revision)).transpose().map_err(|e| e.to_string())?;
-        if old.as_ref().map(|(version, _)| *version as u64) != expected_version || old_revision.as_deref().unwrap_or("") != common.revision { return Err("通用配置已由其他操作修改，请重新读取".into()); }
+        let data: Option<String> = tx.query_row("SELECT data FROM common_configs WHERE tool = ?1", [&common.tool], |row| row.get(0)).optional().map_err(|e| e.to_string())?;
+        let stored = data.as_deref().map(serde_json::from_str::<RegisteredCommon>).transpose().map_err(|e| e.to_string())?;
+        // Readers return the JSON document. The version column is only a cache and can lag that document.
+        if stored.as_ref().map(|value| value.version) != expected_version || stored.as_ref().map(|value| value.revision.as_str()).unwrap_or("") != common.revision {
+            return Err("通用配置已由其他操作修改，请重新读取".into());
+        }
         if let Some(port) = registry.get(&common.tool).and_then(|adapter| adapter.configuration()) {
             let adapter = registry.get(&common.tool).unwrap();
             let parse = |files: &BTreeMap<String, String>| files.iter().map(|(role, text)| Ok((role.clone(), format::parse(adapter.file_kind(role)?, text)?))).collect::<Result<_, String>>();
-            let previous = old.as_ref().map(|(_, data)| {
-                let old: RegisteredCommon = serde_json::from_str(data).map_err(|e| e.to_string())?;
-                parse(&old.files)
-            }).transpose()?;
+            let previous = stored.as_ref().map(|old| parse(&old.files)).transpose()?;
             let next = parse(&common.files)?;
             let issues = port.validate_changes(previous.as_ref(), &next, &Default::default(), super::adapter::Scope::Global);
             if !issues.is_empty() { return Err(serde_json::to_string(&issues).map_err(|e| e.to_string())?); }
         }
-        common.version = old.map_or(1, |(version, _)| version as u64 + 1);
+        common.version = stored.as_ref().map_or(1, |value| value.version + 1);
         common.revision = Uuid::new_v4().to_string();
         let json = serde_json::to_string(&common).map_err(|e| e.to_string())?;
         tx.execute("INSERT INTO common_configs (tool, version, data) VALUES (?1, ?2, ?3) ON CONFLICT(tool) DO UPDATE SET version = excluded.version, data = excluded.data", params![common.tool, common.version as i64, json]).map_err(|e| e.to_string())?;

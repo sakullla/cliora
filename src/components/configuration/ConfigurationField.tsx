@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import type { ConfigurationField as Field, ConfigurationIssue } from '../../types/configuration';
 import { ModelCombobox } from '../../features/tools/ModelCombobox';
 import styles from './configuration.module.css';
-export type FieldPresentation = { unit?: string; description?: string; nativeField?: string; origin?: 'explicit' | 'inherited' | 'unset' | 'unknown'; placeholder?: string; suggestions?: string[]; combobox?: boolean; catalog?: { supported: boolean; busy: boolean; fetch: () => void } };
+export type FieldPresentation = { label?: string; unit?: string; description?: string; nativeField?: string; origin?: 'explicit' | 'inherited' | 'unset' | 'unknown'; placeholder?: string; suggestions?: string[]; combobox?: boolean; catalog?: { supported: boolean; busy: boolean; fetch: () => void } };
 
 type Props = {
   field: Field;
@@ -87,14 +87,15 @@ export function ConfigurationField({ field, value, issues = [], disabled, resetE
   // default: this layer explicitly set it. Inherited/unset fields are already
   // on the default; unknown origins keep the previous always-available behavior.
   const deviates = presentation?.origin !== 'inherited' && presentation?.origin !== 'unset';
+  const caption = presentation?.label ?? field.label;
   return <div className={styles.controls}>
     <div className={styles.fieldHead}>
-      <label htmlFor={id}>{field.label}{presentation?.unit ? `（${presentation.unit}）` : ''}{field.required ? ' *' : ''}</label>
+      <label htmlFor={id}>{caption}{presentation?.unit ? `（${presentation.unit}）` : ''}{field.required ? ' *' : ''}</label>
       {onReset && deviates && <button type="button" className={styles.restore} disabled={blocked} onClick={() => { void commit(onReset, undefined, true); }}>{t('common.field.restoreDefault')}</button>}
       <button type="button" className={styles.infoToggle} aria-label={t('common.field.info')} aria-expanded={infoOpen} aria-controls={`${id}-info`} onClick={() => { setInfoOpen(open => !open); }}>ⓘ</button>
     </div>
     {field.kind === 'boolean' ? <input id={id} type="checkbox" checked={value === true} disabled={blocked} aria-invalid={Boolean(error || issues.length)} aria-describedby={`${id}-issues`} onChange={event => { const next = event.target.checked; void commit(() => onChange(next)); }} />
-      : presentation?.combobox && field.kind === 'string' ? <ModelCombobox id={id} label={field.label} value={input} placeholder={presentation.placeholder ?? t('common.field.pickOrType')} disabled={blocked} options={[...new Set([...field.choices, ...(presentation.suggestions ?? []), ...(input ? [input] : [])])]} action={presentation.catalog?.supported ? { label: t('common.field.fetchCatalog'), busy: presentation.catalog.busy, onClick: () => presentation.catalog!.fetch() } : undefined} onChange={value => { void change(value); }} />
+      : presentation?.combobox && field.kind === 'string' ? <ModelCombobox id={id} label={caption} value={input} placeholder={presentation.placeholder ?? t('common.field.pickOrType')} disabled={blocked} options={[...new Set([...field.choices, ...(presentation.suggestions ?? []), ...(input ? [input] : [])])]} action={presentation.catalog?.supported ? { label: t('common.field.fetchCatalog'), busy: presentation.catalog.busy, onClick: () => presentation.catalog!.fetch() } : undefined} onChange={value => { void change(value); }} />
       : field.choices.length ? <select id={id} value={input} disabled={blocked} onChange={event => { void change(event.target.value); }}>
         <option value="" disabled={field.required || !onReset}>{field.required ? t('common.field.choose') : onReset ? field.defaultSource ?? t('common.field.followDefault') : t('common.field.unset')}</option>
         {input && !field.choices.includes(input) && <option value={input}>{t('common.field.nativeValue', { value: input })}</option>}
@@ -105,6 +106,6 @@ export function ConfigurationField({ field, value, issues = [], disabled, resetE
       {presentation?.description && <small>{presentation.description}</small>}
       <small>{t('common.field.nativeField')}<code>{presentation?.nativeField ?? field.id}</code>{field.defaultSource && t('common.field.whenUnset', { source: field.defaultSource })}</small>
     </div>}
-    <div id={`${id}-issues`} role={error || issues.length ? 'alert' : undefined}>{error}{issues.map(issue => <p key={`${issue.code}:${issue.message}`}>{issue.message}</p>)}{field.unavailableReason}</div>
+    <div id={`${id}-issues`} role={error || issues.length ? 'alert' : undefined}>{error}{issues.map(issue => <p key={`${issue.code}:${issue.message}`}>{issue.message}</p>)}{field.unavailableReason && <small className={styles.unavailable}>{field.unavailableReason}</small>}</div>
   </div>;
 }

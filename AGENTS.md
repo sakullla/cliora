@@ -33,6 +33,29 @@ Match existing code: two-space indentation, single quotes, and semicolons in Typ
 
 Use `*.spec.ts` for Playwright tests and `*.test.mjs` for Node tests. Add regression coverage for changed behavior and sanitized fixtures for CLI formats. No numeric coverage threshold is configured. Browser mocks do not establish native platform acceptance; record actual platform evidence separately.
 
+## UI Capture
+
+`scripts/capture-ui.mjs` is the UI capture tool. It opens the Vite preview in Playwright, installs synthetic native IPC, walks the screens, and writes a gallery. Use it to check layout after a UI change. The pictures are not a local project and are not native platform acceptance. A running desktop window is separate: `scripts/drive-records.mjs` can capture it only when that process exposes a local WebView2 CDP endpoint. Do not resize or cover the Cliora window to produce these Playwright captures; the script sets its own viewport.
+
+Start a frontend first. `npm run dev -- --port 14736` matches the default preview. While `npm run tauri dev` is already running, point the script at that server instead. Browser mode has no native storage; the script supplies the fixtures.
+
+```powershell
+$env:CLIORA_PREVIEW_URL = 'http://127.0.0.1:1420'
+node scripts/capture-ui.mjs --skills --theme light --size 1360
+```
+
+- `--theme all|light|dark` chooses the theme. The default is `all`.
+- `--size all|1360,900,640` chooses widths. The default is `all`.
+- `--skills` captures the Skill list and the SKILL.md editor.
+- `--connections`, `--records`, `--sessions`, and `--features` capture those areas. `--workflows` is an alias of `--features`.
+- `--list` prints feature scenario names. `--only 'kimi-*'` limits those scenarios. It does not filter `--skills`.
+- `CLIORA_CAPTURE_OUT` sets the output directory. The default is `docs/verification/ui`.
+- `CLIORA_PREVIEW_URL` sets the preview. The default is `http://127.0.0.1:14736`.
+
+The Skill fixture treats the directory name as the skill. `crud-page` has a mismatched frontmatter name and an empty description. `lark-apps` is markdown without frontmatter. Both stay on the list as 本机目录 and open an editor. `code-review` is a managed package and opens the same editor with 启用 Skill. 放进资料库 is only on an external directory. The editor capture types into SKILL.md and expects 保存 to become enabled. A name or description mismatch is not 暂不可读取.
+
+Each run checks horizontal overflow and page errors, then writes `index.html`, `README.md`, and `capture-ui[-mode]-manifest.json`. A narrow run replaces the gallery in the output directory, so set `CLIORA_CAPTURE_OUT` when the existing full gallery should stay.
+
 ## Commit & Pull Request Guidelines
 
 Recent history uses `fix:` and `feat:` prefixes, often with Chinese summaries. Keep commits focused. PRs should explain behavior changes, link relevant issues, list validation results, and include screenshots for UI changes. Identify unverified platform behavior explicitly.

@@ -7,7 +7,7 @@ import type { ApiError, Bootstrap, CliId, Theme } from '../types/domain';
 import type { AdapterCatalog, ApplyComparison, ApplyOutcome, CommonConfig, CommonSaveResult, Connection, ConnectionCheck, ModelDirectory, NativeImport, NativeInspection, NativePreview, NativeProfile, PreservedProfile, RegisteredCommon, RegisteredCommonSaveResult, RegisteredProfile, RegisteredToolWorkspace, Scope, ToolWorkspace } from '../types/native';
 import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, TerminalId, TrayStatus } from '../types/launch';
 import type { LibraryDraft, LibraryItem, LibraryKind } from '../types/library';
-import type { McpDefinition, McpDraft, McpPlacement, McpTargetRequest, McpTargetResult, NativeMcpEntry, RuleTarget, RulePreview, RuleApplyResult, RulePlacement, RuleClientSelection, RuleSyncResult, SkillPackage, SkillImportPreview, SkillInstallation, SkillTargetResult, NativeSkillEntry, SkillTargetPreview, SkillRecoveryIssue } from '../types/resources';
+import type { McpDefinition, McpDraft, McpPlacement, McpTargetRequest, McpTargetResult, NativeMcpEntry, RuleTarget, RulePreview, RuleApplyResult, RulePlacement, RuleClientSelection, RuleSyncResult, SkillPackage, SkillImportPreview, SkillInstallation, SkillTargetResult, NativeSkillDocument, NativeSkillEntry, SkillTargetPreview, SkillRecoveryIssue } from '../types/resources';
 import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, ScanStatus, UsageReport } from '../types/history';
 import type { ConflictPreview, PortableApplyTarget, PortableImportReport, PortableItem, PortablePreview, PortableProjectLink, SyncStatus, WebdavSetup } from '../types/portable';
 import type { QueryConfig, UsageCache, UsagePreset, UsageSample, DeleteQueryResult, DraftTestReport, SaveQueryResult, UsageError, UsageQuery, UsageQueryDraft } from '../types/usage';
@@ -168,6 +168,8 @@ export const native = {
   listSkillInstallations: (packageId: string) => command<SkillInstallation[]>('list_skill_installations', { packageId }),
   listSkillRecoveryIssues: () => command<SkillRecoveryIssue[]>('list_skill_recovery_issues'),
   scanNativeSkills: (toolId: string, scope: Scope, projectPath: string | null) => command<NativeSkillEntry[]>('scan_native_skills', { toolId, scope, projectPath }),
+  readNativeSkill: (toolId: string, scope: Scope, projectPath: string | null, directory: string) => command<NativeSkillDocument>('read_native_skill', { toolId, scope, projectPath, directory }),
+  saveNativeSkill: (toolId: string, scope: Scope, projectPath: string | null, directory: string, baseline: string, content: string) => command<void>('save_native_skill', { toolId, scope, projectPath, directory, baseline, content }),
   previewSkillTarget: (packageId: string, toolId: string, scope: Scope, projectPath: string | null) => command<SkillTargetPreview>('preview_skill_target', { packageId, toolId, scope, projectPath }),
   installSkill: (packageId: string, toolId: string, scope: Scope, projectPath: string | null, previewToken: string | null, allowTakeover: boolean) => command<SkillTargetResult>('install_skill', { packageId, toolId, scope, projectPath, previewToken, allowTakeover }),
   removeSkill: (packageId: string, toolId: string, scope: Scope, projectPath: string | null, expectedContextId: string | null = null) => command<SkillTargetResult>('remove_skill', { expectedContextId, packageId, toolId, scope, projectPath }),

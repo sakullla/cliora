@@ -3,6 +3,7 @@ import { CommonConfigurationFields } from '../../components/configuration/Common
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ConfigurationField, type FieldPresentation } from '../../components/configuration/ConfigurationField';
+import { ConnectionCredential } from '../../components/configuration/ConnectionCredential';
 import sharedStyles from '../../components/configuration/configuration.module.css';
 import type { ConfigurationContentProps } from '../contract';
 import styles from './ConfigurationEditor.module.css';
@@ -62,8 +63,13 @@ function Editor({ draft, descriptor, disabled, onAction, onValidityChange, secti
     }
   };
   return <section className={styles.editor} aria-label={t('tools.adapters.claude.label')}>
-    <div hidden={section === 'settings'}>{render('default.model')}
-    <details className={sharedStyles.disclosureCard} open={draft.credential?.source === 'api_key' && !draft.draftConnection?.baseUrl}><summary>{t('common.provider.title')}</summary>{render('base_url')}</details>
+    <div hidden={section === 'settings'}>
+      <section className={sharedStyles.providerCard} aria-label={t('common.provider.title')}>
+        <strong className={sharedStyles.sectionTitle}>{t('common.provider.title')}</strong>
+        {render('base_url')}
+      </section>
+      <ConnectionCredential />
+      {render('default.model')}
     </div>
     <div hidden={section === 'models'}><details className={sharedStyles.disclosureCard} open={section === 'settings'}><summary>{t('tools.adapters.claude.rolesSummary')}</summary><div className={styles.fields}>
       <div className={styles.unifyRow}><button type="button" className={sharedStyles.accent} disabled={disabled || unifying || !values['default.model']} onClick={() => { void unify(); }}>{unifying ? t('tools.adapters.claude.unifying') : t('tools.adapters.claude.unify')}</button>{unifyError && <p role="alert">{unifyError}</p>}<p className={styles.note}>{t('tools.adapters.claude.unifyNote')}</p></div>

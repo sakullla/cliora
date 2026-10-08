@@ -18,6 +18,15 @@ import styles from './GeneralSettings.module.css';
 
 type ToolItem = { id: string; name: string };
 
+const MANAGED_PREVIEW = 8;
+
+function orderedManagedTools(tools: ToolItem[], managed: string[]) {
+  return [
+    ...tools.filter((item) => managed.includes(item.id)),
+    ...tools.filter((item) => !managed.includes(item.id)),
+  ];
+}
+
 const themeGlyphs: Record<Theme, IconName> = { system: 'monitor', light: 'sun', dark: 'moon' };
 const themeOrder: Theme[] = ['system', 'light', 'dark'];
 
@@ -171,6 +180,21 @@ export function GeneralSettings({ tools, managed, preservedUnknown, icons, busy,
   const { t, i18n } = useTranslation();
   const toasts = useToasts();
   const language: AppLanguage = i18n.language === 'en' ? 'en' : 'zh';
+  const catalogKey = tools.map((item) => item.id).join('\0');
+  const [managedExpanded, setManagedExpanded] = useState(false);
+  const [managedPreview, setManagedPreview] = useState(() => orderedManagedTools(tools, managed).slice(0, MANAGED_PREVIEW).map((item) => item.id));
+  // Refresh the collapsed set when the catalog changes or the list is folded again, so a toggle does not move the chip just clicked.
+  useEffect(() => {
+    if (!managedExpanded) setManagedPreview(orderedManagedTools(tools, managed).slice(0, MANAGED_PREVIEW).map((item) => item.id));
+  }, [catalogKey, managedExpanded]);
+  const managedById = new Map(tools.map((item) => [item.id, item]));
+  const managedShown = managedExpanded || tools.length <= MANAGED_PREVIEW
+    ? orderedManagedTools(tools, managed)
+    : managedPreview.flatMap((id) => {
+      const item = managedById.get(id);
+      return item ? [item] : [];
+    });
+  const managedHidden = tools.length - managedShown.length;
   async function handleIconChange(toolId: string, dataUrl: string | null) {
     try {
       await onIconChange(toolId, dataUrl);
@@ -180,7 +204,8 @@ export function GeneralSettings({ tools, managed, preservedUnknown, icons, busy,
   return <>
     <section className="settings-group">
       <div className="setting-intro"><h2>{t('settings.managed.title')}</h2><p>{t('settings.managed.description')}</p></div>
-      <div className="managed-checks">{tools.map((item) => <label key={item.id}><input type="checkbox" checked={managed.includes(item.id)} disabled={!nativeAvailable || busy} onChange={(event) => onManagedChange(item.id, event.target.checked)} /><ToolIcon toolId={item.id} size={24} /><span>{item.name}</span></label>)}</div>
+      <div className="managed-checks">{managedShown.map((item) => <label key={item.id}><ToolIcon toolId={item.id} size={22} /><span title={item.name}>{item.name}</span><input type="checkbox" checked={managed.includes(item.id)} disabled={!nativeAvailable || busy} onChange={(event) => onManagedChange(item.id, event.target.checked)} /></label>)}</div>
+      {tools.length > MANAGED_PREVIEW && <div className="managed-more"><button type="button" aria-expanded={managedExpanded} onClick={() => setManagedExpanded((value) => !value)}>{managedExpanded ? t('settings.managed.less') : t('settings.managed.more', { count: managedHidden })}<Icon name="arrowDown" size={14} /></button></div>}
       <ToolIconSettings tools={tools} icons={icons} busy={busy} onChange={handleIconChange} onError={onIconError} />
       {preservedUnknown.map((item) => <div className="setting-row" key={item.id}><span><strong>{item.id}</strong><small>{t('settings.managed.preservedUnknown', { count: item.profileCount })}</small></span></div>)}
     </section>

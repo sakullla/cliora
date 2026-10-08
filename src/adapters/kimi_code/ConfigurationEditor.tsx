@@ -2,6 +2,7 @@ import { kimiFieldPresentation } from './fieldPresentation';
 import { CommonConfigurationFields } from '../../components/configuration/CommonConfigurationFields';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { ConnectionCredential } from '../../components/configuration/ConnectionCredential';
 import { AdditionalIssues, objectFields, EntityActions, EditorField, ModelRow, ProviderEditor, NewModelForm, useEditorAction } from '../../components/configuration/ModelEditorControls';
 import sharedStyles from '../../components/configuration/configuration.module.css';
 import type { ConfigurationContentProps } from '../contract';
@@ -45,6 +46,7 @@ function Editor(props: ConfigurationContentProps) {
       onDraftValidityChange={valid => props.onValidityChange('connection-form', valid)}
       onConfigure={(id, value) => action.run({ kind: 'provider', provider: id }, 'configure_provider', value)}
       onSelect={id => action.run({ kind: 'provider', provider: id }, 'select_provider')} />
+    <ConnectionCredential />
     <details className={sharedStyles.disclosureCard}><summary>{t('tools.adapters.kimi.notesSummary')}</summary><p className={styles.note}>{t('tools.adapters.kimi.note1')}</p>
     <p className={styles.note}>{t('tools.adapters.kimi.note2')}</p>
     </details></div>

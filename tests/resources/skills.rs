@@ -650,3 +650,70 @@ fn zip_import_rejects_parent_path_before_any_package_is_saved() {
     assert!(import_zip_bytes(&db, "https://example.com/escape.zip", None, bytes).is_err());
     assert!(list(&db).unwrap().is_empty());
 }
+
+#[test]
+fn loose_frontmatter_stays_readable_and_round_trips_skill_markdown() {
+    use crate::credentials::CredentialStore;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    #[derive(Default)]
+    struct Store(Mutex<HashMap<String, String>>);
+    impl CredentialStore for Store {
+        fn put(&self, key: &str, value: &str) -> Result<(), String> { self.0.lock().unwrap().insert(key.into(), value.into()); Ok(()) }
+        fn get(&self, key: &str) -> Result<String, String> { self.0.lock().unwrap().get(key).cloned().ok_or_else(|| "missing".into()) }
+        fn delete(&self, key: &str) -> Result<(), String> { self.0.lock().unwrap().remove(key); Ok(()) }
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let registry = Registry::builtins();
+    let home = temp.path().join("home");
+    let mismatched = home.join(".claude/skills/crud-page");
+    fs::create_dir_all(&mismatched).unwrap();
+    let original = "---\nname: other-name\ndescription:\n---\n# page\n";
+    fs::write(mismatched.join("SKILL.md"), original).unwrap();
+    let bare = home.join(".claude/skills/lark-apps");
+    fs::create_dir_all(&bare).unwrap();
+    fs::write(bare.join("SKILL.md"), "# just markdown\n").unwrap();
+    let described = home.join(".claude/skills/named-elsewhere");
+    fs::create_dir_all(&described).unwrap();
+    fs::write(described.join("SKILL.md"), "---\nname: wrong\ndescription: still here\n---\n").unwrap();
+    let fresh = home.join(".claude/skills/fresh-skill");
+    fs::create_dir_all(&fresh).unwrap();
+
+    let found = scan_native(&db, &registry, &home, "claude_code", Scope::Global, None).unwrap();
+    assert!(found.iter().all(|entry| entry.state == "external"), "{found:?}");
+    assert_eq!(found.iter().map(|entry| entry.name.as_str()).collect::<Vec<_>>(), ["crud-page", "fresh-skill", "lark-apps", "named-elsewhere"]);
+    assert_eq!(found.iter().find(|entry| entry.name == "crud-page").unwrap().detail, "");
+    assert_eq!(found.iter().find(|entry| entry.name == "named-elsewhere").unwrap().detail, "still here");
+
+    let crud = found.iter().find(|entry| entry.name == "crud-page").unwrap();
+    let document = read_document(&db, &registry, &home, "claude_code", Scope::Global, None, &crud.path).unwrap();
+    assert_eq!(document.name, "crud-page");
+    assert_eq!(document.content, original);
+    let edited = format!("{original}\nedited\n");
+    let store = Store::default();
+    save_document(&db, &store, &registry, &home, "claude_code", Scope::Global, None, &crud.path, &document.content, &edited).unwrap();
+    assert_eq!(fs::read_to_string(mismatched.join("SKILL.md")).unwrap(), edited);
+    let again = read_document(&db, &registry, &home, "claude_code", Scope::Global, None, &crud.path).unwrap();
+    assert_eq!(again.content, edited);
+    save_document(&db, &store, &registry, &home, "claude_code", Scope::Global, None, &crud.path, &again.content, &again.content).unwrap();
+    let stale = save_document(&db, &store, &registry, &home, "claude_code", Scope::Global, None, &crud.path, &document.content, "nope");
+    assert!(stale.is_err(), "{stale:?}");
+    assert_eq!(fs::read_to_string(mismatched.join("SKILL.md")).unwrap(), edited);
+
+    let created = read_document(&db, &registry, &home, "claude_code", Scope::Global, None, &fresh.display().to_string()).unwrap();
+    assert_eq!(created.content, "");
+    save_document(&db, &store, &registry, &home, "claude_code", Scope::Global, None, &created.path, "", "# hello\n").unwrap();
+    assert_eq!(fs::read_to_string(fresh.join("SKILL.md")).unwrap(), "# hello\n");
+
+    let outside = temp.path().join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    assert!(read_document(&db, &registry, &home, "claude_code", Scope::Global, None, &outside.display().to_string()).is_err());
+
+    let source = temp.path().join("loose-skill");
+    fs::create_dir_all(&source).unwrap();
+    fs::write(source.join("SKILL.md"), "---\nname: not-the-dir\n---\nbody\n").unwrap();
+    let package = import_local(&db, source.to_str().unwrap(), None, None).unwrap();
+    assert_eq!(package.name, "loose-skill");
+    assert!(package.description.is_empty());
+}
