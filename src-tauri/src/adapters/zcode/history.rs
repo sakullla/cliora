@@ -4,21 +4,23 @@
 //! Three on-disk artifacts are indexed read-only:
 //!
 //! * `~/.zcode/cli/db/db.sqlite` — the CLI's own session store (`session` +
-//!   `model_usage` tables, verified on a real install). It is the complete
-//!   session list with real working directories (`session.directory`) and the
-//!   authoritative per-request usage: `computed_total_tokens = input +
+//!   `model_usage`, plus `message` + `part` on current installs). It is the
+//!   complete session list with real working directories (`session.directory`)
+//!   and the authoritative per-request usage: `computed_total_tokens = input +
 //!   output` with cached input inside `input_tokens`, and cancelled/error
-//!   rows are exactly the all-zero rows. Reading is fail-soft: a missing,
-//!   locked or unrecognized database falls back to the rollout/snapshot
-//!   discovery below instead of failing the scan.
+//!   rows are exactly the all-zero rows. Conversation text lives in `part`
+//!   rows of type `text`, attached to `message` rows (`role` user/assistant).
+//!   Tool, reasoning and step parts stay out of the transcript. Reading is
+//!   fail-soft: a missing, locked or unrecognized database falls back to the
+//!   rollout/snapshot discovery below instead of failing the scan.
 //! * `~/.zcode/cli/rollout/model-io-sess_<id>.jsonl` — one file per session,
 //!   one JSON row per model call with `sessionId`, `startedAt`,
 //!   `model.modelId`, the request body and `response.usage`
 //!   (`inputTokens`/`outputTokens`/`totalTokens`/`cacheReadTokens`/
 //!   `cacheWriteTokens`, matching the official `ZCodeUsage` fields). Rollouts
 //!   proved incomplete and transient on real machines (files are pruned while
-//!   the internal database keeps every billed request), so for database-known
-//!   sessions they contribute only the conversation transcript.
+//!   the internal database keeps every billed request). They supply the
+//!   transcript only when that database has no `message`/`part` text.
 //! * `~/.zcode/v2/sessions/{workspaceHash}/{taskId}.json` — the legacy task
 //!   snapshot format (`ZCodeSessionFile`: `meta` + `messages`), still written
 //!   for imported/legacy tasks. Snapshots carry no token counters, so a
@@ -62,7 +64,7 @@ pub fn sources_controlled(
                 sources.push(HistorySource { native_title: None,
                     path: database.clone(),
                     native_id: Some(id),
-                    fingerprint: format!("zcode-session-v3|{stamp}"),
+                    fingerprint: format!("zcode-session-v4|{stamp}"),
                     fingerprint_error: None,
                 });
                 if sources.len() > MAX_SOURCES {
@@ -193,6 +195,7 @@ fn internal_index(database: &Path, cancelled: &dyn Fn() -> bool) -> Result<Inter
         let (id, usage) = row.map_err(|error| error.to_string())?;
         if let Some(hash) = hashes.get_mut(&id) { hash.update(usage.as_bytes()); }
     }
+    fold_transcript_revision(&connection, &mut hashes, cancelled)?;
     let sessions = hashes.into_iter().map(|(id, mut hash)| {
         if let Some(path) = rollout_sibling(database, &id).filter(|path| path.is_file()) {
             hash.update(source_fingerprint_controlled(&path, cancelled)?.as_bytes());
@@ -225,8 +228,9 @@ pub fn parse_controlled(
 }
 
 /// Internal-database session: identity, working directory and the billed
-/// per-request usage come from `session`/`model_usage`; a sibling rollout log
-/// (when one survives on disk) contributes the conversation transcript.
+/// per-request usage come from `session`/`model_usage`. Conversation text
+/// comes from `message`/`part` when those tables exist; a sibling rollout log
+/// fills in only when the database has no readable text for this session.
 fn parse_internal(source: &HistorySource, cancelled: &dyn Fn() -> bool) -> Result<ParsedSession, String> {
     check_cancelled(cancelled)?;
     let id = source
@@ -314,11 +318,115 @@ fn parse_internal(source: &HistorySource, cancelled: &dyn Fn() -> bool) -> Resul
             });
         }
     }
-    if let Some(rollout) = rollout_sibling(&source.path, &id).filter(|path| path.is_file()) {
-        let partial = rollout_transcript(&rollout, cancelled, &mut session)?;
-        session.partial |= partial;
+    let from_database = database_transcript(&connection, &id, cancelled, &mut session)?;
+    if !from_database {
+        if let Some(rollout) = rollout_sibling(&source.path, &id).filter(|path| path.is_file()) {
+            let partial = rollout_transcript(&rollout, cancelled, &mut session)?;
+            session.partial |= partial;
+        }
     }
     session.finish(source)
+}
+
+/// Hash message identity and text-part bodies so a transcript edit rescans
+/// that session only. Databases from before `message`/`part` existed skip
+/// this and keep the rollout fingerprint.
+fn fold_transcript_revision(
+    connection: &Connection,
+    hashes: &mut BTreeMap<String, Sha256>,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(), String> {
+    let Ok(mut statement) = connection.prepare(
+        "SELECT session_id, id, IFNULL(json_extract(data, '$.role'), ''), IFNULL(time_updated, 0), IFNULL(sequence, -1)
+         FROM message ORDER BY session_id, id",
+    ) else {
+        return Ok(());
+    };
+    let rows = statement
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, i64>(3)?, row.get::<_, i64>(4)?)))
+        .map_err(|error| error.to_string())?;
+    for row in rows {
+        check_cancelled(cancelled)?;
+        let (id, message_id, role, updated, sequence) = row.map_err(|error| error.to_string())?;
+        if let Some(hash) = hashes.get_mut(&id) {
+            hash.update(message_id.as_bytes());
+            hash.update(role.as_bytes());
+            hash.update(updated.to_string().as_bytes());
+            hash.update(sequence.to_string().as_bytes());
+        }
+    }
+    let Ok(mut statement) = connection.prepare(
+        "SELECT session_id, id, IFNULL(json_extract(data, '$.text'), '')
+         FROM part WHERE json_extract(data, '$.type') = 'text' ORDER BY session_id, id",
+    ) else {
+        return Ok(());
+    };
+    let rows = statement
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)))
+        .map_err(|error| error.to_string())?;
+    for row in rows {
+        check_cancelled(cancelled)?;
+        let (id, part_id, text) = row.map_err(|error| error.to_string())?;
+        if let Some(hash) = hashes.get_mut(&id) {
+            hash.update(part_id.as_bytes());
+            hash.update(text.as_bytes());
+        }
+    }
+    Ok(())
+}
+
+/// Read user and assistant text parts. Returns whether any conversation text
+/// was stored. A missing `message` or `part` table means the older rollout
+/// fallback should run; tool, reasoning and step parts are not transcript.
+fn database_transcript(
+    connection: &Connection,
+    session_id: &str,
+    cancelled: &dyn Fn() -> bool,
+    session: &mut ParsedSession,
+) -> Result<bool, String> {
+    let Ok(mut statement) = connection.prepare(
+        "SELECT m.id, m.time_created, json_extract(m.data, '$.role'), json_extract(p.data, '$.text')
+         FROM message m
+         LEFT JOIN part p ON p.message_id = m.id AND json_extract(p.data, '$.type') = 'text'
+         WHERE m.session_id = ?1
+         ORDER BY m.sequence IS NULL, m.sequence, m.time_created, m.id,
+                  p.sequence IS NULL, p.sequence, p.time_created, p.id",
+    ) else {
+        return Ok(false);
+    };
+    let rows = statement
+        .query_map([session_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<i64>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        })
+        .map_err(|error| error.to_string())?;
+    let mut current: Option<(String, String, Option<i64>, Vec<String>)> = None;
+    let mut stored = false;
+    let flush = |pending: Option<(String, String, Option<i64>, Vec<String>)>, session: &mut ParsedSession, stored: &mut bool| {
+        let Some((id, role, time, texts)) = pending else { return; };
+        let text = texts.join("\n\n");
+        let before = session.messages.len();
+        session.add_message(id, &role, text, time);
+        *stored |= session.messages.len() > before;
+    };
+    for row in rows {
+        check_cancelled(cancelled)?;
+        let (id, time, role, text) = row.map_err(|error| error.to_string())?;
+        let Some(role) = role.filter(|role| role == "user" || role == "assistant") else { continue; };
+        if current.as_ref().is_none_or(|pending| pending.0 != id) {
+            flush(current.take(), session, &mut stored);
+            current = Some((id, role, time, Vec::new()));
+        }
+        if let Some(text) = text.filter(|text| !text.trim().is_empty()) {
+            if let Some(pending) = current.as_mut() { pending.3.push(text); }
+        }
+    }
+    flush(current.take(), session, &mut stored);
+    Ok(stored)
 }
 
 /// `db.sqlite` lives at `<root>/cli/db/db.sqlite` and the rollout logs at
@@ -758,7 +866,7 @@ mod tests {
         assert_eq!(sources.len(), 2, "{sources:?}");
         assert!(sources
             .iter()
-            .all(|source| source.fingerprint.starts_with("zcode-session-v3|")));
+            .all(|source| source.fingerprint.starts_with("zcode-session-v4|")));
         let source = sources
             .iter()
             .find(|source| source.native_id.as_deref() == Some("sess_fixture-2026_10_03-a1b2c3"))
@@ -800,6 +908,94 @@ mod tests {
         assert_eq!(only.cwd.as_deref(), Some(r"C:\Users\example\other"));
         assert_eq!(only.usage.len(), 1);
         assert!(only.messages.is_empty());
+    }
+
+    #[test]
+    fn database_text_parts_are_the_transcript_and_ignore_a_sibling_rollout() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join(".zcode");
+        let rollout = root.join("cli").join("rollout");
+        std::fs::create_dir_all(&rollout).unwrap();
+        std::fs::write(
+            rollout.join("model-io-sess_fixture-2026_10_03-a1b2c3.jsonl"),
+            ROLLOUT_FIXTURE,
+        )
+        .unwrap();
+        let database = root.join("cli").join("db").join("db.sqlite");
+        std::fs::create_dir_all(database.parent().unwrap()).unwrap();
+        write_internal_db(&database);
+        let connection = Connection::open(&database).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE message (
+                    id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT, sequence INTEGER);
+                 CREATE TABLE part (
+                    id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT, sequence INTEGER);",
+            )
+            .unwrap();
+        let user = r#"{"role":"user","time":{"created":1791001001000}}"#;
+        let assistant = r#"{"role":"assistant","modelId":"GLM-5.3","time":{"created":1791001002000}}"#;
+        connection.execute(
+            "INSERT INTO message (id, session_id, time_created, time_updated, data, sequence) VALUES (?1, ?2, ?3, ?3, ?4, ?5)",
+            params!["msg-user", "sess_930b8796-7d77-4e70-a8ba-6209ff1272e8", 1791001001000i64, user, 0i64],
+        ).unwrap();
+        connection.execute(
+            "INSERT INTO message (id, session_id, time_created, time_updated, data, sequence) VALUES (?1, ?2, ?3, ?3, ?4, ?5)",
+            params!["msg-assistant", "sess_930b8796-7d77-4e70-a8ba-6209ff1272e8", 1791001002000i64, assistant, 1i64],
+        ).unwrap();
+        connection.execute(
+            "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data, sequence) VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6)",
+            params!["part-user", "msg-user", "sess_930b8796-7d77-4e70-a8ba-6209ff1272e8", 1791001001000i64, r#"{"type":"text","text":"把按钮对齐"}"#, 0i64],
+        ).unwrap();
+        for (id, data, sequence) in [
+            ("part-tool", r#"{"type":"tool","tool":"edit","text":"不应该出现的工具输出"}"#, 0i64),
+            ("part-reason", r#"{"type":"reasoning","text":"不应该出现的推理"}"#, 1i64),
+            ("part-a", r#"{"type":"text","text":"第一段"}"#, 2i64),
+            ("part-b", r#"{"type":"text","text":"第二段"}"#, 3i64),
+        ] {
+            connection.execute(
+                "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data, sequence) VALUES (?1, 'msg-assistant', ?2, 1791001002000, 1791001002000, ?3, ?4)",
+                params![id, "sess_930b8796-7d77-4e70-a8ba-6209ff1272e8", data, sequence],
+            ).unwrap();
+        }
+        // The other session also has database text, which must win over its rollout log.
+        connection.execute(
+            "INSERT INTO message (id, session_id, time_created, time_updated, data, sequence) VALUES ('msg-roll', 'sess_fixture-2026_10_03-a1b2c3', 1791000010000, 1791000010000, '{\"role\":\"user\"}', 0)",
+            [],
+        ).unwrap();
+        connection.execute(
+            "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data, sequence) VALUES ('part-roll', 'msg-roll', 'sess_fixture-2026_10_03-a1b2c3', 1791000010000, 1791000010000, '{\"type\":\"text\",\"text\":\"数据库里的正文\"}', 0)",
+            [],
+        ).unwrap();
+        drop(connection);
+
+        let sources = sources(temp.path()).unwrap();
+        let only = sources.iter().find(|source| source.native_id.as_deref() == Some("sess_930b8796-7d77-4e70-a8ba-6209ff1272e8")).unwrap();
+        let only = parse(only).unwrap();
+        assert_eq!(only.messages.len(), 2);
+        assert_eq!(only.messages[0].role, "user");
+        assert_eq!(only.messages[0].text, "把按钮对齐");
+        assert_eq!(only.messages[0].timestamp, Some(1791001001000));
+        assert_eq!(only.messages[1].role, "assistant");
+        assert_eq!(only.messages[1].text, "第一段\n\n第二段");
+        assert!(only.messages.iter().all(|message| !message.text.contains("不应该出现")));
+
+        let with_rollout = sources.iter().find(|source| source.native_id.as_deref() == Some("sess_fixture-2026_10_03-a1b2c3")).unwrap();
+        let with_rollout = parse(with_rollout).unwrap();
+        assert_eq!(with_rollout.messages.len(), 1);
+        assert_eq!(with_rollout.messages[0].text, "数据库里的正文");
+        assert!(with_rollout.messages.iter().all(|message| !message.text.contains("每日构建")));
+        assert_eq!(with_rollout.usage.len(), 2);
+
+        let before = internal_index(&database, &|| false).unwrap().sessions;
+        let connection = Connection::open(&database).unwrap();
+        connection.execute("UPDATE part SET data = '{\"type\":\"text\",\"text\":\"改过的正文\"}' WHERE id = 'part-user'", []).unwrap();
+        drop(connection);
+        let after = internal_index(&database, &|| false).unwrap().sessions;
+        let changed = "sess_930b8796-7d77-4e70-a8ba-6209ff1272e8";
+        for ((id, old), (_, new)) in before.iter().zip(&after) {
+            assert_eq!(old != new, id == changed);
+        }
     }
 
     #[test]
