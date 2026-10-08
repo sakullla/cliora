@@ -6,8 +6,8 @@ import { GuideDialog } from '../../components/GuideDialog';
 import { SearchField } from '../../components/SearchField';
 import { Icon } from '../../components/Icon';
 import { ScopeMarks, samePath, scopeLabel } from './CliMarks';
-import { ToolIcon } from '../../components/ToolIcon';
 import { confirmAction } from '../../lib/confirm';
+import { CliTargetGrid } from './CliTargetGrid';
 import { native } from '../../lib/native';
 import { saveShortcutHint, searchShortcutHint } from '../../lib/shortcut';
 import type { Project } from '../../types/launch';
@@ -26,6 +26,9 @@ function draftOf(item: McpDefinition): McpDraft {
 }
 function lines(value: Record<string, string>): string {
   return Object.entries(value).map(([key, item]) => `${key}=${item}`).join('\n');
+}
+function keptArgs(args: string[]) {
+  return args.map((item) => item.trim()).filter((item) => item.length > 0);
 }
 function parseLines(value: string): Record<string, string> {
   const output: Record<string, string> = {};
@@ -240,7 +243,7 @@ export function LibraryResources({ section, active, tools, projects }: { section
     if (!draft || busy) return;
     setBusy(true); setDialogError('');
     try {
-      const saved = await native.saveMcpDefinition({ ...draft, inLibrary: true, env: parseLines(envText), headers: parseLines(headerText) });
+      const saved = await native.saveMcpDefinition({ ...draft, args: keptArgs(draft.args), inLibrary: true, env: parseLines(envText), headers: parseLines(headerText) });
       setDefinitions(await native.listMcpDefinitions());
       setDraft(draftOf(saved));
       const alreadyPlaced = placements.some((item) => item.definitionId === saved.id);
@@ -362,7 +365,7 @@ export function LibraryResources({ section, active, tools, projects }: { section
             <section className={styles.skillSection}>
               <h3>{t('library.resources.installAfterImport')}</h3>
               <p>{t('library.resources.installAfterHint')}</p>
-              <div className={styles.targets}>{tools.map((tool) => <label key={tool.id}><input type="checkbox" checked={installTools.includes(tool.id)} onChange={(event) => setInstallTools(event.target.checked ? [...installTools, tool.id] : installTools.filter((id) => id !== tool.id))} /><ToolIcon toolId={tool.id} size={18} />{tool.name}</label>)}</div>
+              <CliTargetGrid tools={tools} selected={installTools} onToggle={(id, checked) => setInstallTools(checked ? [...installTools, id] : installTools.filter((item) => item !== id))} />
             </section>
             <section className={styles.skillSection}>
               <h3>{t('library.resources.importFrom')}</h3>
@@ -427,7 +430,7 @@ export function LibraryResources({ section, active, tools, projects }: { section
           <div className={`${styles.typeField} ${styles.span}`}><span>{t('tools.mcp.type')}</span><div className={styles.typeSwitch} role="radiogroup" aria-label={t('tools.mcp.transport')}>{([['http', 'HTTP'], ['stdio', 'stdio']] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={draft.transport === value} onClick={() => setDraft({ ...draft, transport: value })}>{label}</button>)}</div></div>
           {draft.transport === 'stdio' ? <>
             <label className={styles.span}>{t('tools.mcp.command')}<input aria-label={t('tools.mcp.command')} value={draft.command} onChange={(event) => setDraft({ ...draft, command: event.target.value })} placeholder="npx" /></label>
-            <label className={styles.span}>{t('tools.mcp.args')}<textarea rows={3} value={draft.args.join('\n')} onChange={(event) => setDraft({ ...draft, args: event.target.value.split('\n').filter(Boolean) })} placeholder={'-y\nchrome-devtools-mcp@latest'} /></label>
+            <label className={styles.span}>{t('tools.mcp.args')}<textarea rows={3} value={draft.args.join('\n')} onChange={(event) => setDraft({ ...draft, args: event.target.value.split(/\r?\n/) })} placeholder={'-y\nchrome-devtools-mcp@latest'} /></label>
             <label className={styles.span}>{t('tools.mcp.env')}<textarea rows={4} value={envText} onChange={(event) => setEnvText(event.target.value)} placeholder={'KEY=value\nAPI_TOKEN=${API_TOKEN}'} /></label>
           </> : <>
             <label className={styles.span}>URL<input aria-label={t('tools.mcp.urlAria')} value={draft.url} onChange={(event) => setDraft({ ...draft, url: event.target.value })} placeholder="https://example.com/mcp" /></label>

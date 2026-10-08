@@ -23,6 +23,8 @@ export default {
   managed: {
     title: '管理的 CLI',
     description: '首页、工具页与使用记录只显示勾选的工具。关闭管理不会删除已有配置。',
+    more: '更多（{{count}}）',
+    less: '收起',
     preservedUnknown: '未安装适配器，保留 {{count}} 份配置，只读',
   },
   icons: {

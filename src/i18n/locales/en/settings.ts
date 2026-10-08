@@ -23,6 +23,8 @@ export default {
   managed: {
     title: 'Managed CLIs',
     description: 'Home, tools, and usage records only show checked tools. Unmanaging a tool keeps its configuration.',
+    more: 'More ({{count}})',
+    less: 'Show less',
     preservedUnknown: 'No adapter installed, {{count}} profile(s) preserved, read-only',
   },
   icons: {

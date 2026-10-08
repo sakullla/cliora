@@ -13,30 +13,30 @@
 
   --font-mono: "Cascadia Code", "JetBrains Mono", Consolas, "SFMono-Regular", Menlo, monospace;
 
-  /* Surfaces */
-  --bg: #f4f5f1;
-  --sidebar: #eceee8;
-  --surface: #ffffff;
-  --surface-2: #f6f7f3;
-  --surface-3: #eef0ea;
-  --overlay: rgb(18 26 21 / 42%);
+  /* Surfaces. Warm paper, so the leaf accent is not painted across the whole window. */
+  --bg: #f6f5f2;
+  --sidebar: #f0eee9;
+  --surface: #fffcf8;
+  --surface-2: #f4f2ed;
+  --surface-3: #ebe8e2;
+  --overlay: rgb(28 26 23 / 38%);
 
   /* Text */
-  --text: #1d2420;
-  --text-2: #5b655e;
-  --text-3: #626c65;
+  --text: #1e1d1b;
+  --text-2: #615d57;
+  --text-3: #817c74;
 
   /* Lines */
-  --line: #e3e6df;
-  --line-strong: #d3d8cf;
+  --line: #e6e2da;
+  --line-strong: #d8d3c9;
 
-  /* Brand */
-  --accent: #2f6b45;
-  --accent-hover: #285c3b;
-  --accent-soft: #e6f0e7;
-  --accent-line: #a9c7af;
-  --accent-ring: rgb(47 107 69 / 22%);
-  --on-accent: #ffffff;
+  /* Brand. Deeper and less saturated than the previous moss, for long reading sessions. */
+  --accent: #2e5644;
+  --accent-hover: #264938;
+  --accent-soft: #e7efe9;
+  --accent-line: #c3d4c8;
+  --accent-ring: rgb(46 86 68 / 16%);
+  --on-accent: #f7fbf8;
 
   /* Status */
   --danger: #b4382d;
@@ -45,7 +45,7 @@
   --warning: #9a6200;
   --warning-soft: #fdf5e4;
   --warning-line: #ecd29c;
-  --success: #2f7d4b;
+  --success: #2e5644;
   --info: #2c5f8a;
   --info-soft: #ecf3f9;
   --info-line: #bed3e6;
@@ -64,10 +64,10 @@
   --radius-xl: 16px;
 
   /* Elevation */
-  --shadow-xs: 0 1px 2px rgb(22 34 26 / 6%);
-  --shadow-sm: 0 1px 2px rgb(22 34 26 / 5%), 0 2px 6px rgb(22 34 26 / 4%);
-  --shadow-md: 0 4px 12px rgb(22 34 26 / 7%), 0 1px 3px rgb(22 34 26 / 5%);
-  --shadow-lg: 0 24px 64px rgb(16 28 20 / 18%), 0 4px 16px rgb(16 28 20 / 8%);
+  --shadow-xs: 0 1px 2px rgb(32 28 22 / 6%);
+  --shadow-sm: 0 1px 2px rgb(32 28 22 / 5%), 0 2px 6px rgb(32 28 22 / 4%);
+  --shadow-md: 0 4px 12px rgb(32 28 22 / 7%), 0 1px 3px rgb(32 28 22 / 5%);
+  --shadow-lg: 0 24px 64px rgb(28 24 18 / 16%), 0 4px 16px rgb(28 24 18 / 7%);
 
   /* Controls */
   --control-h: 34px;
@@ -76,32 +76,32 @@
   --fast: 120ms;
   --medium: 200ms;
 
-  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%235b655e' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
-  --search-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='15' height='15' viewBox='0 0 24 24' fill='none' stroke='%2387908a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23615d57' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --search-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='15' height='15' viewBox='0 0 24 24' fill='none' stroke='%23817c74' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #111513;
-  --sidebar: #161b18;
-  --surface: #1b211e;
-  --surface-2: #222a25;
-  --surface-3: #2a332d;
+  --bg: #141615;
+  --sidebar: #191c1a;
+  --surface: #1e221f;
+  --surface-2: #252a26;
+  --surface-3: #2e342f;
   --overlay: rgb(0 0 0 / 55%);
 
-  --text: #e6ebe7;
-  --text-2: #a3aea6;
-  --text-3: #97a39c;
+  --text: #e7e6e2;
+  --text-2: #b0aea6;
+  --text-3: #8e8c84;
 
-  --line: #2c3530;
-  --line-strong: #3a453e;
+  --line: #2e3330;
+  --line-strong: #3c433e;
 
-  --accent: #8fcb9f;
-  --accent-hover: #a5d8b2;
-  --accent-soft: #23362a;
-  --accent-line: #456e52;
-  --accent-ring: rgb(143 203 159 / 25%);
-  --on-accent: #10201a;
+  --accent: #8fb59a;
+  --accent-hover: #a3c6ac;
+  --accent-soft: #24302a;
+  --accent-line: #3d5648;
+  --accent-ring: rgb(143 181 154 / 20%);
+  --on-accent: #142019;
 
   --danger: #f0a196;
   --danger-soft: #3a2421;
@@ -109,13 +109,13 @@
   --warning: #e7c27a;
   --warning-soft: #352c1a;
   --warning-line: #6a5629;
-  --success: #8fcb9f;
+  --success: #8fb59a;
   --info: #9cc3e6;
   --info-soft: #1d2a35;
   --info-line: #35506a;
 
   --chart-input: #7fb0e0;
-  --chart-output: #8fcb9f;
+  --chart-output: #8fb59a;
   --chart-read: #e0b96a;
   --chart-write: #b5a1e0;
 
@@ -124,7 +124,7 @@
   --shadow-md: 0 6px 16px rgb(0 0 0 / 30%), 0 1px 3px rgb(0 0 0 / 25%);
   --shadow-lg: 0 24px 64px rgb(0 0 0 / 50%), 0 4px 16px rgb(0 0 0 / 30%);
 
-  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23a3aea6' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23b0aea6' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
   --search-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='15' height='15' viewBox='0 0 24 24' fill='none' stroke='%2375807a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
 }
 
@@ -518,14 +518,22 @@ label.setting-row:hover { background: var(--surface-2); }
 .theme-choice button[aria-checked="true"] { background: var(--surface); color: var(--text); font-weight: 620; box-shadow: var(--shadow-xs); }
 .theme-choice button[aria-checked="true"] svg { color: var(--accent); }
 
-.managed-checks { display: flex; flex-wrap: wrap; gap: 8px; padding: 2px 20px 16px; }
+.managed-checks {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 148px), 188px));
+  justify-content: start;
+  gap: 8px;
+  padding: 2px 16px 12px;
+}
 .managed-checks label {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
   min-height: 40px;
-  padding: 0 12px 0 10px;
-  border: 1px solid var(--line-strong);
+  margin: 0;
+  padding: 4px 10px 4px 8px;
+  border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
   font-size: 13px;
@@ -533,10 +541,31 @@ label.setting-row:hover { background: var(--surface-2); }
   cursor: pointer;
   transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
 }
+.managed-checks label span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.managed-checks label input[type=checkbox] { width: 15px; height: 15px; margin: 0 0 0 auto; flex: none; }
 .managed-checks label:hover { border-color: var(--text-3); }
 .managed-checks label:has(input:checked) { border-color: var(--accent-line); background: var(--accent-soft); }
 .managed-checks label:has(input:focus-visible) { box-shadow: 0 0 0 3px var(--accent-ring); }
 .managed-checks label:has(input:disabled) { cursor: not-allowed; opacity: .7; }
+.managed-more { padding: 0 16px 14px; }
+.managed-more button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 34px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 560;
+  box-shadow: none;
+}
+.managed-more button:hover:not(:disabled) { border-color: var(--text-3); background: var(--surface-2); color: var(--text); }
+.managed-more button svg { transition: transform var(--fast) var(--ease); }
+.managed-more button[aria-expanded="true"] svg { transform: rotate(180deg); }
 
 .icon-settings { border-top: 1px solid var(--line); padding: 12px 20px; color: var(--text-2); font-size: 12.5px; }
 .icon-settings > summary { font-weight: 560; }
@@ -684,6 +713,11 @@ label.setting-row:hover { background: var(--surface-2); }
    WebKitGTK can resolve to zero inside the fit-content dialog and leave the body with no
    height for its content. */
 .guide-dialog-body { flex: 1 1 auto; min-height: 0; padding: 16px 20px 20px; overflow: auto; max-height: calc(100dvh - 140px); }
+/* The configuration editor owns its scroll. A fixed dialog height keeps the
+   footer below the form instead of letting the body scroll the footer over the last field. */
+.guide-dialog:has(.config-editor) { height: min(760px, calc(100dvh - 40px)); max-height: calc(100dvh - 40px); }
+.guide-dialog-body:has(> .config-editor) { display: flex; flex-direction: column; overflow: hidden; min-height: 0; max-height: none; padding-bottom: 8px; }
+.guide-dialog-body > .config-editor { display: flex; flex: 1 1 auto; flex-direction: column; height: auto; min-height: 0; max-height: none; }
 .dialog-footer {
   position: sticky;
   bottom: -20px;

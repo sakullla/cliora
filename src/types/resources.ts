@@ -40,6 +40,7 @@ export type SkillInstallation = { contextId?: string | null; packageId: string; 
 export type SkillTargetResult = { toolId: string; scope: Scope; projectPath: string | null; path: string | null; status: 'installed' | 'removed' | 'already_current' | 'failed'; detail: string };
 export type SkillRecoveryIssue = { contextId?: string | null; operationId: string; toolId: string; scope: Scope; projectPath: string | null; targetPath: string; backupPath: string; detail: string };
 export type NativeSkillEntry = { name: string; path: string; digest: string | null; state: 'managed' | 'external' | 'unreadable'; detail: string; packageId: string | null };
+export type NativeSkillDocument = { name: string; path: string; content: string };
 export type SkillTargetPreview = { path: string; status: 'ready' | 'conflict'; detail: string; previewToken: string | null; existingDigest: string | null; packageDigest: string; changes: SkillFileChange[] };
 
 export type AgentEntry = { id: string; name: string; description: string; path: string; format: 'toml' | 'markdown' | 'json'; content: string; enabled: boolean; readOnly: boolean; builtin: boolean; owner: string; detail: string };

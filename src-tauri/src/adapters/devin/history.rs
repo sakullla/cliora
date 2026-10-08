@@ -41,12 +41,16 @@
 //!   (`request_count = 1`); Σ per session equals the `final_metrics` totals
 //!   exactly in all 8 files.
 //!
-//! `credentials.toml`, `sessions.db` and every other file under the config
-//! root are never opened by this module.
+//! The transcript itself has no working directory. `cli/sessions.db` does:
+//! `sessions.working_directory` is the cwd for the matching session id. That
+//! table is opened read-only and only those two columns are read. Message
+//! rows, prompt history, and `credentials.toml` stay unread.
 
+use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use rusqlite::{Connection, OpenFlags};
 use serde_json::Value;
 
 use crate::history::{
@@ -57,8 +61,41 @@ use crate::history::{
 /// The only verified ATIF protocol tag; protocol versions stay exact.
 const SCHEMA_VERSION: &str = "ATIF-v1.7";
 
-pub(crate) fn transcripts_dir(home: &Path) -> std::path::PathBuf {
+pub(crate) fn transcripts_dir(home: &Path) -> PathBuf {
     super::config_root(home).join("cli").join("transcripts")
+}
+
+fn sessions_database(transcript: &Path) -> Option<PathBuf> {
+    let database = transcript.parent()?.parent()?.join("sessions.db");
+    (database.is_file() && !database.is_symlink()).then_some(database)
+}
+
+/// Read-only `id` → `working_directory`. Any failure leaves cwd unknown.
+fn working_directories(database: &Path) -> HashMap<String, String> {
+    let mut found = HashMap::new();
+    let Ok(connection) = Connection::open_with_flags(
+        database,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) else {
+        return found;
+    };
+    if connection.busy_timeout(std::time::Duration::from_millis(500)).is_err() {
+        return found;
+    }
+    let Ok(mut statement) = connection.prepare("SELECT id, working_directory FROM sessions") else {
+        return found;
+    };
+    let Ok(rows) = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))) else {
+        return found;
+    };
+    for row in rows.flatten() {
+        let (id, path) = row;
+        let path = path.trim();
+        if valid_native_id(&id) && !path.is_empty() {
+            found.insert(id, path.to_owned());
+        }
+    }
+    found
 }
 
 pub fn sources(home: &Path) -> Result<Vec<HistorySource>, String> {
@@ -74,6 +111,12 @@ pub fn sources_controlled(
     if !root.is_dir() {
         return Ok(Vec::new());
     }
+    let directories = root
+        .parent()
+        .map(|cli| cli.join("sessions.db"))
+        .filter(|path| path.is_file() && !path.is_symlink())
+        .map(|path| working_directories(&path))
+        .unwrap_or_default();
     let mut sources = Vec::new();
     for entry in fs::read_dir(&root).map_err(|error| error.to_string())? {
         check_cancelled(cancelled)?;
@@ -91,10 +134,11 @@ pub fn sources_controlled(
         if !valid_native_id(stem) {
             continue;
         }
-        // v2: the devin-usage task started emitting per-step usage events, so
-        // sessions indexed under v1 re-parse and backfill history_usage.
+        // v3 adds the sessions.db working directory so an index built when cwd
+        // was unknown re-parses and can resume in that directory.
+        let directory = directories.get(stem).map(String::as_str).unwrap_or("");
         let fingerprint = crate::history::source_fingerprint_controlled(&path, cancelled)
-            .map(|value| format!("devin-transcript-v2|{value}"));
+            .map(|value| format!("devin-transcript-v3|{value}|{directory}"));
         let source = match &fingerprint {
             Ok(_) => HistorySource {
                 native_title: None,
@@ -262,6 +306,13 @@ pub fn parse_controlled(
         }
     }
     check_cancelled(cancelled)?;
+    if let Some(id) = session.native_id.as_deref() {
+        if let Some(database) = sessions_database(&source.path) {
+            if let Some(directory) = working_directories(&database).get(id) {
+                session.cwd = Some(directory.clone());
+            }
+        }
+    }
     session.finish(source)
 }
 
@@ -299,7 +350,7 @@ mod tests {
             .iter()
             .find(|source| source.native_id.as_deref() == Some("serene-example"))
             .unwrap();
-        assert!(example.fingerprint.starts_with("devin-transcript-v2|"));
+        assert!(example.fingerprint.starts_with("devin-transcript-v3|"));
         assert!(example.fingerprint.contains('m'), "指纹含元数据摘要");
         assert!(example.path.ends_with("cli/transcripts/serene-example.json"));
         // The non-transcript candidate fails parsing instead of being guessed.
@@ -331,8 +382,56 @@ mod tests {
             .messages
             .iter()
             .all(|message| !message.text.is_empty()));
-        assert_eq!(session.cwd, None, "transcript 不携带工作目录");
+        assert_eq!(session.cwd, None, "没有 sessions.db 时 transcript 仍不猜测工作目录");
         assert!(!session.partial);
+    }
+
+    #[test]
+    fn sessions_db_working_directory_becomes_the_session_cwd() {
+        let home = tempfile::tempdir().unwrap();
+        write_transcripts(home.path());
+        let database = transcripts_dir(home.path()).parent().unwrap().join("sessions.db");
+        let connection = Connection::open(&database).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE sessions (id TEXT PRIMARY KEY, working_directory TEXT NOT NULL);
+                 INSERT INTO sessions (id, working_directory) VALUES ('serene-example', 'C:\\work\\demo');
+                 INSERT INTO sessions (id, working_directory) VALUES ('blank', '   ');",
+            )
+            .unwrap();
+        drop(connection);
+        let listed = sources(home.path()).unwrap();
+        let example = listed
+            .iter()
+            .find(|source| source.native_id.as_deref() == Some("serene-example"))
+            .unwrap();
+        assert!(example.fingerprint.starts_with("devin-transcript-v3|"));
+        assert!(example.fingerprint.ends_with("|C:\\work\\demo"));
+        let session = parse(example).unwrap();
+        assert_eq!(session.cwd.as_deref(), Some(r"C:\work\demo"));
+        let connection = Connection::open(&database).unwrap();
+        connection
+            .execute(
+                "UPDATE sessions SET working_directory = ?1 WHERE id = 'serene-example'",
+                ["D:\\moved\\demo"],
+            )
+            .unwrap();
+        drop(connection);
+        let moved = sources(home.path()).unwrap();
+        let moved = moved
+            .iter()
+            .find(|source| source.native_id.as_deref() == Some("serene-example"))
+            .unwrap();
+        assert!(moved.fingerprint.ends_with("|D:\\moved\\demo"));
+        assert_ne!(moved.fingerprint, example.fingerprint);
+        std::fs::write(&database, "not a database").unwrap();
+        let broken = sources(home.path()).unwrap();
+        let broken = broken
+            .iter()
+            .find(|source| source.native_id.as_deref() == Some("serene-example"))
+            .unwrap();
+        assert!(broken.fingerprint.ends_with('|'));
+        assert_eq!(parse(broken).unwrap().cwd, None);
     }
 
     /// The devin-usage task (2026-10-08) delivers the usage dimension: every

@@ -2,6 +2,7 @@ import { piFieldPresentation } from './fieldPresentation';
 import { CommonConfigurationFields } from '../../components/configuration/CommonConfigurationFields';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { ConnectionCredential } from '../../components/configuration/ConnectionCredential';
 import { AdditionalIssues, objectFields, EntityActions, EditorField, ModelRow, ProviderEditor, NewModelForm, useEditorAction } from '../../components/configuration/ModelEditorControls';
 import sharedStyles from '../../components/configuration/configuration.module.css';
 import type { ConfigurationContentProps } from '../contract';
@@ -40,6 +41,7 @@ function Editor(props: ConfigurationContentProps) {
       onDraftValidityChange={valid => props.onValidityChange('connection-form', valid)}
       onConfigure={(id, value) => action.run({ kind: 'provider', provider: id }, 'configure_provider', value)}
       onSelect={id => action.run({ kind: 'provider', provider: id }, 'select_provider')} />
+    <ConnectionCredential />
     <p className={styles.note}>{t('tools.adapters.pi.defaultNote')}</p>
     </div>
     {models.map(model => <article className={styles.model} key={`${provider}:${key(model)}`} hidden={Boolean(props.section && expanded && expanded !== key(model))} aria-label={t('tools.adapters.shared.modelAria', { id: model.id })}>

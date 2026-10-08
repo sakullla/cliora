@@ -261,6 +261,11 @@ test('a home switch that differs from the file opens the comparison', async ({ p
   await tools.getByRole('radio', { name: '工作' }).click();
   const dialog = page.getByRole('dialog', { name: '比较当前文件与本次配置' });
   await expect(dialog).toBeVisible();
+  const changed = dialog.getByRole('list', { name: '改了什么' });
+  await expect(changed).toContainText('model');
+  await expect(changed).toContainText('"old"');
+  await expect(changed).toContainText('"new"');
+  await expect(dialog.getByText('改了 1 处 · 删除 1 行，新增 1 行')).toBeVisible();
   await expect(dialog.getByText('model = "old"')).toBeVisible();
   await expect(dialog.getByText('model = "new"')).toBeVisible();
   await expect(tools.getByRole('alert')).toHaveCount(0);

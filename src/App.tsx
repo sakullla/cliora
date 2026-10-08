@@ -170,7 +170,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     const mode = bootstrap.preferences.theme;
-    const surface = { light: '#f4f5f1', dark: '#111513' } as const;
+    const surface = { light: '#f6f5f2', dark: '#141615' } as const;
     const apply = () => {
       const resolved = mode === 'system' ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : mode;
       document.documentElement.dataset.theme = resolved;

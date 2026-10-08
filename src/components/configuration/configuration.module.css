@@ -30,6 +30,7 @@
 .controls .restore:hover:not(:disabled) { background: none; border: 0; color: var(--accent-hover); text-decoration: underline; text-underline-offset: 2px; }
 .infoPanel { display: grid; gap: 4px; min-width: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); }
 .infoPanel small { color: var(--text-2); font-size: 11.5px; line-height: 1.6; overflow-wrap: anywhere; }
+.unavailable { display: block; margin-top: 2px; color: var(--text-3); font-size: 12px; line-height: 1.5; }
 
 /* Bordered disclosure section: turns bare <details> groups into cards with a
    header row. Summary text is unchanged so existing anchors keep working. */
@@ -44,6 +45,7 @@
 .entityPanel > button { flex: none; }
 .controls .entityPanel > .danger { margin-left: auto; }
 .connectionTitle { font-size: .86em; color: var(--text-2); }
+.sectionTitle { font-size: 13px; font-weight: 640; color: var(--text); }
 .fields { display: grid; gap: .57em; min-width: 0; }
 .buttons { display: flex; gap: 8px; flex-wrap: wrap; }
 

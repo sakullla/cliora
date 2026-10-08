@@ -319,7 +319,7 @@ fn per_cli_mcp_writes_preserve_other_fields_and_claude_disable_removes_native_en
 }
 
 #[test]
-fn bearer_environment_reference_is_visible_but_literal_token_is_rejected() {
+fn literal_mcp_credential_is_saved_and_visible() {
     let temp = tempfile::tempdir().unwrap();
     let db = Database::open(&temp.path().join("cliora.db")).unwrap();
     let saved = save_definition(
@@ -361,7 +361,7 @@ fn bearer_environment_reference_is_visible_but_literal_token_is_rejected() {
     let entries = list_native(&db, &registry, temp.path(), &target("grok", true)).unwrap();
     assert_eq!(entries[0].headers["Authorization"], "Bearer ${API_TOKEN}");
     assert!(!entries[0].protected_values);
-    let rejected = save_definition(
+    let literal = save_definition(
         &db,
         McpDraft {
             id: None,
@@ -370,13 +370,88 @@ fn bearer_environment_reference_is_visible_but_literal_token_is_rejected() {
             command: String::new(),
             args: Vec::new(),
             url: "https://example.com/mcp".into(),
-            env: BTreeMap::new(),
+            env: BTreeMap::from([("MYSQL_PASSWORD".into(), "local-secret".into())]),
             headers: BTreeMap::from([("Authorization".into(), "Bearer plaintext".into())]),
             in_library: true,
             expected_version: None,
         },
+    )
+    .unwrap();
+    assert_eq!(literal.env["MYSQL_PASSWORD"], "local-secret");
+    assert_eq!(literal.headers["Authorization"], "Bearer plaintext");
+}
+
+#[test]
+fn omitted_native_secret_stays_until_an_empty_value_removes_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let keys = MemoryStore::default();
+    let registry = fixture_registry();
+    let path = temp.path().join(".codex/config.toml");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &path,
+        "[mcp_servers.db]\ncommand = 'npx'\n[mcp_servers.db.env]\nMYSQL_PASSWORD = 'kept-secret'\n",
+    )
+    .unwrap();
+    let saved = save_definition(
+        &db,
+        McpDraft {
+            id: None,
+            name: "db".into(),
+            transport: McpTransport::Stdio,
+            command: "npx".into(),
+            args: vec!["server".into()],
+            url: String::new(),
+            env: BTreeMap::from([("MYSQL_PORT".into(), "3216".into())]),
+            headers: BTreeMap::new(),
+            in_library: true,
+            expected_version: None,
+        },
+    )
+    .unwrap();
+    let before = list_native(&db, &registry, temp.path(), &target("codex", true)).unwrap();
+    assert_eq!(before[0].env["MYSQL_PASSWORD"], "kept-secret");
+    assert!(!before[0].protected_values);
+    let preview = preview_targets(&db, &registry, temp.path(), &saved.id, vec![target("codex", true)]);
+    let mut request = target("codex", true);
+    request.allow_replace = true;
+    request.baseline_hash = preview[0].baseline_hash.clone();
+    request.preview_token = preview[0].preview_token.clone();
+    let written = distribute(&db, &keys, &registry, temp.path(), &saved.id, vec![request]);
+    assert_eq!(written[0].status, "written", "{written:?}");
+    let kept = std::fs::read_to_string(&path).unwrap();
+    assert!(kept.contains("kept-secret"));
+    assert!(kept.contains("3216"));
+    let cleared = save_definition(
+        &db,
+        McpDraft {
+            id: Some(saved.id.clone()),
+            name: "db".into(),
+            transport: McpTransport::Stdio,
+            command: "npx".into(),
+            args: vec!["server".into()],
+            url: String::new(),
+            env: BTreeMap::from([
+                ("MYSQL_PORT".into(), "3216".into()),
+                ("MYSQL_PASSWORD".into(), String::new()),
+            ]),
+            headers: BTreeMap::new(),
+            in_library: true,
+            expected_version: Some(saved.version),
+        },
+    )
+    .unwrap();
+    let removed = distribute(
+        &db,
+        &keys,
+        &registry,
+        temp.path(),
+        &cleared.id,
+        previewed(&db, &registry, temp.path(), &cleared.id, vec![target("codex", true)]),
     );
-    assert!(rejected.is_err());
+    assert_eq!(removed[0].status, "written", "{removed:?}");
+    assert!(!std::fs::read_to_string(&path).unwrap().contains("kept-secret"));
 }
 
 #[test]
@@ -531,7 +606,7 @@ fn preview_is_bound_to_definition_version_scope_and_target_content() {
 }
 
 #[test]
-fn preview_compares_native_entries_without_exposing_literal_credentials() {
+fn preview_shows_the_native_value_so_a_conflict_can_be_compared() {
     let temp = tempfile::tempdir().unwrap();
     let db = Database::open(&temp.path().join("cliora.db")).unwrap();
     let registry = fixture_registry();
@@ -551,8 +626,8 @@ fn preview_compares_native_entries_without_exposing_literal_credentials() {
     let after = preview[0].proposed.as_ref().unwrap();
     assert_eq!(before["command"], "outside");
     assert_eq!(after["command"], "npx");
-    let rendered = serde_json::to_string(&preview[0]).unwrap();
-    assert!(!rendered.contains("private-token"));
+    assert_eq!(before["env"]["API_KEY"], "private-token");
+    assert_eq!(after["env"]["API_KEY"], "${EXAMPLE_KEY}");
 }
 
 #[test]

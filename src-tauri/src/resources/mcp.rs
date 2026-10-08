@@ -155,9 +155,6 @@ fn validate(draft: &McpDraft) -> Result<(), String> {
         {
             return Err("MCP 环境变量或请求头包含无效字符".into());
         }
-        if sensitive_key(name) && !is_reference(value) {
-            return Err(format!("{name} 请使用环境变量引用，不在资料库保存明文密钥"));
-        }
     }
     Ok(())
 }
@@ -414,21 +411,7 @@ fn preview_token(
 }
 
 fn visible_entry(value: Option<&Value>) -> Option<Value> {
-    let mut visible = value.cloned()?;
-    if let Some(fields) = visible.as_object_mut() {
-        for field in ["env", "environment", "headers", "http_headers"] {
-            if let Some(map) = fields.get_mut(field).and_then(Value::as_object_mut) {
-                for (key, content) in map.iter_mut() {
-                    if sensitive_key(key)
-                        && content.as_str().is_some_and(|text| !is_reference(text))
-                    {
-                        *content = Value::String("[已隐藏的原生凭据]".into());
-                    }
-                }
-            }
-        }
-    }
-    Some(visible)
+    value.cloned()
 }
 
 fn managed_hash(
@@ -442,26 +425,16 @@ fn managed_hash(
         params![id, tool, scope_key], |row| row.get(0)).optional().map_err(|error| error.to_string()))
 }
 
-fn visible_map(value: Option<&Value>) -> (BTreeMap<String, String>, bool) {
-    let mut protected = false;
-    let map = value
+fn visible_map(value: Option<&Value>) -> BTreeMap<String, String> {
+    value
         .and_then(Value::as_object)
         .map(|items| {
             items
                 .iter()
-                .filter_map(|(key, value)| {
-                    let value = value.as_str()?;
-                    if sensitive_key(key) && !is_reference(value) {
-                        protected = true;
-                        None
-                    } else {
-                        Some((key.clone(), value.to_owned()))
-                    }
-                })
+                .filter_map(|(key, value)| value.as_str().map(|text| (key.clone(), text.to_owned())))
                 .collect()
         })
-        .unwrap_or_default();
-    (map, protected)
+        .unwrap_or_default()
 }
 
 pub fn list_native(
@@ -507,10 +480,8 @@ pub fn list_native(
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_owned();
-            let (env, env_protected) =
-                visible_map(raw.get("env").or_else(|| raw.get("environment")));
-            let (headers, header_protected) =
-                visible_map(raw.get("headers").or_else(|| raw.get("http_headers")));
+            let env = visible_map(raw.get("env").or_else(|| raw.get("environment")));
+            let headers = visible_map(raw.get("headers").or_else(|| raw.get("http_headers")));
             Some(NativeMcpEntry {
                 name: name.clone(),
                 transport: if url.is_empty() {
@@ -532,7 +503,7 @@ pub fn list_native(
                             .map(|value| !value)
                     })
                     .unwrap_or(true),
-                protected_values: env_protected || header_protected,
+                protected_values: false,
             })
         })
         .collect())
@@ -658,6 +629,8 @@ pub fn stdio_doc(
     stdio_doc_with_env(definition, existing, "env")
 }
 
+/// Keeps a sensitive value already on disk when this definition does not mention that key.
+/// A value in the definition replaces it. An empty value removes it.
 fn protected_values(existing: Option<&Value>, field: &str) -> serde_json::Map<String, Value> {
     existing
         .and_then(Value::as_object)
@@ -739,7 +712,11 @@ pub fn stdio_doc_with_env(
     map.insert("args".into(), serde_json::json!(args));
     let mut env = protected_values(existing, field);
     for (key, value) in &definition.env {
-        env.insert(key.clone(), Value::String(value.clone()));
+        if value.is_empty() {
+            env.remove(key);
+        } else {
+            env.insert(key.clone(), Value::String(value.clone()));
+        }
     }
     if !env.is_empty() {
         map.insert(field.into(), Value::Object(env));
@@ -765,7 +742,11 @@ pub fn http_doc(
     map.insert("url".into(), Value::String(definition.url.clone()));
     let mut headers = protected_values(existing, header_field);
     for (key, value) in &definition.headers {
-        headers.insert(key.clone(), Value::String(value.clone()));
+        if value.is_empty() {
+            headers.remove(key);
+        } else {
+            headers.insert(key.clone(), Value::String(value.clone()));
+        }
     }
     if !headers.is_empty() {
         map.insert(header_field.into(), Value::Object(headers));

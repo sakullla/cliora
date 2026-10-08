@@ -151,7 +151,7 @@ export async function captureConfiguration({ browser, themes, widths, selected, 
         }
         if (action === 'raw') { await dialog.getByRole('button', { name: '原生文本', exact: true }).click(); await expect(dialog.getByRole('textbox', { name: 'settings 配置草稿' })).toBeVisible(); }
         if (action === 'comparison') {
-          await dialog.getByLabel('当前模型', { exact: true }).fill('my-edited-model');
+          await dialog.getByLabel('模型', { exact: true }).fill('my-edited-model');
           await page.evaluate(() => { const state = window.configurationProtocol; const file = JSON.parse(state.disk.settings); file.values.model = 'external-model'; state.disk.settings = JSON.stringify(file); });
           await dialog.getByRole('button', { name: '保存到当前文件', exact: true }).click();
           await expect(dialog.locator('[data-banner="conflict"]')).toBeVisible();

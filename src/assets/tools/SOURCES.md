@@ -22,11 +22,21 @@ These assets render offline. Product symbols remain in their original colors; cu
   SHA-256: `012799424922a9b8dcfaa9e30a7596133bc8a99d10056d18fb8b16dbe0d199c3`.
 - `kimi_code.svg`: Official Kimi symbol: the K path extracted unchanged (white) from https://platform.kimi.com/kimi.svg and placed on the black rounded tile of the official https://www.kimi.com/pwa-192.png app icon. Only the symbol is separated from the wordmark; path and color are retained. The raster mark's blue accent dot is not reproduced (no official vector source).
   SHA-256: `c366c98f46d7ccac6826bda7474817e14cb977ac10e7fa7286196705943ec581`.
-- `mimo_code.svg`: neutral placeholder — no official vector source at hand; neutral rounded-tile monogram, not a product mark. To be replaced by the official MiMo Code symbol when available.
-- `cline.svg`: neutral placeholder — no official vector source at hand; neutral rounded-tile monogram, not a product mark. To be replaced by the official Cline symbol when available.
-- `devin.svg`: neutral placeholder — no official vector source at hand; neutral rounded-tile monogram, not a product mark. To be replaced by the official Devin symbol when available.
-- `command_code.svg`: neutral placeholder — no official vector source at hand; neutral rounded-tile monogram, not a product mark. To be replaced by the official Command Code symbol when available.
-- `antigravity.svg`: neutral placeholder — no official vector source at hand; neutral rounded-tile monogram, not a product mark. To be replaced by the official Antigravity symbol when available.
-- `kiro.svg`: neutral placeholder — no official vector source at hand; neutral rounded-tile monogram, not a product mark. To be replaced by the official Kiro symbol when available.
+- `mimo_code.png`: Official square lockup from https://platform.xiaomimimo.com/favicon.png (white Xiaomi MiMo wordmark on black). The public vector at https://mimo.xiaomi.com/coder/assets/logo.svg is a single-line wordmark with `preserveAspectRatio="none"` and does not read as an icon. Original PNG retained.
+  SHA-256: `30f5305380e8a2f85c652b905ef5e155e0c00c7d56d7ab6bd8b1eb40dad61ba7`.
+- `cline.svg`: Official dark-ink mark from https://cline.bot/assets/branding/logos/cline-icon-dark.svg, used on light surfaces. Paths and #1C1C24 fill retained.
+  SHA-256: `3840c1a6f86cf98012af536e2f21157ab0b3ff541e0992ebf4d77307a9a809dc`.
+- `cline_dark.svg`: Official light mark from https://cline.bot/assets/branding/logos/cline-icon.svg, used on dark surfaces. Paths and #F0F4FF fill retained.
+  SHA-256: `aaeadd69d7a6140ead2ef4092e9b97eba80d6fe7548e31dd5d1c80529e127ab5`.
+- `devin.svg`: Official https://devin.ai/favicon.svg retained unchanged. Original black geometric mark; a quiet light tile preserves it in dark mode.
+  SHA-256: `fe0753d2e3823bc1eb8a37943234fac63733b8c9e8abff0ca0402a6c7ddcd682`.
+- `command_code.svg`: Official mark extracted unchanged from the installed command-code 1.73.4 package, vsix/extension/icons/icon-light.svg. Original #424242 command symbol, used on light surfaces.
+  SHA-256: `1e7fe66ca259c1c33040d5b0dba40dd0588dbf5a7edee175773a8044b5189379`.
+- `command_code_dark.svg`: Official mark from the same package, vsix/extension/icons/icon-dark.svg. Original white command symbol, used on dark surfaces.
+  SHA-256: `df9dce3a1f405eb3946c830a3b92609db4a0a1221af4dc3e0d9c2febb616bdd7`.
+- `antigravity.svg`: Official https://antigravity.google/favicon.svg retained unchanged. Original multicolor mark on its circular tile.
+  SHA-256: `de7911c3d206a3d2fe3d5b4e76e84b185c581d7a259406f64db247b5b824f02e`.
+- `kiro.svg`: Official https://kiro.dev/icon.svg retained unchanged. Original white mark on its #9046FF rounded tile.
+  SHA-256: `774cbc1c7ecec8c935a6091595583d7a92fc8289d6f1db3f071c0f50c61c369f`.
 
 Declare future icons in the independent `src/adapters/<tool>/index.ts` module using `ToolUiAdapter.icon` (`light`, optional `dark`, `fit`, `tile`, `scale`, and `source`) and register the module in `adapters/index.ts`. All pages use `src/components/ToolIcon.tsx`; tools without icon metadata receive a neutral SVG symbol beside their text name. No network requests are needed for ordinary icon rendering.

@@ -422,13 +422,26 @@ fn six_added_adapters_declare_their_delivered_dimensions() {
         .is_empty());
     // devin (local verified 3000.11.3): config.json JSONC editing (project
     // .devin/config.json as the secondary role), --resume/-c, MCP
-    // (mcp_config.json), ATIF-v1.7 transcript index with the usage dimension
+    // (mcp_config.json), Skills (%APPDATA%/devin/skills 与项目 .devin/skills),
+    // ATIF-v1.7 transcript index with the usage dimension
     // delivered (devin-usage 2026-10-08): per-agent-step metrics as inclusive
     // bucket events reconciled against final_metrics on all 8 real local
     // transcripts; credentials.toml is never touched, so no credential
     // channel exists at all.
     let devin = registry.get("devin").unwrap();
-    assert!(!devin.supports_skills());
+    assert!(devin.supports_skills());
+    assert!(devin
+        .skill_root(crate::native::adapter::Scope::Global, home, None)
+        .unwrap()
+        .to_string_lossy()
+        .replace('\\', "/")
+        .ends_with("devin/skills"));
+    assert!(devin
+        .skill_root(crate::native::adapter::Scope::Project, home, Some(work))
+        .unwrap()
+        .to_string_lossy()
+        .replace('\\', "/")
+        .ends_with("/work/p/.devin/skills"));
     assert!(devin.configuration().is_none());
     assert!(devin.agents().is_none());
     assert!(devin.descriptor().yolo_available);

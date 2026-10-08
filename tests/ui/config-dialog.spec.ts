@@ -209,6 +209,15 @@ test('enabling a saved profile opens a comparison when the native file differs',
   await page.locator('[data-profile-id="saved-1"]').getByRole('button', { name: '使用' }).click();
   const comparison = page.getByRole('dialog', { name: '比较当前文件与本次配置' });
   await expect(comparison).toBeVisible();
+  const changed = comparison.getByRole('list', { name: '改了什么' });
+  await expect(changed).toContainText('model');
+  await expect(changed).toContainText('"old"');
+  await expect(changed).toContainText('"new"');
+  await expect(changed.getByText('当前文件', { exact: true })).toBeVisible();
+  await expect(changed.getByText('本次内容', { exact: true })).toBeVisible();
+  await expect(comparison.getByText('改了 1 处 · 删除 1 行，新增 1 行')).toBeVisible();
+  await expect(comparison.locator('[data-kind="delete"]')).toContainText('model = "old"');
+  await expect(comparison.locator('[data-kind="insert"]')).toContainText('model = "new"');
   await expect(comparison.getByText('model = "old"')).toBeVisible();
   await expect(comparison.getByText('model = "new"')).toBeVisible();
   await expect(comparison.locator('[data-banner="conflict"]')).toHaveCount(1);
@@ -532,6 +541,28 @@ test('active configuration save only updates DB; explicit use changes the bindin
   await expect.poll(() => page.evaluate(() => (window as any).workspaceFixture.binding.profileVersion)).toBe(4);
 });
 
+test('common configuration hides tabs that have no fields', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'codex');
+  await page.getByRole('button', { name: '通用配置', exact: true }).first().click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('button', { name: '连接与模型', exact: true })).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: '常用设置', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(dialog.getByRole('button', { name: '原生文本', exact: true })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: '合并与来源', exact: true })).toBeVisible();
+  await expect(dialog.getByLabel('通用参数')).toBeVisible();
+});
+
+test('a CLI without common fields opens native text and hides the empty tabs', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'qoder_cn');
+  await page.getByRole('button', { name: '通用配置', exact: true }).first().click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('button', { name: '连接与模型', exact: true })).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: '常用设置', exact: true })).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: '合并与来源', exact: true })).toHaveCount(0);
+  await expect(dialog.getByText('此范围可使用原生文本编辑')).not.toBeVisible();
+  await expect(dialog.getByRole('textbox', { name: 'settings 配置草稿' })).toBeVisible();
+});
+
 test('common save and explicit partial apply preserve each recovery target', async ({ page }) => {
   await setupConfigurationWorkspace(page, 'codex');
   await page.getByRole('button', { name: '通用配置', exact: true }).first().click();
@@ -599,7 +630,7 @@ for (const tool of ['pi', 'open_code', 'kimi_code', 'codex', 'claude_code']) {
 test('ordered field writes retain sequential typing and focus while IPC is delayed', async ({ page }) => {
   await setupConfigurationWorkspace(page, 'codex');
   await page.getByRole('button', { name: '修改', exact: true }).last().click();
-  const dialog = page.getByRole('dialog'); const input = dialog.getByLabel('当前模型', { exact: true });
+  const dialog = page.getByRole('dialog'); const input = dialog.getByLabel('模型', { exact: true });
   await page.evaluate(() => { (window as any).configurationProtocol.delayEdit = true; });
   await input.focus(); await input.press('ControlOrMeta+A');
   await input.pressSequentially('long-new-model', { delay: 30 });
@@ -711,7 +742,7 @@ test('a cancelled directory request cannot replace a changed source and manual m
 for (const choice of ['使用本次', '保留现有'] as const) {
   test(`current conflict ${choice} rebases safely and preserves the rest of the draft`, async ({ page }) => {
     await setupConfigurationWorkspace(page, 'codex'); await page.getByRole('button', { name: '正在使用的文件', exact: true }).click();
-    const dialog = page.getByRole('dialog'); await dialog.getByLabel('当前模型', { exact: true }).fill('my-edited-model');
+    const dialog = page.getByRole('dialog'); await dialog.getByLabel('模型', { exact: true }).fill('my-edited-model');
     await expect(dialog.getByRole('button', { name: '保存到当前文件' })).toBeEnabled();
     await page.evaluate(() => { const state = (window as any).configurationProtocol; const view = JSON.parse(state.disk.settings); view.values.model = 'external-model'; view.values.external = 'preserve'; state.disk.settings = JSON.stringify(view); });
     await dialog.getByRole('button', { name: '保存到当前文件' }).click();
@@ -728,7 +759,7 @@ for (const choice of ['使用本次', '保留现有'] as const) {
 
 test('current comparison rejects a second external change and supports a fresh explicit recovery', async ({ page }) => {
   await setupConfigurationWorkspace(page, 'codex'); await page.getByRole('button', { name: '正在使用的文件', exact: true }).click(); const dialog = page.getByRole('dialog');
-  await dialog.getByLabel('当前模型', { exact: true }).fill('my-edited-model'); await expect(dialog.getByRole('button', { name: '保存到当前文件' })).toBeEnabled();
+  await dialog.getByLabel('模型', { exact: true }).fill('my-edited-model'); await expect(dialog.getByRole('button', { name: '保存到当前文件' })).toBeEnabled();
   await page.evaluate(() => { const state = (window as any).configurationProtocol; const value = JSON.parse(state.disk.settings); value.values.model = 'external-one'; state.disk.settings = JSON.stringify(value); });
   await dialog.getByRole('button', { name: '保存到当前文件' }).click();
   await expect(dialog.locator('[data-banner="conflict"]')).toHaveCount(1);
@@ -774,15 +805,21 @@ test('diff editor loading states are explicit and a failed chunk can be retried'
 test('history replaces the current editor with sanitized typed preview and guards later changes', async ({ page }) => {
   await setupConfigurationWorkspace(page, 'codex'); await page.getByRole('button', { name: '正在使用的文件', exact: true }).click(); const dialog = page.getByRole('dialog');
   await dialog.getByText('当前文件恢复', { exact: true }).click(); await dialog.getByRole('button', { name: '修改记录', exact: true }).click();
+  const stamp = await page.evaluate(() => {
+    const date = new Date(1_791_200_000_000);
+    const pad = (value: number) => String(value).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  });
+  await expect(dialog.getByRole('button', { name: stamp })).toBeVisible();
   await dialog.getByLabel('修改记录').getByRole('button').filter({ hasNotText: '返回编辑' }).last().click();
   await expect(dialog.getByRole('textbox', { name: '历史原文' })).toBeVisible();
-  await expect(dialog.getByLabel('当前模型', { exact: true })).not.toBeVisible();
+  await expect(dialog.getByLabel('模型', { exact: true })).not.toBeVisible();
   await page.evaluate(() => { const state = (window as any).configurationProtocol; const value = JSON.parse(state.disk.settings); value.values.model = 'later-external'; state.disk.settings = JSON.stringify(value); });
   await dialog.getByRole('button', { name: '恢复这个版本', exact: true }).click();
   await expect(dialog.getByRole('alert').filter({ hasText: '历史比较后文件变化' })).toBeVisible();
   expect(JSON.parse(await page.evaluate(() => (window as any).configurationProtocol.disk.settings)).values.model).toBe('later-external');
   expect(await page.evaluate(() => (window as any).configurationProtocol.calls.filter((call: any) => ['preview_native_backup','restore_native_backup'].includes(call.command)))).toEqual([]);
-  await dialog.getByRole('button', { name: '返回编辑' }).click(); await expect(dialog.getByLabel('当前模型', { exact: true })).toBeVisible();
+  await dialog.getByRole('button', { name: '返回编辑' }).click(); await expect(dialog.getByLabel('模型', { exact: true })).toBeVisible();
 });
 
 test('generic registered fallback uses temporary keys for directory and cancels without modifying the saved key', async ({ page }) => {
@@ -868,7 +905,7 @@ test('cancel request button stops a delayed directory while keeping draft edits 
   await dialog.getByText('密钥已保存到系统 · 空输入保留', { exact: true }).click();
   await dialog.getByRole('button', { name: '替换密钥' }).click();
   await dialog.getByLabel('API 密钥', { exact: true }).fill('synthetic-cancel-key');
-  await dialog.getByLabel('当前模型', { exact: true }).click();
+  await dialog.getByLabel('模型', { exact: true }).click();
   await dialog.getByRole('button', { name: '获取模型目录' }).click();
   await expect.poll(() => page.evaluate(() => !!(window as any).configurationProtocol.releaseDirectory)).toBe(true);
   const before = await page.evaluate(() => Object.values((window as any).configurationProtocol.sessions)[0]) as any;
@@ -876,7 +913,7 @@ test('cancel request button stops a delayed directory while keeping draft edits 
   await dialog.getByText('连接检查与诊断', { exact: true }).click();
   await expect(dialog.getByRole('button', { name: '取消请求', exact: true })).toBeEnabled();
   await dialog.getByRole('button', { name: '取消请求', exact: true }).click();
-  await dialog.getByLabel('当前模型', { exact: true }).click();
+  await dialog.getByLabel('模型', { exact: true }).click();
   await expect(dialog.getByRole('button', { name: '获取模型目录' })).toBeEnabled();
   await page.evaluate(() => { (window as any).configurationProtocol.releaseDirectory(); });
   await expect(dialog.getByLabel('模型目录', { exact: true })).toHaveCount(0);
@@ -895,7 +932,7 @@ test('cancel request error offers retry and suppresses the old response', async 
   await setupConfigurationWorkspace(page, 'codex');
   await page.evaluate(() => { const state = (window as any).configurationProtocol; state.delayDirectory = true; state.cancelRequestFailure = '暂时无法取消，请重试'; });
   await page.getByRole('button', { name: '修改', exact: true }).last().click(); const dialog = page.getByRole('dialog');
-  await dialog.getByLabel('当前模型', { exact: true }).click(); await dialog.getByRole('button', { name: '获取模型目录' }).click();
+  await dialog.getByLabel('模型', { exact: true }).click(); await dialog.getByRole('button', { name: '获取模型目录' }).click();
   await dialog.getByLabel('配置名称').click();
   await dialog.getByText('连接检查与诊断', { exact: true }).click();
   await expect(dialog.getByRole('button', { name: '取消请求', exact: true })).toBeEnabled(); await dialog.getByRole('button', { name: '取消请求', exact: true }).click();
@@ -903,7 +940,7 @@ test('cancel request error offers retry and suppresses the old response', async 
   await expect(dialog.getByRole('button', { name: '取消请求', exact: true })).toBeEnabled();
   await page.evaluate(() => { (window as any).configurationProtocol.cancelRequestFailure = ''; });
   await dialog.getByRole('button', { name: '取消请求', exact: true }).click();
-  await dialog.getByLabel('当前模型', { exact: true }).click();
+  await dialog.getByLabel('模型', { exact: true }).click();
   await expect(dialog.getByRole('button', { name: '获取模型目录' })).toBeEnabled();
   await page.evaluate(() => { (window as any).configurationProtocol.releaseDirectory(); });
   await expect(dialog.getByLabel('模型目录', { exact: true })).toHaveCount(0);
@@ -917,7 +954,7 @@ test('API source buffers separate changed connection B from the stored A key and
   await sourceNative.click();
   await dialog.getByText('连接 · gateway', { exact: true }).click();
   await dialog.getByLabel('供应商 ID', { exact: true }).fill('b'); await expect(sourceNative).toBeEnabled();
-  await dialog.getByLabel('API 地址', { exact: true }).fill('https://b.example.test/v1'); await expect(sourceNative).toBeEnabled();
+  await dialog.getByLabel('请求地址', { exact: true }).fill('https://b.example.test/v1'); await expect(sourceNative).toBeEnabled();
   await sourceApi.click();
   await expect(dialog.getByLabel('API 密钥', { exact: true })).toBeVisible();
   const selected = await page.evaluate(() => (window as any).configurationProtocol.calls.filter((call: any) => call.command === 'select_configuration_credential').at(-1));
@@ -928,12 +965,12 @@ test('API source buffers separate changed connection B from the stored A key and
   const bRef = await page.evaluate(() => Object.keys((window as any).configurationProtocol.leases)[0]);
   await sourceNative.click();
   await dialog.getByLabel('供应商 ID', { exact: true }).fill('gateway'); await expect(sourceNative).toBeEnabled();
-  await dialog.getByLabel('API 地址', { exact: true }).fill('https://gateway.example.test/v1'); await expect(sourceNative).toBeEnabled();
+  await dialog.getByLabel('请求地址', { exact: true }).fill('https://gateway.example.test/v1'); await expect(sourceNative).toBeEnabled();
   await sourceApi.click();
   await expect(dialog.getByText('密钥已保存到系统 · 空输入保留', { exact: true })).toBeVisible();
   await sourceNative.click();
   await dialog.getByLabel('供应商 ID', { exact: true }).fill('b'); await expect(sourceNative).toBeEnabled();
-  await dialog.getByLabel('API 地址', { exact: true }).fill('https://b.example.test/v1'); await expect(sourceNative).toBeEnabled();
+  await dialog.getByLabel('请求地址', { exact: true }).fill('https://b.example.test/v1'); await expect(sourceNative).toBeEnabled();
   await sourceApi.click();
   await expect(dialog.getByText('密钥在草稿中 · 尚未保存到系统', { exact: true })).toBeVisible();
   await dialog.getByRole('button', { name: '保存配置', exact: true }).click();
@@ -979,7 +1016,7 @@ for (const capability of ['writable', 'denied', 'missing', 'managed'] as const) 
 test('model combobox keeps the fetched catalog filterable while typing edits the draft', async ({ page }) => {
   await setupConfigurationWorkspace(page, 'codex');
   await page.getByRole('button', { name: '修改', exact: true }).last().click(); const dialog = page.getByRole('dialog');
-  const model = dialog.getByLabel('当前模型', { exact: true });
+  const model = dialog.getByLabel('模型', { exact: true });
   await model.click(); await dialog.getByRole('button', { name: '获取模型目录' }).click();
   await expect(dialog.getByText(/目录已获取 · \d+ 个模型已同步到模型选择框/)).toBeVisible();
   await model.fill('new');
@@ -1079,6 +1116,61 @@ test('unknown old applied context retains saved configurations and explicit reco
   expect(await page.evaluate(() => (window as any).workspaceFixture.calls.filter((call: any) => call.command.includes('apply_')))).toEqual([]);
 });
 
+test('connection fields follow provider, address, sign-in, then model', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'codex');
+  await page.getByRole('button', { name: '新建配置' }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('radio', { name: '为此连接提供 API 密钥', exact: true }).click();
+  await expect(dialog.getByLabel('API 密钥', { exact: true })).toBeVisible();
+  await expect(dialog.getByRole('list', { name: '连接顺序' }).locator('li')).toHaveText(['供应商', '请求地址', '登录', '模型']);
+  const top = async (locator: ReturnType<typeof dialog.getByLabel>) => (await locator.boundingBox())!.y;
+  const provider = await top(dialog.getByText('供应商连接', { exact: true }));
+  const providerId = await top(dialog.getByLabel('供应商 ID', { exact: true }));
+  const address = await top(dialog.getByLabel('请求地址', { exact: true }));
+  const method = await top(dialog.getByRole('radio', { name: '为此连接提供 API 密钥', exact: true }));
+  const key = await top(dialog.getByLabel('API 密钥', { exact: true }));
+  const model = await top(dialog.getByLabel('模型', { exact: true }));
+  expect(provider).toBeLessThan(providerId);
+  expect(providerId).toBeLessThan(address);
+  expect(address).toBeLessThan(method);
+  expect(method).toBeLessThan(key);
+  expect(key).toBeLessThan(model);
+});
+
+test('compatible connection keeps sign-in between the address and the model', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'qoder_cn');
+  await page.getByRole('button', { name: '新建配置' }).click();
+  const dialog = page.getByRole('dialog');
+  const top = async (locator: ReturnType<typeof dialog.getByLabel>) => (await locator.boundingBox())!.y;
+  await expect(dialog.getByLabel('兼容配置连接')).toBeVisible();
+  await expect(dialog.getByLabel('供应商 ID', { exact: true })).toBeVisible();
+  await expect(dialog.getByRole('list', { name: '连接顺序' }).locator('li')).toHaveText(['供应商', '请求地址', '登录', '模型']);
+  const providerId = await top(dialog.getByLabel('供应商 ID', { exact: true }));
+  const address = await top(dialog.getByLabel('请求地址', { exact: true }));
+  const method = await top(dialog.getByRole('radio', { name: '为此连接提供 API 密钥', exact: true }));
+  const model = await top(dialog.getByLabel('模型', { exact: true }));
+  expect(providerId).toBeLessThan(address);
+  expect(address).toBeLessThan(method);
+  expect(method).toBeLessThan(model);
+});
+
+test('sign-in sits between the request address and the model for every dedicated editor', async ({ page }) => {
+  for (const tool of ['claude_code', 'kimi_code', 'pi', 'open_code'] as const) {
+    await setupConfigurationWorkspace(page, tool);
+    await page.getByRole('button', { name: '新建配置' }).click();
+    const dialog = page.getByRole('dialog');
+    const top = async (locator: ReturnType<typeof dialog.getByLabel>) => (await locator.boundingBox())!.y;
+    await expect(dialog.getByRole('list', { name: '连接顺序' }).locator('li')).toHaveText(['供应商', '请求地址', '登录', '模型']);
+    const address = await top(dialog.getByLabel('请求地址', { exact: true }));
+    const method = await top(dialog.getByRole('radio', { name: '为此连接提供 API 密钥', exact: true }));
+    const model = await top(tool === 'claude_code' ? dialog.getByLabel('默认模型', { exact: true }) : dialog.getByRole('article', { name: '模型 one', exact: true }));
+    expect(address).toBeLessThan(method);
+    expect(method).toBeLessThan(model);
+    await dialog.getByRole('button', { name: '取消', exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+  }
+});
+
 for (const originalKey of ['stored', 'lease'] as const) {
   for (const changed of ['provider', 'address'] as const) {
     test(`API-internal connection change keeps ${originalKey} A ref out of the new ${changed} B buffer`, async ({ page }) => {
@@ -1097,7 +1189,7 @@ for (const originalKey of ['stored', 'lease'] as const) {
       const aRef = await page.evaluate(() => (Object.values((window as any).configurationProtocol.sessions)[0] as any).credential.secretRef);
       await dialog.getByText('供应商连接', { exact: true }).click();
       if (changed === 'provider') { await dialog.getByLabel('供应商 ID', { exact: true }).fill('b'); await expect(sourceNative).toBeEnabled(); }
-      await dialog.getByLabel('Responses 地址', { exact: true }).fill('https://b.example.test/v1'); await expect(sourceNative).toBeEnabled();
+      await dialog.getByLabel('请求地址', { exact: true }).fill('https://b.example.test/v1'); await expect(sourceNative).toBeEnabled();
       await expect(sourceApi).toBeChecked();
       await sourceNative.click(); await expect(sourceNative).toBeEnabled();
       await sourceApi.click();
@@ -1112,13 +1204,13 @@ for (const originalKey of ['stored', 'lease'] as const) {
       const bRef = await page.evaluate(() => (Object.values((window as any).configurationProtocol.sessions)[0] as any).credential.secretRef);
       expect(bRef).not.toBe(aRef);
       if (changed === 'provider') { await dialog.getByLabel('供应商 ID', { exact: true }).fill('gateway'); await expect(sourceNative).toBeEnabled(); }
-      await dialog.getByLabel('Responses 地址', { exact: true }).fill('https://gateway.example.test/v1'); await expect(sourceNative).toBeEnabled();
+      await dialog.getByLabel('请求地址', { exact: true }).fill('https://gateway.example.test/v1'); await expect(sourceNative).toBeEnabled();
       await sourceNative.click(); await expect(sourceNative).toBeEnabled(); await sourceApi.click();
       await expect(dialog.getByText(originalKey === 'lease' ? '密钥在草稿中 · 尚未保存到系统' : '密钥已保存到系统 · 空输入保留', { exact: true })).toBeVisible();
       const restored = await page.evaluate(() => (Object.values((window as any).configurationProtocol.sessions)[0] as any).credential.secretRef);
       expect(restored).toBe(aRef);
       if (changed === 'provider') { await dialog.getByLabel('供应商 ID', { exact: true }).fill('b'); await expect(sourceNative).toBeEnabled(); }
-      await dialog.getByLabel('Responses 地址', { exact: true }).fill('https://b.example.test/v1'); await expect(sourceNative).toBeEnabled();
+      await dialog.getByLabel('请求地址', { exact: true }).fill('https://b.example.test/v1'); await expect(sourceNative).toBeEnabled();
       await sourceNative.click(); await expect(sourceNative).toBeEnabled(); await sourceApi.click();
       await expect(dialog.getByText('密钥在草稿中 · 尚未保存到系统', { exact: true })).toBeVisible();
       await dialog.getByRole('button', { name: '保存配置', exact: true }).click(); await expect(dialog).toHaveCount(0);
@@ -1137,13 +1229,13 @@ test('unfinished A key is retained for A and cannot be submitted to a changed AP
   const sourceApi = dialog.getByRole('radio', { name: '为此连接提供 API 密钥', exact: true });
   await dialog.getByText('密钥已保存到系统 · 空输入保留', { exact: true }).click(); await dialog.getByRole('button', { name: '替换密钥' }).click();
   await dialog.getByLabel('API 密钥', { exact: true }).fill('synthetic-unfinished-a');
-  await dialog.getByText('供应商连接', { exact: true }).click(); await dialog.getByLabel('Responses 地址', { exact: true }).fill('https://b.example.test/v1'); await expect(sourceNative).toBeEnabled();
+  await dialog.getByText('供应商连接', { exact: true }).click(); await dialog.getByLabel('请求地址', { exact: true }).fill('https://b.example.test/v1'); await expect(sourceNative).toBeEnabled();
   await dialog.getByRole('button', { name: '保存配置', exact: true }).click();
   await expect(dialog.getByRole('alert').filter({ hasText: '此密钥输入属于先前连接' })).toBeVisible();
   expect(await page.evaluate(() => (window as any).configurationProtocol.calls.filter((call: any) => call.command === 'set_configuration_draft_secret'))).toEqual([]);
   await sourceNative.click(); await expect(sourceNative).toBeEnabled(); await sourceApi.click();
   await expect(dialog.getByLabel('API 密钥', { exact: true })).toHaveValue('');
-  await dialog.getByLabel('Responses 地址', { exact: true }).fill('https://gateway.example.test/v1'); await expect(sourceNative).toBeEnabled();
+  await dialog.getByLabel('请求地址', { exact: true }).fill('https://gateway.example.test/v1'); await expect(sourceNative).toBeEnabled();
   await sourceNative.click(); await expect(sourceNative).toBeEnabled(); await sourceApi.click();
   await expect(dialog.getByLabel('API 密钥', { exact: true })).toHaveValue('synthetic-unfinished-a');
 });
@@ -1152,14 +1244,14 @@ test('explicit B key input while API still carries A ref is restored separately 
   await setupConfigurationWorkspace(page, 'codex'); await page.getByRole('button', { name: '修改', exact: true }).last().click(); const dialog = page.getByRole('dialog');
   const sourceNative = dialog.getByRole('radio', { name: '使用 CLI 当前登录或凭据', exact: true });
   const sourceApi = dialog.getByRole('radio', { name: '为此连接提供 API 密钥', exact: true });
-  await dialog.getByText('供应商连接', { exact: true }).click(); await dialog.getByLabel('Responses 地址', { exact: true }).fill('https://b.example.test/v1'); await expect(sourceNative).toBeEnabled();
+  await dialog.getByText('供应商连接', { exact: true }).click(); await dialog.getByLabel('请求地址', { exact: true }).fill('https://b.example.test/v1'); await expect(sourceNative).toBeEnabled();
   await dialog.getByText('密钥已保存到系统 · 空输入保留', { exact: true }).click(); await dialog.getByRole('button', { name: '替换密钥' }).click();
   await dialog.getByLabel('API 密钥', { exact: true }).fill('synthetic-unfinished-b');
   await sourceNative.click(); await expect(sourceNative).toBeEnabled(); await sourceApi.click();
   await expect(dialog.getByLabel('API 密钥', { exact: true })).toHaveValue('synthetic-unfinished-b');
   const selected = await page.evaluate(() => (window as any).configurationProtocol.calls.filter((call: any) => call.command === 'select_configuration_credential').at(-1));
   expect(selected.args.credential).toEqual({ source: 'api_key', secretRef: null });
-  await dialog.getByLabel('Responses 地址', { exact: true }).fill('https://gateway.example.test/v1'); await expect(sourceNative).toBeEnabled();
+  await dialog.getByLabel('请求地址', { exact: true }).fill('https://gateway.example.test/v1'); await expect(sourceNative).toBeEnabled();
   await sourceNative.click(); await expect(sourceNative).toBeEnabled(); await sourceApi.click();
   await expect(dialog.getByText('密钥已保存到系统 · 空输入保留', { exact: true })).toBeVisible();
   expect(await page.evaluate(() => (Object.values((window as any).configurationProtocol.sessions)[0] as any).credential.secretRef)).toBe('saved-original');
@@ -1176,7 +1268,7 @@ test('codex named configuration hides restore for inherited and unset descriptor
   });
   await page.getByRole('button', { name: '修改', exact: true }).last().click();
   const dialog = page.getByRole('dialog');
-  const explicitField = dialog.getByLabel('当前模型', { exact: true }).locator('xpath=../..');
+  const explicitField = dialog.getByLabel('模型', { exact: true }).locator('xpath=../..');
   await expect(explicitField.getByRole('button', { name: '恢复默认', exact: true })).toBeVisible();
   await dialog.getByRole('button', { name: '常用设置', exact: true }).click();
   const inheritedField = dialog.getByLabel('推理摘要', { exact: true }).locator('..');

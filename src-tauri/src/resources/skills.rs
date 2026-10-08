@@ -11,8 +11,10 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+use crate::credentials::CredentialStore;
 use crate::database::Database;
 use crate::native::adapter::Scope;
+use crate::native::transaction::{self, FileMutation};
 use crate::adapters::Registry;
 use crate::projects;
 
@@ -66,6 +68,14 @@ pub struct NativeSkillEntry {
     pub state: &'static str,
     pub detail: String,
     pub package_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeSkillDocument {
+    pub name: String,
+    pub path: String,
+    pub content: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -191,49 +201,110 @@ fn preview_candidate(db: &Database, candidate: &Candidate) -> Result<SkillImport
 
 fn manifest_info(
     files: &BTreeMap<String, String>,
-    name: &str,
+    _name: &str,
 ) -> Result<(String, Option<String>), String> {
-    let encoded = files
-        .get("SKILL.md")
-        .ok_or("Skills 包需要根目录 SKILL.md")?;
+    // Directory name is the identity. Frontmatter name and description are
+    // metadata for display, not a reason to hide a skill that is already on disk.
+    let Some(encoded) = files.get("SKILL.md") else {
+        return Ok((String::new(), None));
+    };
     let text = String::from_utf8(STANDARD.decode(encoded).map_err(|_| "SKILL.md 编码错误")?)
         .map_err(|_| "SKILL.md 应为 UTF-8")?;
     let mut lines = text.lines();
     if lines.next().map(str::trim) != Some("---") {
-        return Err("SKILL.md 需要 name 和 description 的 YAML 元数据".into());
+        return Ok((String::new(), None));
     }
-    let mut declared_name = None;
-    let mut description = None;
+    let mut description = String::new();
     let mut compatibility = None;
-    let mut closed = false;
     for line in lines {
         if line.trim() == "---" {
-            closed = true;
             break;
         }
         if let Some((key, value)) = line.split_once(':') {
             let value = value.trim().trim_matches('"').trim_matches('\'').to_owned();
             match key.trim() {
-                "name" => declared_name = Some(value),
-                "description" => description = Some(value),
-                "compatibility" => compatibility = Some(value),
+                "description" => description = value,
+                "compatibility" if !value.is_empty() && value.len() <= 500 => {
+                    compatibility = Some(value);
+                }
                 _ => {}
             }
         }
     }
-    if !closed || declared_name.as_deref() != Some(name) {
-        return Err("SKILL.md 的 name 必须与 Skills 目录名一致".into());
-    }
-    let description = description
-        .filter(|value| !value.is_empty() && value.len() <= 1024)
-        .ok_or("SKILL.md 需要非空 description")?;
-    if compatibility
-        .as_deref()
-        .is_some_and(|value| value.is_empty() || value.len() > 500)
-    {
-        return Err("SKILL.md compatibility 长度无效".into());
-    }
     Ok((description, compatibility))
+}
+
+fn skill_markdown(
+    registry: &Registry,
+    home: &Path,
+    tool: &str,
+    scope: Scope,
+    project_path: Option<&str>,
+    directory: &str,
+) -> Result<(String, PathBuf), String> {
+    let (placeholder, _) = target(registry, home, tool, scope, project_path, "placeholder")?;
+    let root = placeholder.parent().ok_or("Skills 原生目录无效")?;
+    let requested = Path::new(directory);
+    let name = requested
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|name| !name.is_empty() && *name != "." && *name != ".." && !name.contains(['/', '\\']))
+        .ok_or("Skills 目录名无效")?;
+    let dir = root.join(name);
+    if !dir.is_dir() {
+        return Err("Skill 不在当前工具的 Skills 目录".into());
+    }
+    let requested_canon = requested.canonicalize().map_err(|_| "Skill 目录不存在".to_string())?;
+    let dir_canon = dir.canonicalize().map_err(|_| "Skill 目录不存在".to_string())?;
+    if requested_canon != dir_canon {
+        return Err("Skill 不在当前工具的 Skills 目录".into());
+    }
+    Ok((name.to_owned(), dir.join("SKILL.md")))
+}
+
+pub fn read_document(
+    db: &Database,
+    registry: &Registry,
+    home: &Path,
+    tool: &str,
+    scope: Scope,
+    project_path: Option<&str>,
+    directory: &str,
+) -> Result<NativeSkillDocument, String> {
+    let _context = crate::accounts::selection::enter_bound(db, home, tool, scope, project_path.map(Path::new))?;
+    let (name, file) = skill_markdown(registry, home, tool, scope, project_path, directory)?;
+    let content = transaction::read_native(&file)?;
+    Ok(NativeSkillDocument { name, path: directory.to_owned(), content })
+}
+
+pub fn save_document(
+    db: &Database,
+    credentials: &dyn CredentialStore,
+    registry: &Registry,
+    home: &Path,
+    tool: &str,
+    scope: Scope,
+    project_path: Option<&str>,
+    directory: &str,
+    baseline: &str,
+    content: &str,
+) -> Result<(), String> {
+    let _context = crate::accounts::selection::enter_bound(db, home, tool, scope, project_path.map(Path::new))?;
+    let (_, file) = skill_markdown(registry, home, tool, scope, project_path, directory)?;
+    let exists = file.is_file();
+    let current = if exists { transaction::read_native(&file)? } else { String::new() };
+    if current != baseline {
+        return Err("SKILL.md 已被外部修改，请重新打开".into());
+    }
+    if current == content {
+        return Ok(());
+    }
+    transaction::apply_files(db, credentials, &[FileMutation {
+        path: file,
+        baseline: if exists { Some(current) } else { None },
+        contents: Some(content.to_owned()),
+    }], |_| Ok(()))?;
+    Ok(())
 }
 
 fn lock() -> &'static Mutex<()> {
@@ -586,6 +657,11 @@ fn local_candidate(source: &str) -> Result<Candidate, String> {
         .canonicalize()
         .map_err(|_| "Skills 来源目录不存在")?;
     let (name, description, compatibility, files, checksum) = snapshot(&path)?;
+    // A library package is a distributable bundle, so it still needs SKILL.md.
+    // A directory already on a CLI can be opened and edited without one.
+    if !files.contains_key("SKILL.md") {
+        return Err("请选择包含 SKILL.md 的 Skills 目录".into());
+    }
     Ok(Candidate {
         name,
         description,
@@ -860,6 +936,9 @@ fn candidate_from_zip_files(source: &str, prefix: String, archive_files: BTreeMa
         if !relative.is_empty() {
             files.insert(relative.to_owned(), STANDARD.encode(contents));
         }
+    }
+    if !files.contains_key("SKILL.md") {
+        return Err("归档中没有 SKILL.md，请选择完整的 Skills 包".into());
     }
     let (description, compatibility) = manifest_info(&files, &name)?;
     let checksum = digest(&files)?;

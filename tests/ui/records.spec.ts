@@ -301,7 +301,8 @@ test('usage dashboard splits tokens, follows rows into filters and opens heavy s
   await page.keyboard.press('Home');
   await expect(chart.getByRole('status')).toContainText('00:00–01:00');
   for (let step = 0; step < 9; step++) await page.keyboard.press('ArrowRight');
-  await expect(chart.getByRole('status')).toContainText('1,200,000');
+  await expect(chart.getByRole('status')).toContainText('1.2M');
+  await expect(chart.getByRole('status')).not.toContainText('1,200,000');
   await expect(chart.getByRole('status')).toContainText('40 次');
   await page.getByRole('tab', { name: '费用', exact: true }).click();
   const trend = page.getByRole('region', { name: '用量趋势' });
