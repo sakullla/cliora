@@ -239,6 +239,17 @@ impl CliAdapter for Antigravity {
         // injects the headless GEMINI_API_KEY at spawn time.
         true
     }
+    fn connection_policy(&self, _scope: Scope) -> crate::native::adapter::ConnectionPolicy {
+        crate::native::adapter::ConnectionPolicy {
+            api_key: crate::native::adapter::api_key_unsupported(
+                "Antigravity 不向 settings.json 写入密钥；headless GEMINI_API_KEY 只在启动时注入，Cliora 暂不接管",
+            ),
+            provider_address: crate::native::adapter::address_unsupported(
+                "Antigravity 连接编辑面暂不交付：settings.json 以原生 JSON 编辑",
+            ),
+            projection: "single_connection",
+        }
+    }
     fn connection_documents(
         &self,
         _connection: &crate::native::profile::Connection,

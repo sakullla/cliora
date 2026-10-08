@@ -207,6 +207,17 @@ impl CliAdapter for Cline {
     fn auth_env_name(&self, _connection: &Connection) -> Option<String> {
         None
     }
+    fn connection_policy(&self, _scope: Scope) -> crate::native::adapter::ConnectionPolicy {
+        crate::native::adapter::ConnectionPolicy {
+            api_key: crate::native::adapter::api_key_unsupported(
+                "Cline 密钥存于系统 keychain 与明文 providers.json，Cliora 绝不写入",
+            ),
+            provider_address: crate::native::adapter::address_unsupported(
+                "Cline 连接与凭据由产品登录态（keychain 与 providers.json）保管，Cliora 不接管",
+            ),
+            projection: "single_connection",
+        }
+    }
     fn connection_documents(
         &self,
         _connection: &Connection,

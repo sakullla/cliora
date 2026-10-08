@@ -6,11 +6,13 @@
 .editor input:not([type="checkbox"]), .editor select { min-width: 0; width: 100%; box-sizing: border-box; }
 .note { font-size: .86em; color: var(--text-2); line-height: 1.5; margin: 0; }
 .model { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); min-width: 0; overflow: hidden; transition: border-color var(--fast) var(--ease); }
-.model > .fields { padding: 4px 12px 12px; border-top: 1px solid var(--line); }
+.model > .fields { padding: 12px 14px 14px; border-top: 1px solid var(--line); background: var(--surface-2); }
+.model > .fields input:not([type="checkbox"]), .model > .fields select { background-color: var(--surface); }
 .model:hover { border-color: var(--line-strong); }
 .model:has(> div > [aria-expanded='true']) { border-color: var(--accent-line); }
-.editor > div:not([hidden]), .editor > div > div:not([hidden]) { display: grid; gap: .57em; min-width: 0; }
-.modelSpacer { height: var(--config-footer-h); }
+.editor > div:not([hidden]), .editor > div > div:not([hidden]) { display: grid; gap: 14px; min-width: 0; }
+/* Scroll-end marker; the footer sits outside the scroll area so no extra height is needed. */
+.modelSpacer { height: 0; margin-top: -14px; }
 .editor fieldset { min-width: 0; display: grid; gap: .57em; }
 .editor button { max-width: 100%; white-space: normal; }
 

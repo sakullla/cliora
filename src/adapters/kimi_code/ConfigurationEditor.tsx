@@ -3,7 +3,7 @@ import { CommonConfigurationFields } from '../../components/configuration/Common
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ConnectionCredential } from '../../components/configuration/ConnectionCredential';
-import { AdditionalIssues, objectFields, EntityActions, EditorField, ModelRow, ProviderEditor, NewModelForm, useEditorAction } from '../../components/configuration/ModelEditorControls';
+import { AdditionalIssues, objectFields, EntityActions, EditorField, ModelRow, ModelStep, ProviderEditor, NewModelForm, useEditorAction } from '../../components/configuration/ModelEditorControls';
 import sharedStyles from '../../components/configuration/configuration.module.css';
 import type { ConfigurationContentProps } from '../contract';
 import i18n from '../../i18n';
@@ -47,9 +47,9 @@ function Editor(props: ConfigurationContentProps) {
       onConfigure={(id, value) => action.run({ kind: 'provider', provider: id }, 'configure_provider', value)}
       onSelect={id => action.run({ kind: 'provider', provider: id }, 'select_provider')} />
     <ConnectionCredential />
-    <details className={sharedStyles.disclosureCard}><summary>{t('tools.adapters.kimi.notesSummary')}</summary><p className={styles.note}>{t('tools.adapters.kimi.note1')}</p>
-    <p className={styles.note}>{t('tools.adapters.kimi.note2')}</p>
-    </details></div>
+    </div>
+    <ModelStep count={models.length} collapsed={Boolean(props.section && expanded)} defaultModel={view.defaultModel} catalog={props.catalog} disabled={structuralBlocked || !provider}
+      note={<details className={styles.notes}><summary>{t('tools.adapters.kimi.notesSummary')}</summary><p className={styles.note}>{t('tools.adapters.kimi.note1')}</p><p className={styles.note}>{t('tools.adapters.kimi.note2')}</p></details>}>
     {models.map(model => <article className={styles.model} key={`${provider}:${model.id}`} hidden={Boolean(props.section && expanded && expanded !== model.id)} aria-label={t('tools.adapters.shared.modelAria', { id: model.id })}>
       <ModelRow id={model.id} name={typeof model.fields.display_name === 'string' ? model.fields.display_name : undefined}
         sub={typeof model.fields.model === 'string' && model.fields.model !== model.id ? [t('tools.adapters.kimi.requestModel', { model: model.fields.model })] : []}
@@ -68,6 +68,7 @@ function Editor(props: ConfigurationContentProps) {
       listChoices={{ capabilities: capabilityChoices() }}
       initialValues={{ provider }} onCreate={async (id, values) => { const success = await action.run({ kind: 'model', provider, id }, 'create', values); if (success) setExpanded(id); return success; }} />}
     </div>
+    </ModelStep>
     <div className={styles.modelSpacer} data-list-spacer /></div>
     <div hidden={props.section === 'models'}><details className={sharedStyles.disclosureCard} open={props.section === 'settings'}><summary>{t('tools.adapters.kimi.thinkingSummary')}</summary>{descriptor.fields.filter(item => item.id.startsWith('thinking.')).map(item => field(item.id))}</details>
     </div>

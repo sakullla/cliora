@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ConfigurationField, type FieldPresentation } from '../../components/configuration/ConfigurationField';
 import { ConnectionCredential } from '../../components/configuration/ConnectionCredential';
+import { ConfigurationStep, connectionMeta } from '../../components/configuration/ConfigurationStep';
 import sharedStyles from '../../components/configuration/configuration.module.css';
 import type { ConfigurationContentProps } from '../contract';
 import styles from './ConfigurationEditor.module.css';
@@ -64,12 +65,13 @@ function Editor({ draft, descriptor, disabled, onAction, onValidityChange, secti
   };
   return <section className={styles.editor} aria-label={t('tools.adapters.claude.label')}>
     <div hidden={section === 'settings'}>
-      <section className={sharedStyles.providerCard} aria-label={t('common.provider.title')}>
-        <strong className={sharedStyles.sectionTitle}>{t('common.provider.title')}</strong>
-        {render('base_url')}
-      </section>
+      <ConfigurationStep step="connection" label={t('common.provider.title')} title={t('common.provider.title')} meta={connectionMeta(null, values.base_url)}>
+        <div className={styles.fields}>{render('base_url')}</div>
+      </ConfigurationStep>
       <ConnectionCredential />
-      {render('default.model')}
+      <ConfigurationStep step="model" title={t('tools.config.modelStepTitle')} meta={t('tools.config.modelStepHint')}>
+        <div className={styles.fields}>{render('default.model')}</div>
+      </ConfigurationStep>
     </div>
     <div hidden={section === 'models'}><details className={sharedStyles.disclosureCard} open={section === 'settings'}><summary>{t('tools.adapters.claude.rolesSummary')}</summary><div className={styles.fields}>
       <div className={styles.unifyRow}><button type="button" className={sharedStyles.accent} disabled={disabled || unifying || !values['default.model']} onClick={() => { void unify(); }}>{unifying ? t('tools.adapters.claude.unifying') : t('tools.adapters.claude.unify')}</button>{unifyError && <p role="alert">{unifyError}</p>}<p className={styles.note}>{t('tools.adapters.claude.unifyNote')}</p></div>

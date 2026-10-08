@@ -175,6 +175,17 @@ impl CliAdapter for Devin {
             &[]
         }
     }
+    fn connection_policy(&self, _scope: Scope) -> crate::native::adapter::ConnectionPolicy {
+        crate::native::adapter::ConnectionPolicy {
+            api_key: crate::native::adapter::api_key_unsupported(
+                "Devin 无托管连接通道：登录凭据由 credentials.toml 保管，Cliora 绝不读写",
+            ),
+            provider_address: crate::native::adapter::address_unsupported(
+                "Devin 固定走官方服务，config.json 无文档化的供应商连接字段",
+            ),
+            projection: "single_connection",
+        }
+    }
     fn connection_documents(
         &self,
         _connection: &Connection,
