@@ -36,7 +36,8 @@ type UpdateOffer = { version: string; notes: string | null };
 // 任意页面都能收到，设置页挂载时读取最新结果；未收到即无待提示更新。
 let autoCheckOffer: UpdateOffer | null = null;
 if (nativeAvailable) {
-  void listen<UpdateOffer>('cliora:update-available', (event) => { autoCheckOffer = event.payload; });
+  // 浏览器模式夹具只提供 invoke，transformCallback 缺失时 listen 会拒绝；真实运行时不受影响。
+  void listen<UpdateOffer>('cliora:update-available', (event) => { autoCheckOffer = event.payload; }).catch(() => {});
 }
 
 function formatMb(bytes: number): string {
