@@ -27,9 +27,19 @@ function versionParts(value: string) {
   });
 }
 
-/** Negative when current is older than latest. */
-const latestVersions = new Map<string, string>();
+const latestVersions = new Map<string, { at: number; request: Promise<string> }>();
+function latestVersion(tool: string, fresh: boolean) {
+  const cached = latestVersions.get(tool);
+  if (!fresh && cached && Date.now() - cached.at < 300_000) return cached.request;
+  const request = native.cliLatestVersion(tool).catch(error => {
+    if (latestVersions.get(tool)?.request === request) latestVersions.delete(tool);
+    throw error;
+  });
+  latestVersions.set(tool, { at: Date.now(), request });
+  return request;
+}
 
+/** Negative when current is older than latest. */
 function compareVersions(current: string, latest: string) {
   const left = versionParts(current);
   const right = versionParts(latest);
@@ -37,6 +47,22 @@ function compareVersions(current: string, latest: string) {
   for (let index = 0; index < length; index += 1) {
     const delta = (left[index] ?? 0) - (right[index] ?? 0);
     if (delta) return delta;
+  }
+  const prerelease = (version: string) => version.split('+')[0].split('-').slice(1).join('-');
+  const a = prerelease(current);
+  const b = prerelease(latest);
+  if (!a || !b) return a ? -1 : b ? 1 : 0;
+  const aParts = a.split('.');
+  const bParts = b.split('.');
+  for (let index = 0; index < Math.max(aParts.length, bParts.length); index += 1) {
+    if (aParts[index] === undefined) return -1;
+    if (bParts[index] === undefined) return 1;
+    if (aParts[index] === bParts[index]) continue;
+    const aNumber = /^\d+$/.test(aParts[index]);
+    const bNumber = /^\d+$/.test(bParts[index]);
+    if (aNumber && bNumber) return Number(aParts[index]) - Number(bParts[index]);
+    if (aNumber !== bNumber) return aNumber ? -1 : 1;
+    return aParts[index] < bParts[index] ? -1 : 1;
   }
   return 0;
 }
@@ -59,25 +85,22 @@ export function InstallPanel({ toolName, probe, customPath, busy, loading, onCus
   const hasNpm = available.some(item => item.source === 'npm_shim');
   const hasNative = available.some(item => isNative(item.source));
   const multiple = Boolean(probe.nativeInstallCommand && probe.npmInstallCommand);
+  const preferNative = probe.installCommand === probe.nativeInstallCommand;
   const problems = probe.dependencies.filter(item => item.status !== 'found');
   const versionKey = `${probe.tool}:${selected?.version ?? ''}`;
-  const [latest, setLatest] = useState<{ state: 'loading' | 'ready' | 'unknown'; version: string }>(() => {
-    const remembered = latestVersions.get(versionKey);
-    return remembered ? { state: 'ready', version: remembered } : { state: 'loading', version: '' };
-  });
+  const [retry, setRetry] = useState(0);
+  const [latest, setLatest] = useState<{ state: 'loading' | 'ready' | 'unknown' | 'unsupported'; version: string }>({ state: 'loading', version: '' });
   useEffect(() => {
-    const remembered = latestVersions.get(versionKey);
-    if (remembered) { setLatest({ state: 'ready', version: remembered }); return; }
+    if (probe.latestVersionSupported === false) { setLatest({ state: 'unsupported', version: '' }); return; }
     let live = true;
     setLatest({ state: 'loading', version: '' });
-    void native.cliLatestVersion(probe.tool).then((version) => {
+    void latestVersion(probe.tool, retry > 0).then((version) => {
       if (!live) return;
       const text = typeof version === 'string' ? version.trim() : '';
-      if (text) latestVersions.set(versionKey, text);
       setLatest(text ? { state: 'ready', version: text } : { state: 'unknown', version: '' });
     }).catch(() => { if (live) setLatest({ state: 'unknown', version: '' }); });
     return () => { live = false; };
-  }, [probe.tool, versionKey]);
+  }, [probe.tool, versionKey, probe.latestVersionSupported, retry]);
   const currentVersion = selected?.version?.trim() ?? '';
   const behind = Boolean(selected && currentVersion && latest.state === 'ready' && compareVersions(currentVersion, latest.version) < 0);
   const current = !selected || latest.state !== 'ready' || !currentVersion ? false : compareVersions(currentVersion, latest.version) >= 0;
@@ -88,7 +111,7 @@ export function InstallPanel({ toolName, probe, customPath, busy, loading, onCus
       ? (behind ? t('tools.install.currentLatest', { current: currentVersion, latest: latest.version }) : t('tools.install.currentUpToDate', { current: currentVersion }))
       : latest.state === 'loading'
         ? t('tools.install.checkingLatest', { current: currentVersion || t('tools.install.unknownVersion') })
-        : t('tools.install.latestUnknown', { current: currentVersion || t('tools.install.unknownVersion') });
+        : t(latest.state === 'unsupported' ? 'tools.install.latestUnsupported' : 'tools.install.latestUnknown', { current: currentVersion || t('tools.install.unknownVersion') });
   return <details className={styles.pathControl}>
     <summary><span className={styles.statusDot} data-ok={probe.nativeWrites.state === 'supported'} /><strong>{toolName}</strong><span>{selected || probe.nativeWrites.state === 'supported' ? summary : probe.nativeWrites.reason}</span><span className={styles.diagnosticLabel}>{t('tools.install.label')}</span></summary>
     {selected && <div className={styles.release}>
@@ -99,8 +122,9 @@ export function InstallPanel({ toolName, probe, customPath, busy, loading, onCus
       </div>
       <div data-state={behind ? 'behind' : current ? 'current' : undefined}>
         <span>{t('tools.install.latestVersion')}</span>
-        <strong>{latest.state === 'ready' ? latest.version : latest.state === 'loading' ? '…' : t('tools.install.notFound')}</strong>
-        <small>{behind ? t('tools.install.canUpdate', { latest: latest.version }) : current ? t('tools.install.upToDate') : latest.state === 'loading' ? t('tools.install.querying') : t('tools.install.unavailable')}</small>
+        <strong>{latest.state === 'ready' ? latest.version : latest.state === 'loading' ? '…' : t(latest.state === 'unsupported' ? 'tools.install.officialVersion' : 'tools.install.notFound')}</strong>
+        <small>{behind ? t('tools.install.canUpdate', { latest: latest.version }) : current ? t('tools.install.upToDate') : latest.state === 'loading' ? t('tools.install.querying') : t(latest.state === 'unsupported' ? 'tools.install.unsupportedVersion' : 'tools.install.unavailable')}</small>
+        {latest.state === 'unknown' && <button type="button" onClick={() => setRetry(value => value + 1)}>{t('tools.install.retryVersion')}</button>}
       </div>
     </div>}
     {available.filter(item => item.path !== selected?.path).map(item => <div className={styles.installRow} key={item.path}>
@@ -113,11 +137,12 @@ export function InstallPanel({ toolName, probe, customPath, busy, loading, onCus
     {problems.map(item => <p className={styles.installNote} key={item.name}>{item.name} {item.status === 'outdated' ? t('tools.install.outdated') : t('tools.install.missing')}{item.helpUrl && <ExternalLink href={item.helpUrl}>{t('tools.install.installLink')}</ExternalLink>}</p>)}
     <div className={styles.installActions}>
       {!selected && multiple && <>
-        <button type="button" disabled={busy} onClick={() => onMaintain('install_native', 'native')}>{t('tools.install.installNative')}</button>
-        <button type="button" className={styles.primary} disabled={busy} onClick={() => onMaintain('install', 'npm_shim')}>{t('tools.install.installNpm')}</button>
+        <button type="button" className={preferNative ? styles.primary : undefined} disabled={busy} onClick={() => onMaintain('install_native', 'native')}>{t('tools.install.installNative')}</button>
+        <button type="button" className={!preferNative ? styles.primary : undefined} disabled={busy} onClick={() => onMaintain('install', 'npm_shim')}>{t('tools.install.installNpm')}</button>
       </>}
+      {selected && multiple && !hasNative && <button type="button" disabled={busy} onClick={() => onMaintain('install_native', 'native')}>{t('tools.install.installNative')}</button>}
       {!selected && !multiple && probe.installCommand && <button type="button" className={styles.primary} disabled={busy} onClick={() => onMaintain('install')}>{t('tools.install.install')}</button>}
-      {behind && probe.upgradeCommand && <button type="button" className={styles.primary} disabled={busy || loading} onClick={() => onMaintain('upgrade', selected?.source)}>{updateLabel}</button>}
+      {selected && probe.upgradeCommand && (behind || latest.state === 'unknown' || latest.state === 'unsupported') && <button type="button" className={styles.primary} disabled={busy || loading} onClick={() => onMaintain('upgrade', selected.source)}>{updateLabel}</button>}
       {probe.installUrl && <ExternalLink href={probe.installUrl}>{t('tools.install.officialGuide')}</ExternalLink>}
     </div>
     <details className={styles.pathCustom}><summary>{t('tools.install.customPath')}</summary><div><input aria-label={t('tools.install.pathAria')} value={customPath} onChange={event => onCustomPath(event.target.value)} placeholder={t('tools.install.pathPlaceholder')} /><button type="button" disabled={busy} onClick={onSavePath}>{t('tools.install.saveAndRecheck')}</button></div></details>

@@ -8,7 +8,7 @@ import { native, nativeAvailable } from '../../lib/native';
 import { configurationApplicationState } from '../../lib/configurationDraft';
 import { confirmAction } from '../../lib/confirm';
 import { searchShortcutHint } from '../../lib/shortcut';
-import type { AdapterDescriptor, RegisteredProfile, RegisteredToolWorkspace, RegisteredToolContext, Scope, ApplyComparison } from '../../types/native';
+import type { AdapterDescriptor, RegisteredProfile, RegisteredToolWorkspace, RegisteredToolContext, Scope, ApplyComparison, MaintenanceProgress } from '../../types/native';
 import type { ConfigurationDraft, ConfigurationSaveResult, ConfigurationSubject } from '../../types/configuration';
 import type { AccountImpactScope } from '../../types/accounts';
 import type { Project, TrayRepairTarget } from '../../types/launch';
@@ -119,6 +119,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
+  const [maintenance, setMaintenance] = useState<{ tool: string; name: string; running: boolean; action: 'install' | 'upgrade' | 'install_native' | 'uninstall_npm'; source?: string; cancelling?: boolean; output: string; error: string; version?: string | null } | null>(null);
   const [applying, setApplying] = useState<string | null>(null);
   const [resource, setResource] = useState<ResourceView>(repair?.resourceView ?? readStoredContexts()[tool]?.resource ?? 'config');
   const [frame, setFrame] = useState<EditFrame | null>(null);
@@ -309,9 +310,33 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   async function remove(profile: RegisteredProfile) { const identity = currentContext.current; if (!await confirmAction(t('tools.workspace.confirmDelete', { name: profile.name }), () => alive.current && identity === currentContext.current, { title: t('tools.workspace.deleteTitle'), confirmLabel: t('tools.agents.delete'), destructive: true })) return; setBusy(true); try { await native.deleteNativeProfile(profile.id, profile.version, profile.revision ?? ''); if (identity === currentContext.current) await reload(toolId, scope, projectPath, true); } catch (failure) { setError(errorText(failure)); } finally { if (identity === currentContext.current) setBusy(false); } }
   function stored(result: ConfigurationSaveResult) { if (result.profile) setWorkspace(value => value ? { ...value, profiles: [...value.profiles.filter(profile => profile.id !== result.profile!.id), result.profile!] } : value); if (result.common) setWorkspace(value => value ? { ...value, common: result.common } : value); }
   function changed(_draft: ConfigurationDraft) { epoch.current++; }
-  async function maintain(action: 'install' | 'upgrade' | 'install_native' | 'uninstall_npm', source?: string) {
-    if (!await mayLeave() || !await confirmAction(t('tools.workspace.maintainConfirm'), () => alive.current, { title: action === 'uninstall_npm' ? t('tools.workspace.maintainUninstallTitle') : action === 'install' || action === 'install_native' ? t('tools.workspace.maintainInstallTitle') : t('tools.workspace.maintainUpgradeTitle'), confirmLabel: action === 'uninstall_npm' ? t('tools.plugins.action.uninstall') : action === 'install' || action === 'install_native' ? t('tools.plugins.action.install') : t('tools.plugins.action.update') })) return;
-    setBusy(true); try { await native.maintainRegisteredCli(toolId, action, source); await reload(toolId, scope, projectPath, true); } catch (failure) { setError(errorText(failure)); } finally { if (alive.current) setBusy(false); }
+  function cancelMaintenance() {
+    if (!maintenance?.running || maintenance.cancelling) return;
+    setMaintenance({ ...maintenance, cancelling: true });
+    void native.cancelCliMaintenance(maintenance.tool).catch(failure => setMaintenance(previous => previous ? { ...previous, cancelling: false, error: errorText(failure) } : previous));
+  }
+  async function maintain(action: 'install' | 'upgrade' | 'install_native' | 'uninstall_npm', source?: string, retry = false) {
+    if (busy) return;
+    if (!retry && (!await mayLeave() || !await confirmAction(t('tools.workspace.maintainConfirm'), () => alive.current, { title: action === 'uninstall_npm' ? t('tools.workspace.maintainUninstallTitle') : action === 'install' || action === 'install_native' ? t('tools.workspace.maintainInstallTitle') : t('tools.workspace.maintainUpgradeTitle'), confirmLabel: action === 'uninstall_npm' ? t('tools.plugins.action.uninstall') : action === 'install' || action === 'install_native' ? t('tools.plugins.action.install') : t('tools.plugins.action.update') }))) return;
+    const startedContext = currentContext.current;
+    setBusy(true);
+    setMaintenance({ tool: toolId, name: descriptor.name, running: true, action, source, output: '', error: '' });
+    let stop: (() => void) | undefined;
+    try {
+      stop = await listen<MaintenanceProgress>('cliora:maintenance-progress', event => {
+        if (alive.current && event.payload.toolId === toolId) setMaintenance(previous => previous ? { ...previous, output: event.payload.output } : previous);
+      }).catch(() => undefined);
+      const result = await native.maintainRegisteredCli(toolId, action, source);
+      if (alive.current) setMaintenance(previous => previous ? { ...previous, running: false, output: result.output, version: result.version } : previous);
+    } catch (failure) {
+      if (alive.current) setMaintenance(previous => previous ? { ...previous, running: false, error: errorText(failure) } : previous);
+    } finally {
+      stop?.();
+      if (alive.current) {
+        setBusy(false);
+        if (currentContext.current === startedContext) await reload(toolId, scope, projectPath, true);
+      }
+    }
   }
   async function savePath() { if (!await mayLeave()) return; setBusy(true); try { await native.setRegisteredCustomCliPath(toolId, customPath.trim() || null); await reload(toolId, scope, projectPath, true); } catch (failure) { setError(errorText(failure)); } finally { setBusy(false); } }
   async function usePath(path: string) { if (!await mayLeave()) return; setBusy(true); try { await native.setRegisteredCustomCliPath(toolId, path); await reload(toolId, scope, projectPath, true); } catch (failure) { setError(errorText(failure)); } finally { setBusy(false); } }
@@ -378,5 +403,15 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     {resourcesReady && resource === 'skills' && supported.skills && <SkillsWorkspace key={`${context}:${resourceEpoch}:${resourceContext?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={resourceContext?.effectiveContextId ?? null} onDirtyChange={skillsDirty} />}
     {resourcesReady && resource === 'agents' && supported.agents && <AgentsWorkspace key={`${context}:${resourceEpoch}:${resourceContext?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={resourceContext?.effectiveContextId ?? null} onDirtyChange={agentsDirty} />}
     {resourcesReady && resource === 'plugins' && supported.plugins && <PluginsWorkspace key={`${context}:${resourceEpoch}:${resourceContext?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={resourceContext?.effectiveContextId ?? null} />}
+    <GuideDialog open={!!maintenance} title={t('tools.workspace.maintenanceTitle', { name: maintenance?.name })} onClose={() => { if (maintenance?.running) cancelMaintenance(); else setMaintenance(null); }}>
+      {maintenance && <>
+        <p role="status">{maintenance.running ? t('tools.workspace.maintenanceRunning') : maintenance.error || t('tools.workspace.maintenanceDone', { version: maintenance.version ?? '' })}</p>
+        {maintenance.running && maintenance.error && <p role="alert">{maintenance.error}</p>}
+        <pre className={styles.maintenanceLog} aria-label={t('tools.workspace.maintenanceLog')}>{maintenance.output || t('tools.workspace.maintenanceWaiting')}</pre>
+        <div className="dialog-footer">{maintenance.running
+          ? <button disabled={maintenance.cancelling} onClick={cancelMaintenance}>{t(maintenance.cancelling ? 'tools.workspace.maintenanceCancelling' : 'tools.workspace.maintenanceCancel')}</button>
+          : <>{maintenance.error && maintenance.tool === toolId && <button disabled={busy} onClick={() => void maintain(maintenance.action, maintenance.source, true)}>{t('tools.workspace.maintenanceRetry')}</button>}<button onClick={() => setMaintenance(null)}>{t('tools.workspace.maintenanceClose')}</button></>}</div>
+      </>}
+    </GuideDialog>
   </section>;
 }

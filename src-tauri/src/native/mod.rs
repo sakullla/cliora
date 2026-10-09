@@ -8,6 +8,8 @@ pub mod profile;
 pub mod transaction;
 
 pub mod registered;
+pub(crate) mod releases;
+pub(crate) mod maintenance;
 
 pub mod configuration;
 pub mod workspace;

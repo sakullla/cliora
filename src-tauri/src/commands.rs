@@ -2182,39 +2182,14 @@ pub async fn set_default_launch_mode(
     Ok(settings)
 }
 
-fn npm_latest_version(package: &str) -> Result<String, String> {
-    let url = format!("https://registry.npmjs.org/{package}/latest");
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(8))
-        .redirect(reqwest::redirect::Policy::limited(3))
-        .build()
-        .map_err(|_| "暂时查不到最新版本".to_string())?;
-    let response = client
-        .get(&url)
-        .header(reqwest::header::ACCEPT, "application/json")
-        .send()
-        .map_err(|_| "暂时查不到最新版本".to_string())?;
-    if !response.status().is_success() {
-        return Err("暂时查不到最新版本".into());
-    }
-    let body: serde_json::Value = response.json().map_err(|_| "暂时查不到最新版本".to_string())?;
-    body.get("version")
-        .and_then(|value| value.as_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-        .ok_or_else(|| "暂时查不到最新版本".into())
-}
-
 #[tauri::command]
 pub async fn cli_latest_version(tool_id: String) -> Result<String, ApiError> {
     blocking(move || {
-        let adapter = adapters::Registry::builtins()
-            .get(&tool_id)
+        let registry = adapters::Registry::builtins();
+        let adapter = registry.get(&tool_id)
             .ok_or_else(|| native_error("此 CLI 适配器未注册".into()))?;
-        npm_latest_version(adapter.npm_package()).map_err(native_error)
-    })
-    .await
+        crate::native::releases::latest(adapter).map_err(native_error)
+    }).await
 }
 
 #[tauri::command]
@@ -2223,33 +2198,19 @@ pub async fn maintain_registered_cli(
     tool_id: String,
     action: String,
     source: Option<String>,
-) -> Result<(), ApiError> {
+) -> Result<crate::native::maintenance::MaintenanceResult, ApiError> {
     blocking(move || {
-        let registry = adapters::Registry::builtins();
-        let adapter = registry
-            .get(&tool_id)
-            .ok_or_else(|| native_error("此 CLI 适配器未注册".into()))?;
-        let source = source.as_deref().unwrap_or("unknown");
-        if !matches!(source, "npm_shim" | "native" | "unknown") {
-            return Err(native_error("未知安装来源".into()));
-        }
-        let script = match action.as_str() {
-            "install" => match source {
-                "npm_shim" => adapter.npm_install_command(),
-                "native" => adapter.native_install_command(),
-                _ => adapter.install_command(),
-            },
-            "install_native" => adapter.native_install_command(),
-            "upgrade" => adapter.upgrade_command(source),
-            "uninstall_npm" => adapter.npm_uninstall_command(),
-            _ => None,
-        }
-        .ok_or_else(|| native_error("没有可直接执行的命令".into()))?;
-        app.state::<AppState>().with_database(&app, |database| {
-            launch::open_shell(database, &script).map_err(native_error)
-        })
-    })
-    .await
+        crate::native::maintenance::maintain(
+            &adapters::Registry::builtins(), &tool_id, &action,
+            source.as_deref().unwrap_or("unknown"), &home()?,
+            |progress| { let _ = app.emit("cliora:maintenance-progress", progress); },
+        ).map_err(native_error)
+    }).await
+}
+
+#[tauri::command]
+pub fn cancel_cli_maintenance(tool_id: String) {
+    crate::native::maintenance::cancel(&tool_id);
 }
 
 #[tauri::command]

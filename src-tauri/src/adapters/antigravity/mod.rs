@@ -81,6 +81,12 @@ impl CliAdapter for Antigravity {
     fn npm_package(&self) -> &'static str {
         ""
     }
+    fn latest_version_url(&self) -> Option<String> {
+        let os = if cfg!(windows) { "windows" } else if cfg!(target_os = "macos") { "darwin" } else { "linux" };
+        let arch = if cfg!(target_arch = "aarch64") { "arm64" } else if cfg!(target_arch = "x86_64") { "amd64" } else { return None };
+        let libc = if cfg!(all(target_os = "linux", target_env = "musl")) { "_musl" } else { "" };
+        Some(format!("https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/{os}_{arch}{libc}.json"))
+    }
     /// 1.3.1 verified locally; identity only accepts the documented command
     /// name with a self-named or bare semver response.
     fn version_identity(&self, basename: &str, output: &str) -> bool {

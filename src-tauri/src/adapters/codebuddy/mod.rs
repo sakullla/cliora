@@ -398,7 +398,7 @@ impl CliAdapter for CodeBuddy {
     }
     fn upgrade_command(&self, source: &str) -> Option<String> {
         match source {
-            "npm_shim" => Some(format!("npm install -g {}@latest", self.npm_package())),
+            "npm_shim" => self.npm_install_command(),
             "native" => Some("codebuddy update".into()),
             _ => None,
         }

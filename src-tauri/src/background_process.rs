@@ -20,6 +20,19 @@ pub(crate) fn command(program: impl AsRef<OsStr>) -> Command {
     }
 }
 
+pub(crate) fn terminate(child: &mut std::process::Child) {
+    #[cfg(windows)]
+    if let Some(root) = std::env::var_os("SystemRoot") {
+        let _ = command(std::path::PathBuf::from(root).join("System32/taskkill.exe"))
+            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status();
+    }
+    #[cfg(unix)]
+    let _ = kill_process_group(child.id());
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 #[cfg(unix)]
 pub(crate) fn kill_process_group(pid: u32) -> std::io::Result<std::process::ExitStatus> {
     use std::os::unix::process::CommandExt;

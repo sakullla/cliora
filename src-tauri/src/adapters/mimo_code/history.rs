@@ -57,7 +57,13 @@ pub fn sources_controlled(
     if !path.is_file() {
         return Ok(Vec::new());
     }
-    let connection = open(&path)?;
+    static CACHE: std::sync::LazyLock<crate::history::source_cache::RevisionCache<Vec<HistorySource>>> = std::sync::LazyLock::new(crate::history::source_cache::RevisionCache::new);
+    CACHE.read(&path, cancelled, || discover_database(&path, cancelled))
+}
+
+fn discover_database(path: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<HistorySource>, String> {
+    let connection = open(path)?;
+    let connection = connection.unchecked_transaction().map_err(|e| e.to_string())?;
     let mut sources = Vec::new();
     // Root sessions only: child rows are peer actor hosts folded into their
     // parent below, never listed as independent conversations.
@@ -120,12 +126,25 @@ pub fn sources_controlled(
         }
     }
     drop(statement);
+    // Transcript parts can change independently from message token metadata.
+    let mut statement = connection.prepare(
+        "SELECT session_id, json_array(id,message_id,data,time_created) FROM part ORDER BY session_id,id"
+    ).map_err(|e| e.to_string())?;
+    let rows = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))).map_err(|e| e.to_string())?;
+    for row in rows {
+        check_cancelled(cancelled)?;
+        let (id, data) = row.map_err(|e| e.to_string())?;
+        if let Some((count, hash)) = hashes.get_mut(&id) {
+            *count += 1;
+            for (slot, byte) in hash.iter_mut().zip(md5_hex(data.as_bytes())) { *slot ^= byte; }
+        }
+    }
     for (id, (count, hash)) in hashes {
         sources.push(HistorySource {
             native_title: None,
-            path: path.clone(),
+            path: path.to_path_buf(),
             native_id: Some(id),
-            fingerprint: format!("mimo-session-v1|{count}|{}", hex(&hash)),
+            fingerprint: format!("mimo-session-v2|{count}|{}", hex(&hash)),
             fingerprint_error: None,
         });
     }
@@ -443,7 +462,7 @@ mod tests {
             sources[0].native_id.as_deref(),
             Some("ses_root_2026_10_05_a1b2c3d4e5f6g7h8i9j0k1l2m")
         );
-        assert!(sources[0].fingerprint.starts_with("mimo-session-v1|"));
+        assert!(sources[0].fingerprint.starts_with("mimo-session-v2|"));
         let before = sources[0].fingerprint.clone();
         // A new billed message in the child session changes the parent fingerprint.
         let connection = Connection::open(&database).unwrap();

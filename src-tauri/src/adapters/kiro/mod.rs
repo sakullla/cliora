@@ -121,6 +121,9 @@ impl CliAdapter for Kiro {
     fn npm_package(&self) -> &'static str {
         ""
     }
+    fn latest_version_url(&self) -> Option<String> {
+        Some("https://prod.download.cli.kiro.dev/stable/latest/manifest.json".into())
+    }
     /// No verified `--version` transcript exists (the CLI is not installed
     /// locally); identity only accepts the documented command name with a
     /// self-named or bare semver response.

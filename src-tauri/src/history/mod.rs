@@ -18,6 +18,7 @@ use crate::adapters::{CliAdapter, Registry};
 pub(crate) mod models_dev;
 mod report;
 pub(crate) mod usage;
+pub(crate) mod source_cache;
 
 pub use report::{usage_report, UsageReport};
 

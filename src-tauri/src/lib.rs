@@ -283,6 +283,7 @@ pub fn run() {
             commands::launch_cli,
             commands::cli_latest_version,
             commands::maintain_registered_cli,
+            commands::cancel_cli_maintenance,
             commands::get_tray_status,
             commands::quit_app,
             commands::set_registered_managed_tools,

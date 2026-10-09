@@ -100,6 +100,7 @@ impl CliAdapter for KimiCode {
     fn npm_package(&self) -> &'static str {
         "@moonshot-ai/kimi-code"
     }
+    fn npm_script_dependencies(&self) -> &'static [&'static str] { &["node-pty"] }
     /// `kimi --version` on 0.31.1 prints only the bare semver line ("0.31.1").
     fn version_identity(&self, basename: &str, output: &str) -> bool {
         basename == "kimi"
@@ -534,7 +535,7 @@ impl CliAdapter for KimiCode {
     }
     fn upgrade_command(&self, source: &str) -> Option<String> {
         match source {
-            "npm_shim" => Some(format!("npm install -g {}@latest", self.npm_package())),
+            "npm_shim" => self.npm_install_command(),
             "native" => Some("kimi upgrade".into()),
             _ => None,
         }

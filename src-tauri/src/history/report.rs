@@ -279,7 +279,8 @@ struct Call {
     request_count: Option<u64>,
     /// Index into `Loaded::tools`.
     tool: usize,
-    model: Option<String>,
+    /// Index into Loaded::models; labels are allocated once per distinct model.
+    model: usize,
     timestamp: Option<i64>,
     input: u64,
     cache_read: u64,
@@ -307,6 +308,7 @@ struct Tally {
     totals: UsageTotals,
     sessions: HashSet<usize>,
     priced: bool,
+    last_session: Option<usize>,
 }
 
 impl Tally {
@@ -327,7 +329,10 @@ impl Tally {
             }
             None => totals.unpriced_tokens += call.total(),
         }
-        self.sessions.insert(call.session);
+        if self.last_session != Some(call.session) {
+            self.sessions.insert(call.session);
+            self.last_session = Some(call.session);
+        }
     }
     fn finish(mut self) -> UsageTotals {
         self.totals.sessions = self.sessions.len() as u64;
@@ -400,6 +405,7 @@ fn usage_source(filter: &HistoryFilter) -> &'static str {
 
 struct Loaded {
     tools: Vec<String>,
+    models: Vec<(usize, Option<String>)>,
     calls: Vec<Call>,
     sessions: Vec<SessionRow>,
     duplicates: u64,
@@ -423,13 +429,16 @@ fn load_calls(conn: &Connection, filter: &HistoryFilter, from: Option<i64>, to: 
     let mut rows = statement
         .query(rusqlite::params_from_iter(values))
         .map_err(|error| error.to_string())?;
-    let mut loaded = Loaded { tools: Vec::new(), calls: Vec::new(), sessions: Vec::new(), duplicates: 0, price_sources: Vec::new() };
+    let mut loaded = Loaded { tools: Vec::new(), models: Vec::new(), calls: Vec::new(), sessions: Vec::new(), duplicates: 0, price_sources: Vec::new() };
     let mut session_index = HashMap::<String, usize>::new();
     // Session bodies can occupy thousands of SQLite pages. Load metadata once
     // per session instead of joining that large table for every model call.
     let mut session_metadata = conn.prepare(
-        "SELECT id, project_id, cwd, partial, stale FROM history_sessions INDEXED BY idx_history_list
-         WHERE (?1 IS NULL OR id = ?1)"
+        if session_id.is_some() {
+            "SELECT id, project_id, cwd, partial, stale FROM history_sessions WHERE id = ?1"
+        } else {
+            "SELECT id, project_id, cwd, partial, stale FROM history_sessions INDEXED BY idx_history_list WHERE ?1 IS NULL"
+        }
     ).map_err(|error| error.to_string())?;
     let mut known_sessions = session_metadata.query_map([session_id], |row| {
         let id: String = row.get(0)?;
@@ -442,7 +451,9 @@ fn load_calls(conn: &Connection, filter: &HistoryFilter, from: Option<i64>, to: 
     // Hashed (tool, event id) keys keep de-duplication cheap over hundreds of thousands of calls.
     let mut seen = HashSet::<u64>::new();
     let mut sources = std::collections::BTreeSet::new();
-    let mut rates: HashMap<usize, HashMap<String, Option<PricedModel>>> = HashMap::new();
+    let mut model_index = HashMap::<(usize, Option<String>), usize>::new();
+    let mut rates: Vec<Option<PricedModel>> = Vec::new();
+    let mut tool_index = HashMap::<String, usize>::new();
     let count = |value: Option<i64>| value.unwrap_or(0).max(0) as u64;
     while let Some(row) = rows.next().map_err(|error| error.to_string())? {
         let session_id: String = row.get(0).map_err(|error| error.to_string())?;
@@ -454,13 +465,11 @@ fn load_calls(conn: &Connection, filter: &HistoryFilter, from: Option<i64>, to: 
             loaded.duplicates += 1;
             continue;
         }
-        let tool = match loaded.tools.iter().position(|known| *known == tool_name) {
-            Some(index) => index,
-            None => {
-                loaded.tools.push(tool_name);
-                loaded.tools.len() - 1
-            }
-        };
+        let tool = *tool_index.entry(tool_name.clone()).or_insert_with(|| {
+            let index = loaded.tools.len();
+            loaded.tools.push(tool_name);
+            index
+        });
         let session = match session_index.get(&session_id) {
             Some(index) => *index,
             None => {
@@ -470,6 +479,19 @@ fn load_calls(conn: &Connection, filter: &HistoryFilter, from: Option<i64>, to: 
             }
         };
         let model: Option<String> = row.get(3).map_err(|error| error.to_string())?;
+        let key = (tool, model);
+        let model = match model_index.get(&key) {
+            Some(index) => *index,
+            None => {
+                let rate = key.1.as_deref().and_then(|model| book.resolve(&loaded.tools[tool], model));
+                if let Some(price) = &rate { sources.insert(price.label.clone()); }
+                let index = loaded.models.len();
+                rates.push(rate);
+                loaded.models.push(key.clone());
+                model_index.insert(key, index);
+                index
+            }
+        };
         let input = count(row.get(5).map_err(|error| error.to_string())?);
         let output = count(row.get(6).map_err(|error| error.to_string())?);
         let mut cache_read = count(row.get(7).map_err(|error| error.to_string())?);
@@ -495,15 +517,7 @@ fn load_calls(conn: &Connection, filter: &HistoryFilter, from: Option<i64>, to: 
             output,
             cost: None,
         };
-        if let Some(model) = call.model.as_ref() {
-            let prices = rates.entry(call.tool).or_default();
-            if !prices.contains_key(model) {
-                let price = book.resolve(&loaded.tools[call.tool], model);
-                if let Some(price) = &price { sources.insert(price.label.clone()); }
-                prices.insert(model.clone(), price);
-            }
-            call.cost = prices.get(model).and_then(Option::as_ref).map(|price| price.cost(&call));
-        }
+        call.cost = rates[call.model].as_ref().map(|price| price.cost(&call));
         loaded.calls.push(call);
     }
     loaded.price_sources = sources.into_iter().collect();
@@ -592,24 +606,27 @@ pub fn usage_report(db: &Database, filter: &HistoryFilter) -> Result<UsageReport
                 (None, None) => ("unknown".to_owned(), "未归类".to_owned(), None),
             })
             .collect();
-        let mut models: HashMap<(usize, Option<&str>), Tally> = HashMap::new();
-        let mut tools: HashMap<usize, Tally> = HashMap::new();
+        let mut models: Vec<Tally> = loaded.models.iter().map(|_| Tally::default()).collect();
+        let mut tools: Vec<Tally> = loaded.tools.iter().map(|_| Tally::default()).collect();
         let mut projects_by_key: HashMap<&str, (usize, Tally)> = HashMap::new();
-        let mut per_session: HashMap<usize, Tally> = HashMap::new();
+        let mut per_session: Vec<Tally> = loaded.sessions.iter().map(|_| Tally::default()).collect();
         for call in &loaded.calls {
-            models.entry((call.tool, call.model.as_deref())).or_default().add(call);
-            tools.entry(call.tool).or_default().add(call);
+            models[call.model].add(call);
+            tools[call.tool].add(call);
             projects_by_key
                 .entry(session_projects[call.session].0.as_str())
                 .or_insert_with(|| (call.session, Tally::default()))
                 .1
                 .add(call);
-            per_session.entry(call.session).or_default().add(call);
+            per_session[call.session].add(call);
         }
         let models = models
             .into_iter()
-            .map(|((tool, model), tally)| {
-                let tool = &loaded.tools[tool];
+            .enumerate()
+            .map(|(index, tally)| {
+                let (tool, model) = &loaded.models[index];
+                let model = model.as_deref();
+                let tool = &loaded.tools[*tool];
                 let mut value = group(format!("{tool}\u{1f}{}", model.unwrap_or("")), model.unwrap_or("模型未知").to_owned());
                 value.tool_id = Some(tool.clone());
                 value.model = model.map(str::to_owned);
@@ -618,6 +635,7 @@ pub fn usage_report(db: &Database, filter: &HistoryFilter) -> Result<UsageReport
             .collect();
         let tools = tools
             .into_iter()
+            .enumerate()
             .map(|(tool, tally)| {
                 let tool = &loaded.tools[tool];
                 let mut value = group(tool.clone(), tool.clone());
@@ -637,6 +655,7 @@ pub fn usage_report(db: &Database, filter: &HistoryFilter) -> Result<UsageReport
 
         let mut ranked_sessions: Vec<(usize, UsageTotals)> = per_session
             .into_iter()
+            .enumerate()
             .map(|(index, tally)| (index, tally.finish()))
             .collect();
         ranked_sessions.sort_by(|left, right| right.1.total.cmp(&left.1.total).then_with(|| left.0.cmp(&right.0)));

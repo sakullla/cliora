@@ -73,6 +73,14 @@ impl CliAdapter for ZCode {
     fn npm_package(&self) -> &'static str {
         ""
     }
+    fn latest_version_url(&self) -> Option<String> { Some("https://zcode.z.ai/cn".into()) }
+    fn parse_latest_version(&self, text: &str) -> Option<String> {
+        // The official download page publishes versioned installer links.
+        // Match that release path only, never unrelated numbers in the page.
+        text.split("https://cdn-zcode.z.ai/zcode/electron/releases/").skip(1)
+            .filter_map(|part| semver::Version::parse(part.split('/').next()?).ok())
+            .max().map(|version| version.to_string())
+    }
     /// The desktop binary has no verified `--version` contract (it opens the
     /// app instead of printing); installation identity comes from the official
     /// install markers, never from a fabricated version string.

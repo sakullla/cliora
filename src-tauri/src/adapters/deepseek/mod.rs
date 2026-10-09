@@ -67,6 +67,17 @@ impl CliAdapter for DeepSeek {
     fn npm_package(&self) -> &'static str {
         ""
     }
+    fn latest_version_url(&self) -> Option<String> {
+        // Official desktop-auto-update-environment.mjs production feeds.
+        let target = if cfg!(all(windows, target_arch = "x86_64")) { "win-x64/nightly.yml" }
+            else if cfg!(all(target_os = "macos", target_arch = "aarch64")) { "mac-arm64/nightly-mac.yml" }
+            else if cfg!(all(target_os = "macos", target_arch = "x86_64")) { "mac-x64/nightly-mac.yml" }
+            else { return None };
+        Some(format!("https://download.deepseek.com/dsh-desk/feeds/{target}"))
+    }
+    fn parse_latest_version(&self, text: &str) -> Option<String> {
+        serde_yaml::from_str::<Value>(text).ok()?.get("version")?.as_str().map(str::to_owned)
+    }
     /// The desktop app has no verified `--version` contract; install evidence
     /// is the Windows uninstall table (see `detect`), never a version probe.
     fn version_identity(&self, _basename: &str, _output: &str) -> bool {

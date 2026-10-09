@@ -93,6 +93,13 @@ impl CliAdapter for CommandCode {
     fn npm_package(&self) -> &'static str {
         "command-code"
     }
+    fn minimum_node_version(&self) -> Option<(u32, u32, u32)> { Some((22, 0, 0)) }
+    fn node_dependency_detail(&self) -> &'static str { "Command Code 的 npm 安装需要 Node.js 22 或更新版本" }
+    fn version_probe_environment(&self) -> &'static [(&'static str, &'static str)] {
+        // 1.79.x initializes OpenTelemetry before Commander handles --version.
+        // Its SDK shutdown can wait on the network even for this local query.
+        &[("OTEL_SDK_DISABLED", "true")]
+    }
     /// `cmdc --version` prints a bare semver string ("1.73.4"), so the probed
     /// binary name is the only identity signal; the Windows `cmd.exe`
     /// collision stays out of scope.

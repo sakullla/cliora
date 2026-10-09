@@ -97,6 +97,10 @@ impl CliAdapter for Devin {
     fn npm_package(&self) -> &'static str {
         ""
     }
+    fn latest_version_url(&self) -> Option<String> {
+        // Official setup.sh / setup.ps1 use this promoted public channel.
+        Some("https://static.devin.ai/cli/current/manifest.json".into())
+    }
     /// No verified `--version` transcript exists yet; identity only accepts the
     /// documented command name with a self-named or bare semver response.
     fn version_identity(&self, basename: &str, output: &str) -> bool {

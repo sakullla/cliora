@@ -144,7 +144,19 @@ pub trait CliAdapter: Sync {
     fn name(&self) -> &'static str;
     fn command(&self) -> &'static str;
     fn npm_package(&self) -> &'static str;
+    /// Public release metadata belongs to the adapter; transport and caching
+    /// belong to the shared native service. No npm request for standalone CLIs.
+    fn latest_version_url(&self) -> Option<String> {
+        let package = self.npm_package();
+        (!package.is_empty()).then(|| format!("https://registry.npmjs.org/{package}/latest"))
+    }
+    fn parse_latest_version(&self, text: &str) -> Option<String> {
+        serde_json::from_str::<Value>(text).ok()?.get("version")?.as_str().map(str::to_owned)
+    }
     fn version_identity(&self, basename: &str, output: &str) -> bool;
+    /// Noninteractive version probes may disable adapter-owned startup work.
+    /// These overrides never apply to interactive launches or user configuration.
+    fn version_probe_environment(&self) -> &'static [(&'static str, &'static str)] { &[] }
     /// Desktop installation evidence; never launch a GUI with `--version`.
     /// Paths and product/version markers belong to the implementation.
     fn native_installations(&self, _home: &Path) -> Vec<crate::native::adapter::Installation> {
@@ -499,17 +511,21 @@ pub trait CliAdapter: Sync {
         Vec::new()
     }
     fn install_command(&self) -> Option<String> {
-        Some(format!("npm install -g {}", self.npm_package()))
+        self.npm_install_command()
     }
     fn native_install_command(&self) -> Option<String> {
         None
     }
     fn npm_install_command(&self) -> Option<String> {
         let package = self.npm_package();
-        (!package.is_empty()).then(|| format!("npm install -g {package}"))
+        let scripts = std::iter::once(package).chain(self.npm_script_dependencies().iter().copied()).collect::<Vec<_>>().join(",");
+        (!package.is_empty()).then(|| format!("npm install -g {package}@latest --include=optional --ignore-scripts=false --foreground-scripts --allow-scripts={scripts} --no-audit --no-fund --fetch-retries=3 --fetch-timeout=60000 --fetch-retry-mintimeout=1000 --fetch-retry-maxtimeout=10000"))
     }
+    /// npm 11.17+ script policy. Adapters declare native build dependencies;
+    /// the top-level package is always included, scoped to this invocation.
+    fn npm_script_dependencies(&self) -> &'static [&'static str] { &[] }
     fn upgrade_command(&self, source: &str) -> Option<String> {
-        (source == "npm_shim").then(|| format!("npm install -g {}@latest", self.npm_package()))
+        (source == "npm_shim").then(|| self.npm_install_command()).flatten()
     }
     fn npm_uninstall_command(&self) -> Option<String> {
         let package = self.npm_package();

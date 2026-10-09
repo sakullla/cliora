@@ -1,3 +1,4 @@
+import type { MaintenanceResult } from '../types/native';
 import type { ConfigurationAction, ConfigurationDescriptor, ConfigurationDraft } from '../types/configuration';
 import type { RegisteredToolContext } from '../types/native';
 import { invoke, isTauri } from '@tauri-apps/api/core';
@@ -192,7 +193,8 @@ export const native = {
   setDefaultLaunchMode: (target: 'cli' | 'project', mode: LaunchMode) => command<LaunchSettings>('set_default_launch_mode', { target, mode }),
   launchCli: (request: LaunchRequest) => command<LaunchResult>('launch_cli', { request }),
   cliLatestVersion: (toolId: string) => command<string>('cli_latest_version', { toolId }),
-  maintainRegisteredCli: (toolId: string, action: 'install' | 'upgrade' | 'install_native' | 'uninstall_npm', source?: string) => command<void>('maintain_registered_cli', { toolId, action, source: source ?? null }),
+  cancelCliMaintenance: (toolId: string) => command<void>('cancel_cli_maintenance', { toolId }),
+  maintainRegisteredCli: (toolId: string, action: 'install' | 'upgrade' | 'install_native' | 'uninstall_npm', source?: string) => command<MaintenanceResult>('maintain_registered_cli', { toolId, action, source: source ?? null }),
   getTrayStatus: () => command<TrayStatus>('get_tray_status'),
   quitApp: () => command<void>('quit_app'),
   listCliAdapters: () => command<AdapterCatalog>('list_cli_adapters'),

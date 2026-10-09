@@ -32,6 +32,10 @@ impl CliAdapter for Sixth {
     fn npm_package(&self) -> &'static str {
         "@fixture/sixth"
     }
+    fn npm_script_dependencies(&self) -> &'static [&'static str] { &["@fixture/native"] }
+    fn version_probe_environment(&self) -> &'static [(&'static str, &'static str)] { &[("CLIORA_FIXTURE_PROBE", "yes")] }
+    fn latest_version_url(&self) -> Option<String> { Some("https://example.invalid/sixth/releases".into()) }
+    fn parse_latest_version(&self, text: &str) -> Option<String> { text.strip_prefix("release=").map(str::to_owned) }
     fn version_identity(&self, _: &str, output: &str) -> bool {
         output.contains("sixth_fixture")
     }
@@ -124,6 +128,18 @@ impl CliAdapter for Sixth {
 
 #[derive(Default)]
 struct MemoryCredentials(Mutex<HashMap<String, String>>);
+
+#[test]
+fn sixth_release_and_install_policy_extend_through_registry() {
+    let registry = Registry::with_adapters(vec![&SIXTH]).unwrap();
+    let adapter = registry.get("sixth_fixture").unwrap();
+    assert_eq!(adapter.version_probe_environment(), &[("CLIORA_FIXTURE_PROBE", "yes")]);
+    assert_eq!(adapter.latest_version_url().as_deref(), Some("https://example.invalid/sixth/releases"));
+    assert_eq!(adapter.parse_latest_version("release=1.2.3").as_deref(), Some("1.2.3"));
+    let command = adapter.npm_install_command().unwrap();
+    assert!(command.contains("--allow-scripts=@fixture/sixth,@fixture/native"));
+    assert_eq!(adapter.upgrade_command("npm_shim"), Some(command));
+}
 impl CredentialStore for MemoryCredentials {
     fn put(&self, id: &str, secret: &str) -> Result<(), String> {
         self.0.lock().unwrap().insert(id.into(), secret.into());
@@ -155,9 +171,9 @@ fn sixth_adapter_uses_the_same_probe_native_transaction_and_launch_orchestration
         home.join("sixth_fixture")
     };
     if cfg!(windows) {
-        std::fs::write(&executable, "Write-Output 'sixth_fixture 1.0.0'\n").unwrap();
+        std::fs::write(&executable, "if ($env:CLIORA_FIXTURE_PROBE -ne 'yes') { exit 1 }; Write-Output 'sixth_fixture 1.0.0'\n").unwrap();
     } else {
-        std::fs::write(&executable, "#!/bin/sh\necho 'sixth_fixture 1.0.0'\n").unwrap();
+        std::fs::write(&executable, "#!/bin/sh\n[ \"$CLIORA_FIXTURE_PROBE\" = yes ] || exit 1\necho 'sixth_fixture 1.0.0'\n").unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

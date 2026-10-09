@@ -1,10 +1,8 @@
-#[cfg(not(test))]
 use std::collections::HashMap;
 use std::env;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-#[cfg(not(test))]
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -101,6 +99,7 @@ pub fn address_unsupported(reason: &'static str) -> ConnectionFacet {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolProbe {
+    pub latest_version_supported: bool,
     pub tool: String,
     pub installations: Vec<Installation>,
     pub selected_path: Option<String>,
@@ -407,6 +406,12 @@ fn version_from_output(adapter: &dyn CliAdapter, path: &Path, output: &str) -> O
     if !identity {
         return None;
     }
+    if let Some(version) = output.split(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '+')))
+        .map(|token| token.trim_start_matches('v'))
+        .find(|token| semver::Version::parse(token).is_ok())
+    {
+        return Some(version.to_owned());
+    }
     output
         .split(|c: char| !(c.is_ascii_digit() || c == '.'))
         .find(|part| {
@@ -415,7 +420,39 @@ fn version_from_output(adapter: &dyn CliAdapter, path: &Path, output: &str) -> O
         .map(str::to_string)
 }
 
+type VersionEntry = Option<(Instant, String, Installation)>;
+type VersionCache = HashMap<(String, PathBuf), std::sync::Arc<Mutex<VersionEntry>>>;
+static VERSION_CACHE: std::sync::LazyLock<Mutex<VersionCache>> = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Version processes are independent of account, scope and page. Share their
+/// evidence across full/summary reads and coalesce concurrent cold requests.
 fn run_version(path: &Path, adapter: &dyn CliAdapter) -> Installation {
+    let stamp = std::fs::metadata(path).map(|m| format!("{}:{:?}", m.len(), m.modified().ok())).unwrap_or_default();
+    let entry = VERSION_CACHE.lock().unwrap_or_else(|e| e.into_inner())
+        .entry((adapter.id().to_owned(), path.to_path_buf())).or_default().clone();
+    let mut entry = entry.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((at, previous, installation)) = entry.as_ref() {
+        let ttl = if installation.status == "available" { 60 } else { 8 };
+        if previous == &stamp && at.elapsed() < Duration::from_secs(ttl) { return installation.clone(); }
+    }
+    let installation = run_version_uncached(path, adapter);
+    *entry = Some((Instant::now(), stamp, installation.clone()));
+    installation
+}
+
+pub(crate) fn invalidate_probe_cache(id: &str) {
+    VERSION_CACHE.lock().unwrap_or_else(|e| e.into_inner()).retain(|(tool, _), _| tool != id);
+    #[cfg(not(test))]
+    for cache in [summary_cache(), installation_cache()] {
+        cache.lock().unwrap_or_else(|e| e.into_inner()).retain(|key, _| !key.starts_with(&format!("{id}|")));
+    }
+}
+
+fn run_version_uncached(path: &Path, adapter: &dyn CliAdapter) -> Installation {
+    run_version_controlled(path, adapter, &|| false)
+}
+
+fn run_version_controlled(path: &Path, adapter: &dyn CliAdapter, cancelled: &dyn Fn() -> bool) -> Installation {
     if adapter.launch_form() == adapters::LaunchForm::Desktop {
         let home = dirs::home_dir().unwrap_or_default();
         return adapter.native_installations(&home).into_iter().find(|item| {
@@ -446,7 +483,9 @@ fn run_version(path: &Path, adapter: &dyn CliAdapter) -> Installation {
     } else {
         crate::background_process::command(path)
     };
+    #[cfg(unix)] { use std::os::unix::process::CommandExt; command.process_group(0); }
     let spawned = command
+        .envs(adapter.version_probe_environment().iter().copied())
         .arg("--version")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -464,56 +503,57 @@ fn run_version(path: &Path, adapter: &dyn CliAdapter) -> Installation {
             }
         }
     };
-    let deadline = Instant::now() + Duration::from_secs(4);
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(25)),
-            Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Installation {
-                    path: path.display().to_string(),
-                    version: None,
-                    source,
-                    status: "probe_failed",
-                    detail: Some("版本命令超时".into()),
-                };
+    // Drain both streams during execution, retaining only bounded version output.
+    // Waiting first deadlocks when Node warnings or a broken CLI fill a pipe.
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let streams: Vec<Box<dyn Read + Send>> = vec![Box::new(child.stdout.take().unwrap()), Box::new(child.stderr.take().unwrap())];
+    for (index, mut stream) in streams.into_iter().enumerate() {
+        let sender = sender.clone();
+        std::thread::spawn(move || {
+            let mut kept = Vec::new();
+            let mut buffer = [0; 4096];
+            while let Ok(count) = stream.read(&mut buffer) {
+                if count == 0 { break; }
+                let retain = count.min((16 * 1024usize).saturating_sub(kept.len()));
+                kept.extend_from_slice(&buffer[..retain]);
             }
-            Err(error) => {
-                return Installation {
-                    path: path.display().to_string(),
-                    version: None,
-                    source,
-                    status: "probe_failed",
-                    detail: Some(format!("无法读取版本结果：{error}")),
-                }
+            let _ = sender.send((index, kept));
+        });
+    }
+    drop(sender);
+    let failed = |detail: &str| Installation {
+        path: path.display().to_string(), version: None, source,
+        status: "probe_failed", detail: Some(detail.into()),
+    };
+    let deadline = Instant::now() + Duration::from_secs(4);
+    let status = loop {
+        if cancelled() || Instant::now() >= deadline {
+            crate::background_process::terminate(&mut child);
+            return failed(if cancelled() { "版本验证已取消" } else { "版本命令超时" });
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => thread::sleep(Duration::from_millis(25)),
+            Err(_) => {
+                crate::background_process::terminate(&mut child);
+                return failed("无法读取版本结果");
+            }
+        }
+    };
+    let mut output = [Vec::new(), Vec::new()];
+    for _ in 0..2 {
+        match receiver.recv_timeout(Duration::from_millis(250)) {
+            Ok((index, bytes)) => output[index] = bytes,
+            Err(_) => {
+                crate::background_process::terminate(&mut child);
+                return failed("版本输出未结束，请重新检查");
             }
         }
     }
-    let output = match child.wait_with_output() {
-        Ok(output) => output,
-        Err(error) => {
-            return Installation {
-                path: path.display().to_string(),
-                version: None,
-                source,
-                status: "probe_failed",
-                detail: Some(format!("无法读取版本输出：{error}")),
-            }
-        }
-    };
-    let combined = format!(
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let preview: String = combined.chars().take(160).collect();
-    let version = if output.status.success() {
-        version_from_output(adapter, path, &preview)
-    } else {
-        None
-    };
+    let version = status.success().then(|| {
+        // A warning on stderr must not invalidate a bare semver on stdout.
+        output.iter().find_map(|bytes| version_from_output(adapter, path, &String::from_utf8_lossy(bytes)))
+    }).flatten();
     let status = if version.is_some() {
         "available"
     } else {
@@ -530,6 +570,22 @@ fn run_version(path: &Path, adapter: &dyn CliAdapter) -> Installation {
             Some("版本命令失败或工具身份无法确认".into())
         },
     }
+}
+
+/// Verify the channel that was actually installed, without probing unrelated
+/// copies or resolving native configuration. Cancellation remains effective.
+pub(crate) fn verify_installation(registry: &Registry, id: &str, home: &Path, npm: bool, cancelled: &dyn Fn() -> bool) -> Result<Installation, String> {
+    let adapter = registry.get(id).ok_or("未注册的 CLI 适配器")?;
+    for group in group_probe_paths(candidates(adapter, home)) {
+        for path in group {
+            if cancelled() { return Err("安装验证已取消，请重新检查后重试".into()); }
+            let source = source_of(&path, adapter);
+            if if npm { source != "npm_shim" } else { !matches!(source, "native" | "claude_native") } { continue; }
+            let installation = run_version_controlled(&path, adapter, cancelled);
+            if installation.status == "available" { return Ok(installation); }
+        }
+    }
+    Err("安装命令已结束，但尚未验证到可运行的命令。请检查日志、npm 全局目录及文件占用后重试".into())
 }
 
 pub fn probe_path(tool: CliId, path: &Path) -> Installation {
@@ -712,8 +768,7 @@ pub fn probe_registered_summary_cached(
     scope: Scope,
     fresh: bool,
 ) -> Result<ToolProbe, String> {
-    #[cfg(test)]
-    let _ = fresh;
+    if fresh { invalidate_probe_cache(id); }
     #[cfg(not(test))]
     let key = summary_cache_key(id, custom_path, home, scope, project);
     #[cfg(not(test))]
@@ -739,8 +794,7 @@ pub fn probe_registered_cached(
     scope: Scope,
     fresh: bool,
 ) -> Result<ToolProbe, String> {
-    #[cfg(test)]
-    let _ = fresh;
+    if fresh { invalidate_probe_cache(id); }
     #[cfg(not(test))]
     let key = summary_cache_key(id, custom_path, home, scope, project);
     #[cfg(not(test))]
@@ -846,6 +900,7 @@ fn finish_probe(
     let no_candidates = installations.is_empty();
     let runnable = selected.is_some();
     Ok(ToolProbe {
+        latest_version_supported: adapter.latest_version_url().is_some(),
         tool: id.to_owned(),
         selected_path: selected.map(|item| item.path.clone()),
         installations,
@@ -893,6 +948,57 @@ pub fn probe(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(windows)]
+    fn version_probe_drains_noisy_stderr_and_honors_cancellation() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("kimi.ps1");
+        std::fs::write(&path, "[Console]::Error.Write(('warning' * 20000)); Write-Output '2.1.1'\n").unwrap();
+        assert_eq!(run_version_uncached(&path, &adapters::KIMI_CODE).version.as_deref(), Some("2.1.1"));
+        std::fs::write(&path, "Start-Sleep -Seconds 30\n").unwrap();
+        let started = Instant::now();
+        let result = run_version_controlled(&path, &adapters::KIMI_CODE, &|| started.elapsed() > Duration::from_millis(300));
+        assert!(result.detail.unwrap().contains("取消"));
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn version_probe_preserves_prerelease_identity() {
+        assert_eq!(version_from_output(&adapters::CODEX, Path::new("codex.cmd"), "codex-cli 0.162.0-rc.2+build.3"), Some("0.162.0-rc.2+build.3".into()));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn version_reads_coalesce_and_recheck_replaced_shims() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("kimi.cmd");
+        let counter = temp.path().join("calls.txt");
+        let write = |version: &str| std::fs::write(&path, format!("@echo off\r\necho call>>\"%~dp0calls.txt\"\r\necho {version}\r\n")).unwrap();
+        write("2.1.1");
+        std::thread::scope(|scope| {
+            for _ in 0..4 { scope.spawn(|| assert_eq!(run_version(&path, &adapters::KIMI_CODE).version.as_deref(), Some("2.1.1"))); }
+        });
+        assert_eq!(std::fs::read_to_string(&counter).unwrap().lines().count(), 1);
+        write("2.1.123");
+        assert_eq!(run_version(&path, &adapters::KIMI_CODE).version.as_deref(), Some("2.1.123"));
+        assert_eq!(std::fs::read_to_string(&counter).unwrap().lines().count(), 2);
+    }
+
+    #[test]
+    #[ignore = "read-only local CLI version benchmark"]
+    fn performance_registered_versions() {
+        let registry = Registry::builtins();
+        let home = dirs::home_dir().unwrap();
+        for adapter in registry.iter() {
+            invalidate_probe_cache(adapter.id());
+            for pass in ["cold", "warm"] {
+                let start = Instant::now();
+                let probe = probe_registered(&registry, adapter.id(), None, &home, None, Scope::Global).unwrap();
+                eprintln!("probe {} {pass}: {}ms available={}", adapter.id(), start.elapsed().as_millis(), probe.selected_path.is_some());
+            }
+        }
+    }
 
     #[cfg(unix)]
     #[test]
@@ -1059,7 +1165,7 @@ mod tests {
                 source_of(&shim, adapters::known(CliId::Grok))
             )
             .as_deref(),
-            Some("npm install -g @xai-official/grok@latest")
+            Some("npm install -g @xai-official/grok@latest --include=optional --ignore-scripts=false --foreground-scripts --allow-scripts=@xai-official/grok --no-audit --no-fund --fetch-retries=3 --fetch-timeout=60000 --fetch-retry-mintimeout=1000 --fetch-retry-maxtimeout=10000")
         );
         std::fs::write(&shim, "unrelated launcher").unwrap();
         assert_eq!(source_of(&shim, adapters::known(CliId::Grok)), "unknown");
@@ -1077,11 +1183,11 @@ mod tests {
         assert_eq!(source_of(&pi_shim, adapters::known(CliId::Pi)), "npm_shim");
         assert_eq!(
             install_command(adapters::known(CliId::Pi)).as_deref(),
-            Some("npm install -g --ignore-scripts @earendil-works/pi-coding-agent")
+            Some("npm install -g @earendil-works/pi-coding-agent@latest --include=optional --ignore-scripts=false --foreground-scripts --allow-scripts=@earendil-works/pi-coding-agent,esbuild,@google/genai,protobufjs --no-audit --no-fund --fetch-retries=3 --fetch-timeout=60000 --fetch-retry-mintimeout=1000 --fetch-retry-maxtimeout=10000")
         );
         assert_eq!(
             upgrade_command(adapters::known(CliId::Pi), "npm_shim").as_deref(),
-            Some("npm install -g --ignore-scripts @earendil-works/pi-coding-agent@latest")
+            Some("npm install -g @earendil-works/pi-coding-agent@latest --include=optional --ignore-scripts=false --foreground-scripts --allow-scripts=@earendil-works/pi-coding-agent,esbuild,@google/genai,protobufjs --no-audit --no-fund --fetch-retries=3 --fetch-timeout=60000 --fetch-retry-mintimeout=1000 --fetch-retry-maxtimeout=10000")
         );
         assert_eq!(parse_node_version("v22.18.9"), Some((22, 18, 9)));
         assert_eq!(parse_node_version("v22.19.0"), Some((22, 19, 0)));
@@ -1141,12 +1247,12 @@ mod tests {
         assert!(install.contains(if cfg!(windows) { "install.ps1" } else { "install.sh" }));
         assert_eq!(
             codex.upgrade_command("npm_shim").as_deref(),
-            Some("npm install -g @openai/codex@latest")
+            Some("npm install -g @openai/codex@latest --include=optional --ignore-scripts=false --foreground-scripts --allow-scripts=@openai/codex --no-audit --no-fund --fetch-retries=3 --fetch-timeout=60000 --fetch-retry-mintimeout=1000 --fetch-retry-maxtimeout=10000")
         );
         assert_eq!(codex.upgrade_command("native"), codex.native_install_command());
         assert_eq!(
             codex.npm_install_command().as_deref(),
-            Some("npm install -g @openai/codex")
+            Some("npm install -g @openai/codex@latest --include=optional --ignore-scripts=false --foreground-scripts --allow-scripts=@openai/codex --no-audit --no-fund --fetch-retries=3 --fetch-timeout=60000 --fetch-retry-mintimeout=1000 --fetch-retry-maxtimeout=10000")
         );
         assert_eq!(
             codex.npm_uninstall_command().as_deref(),

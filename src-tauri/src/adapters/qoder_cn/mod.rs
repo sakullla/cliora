@@ -43,9 +43,9 @@ pub static QODER_CN: QoderAdapter = QoderAdapter {
     id: "qoder_cn", name: "Qoder CN", command: "qoderclicn",
     directory: ".qoder-cn", config_env: None, plugin_ledger: Some("plugins/installed_plugins_v2.json"),
     binary_directory: "bin/qoderclicn", yolo_flag: "--dangerously-skip-permissions",
-    npm: "", install_url: "https://qoder.cn/download",
-    install_hint: "使用 Qoder CN 安装或更新内置 qoderclicn；也可选择已安装的 CN CLI 路径。",
-    install_script: None,
+    npm: "@qodercn-ai/qoderclicn", install_url: "https://docs.qoder.cn/cli/installation",
+    install_hint: "官方推荐原生安装，尤其在 Windows 上启动更快；npm 方式供已有安装兼容使用。",
+    install_script: Some(if cfg!(windows) { "irm https://static.qoder.com.cn/qoder-cli-cn/install.ps1 | iex" } else { "curl -fsSL https://static.qoder.com.cn/qoder-cli-cn/install.sh | bash -s -- --force" }),
     builtin_agents: BUILTIN_AGENTS,
 };
 
@@ -92,11 +92,17 @@ impl CliAdapter for QoderAdapter {
     }
     fn npm_package(&self) -> &'static str {
         // Legacy but official channel; the recommended install is the native
-        // installer at qoder.com/install.ps1.
+        // installer in the CN documentation; never use the international channel.
         self.npm
     }
+    fn latest_version_url(&self) -> Option<String> {
+        Some("https://static.qoder.com.cn/qoder-cli-cn/channels/manifest.json".into())
+    }
+    fn parse_latest_version(&self, text: &str) -> Option<String> {
+        serde_json::from_str::<Value>(text).ok()?.get("latest")?.as_str().map(str::to_owned)
+    }
     fn version_identity(&self, basename: &str, output: &str) -> bool {
-        (basename == self.command || basename.starts_with(&format!("{}-", self.command)))
+        (basename == "qodercn" || basename == self.command || basename.starts_with(&format!("{}-", self.command)))
             && (output.contains(self.command) || semver::Version::parse(output.trim().trim_start_matches('v')).is_ok())
     }
     fn extra_binary_candidates(&self, home: &Path) -> Vec<PathBuf> {
@@ -109,7 +115,17 @@ impl CliAdapter for QoderAdapter {
             }
         }
         paths.push(directory.join(format!("{}{}", self.command, if cfg!(windows) { ".exe" } else { "" })));
+        for suffix in if cfg!(windows) { &[".exe", ".cmd"][..] } else { &[""][..] } {
+            paths.push(home.join(".local/bin").join(format!("qodercn{suffix}")));
+        }
         paths.into_iter().filter(|path| path.metadata().is_ok_and(|m| m.is_file() && m.len() > 0)).collect()
+    }
+    fn native_binary_directories(&self, home: &Path) -> Vec<PathBuf> {
+        vec![home.join(self.directory).join(self.binary_directory), home.join(".local/bin")]
+    }
+    fn recognizes_native_install_path(&self, path: &Path) -> bool {
+        let resolved = path.canonicalize().unwrap_or_else(|_| path.to_owned());
+        resolved.parent().is_some_and(|parent| parent.ends_with(Path::new(self.directory).join(self.binary_directory)) || parent.ends_with(".local/bin"))
     }
     fn native_files(
         &self,
@@ -294,19 +310,24 @@ impl CliAdapter for QoderAdapter {
         false
     }
     fn minimum_node_version(&self) -> Option<(u32, u32, u32)> {
-        Some((20, 0, 0))
+        Some((20, 18, 1))
     }
     fn node_dependency_detail(&self) -> &'static str {
-        "npm legacy 安装的 Qoder CLI 要求 Node.js 20+；官方 Windows 安装器不依赖 Node.js"
+        "Qoder CN 官方文档要求 npm 兼容安装使用 Node.js 20.18.1+；原生安装不依赖 Node.js"
     }
     fn install_command(&self) -> Option<String> {
         self.native_install_command()
             .or_else(|| self.npm_install_command())
     }
     fn native_install_command(&self) -> Option<String> {
-        // Only the Windows installer script is documented; other platforms fall
-        // back to the legacy npm channel.
-        self.install_script.filter(|_| cfg!(windows)).map(str::to_owned)
+        self.install_script.map(str::to_owned)
+    }
+    fn upgrade_command(&self, source: &str) -> Option<String> {
+        match source {
+            "npm_shim" => self.npm_install_command(),
+            "native" => self.native_install_command(),
+            _ => None,
+        }
     }
     fn descriptor(&self) -> super::AdapterDescriptor {
         super::AdapterDescriptor {
@@ -605,7 +626,13 @@ mod cn_tests {
         assert!(!cn.version_identity("qoder", "qoder 1.1.65"));
         assert!(cn.native_files(Scope::Global, home.path(), None, true)[0].path.replace('\\', "/").ends_with(".qoder-cn/settings.json"));
         assert_eq!(cn.launch_args(None, LaunchMode::Yolo).unwrap(), ["--dangerously-skip-permissions"]);
-        assert!(cn.npm_install_command().is_none());
+        assert!(cn.npm_install_command().unwrap().contains("@qodercn-ai/qoderclicn@latest"));
+        assert!(cn.native_install_command().unwrap().contains("static.qoder.com.cn/qoder-cli-cn/install."));
+        assert_eq!(cn.upgrade_command("native"), cn.native_install_command());
+        assert_eq!(cn.upgrade_command("npm_shim"), cn.npm_install_command());
+        assert_eq!(cn.parse_latest_version(r#"{"latest":"1.1.66","files":[]}"#).as_deref(), Some("1.1.66"));
+        assert!(cn.recognizes_native_install_path(&bin.join("qoderclicn-1.1.65.exe")));
+        assert!(cn.version_identity("qodercn", "1.1.66\n"));
         assert!(registry.get("qoder").is_none());
         assert!(cn.plugins().is_some() && cn.agents().is_some());
     }

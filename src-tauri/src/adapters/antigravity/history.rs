@@ -90,59 +90,25 @@ pub fn sources_controlled(
         if out.len() >= MAX_SOURCES {
             return Err("Antigravity 会话源超过 5000 个，本次未删除旧索引".into());
         }
-        // One conversation's fingerprint folds its index row, its transcript
-        // bytes and its usage blobs, so a change to one conversation never
-        // reparses the others.
-        let mut hash = digest(format!("summary|{id}|{title:?}|{workspace:?}|{status:?}").as_bytes());
-        let mut count = 0usize;
-        if let Ok(bytes) = std::fs::read(transcript_path(&root, &id)) {
-            for (slot, byte) in hash.iter_mut().zip(digest(&bytes)) {
-                *slot ^= byte;
-            }
-            count += bytes.iter().filter(|byte| **byte == b'\n').count();
-        }
-        if let Ok(usage) = open_conversation(&conversation_db(&root, &id)) {
-            let mut statement = match usage
-                .prepare("SELECT data FROM gen_metadata ORDER BY rowid")
-            {
-                Ok(statement) => statement,
-                Err(_) => {
-                    out.push(HistorySource {
-                        native_title: title.filter(|title| !title.trim().is_empty()),
-                        path: index.clone(),
-                        native_id: Some(id),
-                        fingerprint: fingerprint(count, hash),
-                        fingerprint_error: None,
-                    });
-                    continue;
-                }
-            };
-            let rows = statement.query_map([], |row| row.get::<_, Vec<u8>>(0));
-            if let Ok(rows) = rows {
-                for blob in rows.flatten() {
-                    count += 1;
-                    for (slot, byte) in hash.iter_mut().zip(digest(&blob)) {
-                        *slot ^= byte;
-                    }
-                }
-            }
-        }
+        // Discovery reads only revisions, never every transcript/protobuf blob.
+        // Include WAL commits and explicit missing markers; parsing still reports
+        // absent or malformed native data through its existing partial state.
+        let checked = (|| -> Result<String, String> {
+            let transcript = crate::history::source_cache::optional_stamp(&transcript_path(&root, &id), cancelled)?;
+            let database = conversation_db(&root, &id);
+            let usage = if database.exists() {
+                crate::history::source_cache::database_stamp(&database, cancelled)?
+            } else { "missing".into() };
+            Ok(format!("antigravity-session-v2|{id}|{title:?}|{workspace:?}|{status:?}|{transcript}|{usage}"))
+        })();
         out.push(HistorySource {
             native_title: title.filter(|title| !title.trim().is_empty()),
-            path: index.clone(),
-            native_id: Some(id),
-            fingerprint: fingerprint(count, hash),
-            fingerprint_error: None,
+            path: index.clone(), native_id: Some(id),
+            fingerprint: checked.as_ref().cloned().unwrap_or_default(),
+            fingerprint_error: checked.err(),
         });
     }
     Ok(out)
-}
-
-fn fingerprint(count: usize, hash: [u8; 16]) -> String {
-    format!(
-        "antigravity-session-v1|{count}|{}",
-        hash.iter().map(|byte| format!("{byte:02x}")).collect::<String>()
-    )
 }
 
 fn transcript_path(root: &Path, id: &str) -> PathBuf {
@@ -455,17 +421,6 @@ fn decode_string(bytes: &[u8]) -> Result<String, Mismatch> {
     String::from_utf8(bytes.to_vec()).map_err(|_| Mismatch)
 }
 
-/// A stable, dependency-free digest (the mimo_code pattern): the fingerprint
-/// only needs to change when the underlying bytes change.
-fn digest(bytes: &[u8]) -> [u8; 16] {
-    let mut hash: [u8; 16] = [0u8; 16];
-    for (index, byte) in bytes.iter().enumerate() {
-        hash[index % 16] ^= *byte;
-        hash[(index + 7) % 16] = hash[(index + 7) % 16].wrapping_add(*byte);
-        hash[(index * 3 + 1) % 16] = hash[(index * 3 + 1) % 16].rotate_left(1);
-    }
-    hash
-}
 
 #[cfg(test)]
 mod tests {
@@ -636,7 +591,7 @@ mod tests {
             .all(|source| source.native_id.as_deref() != Some(CHILD_ID)));
         assert_eq!(found[0].native_id.as_deref(), Some(ROOT_ID));
         assert_eq!(found[0].native_title.as_deref(), Some("帮我把部署脚本改成幂等版本"));
-        assert!(found[0].fingerprint.starts_with("antigravity-session-v1|"));
+        assert!(found[0].fingerprint.starts_with("antigravity-session-v2|"));
         let before = found[0].fingerprint.clone();
         // A new usage row in the conversation database changes the fingerprint.
         let usage = Connection::open(&conversation_db(
