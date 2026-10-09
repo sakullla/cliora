@@ -226,7 +226,7 @@ test.beforeAll(async () => {
     }
     createRoot(document.getElementById('root')).render(React.createElement(React.StrictMode,null,React.createElement(Fixture)));
   `;
-  const result = await build({ configFile: false, logLevel: 'silent', plugins: [react(), { name: 'account-picker-test', resolveId: id => id === entry ? `\0${entry}` : undefined, load: id => id === `\0${entry}` ? source : undefined }], build: { write: false, minify: false, cssCodeSplit: false, rollupOptions: { input: entry, output: { inlineDynamicImports: true } } } });
+  const result = await build({ configFile: false, logLevel: 'silent', plugins: [react(), { name: 'account-picker-test', resolveId: id => id === entry ? `\0${entry}` : undefined, load: id => id === `\0${entry}` ? source : undefined }], build: { write: false, minify: false, cssCodeSplit: false, rollupOptions: { input: entry, output: { codeSplitting: false } } } });
   const output = (Array.isArray(result) ? result[0] : result) as { output: { type: string; code?: string; source?: string | Uint8Array }[] };
   const code = output.output.filter(item => item.type === 'chunk').map(item => item.code).join('\n');
   const css = output.output.filter(item => item.type === 'asset' && typeof item.source === 'string').map(item => item.source).join('\n');

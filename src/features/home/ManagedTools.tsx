@@ -7,10 +7,12 @@ import type { LaunchSettings } from '../../types/launch';
 import { preferredLaunchMode } from '../../types/launch';
 import type { AdapterDescriptor, ApplyComparison, RegisteredToolWorkspace } from '../../types/native';
 import type { WorkspaceOpenIntent } from '../tools/ToolWorkspace';
+import { RowMenu } from '../../components/RowMenu';
 import { ConflictCompare } from '../../components/configuration/ConflictCompare';
 import { FilterSelect } from '../../components/FilterSelect';
 import type { FilterSelectOption } from '../../components/FilterSelect';
 import { GuideDialog } from '../../components/GuideDialog';
+import { Icon } from '../../components/Icon';
 import { ToolIcon } from '../../components/ToolIcon';
 import { displayPath } from '../../lib/paths';
 import i18n from '../../i18n';
@@ -213,6 +215,14 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
     }
   }
 
+  function clearRememberedDir(toolId: string) {
+    launchDirectories.delete(toolId);
+    setStates((old) => {
+      const current = old[toolId];
+      return current ? { ...old, [toolId]: { ...current } } : old;
+    });
+  }
+
   async function switchProfile(toolId: string, profileId: string) {
     if (!profileId) return;
     const previous = states[toolId];
@@ -315,7 +325,7 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
             : profiles.length ? <div role="radiogroup" aria-label={t('home.tools.switchProfileLabel', { name: tool.name })} title={switchTitle}>{profiles.map((item) => <button key={item.id} type="button" role="radio" aria-checked={item.id === selected?.id} className={item.id === selected?.id ? styles.activeConfig : ''} disabled={loaded?.busy || !writable} title={profileLabel(item.name, item.connection)} onClick={() => { if (item.id !== selected?.id || !appliedCurrent) void switchProfile(tool.id, item.id); }}>{item.name}{item.id === selected?.id && item.connection?.model?.trim() ? <em className={styles.modelHint}>{item.connection.model.trim()}</em> : null}</button>)}</div>
             : <button type="button" className={styles.addConfig} onClick={() => onOpenTool(tool.id, { create: true })}>{t('home.tools.newProfile')}</button>}
         </div>
-        <div className={styles.rowActions}>{!installed && (workspace || loaded?.error) && <button type="button" disabled={checking.has(tool.id) || loaded?.busy} onClick={() => recheck.current(tool.id)}>{checking.has(tool.id) ? t('home.tools.statusChecking') : t('home.tools.recheck')}</button>}<button type="button" className={styles.launch} disabled={!installed || loaded?.busy} aria-busy={loaded?.activity === 'launch' || undefined} title={launchTitle} onClick={() => void launchTool(tool.id)} onContextMenu={(event) => { event.preventDefault(); void launchTool(tool.id, true); }}>{loaded?.activity === 'launch' ? t('home.tools.launching') : t('home.tools.launch')}</button><button type="button" className={styles.configure} onClick={() => onOpenTool(tool.id, { resource: 'config' })}>{t('home.tools.editConfig')}</button></div>
+        <div className={styles.rowActions}>{!installed && (workspace || loaded?.error) && <button type="button" disabled={checking.has(tool.id) || loaded?.busy} onClick={() => recheck.current(tool.id)}>{checking.has(tool.id) ? t('home.tools.statusChecking') : t('home.tools.recheck')}</button>}<button type="button" className={styles.launch} disabled={!installed || loaded?.busy} aria-busy={loaded?.activity === 'launch' || undefined} title={launchTitle} onClick={() => void launchTool(tool.id)} onContextMenu={(event) => { event.preventDefault(); void launchTool(tool.id, true); }}>{loaded?.activity === 'launch' ? <span className="spinner" aria-hidden="true" /> : <Icon name="play" size={13} strokeWidth={2} />}{loaded?.activity === 'launch' ? t('home.tools.launching') : t('home.tools.launch')}</button><RowMenu label={t('home.tools.launchDirMenu')}><button role="menuitem" disabled={!installed || !!loaded?.busy} onClick={() => void launchTool(tool.id, true)}>{t('home.tools.chooseOtherDir')}</button>{rememberedDir && <button role="menuitem" onClick={() => clearRememberedDir(tool.id)}>{t('home.tools.clearRememberedDir')}</button>}</RowMenu><button type="button" className={styles.configure} onClick={() => onOpenTool(tool.id, { resource: 'config' })}>{workspace && !installed ? t('home.tools.goInstall') : t('home.tools.editConfig')}</button></div>
         {line && <div className={styles.note} data-tone={line.tone} role={line.tone === 'error' ? 'alert' : 'status'} title={line.title}>{line.text}</div>}
       </div>;
     })}

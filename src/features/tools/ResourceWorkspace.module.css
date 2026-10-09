@@ -125,6 +125,7 @@
 .urlField { display: grid; gap: 6px; color: var(--text-2); font-size: 12px; font-weight: 560; }
 .urlRow { display: flex; gap: 8px; align-items: center; }
 .urlRow input { flex: 1; min-width: 0; }
+.urlRow button { min-height: var(--control-h); }
 .typeField { display: grid; gap: 6px; color: var(--text-2); font-size: 12px; font-weight: 560; }
 .typeSwitch { display: flex; width: fit-content; gap: 2px; padding: 3px; border-radius: var(--radius); background: var(--surface-3); }
 .typeSwitch button { min-height: 28px; padding: 0 18px; border: 0; border-radius: var(--radius-sm); background: transparent; box-shadow: none; color: var(--text-2); font-weight: 560; }

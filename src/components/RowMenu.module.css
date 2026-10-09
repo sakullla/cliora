@@ -1,0 +1,45 @@
+/* Row action menu (shared by home tool rows and workspace profile rows) */
+.rowMenu { position: relative; }
+.rowMenuButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px; height: 30px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 15px;
+  line-height: 1;
+  letter-spacing: 1px;
+}
+.rowMenuButton:hover:not(:disabled) { color: var(--text); border-color: var(--text-3); }
+.rowMenuList {
+  position: fixed;
+  z-index: 70;
+  display: grid;
+  min-width: 140px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+  animation: reveal var(--fast) var(--ease);
+}
+.rowMenuList button {
+  justify-content: flex-start;
+  width: 100%;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 520;
+  text-align: left;
+}
+.rowMenuList button:hover:not(:disabled) { background: var(--surface-2); }
+.rowMenuList button[data-danger="true"] { color: var(--danger); }

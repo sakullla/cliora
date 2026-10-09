@@ -138,7 +138,7 @@ test('native settings result drives the home list and empty management stays rec
   await expect(themes.getByRole('radio', { name: '深色' })).toBeFocused();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始' }).click();
-  await expect(page.getByRole('button', { name: '编辑配置 →' })).toHaveCount(1);
+  await expect(page.getByRole('button', { name: '去安装 →' })).toHaveCount(1);
   await expect(page.locator('[aria-label="管理中的工具"]')).toContainText('Codex');
 });
 

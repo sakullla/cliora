@@ -183,9 +183,31 @@ test('the launch directory is remembered, and right-click picks another', async 
   await launch.click({ button: 'right' });
   await page.evaluate(() => (window as unknown as { __resolveDialog: (value: string | null) => void }).__resolveDialog('D:/else'));
   await expect(tools.getByRole('status')).toHaveText('Codex 已向外部终端发出请求。');
-  const requests = await page.evaluate(() => (window as unknown as { __launchRequests: Array<Record<string, unknown>> }).__launchRequests);
+  let requests = await page.evaluate(() => (window as unknown as { __launchRequests: Array<Record<string, unknown>> }).__launchRequests);
   expect(requests).toHaveLength(3);
   expect(requests[2]).toEqual({ toolId: 'codex', projectId: null, sessionId: null, mode: 'normal', directory: 'D:/else' });
+
+  const dirMenu = tools.getByRole('button', { name: '启动目录' });
+  await dirMenu.click();
+  const menu = page.getByRole('menu', { name: '启动目录' });
+  await expect(menu.getByRole('menuitem', { name: '选择其他目录…' })).toBeVisible();
+  await expect(menu.getByRole('menuitem', { name: '清除记住的目录' })).toBeVisible();
+  await menu.getByRole('menuitem', { name: '选择其他目录…' }).click();
+  await expect(menu).toHaveCount(0);
+  await page.evaluate(() => (window as unknown as { __resolveDialog: (value: string | null) => void }).__resolveDialog('E:/menu'));
+  await expect(tools.getByRole('status')).toHaveText('Codex 已向外部终端发出请求。');
+  requests = await page.evaluate(() => (window as unknown as { __launchRequests: Array<Record<string, unknown>> }).__launchRequests);
+  expect(requests).toHaveLength(4);
+  expect(requests[3]).toEqual({ toolId: 'codex', projectId: null, sessionId: null, mode: 'normal', directory: 'E:/menu' });
+
+  await dirMenu.click();
+  await page.getByRole('menu', { name: '启动目录' }).getByRole('menuitem', { name: '清除记住的目录' }).click();
+  await launch.click();
+  await page.evaluate(() => (window as unknown as { __resolveDialog: (value: string | null) => void }).__resolveDialog(null));
+  await expect(tools.getByRole('button', { name: '启动', exact: true })).toBeEnabled();
+  await expect(tools.getByRole('status')).toHaveCount(0);
+  requests = await page.evaluate(() => (window as unknown as { __launchRequests: Array<Record<string, unknown>> }).__launchRequests);
+  expect(requests).toHaveLength(4);
 });
 
 test('applying a profile reports the native write, and failure keeps the previous selection', async ({ page }) => {

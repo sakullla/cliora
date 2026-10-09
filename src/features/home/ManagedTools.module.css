@@ -94,28 +94,8 @@
 .rowActions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
 .rowActions .launch { min-width: 68px; border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
 .rowActions .launch:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }
-.rowActions .launch:active:not(:disabled) { transform: scale(.97); }
 .rowActions .configure, .rowActions .configure:hover:not(:disabled) { border-color: transparent; background: transparent; box-shadow: none; color: var(--text-2); }
 .rowActions .configure:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
-.rowActions .launch::before {
-  content: '';
-  width: 9px;
-  height: 9px;
-  background: currentColor;
-  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M6 4v16l14-8z'/%3E%3C/svg%3E") center / contain no-repeat;
-  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M6 4v16l14-8z'/%3E%3C/svg%3E") center / contain no-repeat;
-}
-.rowActions .launch[aria-busy="true"]::before {
-  width: 11px;
-  height: 11px;
-  border: 2px solid currentColor;
-  border-right-color: transparent;
-  border-radius: 50%;
-  background: none;
-  -webkit-mask: none;
-  mask: none;
-  animation: spin .7s linear infinite;
-}
 
 .note {
   grid-column: 1 / -1;

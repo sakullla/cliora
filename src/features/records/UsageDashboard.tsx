@@ -204,8 +204,8 @@ function Breakdown({ report, toolName, filter, onFilter, onPrice, view, onView }
 
 export type UsageNotify = { status: (text: string, protect?: boolean) => void; alert: (value: unknown) => void; readAlert: (value: unknown) => void; clear: () => void };
 
-export function UsageDashboard({ search, favoriteOnly, active, tools, projects, prices, onPricesChange, scanVersion, scanning, lastScanAt, onOpenSession, notify }: {
-  search: string; favoriteOnly: boolean; active: boolean; tools: AdapterDescriptor[]; projects: Project[]; prices: HistoryPrice[]; onPricesChange: (prices: HistoryPrice[]) => void;
+export function UsageDashboard({ search, favoriteOnly, onClearSearch, onClearFavoriteOnly, active, tools, projects, prices, onPricesChange, scanVersion, scanning, lastScanAt, onOpenSession, notify }: {
+  search: string; favoriteOnly: boolean; onClearSearch: () => void; onClearFavoriteOnly: () => void; active: boolean; tools: AdapterDescriptor[]; projects: Project[]; prices: HistoryPrice[]; onPricesChange: (prices: HistoryPrice[]) => void;
   scanVersion: number; scanning: boolean; lastScanAt: number | null;   onOpenSession: (id: string) => void; notify: UsageNotify;
 }) {
   const { t } = useTranslation();
@@ -324,11 +324,13 @@ export function UsageDashboard({ search, favoriteOnly, active, tools, projects, 
       </div>
     </div>
     <div className={styles.subhead}>
-      <p>{rangeCaption(report, range, now)}{(toolId || model || projectId) && <span className={styles.activeChips} aria-label={t('records.page.activeAria')}>
+      <p>{rangeCaption(report, range, now)}{(toolId || model || projectId || search.trim() || favoriteOnly) && <span className={styles.activeChips} aria-label={t('records.page.activeAria')}>
+        {search.trim() && <button type="button" className={styles.chip} title={t('records.page.chipTitle')} onClick={onClearSearch}><span>{t('records.page.chipSearch', { query: search.trim() })}</span><Icon name="close" size={10} strokeWidth={2.4} /></button>}
+        {favoriteOnly && <button type="button" className={styles.chip} title={t('records.page.chipTitle')} onClick={onClearFavoriteOnly}><span>{t('records.page.favoriteOnly')}</span><Icon name="close" size={10} strokeWidth={2.4} /></button>}
         {toolId && <button type="button" className={styles.chip} title={t('records.page.chipTitle')} onClick={() => setToolId('')}><span>{t('records.page.chipTool', { name: toolName(toolId) })}</span><Icon name="close" size={10} strokeWidth={2.4} /></button>}
         {model && <button type="button" className={styles.chip} title={t('records.page.chipTitle')} onClick={() => setModel('')}><span>{t('records.page.chipModel', { name: model })}</span><Icon name="close" size={10} strokeWidth={2.4} /></button>}
         {projectId && <button type="button" className={styles.chip} title={t('records.page.chipTitle')} onClick={() => setProjectId('')}><span>{t('records.page.chipProject', { name: projectId === '__unknown__' ? t('records.page.noProject') : projects.find((item) => item.id === projectId)?.name ?? projectId })}</span><Icon name="close" size={10} strokeWidth={2.4} /></button>}
-        <button type="button" className="text-button" onClick={() => { setToolId(''); setModel(''); setProjectId(''); }}>{t('tools.plugins.clearFilter')}</button>
+        <button type="button" className="text-button" onClick={() => { setToolId(''); setModel(''); setProjectId(''); onClearSearch(); onClearFavoriteOnly(); }}>{t('tools.plugins.clearFilter')}</button>
       </span>}</p>
       <p className={styles.freshness}>
         {scanning || loading ? <><span className="spinner" aria-hidden="true" />{scanning ? t('records.page.syncing') : t('records.usage.updating')}</> : scanned ? t('records.usage.updatedAt', { time: clockTime(scanned) }) : t('records.usage.notScanned')}

@@ -19,8 +19,7 @@
 .quota[data-empty="true"]:empty { display: none; }
 .linked { color: var(--accent) !important; }
 .heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
-.actions { display: flex; gap: 6px; flex-wrap: wrap; }
-.actions { align-items: center; gap: 2px; }
+.actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .query { min-width: 0; display: grid; gap: 6px; }
 .query + .query { border-top: 1px solid var(--line); padding-top: 8px; }
 .queryTitle { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; min-width: 0; }
@@ -78,5 +77,6 @@
 .editor > details { border: 1px solid var(--line); border-radius: var(--radius); padding: 11px 14px; }
 .editor > details > summary { cursor: pointer; color: var(--text-2); }
 .editorActions { position: sticky; bottom: -1px; padding: 13px 0; background: var(--surface); border-top: 1px solid var(--line); z-index: 2; }
-.primary { background: var(--accent) !important; color: var(--on-accent, #fff) !important; border-color: var(--accent) !important; }
+.primary, .primary:hover:not(:disabled) { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
+.primary:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }
 .credential, .target { display: grid; gap: 8px; padding: 12px; margin: 8px 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }

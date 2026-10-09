@@ -83,7 +83,8 @@ test('profile quota preserves overage, missing values, expiry and last success a
   await expect(page.getByText(/有效期至/)).toBeVisible();
   await page.getByRole('button', { name: '刷新额度' }).click();
   await expect(page.getByText('请求受限，请稍后刷新')).toBeVisible();
-  await expect(page.getByText('125% 已用').first()).toBeVisible();
+  // 展开额度详情后折叠摘要不再重复展示；超额度百分比仍要在详情里可见。
+  await expect(page.getByText('125% 已用').filter({ visible: true })).toBeVisible();
   await expect(page.getByText('数据已过期', { exact: true })).toBeVisible();
   await expect(page.getByText(/最近成功：/)).toBeVisible();
   await expect(page.getByRole('button', { name: /秒后可刷新/ })).toBeDisabled();
@@ -212,11 +213,12 @@ test('official supplier profile displays a first result without a second key set
   await setup(page, true);
   await page.getByText('额度详情', { exact: true }).click();
   await expect(page.getByText('已关联官方套餐 · 使用此配置的 API Key')).toBeVisible();
-  await expect(page.getByText('125% 已用').first()).toBeVisible();
+  // 详情展开时折叠摘要被隐藏，断言可见的详情副本。
+  await expect(page.getByText('125% 已用').filter({ visible: true })).toBeVisible();
   expect(await harness(page, `window.quotaHarness.calls.filter(c => c.command === 'refresh_usage_query').length`)).toBe(1);
   await page.getByRole('tab', { name: '账号', exact: true }).click();
   await page.getByRole('tab', { name: '配置', exact: true }).click();
-  await expect(page.getByText('125% 已用').first()).toBeVisible();
+  await expect(page.getByText('125% 已用').filter({ visible: true })).toBeVisible();
   expect(await harness(page, `window.quotaHarness.calls.filter(c => c.command === 'refresh_usage_query').length`)).toBe(1);
   await page.getByRole('button', { name: '额度设置' }).click();
   await expect(page.getByRole('dialog').getByText(/复用此命名配置的 API Key/)).toBeVisible();
