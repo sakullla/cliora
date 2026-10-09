@@ -34,6 +34,10 @@ test('new configuration dialog has one save action', async ({ page }) => {
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
   await expect(page.getByRole('heading', { name: '工具与连接' })).toBeVisible();
   await expect(page.getByText('安装与更新')).toBeVisible();
+  const installSummary = page.locator('summary').filter({ hasText: '安装与更新' });
+  await expect(installSummary).toHaveCSS('display', 'flex');
+  const [nameBox, labelBox] = await Promise.all([installSummary.locator('strong').boundingBox(), installSummary.getByText('安装与更新').boundingBox()]);
+  expect(labelBox!.x - (nameBox!.x + nameBox!.width)).toBeGreaterThan(40);
   await page.getByText('安装与更新').click();
   const docs=page.getByRole('link', { name: '官方安装说明 ↗' });
   await expect(docs).toBeVisible();

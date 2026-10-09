@@ -396,7 +396,7 @@ test('desktop shell keeps on-device copy, first-screen actions, and no sideways 
   await nav.getByRole('button', { name: '设置' }).click();
   await expectFullyInFirstScreen(page, page.getByRole('heading', { name: '管理的 CLI' }));
   await nav.getByRole('button', { name: '资料库' }).click();
-  await expectFullyInFirstScreen(page, page.getByRole('button', { name: '＋ 新建提示词', exact: true }));
+  await expectFullyInFirstScreen(page, page.getByRole('button', { name: '新建提示词', exact: true }));
   await nav.getByRole('button', { name: '使用记录' }).click();
   const search = page.getByRole('textbox', { name: '搜索会话' });
   const sessions = page.getByRole('tab', { name: '会话' });

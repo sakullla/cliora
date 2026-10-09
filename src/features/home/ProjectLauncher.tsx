@@ -241,13 +241,7 @@ export function ProjectLauncher({ tools, repair, spotlight }: { tools: AdapterDe
     {error && <div className={styles.error} role="alert">{error}</div>}
     {feedback && <div className={styles.feedback} role="status">{feedback}</div>}
     {!managed.length && <p className={styles.note}>{t('home.launcher.enableFirst')}</p>}
-    {!!managed.length && <details className={styles.quick}><summary><span>{t('home.launcher.resumeTitle')}</span><small>{t('home.launcher.resumeHint')}</small></summary><div className={styles.quickContent}>
-      <div><strong>{t('home.launcher.resumeById')}</strong><span>{directMode === 'yolo' ? t('home.launcher.resumeDescYolo') : t('home.launcher.resumeDescNormal')}</span></div>
-      <FilterSelect className={styles.quickTool} label={t('home.launcher.resumeTool')} value={defaultTool} options={toolOptions(managed)} placeholder={t('home.launcher.pickTool')} searchLabel={t('home.launcher.searchTool')} onChange={setGlobalTool} />
-      <input aria-label={t('home.launcher.resumeIdLabel')} value={sessionId} placeholder={t('home.launcher.resumeIdPlaceholder')} onChange={(event) => setSessionId(event.target.value)} />
-      <div className={styles.actions}><button type="button" disabled={!!busy || !sessionId.trim()} onClick={() => void launch(defaultTool, null, directMode, sessionId)}>{t('home.launcher.resume')}</button>{directMode === 'yolo' ? <button type="button" className={styles.secondary} disabled={!!busy || !sessionId.trim()} onClick={() => void launch(defaultTool, null, 'normal', sessionId)}>{t('home.launcher.resumeNormal')}</button> : <button type="button" className={styles.secondary} disabled={!!busy || !sessionId.trim() || !directTool?.yoloAvailable} title={directTool?.yoloAvailable ? t('home.tools.launchYolo') : t('home.launcher.yoloUnavailable')} onClick={() => void launch(defaultTool, null, 'yolo', sessionId)}>{t('home.launcher.resumeYolo')}</button>}</div>
-    </div></details>}
-    <div className={styles.heading}><strong>{t('home.projects.title')}{!!projects.length && <span className="count-chip" aria-hidden="true">{projects.length}</span>}</strong><button type="button" className={styles.secondary} disabled={!!busy} onClick={() => void chooseDirectory()}>{t('home.launcher.add')}</button></div>
+    <div className={styles.heading}><strong>{t('home.projects.title')}{!!projects.length && <span className="count-chip" aria-hidden="true">{projects.length}</span>}</strong><button type="button" className={styles.secondary} disabled={!!busy} onClick={() => void chooseDirectory()}><Icon name="plus" size={14} strokeWidth={2.2} />{t('home.launcher.add')}</button></div>
     {projects.length > 4 && <SearchField className={styles.projectSearch} label={t('home.launcher.searchLabel')} value={projectQuery} placeholder={t('home.launcher.searchPlaceholder')} onChange={setProjectQuery} />}
     {listLoading && !projects.length ? <SkeletonRows count={2} /> : projects.length ? (visibleProjects.length ? <div className={styles.projectGrid}>
     {visibleProjects.map((project) => {
@@ -276,6 +270,11 @@ export function ProjectLauncher({ tools, repair, spotlight }: { tools: AdapterDe
       </div>;
     })}
     </div> : <p className={styles.noMatch}>{t('home.launcher.noMatch', { query: projectQuery.trim() })}</p>) : <div className={styles.emptyProjects}><strong>{t('home.launcher.emptyTitle')}</strong><span>{t('home.launcher.emptyDetail')}</span><button type="button" disabled={!!busy} onClick={() => void chooseDirectory()}>{t('home.launcher.addProject')}</button></div>}
-
+    {!!managed.length && <details className={styles.quick}><summary><span>{t('home.launcher.resumeTitle')}</span><small>{t('home.launcher.resumeHint')}</small></summary><div className={styles.quickContent}>
+      <div><strong>{t('home.launcher.resumeById')}</strong><span>{directMode === 'yolo' ? t('home.launcher.resumeDescYolo') : t('home.launcher.resumeDescNormal')}</span></div>
+      <FilterSelect className={styles.quickTool} label={t('home.launcher.resumeTool')} value={defaultTool} options={toolOptions(managed)} placeholder={t('home.launcher.pickTool')} searchLabel={t('home.launcher.searchTool')} onChange={setGlobalTool} />
+      <input aria-label={t('home.launcher.resumeIdLabel')} value={sessionId} placeholder={t('home.launcher.resumeIdPlaceholder')} onChange={(event) => setSessionId(event.target.value)} />
+      <div className={styles.actions}><button type="button" disabled={!!busy || !sessionId.trim()} onClick={() => void launch(defaultTool, null, directMode, sessionId)}>{t('home.launcher.resume')}</button>{directMode === 'yolo' ? <button type="button" className={styles.secondary} disabled={!!busy || !sessionId.trim()} onClick={() => void launch(defaultTool, null, 'normal', sessionId)}>{t('home.launcher.resumeNormal')}</button> : <button type="button" className={styles.secondary} disabled={!!busy || !sessionId.trim() || !directTool?.yoloAvailable} title={directTool?.yoloAvailable ? t('home.tools.launchYolo') : t('home.launcher.yoloUnavailable')} onClick={() => void launch(defaultTool, null, 'yolo', sessionId)}>{t('home.launcher.resumeYolo')}</button>}</div>
+    </div></details>}
   </section>;
 }

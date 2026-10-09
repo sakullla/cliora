@@ -121,7 +121,7 @@ test('tiled CLI targets share one grid in the skill and MCP dialogs', async ({ p
   await dialog.getByRole('button', { name: '关闭' }).click();
 
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
-  await page.getByRole('button', { name: '＋ 新建 MCP', exact: true }).click();
+  await page.getByRole('button', { name: '新建 MCP', exact: true }).click();
   await expect(dialog.getByRole('checkbox', { name: 'Codex', exact: true })).toBeEnabled();
   await expect(dialog.getByRole('checkbox', { name: 'Claude Code', exact: true })).toBeDisabled();
   await dialog.getByRole('checkbox', { name: 'OpenCode', exact: true }).check();

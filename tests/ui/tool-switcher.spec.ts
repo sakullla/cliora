@@ -71,8 +71,20 @@ test('the tool switcher stays one horizontal row', async ({ page }) => {
   expect(fitted.items.every((item) => !item.clipped)).toBe(true);
   expect(new Set(fitted.items.map((item) => item.top)).size).toBe(1);
   expect(fitted.scrollWidth).toBeGreaterThan(fitted.clientWidth);
+  expect(await list.evaluate((root) => root.offsetHeight - root.clientHeight - 2)).toBe(0);
+  await expect(list).toHaveAttribute('data-fade-end', 'true');
+  await expect(list).not.toHaveAttribute('data-fade-start', /.*/);
+
+  await list.hover();
+  await page.mouse.wheel(0, 300);
+  await expect.poll(() => list.evaluate((root) => root.scrollLeft)).toBeGreaterThan(0);
+  await expect(list).toHaveAttribute('data-fade-start', 'true');
 
   await list.getByRole('tab', { name: 'Kiro', exact: true }).click();
   await expect(list.getByRole('tab', { name: 'Kiro', exact: true })).toHaveAttribute('aria-selected', 'true');
   await expect(list.getByRole('tab', { name: 'Codex', exact: true })).toHaveAttribute('aria-selected', 'false');
+  await expect(list).not.toHaveAttribute('data-fade-end', /.*/);
+  const kiro = await list.getByRole('tab', { name: 'Kiro', exact: true }).boundingBox();
+  const box = await list.boundingBox();
+  expect(kiro!.x + kiro!.width).toBeLessThanOrEqual(box!.x + box!.width);
 });

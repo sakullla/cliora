@@ -1,4 +1,7 @@
+/* Rows share the list's columns, so every action lands in the same column whatever its label width. */
 .list {
+  display: grid;
+  grid-template-columns: minmax(150px, 190px) minmax(0, 1fr) repeat(3, auto);
   min-width: 0;
   overflow: hidden;
   container-type: inline-size;
@@ -10,7 +13,8 @@
 
 .row {
   display: grid;
-  grid-template-columns: minmax(150px, 190px) minmax(0, 1fr) auto;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
   align-items: center;
   gap: 14px;
   min-height: 64px;
@@ -91,7 +95,9 @@
 
 .addConfig { border-style: dashed; color: var(--text-2); }
 
-.rowActions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.rowActions { display: grid; grid-column: 3 / -1; grid-template-columns: subgrid; align-items: center; justify-items: end; column-gap: 6px; }
+.rowActions > .launch, .rowActions > .recheck { grid-column: 1; justify-self: stretch; }
+.rowActions > .configure { grid-column: 3; }
 .rowActions .launch { min-width: 68px; border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
 .rowActions .launch:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }
 .rowActions .configure, .rowActions .configure:hover:not(:disabled) { border-color: transparent; background: transparent; box-shadow: none; color: var(--text-2); }
@@ -124,6 +130,6 @@
 @container (max-width: 560px) {
   .row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 8px; padding: 12px; }
   .switch { grid-column: 1 / -1; grid-row: 2; padding-left: 45px; }
-  .rowActions { grid-column: 2; grid-row: 1; align-self: center; }
+  .rowActions { display: flex; justify-content: flex-end; gap: 6px; grid-column: 2; grid-row: 1; align-self: center; }
   .note { grid-row: 3; }
 }

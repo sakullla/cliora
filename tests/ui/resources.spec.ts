@@ -112,7 +112,7 @@ async function mockResources(page: Page) {
 async function startLibraryMcp(page: Page) {
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
-  await page.getByRole('button', { name: '＋ 新建 MCP', exact: true }).click();
+  await page.getByRole('button', { name: '新建 MCP', exact: true }).click();
   await page.getByRole('textbox', { name: '名称' }).fill('filesystem');
   await page.getByRole('textbox', { name: '命令' }).fill('npx');
 }
@@ -305,7 +305,7 @@ test('MCP and Skill libraries are managed from the library page', async ({ page 
   });
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
-  await page.getByRole('button', { name: '＋ 新建 MCP', exact: true }).click();
+  await page.getByRole('button', { name: '新建 MCP', exact: true }).click();
   await page.getByRole('textbox', { name: '名称' }).fill('filesystem');
   await page.getByRole('textbox', { name: '命令' }).fill('npx');
   await page.getByRole('dialog').getByRole('button', { name: '保存', exact: true }).click();
@@ -526,7 +526,7 @@ test('library success notices expire after four seconds', async ({ page }) => {
   await mockResources(page);
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
-  await page.getByRole('button', { name: '＋ 新建提示词', exact: true }).click();
+  await page.getByRole('button', { name: '新建提示词', exact: true }).click();
   await page.getByRole('textbox', { name: '标题', exact: true }).fill('Notice fixture');
   await page.getByRole('textbox', { name: '资料正文', exact: true }).fill('Fixture body');
   await page.clock.install();
