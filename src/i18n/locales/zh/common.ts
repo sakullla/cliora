@@ -217,7 +217,7 @@ export default {
   },
   pages: {
     home: { title: '快速开始', subtitle: '选择工具与项目，一键在外部终端启动。' },
-    connections: { title: '工具与连接', subtitle: '管理每个 CLI 的配置、账号、插件、Agent 定义、MCP 与 Skill。' },
+    connections: { title: '工具与连接', subtitle: '管理当前工具的配置与连接。' },
     library: { title: '资料库', subtitle: '统一保存提示词、规则、MCP 与 Skill。' },
     records: { title: '使用记录', subtitle: '查看本机会话与用量。' },
     settings: { title: '设置', subtitle: '只保留日常需要的选项。' },

@@ -34,7 +34,7 @@
 .quickContent .actions button { flex: 0 1 auto; min-width: 112px; padding: 0 18px; }
 
 /* Section heading */
-.heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 6px; min-height: 30px; }
+.heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 10px; min-height: 30px; }
 .heading strong { font-size: 14px; font-weight: 650; }
 
 .projectSearch { max-width: 380px; }
@@ -75,6 +75,9 @@
 
 .iconAction { width: var(--control-h-sm); flex: none; padding: 0; color: var(--text-2); }
 .iconAction:hover:not(:disabled) { color: var(--text); }
+.controls .secondary,
+.controls .secondary:hover:not(:disabled) { border-color: transparent; background: transparent; box-shadow: none; color: var(--text-2); }
+.controls .secondary:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
 
 .emptyProjects {
   display: grid;

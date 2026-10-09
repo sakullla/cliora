@@ -159,7 +159,7 @@ export default {
     showPassword: '显示口令',
     hide: '隐藏',
     show: '显示',
-    cardTitle: '让熟悉的工作方式，跟你一起走',
+    cardTitle: '加密配置包',
     cardDetail: '备份配置、API 密钥和资料，在另一台设备恢复。加密保护内容，本机登录与使用记录留在本机。',
     export: '导出加密配置包',
     import: '从配置包恢复',
@@ -203,6 +203,10 @@ export default {
     pendingProjects: '{{count}} 个项目目录需在新设备重新关联',
     noAutoSwitch: '恢复后不会自动切换活动配置',
     confirmRestore: '确认恢复 {{count}} 项',
+  },
+  interface: {
+    title: '界面',
+    description: '主题和语言会立即生效。',
   },
   appearance: {
     title: '外观',

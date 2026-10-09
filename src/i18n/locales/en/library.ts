@@ -84,8 +84,6 @@ export default {
     newTitle: 'New {{kind}}',
     ruleHint: 'Fill in the title and body. After saving, return to the list and click icons to choose the CLIs.',
     promptHint: 'Fill in the title and body, then save.',
-    editing: 'Edit item',
-    newItem: 'New item',
     title: 'Title',
     titlePlaceholder: 'Name',
     project: 'Linked project',

@@ -4,7 +4,6 @@ import { open, save } from '@tauri-apps/plugin-dialog';
 import { native, nativeAvailable } from '../../lib/native';
 import type { PortableItem, PortablePreview } from '../../types/portable';
 import type { Project } from '../../types/launch';
-import { Icon } from '../../components/Icon';
 import { GuideDialog } from '../../components/GuideDialog';
 import { formatFailure } from '../../lib/feedback';
 import styles from './MigrationSettings.module.css';
@@ -137,7 +136,7 @@ export function MigrationSettings({ active, onImported }: { active: boolean; onI
   return <div className={styles.page}>
     {!dialogOpen && bannerError && <div className={styles.error} role="alert">{bannerError}</div>}
     {!dialogOpen && message && <div className={styles.message} role="status">{message}</div>}
-    <section className="migration-card"><div className="migration-mark"><Icon name="migration" size={24} /></div><h2>{t('settings.migration.cardTitle')}</h2><p>{t('settings.migration.cardDetail')}</p><div className="migration-actions"><button className="button primary" type="button" onClick={() => setOperation('export')}>{t('settings.migration.export')}</button><button className="button" type="button" onClick={() => setOperation('import')}>{t('settings.migration.import')}</button></div><small>{t('settings.migration.cardNote')}</small></section>
+    <section className="migration-card"><h2>{t('settings.migration.cardTitle')}</h2><p>{t('settings.migration.cardDetail')}</p><div className="migration-actions"><button className="button primary" type="button" onClick={() => setOperation('export')}>{t('settings.migration.export')}</button><button className="button" type="button" onClick={() => setOperation('import')}>{t('settings.migration.import')}</button></div><small>{t('settings.migration.cardNote')}</small></section>
     <GuideDialog open={dialogOpen} title={operation === 'import' ? t('settings.migration.import') : t('settings.migration.export')} hint={operation === 'import' ? t('settings.migration.importHint') : t('settings.migration.exportHint')} onClose={() => { setOperation(null); setRevealPassword(false); }}>
     {bannerError && <div className={styles.error} role="alert">{bannerError}</div>}
     {message && <div className={styles.message} role="status">{message}</div>}

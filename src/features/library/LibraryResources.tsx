@@ -352,7 +352,7 @@ export function LibraryResources({ section, active, tools, projects }: { section
                 if (place.state === 'conflict' || place.state === 'update_available') return { pressed: true, state: 'drifted', status: installStateLabel(place.state) };
                 return { pressed: true, state: 'unavailable', status: installStateLabel(place.state) };
               }} />
-              <div className={styles.cardActions}><button type="button" disabled={busy} onClick={() => void removePackage(item)}>{t('tools.agents.delete')}</button><button type="button" disabled={busy} onClick={() => { setSkillSeed([]); setSkillTarget(item); }}>{t('tools.workspace.edit')}</button></div>
+              <div className={styles.cardActions}><button type="button" className={styles.dangerQuiet} disabled={busy} onClick={() => void removePackage(item)}>{t('tools.agents.delete')}</button><button type="button" className={styles.quiet} disabled={busy} onClick={() => { setSkillSeed([]); setSkillTarget(item); }}>{t('tools.workspace.edit')}</button></div>
             </div>
           </article>;
         }) : needle
@@ -416,7 +416,7 @@ export function LibraryResources({ section, active, tools, projects }: { section
               if (!place.enabled) return { pressed: true, state: 'unavailable', status: t('library.resources.markDisabled') };
               return { pressed: true, state: 'current', status: t('library.page.markCurrent') };
             }} />
-            <div className={styles.cardActions}><button type="button" disabled={busy} onClick={() => void remove(item)}>{t('tools.agents.delete')}</button><button type="button" onClick={() => editMcp(item)}>{t('tools.workspace.edit')}</button></div>
+            <div className={styles.cardActions}><button type="button" className={styles.dangerQuiet} disabled={busy} onClick={() => void remove(item)}>{t('tools.agents.delete')}</button><button type="button" className={styles.quiet} onClick={() => editMcp(item)}>{t('tools.workspace.edit')}</button></div>
           </div>
         </article>;
       }) : needle

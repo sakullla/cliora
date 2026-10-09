@@ -217,7 +217,7 @@ export default {
   },
   pages: {
     home: { title: 'Quick start', subtitle: 'Pick a tool and a project, then launch in an external terminal.' },
-    connections: { title: 'Tools & connections', subtitle: 'Manage each CLI’s configuration, accounts, plugins, agent definitions, MCP, and skills.' },
+    connections: { title: 'Tools & connections', subtitle: 'Manage configuration and connections for the current tool.' },
     library: { title: 'Library', subtitle: 'Keep prompts, rules, MCP, and skills in one place.' },
     records: { title: 'Usage records', subtitle: 'View local sessions and usage.' },
     settings: { title: 'Settings', subtitle: 'Only the options you need day to day.' },

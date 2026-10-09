@@ -1,6 +1,6 @@
 .panel { display: grid; gap: 18px; padding: 20px 0; min-width: 0; }
 .panel h2, .panel h3, .panel p { margin: 0; }
-.panel h2 { font-size: 19px; letter-spacing: -.02em; }
+.panel h2 { font-size: 15px; font-weight: 650; letter-spacing: -.01em; }
 .panel h3 { font-size: 14px; }
 .sectionTitle { display: flex; align-items: center; gap: 8px; }
 .sectionTitle > span { color: var(--text-2); font-size: 12px; }
@@ -85,27 +85,32 @@
 /* ---------- Resource card list (agents / plugins) ---------- */
 .resourceList {
   list-style: none;
-  padding: 6px;
+  padding: 0;
   margin: 0;
+  overflow: hidden;
   display: grid;
-  gap: 8px;
+  gap: 0;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
-  background: var(--surface-2);
+  background: var(--surface);
+  box-shadow: var(--shadow-xs);
 }
 .resourceList > li {
   padding: 14px 16px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
-  gap: 10px 20px;
+  gap: 8px 16px;
   min-width: 0;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface);
-  transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  transition: background-color var(--fast) var(--ease);
 }
-.resourceList > li:hover { border-color: var(--line-strong); box-shadow: var(--shadow-xs); }
+.resourceList > li:first-child { border-top: 0; }
+.resourceList > li:hover { background: var(--surface-2); }
 .resourceList > li > .actions { align-self: start; }
 .resourceBody { display: grid; gap: 6px; min-width: 0; }
 .resourceTitle { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
@@ -116,7 +121,12 @@
 .resourceList details { grid-column: 1 / -1; color: var(--text-2); font-size: 12px; min-width: 0; overflow-wrap: anywhere; }
 .resourceList details > p, .resourceList details > ul { margin-top: 9px; }
 .resourceList summary { cursor: pointer; width: fit-content; }
-.resourceList .danger { color: var(--danger); }
+.resourceList .actions > button,
+.resourceList .actions > button:hover:not(:disabled) { border-color: transparent; background: transparent; box-shadow: none; color: var(--text-2); }
+.resourceList .actions > button:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
+.resourceList .actions > .danger,
+.resourceList .actions > .danger:hover:not(:disabled) { color: var(--danger); }
+.resourceList .actions > .danger:hover:not(:disabled) { background: var(--danger-soft); }
 
 /* ---------- List toolbar (search + filter) ---------- */
 .listToolbar {
@@ -138,7 +148,7 @@
 .listToolbar > span { color: var(--text-3); font-size: 12px; white-space: nowrap; margin-left: auto; }
 .listNote { color: var(--text-2); font-size: 12px; }
 
-.installBox { display: grid; gap: 11px; padding: 16px 18px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface-2); }
+.installBox { display: grid; gap: 11px; padding: 16px 18px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-xs); }
 .installBox .create { padding: 0; border: 0; background: transparent; }
 .installBox .create label { flex-basis: 320px; }
 

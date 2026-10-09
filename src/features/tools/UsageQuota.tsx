@@ -71,19 +71,22 @@ function MetricSummary({ metric, label, now, samples }: { metric: UsageMetric; l
   const { t } = useTranslation();
   const percent = usagePercent(metric);
   const amount = metric.remaining !== null ? t('tools.quota.remaining', { amount: usageAmount(metric.remaining), unit: usageUnit(metric) }) : metric.used !== null ? t('tools.quota.used', { amount: usageAmount(metric.used), unit: usageUnit(metric) }) : metric.missingReason;
+  const amountText = metric.unlimited ? (metric.neverExpires ? t('tools.quota.neverExpires') : t('tools.quota.noLimit')) : amount ?? '';
+  const resetText = !metric.unlimited && metric.window && (metric.window.resetsAt || metric.window.recovery !== 'unknown') ? usageReset(metric, now) : '';
+  const meta = [amountText, resetText].filter(Boolean).join(' · ');
   return <div className={styles.summaryMetric} data-warning={percent !== null && percent >= 90 || metric.remaining !== null && metric.remaining < 0}>
     <div><span>{label}</span><strong>{metric.unlimited ? t('tools.quota.unlimited') : percent === null ? t('tools.quota.percentUnknown') : t('tools.quota.percentUsed', { percent: new Intl.NumberFormat(dateLocale(), { maximumFractionDigits: 1 }).format(percent) })}</strong></div>
     {percent !== null && <progress aria-label={t('tools.quota.percentAria', { label })} max={100} value={Math.min(100, Math.max(0, percent))} />}
-    <small className={styles.metricMeta}>{(metric.unlimited || amount) && <span>{metric.unlimited ? (metric.neverExpires ? t('tools.quota.neverExpires') : t('tools.quota.noLimit')) : amount}</span>}{!metric.unlimited && metric.window && (metric.window.resetsAt || metric.window.recovery !== 'unknown') && <span>{usageReset(metric, now)}</span>}</small>
+    {meta && <small className={styles.metricMeta} title={meta}>{(metric.unlimited || amount) && <span>{amountText}</span>}{resetText && <span>{resetText}</span>}</small>}
     <BurnDown metric={metric} label={label} samples={samples} now={now} />
   </div>;
 }
-export function UsageMetrics({ result, now = Date.now(), program }: { result: UsageResult; now?: number; program?: QueryConfig['program'] }) {
+export function UsageMetrics({ result, now = Date.now(), program, samples }: { result: UsageResult; now?: number; program?: QueryConfig['program']; samples?: UsageSample[] }) {
   const { t } = useTranslation();
   return <div className={styles.metrics}>{result.metrics.map(metric => {
     const percent = usagePercent(metric);
     const label = usageMetricLabel(program, metric);
-    return <div className={styles.metric} key={metric.id}>
+    return <div className={styles.metric} data-warning={percent !== null && percent >= 90 || metric.remaining !== null && metric.remaining < 0} key={metric.id}>
       <div className={styles.heading}><strong>{label}</strong><span>{metric.unlimited ? t('tools.quota.unlimited') : percent === null ? t('tools.quota.percentUnknown') : `${usageAmount(percent)}%${t('tools.quota.percentUsedSuffix')}`}</span></div>
       {percent !== null && <progress aria-label={t('tools.quota.percentAria', { label })} max={100} value={Math.min(100, Math.max(0, percent))} />}
       <small>{t(`tools.quota.subject.${metric.subject}`)}{t('tools.quota.unitSuffix', { unit: usageUnit(metric) })}</small>
@@ -91,6 +94,7 @@ export function UsageMetrics({ result, now = Date.now(), program }: { result: Us
       {metric.missingReason && <small>{metric.missingReason}</small>}
       {metric.window && <small>{metric.window.durationSeconds ? t('tools.quota.windowHours', { hours: usageAmount(metric.window.durationSeconds / 3600) }) : ''}{usageReset(metric, now)}</small>}
       {metric.expiresAt && <small>{t('tools.quota.expiresAt', { time: date(metric.expiresAt) })}</small>}{metric.neverExpires && <small>{t('tools.quota.neverExpires')}</small>}
+      {samples && <BurnDown metric={metric} label={label} samples={samples} now={now} />}
     </div>;
   })}{result.errors.map((e, i) => <p className={styles.error} key={i}>{e.message}</p>)}</div>;
 }
@@ -131,7 +135,7 @@ export function ProfileQuota({ profileId, profileVersion, profileAccountId, tool
         {!!cache?.errors.length && <p role="alert" className={styles.error}>{cache.errors.map(e => e.message).join(t('tools.quota.errorSeparator'))}</p>}
         {!!snapshot?.result.errors.length && <p role="alert" className={styles.error}>{snapshot.result.errors.map(e => e.message).join(t('tools.quota.errorSeparator'))}</p>}
         <details className={styles.quotaDetails} onToggle={event => { const open = event.currentTarget.open; setExpanded(previous => { const next = new Set(previous); if (open) next.add(q.id); else next.delete(q.id); return next; }); }}><summary>{t('tools.quota.detail')}{metrics.length > primary.length ? t('tools.quota.detailMore', { count: metrics.length - primary.length }) : ''}</summary>
-          {snapshot && expanded.has(q.id) && <UsageMetrics result={snapshot.result} now={now} program={q.config.program} />}
+          {snapshot && expanded.has(q.id) && <UsageMetrics result={snapshot.result} now={now} program={q.config.program} samples={state.samples[q.id] ?? []} />}
           <div className={styles.metadata}>{q.config.program.kind === 'profile_builtin' && <small className={styles.linked}>{t('tools.quota.linked')}</small>}<small>{!q.config.enabled ? t('tools.quota.disabled') : q.config.refreshIntervalSeconds ? t('tools.quota.autoRefresh', { minutes: q.config.refreshIntervalSeconds / 60 }) : t('tools.quota.manual')}</small>{snapshot?.measuredAt && <small>{t('tools.quota.lastSuccess', { time: date(snapshot.measuredAt) })}</small>}{cache?.attemptedAt && cache.errors.length > 0 && <small>{t('tools.quota.lastAttempt', { time: date(cache.attemptedAt) })}</small>}<small>{t('tools.quota.source', { site: q.config.site })}{snapshot && ` · ${snapshot.source}`}</small></div>
         </details>
       </div>;

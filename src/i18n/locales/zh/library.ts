@@ -84,8 +84,6 @@ export default {
     newTitle: '新建{{kind}}',
     ruleHint: '填写标题和正文。分发到哪些 CLI，保存后回到列表点图标。',
     promptHint: '填写标题和正文，然后保存。',
-    editing: '编辑资料',
-    newItem: '新资料',
     title: '标题',
     titlePlaceholder: '名称',
     project: '关联项目',
