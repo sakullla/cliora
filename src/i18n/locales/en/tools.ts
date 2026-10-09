@@ -888,7 +888,6 @@ export default {
     stepDoneAria: '{{step}} (done)',
     modelStepTitle: 'Model',
     modelStepHint: 'Pick from the catalog or type a model ID',
-    catalogSuggest: 'Load catalog suggestions',
     noNativeLogin: 'No local sign-in found',
     showInput: 'Show',
     hideInput: 'Hide',

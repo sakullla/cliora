@@ -11,6 +11,7 @@ import { CodeEditor } from '../../../components/CodeEditor';
 import { ConflictCompare } from '../../../components/configuration/ConflictCompare';
 import { applyScopeCopy, applyStatusCopy } from './applyCopy';
 import { AccountPicker } from '../AccountPicker';
+import { ModelCombobox } from '../ModelCombobox';
 import type { useAccounts } from '../AccountsPanel';
 import { ConnectionCredential, ConnectionCredentialProvider } from '../../../components/configuration/ConnectionCredential';
 import { StepHead, configurationStepOrder, type ConfigurationStepKey } from '../../../components/configuration/ConfigurationStep';
@@ -477,9 +478,8 @@ export function ConfigurationWorkspaceEditor(props: Props) {
             </div>}
             <ConnectionCredential />
             <div data-config-step="model" className={sharedStyles.step}>
-              <StepHead step="model" title={t('tools.config.modelStepTitle')} meta={t('tools.config.modelStepHint')} actions={catalog.supported ? <button type="button" className={sharedStyles.catalogButton} disabled={querying || pending} onClick={catalog.fetch}>{querying ? t('common.models.fetching') : t('tools.config.catalogSuggest')}</button> : undefined} />
-              <label>{t('tools.config.model')}<input aria-label={t('tools.config.model')} value={legacyInputs?.model ?? ''} spellCheck={false} list={catalog.models.length ? `${nameId}-models` : undefined} placeholder={t('common.field.pickOrType')} disabled={busy || cancelling} onChange={event => legacyConnection('model', event.target.value)} /></label>
-              {catalog.models.length > 0 && <datalist id={`${nameId}-models`}>{catalog.models.map(model => <option key={model} value={model} />)}</datalist>}
+              <StepHead step="model" title={t('tools.config.modelStepTitle')} meta={t('tools.config.modelStepHint')} />
+              <label>{t('tools.config.model')}<ModelCombobox label={t('tools.config.model')} value={legacyInputs?.model ?? ''} placeholder={t('common.field.pickOrType')} disabled={busy || cancelling} options={[...new Set([...catalog.models, legacyInputs?.model].filter((value): value is string => typeof value === 'string' && value.trim() !== ''))]} action={catalog.supported ? { label: t('common.field.fetchCatalog'), busy: querying, onClick: catalog.fetch } : undefined} onChange={value => legacyConnection('model', value)} /></label>
               {connectionConfigurable && <details className={styles.inlineDisclosure}><summary>{t('tools.config.advancedConnection')}</summary><label>{t('tools.config.authEnvVar')}<input aria-label={t('tools.config.authEnvVar')} spellCheck={false} disabled={busy || cancelling} value={legacyInputs?.authEnvVar ?? ''} onChange={event => legacyConnection('authEnvVar', event.target.value)} /></label></details>}
             </div>
           </section> : <><p className={styles.hint}>{t('tools.config.rawOnlyNote')}</p><ConnectionCredential /></>}

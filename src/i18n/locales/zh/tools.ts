@@ -888,7 +888,6 @@ export default {
     stepDoneAria: '{{step}}（已完成）',
     modelStepTitle: '模型',
     modelStepHint: '从目录选择，或直接输入模型 ID',
-    catalogSuggest: '载入目录候选',
     noNativeLogin: '尚未发现本机登录',
     showInput: '显示',
     hideInput: '隐藏',
