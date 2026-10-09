@@ -623,20 +623,8 @@ impl CliAdapter for Pi {
     fn install_command(&self) -> Option<String> {
         self.npm_install_command()
     }
-    fn npm_install_command(&self) -> Option<String> {
-        Some(format!(
-            "npm install -g --ignore-scripts {}",
-            self.npm_package()
-        ))
-    }
-    fn upgrade_command(&self, source: &str) -> Option<String> {
-        (source == "npm_shim").then(|| {
-            format!(
-                "npm install -g --ignore-scripts {}@latest",
-                self.npm_package()
-            )
-        })
-    }
+    fn npm_script_dependencies(&self) -> &'static [&'static str] { &["esbuild", "@google/genai", "protobufjs"] }
+
 }
 
 #[cfg(test)]

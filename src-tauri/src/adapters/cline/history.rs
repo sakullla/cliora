@@ -57,18 +57,21 @@ pub fn sources_controlled(
     check_cancelled(cancelled)?;
     let sessions_root = super::data_root(home).join("sessions");
     let database = super::sessions_db(home);
+    let mut revisions = std::collections::HashMap::new();
     let ids: Vec<String> = if database.is_file() {
         let connection = open(&database)?;
         let mut statement = connection
-            .prepare("SELECT session_id FROM sessions ORDER BY rowid DESC LIMIT ?1")
+            .prepare("SELECT session_id, json_array(title,started_at,ended_at,metadata_json) FROM sessions ORDER BY rowid DESC LIMIT ?1")
             .map_err(|error| format!("Cline 会话库结构无法识别：{error}"))?;
         let rows = statement
-            .query_map([MAX_SOURCES as i64 + 1], |row| row.get::<_, String>(0))
+            .query_map([MAX_SOURCES as i64 + 1], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
             .map_err(|error| error.to_string())?;
         let mut ids = Vec::new();
         for row in rows {
             check_cancelled(cancelled)?;
-            ids.push(row.map_err(|error| error.to_string())?);
+            let (id, metadata) = row.map_err(|error| error.to_string())?;
+            revisions.insert(id.clone(), hex(&md5_hex(metadata.as_bytes())));
+            ids.push(id);
         }
         drop(statement);
         ids
@@ -103,6 +106,7 @@ pub fn sources_controlled(
         let manifest = sessions_root.join(&id).join(format!("{id}.json"));
         let checked = if manifest.is_file() {
             fingerprint_directory(manifest.parent().unwrap(), cancelled)
+                .map(|stamp| format!("{stamp}|{}", revisions.get(&id).map(String::as_str).unwrap_or("no-index")))
         } else {
             Err("Cline 会话目录或清单缺失".into())
         };
@@ -155,7 +159,7 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// Folds name:length:mtime of every regular file in the session directory
+/// Folds name and shared change-time revision of every regular file in the session directory
 /// into one order-independent digest, so any append to the messages file, a
 /// new subagent stem or a rewritten manifest reindexes that session only.
 fn fingerprint_directory(dir: &Path, cancelled: &dyn Fn() -> bool) -> Result<String, String> {
@@ -170,14 +174,8 @@ fn fingerprint_directory(dir: &Path, cancelled: &dyn Fn() -> bool) -> Result<Str
             continue;
         }
         let name = entry.file_name().to_string_lossy().into_owned();
-        let metadata = entry.metadata().map_err(|error| error.to_string())?;
-        let modified = metadata
-            .modified()
-            .ok()
-            .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|value| value.as_nanos())
-            .unwrap_or(0);
-        rows.push(format!("{name}:{}:{modified}", metadata.len()));
+        let stamp = crate::history::source_fingerprint_controlled(&entry.path(), cancelled)?;
+        rows.push(format!("{name}:{stamp}"));
     }
     if rows.is_empty() {
         return Err("Cline 会话目录没有可指纹的文件".into());
@@ -188,7 +186,7 @@ fn fingerprint_directory(dir: &Path, cancelled: &dyn Fn() -> bool) -> Result<Str
         }
         count += 1;
     }
-    Ok(format!("cline-session-v1|{count}|{}", hex(&combined)))
+    Ok(format!("cline-session-v2|{count}|{}", hex(&combined)))
 }
 
 /// The index database path for a session directory:
@@ -552,6 +550,17 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_database_changes_invalidate_only_the_affected_session() {
+        let home = fixture_home();
+        let before = source_of(home.path(), AGGREGATE_ONLY_ID);
+        let main = source_of(home.path(), MAIN_ID);
+        let connection = Connection::open(super::super::sessions_db(home.path())).unwrap();
+        connection.execute("UPDATE sessions SET metadata_json = json_set(metadata_json, '$.usage.inputTokens', 7654) WHERE session_id=?1", [AGGREGATE_ONLY_ID]).unwrap();
+        assert_ne!(before.fingerprint, source_of(home.path(), AGGREGATE_ONLY_ID).fingerprint);
+        assert_eq!(main.fingerprint, source_of(home.path(), MAIN_ID).fingerprint);
+    }
+
+    #[test]
     fn fixture_layout_lists_sessions_with_stable_fingerprints() {
         let home = fixture_home();
         let listed = sources(home.path()).unwrap();
@@ -570,7 +579,7 @@ mod tests {
         );
         assert!(stale.fingerprint.is_empty());
         let main = source_of(home.path(), MAIN_ID);
-        assert!(main.fingerprint.starts_with("cline-session-v1|"));
+        assert!(main.fingerprint.starts_with("cline-session-v2|"));
         assert!(main.path.ends_with(format!("{MAIN_ID}.json")));
         // A length change in the messages file must change the fingerprint.
         let before = main.fingerprint.clone();

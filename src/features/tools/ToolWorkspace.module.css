@@ -525,3 +525,5 @@ div > .feedback { margin-bottom: 12px; }
   .historyList li { flex: none; }
   .historyList button { width: auto; }
 }
+
+.maintenanceLog { max-height: 360px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 16px; font-size: 12px; background: var(--surface-2); border-radius: 8px; }

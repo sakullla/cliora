@@ -74,7 +74,7 @@ test('install panel updates the active source and can switch to the native CLI',
         if (command === 'get_tray_status') return { available: false, error: null };
         if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
         if (command === 'cli_latest_version') return '0.200.0';
-        if (command === 'maintain_registered_cli') { (window as unknown as { __maintainCalls: unknown[] }).__maintainCalls.push(args); return null; }
+        if (command === 'maintain_registered_cli') { (window as unknown as { __maintainCalls: unknown[] }).__maintainCalls.push(args); return { output: 'installed', version: '0.200.0' }; }
         if (command === 'set_registered_custom_cli_path') { (window as unknown as { __pathCalls: unknown[] }).__pathCalls.push(args); return null; }
         if (command === 'get_registered_tool_workspace') return {
           probe: {
@@ -110,6 +110,7 @@ test('install panel updates the active source and can switch to the native CLI',
   await expect(page.getByRole('button', { name: '重新检测' })).toHaveCount(0);
   await page.getByRole('button', { name: '更新 npm', exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: '更新', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '关闭', exact: true }).first().click();
   await page.getByRole('button', { name: '使用', exact: true }).click();
   const maintain = await page.evaluate(() => (window as unknown as { __maintainCalls: Array<{ action: string; source: string | null }> }).__maintainCalls);
   const paths = await page.evaluate(() => (window as unknown as { __pathCalls: Array<{ path: string }> }).__pathCalls);
@@ -129,7 +130,7 @@ test('a missing CLI asks which install channel to use', async ({ page }) => {
         if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
         if (command === 'get_tray_status') return { available: false, error: null };
         if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
-        if (command === 'maintain_registered_cli') { (window as unknown as { __maintainCalls: unknown[] }).__maintainCalls.push(args); return null; }
+        if (command === 'maintain_registered_cli') { (window as unknown as { __maintainCalls: unknown[] }).__maintainCalls.push(args); return { output: 'installed', version: '0.200.0' }; }
         if (command === 'get_registered_tool_workspace') return {
           probe: { selectedPath: null, installations: [], nativeFiles: [], nativeWrites: { state: 'unknown', reason: '未发现可确认身份的 CLI' }, interfaceFormats: [], providerPresets: [], dependencies: [], installUrl: 'https://developers.openai.com/codex/cli', upgradeHint: '', installCommand: 'irm https://chatgpt.com/codex/install.ps1 | iex', upgradeCommand: null, nativeInstallCommand: 'irm https://chatgpt.com/codex/install.ps1 | iex', npmInstallCommand: 'npm install -g @openai/codex' },
           profiles: [], common: null, binding: null, snapshots: [], recoveryNeeded: [], customPath: null,

@@ -64,7 +64,7 @@ pub fn sources_controlled(
                 sources.push(HistorySource { native_title: None,
                     path: database.clone(),
                     native_id: Some(id),
-                    fingerprint: format!("zcode-session-v4|{stamp}"),
+                    fingerprint: format!("zcode-session-v5|{stamp}"),
                     fingerprint_error: None,
                 });
                 if sources.len() > MAX_SOURCES {
@@ -128,6 +128,7 @@ fn rollout_native_id(path: &Path) -> Option<String> {
     valid_native_id(id).then(|| id.to_owned())
 }
 
+#[derive(Clone)]
 struct InternalIndex {
     sessions: Vec<(String, String)>,
 }
@@ -141,6 +142,19 @@ fn open_internal(database: &Path) -> Result<Connection, String> {
 /// lock, schema drift) is reported as an error so discovery can fall back to
 /// the rollout/snapshot artifacts instead of failing the whole scan.
 fn internal_index(database: &Path, cancelled: &dyn Fn() -> bool) -> Result<InternalIndex, String> {
+    static CACHE: std::sync::LazyLock<crate::history::source_cache::RevisionCache<InternalIndex>> = std::sync::LazyLock::new(crate::history::source_cache::RevisionCache::new);
+    let mut index = CACHE.read(database, cancelled, || internal_database_index(database, cancelled))?;
+    // Rollout files have an independent lifetime; always check their revisions.
+    for (id, stamp) in &mut index.sessions {
+        if let Some(path) = rollout_sibling(database, id).filter(|path| path.is_file()) {
+            stamp.push('|');
+            stamp.push_str(&source_fingerprint_controlled(&path, cancelled)?);
+        }
+    }
+    Ok(index)
+}
+
+fn internal_database_index(database: &Path, cancelled: &dyn Fn() -> bool) -> Result<InternalIndex, String> {
     check_cancelled(cancelled)?;
     if !database.is_file() {
         return Err("ZCode 内部数据库不存在".into());
@@ -196,12 +210,7 @@ fn internal_index(database: &Path, cancelled: &dyn Fn() -> bool) -> Result<Inter
         if let Some(hash) = hashes.get_mut(&id) { hash.update(usage.as_bytes()); }
     }
     fold_transcript_revision(&connection, &mut hashes, cancelled)?;
-    let sessions = hashes.into_iter().map(|(id, mut hash)| {
-        if let Some(path) = rollout_sibling(database, &id).filter(|path| path.is_file()) {
-            hash.update(source_fingerprint_controlled(&path, cancelled)?.as_bytes());
-        }
-        Ok((id, format!("{:x}", hash.finalize())))
-    }).collect::<Result<Vec<_>, String>>()?;
+    let sessions = hashes.into_iter().map(|(id, hash)| (id, format!("{:x}", hash.finalize()))).collect();
     Ok(InternalIndex { sessions })
 }
 
@@ -866,7 +875,7 @@ mod tests {
         assert_eq!(sources.len(), 2, "{sources:?}");
         assert!(sources
             .iter()
-            .all(|source| source.fingerprint.starts_with("zcode-session-v4|")));
+            .all(|source| source.fingerprint.starts_with("zcode-session-v5|")));
         let source = sources
             .iter()
             .find(|source| source.native_id.as_deref() == Some("sess_fixture-2026_10_03-a1b2c3"))

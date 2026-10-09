@@ -25,12 +25,18 @@ docs/verification/ui/
 !docs/architecture/
 docs/architecture/*
 !docs/architecture/configuration-adapters.md
+!docs/architecture/cli-maintenance.md
 
 # Track this redesign's verification document and its dedicated UI captures only.
 !docs/verification/
 docs/verification/*
 !docs/verification/configuration-redesign.md
 !docs/verification/usage-audit-2026-10.md
+!docs/verification/performance-installation/
+docs/verification/performance-installation/*
+!docs/verification/performance-installation/README.md
+!docs/verification/performance-installation/maintenance-1360.png
+!docs/verification/performance-installation/maintenance-640.png
 !docs/verification/configuration-redesign-ui/
 docs/verification/configuration-redesign-ui/*
 !docs/verification/configuration-redesign-ui/kimi-minimum-720x560.png
