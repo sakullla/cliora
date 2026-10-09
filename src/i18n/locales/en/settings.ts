@@ -159,7 +159,7 @@ export default {
     showPassword: 'Show passphrase',
     hide: 'Hide',
     show: 'Show',
-    cardTitle: 'Take your familiar way of working with you',
+    cardTitle: 'Encrypted bundle',
     cardDetail: 'Back up configuration, API keys, and data, then restore on another device. Content is encrypted; local sign-ins and usage records stay on this device.',
     export: 'Export encrypted bundle',
     import: 'Restore from a bundle',
@@ -203,6 +203,10 @@ export default {
     pendingProjects: '{{count}} project directories need re-linking on the new device',
     noAutoSwitch: 'Active profiles will not switch automatically after restore',
     confirmRestore: 'Restore {{count}} items',
+  },
+  interface: {
+    title: 'Interface',
+    description: 'Theme and language apply right away.',
   },
   appearance: {
     title: 'Appearance',

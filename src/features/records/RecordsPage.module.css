@@ -155,8 +155,11 @@
 .detailBar { display: grid; flex: none; gap: 7px; padding: 18px 24px 14px; border-bottom: 1px solid var(--line); background: var(--surface); }
 .detailEyebrow { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--text-2); font-size: 11.5px; }
 .modelBadge { overflow: hidden; max-width: 50%; padding: 0; color: var(--text-3); font-family: var(--font-mono); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
-.detailEyebrow > button { flex: none; margin-left: auto; min-height: 26px; padding: 0 8px; font-size: 11px; }
-.detailEyebrow > button[data-active] { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-line); }
+.detailEyebrow > button,
+.detailEyebrow > button:hover:not(:disabled) { flex: none; margin-left: auto; min-height: 26px; padding: 0 8px; border-color: transparent; background: transparent; box-shadow: none; color: var(--text-3); font-size: 11px; }
+.detailEyebrow > button:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
+.detailEyebrow > button[data-active],
+.detailEyebrow > button[data-active]:hover:not(:disabled) { border-color: transparent; background: transparent; color: var(--warning); }
 .detailMeta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; color: var(--text-3); font-size: 11px; }
 .detailMeta > span { display: flex; align-items: center; gap: 5px; min-width: 0; overflow-wrap: anywhere; }
 .detailMeta > span > svg { flex: none; }

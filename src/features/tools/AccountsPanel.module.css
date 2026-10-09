@@ -1,4 +1,16 @@
-.nativeLogin { border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 16px 18px; background: var(--surface-2); display: grid; gap: 12px; min-width: 0; }
+.addForm { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: end; gap: 12px 16px; background: var(--surface); box-shadow: var(--shadow-xs); }
+.addForm > p { grid-column: 1 / -1; margin: 0; color: var(--text-3); font-size: 12.5px; line-height: 1.55; }
+.addForm > button:first-of-type { grid-column: 2; grid-row: 3; justify-self: end; }
+.addForm > button:last-of-type:not(:first-of-type) { grid-column: 1; grid-row: 3; justify-self: start; }
+@media (max-width: 760px) {
+  .addForm { grid-template-columns: 1fr; }
+  .addForm > button:first-of-type { grid-column: auto; grid-row: 4; justify-self: stretch; }
+  .addForm > button:last-of-type:not(:first-of-type) { grid-column: auto; grid-row: 5; justify-self: stretch; }
+}
+.nativeLogin { border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 16px 18px; background: var(--surface); box-shadow: var(--shadow-xs); display: grid; gap: 12px; min-width: 0; }
+.nativeLogin .nativeCheck,
+.nativeLogin .nativeCheck:hover:not(:disabled) { border-color: transparent; background: transparent; box-shadow: none; color: var(--text-2); }
+.nativeLogin .nativeCheck:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
 .nativeRow { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 8px 16px; padding-top: 12px; border-top: 1px solid var(--line); }
 .nativeIdentity { display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
 .nativeIdentity > span { color: var(--text-2); font-size: 12px; }

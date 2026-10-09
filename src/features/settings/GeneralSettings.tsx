@@ -210,17 +210,16 @@ export function GeneralSettings({ tools, managed, preservedUnknown, icons, busy,
       {preservedUnknown.map((item) => <div className="setting-row" key={item.id}><span><strong>{item.id}</strong><small>{t('settings.managed.preservedUnknown', { count: item.profileCount })}</small></span></div>)}
     </section>
     <section className="settings-group">
-      <div className="setting-intro"><h2>{t('settings.appearance.title')}</h2><p>{t('settings.appearance.description')}</p></div>
+      <div className="setting-intro"><h2>{t('settings.interface.title')}</h2><p>{t('settings.interface.description')}</p></div>
       <div className="setting-row"><span><strong>{t('settings.theme.label')}</strong><small>{t('settings.theme.hint')}</small></span><ThemeChoice value={theme} disabled={busy} onChange={(next) => { if (next !== theme) onThemeChange(next); }} /></div>
-    </section>
-    <section className="settings-group">
-      <div className="setting-intro"><h2>{t('settings.language.title')}</h2><p>{t('settings.language.description')}</p></div>
       <div className="setting-row"><span><strong>{t('settings.language.label')}</strong><small>{t('settings.language.hint')}</small></span><LanguageChoice value={language} disabled={busy} /></div>
     </section>
     {nativeAvailable && <UpdateSettings busy={busy} />}
     {nativeAvailable && <TerminalSettings />}
-    <div className="setting-row"><span><strong>{t('settings.shortcuts.label')}</strong><small>{t('settings.shortcuts.hint')}</small></span><button className="button" type="button" aria-label={t('settings.shortcuts.label')} onClick={onOpenShortcutHelp}>{t('settings.shortcuts.action')}</button></div>
-    <div className="setting-row migration-entry"><span><strong>{t('settings.migrationEntry.label')}</strong><small>{t('settings.migrationEntry.hint')}</small></span><button className="button" type="button" onClick={onOpenMigration}>{t('settings.migrationEntry.action')}</button></div>
+    <section className="settings-group">
+      <div className="setting-row"><span><strong>{t('settings.shortcuts.label')}</strong><small>{t('settings.shortcuts.hint')}</small></span><button className="button" type="button" aria-label={t('settings.shortcuts.label')} onClick={onOpenShortcutHelp}>{t('settings.shortcuts.action')}</button></div>
+      <div className="setting-row"><span><strong>{t('settings.migrationEntry.label')}</strong><small>{t('settings.migrationEntry.hint')}</small></span><button className="button" type="button" onClick={onOpenMigration}>{t('settings.migrationEntry.action')}</button></div>
+    </section>
     <ToastStack status={toasts.notice} alert={toasts.error} onDismiss={toasts.dismiss} />
   </>;
 }

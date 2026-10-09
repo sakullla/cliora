@@ -1,4 +1,4 @@
-.quota { width: 100%; min-width: 0; display: grid; gap: 10px; font-size: 12px; }
+.quota { width: 100%; min-width: 0; display: grid; gap: 8px; font-size: 12px; }
 .quota > .heading { justify-content: flex-end; }
 .quota > .heading > span { margin-right: auto; color: var(--text-2); }
 .quota .iconButton, .quota .refresh {
@@ -21,14 +21,14 @@
 .heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
 .actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .actions { align-items: center; gap: 2px; }
-.query { min-width: 0; display: grid; gap: 8px; }
-.query + .query { border-top: 1px solid var(--line); padding-top: 10px; }
+.query { min-width: 0; display: grid; gap: 6px; }
+.query + .query { border-top: 1px solid var(--line); padding-top: 8px; }
 .queryTitle { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; min-width: 0; }
 .queryTitle > span { font-weight: 620; overflow-wrap: anywhere; font-size: 12.5px; }
 .queryTitle .stale { color: var(--warning); }
-.summaryMetrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); gap: 10px 24px; }
-.summaryMetric { display: grid; gap: 5px; align-content: start; min-width: 0; }
-.metricMeta { display: flex; flex-wrap: wrap; gap: 0 6px; }
+.summaryMetrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); gap: 8px 24px; }
+.summaryMetric { display: grid; gap: 4px; align-content: start; min-width: 0; }
+.metricMeta { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .metricMeta > span + span::before { content: '·'; margin-right: 6px; color: var(--text-3); }
 .summaryMetric > div { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 4px 8px; }
 .summaryMetric > div > span { color: var(--text-2); }
@@ -50,19 +50,22 @@
 .burnDown svg polyline { fill: none; stroke: currentColor; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
 .burnDown svg circle { fill: currentColor; stroke: none; }
 .burnDown figcaption small { color: var(--text-3); }
+.query:has(> .quotaDetails[open]) > .summaryMetrics { display: none; }
 .quotaDetails { font-size: 12px; color: var(--text-2); }
 .quotaDetails > summary { cursor: pointer; width: fit-content; padding: 1px 0; color: var(--text-3); font-size: 11.5px; }
 .quotaDetails > summary:hover { color: var(--accent); }
-.quotaDetails[open] > summary { margin-bottom: 12px; }
-.quotaDetails > .metrics { color: var(--text); padding: 14px; border-radius: var(--radius); background: var(--surface-2); border: 1px solid var(--line); }
+.quotaDetails[open] > summary { margin-bottom: 8px; }
+.quotaDetails > .metrics { color: var(--text); padding: 2px 0 0; border: 0; border-radius: 0; background: transparent; }
 .metadata { display: grid; gap: 5px; padding-top: 11px; overflow-wrap: anywhere; }
-.metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(215px, 100%), 1fr)); gap: 11px; }
-.metric { display: grid; align-content: start; gap: 5px; min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); }
+.metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(215px, 100%), 1fr)); gap: 14px 24px; }
+.metric { display: grid; align-content: start; gap: 5px; min-width: 0; padding: 0; border: 0; border-radius: 0; background: transparent; }
 .metric .heading strong { font-size: 12px; font-weight: 620; }
 .metric .heading span { font-variant-numeric: tabular-nums; font-weight: 620; }
 .metric progress { width: 100%; height: 6px; accent-color: var(--accent); appearance: none; border-radius: 99px; background: var(--surface-3); }
 .metric progress::-webkit-progress-bar { background: var(--surface-3); border-radius: 99px; }
 .metric progress::-webkit-progress-value { background: var(--accent); border-radius: 99px; }
+.metric[data-warning="true"] .heading span { color: var(--warning); }
+.metric[data-warning="true"] progress::-webkit-progress-value { background: var(--warning); }
 .values { display: flex; flex-wrap: wrap; gap: 4px 12px; }
 .error { color: var(--danger, #c33); white-space: pre-wrap; margin: 4px 0; }
 .editor { display: grid; gap: 13px; border: 0; padding: 0; min-width: 0; }

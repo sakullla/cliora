@@ -11,6 +11,7 @@ import { SearchField } from '../../components/SearchField';
 import { ToastStack, type Toast } from '../../components/Toast';
 import { ToolIcon, toolOptions } from '../../components/ToolIcon';
 import { Icon } from '../../components/Icon';
+import { EmptyState } from '../../components/EmptyState';
 import { searchShortcutHint } from '../../lib/shortcut';
 import { formatFailure } from '../../lib/feedback';
 import { UsageDashboard, type UsageNotify } from './UsageDashboard';
@@ -411,7 +412,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
     requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(`[data-session-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'nearest' }));
   }
 
-  if (!nativeAvailable) return <div className={styles.empty}><h2>{t('records.page.nativeTitle')}</h2><p>{t('records.page.nativeDetail')}</p></div>;
+  if (!nativeAvailable) return <EmptyState icon="records" title={t('records.page.nativeTitle')} detail={t('records.page.nativeDetail')} />;
   return <section className={styles.page} aria-label={t('records.page.label')} data-mobile-detail={mobileDetail || undefined}>
     <div className={styles.board}>
     <div className={styles.toolbar}><div className={styles.tabs} role="tablist" aria-label={t('records.page.typesAria')} onKeyDown={navigateChoices}>

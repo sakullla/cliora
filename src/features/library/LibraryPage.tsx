@@ -13,6 +13,7 @@ import { SearchField } from '../../components/SearchField';
 import { GuideDialog } from '../../components/GuideDialog';
 import { toolOptions } from '../../components/ToolIcon';
 import { Icon } from '../../components/Icon';
+import { EmptyState } from '../../components/EmptyState';
 import { shortPath } from '../../lib/paths';
 import { saveShortcutHint, searchShortcutHint } from '../../lib/shortcut';
 import { formatFailure } from '../../lib/feedback';
@@ -298,7 +299,7 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
     setTagText('');
   }
 
-  if (!nativeAvailable) return <div className={styles.empty}>{t('library.page.nativeOnly')}</div>;
+  if (!nativeAvailable) return <EmptyState icon="library" title={t('library.page.nativeOnly')} />;
   return <section className={styles.page} aria-label={t('library.page.label')}>
     <div className={styles.toolbar}>
       <div className={styles.tabs} role="tablist" aria-label={t('library.page.typesAria')} onKeyDown={navigateChoices}>
@@ -326,11 +327,11 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
     <div className={styles.layout}>
       <div className={styles.list} aria-label={t('library.page.listAria', { kind: kindName(kind) })}>
         {listLoading && !items.length ? <SkeletonRows count={3} /> : shown.length ? shown.map((item) => <article className={styles.card} key={item.id}>
-          <small className={styles.cardMeta}>
-            {tagsOf(item.category).length ? tagsOf(item.category).map((tag) => <em className={styles.tagChip} key={tag}>{tag}</em>) : <em className={styles.tagChip} data-muted="true">{t('library.page.noTags')}</em>}
+          {(tagsOf(item.category).length > 0 || item.projectId || item.updatedAt) && <small className={styles.cardMeta}>
+            {tagsOf(item.category).map((tag) => <em className={styles.tagChip} key={tag}>{tag}</em>)}
             {item.projectId && <span className={styles.cardProject}>{projects.find((project) => project.id === item.projectId)?.name ?? t('library.page.originalProject')}</span>}
             {!!item.updatedAt && <span className={styles.cardTime} title={fullTime(item.updatedAt)}><Icon name="clock" size={11} />{shortTime(item.updatedAt)}</span>}
-          </small>
+          </small>}
           <button className={styles.cardTitle} type="button" data-card-title onClick={() => choose(item)} onKeyDown={(event) => {
             if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
             const titles = Array.from(event.currentTarget.closest(`.${styles.list}`)?.querySelectorAll<HTMLElement>('[data-card-title]') ?? []);
@@ -346,8 +347,8 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
               return { pressed: true, state: 'drifted', status: t('library.page.markDrifted') };
             }} /> : <span />}
             <div className={styles.cardActions}>{copiedId === item.id && toasts.notice?.text === copiedText()
-              ? <button type="button" aria-label={t('library.page.copy')} data-copied="true" onClick={() => void copy(item.body, 'page', item.id)}><Icon name="check" size={13} strokeWidth={2.2} />{t('home.launcher.copied')}</button>
-              : <button type="button" onClick={() => void copy(item.body, 'page', item.id)} disabled={!item.body}>{t('library.page.copy')}</button>}{kind === 'prompt' && <button type="button" className={styles.cardLaunch} onClick={() => openLaunch(item)} disabled={!item.body}>{t('library.page.launch')}</button>}<button type="button" onClick={() => choose(item)}>{t('tools.workspace.edit')}</button></div>
+              ? <button type="button" className={styles.quiet} aria-label={t('library.page.copy')} data-copied="true" onClick={() => void copy(item.body, 'page', item.id)}><Icon name="check" size={13} strokeWidth={2.2} />{t('home.launcher.copied')}</button>
+              : <button type="button" className={styles.quiet} onClick={() => void copy(item.body, 'page', item.id)} disabled={!item.body}>{t('library.page.copy')}</button>}{kind === 'prompt' && <button type="button" className={styles.cardLaunch} onClick={() => openLaunch(item)} disabled={!item.body}>{t('library.page.launch')}</button>}<button type="button" className={styles.quiet} onClick={() => choose(item)}>{t('tools.workspace.edit')}</button></div>
           </div>
         </article>) : !items.length && !search.trim()
           ? <div className={styles.empty}><Icon name="library" size={28} strokeWidth={1.3} /><strong>{t('library.page.emptyTitle', { kind: kindName(kind) })}</strong>{kind === 'prompt' ? t('library.page.emptyPrompt') : t('library.page.emptyRule')}<button type="button" className={styles.primary} onClick={() => start(kind)}>{t('library.page.emptyCreate', { kind: kindName(kind) })}</button></div>
@@ -356,7 +357,6 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
     </div>
     <GuideDialog open={!!draft} title={draft?.id ? t('library.page.editTitle', { kind: kindName(kind) }) : t('library.page.newTitle', { kind: kindName(kind) })} hint={kind === 'rule' ? t('library.page.ruleHint') : t('library.page.promptHint')} onClose={() => { void (async () => { if (await canReplace()) { setDraft(null); setSavedText(''); clearDialogResult(); } })(); }}>
       {draft && <div className={styles.editor}>
-        <div className={styles.editorHead}><div><small>{draft.id ? t('library.page.editing') : t('library.page.newItem')}</small><h2>{draft.title || (kind === 'prompt' ? t('library.page.prompt') : t('library.page.rule'))}</h2></div></div>
         {dialogError && <div className={styles.error} role="alert">{dialogError}</div>}
         {dialogNotice && <div className={styles.notice} role="status">{dialogNotice}</div>}
         <div className={styles.fields}>
