@@ -120,7 +120,8 @@ div > .feedback { margin-bottom: 12px; }
   font-size: 12.5px;
   color: var(--text-2);
 }
-.pathControl > summary { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; min-height: 48px; padding: 10px 16px; border-radius: var(--radius-lg); transition: background-color var(--fast) var(--ease); }
+.pathControl:not([open]) { margin-bottom: 8px; border-color: transparent; background: transparent; box-shadow: none; }
+.pathControl:not([open]) > summary { min-height: 32px; padding: 0 2px 2px; }
 .pathControl > summary:hover { background: var(--surface-2); }
 .pathControl > summary::before { order: 10; margin: 0; }
 .pathControl[open] > summary { border-bottom: 1px solid var(--line); border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
