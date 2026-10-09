@@ -106,7 +106,7 @@ export default {
     resumeNormal: 'Resume normally',
     resumeYolo: 'Resume with YOLO',
     yoloUnavailable: 'This CLI has no confirmed YOLO flag',
-    add: '＋ Add project',
+    add: 'Add project',
     searchLabel: 'Search projects',
     searchPlaceholder: 'Search project names or paths',
     noDirectory: 'No directory linked yet',

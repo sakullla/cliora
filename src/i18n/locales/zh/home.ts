@@ -106,7 +106,7 @@ export default {
     resumeNormal: '普通恢复',
     resumeYolo: 'YOLO 恢复',
     yoloUnavailable: '此 CLI 未提供已确认的 YOLO 参数',
-    add: '＋ 添加项目',
+    add: '添加项目',
     searchLabel: '搜索项目',
     searchPlaceholder: '搜索项目名称或路径',
     noDirectory: '尚未关联目录',

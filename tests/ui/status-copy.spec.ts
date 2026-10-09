@@ -110,7 +110,7 @@ test('library filter empty points at create, and copy failure replaces copied', 
   await library.getByLabel('搜索资料').fill('没有这项');
   await expect(library.getByText('筛选结果为空，没有符合条件的提示词。请使用上方的「新建」。')).toBeVisible();
   await expect(library.getByRole('button', { name: '发布检查' })).toHaveCount(0);
-  await expect(library.getByRole('button', { name: '＋ 新建提示词' })).toBeVisible();
+  await expect(library.getByRole('button', { name: '新建提示词' })).toBeVisible();
   await expect(library.getByRole('button', { name: /清空筛选/ })).toHaveCount(0);
   await expect(library.getByText('清空筛选')).toHaveCount(0);
 });
@@ -213,7 +213,7 @@ test('native rule save failure is an alert and success stays a status', async ({
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
   await page.getByRole('tab', { name: '长期规则' }).click();
-  await page.getByRole('button', { name: '＋ 新建规则' }).click();
+  await page.getByRole('button', { name: '新建规则' }).click();
   const dialog = page.getByRole('dialog');
   await dialog.getByLabel('标题').fill('一条规则');
   await dialog.getByRole('button', { name: '保存', exact: true }).click();
@@ -416,7 +416,7 @@ test('an empty library offers to create the first item', async ({ page }) => {
   const library = page.getByRole('region', { name: '资料库内容' });
   await library.getByRole('tab', { name: '长期规则' }).click();
   await expect(library.getByText('还没有规则')).toBeVisible();
-  await library.getByRole('button', { name: '＋ 新建第一条规则' }).click();
+  await library.getByRole('button', { name: '新建第一条规则' }).click();
   await expect(page.getByRole('dialog')).toContainText('新建规则');
 });
 

@@ -45,6 +45,46 @@ type StoredContext = { resource?: ResourceView; scope?: Scope; projectPath?: str
 function readStoredContexts(): Record<string, StoredContext> {
   try { return JSON.parse(localStorage.getItem(contextStoreKey) ?? '{}') as Record<string, StoredContext>; } catch { return {}; }
 }
+
+function ToolSwitcher({ tools, selected, onSelect }: { tools: AdapterDescriptor[]; selected: string; onSelect: (id: string) => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [edges, setEdges] = useState({ start: false, end: false });
+  const measure = useCallback(() => {
+    const node = ref.current;
+    if (!node) return;
+    const start = node.scrollLeft > 1;
+    const end = node.scrollLeft + node.clientWidth < node.scrollWidth - 1;
+    setEdges(old => old.start === start && old.end === end ? old : { start, end });
+  }, []);
+  useLayoutEffect(() => {
+    const node = ref.current;
+    const tab = node?.querySelector<HTMLElement>('[aria-selected="true"]');
+    if (node && tab) {
+      const left = tab.offsetLeft - 32;
+      const right = tab.offsetLeft + tab.offsetWidth + 32;
+      if (left < node.scrollLeft) node.scrollLeft = left;
+      else if (right > node.scrollLeft + node.clientWidth) node.scrollLeft = right - node.clientWidth;
+    }
+    measure();
+  }, [selected, tools.length, measure]);
+  useEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+    const observer = new ResizeObserver(measure);
+    [node, ...node.children].forEach(item => observer.observe(item));
+    const onWheel = (event: WheelEvent) => {
+      if (Math.abs(event.deltaX) >= Math.abs(event.deltaY)) return;
+      const max = node.scrollWidth - node.clientWidth;
+      if (max <= 0 || (event.deltaY < 0 && node.scrollLeft <= 0) || (event.deltaY > 0 && node.scrollLeft >= max - 1)) return;
+      event.preventDefault();
+      node.scrollLeft += event.deltaY;
+    };
+    node.addEventListener('wheel', onWheel, { passive: false });
+    return () => { observer.disconnect(); node.removeEventListener('wheel', onWheel); };
+  }, [measure, tools.length]);
+  return <div ref={ref} className={styles.toolSwitcher} data-fade-start={edges.start || undefined} data-fade-end={edges.end || undefined} role="tablist" aria-label="CLI" onKeyDown={navigateChoices} onScroll={measure}>{tools.map(item => <button key={item.id} role="tab" aria-selected={item.id === selected} tabIndex={item.id === selected ? 0 : -1} className={item.id === selected ? styles.selected : ''} onClick={() => onSelect(item.id)}><ToolIcon toolId={item.id} size={23} />{item.name}</button>)}</div>;
+}
+
 export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0, openIntent = null, active = true, repair, onDirtyChange, discardSignal = 0 }: { active?: boolean; managedTools: AdapterDescriptor[]; initialTool?: string; openSequence?: number; openIntent?: WorkspaceOpenIntent | null; repair?: TrayRepairTarget | null; onDirtyChange?: (dirty: boolean) => void; discardSignal?: number }) {
   const { t } = useTranslation();
   const [tool, setTool] = useState(repair?.toolId ?? initialTool ?? managedTools[0]?.id ?? '');
@@ -314,7 +354,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   if (!descriptor) return <p>{t('tools.workspace.noTools')}</p>;
   return <section className={styles.workspace} aria-label={t('common.nav.connections')}>
     <div className={styles.chrome}>
-    <div className={styles.toolbar}><div className={styles.toolSwitcher} role="tablist" aria-label="CLI" onKeyDown={navigateChoices}>{managedTools.map(item => <button key={item.id} role="tab" aria-selected={item.id === toolId} tabIndex={item.id === toolId ? 0 : -1} className={item.id === toolId ? styles.selected : ''} onClick={() => void switchTool(item.id)}><ToolIcon toolId={item.id} size={23} />{item.name}</button>)}</div></div>
+    <div className={styles.toolbar}><ToolSwitcher tools={managedTools} selected={toolId} onSelect={id => void switchTool(id)} /></div>
     <div className={styles.taskBar}><div className={styles.views} role="tablist" aria-label={t('tools.workspace.tasksAria')} onKeyDown={navigateChoices}>{resourceViews.filter((id) => supported[id]).map((id) => { const label = t(`tools.workspace.view.${id}`); const shortcutIndex = resourceViews.findIndex((view) => view === id) + 1; return <button role="tab" key={id} aria-selected={resource === id} aria-keyshortcuts={`Alt+${shortcutIndex}`} tabIndex={resource === id ? 0 : -1} title={t('tools.workspace.viewTitle', { label, index: shortcutIndex })} className={resource === id ? styles.selected : ''} onClick={() => void switchResource(id)}>{label}</button>; })}</div><div className={styles.scopeBar}><FilterSelect className={styles.projectSelect} label={t('tools.workspace.scopeLabel')} value={scope === 'global' ? '__global__' : projectPath} forceSearch searchLabel={t('home.launcher.searchLabel')} options={[{ value: '__global__', label: t('tools.workspace.scopeGlobal') }, ...projects.map(project => ({ value: project.path ?? project.id, label: project.name, detail: project.path ? shortPath(project.path) : undefined, disabled: !project.available || !project.path })), ...(projectPath && !projects.some(project => project.path === projectPath) ? [{ value: projectPath, label: projectPath.split(/[\\/]/).at(-1) ?? projectPath }] : [])]} onChange={value => void switchScope(value === '__global__' ? 'global' : 'project', value === '__global__' ? '' : value)} onPickFolder={() => void pickProject()} pickFolderLabel={t('common.filterSelect.pickFolder')} /></div></div>
     </div>
     {(error || notice) && <div className={styles.feedback}>{error && <StatusBanner tone="error" onDismiss={() => setError('')}>{error}</StatusBanner>}{notice && <StatusBanner tone="success" autoDismissMs={8000} onDismiss={() => setNotice('')}>{notice}</StatusBanner>}</div>}

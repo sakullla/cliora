@@ -47,7 +47,7 @@ function installStateLabel(state: SkillInstallation['state']): string {
   return i18n.t(`library.resources.installState.${state}`);
 }
 
-export function LibraryResources({ section, active, tools, projects }: { section: 'mcp' | 'skill'; active: boolean; tools: AdapterDescriptor[]; projects: Project[] }) {
+export function LibraryResources({ section, active, tools, projects, createSignal = 0 }: { section: 'mcp' | 'skill'; active: boolean; tools: AdapterDescriptor[]; projects: Project[]; createSignal?: number }) {
   const { t } = useTranslation();
   const contextLabel = useAccountLabels();
   const [definitions, setDefinitions] = useState<McpDefinition[]>([]);
@@ -105,6 +105,14 @@ export function LibraryResources({ section, active, tools, projects }: { section
     setConflict(false);
     setFormKey((value) => value + 1);
   }
+
+  const handledCreate = useRef(createSignal);
+  useEffect(() => {
+    if (createSignal === handledCreate.current) return;
+    handledCreate.current = createSignal;
+    if (section === 'mcp') editMcp();
+    else if (!busy) { setDialogError(''); setSkillOpen(true); }
+  }, [createSignal]);
 
   async function remove(item: McpDefinition) {
     if (busy || !await confirmAction(t('library.resources.confirmRemoveMcp', { name: item.name }), () => true, { title: t('tools.mcp.removeTitle'), confirmLabel: t('tools.agents.delete'), destructive: true })) return;
@@ -331,10 +339,7 @@ export function LibraryResources({ section, active, tools, projects }: { section
 
   if (section === 'skill') {
     return <div className={styles.layout}>
-      <div className={styles.filters}>
-        <SearchField className={styles.searchBox} label={t('library.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={setSearch} placeholder={t('library.resources.searchSkillPlaceholder')} />
-        <button type="button" className={styles.primary} disabled={busy} onClick={() => { setDialogError(''); setSkillOpen(true); }}>{t('tools.skills.add')}</button>
-      </div>
+      <SearchField className={styles.searchBox} label={t('library.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={setSearch} placeholder={t('library.resources.searchSkillPlaceholder')} />
       {error && <div className={styles.error} role="alert">{error}</div>}
       {notice && <div className={styles.notice} role="status">{notice}</div>}
       <div className={styles.list} aria-label={t('library.resources.skillListAria')}>
@@ -357,7 +362,7 @@ export function LibraryResources({ section, active, tools, projects }: { section
           </article>;
         }) : needle
           ? <div className={styles.empty}><Icon name="search" size={28} strokeWidth={1.3} />{t('library.resources.noSkillMatch', { query: search.trim() })}</div>
-          : <div className={styles.empty}><Icon name="sparkle" size={28} strokeWidth={1.3} /><strong>{t('library.resources.emptySkillTitle')}</strong>{t('library.resources.emptySkillDetail')}<button type="button" className={styles.primary} disabled={busy} onClick={() => { setDialogError(''); setSkillOpen(true); }}>{t('tools.skills.add')}</button></div>}
+          : <div className={styles.empty}><Icon name="sparkle" size={28} strokeWidth={1.3} /><strong>{t('library.resources.emptySkillTitle')}</strong>{t('library.resources.emptySkillDetail')}<button type="button" className={styles.primary} disabled={busy} onClick={() => { setDialogError(''); setSkillOpen(true); }}><Icon name="plus" size={14} strokeWidth={2.2} />{t('tools.skills.add')}</button></div>}
       </div>
       <GuideDialog open={skillOpen} title={t('tools.skills.add')} hint={t('library.resources.addSkillHint')} onClose={closeSkill}>
         <div className={styles.skillAdd}>
@@ -396,10 +401,7 @@ export function LibraryResources({ section, active, tools, projects }: { section
   }
 
   return <div className={styles.layout}>
-    <div className={styles.filters}>
-      <SearchField className={styles.searchBox} label={t('library.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={setSearch} placeholder={t('library.resources.searchMcpPlaceholder')} />
-      <button type="button" className={styles.primary} onClick={() => editMcp()}>{t('library.resources.newMcp')}</button>
-    </div>
+    <SearchField className={styles.searchBox} label={t('library.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={setSearch} placeholder={t('library.resources.searchMcpPlaceholder')} />
     {error && <div className={styles.error} role="alert">{error}</div>}
     {notice && <div className={styles.notice} role="status">{notice}</div>}
     <div className={styles.list} aria-label={t('library.resources.mcpListAria')}>
@@ -421,7 +423,7 @@ export function LibraryResources({ section, active, tools, projects }: { section
         </article>;
       }) : needle
         ? <div className={styles.empty}><Icon name="search" size={28} strokeWidth={1.3} />{t('library.resources.noMcpMatch', { query: search.trim() })}</div>
-        : <div className={styles.empty}><Icon name="connections" size={28} strokeWidth={1.3} /><strong>{t('library.resources.emptyMcpTitle')}</strong>{t('library.resources.emptyMcpDetail')}<button type="button" className={styles.primary} onClick={() => editMcp()}>{t('library.resources.emptyMcpCreate')}</button></div>}
+        : <div className={styles.empty}><Icon name="connections" size={28} strokeWidth={1.3} /><strong>{t('library.resources.emptyMcpTitle')}</strong>{t('library.resources.emptyMcpDetail')}<button type="button" className={styles.primary} onClick={() => editMcp()}><Icon name="plus" size={14} strokeWidth={2.2} />{t('library.resources.emptyMcpCreate')}</button></div>}
     </div>
     <GuideDialog open={!!draft} title={draft?.id ? t('tools.mcp.editTitle') : t('library.resources.newMcpTitle')} hint={t('library.resources.mcpDialogHint')} onClose={() => { setDraft(null); setConflict(false); }}>
       {draft && <>

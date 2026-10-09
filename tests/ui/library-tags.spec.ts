@@ -32,7 +32,7 @@ test('library category is edited and filtered as tags', async ({ page }) => {
   const firstCard = page.getByRole('article').filter({ has: page.getByRole('button', { name: '已有规则', exact: true }) });
   await expect(firstCard.getByText('开发', { exact: true })).toBeVisible();
   await expect(firstCard.getByText('写作', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: '＋ 新建规则' }).click();
+  await page.getByRole('button', { name: '新建规则' }).click();
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByLabel('标题')).toBeVisible();
   await expect(dialog.getByLabel('分类')).toHaveCount(0);

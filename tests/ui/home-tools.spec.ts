@@ -499,7 +499,8 @@ test('a transient version failure automatically rechecks and enables launch', as
   await page.goto('/');
   const tools = page.getByLabel('管理中的工具');
   await expect(tools).toContainText('版本检测失败');
-  await expect(tools.getByRole('button', { name: '启动', exact: true })).toBeDisabled();
+  await expect(tools.getByRole('button', { name: '启动', exact: true })).toHaveCount(0);
+  await expect(tools.getByRole('button', { name: '重新检测', exact: true })).toBeVisible();
   await page.evaluate(() => { (window as unknown as { __probeMode: string }).__probeMode = 'available'; });
   await page.clock.fastForward(8500);
   await expect(tools.getByRole('button', { name: '启动', exact: true })).toBeEnabled();

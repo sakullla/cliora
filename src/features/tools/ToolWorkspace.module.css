@@ -7,8 +7,7 @@
   gap: 12px;
   margin: -8px 0 0;
   padding: 8px 0 10px;
-  background: color-mix(in srgb, var(--bg) 92%, transparent);
-  backdrop-filter: blur(10px);
+  background: var(--bg);
 }
 
 /* ---------- Shared button variants ---------- */
@@ -21,22 +20,31 @@
 .toolSwitcher {
   display: grid;
   grid-auto-flow: column;
-  grid-auto-columns: minmax(max-content, 1fr);
-  gap: 4px;
+  grid-auto-columns: max-content;
+  gap: 2px;
+  width: fit-content;
+  max-width: 100%;
   overflow-x: auto;
-  padding: 5px;
+  padding: 4px;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background: var(--surface-3);
+  position: relative;
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
 }
+.toolSwitcher::-webkit-scrollbar { display: none; }
+.toolSwitcher[data-fade-end] { mask-image: linear-gradient(to right, #000 calc(100% - 48px), transparent); }
+.toolSwitcher[data-fade-start] { mask-image: linear-gradient(to left, #000 calc(100% - 48px), transparent); }
+.toolSwitcher[data-fade-start][data-fade-end] { mask-image: linear-gradient(to right, transparent, #000 48px, #000 calc(100% - 48px), transparent); }
 .toolSwitcher button {
   position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  min-height: 40px;
-  padding: 0 12px;
+  min-height: 36px;
+  padding: 0 14px 0 10px;
   border: 0;
   border-radius: var(--radius);
   background: transparent;
@@ -120,6 +128,7 @@ div > .feedback { margin-bottom: 12px; }
   font-size: 12.5px;
   color: var(--text-2);
 }
+.pathControl > summary { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; min-height: 48px; padding: 10px 16px; border-radius: var(--radius-lg); transition: background-color var(--fast) var(--ease); }
 .pathControl:not([open]) { margin-bottom: 8px; border-color: transparent; background: transparent; box-shadow: none; }
 .pathControl:not([open]) > summary { min-height: 32px; padding: 0 2px 2px; }
 .pathControl > summary:hover { background: var(--surface-2); }
