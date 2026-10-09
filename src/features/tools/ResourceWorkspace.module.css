@@ -3,7 +3,7 @@
 .workspaceSection { display: grid; gap: 14px; min-width: 0; padding-top: 20px; }
 .workspaceHead { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 12px 14px; }
 .workspaceHead > div { display: grid; gap: 5px; flex: 1 1 280px; min-width: 0; }
-.workspaceHead h2 { margin: 0; font-size: 19px; letter-spacing: -.02em; }
+.workspaceHead h2 { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: -.01em; }
 .workspaceHead p { margin: 0; color: var(--text-2); font-size: 12.5px; line-height: 1.6; }
 .workspaceHead > button { flex: none; margin-top: 2px; }
 .emptyState { display: grid; justify-items: center; gap: 6px; padding: 36px 20px; border: 1px dashed var(--line-strong); border-radius: var(--radius-lg); background: color-mix(in srgb, var(--surface) 55%, transparent); color: var(--text-3); text-align: center; }
