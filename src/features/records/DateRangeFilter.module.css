@@ -30,3 +30,4 @@
 .footer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 14px; border-top: 1px solid var(--line); }
 .footer > :first-child { margin-right: auto; }
 .apply, .apply:hover:not(:disabled) { color: var(--on-accent); border-color: var(--accent); background: var(--accent); }
+.apply:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }

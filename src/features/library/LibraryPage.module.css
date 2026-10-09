@@ -33,7 +33,7 @@
 .tabs button[aria-selected="true"] .tabCount { background: var(--accent-soft); color: var(--accent); }
 
 .primary, .primary:hover:not(:disabled) { border-color: var(--accent) !important; background: var(--accent) !important; color: var(--on-accent) !important; }
-.primary:hover:not(:disabled) { filter: brightness(1.06); }
+.primary:hover:not(:disabled) { border-color: var(--accent-hover) !important; background: var(--accent-hover) !important; }
 
 /* Filters stay on one row until the page is too narrow for three controls */
 .filters { display: grid; grid-template-columns: minmax(0, 1fr) minmax(132px, 190px) minmax(132px, 190px); align-items: center; gap: 8px; }
@@ -217,6 +217,7 @@
 .sources button span { color: var(--text-3); font-size: 12px; font-weight: 450; }
 .urlRow { display: flex; gap: 8px; align-items: center; }
 .urlRow input { flex: 1; min-width: 0; }
+.urlRow button { min-height: var(--control-h); }
 .cliMarks { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 .cliMarks button { width: 26px; height: 26px; min-height: 26px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 999px; background: transparent; box-shadow: none; transition: transform var(--fast) var(--ease); }
 .cliMarks button:hover:not(:disabled) { background: transparent; transform: scale(1.14); }

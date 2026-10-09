@@ -55,13 +55,13 @@ test('row menu supports keyboard navigation and returns focus to its trigger', a
   const trigger = page.getByRole('button', { name: '配置 1 更多操作' });
   await trigger.click();
   const menu = page.getByRole('menu', { name: '配置 1 更多操作' });
-  await expect(menu.getByRole('menuitem', { name: '修改配置' })).toBeFocused();
-  await page.keyboard.press('ArrowDown');
   await expect(menu.getByRole('menuitem', { name: '复制配置' })).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(menu.getByRole('menuitem', { name: '添加额度查询' })).toBeFocused();
   await page.keyboard.press('End');
   await expect(menu.getByRole('menuitem', { name: '删除配置' })).toBeFocused();
   await page.keyboard.press('ArrowDown');
-  await expect(menu.getByRole('menuitem', { name: '修改配置' })).toBeFocused();
+  await expect(menu.getByRole('menuitem', { name: '复制配置' })).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(menu).toHaveCount(0);
   await expect(trigger).toBeFocused();

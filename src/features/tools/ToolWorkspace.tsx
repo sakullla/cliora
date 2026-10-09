@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
-import { createPortal } from 'react-dom';
 import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import { native, nativeAvailable } from '../../lib/native';
@@ -27,6 +25,7 @@ import { StatusBanner } from '../../components/StatusBanner';
 import { FilterSelect } from '../../components/FilterSelect';
 import { SearchField } from '../../components/SearchField';
 import { GuideDialog } from '../../components/GuideDialog';
+import { RowMenu } from '../../components/RowMenu';
 import { ConflictCompare } from '../../components/configuration/ConflictCompare';
 import { shortPath } from '../../lib/paths';
 import { navigateChoices } from '../../lib/choiceNavigation';
@@ -35,65 +34,6 @@ import styles from './ToolWorkspace.module.css';
 
 const errorText = (value: unknown) => value && typeof value === 'object' && 'message' in value ? String(value.message) : i18n.t('tools.workspace.operationFailed');
 function host(address?: string) { try { return address ? new URL(address).host : ''; } catch { return i18n.t('tools.workspace.hostUnknown'); } }
-function RowMenu({ label, children }: { label: string; children: ReactNode }) {
-  const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
-  const [box, setBox] = useState<{ top: number; left: number } | null>(null);
-  const ref = useRef<HTMLDivElement>(null);
-  const trigger = useRef<HTMLButtonElement>(null);
-  const panel = useRef<HTMLDivElement>(null);
-  const items = () => [...panel.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? []];
-  const dismiss = (restoreFocus: boolean) => { setOpen(false); if (restoreFocus) trigger.current?.focus(); };
-  // Keyboard users land on the first action once the menu has been placed.
-  useEffect(() => { if (open && box) items()[0]?.focus({ preventScroll: true }); }, [open, box !== null]);
-  useEffect(() => { if (!open) setBox(null); }, [open]);
-  function keyNavigate(event: ReactKeyboardEvent<HTMLDivElement>) {
-    const list = items(); if (!list.length) return;
-    const index = list.indexOf(document.activeElement as HTMLButtonElement);
-    if (event.key === 'Tab') { event.preventDefault(); dismiss(true); return; }
-    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
-    event.preventDefault();
-    const next = event.key === 'Home' ? 0 : event.key === 'End' ? list.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + list.length) % list.length;
-    list[next].focus();
-  }
-  useLayoutEffect(() => {
-    if (!open) return;
-    const place = () => {
-      const trigger = ref.current?.getBoundingClientRect();
-      const menu = panel.current;
-      if (!trigger || !menu) return;
-      const width = menu.offsetWidth;
-      const height = menu.offsetHeight;
-      const left = Math.max(8, Math.min(trigger.right - width, window.innerWidth - width - 8));
-      const spaceBelow = window.innerHeight - trigger.bottom - 8;
-      const top = spaceBelow >= height || trigger.top < height + 8
-        ? Math.min(trigger.bottom + 4, Math.max(8, window.innerHeight - height - 8))
-        : trigger.top - height - 4;
-      setBox({ top, left });
-    };
-    place();
-    window.addEventListener('resize', place);
-    window.addEventListener('scroll', place, true);
-    return () => { window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true); };
-  }, [open]);
-  useEffect(() => {
-    if (!open) return;
-    const close = (event: MouseEvent) => {
-      const target = event.target as Node;
-      if (ref.current?.contains(target) || panel.current?.contains(target)) return;
-      setOpen(false);
-    };
-    const key = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.stopPropagation(); dismiss(true); } };
-    document.addEventListener('mousedown', close);
-    document.addEventListener('keydown', key);
-    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', key); };
-  }, [open]);
-  return <div className={styles.rowMenu} ref={ref}>
-    <button ref={trigger} type="button" className={styles.rowMenuButton} aria-label={label} title={t('tools.workspace.moreActions')} aria-expanded={open} aria-haspopup="menu" onClick={() => setOpen(value => !value)} onKeyDown={event => { if (event.key === 'ArrowDown' && !open) { event.preventDefault(); setOpen(true); } }}><svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true" fill="currentColor"><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" /></svg></button>
-    {open && createPortal(<div ref={panel} className={styles.rowMenuList} role="menu" aria-label={label} style={box ? { top: box.top, left: box.left } : { top: 0, left: -10000 }} onKeyDown={keyNavigate} onClick={() => dismiss(true)}>{children}</div>, document.body)}
-  </div>;
-}
-
 
 type ResourceView = 'config' | 'accounts' | 'mcp' | 'skills' | 'plugins' | 'agents';
 type EditFrame = { key: string; subject: ConfigurationSubject; profile: RegisteredProfile | null; title: string };
@@ -363,7 +303,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
         <span className={styles.profileMeta}>{model && <span className={styles.profileModel} title={model}>{model}</span>}<span data-tone={authentication?.kind === 'rebind_required' ? 'warn' : undefined}>{t('tools.workspace.savedAs', { credential })}{host(profile.connection?.baseUrl) && ` · ${host(profile.connection?.baseUrl)}`}</span></span>
         {same && <span className={styles.profileHistory}><span>{t('tools.workspace.versions', { used: binding!.profileVersion, saved: profile.version })}{commonPending ? t('tools.workspace.commonPending') : ''}</span>{frozen && <span>{t('tools.workspace.lastUsed', { summary: `${frozenSource}${frozen.providerId ? ' · '+frozen.providerId : ''}${host(frozen.baseUrl ?? undefined) ? ' · '+host(frozen.baseUrl ?? undefined) : ''}${frozen.model ? ' · '+frozen.model : ''}` })}</span>}</span>}
       </span>
-      <span className={styles.profileActions}>{!applied && <button className={styles.primary} disabled={busy || !!applying || workspace?.probe.nativeWrites.state !== 'supported'} onClick={() => void apply(profile)}>{applying === profile.id ? t('tools.workspace.applying') : same ? t('tools.workspace.useNew') : t('tools.workspace.use')}</button>}<button onClick={() => void openFrame('profile', profile)}>{t('tools.workspace.edit')}</button><RowMenu label={t('tools.workspace.rowMenu', { name: profile.name })}><button role="menuitem" onClick={() => void openFrame('profile', profile)}>{t('tools.workspace.editConfig')}</button><button role="menuitem" onClick={() => void duplicate(profile)}>{t('tools.workspace.duplicateConfig')}</button><button role="menuitem" onClick={() => setQuotaAddFor(profile.id)}>{t('tools.workspace.addQuota')}</button><button role="menuitem" data-danger="true" onClick={() => void remove(profile)}>{t('tools.workspace.deleteConfig')}</button></RowMenu></span>
+      <span className={styles.profileActions}>{!applied && <button className={styles.primary} disabled={busy || !!applying || workspace?.probe.nativeWrites.state !== 'supported'} onClick={() => void apply(profile)}>{applying === profile.id ? t('tools.workspace.applying') : same ? t('tools.workspace.useNew') : t('tools.workspace.use')}</button>}<button onClick={() => void openFrame('profile', profile)}>{t('tools.workspace.edit')}</button><RowMenu label={t('tools.workspace.rowMenu', { name: profile.name })}><button role="menuitem" onClick={() => void duplicate(profile)}>{t('tools.workspace.duplicateConfig')}</button><button role="menuitem" onClick={() => setQuotaAddFor(profile.id)}>{t('tools.workspace.addQuota')}</button><button role="menuitem" data-danger="true" onClick={() => void remove(profile)}>{t('tools.workspace.deleteConfig')}</button></RowMenu></span>
       <ProfileQuota profileId={profile.id} profileVersion={profile.version} toolId={toolId} profileAccountId={profile.authentication?.kind === 'oauth' ? profile.authentication.accountId : undefined} state={quota} addRequested={quotaAddFor === profile.id} onAddHandled={() => setQuotaAddFor(null)} />
     </div>;
   }
@@ -386,7 +326,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
         ? <div className={styles.loadingList} role="status" aria-label={t('tools.workspace.loading')}><span className="skeleton-block short" /><span className="skeleton-block" /><span className="skeleton-block" /></div>
         : <div className={styles.taskEmpty} data-tone={nativeAvailable ? 'error' : undefined}><Icon name={nativeAvailable ? 'alert' : 'monitor'} size={22} strokeWidth={1.5} /><div><strong>{nativeAvailable ? t('tools.workspace.loadFailed') : t('tools.workspace.needDesktop')}</strong><p>{nativeAvailable ? t('tools.workspace.loadFailedHint') : t('tools.workspace.previewHint')}</p></div>{nativeAvailable && <button className={styles.primary} onClick={() => void reload(toolId, scope, projectPath)}>{t('tools.workspace.retryLoad')}</button>}</div>)
       : <div className={styles.profileList} aria-label={t('tools.workspace.listAria')}>
-        <div className={styles.listHeading}><strong>{t('tools.workspace.profilesTitle')}{workspace.profiles.length > 0 && <span className="count-chip">{workspace.profiles.length}</span>}</strong><span className={styles.listActions}><button title={t('tools.workspace.launchTitle', { name: descriptor.name })} disabled={launching || !workspace} onClick={() => void launch()}><Icon name="play" size={13} strokeWidth={2} />{launching ? t('tools.workspace.launching') : t('home.tools.launch')}</button><button title={t('tools.workspace.commonTitle')} onClick={() => void openFrame('common')}><Icon name="settings" size={14} />{t('tools.workspace.common')}</button><button className={styles.primary} onClick={() => void createProfile()}><Icon name="plus" size={14} strokeWidth={2.2} />{t('tools.workspace.frameNew')}</button></span></div>
+        <div className={styles.listHeading}><strong>{t('tools.workspace.profilesTitle')}{workspace.profiles.length > 0 && <span className="count-chip">{workspace.profiles.length}</span>}</strong><span className={styles.listActions}><button title={t('tools.workspace.launchTitle', { name: descriptor.name })} disabled={launching || !workspace} onClick={() => void launch()}><Icon name="play" size={14} strokeWidth={2} />{launching ? t('tools.workspace.launching') : t('home.tools.launch')}</button><button title={t('tools.workspace.commonTitle')} onClick={() => void openFrame('common')}><Icon name="settings" size={14} strokeWidth={2} />{t('tools.workspace.common')}</button><button className={styles.primary} onClick={() => void createProfile()}><Icon name="plus" size={14} strokeWidth={2} />{t('tools.workspace.frameNew')}</button></span></div>
         {currentFile && <div className={styles.profileRow} data-kind="native"><span><button className={styles.profileName} onClick={() => void openFrame('current')}>{t('tools.workspace.currentFile')}</button><small>{t('tools.workspace.currentFileHint')}</small></span><button onClick={() => void openFrame('current')}>{t('tools.workspace.edit')}</button></div>}
         {workspace.profiles.length > 6 && <label className={styles.profileFilter}><SearchField type="search" label={t('home.tools.searchProfile')} pageSearch title={searchShortcutHint()} placeholder={t('tools.workspace.searchPlaceholder')} value={filter} onChange={setFilter} />{query && <span>{profileGroups.reduce((total, group) => total + group.visible.length, 0)} / {workspace.profiles.length}</span>}</label>}
         {!workspace.profiles.length && <div className={styles.profileEmpty}><strong>{t('tools.workspace.emptyTitle')}</strong><span>{t('tools.workspace.emptyDetail')}{currentFile ? t('tools.workspace.emptyCurrent') : ''}</span><button className={styles.primary} onClick={() => void createProfile()}><Icon name="plus" size={14} strokeWidth={2.2} />{t('tools.workspace.emptyCreate')}</button></div>}

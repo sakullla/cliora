@@ -105,6 +105,9 @@ export function InstallPanel({ toolName, probe, customPath, busy, loading, onCus
   const behind = Boolean(selected && currentVersion && latest.state === 'ready' && compareVersions(currentVersion, latest.version) < 0);
   const current = !selected || latest.state !== 'ready' || !currentVersion ? false : compareVersions(currentVersion, latest.version) >= 0;
   const updateLabel = multiple ? (selected && isNative(selected.source) ? t('tools.install.updateNative') : t('tools.install.updateNpm')) : t('tools.install.update');
+  // 未安装时默认展开检测面板；仅取初始值，用户折叠或安装成功后不再强制。
+  const [startOpen] = useState(!selected);
+  const latestNote = behind ? t('tools.install.canUpdate', { latest: latest.version }) : current ? t('tools.install.upToDate') : latest.state === 'loading' ? t('tools.install.querying') : t(latest.state === 'unsupported' ? 'tools.install.unsupportedVersion' : 'tools.install.unavailable');
   const summary = !selected
     ? t('tools.install.notInstalled')
     : latest.state === 'ready'
@@ -112,18 +115,18 @@ export function InstallPanel({ toolName, probe, customPath, busy, loading, onCus
       : latest.state === 'loading'
         ? t('tools.install.checkingLatest', { current: currentVersion || t('tools.install.unknownVersion') })
         : t(latest.state === 'unsupported' ? 'tools.install.latestUnsupported' : 'tools.install.latestUnknown', { current: currentVersion || t('tools.install.unknownVersion') });
-  return <details className={styles.pathControl}>
+  return <details className={styles.pathControl} open={startOpen || undefined}>
     <summary><span className={styles.statusDot} data-ok={probe.nativeWrites.state === 'supported'} /><strong>{toolName}</strong><span>{selected || probe.nativeWrites.state === 'supported' ? summary : probe.nativeWrites.reason}</span><span className={styles.diagnosticLabel}>{t('tools.install.label')}</span></summary>
     {selected && <div className={styles.release}>
       <div>
         <span>{t('tools.install.currentVersion')}</span>
         <strong>{currentVersion || t('tools.install.unknown')}</strong>
-        <small>{sourceLabel(selected.source)} · {fileName(selected.path)}</small>
+        <small title={selected.path}>{sourceLabel(selected.source)} · {fileName(selected.path)}</small>
       </div>
       <div data-state={behind ? 'behind' : current ? 'current' : undefined}>
         <span>{t('tools.install.latestVersion')}</span>
         <strong>{latest.state === 'ready' ? latest.version : latest.state === 'loading' ? '…' : t(latest.state === 'unsupported' ? 'tools.install.officialVersion' : 'tools.install.notFound')}</strong>
-        <small>{behind ? t('tools.install.canUpdate', { latest: latest.version }) : current ? t('tools.install.upToDate') : latest.state === 'loading' ? t('tools.install.querying') : t(latest.state === 'unsupported' ? 'tools.install.unsupportedVersion' : 'tools.install.unavailable')}</small>
+        <small title={latestNote}>{latestNote}</small>
         {latest.state === 'unknown' && <button type="button" onClick={() => setRetry(value => value + 1)}>{t('tools.install.retryVersion')}</button>}
       </div>
     </div>}

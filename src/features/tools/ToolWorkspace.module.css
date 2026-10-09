@@ -51,7 +51,7 @@
   background: var(--surface);
   color: var(--text);
   font-weight: 640;
-  box-shadow: var(--shadow-sm), inset 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent);
+  box-shadow: var(--shadow-sm);
 }
 @container (max-width: 640px) {
   .toolSwitcher { display: flex; }
@@ -155,6 +155,7 @@ div > .feedback { margin-bottom: 12px; }
 .pathCustom > summary::before { margin-right: 6px; }
 .pathCustom > div { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
 .pathCustom > div input { flex: 1 1 220px; min-width: 0; }
+.pathCustom > div button { min-height: var(--control-h); }
 
 /* ---------- Profile list ---------- */
 .profileList {
@@ -162,7 +163,7 @@ div > .feedback { margin-bottom: 12px; }
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background: var(--surface);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-xs);
 }
 .listHeading {
   display: flex;
@@ -303,52 +304,6 @@ div > .feedback { margin-bottom: 12px; }
 .badge[data-tone="ok"] { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent) !important; }
 .badge[data-tone="ok"]::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .badge[data-tone="warn"] { border-color: var(--warning-line); background: var(--warning-soft); color: var(--warning) !important; }
-
-/* Row action menu */
-.rowMenu { position: relative; }
-.rowMenuButton {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px; height: 30px;
-  padding: 0;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  color: var(--text-2);
-  font-size: 15px;
-  line-height: 1;
-  letter-spacing: 1px;
-}
-.rowMenuButton:hover:not(:disabled) { color: var(--text); border-color: var(--text-3); }
-.rowMenuList {
-  position: fixed;
-  z-index: 70;
-  display: grid;
-  min-width: 140px;
-  padding: 4px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface);
-  box-shadow: var(--shadow-md);
-  animation: reveal var(--fast) var(--ease);
-}
-.rowMenuList button {
-  justify-content: flex-start;
-  width: 100%;
-  min-height: 32px;
-  padding: 0 10px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  box-shadow: none;
-  color: var(--text);
-  font-size: 12.5px;
-  font-weight: 520;
-  text-align: left;
-}
-.rowMenuList button:hover:not(:disabled) { background: var(--surface-2); }
-.rowMenuList button[data-danger="true"] { color: var(--danger); }
 
 /* ---------- Empty / task states ---------- */
 .taskEmpty {

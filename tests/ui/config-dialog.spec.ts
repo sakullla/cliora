@@ -23,6 +23,8 @@ test('new configuration dialog has one save action', async ({ page }) => {
           probe: { selectedPath: 'C:/codex.cmd', installations: [{ path: 'C:/codex.cmd', version: '1.0.0', status: 'available', source: 'npm_shim', detail: null }], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: ['openai_responses'], providerPresets: [{ id: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', interfaceFormat: 'openai_responses', sourceUrl: 'https://platform.openai.com' }], dependencies: [], installUrl: 'https://developers.openai.com/codex/cli', upgradeHint: '', installCommand: null, upgradeCommand: 'npm install -g @openai/codex@latest', nativeInstallCommand: null },
           profiles: [], common: null, binding: null, snapshots: [], recoveryNeeded: [], customPath: null,
         };
+        // 版本查询成功且已是最新：这里不该出现“更新”入口；查询失败时的更新入口由 cli-maintenance 覆盖。
+        if (command === 'cli_latest_version') return '1.0.0';
         return null;
       } },
     });
@@ -142,7 +144,6 @@ test('a missing CLI asks which install channel to use', async ({ page }) => {
   await installConfigurationProtocol(page);
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
-  await page.getByText('安装与更新').click();
   await expect(page.getByRole('button', { name: '安装', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: '安装 npm', exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: '安装', exact: true }).click();
@@ -297,7 +298,7 @@ test('the profile row menu stays fully clickable past the card edge', async ({ p
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
   await page.getByRole('button', { name: '新配置 更多操作' }).click();
   const menu = page.getByRole('menu');
-  await expect(menu.getByRole('menuitem', { name: '修改配置' })).toBeVisible();
+  await expect(menu.getByRole('menuitem', { name: '复制配置' })).toBeVisible();
   await expect(menu.getByRole('menuitem', { name: '删除配置' })).toBeVisible();
   const hit = await menu.evaluate((node) => {
     const menuRect = node.getBoundingClientRect();
@@ -319,8 +320,8 @@ test('the profile row menu stays fully clickable past the card edge', async ({ p
   });
   expect(hit.escapes).toBe(true);
   expect(hit.covered).toBe(false);
-  await menu.getByRole('menuitem', { name: '修改配置' }).click();
-  await expect(page.getByRole('dialog', { name: '修改配置' })).toBeVisible();
+  await menu.getByRole('menuitem', { name: '复制配置' }).click();
+  await expect(page.getByRole('dialog', { name: /^复制配置 · / })).toBeVisible();
 });
 
 test('a long configuration list can be searched without growing the page', async ({ page }) => {

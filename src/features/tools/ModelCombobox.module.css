@@ -20,7 +20,7 @@
 }
 .trigger > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .trigger[data-empty="true"] { color: var(--text-3); font-family: inherit; }
-.trigger:hover:not(:disabled) { background-color: var(--surface); border-color: var(--text-3); }
+.trigger:hover:not(:disabled) { background-color: var(--surface-2); border-color: var(--text-3); }
 .trigger[data-open="true"] { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
 
 .panel {
@@ -40,10 +40,10 @@
 .list { display: grid; align-content: start; gap: 2px; min-height: 0; overflow: auto; }
 .list > button {
   justify-content: space-between;
-  min-height: 30px;
+  min-height: 40px;
   padding: 0 8px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   box-shadow: none;
   background: transparent;
   color: var(--text);
