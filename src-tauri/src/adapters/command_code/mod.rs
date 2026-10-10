@@ -517,6 +517,7 @@ mod tests {
     #[test]
     fn mcp_documents_match_the_native_stdio_and_http_shapes() {
         let definition = McpDefinition {
+            reference_source: None,
             id: "fixture-definition".into(),
             name: "example".into(),
             transport: McpTransport::Stdio,

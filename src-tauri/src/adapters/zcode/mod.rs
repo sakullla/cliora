@@ -503,6 +503,7 @@ mod tests {
         let definition = crate::resources::mcp::save_definition(
             &db,
             McpDraft {
+                reference_source: None,
                 id: None,
                 name: "example".into(),
                 transport: McpTransport::Stdio,
