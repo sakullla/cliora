@@ -4,7 +4,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px; height: 30px;
+  width: var(--control-h-sm); height: var(--control-h-sm);
   padding: 0;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm);

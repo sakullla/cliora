@@ -134,7 +134,8 @@
   overflow-wrap: anywhere;
 }
 .cardTitle::after { content: ''; position: absolute; inset: 0; border-radius: inherit; }
-.cardTitle:hover { color: var(--accent) !important; }
+.cardTitle:hover,
+.cardTitle:focus { color: var(--text) !important; text-decoration: underline; text-underline-offset: 3px; }
 .cardTitle:focus-visible { outline: none; }
 .card:has(.cardTitle:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
 .card p {
@@ -156,7 +157,7 @@
 .scopeLine { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .scopeName { flex: none; max-width: 120px; overflow: hidden; padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--text-2); font-size: 11px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
 .cardActions { display: flex; flex: none; align-items: center; gap: 6px; margin-left: auto; }
-.cardActions button { min-height: 28px; font-size: 12px; }
+.cardActions button { min-height: var(--control-h-sm); font-size: 12px; }
 .cardActions .quiet, .cardActions .quiet:hover:not(:disabled) { border-color: transparent; background: transparent; box-shadow: none; color: var(--text-2); }
 .cardActions .quiet:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
 .cardActions .quiet[data-copied="true"], .cardActions .quiet[data-copied="true"]:hover:not(:disabled) { border-color: transparent; background: var(--accent-soft); color: var(--accent); }

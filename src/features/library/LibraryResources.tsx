@@ -362,7 +362,7 @@ export function LibraryResources({ section, active, tools, projects, createSigna
           </article>;
         }) : needle
           ? <div className={styles.empty}><Icon name="search" size={28} strokeWidth={1.3} />{t('library.resources.noSkillMatch', { query: search.trim() })}</div>
-          : <div className={styles.empty}><Icon name="sparkle" size={28} strokeWidth={1.3} /><strong>{t('library.resources.emptySkillTitle')}</strong>{t('library.resources.emptySkillDetail')}<button type="button" className={styles.primary} disabled={busy} onClick={() => { setDialogError(''); setSkillOpen(true); }}><Icon name="plus" size={14} strokeWidth={2.2} />{t('tools.skills.add')}</button></div>}
+          : <div className={styles.empty}><Icon name="sparkle" size={28} strokeWidth={1.3} /><strong>{t('library.resources.emptySkillTitle')}</strong>{t('library.resources.emptySkillDetail')}<button type="button" disabled={busy} onClick={() => { setDialogError(''); setSkillOpen(true); }}><Icon name="plus" size={14} strokeWidth={2.2} />{t('tools.skills.add')}</button></div>}
       </div>
       <GuideDialog open={skillOpen} title={t('tools.skills.add')} hint={t('library.resources.addSkillHint')} onClose={closeSkill}>
         <div className={styles.skillAdd}>
@@ -423,7 +423,7 @@ export function LibraryResources({ section, active, tools, projects, createSigna
         </article>;
       }) : needle
         ? <div className={styles.empty}><Icon name="search" size={28} strokeWidth={1.3} />{t('library.resources.noMcpMatch', { query: search.trim() })}</div>
-        : <div className={styles.empty}><Icon name="connections" size={28} strokeWidth={1.3} /><strong>{t('library.resources.emptyMcpTitle')}</strong>{t('library.resources.emptyMcpDetail')}<button type="button" className={styles.primary} onClick={() => editMcp()}><Icon name="plus" size={14} strokeWidth={2.2} />{t('library.resources.emptyMcpCreate')}</button></div>}
+        : <div className={styles.empty}><Icon name="connections" size={28} strokeWidth={1.3} /><strong>{t('library.resources.emptyMcpTitle')}</strong>{t('library.resources.emptyMcpDetail')}<button type="button" onClick={() => editMcp()}><Icon name="plus" size={14} strokeWidth={2.2} />{t('library.resources.emptyMcpCreate')}</button></div>}
     </div>
     <GuideDialog open={!!draft} title={draft?.id ? t('tools.mcp.editTitle') : t('library.resources.newMcpTitle')} hint={t('library.resources.mcpDialogHint')} onClose={() => { setDraft(null); setConflict(false); }}>
       {draft && <>

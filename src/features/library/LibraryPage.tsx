@@ -352,7 +352,7 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
               : <button type="button" className={styles.quiet} onClick={() => void copy(item.body, 'page', item.id)} disabled={!item.body}>{t('library.page.copy')}</button>}{kind === 'prompt' && <button type="button" className={styles.cardLaunch} onClick={() => openLaunch(item)} disabled={!item.body}>{t('library.page.launch')}</button>}<button type="button" className={styles.quiet} onClick={() => choose(item)}>{t('tools.workspace.edit')}</button></div>
           </div>
         </article>) : !items.length && !search.trim()
-          ? <div className={styles.empty}><Icon name="library" size={28} strokeWidth={1.3} /><strong>{t('library.page.emptyTitle', { kind: kindName(kind) })}</strong>{kind === 'prompt' ? t('library.page.emptyPrompt') : t('library.page.emptyRule')}<button type="button" className={styles.primary} onClick={() => start(kind)}><Icon name="plus" size={14} strokeWidth={2.2} />{t('library.page.emptyCreate', { kind: kindName(kind) })}</button></div>
+          ? <div className={styles.empty}><Icon name="library" size={28} strokeWidth={1.3} /><strong>{t('library.page.emptyTitle', { kind: kindName(kind) })}</strong>{kind === 'prompt' ? t('library.page.emptyPrompt') : t('library.page.emptyRule')}<button type="button" onClick={() => start(kind)}><Icon name="plus" size={14} strokeWidth={2.2} />{t('library.page.emptyCreate', { kind: kindName(kind) })}</button></div>
           : <div className={styles.empty}><Icon name="search" size={28} strokeWidth={1.3} />{t('library.page.noResults', { kind: kindName(kind) })}</div>}
       </div>
     </div>

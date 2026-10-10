@@ -186,6 +186,8 @@ div > .feedback { margin-bottom: 12px; }
 }
 .listHeading > strong { display: inline-flex; align-items: center; font-size: 13.5px; font-weight: 650; letter-spacing: .1px; }
 .listActions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
+.listActions > button,
+.profileActions > button { min-height: var(--control-h-sm); }
 .listActions > button:not(.primary),
 .listActions > button:not(.primary):hover:not(:disabled) { border-color: transparent; background: transparent; box-shadow: none; color: var(--text-2); }
 .listActions > button:not(.primary):hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
@@ -273,7 +275,7 @@ div > .feedback { margin-bottom: 12px; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.profileName:hover:not(:disabled) { background: transparent; border-color: transparent; color: var(--accent); box-shadow: none; }
+.profileName:hover:not(:disabled) { background: transparent; border-color: transparent; color: var(--text); box-shadow: none; text-decoration: underline; text-underline-offset: 3px; }
 .profileRow strong { overflow: hidden; font-size: 14px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .profileRow small { overflow: hidden; color: var(--text-2); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .profileRow[data-kind="native"] .profileName::before {
@@ -444,7 +446,7 @@ div > .feedback { margin-bottom: 12px; }
 .historyList { margin: 0; padding: 5px; overflow: auto; list-style: none; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
 .historyList button { display: flex; justify-content: flex-start; width: 100%; min-height: 34px; padding: 0 9px; border: 0; border-radius: var(--radius-sm); background: transparent; box-shadow: none; color: var(--text); font-size: 12.5px; font-weight: 450; text-align: left; white-space: nowrap; }
 .historyList button:hover:not(:disabled) { border-color: transparent; background: var(--surface-3); transform: none; }
-.historyList button[aria-pressed='true'] { background: var(--surface); color: var(--accent); font-weight: 650; }
+.historyList button[aria-pressed='true'] { background: var(--surface); color: var(--text); font-weight: 650; box-shadow: inset 2px 0 var(--accent); }
 .historyPreview { min-width: 0; min-height: 0; }
 .historyPreview :global(.code-editor) { height: 100%; }
 .historyPreview :global(.code-editor) .cm-editor,
