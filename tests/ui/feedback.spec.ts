@@ -350,3 +350,50 @@ for (const editBeforeRetry of [true, false]) test(`MCP read recovery preserves f
   await expect(name).toHaveValue('Keep newer draft');
   expect(await page.evaluate(() => (window as any).saves)).toBe(1);
 });
+
+
+for (const externalChange of [false, true]) test(`tool MCP continuous editing saves against its accepted revision (${externalChange})`, async ({ page }) => {
+  await install(page);
+  await page.addInitScript(() => {
+    const host = window as any; const invoke = host.__TAURI_INTERNALS__.invoke;
+    let definition = { id: 'A', name: 'MCP A', transport: 'stdio', command: 'node', args: [], env: {}, headers: {}, url: '', version: 1, inLibrary: true };
+    host.mcpSaveRequests = [];
+    host.externalMcpEdit = () => { definition = { ...definition, command: 'external', version: definition.version + 1 }; };
+    host.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command === 'get_registered_tool_workspace') { const workspace = await invoke(command, args); return { ...workspace, probe: { ...workspace.probe, dependencies: [], providerPresets: [], interfaceFormats: [], installUrl: '', upgradeHint: '' } }; }
+      if (command === 'list_mcp_definitions') return [definition];
+      if (command === 'list_native_mcp') return [{ ...definition, enabled: true }];
+      if (command === 'save_mcp_definition') {
+        host.mcpSaveRequests.push(args.draft);
+        if (args.draft.expectedVersion !== definition.version) throw { message: 'MCP 已被外部修改，请重新读取' };
+        definition = { ...definition, ...args.draft, version: definition.version + 1 };
+        if (host.mcpSaveRequests.length === 1) return new Promise(resolve => { host.finishFirstMcpSave = () => resolve(definition); });
+        return definition;
+      }
+      if (command === 'preview_mcp_targets') return args.targets.map((target: any) => ({ ...target, status: 'ready', detail: '', baselineHash: 'baseline', previewToken: 'preview' }));
+      if (command === 'distribute_mcp') return args.targets.map((target: any) => ({ ...target, status: 'written', detail: '' }));
+      return invoke(command, args);
+    };
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  await page.getByRole('button', { name: /MCP A/ }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.locator('[data-dialog-save]').click();
+  await expect.poll(() => page.evaluate(() => typeof (window as any).finishFirstMcpSave)).toBe('function');
+  await dialog.getByRole('textbox', { name: '命令', exact: true }).fill('continued-command');
+  await page.evaluate(() => (window as any).finishFirstMcpSave());
+  await expect(dialog.locator('[data-dialog-save]')).toBeEnabled();
+  await expect(dialog.getByRole('textbox', { name: '命令', exact: true })).toHaveValue('continued-command');
+  if (externalChange) await page.evaluate(() => (window as any).externalMcpEdit());
+  await dialog.locator('[data-dialog-save]').click();
+  await expect.poll(() => page.evaluate(() => (window as any).mcpSaveRequests.map((item: any) => item.expectedVersion))).toEqual([1, 2]);
+  if (externalChange) {
+    await expect(dialog.getByRole('alert')).toContainText('MCP 已被外部修改');
+    await expect(dialog.getByRole('textbox', { name: '命令', exact: true })).toHaveValue('continued-command');
+  } else {
+    await expect(dialog).toHaveCount(0);
+    await expect(page.locator('.feedback-item').filter({ hasText: '已写入当前工具' })).toBeVisible();
+  }
+});
