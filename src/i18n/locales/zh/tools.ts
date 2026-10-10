@@ -346,6 +346,7 @@ export default {
     confirmDiscard: 'MCP 草稿尚未保存，切换后会丢失修改。',
     importedNotice: '已读取当前工具上的条目。保存只更新这个 CLI。',
     written: '已写入当前工具。',
+    definitionSaved: '定义已保存。',
     partialFailed: '部分写入失败，可重试。',
     pickProject: '请选择项目。',
     dirtyAgain: '已写入当前工具前，表单又有改动，请再保存一次。',

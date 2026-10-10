@@ -51,7 +51,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
   const [nativeEntries, setNativeEntries] = useState<NativeMcpEntry[]>([]);
   const [enabled, setEnabled] = useState(true);
   const [nativeOrigin, setNativeOrigin] = useState<NativeMcpEntry | null>(null);
-  const [currentConflict, setCurrentConflict] = useState<{ id: string; items: McpTargetResult[] } | null>(null);
+  const [currentConflict, setCurrentConflict] = useState<{ id: string; items: McpTargetResult[]; generation: number; revision: number; form: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const feedback = useFeedback(JSON.stringify(['mcp', toolId, scope, projectPath, contextId]));
   const [capabilityBlocked, setCapabilityBlocked] = useState('');
@@ -59,6 +59,8 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
   const [syncLibrary, setSyncLibrary] = useState(false);
   const project = scope === 'project' ? projectPath || null : null;
   const dirty = JSON.stringify([draft, envText, headerText,enabled]) !== savedFingerprint;
+  const editorGeneration = useRef(0);
+  const editorRevision = useRef(0);
   const latestForm = useRef(''); latestForm.current = JSON.stringify([draft, envText, headerText, enabled]);
   const mounted = useRef(true);
   useEffect(() => { mounted.current=true;return () => { mounted.current=false; }; },[]);
@@ -99,6 +101,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
   async function importNative(item: NativeMcpEntry) {
     const operationFeedback = feedback.begin('importNative:' + item.name);
     if (!await canReplace()) return;
+    editorGeneration.current++;
     setNativeOrigin(item); setCurrentConflict(null); setComposing(true);
     const found = definitions.find((definition) => definition.name === item.name);
     const next: McpDraft = { id: found?.id ?? null, name: item.name, transport: item.transport, command: item.command, args: item.args, url: item.url,
@@ -110,39 +113,79 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
   }
   async function startNew() {
     if (!await canReplace()) return;
+    editorGeneration.current++;
     setDraft(blank()); setEnvText(''); setHeaderText(''); setEnabled(true); setNativeOrigin(null); setCurrentConflict(null); setSyncLibrary(false);
     setSavedFingerprint(JSON.stringify([blank(), '', '', true])); setComposing(true); }
   async function closeCompose() {
     if (!await canReplace()) return;
+    editorGeneration.current++;
     const next = blank();
     setDraft(next); setEnvText(''); setHeaderText(''); setEnabled(true); setNativeOrigin(null); setCurrentConflict(null);
     setSavedFingerprint(JSON.stringify([next, '', '', true])); setComposing(false); }
   function leaveComposer() {
+    editorGeneration.current++;
     const next = blank();
     setDraft(next); setEnvText(''); setHeaderText(''); setEnabled(true); setNativeOrigin(null); setCurrentConflict(null);
     setSavedFingerprint(JSON.stringify([next, '', '', true])); setComposing(false);
   }
-  async function applyItems(id: string, items: McpTargetResult[], replace: boolean, operationFeedback = feedback.begin('save:' + id), current = () => mounted.current) {
+  async function applyItems(id: string, items: McpTargetResult[], replace: boolean, operationFeedback: FeedbackOperation, current: () => boolean) {
     const targets = items.filter(item => item.status === 'ready' || item.status === 'conflict').map((item): McpTargetRequest => ({ toolId: item.toolId, scope: item.scope,
       projectPath: item.projectPath, contextId: item.contextId ?? contextId, enabled, baselineHash: item.baselineHash, previewToken: item.previewToken, allowReplace: replace && item.status === 'conflict' }));
     const outcome = await native.distributeMcp(id, targets);
     const written = outcome.every(item => item.status === 'written');
-    if (written) operationFeedback.success(t('tools.mcp.written'));
-    else operationFeedback.partial(t('tools.mcp.partialFailed'), { detail: outcome.filter(item => item.status !== 'written').map(item => item.detail).join(' · ') });
-    if (written) operationFeedback.committed(t('tools.mcp.written'));
-    try { const entries = await native.listNativeMcp(target); if (current()) { setNativeEntries(entries); setCurrentConflict(null); } }
-    catch (value) { operationFeedback.error(errorText(value), { recovery: { label: t('common.feedback.retry'), valid: current, run: async () => {
-      const retry = feedback.resume(operationFeedback); if (written) retry.committed(t('tools.mcp.written'));
-      try { const entries = await native.listNativeMcp(target); if (current()) setNativeEntries(entries); if (written) retry.success(t('tools.mcp.written')); else retry.partial(t('tools.mcp.partialFailed'), { detail: outcome.filter(item => item.status !== 'written').map(item => item.detail).join(' · ') }); }
-      catch (error) { retry.error(errorText(error)); }
-    } } }); return false; }
-    return written;
+    const savedNotice = t('tools.mcp.definitionSaved');
+    const failures = outcome.filter(item => item.status !== 'written').map(item => item.detail).join(' · ');
+    function report(result: FeedbackOperation, readFailure?: unknown) {
+      const summary = written ? t('tools.mcp.written') : `${savedNotice} ${t('tools.mcp.partialFailed')}`;
+      if (readFailure === undefined) {
+        if (written) result.success(summary);
+        else result.partial(summary, { detail: failures });
+        return;
+      }
+      result.partial(summary, { detail: [failures, errorText(readFailure)].filter(Boolean).join(' · '), recovery: {
+        label: t('common.feedback.retry'), valid: current,
+        run: async () => {
+          if (!current()) return;
+          await refresh(feedback.resume(result));
+        },
+      } });
+    }
+    async function refresh(result: FeedbackOperation) {
+      try {
+        const entries = await native.listNativeMcp(target);
+        if (current()) setNativeEntries(entries);
+        report(result);
+        return true;
+      } catch (value) { report(result, value); return false; }
+    }
+    // Each retry reuses immutable write outcomes and only reads the list. It
+    // never repeats a successful target or removes the remaining write errors.
+    const refreshed = await refresh(operationFeedback);
+    if (current() && refreshed) setCurrentConflict(null);
+    return written && refreshed;
+  }
+
+  async function applyConflict() {
+    if (!currentConflict || busy) return;
+    const conflict = currentConflict;
+    const { generation, revision, form } = conflict;
+    const current = () => mounted.current && generation === editorGeneration.current && revision === editorRevision.current && form === latestForm.current;
+    const result = feedback.begin('save:' + conflict.id);
+    result.committed(t('tools.mcp.definitionSaved'));
+    if (!current()) { result.error(t('common.feedback.stale')); return; }
+    setBusy(true);
+    try {
+      if (await applyItems(conflict.id, conflict.items, true, result, current) && current()) leaveComposer();
+    } catch (value) { result.error(errorText(value)); }
+    finally { if (mounted.current) setBusy(false); }
   }
   async function save() {
     const operationFeedback = feedback.begin('save:' + (draft.id ?? draft.name));
     if (scope === 'project' && !project) { operationFeedback.error(t('tools.mcp.pickProject')); return; }
     const origin = nativeOrigin; let acceptedForm = latestForm.current;
-    const current = () => mounted.current && acceptedForm === latestForm.current;
+    const generation = editorGeneration.current;
+    const revision = editorRevision.current;
+    const current = () => mounted.current && generation === editorGeneration.current && revision === editorRevision.current && acceptedForm === latestForm.current;
     const editing = !!(draft.id || nativeOrigin);
     const linked = definitions.find((item) => item.id === draft.id) ?? definitions.find((item) => item.name === draft.name.trim());
     const inLibrary = editing ? linked?.inLibrary !== false : syncLibrary || linked?.inLibrary === true;
@@ -158,7 +201,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
       if (!current()) { result.partial(t('tools.mcp.savedKeepEditing')); return; }
       const sameOrigin = !!origin && JSON.stringify(fresh.find(item => item.name === origin.name)) === JSON.stringify(origin);
       if (items.some(item => item.status === 'conflict') && !sameOrigin) {
-        setCurrentConflict({ id: saved.id, items }); result.partial(t('tools.mcp.savedKeepEditing')); return;
+        setCurrentConflict({ id: saved.id, items, generation, revision, form: acceptedForm }); result.partial(t('tools.mcp.savedKeepEditing')); return;
       }
       if (!items.some(item => item.status === 'ready' || item.status === 'conflict')) { result.error(items.map(item => item.detail).join(t('tools.quota.errorSeparator'))); return; }
       if (await applyItems(saved.id, items, sameOrigin, result, current) && current()) leaveComposer();
@@ -169,7 +212,13 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
         run: async () => {
           if (!current()) return;
           const retry = feedback.resume(result); retry.committed(t('tools.mcp.savedKeepEditing')); setBusy(true);
-          try { await finish(retry); } catch (error) { reportFailure(retry, error); }
+          try {
+            const definitions = await native.listMcpDefinitions();
+            if (current()) setDefinitions(definitions);
+            const entries = await native.listNativeMcp(target);
+            if (current()) setNativeEntries(entries);
+            retry.partial(t('tools.mcp.savedKeepEditing'));
+          } catch (error) { reportFailure(retry, error); }
           finally { if (mounted.current) setBusy(false); }
         },
       } } : undefined);
@@ -178,7 +227,10 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
       saved = await native.saveMcpDefinition({ ...draft, args: keptArgs(draft.args), id: linked?.id ?? draft.id, expectedVersion: linked?.version ?? draft.expectedVersion, inLibrary, env: parseLines(envText), headers: parseLines(headerText) });
       operationFeedback.identify('save:' + saved.id);
       operationFeedback.committed(t('tools.mcp.savedKeepEditing'));
-      if (!current()) { operationFeedback.partial(t('tools.mcp.dirtyAgain')); return; }
+      if (!current()) {
+        if (mounted.current && editorGeneration.current === generation) setDraft(previous => ({ ...previous, id: saved!.id, expectedVersion: saved!.version }));
+        operationFeedback.partial(t('tools.mcp.dirtyAgain')); return;
+      }
       const accepted = saved;
       select(accepted, enabled);
       acceptedForm = latestForm.current;
@@ -235,9 +287,9 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
       {!nativeEntries.length && <p>{t('tools.mcp.listEmpty')}</p>}
     </aside>
     <GuideDialog open={composing} title={draft.id || nativeOrigin ? t('tools.mcp.editTitle') : t('tools.mcp.add')} hint={t('tools.mcp.dialogHint')} onClose={() => void closeCompose()}>
-    <div className={styles.panel}>
+    <div className={styles.panel} onChangeCapture={() => { editorRevision.current++; }}>
       <label>{t('tools.mcp.name')}<input aria-label={t('tools.mcp.nameAria')} value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder={t('tools.mcp.namePlaceholder')} /></label>
-      <div className={styles.typeField}><span>{t('tools.mcp.type')}</span><div className={styles.typeSwitch} role="radiogroup" aria-label={t('tools.mcp.transport')}>{([['http', 'HTTP'], ['stdio', 'stdio']] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={draft.transport === value} onClick={() => setDraft({ ...draft, transport: value })}>{label}</button>)}</div></div>
+      <div className={styles.typeField}><span>{t('tools.mcp.type')}</span><div className={styles.typeSwitch} role="radiogroup" aria-label={t('tools.mcp.transport')}>{([['http', 'HTTP'], ['stdio', 'stdio']] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={draft.transport === value} onClick={() => { editorRevision.current++; setDraft({ ...draft, transport: value }); }}>{label}</button>)}</div></div>
       {draft.transport === 'stdio' ? <>
         <label>{t('tools.mcp.command')}<input aria-label={t('tools.mcp.command')} value={draft.command} onChange={(event) => setDraft({ ...draft, command: event.target.value })} placeholder="npx" /></label>
         <label>{t('tools.mcp.args')}<textarea rows={3} value={draft.args.join('\n')} onChange={(event) => setDraft({ ...draft, args: event.target.value.split(/\r?\n/) })} placeholder={'-y\nchrome-devtools-mcp@latest'} /></label>
@@ -248,7 +300,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
       </>}
       <label className={styles.inline}><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} />{t('tools.plugins.action.enable')}</label>
       {!(draft.id || nativeOrigin) && <label className={styles.inline}><input type="checkbox" checked={syncLibrary} onChange={(event) => setSyncLibrary(event.target.checked)} />{t('tools.mcp.quickSync')}<small className={styles.fieldHint}>{t('tools.mcp.quickSyncHint')}</small></label>}
-      {currentConflict && <div className={styles.resultList} role="group" aria-label={t('tools.mcp.conflictLabel')}><strong>{t('tools.mcp.conflictTitle')}</strong>{currentConflict.items.map(item => <div className={styles.fileDiff} key={item.toolId}><CodeEditor compact label={t('tools.mcp.conflictCurrent')} format="json" readOnly value={JSON.stringify(item.existing, null, 2)} /><CodeEditor compact label={t('tools.mcp.conflictNext')} format="json" readOnly value={JSON.stringify(item.proposed, null, 2)} /></div>)}<div className={styles.actions}><button type="button" onClick={() => setCurrentConflict(null)}>{t('common.conflict.keepCurrent')}</button><button type="button" disabled={busy} onClick={() => { const result = feedback.begin('save:' + currentConflict.id); setBusy(true); void applyItems(currentConflict.id, currentConflict.items, true, result).then(ok => { if (ok) leaveComposer(); }).catch(value => result.error(errorText(value))).finally(() => setBusy(false)); }}>{t('tools.mcp.useNext')}</button></div></div>}
+      {currentConflict && <div className={styles.resultList} role="group" aria-label={t('tools.mcp.conflictLabel')}><strong>{t('tools.mcp.conflictTitle')}</strong>{currentConflict.items.map(item => <div className={styles.fileDiff} key={item.toolId}><CodeEditor compact label={t('tools.mcp.conflictCurrent')} format="json" readOnly value={JSON.stringify(item.existing, null, 2)} /><CodeEditor compact label={t('tools.mcp.conflictNext')} format="json" readOnly value={JSON.stringify(item.proposed, null, 2)} /></div>)}<div className={styles.actions}><button type="button" onClick={() => setCurrentConflict(null)}>{t('common.conflict.keepCurrent')}</button><button type="button" disabled={busy} onClick={() => void applyConflict()}>{t('tools.mcp.useNext')}</button></div></div>}
 
       <FeedbackRegion context={feedback.context} />
       <div className="dialog-footer">{(draft.id || nativeOrigin) && <button type="button" disabled={busy} onClick={() => void removeSaved()}>{t('tools.mcp.removeFromTool')}</button>}<span className="dialog-footer-gap" /><button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint()} disabled={busy || !draft.name.trim() || (scope === 'project' && !project)} onClick={() => void save()}>{draft.id || nativeOrigin ? t('home.launcher.save') : t('tools.mcp.addSubmit')}</button></div>
