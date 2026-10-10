@@ -1,17 +1,23 @@
 import type { FeedbackOperation } from '../../lib/notifications';
 import { useFeedback, FeedbackRegion } from '../../components/Feedback';
-import { removalContext, useAccountLabels } from './resourceContexts';
+import { removalContext, useAccountLabels, useResourceContexts } from './resourceContexts';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { open as pickPath } from '@tauri-apps/plugin-dialog';
 import { GuideDialog } from '../../components/GuideDialog';
-import { SearchField } from '../../components/SearchField';
+import { ResourceList } from '../../components/resources/ResourceList';
+import { ResourceBatch, type BatchJob } from '../../components/resources/ResourceBatch';
+import { SkillDocumentEditor } from '../../components/resources/SkillDocumentEditor';
+import { McpDocumentPanel } from '../../components/resources/McpDocumentPanel';
+import { McpPaste } from '../../components/resources/McpPaste';
+import { readResourceStates, resourceError } from '../../lib/resources';
+import { writeClipboard } from '../../lib/clipboard';
 import { Icon } from '../../components/Icon';
 import { ScopeMarks, samePath, scopeLabel } from './CliMarks';
 import { confirmAction } from '../../lib/confirm';
 import { CliTargetGrid } from './CliTargetGrid';
 import { native } from '../../lib/native';
-import { saveShortcutHint, searchShortcutHint } from '../../lib/shortcut';
+import { saveShortcutHint } from '../../lib/shortcut';
 import type { Project } from '../../types/launch';
 import type { AdapterDescriptor, Scope } from '../../types/native';
 import type { McpDefinition, McpDraft, McpPlacement, McpTargetRequest, SkillImportPreview, SkillInstallation, SkillPackage } from '../../types/resources';
@@ -45,10 +51,6 @@ function failure(error: unknown) {
   return error && typeof error === 'object' && 'message' in error ? String(error.message) : i18n.t('tools.workspace.operationFailed');
 }
 
-function installStateLabel(state: SkillInstallation['state']): string {
-  return i18n.t(`library.resources.installState.${state}`);
-}
-
 export function LibraryResources({ section, active, tools, projects, createSignal = 0 }: { section: 'mcp' | 'skill'; active: boolean; tools: AdapterDescriptor[]; projects: Project[]; createSignal?: number }) {
   const { t } = useTranslation();
   const contextLabel = useAccountLabels();
@@ -74,10 +76,79 @@ export function LibraryResources({ section, active, tools, projects, createSigna
   const [archiveSelection, setArchiveSelection] = useState<{ source: string; local: boolean; entries: string[]; chosen: string | null } | null>(null);
   const [pendingImport, setPendingImport] = useState<{ preview: SkillImportPreview; kind: 'local' | 'zip' | 'local_zip'; source: string; subdirectory: string | null } | null>(null);
   const [skillTarget, setSkillTarget] = useState<SkillPackage | null>(null);
+  const [skillDirty, setSkillDirty] = useState(false);
+  const [configOpen, setConfigOpen] = useState(false);
+  const [configDirty, setConfigDirty] = useState(false);
   const [skillSeed, setSkillSeed] = useState<string[]>([]);
   const [installTools, setInstallTools] = useState<string[]>([]);
-  const [search, setSearch] = useState('');
-  useEffect(() => { setSearch(''); }, [section]);
+  const [visibleIds, setVisibleIds] = useState<string[]>([]);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [stateVersion, setStateVersion] = useState(0);
+  const [skillStates, setSkillStates] = useState<Record<string, 'ready' | 'failed'>>({});
+  const [addedId, setAddedId] = useState<string | null>(null);
+  const [batchTool, setBatchTool] = useState('');
+  const [batchScope, setBatchScope] = useState('');
+  const [batchAction, setBatchAction] = useState('distribute');
+  const batchTarget: McpTargetRequest = { toolId: batchTool, scope: batchScope ? 'project' : 'global', projectPath: batchScope || null, enabled: batchAction !== 'disable' };
+  const batchContexts = useResourceContexts(batchTool ? [{ id: batchTool }] : [], [], batchTarget);
+  if (batchTool && batchContexts.ready(batchTarget)) batchTarget.contextId = batchContexts.context(batchTarget);
+  useEffect(() => {
+    if (section !== 'skill') return;
+    let live = true;
+    const ids = [...new Set([...visibleIds, ...selectedIds])];
+    void (async () => {
+      for (let offset = 0; offset < ids.length && live; offset += 50) {
+        const chunk = ids.slice(offset, offset + 50);
+        try {
+          const results = await readResourceStates(chunk.map(packageId => ({ kind: 'skill' as const, packageId })), () => live);
+          if (!live) return;
+          for (const result of results) {
+            const id = chunk[result.index]; if (!id) continue;
+            setSkillStates(old => ({ ...old, [id]: result.status === 'ready' ? 'ready' : 'failed' }));
+            if (result.status === 'ready' && Array.isArray(result.value)) setInstallations(old => [...old.filter(entry => entry.packageId !== id), ...result.value as SkillInstallation[]]);
+          }
+        } catch { if (live) setSkillStates(old => ({ ...old, ...Object.fromEntries(chunk.map(id => [id, 'failed'])) })); }
+      }
+    })();
+    return () => { live = false; };
+  }, [section, JSON.stringify(visibleIds), JSON.stringify(selectedIds), stateVersion]);
+  async function refreshResources() {
+    if (section === 'skill') await reloadSkills();
+    else { const [items, placed] = await Promise.all([native.listMcpDefinitions(), native.listMcpPlacements()]); setDefinitions(items); setPlacements(placed); }
+  }
+  function batch(ids: string[]) {
+    const items = section === 'skill' ? packages : definitions;
+    const jobs: BatchJob[] = ids.map(id => {
+      const item = items.find(item => item.id === id)!;
+      if (batchAction === 'delete') return { id, name: item.name, run: async () => { if (section === 'skill') await native.deleteSkillPackage(id); else await native.deleteMcpDefinition(id, (item as McpDefinition).version); } };
+      return { id, name: item.name, operation: section === 'mcp' ? { action: 'mcp_apply', definitionId: id, target: batchTarget } : batchAction === 'distribute' ? { action: 'skill_install', packageId: id, target: batchTarget, previewToken: null, allowTakeover: false } : { action: batchAction === 'remove' ? 'skill_remove' : 'skill_enable', packageId: id, target: batchTarget } };
+    });
+    return <div><div className={styles.actions}>
+      <label>{t('library.experience.batchAction')}<select aria-label={t('library.experience.batchAction')} value={batchAction} onChange={event => setBatchAction(event.target.value)}>{['distribute', 'enable', 'disable', ...(section === 'skill' ? ['remove'] : []), 'delete'].map(action => <option key={action} value={action}>{t(`library.experience.${action}`)}</option>)}</select></label>
+      {batchAction !== 'delete' && <><label>{t('library.experience.batchTarget')}<select aria-label={t('library.experience.batchTarget')} value={batchTool} onChange={event => setBatchTool(event.target.value)}><option value="">—</option>{tools.filter(tool => tool.management?.[section === 'skill' ? 'skills' : 'mcp'] !== false).map(tool => <option key={tool.id} value={tool.id}>{tool.name}</option>)}</select></label><label>{t('library.experience.scope')}<select aria-label={t('library.experience.scope')} value={batchScope} onChange={event => setBatchScope(event.target.value)}><option value="">{t('tools.apply.global')}</option>{projects.filter(project => project.available && project.path).map(project => <option key={project.id} value={project.path!}>{project.name}</option>)}</select></label></>}
+    </div>{(batchTool && batchContexts.ready(batchTarget) || batchAction === 'delete') && <ResourceBatch key={JSON.stringify([section, batchTool, batchScope, batchAction])} context={JSON.stringify(['library-batch', section, batchTarget, batchAction])} jobs={jobs} action={t(`library.experience.${batchAction}`)} destructive={['delete', 'remove', 'disable'].includes(batchAction)} onChanged={refreshResources} />}</div>;
+  }
+  async function copyResource(id: string) {
+    const result = feedback.begin(JSON.stringify(['copy', section, id]));
+    try {
+      let text: string;
+      if (section === 'skill') text = (await native.readSkillPackageDocument(id)).content;
+      else {
+        const toolId = tools.find(tool => tool.management?.mcp !== false)?.id;
+        if (!toolId) throw new Error(t('library.experience.invalidConfig'));
+        text = (await native.readMcpDocument({ target: { toolId, scope: 'global', projectPath: null, enabled: true }, definitionId: id, name: definitions.find(item => item.id === id)!.name })).text;
+      }
+      if (!await writeClipboard(text)) throw new Error(t('library.experience.copyFailed'));
+      result.success(section === 'skill' ? t('library.page.copied') : t('library.experience.copiedEntry'));
+    } catch (error) { result.error(resourceError(error)); }
+  }
+  function acceptDraft(value: McpDraft, copy = false) {
+    setConfigOpen(false); setConfigDirty(false);
+    editorRevision.current++;
+    if (copy) { editorGeneration.current++; setFormKey(value => value + 1); }
+    setDraft({ ...value, id: copy ? null : draft?.id ?? null, expectedVersion: copy ? null : draft?.expectedVersion ?? null, inLibrary: true });
+    setEnvText(lines(value.env)); setHeaderText(lines(value.headers));
+  }
 
   useEffect(() => {
     if (!active) return;
@@ -87,8 +158,7 @@ export function LibraryResources({ section, active, tools, projects, createSigna
       : native.listSkillPackages().then(async (items) => {
         if (!live) return;
         setPackages(items);
-        const found = (await Promise.all(items.map((item) => native.listSkillInstallations(item.id)))).flat();
-        if (live) setInstallations(found);
+        if (live) setStateVersion(value => value + 1);
       });
     void load.then(() => { if (live) operationFeedback.complete(); }).catch((value) => { if (live) operationFeedback.error(failure(value)); });
     return () => { live = false; };
@@ -96,6 +166,7 @@ export function LibraryResources({ section, active, tools, projects, createSigna
 
   function editMcp(item?: McpDefinition) {
     editorGeneration.current++;
+    setConfigOpen(false);
     saveOperation.current = null;
     const next = item ? draftOf(item) : blank();
     setDraft(next);
@@ -129,7 +200,7 @@ export function LibraryResources({ section, active, tools, projects, createSigna
   async function reloadSkills() {
     const items = await native.listSkillPackages();
     setPackages(items);
-    setInstallations((await Promise.all(items.map((entry) => native.listSkillInstallations(entry.id)))).flat());
+    setStateVersion(value => value + 1);
   }
 
   function closeSkill() {
@@ -142,6 +213,7 @@ export function LibraryResources({ section, active, tools, projects, createSigna
     const prior = item ? installations.filter((entry) => entry.packageId === item.id && entry.state !== 'conflict' && entry.state !== 'disabled' && entry.state !== 'unavailable') : [];
     const checked = installTools.filter((toolId) => !prior.some((entry) => entry.toolId === toolId && entry.scope === 'global'));
     await reloadSkills();
+    if (item) setAddedId(item.id);
     closeSkill();
     setInstallTools([]);
     const targets = [
@@ -318,6 +390,7 @@ export function LibraryResources({ section, active, tools, projects, createSigna
         reportLate(operationFeedback); return;
       }
       const accepted = saved;
+      if (!draft.id) setAddedId(accepted.id);
       setDraft(draftOf(accepted));
       setDefinitions(items => items.some(item => item.id === accepted.id) ? items.map(item => item.id === accepted.id ? accepted : item) : [accepted, ...items]);
       await finish(operationFeedback);
@@ -398,39 +471,15 @@ export function LibraryResources({ section, active, tools, projects, createSigna
     finally { setBusy(false); }
   }
 
-  const needle = search.trim().toLowerCase();
-  const libraryDefinitions = definitions.filter((item) => item.inLibrary !== false)
-    .filter((item) => !needle || `${item.name} ${item.command} ${item.args.join(' ')} ${item.url ?? ''}`.toLowerCase().includes(needle));
-  const libraryPackages = packages.filter((item) => item.inLibrary !== false)
-    .filter((item) => !needle || `${item.name} ${item.description ?? ''}`.toLowerCase().includes(needle));
-
   if (section === 'skill') {
     return <div className={styles.layout}>
-      <SearchField className={styles.searchBox} label={t('library.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={setSearch} placeholder={t('library.resources.searchSkillPlaceholder')} />
-
       <FeedbackRegion context={feedback.context} />
-      <div className={styles.list} aria-label={t('library.resources.skillListAria')}>
-        {libraryPackages.length ? libraryPackages.map((item) => {
-          return <article className={styles.card} key={item.id}>
-            <div className={styles.cardHead}>
-              <button className={styles.cardTitle} type="button" onClick={() => { setSkillSeed([]); setSkillTarget(item); }}>{item.name}</button>
-              <span className={styles.badge}>{t('tools.skills.fileCount', { count: item.fileCount })}</span>
-            </div>
-            <p>{item.description || t('library.resources.fullPackage')}</p>
-            <div className={styles.cardBar}>
-              <ScopeMarks contextLabel={contextLabel} accountContexts label={t('library.page.cliMarks', { title: item.name })} tools={tools} places={installations.filter((entry) => entry.packageId === item.id)} projects={projects} busy={busy} onToggle={(toolId, scope, projectPath, contextId) => void toggleSkill(item, toolId, scope, projectPath, contextId)} mark={(place) => {
-                if (!place) return { pressed: false, state: 'off', status: t('tools.skills.stateNotInstalled') };
-                if (place.state === 'current') return { pressed: true, state: 'current', status: t('library.page.markCurrent') };
-                if (place.state === 'conflict' || place.state === 'update_available') return { pressed: true, state: 'drifted', status: installStateLabel(place.state) };
-                return { pressed: true, state: 'unavailable', status: installStateLabel(place.state) };
-              }} />
-              <div className={styles.cardActions}><button type="button" className={styles.dangerQuiet} disabled={busy} onClick={() => void removePackage(item)}>{t('tools.agents.delete')}</button><button type="button" className={styles.quiet} disabled={busy} onClick={() => { setSkillSeed([]); setSkillTarget(item); }}>{t('tools.workspace.edit')}</button></div>
-            </div>
-          </article>;
-        }) : needle
-          ? <div className={styles.empty}><Icon name="search" size={28} strokeWidth={1.3} />{t('library.resources.noSkillMatch', { query: search.trim() })}</div>
-          : <div className={styles.empty}><Icon name="sparkle" size={28} strokeWidth={1.3} /><strong>{t('library.resources.emptySkillTitle')}</strong>{t('library.resources.emptySkillDetail')}<button type="button" disabled={busy} onClick={() => { setSkillOpen(true); }}><Icon name="plus" size={14} strokeWidth={2.2} />{t('tools.skills.add')}</button></div>}
-      </div>
+      <ResourceList key="library-skill" context="library:skill" label={t('library.resources.skillListAria')} addedId={addedId}
+        rows={packages.filter(item => item.inLibrary !== false).map(item => ({ id: item.id, name: item.name, description: item.description || t('library.resources.fullPackage'), search: item.source + ' ' + (item.compatibility ?? ''), metadata: `${t('library.experience.library')} · ${t('tools.skills.fileCount', { count: item.fileCount })} · ${skillStates[item.id] === 'failed' ? t('library.experience.failedState') : skillStates[item.id] ? t('library.experience.loaded') : t('library.experience.unknown')}`, facets: installations.filter(entry => entry.packageId === item.id).flatMap(entry => ['tool:' + entry.toolId, 'scope:' + entry.scope]), state: skillStates[item.id] === 'ready' ? installations.some(entry => entry.packageId === item.id) ? 'installed' : 'notInstalled' : skillStates[item.id] ?? 'unknown' }))}
+        filters={[...['installed', 'notInstalled', 'unknown', 'failed'].map(value => ({ value, label: t(`library.experience.${value === 'failed' ? 'failedState' : value}`) })), ...tools.map(tool => ({ value: 'tool:' + tool.id, label: tool.name })), { value: 'scope:global', label: t('tools.apply.global') }, { value: 'scope:project', label: t('tools.accounts.scopeProject') }]}
+        onVisible={setVisibleIds} onSelected={setSelectedIds} onRefresh={() => { void refreshResources().catch(error => feedback.begin('refresh').error(resourceError(error))); }} bulk={batch}
+        onOpen={id => { setSkillSeed([]); setSkillTarget(packages.find(item => item.id === id)!); }}
+        actions={id => <><button type="button" onClick={() => void copyResource(id)}>{t('library.experience.copy')}</button><button type="button" disabled={busy} onClick={() => void removePackage(packages.find(item => item.id === id)!)}>{t('tools.agents.delete')}</button></>} />
       <GuideDialog open={skillOpen} title={t('tools.skills.add')} hint={t('library.resources.addSkillHint')} onClose={closeSkill}>
         <div className={styles.skillAdd}>
           {!archiveSelection && !pendingImport && <>
@@ -461,40 +510,23 @@ export function LibraryResources({ section, active, tools, projects, createSigna
           <FeedbackRegion context={feedback.context} />
         </div>
       </GuideDialog>
-      <GuideDialog open={!!skillTarget} title={t('library.resources.editSkillTitle')} hint={t('library.resources.editSkillHint')} onClose={() => { setSkillTarget(null); setSkillSeed([]); }}>
-        {skillTarget && <SkillDistribution item={skillTarget} tools={tools} projects={projects} installations={installations} initialTools={skillSeed} autoRun={skillSeed.length > 0} onChanged={reloadSkills} />}
+      <GuideDialog wide open={!!skillTarget} title={t('library.resources.editSkillTitle')} hint={t('library.resources.editSkillHint')} onClose={() => { void (async () => { if (skillDirty && !await confirmAction(t('tools.mcp.confirmDiscard'), () => true, { title: t('common.app.leaveDirtyTitle'), confirmLabel: t('common.app.leaveDirtyConfirm') })) return; setSkillTarget(null); setSkillSeed([]); setSkillDirty(false); })(); }}>
+        {skillTarget && <><SkillDocumentEditor key={skillTarget.id} packageId={skillTarget.id} onDirtyChange={setSkillDirty} onChanged={reloadSkills} /><ScopeMarks contextLabel={contextLabel} accountContexts label={t('library.page.cliMarks', { title: skillTarget.name })} tools={tools} places={installations.filter(entry => entry.packageId === skillTarget.id)} projects={projects} busy={busy || skillStates[skillTarget.id] !== 'ready'} onToggle={(toolId, scope, projectPath, contextId) => void toggleSkill(skillTarget, toolId, scope, projectPath, contextId)} mark={place => ({ pressed: !!place, state: !place ? 'off' : place.state === 'current' ? 'current' : 'unavailable', status: !place ? skillStates[skillTarget.id] === 'ready' ? t('tools.skills.stateNotInstalled') : t('library.experience.unknown') : t(`library.resources.installState.${place.state}`) })} /><SkillDistribution item={skillTarget} tools={tools} projects={projects} installations={installations} initialTools={skillSeed} autoRun={skillSeed.length > 0} onChanged={reloadSkills} /></>}
       </GuideDialog>
     </div>;
   }
 
   return <div className={styles.layout}>
-    <SearchField className={styles.searchBox} label={t('library.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={setSearch} placeholder={t('library.resources.searchMcpPlaceholder')} />
-
     <FeedbackRegion context={feedback.context} />
-    <div className={styles.list} aria-label={t('library.resources.mcpListAria')}>
-      {libraryDefinitions.length ? libraryDefinitions.map((item) => {
-        return <article className={styles.card} key={item.id}>
-          <div className={styles.cardHead}>
-            <button className={styles.cardTitle} type="button" onClick={() => editMcp(item)}>{item.name}</button>
-            <span className={styles.badge} data-accent={item.transport === 'http' || undefined}>{item.transport === 'http' ? 'HTTP' : 'stdio'}</span>
-          </div>
-          <p className={styles.mono}>{item.transport === 'http' ? item.url || t('library.resources.noUrl') : [item.command, ...item.args].filter(Boolean).join(' ') || t('library.resources.noCommand')}</p>
-          <div className={styles.cardBar}>
-            <ScopeMarks contextLabel={contextLabel} accountContexts label={t('library.page.cliMarks', { title: item.name })} tools={tools} places={placements.filter((entry) => entry.definitionId === item.id)} projects={projects} busy={busy} onToggle={(toolId, scope, projectPath, contextId) => void toggleMcp(item, toolId, scope, projectPath, contextId)} mark={(place) => {
-              if (!place) return { pressed: false, state: 'off', status: t('library.page.markOff') };
-              if (!place.enabled) return { pressed: true, state: 'unavailable', status: t('library.resources.markDisabled') };
-              return { pressed: true, state: 'current', status: t('library.page.markCurrent') };
-            }} />
-            <div className={styles.cardActions}><button type="button" className={styles.dangerQuiet} disabled={busy} onClick={() => void remove(item)}>{t('tools.agents.delete')}</button><button type="button" className={styles.quiet} onClick={() => editMcp(item)}>{t('tools.workspace.edit')}</button></div>
-          </div>
-        </article>;
-      }) : needle
-        ? <div className={styles.empty}><Icon name="search" size={28} strokeWidth={1.3} />{t('library.resources.noMcpMatch', { query: search.trim() })}</div>
-        : <div className={styles.empty}><Icon name="connections" size={28} strokeWidth={1.3} /><strong>{t('library.resources.emptyMcpTitle')}</strong>{t('library.resources.emptyMcpDetail')}<button type="button" onClick={() => editMcp()}><Icon name="plus" size={14} strokeWidth={2.2} />{t('library.resources.emptyMcpCreate')}</button></div>}
-    </div>
-    <GuideDialog open={!!draft} title={draft?.id ? t('tools.mcp.editTitle') : t('library.resources.newMcpTitle')} hint={t('library.resources.mcpDialogHint')} onClose={() => { editorGeneration.current++; setDraft(null); setConflict(false); }}>
+    <ResourceList key="library-mcp" context="library:mcp" label={t('library.resources.mcpListAria')} addedId={addedId} toolbarActions={<McpPaste onAdded={item => setAddedId(item.id)} context="library:mcp" definitions={definitions} onDraft={value => { editMcp(); acceptDraft(value, true); }} onChanged={refreshResources} />}
+      rows={definitions.filter(item => item.inLibrary !== false).map(item => ({ id: item.id, name: item.name, description: item.transport === 'http' ? item.url : [item.command, ...item.args].join(' '), search: Object.keys(item.env).join(' ') + ' ' + Object.keys(item.headers).join(' '), metadata: `${t('library.experience.library')} · ${item.transport} · ${placements.filter(entry => entry.definitionId === item.id).map(entry => tools.find(tool => tool.id === entry.toolId)?.name ?? entry.toolId).join(', ')}`, state: item.transport, facets: placements.filter(entry => entry.definitionId === item.id).flatMap(entry => ['tool:' + entry.toolId, 'scope:' + entry.scope, entry.enabled ? 'enable' : 'disable']) }))}
+      filters={[...['stdio', 'http'].map(value => ({ value, label: value.toUpperCase() })), ...tools.map(tool => ({ value: 'tool:' + tool.id, label: tool.name })), { value: 'scope:global', label: t('tools.apply.global') }, { value: 'scope:project', label: t('tools.accounts.scopeProject') }, ...['enable','disable'].map(value => ({ value, label: t(`library.experience.${value}`) }))]} bulk={batch}
+      onRefresh={() => { void refreshResources().catch(error => feedback.begin('refresh').error(resourceError(error))); }} onOpen={id => editMcp(definitions.find(item => item.id === id)!)}
+      actions={id => <><button type="button" onClick={() => void copyResource(id)}>{t('library.experience.copy')}</button><button type="button" disabled={busy} onClick={() => void remove(definitions.find(item => item.id === id)!)}>{t('tools.agents.delete')}</button></>} />
+    <GuideDialog wide open={!!draft} title={draft?.id ? t('tools.mcp.editTitle') : t('library.resources.newMcpTitle')} hint={t('library.resources.mcpDialogHint')} onClose={() => { void (async () => { if (configDirty && !await confirmAction(t('tools.mcp.confirmDiscard'), () => true, { title: t('common.app.leaveDirtyTitle'), confirmLabel: t('common.app.leaveDirtyConfirm') })) return; editorGeneration.current++; setDraft(null); setConfigDirty(false); setConflict(false); })(); }}>
       {draft && <>
-        <div className={styles.fields} onChangeCapture={() => { editorRevision.current++; }}>
+        <McpDocumentPanel key={formKey} definitionId={draft.id} getDraft={() => ({ ...draft, env: parseLines(envText), headers: parseLines(headerText) })} name={draft.name} onModeChange={setConfigOpen} onDirtyChange={setConfigDirty} formDirty={JSON.stringify(draft) !== JSON.stringify(draftOf(definitions.find(item => item.id === draft.id) ?? { ...draft, id: draft.id ?? '', version: draft.expectedVersion ?? 0 })) || envText !== lines(draft.env) || headerText !== lines(draft.headers)} onDraft={acceptDraft} onChanged={refreshResources} />
+        <div hidden={configOpen} className={styles.fields} onChangeCapture={() => { editorRevision.current++; }}>
           <label className={styles.span}>{t('tools.mcp.name')}<input aria-label={t('tools.mcp.nameAria')} value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder={t('tools.mcp.namePlaceholder')} /></label>
           <div className={`${styles.typeField} ${styles.span}`}><span>{t('tools.mcp.type')}</span><div className={styles.typeSwitch} role="radiogroup" aria-label={t('tools.mcp.transport')}>{([['http', 'HTTP'], ['stdio', 'stdio']] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={draft.transport === value} onClick={() => { editorRevision.current++; setDraft({ ...draft, transport: value }); }}>{label}</button>)}</div></div>
           {draft.transport === 'stdio' ? <>
@@ -506,9 +538,10 @@ export function LibraryResources({ section, active, tools, projects, createSigna
             <label className={styles.span}>{t('tools.mcp.headers')}<textarea rows={4} value={headerText} onChange={(event) => setHeaderText(event.target.value)} placeholder="Authorization=Bearer ${API_TOKEN}" /></label>
           </>}
         </div>
+        {draft.id && <ScopeMarks contextLabel={contextLabel} accountContexts label={t('library.page.cliMarks', { title: draft.name })} tools={tools} places={placements.filter(entry => entry.definitionId === draft.id)} projects={projects} busy={busy} onToggle={(toolId, scope, projectPath, contextId) => { const item = definitions.find(item => item.id === draft.id); if (item) void toggleMcp(item, toolId, scope, projectPath, contextId); }} mark={place => ({ pressed: !!place, state: place?.enabled ? 'current' : 'off', status: place?.enabled ? t('library.page.markCurrent') : t('library.page.markOff') })} />}
         <div onChangeCapture={() => { editorRevision.current++; }} onClickCapture={() => { editorRevision.current++; }}><McpDistribution key={formKey} ref={distributeRef} definition={definitions.find((item) => item.id === draft.id) ?? { ...draft, id: draft.id ?? '', version: draft.expectedVersion ?? 0 }} tools={tools} projects={projects} placements={placements} formStamp={JSON.stringify([draft.name, draft.transport, draft.command, draft.args, draft.url, envText, headerText])} onWillDistribute={setWillDistribute} onConflictChange={setConflict} /></div>
         <FeedbackRegion context={feedback.context} />
-        <div className="dialog-footer">{draft.id && <button type="button" disabled={busy} onClick={() => { const current = definitions.find((item) => item.id === draft.id); if (current) void remove(current); }}>{t('tools.agents.delete')}</button>}<span className="dialog-footer-gap" />{conflict && <button type="button" disabled={busy} onClick={() => { setConflict(false); distributeRef.current?.dismiss(); }}>{t('common.conflict.keepCurrent')}</button>}<button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint()} disabled={busy || !draft.name.trim()} onClick={() => void (conflict ? replaceDistribution() : save())}>{conflict ? t('library.resources.replaceDistribute') : willDistribute ? t('library.resources.saveDistribute') : t('home.launcher.save')}</button></div>
+        <div hidden={configOpen} className="dialog-footer">{draft.id && <button type="button" disabled={busy} onClick={() => { const current = definitions.find((item) => item.id === draft.id); if (current) void remove(current); }}>{t('tools.agents.delete')}</button>}<span className="dialog-footer-gap" />{conflict && <button type="button" disabled={busy} onClick={() => { setConflict(false); distributeRef.current?.dismiss(); }}>{t('common.conflict.keepCurrent')}</button>}<button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint()} disabled={busy || configOpen || !draft.name.trim()} onClick={() => void (conflict ? replaceDistribution() : save())}>{conflict ? t('library.resources.replaceDistribute') : willDistribute ? t('library.resources.saveDistribute') : t('home.launcher.save')}</button></div>
       </>}
     </GuideDialog>
   </div>;

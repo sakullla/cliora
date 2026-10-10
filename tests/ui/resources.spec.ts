@@ -94,6 +94,9 @@ async function mockResources(page: Page) {
           if (found) found.inLibrary = args.inLibrary;
           return null;
         }
+        if (command === 'resource_sort_preference') return args.value ?? 'added';
+        if (command === 'resource_states') return Promise.all(args.requests.map(async (request: any, index: number) => ({ index, status: 'ready', detail: '', value: await (window as any).__TAURI_INTERNALS__.invoke('list_skill_installations', { packageId: request.packageId }) })));
+        if (command === 'read_skill_package_document') return { packageId: args.packageId, name: 'alpha', content: '# alpha', digest: 'fixture' };
         if (command === 'list_skill_packages') return skillPackages;
         if (command === 'list_skill_installations') return [];
         if (command === 'get_skill_enabled') return false;
@@ -317,14 +320,14 @@ test('MCP and Skill libraries are managed from the library page', async ({ page 
   const library = page.getByRole('region', { name: '资料库内容' });
   await library.getByRole('tab', { name: 'Skill', exact: true }).click();
   await expect(library.getByText('alpha')).toBeVisible();
-  await expect(library.getByRole('button', { name: 'Codex · 未安装' })).toBeVisible();
+  await expect(library.getByText('状态已读取', { exact: false })).toBeVisible();
   await library.getByRole('button', { name: '删除' }).click();
   await page.getByRole('button', { name: '删除', exact: true }).last().click();
-  await expect(library.getByText('还没有 Skill')).toBeVisible();
+  await expect(library.getByText('没有匹配的资源')).toBeVisible();
   await library.getByRole('tab', { name: 'MCP', exact: true }).click();
   await library.getByRole('button', { name: '删除' }).click();
   await page.getByRole('button', { name: '删除', exact: true }).last().click();
-  await expect(library.getByText('还没有 MCP')).toBeVisible();
+  await expect(library.getByText('没有匹配的资源')).toBeVisible();
 });
 
 test('saving an MCP closes the dialog and leaves the success on the page', async ({ page }) => {
@@ -400,9 +403,9 @@ test('OAuth MCP uncheck passes its exact context with one account', async ({ pag
 test('A and B MCP placements stay distinct and unchecking B preserves A', async ({ page }) => {
   await mockAccountResources(page);
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  await page.getByRole('button', { name: '修改', exact: true }).click();
   await expect(page.getByRole('group', { name: 'filesystem 的 CLI · 全局 · 工作账号', exact: true })).toBeVisible();
   await expect(page.getByRole('group', { name: 'filesystem 的 CLI · 全局 · 个人账号', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: '修改' }).click();
   await expect(page.getByText('Codex · 全局 · 工作账号（切换后可修改）')).toBeVisible();
   await expect(page.getByRole('checkbox', { name: 'Codex' })).toBeChecked();
   await page.getByRole('checkbox', { name: 'Codex' }).uncheck();
@@ -414,9 +417,10 @@ test('A and B MCP placements stay distinct and unchecking B preserves A', async 
   expect(state.places.map((item: any) => item.contextId)).toEqual(['ctx-a']);
 });
 
-test('Skill card and installed list remove the selected account without collapsing A/B', async ({ page }) => {
+test('Skill detail and installed list remove the selected account without collapsing A/B', async ({ page }) => {
   await mockAccountResources(page);
   await page.getByRole('region', { name: '资料库内容' }).getByRole('tab', { name: 'Skill', exact: true }).click();
+  await page.getByRole('button', { name: '修改', exact: true }).click();
   const a = page.getByRole('group', { name: 'alpha 的 CLI · 全局 · 工作账号', exact: true });
   const b = page.getByRole('group', { name: 'alpha 的 CLI · 全局 · 个人账号', exact: true });
   await expect(a).toBeVisible(); await expect(b).toBeVisible();
@@ -424,6 +428,7 @@ test('Skill card and installed list remove the selected account without collapsi
   await expect(page.getByRole('alert')).toContainText('请先应用目标账号');
   await b.getByRole('button').click();
   await expect(b).toHaveCount(0); await expect(a).toBeVisible();
+  await page.getByRole('dialog').getByRole('button', { name: '关闭', exact: true }).click();
   await page.evaluate(() => { (window as any).__activeContext = 'ctx-a'; });
   await page.getByRole('button', { name: '修改' }).click();
   const row = page.getByRole('dialog').getByRole('listitem').filter({ hasText: '工作账号' });

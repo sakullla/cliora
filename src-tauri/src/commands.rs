@@ -738,6 +738,10 @@ pub async fn read_mcp_document(app: AppHandle, request: resources::documents::Mc
     blocking(move || { let db = app.state::<AppState>().database(&app)?; resources::documents::read(&db, &adapters::Registry::builtins(), &home()?, &request).map_err(native_error) }).await
 }
 #[tauri::command]
+pub async fn render_mcp_draft(app: AppHandle, target: resources::mcp::McpTargetRequest, draft: resources::mcp::McpDraft) -> Result<resources::documents::McpDocument, ApiError> {
+    blocking(move || { let db = app.state::<AppState>().database(&app)?; resources::documents::render_draft(&db, &adapters::Registry::builtins(), &home()?, &target, draft).map_err(native_error) }).await
+}
+#[tauri::command]
 pub async fn save_mcp_document(app: AppHandle, target: resources::mcp::McpTargetRequest, name: String, baseline: String, text: String) -> Result<resources::documents::McpDocument, ApiError> {
     blocking(move || { let db = app.state::<AppState>().database(&app)?; resources::documents::save(&db, &SystemCredentialStore, &adapters::Registry::builtins(), &home()?, &target, &name, &baseline, &text).map_err(native_error) }).await
 }

@@ -1,0 +1,28 @@
+.root { display: grid; gap: 12px; min-width: 0; }
+.toolbar, .selection, .pagination, .actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.toolbar > :first-child { flex: 1 1 220px; min-width: 150px; }
+.toolbar select { max-width: 180px; }
+.selection, .pagination { color: var(--text-2); font-size: 12px; }
+.selection { min-height: 34px; }
+.selection > span:first-child { margin-right: auto; }
+.rows { border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); overflow: hidden; }
+.row { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 65px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.row:last-child { border-bottom: 0; }
+.row[data-selected=true] { background: var(--accent-soft); }
+.row > input { width: 16px; height: 16px; }
+.entry { display: grid; gap: 4px; min-width: 0; }
+.title { border: 0; background: transparent; box-shadow: none; color: var(--text); padding: 0; min-height: 20px; height: auto; line-height: 1.35; justify-content: start; text-align: left; overflow-wrap: anywhere; }
+.summary { color: var(--text-2); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.meta { color: var(--text-3); font-size: 11px; }
+.pagination { justify-content: flex-end; }
+.pagination span { margin-right: auto; }
+.empty { padding: 28px; text-align: center; color: var(--text-2); }
+.batch { padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-lg); display: grid; gap: 10px; }
+.results { max-height: 180px; overflow: auto; margin: 0; padding-left: 20px; font-size: 12px; overflow-wrap: anywhere; }
+.editor { display: grid; gap: 12px; min-width: 0; }
+.paste { display: contents; }
+.pasteBody { display: grid; gap: 12px; flex: 1 0 100%; min-width: 0; order: 1; }
+.editor label.check { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.editor .check input { flex: none; width: 16px; height: 16px; margin: 0; }
+.editor p { margin: 0; color: var(--text-2); font-size: 12px; overflow-wrap: anywhere; }
+@media (max-width: 700px) { .row { gap: 8px; padding: 10px; } .actions { gap: 4px; } .actions button { padding: 5px 8px; } .meta { overflow-wrap: anywhere; } .toolbar select { max-width: 135px; } }

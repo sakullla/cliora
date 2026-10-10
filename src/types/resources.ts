@@ -27,6 +27,8 @@ export type McpTargetResult = { contextId?: string | null; toolId: string; scope
 export type NativeMcpEntry = Omit<McpDefinition, 'id' | 'version'> & { enabled: boolean; protectedValues: boolean };
 
 export type McpDocumentRequest = { target: McpTargetRequest; definitionId: string | null; name: string; reveal?: boolean };
+/** Read-only adapter rendering; never saves the draft or resolves secret references. */
+export type McpDraftRenderRequest = { target: McpTargetRequest; draft: McpDraft };
 export type McpDocument = { source: 'native_entry' | 'equivalent'; format: 'json' | 'jsonc' | 'toml' | 'yaml'; name: string; text: string; rawText: string | null; rawScope: 'native_file' | null; sourcePath: string | null; baseline: string; targetToolId: string; protectedValues: boolean; unmappedFields: string[]; diagnostics: string[] };
 export type McpPasteItem = { name: string; draft: McpDraft | null; unmappedFields: string[]; diagnostics: string[] };
 export type SkillPackageDocument = { packageId: string; name: string; content: string; digest: string };

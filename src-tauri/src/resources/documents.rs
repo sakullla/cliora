@@ -156,7 +156,22 @@ pub fn read(db: &Database, registry: &Registry, home: &Path, request: &McpDocume
         protected_values |= protected;
         (Some(text), Some("native_file"), Some(location.path.display().to_string()))
     } else { (None, None, None) };
-    Ok(McpDocument { source, format: kind(&location), name: name.clone(), text: entry_text(adapter, &location, &name, entry)?, raw_text, raw_scope, source_path, baseline: baseline(&request.target, &location, &name, &native_text), target_tool_id: request.target.tool_id.clone(), protected_values, unmapped_fields, diagnostics: if source == "native_entry" { vec!["text 是可编辑的格式化条目；rawText 是整个来源文件原文（只读，可能已脱敏），包含其他条目和配置。保存仅修改本条目。".into()] } else { Vec::new() } })
+    Ok(McpDocument { source, format: kind(&location), name: name.clone(), text: entry_text(adapter, &location, &name, entry)?, raw_text, raw_scope, source_path, baseline: baseline(&request.target, &location, &name, &native_text), target_tool_id: request.target.tool_id.clone(), protected_values, unmapped_fields, diagnostics: if source == "native_entry" { vec!["配置编辑仅修改当前条目。原文件全文只供查看，包含其他配置，敏感内容可能已脱敏。".into()] } else { Vec::new() } })
+}
+
+/// Render only caller-owned draft fields. This does not read a native document,
+/// persist a definition, resolve credential references, or write a target.
+pub fn render_draft(db: &Database, registry: &Registry, home: &Path, target: &McpTargetRequest, draft: McpDraft) -> Result<McpDocument, String> {
+    mcp::validate(&draft)?;
+    let mut value = serde_json::to_value(&draft).map_err(|e| e.to_string())?;
+    if value.to_string().len() > MAX_TEXT { return Err("配置超过 1 MiB".into()); }
+    restore_masks(&mut value, None)?;
+    let definition = McpDefinition { id: String::new(), name: draft.name, transport: draft.transport, command: draft.command, args: draft.args, url: draft.url, env: draft.env, headers: draft.headers, in_library: false, version: 0 };
+    let (location, _) = mcp::target_location(db, registry, target, home)?;
+    let adapter = registry.get(&target.tool_id).ok_or("工具未注册")?;
+    let entry = adapter.mcp_document_at(&definition, target.enabled, None, &location)?.ok_or("目标不能表达此 MCP 配置")?;
+    verify_equivalent(adapter, &definition, &entry)?;
+    Ok(McpDocument { source: "equivalent", format: kind(&location), name: definition.name.clone(), text: entry_text(adapter, &location, &definition.name, entry)?, raw_text: None, raw_scope: None, source_path: None, baseline: String::new(), target_tool_id: target.tool_id.clone(), protected_values: false, unmapped_fields: vec![], diagnostics: vec![] })
 }
 
 pub fn parse_paste(db: &Database, registry: &Registry, home: &Path, target: &McpTargetRequest, name: Option<&str>, text: &str) -> Result<Vec<McpPasteItem>, String> {
