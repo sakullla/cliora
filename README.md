@@ -51,6 +51,14 @@ The embedded QuickJS 0.14.0 helper runs outside the UI, with no shell, filesyste
 
 Agent management creates, edits, imports, disables/enables and deletes supported native definitions while preserving unknown fields. Disabled file definitions move outside native scanner roots. Plugin/organization-owned definitions cannot be edited independently. Native changes use baseline checks and encrypted recovery; agent undo rejects intervening external changes. A saved plugin declaration is not reported as dependency installation or session loading. Some uninstall operations retain native package/cache files. Package sources and fixed-format evidence live in [plugin fixtures](tests/fixtures/plugins/sources.json) and [agent fixtures](tests/fixtures/agents/sources.json).
 
+### Cursor IDE (default off)
+
+Enable **Cursor IDE** in managed tools to use Windows desktop installation discovery, default-profile/project IDE settings, native MCP and Skills. Only `cursor_ide` is registered; an `agent` command is not an IDE installation. Installation identity comes from `Cursor.exe` plus product/package markers; verified 3.24.9 is evidence, and ordinary 3.x minor/patch updates remain eligible.
+
+The settings form edits editor preferences; raw JSONC preserves unrelated extension settings. User settings follow inherited `VSCODE_PORTABLE` / `VSCODE_APPDATA` overrides or the platform default, while project settings use `.vscode/settings.json`. Arbitrary running `--user-data-dir` / alternate profiles are not inferred. MCP uses user/project `.cursor/mcp.json`; disable removes/restores the entry without taking over the IDE's private state. Skills install complete packages under `.cursor/skills`; compatibility and builtin roots are visibly read-only. Nested categories in the writable root and multi-root workspaces are not aggregated.
+
+Bare desktop launch is implemented, but GUI acceptance was blocked by automatic approval during this task. Workspace directory launch remains unavailable. Windows installation/version evidence, synthetic tests and the unverified macOS/Linux boundaries are recorded in [Cursor IDE evidence](docs/verification/cursor-ide/README.md). Accounts, quota, sessions, plugins and Agent CLI are not added by this integration.
+
 ### Default-off CLI additions: per-dimension delivery matrix
 
 The five additions registered by the 2026-10 workflow deliver each dimension only where official evidence or a locally verified install confirmed it; undelivered cells stay hidden in the UI with a recorded reason. All five register through the open string-ID registry and default to off.

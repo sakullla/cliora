@@ -8,6 +8,7 @@ pub mod codebuddy;
 pub mod codex;
 pub(crate) mod command_code;
 mod contract;
+pub(crate) mod cursor_ide;
 pub mod configuration;
 pub(crate) mod deepseek;
 pub(crate) mod devin;
@@ -47,3 +48,5 @@ pub static DEVIN: devin::Devin = devin::Devin;
 pub static COMMAND_CODE: command_code::CommandCode = command_code::CommandCode;
 pub static ANTIGRAVITY: antigravity::Antigravity = antigravity::Antigravity;
 pub static KIRO: kiro::Kiro = kiro::Kiro;
+
+pub static CURSOR_IDE: cursor_ide::CursorIde = cursor_ide::CursorIde;

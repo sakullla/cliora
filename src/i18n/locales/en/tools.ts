@@ -1,4 +1,10 @@
 export default {
+  cursorIde: {
+    settingsLabel: 'Cursor IDE settings',
+    settingsNote: 'Edit settings.json for the default IDE profile or project. Accounts, model subscriptions and CLI configuration remain managed by Cursor. Extension settings remain in the raw document.',
+    readOnlySource: 'Read-only source: {{source}}',
+    fields: { editor_fontSize: 'Editor font size', editor_tabSize: 'Tab size', editor_wordWrap: 'Word wrap', files_autoSave: 'Auto save', workbench_colorTheme: 'Color theme' },
+  },
   preview: {
     tabsLabel: 'Tools',
     configTitle: '{{name}} configuration',
@@ -389,6 +395,7 @@ export default {
     addSubmit: 'Add',
   },
   skills: {
+    readOnlySource: 'Read-only source',
     pickProjectFirst: 'Open the project directory on the tools page first.',
     dependencyFirst: 'Check and confirm the Skills environment requirements first.',
     pickDirTitle: 'Choose a directory containing SKILL.md',

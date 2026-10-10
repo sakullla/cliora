@@ -364,7 +364,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
   const [guide, setGuide] = useState(false);
   const [syncLibrary, setSyncLibrary] = useState(false);
   const [external, setExternal] = useState<NativeSkillEntry | null>(null);
-  const [skillDoc, setSkillDoc] = useState<{ path: string; baseline: string; draft: string } | null>(null);
+  const [skillDoc, setSkillDoc] = useState<{ path: string; baseline: string; draft: string; readOnly?: boolean; readOnlyReason?: string | null } | null>(null);
   const [skillLoading, setSkillLoading] = useState(false);
   const skillRequest = useRef(0);
   const [visibleIds, setVisibleIds] = useState<string[]>([]);
@@ -393,7 +393,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
     void (async () => {
       for (let offset = 0; offset < ids.length && live; offset += 50) {
         const chunk = ids.slice(offset, offset + 50);
-        const requests = chunk.map(path => ({ kind: 'native_skill' as const, target: skillTarget, name: nativeEntries.find(entry => entry.path === path)?.name ?? '' }));
+        const requests = chunk.map(path => ({ kind: 'native_skill' as const, target: skillTarget, directory: path, name: nativeEntries.find(entry => entry.path === path)?.name ?? '' }));
         try {
           const results = await readResourceStates(requests, () => live);
           if (!live) return;
@@ -412,6 +412,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
   function skillBatch(ids: string[]) {
     const jobs: BatchJob[] = ids.map(path => {
       const entry = nativeEntries.find(entry => entry.path === path)!;
+      if (entry.readOnly) return { id: path, name: entry.name, run: async () => { throw new Error(entry.readOnlyReason || t('tools.skills.readOnlySource')); } };
       if (!entry.packageId) return { id: path, name: entry.name, run: async () => { throw new Error(stateErrors[path] || t('library.experience.unknown')); } };
       return { id: path, name: entry.name, operation: { action: batchAction === 'remove' ? 'skill_remove' : 'skill_enable', packageId: entry.packageId, target: { ...skillTarget, enabled: batchAction === 'enable' } } };
     });
@@ -554,15 +555,15 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
     const operationFeedback = feedback.begin(JSON.stringify(['openNative', entry.path]));
     const request = ++skillRequest.current;
     setAdding(false);
-    setExternal(entry.packageId ? null : entry);
-    setSelectedId(entry.packageId);
+    setExternal(entry.packageId && !entry.readOnly ? null : entry);
+    setSelectedId(entry.readOnly ? null : entry.packageId);
     setSkillDoc(null);
     setSkillLoading(true);
     setGuide(true);
     try {
       const document = await native.readNativeSkill(toolId, scope, project, entry.path);
       if (skillRequest.current !== request) return;
-      setSkillDoc({ path: entry.path, baseline: document.content, draft: document.content }); operationFeedback.complete();
+      setSkillDoc({ path: entry.path, baseline: document.content, draft: document.content, readOnly: document.readOnly, readOnlyReason: document.readOnlyReason }); operationFeedback.complete();
     } catch (value) {
       if (skillRequest.current === request) operationFeedback.error(errorText(value));
     } finally {
@@ -572,11 +573,11 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
   useEffect(() => {
     if (!guide || !skillDoc) return;
     const entry = nativeEntries.find(entry => entry.path === skillDoc.path);
-    if (entry?.packageId && entry.packageId !== selectedId) { setSelectedId(entry.packageId); setExternal(null); }
+    if (!entry?.readOnly && entry?.packageId && entry.packageId !== selectedId) { setSelectedId(entry.readOnly ? null : entry.packageId); setExternal(null); }
   }, [guide, skillDoc?.path, nativeEntries, selectedId]);
   async function saveSkill() {
     const operationFeedback = feedback.begin(JSON.stringify(['saveSkill', skillDoc?.path]));
-    if (!skillDoc || skillDoc.draft === skillDoc.baseline) return;
+    if (!skillDoc || skillDoc.readOnly || skillDoc.draft === skillDoc.baseline) return;
     const request = skillRequest.current;
     const saved = skillDoc;
     setBusy(true); try {
@@ -656,7 +657,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
 
     <div className={styles.layout}>
     <ResourceList key={feedback.context} context={feedback.context} label={t('library.resources.skillListAria')} addedId={nativeEntries.find(entry => entry.name === addedSkill)?.path}
-      rows={nativeEntries.map(entry => ({ id: entry.path, name: entry.name, description: entry.detail || displayPath(entry.path), search: entry.path, metadata: `${toolId} · ${scope} · ${stateErrors[entry.path] ? t('library.experience.failedState') : entry.state === 'unknown' ? t('library.experience.unknown') : entry.state === 'managed' ? t('tools.skills.stateInstalled') : entry.state === 'external' ? t('tools.skills.stateExternal') : t('tools.skills.stateUnreadable')}`, state: stateErrors[entry.path] ? 'failed' : entry.state }))}
+      rows={nativeEntries.map(entry => ({ id: entry.path, name: entry.name, description: entry.detail || displayPath(entry.path), search: entry.path, metadata: `${toolId} · ${scope} · ${entry.readOnly ? `${t('tools.skills.readOnlySource')} (${entry.source}) · ` : ''}${stateErrors[entry.path] ? t('library.experience.failedState') : entry.state === 'unknown' ? t('library.experience.unknown') : entry.state === 'managed' ? t('tools.skills.stateInstalled') : entry.state === 'external' ? t('tools.skills.stateExternal') : t('tools.skills.stateUnreadable')}`, state: stateErrors[entry.path] ? 'failed' : entry.state }))}
       filters={['managed', 'external', 'unknown', 'failed'].map(value => ({ value, label: value === 'managed' ? t('tools.skills.stateInstalled') : value === 'external' ? t('tools.skills.stateExternal') : t(`library.experience.${value === 'failed' ? 'failedState' : value}`) }))}
       actions={path => <button type="button" onClick={() => { const result = feedback.begin('copy:' + path); void native.readNativeSkill(toolId, scope, project, path).then(async document => { if (!await writeClipboard(document.content)) throw new Error(t('library.experience.copyFailed')); result.success(t('library.page.copied')); }).catch(error => result.error(errorText(error))); }}>{t('library.experience.copy')}</button>}
       onVisible={setVisibleIds} onSelected={setSelectedIds} bulk={skillBatch} onRefresh={() => void refreshSkills().catch(error => feedback.begin('refresh').error(errorText(error)))} onOpen={id => { const entry = nativeEntries.find(entry => entry.path === id); if (entry) void openNative(entry); }} />
@@ -672,7 +673,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
         <label className={styles.urlField}>{t('tools.skills.zipUrl')}<span className={styles.urlRow}><input aria-label={t('tools.skills.zipUrlAria')} value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://example.com/skill.zip" /><button type="button" disabled={busy || !url.trim()} onClick={() => void archive(url.trim(), false)}>{t('tools.skills.importUrl')}</button></span></label>
       </>}
       {!adding && skillLoading && <p className={styles.muted} role="status">{t('tools.skills.loading')}</p>}
-      {!adding && skillDoc && <><p className={styles.muted}>{t('tools.skills.editorNote')}</p><CodeEditor format="markdown" label={t('tools.skills.editorLabel')} documentId={skillDoc.path} value={skillDoc.draft} onChange={(value) => setSkillDoc((current) => current ? { ...current, draft: value } : current)} readOnly={busy} /><button type="button" onClick={() => { const result = feedback.begin('copySkill:' + skillDoc.path); void writeClipboard(skillDoc.draft).then(ok => ok ? result.success(t('library.page.copied')) : result.error(t('library.experience.copyFailed'))); }}>{t('library.experience.copySkill')}</button></>}
+      {!adding && skillDoc && <><p className={styles.muted}>{skillDoc.readOnly ? skillDoc.readOnlyReason || t('tools.skills.readOnlySource') : t('tools.skills.editorNote')}</p><CodeEditor format="markdown" label={t('tools.skills.editorLabel')} documentId={skillDoc.path} value={skillDoc.draft} onChange={(value) => setSkillDoc((current) => current ? { ...current, draft: value } : current)} readOnly={busy || skillDoc.readOnly} /><button type="button" onClick={() => { const result = feedback.begin('copySkill:' + skillDoc.path); void writeClipboard(skillDoc.draft).then(ok => ok ? result.success(t('library.page.copied')) : result.error(t('library.experience.copyFailed'))); }}>{t('library.experience.copySkill')}</button></>}
       <FeedbackRegion context={feedback.context} />
 
       {selected && !adding && <>
@@ -685,7 +686,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
           <div className={styles.actions}><button type="button" onClick={() => setPendingTarget(null)}>{t('common.dialog.cancel')}</button><button type="button" className={styles.primary} disabled={busy} onClick={() => void change(false)}>{pendingTarget.status === 'conflict' ? t('tools.skills.confirmTakeover') : t('tools.skills.confirmInstall')}</button></div>
         </div>}
       </>}
-      {!adding && (skillDoc || selected) && <div className="dialog-footer">{external && <button type="button" disabled={busy} onClick={() => void syncExternal()}>{t('tools.skills.addToLibrary')}</button>}{installed && <button type="button" disabled={busy} onClick={() => void change(true)}>{t('tools.mcp.removeFromTool')}</button>}<span className="dialog-footer-gap" />{installed?.state === 'update_available' && <button type="button" disabled={busy || (scope === 'project' && !project)} onClick={() => void change(false)}>{t('tools.skills.updateToScope')}</button>}<button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint()} disabled={busy || !skillDoc || skillDoc.draft === skillDoc.baseline} onClick={() => void saveSkill()}>{t('tools.skills.save')}</button></div>}
+      {!adding && (skillDoc || selected) && <div className="dialog-footer">{external && <button type="button" disabled={busy} onClick={() => void syncExternal()}>{t('tools.skills.addToLibrary')}</button>}{installed && <button type="button" disabled={busy} onClick={() => void change(true)}>{t('tools.mcp.removeFromTool')}</button>}<span className="dialog-footer-gap" />{installed?.state === 'update_available' && <button type="button" disabled={busy || (scope === 'project' && !project)} onClick={() => void change(false)}>{t('tools.skills.updateToScope')}</button>}<button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint()} disabled={busy || !skillDoc || skillDoc.readOnly || skillDoc.draft === skillDoc.baseline} onClick={() => void saveSkill()}>{t('tools.skills.save')}</button></div>}
       {archiveSelection && <div className={styles.distribution}><label>{t('tools.skills.archiveLabel')}<select aria-label={t('tools.skills.archiveAria')} value={archiveSelection.chosen ?? '__choose__'} onChange={event => setArchiveSelection({ ...archiveSelection, chosen: event.target.value === '__choose__' ? null : event.target.value })}><option value="__choose__">{t('tools.skills.archivePlaceholder')}</option>{archiveSelection.entries.map(entry => <option key={entry} value={entry}>{entry || t('tools.skills.archiveRoot')}</option>)}</select></label><div className={styles.actions}><button type="button" onClick={() => setArchiveSelection(null)}>{t('common.dialog.cancel')}</button><button type="button" disabled={busy || archiveSelection.chosen === null} onClick={() => void archive(archiveSelection.source, archiveSelection.local, archiveSelection.chosen ?? undefined)}>{t('tools.skills.archiveImport')}</button></div></div>}
       {pendingImport && <div className={styles.resultList} role="group" aria-label={t('tools.skills.importLabel')}>
         <strong>{t('tools.skills.importTitle', { name: pendingImport.preview.name })}</strong>

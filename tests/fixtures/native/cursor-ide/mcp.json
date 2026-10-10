@@ -1,0 +1,1 @@
+{"mcpServers":{"stdio-demo":{"command":"node","args":["fixture.mjs"],"env":{"DEMO_TOKEN":"${env:DEMO_TOKEN}"},"envFile":".env.example"},"remote-demo":{"url":"https://example.invalid/mcp","headers":{"Authorization":"Bearer ${env:DEMO_TOKEN}"}}}}

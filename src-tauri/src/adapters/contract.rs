@@ -130,6 +130,14 @@ pub struct NativeCredentialTarget {
     pub remove_paths: Vec<Vec<String>>,
 }
 
+/// Additional adapter-owned Skill roots are discovery-only. Shared services
+/// retain filesystem validation; these roots never become installation targets.
+pub struct SkillReadRoot {
+    pub id: &'static str,
+    pub path: PathBuf,
+    pub reason: &'static str,
+}
+
 pub trait CliAdapter: Sync {
     fn native_credential_target(&self, _scope: Scope) -> Option<NativeCredentialTarget> { None }
     fn portable_field_kind(&self, path: &[String]) -> super::configuration::PortableFieldKind {
@@ -509,6 +517,8 @@ pub trait CliAdapter: Sync {
     fn mcp_disabled_description(&self) -> Option<&'static str> {
         None
     }
+    fn validate_skill_write(&self, _home: &Path) -> Result<(), String> { Ok(()) }
+    fn skill_read_roots(&self, _scope: Scope, _home: &Path, _project: Option<&Path>) -> Vec<SkillReadRoot> { Vec::new() }
     fn skill_root(&self, _scope: Scope, _home: &Path, _project: Option<&Path>) -> Option<PathBuf> {
         None
     }

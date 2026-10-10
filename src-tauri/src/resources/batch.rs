@@ -117,7 +117,7 @@ fn execute(db: &Database, credentials: &dyn CredentialStore, registry: &Registry
 #[serde(tag = "kind", rename_all = "snake_case", rename_all_fields = "camelCase")]
 pub enum StateRequest {
     Skill { package_id: String },
-    NativeSkill { target: McpTargetRequest, name: String },
+    NativeSkill { target: McpTargetRequest, name: String, #[serde(default)] directory: Option<String> },
     Mcp { definition_id: String, target: McpTargetRequest },
 }
 
@@ -127,9 +127,9 @@ pub fn states(db: &Database, registry: &Registry, home: &Path, requests: Vec<Sta
     let mut cached = HashMap::<String, Result<Value, String>>::new();
     Ok(requests.into_iter().enumerate().map(|(index, request)| {
         let result = match request {
-            StateRequest::NativeSkill { target, name } => {
-                let cache_key = serde_json::to_string(&(&target, &name)).unwrap_or_default();
-                cached.entry(format!("native:{cache_key}")).or_insert_with(|| skills::native_state(db, registry, home, &target, &name).and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string()))).clone()
+            StateRequest::NativeSkill { target, name, directory } => {
+                let cache_key = serde_json::to_string(&(&target, &name, &directory)).unwrap_or_default();
+                cached.entry(format!("native:{cache_key}")).or_insert_with(|| skills::native_state(db, registry, home, &target, &name, directory.as_deref()).and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string()))).clone()
             },
             StateRequest::Skill { package_id } => cached.entry(format!("package:{package_id}")).or_insert_with(|| recovery.as_ref().map_err(Clone::clone).and_then(|_| skills::installations_ready(db, registry, home, &package_id)).and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string()))).clone(),
             StateRequest::Mcp { definition_id, target } => (|| {

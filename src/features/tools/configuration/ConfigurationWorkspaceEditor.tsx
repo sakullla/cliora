@@ -397,7 +397,10 @@ export function ConfigurationWorkspaceEditor(props: Props) {
 
   const fieldCount = draft?.descriptor?.fields.length ?? 0;
   const fileCount = draft ? new Set([...workspace.probe.nativeFiles.filter(file => !file.sensitive).map(file => file.role), ...Object.keys(draft.profile.files)]).size : 0;
-  const views = configViews(subject, Boolean(Editor), fieldCount, fileCount);
+  const settingsOnly = Boolean(Editor) && workspace.probe.connectionPolicy?.providerAddress.state === 'unsupported'
+    && apiSourceCapability?.available === false && accountSourceCapability?.available === false
+    && draft?.catalogSupport?.available === false;
+  const views = configViews(subject, Boolean(Editor), fieldCount, fileCount).filter(item => !settingsOnly || item !== 'models');
   const activeView = views.includes(view) ? view : views[0] ?? view;
   useEffect(() => {
     const previous = credentialSource.current;

@@ -21,8 +21,8 @@ fn native_skill_metadata_supports_five_hundred_without_reading_package_contents(
     let matches: Vec<_> = metadata.iter().filter(|entry| entry.detail.contains("off-page semantic needle remains searchable")).collect();
     assert_eq!(matches.len(), 1);
     assert_eq!(matches[0].name, "skill-499");
-    assert!(native_state(&db, &registry, temp.path(), &target, "../outside").is_err());
-    let states = crate::resources::batch::states(&db, &registry, temp.path(), vec![crate::resources::batch::StateRequest::NativeSkill { target, name: "skill-000".into() }]).unwrap();
+    assert!(native_state(&db, &registry, temp.path(), &target, "../outside", None).is_err());
+    let states = crate::resources::batch::states(&db, &registry, temp.path(), vec![crate::resources::batch::StateRequest::NativeSkill { target, name: "skill-000".into(), directory: None }]).unwrap();
     assert_eq!(states[0].status, "failed");
 }
 
