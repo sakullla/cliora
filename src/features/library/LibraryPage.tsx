@@ -167,6 +167,8 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
     setBusy(true);
     try {
       const saved = await native.saveLibraryItem(draft);
+      operationFeedback.identify('save:' + saved.id);
+      operationFeedback.committed(t('library.page.saved'));
       setCountStamp((value) => value + 1);
       const next = edit(saved);
       setDraft(next); setSavedText(JSON.stringify(next));

@@ -1,4 +1,4 @@
-import { FeedbackRegion } from '../../components/Feedback';
+import { useFeedback, FeedbackRegion } from '../../components/Feedback';
 import { notifications } from '../../lib/notifications';
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -98,7 +98,7 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
   })));
   const [launchSettings, setLaunchSettings] = useState<LaunchSettings | null>(null);
   const [conflict, setConflict] = useState<{ toolId: string; toolName: string; profileName: string; comparison: ApplyComparison } | null>(null);
-  const [conflictError, setConflictError] = useState('');
+  const conflictFeedback = useFeedback('home-tool:' + (conflict?.toolId ?? ''));
   const generation = useRef(0);
   const requests = useRef(new Map<string, number>());
   const recheck = useRef<(toolId: string) => void>(() => {});
@@ -164,7 +164,7 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
   }, [tools.map((item) => item.id).join('|')]);
 
   async function launchTool(toolId: string, pickDirectory = false) {
-    const feedback = notifications.begin('home-tool:' + toolId, 'launch');
+    const feedback = notifications.begin('home-tool:' + toolId, 'pickLaunchDirectory');
     const previous = states[toolId];
     if (!previous || previous.busy || acting.current.has(toolId)) return;
     acting.current.add(toolId);
@@ -185,6 +185,7 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
         launchDirectories.set(toolId, picked);
         lastLaunchDirectory = picked;
       }
+      feedback.identify(JSON.stringify(['launch', directory, preferredLaunchMode(launchSettings, 'cli', !!tools.find((item) => item.id === toolId)?.yoloAvailable)]));
       await native.launchCli({ toolId, projectId: null, sessionId: null, mode: preferredLaunchMode(launchSettings, 'cli', !!tools.find((item) => item.id === toolId)?.yoloAvailable), directory });
       const notice = lineNotice('ok', tools.find((item) => item.id === toolId)?.launchForm === 'desktop' ? t('home.tools.launchedDesktop', { name: toolName }) : t('home.tools.launchedCli', { name: toolName }));
       setStates((old) => ({ ...old, [toolId]: settle(previous) }));
@@ -206,7 +207,7 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
   }
 
   async function switchProfile(toolId: string, profileId: string) {
-    const feedback = notifications.begin('home-tool:' + toolId, 'apply');
+    const feedback = notifications.begin('home-tool:' + toolId, JSON.stringify(['apply', profileId]));
     if (!profileId) return;
     const previous = states[toolId];
     if (!previous?.workspace || previous.busy || acting.current.has(toolId)) return;
@@ -235,7 +236,6 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
         try {
           const comparison = await native.compareRegisteredApplication(profileId, 'global', '');
           setConflict({ toolId, toolName, profileName: profile.name, comparison });
-          setConflictError('');
           feedback.complete();
           setStates((old) => ({ ...old, [toolId]: settle(previous) }));
           return;
@@ -258,10 +258,9 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
   async function useComparedFile() {
     if (!conflict) return;
     const { toolId, toolName, comparison } = conflict;
-    const feedback = notifications.begin('home-tool:' + toolId, 'apply');
+    const feedback = conflictFeedback.begin(JSON.stringify(['apply', comparison.profile.id]));
     requests.current.set(toolId, (requests.current.get(toolId) ?? 0) + 1);
     const previous = states[toolId];
-    setConflictError('');
     try {
       await native.applyComparedApplication(comparison, 'global', '');
       setConflict(null);
@@ -276,7 +275,7 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
       });
       feedback.success(notice.text);
     } catch (error) {
-      setConflictError(message(error));
+      feedback.error(message(error));
       if (previous) setStates((old) => ({ ...old, [toolId]: settle(previous) }));
     }
   }
@@ -316,8 +315,8 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
         {line && <div className={styles.note} data-tone={line.tone} role={line.tone === 'error' ? 'alert' : 'status'} title={line.title}>{line.text}</div>}
       </div>;
     })}
-    <GuideDialog open={!!conflict} title={t('home.conflict.title')} hint={conflict ? t('home.conflict.hint', { tool: conflict.toolName, profile: conflict.profileName }) : undefined} onClose={() => { setConflict(null); setConflictError(''); }}>
-      {conflict && <div aria-label={t('home.conflict.label')}>{conflict.comparison.files.map((file, index) => <ConflictCompare key={file.role} title={file.role} banner={index === 0 ? t('home.conflict.banner') : undefined} currentContent={file.current} nextContent={file.proposedText ?? ''} format={file.format} actions={false} onKeepCurrent={() => { setConflict(null); setConflictError(''); }} onUseNext={() => void useComparedFile()} />)}{conflictError && <p role="alert">{conflictError}</p>}<div className="file-conflict-actions"><button type="button" onClick={() => { setConflict(null); setConflictError(''); }}>{t('common.conflict.keepCurrent')}</button><button type="button" onClick={() => void useComparedFile()}>{t('common.conflict.useNext')}</button></div></div>}
+    <GuideDialog open={!!conflict} title={t('home.conflict.title')} hint={conflict ? t('home.conflict.hint', { tool: conflict.toolName, profile: conflict.profileName }) : undefined} onClose={() => { setConflict(null); }}>
+      {conflict && <div aria-label={t('home.conflict.label')}>{conflict.comparison.files.map((file, index) => <ConflictCompare key={file.role} title={file.role} banner={index === 0 ? t('home.conflict.banner') : undefined} currentContent={file.current} nextContent={file.proposedText ?? ''} format={file.format} actions={false} onKeepCurrent={() => { setConflict(null); }} onUseNext={() => void useComparedFile()} />)}<FeedbackRegion context={conflictFeedback.context} /><div className="file-conflict-actions"><button type="button" onClick={() => { setConflict(null); }}>{t('common.conflict.keepCurrent')}</button><button type="button" onClick={() => void useComparedFile()}>{t('common.conflict.useNext')}</button></div></div>}
     </GuideDialog>
   </div>;
 }

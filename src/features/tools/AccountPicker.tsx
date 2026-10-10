@@ -75,8 +75,8 @@ export function AccountPicker({ toolId, selectedAccountId, onSelect, onBack }: A
         return;
       }
       ownedAttempt.current = started.pendingLogin ? { accountId: started.id, attemptId: started.pendingLogin.id, version: started.version } : null;
+      operationFeedback.success(t('tools.accounts.opened'));
       await state.refresh();
-      if (isCurrent(request)) operationFeedback.success(t('tools.accounts.opened'));
     } catch (value) { if (isCurrent(request)) operationFeedback.error(errorText(value)); }
     finally { if (isCurrent(request)) setBusy(false); }
   }
@@ -127,7 +127,7 @@ export function AccountPicker({ toolId, selectedAccountId, onSelect, onBack }: A
 
   async function check(account: AuthAccount) {
     const operationFeedback = feedback.begin('check:' + account.id);
-    const request = ++sequence.current; setBusy(true); try { await native.checkAccount(account.id); await state.refresh(); operationFeedback.complete(); }
+    const request = ++sequence.current; setBusy(true); try { await native.checkAccount(account.id); operationFeedback.complete(); await state.refresh(); }
     catch (value) { if (isCurrent(request)) operationFeedback.error(errorText(value)); }
     finally { if (isCurrent(request)) setBusy(false); }
   }
@@ -136,8 +136,7 @@ export function AccountPicker({ toolId, selectedAccountId, onSelect, onBack }: A
     <header><div><h3>{t('tools.accounts.pickerTitle')}</h3><p>{metadata?.description ?? t('tools.accounts.pickerDefaultDescription')}</p></div><button onClick={() => void cancel(true)}>{t('tools.accounts.back')}</button></header>
     <p>{t('tools.accounts.note')}</p>
     {!nativeAvailable && <p role="alert">{t('tools.accounts.pickerNativeOnly')}</p>}
-    {state.error && <p role="alert">{state.error}</p>}
-    <FeedbackRegion context={feedback.context} />
+    <FeedbackRegion context={feedback.context} relatedContexts={[state.readContext]} />
     {state.loading && <p role="status">{t('tools.accounts.loading')}</p>}
     {!state.loading && !state.accounts.length && <p>{t('tools.accounts.pickerEmpty')}</p>}
     <ul>{state.accounts.map(account => {

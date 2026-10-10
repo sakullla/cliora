@@ -58,6 +58,9 @@ export function LibraryResources({ section, active, tools, projects, createSigna
   const [conflict, setConflict] = useState(false);
   const [formKey, setFormKey] = useState(0);
   const distributeRef = useRef<McpDistributeHandle>(null);
+  const editorGeneration = useRef(0);
+  const saveOperation = useRef<FeedbackOperation | null>(null);
+  useEffect(() => () => { editorGeneration.current++; }, []);
   const [packages, setPackages] = useState<SkillPackage[]>([]);
   const [installations, setInstallations] = useState<SkillInstallation[]>([]);
   const [draft, setDraft] = useState<McpDraft | null>(null);
@@ -91,6 +94,8 @@ export function LibraryResources({ section, active, tools, projects, createSigna
   }, [active, section]);
 
   function editMcp(item?: McpDefinition) {
+    editorGeneration.current++;
+    saveOperation.current = null;
     const next = item ? draftOf(item) : blank();
     setDraft(next);
     setEnvText(item ? lines(item.env) : '');
@@ -242,39 +247,87 @@ export function LibraryResources({ section, active, tools, projects, createSigna
   }
 
   async function save() {
-    const operationFeedback = feedback.begin(JSON.stringify(['save', draft?.id ?? 'new:' + formKey]));
     if (!draft || busy) return;
-    setBusy(true); try {
-      const saved = await native.saveMcpDefinition({ ...draft, args: keptArgs(draft.args), inLibrary: true, env: parseLines(envText), headers: parseLines(headerText) });
-      setDefinitions(await native.listMcpDefinitions());
-      setDraft(draftOf(saved));
-      const alreadyPlaced = placements.some((item) => item.definitionId === saved.id);
-      if (willDistribute || alreadyPlaced) {
-        const outcome = await distributeRef.current?.run(saved);
-        setPlacements(await native.listMcpPlacements().catch(() => []));
-        if (outcome?.status === 'written') { setConflict(false); setDraft(null); operationFeedback.success(outcome.notice); }
-        else if (outcome?.status === 'pending') { setConflict(true); operationFeedback.partial(t('library.resources.saved'), { detail: t('library.resources.savedNotDistributed') }); }
-        else {
-          setConflict(false);
-          operationFeedback.partial(t('library.resources.saved'), { detail: outcome?.status === 'failed' ? outcome.message : t('library.resources.savedNotDistributed') });
+    const operationFeedback = feedback.begin(JSON.stringify(['save', draft.id ?? 'new:' + formKey]));
+    saveOperation.current = operationFeedback;
+    const generation = editorGeneration.current;
+    const current = () => editorGeneration.current === generation;
+    const distribution = distributeRef.current;
+    const distribute = willDistribute || placements.some(item => item.definitionId === draft.id);
+    let saved: McpDefinition | null = null;
+    let writtenNotice: string | null = null;
+    async function finish(result: FeedbackOperation) {
+      if (!saved) return;
+      const items = await native.listMcpDefinitions();
+      if (!current()) { reportLate(result); return; }
+      setDefinitions(items);
+      if (distribute && !writtenNotice) {
+        const outcome = await distribution?.run(saved);
+        if (outcome?.status === 'written') writtenNotice = outcome.notice;
+        if (!current()) { reportLate(result); return; }
+        if (!writtenNotice) {
+          setConflict(outcome?.status === 'pending');
+          result.partial(t('library.resources.saved'), { detail: outcome?.status === 'failed' ? outcome.message : t('library.resources.savedNotDistributed') });
+          return;
         }
-      } else {
-        setPlacements(await native.listMcpPlacements().catch(() => []));
-        setDraft(null);
-        operationFeedback.success(t('library.resources.saved'));
       }
-      } catch (value) { operationFeedback.error(failure(value)); }
+      if (writtenNotice) {
+        result.committed(writtenNotice);
+        const placed = await native.listMcpPlacements();
+        if (!current()) { reportLate(result); return; }
+        setPlacements(placed);
+      }
+      setConflict(false); setDraft(null); result.success(writtenNotice ?? t('library.resources.saved'));
+    }
+    function reportLate(result: FeedbackOperation) {
+      if (distribute && !writtenNotice) result.partial(t('library.resources.saved'), { detail: t('library.resources.savedNotDistributed') });
+      else result.success(writtenNotice ?? t('library.resources.saved'));
+    }
+    function reportFailure(result: FeedbackOperation, value: unknown) {
+      result.error(failure(value), saved ? { recovery: {
+        label: t('common.feedback.retry'), valid: current,
+        run: async () => {
+          if (!current()) return;
+          const retry = feedback.resume(result); saveOperation.current = retry;
+          retry.committed(writtenNotice ?? t('library.resources.saved'));
+          setBusy(true);
+          try { await finish(retry); } catch (error) { reportFailure(retry, error); }
+          finally { setBusy(false); }
+        },
+      } } : undefined);
+    }
+    setBusy(true);
+    try {
+      saved = await native.saveMcpDefinition({ ...draft, args: keptArgs(draft.args), inLibrary: true, env: parseLines(envText), headers: parseLines(headerText) });
+      operationFeedback.identify(JSON.stringify(['save', saved.id]));
+      operationFeedback.committed(t('library.resources.saved'));
+      if (!current()) { reportLate(operationFeedback); return; }
+      const accepted = saved;
+      setDraft(draftOf(accepted));
+      setDefinitions(items => items.some(item => item.id === accepted.id) ? items.map(item => item.id === accepted.id ? accepted : item) : [accepted, ...items]);
+      await finish(operationFeedback);
+    } catch (value) { reportFailure(operationFeedback, value); }
     finally { setBusy(false); }
   }
 
   async function replaceDistribution() {
-    const operationFeedback = feedback.begin(JSON.stringify(['save', draft?.id]));
-    if (busy) return;
-    setBusy(true); try {
-      const outcome = await distributeRef.current?.commit();
-      setPlacements(await native.listMcpPlacements().catch(() => []));
-      if (outcome?.status === 'written') { setConflict(false); setDraft(null); operationFeedback.success(outcome.notice); }
-      else if (outcome?.status === 'failed') operationFeedback.partial(t('library.resources.saved'), { detail: outcome.message });
+    if (busy || !draft) return;
+    const operationFeedback = saveOperation.current ? feedback.resume(saveOperation.current) : feedback.begin(JSON.stringify(['save', draft.id]));
+    saveOperation.current = operationFeedback;
+    operationFeedback.committed(t('library.resources.saved'));
+    const generation = editorGeneration.current;
+    const distribution = distributeRef.current;
+    setBusy(true);
+    try {
+      const outcome = await distribution?.commit();
+      if (outcome?.status === 'written') {
+        operationFeedback.committed(outcome.notice);
+        operationFeedback.success(outcome.notice);
+        if (editorGeneration.current !== generation) return;
+        const placed = await native.listMcpPlacements();
+        if (editorGeneration.current !== generation) return;
+        setPlacements(placed); setConflict(false); setDraft(null);
+      } else if (outcome?.status === 'failed') operationFeedback.error(outcome.message);
     } catch (value) { operationFeedback.error(failure(value)); }
     finally { setBusy(false); }
   }
@@ -422,7 +475,7 @@ export function LibraryResources({ section, active, tools, projects, createSigna
         ? <div className={styles.empty}><Icon name="search" size={28} strokeWidth={1.3} />{t('library.resources.noMcpMatch', { query: search.trim() })}</div>
         : <div className={styles.empty}><Icon name="connections" size={28} strokeWidth={1.3} /><strong>{t('library.resources.emptyMcpTitle')}</strong>{t('library.resources.emptyMcpDetail')}<button type="button" onClick={() => editMcp()}><Icon name="plus" size={14} strokeWidth={2.2} />{t('library.resources.emptyMcpCreate')}</button></div>}
     </div>
-    <GuideDialog open={!!draft} title={draft?.id ? t('tools.mcp.editTitle') : t('library.resources.newMcpTitle')} hint={t('library.resources.mcpDialogHint')} onClose={() => { setDraft(null); setConflict(false); }}>
+    <GuideDialog open={!!draft} title={draft?.id ? t('tools.mcp.editTitle') : t('library.resources.newMcpTitle')} hint={t('library.resources.mcpDialogHint')} onClose={() => { editorGeneration.current++; setDraft(null); setConflict(false); }}>
       {draft && <>
         <div className={styles.fields}>
           <label className={styles.span}>{t('tools.mcp.name')}<input aria-label={t('tools.mcp.nameAria')} value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder={t('tools.mcp.namePlaceholder')} /></label>

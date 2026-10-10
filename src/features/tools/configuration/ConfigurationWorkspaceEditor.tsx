@@ -307,6 +307,7 @@ export function ConfigurationWorkspaceEditor(props: Props) {
     setBusy(true); try {
       await flushSecret(); if (!alive.current || owner !== session.current || !owner.canSubmit) return;
       const result = await saveConfigurationDraft(owner.draft);
+      operationFeedback.committed(t('tools.config.savedKept'));
       if (!alive.current || owner !== session.current) return;
       if (!owner.acceptSaved(result.draft)) return; acceptApiCredential(owner.draft); setDraft(owner.draft); setRawInputs(owner.draft.profile.files);
       baseline.current = JSON.stringify(owner.draft.profile); baselineRevision.current = owner.draft.revision; setSaved(result); latest.current.onStored(result); updateValidity();
@@ -367,9 +368,27 @@ export function ConfigurationWorkspaceEditor(props: Props) {
     finally { if (alive.current) setBusy(false); }
   }
 
+  async function retryScope(scopeKey: string) {
+    const target = influence?.targets.find(item => item.scopeKey === scopeKey);
+    if (!target || !saved?.common || busy) return;
+    const result = feedback.begin('save');
+    setBusy(true);
+    try {
+      const next = await applyCommonConfiguration(saved.common, [target]);
+      const outcomes = applications.map(old => old.scopeKey === scopeKey ? next[0] ?? old : old);
+      setApplications(outcomes);
+      const failed = outcomes.filter(item => item.status === 'failed');
+      if (failed.length) result.partial(t('tools.config.commonPartial'), { detail: failed.map(item => item.detail).join(' · ') });
+      else result.success(t('tools.config.savedUsed'));
+    } catch (failure) {
+      result.partial(t('tools.config.commonPartial'), { detail: [...applications.filter(item => item.status === 'failed' && item.scopeKey !== scopeKey).map(item => item.detail), messageOf(failure)].join(' · ') });
+    } finally { if (alive.current) setBusy(false); }
+  }
+
   async function applyComparison() {
-    const operationFeedback = feedback.begin('applyComparison');
+    const operationFeedback = feedback.begin('save');
     if (!comparison) return;
+    operationFeedback.committed(t('tools.config.savedNotUsed'));
     setBusy(true);
     try { await native.applyComparedApplication(comparison, scope, projectPath); if (alive.current) { setComparison(null); operationFeedback.success(t('tools.workspace.appliedShort')); } }
     catch (failure) { if (alive.current) operationFeedback.error(messageOf(failure)); }
@@ -508,7 +527,7 @@ export function ConfigurationWorkspaceEditor(props: Props) {
         {activeView === 'models' && subject !== 'common' && directory && draft.catalogSupport?.multiple !== true && <p role="status" className={styles.hint}>{t('tools.config.directoryFetched', { count: directory.models.length, synced: Editor ? t('tools.config.dirSynced') : t('tools.config.dirAvailable') })}</p>}
         {activeView === 'models' && subject !== 'common' && <details className={styles.diagnostics}><summary>{Editor && draft.catalogSupport?.multiple !== true ? t('tools.config.diagConnection') : t('tools.config.diagCatalog')}</summary><div className={styles.buttons}>{!(Editor && draft.catalogSupport?.multiple !== true) && <button className={sharedStyles.accent} disabled={querying || pending || !draft.catalogSupport?.available} onClick={() => void query('directory')}>{t('common.field.fetchCatalog')}</button>}<button disabled={querying || pending || !connection} onClick={() => void query('check')}>{t('tools.config.checkConnection')}</button><button disabled={!querying || pending || cancelling} onClick={() => void cancelRequests()}>{cancelling ? t('tools.config.cancellingRequests') : t('tools.config.cancelRequests')}</button></div>{draft.catalogSupport?.reason && <p className={styles.hint}>{draft.catalogSupport.reason}{t('tools.config.catalogReasonSuffix')}</p>}<details><summary>{t('tools.config.moreDiagnostics')}</summary><button disabled={querying || pending || !connection} onClick={() => void query('check', true)}>{t('tools.config.sendMinimal')}</button></details>{check && <div role="status"><p className={styles.hint}>{check.format.message}</p><p className={styles.hint}>{check.connectivity.message}</p><p className={styles.hint}>{check.modelRequest.message}</p></div>}</details>}
         {subject === 'profile' && <details className={sharedStyles.disclosureCard}><summary>{t('tools.config.inheritSummary')}</summary><label><input type="checkbox" disabled={busy || pending || cancelling} checked={draft.profile.inheritCommon} onChange={event => metadata({ inheritCommon: event.target.checked })} />{t('tools.config.inheritCommon')}</label></details>}
-        {subject === 'common' && <section aria-label={t('tools.config.influenceLabel')} className={styles.influence}><div className={styles.influenceHead}><strong>{t('tools.config.influenceTitle')}{influence && <span className="count-chip">{influence.targets.length}</span>}</strong><button disabled={busy || cancelling} onClick={() => { const result = feedback.begin('influence'); void commonInfluence(toolId).then(value => { if (alive.current) { setInfluence(value); result.complete(); } }).catch(failure => result.error(messageOf(failure))); }}>{t('tools.config.influenceRefresh')}</button></div>{influence?.targets.length ? <ul>{influence.targets.map(target => <li key={target.scopeKey}>{t('tools.config.influenceEntry', { profile: target.profileName, scope: target.scope === 'global' ? t('tools.apply.global') : target.projectPath, version: target.appliedVersion })}</li>)}</ul> : <p>{t('tools.config.influenceEmpty')}</p>}{applications.map(item => <p key={item.scopeKey} role={item.status === 'failed' ? 'alert' : 'status'}>{applyScopeCopy(item.scopeKey, influence?.targets ?? [])} · {applyStatusCopy(item.status, item.detail)}{item.status === 'failed' && saved?.common && <button onClick={() => { const result = feedback.begin('retryScope:' + item.scopeKey); const target = influence?.targets.find(target => target.scopeKey === item.scopeKey); if (target) void applyCommonConfiguration(saved.common!, [target]).then(next => { setApplications(previous => previous.map(old => old.scopeKey === item.scopeKey ? next[0] : old)); result.complete(); }).catch(failure => result.error(messageOf(failure))); }}>{t('tools.config.retryScope')}</button>}</p>)}</section>}
+        {subject === 'common' && <section aria-label={t('tools.config.influenceLabel')} className={styles.influence}><div className={styles.influenceHead}><strong>{t('tools.config.influenceTitle')}{influence && <span className="count-chip">{influence.targets.length}</span>}</strong><button disabled={busy || cancelling} onClick={() => { const result = feedback.begin('influence'); void commonInfluence(toolId).then(value => { if (alive.current) { setInfluence(value); result.complete(); } }).catch(failure => result.error(messageOf(failure))); }}>{t('tools.config.influenceRefresh')}</button></div>{influence?.targets.length ? <ul>{influence.targets.map(target => <li key={target.scopeKey}>{t('tools.config.influenceEntry', { profile: target.profileName, scope: target.scope === 'global' ? t('tools.apply.global') : target.projectPath, version: target.appliedVersion })}</li>)}</ul> : <p>{t('tools.config.influenceEmpty')}</p>}{applications.map(item => <p key={item.scopeKey} role={item.status === 'failed' ? 'alert' : 'status'}>{applyScopeCopy(item.scopeKey, influence?.targets ?? [])} · {applyStatusCopy(item.status, item.detail)}{item.status === 'failed' && saved?.common && <button disabled={busy} onClick={() => void retryScope(item.scopeKey)}>{t('tools.config.retryScope')}</button>}</p>)}</section>}
         {subject === 'current' && <details className={sharedStyles.disclosureCard}><summary>{t('tools.config.restoreSummary')}</summary><button disabled={pending || busy} onClick={() => void compareCurrent()}>{t('tools.config.recompare')}</button><button disabled={pending || busy} onClick={() => void showHistory()}>{t('tools.config.historyButton')}</button></details>}
         {comparison && <section aria-label={t('tools.config.conflictLabel')}>{comparison.files.map((file, index) => <ConflictCompare key={file.role} title={file.role} banner={index === 0 ? t('tools.config.conflictBanner') : undefined} actions={false} currentContent={file.current} nextContent={file.proposedText} format={file.format} busy={busy || cancelling} onUseNext={() => void applyComparison()} onKeepCurrent={() => setComparison(null)} />)}<div className={styles.buttons}><button disabled={busy || cancelling} onClick={() => void applyComparison()}>{t('common.conflict.useNext')}</button><button onClick={() => setComparison(null)}>{t('common.conflict.keepCurrent')}</button></div></section>}
       </div>
