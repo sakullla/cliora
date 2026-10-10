@@ -42,17 +42,18 @@ export function useAccounts(tool: string, active = true) {
   const request = useRef(0);
   const [accounts, setAccounts] = useState<AuthAccount[]>([]);
   const [capability, setCapability] = useState<AccountCapability | null>(null);
-  const [error, setError] = useState('');
+  const readFeedback = useFeedback(JSON.stringify(['accounts-read', tool]));
   const [loading, setLoading] = useState(true);
   const refresh = async () => {
     const scope = generation.current; const currentRequest = ++request.current;
+    const result = readFeedback.begin('refresh');
     try {
       const [all, caps] = await Promise.all([native.listAccounts(), native.accountCapabilities()]);
-      if (mounted.current && generation.current === scope && request.current === currentRequest && currentTool.current === tool) { const matching = all.filter(account => account.toolId === tool); setAccounts(matching); setError(''); setCapability(caps.find(cap => cap.toolId === tool) ?? null); return matching; }
+      if (mounted.current && generation.current === scope && request.current === currentRequest && currentTool.current === tool) { const matching = all.filter(account => account.toolId === tool); setAccounts(matching); result.complete(); setCapability(caps.find(cap => cap.toolId === tool) ?? null); return matching; }
       return null;
     } catch (value) {
-      if (mounted.current && generation.current === scope && request.current === currentRequest && currentTool.current === tool) setError(value && typeof value === 'object' && 'message' in value ? String(value.message) : i18n.t('tools.accounts.readFailed'));
-      throw value;
+      if (mounted.current && generation.current === scope && request.current === currentRequest && currentTool.current === tool) result.error(value && typeof value === 'object' && 'message' in value ? String(value.message) : i18n.t('tools.accounts.readFailed'));
+      return null;
     }
   };
   useEffect(() => {
@@ -62,7 +63,7 @@ export function useAccounts(tool: string, active = true) {
     void read(); const timer = window.setInterval(() => void read(), 2500);
     return () => { mounted.current = false; generation.current++; window.clearInterval(timer); };
   }, [tool, active]);
-  return { accounts, capability, error, refresh, loading };
+  return { accounts, capability, readContext: readFeedback.context, refresh, loading };
 }
 type AccountNavigation = {
   onOpenProfile?: (profileId: string, target?: AccountImpactScope) => void;
@@ -162,7 +163,7 @@ export function AccountsPanel({ toolId, state, onOpenProfile, onOpenUsage }: { t
     if (nativeAvailable) void discover();
     return () => { discoverySequence.current++; };
   }, [toolId]);
-  async function run(operation: string, work: () => Promise<unknown>, notice: string) { const result = feedback.begin(operation); setBusy(true); try { const outcome = await work(); if (outcome === false || !live.current || currentTool.current !== toolId) return; await state.refresh(); if (live.current && currentTool.current === toolId) result.success(notice); } catch (value) { if (!live.current || currentTool.current !== toolId) return; result.error(value && typeof value === 'object' && 'message' in value ? String(value.message) : t('tools.accounts.actionFailed')); } finally { if (live.current && currentTool.current === toolId) setBusy(false); } }
+  async function run(operation: string, work: () => Promise<unknown>, notice: string) { const result = feedback.begin(operation); setBusy(true); try { const outcome = await work(); if (outcome === false || !live.current || currentTool.current !== toolId) return; result.success(notice); await state.refresh(); } catch (value) { if (!live.current || currentTool.current !== toolId) return; result.error(value && typeof value === 'object' && 'message' in value ? String(value.message) : t('tools.accounts.actionFailed')); } finally { if (live.current && currentTool.current === toolId) setBusy(false); } }
   return <section className={styles.panel} aria-label={t('tools.accounts.label')}>
     <div className={styles.header}><div><h2>{t('tools.accounts.title')}</h2><p>{metadata?.description ?? t('tools.accounts.defaultDescription')}</p></div>{state.capability?.managedLogin && <button className={styles.primary} onClick={() => setCreating(value => !value)}>{creating ? t('tools.accounts.collapseAdd') : t('tools.accounts.add')}</button>}</div>
     {!nativeAvailable && <p role="alert">{t('tools.accounts.nativeOnly')}</p>}
@@ -178,7 +179,7 @@ export function AccountsPanel({ toolId, state, onOpenProfile, onOpenUsage }: { t
       <button className={styles.primary} disabled={busy || !nativeAvailable || !label.trim() || !state.capability?.managedLogin || !state.capability.methods.length} onClick={() => void run('create:' + label, async () => { const account = await native.createAccount(toolId, label.trim()); if (!live.current || currentTool.current !== toolId) return; await native.startAccountLogin(account.id, account.version, state.capability!.methods.includes(method) ? method : state.capability!.methods[0]); }, t('tools.accounts.loginRequested'))}>{t('tools.accounts.addAndLogin')}</button>
       {state.capability?.importNative && <button disabled={busy || !nativeAvailable || !label.trim()} onClick={() => void run('adopt:' + label, () => native.adoptNativeAccount(toolId, label), t('tools.accounts.adopted'))}>{t('tools.accounts.adopt')}</button>}
     </div>}
-    {state.error && <p role="alert">{state.error}</p>}<FeedbackRegion context={feedback.context} />
+    <FeedbackRegion context={feedback.context} relatedContexts={[state.readContext]} />
     <div className={styles.sectionTitle}><h3>{t('tools.accounts.managedTitle')}</h3><span>{t('tools.accounts.count', { count: state.accounts.length })}</span></div>
     {state.loading ? <SkeletonRows count={2} /> : state.accounts.length === 0 && <p className={styles.empty}>{state.capability?.managedLogin ? t('tools.accounts.emptyManaged') : t('tools.accounts.emptyReadonly')}</p>}
     <ul className={styles.list}>{state.accounts.map(account => <li key={account.id}>

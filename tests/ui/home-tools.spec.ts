@@ -171,10 +171,10 @@ test('the launch directory is remembered, and right-click picks another', async 
   const launch = tools.getByRole('button', { name: '启动', exact: true });
   await launch.click();
   await page.evaluate(() => (window as unknown as { __resolveDialog: (value: string | null) => void }).__resolveDialog('C:/work'));
-  await expect(tools.getByRole('status')).toHaveText('Codex 已向外部终端发出请求。');
+  await expect(tools.getByRole('status').first()).toHaveText('Codex 已向外部终端发出请求。');
 
   await launch.click();
-  await expect(tools.getByRole('status')).toHaveText('Codex 已向外部终端发出请求。');
+  await expect(tools.getByRole('status').first()).toHaveText('Codex 已向外部终端发出请求。');
   expect(await page.evaluate(() => (window as unknown as { __launchRequests: Array<Record<string, unknown>> }).__launchRequests)).toEqual([
     { toolId: 'codex', projectId: null, sessionId: null, mode: 'normal', directory: 'C:/work' },
     { toolId: 'codex', projectId: null, sessionId: null, mode: 'normal', directory: 'C:/work' },
@@ -182,7 +182,7 @@ test('the launch directory is remembered, and right-click picks another', async 
 
   await launch.click({ button: 'right' });
   await page.evaluate(() => (window as unknown as { __resolveDialog: (value: string | null) => void }).__resolveDialog('D:/else'));
-  await expect(tools.getByRole('status')).toHaveText('Codex 已向外部终端发出请求。');
+  await expect(tools.getByRole('status').first()).toHaveText('Codex 已向外部终端发出请求。');
   let requests = await page.evaluate(() => (window as unknown as { __launchRequests: Array<Record<string, unknown>> }).__launchRequests);
   expect(requests).toHaveLength(3);
   expect(requests[2]).toEqual({ toolId: 'codex', projectId: null, sessionId: null, mode: 'normal', directory: 'D:/else' });
@@ -195,7 +195,7 @@ test('the launch directory is remembered, and right-click picks another', async 
   await menu.getByRole('menuitem', { name: '选择其他目录…' }).click();
   await expect(menu).toHaveCount(0);
   await page.evaluate(() => (window as unknown as { __resolveDialog: (value: string | null) => void }).__resolveDialog('E:/menu'));
-  await expect(tools.getByRole('status')).toHaveText('Codex 已向外部终端发出请求。');
+  await expect(tools.getByRole('status').first()).toHaveText('Codex 已向外部终端发出请求。');
   requests = await page.evaluate(() => (window as unknown as { __launchRequests: Array<Record<string, unknown>> }).__launchRequests);
   expect(requests).toHaveLength(4);
   expect(requests[3]).toEqual({ toolId: 'codex', projectId: null, sessionId: null, mode: 'normal', directory: 'E:/menu' });
@@ -238,7 +238,7 @@ test('applying a profile reports the native write, and failure keeps the previou
 
   await page.evaluate(() => (window as unknown as { __holdNextApply: () => void }).__holdNextApply());
   await daily.click();
-  await expect(tools.getByRole('status')).toHaveText('正在应用 Codex 的配置。');
+  await expect(tools.getByRole('status').filter({ hasText: '正在应用 Codex 的配置。' })).toBeVisible();
   await expect(tools.getByRole('alert')).toHaveCount(0);
   await expect(work).toHaveAttribute('aria-checked', 'true');
   await page.evaluate(() => (window as unknown as { __resolveApply: (ok: boolean) => void }).__resolveApply(false));
@@ -247,14 +247,16 @@ test('applying a profile reports the native write, and failure keeps the previou
   await expect(alert).toContainText('未切换');
   await expect(alert).toContainText('写入被拒绝');
   await oneLine(alert);
-  await expect(tools.getByRole('status')).toHaveCount(0);
-  await expect(tools).not.toContainText('已写入原生文件');
+  const failedEvent = alert.locator('..');
+  const failedId = await failedEvent.getAttribute('data-feedback-id');
+  await expect(tools.getByRole('status').filter({ hasText: '正在应用' })).toHaveCount(0);
+  await expect(tools.getByRole('status').filter({ hasText: '已写入原生文件' })).toBeVisible();
   await expect(work).toHaveAttribute('aria-checked', 'true');
   await expect(daily).toHaveAttribute('aria-checked', 'false');
   await expect(group).toBeVisible();
 
   await daily.click();
-  await expect(tools.getByRole('status')).toHaveText('Codex 已写入原生文件，下次启动读取。');
+  await expect(tools.locator(`[data-feedback-id="${failedId}"]`)).toHaveAttribute('data-tone', 'success');
   await expect(tools.getByRole('alert')).toHaveCount(0);
   await expect(daily).toHaveAttribute('aria-checked', 'true');
   const calls = await page.evaluate(() => (window as unknown as { __applyCalls: Array<Record<string, unknown>> }).__applyCalls);

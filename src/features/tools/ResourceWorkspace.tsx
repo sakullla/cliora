@@ -122,38 +122,70 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
     setDraft(next); setEnvText(''); setHeaderText(''); setEnabled(true); setNativeOrigin(null); setCurrentConflict(null);
     setSavedFingerprint(JSON.stringify([next, '', '', true])); setComposing(false);
   }
-  async function applyItems(id: string, items: McpTargetResult[], replace: boolean, operationFeedback = feedback.begin('save:' + id)) {
+  async function applyItems(id: string, items: McpTargetResult[], replace: boolean, operationFeedback = feedback.begin('save:' + id), current = () => mounted.current) {
     const targets = items.filter(item => item.status === 'ready' || item.status === 'conflict').map((item): McpTargetRequest => ({ toolId: item.toolId, scope: item.scope,
       projectPath: item.projectPath, contextId: item.contextId ?? contextId, enabled, baselineHash: item.baselineHash, previewToken: item.previewToken, allowReplace: replace && item.status === 'conflict' }));
     const outcome = await native.distributeMcp(id, targets);
-    setNativeEntries(await native.listNativeMcp(target)); setCurrentConflict(null);
     const written = outcome.every(item => item.status === 'written');
     if (written) operationFeedback.success(t('tools.mcp.written'));
     else operationFeedback.partial(t('tools.mcp.partialFailed'), { detail: outcome.filter(item => item.status !== 'written').map(item => item.detail).join(' · ') });
+    if (written) operationFeedback.committed(t('tools.mcp.written'));
+    try { const entries = await native.listNativeMcp(target); if (current()) { setNativeEntries(entries); setCurrentConflict(null); } }
+    catch (value) { operationFeedback.error(errorText(value), { recovery: { label: t('common.feedback.retry'), valid: current, run: async () => {
+      const retry = feedback.resume(operationFeedback); if (written) retry.committed(t('tools.mcp.written'));
+      try { const entries = await native.listNativeMcp(target); if (current()) setNativeEntries(entries); if (written) retry.success(t('tools.mcp.written')); else retry.partial(t('tools.mcp.partialFailed'), { detail: outcome.filter(item => item.status !== 'written').map(item => item.detail).join(' · ') }); }
+      catch (error) { retry.error(errorText(error)); }
+    } } }); return false; }
     return written;
   }
   async function save() {
     const operationFeedback = feedback.begin('save:' + (draft.id ?? draft.name));
     if (scope === 'project' && !project) { operationFeedback.error(t('tools.mcp.pickProject')); return; }
-    const origin = nativeOrigin; const started = latestForm.current;
+    const origin = nativeOrigin; let acceptedForm = latestForm.current;
+    const current = () => mounted.current && acceptedForm === latestForm.current;
     const editing = !!(draft.id || nativeOrigin);
     const linked = definitions.find((item) => item.id === draft.id) ?? definitions.find((item) => item.name === draft.name.trim());
     const inLibrary = editing ? linked?.inLibrary !== false : syncLibrary || linked?.inLibrary === true;
-    setBusy(true); try {
-      const saved = await native.saveMcpDefinition({ ...draft, args: keptArgs(draft.args), id: linked?.id ?? draft.id, expectedVersion: linked?.version ?? draft.expectedVersion, inLibrary, env: parseLines(envText), headers: parseLines(headerText) });
-      setDefinitions(await native.listMcpDefinitions());
-      if (!mounted.current || started !== latestForm.current) { operationFeedback.success(t('tools.mcp.dirtyAgain')); return; }
-      select(saved,enabled);
-      const savedForm=JSON.stringify([draftOf(saved),lines(saved.env),lines(saved.headers),enabled]);
+    let saved: McpDefinition | null = null;
+    async function finish(result: FeedbackOperation) {
+      if (!saved) return;
+      const definitions = await native.listMcpDefinitions();
+      if (!current()) { result.partial(t('tools.mcp.savedKeepEditing')); return; }
+      setDefinitions(definitions);
       const items = await native.previewMcpTargets(saved.id, [target]);
+      if (!current()) { result.partial(t('tools.mcp.savedKeepEditing')); return; }
       const fresh = origin ? await native.listNativeMcp(target) : [];
-      if (!mounted.current || savedForm!==latestForm.current) {operationFeedback.success(t('tools.mcp.savedKeepEditing'));return;}
+      if (!current()) { result.partial(t('tools.mcp.savedKeepEditing')); return; }
       const sameOrigin = !!origin && JSON.stringify(fresh.find(item => item.name === origin.name)) === JSON.stringify(origin);
-      if (items.some(item => item.status === 'conflict') && !sameOrigin) { setCurrentConflict({ id: saved.id, items }); return; }
-      if (!items.some(item => item.status === 'ready' || item.status === 'conflict')) { operationFeedback.error(items.map(item => item.detail).join(t('tools.quota.errorSeparator'))); return; }
-      if (await applyItems(saved.id, items, sameOrigin, operationFeedback)) leaveComposer();
-    } catch (value) { operationFeedback.error(errorText(value)); }
-    finally { setBusy(false); }
+      if (items.some(item => item.status === 'conflict') && !sameOrigin) {
+        setCurrentConflict({ id: saved.id, items }); result.partial(t('tools.mcp.savedKeepEditing')); return;
+      }
+      if (!items.some(item => item.status === 'ready' || item.status === 'conflict')) { result.error(items.map(item => item.detail).join(t('tools.quota.errorSeparator'))); return; }
+      if (await applyItems(saved.id, items, sameOrigin, result, current) && current()) leaveComposer();
+    }
+    function reportFailure(result: FeedbackOperation, value: unknown) {
+      result.error(errorText(value), saved ? { recovery: {
+        label: t('common.feedback.retry'), valid: current,
+        run: async () => {
+          if (!current()) return;
+          const retry = feedback.resume(result); retry.committed(t('tools.mcp.savedKeepEditing')); setBusy(true);
+          try { await finish(retry); } catch (error) { reportFailure(retry, error); }
+          finally { if (mounted.current) setBusy(false); }
+        },
+      } } : undefined);
+    }
+    setBusy(true); try {
+      saved = await native.saveMcpDefinition({ ...draft, args: keptArgs(draft.args), id: linked?.id ?? draft.id, expectedVersion: linked?.version ?? draft.expectedVersion, inLibrary, env: parseLines(envText), headers: parseLines(headerText) });
+      operationFeedback.identify('save:' + saved.id);
+      operationFeedback.committed(t('tools.mcp.savedKeepEditing'));
+      if (!current()) { operationFeedback.partial(t('tools.mcp.dirtyAgain')); return; }
+      const accepted = saved;
+      select(accepted, enabled);
+      acceptedForm = latestForm.current;
+      setDefinitions(items => items.some(item => item.id === accepted.id) ? items.map(item => item.id === accepted.id ? accepted : item) : [accepted, ...items]);
+      await finish(operationFeedback);
+    } catch (value) { reportFailure(operationFeedback, value); }
+    finally { if (mounted.current) setBusy(false); }
   }
   async function removeSaved() {
     const operationFeedback = feedback.begin('removeSaved:' + (draft.id ?? draft.name));

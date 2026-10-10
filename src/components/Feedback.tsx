@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
-import { notifications, type FeedbackEvent } from '../lib/notifications';
+import { notifications, type FeedbackEvent, type FeedbackOperation } from '../lib/notifications';
 import { Icon } from './Icon';
 
 const regions = new Map<string, { contexts: string[]; node: HTMLElement }>();
@@ -28,7 +28,7 @@ export function useFeedback(context: string) {
   const scoped = events.filter((event) => event.context === context);
   const latest = (tone: 'error' | 'success') => [...scoped].reverse().find((event) => event.tone === tone);
   const begin = (operation: string) => notifications.begin(context, operation, surface());
-  return { context, begin, events: scoped,
+  return { context, begin, resume: (operation: FeedbackOperation) => operation.retry(surface()), events: scoped,
     error: latest('error')?.text ?? '', notice: latest('success')?.text ?? '',
     dismiss: (id: number) => notifications.dismiss(id),
   };

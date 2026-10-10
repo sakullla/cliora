@@ -10,7 +10,7 @@ async function install(page: Page, seed: Record<string, boolean> = {}) {
     const codex = { id: 'codex', name: 'Codex', interfaceFormats: [], projectModelOverride: false, yoloAvailable: true, nativeConfig: facet, launch: facet, resume: facet, resources: facet, history: facet };
     const bootstrap = () => ({ preferences: { schema_version: 1, managed_tools: ['codex'], theme, tool_icons: {} }, tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }] });
     const launchSettings = () => ({ selected: 'auto', terminals: [{ id: 'auto', label: '系统默认', available: true }, { id: 'windows_terminal', label: 'Windows Terminal', available: true }], cliMode: 'normal', projectMode: 'normal' });
-    const workspace = { probe: { selectedPath: 'C:/codex.cmd', installations: [{ path: 'C:/codex.cmd', version: '1.0.0', status: 'available' }], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' } }, profiles: [], binding: null, snapshots: [], recoveryNeeded: [], common: null, customPath: null };
+    const workspace = { probe: { selectedPath: 'C:/codex.cmd', installations: [{ path: 'C:/codex.cmd', version: '1.0.0', status: 'available' }], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' } }, profiles: [], binding: null, snapshots: [], recoveryNeeded: [], common: null, customPath: null, effectiveContextId: null };
     const session = { id: 'record-a', toolId: 'codex', nativeId: '1111', title: 'Review change', cwd: 'C:\\project', model: 'gpt', projectId: null, startedAt: 1, updatedAt: 1, favorite: false, partial: false, stale: false, messageCount: 1, usageCount: 0 };
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async () => { if (control.copyDelay) await new Promise(resolve => setTimeout(resolve, control.copyDelay)); if (control.copyFails) throw new Error('clipboard denied'); }, readText: async () => '' } });
     Object.assign(window, {
@@ -219,4 +219,67 @@ test('delayed MCP A save failure never appears in newly opened MCP B editor', as
   await expect(page.locator('main .feedback-item').filter({ hasText: 'MCP A 写入失败' })).toHaveCount(1);
   await expect(page.getByRole('dialog').getByRole('alert')).toHaveCount(0);
   await expect(page.getByRole('dialog').getByRole('textbox', { name: '名称', exact: true })).toHaveValue('MCP B');
+});
+
+
+for (const distribute of [false, true]) test(`late successful MCP save preserves the new editor and selected targets (${distribute})`, async ({ page }) => {
+  await install(page);
+  await page.addInitScript(({ distribute }) => {
+    const host = window as any; const invoke = host.__TAURI_INTERNALS__.invoke;
+    const definitions = ['A', 'B'].map(id => ({ id, name: `MCP ${id}`, transport: 'stdio', command: 'node', args: [], env: {}, headers: {}, url: '', version: 1, inLibrary: true }));
+    host.mcpWrites = [];
+    host.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command === 'list_mcp_definitions') return definitions;
+      if (command === 'list_mcp_placements') return distribute ? [{ definitionId: 'A', toolId: 'codex', scope: 'global', projectPath: null, enabled: true, contextId: null }] : [];
+      if (command === 'save_mcp_definition') return new Promise(resolve => { host.resolveMcpSave = () => resolve({ ...definitions[0], ...args.draft, version: 2 }); });
+      if (command === 'preview_mcp_targets' || command === 'distribute_mcp') { host.mcpWrites.push({ command, args }); return []; }
+      return invoke(command, args);
+    };
+  }, { distribute });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  await page.getByRole('button', { name: 'MCP A', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.locator('[data-dialog-save]').click();
+  await expect.poll(() => page.evaluate(() => typeof (window as any).resolveMcpSave)).toBe('function');
+  await dialog.getByRole('button', { name: '关闭', exact: true }).click();
+  await page.getByRole('button', { name: 'MCP B', exact: true }).click();
+  await dialog.getByRole('textbox', { name: '名称', exact: true }).fill('B draft kept');
+  await dialog.getByRole('checkbox', { name: 'Codex', exact: true }).check();
+  const before = await dialog.locator('input:checked, [aria-pressed=true]').count();
+  await page.evaluate(() => (window as any).resolveMcpSave());
+  await expect(dialog.getByRole('textbox', { name: '名称', exact: true })).toHaveValue('B draft kept');
+  await expect(dialog.locator('[data-dialog-save]')).toBeEnabled();
+  expect(await dialog.locator('input:checked, [aria-pressed=true]').count()).toBe(before);
+  expect(await page.evaluate(() => (window as any).mcpWrites)).toEqual([]);
+  await expect(dialog.getByRole('alert')).toHaveCount(0);
+});
+
+test('profile conflict failure is visible inside modal and successful retry clears original event', async ({ page }) => {
+  await install(page);
+  await page.addInitScript(() => {
+    const host = window as any; const invoke = host.__TAURI_INTERNALS__.invoke;
+    const profile = { id: 'saved-1', tool: 'codex', name: '配置 A', version: 1, revision: '', inheritCommon: false, files: {}, suppressed: {}, connection: null, nativeCredentials: {} };
+    host.conflictFails = true;
+    host.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command === 'get_registered_tool_workspace') { const workspace = await invoke(command, args); return { ...workspace, probe: { ...workspace.probe, dependencies: [], providerPresets: [], interfaceFormats: [], installUrl: '', upgradeHint: '' }, profiles: [profile] }; }
+      if (command === 'apply_registered_native_profile') throw { message: '请确认接管' };
+      if (command === 'compare_registered_application') return { profile, common: null, files: [{ role: 'config', format: 'toml', current: 'model = "old"', proposedText: 'model = "new"' }] };
+      if (command === 'apply_compared_application') { if (host.conflictFails) throw { message: '冲突写入失败' }; return null; }
+      return invoke(command, args);
+    };
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.locator('[data-profile-id="saved-1"]').getByRole('button', { name: '使用', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '比较当前文件与本次配置' });
+  await dialog.getByRole('button', { name: '使用本次内容' }).click();
+  await expect(dialog.getByRole('alert')).toContainText('冲突写入失败');
+  await expect(page.locator('main .feedback-item').filter({ hasText: '冲突写入失败' })).toHaveCount(1);
+  await page.evaluate(() => { (window as any).conflictFails = false; });
+  await dialog.getByRole('button', { name: '使用本次内容' }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator('main .feedback-item').filter({ hasText: '冲突写入失败' })).toHaveCount(0);
+  await expect(page.locator('main .feedback-item').filter({ hasText: '请确认接管' })).toHaveCount(0);
 });
