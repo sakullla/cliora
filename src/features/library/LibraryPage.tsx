@@ -1,3 +1,4 @@
+import { useFeedback, FeedbackRegion } from '../../components/Feedback';
 import { CodeEditor } from '../../components/CodeEditor';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -17,8 +18,6 @@ import { EmptyState } from '../../components/EmptyState';
 import { shortPath } from '../../lib/paths';
 import { saveShortcutHint, searchShortcutHint } from '../../lib/shortcut';
 import { formatFailure } from '../../lib/feedback';
-import { useToasts } from '../../lib/toast';
-import { ToastStack } from '../../components/Toast';
 import { SkeletonRows } from '../../components/Skeleton';
 import { navigateChoices } from '../../lib/choiceNavigation';
 import { ScopeMarks, samePath, scopeLabel } from './CliMarks';
@@ -90,10 +89,10 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
   const [draft, setDraft] = useState<LibraryDraft | null>(null);
   const [savedText, setSavedText] = useState('');
   const [busy, setBusy] = useState(false);
-  const toasts = useToasts();
+  const feedback = useFeedback('library');
   const [listLoading, setListLoading] = useState(nativeAvailable);
-  const [dialogError, setDialogError] = useState('');
-  const [dialogNotice, setDialogNotice] = useState('');
+  const setDialogError = feedback.setError;
+  const setDialogNotice = feedback.setNotice;
   const [tagText, setTagText] = useState('');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [rulePlacements, setRulePlacements] = useState<RulePlacement[]>([]);
@@ -101,13 +100,13 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
   const [launchTool, setLaunchTool] = useState('');
   const [launchProject, setLaunchProject] = useState('');
   const [launchText, setLaunchText] = useState('');
-  const [launchError, setLaunchError] = useState('');
+  const setLaunchError = feedback.setError;
   const [launchBusy, setLaunchBusy] = useState(false);
   useEffect(() => {
     if (!copiedId) return;
     const timer = window.setTimeout(() => setCopiedId(null), 1800);
     return () => window.clearTimeout(timer);
-  }, [copiedId, toasts.notice]);
+  }, [copiedId, feedback.notice]);
   const dirty = !!draft && JSON.stringify(draft) !== savedText;
   const latest = useRef(''); latest.current = JSON.stringify([kind, draft, active]);
   const mounted = useRef(true);
@@ -117,10 +116,7 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
     return confirmAction(message, () => mounted.current && latest.current === started, options);
   }
 
-  function showError(text: string) { toasts.showError(text); }
-  function showNotice(text: string) { toasts.showNotice(text); }
-  function showDialogError(text: string) { setDialogNotice(''); setDialogError(text); }
-  function showDialogNotice(text: string) { setDialogError(''); setDialogNotice(text); }
+  function showError(text: string) { feedback.showError(text); }
   function clearDialogResult() { setDialogError(''); setDialogNotice(''); }
 
   useEffect(() => {
@@ -153,16 +149,16 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
   async function choose(item: LibraryItem) {
     if (!await canReplace()) return;
     const next = edit(item);
-    setDraft(next); setSavedText(JSON.stringify(next)); setTagText(''); toasts.setError(null); toasts.setNotice(null); clearDialogResult();
+    setDraft(next); setSavedText(JSON.stringify(next)); setTagText(''); feedback.setError(''); feedback.setNotice(''); clearDialogResult();
   }
   async function start(kind: LibraryKind) {
     if (!await canReplace()) return;
     const next = empty(kind);
-    setDraft(next); setSavedText(JSON.stringify(next)); setTagText(''); toasts.setError(null); toasts.setNotice(null); clearDialogResult();
+    setDraft(next); setSavedText(JSON.stringify(next)); setTagText(''); feedback.setError(''); feedback.setNotice(''); clearDialogResult();
   }
   async function openSection(next: LibrarySection) {
     if (next === section || !await canReplace()) return;
-    setSection(next); setDraft(null); setSavedText(''); toasts.setNotice(null); toasts.setError(null); clearDialogResult();
+    setSection(next); setDraft(null); setSavedText(''); feedback.setNotice(''); feedback.setError(''); clearDialogResult();
     if (next === 'prompt' || next === 'rule') { setKind(next); setCategoryFilter('*'); }
   }
   async function refresh(nextKind = kind) { setItems(await native.listLibraryItems(nextKind, null, search)); }
@@ -170,6 +166,7 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
     setItems((current) => current.some((item) => item.id === saved.id) ? current.map((item) => item.id === saved.id ? saved : item) : [saved, ...current]);
   }
   async function save() {
+    const operationFeedback = feedback.begin('save:' + (draft?.id ?? 'new'));
     if (!draft || busy || !nativeAvailable) return;
     setBusy(true); clearDialogResult();
     try {
@@ -181,9 +178,8 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
       catch (value) {
         keepSaved(saved);
         const failure = listFailureAfterSave(value);
-        toasts.showMixed(t('library.page.saved'), failure);
-        setDialogNotice(t('library.page.saved'));
-        setDialogError(failure);
+        operationFeedback.partial(t('library.page.saved'), { detail: failure });
+
         return;
       }
       if (saved.kind === 'rule' && rulePlacements.some((item) => item.ruleId === saved.id)) {
@@ -191,12 +187,12 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
         const distributed = await distributeRule(saved.id, saved.version, ids, false);
         if (!distributed) { setDraft(next); setSavedText(JSON.stringify(next)); return; }
         setDraft(null); setSavedText(''); clearDialogResult();
-        showNotice(t('library.page.ruleSaved'));
+        operationFeedback.success(t('library.page.ruleSaved'));
         return;
       }
       setDraft(null); setSavedText(''); clearDialogResult();
-      showNotice(t('library.page.saved'));
-    } catch (value) { showDialogError(formatFailure(value, t('library.page.saveFailed'), t('library.page.saveFailedNext'))); }
+      operationFeedback.success(t('library.page.saved'));
+    } catch (value) { operationFeedback.error(formatFailure(value, t('library.page.saveFailed'), t('library.page.saveFailedNext'))); }
     finally { setBusy(false); }
   }
   function ruleFailure(value: unknown, hint = t('library.page.ruleFailedHint')) {
@@ -205,31 +201,33 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
     return t('library.page.ruleFailed', { detail, hint });
   }
   async function distributeRule(id: string, version: number, toolIds: string[], allowReplace: boolean) {
+    const operationFeedback = feedback.begin('distributeRule:' + '');
     try {
       const synced = await native.syncRuleClients(id, version, { toolIds, scope: 'global', projectPath: null, allowReplace });
       const rows = Array.isArray(synced) ? synced : [];
       if (!allowReplace && rows.some((item) => item.status === 'conflict')) {
         const started = latest.current;
         if (!await confirmAction(t('library.page.confirmReplace'), () => mounted.current && latest.current === started, { title: t('library.page.replaceTitle'), confirmLabel: t('library.page.replaceAction') })) {
-          showDialogNotice(t('library.page.replaceKept'));
+          operationFeedback.success(t('library.page.replaceKept'));
           return false;
         }
         return distributeRule(id, version, toolIds, true);
       }
       const failed = rows.find((item) => item.status === 'failed');
-      if (failed) { showDialogError(ruleFailure({ message: failed.detail })); return false; }
+      if (failed) { operationFeedback.error(ruleFailure({ message: failed.detail })); return false; }
       const listed = await native.listRulePlacements().catch(() => rulePlacements);
       setRulePlacements(Array.isArray(listed) ? listed : []);
       return true;
-    } catch (value) { showDialogError(ruleFailure(value)); return false; }
+    } catch (value) { operationFeedback.error(ruleFailure(value)); return false; }
   }
   async function toggleRule(item: LibraryItem, toolId: string, scope: Scope, projectPath: string | null) {
+    const operationFeedback = feedback.begin('toggleRule:' + item.id);
     if (busy) return;
     const current = rulePlacements.filter((place) => place.ruleId === item.id && place.scope === scope && (scope === 'global' || samePath(place.projectPath, projectPath))).map((place) => place.toolId);
     const next = current.includes(toolId) ? current.filter((id) => id !== toolId) : [...current, toolId];
     const toolName = managedTools.find((tool) => tool.id === toolId)?.name ?? toolId;
     const where = scope === 'project' ? t('library.page.whereScope', { scope: scopeLabel(scope, projectPath, projects) }) : '';
-    setBusy(true); toasts.setError(null); toasts.setNotice(null);
+    setBusy(true); feedback.setError(''); feedback.setNotice('');
     try {
       let rows = await native.syncRuleClients(item.id, item.version, { toolIds: next, scope, projectPath, allowReplace: false });
       rows = Array.isArray(rows) ? rows : [];
@@ -240,27 +238,29 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
         rows = Array.isArray(rows) ? rows : [];
       }
       const failed = rows.find((row) => row.status === 'failed');
-      if (failed) { showError(ruleFailure({ message: failed.detail }, t('library.page.ruleFailedRetryIcon'))); return; }
+      if (failed) { operationFeedback.error(ruleFailure({ message: failed.detail }, t('library.page.ruleFailedRetryIcon'))); return; }
       const listed = await native.listRulePlacements().catch(() => rulePlacements);
       setRulePlacements(Array.isArray(listed) ? listed : []);
-      showNotice(next.includes(toolId) ? t('library.page.written', { where, tool: toolName }) : t('library.page.removed', { where, tool: toolName }));
-    } catch (value) { showError(ruleFailure(value, t('library.page.ruleFailedRetryIcon'))); }
+      operationFeedback.success(next.includes(toolId) ? t('library.page.written', { where, tool: toolName }) : t('library.page.removed', { where, tool: toolName }));
+    } catch (value) { operationFeedback.error(ruleFailure(value, t('library.page.ruleFailedRetryIcon'))); }
     finally { setBusy(false); }
   }
   function openLaunch(item: LibraryItem) {
     setLaunchItem(item); setLaunchText(item.body); setLaunchTool(managedTools[0]?.id ?? ''); setLaunchProject(item.projectId ?? projects.find((project) => project.available)?.id ?? ''); setLaunchError('');
   }
   async function startSession() {
+    const operationFeedback = feedback.begin('startSession:' + '');
     if (!launchItem || !launchTool || launchBusy) return;
     setLaunchBusy(true); setLaunchError('');
     try {
       await native.launchCli({ toolId: launchTool, projectId: launchProject || null, sessionId: null, mode: 'normal', initialPrompt: launchText });
       setLaunchItem(null);
-      showNotice(t('library.page.sessionStarted'));
+      operationFeedback.success(t('library.page.sessionStarted'));
     } catch (value) { setLaunchError(formatFailure(value, t('library.page.sessionFailed'), t('library.page.sessionFailedNext'))); }
     finally { setLaunchBusy(false); }
   }
   async function remove() {
+    const operationFeedback = feedback.begin('remove:' + '');
     if (!draft?.id || draft.expectedVersion === null || busy || !await confirmCurrent(t('library.page.confirmDelete', { title: draft.title }), { title: t('library.page.deleteTitle'), confirmLabel: t('library.page.deleteAction'), destructive: true })) return;
     setBusy(true); clearDialogResult();
     try {
@@ -269,23 +269,24 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
       setDraft(null); setSavedText('');
       try { await refresh(); }
       catch (value) {
-        toasts.showMixed(t('library.page.deleted'), formatFailure(value, t('library.page.listFailed'), t('library.page.listNext')));
+        operationFeedback.partial(t('library.page.deleted'), { detail: formatFailure(value, t('library.page.listFailed'), t('library.page.listNext')) });
         return;
       }
-      showNotice(t('library.page.deleted'));
-    } catch (value) { showDialogError(formatFailure(value, t('library.page.deleteFailed'), t('library.page.deleteFailedNext'))); }
+      operationFeedback.success(t('library.page.deleted'));
+    } catch (value) { operationFeedback.error(formatFailure(value, t('library.page.deleteFailed'), t('library.page.deleteFailedNext'))); }
     finally { setBusy(false); }
   }
   async function copy(text: string, surface: 'page' | 'dialog' = 'page', itemId: string | null = null) {
+    const operationFeedback = feedback.begin('copy:' + (itemId ?? draft?.id ?? 'draft'));
+    const origin = latest.current;
     if (surface === 'dialog') clearDialogResult();
-    else { toasts.setNotice(null); toasts.setError(null); setCopiedId(null); }
+    else { feedback.setNotice(''); feedback.setError(''); setCopiedId(null); }
     try {
       await navigator.clipboard.writeText(text);
-      if (surface === 'dialog') showDialogNotice(copiedText());
-      else { showNotice(copiedText()); setCopiedId(itemId); }
+      if (surface === 'dialog') operationFeedback.success(copiedText());
+      else { operationFeedback.success(copiedText()); setCopiedId(itemId); }
     } catch {
-      if (surface === 'dialog') showDialogError(t('library.page.copyFailed'));
-      else showError(t('library.page.copyFailed'));
+      operationFeedback.error(t('library.page.copyFailed'), { recovery: { label: t('common.feedback.retry'), valid: () => mounted.current && latest.current === origin, run: () => copy(text, surface, itemId) } });
     }
   }
   function addTag(raw: string) {
@@ -347,7 +348,7 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
               if (place.state === 'unavailable') return { pressed: true, state: 'unavailable', status: t('library.page.markUnavailable') };
               return { pressed: true, state: 'drifted', status: t('library.page.markDrifted') };
             }} /> : <span />}
-            <div className={styles.cardActions}>{copiedId === item.id && toasts.notice?.text === copiedText()
+            <div className={styles.cardActions}>{copiedId === item.id && feedback.notice === copiedText()
               ? <button type="button" className={styles.quiet} aria-label={t('library.page.copy')} data-copied="true" onClick={() => void copy(item.body, 'page', item.id)}><Icon name="check" size={13} strokeWidth={2.2} />{t('home.launcher.copied')}</button>
               : <button type="button" className={styles.quiet} onClick={() => void copy(item.body, 'page', item.id)} disabled={!item.body}>{t('library.page.copy')}</button>}{kind === 'prompt' && <button type="button" className={styles.cardLaunch} onClick={() => openLaunch(item)} disabled={!item.body}>{t('library.page.launch')}</button>}<button type="button" className={styles.quiet} onClick={() => choose(item)}>{t('tools.workspace.edit')}</button></div>
           </div>
@@ -358,8 +359,8 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
     </div>
     <GuideDialog open={!!draft} title={draft?.id ? t('library.page.editTitle', { kind: kindName(kind) }) : t('library.page.newTitle', { kind: kindName(kind) })} hint={kind === 'rule' ? t('library.page.ruleHint') : t('library.page.promptHint')} onClose={() => { void (async () => { if (await canReplace()) { setDraft(null); setSavedText(''); clearDialogResult(); } })(); }}>
       {draft && <div className={styles.editor}>
-        {dialogError && <div className={styles.error} role="alert">{dialogError}</div>}
-        {dialogNotice && <div className={styles.notice} role="status">{dialogNotice}</div>}
+
+        <FeedbackRegion context={feedback.context} />
         <div className={styles.fields}>
           <label>{t('library.page.title')}<input autoFocus={!draft.id} value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder={t('library.page.titlePlaceholder')} /></label>
           <label>{t('library.page.project')}<FilterSelect label={t('library.page.project')} value={draft.projectId ?? ''} options={[{ value: '', label: t('tools.apply.global') }, ...projects.map((project) => ({ value: project.id, label: project.name, detail: project.path ? shortPath(project.path) : undefined, note: project.available ? undefined : t('library.page.staleDir') }))]} searchLabel={t('home.launcher.searchLabel')} onChange={(value) => setDraft({ ...draft, projectId: value || null })} /></label>
@@ -377,7 +378,7 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
     </GuideDialog>
     <GuideDialog open={!!launchItem} title={t('library.page.launchTitle')} hint={t('library.page.launchHint')} onClose={() => { if (!launchBusy) setLaunchItem(null); }}>
       {launchItem && <div className={styles.editor}>
-        {launchError && <div className={styles.error} role="alert">{launchError}</div>}
+        <FeedbackRegion context={feedback.context} />
         <div className={styles.fields}>
           <label>CLI<FilterSelect label={t('library.page.launchCli')} value={launchTool} options={toolOptions(managedTools)} placeholder={t('library.page.noCli')} disabled={!managedTools.length} searchLabel={t('library.page.searchCli')} onChange={setLaunchTool} /></label>
           <label>{t('library.page.launchProjectLabel')}<FilterSelect label={t('library.page.launchProject')} value={launchProject} options={[{ value: '', label: t('library.page.noProject') }, ...projects.map((project) => ({ value: project.id, label: project.name, detail: project.path ? shortPath(project.path) : undefined, note: project.available ? undefined : t('library.page.staleDir') }))]} searchLabel={t('home.launcher.searchLabel')} onChange={setLaunchProject} /></label>
@@ -387,6 +388,6 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
       </div>}
     </GuideDialog>
     </>}
-    <ToastStack status={toasts.notice} alert={toasts.error} onDismiss={toasts.dismiss} />
+    <FeedbackRegion context={feedback.context} />
   </section>;
 }

@@ -1,3 +1,4 @@
+import { useFeedback, FeedbackRegion } from '../../components/Feedback';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { native, nativeAvailable } from '../../lib/native';
@@ -73,39 +74,40 @@ function AccountImpactView({ account, active, refreshAccounts, onOpenProfile, on
   const [impact, setImpact] = useState<AccountImpact | null>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
+  const feedback = useFeedback(JSON.stringify(['account', account.id]));
+  const { setError } = feedback;
+  const { setNotice } = feedback;
   const [refreshEpoch, setRefreshEpoch] = useState(0);
-  const successfulReapply = useRef<{ accountId: string; contextId: string; notice: string } | null>(null);
   const request = useRef(0);
   const current = useRef(account); current.current = account;
   async function refresh() {
+    const operationFeedback = feedback.begin('refresh');
     const sequence = ++request.current; setLoading(true); setError('');
     try {
       const value = await native.accountImpact(account.id);
       if (sequence !== request.current || current.current.id !== account.id || current.current.version !== account.version) return;
       if (value.accountId !== account.id || value.toolId !== account.toolId || value.accountVersion !== account.version) throw new Error(t('tools.accounts.changedError'));
       setImpact(value);
-    } catch (value) { if (sequence === request.current) setError(value && typeof value === 'object' && 'message' in value ? String(value.message) : t('tools.accounts.impactFailed')); }
+    } catch (value) { if (sequence === request.current) operationFeedback.error(value && typeof value === 'object' && 'message' in value ? String(value.message) : t('tools.accounts.impactFailed')); }
     finally { if (sequence === request.current) setLoading(false); }
   }
   useEffect(() => {
-    const success = successfulReapply.current;
-    if (success && (success.accountId !== account.id || success.contextId !== account.context?.id || account.state !== 'signed_in')) successfulReapply.current = null;
-    setImpact(null); setNotice(successfulReapply.current?.notice ?? ''); setBusy(false);
+    setImpact(null); setBusy(false);
     if (active && nativeAvailable) void refresh();
     return () => { request.current++; };
   }, [active, account.id, account.version, refreshEpoch]);
   async function refreshWithAccounts() {
+    const operationFeedback = feedback.begin('refreshWithAccounts');
     const sequence = request.current; setBusy(true); setError('');
     try {
       const updated = await refreshAccounts();
       if (request.current === sequence && updated?.some(item => item.id === account.id)) setRefreshEpoch(value => value + 1);
-    } catch (value) { if (request.current === sequence) setError(value && typeof value === 'object' && 'message' in value ? String(value.message) : t('tools.accounts.refreshFailed')); }
+    } catch (value) { if (request.current === sequence) operationFeedback.error(value && typeof value === 'object' && 'message' in value ? String(value.message) : t('tools.accounts.refreshFailed')); }
     finally { if (request.current === sequence && current.current.id === account.id) setBusy(false); }
   }
   async function reapply(scope: AccountImpactScope) {
-    const sequence = ++request.current; setBusy(true); setError(''); setNotice(''); successfulReapply.current = null;
+    const operationFeedback = feedback.begin('reapply');
+    const sequence = ++request.current; setBusy(true); setError(''); setNotice('');
     try {
       const fresh = await native.accountImpact(account.id);
       if (sequence !== request.current) return;
@@ -114,18 +116,18 @@ function AccountImpactView({ account, active, refreshAccounts, onOpenProfile, on
       await native.reapplyAccountProfile(scope.reapplyRequest!);
       if (sequence !== request.current) return;
       const successNotice = t('tools.accounts.reapplied', { profile: target.profileName ?? target.profileId, scope: scopeName(target) });
-      successfulReapply.current = { accountId: account.id, contextId: scope.reapplyRequest!.expectedContextId, notice: successNotice }; setNotice(successNotice);
+      operationFeedback.success(successNotice);
       // Shared apply checks the identity and can advance its version. Refresh the
       // parent first; the next render reads impacts against the accepted version.
       const updated = await refreshAccounts();
       if (request.current === sequence && updated?.some(item => item.id === account.id)) setRefreshEpoch(value => value + 1);
-    } catch (value) { if (sequence === request.current) setError(value && typeof value === 'object' && 'message' in value ? String(value.message) : t('tools.accounts.reapplyFailed')); }
+    } catch (value) { if (sequence === request.current) operationFeedback.error(value && typeof value === 'object' && 'message' in value ? String(value.message) : t('tools.accounts.reapplyFailed')); }
     finally { if (request.current === sequence && current.current.id === account.id) setBusy(false); }
   }
   if (!active) return null;
   return <section className={accountStyles.impact} aria-label={t('tools.accounts.impactAria', { label: account.label })}>
     <div className={accountStyles.impactHeader}><strong>{t('tools.accounts.impactTitle')}</strong><button disabled={loading || busy} onClick={() => void refreshWithAccounts()}>{t('tools.accounts.refreshImpact')}</button></div>
-    {loading && !impact && <p role="status">{t('tools.accounts.loadingImpact')}</p>}{error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
+    {loading && !impact && <p role="status">{t('tools.accounts.loadingImpact')}</p>}<FeedbackRegion context={feedback.context} />
     {impact && <><ul>{impact.profiles.map(profile => <li key={profile.id}><div className={styles.actions}><span>{profile.name}</span>{onOpenProfile && <button disabled={busy} onClick={() => onOpenProfile(profile.id)}>{t('tools.accounts.editProfile')}</button>}</div></li>)}</ul>{!impact.profiles.length && <p>{t('tools.accounts.noProfiles')}</p>}
       <h4>{t('tools.accounts.scopesTitle')}</h4><ul>{impact.scopes.map(scope => <li key={scope.bindingId}>
         <strong>{scope.profileName ?? t('tools.accounts.deletedProfile')} · {scopeName(scope)}</strong><p>{scope.active ? t('tools.accounts.scopeActive') : t('tools.accounts.scopeHistory')} · {contextName(scope.contextKind)}{scope.needsReapply ? t('tools.accounts.needsReapply') : ''}</p>
@@ -144,8 +146,8 @@ export function AccountsPanel({ toolId, state, onOpenProfile, onOpenUsage }: { t
   const [label, setLabel] = useState(metadata?.defaultLabel ?? t('tools.accounts.newAccount'));
   const [method, setMethod] = useState<'browser' | 'device'>('browser');
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
+  const feedback = useFeedback(JSON.stringify(['accounts', toolId]));
+  const { setNotice: setMessage, setError } = feedback;
   const [editing, setEditing] = useState<string | null>(null);
   const [renamed, setRenamed] = useState('');
   const [creating, setCreating] = useState(false);
@@ -166,7 +168,7 @@ export function AccountsPanel({ toolId, state, onOpenProfile, onOpenUsage }: { t
     if (nativeAvailable) void discover();
     return () => { discoverySequence.current++; };
   }, [toolId]);
-  async function run(work: () => Promise<unknown>, notice: string) { setBusy(true); setError(''); setMessage(''); try { const outcome = await work(); if (outcome === false || !live.current || currentTool.current !== toolId) return; await state.refresh(); if (live.current && currentTool.current === toolId) setMessage(notice); } catch (value) { if (!live.current || currentTool.current !== toolId) return; setError(value && typeof value === 'object' && 'message' in value ? String(value.message) : t('tools.accounts.actionFailed')); } finally { if (live.current && currentTool.current === toolId) setBusy(false); } }
+  async function run(work: () => Promise<unknown>, notice: string) { const result = feedback.begin(notice); setBusy(true); setError(''); setMessage(''); try { const outcome = await work(); if (outcome === false || !live.current || currentTool.current !== toolId) return; await state.refresh(); if (live.current && currentTool.current === toolId) result.success(notice); } catch (value) { if (!live.current || currentTool.current !== toolId) return; result.error(value && typeof value === 'object' && 'message' in value ? String(value.message) : t('tools.accounts.actionFailed')); } finally { if (live.current && currentTool.current === toolId) setBusy(false); } }
   return <section className={styles.panel} aria-label={t('tools.accounts.label')}>
     <div className={styles.header}><div><h2>{t('tools.accounts.title')}</h2><p>{metadata?.description ?? t('tools.accounts.defaultDescription')}</p></div>{state.capability?.managedLogin && <button className={styles.primary} onClick={() => setCreating(value => !value)}>{creating ? t('tools.accounts.collapseAdd') : t('tools.accounts.add')}</button>}</div>
     {!nativeAvailable && <p role="alert">{t('tools.accounts.nativeOnly')}</p>}
@@ -182,7 +184,7 @@ export function AccountsPanel({ toolId, state, onOpenProfile, onOpenUsage }: { t
       <button className={styles.primary} disabled={busy || !nativeAvailable || !label.trim() || !state.capability?.managedLogin || !state.capability.methods.length} onClick={() => void run(async () => { const account = await native.createAccount(toolId, label.trim()); if (!live.current || currentTool.current !== toolId) return; await native.startAccountLogin(account.id, account.version, state.capability!.methods.includes(method) ? method : state.capability!.methods[0]); }, t('tools.accounts.loginRequested'))}>{t('tools.accounts.addAndLogin')}</button>
       {state.capability?.importNative && <button disabled={busy || !nativeAvailable || !label.trim()} onClick={() => void run(() => native.adoptNativeAccount(toolId, label), t('tools.accounts.adopted'))}>{t('tools.accounts.adopt')}</button>}
     </div>}
-    {(error || state.error) && <p role="alert">{error || state.error}</p>}{message && <p role="status">{message}</p>}
+    {state.error && <p role="alert">{state.error}</p>}<FeedbackRegion context={feedback.context} />
     <div className={styles.sectionTitle}><h3>{t('tools.accounts.managedTitle')}</h3><span>{t('tools.accounts.count', { count: state.accounts.length })}</span></div>
     {state.loading ? <SkeletonRows count={2} /> : state.accounts.length === 0 && <p className={styles.empty}>{state.capability?.managedLogin ? t('tools.accounts.emptyManaged') : t('tools.accounts.emptyReadonly')}</p>}
     <ul className={styles.list}>{state.accounts.map(account => <li key={account.id}>

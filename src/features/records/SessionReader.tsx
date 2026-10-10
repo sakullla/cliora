@@ -1,3 +1,4 @@
+import { useFeedback, FeedbackRegion } from '../../components/Feedback';
 import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { HistoryDetail, HistoryMessage } from '../../types/history';
@@ -36,7 +37,7 @@ const Message = memo(function Message({ item, toolId, toolName, raw, query, curr
 }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
-  const [copied, setCopied] = useState('');
+  const feedback = useFeedback(JSON.stringify(['history-message', toolId, item.id]));
   const approximate = item.timestampSource !== 'native';
   const timeSource = item.timestampSource === 'turn' ? t('records.reader.timeTurn') : item.timestampSource === 'session' ? t('records.reader.timeSession') : t('records.reader.timeUnknown');
   const user = item.role === 'user';
@@ -45,20 +46,17 @@ const Message = memo(function Message({ item, toolId, toolName, raw, query, curr
   const role = user ? t('records.reader.you') : item.role === 'assistant' ? toolName : (item.role === 'system' ? t('records.reader.roleSystem') : item.role === 'tool' ? t('records.reader.roleTool') : item.role);
   const clamped = item.text.length > CLAMP_LENGTH && !expanded && !query && !raw;
   const text = clamped ? item.text.slice(0, CLAMP_LENGTH) : item.text;
-  useEffect(() => {
-    if (!copied) return;
-    const timer = window.setTimeout(() => setCopied(''), 1800);
-    return () => window.clearTimeout(timer);
-  }, [copied]);
+
   return <article className={styles.message} data-message-id={item.id} data-role={item.role} data-context={!!context || undefined} data-current-match={current || undefined}>
     {collapsedContext ? <button type="button" className={styles.contextToggle} aria-expanded={false} onClick={() => setExpanded(true)}><Icon name="folder" size={14} /><span>{context}</span><span>{t('records.reader.expand')}</span></button> : <>
     <div className={styles.avatar}>{user ? t('records.reader.you') : <ToolIcon toolId={toolId} size={22} />}</div>
     <div className={styles.messageContent}>
       <header className={styles.messageHead}><strong>{context ?? role}</strong>
         <time title={item.timestamp === null ? t('records.format.timeUnknown') : `${new Date(item.timestamp).toLocaleString(readerLocale())}${approximate ? ` · ${timeSource}` : ''}`}>{item.timestamp === null ? t('records.format.timeUnknown') : `${approximate ? t('records.reader.approxPrefix') : ''}${new Date(item.timestamp).toLocaleTimeString(readerLocale(), { hour: '2-digit', minute: '2-digit' })}`}</time>
-        <button type="button" aria-label={copied || t('records.reader.copy')} title={t('records.reader.copy')} onClick={() => void writeClipboard(item.text).then((ok) => setCopied(ok ? t('records.reader.copied') : t('records.reader.copyFailed')))}>
-          <Icon name={copied === t('records.reader.copied') ? 'check' : 'copy'} size={14} />{copied && <span role="status">{copied}</span>}
+        <button type="button" aria-label={t('records.reader.copy')} title={t('records.reader.copy')} onClick={() => { const result = feedback.begin('copy'); void writeClipboard(item.text).then((ok) => { if (ok) result.success(t('records.reader.copied')); else result.error(t('records.reader.copyFailed')); }); }}>
+          <Icon name="copy" size={14} />
         </button>
+        <FeedbackRegion context={feedback.context} />
       </header>
       <div className={`${styles.prose} ${clamped ? styles.clamped : ''}`}>
         {raw || user || query || !renderMarkdown ? <p className={styles.raw}><Highlight text={text} query={query} /></p>

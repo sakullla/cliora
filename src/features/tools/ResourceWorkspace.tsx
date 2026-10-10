@@ -1,3 +1,4 @@
+import { useFeedback, FeedbackRegion } from '../../components/Feedback';
 import { CodeEditor } from '../../components/CodeEditor';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -51,8 +52,9 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
   const [nativeOrigin, setNativeOrigin] = useState<NativeMcpEntry | null>(null);
   const [currentConflict, setCurrentConflict] = useState<{ id: string; items: McpTargetResult[] } | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
+  const feedback = useFeedback(JSON.stringify(['mcp', toolId, scope, projectPath, contextId]));
+  const { setError } = feedback;
+  const { setNotice } = feedback;
   const [capabilityBlocked, setCapabilityBlocked] = useState('');
   const [composing, setComposing] = useState(false);
   const [syncLibrary, setSyncLibrary] = useState(false);
@@ -61,11 +63,6 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
   const latestForm = useRef(''); latestForm.current = JSON.stringify([draft, envText, headerText, enabled]);
   const mounted = useRef(true);
   useEffect(() => { mounted.current=true;return () => { mounted.current=false; }; },[]);
-  useEffect(() => {
-    if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(''), 5000);
-    return () => window.clearTimeout(timer);
-  }, [notice]);
   const previewContext = JSON.stringify([draft, envText, headerText, toolId, scope, project, enabled]);
   const previewEpochRef = useRef({ context: previewContext, epoch: 0 });
   if (previewEpochRef.current.context !== previewContext) {
@@ -102,6 +99,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
     return !dirty || confirmAction(t('tools.mcp.confirmDiscard'), () => mounted.current && started === previewEpochRef.current, { title: t('common.app.leaveDirtyTitle'), confirmLabel: t('common.app.leaveDirtyConfirm') });
   }
   async function importNative(item: NativeMcpEntry) {
+    const operationFeedback = feedback.begin('importNative');
     if (!await canReplace()) return;
     setNativeOrigin(item); setCurrentConflict(null); setComposing(true);
     const found = definitions.find((definition) => definition.name === item.name);
@@ -110,7 +108,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
     setSavedFingerprint(JSON.stringify([next, lines(item.env), lines(item.headers),item.enabled]));
     setDraft(next);
     setEnvText(lines(item.env)); setHeaderText(lines(item.headers)); setEnabled(item.enabled);
-    setNotice(t('tools.mcp.importedNotice'));
+    operationFeedback.success(t('tools.mcp.importedNotice'));
   }
   async function startNew() {
     if (!await canReplace()) return;
@@ -129,16 +127,18 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
     setSavedFingerprint(JSON.stringify([next, '', '', true])); setComposing(false);
   }
   async function applyItems(id: string, items: McpTargetResult[], replace: boolean) {
+    const operationFeedback = feedback.begin('applyItems');
     const targets = items.filter(item => item.status === 'ready' || item.status === 'conflict').map((item): McpTargetRequest => ({ toolId: item.toolId, scope: item.scope,
       projectPath: item.projectPath, contextId: item.contextId ?? contextId, enabled, baselineHash: item.baselineHash, previewToken: item.previewToken, allowReplace: replace && item.status === 'conflict' }));
     const outcome = await native.distributeMcp(id, targets);
     setNativeEntries(await native.listNativeMcp(target)); setCurrentConflict(null);
     const written = outcome.every(item => item.status === 'written');
-    setNotice(written ? t('tools.mcp.written') : t('tools.mcp.partialFailed'));
+    operationFeedback.success(written ? t('tools.mcp.written') : t('tools.mcp.partialFailed'));
     return written;
   }
   async function save() {
-    if (scope === 'project' && !project) { setError(t('tools.mcp.pickProject')); return; }
+    const operationFeedback = feedback.begin('save');
+    if (scope === 'project' && !project) { operationFeedback.error(t('tools.mcp.pickProject')); return; }
     const origin = nativeOrigin; const started = latestForm.current;
     const editing = !!(draft.id || nativeOrigin);
     const linked = definitions.find((item) => item.id === draft.id) ?? definitions.find((item) => item.name === draft.name.trim());
@@ -147,20 +147,21 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
     try {
       const saved = await native.saveMcpDefinition({ ...draft, args: keptArgs(draft.args), id: linked?.id ?? draft.id, expectedVersion: linked?.version ?? draft.expectedVersion, inLibrary, env: parseLines(envText), headers: parseLines(headerText) });
       setDefinitions(await native.listMcpDefinitions());
-      if (!mounted.current || started !== latestForm.current) { setNotice(t('tools.mcp.dirtyAgain')); return; }
+      if (!mounted.current || started !== latestForm.current) { operationFeedback.success(t('tools.mcp.dirtyAgain')); return; }
       select(saved,enabled);
       const savedForm=JSON.stringify([draftOf(saved),lines(saved.env),lines(saved.headers),enabled]);
       const items = await native.previewMcpTargets(saved.id, [target]);
       const fresh = origin ? await native.listNativeMcp(target) : [];
-      if (!mounted.current || savedForm!==latestForm.current) {setNotice(t('tools.mcp.savedKeepEditing'));return;}
+      if (!mounted.current || savedForm!==latestForm.current) {operationFeedback.success(t('tools.mcp.savedKeepEditing'));return;}
       const sameOrigin = !!origin && JSON.stringify(fresh.find(item => item.name === origin.name)) === JSON.stringify(origin);
       if (items.some(item => item.status === 'conflict') && !sameOrigin) { setCurrentConflict({ id: saved.id, items }); return; }
-      if (!items.some(item => item.status === 'ready' || item.status === 'conflict')) { setError(items.map(item => item.detail).join(t('tools.quota.errorSeparator'))); return; }
+      if (!items.some(item => item.status === 'ready' || item.status === 'conflict')) { operationFeedback.error(items.map(item => item.detail).join(t('tools.quota.errorSeparator'))); return; }
       if (await applyItems(saved.id, items, sameOrigin)) leaveComposer();
-    } catch (value) { setError(errorText(value)); }
+    } catch (value) { operationFeedback.error(errorText(value)); }
     finally { setBusy(false); }
   }
   async function removeSaved() {
+    const operationFeedback = feedback.begin('removeSaved');
     const onTool = !!nativeOrigin || nativeEntries.some((entry) => entry.name === draft.name);
     const inLibrary = definitions.find((item) => item.id === draft.id)?.inLibrary === true;
     if (!onTool && !inLibrary) return;
@@ -176,10 +177,10 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
       if (mounted.current) {
         setDefinitions(await native.listMcpDefinitions());
         setNativeEntries(await native.listNativeMcp(target).catch(() => []));
-        setNotice(t('tools.mcp.deleted'));
+        operationFeedback.success(t('tools.mcp.deleted'));
         leaveComposer();
       }
-    } catch (value) { if (mounted.current) setError(errorText(value)); }
+    } catch (value) { if (mounted.current) operationFeedback.error(errorText(value)); }
     finally { if (mounted.current) setBusy(false); }
   }
 
@@ -192,16 +193,15 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
   if (empty) {
     return <section className={styles.workspaceSection} aria-label={t('tools.mcp.title')}>
       {head(true)}
-      {notice && <StatusBanner tone="success" onDismiss={() => setNotice('')}>{notice}</StatusBanner>}
-      {error && <StatusBanner tone="error" onDismiss={() => setError('')}>{error}</StatusBanner>}
+      <FeedbackRegion context={feedback.context} />
+
       <div className={styles.emptyState}><Icon name="connections" size={26} strokeWidth={1.4} /><strong>{t('tools.mcp.emptyTitle')}</strong><p>{t('tools.mcp.emptyDetail')}</p>{scope === 'project' && !project && <p className={styles.muted}>{t('tools.mcp.pickProjectFirst')}</p>}</div>
     </section>;
   }
 
   return <section className={styles.workspaceSection} aria-label={t('tools.mcp.title')}>
     {head(true)}
-    {!composing && notice && <StatusBanner tone="success" onDismiss={() => setNotice('')}>{notice}</StatusBanner>}
-    {!composing && error && <StatusBanner tone="error" onDismiss={() => setError('')}>{error}</StatusBanner>}
+    <FeedbackRegion context={feedback.context} />
     <div className={styles.layout}>
     <aside className={styles.list}>
       <div className={styles.listHead}><strong>{t('tools.mcp.activeCount', { count: nativeEntries.length })}</strong></div>
@@ -223,8 +223,8 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
       <label className={styles.inline}><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} />{t('tools.plugins.action.enable')}</label>
       {!(draft.id || nativeOrigin) && <label className={styles.inline}><input type="checkbox" checked={syncLibrary} onChange={(event) => setSyncLibrary(event.target.checked)} />{t('tools.mcp.quickSync')}<small className={styles.fieldHint}>{t('tools.mcp.quickSyncHint')}</small></label>}
       {currentConflict && <div className={styles.resultList} role="group" aria-label={t('tools.mcp.conflictLabel')}><strong>{t('tools.mcp.conflictTitle')}</strong>{currentConflict.items.map(item => <div className={styles.fileDiff} key={item.toolId}><CodeEditor compact label={t('tools.mcp.conflictCurrent')} format="json" readOnly value={JSON.stringify(item.existing, null, 2)} /><CodeEditor compact label={t('tools.mcp.conflictNext')} format="json" readOnly value={JSON.stringify(item.proposed, null, 2)} /></div>)}<div className={styles.actions}><button type="button" onClick={() => setCurrentConflict(null)}>{t('common.conflict.keepCurrent')}</button><button type="button" disabled={busy} onClick={() => { setBusy(true); void applyItems(currentConflict.id, currentConflict.items, true).then(ok => { if (ok) leaveComposer(); }).catch(value => setError(errorText(value))).finally(() => setBusy(false)); }}>{t('tools.mcp.useNext')}</button></div></div>}
-      {error && <p className={styles.error} role="alert">{error}</p>}
-      {notice && <p className={styles.notice} role="status">{notice}</p>}
+
+      <FeedbackRegion context={feedback.context} />
       <div className="dialog-footer">{(draft.id || nativeOrigin) && <button type="button" disabled={busy} onClick={() => void removeSaved()}>{t('tools.mcp.removeFromTool')}</button>}<span className="dialog-footer-gap" /><button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint()} disabled={busy || !draft.name.trim() || (scope === 'project' && !project)} onClick={() => void save()}>{draft.id || nativeOrigin ? t('home.launcher.save') : t('tools.mcp.addSubmit')}</button></div>
     </div>
     </GuideDialog>
@@ -256,13 +256,14 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
   useLayoutEffect(() => { onDirtyChange?.(!!url.trim() || !!archiveSelection || !!pendingImport || adding || skillDirty); }, [url, archiveSelection, pendingImport, adding, skillDirty, onDirtyChange]);
   useEffect(() => () => { onDirtyChange?.(false); }, [onDirtyChange]);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [result, setResult] = useState<SkillTargetResult | null>(null);
-  useEffect(() => {
-    if (!result || result.status === 'failed') return;
-    const timer = window.setTimeout(() => setResult(null), 5000);
-    return () => window.clearTimeout(timer);
-  }, [result]);
+  const feedback = useFeedback(JSON.stringify(['skills', toolId, scope, projectPath, contextId]));
+  const { setError } = feedback;
+  function setResult(result: SkillTargetResult | null) {
+    if (!result) return;
+    const text = result.status === 'failed' || result.detail === t('tools.skills.saved') ? result.detail : result.detail === t('tools.skills.addedToLibrary') ? t('tools.skills.addedToLibraryNote') : result.status === 'removed' ? t('tools.skills.removed', { path: result.path ?? '' }) : t('tools.skills.installed', { path: result.path ?? '' });
+    const operation = feedback.begin('skill-change');
+    if (result.status === 'failed') operation.error(text); else operation.success(text);
+  }
   const selected = packages.find((item) => item.id === selectedId);
   const project = scope === 'project' ? projectPath || null : null;
   const visibleIssues = recoveryIssues.filter((issue) => issue.toolId === toolId && (issue.scope === 'project' || (issue.contextId ?? null) === (contextId ?? null)));
@@ -479,7 +480,6 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
   }
 
   const recovery = !!visibleIssues.length && <div className={styles.error} role="alert"><strong>{t('tools.skills.recoveryTitle')}</strong><p>{t('tools.skills.recoveryDetail')}</p>{visibleIssues.map((issue) => <div key={issue.operationId} className={styles.fileChange}><strong>{issue.scope === 'global' ? t('tools.apply.global') : t('tools.skills.recoveryProject', { path: issue.projectPath ?? '' })}</strong><p>{issue.detail}</p><p>{t('tools.skills.recoveryTarget', { path: issue.targetPath })}</p><p>{t('tools.skills.recoveryBackup', { path: issue.backupPath })}</p><button type="button" onClick={() => void navigator.clipboard.writeText(issue.backupPath).catch((value) => setError(errorText(value)))}>{t('tools.skills.recoveryCopy')}</button></div>)}<button type="button" onClick={() => void checkRecovery()}>{t('tools.skills.recoveryRecheck')}</button></div>;
-  const outcome = result && (result.status === 'failed' || result.detail === t('tools.skills.saved') ? result.detail : result.detail === t('tools.skills.addedToLibrary') ? t('tools.skills.addedToLibraryNote') : result.status === 'removed' ? t('tools.skills.removed', { path: result.path ?? '' }) : t('tools.skills.installed', { path: result.path ?? '' }));
   const installState: { label: string; tone: 'on' | 'warn' | undefined } = installed?.state === 'current' ? { label: t('tools.skills.stateInstalled'), tone: 'on' }
     : installed?.state === 'update_available' ? { label: t('tools.skills.stateUpdate'), tone: 'warn' }
     : installed?.state === 'conflict' ? { label: t('tools.skills.stateConflict'), tone: 'warn' }
@@ -493,8 +493,8 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
     return <section className={styles.workspaceSection} aria-label="Skill">
       {head}
       {recovery}
-      {outcome && <StatusBanner tone={result?.status === 'failed' ? 'warning' : 'success'} onDismiss={() => setResult(null)}>{outcome}</StatusBanner>}
-      {error && <StatusBanner tone="error" onDismiss={() => setError('')}>{error}</StatusBanner>}
+      <FeedbackRegion context={feedback.context} />
+
       <div className={styles.emptyState}><Icon name="sparkle" size={26} strokeWidth={1.4} /><strong>{t('tools.skills.emptyTitle')}</strong><p>{t('tools.skills.emptyDetail')}</p>{scope === 'project' && !project && <p className={styles.muted}>{t('tools.mcp.pickProjectFirst')}</p>}</div>
     </section>;
   }
@@ -502,8 +502,8 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
   return <section className={styles.workspaceSection} aria-label="Skill">
     {head}
     {recovery}
-    {!guide && outcome && <StatusBanner tone={result?.status === 'failed' ? 'warning' : 'success'} onDismiss={() => setResult(null)}>{outcome}</StatusBanner>}
-    {!guide && error && <StatusBanner tone="error" onDismiss={() => setError('')}>{error}</StatusBanner>}
+    <FeedbackRegion context={feedback.context} />
+
     <div className={styles.layout}>
     <aside className={styles.list}>
       <div className={styles.listHead}><strong>{t('tools.mcp.activeCount', { count: nativeEntries.length })}</strong></div>
@@ -523,8 +523,8 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
       </>}
       {!adding && skillLoading && <p className={styles.muted} role="status">{t('tools.skills.loading')}</p>}
       {!adding && skillDoc && <><p className={styles.muted}>{t('tools.skills.editorNote')}</p><CodeEditor format="markdown" label={t('tools.skills.editorLabel')} documentId={skillDoc.path} value={skillDoc.draft} onChange={(value) => setSkillDoc((current) => current ? { ...current, draft: value } : current)} readOnly={busy} /></>}
-      {outcome && <p role="status" className={result?.status === 'failed' ? styles.error : styles.notice}>{outcome}</p>}
-      {error && <p className={styles.error} role="alert">{error}</p>}
+      <FeedbackRegion context={feedback.context} />
+
       {selected && !adding && <>
         <p className={styles.muted}>{selected.description || t('tools.skills.fullPackage')} · {t('tools.skills.fileCount', { count: selected.fileCount })}</p><details className={styles.source}><summary title={displayPath(selected.source)}>{t('tools.skills.sourceLabel', { source: shortPath(selected.source) })}</summary><p>{displayPath(selected.source)}</p></details>
         {selected.compatibility && <label className={styles.inline}><input type="checkbox" checked={dependencyChecked} onChange={(event) => setDependencyChecked(event.target.checked)} />{t('tools.skills.compatibilityChecked', { requirement: selected.compatibility })}</label>}

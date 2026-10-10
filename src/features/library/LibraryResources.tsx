@@ -1,3 +1,4 @@
+import { useFeedback, FeedbackRegion } from '../../components/Feedback';
 import { removalContext, useAccountLabels } from './resourceContexts';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -62,14 +63,10 @@ export function LibraryResources({ section, active, tools, projects, createSigna
   const [envText, setEnvText] = useState('');
   const [headerText, setHeaderText] = useState('');
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
-  useEffect(() => {
-    if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(''), 4000);
-    return () => window.clearTimeout(timer);
-  }, [notice]);
-  const [dialogError, setDialogError] = useState('');
+  const feedback = useFeedback(JSON.stringify(['resources', section]));
+  const { setError } = feedback;
+  const { setNotice } = feedback;
+  const setDialogError = feedback.setError;
   const [skillOpen, setSkillOpen] = useState(false);
   const [skillUrl, setSkillUrl] = useState('');
   const [archiveSelection, setArchiveSelection] = useState<{ source: string; local: boolean; entries: string[]; chosen: string | null } | null>(null);
@@ -115,14 +112,15 @@ export function LibraryResources({ section, active, tools, projects, createSigna
   }, [createSignal]);
 
   async function remove(item: McpDefinition) {
+    const operationFeedback = feedback.begin('remove');
     if (busy || !await confirmAction(t('library.resources.confirmRemoveMcp', { name: item.name }), () => true, { title: t('tools.mcp.removeTitle'), confirmLabel: t('tools.agents.delete'), destructive: true })) return;
     setBusy(true); setError('');
     try {
       await native.deleteMcpDefinition(item.id, item.version);
       setDefinitions(await native.listMcpDefinitions());
       setDraft(null);
-      setNotice(t('library.resources.removed'));
-    } catch (value) { setError(failure(value)); }
+      operationFeedback.success(t('library.resources.removed'));
+    } catch (value) { operationFeedback.error(failure(value)); }
     finally { setBusy(false); }
   }
 
@@ -140,6 +138,7 @@ export function LibraryResources({ section, active, tools, projects, createSigna
   }
 
   async function finishSkillImport(item?: SkillPackage) {
+    const operationFeedback = feedback.begin('finishSkillImport');
     const prior = item ? installations.filter((entry) => entry.packageId === item.id && entry.state !== 'conflict' && entry.state !== 'disabled' && entry.state !== 'unavailable') : [];
     const checked = installTools.filter((toolId) => !prior.some((entry) => entry.toolId === toolId && entry.scope === 'global'));
     await reloadSkills();
@@ -164,13 +163,13 @@ export function LibraryResources({ section, active, tools, projects, createSigna
       if (conflicts.length) {
         setSkillSeed([]);
         setSkillTarget(item);
-        setNotice(t('library.resources.conflictsNotice', { names: conflicts.join('、') }));
-      } else if (failed.length) setError(failed.join(t('tools.quota.errorSeparator')));
-      else setNotice(notes.join(t('tools.quota.errorSeparator')) || t('library.resources.syncedAll'));
+        operationFeedback.success(t('library.resources.conflictsNotice', { names: conflicts.join('、') }));
+      } else if (failed.length) operationFeedback.error(failed.join(t('tools.quota.errorSeparator')));
+      else operationFeedback.success(notes.join(t('tools.quota.errorSeparator')) || t('library.resources.syncedAll'));
       if (!failed.length) setError('');
       return;
     }
-    setNotice(t('library.resources.addedToLibrary'));
+    operationFeedback.success(t('library.resources.addedToLibrary'));
     setError('');
   }
 
@@ -235,6 +234,7 @@ export function LibraryResources({ section, active, tools, projects, createSigna
   }
 
   async function removePackage(item: SkillPackage) {
+    const operationFeedback = feedback.begin('removePackage');
     const placed = installations.some((entry) => entry.packageId === item.id);
     const message = placed ? t('library.resources.confirmDeletePlaced', { name: item.name }) : t('library.resources.confirmDelete', { name: item.name });
     if (busy || !await confirmAction(message, () => true, { title: t('library.resources.deleteSkillTitle'), confirmLabel: t('tools.agents.delete'), destructive: true })) return;
@@ -242,12 +242,13 @@ export function LibraryResources({ section, active, tools, projects, createSigna
     try {
       await native.deleteSkillPackage(item.id);
       await reloadSkills();
-      setNotice(t('library.resources.removed'));
-    } catch (value) { setError(failure(value)); }
+      operationFeedback.success(t('library.resources.removed'));
+    } catch (value) { operationFeedback.error(failure(value)); }
     finally { setBusy(false); }
   }
 
   async function save() {
+    const operationFeedback = feedback.begin('save');
     if (!draft || busy) return;
     setBusy(true); setDialogError('');
     try {
@@ -258,7 +259,7 @@ export function LibraryResources({ section, active, tools, projects, createSigna
       if (willDistribute || alreadyPlaced) {
         const outcome = await distributeRef.current?.run(saved);
         setPlacements(await native.listMcpPlacements().catch(() => []));
-        if (outcome?.status === 'written') { setConflict(false); setDialogError(''); setDraft(null); setNotice(outcome.notice); }
+        if (outcome?.status === 'written') { setConflict(false); setDialogError(''); setDraft(null); operationFeedback.success(outcome.notice); }
         else if (outcome?.status === 'pending') setConflict(true);
         else {
           setConflict(false);
@@ -267,7 +268,7 @@ export function LibraryResources({ section, active, tools, projects, createSigna
       } else {
         setPlacements(await native.listMcpPlacements().catch(() => []));
         setDraft(null);
-        setNotice(t('library.resources.saved'));
+        operationFeedback.success(t('library.resources.saved'));
       }
       setError('');
     } catch (value) { setDialogError(failure(value)); }
@@ -275,17 +276,19 @@ export function LibraryResources({ section, active, tools, projects, createSigna
   }
 
   async function replaceDistribution() {
+    const operationFeedback = feedback.begin('replaceDistribution');
     if (busy) return;
     setBusy(true); setDialogError('');
     try {
       const outcome = await distributeRef.current?.commit();
       setPlacements(await native.listMcpPlacements().catch(() => []));
-      if (outcome?.status === 'written') { setConflict(false); setDraft(null); setNotice(outcome.notice); setError(''); }
+      if (outcome?.status === 'written') { setConflict(false); setDraft(null); operationFeedback.success(outcome.notice); setError(''); }
     } catch (value) { setDialogError(failure(value)); }
     finally { setBusy(false); }
   }
 
   async function toggleMcp(item: McpDefinition, toolId: string, scope: Scope, projectPath: string | null, contextId: string | null) {
+    const operationFeedback = feedback.begin('toggleMcp');
     if (busy) return;
     const toolName = tools.find((tool) => tool.id === toolId)?.name ?? toolId;
     const where = scope === 'project' ? t('library.page.whereScope', { scope: scopeLabel(scope, projectPath, projects) }) : '';
@@ -294,22 +297,23 @@ export function LibraryResources({ section, active, tools, projects, createSigna
     try {
       if (place) {
         await native.removeNativeMcp({ toolId, scope, projectPath: place.projectPath, contextId: await removalContext(place), enabled: place.enabled }, item.name);
-        setNotice(t('library.page.removed', { where, tool: toolName }));
+        operationFeedback.success(t('library.page.removed', { where, tool: toolName }));
       } else {
         const target: McpTargetRequest = { toolId, scope, projectPath, enabled: true };
         const preview = await native.previewMcpTargets(item.id, [target]);
         const first = preview[0];
-        if (!first || (first.status !== 'ready' && first.status !== 'conflict')) { setError(first?.detail || t('library.resources.cannotWrite', { tool: toolName })); return; }
+        if (!first || (first.status !== 'ready' && first.status !== 'conflict')) { operationFeedback.error(first?.detail || t('library.resources.cannotWrite', { tool: toolName })); return; }
         if (first.status === 'conflict' && !await confirmAction(t('library.resources.confirmReplace', { name: item.name, tool: toolName }), () => true, { title: t('library.resources.replaceMcpTitle'), confirmLabel: t('library.page.replaceAction') })) return;
         await native.distributeMcp(item.id, [{ ...target, contextId: first.contextId, baselineHash: first.baselineHash, previewToken: first.previewToken, allowReplace: first.status === 'conflict' }]);
-        setNotice(t('library.page.written', { where, tool: toolName }));
+        operationFeedback.success(t('library.page.written', { where, tool: toolName }));
       }
       setPlacements(await native.listMcpPlacements().catch(() => placements));
-    } catch (value) { setError(failure(value)); }
+    } catch (value) { operationFeedback.error(failure(value)); }
     finally { setBusy(false); }
   }
 
   async function toggleSkill(item: SkillPackage, toolId: string, scope: Scope, projectPath: string | null, contextId: string | null) {
+    const operationFeedback = feedback.begin('toggleSkill');
     if (busy) return;
     const toolName = tools.find((tool) => tool.id === toolId)?.name ?? toolId;
     const where = scope === 'project' ? t('library.page.whereScope', { scope: scopeLabel(scope, projectPath, projects) }) : '';
@@ -318,16 +322,16 @@ export function LibraryResources({ section, active, tools, projects, createSigna
     try {
       if (place) {
         await native.removeSkill(item.id, toolId, scope, place.projectPath, await removalContext(place));
-        setNotice(t('library.page.removed', { where, tool: toolName }));
+        operationFeedback.success(t('library.page.removed', { where, tool: toolName }));
       } else {
         const preview = await native.previewSkillTarget(item.id, toolId, scope, projectPath);
         if (preview?.status === 'conflict' && !await confirmAction(t('library.resources.confirmReplace', { name: item.name, tool: toolName }), () => true, { title: t('library.resources.replaceSkillTitle'), confirmLabel: t('library.resources.replaceInstall') })) return;
         const outcome = await native.installSkill(item.id, toolId, scope, projectPath, preview?.previewToken ?? null, preview?.status === 'conflict');
-        if (outcome.status === 'failed') { setError(outcome.detail); return; }
-        setNotice(t('library.resources.installedTo', { where, tool: toolName }));
+        if (outcome.status === 'failed') { operationFeedback.error(outcome.detail); return; }
+        operationFeedback.success(t('library.resources.installedTo', { where, tool: toolName }));
       }
       await reloadSkills();
-    } catch (value) { setError(failure(value)); }
+    } catch (value) { operationFeedback.error(failure(value)); }
     finally { setBusy(false); }
   }
 
@@ -340,8 +344,8 @@ export function LibraryResources({ section, active, tools, projects, createSigna
   if (section === 'skill') {
     return <div className={styles.layout}>
       <SearchField className={styles.searchBox} label={t('library.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={setSearch} placeholder={t('library.resources.searchSkillPlaceholder')} />
-      {error && <div className={styles.error} role="alert">{error}</div>}
-      {notice && <div className={styles.notice} role="status">{notice}</div>}
+
+      <FeedbackRegion context={feedback.context} />
       <div className={styles.list} aria-label={t('library.resources.skillListAria')}>
         {libraryPackages.length ? libraryPackages.map((item) => {
           return <article className={styles.card} key={item.id}>
@@ -391,7 +395,7 @@ export function LibraryResources({ section, active, tools, projects, createSigna
             <p>{t('library.resources.existingNote', { source: pendingImport.preview.source, count: pendingImport.preview.fileCount, install: installTools.length ? t('library.resources.existingInstall') : '' })}</p>
             <div className={styles.actions}><button type="button" onClick={() => setPendingImport(null)}>{t('library.resources.back')}</button><button type="button" className={styles.primary} disabled={busy} onClick={() => void confirmSkillImport()}>{installations.some((entry) => packages.some((item) => item.id === entry.packageId && item.name === pendingImport.preview.name)) ? t('library.resources.updateAndSync') : t('library.resources.confirmUpdate')}</button></div>
           </section>}
-          {dialogError && <p className={styles.error} role="alert">{dialogError}</p>}
+          <FeedbackRegion context={feedback.context} />
         </div>
       </GuideDialog>
       <GuideDialog open={!!skillTarget} title={t('library.resources.editSkillTitle')} hint={t('library.resources.editSkillHint')} onClose={() => { setSkillTarget(null); setSkillSeed([]); }}>
@@ -402,8 +406,8 @@ export function LibraryResources({ section, active, tools, projects, createSigna
 
   return <div className={styles.layout}>
     <SearchField className={styles.searchBox} label={t('library.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={setSearch} placeholder={t('library.resources.searchMcpPlaceholder')} />
-    {error && <div className={styles.error} role="alert">{error}</div>}
-    {notice && <div className={styles.notice} role="status">{notice}</div>}
+
+    <FeedbackRegion context={feedback.context} />
     <div className={styles.list} aria-label={t('library.resources.mcpListAria')}>
       {libraryDefinitions.length ? libraryDefinitions.map((item) => {
         return <article className={styles.card} key={item.id}>
@@ -440,7 +444,7 @@ export function LibraryResources({ section, active, tools, projects, createSigna
           </>}
         </div>
         <McpDistribution key={formKey} ref={distributeRef} definition={definitions.find((item) => item.id === draft.id) ?? { ...draft, id: draft.id ?? '', version: draft.expectedVersion ?? 0 }} tools={tools} projects={projects} placements={placements} formStamp={JSON.stringify([draft.name, draft.transport, draft.command, draft.args, draft.url, envText, headerText])} onWillDistribute={setWillDistribute} onConflictChange={setConflict} />
-        {dialogError && <p className={styles.error} role="alert">{dialogError}</p>}
+        <FeedbackRegion context={feedback.context} />
         <div className="dialog-footer">{draft.id && <button type="button" disabled={busy} onClick={() => { const current = definitions.find((item) => item.id === draft.id); if (current) void remove(current); }}>{t('tools.agents.delete')}</button>}<span className="dialog-footer-gap" />{conflict && <button type="button" disabled={busy} onClick={() => { setConflict(false); distributeRef.current?.dismiss(); }}>{t('common.conflict.keepCurrent')}</button>}<button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint()} disabled={busy || !draft.name.trim()} onClick={() => void (conflict ? replaceDistribution() : save())}>{conflict ? t('library.resources.replaceDistribute') : willDistribute ? t('library.resources.saveDistribute') : t('home.launcher.save')}</button></div>
       </>}
     </GuideDialog>

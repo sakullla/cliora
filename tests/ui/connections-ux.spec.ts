@@ -72,7 +72,7 @@ test('a success notice can be dismissed', async ({ page }) => {
   await page.locator('[data-profile-id="p1"]').getByRole('button', { name: '使用', exact: true }).click();
   const notice = page.getByRole('status').filter({ hasText: '已使用保存的配置' });
   await expect(notice).toBeVisible();
-  await page.getByRole('button', { name: '关闭提示' }).click();
+  await page.getByRole('button', { name: '忽略此消息' }).click();
   await expect(notice).toHaveCount(0);
 });
 

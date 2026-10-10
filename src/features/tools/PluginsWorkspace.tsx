@@ -1,3 +1,4 @@
+import { useFeedback, FeedbackRegion } from '../../components/Feedback';
 import { uiAdapterFor } from '../../adapters';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -7,7 +8,6 @@ import type { Scope } from '../../types/native';
 import type { PluginAction, PluginEntry, PluginSnapshot, PluginTarget } from '../../types/resources';
 import styles from './ManagementPanel.module.css';
 import { useAccountLabels } from '../library/resourceContexts';
-import { StatusBanner } from '../../components/StatusBanner';
 import { SearchField } from '../../components/SearchField';
 import i18n from '../../i18n';
 
@@ -40,8 +40,9 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId }: { to
   const [source, setSource] = useState('');
   const [trusted, setTrusted] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
+  const feedback = useFeedback(JSON.stringify(['plugins', toolId, scope, projectPath, contextId]));
+  const { setError } = feedback;
+  const { setNotice } = feedback;
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
   const generation = useRef(0);
@@ -56,12 +57,14 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId }: { to
     void scanOnce(target).then(value => { if (id === generation.current) { remember(cacheKey, value); setSnapshot(value); } }).catch(value => { if (id === generation.current) { remembered.delete(cacheKey); setError(message(value)); } }).finally(() => { completed = true; if (id === generation.current) setBusy(false); });
     return () => { generation.current++; };
   }, [target]);
-  async function refresh() { const id = ++generation.current; setBusy(true); setError('');
+  async function refresh() {
+    const operationFeedback = feedback.begin('refresh'); const id = ++generation.current; setBusy(true); setError('');
     try { const value = await native.scanNativePlugins(target); if (id === generation.current) { remember(cacheKey, value); setSnapshot(value); } }
-    catch (value) { if (id === generation.current) { remembered.delete(cacheKey); setError(message(value)); setSnapshot(null); } }
+    catch (value) { if (id === generation.current) { remembered.delete(cacheKey); operationFeedback.error(message(value)); setSnapshot(null); } }
     finally { if (id === generation.current) setBusy(false); }
   }
   async function operate(action: PluginAction, entry?: PluginEntry) {
+    const operationFeedback = feedback.begin('operate');
     if (!snapshot?.baseline || busy) return;
     const id = generation.current;
     if (action === 'uninstall' && !await confirmAction(t('tools.plugins.confirmUninstall', { name: entry?.name }), () => id === generation.current, { title: t('tools.plugins.uninstallTitle'), confirmLabel: actionLabel('uninstall') })) return;
@@ -72,17 +75,17 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId }: { to
       if (id !== generation.current) return;
       remembered.delete(cacheKey);
       if (result.snapshot) remember(cacheKey, result.snapshot);
-      setSnapshot(result.snapshot); setNotice(result.detail);
-      if (result.status === 'failed_possible_side_effects') setError(t('tools.plugins.sideEffects'));
+      setSnapshot(result.snapshot); operationFeedback.success(result.detail);
+      if (result.status === 'failed_possible_side_effects') operationFeedback.error(t('tools.plugins.sideEffects'));
       else if (action === 'install') { setSource(''); setTrusted(false); }
-    } catch (value) { if (id === generation.current) setError(message(value)); }
+    } catch (value) { if (id === generation.current) operationFeedback.error(message(value)); }
     finally { if (id === generation.current) setBusy(false); }
   }
   return <section className={styles.panel} aria-label={t('tools.plugins.label')}>
     <div className={styles.header}><div><h2>{t('tools.plugins.title')}</h2><p>{t('tools.plugins.description')}</p></div><div className={styles.actions}><button disabled={busy} onClick={() => void refresh()}>{t('tools.plugins.rescan')}</button></div></div>
     <div className={styles.context}><span>{scope === 'global' ? scopeLabel('user') : projectPath}</span><span>{accountLabel(contextId)}</span></div>
     {busy && <p role="status">{snapshot ? snapshot.baseline ? t('tools.plugins.operating') : t('tools.plugins.verifying') : t('tools.plugins.loading')}</p>}
-    {error && <StatusBanner tone="error" onDismiss={() => setError('')}>{error}</StatusBanner>}{notice && <StatusBanner tone="success" onDismiss={() => setNotice('')}>{notice}</StatusBanner>}
+    <FeedbackRegion context={feedback.context} />
     {snapshot && <>
       {snapshot.capability.actions.some(action => action === 'install' || action === 'update') && <div className={styles.installBox}><div className={styles.create}><label>{t('tools.plugins.source')}<input aria-label={t('tools.plugins.source')} value={source} onChange={event => { setSource(event.target.value); setTrusted(false); }} placeholder={snapshot.capability.sources} disabled={busy} /></label>
         <button className={styles.primary} disabled={busy || !source.trim() || !trusted || !snapshot.capability.actions.includes('install')} onClick={() => void operate('install')}>{uiAdapterFor(toolId).plugins?.installLabel ?? t('tools.plugins.installDefault')}</button></div>

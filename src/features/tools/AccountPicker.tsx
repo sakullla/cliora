@@ -1,3 +1,4 @@
+import { useFeedback, FeedbackRegion } from '../../components/Feedback';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { uiAdapterFor } from '../../adapters';
@@ -27,8 +28,9 @@ export function AccountPicker({ toolId, selectedAccountId, onSelect, onBack }: A
   const [method, setMethod] = useState<'browser' | 'device'>('browser');
   const [creating, setCreating] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
+  const feedback = useFeedback(JSON.stringify(['login', toolId]));
+  const { setError } = feedback;
+  const { setNotice } = feedback;
   const [loginAccountId, setLoginAccountId] = useState<string | null>(null);
   const currentTool = useRef(toolId); currentTool.current = toolId;
   const sequence = useRef(0);
@@ -57,6 +59,7 @@ export function AccountPicker({ toolId, selectedAccountId, onSelect, onBack }: A
   const selectedMethod = methods.includes(method) ? method : methods[0];
 
   async function login(existing?: AuthAccount) {
+    const operationFeedback = feedback.begin('login');
     if (!state.capability?.managedLogin || !selectedMethod) return;
     const request = ++sequence.current;
     setBusy(true); setError(''); setNotice('');
@@ -73,8 +76,8 @@ export function AccountPicker({ toolId, selectedAccountId, onSelect, onBack }: A
       }
       ownedAttempt.current = started.pendingLogin ? { accountId: started.id, attemptId: started.pendingLogin.id, version: started.version } : null;
       await state.refresh();
-      if (isCurrent(request)) setNotice(t('tools.accounts.opened'));
-    } catch (value) { if (isCurrent(request)) setError(errorText(value)); }
+      if (isCurrent(request)) operationFeedback.success(t('tools.accounts.opened'));
+    } catch (value) { if (isCurrent(request)) operationFeedback.error(errorText(value)); }
     finally { if (isCurrent(request)) setBusy(false); }
   }
 
@@ -89,6 +92,7 @@ export function AccountPicker({ toolId, selectedAccountId, onSelect, onBack }: A
   }, [loginAccount]);
 
   async function cancel(back = false) {
+    const operationFeedback = feedback.begin('cancel');
     if (cancelling.current) return;
     cancelling.current = true;
     const request = ++sequence.current;
@@ -101,13 +105,14 @@ export function AccountPicker({ toolId, selectedAccountId, onSelect, onBack }: A
         await state.refresh();
       }
       if (!isCurrent(request)) return;
-      setNotice(t('tools.accounts.cancelled'));
+      operationFeedback.success(t('tools.accounts.cancelled'));
       if (back) onBack();
-    } catch (value) { if (isCurrent(request)) setError(errorText(value)); }
+    } catch (value) { if (isCurrent(request)) operationFeedback.error(errorText(value)); }
     finally { cancelling.current = false; if (isCurrent(request)) setBusy(false); }
   }
 
   async function select(account: AuthAccount) {
+    const operationFeedback = feedback.begin('select');
     const request = ++sequence.current;
     setBusy(true); setError('');
     try {
@@ -118,14 +123,15 @@ export function AccountPicker({ toolId, selectedAccountId, onSelect, onBack }: A
         throw new Error(t('tools.accounts.notVerified'));
       }
       onSelect(checked);
-    } catch (value) { if (isCurrent(request)) setError(errorText(value)); }
+    } catch (value) { if (isCurrent(request)) operationFeedback.error(errorText(value)); }
     finally { if (isCurrent(request)) setBusy(false); }
   }
 
   async function check(account: AuthAccount) {
+    const operationFeedback = feedback.begin('check');
     const request = ++sequence.current; setBusy(true); setError('');
     try { await native.checkAccount(account.id); await state.refresh(); }
-    catch (value) { if (isCurrent(request)) setError(errorText(value)); }
+    catch (value) { if (isCurrent(request)) operationFeedback.error(errorText(value)); }
     finally { if (isCurrent(request)) setBusy(false); }
   }
 
@@ -133,8 +139,8 @@ export function AccountPicker({ toolId, selectedAccountId, onSelect, onBack }: A
     <header><div><h3>{t('tools.accounts.pickerTitle')}</h3><p>{metadata?.description ?? t('tools.accounts.pickerDefaultDescription')}</p></div><button onClick={() => void cancel(true)}>{t('tools.accounts.back')}</button></header>
     <p>{t('tools.accounts.note')}</p>
     {!nativeAvailable && <p role="alert">{t('tools.accounts.pickerNativeOnly')}</p>}
-    {(error || state.error) && <p role="alert">{error || state.error}</p>}
-    {notice && <p role="status">{notice}</p>}
+    {state.error && <p role="alert">{state.error}</p>}
+    <FeedbackRegion context={feedback.context} />
     {state.loading && <p role="status">{t('tools.accounts.loading')}</p>}
     {!state.loading && !state.accounts.length && <p>{t('tools.accounts.pickerEmpty')}</p>}
     <ul>{state.accounts.map(account => {

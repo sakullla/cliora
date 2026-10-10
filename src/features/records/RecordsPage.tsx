@@ -8,7 +8,7 @@ import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, ScanSt
 import { displayPath } from '../../lib/paths';
 import { FilterSelect } from '../../components/FilterSelect';
 import { SearchField } from '../../components/SearchField';
-import { ToastStack, type Toast } from '../../components/Toast';
+import { useFeedback, FeedbackRegion } from '../../components/Feedback';
 import { ToolIcon, toolOptions } from '../../components/ToolIcon';
 import { Icon } from '../../components/Icon';
 import { EmptyState } from '../../components/EmptyState';
@@ -141,14 +141,8 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
   const scanRequest = useRef(0);
   const scanningRef = useRef(false);
   const lastScan = useRef(0);
-  const [error, setError] = useState<Toast | null>(null);
-  const [notice, setNotice] = useState<Toast | null>(null);
-  const toastSequence = useRef(0);
-  useEffect(() => {
-    if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(null), 4500);
-    return () => window.clearTimeout(timer);
-  }, [notice]);
+  const feedback = useFeedback(JSON.stringify(['records', selectedId]));
+  const { setError, setNotice } = feedback;
   const [copyFlash, setCopyFlash] = useState(0);
   useEffect(() => {
     if (!copyFlash) return;
@@ -157,20 +151,9 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
   }, [copyFlash]);
   const copied = !!copyFlash;
   const protectSave = useRef(false);
-  function showError(value: unknown) {
-    protectSave.current = false;
-    setNotice(null);
-    setError({ id: ++toastSequence.current, tone: 'alert', text: typeof value === 'string' ? value : errorText(value) });
-  }
-  function showReadError(value: unknown) {
-    if (!protectSave.current) setNotice(null);
-    setError({ id: ++toastSequence.current, tone: 'alert', text: typeof value === 'string' ? value : formatFailure(value, t('records.page.readFailed'), recordNext()) });
-  }
-  function showNotice(text: string, protect = false) {
-    setError(null);
-    setNotice({ id: ++toastSequence.current, tone: 'status', text });
-    protectSave.current = protect;
-  }
+  function showError(value: unknown) { feedback.showError(typeof value === 'string' ? value : errorText(value)); }
+  function showReadError(value: unknown) { feedback.showError(formatFailure(value, t('records.page.readFailed'), recordNext())); }
+  function showNotice(text: string, _protect = false) { feedback.showNotice(text); }
   const initialized = useRef(false);
   const request = useRef(0);
   const detailRequest = useRef(0);
@@ -193,7 +176,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
       const items = await native.listHistorySessions(current);
       if (sequence !== request.current || key !== JSON.stringify(filterRef.current)) return false;
       loadedFilter.current = key;
-      setSessions(items); setError(null);
+      setSessions(items); setError('');
       setModelCatalog((old) => { const next = [...new Set([...old, ...items.flatMap((item) => item.model ? [item.model] : [])])].sort(); return next.length === old.length ? old : next; });
       const pending = pendingSession.current;
       pendingSession.current = null;
@@ -272,7 +255,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
     if (!nativeAvailable || scanningRef.current) return;
     const sequence = ++scanRequest.current; scanningRef.current = true; lastScan.current = Date.now();
     setScanning(true); setScanMode(auto ? 'auto' : 'manual');
-    if (!auto) { protectSave.current = false; setNotice(null); setError(null); }
+    if (!auto) { protectSave.current = false; setNotice(''); setError(''); }
     try {
       const reports = await native.refreshHistory();
       if (sequence !== scanRequest.current) return;
@@ -284,7 +267,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
     finally { if (sequence === scanRequest.current) { scanningRef.current = false; setScanning(false); setScanProgress(null); } }
   }
   async function cancelScan() {
-    scanRequest.current++; scanningRef.current = false; setScanning(false); setScanProgress(null); protectSave.current = false; setNotice(null); setError(null);
+    scanRequest.current++; scanningRef.current = false; setScanning(false); setScanProgress(null); protectSave.current = false; setNotice(''); setError('');
     try { await native.cancelHistoryRefresh(); showNotice(t('records.page.scanStopped')); }
     catch (value) { showError(value); }
   }
@@ -312,16 +295,18 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
 
   async function copy() {
     if (!readyCommand) return;
-    protectSave.current = false; setNotice(null); setError(null);
-    try { await navigator.clipboard.writeText(readyCommand); showNotice(copiedCommandText()); setCopyFlash((value) => value + 1); }
-    catch { setCopyFlash(0); if (commandRef.current) commandRef.current.open = true; showError(t('records.page.copyFailed')); }
+    const result = feedback.begin('copy-command');
+    protectSave.current = false; setNotice(''); setError('');
+    try { await navigator.clipboard.writeText(readyCommand); result.success(copiedCommandText()); setCopyFlash((value) => value + 1); }
+    catch { setCopyFlash(0); if (commandRef.current) commandRef.current.open = true; result.error(t('records.page.copyFailed')); }
   }
 
   async function resume() {
     if (!selected || !readyCommand) return;
-    setBusy(true); protectSave.current = false; setNotice(null); setError(null);
-    try { await native.resumeHistorySession(selected.session.id, mode); showNotice(t('records.page.resumeRequested')); }
-    catch (value) { showError(value); }
+    const result = feedback.begin('resume-session');
+    setBusy(true); protectSave.current = false; setNotice(''); setError('');
+    try { await native.resumeHistorySession(selected.session.id, mode); result.success(t('records.page.resumeRequested')); }
+    catch (value) { result.error(errorText(value)); }
     finally { setBusy(false); }
   }
 
@@ -348,7 +333,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
       const destination = await save({ title: t('records.page.exportTitle'), defaultPath: `cliora-session-${selected.session.nativeId ?? selected.session.id.slice(0, 8)}.${format === 'json' ? 'json' : 'md'}`,
         filters: [{ name: format === 'json' ? 'JSON' : 'Markdown', extensions: [format === 'json' ? 'json' : 'md'] }] });
       if (!destination) return;
-      protectSave.current = false; setNotice(null); setError(null);
+      protectSave.current = false; setNotice(''); setError('');
       const path = await native.exportHistorySession(selected.session.id, format, destination);
       showNotice(t('records.page.exported', { path }));
     } catch (value) { showError(value); }
@@ -403,7 +388,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
     setToolId(''); setSearch(''); setFavoriteOnly(false); setProjectId(''); setModel(''); setRangeKey('all');
   }
 
-  const notify: UsageNotify = { status: (text, protect) => showNotice(text, protect), alert: showError, readAlert: showReadError, clear: () => { protectSave.current = false; setNotice(null); setError(null); } };
+  const notify: UsageNotify = { status: (text, protect) => showNotice(text, protect), alert: showError, readAlert: showReadError, clear: () => { protectSave.current = false; setNotice(''); setError(''); } };
   function openSession(id: string) {
     pendingSession.current = search.trim() || favoriteOnly || toolId || model || projectId || rangeKey !== 'all' ? id : null;
     clearAllFilters();
@@ -420,7 +405,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
       <button type="button" role="tab" id="records-usage-tab" aria-controls="records-usage-panel" tabIndex={tab === 'usage' ? 0 : -1} aria-selected={tab === 'usage'} onClick={() => setTab('usage')}><Icon name="connections" size={15} />{t('records.page.usage')}</button>
     </div><button type="button" className={styles.refresh} disabled={scanning} aria-label={t('records.page.refreshAria')} aria-busy={scanning || undefined} onClick={() => void refresh()}>{scanning ? <span className="spinner" aria-hidden="true" /> : <Icon name="refresh" size={15} />}<span>{scanning ? t('records.page.refreshing') : t('records.page.refresh')}</span></button></div>
     {scanning && scanMode === 'manual' && <p className={styles.caveat} role="status">{t('records.page.scanning', { tool: tools.find(item => item.id === scanProgress?.toolId)?.name ?? scanProgress?.toolId ?? '', progress: scanProgress?.totalSources ? `${scanProgress.completedSources} / ${scanProgress.totalSources}` : t('records.page.discovering') })}<span className={styles.progress} aria-hidden="true"><span style={scanProgress?.totalSources ? { width: `${Math.min(100, (scanProgress.completedSources / scanProgress.totalSources) * 100)}%` } : undefined} data-indeterminate={!scanProgress?.totalSources || undefined} /></span><button type="button" onClick={() => void cancelScan()}>{t('records.page.stopScan')}</button></p>}
-    <ToastStack status={notice} alert={error} onDismiss={(tone) => { if (tone === 'alert') setError(null); else setNotice(null); }} />
+    <FeedbackRegion context={feedback.context} />
     <div className={styles.columns} id="records-sessions-panel" role="tabpanel" aria-labelledby="records-sessions-tab" hidden={tab !== 'sessions'}>
       <aside className={styles.sessionLibrary} aria-label={t('records.page.libraryAria')}>
         <div className={styles.filters}>

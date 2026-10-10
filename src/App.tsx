@@ -2,6 +2,9 @@ import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useSta
 import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { FeedbackCenter } from './components/Feedback';
+import { notifications } from './lib/notifications';
+import { formatFailure } from './lib/feedback';
 import { Icon } from './components/Icon';
 import type { IconName } from './components/Icon';
 import brandIcon from '../src-tauri/icons/128x128@2x.png';
@@ -111,7 +114,7 @@ export default function App() {
     let active = true;
     const stops: Array<() => void> = [];
     void listen<string>('cliora:tray-error', (event) => {
-      if (active) setError({ code: 'tray_error', message: event.payload, action: t('common.app.trayErrorAction') });
+      if (active) notifications.begin('app', 'tray').error(formatFailure({ message: event.payload }, t('common.operationFailed'), t('common.app.trayErrorAction')));
     }).then((unlisten) => {
       if (active) stops.push(unlisten); else unlisten();
     }).catch(() => {});
@@ -160,7 +163,7 @@ export default function App() {
         pendingCatalog.current = nextCatalog;
         setCatalog((current) => current ? { ...nextCatalog, managedIds: current.managedIds } : nextCatalog);
       } else { pendingCatalog.current = null; setCatalog(nextCatalog); }
-    } catch (value) { setError(value as ApiError); }
+    } catch (value) { notifications.begin('app', 'refresh-import').error(formatFailure(value, t('common.operationFailed'), t('common.nativeError.retry'))); }
   }
 
   useLayoutEffect(() => {
@@ -278,28 +281,31 @@ export default function App() {
   ];
 
   async function updateManaged(id: string, checked: boolean) {
+    const result = notifications.begin('app', 'updateManaged');
     if (!nativeAvailable || busy) return;
     const next = checked ? [...managed, id] : managed.filter((item) => item !== id);
     setBusy(true); setError(null);
-    try { setCatalog(await native.setRegisteredManagedTools(next)); }
-    catch (value) { setError(value as ApiError); }
+    try { setCatalog(await native.setRegisteredManagedTools(next)); result.complete(); }
+    catch (value) { result.error(formatFailure(value, t('common.operationFailed'), t('common.nativeError.retry'))); }
     finally { setBusy(false); }
   }
 
   async function updateTheme(theme: Theme) {
+    const result = notifications.begin('app', 'updateTheme');
     if (!nativeAvailable) { setBootstrap({ ...bootstrap, preferences: { ...bootstrap.preferences, theme } }); return; }
     if (busy) return;
     setBusy(true); setError(null);
-    try { setBootstrap(await native.setTheme(theme)); }
-    catch (value) { setError(value as ApiError); }
+    try { setBootstrap(await native.setTheme(theme)); result.complete(); }
+    catch (value) { result.error(formatFailure(value, t('common.operationFailed'), t('common.nativeError.retry'))); }
     finally { setBusy(false); }
   }
 
   async function updateIcon(toolId: string, dataUrl: string | null) {
+    const result = notifications.begin('app', 'updateIcon');
     if (!nativeAvailable || busy) return;
     setBusy(true); setError(null);
-    try { setBootstrap(await native.setToolIcon(toolId, dataUrl)); }
-    catch (value) { setError(value as ApiError); throw value; }
+    try { setBootstrap(await native.setToolIcon(toolId, dataUrl)); result.complete(); }
+    catch (value) { result.error(formatFailure(value, t('common.operationFailed'), t('common.nativeError.retry'))); throw value; }
     finally { setBusy(false); }
   }
 
@@ -312,6 +318,7 @@ export default function App() {
         </button>; })}
       </nav>
       <div className="sidebar-foot">
+        <FeedbackCenter />
         <div className="theme-switch" role="group" aria-label={t('common.theme.switch')}>{themes.map((item) => { const label = t(`common.theme.${item.id}`); return <button key={item.id} type="button" aria-label={label} title={label} aria-pressed={bootstrap.preferences.theme === item.id} disabled={busy} onClick={() => { if (bootstrap.preferences.theme !== item.id) void updateTheme(item.id); }}><Icon name={item.glyph} size={14} /></button>; })}</div>
         <div className="sidebar-status" title={nativeAvailable ? t('common.shell.statusLocalTitle') : t('common.shell.statusPreviewTitle')}><span className="status-dot" data-tone={nativeAvailable ? undefined : 'preview'} /><span className="status-text" data-short={nativeAvailable ? t('common.shell.statusLocalShort') : t('common.shell.statusPreviewShort')}>{nativeAvailable ? t('common.shell.statusLocal') : t('common.shell.statusPreview')}</span></div>
       </div>
@@ -344,7 +351,7 @@ export default function App() {
           onThemeChange={(next) => void updateTheme(next)}
           onManagedChange={(id, checked) => void updateManaged(id, checked)}
           onIconChange={updateIcon}
-          onIconError={(message) => setError({ code: 'icon_error', message, action: t('settings.icons.repick') })}
+          onIconError={(message) => notifications.begin('app', 'icon').error(formatFailure({ message }, t('common.operationFailed'), t('settings.icons.repick')))}
           onOpenMigration={() => setSettingsTab('migration')}
           onOpenShortcutHelp={() => setHelpOpen(true)}
         />}
