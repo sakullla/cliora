@@ -465,6 +465,12 @@ pub trait CliAdapter: Sync {
             .and_then(Value::as_object).cloned().unwrap_or_default())
     }
     /// Normalize an entry for display, including its native enabled/disabled state.
+    /// Recognize a complete native reference without resolving it. Existing
+    /// adapters retain ${NAME}/{env:NAME}, optionally prefixed by Bearer.
+    /// Override for another native grammar; shared redaction owns protection.
+    fn mcp_is_reference(&self, value: &str) -> bool {
+        crate::resources::mcp::is_reference(value)
+    }
     fn mcp_entry_view(&self, entry: &Value) -> Value { entry.clone() }
     /// Decode a native entry into the portable model. Consumers must inspect
     /// unmapped fields before converting; raw editing retains the original.

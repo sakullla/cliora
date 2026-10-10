@@ -53,43 +53,43 @@ fn sensitive(key: &str) -> bool {
     ["key", "token", "secret", "password", "authorization", "credential"].iter().any(|part| key.contains(part))
 }
 
-fn redact(value: &mut Value) -> bool {
+fn redact(adapter: &dyn crate::adapters::CliAdapter, value: &mut Value) -> bool {
     let mut changed = false;
     match value {
         Value::Object(map) => for (key, value) in map {
-            if sensitive(key) && value.is_string() && !value.as_str().is_some_and(mcp::is_reference) {
+            if sensitive(key) && value.is_string() && !value.as_str().is_some_and(|text| adapter.mcp_is_reference(text)) {
                 *value = Value::String(MASK.into()); changed = true;
-            } else { changed |= redact(value); }
+            } else { changed |= redact(adapter, value); }
         },
-        Value::Array(items) => for item in items { changed |= redact(item); },
+        Value::Array(items) => for item in items { changed |= redact(adapter, item); },
         _ => (),
     }
     changed
 }
 
-fn raw_text(location: &McpLocation, text: &str, parsed: &Value, reveal: bool) -> Result<(String, bool), String> {
+fn raw_text(adapter: &dyn crate::adapters::CliAdapter, location: &McpLocation, text: &str, parsed: &Value, reveal: bool) -> Result<(String, bool), String> {
     if reveal { return Ok((text.into(), false)); }
-    fn collect(value: &Value, path: &mut Vec<String>, output: &mut Vec<Vec<String>>) {
+    fn collect(adapter: &dyn crate::adapters::CliAdapter, value: &Value, path: &mut Vec<String>, output: &mut Vec<Vec<String>>) {
         match value {
             Value::Object(map) => for (key, child) in map {
                 path.push(key.clone());
-                if sensitive(key) && child.is_string() && !child.as_str().is_some_and(mcp::is_reference) { output.push(path.clone()); }
-                else { collect(child, path, output); }
+                if sensitive(key) && child.is_string() && !child.as_str().is_some_and(|text| adapter.mcp_is_reference(text)) { output.push(path.clone()); }
+                else { collect(adapter, child, path, output); }
                 path.pop();
             },
             // Formats with arrays cannot all patch indexed nested keys without
             // rewriting. Redact the parent array as a unit while retaining all
             // document text outside that field.
-            Value::Array(_) => { let mut copy = value.clone(); if redact(&mut copy) { output.push(path.clone()); } },
+            Value::Array(_) => { let mut copy = value.clone(); if redact(adapter, &mut copy) { output.push(path.clone()); } },
             _ => (),
         }
     }
     let mut paths = Vec::new();
-    collect(parsed, &mut Vec::new(), &mut paths);
+    collect(adapter, parsed, &mut Vec::new(), &mut paths);
     let mut output = text.to_owned();
     for path in &paths {
         let mut value = path.iter().try_fold(parsed, |v,k| v.get(k)).ok_or("原文保护字段定位失败")?.clone();
-        if value.is_string() { value = Value::String(MASK.into()); } else { redact(&mut value); }
+        if value.is_string() { value = Value::String(MASK.into()); } else { redact(adapter, &mut value); }
         if path.is_empty() { output = format::render(location.kind, &value)?; }
         else { output = format::set_path(location.kind, &output, path, Some(&value))?; }
     }
@@ -154,9 +154,9 @@ pub fn read(db: &Database, registry: &Registry, home: &Path, request: &McpDocume
     let decoded = adapter.mcp_decode(&name, &entry);
     let enabled = decoded.as_ref().ok().map(|d| d.enabled);
     let unmapped_fields = decoded.map_or_else(|_| vec!["unrecognized native schema".into()], |d| d.unmapped_fields);
-    let mut protected_values = if request.reveal { false } else { redact(&mut entry) };
+    let mut protected_values = if request.reveal { false } else { redact(adapter, &mut entry) };
     let (raw_text, raw_scope, source_path) = if source == "native_entry" {
-        let (text, protected) = raw_text(&location, &native_text, &parsed, request.reveal)?;
+        let (text, protected) = raw_text(adapter, &location, &native_text, &parsed, request.reveal)?;
         protected_values |= protected;
         (Some(text), Some("native_file"), Some(location.path.display().to_string()))
     } else { (None, None, None) };
@@ -250,9 +250,12 @@ pub fn equivalent(db: &Database, registry: &Registry, home: &Path, source: &McpT
     let definition = McpDefinition { id: String::new(), name: d.name, transport: d.transport, command: d.command, args: d.args, url: d.url, env: d.env, headers: d.headers, in_library: false, version: 0 };
     let (location, _) = mcp::target_location(db, registry, target, home)?;
     let adapter = registry.get(&target.tool_id).ok_or("目标工具未注册")?;
+    if definition.env.values().chain(definition.headers.values()).any(|value| source_adapter.mcp_is_reference(value) && !adapter.mcp_is_reference(value)) {
+        return Err("目标格式不能保留来源工具的环境变量引用语义；请保留原始配置".into());
+    }
     let mut entry = adapter.mcp_document_at(&definition, enabled, None, &location)?.ok_or("目标不支持此配置的启停状态")?;
     verify_equivalent(adapter, &definition, &entry)?;
     if adapter.mcp_decode(name, &entry)?.enabled != enabled { return Err("目标格式不能表达此启停状态".into()); }
-    let protected_values = redact(&mut entry);
+    let protected_values = redact(adapter, &mut entry);
     Ok(McpDocument { enabled: Some(enabled), source: "equivalent", format: kind(&location), name: name.into(), text: entry_text(adapter, &location, name, entry)?, raw_text: None, raw_scope: None, source_path: None, baseline: String::new(), target_tool_id: target.tool_id.clone(), protected_values, unmapped_fields: vec![], diagnostics: vec![] })
 }
