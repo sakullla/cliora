@@ -342,6 +342,19 @@ pub(crate) fn scan_directory(
     }
     Ok(())
 }
+/// Plugin-owned definitions only exist for CLIs that expose a plugins port.
+/// A missing port means "no plugin sources", never an agents capability error.
+fn plugin_owned(
+    db: &Database,
+    home: &Path,
+    target: &PluginTarget,
+) -> Result<Vec<plugins::PluginEntry>, String> {
+    if crate::adapters::plugins::get(&target.tool_id).is_err() {
+        return Ok(Vec::new());
+    }
+    // Do not lose package ownership when native discovery fails.
+    Ok(plugins::scan_resources(db, home, target)?.entries)
+}
 pub fn scan(db: &Database, home: &Path, target: &PluginTarget) -> Result<AgentSnapshot, String> {
     let _context = selection::enter_bound(
         db,
@@ -354,9 +367,8 @@ pub fn scan(db: &Database, home: &Path, target: &PluginTarget) -> Result<AgentSn
     if !contract::capability(&target.tool_id)?.supported {
         return snapshot_inner(home, target, &[]);
     }
-    // Do not lose package ownership when native discovery fails.
-    let plugins = plugins::scan_resources(db, home, target)?;
-    snapshot_inner(home, target, &plugins.entries)
+    let plugins = plugin_owned(db, home, target)?;
+    snapshot_inner(home, target, &plugins)
 }
 pub fn operate(
     db: &Database,
@@ -374,8 +386,8 @@ pub fn operate(
         project(target)?.as_deref(),
     )?;
     selection::validate_expected(&target.tool_id, target.context_id.as_deref())?;
-    let plugins = plugins::scan_resources(db, home, target)?;
-    operate_inner(db, credentials, home, request, &plugins.entries)
+    let plugins = plugin_owned(db, home, target)?;
+    operate_inner(db, credentials, home, request, &plugins)
 }
 fn operate_inner(
     db: &Database,

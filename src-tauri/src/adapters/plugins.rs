@@ -139,10 +139,9 @@ pub trait PluginAdapter: Sync {
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
-        let index = items.iter().position(|item| {
-            item.as_str() == Some(&request.source)
-                || item.get("source").and_then(Value::as_str) == Some(&request.source)
-        });
+        let index = items
+            .iter()
+            .position(|item| declaration_source(item).as_deref() == Some(request.source.as_str()));
         match request.action.as_str() {
             "disable" => {
                 let index = index.ok_or("插件声明已消失")?;
@@ -285,6 +284,21 @@ pub(crate) fn text(value: &Value, names: &[&str]) -> Option<String> {
     names
         .iter()
         .find_map(|name| value.get(*name).and_then(Value::as_str).map(str::to_owned))
+}
+
+/// The source identity of one config declaration: a spec string, a
+/// `[spec, options]` tuple (native installers write this when the package
+/// exports config options), or a `{source}` record.
+pub fn declaration_source(item: &Value) -> Option<String> {
+    item.as_str()
+        .map(str::to_owned)
+        .or_else(|| {
+            item.as_array()
+                .and_then(|parts| parts.first())
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .or_else(|| text(item, &["source"]))
 }
 
 fn string_source(value: &Value) -> String {
