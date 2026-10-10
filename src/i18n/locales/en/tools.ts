@@ -1,4 +1,11 @@
 export default {
+  minimaxCode: {
+    settingsLabel: 'MiniMax Code settings',
+    connectionNote: 'Use minimax_api for the official API, or a distinct ID for a custom service. Enter the endpoint for your region. Subscription login remains managed by mcode.',
+    applyConnection: 'Update connection draft',
+    settingsNote: 'User config.yaml. Official login remains managed by mcode; bring your own key through MiniMax API or a custom connection. Manage project MCP and Skills in Resources.',
+    fields: { defaultModel: 'Default model', permissionMode: 'Permission mode', minimaxModelSource: 'MiniMax model source', skills_external_enabled: 'Enable external Skills', skills_external_walkUp: 'Search parent directories for Skills' },
+  },
   cursorIde: {
     settingsLabel: 'Cursor IDE settings',
     settingsNote: 'Edit settings.json for the default IDE profile or project. Accounts, model subscriptions and CLI configuration remain managed by Cursor. Extension settings remain in the raw document.',

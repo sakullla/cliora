@@ -59,6 +59,16 @@ The settings form edits editor preferences; raw JSONC preserves unrelated extens
 
 Bare desktop launch is implemented, but GUI acceptance was blocked by automatic approval during this task. Workspace directory launch remains unavailable. Windows installation/version evidence, synthetic tests and the unverified macOS/Linux boundaries are recorded in [Cursor IDE evidence](docs/verification/cursor-ide/README.md). Accounts, quota, sessions, plugins and Agent CLI are not added by this integration.
 
+### MiniMax Code (default off)
+
+Enable **MiniMax Code** in managed tools to manage the `mcode` CLI from `@minimax-ai/code`, independently of the existing MiniMax quota supplier. Configuration, normal terminal launch, user/project MCP and Skills are supported; the integration was checked against 0.6.7. Node 22.19+ on 22.x or Node 24–26 is required. The MC icon is a Cliora text badge.
+
+The global YAML settings editor separates official login (owned by mcode), `minimax_api` for official API keys, and `custom_provider` for custom connections. Enter the region-specific endpoint explicitly. Keys are imported only on an explicit action through the system credential store; existing official login files are never adopted. The installation directory `.minimax-code` is distinct from `.minimax` user data; inherited `MINIMAX_DATA_DIR` / `MAVIS_DATA_DIR` overrides are honored. Relative overrides stop management instead of changing the target with the working directory.
+
+Global MCP is `dataDir/mcp.json`; project MCP is `.mcp.json`. MiniMax interpolates `${NAME}` / `${NAME:-fallback}` only in project MCP. Copying retains its source scope; equivalent configuration and distribution reject changes in interpolation meaning. Product-owned MCP and OAuth state remain protected. Complete Skill packages install into `dataDir/skills` or project `.minimax/skills`; external and filesystem builtin sources are read-only and follow native enable/walk-up flags.
+
+Accounts, subscription login, quota, history, plugins and agents are not added by this tool integration. Embedded/package Skills, alternate running CLI profiles and untested platforms are described in [MiniMax Code support and evidence](docs/verification/minimax-code/README.md). Synthetic browser captures are separate from the isolated Windows native config-loader probe.
+
 ### Default-off CLI additions: per-dimension delivery matrix
 
 The five additions registered by the 2026-10 workflow deliver each dimension only where official evidence or a locally verified install confirmed it; undelivered cells stay hidden in the UI with a recorded reason. All five register through the open string-ID registry and default to off.

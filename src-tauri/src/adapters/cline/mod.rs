@@ -468,7 +468,7 @@ mod tests {
     #[test]
     fn mcp_documents_write_only_the_generic_shape_and_preserve_unknown_fields() {
         let definition = McpDefinition {
-            reference_source: None,
+            reference_source: None, reference_scope: None,
             id: "fixture-definition".into(),
             name: "example".into(),
             transport: McpTransport::Stdio,

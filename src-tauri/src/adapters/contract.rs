@@ -477,6 +477,12 @@ pub trait CliAdapter: Sync {
     fn mcp_reference_fragments(&self, value: &str) -> Vec<String> {
         crate::adapters::mcp_codec::reference_fragments(value, &|part| self.mcp_is_reference(part))
     }
+    /// Most clients share one grammar across scopes. An adapter with distinct
+    /// global/project interpolation must reject ambiguous legacy provenance.
+    fn mcp_reference_fragments_at(&self, value: &str, _scope: Option<Scope>) -> Result<Vec<String>, String> {
+        Ok(self.mcp_reference_fragments(value))
+    }
+    fn mcp_is_reference_at(&self, value: &str, _scope: Scope) -> bool { self.mcp_is_reference(value) }
     fn mcp_entry_view(&self, entry: &Value) -> Value { entry.clone() }
     /// Decode a native entry into the portable model. Consumers must inspect
     /// unmapped fields before converting; raw editing retains the original.

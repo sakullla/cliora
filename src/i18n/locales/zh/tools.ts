@@ -1,4 +1,11 @@
 export default {
+  minimaxCode: {
+    settingsLabel: 'MiniMax Code 设置',
+    connectionNote: '官方自备密钥使用供应商 ID minimax_api；自定义服务填写独立 ID。地址按实际区域填写。官方订阅登录请继续在 mcode 中管理。',
+    applyConnection: '更新连接草稿',
+    settingsNote: '用户级 config.yaml。官方登录由 mcode 管理；自备 API key 使用 MiniMax API 或自定义连接。项目 MCP 与 Skills 在资源页管理。',
+    fields: { defaultModel: '默认模型', permissionMode: '权限模式', minimaxModelSource: 'MiniMax 模型来源', skills_external_enabled: '启用外部 Skills', skills_external_walkUp: '查找父目录 Skills' },
+  },
   cursorIde: {
     settingsLabel: 'Cursor IDE 设置',
     settingsNote: '编辑 IDE 默认 Profile 或项目的 settings.json；账号、模型订阅与命令行配置仍由 Cursor 管理。原文页保留扩展设置。',

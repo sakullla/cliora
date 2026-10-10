@@ -384,7 +384,7 @@ mod tests {
 
     fn definition(name: &str, transport: McpTransport) -> McpDefinition {
         McpDefinition {
-            reference_source: None,
+            reference_source: None, reference_scope: None,
             id: "def-1".into(),
             name: name.into(),
             transport,

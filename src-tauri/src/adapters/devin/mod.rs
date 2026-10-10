@@ -524,7 +524,7 @@ mod tests {
 
     fn mcp_definition(transport: McpTransport) -> McpDefinition {
         McpDefinition {
-            reference_source: None,
+            reference_source: None, reference_scope: None,
             id: "fixture-definition".into(),
             name: "example".into(),
             transport,

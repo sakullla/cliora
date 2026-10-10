@@ -53,43 +53,43 @@ fn sensitive(key: &str) -> bool {
     ["key", "token", "secret", "password", "authorization", "credential"].iter().any(|part| key.contains(part))
 }
 
-fn redact(adapter: &dyn crate::adapters::CliAdapter, value: &mut Value) -> bool {
+fn redact(adapter: &dyn crate::adapters::CliAdapter, scope: crate::native::adapter::Scope, value: &mut Value) -> bool {
     let mut changed = false;
     match value {
         Value::Object(map) => for (key, value) in map {
-            if sensitive(key) && value.is_string() && !value.as_str().is_some_and(|text| adapter.mcp_is_reference(text)) {
+            if sensitive(key) && value.is_string() && !value.as_str().is_some_and(|text| adapter.mcp_is_reference_at(text, scope)) {
                 *value = Value::String(MASK.into()); changed = true;
-            } else { changed |= redact(adapter, value); }
+            } else { changed |= redact(adapter, scope, value); }
         },
-        Value::Array(items) => for item in items { changed |= redact(adapter, item); },
+        Value::Array(items) => for item in items { changed |= redact(adapter, scope, item); },
         _ => (),
     }
     changed
 }
 
-fn raw_text(adapter: &dyn crate::adapters::CliAdapter, location: &McpLocation, text: &str, parsed: &Value, reveal: bool) -> Result<(String, bool), String> {
+fn raw_text(adapter: &dyn crate::adapters::CliAdapter, scope: crate::native::adapter::Scope, location: &McpLocation, text: &str, parsed: &Value, reveal: bool) -> Result<(String, bool), String> {
     if reveal { return Ok((text.into(), false)); }
-    fn collect(adapter: &dyn crate::adapters::CliAdapter, value: &Value, path: &mut Vec<String>, output: &mut Vec<Vec<String>>) {
+    fn collect(adapter: &dyn crate::adapters::CliAdapter, scope: crate::native::adapter::Scope, value: &Value, path: &mut Vec<String>, output: &mut Vec<Vec<String>>) {
         match value {
             Value::Object(map) => for (key, child) in map {
                 path.push(key.clone());
-                if sensitive(key) && child.is_string() && !child.as_str().is_some_and(|text| adapter.mcp_is_reference(text)) { output.push(path.clone()); }
-                else { collect(adapter, child, path, output); }
+                if sensitive(key) && child.is_string() && !child.as_str().is_some_and(|text| adapter.mcp_is_reference_at(text, scope)) { output.push(path.clone()); }
+                else { collect(adapter, scope, child, path, output); }
                 path.pop();
             },
             // Formats with arrays cannot all patch indexed nested keys without
             // rewriting. Redact the parent array as a unit while retaining all
             // document text outside that field.
-            Value::Array(_) => { let mut copy = value.clone(); if redact(adapter, &mut copy) { output.push(path.clone()); } },
+            Value::Array(_) => { let mut copy = value.clone(); if redact(adapter, scope, &mut copy) { output.push(path.clone()); } },
             _ => (),
         }
     }
     let mut paths = Vec::new();
-    collect(adapter, parsed, &mut Vec::new(), &mut paths);
+    collect(adapter, scope, parsed, &mut Vec::new(), &mut paths);
     let mut output = text.to_owned();
     for path in &paths {
         let mut value = path.iter().try_fold(parsed, |v,k| v.get(k)).ok_or("原文保护字段定位失败")?.clone();
-        if value.is_string() { value = Value::String(MASK.into()); } else { redact(adapter, &mut value); }
+        if value.is_string() { value = Value::String(MASK.into()); } else { redact(adapter, scope, &mut value); }
         if path.is_empty() { output = format::render(location.kind, &value)?; }
         else { output = format::set_path(location.kind, &output, path, Some(&value))?; }
     }
@@ -144,7 +144,7 @@ pub fn read(db: &Database, registry: &Registry, home: &Path, request: &McpDocume
         else { mcp::parse_native(&location).map_err(|_| "无法解析原生 MCP 文件，请检查文件格式或访问权限")? };
     let (mut entry, source, name) = if let Some(id) = &request.definition_id {
         let definition = mcp::get_definition(db, id)?;
-        let entry = mcp::render_target(registry, adapter, &definition, request.target.enabled, None, &location)?.ok_or("目标不能表达此 MCP 配置的启停状态")?;
+        let entry = mcp::render_target(registry, adapter, &definition, request.target.enabled, None, request.target.scope, &location)?.ok_or("目标不能表达此 MCP 配置的启停状态")?;
         verify_equivalent(adapter, &definition, &entry)?;
         if adapter.mcp_decode(&definition.name, &entry)?.enabled != request.target.enabled { return Err("目标格式不能表达此启停状态".into()); }
         (entry, "equivalent", definition.name)
@@ -154,9 +154,9 @@ pub fn read(db: &Database, registry: &Registry, home: &Path, request: &McpDocume
     let decoded = adapter.mcp_decode(&name, &entry);
     let enabled = decoded.as_ref().ok().map(|d| d.enabled);
     let unmapped_fields = decoded.map_or_else(|_| vec!["unrecognized native schema".into()], |d| d.unmapped_fields);
-    let mut protected_values = if request.reveal { false } else { redact(adapter, &mut entry) };
+    let mut protected_values = if request.reveal { false } else { redact(adapter, request.target.scope, &mut entry) };
     let (raw_text, raw_scope, source_path) = if source == "native_entry" {
-        let (text, protected) = raw_text(adapter, &location, &native_text, &parsed, request.reveal)?;
+        let (text, protected) = raw_text(adapter, request.target.scope, &location, &native_text, &parsed, request.reveal)?;
         protected_values |= protected;
         (Some(text), Some("native_file"), Some(location.path.display().to_string()))
     } else { (None, None, None) };
@@ -170,10 +170,10 @@ pub fn render_draft(db: &Database, registry: &Registry, home: &Path, target: &Mc
     let mut value = serde_json::to_value(&draft).map_err(|e| e.to_string())?;
     if value.to_string().len() > MAX_TEXT { return Err("配置超过 1 MiB".into()); }
     restore_masks(&mut value, None)?;
-    let definition = McpDefinition { id: String::new(), name: draft.name, transport: draft.transport, command: draft.command, args: draft.args, url: draft.url, env: draft.env, headers: draft.headers, reference_source: draft.reference_source, in_library: false, version: 0 };
+    let definition = McpDefinition { id: String::new(), name: draft.name, transport: draft.transport, command: draft.command, args: draft.args, url: draft.url, env: draft.env, headers: draft.headers, reference_source: draft.reference_source, reference_scope: draft.reference_scope, in_library: false, version: 0 };
     let (location, _) = mcp::target_location(db, registry, target, home)?;
     let adapter = registry.get(&target.tool_id).ok_or("工具未注册")?;
-    let entry = mcp::render_target(registry, adapter, &definition, target.enabled, None, &location)?.ok_or("目标不能表达此 MCP 配置")?;
+    let entry = mcp::render_target(registry, adapter, &definition, target.enabled, None, target.scope, &location)?.ok_or("目标不能表达此 MCP 配置")?;
     verify_equivalent(adapter, &definition, &entry)?;
     if adapter.mcp_decode(&definition.name, &entry)?.enabled != target.enabled { return Err("目标格式不能表达此启停状态".into()); }
     Ok(McpDocument { enabled: Some(target.enabled), source: "equivalent", format: kind(&location), name: definition.name.clone(), text: entry_text(adapter, &location, &definition.name, entry)?, raw_text: None, raw_scope: None, source_path: None, baseline: String::new(), target_tool_id: target.tool_id.clone(), protected_values: false, unmapped_fields: vec![], diagnostics: vec![] })
@@ -193,6 +193,7 @@ pub fn parse_paste(db: &Database, registry: &Registry, home: &Path, target: &Mcp
     Ok(entries.into_iter().map(|(name, mut entry)| {
         let result = restore_masks(&mut entry, None).and_then(|_| adapter.mcp_decode(&name, &entry)).and_then(|mut decoded| {
             decoded.draft.reference_source = Some(target.tool_id.clone());
+            decoded.draft.reference_scope = Some(target.scope);
             mcp::validate(&decoded.draft)?;
             if decoded.draft.transport == mcp::McpTransport::Stdio && mcp::stdio_command(&decoded.draft.command, &decoded.draft.args) != (decoded.draft.command.clone(), decoded.draft.args.clone()) {
                 decoded.unmapped_fields.push("command/args normalization".into());
@@ -248,12 +249,12 @@ pub fn equivalent(db: &Database, registry: &Registry, home: &Path, source: &McpT
     mcp::validate(&decoded.draft)?;
     let enabled = decoded.enabled;
     let d = decoded.draft;
-    let definition = McpDefinition { id: String::new(), name: d.name, transport: d.transport, command: d.command, args: d.args, url: d.url, env: d.env, headers: d.headers, reference_source: Some(source.tool_id.clone()), in_library: false, version: 0 };
+    let definition = McpDefinition { id: String::new(), name: d.name, transport: d.transport, command: d.command, args: d.args, url: d.url, env: d.env, headers: d.headers, reference_source: Some(source.tool_id.clone()), reference_scope: Some(source.scope), in_library: false, version: 0 };
     let (location, _) = mcp::target_location(db, registry, target, home)?;
     let adapter = registry.get(&target.tool_id).ok_or("目标工具未注册")?;
-    let mut entry = mcp::render_target(registry, adapter, &definition, enabled, None, &location)?.ok_or("目标不支持此配置的启停状态")?;
+    let mut entry = mcp::render_target(registry, adapter, &definition, enabled, None, target.scope, &location)?.ok_or("目标不支持此配置的启停状态")?;
     verify_equivalent(adapter, &definition, &entry)?;
     if adapter.mcp_decode(name, &entry)?.enabled != enabled { return Err("目标格式不能表达此启停状态".into()); }
-    let protected_values = redact(adapter, &mut entry);
+    let protected_values = redact(adapter, target.scope, &mut entry);
     Ok(McpDocument { enabled: Some(enabled), source: "equivalent", format: kind(&location), name: name.into(), text: entry_text(adapter, &location, name, entry)?, raw_text: None, raw_scope: None, source_path: None, baseline: String::new(), target_tool_id: target.tool_id.clone(), protected_values, unmapped_fields: vec![], diagnostics: vec![] })
 }

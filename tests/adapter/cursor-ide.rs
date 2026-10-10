@@ -560,7 +560,7 @@ fn cursor_a2_native_reference_document_copy_paste_preserves_semantics() {
         (McpTransport::Http, "headers"),
     ] {
         let definition = McpDefinition {
-            reference_source: None,
+            reference_source: None, reference_scope: None,
             id: "fixture".into(),
             name: "merge".into(),
             transport,
@@ -662,6 +662,7 @@ fn cursor_a3_reference_provenance_covers_drafts_library_and_distribution() {
         .find(|entity| entity["id"] == saved.id).unwrap();
     assert_eq!(entity["payload"]["value"]["definition"]["referenceSource"], "cursor_ide");
     entity["payload"]["value"]["definition"].as_object_mut().unwrap().remove("referenceSource");
+    entity["payload"]["value"]["definition"].as_object_mut().unwrap().remove("referenceScope");
     let old_snapshot: crate::portable::PortableSnapshot = serde_json::from_value(portable_json.clone()).unwrap();
     crate::portable::validate_snapshot(&old_snapshot).unwrap();
     assert_eq!(serde_json::to_value(&old_snapshot).unwrap(), portable_json);
@@ -701,6 +702,7 @@ fn cursor_a3_reference_provenance_covers_drafts_library_and_distribution() {
     // same, and known reference syntax still cannot silently become a literal.
     let mut legacy = serde_json::to_value(&edited).unwrap();
     legacy.as_object_mut().unwrap().remove("referenceSource");
+    legacy.as_object_mut().unwrap().remove("referenceScope");
     let old: McpDefinition = serde_json::from_value(legacy.clone()).unwrap();
     assert!(old.reference_source.is_none());
     assert_eq!(serde_json::to_value(&old).unwrap(), legacy);

@@ -782,7 +782,7 @@ mod tests {
     #[test]
     fn mcp_documents_match_the_official_local_and_remote_shapes() {
         let definition = McpDefinition {
-            reference_source: None,
+            reference_source: None, reference_scope: None,
             id: "fixture-definition".into(),
             name: "example".into(),
             transport: McpTransport::Stdio,

@@ -362,7 +362,7 @@ fn sample(db: &Database) -> McpDefinition {
     save_definition(
         db,
         McpDraft {
-            reference_source: None,
+            reference_source: None, reference_scope: None,
             id: None,
             name: "example".into(),
             transport: McpTransport::Stdio,
@@ -653,7 +653,7 @@ fn literal_mcp_credential_is_saved_and_visible() {
     let saved = save_definition(
         &db,
         McpDraft {
-            reference_source: None,
+            reference_source: None, reference_scope: None,
             id: None,
             name: "remote".into(),
             transport: McpTransport::Http,
@@ -693,7 +693,7 @@ fn literal_mcp_credential_is_saved_and_visible() {
     let literal = save_definition(
         &db,
         McpDraft {
-            reference_source: None,
+            reference_source: None, reference_scope: None,
             id: None,
             name: "literal".into(),
             transport: McpTransport::Http,
@@ -727,7 +727,7 @@ fn omitted_native_secret_stays_until_an_empty_value_removes_it() {
     let saved = save_definition(
         &db,
         McpDraft {
-            reference_source: None,
+            reference_source: None, reference_scope: None,
             id: None,
             name: "db".into(),
             transport: McpTransport::Stdio,
@@ -757,7 +757,7 @@ fn omitted_native_secret_stays_until_an_empty_value_removes_it() {
     let cleared = save_definition(
         &db,
         McpDraft {
-            reference_source: None,
+            reference_source: None, reference_scope: None,
             id: Some(saved.id.clone()),
             name: "db".into(),
             transport: McpTransport::Stdio,
@@ -907,7 +907,7 @@ fn preview_is_bound_to_definition_version_scope_and_target_content() {
     save_definition(
         &db,
         McpDraft {
-            reference_source: None,
+            reference_source: None, reference_scope: None,
             id: Some(definition.id.clone()),
             expected_version: Some(definition.version),
             name: definition.name.clone(),
@@ -1136,7 +1136,7 @@ fn pasted_stdio_command_line_is_split_before_a_client_spawns_it() {
     let saved = save_definition(
         &db,
         McpDraft {
-            reference_source: None,
+            reference_source: None, reference_scope: None,
             id: None,
             name: "chrome-devtools-mcp".into(),
             transport: McpTransport::Stdio,

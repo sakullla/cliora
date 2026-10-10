@@ -29,7 +29,7 @@ function blank(): McpDraft {
   return { id: null, name: '', transport: 'stdio', command: '', args: [], url: '', env: {}, headers: {}, inLibrary: false, expectedVersion: null };
 }
 function draftOf(item: McpDefinition): McpDraft {
-  return { id: item.id, name: item.name, transport: item.transport, command: item.command, args: item.args, url: item.url, env: item.env, headers: item.headers, referenceSource: item.referenceSource, inLibrary: item.inLibrary !== false, expectedVersion: item.version };
+  return { id: item.id, name: item.name, transport: item.transport, command: item.command, args: item.args, url: item.url, env: item.env, headers: item.headers, referenceSource: item.referenceSource, referenceScope: item.referenceScope, inLibrary: item.inLibrary !== false, expectedVersion: item.version };
 }
 function lines(value: Record<string, string>): string {
   return Object.entries(value).map(([key, item]) => `${key}=${item}`).join('\n');
@@ -115,7 +115,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
     setNativeOrigin(item); setCurrentConflict(null); setComposing(true);
     const found = definitions.find((definition) => definition.name === item.name);
     const next: McpDraft = { id: found?.id ?? null, name: item.name, transport: item.transport, command: item.command, args: item.args, url: item.url,
-      env: item.env, headers: item.headers, referenceSource: item.referenceSource ?? target.toolId, inLibrary: found?.inLibrary === true, expectedVersion: found?.version ?? null };
+      env: item.env, headers: item.headers, referenceSource: item.referenceSource ?? target.toolId, referenceScope: item.referenceScope ?? target.scope, inLibrary: found?.inLibrary === true, expectedVersion: found?.version ?? null };
     setSavedFingerprint(JSON.stringify([next, lines(item.env), lines(item.headers),item.enabled]));
     setDraft(next);
     setEnvText(lines(item.env)); setHeaderText(lines(item.headers)); setEnabled(item.enabled);
