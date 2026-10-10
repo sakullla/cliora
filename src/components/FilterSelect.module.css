@@ -30,18 +30,18 @@
 .triggerCopy > small { color: var(--text-2); font-size: 11px; font-weight: 450; }
 
 .trigger[data-variant="accent"] {
-  min-height: 36px;
+  min-height: var(--control-h-sm);
   padding: 4px 28px 4px 10px;
   border-color: var(--accent-line);
   background-color: var(--accent-soft);
-  color: var(--accent);
+  color: var(--text);
   font-size: 12.5px;
   font-weight: 640;
 }
-.trigger[data-variant="accent"]:hover:not(:disabled) { border-color: var(--accent); background-color: var(--accent-soft); color: var(--accent); }
+.trigger[data-variant="accent"]:hover:not(:disabled) { border-color: var(--accent); background-color: var(--accent-soft); color: var(--text); }
 .trigger[data-variant="accent"][data-empty="true"],
 .trigger[data-variant="accent"][data-empty="true"]:hover:not(:disabled) { border-color: var(--line-strong); background-color: var(--surface); color: var(--text-2); font-weight: 560; }
-.trigger[data-variant="accent"] .triggerCopy > small { color: var(--accent); font-weight: 450; opacity: .85; }
+.trigger[data-variant="accent"] .triggerCopy > small { color: var(--text-2); font-weight: 450; opacity: .85; }
 
 .panel {
   position: fixed;

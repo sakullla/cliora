@@ -76,7 +76,7 @@
 .muted > .state { margin-right: 8px; vertical-align: 1px; }
 .list small.mono { font-family: var(--font-mono); font-size: 11px; }
 .list > .active, .list > .active:hover:not(:disabled) { background: var(--accent-soft); }
-.list > .active strong { color: var(--accent); }
+.list > .active strong { color: var(--text); }
 .list small { max-width: 100%; overflow: hidden; color: var(--text-2); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
 .list > p { padding: 6px 10px 8px; color: var(--text-3); font-size: 12px; line-height: 1.55; }
 .list > .actions { padding: 2px 4px 6px; }

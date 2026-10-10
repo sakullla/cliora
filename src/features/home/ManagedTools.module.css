@@ -62,8 +62,8 @@
 }
 .step {
   flex: none;
-  width: 30px;
-  min-height: 36px;
+  width: var(--control-h-sm);
+  min-height: var(--control-h-sm);
   padding: 0;
   border-radius: var(--radius-sm);
   box-shadow: none;
@@ -89,15 +89,16 @@
   transition: background-color var(--fast) var(--ease), border-color var(--fast) var(--ease), color var(--fast) var(--ease);
 }
 .switch > div[role="radiogroup"] > button:hover:not(:disabled) { border-color: var(--line-strong); background: var(--surface); color: var(--text); }
-.activeConfig, .activeConfig:hover:not(:disabled) { border-color: var(--accent-line) !important; background: var(--accent-soft) !important; color: var(--accent) !important; font-weight: 640 !important; }
+.activeConfig, .activeConfig:hover:not(:disabled) { border-color: var(--accent-line) !important; background: var(--accent-soft) !important; color: var(--text) !important; font-weight: 640 !important; }
 .modelHint { margin-left: 6px; color: inherit; font-style: normal; font-weight: 520; opacity: .8; }
-.activeConfig::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: currentColor; vertical-align: 1px; }
+.activeConfig::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--accent); vertical-align: 1px; }
 
 .addConfig { border-style: dashed; color: var(--text-2); }
 
 .rowActions { display: grid; grid-column: 3 / -1; grid-template-columns: subgrid; align-items: center; justify-items: end; column-gap: 6px; }
 .rowActions > .launch, .rowActions > .recheck { grid-column: 1; justify-self: stretch; }
 .rowActions > .configure { grid-column: 3; }
+.rowActions > button { min-height: var(--control-h-sm); }
 .rowActions .launch { min-width: 68px; border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
 .rowActions .launch:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }
 .rowActions .configure, .rowActions .configure:hover:not(:disabled) { border-color: transparent; background: transparent; box-shadow: none; color: var(--text-2); }
