@@ -377,7 +377,7 @@ async function mockAccountResources(page: Page, contexts = ['ctx-a', 'ctx-b']) {
         const items = command === 'remove_skill' ? win.__accountInstalls : win.__resourceMcpPlacements;
         const index = items.findIndex((item: any) => item.contextId === context);
         if (index >= 0) items.splice(index, 1);
-        return null;
+        return command === 'remove_skill' ? { toolId: args.toolId, scope: args.scope, projectPath: args.projectPath, path: null, status: 'removed', detail: '已移除' } : null;
       }
       return invoke(command, args);
     };

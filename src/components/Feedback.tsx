@@ -1,10 +1,9 @@
-import { useEffect, useId, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction } from 'react';
+import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 import { notifications, type FeedbackEvent } from '../lib/notifications';
-import { formatFailure } from '../lib/feedback';
 import { Icon } from './Icon';
 
-const regions = new Map<string, { context: string; node: HTMLElement }>();
+const regions = new Map<string, { contexts: string[]; node: HTMLElement }>();
 const regionListeners = new Set<() => void>();
 let regionVersion = 0;
 let centerExpanded = false;
@@ -15,7 +14,7 @@ function useRegions() {
 function surface() { return document.activeElement?.closest('dialog')?.getAttribute('data-feedback-surface') ?? null; }
 function owner(event: FeedbackEvent) {
   if (centerExpanded) return undefined;
-  const candidates = [...regions].filter(([, region]) => region.context === event.context && region.node.getClientRects().length && !region.node.closest('[hidden]'));
+  const candidates = [...regions].filter(([, region]) => region.contexts.includes(event.context) && region.node.getClientRects().length && !region.node.closest('[hidden]'));
   const modal = candidates.find(([, region]) => {
     const dialog = region.node.closest('dialog[open]');
     return dialog && (!event.surface || dialog.getAttribute('data-feedback-surface') === event.surface);
@@ -29,32 +28,20 @@ export function useFeedback(context: string) {
   const scoped = events.filter((event) => event.context === context);
   const latest = (tone: 'error' | 'success') => [...scoped].reverse().find((event) => event.tone === tone);
   const begin = (operation: string) => notifications.begin(context, operation, surface());
-  const set = (tone: 'error' | 'success', value: SetStateAction<string>, operation?: string) => {
-    const text = typeof value === 'function' ? value(latest(tone)?.text ?? '') : value;
-    // Legacy clears at operation start must never clear a different unresolved result.
-    if (text) begin(operation ?? `${tone}:${text}`)[tone](text);
-  };
-  return {
-    context, begin, events: scoped,
+  return { context, begin, events: scoped,
     error: latest('error')?.text ?? '', notice: latest('success')?.text ?? '',
-    setError: ((value) => set('error', value)) as Dispatch<SetStateAction<string>>,
-    setNotice: ((value) => set('success', value)) as Dispatch<SetStateAction<string>>,
-    showError: (text: string, operation?: string) => set('error', text, operation),
-    showNotice: (text: string, _protect = false, operation?: string) => set('success', text, operation),
-    showFailure: (value: unknown, object: string, next: string, _keep = false) => set('error', formatFailure(value, object, next)),
-    showMixed: (text: string, detail: string) => begin(`partial:${text}`).partial(text, { detail }),
     dismiss: (id: number) => notifications.dismiss(id),
   };
 }
 
-function FeedbackItem({ event }: { event: FeedbackEvent }) {
+function FeedbackItem({ event, announce = true }: { event: FeedbackEvent; announce?: boolean }) {
   const { t } = useTranslation();
   const [recoveryError, setRecoveryError] = useState('');
   const [busy, setBusy] = useState(false);
   const pause = () => notifications.pause(event.id);
   return <div className="feedback-item" data-feedback-id={event.id} data-tone={event.tone} onMouseEnter={pause} onMouseLeave={pause} onFocus={pause} onBlur={pause}>
     <Icon name={event.tone === 'success' ? 'check' : event.tone === 'pending' ? 'info' : 'alert'} size={14} />
-    <span title={event.text} role={event.tone === 'error' || event.tone === 'partial' ? 'alert' : 'status'}>{event.tone === 'partial' && <strong>{t('common.feedback.partial')} </strong>}{event.text}</span>
+    <span title={event.text} role={announce ? event.tone === 'error' || event.tone === 'partial' ? 'alert' : 'status' : undefined}>{event.tone === 'partial' && <strong>{t('common.feedback.partial')} </strong>}{event.text}</span>
     {event.detail && <details><summary>{t('common.feedback.details')}</summary><p>{event.detail}</p></details>}
     {event.recovery && <button type="button" disabled={busy} onClick={async () => {
       setBusy(true); setRecoveryError('');
@@ -68,16 +55,17 @@ function FeedbackItem({ event }: { event: FeedbackEvent }) {
 }
 
 /** A reserved, scrollable slot: results cannot move the controls around them. */
-export function FeedbackRegion({ context }: { context: string }) {
+export function FeedbackRegion({ context, relatedContexts = [] }: { context: string; relatedContexts?: string[] }) {
+  const contexts = JSON.stringify([context, ...relatedContexts]);
   const id = useId();
   const node = useRef<HTMLDivElement>(null);
   const events = useSyncExternalStore(notifications.subscribe, notifications.getSnapshot);
   useRegions();
   useEffect(() => {
     if (!node.current) return;
-    regions.set(id, { context, node: node.current }); updateRegions();
+    regions.set(id, { contexts: JSON.parse(contexts) as string[], node: node.current }); updateRegions();
     return () => { regions.delete(id); updateRegions(); };
-  }, [id, context]);
+  }, [id, contexts]);
   return <div ref={node} className="feedback-region" data-feedback-context={context}>
     {events.filter((event) => owner(event) === id).reverse().map((event) => <FeedbackItem key={event.id} event={event} />)}
   </div>;
@@ -87,6 +75,8 @@ export function FeedbackCenter() {
   const { t } = useTranslation();
   const events = useSyncExternalStore(notifications.subscribe, notifications.getSnapshot);
   const [open, setOpen] = useState(false);
+  const announced = useRef(new Map<number, string>());
+  const [announcement, setAnnouncement] = useState({ error: '', polite: '' });
   const toggle = (value: boolean) => { centerExpanded = value; setOpen(value); updateRegions(); };
   useRegions();
   useEffect(() => {
@@ -106,12 +96,27 @@ export function FeedbackCenter() {
     return () => window.clearInterval(timer);
   }, [events]);
   const hidden = events.filter((event) => !owner(event));
+  useEffect(() => {
+    const fresh = events.filter(event => {
+      const signature = JSON.stringify([event.tone, event.text, event.detail]);
+      const previous = announced.current.get(event.id);
+      announced.current.set(event.id, signature);
+      return !owner(event) && signature !== previous;
+    });
+    if (fresh.length) setAnnouncement({
+      error: fresh.filter(event => event.tone === 'error' || event.tone === 'partial').map(event => event.tone === 'partial' ? `${t('common.feedback.partial')} ${event.text}` : event.text).join(' · '),
+      polite: fresh.filter(event => event.tone === 'success' || event.tone === 'pending').map(event => event.text).join(' · '),
+    });
+    else if (!events.some(event => !owner(event))) setAnnouncement({ error: '', polite: '' });
+  }, [events]);
   const unresolved = events.filter((event) => event.tone === 'error' || event.tone === 'partial').length;
   return <div className="feedback-center">
+    <span className="sr-only" aria-live="assertive" aria-atomic="true">{announcement.error}</span>
+    <span className="sr-only" aria-live="polite" aria-atomic="true">{announcement.polite}</span>
     <button type="button" className="feedback-center-toggle" aria-label={t('common.feedback.title')} aria-expanded={open} onClick={() => toggle(!open)} title={t('common.feedback.summary', { count: unresolved })}><Icon name="info" size={16} /><span>{t('common.feedback.title')}</span><span>{unresolved || hidden.length || ''}</span></button>
     {open && <div className="feedback-center-panel" aria-label={t('common.feedback.title')}>
       <strong>{t('common.feedback.summary', { count: unresolved })}</strong>
-      {hidden.length ? [...hidden].reverse().map((event) => <FeedbackItem key={event.id} event={event} />) : <p>{t('common.feedback.empty')}</p>}
+      {hidden.length ? [...hidden].reverse().map((event) => <FeedbackItem key={event.id} event={event} announce={false} />) : <p>{t('common.feedback.empty')}</p>}
       <button type="button" onClick={() => toggle(false)}>{t('common.dialog.close')}</button>
     </div>}
   </div>;

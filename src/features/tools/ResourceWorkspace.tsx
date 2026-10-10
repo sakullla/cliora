@@ -1,3 +1,4 @@
+import type { FeedbackOperation } from '../../lib/notifications';
 import { useFeedback, FeedbackRegion } from '../../components/Feedback';
 import { CodeEditor } from '../../components/CodeEditor';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -53,8 +54,6 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
   const [currentConflict, setCurrentConflict] = useState<{ id: string; items: McpTargetResult[] } | null>(null);
   const [busy, setBusy] = useState(false);
   const feedback = useFeedback(JSON.stringify(['mcp', toolId, scope, projectPath, contextId]));
-  const { setError } = feedback;
-  const { setNotice } = feedback;
   const [capabilityBlocked, setCapabilityBlocked] = useState('');
   const [composing, setComposing] = useState(false);
   const [syncLibrary, setSyncLibrary] = useState(false);
@@ -73,7 +72,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
   const target = useMemo<McpTargetRequest>(() => ({ toolId, scope, projectPath: project, enabled, contextId }), [toolId, scope, project, enabled, contextId]);
 
   useEffect(() => {
-    void native.listMcpDefinitions().then(setDefinitions).catch((value) => setError(errorText(value)));
+    const result = feedback.begin('definitions'); void native.listMcpDefinitions().then(value => { setDefinitions(value); result.complete(); }).catch(value => result.error(errorText(value)));
   }, []);
   useEffect(() => {
     if (!toolId || (scope === 'project' && !project)) { setNativeEntries([]); setCapabilityBlocked(''); return; }
@@ -92,14 +91,13 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
     setDraft(next); setEnvText(lines(item.env)); setHeaderText(lines(item.headers));
     setEnabled(nextEnabled);setSavedFingerprint(JSON.stringify([next, lines(item.env), lines(item.headers),nextEnabled]));
     latestForm.current=JSON.stringify([next,lines(item.env),lines(item.headers),nextEnabled]);
-    setError('');
-  }
+    }
   async function canReplace() {
     const started = previewEpochRef.current;
     return !dirty || confirmAction(t('tools.mcp.confirmDiscard'), () => mounted.current && started === previewEpochRef.current, { title: t('common.app.leaveDirtyTitle'), confirmLabel: t('common.app.leaveDirtyConfirm') });
   }
   async function importNative(item: NativeMcpEntry) {
-    const operationFeedback = feedback.begin('importNative');
+    const operationFeedback = feedback.begin('importNative:' + item.name);
     if (!await canReplace()) return;
     setNativeOrigin(item); setCurrentConflict(null); setComposing(true);
     const found = definitions.find((definition) => definition.name === item.name);
@@ -113,38 +111,35 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
   async function startNew() {
     if (!await canReplace()) return;
     setDraft(blank()); setEnvText(''); setHeaderText(''); setEnabled(true); setNativeOrigin(null); setCurrentConflict(null); setSyncLibrary(false);
-    setSavedFingerprint(JSON.stringify([blank(), '', '', true])); setComposing(true); setNotice(''); setError('');
-  }
+    setSavedFingerprint(JSON.stringify([blank(), '', '', true])); setComposing(true); }
   async function closeCompose() {
     if (!await canReplace()) return;
     const next = blank();
     setDraft(next); setEnvText(''); setHeaderText(''); setEnabled(true); setNativeOrigin(null); setCurrentConflict(null);
-    setSavedFingerprint(JSON.stringify([next, '', '', true])); setComposing(false); setNotice(''); setError('');
-  }
+    setSavedFingerprint(JSON.stringify([next, '', '', true])); setComposing(false); }
   function leaveComposer() {
     const next = blank();
     setDraft(next); setEnvText(''); setHeaderText(''); setEnabled(true); setNativeOrigin(null); setCurrentConflict(null);
     setSavedFingerprint(JSON.stringify([next, '', '', true])); setComposing(false);
   }
-  async function applyItems(id: string, items: McpTargetResult[], replace: boolean) {
-    const operationFeedback = feedback.begin('applyItems');
+  async function applyItems(id: string, items: McpTargetResult[], replace: boolean, operationFeedback = feedback.begin('save:' + id)) {
     const targets = items.filter(item => item.status === 'ready' || item.status === 'conflict').map((item): McpTargetRequest => ({ toolId: item.toolId, scope: item.scope,
       projectPath: item.projectPath, contextId: item.contextId ?? contextId, enabled, baselineHash: item.baselineHash, previewToken: item.previewToken, allowReplace: replace && item.status === 'conflict' }));
     const outcome = await native.distributeMcp(id, targets);
     setNativeEntries(await native.listNativeMcp(target)); setCurrentConflict(null);
     const written = outcome.every(item => item.status === 'written');
-    operationFeedback.success(written ? t('tools.mcp.written') : t('tools.mcp.partialFailed'));
+    if (written) operationFeedback.success(t('tools.mcp.written'));
+    else operationFeedback.partial(t('tools.mcp.partialFailed'), { detail: outcome.filter(item => item.status !== 'written').map(item => item.detail).join(' · ') });
     return written;
   }
   async function save() {
-    const operationFeedback = feedback.begin('save');
+    const operationFeedback = feedback.begin('save:' + (draft.id ?? draft.name));
     if (scope === 'project' && !project) { operationFeedback.error(t('tools.mcp.pickProject')); return; }
     const origin = nativeOrigin; const started = latestForm.current;
     const editing = !!(draft.id || nativeOrigin);
     const linked = definitions.find((item) => item.id === draft.id) ?? definitions.find((item) => item.name === draft.name.trim());
     const inLibrary = editing ? linked?.inLibrary !== false : syncLibrary || linked?.inLibrary === true;
-    setBusy(true); setError(''); setNotice('');
-    try {
+    setBusy(true); try {
       const saved = await native.saveMcpDefinition({ ...draft, args: keptArgs(draft.args), id: linked?.id ?? draft.id, expectedVersion: linked?.version ?? draft.expectedVersion, inLibrary, env: parseLines(envText), headers: parseLines(headerText) });
       setDefinitions(await native.listMcpDefinitions());
       if (!mounted.current || started !== latestForm.current) { operationFeedback.success(t('tools.mcp.dirtyAgain')); return; }
@@ -156,12 +151,12 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
       const sameOrigin = !!origin && JSON.stringify(fresh.find(item => item.name === origin.name)) === JSON.stringify(origin);
       if (items.some(item => item.status === 'conflict') && !sameOrigin) { setCurrentConflict({ id: saved.id, items }); return; }
       if (!items.some(item => item.status === 'ready' || item.status === 'conflict')) { operationFeedback.error(items.map(item => item.detail).join(t('tools.quota.errorSeparator'))); return; }
-      if (await applyItems(saved.id, items, sameOrigin)) leaveComposer();
+      if (await applyItems(saved.id, items, sameOrigin, operationFeedback)) leaveComposer();
     } catch (value) { operationFeedback.error(errorText(value)); }
     finally { setBusy(false); }
   }
   async function removeSaved() {
-    const operationFeedback = feedback.begin('removeSaved');
+    const operationFeedback = feedback.begin('removeSaved:' + (draft.id ?? draft.name));
     const onTool = !!nativeOrigin || nativeEntries.some((entry) => entry.name === draft.name);
     const inLibrary = definitions.find((item) => item.id === draft.id)?.inLibrary === true;
     if (!onTool && !inLibrary) return;
@@ -170,8 +165,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
       ? t('tools.mcp.confirmRemoveLibrary', { name })
       : t('tools.mcp.confirmRemove', { name });
     if (!await confirmAction(message, () => mounted.current, { title: t('tools.mcp.removeTitle'), confirmLabel: t('tools.agents.delete'), destructive: true })) return;
-    setBusy(true); setError('');
-    try {
+    setBusy(true); try {
       if (onTool) await native.removeNativeMcp({ ...target, enabled }, name);
       if (!inLibrary && draft.id && draft.expectedVersion !== null) await native.deleteMcpDefinition(draft.id, draft.expectedVersion);
       if (mounted.current) {
@@ -222,7 +216,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
       </>}
       <label className={styles.inline}><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} />{t('tools.plugins.action.enable')}</label>
       {!(draft.id || nativeOrigin) && <label className={styles.inline}><input type="checkbox" checked={syncLibrary} onChange={(event) => setSyncLibrary(event.target.checked)} />{t('tools.mcp.quickSync')}<small className={styles.fieldHint}>{t('tools.mcp.quickSyncHint')}</small></label>}
-      {currentConflict && <div className={styles.resultList} role="group" aria-label={t('tools.mcp.conflictLabel')}><strong>{t('tools.mcp.conflictTitle')}</strong>{currentConflict.items.map(item => <div className={styles.fileDiff} key={item.toolId}><CodeEditor compact label={t('tools.mcp.conflictCurrent')} format="json" readOnly value={JSON.stringify(item.existing, null, 2)} /><CodeEditor compact label={t('tools.mcp.conflictNext')} format="json" readOnly value={JSON.stringify(item.proposed, null, 2)} /></div>)}<div className={styles.actions}><button type="button" onClick={() => setCurrentConflict(null)}>{t('common.conflict.keepCurrent')}</button><button type="button" disabled={busy} onClick={() => { setBusy(true); void applyItems(currentConflict.id, currentConflict.items, true).then(ok => { if (ok) leaveComposer(); }).catch(value => setError(errorText(value))).finally(() => setBusy(false)); }}>{t('tools.mcp.useNext')}</button></div></div>}
+      {currentConflict && <div className={styles.resultList} role="group" aria-label={t('tools.mcp.conflictLabel')}><strong>{t('tools.mcp.conflictTitle')}</strong>{currentConflict.items.map(item => <div className={styles.fileDiff} key={item.toolId}><CodeEditor compact label={t('tools.mcp.conflictCurrent')} format="json" readOnly value={JSON.stringify(item.existing, null, 2)} /><CodeEditor compact label={t('tools.mcp.conflictNext')} format="json" readOnly value={JSON.stringify(item.proposed, null, 2)} /></div>)}<div className={styles.actions}><button type="button" onClick={() => setCurrentConflict(null)}>{t('common.conflict.keepCurrent')}</button><button type="button" disabled={busy} onClick={() => { const result = feedback.begin('save:' + currentConflict.id); setBusy(true); void applyItems(currentConflict.id, currentConflict.items, true, result).then(ok => { if (ok) leaveComposer(); }).catch(value => result.error(errorText(value))).finally(() => setBusy(false)); }}>{t('tools.mcp.useNext')}</button></div></div>}
 
       <FeedbackRegion context={feedback.context} />
       <div className="dialog-footer">{(draft.id || nativeOrigin) && <button type="button" disabled={busy} onClick={() => void removeSaved()}>{t('tools.mcp.removeFromTool')}</button>}<span className="dialog-footer-gap" /><button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint()} disabled={busy || !draft.name.trim() || (scope === 'project' && !project)} onClick={() => void save()}>{draft.id || nativeOrigin ? t('home.launcher.save') : t('tools.mcp.addSubmit')}</button></div>
@@ -257,11 +251,9 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
   useEffect(() => () => { onDirtyChange?.(false); }, [onDirtyChange]);
   const [busy, setBusy] = useState(false);
   const feedback = useFeedback(JSON.stringify(['skills', toolId, scope, projectPath, contextId]));
-  const { setError } = feedback;
-  function setResult(result: SkillTargetResult | null) {
+  function setResult(operation: FeedbackOperation, result: SkillTargetResult) {
     if (!result) return;
     const text = result.status === 'failed' || result.detail === t('tools.skills.saved') ? result.detail : result.detail === t('tools.skills.addedToLibrary') ? t('tools.skills.addedToLibraryNote') : result.status === 'removed' ? t('tools.skills.removed', { path: result.path ?? '' }) : t('tools.skills.installed', { path: result.path ?? '' });
-    const operation = feedback.begin('skill-change');
     if (result.status === 'failed') operation.error(text); else operation.success(text);
   }
   const selected = packages.find((item) => item.id === selectedId);
@@ -278,37 +270,37 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
     setSkillLoading(false);
   }, [toolId, scope, project]);
   useEffect(() => {
-    let live = true;
-    void native.listSkillRecoveryIssues().then((issues) => { if (live) setRecoveryIssues(issues); })
-      .catch((value) => { if (live) setError(errorText(value)); });
+    let live = true; const result = feedback.begin('recovery');
+    void native.listSkillRecoveryIssues().then((issues) => { if (live) { setRecoveryIssues(issues); result.complete(); } })
+      .catch((value) => { if (live) result.error(errorText(value)); });
     return () => { live = false; };
   }, [toolId, scope, project]);
   useEffect(() => {
     if (!toolId || (scope === 'project' && !project)) { setNativeEntries([]); return; }
-    let live = true;
-    void native.scanNativeSkills(toolId, scope, project).then((entries) => { if (live) setNativeEntries(entries); })
-      .catch((value) => { if (live) setError(errorText(value)); });
+    let live = true; const result = feedback.begin('scan');
+    void native.scanNativeSkills(toolId, scope, project).then((entries) => { if (live) { setNativeEntries(entries); result.complete(); } })
+      .catch((value) => { if (live) result.error(errorText(value)); });
     return () => { live = false; };
   }, [toolId, scope, project]);
   const installed = installations.find((item) => item.toolId === toolId && item.scope === scope && item.projectPath === project && (item.contextId ?? null) === (scope === 'global' ? contextId ?? null : null));
-  useEffect(() => { void native.listSkillPackages().then(setPackages).catch((value) => setError(errorText(value))); }, []);
+  useEffect(() => { const result = feedback.begin('packages'); void native.listSkillPackages().then(value => { setPackages(value); result.complete(); }).catch(value => result.error(errorText(value))); }, []);
   useEffect(() => {
     if (!selectedId) return;
-    let live = true;
-    void Promise.all([native.listSkillInstallations(selectedId),native.getSkillEnabled(selectedId,toolId,scope,project)]).then(([items,enabled]) => { if (live) {setInstallations(items);setSkillEnabled(enabled);} })
-      .catch((value) => { if (live) setError(errorText(value)); });
+    let live = true; const result = feedback.begin('installations:' + selectedId);
+    void Promise.all([native.listSkillInstallations(selectedId),native.getSkillEnabled(selectedId,toolId,scope,project)]).then(([items,enabled]) => { if (live) {setInstallations(items);setSkillEnabled(enabled);result.complete();} })
+      .catch((value) => { if (live) result.error(errorText(value)); });
     return () => { live = false; };
   }, [selectedId, toolId, scope, project]);
 
-  async function installPackage(packageId: string) {
-    if (scope === 'project' && !project) { setError(t('tools.skills.pickProjectFirst')); return; }
+  async function installPackage(packageId: string, operationFeedback: FeedbackOperation) {
+    if (scope === 'project' && !project) { operationFeedback.error(t('tools.skills.pickProjectFirst')); return; }
     const item = (await native.listSkillPackages()).find((entry) => entry.id === packageId);
     if (!item) return;
-    if (item.compatibility && !dependencyChecked) { setError(t('tools.skills.dependencyFirst')); setSelectedId(packageId); return; }
+    if (item.compatibility && !dependencyChecked) { operationFeedback.error(t('tools.skills.dependencyFirst')); setSelectedId(packageId); return; }
     const targetPreview = await native.previewSkillTarget(packageId, toolId, scope, project);
     if (targetPreview.status === 'conflict') { setPendingTarget(targetPreview); setSelectedId(packageId); return; }
     const outcome = await native.installSkill(packageId, toolId, scope, project, targetPreview.previewToken, false);
-    setResult(outcome);
+    setResult(operationFeedback, outcome);
     setInstallations(await native.listSkillInstallations(packageId));
     setNativeEntries(await native.scanNativeSkills(toolId, scope, project));
     setSkillEnabled(await native.getSkillEnabled(packageId, toolId, scope, project));
@@ -316,38 +308,38 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
     if (outcome.status !== 'failed') { setGuide(false); setAdding(false); }
   }
 
-  async function place(item: SkillPackage, existed: boolean) {
+  async function place(item: SkillPackage, existed: boolean, operationFeedback: FeedbackOperation) {
     if (syncLibrary) await native.setSkillInLibrary(item.id, true);
     else if (!existed) await native.setSkillInLibrary(item.id, false);
-    await finishImported(item, true);
+    await finishImported(item, true, operationFeedback);
   }
 
-  async function finishImported(item: SkillPackage, installAfter: boolean) {
+  async function finishImported(item: SkillPackage, installAfter: boolean, operationFeedback: FeedbackOperation) {
     setPackages(await native.listSkillPackages());
     setSelectedId(item.id);
-    setResult(null);
+
     setAdding(false);
-    if (installAfter) await installPackage(item.id);
+    if (installAfter) await installPackage(item.id, operationFeedback);
     else setGuide(false);
   }
 
   async function local() {
+    const operationFeedback = feedback.begin('local');
     try {
       const source = await open({ directory: true, multiple: false, title: t('tools.skills.pickDirTitle') });
       if (typeof source !== 'string') return;
-      setBusy(true); setError('');
-      const preview = await native.previewSkillLocal(source);
+      setBusy(true); const preview = await native.previewSkillLocal(source);
       if (preview.existingDigest && preview.existingDigest !== preview.digest) {
         setPendingImport({ preview, kind: 'local', source, subdirectory: null, installAfter: true }); return;
       }
       const item = await native.importSkillLocal(source, preview.digest, preview.existingDigest);
-      await place(item, !!preview.existingDigest);
-    } catch (value) { setError(errorText(value)); }
+      await place(item, !!preview.existingDigest, operationFeedback);
+    } catch (value) { operationFeedback.error(errorText(value)); }
     finally { setBusy(false); }
   }
   async function archive(source: string, localZip: boolean, chosen?: string) {
-    setBusy(true); setError('');
-    try {
+    const operationFeedback = feedback.begin(JSON.stringify(['archive', source, chosen]));
+    setBusy(true); try {
       let child = chosen ?? null;
       if (chosen === undefined) {
         const entries = await native.listSkillZipEntries(source, localZip);
@@ -359,22 +351,23 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
         setPendingImport({ preview, kind: localZip ? 'local_zip' : 'zip', source, subdirectory: child, installAfter: true }); setArchiveSelection(null); return;
       }
       const item = localZip ? await native.importSkillLocalZip(source, child, preview.digest, preview.existingDigest) : await native.importSkillHttpsZip(source, child, preview.digest, preview.existingDigest);
-      await place(item, !!preview.existingDigest);
+      await place(item, !!preview.existingDigest, operationFeedback);
       if (!localZip) setUrl('');
       setArchiveSelection(null);
-    } catch (value) { setError(errorText(value)); }
+    } catch (value) { operationFeedback.error(errorText(value)); }
     finally { setBusy(false); }
   }
   async function localZip() {
+    const operationFeedback = feedback.begin('localZip');
     try {
       const source = await open({ directory: false, multiple: false, title: t('tools.skills.pickZipTitle'), filters: [{ name: 'ZIP', extensions: ['zip'] }] });
       if (typeof source === 'string') await archive(source, true);
-    } catch (value) { setError(errorText(value)); }
+    } catch (value) { operationFeedback.error(errorText(value)); }
   }
   async function confirmImport() {
+    const operationFeedback = feedback.begin(JSON.stringify(['confirmImport', pendingImport?.source]));
     if (!pendingImport) return;
-    setBusy(true); setError('');
-    try {
+    setBusy(true); try {
       const { preview, kind, source, subdirectory, installAfter } = pendingImport;
       const item = kind === 'local'
         ? await native.importSkillLocal(source, preview.digest, preview.existingDigest)
@@ -382,9 +375,9 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
         : await native.importSkillHttpsZip(source, subdirectory, preview.digest, preview.existingDigest);
       setPendingImport(null);
       if (kind === 'zip') setUrl('');
-      if (installAfter) await place(item, !!preview.existingDigest);
-      else { await native.setSkillInLibrary(item.id, true); setGuide(false); setExternal(null); setResult({ toolId, scope, projectPath: project, path: item.name, status: 'installed', detail: t('tools.skills.addedToLibrary') }); }
-    } catch (value) { setError(errorText(value)); }
+      if (installAfter) await place(item, !!preview.existingDigest, operationFeedback);
+      else { await native.setSkillInLibrary(item.id, true); setGuide(false); setExternal(null); setResult(operationFeedback, { toolId, scope, projectPath: project, path: item.name, status: 'installed', detail: t('tools.skills.addedToLibrary') }); }
+    } catch (value) { operationFeedback.error(errorText(value)); }
     finally { setBusy(false); }
   }
   function closeGuide() {
@@ -399,9 +392,9 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
     setSkillLoading(false);
   }
   async function openNative(entry: NativeSkillEntry) {
+    const operationFeedback = feedback.begin(JSON.stringify(['openNative', entry.path]));
     const request = ++skillRequest.current;
     setAdding(false);
-    setError('');
     setExternal(entry.packageId ? null : entry);
     setSelectedId(entry.packageId);
     setSkillDoc(null);
@@ -410,76 +403,78 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
     try {
       const document = await native.readNativeSkill(toolId, scope, project, entry.path);
       if (skillRequest.current !== request) return;
-      setSkillDoc({ path: entry.path, baseline: document.content, draft: document.content });
+      setSkillDoc({ path: entry.path, baseline: document.content, draft: document.content }); operationFeedback.complete();
     } catch (value) {
-      if (skillRequest.current === request) setError(errorText(value));
+      if (skillRequest.current === request) operationFeedback.error(errorText(value));
     } finally {
       if (skillRequest.current === request) setSkillLoading(false);
     }
   }
   async function saveSkill() {
+    const operationFeedback = feedback.begin(JSON.stringify(['saveSkill', skillDoc?.path]));
     if (!skillDoc || skillDoc.draft === skillDoc.baseline) return;
     const request = skillRequest.current;
     const saved = skillDoc;
-    setBusy(true); setError('');
-    try {
+    setBusy(true); try {
       await native.saveNativeSkill(toolId, scope, project, saved.path, saved.baseline, saved.draft);
       if (skillRequest.current !== request) return;
       setSkillDoc({ ...saved, baseline: saved.draft });
       setNativeEntries(await native.scanNativeSkills(toolId, scope, project));
-      setResult({ toolId, scope, projectPath: project, path: saved.path, status: 'installed', detail: t('tools.skills.saved') });
+      setResult(operationFeedback, { toolId, scope, projectPath: project, path: saved.path, status: 'installed', detail: t('tools.skills.saved') });
     } catch (value) {
-      if (skillRequest.current === request) setError(errorText(value));
+      if (skillRequest.current === request) operationFeedback.error(errorText(value));
     } finally {
       if (skillRequest.current === request) setBusy(false);
     }
   }
   async function syncExternal() {
+    const operationFeedback = feedback.begin(JSON.stringify(['syncExternal', external?.path]));
     if (!external) return;
-    setBusy(true); setError('');
-    try {
+    setBusy(true); try {
       const preview = await native.previewSkillLocal(external.path);
       if (preview.existingDigest && preview.existingDigest !== preview.digest) {
         setPendingImport({ preview, kind: 'local', source: external.path, subdirectory: null, installAfter: false }); return;
       }
       const item = await native.importSkillLocal(external.path, preview.digest, preview.existingDigest);
       await native.setSkillInLibrary(item.id, true);
-      setResult({ toolId, scope, projectPath: project, path: item.name, status: 'installed', detail: t('tools.skills.addedToLibrary') });
+      setResult(operationFeedback, { toolId, scope, projectPath: project, path: item.name, status: 'installed', detail: t('tools.skills.addedToLibrary') });
       setGuide(false); setExternal(null);
-    } catch (value) { setError(errorText(value)); }
+    } catch (value) { operationFeedback.error(errorText(value)); }
     finally { setBusy(false); }
   }
   async function change(remove: boolean) {
+    const operationFeedback = feedback.begin(JSON.stringify(['change', selected?.id, remove]));
     if (!selected) return;
-    if (scope === 'project' && !project) { setError(t('tools.skills.pickProjectFirst')); return; }
-    if (!remove && selected.compatibility && !dependencyChecked) { setError(t('tools.skills.dependencyFirst')); return; }
-    setBusy(true); setError(''); setResult(null);
+    if (scope === 'project' && !project) { operationFeedback.error(t('tools.skills.pickProjectFirst')); return; }
+    if (!remove && selected.compatibility && !dependencyChecked) { operationFeedback.error(t('tools.skills.dependencyFirst')); return; }
+    setBusy(true);
     try {
       const targetPreview = !remove ? pendingTarget ?? await native.previewSkillTarget(selected.id, toolId, scope, project) : null;
       if (!remove && !pendingTarget && targetPreview?.status === 'conflict') { setPendingTarget(targetPreview); return; }
       const outcome = remove ? await native.removeSkill(selected.id, toolId, scope, project, contextId)
         : await native.installSkill(selected.id, toolId, scope, project, targetPreview?.previewToken ?? null, targetPreview?.status === 'conflict');
-      setResult(outcome);
+      setResult(operationFeedback, outcome);
       setPendingTarget(null);
       setInstallations(await native.listSkillInstallations(selected.id));
       setNativeEntries(await native.scanNativeSkills(toolId, scope, project));
       setSkillEnabled(await native.getSkillEnabled(selected.id,toolId,scope,project));
       setRecoveryIssues(await native.listSkillRecoveryIssues());
       if (outcome.status !== 'failed') { setGuide(false); setAdding(false); }
-    } catch (value) { setError(errorText(value)); }
+    } catch (value) { operationFeedback.error(errorText(value)); }
     finally { setBusy(false); }
   }
   async function toggleSkill(next: boolean) {
-    if (!selected) return; setBusy(true);setError('');
-    try {await native.setSkillEnabled(selected.id,toolId,scope,project,next,contextId);setSkillEnabled(await native.getSkillEnabled(selected.id,toolId,scope,project));setInstallations(await native.listSkillInstallations(selected.id));setNativeEntries(await native.scanNativeSkills(toolId,scope,project));}
-    catch(value){setError(errorText(value));}finally{setBusy(false);}
+    const operationFeedback = feedback.begin(JSON.stringify(['toggle', selected?.id, next]));
+    if (!selected) return; setBusy(true);try {await native.setSkillEnabled(selected.id,toolId,scope,project,next,contextId);setSkillEnabled(await native.getSkillEnabled(selected.id,toolId,scope,project));setInstallations(await native.listSkillInstallations(selected.id));setNativeEntries(await native.scanNativeSkills(toolId,scope,project));operationFeedback.complete();}
+    catch(value){operationFeedback.error(errorText(value));}finally{setBusy(false);}
   }
   async function checkRecovery() {
-    try { setRecoveryIssues(await native.listSkillRecoveryIssues()); setError(''); }
-    catch (value) { setError(errorText(value)); }
+    const operationFeedback = feedback.begin('recovery');
+    try { setRecoveryIssues(await native.listSkillRecoveryIssues()); operationFeedback.complete(); }
+    catch (value) { operationFeedback.error(errorText(value)); }
   }
 
-  const recovery = !!visibleIssues.length && <div className={styles.error} role="alert"><strong>{t('tools.skills.recoveryTitle')}</strong><p>{t('tools.skills.recoveryDetail')}</p>{visibleIssues.map((issue) => <div key={issue.operationId} className={styles.fileChange}><strong>{issue.scope === 'global' ? t('tools.apply.global') : t('tools.skills.recoveryProject', { path: issue.projectPath ?? '' })}</strong><p>{issue.detail}</p><p>{t('tools.skills.recoveryTarget', { path: issue.targetPath })}</p><p>{t('tools.skills.recoveryBackup', { path: issue.backupPath })}</p><button type="button" onClick={() => void navigator.clipboard.writeText(issue.backupPath).catch((value) => setError(errorText(value)))}>{t('tools.skills.recoveryCopy')}</button></div>)}<button type="button" onClick={() => void checkRecovery()}>{t('tools.skills.recoveryRecheck')}</button></div>;
+  const recovery = !!visibleIssues.length && <div className={styles.error} role="alert"><strong>{t('tools.skills.recoveryTitle')}</strong><p>{t('tools.skills.recoveryDetail')}</p>{visibleIssues.map((issue) => <div key={issue.operationId} className={styles.fileChange}><strong>{issue.scope === 'global' ? t('tools.apply.global') : t('tools.skills.recoveryProject', { path: issue.projectPath ?? '' })}</strong><p>{issue.detail}</p><p>{t('tools.skills.recoveryTarget', { path: issue.targetPath })}</p><p>{t('tools.skills.recoveryBackup', { path: issue.backupPath })}</p><button type="button" onClick={() => { const result = feedback.begin('copyRecovery:' + issue.operationId); void navigator.clipboard.writeText(issue.backupPath).then(() => result.success(t('records.reader.copied'))).catch(value => result.error(errorText(value))); }}>{t('tools.skills.recoveryCopy')}</button></div>)}<button type="button" onClick={() => void checkRecovery()}>{t('tools.skills.recoveryRecheck')}</button></div>;
   const installState: { label: string; tone: 'on' | 'warn' | undefined } = installed?.state === 'current' ? { label: t('tools.skills.stateInstalled'), tone: 'on' }
     : installed?.state === 'update_available' ? { label: t('tools.skills.stateUpdate'), tone: 'warn' }
     : installed?.state === 'conflict' ? { label: t('tools.skills.stateConflict'), tone: 'warn' }

@@ -22,7 +22,6 @@ export function NativeRuleEditor({ tools, projects }: { tools: AdapterDescriptor
   const [enabled, setEnabled] = useState(false);
   const [open, setOpen] = useState(false);
   const feedback = useFeedback(JSON.stringify(['native-rule', tool, scope, project]));
-  const { setNotice: setStatus, setError: setFailure } = feedback;
   const context = JSON.stringify([tool, scope, project]);
   const latest = useRef({ context, text }); latest.current = { context, text };
   const mounted = useRef(true);
@@ -31,46 +30,46 @@ export function NativeRuleEditor({ tools, projects }: { tools: AdapterDescriptor
   const target = { toolId: tool, scope, projectPath: scope === 'project' ? project || null : null };
   const dirty = !!loaded && text !== loaded.text;
   const errorText = (value: unknown) => value && typeof value === 'object' && 'message' in value ? String(value.message) : String(value);
-  function clearResult() { setStatus(''); setFailure(''); }
-  function showFailure(value: unknown, summary: string, next: string, operation = 'read') {
+  function failureText(value: unknown, summary: string, next: string) {
     const detail = errorText(value).trim().replace(/[。！？\s]+$/, '');
-    setStatus('');
-    feedback.begin(operation).error(detail ? t('library.nativeRule.failureDetail', { summary, detail, next }) : t('library.nativeRule.failure', { summary, next }));
+    return detail ? t('library.nativeRule.failureDetail', { summary, detail, next }) : t('library.nativeRule.failure', { summary, next });
   }
   async function change(action: () => void) {
     const started = latest.current;
     if (!dirty || await confirmAction(t('library.nativeRule.confirmDiscard'), () => isCurrent(started), { title: t('common.app.leaveDirtyTitle'), confirmLabel: t('common.app.leaveDirtyConfirm') })) action();
   }
   useEffect(() => {
-    setLoaded(null); setText(''); setConflict(null); clearResult();
+    setLoaded(null); setText(''); setConflict(null);
     if (!tool || scope === 'project' && !project) return;
-    let live = true;
-    void native.readNativeRule(target).then(value => { if (live) { setLoaded(value); setText(value.text); setEnabled(!!value.text); } }).catch(value => { if (live) showFailure(value, t('library.nativeRule.readFailed'), t('library.nativeRule.readFailedNext')); });
+    let live = true; const result = feedback.begin('read');
+    void native.readNativeRule(target).then(value => { if (live) { setLoaded(value); setText(value.text); setEnabled(!!value.text); result.complete(); } }).catch(value => { if (live) result.error(failureText(value, t('library.nativeRule.readFailed'), t('library.nativeRule.readFailedNext'))); });
     return () => { live = false; };
   }, [context]);
   async function save(original = loaded?.text) {
+    const result = feedback.begin('save');
     if (original === undefined) return;
-    const started = { ...latest.current }; setBusy(true); clearResult();
+    const started = { ...latest.current }; setBusy(true);
     try {
       await native.saveNativeRule({ ...target, contextId: loaded?.contextId }, original, started.text);
       if (latest.current.context !== started.context) return;
       const current = await native.readNativeRule(target);
       if (latest.current.context !== started.context) return;
       setLoaded(current); setEnabled(!!current.text); if (latest.current.text === started.text) { setText(current.text); setConflict(null); }
-      setFailure(''); feedback.begin('save').success(t('library.nativeRule.saved')); setOpen(false);
+      result.success(t('library.nativeRule.saved')); setOpen(false);
     } catch (value) {
       if (latest.current.context !== started.context) return;
-      showFailure(value, t('library.nativeRule.saveFailed'), t('library.nativeRule.saveFailedNext'), 'save');
+      result.error(failureText(value, t('library.nativeRule.saveFailed'), t('library.nativeRule.saveFailedNext')));
       const current = await native.readNativeRule(target).catch(() => null);
       if (latest.current.context === started.context && current && current.text !== original) setConflict(current.text);
     } finally { setBusy(false); }
   }
   async function toggle(next: boolean) {
+    const result = feedback.begin('toggle:' + next);
     const snapshot = latest.current;
     if (dirty && !await confirmAction(t('library.nativeRule.confirmToggle'), () => isCurrent(snapshot), { title: t('common.app.leaveDirtyTitle'), confirmLabel: t('common.app.leaveDirtyConfirm') })) return;
-    const started=latest.current.context;setBusy(true);clearResult();
-    try { await native.setNativeRuleEnabled({ ...target, contextId: loaded?.contextId },next); const value=await native.readNativeRule(target); if(latest.current.context===started){setLoaded(value);setText(value.text);setEnabled(!!value.text);} }
-    catch(value){if(latest.current.context===started)showFailure(value,t('library.nativeRule.toggleFailed'),t('library.nativeRule.toggleFailedNext'), 'toggle');}finally{setBusy(false);}
+    const started=latest.current.context;setBusy(true);
+    try { await native.setNativeRuleEnabled({ ...target, contextId: loaded?.contextId },next); const value=await native.readNativeRule(target); if(latest.current.context===started){setLoaded(value);setText(value.text);setEnabled(!!value.text); result.complete();} }
+    catch(value){if(latest.current.context===started)result.error(failureText(value,t('library.nativeRule.toggleFailed'),t('library.nativeRule.toggleFailedNext')));}finally{setBusy(false);}
   }
   return <>
     <button type="button" className="button native-rule-open" onClick={() => setOpen(true)}>{t('library.nativeRule.open')}</button>

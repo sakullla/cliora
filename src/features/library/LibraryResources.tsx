@@ -1,3 +1,4 @@
+import type { FeedbackOperation } from '../../lib/notifications';
 import { useFeedback, FeedbackRegion } from '../../components/Feedback';
 import { removalContext, useAccountLabels } from './resourceContexts';
 import { useEffect, useRef, useState } from 'react';
@@ -64,9 +65,6 @@ export function LibraryResources({ section, active, tools, projects, createSigna
   const [headerText, setHeaderText] = useState('');
   const [busy, setBusy] = useState(false);
   const feedback = useFeedback(JSON.stringify(['resources', section]));
-  const { setError } = feedback;
-  const { setNotice } = feedback;
-  const setDialogError = feedback.setError;
   const [skillOpen, setSkillOpen] = useState(false);
   const [skillUrl, setSkillUrl] = useState('');
   const [archiveSelection, setArchiveSelection] = useState<{ source: string; local: boolean; entries: string[]; chosen: string | null } | null>(null);
@@ -79,7 +77,7 @@ export function LibraryResources({ section, active, tools, projects, createSigna
 
   useEffect(() => {
     if (!active) return;
-    let live = true;
+    let live = true; const operationFeedback = feedback.begin('load');
     const load = section === 'mcp'
       ? Promise.all([native.listMcpDefinitions(), native.listMcpPlacements()]).then(([items, placed]) => { if (live) { setDefinitions(items); setPlacements(placed); } })
       : native.listSkillPackages().then(async (items) => {
@@ -88,7 +86,7 @@ export function LibraryResources({ section, active, tools, projects, createSigna
         const found = (await Promise.all(items.map((item) => native.listSkillInstallations(item.id)))).flat();
         if (live) setInstallations(found);
       });
-    void load.catch((value) => { if (live) setError(failure(value)); });
+    void load.then(() => { if (live) operationFeedback.complete(); }).catch((value) => { if (live) operationFeedback.error(failure(value)); });
     return () => { live = false; };
   }, [active, section]);
 
@@ -97,7 +95,6 @@ export function LibraryResources({ section, active, tools, projects, createSigna
     setDraft(next);
     setEnvText(item ? lines(item.env) : '');
     setHeaderText(item ? lines(item.headers) : '');
-    setDialogError('');
     setWillDistribute(false);
     setConflict(false);
     setFormKey((value) => value + 1);
@@ -108,14 +105,13 @@ export function LibraryResources({ section, active, tools, projects, createSigna
     if (createSignal === handledCreate.current) return;
     handledCreate.current = createSignal;
     if (section === 'mcp') editMcp();
-    else if (!busy) { setDialogError(''); setSkillOpen(true); }
+    else if (!busy) { setSkillOpen(true); }
   }, [createSignal]);
 
   async function remove(item: McpDefinition) {
-    const operationFeedback = feedback.begin('remove');
+    const operationFeedback = feedback.begin(JSON.stringify(['remove', item.id]));
     if (busy || !await confirmAction(t('library.resources.confirmRemoveMcp', { name: item.name }), () => true, { title: t('tools.mcp.removeTitle'), confirmLabel: t('tools.agents.delete'), destructive: true })) return;
-    setBusy(true); setError('');
-    try {
+    setBusy(true); try {
       await native.deleteMcpDefinition(item.id, item.version);
       setDefinitions(await native.listMcpDefinitions());
       setDraft(null);
@@ -134,11 +130,9 @@ export function LibraryResources({ section, active, tools, projects, createSigna
     setSkillOpen(false);
     setArchiveSelection(null);
     setPendingImport(null);
-    setDialogError('');
-  }
+    }
 
-  async function finishSkillImport(item?: SkillPackage) {
-    const operationFeedback = feedback.begin('finishSkillImport');
+  async function finishSkillImport(operationFeedback: FeedbackOperation, item?: SkillPackage) {
     const prior = item ? installations.filter((entry) => entry.packageId === item.id && entry.state !== 'conflict' && entry.state !== 'disabled' && entry.state !== 'unavailable') : [];
     const checked = installTools.filter((toolId) => !prior.some((entry) => entry.toolId === toolId && entry.scope === 'global'));
     await reloadSkills();
@@ -151,29 +145,29 @@ export function LibraryResources({ section, active, tools, projects, createSigna
     if (item && targets.length) {
       const notes: string[] = [];
       const conflicts: string[] = [];
+      const failed: string[] = [];
       for (const target of targets) {
         const name = tools.find((tool) => tool.id === target.toolId)?.name ?? target.toolId;
+        try {
         const preview = await native.previewSkillTarget(item.id, target.toolId, target.scope, target.projectPath);
         if (preview?.status === 'conflict') { conflicts.push(name); continue; }
         const outcome = await native.installSkill(item.id, target.toolId, target.scope, target.projectPath, preview?.previewToken ?? null, false);
+        if (outcome.status === 'failed') failed.push(name + ': ' + outcome.detail);
         notes.push(t('library.resources.syncEntry', { name, result: outcome.status === 'failed' ? outcome.detail : t('library.resources.synced') }));
+        } catch (value) { failed.push(name + ': ' + failure(value)); }
       }
       await reloadSkills();
-      const failed = notes.filter((line) => !line.endsWith(t('library.resources.synced')));
-      if (conflicts.length) {
+      if (conflicts.length || failed.length) {
         setSkillSeed([]);
         setSkillTarget(item);
-        operationFeedback.success(t('library.resources.conflictsNotice', { names: conflicts.join('、') }));
-      } else if (failed.length) operationFeedback.error(failed.join(t('tools.quota.errorSeparator')));
-      else operationFeedback.success(notes.join(t('tools.quota.errorSeparator')) || t('library.resources.syncedAll'));
-      if (!failed.length) setError('');
+        operationFeedback.partial(t('library.resources.addedToLibrary'), { detail: [...(conflicts.length ? [t('library.resources.conflictsNotice', { names: conflicts.join('、') })] : []), ...failed].join(' · ') });
+      } else operationFeedback.success(notes.join(t('tools.quota.errorSeparator')) || t('library.resources.syncedAll'));
       return;
     }
     operationFeedback.success(t('library.resources.addedToLibrary'));
-    setError('');
-  }
+    }
 
-  async function importPreview(preview: SkillImportPreview, kind: 'local' | 'zip' | 'local_zip', source: string, subdirectory: string | null) {
+  async function importPreview(preview: SkillImportPreview, kind: 'local' | 'zip' | 'local_zip', source: string, subdirectory: string | null, operationFeedback: FeedbackOperation) {
     if (preview.existingDigest && preview.existingDigest !== preview.digest) {
       setPendingImport({ preview, kind, source, subdirectory });
       setArchiveSelection(null);
@@ -184,22 +178,22 @@ export function LibraryResources({ section, active, tools, projects, createSigna
       : kind === 'local_zip'
         ? await native.importSkillLocalZip(source, subdirectory, preview.digest, preview.existingDigest)
         : await native.importSkillHttpsZip(source, subdirectory, preview.digest, preview.existingDigest);
-    if (item) await finishSkillImport(item);
+    if (item) await finishSkillImport(operationFeedback, item);
   }
 
   async function addFolder() {
+    const operationFeedback = feedback.begin('addFolder');
     try {
       const source = await pickPath({ directory: true, multiple: false, title: t('tools.skills.pickDirTitle') });
       if (typeof source !== 'string') return;
-      setBusy(true); setDialogError('');
-      await importPreview(await native.previewSkillLocal(source), 'local', source, null);
-    } catch (value) { setDialogError(failure(value)); }
+      setBusy(true); await importPreview(await native.previewSkillLocal(source), 'local', source, null, operationFeedback);
+    } catch (value) { operationFeedback.error(failure(value)); }
     finally { setBusy(false); }
   }
 
   async function addArchive(source: string, localZip: boolean, chosen?: string) {
-    setBusy(true); setDialogError('');
-    try {
+    const operationFeedback = feedback.begin(JSON.stringify(['addArchive', source, chosen]));
+    setBusy(true); try {
       let child = chosen ?? null;
       if (chosen === undefined) {
         const entries = await native.listSkillZipEntries(source, localZip);
@@ -207,39 +201,39 @@ export function LibraryResources({ section, active, tools, projects, createSigna
         child = entries[0] || null;
       }
       const preview = localZip ? await native.previewSkillLocalZip(source, child) : await native.previewSkillHttpsZip(source, child);
-      await importPreview(preview, localZip ? 'local_zip' : 'zip', source, child);
+      await importPreview(preview, localZip ? 'local_zip' : 'zip', source, child, operationFeedback);
       if (!localZip) setSkillUrl('');
-    } catch (value) { setDialogError(failure(value)); }
+    } catch (value) { operationFeedback.error(failure(value)); }
     finally { setBusy(false); }
   }
 
   async function addZip() {
+    const operationFeedback = feedback.begin('addZip');
     try {
       const source = await pickPath({ directory: false, multiple: false, title: t('tools.skills.pickZipTitle'), filters: [{ name: 'ZIP', extensions: ['zip'] }] });
       if (typeof source === 'string') await addArchive(source, true);
-    } catch (value) { setDialogError(failure(value)); }
+    } catch (value) { operationFeedback.error(failure(value)); }
   }
 
   async function confirmSkillImport() {
+    const operationFeedback = feedback.begin(JSON.stringify(['confirmSkillImport', pendingImport?.preview.name]));
     if (!pendingImport) return;
-    setBusy(true); setDialogError('');
-    try {
+    setBusy(true); try {
       const { preview, kind, source, subdirectory } = pendingImport;
       const item = kind === 'local' ? await native.importSkillLocal(source, preview.digest, preview.existingDigest)
         : kind === 'local_zip' ? await native.importSkillLocalZip(source, subdirectory, preview.digest, preview.existingDigest)
         : await native.importSkillHttpsZip(source, subdirectory, preview.digest, preview.existingDigest);
-      await finishSkillImport(item);
-    } catch (value) { setDialogError(failure(value)); }
+      await finishSkillImport(operationFeedback, item);
+    } catch (value) { operationFeedback.error(failure(value)); }
     finally { setBusy(false); }
   }
 
   async function removePackage(item: SkillPackage) {
-    const operationFeedback = feedback.begin('removePackage');
+    const operationFeedback = feedback.begin(JSON.stringify(['removePackage', item.id]));
     const placed = installations.some((entry) => entry.packageId === item.id);
     const message = placed ? t('library.resources.confirmDeletePlaced', { name: item.name }) : t('library.resources.confirmDelete', { name: item.name });
     if (busy || !await confirmAction(message, () => true, { title: t('library.resources.deleteSkillTitle'), confirmLabel: t('tools.agents.delete'), destructive: true })) return;
-    setBusy(true); setError('');
-    try {
+    setBusy(true); try {
       await native.deleteSkillPackage(item.id);
       await reloadSkills();
       operationFeedback.success(t('library.resources.removed'));
@@ -248,10 +242,9 @@ export function LibraryResources({ section, active, tools, projects, createSigna
   }
 
   async function save() {
-    const operationFeedback = feedback.begin('save');
+    const operationFeedback = feedback.begin(JSON.stringify(['save', draft?.id ?? 'new:' + formKey]));
     if (!draft || busy) return;
-    setBusy(true); setDialogError('');
-    try {
+    setBusy(true); try {
       const saved = await native.saveMcpDefinition({ ...draft, args: keptArgs(draft.args), inLibrary: true, env: parseLines(envText), headers: parseLines(headerText) });
       setDefinitions(await native.listMcpDefinitions());
       setDraft(draftOf(saved));
@@ -259,42 +252,40 @@ export function LibraryResources({ section, active, tools, projects, createSigna
       if (willDistribute || alreadyPlaced) {
         const outcome = await distributeRef.current?.run(saved);
         setPlacements(await native.listMcpPlacements().catch(() => []));
-        if (outcome?.status === 'written') { setConflict(false); setDialogError(''); setDraft(null); operationFeedback.success(outcome.notice); }
-        else if (outcome?.status === 'pending') setConflict(true);
+        if (outcome?.status === 'written') { setConflict(false); setDraft(null); operationFeedback.success(outcome.notice); }
+        else if (outcome?.status === 'pending') { setConflict(true); operationFeedback.partial(t('library.resources.saved'), { detail: t('library.resources.savedNotDistributed') }); }
         else {
           setConflict(false);
-          setDialogError(outcome?.status === 'failed' ? outcome.message : t('library.resources.savedNotDistributed'));
+          operationFeedback.partial(t('library.resources.saved'), { detail: outcome?.status === 'failed' ? outcome.message : t('library.resources.savedNotDistributed') });
         }
       } else {
         setPlacements(await native.listMcpPlacements().catch(() => []));
         setDraft(null);
         operationFeedback.success(t('library.resources.saved'));
       }
-      setError('');
-    } catch (value) { setDialogError(failure(value)); }
+      } catch (value) { operationFeedback.error(failure(value)); }
     finally { setBusy(false); }
   }
 
   async function replaceDistribution() {
-    const operationFeedback = feedback.begin('replaceDistribution');
+    const operationFeedback = feedback.begin(JSON.stringify(['save', draft?.id]));
     if (busy) return;
-    setBusy(true); setDialogError('');
-    try {
+    setBusy(true); try {
       const outcome = await distributeRef.current?.commit();
       setPlacements(await native.listMcpPlacements().catch(() => []));
-      if (outcome?.status === 'written') { setConflict(false); setDraft(null); operationFeedback.success(outcome.notice); setError(''); }
-    } catch (value) { setDialogError(failure(value)); }
+      if (outcome?.status === 'written') { setConflict(false); setDraft(null); operationFeedback.success(outcome.notice); }
+      else if (outcome?.status === 'failed') operationFeedback.partial(t('library.resources.saved'), { detail: outcome.message });
+    } catch (value) { operationFeedback.error(failure(value)); }
     finally { setBusy(false); }
   }
 
   async function toggleMcp(item: McpDefinition, toolId: string, scope: Scope, projectPath: string | null, contextId: string | null) {
-    const operationFeedback = feedback.begin('toggleMcp');
+    const operationFeedback = feedback.begin(JSON.stringify(['toggleMcp', item.id, toolId, scope, projectPath, contextId]));
     if (busy) return;
     const toolName = tools.find((tool) => tool.id === toolId)?.name ?? toolId;
     const where = scope === 'project' ? t('library.page.whereScope', { scope: scopeLabel(scope, projectPath, projects) }) : '';
     const place = placements.find((entry) => entry.definitionId === item.id && entry.toolId === toolId && entry.scope === scope && (entry.contextId ?? null) === contextId && (scope === 'global' || samePath(entry.projectPath, projectPath)));
-    setBusy(true); setError(''); setNotice('');
-    try {
+    setBusy(true); try {
       if (place) {
         await native.removeNativeMcp({ toolId, scope, projectPath: place.projectPath, contextId: await removalContext(place), enabled: place.enabled }, item.name);
         operationFeedback.success(t('library.page.removed', { where, tool: toolName }));
@@ -304,7 +295,9 @@ export function LibraryResources({ section, active, tools, projects, createSigna
         const first = preview[0];
         if (!first || (first.status !== 'ready' && first.status !== 'conflict')) { operationFeedback.error(first?.detail || t('library.resources.cannotWrite', { tool: toolName })); return; }
         if (first.status === 'conflict' && !await confirmAction(t('library.resources.confirmReplace', { name: item.name, tool: toolName }), () => true, { title: t('library.resources.replaceMcpTitle'), confirmLabel: t('library.page.replaceAction') })) return;
-        await native.distributeMcp(item.id, [{ ...target, contextId: first.contextId, baselineHash: first.baselineHash, previewToken: first.previewToken, allowReplace: first.status === 'conflict' }]);
+        const outcomes = await native.distributeMcp(item.id, [{ ...target, contextId: first.contextId, baselineHash: first.baselineHash, previewToken: first.previewToken, allowReplace: first.status === 'conflict' }]);
+        const failed = outcomes.filter(result => result.status !== 'written');
+        if (failed.length) { operationFeedback.error(failed.map(result => result.detail).join(' · ')); return; }
         operationFeedback.success(t('library.page.written', { where, tool: toolName }));
       }
       setPlacements(await native.listMcpPlacements().catch(() => placements));
@@ -313,15 +306,15 @@ export function LibraryResources({ section, active, tools, projects, createSigna
   }
 
   async function toggleSkill(item: SkillPackage, toolId: string, scope: Scope, projectPath: string | null, contextId: string | null) {
-    const operationFeedback = feedback.begin('toggleSkill');
+    const operationFeedback = feedback.begin(JSON.stringify(['toggleSkill', item.id, toolId, scope, projectPath, contextId]));
     if (busy) return;
     const toolName = tools.find((tool) => tool.id === toolId)?.name ?? toolId;
     const where = scope === 'project' ? t('library.page.whereScope', { scope: scopeLabel(scope, projectPath, projects) }) : '';
     const place = installations.find((entry) => entry.packageId === item.id && entry.toolId === toolId && entry.scope === scope && (entry.contextId ?? null) === contextId && (scope === 'global' || samePath(entry.projectPath, projectPath)));
-    setBusy(true); setError(''); setNotice('');
-    try {
+    setBusy(true); try {
       if (place) {
-        await native.removeSkill(item.id, toolId, scope, place.projectPath, await removalContext(place));
+        const outcome = await native.removeSkill(item.id, toolId, scope, place.projectPath, await removalContext(place));
+        if (outcome.status === 'failed') { operationFeedback.error(outcome.detail); return; }
         operationFeedback.success(t('library.page.removed', { where, tool: toolName }));
       } else {
         const preview = await native.previewSkillTarget(item.id, toolId, scope, projectPath);
@@ -366,7 +359,7 @@ export function LibraryResources({ section, active, tools, projects, createSigna
           </article>;
         }) : needle
           ? <div className={styles.empty}><Icon name="search" size={28} strokeWidth={1.3} />{t('library.resources.noSkillMatch', { query: search.trim() })}</div>
-          : <div className={styles.empty}><Icon name="sparkle" size={28} strokeWidth={1.3} /><strong>{t('library.resources.emptySkillTitle')}</strong>{t('library.resources.emptySkillDetail')}<button type="button" disabled={busy} onClick={() => { setDialogError(''); setSkillOpen(true); }}><Icon name="plus" size={14} strokeWidth={2.2} />{t('tools.skills.add')}</button></div>}
+          : <div className={styles.empty}><Icon name="sparkle" size={28} strokeWidth={1.3} /><strong>{t('library.resources.emptySkillTitle')}</strong>{t('library.resources.emptySkillDetail')}<button type="button" disabled={busy} onClick={() => { setSkillOpen(true); }}><Icon name="plus" size={14} strokeWidth={2.2} />{t('tools.skills.add')}</button></div>}
       </div>
       <GuideDialog open={skillOpen} title={t('tools.skills.add')} hint={t('library.resources.addSkillHint')} onClose={closeSkill}>
         <div className={styles.skillAdd}>

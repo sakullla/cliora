@@ -1,3 +1,5 @@
+import { formatFailure } from '../../lib/feedback';
+import { useFeedback, FeedbackRegion } from '../../components/Feedback';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { native, nativeAvailable } from '../../lib/native';
@@ -202,13 +204,13 @@ function Breakdown({ report, toolName, filter, onFilter, onPrice, view, onView }
   </section>;
 }
 
-export type UsageNotify = { status: (text: string, protect?: boolean) => void; alert: (value: unknown) => void; readAlert: (value: unknown) => void; clear: () => void };
 
-export function UsageDashboard({ search, favoriteOnly, onClearSearch, onClearFavoriteOnly, active, tools, projects, prices, onPricesChange, scanVersion, scanning, lastScanAt, onOpenSession, notify }: {
+export function UsageDashboard({ search, favoriteOnly, onClearSearch, onClearFavoriteOnly, active, tools, projects, prices, onPricesChange, scanVersion, scanning, lastScanAt, onOpenSession }: {
   search: string; favoriteOnly: boolean; onClearSearch: () => void; onClearFavoriteOnly: () => void; active: boolean; tools: AdapterDescriptor[]; projects: Project[]; prices: HistoryPrice[]; onPricesChange: (prices: HistoryPrice[]) => void;
-  scanVersion: number; scanning: boolean; lastScanAt: number | null;   onOpenSession: (id: string) => void; notify: UsageNotify;
+  scanVersion: number; scanning: boolean; lastScanAt: number | null;   onOpenSession: (id: string) => void;
 }) {
   const { t } = useTranslation();
+  const feedback = useFeedback('usage');
   const [range, setRange] = useState<UsageRange>(storedRange);
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
@@ -293,24 +295,25 @@ export function UsageDashboard({ search, favoriteOnly, onClearSearch, onClearFav
     if (![priceDraft.input, priceDraft.output, priceDraft.read, priceDraft.write].every((value) => value.trim() !== '')) {
       setPriceError(t('records.usage.priceFillAll')); return;
     }
-    notify.clear(); setPriceError('');
+    const result = feedback.begin(JSON.stringify(['savePrice', chosenTool, chosenModel])); setPriceError('');
     try {
       const price = await native.saveHistoryPrice({ toolId: chosenTool, model: chosenModel, currency: priceDraft.currency.trim().toUpperCase(),
         inputPerMillion: Number(priceDraft.input), outputPerMillion: Number(priceDraft.output),
         cacheReadPerMillion: Number(priceDraft.read), cacheWritePerMillion: Number(priceDraft.write),
         source: priceDraft.source.trim() || t('records.usage.sourceManual'), updatedAt: 0 });
       onPricesChange([...prices.filter((item) => item.toolId !== price.toolId || item.model !== price.model), price]);
-      setPriceOpen(false); notify.status(t('records.usage.priceSaved'), true);
+      setPriceOpen(false);
       const sequence = ++request.current;
-      try { const value = await native.getUsageReport(filter); if (sequence === request.current) setReport(value); }
-      catch (value) { notify.readAlert(value); }
-    } catch (value) { setPriceError(typeof value === 'string' ? value : (value as { message?: string })?.message ?? t('records.usage.priceSaveFailed')); }
+      try { const value = await native.getUsageReport(filter); if (sequence === request.current) setReport(value); result.success(t('records.usage.priceSaved')); }
+      catch (value) { result.partial(t('records.usage.priceSaved'), { detail: formatFailure(value, t('records.page.readFailed'), t('records.page.readFailedNext')) }); }
+    } catch (value) { result.error(typeof value === 'string' ? value : (value as { message?: string })?.message ?? t('records.usage.priceSaveFailed')); }
   }
 
   const scanned = lastScanAt ?? (report?.scans.length ? Math.max(...report.scans.map((item) => item.scannedAt)) : null);
   const modelOptions = [{ value: '', label: t('records.page.allModels') }, ...(report?.models ?? []).map((item) => ({ value: item, label: item })), ...(model && !(report?.models ?? []).includes(model) ? [{ value: model, label: model }] : [])];
 
   return <div className={styles.dashboard} data-loading={loading || undefined} aria-busy={loading || undefined}>
+    <FeedbackRegion context={feedback.context} />
     <div className={styles.overviewHead}><div><h2>{t('records.usage.title')}</h2><p>{search.trim() || favoriteOnly ? t('records.usage.filtered', { parts: [search.trim() ? t('records.usage.filterSearch', { query: search.trim() }) : '', favoriteOnly ? t('records.page.favoriteOnly') : ''].filter(Boolean).join(' · ') }) : t('records.usage.overviewSubtitle')}</p></div>
       <button type="button" onClick={() => openPrice()}><Icon name="settings" size={14} />{t('records.usage.priceSettings')}</button>
     </div>
@@ -437,7 +440,7 @@ export function UsageDashboard({ search, favoriteOnly, onClearSearch, onClearFav
         <label>{t('records.usage.cacheRead')}<input aria-label={t('records.usage.cacheReadAria')} type="number" min="0" value={priceDraft.read} onChange={(event) => setPriceDraft({ ...priceDraft, read: event.target.value })} /></label>
         <label>{t('records.usage.cacheWrite')}<input aria-label={t('records.usage.cacheWriteAria')} type="number" min="0" value={priceDraft.write} onChange={(event) => setPriceDraft({ ...priceDraft, write: event.target.value })} /></label>
         <label>{t('records.usage.source')}<input aria-label={t('records.usage.sourceAria')} value={priceDraft.source} onChange={(event) => setPriceDraft({ ...priceDraft, source: event.target.value })} placeholder={t('records.usage.sourcePlaceholder')} /></label>
-        {priceError && <p className={styles.error} role="alert">{priceError}</p>}
+        <FeedbackRegion context={feedback.context} />{priceError && <p className={styles.error} role="alert">{priceError}</p>}
         <div className="dialog-footer"><button type="button" className={styles.primaryButton} data-dialog-save title={saveShortcutHint()} onClick={() => void savePrice()}>{t('records.usage.savePrice')}</button></div>
       </div>
     </GuideDialog>

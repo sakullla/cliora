@@ -153,6 +153,7 @@ export default function App() {
   }
 
   async function refreshAfterImport() {
+    const result = notifications.begin('app', 'refresh-import');
     if (!nativeAvailable) return;
     const sequence = ++refreshSequence.current;
     try {
@@ -163,7 +164,8 @@ export default function App() {
         pendingCatalog.current = nextCatalog;
         setCatalog((current) => current ? { ...nextCatalog, managedIds: current.managedIds } : nextCatalog);
       } else { pendingCatalog.current = null; setCatalog(nextCatalog); }
-    } catch (value) { notifications.begin('app', 'refresh-import').error(formatFailure(value, t('common.operationFailed'), t('common.nativeError.retry'))); }
+    result.complete();
+    } catch (value) { result.error(formatFailure(value, t('common.operationFailed'), t('common.nativeError.retry'))); }
   }
 
   useLayoutEffect(() => {
@@ -281,7 +283,7 @@ export default function App() {
   ];
 
   async function updateManaged(id: string, checked: boolean) {
-    const result = notifications.begin('app', 'updateManaged');
+    const result = notifications.begin('app', 'updateManaged:' + id);
     if (!nativeAvailable || busy) return;
     const next = checked ? [...managed, id] : managed.filter((item) => item !== id);
     setBusy(true); setError(null);
@@ -301,7 +303,7 @@ export default function App() {
   }
 
   async function updateIcon(toolId: string, dataUrl: string | null) {
-    const result = notifications.begin('app', 'updateIcon');
+    const result = notifications.begin('app', 'updateIcon:' + toolId);
     if (!nativeAvailable || busy) return;
     setBusy(true); setError(null);
     try { setBootstrap(await native.setToolIcon(toolId, dataUrl)); result.complete(); }

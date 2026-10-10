@@ -28,8 +28,6 @@ export function MigrationSettings({ active, onImported }: { active: boolean; onI
   const [revealPassword, setRevealPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const feedback = useFeedback('migration');
-  const { setNotice: setMessage } = feedback;
-  const { setError } = feedback;
 
   useEffect(() => {
     if (!active || !nativeAvailable) return;
@@ -63,8 +61,7 @@ export function MigrationSettings({ active, onImported }: { active: boolean; onI
       defaultPath: `cliora-${new Date().toISOString().slice(0, 10)}.cliora`,
       filters: [{ name: t('settings.migration.bundleName'), extensions: ['cliora'] }] });
     if (!destination) return;
-    setBusy(true); setError(''); setMessage('');
-    try {
+    setBusy(true); try {
       const count = await native.exportPortableBundle(destination, exportPassword, exportSelected);
       operationFeedback.success(t('settings.migration.exported', { count }));
       setExportPassword(''); setOperation(null); setRevealPassword(false);
@@ -78,14 +75,13 @@ export function MigrationSettings({ active, onImported }: { active: boolean; onI
     const source = await open({ title: t('settings.migration.openTitle'), multiple: false,
       filters: [{ name: t('settings.migration.bundleName'), extensions: ['cliora'] }] });
     if (typeof source !== 'string') return;
-    setBusy(true); setError(''); setMessage('');
-    try {
+    setBusy(true); try {
       const next = await native.previewPortableBundle(source, importPassword);
       setPreview(next);
       setImportSelected(next.items.filter((item) => item.status === 'new').map((item) => item.key));
       setProjects(await native.listProjects().catch(() => []));
       setProjectLinks({}); setApplyTargets({});
-      setImportPassword('');
+      setImportPassword(''); operationFeedback.complete();
     } catch (reason) { operationFeedback.error(formatFailure(reason, t('settings.migration.previewFailed'), t('settings.migration.previewFailedNext'))); }
     finally { setBusy(false); }
   }
@@ -103,8 +99,7 @@ export function MigrationSettings({ active, onImported }: { active: boolean; onI
   async function applyPreview() {
     const operationFeedback = feedback.begin('applyPreview');
     if (!preview || busy) return;
-    setBusy(true); setError(''); setMessage('');
-    try {
+    setBusy(true); try {
       const links = Object.entries(projectLinks).filter(([id]) => importSelected.includes(`project:${id}`)).map(([projectId, path]) => ({ projectId, path }));
       const targets = Object.entries(applyTargets).filter(([key, value]) => value && importSelected.includes(key)).map(([key, value]) => ({
         profileId: key.slice('profile:'.length), projectId: value === 'global' ? null : value,

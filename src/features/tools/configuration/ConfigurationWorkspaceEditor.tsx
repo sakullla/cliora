@@ -26,7 +26,7 @@ type Props = {
   toolId: string; subject: ConfigurationSubject; profile: RegisteredProfile | null; scope: Scope; projectPath: string;
   workspace: RegisteredToolWorkspace; accounts: ReturnType<typeof useAccounts>;
   onDirtyChange: (dirty: boolean) => void; onDraftChange: (draft: ConfigurationDraft) => void;
-  onStored: (result: ConfigurationSaveResult) => void; onDone: (result: ConfigurationSaveResult, used?: boolean) => void; onClose: () => void;
+  onStored: (result: ConfigurationSaveResult) => void; onDone: (result: ConfigurationSaveResult, used: boolean, feedbackContext: string) => void; onClose: () => void;
 };
 const messageOf = (value: unknown) => value && typeof value === 'object' && 'message' in value ? String(value.message) : i18n.t('tools.workspace.operationFailed');
 type ConfigView = 'models' | 'settings' | 'raw' | 'preview';
@@ -57,8 +57,7 @@ export function ConfigurationWorkspaceEditor(props: Props) {
   const [pending, setPending] = useState(false);
   const [valid, setValid] = useState(true);
   const feedback = useFeedback(JSON.stringify(['config', toolId, subject, scope, projectPath, props.profile?.id]));
-  const { error, setError } = feedback;
-  const { setNotice } = feedback;
+  const { error } = feedback;
   const [legacyInputs, setLegacyInputs] = useState<Connection | null>(props.profile?.connection ?? null);
   const [nameInput, setNameInput] = useState(props.profile?.name ?? '');
   const [view, setView] = useState<'models' | 'settings' | 'raw' | 'preview'>(subject === 'common' ? 'settings' : 'models');
@@ -116,20 +115,20 @@ export function ConfigurationWorkspaceEditor(props: Props) {
 
   useEffect(() => {
     alive.current = true;
-    const generation = ++opening.current;
+    const generation = ++opening.current; const operation = feedback.begin('open'); const influenceResult = feedback.begin('influence');
     const id = `configuration-${crypto.randomUUID()}`;
     void beginConfigurationDraft({ toolId, scope, projectPath: projectPath || null, sessionId: id, subject, profile: props.profile }).then(value => {
       if (!alive.current || opening.current !== generation) { void cancelConfigurationDraft(id).catch(() => {}); return; }
       if (!value || Editor && !value.descriptor) throw new Error(t('tools.config.noCapability'));
       session.current = createConfigurationSession(value); baseline.current = JSON.stringify(value.profile); baselineRevision.current = value.revision;
-      setDraft(value); setLegacyInputs(value.draftConnection ?? value.profile.connection); setNameInput(value.profile.name); setRawInputs(value.profile.files); setValid(session.current.canSubmit); setLoading(false);
+      setDraft(value); setLegacyInputs(value.draftConnection ?? value.profile.connection); setNameInput(value.profile.name); setRawInputs(value.profile.files); setValid(session.current.canSubmit); setLoading(false); operation.complete();
       if (value.credential) {
         const connection = value.draftConnection ?? value.profile.connection;
         sourceBuffers.current[value.credential.source] = { credential: value.credential, connection };
         if (value.credential.source === 'api_key') acceptApiCredential(value);
       }
-    }).catch(failure => { if (alive.current && opening.current === generation) { setError(messageOf(failure)); setLoading(false); } });
-    if (subject === 'common') void commonInfluence(toolId).then(value => { if (alive.current) setInfluence(value); }).catch(failure => { if (alive.current) setError(messageOf(failure)); });
+    }).catch(failure => { if (alive.current && opening.current === generation) { operation.error(messageOf(failure)); setLoading(false); } });
+    if (subject === 'common') void commonInfluence(toolId).then(value => { if (alive.current) { setInfluence(value); influenceResult.complete(); } }).catch(failure => { if (alive.current) influenceResult.error(messageOf(failure)); });
     return () => { alive.current = false; opening.current++; sequence.current++; session.current?.close(); session.current = null; void cancelConfigurationDraft(id).catch(() => {}); latest.current.onDirtyChange(false); };
   }, []);
   useEffect(() => {
@@ -150,15 +149,14 @@ export function ConfigurationWorkspaceEditor(props: Props) {
     const owner = session.current;
     if (!owner) throw new Error(t('tools.config.draftNotLoaded'));
     if (requestCancellation.current) throw new Error(t('tools.config.cancellingError'));
-    sequence.current++; setComparison(null); setCurrentConflict(null); setQuerying(false); setDirectory(null); setCheck(null); setVisibleSecret(null); setError('');
-    latest.current.onDirtyChange(true);
+    sequence.current++; setComparison(null); setCurrentConflict(null); setQuerying(false); setDirectory(null); setCheck(null); setVisibleSecret(null); latest.current.onDirtyChange(true);
     const promise = owner.edit(work); updateValidity();
     try {
       const accepted = await promise;
       if (!alive.current || session.current !== owner || !accepted) return;
       const next = owner.draft; setDraft(next);
       if (!raw) setRawInputs(next.profile.files);
-      latest.current.onDraftChange(next);
+      latest.current.onDraftChange(next); operationFeedback.complete();
     } catch (failure) { if (alive.current && session.current === owner) operationFeedback.error(messageOf(failure)); throw failure; }
     finally { if (alive.current && session.current === owner) updateValidity(); }
   }
@@ -239,11 +237,10 @@ export function ConfigurationWorkspaceEditor(props: Props) {
     } catch {}
   }
   async function query(kind: 'directory' | 'check', paid = false) {
-    const operationFeedback = feedback.begin('query');
+    const operationFeedback = feedback.begin('query:' + kind);
     const consent = session.current?.draft;
     if (paid && !await confirmAction(t('tools.config.paidConfirm'), () => alive.current && session.current?.draft.sessionId === consent?.sessionId && session.current?.draft.revision === consent?.revision, { title: t('tools.config.paidTitle'), confirmLabel: t('tools.config.paidAction') })) return;
-    setQuerying(true); setError('');
-    let token: number | undefined;
+    setQuerying(true); let token: number | undefined;
     try {
       await flushSecret();
       const owner = session.current; if (!owner || owner.pending) return;
@@ -253,6 +250,7 @@ export function ConfigurationWorkspaceEditor(props: Props) {
       if (!alive.current || session.current !== owner || token !== sequence.current || !configurationRequestMatches(owner.draft, started, result)) return;
       if ('directory' in result) { setDirectory(result.directory); setDirectoryOpen(true); setChosen(new Set()); catalogCache.current = { key: `${started.credential?.source ?? ''}|${configurationCredentialIdentity(started)}`, models: result.directory.models }; }
       else setCheck(result.check);
+      operationFeedback.complete();
     } catch (failure) { if (alive.current && (token === undefined || token === sequence.current)) operationFeedback.error(messageOf(failure)); }
     finally { if (alive.current && (token === undefined || token === sequence.current)) setQuerying(false); }
   }
@@ -262,12 +260,11 @@ export function ConfigurationWorkspaceEditor(props: Props) {
     if (!owner || owner.pending || requestCancellation.current) return;
     const started = owner.draft;
     sequence.current++; requestCancellation.current = true;
-    setCancelling(true); setError('');
-    try {
+    setCancelling(true); try {
       const next = await cancelConfigurationRequests(started);
       if (!alive.current || session.current !== owner || owner.draft.revision !== started.revision || owner.draft.requestGeneration !== started.requestGeneration) return;
       if (!owner.acceptSaved(next)) return;
-      setDraft(owner.draft); setQuerying(false); updateValidity();
+      setDraft(owner.draft); setQuerying(false); updateValidity(); operationFeedback.complete();
     } catch (failure) {
       if (alive.current && session.current === owner) operationFeedback.error(messageOf(failure));
     } finally { requestCancellation.current = false; if (alive.current && session.current === owner) setCancelling(false); }
@@ -287,18 +284,19 @@ export function ConfigurationWorkspaceEditor(props: Props) {
     const operationFeedback = feedback.begin('showPreview');
     const owner = session.current; if (!owner || !owner.canSubmit) return;
     const started = owner.draft; const token = ++sequence.current; setView('preview'); setPreviewLoading(true);
-    try { const value = await native.previewRegisteredNativeProfile(started.profile, scope); if (alive.current && owner === session.current && token === sequence.current && owner.draft.revision === started.revision) setPreview(value); }
+    try { const value = await native.previewRegisteredNativeProfile(started.profile, scope); if (alive.current && owner === session.current && token === sequence.current && owner.draft.revision === started.revision) { setPreview(value); operationFeedback.complete(); } }
     catch (failure) { if (alive.current && token === sequence.current) operationFeedback.error(messageOf(failure)); }
     finally { if (alive.current && token === sequence.current) setPreviewLoading(false); }
   }
-  async function applyStored(result: ConfigurationSaveResult) {
-    const operationFeedback = feedback.begin('applyStored');
+  async function applyStored(result: ConfigurationSaveResult, operationFeedback: ReturnType<typeof feedback.begin>) {
     if (result.profile) {
       try { await native.applyRegisteredNativeProfile(toolId, result.profile.id, scope, projectPath || undefined, false); }
-      catch (failure) { operationFeedback.success(t('tools.config.savedNotUsed')); operationFeedback.error(messageOf(failure)); setComparison(await native.compareRegisteredApplication(result.profile.id, scope, projectPath).catch(() => null)); return false; }
+      catch (failure) { operationFeedback.partial(t('tools.config.savedNotUsed'), { detail: messageOf(failure) }); setComparison(await native.compareRegisteredApplication(result.profile.id, scope, projectPath).catch(() => null)); return false; }
     } else if (result.common && influence) {
-      const outcomes = await applyCommonConfiguration(result.common, influence.targets); setApplications(outcomes);
-      if (outcomes.some(item => item.status === 'failed')) { operationFeedback.success(t('tools.config.commonPartial')); return false; }
+      try {
+        const outcomes = await applyCommonConfiguration(result.common, influence.targets); setApplications(outcomes);
+        if (outcomes.some(item => item.status === 'failed')) { operationFeedback.partial(t('tools.config.commonPartial'), { detail: outcomes.filter(item => item.status === 'failed').map(item => item.detail).join(' · ') }); return false; }
+      } catch (failure) { operationFeedback.partial(t('tools.config.savedNotUsed'), { detail: messageOf(failure) }); return false; }
     }
     return true;
   }
@@ -306,16 +304,15 @@ export function ConfigurationWorkspaceEditor(props: Props) {
     const operationFeedback = feedback.begin('save');
     const owner = session.current; if (!owner || !owner.canSubmit || busy) return;
     if (subject === 'profile' && !owner.draft.profile.name.trim()) { operationFeedback.error(t('tools.config.nameRequired')); document.querySelector<HTMLInputElement>(`[aria-label="${t('tools.config.name')}"]`)?.focus(); return; }
-    setBusy(true); setError(''); setNotice('');
-    try {
+    setBusy(true); try {
       await flushSecret(); if (!alive.current || owner !== session.current || !owner.canSubmit) return;
       const result = await saveConfigurationDraft(owner.draft);
       if (!alive.current || owner !== session.current) return;
       if (!owner.acceptSaved(result.draft)) return; acceptApiCredential(owner.draft); setDraft(owner.draft); setRawInputs(owner.draft.profile.files);
       baseline.current = JSON.stringify(owner.draft.profile); baselineRevision.current = owner.draft.revision; setSaved(result); latest.current.onStored(result); updateValidity();
-      if (use && !await applyStored(result)) return;
+      if (use && !await applyStored(result, operationFeedback)) return;
       operationFeedback.success(subject === 'current' ? t('tools.config.savedCurrent') : use ? t('tools.config.savedUsed') : t('tools.config.savedKept'));
-      latest.current.onDone(result, use);
+      latest.current.onDone(result, use, feedback.context);
     } catch (failure) {
       if (!alive.current || owner !== session.current) return;
       operationFeedback.error(messageOf(failure));
@@ -331,10 +328,11 @@ export function ConfigurationWorkspaceEditor(props: Props) {
     try {
       const value = await compareConfigurationCurrent(started);
       if (!alive.current || token !== sequence.current || owner !== session.current || owner.draft.revision !== started.revision) return;
-      setCurrentConflict(value); setConflictChoices({}); setView('raw');
+      setCurrentConflict(value); setConflictChoices({}); setView('raw'); operationFeedback.complete();
     } catch (failure) { if (alive.current && token === sequence.current) operationFeedback.error(messageOf(failure)); }
   }
   async function chooseCurrent(role: string, choice: 'current' | 'edited') {
+    const result = feedback.begin('rebase');
     const captured = currentConflict; if (!captured) return;
     const choices = { ...conflictChoices, [role]: choice }; setConflictChoices(choices);
     const changed = captured.files.filter(file => file.current !== file.original);
@@ -342,27 +340,25 @@ export function ConfigurationWorkspaceEditor(props: Props) {
     await edit(current => rebaseConfigurationCurrent(current, captured.comparisonId, {
       ...current.profile.files,
       ...Object.fromEntries(changed.map(file => [file.role, choices[file.role] === 'current' ? file.current : file.edited])),
-    })).then(() => { if (alive.current) { setCurrentConflict(null); setNotice(t('tools.config.rebased')); setRawResetEpoch(value => value + 1); } }).catch(() => {});
+    })).then(() => { if (alive.current) { setCurrentConflict(null); result.success(t('tools.config.rebased')); setRawResetEpoch(value => value + 1); } }).catch(() => {});
   }
   async function showHistory() {
-    const operationFeedback = feedback.begin('showHistory');
+    const operationFeedback = feedback.begin('showHistory:' + rawRole);
     const owner = session.current; if (!owner) return; const started = owner.draft;
-    setHistory(true); setBackup(null); setError('');
-    try { const rows = await native.listNativeBackups(toolId, scope, projectPath, rawRole); if (alive.current && owner === session.current && owner.draft.revision === started.revision) setBackups(rows); }
+    setHistory(true); setBackup(null); try { const rows = await native.listNativeBackups(toolId, scope, projectPath, rawRole); if (alive.current && owner === session.current && owner.draft.revision === started.revision) { setBackups(rows); operationFeedback.complete(); } }
     catch (failure) { if (alive.current) operationFeedback.error(messageOf(failure)); }
   }
   async function selectBackup(id: string) {
-    const operationFeedback = feedback.begin('selectBackup');
+    const operationFeedback = feedback.begin(JSON.stringify(['selectBackup', rawRole, id]));
     const owner = session.current; if (!owner) return; const started = owner.draft; const token = ++sequence.current;
-    try { const value = await previewConfigurationBackup(started, rawRole, id); if (alive.current && token === sequence.current && owner === session.current && owner.draft.revision === started.revision) setBackup(value); }
+    try { const value = await previewConfigurationBackup(started, rawRole, id); if (alive.current && token === sequence.current && owner === session.current && owner.draft.revision === started.revision) { setBackup(value); operationFeedback.complete(); } }
     catch (failure) { if (alive.current && token === sequence.current) operationFeedback.error(messageOf(failure)); }
   }
   async function restoreBackup() {
     const operationFeedback = feedback.begin('restoreBackup');
     const owner = session.current; const target = backup; if (!owner || !target || owner.pending) return;
     if (dirty && !await confirmAction(t('tools.config.restoreConfirm'), () => alive.current && owner === session.current && owner.draft.revision === target.revision, { title: t('tools.config.restoreTitle'), confirmLabel: t('tools.config.restoreAction') })) return;
-    setBusy(true); setError('');
-    try {
+    setBusy(true); try {
       const result = await restoreConfigurationBackup(owner.draft, target.role, target.transactionId);
       if (!alive.current || owner !== session.current || !owner.acceptSaved(result.draft)) return;
       setDraft(owner.draft); setRawInputs(owner.draft.profile.files); setRawResetEpoch(value => value + 1); setHistory(false); setBackup(null); latest.current.onDraftChange(owner.draft); updateValidity();
@@ -465,7 +461,7 @@ export function ConfigurationWorkspaceEditor(props: Props) {
           </div>}
           {source === 'native' && <div className={styles.sourceBody}><p className={styles.hint}>{adapter.accounts?.nativeDescription ?? t('tools.config.nativeHint')}</p>{nativeLogins?.logins.map((login, index) => { const ok = login.state === 'signed_in'; return <p className={styles.identity} data-tone={ok ? 'ok' : 'warn'} key={index}><span className={styles.identityName}>{login.identity?.email ?? login.identity?.subject ?? (login.authKind === 'api_key' ? t('tools.config.cliKeyIdentity') : t('tools.config.noIdentity'))}</span><span className={styles.identityState}>{' · '}{ok ? login.authKind === 'api_key' ? t('tools.config.configuredUnverified') : login.identity ? t('tools.config.cliSignedIn') : t('tools.config.identityPending') : login.state}</span></p>; })}{nativeLogins && !nativeLogins.logins.length && <p className={styles.identity} data-tone="warn"><span className={styles.identityName}>{t('tools.config.noNativeLogin')}</span></p>}{nativeError && <p role="alert">{nativeError}</p>}</div>}
           {subject === 'profile' && source === 'account' && <div className={`${styles.sourceBody} ${styles.accountBody}`}><p className={styles.identity} data-tone={accountReady ? 'ok' : 'warn'}><span className={styles.identityName}>{selectedAccount?.identity?.email ?? selectedAccount?.identity?.subject ?? t('tools.config.noAccountSelected')}</span><span className={styles.identityState}>{' · '}{accountReady ? t('tools.config.verified') : t('tools.config.pendingVerify')}</span></p><button className={sharedStyles.accent} disabled={busy || pending || cancelling} onClick={event => { focusReturn.current = event.currentTarget; setPicking(true); }}>{t('tools.config.pickAccount')}</button></div>}
-          {source === 'api_key' && <div ref={credentialPanel} className={styles.sourceBody}>{!apiWritable && <p role="alert">{apiReason ?? t('tools.config.noNewSecret')}</p>}{apiWritable && <div className={styles.secret}>{!secretReplacing && storedSecret ? <><details className={styles.secretStored} data-status={draft.credentialStatus}><summary>{draft.credentialStatus === 'draft' ? t('tools.config.secretDraft') : draft.credentialStatus === 'stored' ? t('tools.config.secretStored') : t('tools.config.secretUnknown')}</summary><div className={styles.buttons}><button onClick={() => { startSecretInput(); setSecretReplacing(true); }}>{t('tools.config.replaceSecret')}</button><button onClick={() => { const ref = draft.credential?.source === 'api_key' ? draft.credential.secretRef : null; if (visibleSecret !== null) { setVisibleSecret(null); return; } const token = ++sequence.current; if (ref) void revealConfigurationDraftSecret(session.current!.draft).then(value => { if (alive.current && token === sequence.current) setVisibleSecret(value); }).catch(failure => setError(messageOf(failure))); }}>{visibleSecret !== null ? t('tools.config.hideSecret') : t('tools.config.showSecret')}</button><button className={sharedStyles.danger} disabled={pending} onClick={() => void removeSecret()}>{t('tools.config.removeSecret')}</button>{visibleSecret !== null && <input aria-label={t('tools.config.savedSecretAria')} type="text" readOnly value={visibleSecret} />}</div></details></> : <label>{t('tools.config.apiKeyLabel')}<span className={styles.secretField}><input aria-label={t('tools.config.apiKeyLabel')} type={secretShown ? 'text' : 'password'} autoComplete="off" spellCheck={false} value={secretInput} disabled={busy || cancelling} placeholder={storedSecret ? t('tools.config.secretPlaceholder') : t('tools.config.secretPlaceholderNew')} onChange={event => { sequence.current++; setDirectory(null); setCheck(null); startSecretInput(); setSecretInput(event.target.value); latest.current.onDirtyChange(true); }} /><button type="button" className={styles.secretToggle} aria-pressed={secretShown} disabled={!secretInput} onClick={() => setSecretShown(value => !value)}>{secretShown ? t('tools.config.hideInput') : t('tools.config.showInput')}</button></span></label>}{subject === 'current' && draft.credential?.source === 'api_key' && !draft.credential.secretRef && <button className={sharedStyles.danger} disabled={busy || pending || cancelling} onClick={() => void removeSecret()}>{t('tools.config.removeCurrentSecret')}</button>}</div>}<p className={styles.hint}>{t('tools.config.usedFor', { target: draft.nativeCredentialTarget?.label ?? (connection?.baseUrl || t('tools.config.currentConnection')), note: subject === 'current' ? t('tools.config.currentNote') : t('tools.config.profileNote') })}</p></div>}
+          {source === 'api_key' && <div ref={credentialPanel} className={styles.sourceBody}>{!apiWritable && <p role="alert">{apiReason ?? t('tools.config.noNewSecret')}</p>}{apiWritable && <div className={styles.secret}>{!secretReplacing && storedSecret ? <><details className={styles.secretStored} data-status={draft.credentialStatus}><summary>{draft.credentialStatus === 'draft' ? t('tools.config.secretDraft') : draft.credentialStatus === 'stored' ? t('tools.config.secretStored') : t('tools.config.secretUnknown')}</summary><div className={styles.buttons}><button onClick={() => { startSecretInput(); setSecretReplacing(true); }}>{t('tools.config.replaceSecret')}</button><button onClick={() => { const ref = draft.credential?.source === 'api_key' ? draft.credential.secretRef : null; if (visibleSecret !== null) { setVisibleSecret(null); return; } const result = feedback.begin('revealSecret'); const token = ++sequence.current; if (ref) void revealConfigurationDraftSecret(session.current!.draft).then(value => { if (alive.current && token === sequence.current) { setVisibleSecret(value); result.complete(); } }).catch(failure => result.error(messageOf(failure))); }}>{visibleSecret !== null ? t('tools.config.hideSecret') : t('tools.config.showSecret')}</button><button className={sharedStyles.danger} disabled={pending} onClick={() => void removeSecret()}>{t('tools.config.removeSecret')}</button>{visibleSecret !== null && <input aria-label={t('tools.config.savedSecretAria')} type="text" readOnly value={visibleSecret} />}</div></details></> : <label>{t('tools.config.apiKeyLabel')}<span className={styles.secretField}><input aria-label={t('tools.config.apiKeyLabel')} type={secretShown ? 'text' : 'password'} autoComplete="off" spellCheck={false} value={secretInput} disabled={busy || cancelling} placeholder={storedSecret ? t('tools.config.secretPlaceholder') : t('tools.config.secretPlaceholderNew')} onChange={event => { sequence.current++; setDirectory(null); setCheck(null); startSecretInput(); setSecretInput(event.target.value); latest.current.onDirtyChange(true); }} /><button type="button" className={styles.secretToggle} aria-pressed={secretShown} disabled={!secretInput} onClick={() => setSecretShown(value => !value)}>{secretShown ? t('tools.config.hideInput') : t('tools.config.showInput')}</button></span></label>}{subject === 'current' && draft.credential?.source === 'api_key' && !draft.credential.secretRef && <button className={sharedStyles.danger} disabled={busy || pending || cancelling} onClick={() => void removeSecret()}>{t('tools.config.removeCurrentSecret')}</button>}</div>}<p className={styles.hint}>{t('tools.config.usedFor', { target: draft.nativeCredentialTarget?.label ?? (connection?.baseUrl || t('tools.config.currentConnection')), note: subject === 'current' ? t('tools.config.currentNote') : t('tools.config.profileNote') })}</p></div>}
           {!accountSupported && accountSourceCapability?.reason && <p className={styles.hint}>{accountSourceCapability.reason}</p>}
           {!apiWritable && apiReason && <p className={styles.hint}>{apiReason}</p>}
         </section>
@@ -512,7 +508,7 @@ export function ConfigurationWorkspaceEditor(props: Props) {
         {activeView === 'models' && subject !== 'common' && directory && draft.catalogSupport?.multiple !== true && <p role="status" className={styles.hint}>{t('tools.config.directoryFetched', { count: directory.models.length, synced: Editor ? t('tools.config.dirSynced') : t('tools.config.dirAvailable') })}</p>}
         {activeView === 'models' && subject !== 'common' && <details className={styles.diagnostics}><summary>{Editor && draft.catalogSupport?.multiple !== true ? t('tools.config.diagConnection') : t('tools.config.diagCatalog')}</summary><div className={styles.buttons}>{!(Editor && draft.catalogSupport?.multiple !== true) && <button className={sharedStyles.accent} disabled={querying || pending || !draft.catalogSupport?.available} onClick={() => void query('directory')}>{t('common.field.fetchCatalog')}</button>}<button disabled={querying || pending || !connection} onClick={() => void query('check')}>{t('tools.config.checkConnection')}</button><button disabled={!querying || pending || cancelling} onClick={() => void cancelRequests()}>{cancelling ? t('tools.config.cancellingRequests') : t('tools.config.cancelRequests')}</button></div>{draft.catalogSupport?.reason && <p className={styles.hint}>{draft.catalogSupport.reason}{t('tools.config.catalogReasonSuffix')}</p>}<details><summary>{t('tools.config.moreDiagnostics')}</summary><button disabled={querying || pending || !connection} onClick={() => void query('check', true)}>{t('tools.config.sendMinimal')}</button></details>{check && <div role="status"><p className={styles.hint}>{check.format.message}</p><p className={styles.hint}>{check.connectivity.message}</p><p className={styles.hint}>{check.modelRequest.message}</p></div>}</details>}
         {subject === 'profile' && <details className={sharedStyles.disclosureCard}><summary>{t('tools.config.inheritSummary')}</summary><label><input type="checkbox" disabled={busy || pending || cancelling} checked={draft.profile.inheritCommon} onChange={event => metadata({ inheritCommon: event.target.checked })} />{t('tools.config.inheritCommon')}</label></details>}
-        {subject === 'common' && <section aria-label={t('tools.config.influenceLabel')} className={styles.influence}><div className={styles.influenceHead}><strong>{t('tools.config.influenceTitle')}{influence && <span className="count-chip">{influence.targets.length}</span>}</strong><button disabled={busy || cancelling} onClick={() => { void commonInfluence(toolId).then(value => { if (alive.current) setInfluence(value); }).catch(failure => setError(messageOf(failure))); }}>{t('tools.config.influenceRefresh')}</button></div>{influence?.targets.length ? <ul>{influence.targets.map(target => <li key={target.scopeKey}>{t('tools.config.influenceEntry', { profile: target.profileName, scope: target.scope === 'global' ? t('tools.apply.global') : target.projectPath, version: target.appliedVersion })}</li>)}</ul> : <p>{t('tools.config.influenceEmpty')}</p>}{applications.map(item => <p key={item.scopeKey} role={item.status === 'failed' ? 'alert' : 'status'}>{applyScopeCopy(item.scopeKey, influence?.targets ?? [])} · {applyStatusCopy(item.status, item.detail)}{item.status === 'failed' && saved?.common && <button onClick={() => { const target = influence?.targets.find(target => target.scopeKey === item.scopeKey); if (target) void applyCommonConfiguration(saved.common!, [target]).then(next => setApplications(previous => previous.map(old => old.scopeKey === item.scopeKey ? next[0] : old))).catch(failure => setError(messageOf(failure))); }}>{t('tools.config.retryScope')}</button>}</p>)}</section>}
+        {subject === 'common' && <section aria-label={t('tools.config.influenceLabel')} className={styles.influence}><div className={styles.influenceHead}><strong>{t('tools.config.influenceTitle')}{influence && <span className="count-chip">{influence.targets.length}</span>}</strong><button disabled={busy || cancelling} onClick={() => { const result = feedback.begin('influence'); void commonInfluence(toolId).then(value => { if (alive.current) { setInfluence(value); result.complete(); } }).catch(failure => result.error(messageOf(failure))); }}>{t('tools.config.influenceRefresh')}</button></div>{influence?.targets.length ? <ul>{influence.targets.map(target => <li key={target.scopeKey}>{t('tools.config.influenceEntry', { profile: target.profileName, scope: target.scope === 'global' ? t('tools.apply.global') : target.projectPath, version: target.appliedVersion })}</li>)}</ul> : <p>{t('tools.config.influenceEmpty')}</p>}{applications.map(item => <p key={item.scopeKey} role={item.status === 'failed' ? 'alert' : 'status'}>{applyScopeCopy(item.scopeKey, influence?.targets ?? [])} · {applyStatusCopy(item.status, item.detail)}{item.status === 'failed' && saved?.common && <button onClick={() => { const result = feedback.begin('retryScope:' + item.scopeKey); const target = influence?.targets.find(target => target.scopeKey === item.scopeKey); if (target) void applyCommonConfiguration(saved.common!, [target]).then(next => { setApplications(previous => previous.map(old => old.scopeKey === item.scopeKey ? next[0] : old)); result.complete(); }).catch(failure => result.error(messageOf(failure))); }}>{t('tools.config.retryScope')}</button>}</p>)}</section>}
         {subject === 'current' && <details className={sharedStyles.disclosureCard}><summary>{t('tools.config.restoreSummary')}</summary><button disabled={pending || busy} onClick={() => void compareCurrent()}>{t('tools.config.recompare')}</button><button disabled={pending || busy} onClick={() => void showHistory()}>{t('tools.config.historyButton')}</button></details>}
         {comparison && <section aria-label={t('tools.config.conflictLabel')}>{comparison.files.map((file, index) => <ConflictCompare key={file.role} title={file.role} banner={index === 0 ? t('tools.config.conflictBanner') : undefined} actions={false} currentContent={file.current} nextContent={file.proposedText} format={file.format} busy={busy || cancelling} onUseNext={() => void applyComparison()} onKeepCurrent={() => setComparison(null)} />)}<div className={styles.buttons}><button disabled={busy || cancelling} onClick={() => void applyComparison()}>{t('common.conflict.useNext')}</button><button onClick={() => setComparison(null)}>{t('common.conflict.keepCurrent')}</button></div></section>}
       </div>
@@ -522,6 +518,6 @@ export function ConfigurationWorkspaceEditor(props: Props) {
       <FeedbackRegion context={feedback.context} />
       </div>
     </div>
-    <footer className={`${styles.footer} ${sharedStyles.controls}`}><button onClick={props.onClose}>{t('common.dialog.cancel')}</button>{status.jump ? <button type="button" className={styles.status} data-tone={status.tone} title={t('tools.config.statusJumpTitle')} onClick={() => problems.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })}>{status.text}</button> : <span className={styles.status} data-tone={status.tone} title={status.text}>{status.text}</span>}{!picking && !history && <div className={styles.actions}><button className={subject === 'profile' && workspace.probe.nativeWrites.state === 'supported' ? undefined : styles.primary} data-dialog-save title={saveShortcutHint()} disabled={!canSubmit || subject === 'current' && workspace.probe.nativeWrites.state !== 'supported'} onClick={() => void save()}>{subject === 'current' ? t('tools.config.saveCurrent') : subject === 'common' ? t('tools.config.saveCommon') : t('tools.config.saveProfile')}</button>{subject === 'profile' && workspace.probe.nativeWrites.state === 'supported' && <button className={styles.primary} disabled={!canSubmit} onClick={() => void save(true)}>{t('tools.config.saveAndUse')}</button>}{(subject === 'common' || saved) && <details><summary>{t('tools.config.moreSaveActions')}</summary>{subject === 'common' && <button disabled={!canSubmit || !influence?.targets.length} onClick={() => void save(true)}>{t('tools.config.saveAndApply')}</button>}{saved && <button disabled={busy || cancelling} onClick={() => { setBusy(true); void applyStored(saved).finally(() => { if (alive.current) setBusy(false); }); }}>{t('tools.config.retryUse')}</button>}</details>}</div>}</footer>
+    <footer className={`${styles.footer} ${sharedStyles.controls}`}><button onClick={props.onClose}>{t('common.dialog.cancel')}</button>{status.jump ? <button type="button" className={styles.status} data-tone={status.tone} title={t('tools.config.statusJumpTitle')} onClick={() => problems.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })}>{status.text}</button> : <span className={styles.status} data-tone={status.tone} title={status.text}>{status.text}</span>}{!picking && !history && <div className={styles.actions}><button className={subject === 'profile' && workspace.probe.nativeWrites.state === 'supported' ? undefined : styles.primary} data-dialog-save title={saveShortcutHint()} disabled={!canSubmit || subject === 'current' && workspace.probe.nativeWrites.state !== 'supported'} onClick={() => void save()}>{subject === 'current' ? t('tools.config.saveCurrent') : subject === 'common' ? t('tools.config.saveCommon') : t('tools.config.saveProfile')}</button>{subject === 'profile' && workspace.probe.nativeWrites.state === 'supported' && <button className={styles.primary} disabled={!canSubmit} onClick={() => void save(true)}>{t('tools.config.saveAndUse')}</button>}{(subject === 'common' || saved) && <details><summary>{t('tools.config.moreSaveActions')}</summary>{subject === 'common' && <button disabled={!canSubmit || !influence?.targets.length} onClick={() => void save(true)}>{t('tools.config.saveAndApply')}</button>}{saved && <button disabled={busy || cancelling} onClick={() => { setBusy(true); const result = feedback.begin('save'); void applyStored(saved, result).then(ok => { if (ok) result.success(t('tools.config.savedUsed')); }).catch(failure => result.partial(t('tools.config.savedNotUsed'), { detail: messageOf(failure) })).finally(() => { if (alive.current) setBusy(false); }); }}>{t('tools.config.retryUse')}</button>}</details>}</div>}</footer>
   </div>;
 }

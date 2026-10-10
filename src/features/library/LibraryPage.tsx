@@ -91,8 +91,6 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
   const [busy, setBusy] = useState(false);
   const feedback = useFeedback('library');
   const [listLoading, setListLoading] = useState(nativeAvailable);
-  const setDialogError = feedback.setError;
-  const setDialogNotice = feedback.setNotice;
   const [tagText, setTagText] = useState('');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [rulePlacements, setRulePlacements] = useState<RulePlacement[]>([]);
@@ -100,7 +98,6 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
   const [launchTool, setLaunchTool] = useState('');
   const [launchProject, setLaunchProject] = useState('');
   const [launchText, setLaunchText] = useState('');
-  const setLaunchError = feedback.setError;
   const [launchBusy, setLaunchBusy] = useState(false);
   useEffect(() => {
     if (!copiedId) return;
@@ -116,12 +113,11 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
     return confirmAction(message, () => mounted.current && latest.current === started, options);
   }
 
-  function showError(text: string) { feedback.showError(text); }
-  function clearDialogResult() { setDialogError(''); setDialogNotice(''); }
 
   useEffect(() => {
     if (!nativeAvailable || !active) return;
-    void native.listProjects().then(setProjects).catch((value) => showError(formatFailure(value, t('library.page.projectsFailed'), t('library.page.projectsFailedNext'))));
+    const result = feedback.begin('projects');
+    void native.listProjects().then(value => { setProjects(value); result.complete(); }).catch((value) => result.error(formatFailure(value, t('library.page.projectsFailed'), t('library.page.projectsFailedNext'))));
     void native.listRulePlacements().then((rows) => setRulePlacements(Array.isArray(rows) ? rows : [])).catch(() => setRulePlacements([]));
   }, [active]);
   useEffect(() => {
@@ -135,9 +131,9 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
   useEffect(() => {
     if (!nativeAvailable || !active) return;
     let live = true;
-    setListLoading(true);
-    void native.listLibraryItems(kind, null, search).then((result) => { if (live) { setItems(result); setListLoading(false); } })
-      .catch((value) => { if (live) { setListLoading(false); showError(formatFailure(value, t('library.page.listFailed'), t('library.page.listNext'))); } });
+    setListLoading(true); const operation = feedback.begin('list:' + kind);
+    void native.listLibraryItems(kind, null, search).then((result) => { if (live) { setItems(result); setListLoading(false); operation.complete(); } })
+      .catch((value) => { if (live) { setListLoading(false); operation.error(formatFailure(value, t('library.page.listFailed'), t('library.page.listNext'))); } });
     return () => { live = false; };
   }, [active, kind, search]);
 
@@ -149,16 +145,16 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
   async function choose(item: LibraryItem) {
     if (!await canReplace()) return;
     const next = edit(item);
-    setDraft(next); setSavedText(JSON.stringify(next)); setTagText(''); feedback.setError(''); feedback.setNotice(''); clearDialogResult();
+    setDraft(next); setSavedText(JSON.stringify(next)); setTagText('');
   }
   async function start(kind: LibraryKind) {
     if (!await canReplace()) return;
     const next = empty(kind);
-    setDraft(next); setSavedText(JSON.stringify(next)); setTagText(''); feedback.setError(''); feedback.setNotice(''); clearDialogResult();
+    setDraft(next); setSavedText(JSON.stringify(next)); setTagText('');
   }
   async function openSection(next: LibrarySection) {
     if (next === section || !await canReplace()) return;
-    setSection(next); setDraft(null); setSavedText(''); feedback.setNotice(''); feedback.setError(''); clearDialogResult();
+    setSection(next); setDraft(null); setSavedText('');
     if (next === 'prompt' || next === 'rule') { setKind(next); setCategoryFilter('*'); }
   }
   async function refresh(nextKind = kind) { setItems(await native.listLibraryItems(nextKind, null, search)); }
@@ -168,7 +164,7 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
   async function save() {
     const operationFeedback = feedback.begin('save:' + (draft?.id ?? 'new'));
     if (!draft || busy || !nativeAvailable) return;
-    setBusy(true); clearDialogResult();
+    setBusy(true);
     try {
       const saved = await native.saveLibraryItem(draft);
       setCountStamp((value) => value + 1);
@@ -184,13 +180,13 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
       }
       if (saved.kind === 'rule' && rulePlacements.some((item) => item.ruleId === saved.id)) {
         const ids = rulePlacements.filter((item) => item.ruleId === saved.id && item.scope === 'global').map((item) => item.toolId);
-        const distributed = await distributeRule(saved.id, saved.version, ids, false);
+        const distributed = await distributeRule(saved.id, saved.version, ids, false, operationFeedback);
         if (!distributed) { setDraft(next); setSavedText(JSON.stringify(next)); return; }
-        setDraft(null); setSavedText(''); clearDialogResult();
+        setDraft(null); setSavedText('');
         operationFeedback.success(t('library.page.ruleSaved'));
         return;
       }
-      setDraft(null); setSavedText(''); clearDialogResult();
+      setDraft(null); setSavedText('');
       operationFeedback.success(t('library.page.saved'));
     } catch (value) { operationFeedback.error(formatFailure(value, t('library.page.saveFailed'), t('library.page.saveFailedNext'))); }
     finally { setBusy(false); }
@@ -200,8 +196,7 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
     const detail = raw.trim().replace(/[。！？\s]+$/, '') || t('library.page.writeIncomplete');
     return t('library.page.ruleFailed', { detail, hint });
   }
-  async function distributeRule(id: string, version: number, toolIds: string[], allowReplace: boolean) {
-    const operationFeedback = feedback.begin('distributeRule:' + '');
+  async function distributeRule(id: string, version: number, toolIds: string[], allowReplace: boolean, operationFeedback: ReturnType<typeof feedback.begin>) {
     try {
       const synced = await native.syncRuleClients(id, version, { toolIds, scope: 'global', projectPath: null, allowReplace });
       const rows = Array.isArray(synced) ? synced : [];
@@ -211,24 +206,23 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
           operationFeedback.success(t('library.page.replaceKept'));
           return false;
         }
-        return distributeRule(id, version, toolIds, true);
+        return distributeRule(id, version, toolIds, true, operationFeedback);
       }
       const failed = rows.find((item) => item.status === 'failed');
-      if (failed) { operationFeedback.error(ruleFailure({ message: failed.detail })); return false; }
+      if (failed) { operationFeedback.partial(t('library.page.saved'), { detail: ruleFailure({ message: failed.detail }) }); return false; }
       const listed = await native.listRulePlacements().catch(() => rulePlacements);
       setRulePlacements(Array.isArray(listed) ? listed : []);
-      return true;
-    } catch (value) { operationFeedback.error(ruleFailure(value)); return false; }
+      operationFeedback.complete(); return true;
+    } catch (value) { operationFeedback.partial(t('library.page.saved'), { detail: ruleFailure(value) }); return false; }
   }
   async function toggleRule(item: LibraryItem, toolId: string, scope: Scope, projectPath: string | null) {
-    const operationFeedback = feedback.begin('toggleRule:' + item.id);
+    const operationFeedback = feedback.begin(JSON.stringify(['toggleRule', item.id, toolId, scope, projectPath]));
     if (busy) return;
     const current = rulePlacements.filter((place) => place.ruleId === item.id && place.scope === scope && (scope === 'global' || samePath(place.projectPath, projectPath))).map((place) => place.toolId);
     const next = current.includes(toolId) ? current.filter((id) => id !== toolId) : [...current, toolId];
     const toolName = managedTools.find((tool) => tool.id === toolId)?.name ?? toolId;
     const where = scope === 'project' ? t('library.page.whereScope', { scope: scopeLabel(scope, projectPath, projects) }) : '';
-    setBusy(true); feedback.setError(''); feedback.setNotice('');
-    try {
+    setBusy(true); try {
       let rows = await native.syncRuleClients(item.id, item.version, { toolIds: next, scope, projectPath, allowReplace: false });
       rows = Array.isArray(rows) ? rows : [];
       if (rows.some((row) => row.status === 'conflict')) {
@@ -246,23 +240,21 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
     finally { setBusy(false); }
   }
   function openLaunch(item: LibraryItem) {
-    setLaunchItem(item); setLaunchText(item.body); setLaunchTool(managedTools[0]?.id ?? ''); setLaunchProject(item.projectId ?? projects.find((project) => project.available)?.id ?? ''); setLaunchError('');
-  }
+    setLaunchItem(item); setLaunchText(item.body); setLaunchTool(managedTools[0]?.id ?? ''); setLaunchProject(item.projectId ?? projects.find((project) => project.available)?.id ?? ''); }
   async function startSession() {
-    const operationFeedback = feedback.begin('startSession:' + '');
+    const operationFeedback = feedback.begin(JSON.stringify(['startSession', launchItem?.id, launchTool, launchProject]));
     if (!launchItem || !launchTool || launchBusy) return;
-    setLaunchBusy(true); setLaunchError('');
-    try {
+    setLaunchBusy(true); try {
       await native.launchCli({ toolId: launchTool, projectId: launchProject || null, sessionId: null, mode: 'normal', initialPrompt: launchText });
       setLaunchItem(null);
       operationFeedback.success(t('library.page.sessionStarted'));
-    } catch (value) { setLaunchError(formatFailure(value, t('library.page.sessionFailed'), t('library.page.sessionFailedNext'))); }
+    } catch (value) { operationFeedback.error(formatFailure(value, t('library.page.sessionFailed'), t('library.page.sessionFailedNext'))); }
     finally { setLaunchBusy(false); }
   }
   async function remove() {
-    const operationFeedback = feedback.begin('remove:' + '');
+    const operationFeedback = feedback.begin('remove:' + draft?.id);
     if (!draft?.id || draft.expectedVersion === null || busy || !await confirmCurrent(t('library.page.confirmDelete', { title: draft.title }), { title: t('library.page.deleteTitle'), confirmLabel: t('library.page.deleteAction'), destructive: true })) return;
-    setBusy(true); clearDialogResult();
+    setBusy(true);
     try {
       await native.deleteLibraryItem(draft.id, draft.expectedVersion);
       setCountStamp((value) => value + 1);
@@ -279,8 +271,7 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
   async function copy(text: string, surface: 'page' | 'dialog' = 'page', itemId: string | null = null) {
     const operationFeedback = feedback.begin('copy:' + (itemId ?? draft?.id ?? 'draft'));
     const origin = latest.current;
-    if (surface === 'dialog') clearDialogResult();
-    else { feedback.setNotice(''); feedback.setError(''); setCopiedId(null); }
+    if (surface === 'page') setCopiedId(null);
     try {
       await navigator.clipboard.writeText(text);
       if (surface === 'dialog') operationFeedback.success(copiedText());
@@ -357,7 +348,7 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
           : <div className={styles.empty}><Icon name="search" size={28} strokeWidth={1.3} />{t('library.page.noResults', { kind: kindName(kind) })}</div>}
       </div>
     </div>
-    <GuideDialog open={!!draft} title={draft?.id ? t('library.page.editTitle', { kind: kindName(kind) }) : t('library.page.newTitle', { kind: kindName(kind) })} hint={kind === 'rule' ? t('library.page.ruleHint') : t('library.page.promptHint')} onClose={() => { void (async () => { if (await canReplace()) { setDraft(null); setSavedText(''); clearDialogResult(); } })(); }}>
+    <GuideDialog open={!!draft} title={draft?.id ? t('library.page.editTitle', { kind: kindName(kind) }) : t('library.page.newTitle', { kind: kindName(kind) })} hint={kind === 'rule' ? t('library.page.ruleHint') : t('library.page.promptHint')} onClose={() => { void (async () => { if (await canReplace()) { setDraft(null); setSavedText('');  } })(); }}>
       {draft && <div className={styles.editor}>
 
         <FeedbackRegion context={feedback.context} />

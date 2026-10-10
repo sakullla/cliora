@@ -196,9 +196,10 @@ export function GeneralSettings({ tools, managed, preservedUnknown, icons, busy,
     });
   const managedHidden = tools.length - managedShown.length;
   async function handleIconChange(toolId: string, dataUrl: string | null) {
+    const result = feedback.begin('icon:' + toolId);
     try {
       await onIconChange(toolId, dataUrl);
-      feedback.showNotice(dataUrl ? t('settings.icons.updated') : t('settings.icons.restored'));
+      result.success(dataUrl ? t('settings.icons.updated') : t('settings.icons.restored'));
     } catch { /* 失败原因由页面顶部错误条展示。 */ }
   }
   return <>

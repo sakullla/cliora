@@ -41,43 +41,39 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId }: { to
   const [trusted, setTrusted] = useState(false);
   const [busy, setBusy] = useState(false);
   const feedback = useFeedback(JSON.stringify(['plugins', toolId, scope, projectPath, contextId]));
-  const { setError } = feedback;
-  const { setNotice } = feedback;
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
   const generation = useRef(0);
   const accountLabel = useAccountLabels();
   const entries = snapshot?.entries ?? [];
   const filtered = entries.filter(entry => `${entry.name} ${entry.source}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()) && (filter === 'all' || (filter === 'readonly' ? entry.readOnly : filter === 'enabled' ? entry.enabled === true : entry.enabled === false)));
-  useEffect(() => { const id = ++generation.current; setSnapshot(null); setError(''); setNotice(''); setBusy(true);
+  useEffect(() => { const result = feedback.begin('refresh'); const id = ++generation.current; setSnapshot(null); setBusy(true);
     const cached = remembered.get(cacheKey);
     if (cached && Date.now() - cached.at < 30_000) { setSnapshot(cached.snapshot); setBusy(false); return () => { generation.current++; }; }
     let completed = false;
     void native.previewNativePlugins(target).then(value => { if (value && !completed && id === generation.current) setSnapshot(value); }).catch(() => { /* The authoritative scan reports errors; preview is optional. */ });
-    void scanOnce(target).then(value => { if (id === generation.current) { remember(cacheKey, value); setSnapshot(value); } }).catch(value => { if (id === generation.current) { remembered.delete(cacheKey); setError(message(value)); } }).finally(() => { completed = true; if (id === generation.current) setBusy(false); });
+    void scanOnce(target).then(value => { if (id === generation.current) { remember(cacheKey, value); setSnapshot(value); result.complete(); } }).catch(value => { if (id === generation.current) { remembered.delete(cacheKey); result.error(message(value)); } }).finally(() => { completed = true; if (id === generation.current) setBusy(false); });
     return () => { generation.current++; };
   }, [target]);
   async function refresh() {
-    const operationFeedback = feedback.begin('refresh'); const id = ++generation.current; setBusy(true); setError('');
-    try { const value = await native.scanNativePlugins(target); if (id === generation.current) { remember(cacheKey, value); setSnapshot(value); } }
+    const operationFeedback = feedback.begin('refresh'); const id = ++generation.current; setBusy(true); try { const value = await native.scanNativePlugins(target); if (id === generation.current) { remember(cacheKey, value); setSnapshot(value); operationFeedback.complete(); } }
     catch (value) { if (id === generation.current) { remembered.delete(cacheKey); operationFeedback.error(message(value)); setSnapshot(null); } }
     finally { if (id === generation.current) setBusy(false); }
   }
   async function operate(action: PluginAction, entry?: PluginEntry) {
-    const operationFeedback = feedback.begin('operate');
+    const operationFeedback = feedback.begin(JSON.stringify(['operate', action, entry?.id ?? source.trim()]));
     if (!snapshot?.baseline || busy) return;
     const id = generation.current;
     if (action === 'uninstall' && !await confirmAction(t('tools.plugins.confirmUninstall', { name: entry?.name }), () => id === generation.current, { title: t('tools.plugins.uninstallTitle'), confirmLabel: actionLabel('uninstall') })) return;
     if (id !== generation.current) return;
-    setBusy(true); setError(''); setNotice('');
-    try {
+    setBusy(true); try {
       const result = await native.operateNativePlugin({ target, action, source: entry?.id ?? source.trim(), baseline: snapshot.baseline, trusted });
       if (id !== generation.current) return;
       remembered.delete(cacheKey);
       if (result.snapshot) remember(cacheKey, result.snapshot);
-      setSnapshot(result.snapshot); operationFeedback.success(result.detail);
-      if (result.status === 'failed_possible_side_effects') operationFeedback.error(t('tools.plugins.sideEffects'));
-      else if (action === 'install') { setSource(''); setTrusted(false); }
+      setSnapshot(result.snapshot);
+      if (result.status === 'failed_possible_side_effects') operationFeedback.partial(t('tools.plugins.sideEffects'), { detail: result.detail });
+      else { operationFeedback.success(result.detail); if (action === 'install') { setSource(''); setTrusted(false); } }
     } catch (value) { if (id === generation.current) operationFeedback.error(message(value)); }
     finally { if (id === generation.current) setBusy(false); }
   }
