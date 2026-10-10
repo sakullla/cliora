@@ -8,6 +8,117 @@ async function library(page: Page, section = 'MCP', options = {}) {
   await page.getByRole('tab', { name: section, exact: true }).click();
 }
 
+for (const initiallyEnabled of [true, false]) test(`pending MCP render keeps the later enable choice (${initiallyEnabled} to ${!initiallyEnabled})`, async ({ page }) => {
+  await library(page);
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接', exact: true }).click();
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  await page.getByRole('button', { name: '添加 MCP', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('textbox', { name: '名称', exact: true }).fill('pending-state');
+  await dialog.getByRole('textbox', { name: '命令', exact: true }).fill('node');
+  const enabled = dialog.getByRole('checkbox', { name: '启用', exact: true });
+  await enabled.setChecked(initiallyEnabled);
+  await page.evaluate(() => {
+    const host = (window as any).__TAURI_INTERNALS__; const invoke = host.invoke; let delayed = false;
+    host.invoke = async (command: string, args: unknown) => {
+      if (command === 'render_mcp_draft' && !delayed) { delayed = true; await new Promise<void>(resolve => { (window as any).__finishRender = resolve; }); }
+      return invoke(command, args);
+    };
+  });
+  await dialog.getByRole('button', { name: '配置文本', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => !!(window as any).__finishRender)).toBe(true);
+  await enabled.setChecked(!initiallyEnabled);
+  await page.evaluate(() => (window as any).__finishRender());
+  await expect(dialog.getByRole('button', { name: '配置文本', exact: true })).toBeEnabled();
+  await expect(enabled).toBeVisible();
+  await expect(enabled).toBeChecked({ checked: !initiallyEnabled });
+  await dialog.getByRole('button', { name: '配置文本', exact: true }).click();
+  await expect(dialog.getByRole('textbox', { name: '当前条目配置（格式化）', exact: true })).toContainText('pending-state');
+  await dialog.getByRole('button', { name: '转入表单草稿', exact: true }).click();
+  await expect(enabled).toBeChecked({ checked: !initiallyEnabled });
+  const evidence = await page.evaluate(() => (window as any).__resourceScale);
+  expect(evidence.calls.filter((call: any) => call.command === 'render_mcp_draft').map((call: any) => call.args.target.enabled)).toEqual([initiallyEnabled, !initiallyEnabled]);
+  expect(evidence.writes).toHaveLength(0);
+});
+
+for (const surface of ['library', 'tool']) test(`pending configuration parse preserves input when ${surface} save accepts a new definition identity`, async ({ page }) => {
+  await library(page);
+  if (surface === 'tool') {
+    await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接', exact: true }).click();
+    await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  }
+  await page.getByRole('button', { name: surface === 'library' ? '新建 MCP' : '添加 MCP', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('textbox', { name: '名称', exact: true }).fill('accepted-during-parse');
+  await dialog.getByRole('textbox', { name: '命令', exact: true }).fill('node');
+  await page.evaluate(() => {
+    const host = (window as any).__TAURI_INTERNALS__; const invoke = host.invoke; let parsed = false;
+    host.invoke = async (command: string, args: unknown) => {
+      const result = await invoke(command, args);
+      if (command === 'save_mcp_definition') await new Promise<void>(resolve => { (window as any).__finishFormSave = resolve; });
+      if (command === 'parse_mcp_paste' && !parsed) { parsed = true; await new Promise<void>(resolve => { (window as any).__finishConfigParse = resolve; }); }
+      return result;
+    };
+  });
+  await dialog.locator('[data-dialog-save]').click();
+  await expect.poll(() => page.evaluate(() => !!(window as any).__finishFormSave)).toBe(true);
+  await dialog.getByRole('button', { name: '配置文本', exact: true }).click();
+  const editor = dialog.getByRole('textbox', { name: '当前条目配置（格式化）', exact: true });
+  await editor.fill('{"mcpServers":{"accepted-during-parse":{"command":"keep-config"}}}');
+  const toForm = dialog.getByRole('button', { name: '转入表单草稿', exact: true });
+  await toForm.click();
+  await expect.poll(() => page.evaluate(() => !!(window as any).__finishConfigParse)).toBe(true);
+  await page.evaluate(() => (window as any).__finishFormSave());
+  // This action exists only after the parent accepts the new ID. The form's
+  // save button intentionally remains disabled while configuration is open.
+  await expect(dialog.locator('.dialog-footer button:not([data-dialog-save])').first()).toBeEnabled();
+  await page.evaluate(() => (window as any).__finishConfigParse());
+  await expect(toForm).toBeEnabled();
+  await expect(editor).toContainText('keep-config');
+  await toForm.click();
+  await expect(dialog.getByRole('textbox', { name: '命令', exact: true })).toHaveValue('keep-config');
+  await dialog.locator('[data-dialog-save]').click();
+  await expect.poll(() => page.evaluate(() => (window as any).__resourceScale.calls.filter((call: any) => call.command === 'save_mcp_definition').map((call: any) => call.args.draft.expectedVersion))).toEqual([null, 1]);
+  await page.evaluate(() => (window as any).__finishFormSave());
+  await expect(dialog).toHaveCount(0);
+});
+
+test('pending output-target conversion preserves later configuration text and restores its format identity', async ({ page }) => {
+  await library(page);
+  await page.evaluate(() => {
+    const host = (window as any).__TAURI_INTERNALS__; const invoke = host.invoke; let delayed = false;
+    host.invoke = async (command: string, args: any) => {
+      if (command === 'list_cli_adapters') { const result = await invoke(command, args); return { ...result, registered: [...result.registered, { ...result.registered[0], id: 'second-fixture', name: 'Second fixture' }] }; }
+      if (command === 'render_mcp_draft' && args.target.toolId === 'second-fixture' && !delayed) { delayed = true; await new Promise<void>(resolve => { (window as any).__finishTargetRender = resolve; }); }
+      return invoke(command, args);
+    };
+  });
+  await page.getByRole('button', { name: '新建 MCP', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('textbox', { name: '名称', exact: true }).fill('target-switch');
+  await dialog.getByRole('textbox', { name: '命令', exact: true }).fill('node');
+  await dialog.getByRole('button', { name: '配置文本', exact: true }).click();
+  const output = dialog.getByRole('combobox', { name: '输出目标', exact: true });
+  await output.selectOption('second-fixture');
+  await expect.poll(() => page.evaluate(() => !!(window as any).__finishTargetRender)).toBe(true);
+  const editor = dialog.getByRole('textbox', { name: '当前条目配置（格式化）', exact: true });
+  await editor.fill('{"mcpServers":{"target-switch":{"command":"keep-this-input"}}}');
+  await page.evaluate(() => (window as any).__finishTargetRender());
+  await expect(dialog.getByRole('alert').filter({ hasText: '转换期间草稿已更改' })).toBeVisible();
+  await expect(editor).toContainText('keep-this-input');
+  await expect(output).toHaveValue('codex');
+  await dialog.getByRole('button', { name: '转入表单草稿', exact: true }).click();
+  await expect(dialog.getByRole('textbox', { name: '命令', exact: true })).toHaveValue('keep-this-input');
+  await dialog.getByRole('button', { name: '配置文本', exact: true }).click();
+  await output.selectOption('second-fixture');
+  await expect(output).toBeEnabled();
+  await expect(output).toHaveValue('second-fixture');
+  await expect(editor).toContainText('keep-this-input');
+  await dialog.getByRole('button', { name: '转入表单草稿', exact: true }).click();
+  await expect(dialog.getByRole('textbox', { name: '命令', exact: true })).toHaveValue('keep-this-input');
+  expect(await page.evaluate(() => (window as any).__resourceScale.writes.length)).toBe(0);
+});
+
 test('500 MCP: complete search, stable page/selection and detail return; 500 writes in bounded chunks and failed-only retry', async ({ page }) => {
   await library(page);
   const list = page.locator('[data-resource-list="library:mcp"]');

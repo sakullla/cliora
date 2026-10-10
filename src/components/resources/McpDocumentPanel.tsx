@@ -27,15 +27,18 @@ export function McpDocumentPanel({ target, definitionId = null, name, formDirty,
   useEffect(() => { onDirtyChange?.(!!document && text !== document.text); }, [document, text, onDirtyChange]);
   const live = useRef(true);
   const epoch = useRef(0);
-  const latest = useRef({ getDraft, text });
-  latest.current = { getDraft, text };
+  // Enable state and target identity live outside McpDraft. Both directions
+  // must validate the complete conversion context, including later text edits.
+  const context = JSON.stringify([target ?? null, definitionId, sourceName ?? null, name]);
+  const latest = useRef({ getDraft, text, context, toolId });
+  latest.current = { getDraft, text, context, toolId };
   const feedback = useFeedback(JSON.stringify(['mcp-document', target, definitionId, name]));
   const destination: McpTargetRequest = { ...(target ?? { scope: 'global', projectPath: null, enabled: true }), toolId };
   useEffect(() => { void native.listCliAdapters().then(value => { const entries = value.registered.filter(item => item.management?.mcp !== false && item.resources.state === 'available'); setTools(entries); if (!target) setToolId(entries[0]?.id ?? ''); }).catch(() => {}); return () => { live.current = false; epoch.current++; }; }, []);
   async function load(nextTool = toolId, reveal = false) {
     const request = ++epoch.current; const result = feedback.begin(JSON.stringify(['read', nextTool, reveal])); setBusy(true);
     try {
-      const draft = getDraft(); const snapshot = JSON.stringify(draft);
+      const draft = getDraft(); const snapshot = JSON.stringify([draft, text, context]);
       const nextTarget = { ...destination, toolId: nextTool };
       let value: McpDocument;
       if (formDirty || !definitionId && !sourceName) {
@@ -50,7 +53,7 @@ export function McpDocumentPanel({ target, definitionId = null, name, formDirty,
       } else value = sourceName && target && nextTool !== target.toolId ? await native.equivalentMcpDocument(target, sourceName, nextTarget) : await native.readMcpDocument({ target: nextTarget, definitionId, name: sourceName ?? name, reveal });
 
       if (live.current && request === epoch.current) {
-        if (JSON.stringify(latest.current.getDraft()) !== snapshot) throw new Error(t('library.experience.draftChanged'));
+        if (latest.current.toolId !== nextTool || JSON.stringify([latest.current.getDraft(), latest.current.text, latest.current.context]) !== snapshot) throw new Error(t('library.experience.draftChanged'));
         setDocument(value); setText(value.text); setOpen(true); setRaw(false);
       } result.complete();
     } catch (error) { if (live.current && request === epoch.current && document) setToolId(document.targetToolId); result.error(resourceError(error)); }
@@ -61,12 +64,13 @@ export function McpDocumentPanel({ target, definitionId = null, name, formDirty,
     const request = ++epoch.current; const value = text;
     const result = feedback.begin(copy ? 'copy-new' : 'form'); setBusy(true);
     try {
+      const snapshot = JSON.stringify([getDraft(), value, context, toolId]);
       if (document.protectedValues) throw new Error(t('library.experience.maskedConversion'));
       const parsed = await native.parseMcpPaste(destination, document.name, value);
       if (parsed.length !== 1 || !parsed[0].draft || parsed[0].unmappedFields.length) throw new Error(parsed.flatMap(item => [...item.diagnostics, ...item.unmappedFields]).join(' · ') || t('library.experience.invalidConfig'));
       if (!target && parsed[0].enabled === false) throw new Error(t('library.experience.stateNotPortable'));
       if (live.current && request === epoch.current) {
-        if (latest.current.text !== value) throw new Error(t('library.experience.draftChanged'));
+        if (JSON.stringify([latest.current.getDraft(), latest.current.text, latest.current.context, latest.current.toolId]) !== snapshot) throw new Error(t('library.experience.draftChanged'));
         onDraft({ ...parsed[0].draft, id: null, expectedVersion: null, name: copy ? `${parsed[0].name}-copy` : parsed[0].name }, copy, parsed[0].enabled ?? undefined); setOpen(false);
       } result.complete();
     } catch (error) { result.error(resourceError(error)); }
