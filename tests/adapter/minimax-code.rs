@@ -105,6 +105,118 @@ fn minimax_registry_identity_capabilities_and_launch() {
 }
 
 #[test]
+fn minimax_a2_mcp_project_state_ignores_global_product_flags() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let project = home.join("project");
+    fs::create_dir(&project).unwrap();
+    let db = Database::open(&home.join("db")).unwrap();
+    let registry = registry();
+    let text = r#"{"mcpServers":{"scope-state":{"type":"stdio","command":"node","enabled":true,"configured":false}}}"#;
+    for (request, expected) in [(target(None), false), (target(Some(&project)), true)] {
+        let location = resources::location(request.scope, home, request.project_path.as_deref().map(Path::new)).unwrap();
+        write(&location.path, text);
+        let entries = mcp::list_native(&db, &registry, home, &request).unwrap();
+        assert_eq!(entries[0].enabled, expected, "list: {:?}", request.scope);
+        let doc = documents::read(&db, &registry, home, &documents::McpDocumentRequest { target: request.clone(), definition_id: None, name: "scope-state".into(), reveal: false }).unwrap();
+        assert_eq!(doc.enabled, Some(expected), "document: {:?}", request.scope);
+        let pasted = documents::parse_paste(&db, &registry, home, &request, None, text).unwrap();
+        assert_eq!(pasted[0].enabled, Some(expected));
+        assert_eq!(pasted[0].draft.is_some(), request.scope == Scope::Project);
+        let equivalent = documents::equivalent(&db, &registry, home, &request, "scope-state", &target(None));
+        if request.scope == Scope::Project {
+            assert_eq!(equivalent.unwrap().enabled, Some(true));
+        } else {
+            assert!(equivalent.is_err());
+        }
+    }
+}
+
+#[test]
+fn minimax_a2_project_product_flags_allow_raw_toggle_distribution_and_delete() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let project = home.join("project");
+    fs::create_dir(&project).unwrap();
+    let db = Database::open(&home.join("db")).unwrap();
+    let registry = registry();
+    let store = Store::default();
+    let name = "scope-state";
+    let original = json!({"mcpServers":{name:{"type":"stdio","command":"node","enabled":true,"configured":false,"builtin":true,"unknown":{"keep":1}}},"keepRoot":true});
+    let def = mcp::save_definition(&db, draft(name)).unwrap();
+    for request in [target(None), target(Some(&project))] {
+        let location = resources::location(request.scope, home, request.project_path.as_deref().map(Path::new)).unwrap();
+        write(&location.path, &original.to_string());
+        let read = || documents::read(&db, &registry, home, &documents::McpDocumentRequest { target: request.clone(), definition_id: None, name: name.into(), reveal: false }).unwrap();
+        for enabled in [false, true] {
+            let doc = read();
+            let mut edited: Value = serde_json::from_str(&doc.text).unwrap();
+            edited["mcpServers"][name]["enabled"] = json!(enabled);
+            let saved = documents::save(&db, &store, &registry, home, &request, name, &doc.baseline, &edited.to_string());
+            if request.scope == Scope::Global { assert!(saved.is_err()); }
+            else {
+                assert_eq!(saved.unwrap().enabled, Some(enabled));
+                assert_eq!(mcp::list_native(&db, &registry, home, &request).unwrap()[0].enabled, enabled);
+            }
+            let mut toggle = request.clone();
+            toggle.enabled = enabled;
+            toggle.allow_replace = true;
+            let preview = mcp::preview_targets(&db, &registry, home, &def.id, vec![toggle.clone()]).remove(0);
+            toggle.baseline_hash = preview.baseline_hash;
+            toggle.preview_token = preview.preview_token;
+            let result = mcp::distribute(&db, &store, &registry, home, &def.id, vec![toggle]).remove(0);
+            if request.scope == Scope::Global { assert_ne!(result.status, "written"); }
+            else {
+                assert_eq!(result.status, "written", "{}", result.detail);
+                assert_eq!(read().enabled, Some(enabled));
+                assert_eq!(mcp::list_native(&db, &registry, home, &request).unwrap()[0].enabled, enabled);
+                let after: Value = serde_json::from_str(&fs::read_to_string(&location.path).unwrap()).unwrap();
+                assert_eq!(after["keepRoot"], true);
+                for field in ["configured", "builtin", "unknown"] { assert_eq!(after["mcpServers"][name][field], original["mcpServers"][name][field]); }
+            }
+        }
+        let removed = mcp::remove_native(&db, &store, &registry, home, &request, name);
+        if request.scope == Scope::Global { assert!(removed.is_err()); assert_eq!(serde_json::from_str::<Value>(&fs::read_to_string(&location.path).unwrap()).unwrap(), original); }
+        else { removed.unwrap(); assert!(mcp::list_native(&db, &registry, home, &request).unwrap().is_empty()); }
+    }
+    // Project loader ignores even non-boolean product properties; semantic
+    // conversion may omit them while raw edits keep the original JSON.
+    let ignored = json!({"command":"node","configured":"ignored","builtin":{"ignored":true}});
+    assert!(MiniMaxCode.mcp_decode_at(name, &ignored, Scope::Global).is_err());
+    let decoded = MiniMaxCode.mcp_decode_at(name, &ignored, Scope::Project).unwrap();
+    assert!(decoded.enabled && decoded.unmapped_fields.is_empty());
+    for scope in [Scope::Global, Scope::Project] {
+        let location = resources::location(scope, home, Some(&project)).unwrap();
+        assert!(MiniMaxCode.mcp_change_in_scope(&json!({}), &location, "matrix", Some(json!({"command":"node"})), scope).is_err());
+    }
+}
+
+#[test]
+fn minimax_a2_global_incomplete_can_be_explicitly_enabled() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let db = Database::open(&home.join("db")).unwrap();
+    let registry = registry();
+    let store = Store::default();
+    write(&home.join(".minimax/mcp.json"), r#"{"mcpServers":{"incomplete":{"command":"node","configured":false,"enabled":true}}}"#);
+    let def = mcp::save_definition(&db, draft("incomplete")).unwrap();
+    for enabled in [true, false, true] {
+        let mut request = target(None);
+        request.enabled = enabled;
+        request.allow_replace = true;
+        let preview = mcp::preview_targets(&db, &registry, home, &def.id, vec![request.clone()]).remove(0);
+        request.baseline_hash = preview.baseline_hash;
+        request.preview_token = preview.preview_token;
+        let result = mcp::distribute(&db, &store, &registry, home, &def.id, vec![request.clone()]).remove(0);
+        assert_eq!(result.status, "written", "{}", result.detail);
+        assert_eq!(mcp::list_native(&db, &registry, home, &request).unwrap()[0].enabled, enabled);
+        let doc = documents::read(&db, &registry, home, &documents::McpDocumentRequest { target: request, definition_id: None, name: "incomplete".into(), reveal: false }).unwrap();
+        assert_eq!(doc.enabled, Some(enabled));
+        assert_eq!(serde_json::from_str::<Value>(&doc.text).unwrap()["mcpServers"]["incomplete"]["configured"], true);
+    }
+}
+
+#[test]
 fn minimax_data_root_overrides_profile_legacy_and_install_are_distinct() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path();

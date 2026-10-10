@@ -70,3 +70,105 @@ for (const surface of ['native', 'library']) test(`MiniMax ${surface} MCP copies
   expect(calls.length).toBe(2);
   for (const call of calls) expect(call.args.draft).toMatchObject({ referenceSource: 'minimax_code', referenceScope: 'global' });
 });
+
+async function connectionFixture(page: Page) {
+  await page.addInitScript(resourceExperienceFixture, { count: 2 });
+  await page.addInitScript(minimaxCodeFixture, { connection: { providerId: 'fixture', interfaceFormat: 'openai_responses', baseUrl: 'https://example.invalid/v1', model: 'OldModel' } });
+  await page.goto('/');
+  await page.getByLabel('管理中的工具').getByRole('button', { name: '编辑配置', exact: true }).click();
+  await page.getByRole('button', { name: '新建配置', exact: true }).click();
+  await expect(page.getByRole('textbox', { name: '模型', exact: true })).toHaveValue('OldModel');
+}
+
+test('MiniMax A2 default model settings update untouched connection inputs and remain savable', async ({ page }) => {
+  await connectionFixture(page);
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('button', { name: '保存配置', exact: true })).toBeEnabled();
+  await dialog.getByRole('button', { name: '常用设置', exact: true }).click();
+  await dialog.getByRole('textbox', { name: '默认模型', exact: true }).fill('custom_provider:fixture/NewModel');
+  await dialog.getByRole('textbox', { name: '默认模型', exact: true }).blur();
+  await expect.poll(() => page.evaluate(() => Object.values((window as any).__minimaxCode.sessions).some((value: any) => value.view.connection?.model === 'NewModel'))).toBe(true);
+  await expect(dialog.getByRole('button', { name: '保存配置', exact: true })).toBeEnabled();
+  await dialog.getByRole('button', { name: '连接与模型', exact: true }).click();
+  await expect(dialog.getByRole('textbox', { name: '模型', exact: true })).toHaveValue('NewModel');
+  await expect(dialog.getByRole('button', { name: '更新连接草稿', exact: true })).toBeDisabled();
+  await dialog.getByRole('button', { name: '保存配置', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__minimaxCode.saved.at(-1)?.view.connection?.model)).toBe('NewModel');
+});
+
+async function changeRawModel(page: Page, model: string) {
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('button', { name: '原生文本', exact: true }).click();
+  const root = await page.evaluate(() => JSON.parse((Object.values((window as any).__minimaxCode.sessions)[0] as any).profile.files.settings));
+  root.defaultModel = `custom_provider:fixture/${model}`;
+  await dialog.getByRole('textbox', { name: 'settings 配置草稿', exact: true }).fill(JSON.stringify(root, null, 2));
+  await expect.poll(() => page.evaluate(() => (Object.values((window as any).__minimaxCode.sessions)[0] as any).view.connection?.model)).toBe(model);
+}
+
+test('MiniMax A2 raw model changes synchronize the hidden form and save', async ({ page }) => {
+  await connectionFixture(page);
+  const dialog = page.getByRole('dialog');
+  await changeRawModel(page, 'RawModel');
+  await expect(dialog.getByRole('button', { name: '保存配置', exact: true })).toBeEnabled();
+  await dialog.getByRole('button', { name: '连接与模型', exact: true }).click();
+  await expect(dialog.getByRole('textbox', { name: '模型', exact: true })).toHaveValue('RawModel');
+  await expect(dialog.getByRole('button', { name: '更新连接草稿', exact: true })).toBeDisabled();
+  await dialog.getByRole('button', { name: '保存配置', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__minimaxCode.saved.at(-1)?.view.connection?.model)).toBe('RawModel');
+});
+
+for (const surface of ['settings', 'raw']) test(`MiniMax A2 ${surface} changes retain only genuinely edited connection fields`, async ({ page }) => {
+  await connectionFixture(page);
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('textbox', { name: '请求地址', exact: true }).fill('https://local.invalid/v2');
+  if (surface === 'raw') await changeRawModel(page, 'NewModel');
+  else {
+    await dialog.getByRole('button', { name: '常用设置', exact: true }).click();
+    await dialog.getByRole('textbox', { name: '默认模型', exact: true }).fill('custom_provider:fixture/NewModel');
+    await dialog.getByRole('textbox', { name: '默认模型', exact: true }).blur();
+    await expect.poll(() => page.evaluate(() => (Object.values((window as any).__minimaxCode.sessions)[0] as any).view.connection?.model)).toBe('NewModel');
+  }
+  await expect(dialog.getByRole('button', { name: '保存配置', exact: true })).toBeDisabled();
+  await dialog.getByRole('button', { name: '连接与模型', exact: true }).click();
+  await expect(dialog.getByRole('textbox', { name: '模型', exact: true })).toHaveValue('NewModel');
+  await expect(dialog.getByRole('textbox', { name: '请求地址', exact: true })).toHaveValue('https://local.invalid/v2');
+  await dialog.getByRole('button', { name: '更新连接草稿', exact: true }).click();
+  await expect(dialog.getByRole('button', { name: '保存配置', exact: true })).toBeEnabled();
+  await dialog.getByRole('button', { name: '保存配置', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__minimaxCode.saved.at(-1)?.view.connection)).toMatchObject({ baseUrl: 'https://local.invalid/v2', model: 'NewModel' });
+});
+
+test('MiniMax A2 explicit local model survives raw refresh until cancelled', async ({ page }) => {
+  await connectionFixture(page);
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('textbox', { name: '模型', exact: true }).fill('LocalModel');
+  await changeRawModel(page, 'RawModel');
+  await expect(dialog.getByRole('button', { name: '保存配置', exact: true })).toBeDisabled();
+  await dialog.getByRole('button', { name: '连接与模型', exact: true }).click();
+  await expect(dialog.getByRole('textbox', { name: '模型', exact: true })).toHaveValue('LocalModel');
+  await dialog.getByRole('region', { name: 'MiniMax Code 设置', exact: true }).getByRole('button', { name: '取消', exact: true }).click();
+  await expect(dialog.getByRole('textbox', { name: '模型', exact: true })).toHaveValue('RawModel');
+  await expect(dialog.getByRole('button', { name: '保存配置', exact: true })).toBeEnabled();
+});
+
+test('MiniMax A2 delayed failed connection edit preserves input and retry acknowledges the new draft', async ({ page }) => {
+  await connectionFixture(page);
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('textbox', { name: '模型', exact: true }).fill('LocalModel');
+  await page.evaluate(() => { (window as any).__minimaxCode.holdEdits = true; (window as any).__minimaxCode.failEdit = true; });
+  await dialog.getByRole('button', { name: '更新连接草稿', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__minimaxCode.pendingEdits.length)).toBe(1);
+  await expect(dialog.getByRole('textbox', { name: '模型', exact: true })).toBeDisabled();
+  await expect(dialog.getByRole('button', { name: '保存配置', exact: true })).toBeDisabled();
+  await page.evaluate(() => (window as any).__minimaxCode.pendingEdits.shift()());
+  await expect(dialog.getByRole('textbox', { name: '模型', exact: true })).toBeEnabled();
+  await expect(dialog.getByRole('textbox', { name: '模型', exact: true })).toHaveValue('LocalModel');
+  await expect(dialog.getByRole('button', { name: '保存配置', exact: true })).toBeDisabled();
+  expect(await page.evaluate(() => (Object.values((window as any).__minimaxCode.sessions)[0] as any).view.connection.model)).toBe('OldModel');
+  await page.evaluate(() => { (window as any).__minimaxCode.holdEdits = false; (window as any).__minimaxCode.failEdit = false; });
+  await dialog.getByRole('button', { name: '更新连接草稿', exact: true }).click();
+  await expect(dialog.getByRole('button', { name: '更新连接草稿', exact: true })).toBeDisabled();
+  await expect(dialog.getByRole('button', { name: '保存配置', exact: true })).toBeEnabled();
+  await dialog.getByRole('button', { name: '保存配置', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__minimaxCode.saved.at(-1)?.view.connection.model)).toBe('LocalModel');
+});
