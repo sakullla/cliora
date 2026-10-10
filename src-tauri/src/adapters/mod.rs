@@ -18,6 +18,7 @@ pub(crate) mod kiro;
 pub mod model_directory;
 pub mod mcp_codec;
 pub(crate) mod mimo_code;
+pub(crate) mod minimax_code;
 pub mod official;
 pub(crate) mod opencode;
 pub(crate) mod pi;
@@ -50,3 +51,4 @@ pub static ANTIGRAVITY: antigravity::Antigravity = antigravity::Antigravity;
 pub static KIRO: kiro::Kiro = kiro::Kiro;
 
 pub static CURSOR_IDE: cursor_ide::CursorIde = cursor_ide::CursorIde;
+pub static MINIMAX_CODE: minimax_code::MiniMaxCode = minimax_code::MiniMaxCode;

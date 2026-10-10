@@ -34,6 +34,8 @@ pub struct McpDefinition {
     /// Native adapter that owns the interpolation grammar; absent in legacy data.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reference_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_scope: Option<Scope>,
     #[serde(default = "default_in_library")]
     pub in_library: bool,
     pub version: u64,
@@ -53,6 +55,8 @@ pub struct McpDraft {
     /// Native adapter that owns the interpolation grammar; absent in legacy data.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reference_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_scope: Option<Scope>,
     #[serde(default = "default_in_library")]
     pub in_library: bool,
     pub expected_version: Option<u64>,
@@ -108,6 +112,8 @@ pub struct NativeMcpEntry {
     /// Native adapter that owns the interpolation grammar; absent in legacy data.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reference_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_scope: Option<Scope>,
     pub enabled: bool,
     pub protected_values: bool,
 }
@@ -205,7 +211,8 @@ pub fn save_definition(db: &Database, mut draft: McpDraft) -> Result<McpDefiniti
     if let Some(id) = draft.id.as_deref() {
         let previous = get_definition(db, id)?;
         // Older clients may omit provenance while editing a known definition.
-        if draft.reference_source.is_none() { draft.reference_source = previous.reference_source; }
+        if draft.reference_source.is_none() { draft.reference_source = previous.reference_source.clone(); }
+        if draft.reference_scope.is_none() && draft.reference_source == previous.reference_source { draft.reference_scope = previous.reference_scope; }
         if previous.name != draft.name.trim() {
             let installed: bool = db.with_connection(|conn| {
                 conn.query_row(
@@ -236,6 +243,7 @@ pub fn save_definition(db: &Database, mut draft: McpDraft) -> Result<McpDefiniti
         env: draft.env,
         headers: draft.headers,
         reference_source: draft.reference_source,
+        reference_scope: draft.reference_scope,
         in_library: draft.in_library,
         version,
     };
@@ -513,6 +521,7 @@ pub fn list_native(
                 env,
                 headers,
                 reference_source: Some(target.tool_id.clone()),
+                reference_scope: Some(target.scope),
                 enabled: raw
                     .get("enabled")
                     .and_then(Value::as_bool)
@@ -560,7 +569,7 @@ pub fn preview_targets(
                     let existing = entries.get(&definition.name);
                     let actual = entry_hash(existing)?;
                     let owned = managed_hash(db, definition_id, &target.tool_id, &scope_key)?;
-                    let proposal = render_target(registry, adapter, definition, target.enabled, existing, &location)?;
+                    let proposal = render_target(registry, adapter, definition, target.enabled, existing, target.scope, &location)?;
                     Ok::<_, String>((existing.is_some(), actual, owned, visible_entry(existing), visible_entry(proposal.as_ref()), preview_token(definition, &target, &location, &scope_key, &entry_hash(existing)?)?))
                 })();
                 match inspected {
@@ -606,7 +615,7 @@ pub fn distribute(
             result.path = Some(location.path.display().to_string());
             let (baseline, parsed) = parse_native(&location)?;
             let adapter = registry.get(&target.tool_id).ok_or("此 CLI 尚无注册适配器")?;
-            validate_references(registry, adapter, definition)?;
+            validate_references(registry, adapter, definition, target.scope)?;
             let entries = adapter.mcp_entries(&parsed, &location)?;
             let existing = entries.get(&definition.name);
             let actual_hash = entry_hash(existing)?;
@@ -621,7 +630,7 @@ pub fn distribute(
                     return Err("同名原生条目未受当前定义管理或已被外部修改；请预览后确认替换".into());
                 }
             }
-            let document = render_target(registry, adapter, definition, target.enabled, existing, &location)?;
+            let document = render_target(registry, adapter, definition, target.enabled, existing, target.scope, &location)?;
             let written_hash = entry_hash(document.as_ref())?;
             let unchanged = existing == document.as_ref();
             // A deletion-based disable leaves the placement ledger in place.
@@ -661,6 +670,7 @@ pub(super) fn validate_references(
     registry: &Registry,
     target: &dyn crate::adapters::CliAdapter,
     definition: &McpDefinition,
+    target_scope: Scope,
 ) -> Result<(), String> {
     let source = definition.reference_source.as_deref()
         .map(|id| registry.get(id).ok_or("MCP 引用来源工具未注册，无法确认环境变量引用语义"))
@@ -669,11 +679,11 @@ pub(super) fn validate_references(
         .chain(std::iter::once(&definition.url)).chain(definition.env.values()).chain(definition.headers.values()) {
         // Legacy definitions have no source. Treat any known native grammar as
         // a reference conservatively instead of silently exporting it literally.
-        let mut source_references = source.map_or_else(
-            || registry.iter().flat_map(|adapter| adapter.mcp_reference_fragments(value)).collect::<Vec<_>>(),
-            |adapter| adapter.mcp_reference_fragments(value),
-        );
-        let mut target_references = target.mcp_reference_fragments(value);
+        let mut source_references = match source {
+            None => registry.iter().flat_map(|adapter| adapter.mcp_reference_fragments(value)).collect::<Vec<_>>(),
+            Some(adapter) => adapter.mcp_reference_fragments_at(value, definition.reference_scope)?,
+        };
+        let mut target_references = target.mcp_reference_fragments_at(value, Some(target_scope))?;
         source_references.sort(); source_references.dedup();
         target_references.sort(); target_references.dedup();
         if source_references != target_references {
@@ -689,9 +699,10 @@ pub(super) fn render_target(
     definition: &McpDefinition,
     enabled: bool,
     existing: Option<&Value>,
+    scope: Scope,
     location: &McpLocation,
 ) -> Result<Option<Value>, String> {
-    validate_references(registry, adapter, definition)?;
+    validate_references(registry, adapter, definition, scope)?;
     adapter.mcp_document_at(definition, enabled, existing, location)
 }
 

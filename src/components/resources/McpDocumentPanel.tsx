@@ -47,7 +47,7 @@ export function McpDocumentPanel({ target, definitionId = null, name, formDirty,
           const original = await native.readMcpDocument({ target, definitionId: null, name: sourceName, reveal });
           if (original.protectedValues) throw new Error(t('library.experience.maskedConversion'));
           if (original.unmappedFields.length) throw new Error(t('library.experience.unmapped', { fields: original.unmappedFields.join(', ') }));
-          value = await native.renderMcpDraft(nextTarget, { ...draft, referenceSource: target.toolId });
+          value = await native.renderMcpDraft(nextTarget, { ...draft, referenceSource: target.toolId, referenceScope: target.scope });
           if (nextTool === target.toolId) value = { ...value, source: 'native_entry', baseline: original.baseline, rawText: original.rawText, rawScope: original.rawScope, sourcePath: original.sourcePath };
         } else value = await native.renderMcpDraft(nextTarget, draft);
       } else value = sourceName && target && nextTool !== target.toolId ? await native.equivalentMcpDocument(target, sourceName, nextTarget) : await native.readMcpDocument({ target: nextTarget, definitionId, name: sourceName ?? name, reveal });

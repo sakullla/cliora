@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { chromium, expect } from '@playwright/test';
-import { workflowFixtures, resourceExperienceFixture, cursorIdeFixture } from './capture-workflow-fixtures.mjs';
+import { workflowFixtures, resourceExperienceFixture, cursorIdeFixture, minimaxCodeFixture } from './capture-workflow-fixtures.mjs';
 import { captureConfiguration, configurationScenarios, installCaptureConfigurationProtocol } from './capture-configuration.mjs';
 const historyScenarioNames=['grok-precise-detail','grok-inferred-time','grok-no-usage','grok-statistics','grok-statistics-details'];
 const scenarioNames=[...configurationScenarios.map(item=>item.name),...historyScenarioNames];
@@ -21,9 +21,9 @@ if((process.argv.includes('--features')||process.argv.includes('--workflows')||p
 if(process.argv.includes('--list')){console.log(selectedScenarios.join('\n'));process.exit(0);}
 const root=fileURLToPath(new URL('../',import.meta.url)).replace(/\\/g,'/').replace(/\/$/,'');
 const workflowsOnly=process.argv.includes('--features')||process.argv.includes('--workflows');
-const fullCapture=!process.argv.some(arg=>['--features','--workflows','--records','--sessions','--connections','--skills','--home','--resources','--cursor-ide'].includes(arg));
-const captureMode=process.argv.includes('--cursor-ide')?'cursor-ide':process.argv.includes('--resources')?'resources':process.argv.includes('--home')?'home':workflowsOnly?'features':process.argv.includes('--sessions')?'sessions':process.argv.includes('--records')?'records':process.argv.includes('--connections')?'connections':process.argv.includes('--skills')?'skills':'full';
-const manifestName=`capture-ui${['features','sessions','records','connections','skills','home','resources','cursor-ide'].includes(captureMode)?'-'+captureMode:''}-manifest.json`;
+const fullCapture=!process.argv.some(arg=>['--features','--workflows','--records','--sessions','--connections','--skills','--home','--resources','--cursor-ide','--minimax-code'].includes(arg));
+const captureMode=process.argv.includes('--minimax-code')?'minimax-code':process.argv.includes('--cursor-ide')?'cursor-ide':process.argv.includes('--resources')?'resources':process.argv.includes('--home')?'home':workflowsOnly?'features':process.argv.includes('--sessions')?'sessions':process.argv.includes('--records')?'records':process.argv.includes('--connections')?'connections':process.argv.includes('--skills')?'skills':'full';
+const manifestName=`capture-ui${['features','sessions','records','connections','skills','home','resources','cursor-ide','minimax-code'].includes(captureMode)?'-'+captureMode:''}-manifest.json`;
 const out=process.env.CLIORA_CAPTURE_OUT ?? root+'/docs/verification/ui'; fs.mkdirSync(out,{recursive:true});
 const previewUrl=process.env.CLIORA_PREVIEW_URL??'http://127.0.0.1:14736';
 let previewReady=false;
@@ -264,9 +264,21 @@ const ids=['scenario','theme','width','query'];const controls=ids.map(id=>docume
 
 if(!workflowsOnly){
 for(const width of widths)for(const theme of themes){
- const page=await browser.newPage({viewport:{width,height:1000}});page.on('pageerror',e=>failures.push(e.message));await page.addInitScript(mock,theme);await installCaptureConfigurationProtocol(page);if(process.argv.includes('--resources'))await page.addInitScript(resourceExperienceFixture,{theme,count:500,stateDelay:120});if(process.argv.includes('--cursor-ide')){await page.addInitScript(resourceExperienceFixture,{theme,count:2});await page.addInitScript(cursorIdeFixture,{theme});}await page.goto(process.env.CLIORA_PREVIEW_URL ?? 'http://127.0.0.1:14736');await page.getByText('正在读取本机设置').waitFor({state:'hidden'});await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);
+ const page=await browser.newPage({viewport:{width,height:1000}});page.on('pageerror',e=>failures.push(e.message));await page.addInitScript(mock,theme);await installCaptureConfigurationProtocol(page);if(process.argv.includes('--resources'))await page.addInitScript(resourceExperienceFixture,{theme,count:500,stateDelay:120});if(process.argv.includes('--minimax-code')){await page.addInitScript(resourceExperienceFixture,{theme,count:2});await page.addInitScript(minimaxCodeFixture,{theme});}if(process.argv.includes('--cursor-ide')){await page.addInitScript(resourceExperienceFixture,{theme,count:2});await page.addInitScript(cursorIdeFixture,{theme});}await page.goto(process.env.CLIORA_PREVIEW_URL ?? 'http://127.0.0.1:14736');await page.getByText('正在读取本机设置').waitFor({state:'hidden'});await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);
  const nav=page.getByRole('navigation',{name:'页面'});
  async function capture(name){await captureImage(page,name,theme,width);}
+ if(process.argv.includes('--minimax-code')){
+  await expect(page.getByLabel('管理中的工具').getByText('MiniMax Code',{exact:true})).toBeVisible();await capture('minimax-code-home');
+  await nav.getByRole('button',{name:'工具与连接',exact:true}).click();await page.getByRole('button',{name:'新建配置',exact:true}).click();
+  await expect(page.getByRole('button',{name:'更新连接草稿',exact:true})).toBeVisible();await capture('minimax-code-connection');
+  await page.getByRole('button',{name:'常用设置',exact:true}).click();await expect(page.getByRole('textbox',{name:'默认模型',exact:true})).toBeVisible();await capture('minimax-code-settings');
+  await page.getByRole('dialog').getByRole('button',{name:'关闭',exact:true}).click();
+  await page.getByRole('tab',{name:'MCP',exact:true}).click();await page.getByRole('button',{name:'mcp-001',exact:true}).click();await page.getByRole('button',{name:'配置文本',exact:true}).click();await page.getByRole('textbox',{name:'当前条目配置（格式化）',exact:true}).waitFor();await capture('minimax-code-mcp-document');
+  await page.getByRole('dialog').getByRole('button',{name:'关闭',exact:true}).click();await page.getByRole('tab',{name:'Skill',exact:true}).click();
+  const rows=page.getByRole('region',{name:'Skill',exact:true}).locator('article');await expect(rows).toHaveCount(3);await capture('minimax-code-skill-sources');
+  await rows.filter({hasText:'minimax_builtin Skill source'}).getByRole('button',{name:'same-skill',exact:true}).click();await expect(page.getByRole('textbox',{name:'SKILL.md',exact:true})).toHaveAttribute('contenteditable','false');await capture('minimax-code-readonly-skill');
+  await page.close();continue;
+ }
  if(process.argv.includes('--cursor-ide')){
   await page.getByLabel('管理中的工具').getByRole('button',{name:'启动',exact:true}).click();
   await expect(page.getByLabel('管理中的工具').getByRole('status')).toContainText('已请求启动桌面应用');

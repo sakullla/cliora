@@ -858,7 +858,7 @@ mod tests {
         let definition = mcp::save_definition(
             &db,
             mcp::McpDraft {
-                reference_source: None,
+                reference_source: None, reference_scope: None,
                 id: None,
                 name: "example".into(),
                 transport: McpTransport::Stdio,

@@ -387,7 +387,7 @@ mod tests {
 
     fn stdio_definition() -> McpDefinition {
         McpDefinition {
-            reference_source: None,
+            reference_source: None, reference_scope: None,
             id: "definition-1".into(),
             name: "cliora-fixture".into(),
             transport: McpTransport::Stdio,
@@ -403,7 +403,7 @@ mod tests {
 
     fn http_definition() -> McpDefinition {
         McpDefinition {
-            reference_source: None,
+            reference_source: None, reference_scope: None,
             id: "definition-2".into(),
             name: "cliora-http".into(),
             transport: McpTransport::Http,
