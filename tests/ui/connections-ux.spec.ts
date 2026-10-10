@@ -15,7 +15,7 @@ async function mockWorkspace(page: Page, count = 20) {
       __TAURI_INTERNALS__: { invoke: async (command: string, args?: { profileId?: string }) => {
         if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['claude_code'], theme: 'system' }, tools: [{ id: 'claude_code', name: 'Claude Code' }] };
         if (command === 'list_cli_adapters') return { registered: [{ id: 'claude_code', name: 'Claude Code', interfaceFormats: ['anthropic_messages'], management: { accounts: false, mcp: true, skills: true, agents: false, plugins: false } }], managedIds: ['claude_code'], preservedUnknown: [] };
-        if (command === 'list_projects' || command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_skill_recovery_issues' || command === 'scan_native_skills' || command === 'list_native_mcp') return [];
+        if (command === 'list_projects' || command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_skill_recovery_issues' || command === 'list_native_skill_metadata' || command === 'resource_states' || command === 'list_native_mcp') return [];
         if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
         if (command === 'get_tray_status') return { available: false, error: null };
         if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
@@ -80,10 +80,13 @@ test('MCP and Skill tabs share one heading and a single add action', async ({ pa
   await mockWorkspace(page, 1);
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'MCP 服务器' })).toBeVisible();
-  await expect(page.getByText('这个 CLI 还没有生效的 MCP')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'MCP 服务器', exact: true })).toHaveCount(1);
+  await expect(page.getByText('没有匹配的资源', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '添加 MCP', exact: true })).toHaveCount(1);
   await page.getByRole('tab', { name: 'Skill', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Skill', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Skill', exact: true })).toHaveCount(1);
+  await expect(page.getByText('没有匹配的资源', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '添加 Skill', exact: true })).toHaveCount(1);
 });
 
