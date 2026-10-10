@@ -139,8 +139,8 @@ test('terminal errors stay readable in light and dark and can be chosen again', 
   const alert = page.getByRole('region', { name: '外部终端' }).getByRole('alert');
   await expect(alert).toContainText('终端不可用');
   await expect(alert).toContainText('可以重新选择终端');
-  await expect(alert).toHaveAttribute('style', /var\(--danger\)/);
-  await expect(alert).not.toHaveAttribute('style', /#a93626/i);
+  await expect(alert).toHaveClass(/setting-error/);
+  await expect(alert).not.toHaveAttribute('style', /./);
   await expect.poll(async () => (await dangerColor(alert)).same).toBe(true);
   const light = await dangerColor(alert);
   expect(light.same).toBe(true);
