@@ -3,10 +3,15 @@ import { build } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'node:path';
 import { installConfigurationProtocol, setupConfigurationWorkspace } from './configuration-workspace-fixture';
+import type { NativeSkillEntry, ResourceStateRequest } from '../../src/types/resources';
 
 async function setup(page: Page, inherited = false) {
   await page.addInitScript((inherited) => {
     const account = (id: string, label: string) => ({ id, label, toolId: 'codex', provider: 'openai', version: 1, state: 'signed_in', identity: { subject: id, email: `${id}@example.test`, plan: 'Plus', source: 'mock' }, context: { id: `ctx-${id}` }, retiredContexts: [], pendingLogin: null, detail: null, checkedAt: null });
+    const skill: NativeSkillEntry = { name: 'project-skill', packageId: null, state: 'unknown', path: '/tmp/project/.agents/skills/project-skill', digest: null, detail: '', readOnly: false };
+    const checkSkillTarget = (target: { toolId: string; scope: string; projectPath: string | null; contextId?: string | null }) => {
+      if (target.toolId !== 'codex' || target.scope !== 'project' || target.projectPath !== '/tmp/project' || target.contextId !== 'ctx-a') throw { message: 'Skill 读取上下文错误' };
+    };
     const harness = { nativeFailure: '', nativeSnapshot: { toolId: 'codex', checkedAt: 1790992800, logins: [{ provider: 'chatgpt', authKind: 'oauth', state: 'signed_in', identity: { subject: 'native', email: 'native@example.test', plan: 'plus', source: 'native' }, detail: '原生本地登录，未在线核验。', managedAccountId: null }] }, skillEnabled: true, accounts: [account('a', '工作账号'), account('b', '个人账号')], profiles: [] as any[], queries: [] as any[], binding: null as any, impacts: {} as Record<string, any>, impactFailure: '', applyFailure: '', calls: [] as { command: string; args: any }[] };
     Object.assign(window, { isTauri: true, oauthHarness: harness, __TAURI_INTERNALS__: { invoke: async (command: string, args: any) => {
       harness.calls.push({ command, args });
@@ -23,13 +28,22 @@ async function setup(page: Page, inherited = false) {
         return [{ name: 'project-server', command: 'node', args: [], env: {}, headers: {}, transport: 'stdio', enabled: true }];
       }
       if (inherited && command === 'list_skill_packages') return [{ id: 'skill', name: 'project-skill', description: 'fixture', fileCount: 1, source: '/tmp/fixtures/project-skill', digest: 'fixture-digest', compatibility: null, inLibrary: true, updatedAt: 1 }];
-      if (inherited && command === 'scan_native_skills') return [{ name: 'project-skill', packageId: 'skill', state: 'managed', path: '/tmp/project/.agents/skills/project-skill', description: 'fixture' }];
-      if (inherited && command === 'list_skill_installations') return [{ packageId: 'skill', toolId: 'codex', scope: 'project', projectPath: '/tmp/project', contextId: null, state: 'current', targetPath: '/tmp/project/.agents/skills/project-skill' }];
+      if (inherited && command === 'list_native_skill_metadata') { checkSkillTarget(args.target); return [skill]; }
+      if (inherited && command === 'resource_states') return args.requests.map((request: ResourceStateRequest, index: number) => {
+        if (request.kind !== 'native_skill' || request.name !== skill.name || request.directory !== skill.path) throw { message: 'Skill 状态请求错误' };
+        checkSkillTarget(request.target);
+        return { index, status: 'ready', detail: '', value: { ...skill, state: 'managed', packageId: 'skill', digest: 'fixture-digest' } };
+      });
+      if (inherited && command === 'read_native_skill') {
+        if (args.toolId !== 'codex' || args.scope !== 'project' || args.projectPath !== '/tmp/project' || args.directory !== skill.path) throw { message: 'Skill 文档范围错误' };
+        return { name: skill.name, path: skill.path + '/SKILL.md', content: '# Project skill\nSynthetic inherited account fixture.', readOnly: false };
+      }
+      if (inherited && command === 'list_skill_installations') return [{ packageId: 'skill', toolId: 'codex', scope: 'project', projectPath: '/tmp/project', contextId: null, state: harness.skillEnabled ? 'current' : 'disabled', targetPath: skill.path, digest: 'fixture-digest' }];
       if (command === 'list_skill_recovery_issues') return [];
       if (inherited && command === 'get_skill_enabled') return harness.skillEnabled;
       if (inherited && command === 'set_skill_enabled') { if (args.expectedContextId !== 'ctx-a') throw { message: 'Skill 上下文错误' }; harness.skillEnabled = args.enabled; return null; }
       if (command === 'list_usage_queries') return structuredClone(harness.queries);
-      if (['list_projects', 'list_usage_cache', 'list_mcp_definitions', 'list_skill_packages'].includes(command)) return [];
+      if (['list_projects', 'list_usage_cache', 'list_mcp_definitions', 'list_skill_packages', 'list_native_skill_metadata', 'resource_states'].includes(command)) return [];
       if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
       if (command === 'get_tray_status') return { available: false, error: null };
       if (command.startsWith('plugin:event|')) return 1;
@@ -198,12 +212,21 @@ test('project without explicit binding edits and queries using its inherited eff
   await expect(page.getByRole('button', { name: /project-server/ })).toBeVisible();
   await page.getByRole('tab', { name: 'Skill', exact: true }).click();
   await page.getByRole('button').filter({ hasText: 'project-skill' }).click();
+  await expect(page.getByRole('textbox', { name: 'SKILL.md', exact: true })).toContainText('Synthetic inherited account fixture.');
   await expect(page.getByRole('checkbox', { name: '启用 Skill' })).toBeChecked();
   await page.getByRole('checkbox', { name: '启用 Skill' }).uncheck();
+  await expect(page.getByRole('checkbox', { name: '启用 Skill' })).not.toBeChecked();
+  await expect(page.getByRole('checkbox', { name: '启用 Skill' })).toBeEnabled();
   const calls = await page.evaluate(() => (window as any).oauthHarness.calls);
   const configuration = await page.evaluate(() => (window as any).configurationProtocol.calls);
   expect(configuration.find((call: any) => call.command === 'save_configuration_draft').args.draft).toMatchObject({ scope: 'project', contextId: 'ctx-a' });
-  expect(calls.find((call: any) => call.command === 'set_skill_enabled').args).toMatchObject({ scope: 'project', expectedContextId: 'ctx-a' });
+  const target = { toolId: 'codex', scope: 'project', projectPath: '/tmp/project', contextId: 'ctx-a' };
+  expect(calls.filter((call: any) => call.command === 'list_native_skill_metadata').length).toBeGreaterThan(0);
+  for (const call of calls.filter((call: any) => call.command === 'list_native_skill_metadata')) expect(call.args.target).toMatchObject(target);
+  expect(calls.find((call: any) => call.command === 'resource_states').args.requests).toEqual([expect.objectContaining({ kind: 'native_skill', target: expect.objectContaining(target), name: 'project-skill', directory: '/tmp/project/.agents/skills/project-skill' })]);
+  expect(calls.find((call: any) => call.command === 'set_skill_enabled').args).toMatchObject({ packageId: 'skill', toolId: 'codex', scope: 'project', projectPath: '/tmp/project', enabled: false, expectedContextId: 'ctx-a' });
+  expect(calls.filter((call: any) => call.command === 'get_skill_enabled').length).toBeGreaterThanOrEqual(2);
+  expect(calls.filter((call: any) => call.command === 'apply_registered_native_profile')).toEqual([]);
   expect(await page.evaluate(() => (window as any).oauthHarness.binding)).toBeNull();
 });
 
