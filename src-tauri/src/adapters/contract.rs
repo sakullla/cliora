@@ -484,10 +484,15 @@ pub trait CliAdapter: Sync {
     }
     fn mcp_is_reference_at(&self, value: &str, _scope: Scope) -> bool { self.mcp_is_reference(value) }
     fn mcp_entry_view(&self, entry: &Value) -> Value { entry.clone() }
+    /// Native loaders may interpret the same fields differently by scope.
+    fn mcp_entry_view_at(&self, entry: &Value, _scope: Scope) -> Value { self.mcp_entry_view(entry) }
     /// Decode a native entry into the portable model. Consumers must inspect
     /// unmapped fields before converting; raw editing retains the original.
     fn mcp_decode(&self, name: &str, entry: &Value) -> Result<crate::adapters::mcp_codec::DecodedMcp, String> {
         crate::adapters::mcp_codec::decode(name, &self.mcp_entry_view(entry))
+    }
+    fn mcp_decode_at(&self, name: &str, entry: &Value, _scope: Scope) -> Result<crate::adapters::mcp_codec::DecodedMcp, String> {
+        self.mcp_decode(name, entry)
     }
     fn mcp_parse_text(&self, location: &McpLocation, text: &str) -> Result<Value, String> {
         crate::native::format::parse(location.kind, text).map_err(|_| "MCP 配置语法无效，请检查文件格式".into())
@@ -505,6 +510,9 @@ pub trait CliAdapter: Sync {
         if let Some(child) = location.child { path.push(child.to_owned()); }
         path.push(name.to_owned());
         Ok(crate::native::transaction::FieldChange { path, value })
+    }
+    fn mcp_change_in_scope(&self, parsed: &Value, location: &McpLocation, name: &str, value: Option<Value>, _scope: Scope) -> Result<crate::native::transaction::FieldChange, String> {
+        self.mcp_change(parsed, location, name, value)
     }
     fn mcp_location_for_version(
         &self,
@@ -531,6 +539,9 @@ pub trait CliAdapter: Sync {
         _location: &McpLocation,
     ) -> Result<Option<Value>, String> {
         self.mcp_document(definition, enabled, existing)
+    }
+    fn mcp_document_in_scope(&self, definition: &McpDefinition, enabled: bool, existing: Option<&Value>, location: &McpLocation, _scope: Scope) -> Result<Option<Value>, String> {
+        self.mcp_document_at(definition, enabled, existing, location)
     }
     fn mcp_disabled_description(&self) -> Option<&'static str> {
         None

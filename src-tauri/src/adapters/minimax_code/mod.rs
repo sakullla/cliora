@@ -324,7 +324,10 @@ impl CliAdapter for MiniMaxCode {
         name: &str,
         entry: &Value,
     ) -> Result<super::mcp_codec::DecodedMcp, String> {
-        resources::decode(name, entry)
+        resources::decode(name, entry, Scope::Global)
+    }
+    fn mcp_decode_at(&self, name: &str, entry: &Value, scope: Scope) -> Result<super::mcp_codec::DecodedMcp, String> {
+        resources::decode(name, entry, scope)
     }
     fn mcp_entry_view(&self, entry: &Value) -> Value {
         let mut value = entry.clone();
@@ -333,6 +336,9 @@ impl CliAdapter for MiniMaxCode {
         }
         value
     }
+    fn mcp_entry_view_at(&self, entry: &Value, scope: Scope) -> Value {
+        if scope == Scope::Global { self.mcp_entry_view(entry) } else { entry.clone() }
+    }
     fn mcp_document_at(
         &self,
         definition: &crate::resources::mcp::McpDefinition,
@@ -340,7 +346,11 @@ impl CliAdapter for MiniMaxCode {
         existing: Option<&Value>,
         location: &super::McpLocation,
     ) -> Result<Option<Value>, String> {
-        resources::document(self, definition, enabled, existing, location)
+        let scope = if location.path.file_name().is_some_and(|v| v == ".mcp.json") { Scope::Project } else { Scope::Global };
+        resources::document(self, definition, enabled, existing, scope)
+    }
+    fn mcp_document_in_scope(&self, definition: &crate::resources::mcp::McpDefinition, enabled: bool, existing: Option<&Value>, _: &super::McpLocation, scope: Scope) -> Result<Option<Value>, String> {
+        resources::document(self, definition, enabled, existing, scope)
     }
     fn mcp_change(
         &self,
@@ -349,7 +359,10 @@ impl CliAdapter for MiniMaxCode {
         name: &str,
         value: Option<Value>,
     ) -> Result<crate::native::transaction::FieldChange, String> {
-        resources::change(parsed, name, value)
+        resources::change(parsed, name, value, Scope::Global)
+    }
+    fn mcp_change_in_scope(&self, parsed: &Value, _: &super::McpLocation, name: &str, value: Option<Value>, scope: Scope) -> Result<crate::native::transaction::FieldChange, String> {
+        resources::change(parsed, name, value, scope)
     }
     fn mcp_is_reference(&self, value: &str) -> bool {
         resources::is_reference(value)

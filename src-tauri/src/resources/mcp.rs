@@ -294,7 +294,7 @@ pub fn remove_native(
             params![tool, scope_key, name_owned]).map(|_| ()).map_err(|error| error.to_string())
     };
     if adapter.mcp_entries(&parsed, &location)?.contains_key(name) {
-        let change = adapter.mcp_change(&parsed, &location, name, None)?;
+        let change = adapter.mcp_change_in_scope(&parsed, &location, name, None, target.scope)?;
         transaction::apply(db, credentials, &[transaction::FilePatch {
             path: location.path.clone(), kind: location.kind, baseline,
             changes: vec![change],
@@ -476,7 +476,7 @@ pub fn list_native(
     let mut result: Vec<_> = entries
         .iter()
         .filter_map(|(name, raw)| {
-            let view = adapter.mcp_entry_view(raw);
+            let view = adapter.mcp_entry_view_at(raw, target.scope);
             let raw = view.as_object()?;
             let command = raw.get("command");
             let (command, args) = match command {
@@ -637,7 +637,7 @@ pub fn distribute(
             // Re-enabling an old placement must preserve its unknown/old rank.
             let newly_added = existing.is_none() && document.is_some() && owned.is_none();
             let order_id = native_order_id(&location, &definition.name);
-            let change = adapter.mcp_change(&parsed, &location, &definition.name, document)?;
+            let change = adapter.mcp_change_in_scope(&parsed, &location, &definition.name, document, target.scope)?;
             let commit = |tx: &rusqlite::Transaction<'_>| {
                 let current: i64 = tx.query_row("SELECT version FROM mcp_definitions WHERE id = ?1", [&definition.id], |row| row.get(0)).map_err(|error| error.to_string())?;
                 if current != definition.version as i64 { return Err("MCP 定义在预览后变化；请重新预览".into()); }
@@ -703,7 +703,7 @@ pub(super) fn render_target(
     location: &McpLocation,
 ) -> Result<Option<Value>, String> {
     validate_references(registry, adapter, definition, scope)?;
-    adapter.mcp_document_at(definition, enabled, existing, location)
+    adapter.mcp_document_in_scope(definition, enabled, existing, location, scope)
 }
 
 pub fn stdio_doc(

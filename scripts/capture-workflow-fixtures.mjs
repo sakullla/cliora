@@ -185,13 +185,35 @@ export function resourceExperienceFixture(options = {}) {
 export function minimaxCodeFixture(options = {}) {
   const previous = window.__TAURI_INTERNALS__.invoke;
   const calls = [], sessions = {};
+  const nativeConnection = root => {
+    const full = typeof root.defaultModel === 'string' ? root.defaultModel : '';
+    const slash = full.indexOf('/'); if (slash < 0) return null;
+    const provider = full.slice(0, slash), model = full.slice(slash + 1);
+    let providerId, source, interfaceFormat;
+    if (provider === 'minimax_api' || provider === 'minimax' && root.minimaxModelSource === 'minimax_api_key') { providerId = 'minimax_api'; source = root.minimax_api; interfaceFormat = 'anthropic_messages'; }
+    else if (provider.startsWith('custom_provider:')) { providerId = provider.slice('custom_provider:'.length); const entry = root.custom_provider?.[providerId]; source = entry?.options; interfaceFormat = entry?.api?.replaceAll('-', '_'); }
+    else return null;
+    if (!source?.baseURL || !['anthropic_messages','openai_completions','openai_responses'].includes(interfaceFormat)) return null;
+    return { providerId, model, interfaceFormat, baseUrl: source.baseURL, secretRef: null, authEnvVar: null, modelRecords: [] };
+  };
+  const configure = (root, connection) => {
+    if (connection.providerId === 'minimax_api') { root.minimaxModelSource = 'minimax_api_key'; root.defaultModel = `minimax_api/${connection.model}`; root.minimax_api = { ...root.minimax_api, baseURL: connection.baseUrl }; }
+    else { root.defaultModel = `custom_provider:${connection.providerId}/${connection.model}`; root.custom_provider ??= {}; const old = root.custom_provider[connection.providerId]; root.custom_provider[connection.providerId] = { ...old, kind:'custom', enabled:true, api:connection.interfaceFormat.replaceAll('_','-'), options:{...old?.options,authMode:'api-key',baseURL:connection.baseUrl}, models:{...old?.models,[connection.model]:{name:connection.model,enabled:true,configuration_source:'manual'}} }; }
+  };
+  const refresh = (value, root) => {
+    value.profile.files.settings = JSON.stringify(root, null, 2);
+    value.view = Object.fromEntries(fields.map(([id]) => [id, id.split('.').reduce((node, key) => node?.[key], root) ?? null]));
+    value.view.connection = nativeConnection(root); value.draftConnection = value.view.connection;
+    value.profile.connection = value.credential.source === 'api_key' ? value.view.connection : null;
+    return value;
+  };
   const fields = [['defaultModel','string','minimax/MiniMax-M2.7'],['permissionMode','string','auto'],['minimaxModelSource','string','token_plan'],['skills.external.enabled','boolean',true],['skills.external.walkUp','boolean',true]];
   const configuration = { version:1,operations:['set','reset','configure_connection'],fields:fields.map(([id,kind])=>({id,label:id,kind,required:false,advanced:false,choices:id==='permissionMode'?['default','auto','off','bypassPermissions']:id==='minimaxModelSource'?['token_plan','minimax_api_key']:[],minimum:null,defaultSource:'MiniMax Code',unavailableReason:null})) };
   const formats=['anthropic_messages','openai_completions','openai_responses'];
   const descriptor={id:'minimax_code',name:'MiniMax Code',launchForm:'terminal',launchDirectory:'terminal',interfaceFormats:formats,configuration,yoloAvailable:false,management:{accounts:false,mcp:true,skills:true,agents:false,plugins:false,projectPlugins:false},nativeConfig:{state:'available',reason:''},launch:{state:'available',reason:''},resources:{state:'available',reason:''},resume:{state:'available',reason:''},history:{state:'unsupported',reason:'未接入'}};
   const entries=['primary','minimax_builtin','user-cc'].map((source,index)=>({name:'same-skill',path:`C:/fixtures/minimax/${source}/same-skill`,source,readOnly:index>0,readOnlyReason:index>0?'MiniMax 内置或外部来源只读':null,state:'external',detail:`${source} Skill source`,digest:null,packageId:null}));
   const contents=Object.fromEntries(entries.map(entry=>[entry.path,`---\nname: mismatched\ndescription: \n---\n# ${entry.source} Skill\n`]));
-  window.__minimaxCode={calls,entries,contents,failLaunch:false};
+  window.__minimaxCode={calls,entries,contents,sessions,failLaunch:false,holdEdits:false,pendingEdits:[],failEdit:false,saved:[]};
   for(const entry of [...window.__resourceScale.definitions,...window.__resourceScale.nativeEntries]) { entry.referenceSource='minimax_code';entry.referenceScope=options.scope??'global';entry.env={TOKEN:'${TOKEN}'}; }
   window.__TAURI_INTERNALS__.invoke=async(command,args={})=>{
     calls.push({command,args});
@@ -209,15 +231,23 @@ export function minimaxCodeFixture(options = {}) {
     if(command==='save_native_skill'){const entry=entries.find(entry=>entry.path===args.directory);if(entry.readOnly)throw Error(entry.readOnlyReason);if(contents[entry.path]!==args.baseline)throw Error('外部修改');contents[entry.path]=args.content;return null;}
     if(command==='begin_configuration_draft'){
       const request=args.request,view=Object.fromEntries(fields.map(([id,,value])=>[id,value]));view.connection=null;
-      const files={settings:'defaultModel: minimax/MiniMax-M2.7\nminimaxModelSource: token_plan\npermissionMode: auto\n'};
-      const value={sessionId:request.sessionId,revision:0,requestGeneration:0,subject:request.subject,scope:request.scope,projectPath:request.projectPath,contextId:null,profile:{id:'',tool:'minimax_code',name:'MiniMax Code',version:1,revision:'',inheritCommon:false,files,suppressed:{},authentication:{kind:'api_key'},connection:null,nativeCredentials:{},editing:{version:1,selectedProvider:null,intents:[]}},baselineFiles:files,common:null,view,issues:[],descriptor:configuration,draftConnection:null,credential:{source:'api_key',secretRef:null,remove:false},credentialStatus:'none',sourceCapabilities:[{source:'native',available:true,reason:null},{source:'account',available:false,reason:'官方登录由 mcode 管理'},{source:'api_key',available:true,reason:null}],catalogSupport:{available:false,multiple:false,reason:'填写已知模型 ID'}};sessions[value.sessionId]=value;return structuredClone(value);
+      const root={defaultModel:'minimax/MiniMax-M2.7',minimaxModelSource:'token_plan',permissionMode:'auto',skills:{external:{enabled:true,walkUp:true}}};
+      if(options.connection)configure(root,options.connection);
+      const files={settings:JSON.stringify(root,null,2)};
+      const value={sessionId:request.sessionId,revision:0,requestGeneration:0,subject:request.subject,scope:request.scope,projectPath:request.projectPath,contextId:null,profile:{id:'',tool:'minimax_code',name:'MiniMax Code',version:1,revision:'',inheritCommon:false,files,suppressed:{},authentication:{kind:options.connection?'native':'api_key'},connection:null,nativeCredentials:{},editing:{version:1,selectedProvider:null,intents:[]}},baselineFiles:files,common:null,view,issues:[],descriptor:configuration,draftConnection:null,credential:{source:options.connection?'native':'api_key',secretRef:null,remove:false},credentialStatus:'none',sourceCapabilities:[{source:'native',available:true,reason:null},{source:'account',available:false,reason:'官方登录由 mcode 管理'},{source:'api_key',available:true,reason:null}],catalogSupport:{available:false,multiple:false,reason:'填写已知模型 ID'}};sessions[value.sessionId]=refresh(value,root);return structuredClone(value);
     }
     if(command==='edit_configuration_draft'){
+      if(window.__minimaxCode.holdEdits)await new Promise(resolve=>window.__minimaxCode.pendingEdits.push(resolve));
+      if(window.__minimaxCode.failEdit)throw Error('合成连接更新失败，请重试');
       const value=sessions[args.draft.sessionId];
-      if(args.action.operation==='configure_connection'){value.view.connection=args.action.value;value.draftConnection=args.action.value;value.view.defaultModel=`${args.action.value.providerId==='minimax_api'?'minimax_api':`custom_provider:${args.action.value.providerId}`}/${args.action.value.model}`;}
-      else if(args.action.operation==='reset')delete value.view[args.action.field];else value.view[args.action.field]=args.action.value;
-      value.profile.files.settings=JSON.stringify(value.view,null,2);value.revision++;return structuredClone(value);
+      const root=JSON.parse(value.profile.files.settings);
+      if(args.action.operation==='configure_connection')configure(root,args.action.value);
+      else { const keys=args.action.field.split('.'),last=keys.pop();let node=root;for(const key of keys)node=node[key]??={};if(args.action.operation==='reset')delete node[last];else node[last]=args.action.value; }
+      value.revision++;return structuredClone(refresh(value,root));
     }
+    if(command==='replace_configuration_text'){const value=sessions[args.draft.sessionId];value.revision++;return structuredClone(refresh(value,JSON.parse(args.files.settings)));}
+    if(command==='update_configuration_draft'){const value=sessions[args.draft.sessionId];value.profile.name=args.profile.name;value.profile.inheritCommon=args.profile.inheritCommon;value.revision++;return structuredClone(value);}
+    if(command==='save_configuration_draft'){const value=sessions[args.draft.sessionId];window.__minimaxCode.saved.push(structuredClone(value));value.profile.id='saved-minimax';value.profile.version++;value.revision++;return {draft:structuredClone(value),profile:structuredClone(value.profile),common:null,application:null};}
     if(command==='cancel_configuration_draft')return null;
     return previous(command,args);
   };

@@ -44,6 +44,7 @@ fn reserved(name: &str) -> bool {
 pub(super) fn decode(
     name: &str,
     entry: &Value,
+    scope: Scope,
 ) -> Result<crate::adapters::mcp_codec::DecodedMcp, String> {
     let map = entry.as_object().ok_or("MiniMax MCP 条目必须是对象")?;
     if map.get("command").is_some_and(|v| !v.is_string()) {
@@ -63,7 +64,7 @@ pub(super) fn decode(
         }
     }
     for field in ["configured", "builtin"] {
-        if map.get(field).is_some_and(|v| !v.is_boolean()) {
+        if scope == Scope::Global && map.get(field).is_some_and(|v| !v.is_boolean()) {
             return Err(format!("MiniMax {field} 必须是布尔值"));
         }
     }
@@ -79,14 +80,16 @@ pub(super) fn decode(
         ("configured", Value::Bool(true)),
         ("builtin", Value::Bool(false)),
     ] {
-        if normalized.get(field) == Some(&benign) {
+        // Project E0n always supplies configured:true/builtin:false. Raw
+        // properties are ignored, including values of other JSON types.
+        if scope == Scope::Project || normalized.get(field) == Some(&benign) {
             normalized.as_object_mut().unwrap().remove(field);
         } else if normalized.get(field).is_some() {
             product_fields.push(field.into());
         }
     }
     let mut result = crate::adapters::mcp_codec::decode(name, &normalized)?;
-    if entry["configured"] == false {
+    if scope == Scope::Global && entry["configured"] == false {
         result.enabled = false;
     }
     result.unmapped_fields.extend(product_fields);
@@ -115,12 +118,12 @@ pub(super) fn document(
     definition: &McpDefinition,
     enabled: bool,
     existing: Option<&Value>,
-    location: &McpLocation,
+    scope: Scope,
 ) -> Result<Option<Value>, String> {
-    if reserved(&definition.name) || existing.is_some_and(|v| v["builtin"] == true) {
+    if reserved(&definition.name) || (scope == Scope::Global && existing.is_some_and(|v| v["builtin"] == true)) {
         return Err("MiniMax 内置 MCP 由客户端管理，不能覆盖或停用".into());
     }
-    let project = location.path.file_name().is_some_and(|v| v == ".mcp.json");
+    let project = scope == Scope::Project;
     let reference = |value: &str| project && adapter.mcp_is_reference(value);
     let mut map = match definition.transport {
         McpTransport::Stdio => {
@@ -149,15 +152,16 @@ pub(super) fn change(
     root: &Value,
     name: &str,
     value: Option<Value>,
+    scope: Scope,
 ) -> Result<FieldChange, String> {
     let original = root.get("mcpServers").and_then(|v| v.get(name));
     if reserved(name)
-        || original.is_some_and(|v| v["builtin"] == true)
-        || value.as_ref().is_some_and(|v| v["builtin"] == true)
+        || (scope == Scope::Global && (original.is_some_and(|v| v["builtin"] == true)
+            || value.as_ref().is_some_and(|v| v["builtin"] == true)))
     {
         return Err("MiniMax 内置 MCP 为产品自管，只读浏览".into());
     }
-    if value
+    if scope == Scope::Global && value
         .as_ref()
         .is_some_and(|v| v.get("auth") != original.and_then(|v| v.get("auth")))
     {

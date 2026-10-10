@@ -17,11 +17,22 @@ function Editor(props: ConfigurationContentProps) {
   const common = Array.isArray(view.commonFields) ? view.commonFields as { id: string; value: unknown }[] : [];
   const value = (id: string) => props.mode === 'common' ? common.find(field => field.id === id)?.value : view[id];
   const connection = view.connection as Connection | null;
-  const [input, setInput] = useState({ providerId: connection?.providerId ?? 'minimax_api', interfaceFormat: connection?.interfaceFormat ?? 'anthropic_messages', baseUrl: connection?.baseUrl ?? '', model: connection?.model ?? '' });
   const current = { providerId: connection?.providerId ?? 'minimax_api', interfaceFormat: connection?.interfaceFormat ?? 'anthropic_messages', baseUrl: connection?.baseUrl ?? '', model: connection?.model ?? '' };
+  const [input, setInput] = useState(current);
+  const [baseline, setBaseline] = useState(current);
+  if (JSON.stringify(baseline) !== JSON.stringify(current)) {
+    // Reconcile before commit so an untouched hidden form never invalidates a
+    // settings edit. Only preserve fields actually changed by the user.
+    const next = { ...input };
+    for (const key of Object.keys(current) as (keyof typeof current)[]) {
+      if (input[key] === baseline[key]) next[key] = current[key];
+    }
+    setInput(next);
+    setBaseline(current);
+  }
   const dirty = JSON.stringify(input) !== JSON.stringify(current);
   useEffect(() => { props.onValidityChange('connection-form', !dirty); return () => props.onValidityChange('connection-form', true); }, [dirty, props.onValidityChange]);
-  const blocked = props.disabled || action.pending;
+  const blocked = props.disabled || props.pending || action.pending;
   const field = (key: 'providerId' | 'baseUrl' | 'model', label: string) => <label>{label}<input value={input[key]} spellCheck={false} disabled={blocked} onChange={event => setInput(previous => ({ ...previous, [key]: event.target.value }))} /></label>;
   return <section className={styles.fieldGrid} aria-label={t('tools.minimaxCode.settingsLabel')}>
     <p className={styles.span}>{t('tools.minimaxCode.settingsNote')}</p>
