@@ -966,16 +966,14 @@ pub fn set_in_library(db: &Database, id: &str, in_library: bool) -> Result<(), S
 }
 
 pub fn list(db: &Database) -> Result<Vec<SkillPackage>, String> {
-    let _ = recover_report(db)?;
     db.with_connection(|conn| {
-        let mut statement = conn.prepare("SELECT id, name, description, source, digest, files_json, updated_at, in_library FROM skill_packages ORDER BY name COLLATE NOCASE")
+        let mut statement = conn.prepare("SELECT id, name, description, source, digest, metadata.manifest, updated_at, in_library, metadata.file_count FROM skill_packages JOIN skill_package_metadata metadata ON metadata.package_id=id ORDER BY (SELECT sequence FROM resource_order WHERE kind='skill' AND resource_id=skill_packages.id) DESC, name COLLATE NOCASE, id")
             .map_err(|error| error.to_string())?;
         let rows = statement.query_map([], |row| {
-            let json: String = row.get(5)?;
-            let file_count = serde_json::from_str::<BTreeMap<String, String>>(&json).map_or(0, |files| files.len());
+            let manifest: Option<String> = row.get(5)?;
+            let file_count = row.get::<_, i64>(8)?.max(0) as usize;
             let name: String = row.get(1)?;
-            let compatibility = serde_json::from_str::<BTreeMap<String, String>>(&json).ok()
-                .and_then(|files| manifest_info(&files, &name).ok()).and_then(|(_, compatibility)| compatibility);
+            let compatibility = manifest.and_then(|manifest| manifest_info(&BTreeMap::from([("SKILL.md".into(), manifest)]), &name).ok()).and_then(|(_, compatibility)| compatibility);
             Ok(SkillPackage { id: row.get(0)?, name, description: row.get(2)?, compatibility, source: row.get(3)?, digest: row.get(4)?, file_count, updated_at: row.get::<_, i64>(6)?.max(0) as u64, in_library: row.get::<_, i64>(7)? != 0 })
         }).map_err(|error| error.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?;
         Ok(rows)
@@ -995,7 +993,43 @@ fn package(db: &Database, id: &str) -> Result<(SkillPackage, BTreeMap<String, St
         Ok((package, files))
     })
 }
-fn target(
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageDocument {
+    pub package_id: String,
+    pub name: String,
+    pub content: String,
+    pub digest: String,
+}
+
+pub fn read_package_document(db: &Database, id: &str) -> Result<PackageDocument, String> {
+    let (package, files) = package(db, id)?;
+    let content = String::from_utf8(STANDARD.decode(files.get("SKILL.md").ok_or("SKILL.md 不存在")?).map_err(|_| "SKILL.md 编码错误")?).map_err(|_| "SKILL.md 应为 UTF-8")?;
+    Ok(PackageDocument { package_id: id.into(), name: package.name, content, digest: package.digest })
+}
+
+pub fn save_package_document(db: &Database, id: &str, baseline: &str, content: &str) -> Result<PackageDocument, String> {
+    let _guard = lock().lock().map_err(|_| "Skills 服务暂时不可用")?;
+    // A package lives in SQLite, not a native directory. The same recovery lock
+    // prevents overlap with install/recovery; the CAS commits its complete blob
+    // atomically without touching any installed copy or accompanying file.
+    let _ = recover_locked_report(db)?;
+    let (package, mut files) = package(db, id)?;
+    if package.digest != baseline { return Err("Skills 包已变化，请重新读取后合并草稿".into()); }
+    files.insert("SKILL.md".into(), STANDARD.encode(content.as_bytes()));
+    let bytes = files.values().try_fold(0usize, |total, encoded| STANDARD.decode(encoded).map(|bytes| total + bytes.len()).map_err(|_| "Skills 包内容损坏"))?;
+    if bytes > MAX_BYTES { return Err("Skills 包超过 12 MiB".into()); }
+    let checksum = digest(&files)?;
+    let (description, _) = manifest_info(&files, &package.name)?;
+    db.with_connection(|conn| {
+        let changed = conn.execute("UPDATE skill_packages SET files_json=?2, digest=?3, description=?4, updated_at=?5 WHERE id=?1 AND digest=?6", params![id, serde_json::to_string(&files).map_err(|e| e.to_string())?, checksum, description, timestamp() as i64, baseline]).map_err(|e| e.to_string())?;
+        if changed != 1 { return Err("Skills 包已变化，请重新读取".into()); }
+        Ok(())
+    })?;
+    read_package_document(db, id)
+}
+pub(super) fn target(
     registry: &Registry,
     home: &Path,
     tool: &str,
@@ -1026,6 +1060,18 @@ fn on_disk(path: &Path) -> Result<Option<String>, String> {
         .and_then(|value| value.to_str())
         .ok_or("Skills 目录名无效")?;
     on_disk_as(path, name)
+}
+
+fn native_order_id(path: &Path) -> String { transaction::fingerprint(path.to_string_lossy().as_bytes()) }
+
+fn sort_native(db: &Database, entries: &mut [NativeSkillEntry]) -> Result<(), String> {
+    let order = db.with_connection(|conn| {
+        let mut statement = conn.prepare("SELECT resource_id,sequence FROM resource_order WHERE kind='native_skill'").map_err(|e| e.to_string())?;
+        let rows = statement.query_map([], |r| Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?))).map_err(|e| e.to_string())?.collect::<Result<BTreeMap<_,_>,_>>().map_err(|e| e.to_string())?;
+        Ok(rows)
+    })?;
+    entries.sort_by(|a,b| order.get(&native_order_id(Path::new(&b.path))).cmp(&order.get(&native_order_id(Path::new(&a.path)))).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())).then_with(|| a.name.cmp(&b.name)));
+    Ok(())
 }
 fn on_disk_as(path: &Path, name: &str) -> Result<Option<String>, String> {
     if !path.exists() {
@@ -1081,8 +1127,8 @@ pub fn scan_native(
         if name.starts_with('.') || !entry.path().is_dir() {
             continue;
         }
-        if entries.len() >= 128 {
-            return Err("原生 Skills 目录超过 128 个，请缩小管理范围".into());
+        if entries.len() >= 4096 {
+            return Err("原生 Skills 目录超过 4096 个，请缩小管理范围".into());
         }
         let path = entry.path();
         let inspected = snapshot(&path);
@@ -1120,8 +1166,46 @@ pub fn scan_native(
             package_id,
         });
     }
-    entries.sort_by(|a, b| a.name.cmp(&b.name));
+    sort_native(db, &mut entries)?;
     Ok(entries)
+}
+
+/// Fast listing does not hash package contents or run recovery for every row.
+/// Unknown is explicit until a visible-page resource_states request resolves it.
+pub fn native_metadata(db: &Database, registry: &Registry, home: &Path, target_request: &super::mcp::McpTargetRequest) -> Result<Vec<NativeSkillEntry>, String> {
+    let t = target_request;
+    let _context = crate::accounts::selection::enter_bound(db, home, &t.tool_id, t.scope, t.project_path.as_deref().map(Path::new))?;
+    crate::accounts::selection::validate_expected(&t.tool_id, t.context_id.as_deref())?;
+    let (placeholder, _) = target(registry, home, &t.tool_id, t.scope, t.project_path.as_deref(), "metadata")?;
+    let root = placeholder.parent().ok_or("Skills 原生目录无效")?;
+    if !root.exists() { return Ok(Vec::new()); }
+    let packages = db.with_connection(|conn| {
+        let mut statement = conn.prepare("SELECT name,id FROM skill_packages").map_err(|e| e.to_string())?;
+        let rows = statement.query_map([], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))).map_err(|e| e.to_string())?.collect::<Result<BTreeMap<_,_>,_>>().map_err(|e| e.to_string())?;
+        Ok(rows)
+    })?;
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(root).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') || !entry.path().is_dir() { continue; }
+        if entries.len() >= 4096 { return Err("原生 Skills 目录超过 4096 个".into()); }
+        entries.push(NativeSkillEntry { package_id: packages.get(&name).cloned(), name, path: entry.path().display().to_string(), digest: None, state: "unknown", detail: String::new() });
+    }
+    sort_native(db, &mut entries)?;
+    Ok(entries)
+}
+
+pub(super) fn native_state(db: &Database, registry: &Registry, home: &Path, target_request: &super::mcp::McpTargetRequest, name: &str) -> Result<NativeSkillEntry, String> {
+    if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\', ':']) { return Err("Skills 目录名无效".into()); }
+    let t = target_request;
+    let _context = crate::accounts::selection::enter_bound(db, home, &t.tool_id, t.scope, t.project_path.as_deref().map(Path::new))?;
+    crate::accounts::selection::validate_expected(&t.tool_id, t.context_id.as_deref())?;
+    let (path, scope_key) = target(registry, home, &t.tool_id, t.scope, t.project_path.as_deref(), name)?;
+    let (_, detail, _, _, digest) = snapshot(&path)?;
+    let package_id: Option<String> = db.with_connection(|conn| conn.query_row("SELECT id FROM skill_packages WHERE name=?1", [name], |r| r.get(0)).optional().map_err(|e| e.to_string()))?;
+    let managed: Option<String> = db.with_connection(|conn| conn.query_row("SELECT digest FROM skill_installations WHERE package_id=?1 AND tool=?2 AND scope_key=?3 AND target_path=?4", params![package_id, t.tool_id, scope_key, path.display().to_string()], |r| r.get(0)).optional().map_err(|e| e.to_string()))?;
+    Ok(NativeSkillEntry { name: name.into(), path: path.display().to_string(), state: if managed.as_deref() == Some(&digest) { "managed" } else { "external" }, detail, digest: Some(digest), package_id })
 }
 
 pub fn preview_target(
@@ -1188,6 +1272,10 @@ pub fn installations(
     package_id: &str,
 ) -> Result<Vec<SkillInstallation>, String> {
     let _ = recover_report(db)?;
+    installations_ready(db, registry, home, package_id)
+}
+
+pub(super) fn installations_ready(db: &Database, registry: &Registry, home: &Path, package_id: &str) -> Result<Vec<SkillInstallation>, String> {
     let (package, _) = package(db, package_id)?;
     let records = db.with_connection(|conn| {
         let mut statement = conn.prepare("SELECT tool,scope_key,target_path,digest,0 FROM skill_installations WHERE package_id=?1 UNION ALL SELECT tool,scope_key,target_path,old_digest,1 FROM skill_operations WHERE package_id=?1 AND status='disabled' ORDER BY tool,scope_key")
@@ -1522,6 +1610,12 @@ fn operate(
         }
         let saved = db.with_connection(|conn| {
             let tx = conn.transaction().map_err(|error| error.to_string())?;
+            let order_id = native_order_id(&path);
+            if !removing && actual.is_none() {
+                tx.execute("INSERT OR IGNORE INTO resource_order(kind,resource_id) VALUES ('native_skill',?1)", [&order_id]).map_err(|e| e.to_string())?;
+            } else if removing && !disabling {
+                tx.execute("DELETE FROM resource_order WHERE kind='native_skill' AND resource_id=?1", [&order_id]).map_err(|e| e.to_string())?;
+            }
             if removing { tx.execute("DELETE FROM skill_installations WHERE package_id = ?1 AND tool = ?2 AND scope_key = ?3", params![package_id, tool_id, key]) }
             else { tx.execute("INSERT INTO skill_installations (package_id, tool, scope_key, target_path, digest) VALUES (?1, ?2, ?3, ?4, ?5)
                 ON CONFLICT(package_id, tool, scope_key) DO UPDATE SET target_path = excluded.target_path, digest = excluded.digest",

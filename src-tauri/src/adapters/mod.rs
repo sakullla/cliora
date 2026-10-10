@@ -15,6 +15,7 @@ pub(crate) mod grok;
 pub(crate) mod kimi_code;
 pub(crate) mod kiro;
 pub mod model_directory;
+pub mod mcp_codec;
 pub(crate) mod mimo_code;
 pub mod official;
 pub(crate) mod opencode;

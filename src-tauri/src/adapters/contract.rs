@@ -442,6 +442,22 @@ pub trait CliAdapter: Sync {
     }
     /// Normalize an entry for display, including its native enabled/disabled state.
     fn mcp_entry_view(&self, entry: &Value) -> Value { entry.clone() }
+    /// Decode a native entry into the portable model. Consumers must inspect
+    /// unmapped fields before converting; raw editing retains the original.
+    fn mcp_decode(&self, name: &str, entry: &Value) -> Result<crate::adapters::mcp_codec::DecodedMcp, String> {
+        crate::adapters::mcp_codec::decode(name, &self.mcp_entry_view(entry))
+    }
+    fn mcp_parse_text(&self, location: &McpLocation, text: &str) -> Result<Value, String> {
+        crate::native::format::parse(location.kind, text).map_err(|_| "MCP 配置语法无效，请检查文件格式".into())
+    }
+    fn mcp_render_text(&self, location: &McpLocation, value: &Value) -> Result<String, String> {
+        crate::native::format::render(location.kind, value)
+    }
+    fn mcp_render_entry(&self, location: &McpLocation, name: &str, entry: Value) -> Result<String, String> {
+        let empty = self.mcp_parse_text(location, "")?;
+        let change = self.mcp_change(&empty, location, name, Some(entry))?;
+        crate::native::format::set_path(location.kind, "", &change.path, change.value.as_ref())
+    }
     fn mcp_change(&self, _parsed: &Value, location: &McpLocation, name: &str, value: Option<Value>) -> Result<crate::native::transaction::FieldChange, String> {
         let mut path = vec![location.root.to_owned()];
         if let Some(child) = location.child { path.push(child.to_owned()); }
