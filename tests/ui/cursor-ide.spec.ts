@@ -57,3 +57,44 @@ test('existing connection tool keeps its connection view', async ({ page }) => {
   await expect(page.getByRole('button',{name:'连接与模型',exact:true})).toBeVisible();
   await expect(page.getByRole('list',{name:'连接顺序',exact:true})).toBeVisible();
 });
+
+for (const surface of ['native', 'library']) test(`Cursor ${surface} MCP editing preserves reference provenance and rejected target keeps the draft`, async ({ page }) => {
+  await page.addInitScript(resourceExperienceFixture, { count: 2 });
+  await page.addInitScript(cursorIdeFixture);
+  await page.addInitScript(() => {
+    const state = (window as any).__resourceScale;
+    for (const item of [...state.definitions, ...state.nativeEntries]) {
+      item.referenceSource = 'cursor_ide'; item.env = { TOKEN: '${env:TOKEN}' };
+    }
+    const host = (window as any).__TAURI_INTERNALS__; const invoke = host.invoke;
+    host.invoke = async (command: string, args: any) => {
+      if (command === 'render_mcp_draft' && args.target.toolId === 'claude_code') {
+        state.calls.push({ command, args });
+        if (args.draft.referenceSource !== 'cursor_ide') throw Error('Missing reference provenance');
+        throw Error('目标格式不能保留来源工具的环境变量引用语义');
+      }
+      const value = await invoke(command, args);
+      if (command === 'list_cli_adapters') value.registered.push({ ...value.registered[0], id: 'claude_code', name: 'Claude Code' });
+      return value;
+    };
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: surface === 'native' ? '工具与连接' : '资料库', exact: true }).click();
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  await page.getByRole('button', { name: 'mcp-001', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('textbox', { name: '命令', exact: true }).fill('node-edited');
+  await dialog.getByRole('button', { name: '配置文本', exact: true }).click();
+  await expect(dialog.getByRole('textbox', { name: '当前条目配置（格式化）', exact: true })).toContainText('node-edited');
+  await dialog.getByRole('combobox', { name: '输出目标', exact: true }).selectOption('claude_code');
+  await expect(dialog.getByRole('alert')).toContainText('环境变量引用语义');
+  await expect(dialog.getByRole('combobox', { name: '输出目标', exact: true })).toHaveValue('cursor_ide');
+  await expect(dialog.getByRole('textbox', { name: '当前条目配置（格式化）', exact: true })).toContainText('${env:TOKEN}');
+  await dialog.getByRole('button', { name: '复制为新条目', exact: true }).click();
+  await expect(dialog.getByRole('textbox', { name: '名称', exact: true })).toHaveValue('mcp-001-copy');
+  await dialog.getByRole('button', { name: '配置文本', exact: true }).click();
+  const calls = await page.evaluate(() => (window as any).__resourceScale.calls.filter((call: any) => call.command === 'render_mcp_draft'));
+  expect(calls.length).toBe(3);
+  for (const call of calls) expect(call.args.draft.referenceSource).toBe('cursor_ide');
+  expect(await page.evaluate(() => (window as any).__resourceScale.calls.filter((call: any) => call.command === 'save_mcp_definition'))).toHaveLength(0);
+});

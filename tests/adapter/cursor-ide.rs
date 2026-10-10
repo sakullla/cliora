@@ -560,6 +560,7 @@ fn cursor_a2_native_reference_document_copy_paste_preserves_semantics() {
         (McpTransport::Http, "headers"),
     ] {
         let definition = McpDefinition {
+            reference_source: None,
             id: "fixture".into(),
             name: "merge".into(),
             transport,
@@ -626,4 +627,110 @@ fn cursor_a2_native_reference_document_copy_paste_preserves_semantics() {
             secret
         );
     }
+}
+
+#[cfg(windows)]
+#[test]
+fn cursor_a3_reference_provenance_covers_drafts_library_and_distribution() {
+    let temp = tempfile::tempdir().unwrap();
+    installation(temp.path());
+    let db = Database::open(&temp.path().join("db")).unwrap();
+    let registry = Registry::builtins();
+    let store = Store::default();
+    let source = target();
+    let mut other = target();
+    other.tool_id = "claude_code".into();
+    let text = r#"{"mcpServers":{"remote":{"url":"https://example.invalid/mcp","headers":{"Authorization":"Bearer ${env:DEMO_TOKEN}"}}}}"#;
+    let path = temp.path().join(".cursor/mcp.json");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, text).unwrap();
+    let entries = mcp::list_native(&db, &registry, temp.path(), &source).unwrap();
+    assert_eq!(entries[0].reference_source.as_deref(), Some("cursor_ide"));
+    let mut draft = documents::parse_paste(&db, &registry, temp.path(), &source, None, text)
+        .unwrap().remove(0).draft.unwrap();
+    assert_eq!(draft.reference_source.as_deref(), Some("cursor_ide"));
+    // Exact formDirty route: caller changes a field before switching the target.
+    draft.url = "https://example.invalid/edited".into();
+    assert!(documents::render_draft(&db, &registry, temp.path(), &other, draft.clone())
+        .unwrap_err().contains("环境变量引用语义"));
+    assert!(documents::render_draft(&db, &registry, temp.path(), &source, draft.clone()).is_ok());
+    let saved = mcp::save_definition(&db, draft.clone()).unwrap();
+    assert_eq!(mcp::get_definition(&db, &saved.id).unwrap().reference_source, draft.reference_source);
+    let snapshot = crate::portable::collect_snapshot(&db, &store, &registry).unwrap();
+    let mut portable_json = serde_json::to_value(&snapshot).unwrap();
+    let entity = portable_json["entities"].as_array_mut().unwrap().iter_mut()
+        .find(|entity| entity["id"] == saved.id).unwrap();
+    assert_eq!(entity["payload"]["value"]["definition"]["referenceSource"], "cursor_ide");
+    entity["payload"]["value"]["definition"].as_object_mut().unwrap().remove("referenceSource");
+    let old_snapshot: crate::portable::PortableSnapshot = serde_json::from_value(portable_json.clone()).unwrap();
+    crate::portable::validate_snapshot(&old_snapshot).unwrap();
+    assert_eq!(serde_json::to_value(&old_snapshot).unwrap(), portable_json);
+    for target in [&source, &other] {
+        let result = documents::read(&db, &registry, temp.path(), &documents::McpDocumentRequest {
+            target: target.clone(), definition_id: Some(saved.id.clone()), name: saved.name.clone(), reveal: false,
+        });
+        if target.tool_id == source.tool_id { assert!(!result.unwrap().protected_values); }
+        else { assert!(result.unwrap_err().contains("环境变量引用语义")); }
+    }
+    assert!(mcp::preview_targets(&db, &registry, temp.path(), &saved.id, vec![other.clone()])[0]
+        .detail.contains("环境变量引用语义"));
+    // Actual distribution enforces the rule independently of UI and preview.
+    let rejected = mcp::distribute(&db, &store, &registry, temp.path(), &saved.id, vec![other.clone()]);
+    assert_eq!(rejected[0].status, "failed");
+    assert!(rejected[0].detail.contains("环境变量引用语义"));
+    assert!(!temp.path().join(".claude.json").exists());
+    let preview = mcp::preview_targets(&db, &registry, temp.path(), &saved.id, vec![source.clone()]).remove(0);
+    let mut approved = source.clone();
+    approved.baseline_hash = preview.baseline_hash;
+    approved.preview_token = preview.preview_token;
+    approved.allow_replace = true;
+    assert_eq!(mcp::distribute(&db, &store, &registry, temp.path(), &saved.id, vec![approved])[0].status, "written");
+    assert!(fs::read_to_string(&path).unwrap().contains("Bearer ${env:DEMO_TOKEN}"));
+    // Older editors do not erase existing provenance; copies retain it too.
+    draft.id = Some(saved.id.clone());
+    draft.expected_version = Some(saved.version);
+    draft.reference_source = None;
+    let edited = mcp::save_definition(&db, draft).unwrap();
+    assert_eq!(edited.reference_source.as_deref(), Some("cursor_ide"));
+    let mut copy: mcp::McpDraft = serde_json::from_value(serde_json::to_value(&edited).unwrap()).unwrap();
+    copy.id = None;
+    copy.expected_version = None;
+    copy.name = "remote-copy".into();
+    assert_eq!(mcp::save_definition(&db, copy).unwrap().reference_source, edited.reference_source);
+    // Old snapshots omit the new optional field. Their serialization stays the
+    // same, and known reference syntax still cannot silently become a literal.
+    let mut legacy = serde_json::to_value(&edited).unwrap();
+    legacy.as_object_mut().unwrap().remove("referenceSource");
+    let old: McpDefinition = serde_json::from_value(legacy.clone()).unwrap();
+    assert!(old.reference_source.is_none());
+    assert_eq!(serde_json::to_value(&old).unwrap(), legacy);
+    let legacy_draft: mcp::McpDraft = serde_json::from_value(legacy).unwrap();
+    assert!(documents::render_draft(&db, &registry, temp.path(), &other, legacy_draft).is_err());
+    // Embedded references are checked too, separately from secret redaction.
+    let mut embedded: mcp::McpDraft = serde_json::from_value(serde_json::to_value(&edited).unwrap()).unwrap();
+    embedded.headers.clear();
+    embedded.url = "https://example.invalid/${env:TOKEN}".into();
+    assert!(documents::render_draft(&db, &registry, temp.path(), &other, embedded).is_err());
+    let mut arguments: mcp::McpDraft = serde_json::from_value(serde_json::to_value(&edited).unwrap()).unwrap();
+    arguments.transport = McpTransport::Stdio;
+    arguments.command = "node".into();
+    arguments.url.clear();
+    arguments.headers.clear();
+    arguments.args = vec!["--token=${env:TOKEN}".into()];
+    assert!(documents::render_draft(&db, &registry, temp.path(), &other, arguments.clone()).is_err());
+    assert!(documents::render_draft(&db, &registry, temp.path(), &source, arguments).is_ok());
+    // Literal values which another grammar would expand are equally unsafe.
+    let mut literal: mcp::McpDraft = serde_json::from_value(serde_json::to_value(&edited).unwrap()).unwrap();
+    literal.headers.insert("Authorization".into(), "Bearer ${TOKEN}".into());
+    assert!(documents::render_draft(&db, &registry, temp.path(), &other, literal.clone()).is_err());
+    literal.headers.insert("Authorization".into(), "Bearer fixture-secret".into());
+    literal.id = None;
+    literal.expected_version = None;
+    literal.name = "literal".into();
+    let secret = mcp::save_definition(&db, literal).unwrap();
+    let doc = documents::read(&db, &registry, temp.path(), &documents::McpDocumentRequest {
+        target: other, definition_id: Some(secret.id), name: secret.name, reveal: false,
+    }).unwrap();
+    assert!(doc.protected_values);
+    assert!(!doc.text.contains("fixture-secret"));
 }

@@ -17,6 +17,8 @@ export type McpDefinition = {
   url: string;
   env: Record<string, string>;
   headers: Record<string, string>;
+  /** Adapter owning native interpolation syntax; missing in legacy snapshots. */
+  referenceSource?: string | null;
   inLibrary: boolean;
   version: number;
 };

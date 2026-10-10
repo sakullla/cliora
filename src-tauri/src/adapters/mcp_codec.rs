@@ -50,5 +50,20 @@ pub fn decode(name: &str, entry: &Value) -> Result<DecodedMcp, String> {
     if url.is_empty() && (object.contains_key("headers") || object.contains_key("http_headers")) { return Err("stdio MCP 不支持 HTTP 请求头".into()); }
     if object.contains_key("env") && object.contains_key("environment") { return Err("MCP 环境变量字段重复".into()); }
     if object.contains_key("headers") && object.contains_key("http_headers") { return Err("MCP 请求头字段重复".into()); }
-    Ok(DecodedMcp { draft: McpDraft { id: None, name: name.into(), transport: if url.is_empty() { McpTransport::Stdio } else { McpTransport::Http }, command, args, url, env: map(object.get("env").or_else(|| object.get("environment")))?, headers: map(object.get("headers").or_else(|| object.get("http_headers")))?, in_library: true, expected_version: None }, enabled, unmapped_fields })
+    Ok(DecodedMcp { draft: McpDraft { reference_source: None, id: None, name: name.into(), transport: if url.is_empty() { McpTransport::Stdio } else { McpTransport::Http }, command, args, url, env: map(object.get("env").or_else(|| object.get("environment")))?, headers: map(object.get("headers").or_else(|| object.get("http_headers")))?, in_library: true, expected_version: None }, enabled, unmapped_fields })
+}
+/// Find brace-delimited candidates; native recognition remains adapter-owned.
+/// Other template grammars can override mcp_reference_fragments.
+pub fn reference_fragments(value: &str, recognizes: &dyn Fn(&str) -> bool) -> Vec<String> {
+    let mut fragments = Vec::new();
+    let mut offset = 0;
+    while let Some(relative) = value[offset..].find('{') {
+        let open = offset + relative;
+        let start = if open > 0 && value.as_bytes()[open - 1] == b'$' { open - 1 } else { open };
+        let Some(close) = value[open..].find('}').map(|index| open + index + 1) else { break; };
+        let candidate = &value[start..close];
+        if recognizes(candidate) { fragments.push(candidate.to_owned()); }
+        offset = close;
+    }
+    fragments
 }

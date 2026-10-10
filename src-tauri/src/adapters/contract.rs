@@ -471,6 +471,12 @@ pub trait CliAdapter: Sync {
     fn mcp_is_reference(&self, value: &str) -> bool {
         crate::resources::mcp::is_reference(value)
     }
+    /// Conversion checks include interpolation inside URLs and arguments.
+    /// Redaction still uses whole-value recognition: mixed values may contain
+    /// literal secrets alongside references.
+    fn mcp_reference_fragments(&self, value: &str) -> Vec<String> {
+        crate::adapters::mcp_codec::reference_fragments(value, &|part| self.mcp_is_reference(part))
+    }
     fn mcp_entry_view(&self, entry: &Value) -> Value { entry.clone() }
     /// Decode a native entry into the portable model. Consumers must inspect
     /// unmapped fields before converting; raw editing retains the original.

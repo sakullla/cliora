@@ -434,6 +434,7 @@ mod tests {
 
     fn definition(transport: McpTransport) -> McpDefinition {
         McpDefinition {
+            reference_source: None,
             id: "fixture-definition".into(),
             name: "example".into(),
             transport,

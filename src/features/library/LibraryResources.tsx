@@ -30,7 +30,7 @@ function blank(): McpDraft {
   return { id: null, name: '', transport: 'stdio', command: '', args: [], url: '', env: {}, headers: {}, inLibrary: true, expectedVersion: null };
 }
 function draftOf(item: McpDefinition): McpDraft {
-  return { id: item.id, name: item.name, transport: item.transport, command: item.command, args: item.args, url: item.url, env: item.env, headers: item.headers, inLibrary: item.inLibrary !== false, expectedVersion: item.version };
+  return { id: item.id, name: item.name, transport: item.transport, command: item.command, args: item.args, url: item.url, env: item.env, headers: item.headers, referenceSource: item.referenceSource, inLibrary: item.inLibrary !== false, expectedVersion: item.version };
 }
 function lines(value: Record<string, string>): string {
   return Object.entries(value).map(([key, item]) => `${key}=${item}`).join('\n');
