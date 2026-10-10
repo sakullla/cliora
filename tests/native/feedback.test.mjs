@@ -141,7 +141,7 @@ test('late MCP save failure retains origin surface and successful retry clears i
     feedback: { begin: key => store.begin('mcp', key, surface) }, draft: { id: 'A', args: [] }, formKey: 1,
     busy: false, envText: '', headerText: '', keptArgs: x => x, parseLines: () => ({}), failure: e => e.message,
     setBusy: noop, setDefinitions: noop, setDraft: noop, draftOf: x => x, placements: [], willDistribute: false,
-    setPlacements: noop, setConflict: noop, saveOperation: { current: null }, editorGeneration: { current: 1 }, distributeRef: { current: null }, t: translate,
+    setPlacements: noop, setConflict: noop, saveOperation: { current: null }, editorGeneration: { current: 1 }, editorRevision: { current: 0 }, distributeRef: { current: null }, t: translate,
     native: { saveMcpDefinition: () => pending, listMcpDefinitions: async () => [], listMcpPlacements: async () => [] },
   });
   const first = save(); surface = 'dialog-B'; reject(Error('A failed')); await first;
@@ -180,7 +180,7 @@ test('library MCP checks fulfilled business failure instead of announcing writte
   const toggle = consumer('src/features/library/LibraryResources.tsx', 'toggleMcp', {
     feedback: { begin: key => store.begin('mcp', key) }, busy: false, tools: [], placements: [],
     setBusy: noop, setPlacements: noop, t: translate, failure: e => e.message,
-    native: { previewMcpTargets: async () => [{ status: 'ready' }], distributeMcp: async () => [{ status: 'failed', detail: 'write denied' }] },
+    native: { previewMcpTargets: async () => [{ status: 'ready' }], listNativeMcp: async () => [], distributeMcp: async () => [{ status: 'failed', detail: 'write denied' }] },
   });
   await toggle({ id: 'A', name: 'A' }, 'tool', 'global', null, null);
   assert.deepEqual(store.getSnapshot().map(e => [e.tone, e.text]), [['error', 'write denied']]);
@@ -203,7 +203,7 @@ for (const distribute of [false, true]) test(`late MCP A success preserves B dra
     feedback: { begin: key => store.begin('mcp', key, 'A') }, draft: { id: 'A', args: [] }, formKey: 1,
     busy: false, envText: '', headerText: '', keptArgs: x => x, parseLines: () => ({}), failure: e => e.message,
     setBusy: noop, setDefinitions: () => changes++, setDraft: () => changes++, draftOf: x => x, placements: [], willDistribute: distribute,
-    setPlacements: () => changes++, setConflict: () => changes++, saveOperation: { current: null }, editorGeneration: generation, distributeRef: distribution, t: translate,
+    setPlacements: () => changes++, setConflict: () => changes++, saveOperation: { current: null }, editorGeneration: generation, editorRevision: { current: 0 }, distributeRef: distribution, t: translate,
     native: { saveMcpDefinition: () => new Promise(done => { resolve = done; }), listMcpDefinitions: async () => [] },
   });
   const pending = save(); generation.current++; distribution.current = { run: async () => { writes += 100; } };
@@ -219,13 +219,13 @@ test('MCP committed version survives list failure; recovery reads without saving
     feedback: { begin: key => store.begin('mcp', key), resume: result => result.retry() }, draft: { id: null, args: [] }, formKey: 1,
     busy: false, envText: '', headerText: '', keptArgs: x => x, parseLines: () => ({}), failure: e => e.message,
     setBusy: noop, setDefinitions: noop, setDraft: value => { draft = value; }, draftOf: x => x, placements: [], willDistribute: false,
-    setPlacements: noop, setConflict: noop, saveOperation: { current: null }, editorGeneration: { current: 1 }, distributeRef: { current: null }, t: translate,
+    setPlacements: noop, setConflict: noop, saveOperation: { current: null }, editorGeneration: { current: 1 }, editorRevision: { current: 0 }, distributeRef: { current: null }, t: translate,
     native: { saveMcpDefinition: async () => { writes++; return { id: 'saved', version: 7 }; }, listMcpDefinitions: async () => { if (readsFail) throw Error('list failed'); return []; } },
   });
   await save(); assert.equal(draft.version, 7); assert.equal(store.getSnapshot()[0].tone, 'partial');
   assert.match(store.getSnapshot()[0].operation, /saved/); assert.equal(store.getSnapshot()[0].detail, 'list failed');
   readsFail = false; await store.recover(store.getSnapshot()[0].id);
-  assert.equal(writes, 1); assert.equal(draft, null); assert.equal(store.getSnapshot()[0].tone, 'success');
+  assert.equal(writes, 1); assert.equal(draft.version, 7); assert.equal(store.getSnapshot()[0].tone, 'success');
 });
 
 test('home profile B success preserves profile A failure; conflict retry resolves A', async () => {
@@ -283,21 +283,21 @@ test('account read failure has one authority and polling success cannot clear a 
 });
 
 
-test('tool MCP accepts ID/version before list failure and resumes distribution without duplicate save', async () => {
+test('tool MCP accepts ID/version before list failure and read recovery never writes or closes', async () => {
   const store = createNotificationStore(); let writes = 0; let fails = true; let accepted; let applied = 0;
   const latest = { current: 'draft' };
   const save = consumer('src/features/tools/ResourceWorkspace.tsx', 'save', {
     feedback: { begin: key => store.begin('tool-mcp', key), resume: result => result.retry() }, draft: { name: 'new', args: [] },
-    scope: 'global', project: null, nativeOrigin: null, latestForm: latest, mounted: { current: true }, definitions: [], syncLibrary: true,
+    scope: 'global', project: null, nativeOrigin: null, editorGeneration: { current: 1 }, editorRevision: { current: 0 }, latestForm: latest, mounted: { current: true }, definitions: [], syncLibrary: true,
     setBusy: noop, keptArgs: x => x, parseLines: () => ({}), envText: '', headerText: '', enabled: true, setDefinitions: noop,
     select: value => { accepted = value; latest.current = value.id; }, target: {}, setCurrentConflict: noop,
     applyItems: async (_, __, ___, result) => { applied++; result.success('written'); return true; }, leaveComposer: noop,
     t: translate, errorText: e => e.message,
-    native: { saveMcpDefinition: async () => { writes++; return { id: 'saved', version: 3 }; }, listMcpDefinitions: async () => { if (fails) throw Error('read failed'); return []; }, previewMcpTargets: async () => [{ status: 'ready' }] },
+    native: { saveMcpDefinition: async () => { writes++; return { id: 'saved', version: 3 }; }, listMcpDefinitions: async () => { if (fails) throw Error('read failed'); return []; }, previewMcpTargets: async () => [{ status: 'ready' }], listNativeMcp: async () => [] },
   });
   await save(); assert.equal(accepted.version, 3); assert.equal(store.getSnapshot()[0].operation, 'save:saved'); assert.equal(store.getSnapshot()[0].tone, 'partial');
   fails = false; await store.recover(store.getSnapshot()[0].id);
-  assert.equal(writes, 1); assert.equal(applied, 1); assert.equal(store.getSnapshot()[0].tone, 'success');
+  assert.equal(writes, 1); assert.equal(applied, 0); assert.equal(store.getSnapshot()[0].tone, 'partial');
 });
 
 test('configuration compare recovery replaces saved partial on both failure and success', async () => {
@@ -323,4 +323,68 @@ test('account mutation success plus failed read produces one read error and pres
   await run('logout:B', async () => { throw Error('logout failed'); }, 'logged out');
   assert.equal(store.getSnapshot().filter(e => e.text === 'read failed').length, 1);
   assert.equal(store.getSnapshot().at(-1).text, 'logout failed');
+});
+
+
+for (const change of ['revision', 'session']) test(`library refresh recovery cannot close later draft after ${change} changes`, async () => {
+  const store = createNotificationStore(); let read = 0; let resolve; let draft = { id: 'A', name: 'initial' };
+  const generation = { current: 1 }; const revision = { current: 0 };
+  const save = consumer('src/features/library/LibraryResources.tsx', 'save', {
+    feedback: { begin: key => store.begin('mcp', key), resume: result => result.retry() }, draft: { id: 'A', args: [] }, formKey: 1,
+    busy: false, envText: '', headerText: '', keptArgs: x => x, parseLines: () => ({}), failure: e => e.message,
+    setBusy: noop, setDefinitions: noop, setDraft: value => { draft = typeof value === 'function' ? value(draft) : value; }, draftOf: x => x, placements: [], willDistribute: false,
+    setPlacements: noop, setConflict: noop, saveOperation: { current: null }, editorGeneration: generation, editorRevision: revision, distributeRef: { current: null }, t: translate,
+    native: { saveMcpDefinition: async () => ({ id: 'A', version: 2 }), listMcpDefinitions: async () => { if (++read === 1) throw Error('offline'); return new Promise(done => { resolve = done; }); } },
+  });
+  await save(); const recovery = store.recover(store.getSnapshot()[0].id);
+  if (change === 'session') generation.current++; else revision.current++;
+  draft = { id: change === 'session' ? 'B' : 'A', name: 'keep typing' };
+  resolve([]); await recovery; assert.equal(draft.name, 'keep typing');
+});
+
+for (const change of ['none', 'revision', 'session']) test(`tool conflict uses one guard through distribute and list refresh (${change})`, async () => {
+  const store = createNotificationStore(); let resolve; let closed = 0; let stateWrites = 0;
+  const generation = { current: 1 }; const revision = { current: 0 }; const form = { current: 'A' };
+  const common = { feedback: { begin: key => store.begin('mcp', key), resume: result => result.retry() }, t: translate, errorText: e => e.message,
+    mounted: { current: true }, editorGeneration: generation, editorRevision: revision, latestForm: form, busy: false, setBusy: noop,
+    currentConflict: { id: 'A', items: [{ toolId: 'tool', status: 'conflict' }], generation: 1, revision: 0, form: 'A' },
+    setNativeEntries: () => stateWrites++, setCurrentConflict: () => stateWrites++, contextId: null, enabled: true, target: {},
+    native: { distributeMcp: () => new Promise(done => { resolve = done; }), listNativeMcp: async () => [] },
+  };
+  const applyItems = consumer('src/features/tools/ResourceWorkspace.tsx', 'applyItems', common);
+  const apply = consumer('src/features/tools/ResourceWorkspace.tsx', 'applyConflict', { ...common, applyItems, leaveComposer: () => closed++ });
+  const pending = apply(); const changed = change !== 'none'; if (change === 'session') { generation.current++; form.current = 'B'; } else if (changed) { revision.current++; form.current = 'edited A'; }
+  resolve([{ status: 'written' }]); await pending;
+  assert.equal(closed, changed ? 0 : 1); assert.equal(stateWrites, changed ? 0 : 2);
+});
+
+test('old conflict preview cannot apply after continuing to edit the same draft', async () => {
+  const store = createNotificationStore(); let writes = 0;
+  const apply = consumer('src/features/tools/ResourceWorkspace.tsx', 'applyConflict', {
+    feedback: { begin: key => store.begin('mcp', key) }, t: translate, errorText: e => e.message,
+    mounted: { current: true }, editorGeneration: { current: 1 }, editorRevision: { current: 2 }, latestForm: { current: 'edited' }, busy: false,
+    currentConflict: { id: 'A', items: [], generation: 1, revision: 1, form: 'initial' }, setBusy: noop,
+    applyItems: async () => { writes++; return true; }, leaveComposer: noop,
+  });
+  await apply(); assert.equal(writes, 0); assert.equal(store.getSnapshot()[0].detail, 'common.feedback.stale');
+});
+
+for (const written of [false, true]) test(`repeated list failures retain saved and distribution stages with read-only recovery (${written})`, async () => {
+  const store = createNotificationStore(); let writes = 0; let reads = 0; let closed = 0;
+  const apply = consumer('src/features/tools/ResourceWorkspace.tsx', 'applyItems', {
+    feedback: { resume: result => result.retry() }, t: translate, errorText: e => e.message,
+    contextId: null, enabled: true, target: {}, setNativeEntries: noop, setCurrentConflict: () => closed++,
+    native: { distributeMcp: async () => { writes++; return [{ status: written ? 'written' : 'failed', detail: 'target denied' }]; },
+      listNativeMcp: async () => { if (++reads <= 3) throw Error('list offline ' + reads); return []; } },
+  });
+  await apply('A', [{ status: 'ready' }], false, store.begin('mcp', 'save:A'), () => true);
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const event = store.getSnapshot()[0]; assert.equal(event.tone, 'partial'); assert.ok(event.recovery);
+    assert.match(event.detail, new RegExp('list offline ' + attempt));
+    if (!written) { assert.match(event.text, /definitionSaved/); assert.match(event.detail, /target denied/); }
+    await store.recover(event.id);
+  }
+  assert.equal(writes, 1); assert.equal(reads, 4); assert.equal(closed, 0);
+  const last = store.getSnapshot()[0]; assert.equal(last.tone, written ? 'success' : 'partial');
+  if (!written) { assert.match(last.text, /definitionSaved/); assert.equal(last.detail, 'target denied'); }
 });

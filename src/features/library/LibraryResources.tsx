@@ -59,6 +59,7 @@ export function LibraryResources({ section, active, tools, projects, createSigna
   const [formKey, setFormKey] = useState(0);
   const distributeRef = useRef<McpDistributeHandle>(null);
   const editorGeneration = useRef(0);
+  const editorRevision = useRef(0);
   const saveOperation = useRef<FeedbackOperation | null>(null);
   useEffect(() => () => { editorGeneration.current++; }, []);
   const [packages, setPackages] = useState<SkillPackage[]>([]);
@@ -251,7 +252,8 @@ export function LibraryResources({ section, active, tools, projects, createSigna
     const operationFeedback = feedback.begin(JSON.stringify(['save', draft.id ?? 'new:' + formKey]));
     saveOperation.current = operationFeedback;
     const generation = editorGeneration.current;
-    const current = () => editorGeneration.current === generation;
+    const revision = editorRevision.current;
+    const current = () => editorGeneration.current === generation && editorRevision.current === revision;
     const distribution = distributeRef.current;
     const distribute = willDistribute || placements.some(item => item.definitionId === draft.id);
     let saved: McpDefinition | null = null;
@@ -291,7 +293,17 @@ export function LibraryResources({ section, active, tools, projects, createSigna
           const retry = feedback.resume(result); saveOperation.current = retry;
           retry.committed(writtenNotice ?? t('library.resources.saved'));
           setBusy(true);
-          try { await finish(retry); } catch (error) { reportFailure(retry, error); }
+          try {
+            const items = await native.listMcpDefinitions();
+            if (current()) setDefinitions(items);
+            if (writtenNotice) {
+              const placed = await native.listMcpPlacements();
+              if (current()) setPlacements(placed);
+            }
+            // Refresh recovery never changes drafts, closes an editor or writes
+            // targets. An unfinished distribution remains explicitly partial.
+            reportLate(retry);
+          } catch (error) { reportFailure(retry, error); }
           finally { setBusy(false); }
         },
       } } : undefined);
@@ -301,7 +313,10 @@ export function LibraryResources({ section, active, tools, projects, createSigna
       saved = await native.saveMcpDefinition({ ...draft, args: keptArgs(draft.args), inLibrary: true, env: parseLines(envText), headers: parseLines(headerText) });
       operationFeedback.identify(JSON.stringify(['save', saved.id]));
       operationFeedback.committed(t('library.resources.saved'));
-      if (!current()) { reportLate(operationFeedback); return; }
+      if (!current()) {
+        if (editorGeneration.current === generation) setDraft(previous => previous ? { ...previous, id: saved!.id, expectedVersion: saved!.version } : previous);
+        reportLate(operationFeedback); return;
+      }
       const accepted = saved;
       setDraft(draftOf(accepted));
       setDefinitions(items => items.some(item => item.id === accepted.id) ? items.map(item => item.id === accepted.id ? accepted : item) : [accepted, ...items]);
@@ -316,6 +331,8 @@ export function LibraryResources({ section, active, tools, projects, createSigna
     saveOperation.current = operationFeedback;
     operationFeedback.committed(t('library.resources.saved'));
     const generation = editorGeneration.current;
+    const revision = editorRevision.current;
+    const current = () => editorGeneration.current === generation && editorRevision.current === revision;
     const distribution = distributeRef.current;
     setBusy(true);
     try {
@@ -323,9 +340,9 @@ export function LibraryResources({ section, active, tools, projects, createSigna
       if (outcome?.status === 'written') {
         operationFeedback.committed(outcome.notice);
         operationFeedback.success(outcome.notice);
-        if (editorGeneration.current !== generation) return;
+        if (!current()) return;
         const placed = await native.listMcpPlacements();
-        if (editorGeneration.current !== generation) return;
+        if (!current()) return;
         setPlacements(placed); setConflict(false); setDraft(null);
       } else if (outcome?.status === 'failed') operationFeedback.error(outcome.message);
     } catch (value) { operationFeedback.error(failure(value)); }
@@ -477,9 +494,9 @@ export function LibraryResources({ section, active, tools, projects, createSigna
     </div>
     <GuideDialog open={!!draft} title={draft?.id ? t('tools.mcp.editTitle') : t('library.resources.newMcpTitle')} hint={t('library.resources.mcpDialogHint')} onClose={() => { editorGeneration.current++; setDraft(null); setConflict(false); }}>
       {draft && <>
-        <div className={styles.fields}>
+        <div className={styles.fields} onChangeCapture={() => { editorRevision.current++; }}>
           <label className={styles.span}>{t('tools.mcp.name')}<input aria-label={t('tools.mcp.nameAria')} value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder={t('tools.mcp.namePlaceholder')} /></label>
-          <div className={`${styles.typeField} ${styles.span}`}><span>{t('tools.mcp.type')}</span><div className={styles.typeSwitch} role="radiogroup" aria-label={t('tools.mcp.transport')}>{([['http', 'HTTP'], ['stdio', 'stdio']] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={draft.transport === value} onClick={() => setDraft({ ...draft, transport: value })}>{label}</button>)}</div></div>
+          <div className={`${styles.typeField} ${styles.span}`}><span>{t('tools.mcp.type')}</span><div className={styles.typeSwitch} role="radiogroup" aria-label={t('tools.mcp.transport')}>{([['http', 'HTTP'], ['stdio', 'stdio']] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={draft.transport === value} onClick={() => { editorRevision.current++; setDraft({ ...draft, transport: value }); }}>{label}</button>)}</div></div>
           {draft.transport === 'stdio' ? <>
             <label className={styles.span}>{t('tools.mcp.command')}<input aria-label={t('tools.mcp.command')} value={draft.command} onChange={(event) => setDraft({ ...draft, command: event.target.value })} placeholder="npx" /></label>
             <label className={styles.span}>{t('tools.mcp.args')}<textarea rows={3} value={draft.args.join('\n')} onChange={(event) => setDraft({ ...draft, args: event.target.value.split(/\r?\n/) })} placeholder={'-y\nchrome-devtools-mcp@latest'} /></label>
@@ -489,7 +506,7 @@ export function LibraryResources({ section, active, tools, projects, createSigna
             <label className={styles.span}>{t('tools.mcp.headers')}<textarea rows={4} value={headerText} onChange={(event) => setHeaderText(event.target.value)} placeholder="Authorization=Bearer ${API_TOKEN}" /></label>
           </>}
         </div>
-        <McpDistribution key={formKey} ref={distributeRef} definition={definitions.find((item) => item.id === draft.id) ?? { ...draft, id: draft.id ?? '', version: draft.expectedVersion ?? 0 }} tools={tools} projects={projects} placements={placements} formStamp={JSON.stringify([draft.name, draft.transport, draft.command, draft.args, draft.url, envText, headerText])} onWillDistribute={setWillDistribute} onConflictChange={setConflict} />
+        <div onChangeCapture={() => { editorRevision.current++; }} onClickCapture={() => { editorRevision.current++; }}><McpDistribution key={formKey} ref={distributeRef} definition={definitions.find((item) => item.id === draft.id) ?? { ...draft, id: draft.id ?? '', version: draft.expectedVersion ?? 0 }} tools={tools} projects={projects} placements={placements} formStamp={JSON.stringify([draft.name, draft.transport, draft.command, draft.args, draft.url, envText, headerText])} onWillDistribute={setWillDistribute} onConflictChange={setConflict} /></div>
         <FeedbackRegion context={feedback.context} />
         <div className="dialog-footer">{draft.id && <button type="button" disabled={busy} onClick={() => { const current = definitions.find((item) => item.id === draft.id); if (current) void remove(current); }}>{t('tools.agents.delete')}</button>}<span className="dialog-footer-gap" />{conflict && <button type="button" disabled={busy} onClick={() => { setConflict(false); distributeRef.current?.dismiss(); }}>{t('common.conflict.keepCurrent')}</button>}<button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint()} disabled={busy || !draft.name.trim()} onClick={() => void (conflict ? replaceDistribution() : save())}>{conflict ? t('library.resources.replaceDistribute') : willDistribute ? t('library.resources.saveDistribute') : t('home.launcher.save')}</button></div>
       </>}

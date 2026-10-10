@@ -283,3 +283,70 @@ test('profile conflict failure is visible inside modal and successful retry clea
   await expect(page.locator('main .feedback-item').filter({ hasText: '冲突写入失败' })).toHaveCount(0);
   await expect(page.locator('main .feedback-item').filter({ hasText: '请确认接管' })).toHaveCount(0);
 });
+
+
+test('MCP save keeps subsequent input in the same editor and accepts the saved version', async ({ page }) => {
+  await install(page);
+  await page.addInitScript(() => {
+    const host = window as any; const invoke = host.__TAURI_INTERNALS__.invoke;
+    const definition = { id: 'A', name: 'MCP A', transport: 'stdio', command: 'node', args: [], env: {}, headers: {}, url: '', version: 1, inLibrary: true };
+    host.saveDrafts = [];
+    host.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command === 'list_mcp_definitions') return [definition];
+      if (command === 'list_mcp_placements') return [];
+      if (command === 'save_mcp_definition') { host.saveDrafts.push(args.draft); return new Promise(resolve => { host.resolveMcpSave = () => resolve({ ...definition, ...args.draft, version: 2 }); }); }
+      return invoke(command, args);
+    };
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  await page.getByRole('button', { name: 'MCP A', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.locator('[data-dialog-save]').click();
+  await expect.poll(() => page.evaluate(() => (window as any).saveDrafts.length)).toBe(1);
+  await dialog.getByRole('textbox', { name: '名称', exact: true }).fill('New unsaved name');
+  await page.evaluate(() => (window as any).resolveMcpSave());
+  await expect(dialog.locator('[data-dialog-save]')).toBeEnabled();
+  await expect(dialog.getByRole('textbox', { name: '名称', exact: true })).toHaveValue('New unsaved name');
+  await dialog.locator('[data-dialog-save]').click();
+  await expect.poll(() => page.evaluate(() => (window as any).saveDrafts[1]?.expectedVersion)).toBe(2);
+});
+
+for (const editBeforeRetry of [true, false]) test(`MCP read recovery preserves further input (${editBeforeRetry})`, async ({ page }) => {
+  await install(page);
+  await page.addInitScript(() => {
+    const host = window as any; const invoke = host.__TAURI_INTERNALS__.invoke;
+    const definition = { id: 'A', name: 'MCP A', transport: 'stdio', command: 'node', args: [], env: {}, headers: {}, url: '', version: 1, inLibrary: true };
+    let saved = false; let reads = 0; host.saves = 0;
+    host.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command === 'list_mcp_definitions') {
+        if (!saved) return [definition];
+        if (++reads === 1) throw { message: 'list offline' };
+        return new Promise(resolve => { host.resolveMcpRead = () => resolve([definition]); });
+      }
+      if (command === 'list_mcp_placements') return [];
+      if (command === 'save_mcp_definition') { saved = true; host.saves++; return { ...definition, ...args.draft, version: 2 }; }
+      return invoke(command, args);
+    };
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  await page.getByRole('button', { name: 'MCP A', exact: true }).click();
+  const dialog = page.getByRole('dialog'); const name = dialog.getByRole('textbox', { name: '名称', exact: true });
+  await dialog.locator('[data-dialog-save]').click();
+  const retry = dialog.getByRole('button', { name: '重试', exact: true });
+  await expect(retry).toBeVisible();
+  if (editBeforeRetry) await name.fill('Keep newer draft');
+  await retry.click();
+  if (editBeforeRetry) await expect(dialog.getByRole('alert').filter({ hasText: '操作对象已变化' })).toBeVisible();
+  else {
+    await expect.poll(() => page.evaluate(() => typeof (window as any).resolveMcpRead)).toBe('function');
+    await name.fill('Keep newer draft');
+    await page.evaluate(() => (window as any).resolveMcpRead());
+    await expect(dialog.locator('[data-dialog-save]')).toBeEnabled();
+  }
+  await expect(name).toHaveValue('Keep newer draft');
+  expect(await page.evaluate(() => (window as any).saves)).toBe(1);
+});

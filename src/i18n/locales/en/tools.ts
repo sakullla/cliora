@@ -346,6 +346,7 @@ export default {
     confirmDiscard: 'The MCP draft is unsaved. Switching discards the changes.',
     importedNotice: 'Read the entry from the current tool. Saving only updates this CLI.',
     written: 'Written to the current tool.',
+    definitionSaved: 'Definition saved.',
     partialFailed: 'Some writes failed. You can retry.',
     pickProject: 'Choose a project.',
     dirtyAgain: 'The form changed again before writing to the current tool. Save once more.',
