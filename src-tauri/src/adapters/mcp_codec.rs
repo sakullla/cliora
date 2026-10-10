@@ -62,8 +62,15 @@ pub fn reference_fragments(value: &str, recognizes: &dyn Fn(&str) -> bool) -> Ve
         let start = if open > 0 && value.as_bytes()[open - 1] == b'$' { open - 1 } else { open };
         let Some(close) = value[open..].find('}').map(|index| open + index + 1) else { break; };
         let candidate = &value[start..close];
-        if recognizes(candidate) { fragments.push(candidate.to_owned()); }
-        offset = close;
+        if recognizes(candidate) {
+            fragments.push(candidate.to_owned());
+            offset = close;
+        } else {
+            // An outer JSON/object brace is not a reference, but can enclose
+            // one. Resume after this opening brace instead of skipping its
+            // entire candidate (including any inner interpolation).
+            offset = open + 1;
+        }
     }
     fragments
 }

@@ -734,3 +734,71 @@ fn cursor_a3_reference_provenance_covers_drafts_library_and_distribution() {
     assert!(doc.protected_values);
     assert!(!doc.text.contains("fixture-secret"));
 }
+
+#[test]
+fn cursor_a4_nested_reference_scanner_checks_each_candidate() {
+    let registry = Registry::builtins();
+    let cursor = registry.get("cursor_ide").unwrap();
+    let default = registry.get("claude_code").unwrap();
+    for (value, expected) in [
+        (r#"{"token":"${env:TOKEN}"}"#, vec!["${env:TOKEN}"]),
+        (r#"{"nested":{"a":"${env:A}","b":"${env:B}"}}"#, vec!["${env:A}", "${env:B}"]),
+        (r#"中文 { "token":"${env:TOKEN}" "#, vec!["${env:TOKEN}"]),
+        ("中文 ${env:UNCLOSED", vec![]),
+    ] {
+        assert_eq!(cursor.mcp_reference_fragments(value), expected, "{value}");
+        assert!(default.mcp_reference_fragments(value).is_empty());
+    }
+    let reverse = r#"{"token":"${TOKEN}"}"#;
+    assert_eq!(default.mcp_reference_fragments(reverse), vec!["${TOKEN}"]);
+    assert!(cursor.mcp_reference_fragments(reverse).is_empty());
+}
+
+#[cfg(windows)]
+#[test]
+fn cursor_a4_json_argument_conversion_and_distribution_keep_reference_semantics() {
+    for (source_id, target_id, reference) in [
+        ("cursor_ide", "claude_code", "${env:TOKEN}"),
+        ("claude_code", "cursor_ide", "${TOKEN}"),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        installation(temp.path());
+        let db = Database::open(&temp.path().join("db")).unwrap();
+        let registry = Registry::builtins();
+        let store = Store::default();
+        let mut source = target(); source.tool_id = source_id.into();
+        let mut destination = target(); destination.tool_id = target_id.into();
+        let argument = serde_json::to_string(&json!({"token": reference})).unwrap();
+        let text = serde_json::to_string(&json!({"mcpServers":{"nested":{
+            "command":"node", "args":[argument]
+        }}})).unwrap();
+        let draft = documents::parse_paste(&db, &registry, temp.path(), &source, None, &text)
+            .unwrap().remove(0).draft.unwrap();
+        assert!(documents::render_draft(&db, &registry, temp.path(), &source, draft.clone()).is_ok());
+        let rejected = documents::render_draft(&db, &registry, temp.path(), &destination, draft.clone());
+        assert!(rejected.is_err(), "{source_id} -> {target_id} incorrectly rendered {argument}");
+        assert!(rejected.unwrap_err().contains("环境变量引用语义"));
+        let definition = mcp::save_definition(&db, draft).unwrap();
+        let rejected = mcp::distribute(&db, &store, &registry, temp.path(), &definition.id, vec![destination]);
+        assert_eq!(rejected[0].status, "failed");
+        assert!(rejected[0].detail.contains("环境变量引用语义"));
+        let preview = mcp::preview_targets(&db, &registry, temp.path(), &definition.id, vec![source.clone()]).remove(0);
+        source.baseline_hash = preview.baseline_hash;
+        source.preview_token = preview.preview_token;
+        assert_eq!(mcp::distribute(&db, &store, &registry, temp.path(), &definition.id, vec![source.clone()])[0].status, "written");
+        let native = mcp::list_native(&db, &registry, temp.path(), &source).unwrap();
+        assert_eq!(native[0].args, vec![argument]);
+        // Fragment recognition must not make a mixed literal secret public.
+        let mixed = serde_json::to_string(&json!({"token":reference, "secret":"literal-fixture-secret"})).unwrap();
+        let mut protected: mcp::McpDraft = serde_json::from_value(serde_json::to_value(&definition).unwrap()).unwrap();
+        protected.id = None; protected.name = "mixed-secret".into();
+        protected.env.insert("API_TOKEN".into(), mixed);
+        let secret = mcp::save_definition(&db, protected).unwrap();
+        let document = documents::read(&db, &registry, temp.path(), &documents::McpDocumentRequest {
+            target: source, definition_id: Some(secret.id), name: secret.name, reveal: false,
+        }).unwrap();
+        assert!(document.protected_values);
+        assert!(document.text.contains("__CLIORA_REDACTED__"));
+        assert!(!document.text.contains("literal-fixture-secret"));
+    }
+}
