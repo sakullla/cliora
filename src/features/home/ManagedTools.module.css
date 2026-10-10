@@ -89,7 +89,7 @@
   transition: background-color var(--fast) var(--ease), border-color var(--fast) var(--ease), color var(--fast) var(--ease);
 }
 .switch > div[role="radiogroup"] > button:hover:not(:disabled) { border-color: var(--line-strong); background: var(--surface); color: var(--text); }
-.activeConfig, .activeConfig:hover:not(:disabled) { border-color: var(--accent-line) !important; background: var(--accent-soft) !important; color: var(--text) !important; font-weight: 640 !important; }
+.switch > div[role="radiogroup"] > button.activeConfig, .switch > div[role="radiogroup"] > button.activeConfig:hover:not(:disabled) { border-color: var(--accent-line); background: var(--accent-soft); color: var(--text); font-weight: 640; }
 .modelHint { margin-left: 6px; color: inherit; font-style: normal; font-weight: 520; opacity: .8; }
 .activeConfig::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--accent); vertical-align: 1px; }
 

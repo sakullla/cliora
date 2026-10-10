@@ -13,5 +13,5 @@ export function ExternalLink({ href, children }: { href: string; children: React
     void native.openExternalUrl(href).catch((reason: unknown) => {
       setError(typeof reason === 'object' && reason && 'message' in reason ? String(reason.message) : t('common.externalLink.openFailed'));
     });
-  }}>{children}</a>{error && <span role="alert">{error}</span>}</>;
+  }}>{children}</a>{error && <span role="alert" className="external-link-error">{error}</span>}</>;
 }
