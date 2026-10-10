@@ -34,7 +34,7 @@ async function install(page: Page) {
       tools: catalog.map(([id, name]) => ({ id, name, installation: 'not_checked', configuration: 'not_checked' })),
     });
     const adapters = () => ({
-      registered: catalog.map(([id, name]) => ({ id, name, interfaceFormats: ['openai_responses'], yoloAvailable: true, nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } })),
+      registered: catalog.map(([id, name]) => ({ id, name, interfaceFormats: ['openai_responses'], yoloAvailable: !['zcode', 'deepseek'].includes(id), launchForm: ['zcode', 'deepseek'].includes(id) ? 'desktop' : 'terminal', launchDirectory: ['zcode', 'deepseek'].includes(id) ? 'unsupported' : 'terminal', nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } })),
       managedIds: managed,
       preservedUnknown: [],
     });
@@ -168,8 +168,12 @@ test('long labels, search icon, switcher, and the five pages stay quiet', async 
   const rows = page.locator('[data-tool-row]');
   await expect(rows.getByRole('button', { name: '启动', exact: true }).first()).toBeVisible();
   await expect(rows.getByRole('button', { name: '重新检测', exact: true }).first()).toBeVisible();
-  await expect(rows.getByRole('button', { name: '编辑配置 →', exact: true }).first()).toBeVisible();
-  await expect(rows.getByRole('button', { name: '去安装 →', exact: true }).first()).toBeVisible();
+  for (const name of ['编辑配置', '去安装']) {
+    const action = rows.getByRole('button', { name, exact: true }).first();
+    await expect(action).toBeVisible();
+    await expect(action).toHaveAttribute('title', name);
+    await expect(action).toHaveText('');
+  }
   const edges = await rows.getByRole('button', { name: /^(启动|重新检测)$/ }).evaluateAll((nodes) => nodes.map((node) => {
     const box = node.getBoundingClientRect();
     return `${Math.round(box.left)}-${Math.round(box.right)}`;
@@ -257,8 +261,8 @@ test('long labels, search icon, switcher, and the five pages stay quiet', async 
     await nav.getByRole('button', { name: '快速开始' }).click();
     await expect(page.getByRole('heading', { name: '快速开始', level: 1 })).toBeVisible();
     await expect(rows.getByRole('button', { name: '启动', exact: true }).first()).toBeVisible();
-    await expect(rows.getByRole('button', { name: '编辑配置 →', exact: true }).first()).toBeVisible();
-    await expect(rows.getByRole('button', { name: '去安装 →', exact: true }).first()).toBeVisible();
+    await expect(rows.getByRole('button', { name: '编辑配置', exact: true }).first()).toBeVisible();
+    await expect(rows.getByRole('button', { name: '去安装', exact: true }).first()).toBeVisible();
     await expect(page.getByRole('group', { name: '切换主题' })).toBeVisible();
     await expectNoSideScroll(page);
 

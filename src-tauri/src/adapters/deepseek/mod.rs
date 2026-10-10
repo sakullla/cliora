@@ -518,10 +518,9 @@ mod tests {
             DeepSeek.launch_args(None, LaunchMode::Normal).unwrap(),
             Vec::<String>::new()
         );
-        assert_eq!(
-            DeepSeek.desktop_launch_args(Path::new("/work/app")).unwrap(),
-            Vec::<String>::new()
-        );
+        assert_eq!(DeepSeek.launch_directory(), crate::adapters::LaunchDirectory::Unsupported);
+        let workspace = DeepSeek.desktop_launch_args(Path::new("/work/app")).unwrap_err();
+        assert!(workspace.contains("工作区"));
         let yolo = DeepSeek.launch_args(None, LaunchMode::Yolo).unwrap_err();
         assert!(yolo.contains("跳审批"));
         let resume = DeepSeek.launch_args(Some("session 1"), LaunchMode::Normal).unwrap_err();
