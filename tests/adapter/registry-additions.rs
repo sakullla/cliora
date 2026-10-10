@@ -362,7 +362,13 @@ fn six_added_adapters_declare_their_delivered_dimensions() {
         assert!(adapter.official_usage().is_none(), "{id} 不声明官方额度");
         assert!(descriptor.login.is_none(), "{id} 不声明登录");
         assert!(!descriptor.management.accounts, "{id} 无账号管理");
-        assert!(!descriptor.management.plugins, "{id} 无插件管理");
+        assert_eq!(
+            descriptor.management.plugins,
+            adapter
+                .plugins()
+                .is_some_and(|port| !port.capability().actions.is_empty()),
+            "{id} 插件管理面必须与插件端口一致"
+        );
         // Product-owned credential files never appear in the managed file
         // list.
         let files = adapter.native_files(crate::native::adapter::Scope::Global, home, None, true);
@@ -381,15 +387,16 @@ fn six_added_adapters_declare_their_delivered_dimensions() {
     // mimo_code ([src] XiaomiMiMo/MiMo-Code 0.1.15): JSONC config editing with
     // provider apiKey custody, --session resume (same contract as headless
     // `mimo run -c/--session/--fork`), MCP (config `mcp` key), Skills, Agents
-    // (config `agent` key + {agent,agents}/**/*.md), read-only mimocode.db
-    // sessions with per-message token splits; plugins stay pending native
-    // `plug` verification, accounts are absent by design (auth.json not
-    // adopted), project `.mimocode` is a resource location only.
+    // (config `agent` key + {agent,agents}/**/*.md), Plugins (config `plugin`
+    // array + {plugin,plugins}/*.ts|js auto-discovery, config-only), read-only
+    // mimocode.db sessions with per-message token splits; accounts are absent
+    // by design (auth.json not adopted), project `.mimocode` is a resource
+    // location only.
     let mimo = registry.get("mimo_code").unwrap();
     assert!(mimo.supports_skills());
     assert!(mimo.configuration().is_some());
     assert!(mimo.agents().is_some());
-    assert!(mimo.plugins().is_none());
+    assert!(mimo.plugins().is_some());
     assert!(mimo.descriptor().yolo_available);
     assert!(mimo
         .launch_args(Some("ses_x"), crate::adapters::LaunchMode::Normal)

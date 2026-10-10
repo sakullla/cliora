@@ -426,13 +426,18 @@ static VERSION_CACHE: std::sync::LazyLock<Mutex<VersionCache>> = std::sync::Lazy
 
 /// Version processes are independent of account, scope and page. Share their
 /// evidence across full/summary reads and coalesce concurrent cold requests.
+/// Every lookup revalidates the binary's size/mtime stamp, so a changed or
+/// replaced CLI re-probes immediately; the TTL only bounds how long an
+/// unchanged success is trusted without spawning again. Slow CLIs (MiMo takes
+/// seconds for `--version`) would otherwise re-pay that cost on every cold
+/// workspace load after a single idle minute.
 fn run_version(path: &Path, adapter: &dyn CliAdapter) -> Installation {
     let stamp = std::fs::metadata(path).map(|m| format!("{}:{:?}", m.len(), m.modified().ok())).unwrap_or_default();
     let entry = VERSION_CACHE.lock().unwrap_or_else(|e| e.into_inner())
         .entry((adapter.id().to_owned(), path.to_path_buf())).or_default().clone();
     let mut entry = entry.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((at, previous, installation)) = entry.as_ref() {
-        let ttl = if installation.status == "available" { 60 } else { 8 };
+        let ttl = if installation.status == "available" { 600 } else { 8 };
         if previous == &stamp && at.elapsed() < Duration::from_secs(ttl) { return installation.clone(); }
     }
     let installation = run_version_uncached(path, adapter);

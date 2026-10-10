@@ -1,4 +1,4 @@
-use crate::adapters::plugins::text;
+use crate::adapters::plugins::declaration_source;
 use crate::adapters::{self, Registry};
 // Plugins are native packages, never flattened into the Skill library.
 use crate::{
@@ -361,11 +361,7 @@ fn config_entries_with_recovery(
     };
     let saved = if reconcile { reconcile_disabled(db, target, &path, &baseline, entries)? }
         else { disabled(db, target)? };
-    let source_of = |item: &Value| {
-        item.as_str()
-            .map(str::to_owned)
-            .or_else(|| text(item, &["source"]))
-    };
+    let source_of = declaration_source;
     let mut result = vec![];
     for (item, declared) in entries.iter().map(|item| (item.clone(), true)).chain(
         saved
@@ -377,11 +373,7 @@ fn config_entries_with_recovery(
             })
             .map(|(_, item)| (item.clone(), false)),
     ) {
-        let source = item
-            .as_str()
-            .map(str::to_owned)
-            .or_else(|| text(&item, &["source"]))
-            .ok_or("插件声明没有来源")?;
+        let source = source_of(&item).ok_or("插件声明没有来源")?;
         let disabled_original = saved.get(&source);
         let enabled = declared && disabled_original.is_none();
         let conflict = disabled_original.is_some_and(|original| {

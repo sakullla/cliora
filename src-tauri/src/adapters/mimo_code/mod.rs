@@ -29,6 +29,11 @@
 //! * **Agents** (`config/agent.ts`): config `agent` key
 //!   `Record<string, AgentConfig>` plus `{agent,agents}/**/*.md` files (see
 //!   `agents`).
+//! * **Plugins** (`config/plugin.ts`, `plugin/install.ts`, `plugin/loader.ts`):
+//!   config `plugin` array of string or `[string, options]` specs plus
+//!   auto-discovered `{plugin,plugins}/*.{ts,js}`; npm dependencies resolve
+//!   into the config directory `node_modules` and install on demand at load
+//!   (see `plugins`).
 //! * **History** (`storage/schema.ts`, `session/*.sql.ts`, `message-v2.ts`,
 //!   `session.ts getUsage`, `processor.ts`): the data-root SQLite
 //!   `mimocode.db` (session/message/part) is indexed read-only with per-message
@@ -47,6 +52,7 @@
 pub(crate) mod agents;
 pub(crate) mod configuration;
 pub mod history;
+pub(crate) mod plugins;
 
 use std::collections::BTreeMap;
 use std::env;
@@ -130,6 +136,48 @@ fn settings_file(dir: &Path) -> (PathBuf, FileKind) {
 /// fresh terminal launch must not inherit them.
 const SESSION_ENV_MARKERS: &[&str] = &["MIMOCODE", "MIMOCODE_PID", "AGENT"];
 
+/// MiMo starts local MCP servers with `child_process.spawn(..., shell:false)`
+/// (`packages/cli/src/mcp/stdio-transport.ts`), which cannot execute Windows
+/// `.cmd`/`.bat` shims — the native session reports
+/// `ENOENT ... uv_spawn 'npx'` for a bare `npx` and the server stays failed.
+/// Wrap those commands in `cmd /c`, the same shape Claude Code's own
+/// `~/.claude.json` entries use (verified connected under MiMo 0.1.15).
+#[cfg(windows)]
+fn windows_batch_command(command: Vec<String>) -> Vec<String> {
+    wrap_batch_command(command, &crate::process_environment::directories())
+}
+
+#[cfg(any(windows, test))]
+fn wrap_batch_command(command: Vec<String>, directories: &[PathBuf]) -> Vec<String> {
+    let Some(program) = command.first().cloned() else {
+        return command;
+    };
+    if program.eq_ignore_ascii_case("cmd") || program.eq_ignore_ascii_case("cmd.exe") {
+        return command;
+    }
+    let path = Path::new(&program);
+    let batch = if let Some(extension) = path.extension() {
+        extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
+    } else {
+        // A bare name only wraps with PATH evidence, so `node` and friends
+        // stay untouched.
+        !program.contains(['/', '\\'])
+            && directories.iter().any(|dir| {
+                dir.is_absolute()
+                    && (dir.join(format!("{program}.cmd")).is_file()
+                        || dir.join(format!("{program}.bat")).is_file())
+            })
+    };
+    if !batch {
+        return command;
+    }
+    let mut wrapped = Vec::with_capacity(command.len() + 2);
+    wrapped.push("cmd".into());
+    wrapped.push("/c".into());
+    wrapped.extend(command);
+    wrapped
+}
+
 impl CliAdapter for MiMoCode {
     fn configuration(&self) -> Option<&dyn crate::adapters::configuration::ConfigurationAdapter> {
         Some(self)
@@ -141,6 +189,9 @@ impl CliAdapter for MiMoCode {
         true
     }
     fn agents(&self) -> Option<&dyn crate::adapters::agents::AgentAdapter> {
+        Some(self)
+    }
+    fn plugins(&self) -> Option<&dyn crate::adapters::plugins::PluginAdapter> {
         Some(self)
     }
     fn id(&self) -> &'static str {
@@ -255,10 +306,13 @@ impl CliAdapter for MiMoCode {
                 let (command, args) = mcp::stdio_command(&definition.command, &definition.args);
                 let mut map = mcp::stdio_doc_with_env(definition, existing, "environment");
                 map.remove("args");
-                map.insert(
-                    "command".into(),
-                    json!(std::iter::once(command).chain(args).collect::<Vec<_>>()),
-                );
+                let mut command: Vec<String> =
+                    std::iter::once(command).chain(args).collect::<Vec<_>>();
+                #[cfg(windows)]
+                {
+                    command = windows_batch_command(command);
+                }
+                map.insert("command".into(), json!(command));
                 map.insert("type".into(), json!("local"));
                 map
             }
@@ -565,7 +619,7 @@ impl CliAdapter for MiMoCode {
             },
             resources: Facet {
                 state: "available",
-                reason: "MCP（mimocode.jsonc mcp 键 Local/Remote 形状）、Skills（项目 .mimocode/skills 与个人 ~/.config/mimocode/skills）、Agents（config agent 键与 {agent,agents}/**/*.md）由原生路径提供",
+                reason: "MCP（mimocode.jsonc mcp 键 Local/Remote 形状）、Skills（项目 .mimocode/skills 与个人 ~/.config/mimocode/skills）、Agents（config agent 键与 {agent,agents}/**/*.md）、Plugins（config plugin 键与 {plugin,plugins}/*.ts|js 自动发现）由原生路径提供",
             },
             history: Facet {
                 state: "available",
@@ -577,8 +631,8 @@ impl CliAdapter for MiMoCode {
                 mcp: true,
                 skills: true,
                 agents: true,
-                plugins: false,
-                project_plugins: false,
+                plugins: true,
+                project_plugins: true,
                 rules: RuleSupport {
                     global: false,
                     project: false,
@@ -767,6 +821,34 @@ mod tests {
     }
 
     #[test]
+    fn windows_mcp_commands_wrap_only_proven_batch_shims() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("npx.cmd"), "").unwrap();
+        let directories = vec![temp.path().to_path_buf()];
+        assert_eq!(
+            wrap_batch_command(vec!["npx".into(), "-y".into(), "pkg".into()], &directories),
+            ["cmd", "/c", "npx", "-y", "pkg"]
+        );
+        let absolute = temp.path().join("uvx.cmd");
+        std::fs::write(&absolute, "").unwrap();
+        let absolute = absolute.display().to_string();
+        let wrapped = wrap_batch_command(vec![absolute, "x".into()], &directories);
+        assert_eq!(&wrapped[..2], ["cmd", "/c"]);
+        // Extension-bearing shims and bare unknown names stay untouched;
+        // `cmd /c` chains are never wrapped twice.
+        assert_eq!(
+            wrap_batch_command(vec!["npx.cmd".into()], &directories),
+            ["cmd", "/c", "npx.cmd"]
+        );
+        assert_eq!(wrap_batch_command(vec!["node".into()], &directories), ["node"]);
+        assert_eq!(wrap_batch_command(vec!["npx".into()], &[]), ["npx"]);
+        assert_eq!(
+            wrap_batch_command(vec!["cmd".into(), "/c".into(), "npx".into()], &directories),
+            ["cmd", "/c", "npx"]
+        );
+    }
+
+    #[test]
     fn resource_roots_follow_the_official_skills_and_agent_directories() {
         let temp = tempfile::tempdir().unwrap();
         let project = temp.path().join("project");
@@ -857,7 +939,7 @@ mod tests {
         assert!(descriptor.yolo_available);
         assert!(!descriptor.management.accounts);
         assert!(descriptor.management.mcp && descriptor.management.skills && descriptor.management.agents);
-        assert!(!descriptor.management.plugins);
+        assert!(descriptor.management.plugins && descriptor.management.project_plugins);
         assert!(!descriptor.management.rules.global && !descriptor.management.rules.project);
         assert!(descriptor.login.is_none());
     }
@@ -1005,10 +1087,11 @@ mod tests {
         assert!(MiMoCode.supports_skills());
         assert!(MiMoCode.agents().is_some());
         assert!(MiMoCode.configuration().is_some());
-        // Plugins (native `plug` command) stay undelivered pending verification;
-        // accounts/official quota have no verified non-interactive interface and
-        // auth.json is deliberately not adopted.
-        assert!(MiMoCode.plugins().is_none());
+        // Plugins deliver through the config `plugin` array (config-only
+        // transactions; npm deps install on demand at load); accounts/official
+        // quota have no verified non-interactive interface and auth.json is
+        // deliberately not adopted.
+        assert!(MiMoCode.plugins().is_some());
         assert!(MiMoCode.accounts().is_none());
         assert!(MiMoCode.official_usage().is_none());
         assert!(MiMoCode
