@@ -24,6 +24,7 @@ pub struct McpDocument {
     pub source: &'static str,
     pub format: &'static str,
     pub name: String,
+    pub enabled: Option<bool>,
     pub text: String,
     /// Actual source file text, with only protected values replaced in-place.
     /// Read-only: saving this document still accepts only the selected entry.
@@ -41,6 +42,7 @@ pub struct McpDocument {
 #[serde(rename_all = "camelCase")]
 pub struct McpPasteItem {
     pub name: String,
+    pub enabled: Option<bool>,
     pub draft: Option<McpDraft>,
     pub unmapped_fields: Vec<String>,
     pub diagnostics: Vec<String>,
@@ -142,13 +144,15 @@ pub fn read(db: &Database, registry: &Registry, home: &Path, request: &McpDocume
         else { mcp::parse_native(&location).map_err(|_| "无法解析原生 MCP 文件，请检查文件格式或访问权限")? };
     let (mut entry, source, name) = if let Some(id) = &request.definition_id {
         let definition = mcp::get_definition(db, id)?;
-        let entry = adapter.mcp_document_at(&definition, true, None, &location)?.ok_or("目标不能表达此 MCP 配置")?;
+        let entry = adapter.mcp_document_at(&definition, request.target.enabled, None, &location)?.ok_or("目标不能表达此 MCP 配置的启停状态")?;
         verify_equivalent(adapter, &definition, &entry)?;
+        if adapter.mcp_decode(&definition.name, &entry)?.enabled != request.target.enabled { return Err("目标格式不能表达此启停状态".into()); }
         (entry, "equivalent", definition.name)
     } else {
         (adapter.mcp_entries(&parsed, &location)?.get(&request.name).cloned().ok_or("MCP 条目不存在")?, "native_entry", request.name.clone())
     };
     let decoded = adapter.mcp_decode(&name, &entry);
+    let enabled = decoded.as_ref().ok().map(|d| d.enabled);
     let unmapped_fields = decoded.map_or_else(|_| vec!["unrecognized native schema".into()], |d| d.unmapped_fields);
     let mut protected_values = if request.reveal { false } else { redact(&mut entry) };
     let (raw_text, raw_scope, source_path) = if source == "native_entry" {
@@ -156,7 +160,7 @@ pub fn read(db: &Database, registry: &Registry, home: &Path, request: &McpDocume
         protected_values |= protected;
         (Some(text), Some("native_file"), Some(location.path.display().to_string()))
     } else { (None, None, None) };
-    Ok(McpDocument { source, format: kind(&location), name: name.clone(), text: entry_text(adapter, &location, &name, entry)?, raw_text, raw_scope, source_path, baseline: baseline(&request.target, &location, &name, &native_text), target_tool_id: request.target.tool_id.clone(), protected_values, unmapped_fields, diagnostics: if source == "native_entry" { vec!["配置编辑仅修改当前条目。原文件全文只供查看，包含其他配置，敏感内容可能已脱敏。".into()] } else { Vec::new() } })
+    Ok(McpDocument { enabled, source, format: kind(&location), name: name.clone(), text: entry_text(adapter, &location, &name, entry)?, raw_text, raw_scope, source_path, baseline: baseline(&request.target, &location, &name, &native_text), target_tool_id: request.target.tool_id.clone(), protected_values, unmapped_fields, diagnostics: if source == "native_entry" { vec!["配置编辑仅修改当前条目。原文件全文只供查看，包含其他配置，敏感内容可能已脱敏。".into()] } else { Vec::new() } })
 }
 
 /// Render only caller-owned draft fields. This does not read a native document,
@@ -171,7 +175,8 @@ pub fn render_draft(db: &Database, registry: &Registry, home: &Path, target: &Mc
     let adapter = registry.get(&target.tool_id).ok_or("工具未注册")?;
     let entry = adapter.mcp_document_at(&definition, target.enabled, None, &location)?.ok_or("目标不能表达此 MCP 配置")?;
     verify_equivalent(adapter, &definition, &entry)?;
-    Ok(McpDocument { source: "equivalent", format: kind(&location), name: definition.name.clone(), text: entry_text(adapter, &location, &definition.name, entry)?, raw_text: None, raw_scope: None, source_path: None, baseline: String::new(), target_tool_id: target.tool_id.clone(), protected_values: false, unmapped_fields: vec![], diagnostics: vec![] })
+    if adapter.mcp_decode(&definition.name, &entry)?.enabled != target.enabled { return Err("目标格式不能表达此启停状态".into()); }
+    Ok(McpDocument { enabled: Some(target.enabled), source: "equivalent", format: kind(&location), name: definition.name.clone(), text: entry_text(adapter, &location, &definition.name, entry)?, raw_text: None, raw_scope: None, source_path: None, baseline: String::new(), target_tool_id: target.tool_id.clone(), protected_values: false, unmapped_fields: vec![], diagnostics: vec![] })
 }
 
 pub fn parse_paste(db: &Database, registry: &Registry, home: &Path, target: &McpTargetRequest, name: Option<&str>, text: &str) -> Result<Vec<McpPasteItem>, String> {
@@ -197,8 +202,8 @@ pub fn parse_paste(db: &Database, registry: &Registry, home: &Path, target: &Mcp
             Ok(decoded)
         });
         match result {
-            Ok(decoded) => { let lossless = decoded.unmapped_fields.is_empty(); McpPasteItem { name, draft: lossless.then_some(decoded.draft), unmapped_fields: decoded.unmapped_fields, diagnostics: if lossless { vec![] } else { vec!["这些字段无法无损转为资料库定义；请使用原生配置编辑。".into()] } } },
-            Err(error) => McpPasteItem { name, draft: None, unmapped_fields: vec![], diagnostics: vec![error] },
+            Ok(decoded) => { let lossless = decoded.unmapped_fields.is_empty(); McpPasteItem { name, enabled: Some(decoded.enabled), draft: lossless.then_some(decoded.draft), unmapped_fields: decoded.unmapped_fields, diagnostics: if lossless { vec![] } else { vec!["这些字段无法无损转为资料库定义；请使用原生配置编辑。".into()] } } },
+            Err(error) => McpPasteItem { name, enabled: None, draft: None, unmapped_fields: vec![], diagnostics: vec![error] },
         }
     }).collect())
 }
@@ -240,12 +245,14 @@ pub fn equivalent(db: &Database, registry: &Registry, home: &Path, source: &McpT
     let decoded = source_adapter.mcp_decode(name, entries.get(name).ok_or("MCP 条目不存在")?)?;
     if !decoded.unmapped_fields.is_empty() { return Err(format!("无法无损转换字段：{}", decoded.unmapped_fields.join(", "))); }
     mcp::validate(&decoded.draft)?;
+    let enabled = decoded.enabled;
     let d = decoded.draft;
     let definition = McpDefinition { id: String::new(), name: d.name, transport: d.transport, command: d.command, args: d.args, url: d.url, env: d.env, headers: d.headers, in_library: false, version: 0 };
     let (location, _) = mcp::target_location(db, registry, target, home)?;
     let adapter = registry.get(&target.tool_id).ok_or("目标工具未注册")?;
-    let mut entry = adapter.mcp_document_at(&definition, true, None, &location)?.ok_or("目标不支持此配置")?;
+    let mut entry = adapter.mcp_document_at(&definition, enabled, None, &location)?.ok_or("目标不支持此配置的启停状态")?;
     verify_equivalent(adapter, &definition, &entry)?;
+    if adapter.mcp_decode(name, &entry)?.enabled != enabled { return Err("目标格式不能表达此启停状态".into()); }
     let protected_values = redact(&mut entry);
-    Ok(McpDocument { source: "equivalent", format: kind(&location), name: name.into(), text: entry_text(adapter, &location, name, entry)?, raw_text: None, raw_scope: None, source_path: None, baseline: String::new(), target_tool_id: target.tool_id.clone(), protected_values, unmapped_fields: vec![], diagnostics: vec![] })
+    Ok(McpDocument { enabled: Some(enabled), source: "equivalent", format: kind(&location), name: name.into(), text: entry_text(adapter, &location, name, entry)?, raw_text: None, raw_scope: None, source_path: None, baseline: String::new(), target_tool_id: target.tool_id.clone(), protected_values, unmapped_fields: vec![], diagnostics: vec![] })
 }

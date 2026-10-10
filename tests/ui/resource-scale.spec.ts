@@ -29,6 +29,8 @@ test('500 MCP: complete search, stable page/selection and detail return; 500 wri
   await expect(list.getByText('成功 499 项，未成功 1 项', { exact: true }).filter({ visible: true })).toBeVisible();
   let evidence = await page.evaluate(() => (window as any).__resourceScale);
   expect(evidence.calls.filter((call: any) => call.command === 'run_resource_batch')).toHaveLength(10);
+  expect(evidence.calls.filter((call: any) => call.command === 'preview_mcp_targets')).toHaveLength(500);
+  expect(evidence.calls.filter((call: any) => call.command === 'run_resource_batch').flatMap((call: any) => call.args.operations).every((operation: any) => operation.target.previewToken && operation.target.baselineHash)).toBe(true);
   expect(evidence.writes).toHaveLength(499);
   await page.evaluate(() => { (window as any).__resourceScale.failBatch = null; });
   await list.getByRole('button', { name: '重试未成功项', exact: true }).click();
@@ -37,6 +39,154 @@ test('500 MCP: complete search, stable page/selection and detail return; 500 wri
   expect(evidence.writes).toHaveLength(500);
   expect(new Set(evidence.writes.map((item: any) => item.id)).size).toBe(500);
   expect(evidence.calls.filter((call: any) => call.command === 'run_resource_batch').at(-1).args.operations).toHaveLength(1);
+  expect(evidence.calls.filter((call: any) => call.command === 'preview_mcp_targets')).toHaveLength(501);
+});
+
+test('MCP batch requires preview credentials, preserves external edits and obtains fresh credentials on retry', async ({ page }) => {
+  await library(page);
+  const unpreviewed = await page.evaluate(() => (window as any).__TAURI_INTERNALS__.invoke('run_resource_batch', { operationId: 'no-preview', operations: [{ action: 'mcp_apply', definitionId: 'mcp-001', target: { toolId: 'codex', scope: 'global', projectPath: null, enabled: true } }] }));
+  expect(unpreviewed.items[0].status).toBe('failed');
+  await page.evaluate(() => {
+    const host = (window as any).__TAURI_INTERNALS__; const invoke = host.invoke; let changed = false;
+    host.invoke = async (command: string, args: any) => {
+      const result = await invoke(command, args);
+      if (command === 'preview_mcp_targets' && !changed) { changed = true; (window as any).__resourceScale.nativeEntries[0].command = 'external-command'; }
+      return result;
+    };
+  });
+  const list = page.locator('[data-resource-list="library:mcp"]');
+  await list.getByRole('checkbox', { name: '选择 mcp-001', exact: true }).check();
+  await list.getByRole('combobox', { name: '批量目标', exact: true }).selectOption('codex');
+  await list.getByRole('button', { name: '分发 / 安装', exact: true }).click();
+  await expect(list.getByRole('button', { name: '重试未成功项', exact: true })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__resourceScale.writes.length)).toBe(0);
+  expect(await page.evaluate(() => (window as any).__resourceScale.nativeEntries[0].command)).toBe('external-command');
+  await page.evaluate(() => { (window as any).__resourceScale.conflicts = ['mcp-001']; });
+  await list.getByRole('button', { name: '重试未成功项', exact: true }).click();
+  await expect(page.getByRole('dialog')).toContainText('external-command');
+  await page.getByRole('dialog').getByRole('button', { name: '取消', exact: true }).click();
+  expect(await page.evaluate(() => (window as any).__resourceScale.writes.length)).toBe(0);
+  await list.getByRole('button', { name: '重试未成功项', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '替换并写入', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__resourceScale.writes.length)).toBe(1);
+  const calls = await page.evaluate(() => (window as any).__resourceScale.calls);
+  expect(calls.filter((call: any) => call.command === 'preview_mcp_targets')).toHaveLength(3);
+});
+
+test('native paste retains committed definitions and failed target retry after refreshing the library', async ({ page }) => {
+  await library(page);
+  await page.evaluate(() => { (window as any).__resourceScale.failBatch = 'new-500'; });
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接', exact: true }).click();
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  await page.getByRole('button', { name: '粘贴 MCP 配置', exact: true }).click();
+  await page.getByRole('textbox', { name: '粘贴 MCP 配置', exact: true }).fill('{"mcpServers":{"failed-target":{"command":"node","enabled":false},"successful-target":{"command":"node"}}}');
+  await page.getByRole('button', { name: '校验配置', exact: true }).click();
+  await page.getByRole('button', { name: '添加已校验条目', exact: true }).click();
+  await expect(page.getByRole('button', { name: '重试未成功项', exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as any).__resourceScale.definitions.length)).toBe(502);
+  await page.getByText('逐项结果', { exact: true }).click();
+  await expect(page.locator('li').filter({ hasText: 'failed-target' })).toContainText('已保存');
+  await page.evaluate(() => { (window as any).__resourceScale.failBatch = null; });
+  await page.getByRole('button', { name: '重试未成功项', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__resourceScale.writes.length)).toBe(2);
+  const state = await page.evaluate(() => (window as any).__resourceScale);
+  expect(state.calls.filter((call: any) => call.command === 'save_mcp_definition')).toHaveLength(2);
+  expect(state.calls.filter((call: any) => call.command === 'preview_mcp_targets')).toHaveLength(3);
+  expect(state.nativeEntries.find((item: any) => item.name === 'failed-target').enabled).toBe(false);
+  expect(state.writes.filter((item: any) => item.id === 'new-501')).toHaveLength(1);
+});
+
+for (const surface of ['library', 'tool']) for (const fresh of [false, true]) test(`${surface} pending form save preserves later configuration edits and advances the accepted CAS version (new=${fresh})`, async ({ page }) => {
+  await library(page);
+  if (surface === 'tool') {
+    await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接', exact: true }).click();
+    await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  }
+  const entryName = fresh ? 'fresh-entry' : 'mcp-001';
+  await page.getByRole('button', { name: fresh ? surface === 'library' ? '新建 MCP' : '添加 MCP' : entryName, exact: true }).click();
+  if (fresh) await page.getByRole('dialog').getByRole('textbox', { name: '名称', exact: true }).fill(entryName);
+  await page.evaluate(() => {
+    const host = (window as any).__TAURI_INTERNALS__; const invoke = host.invoke; let delayed = false;
+    host.invoke = async (command: string, args: unknown) => {
+      const result = await invoke(command, args);
+      if (command === 'save_mcp_definition' && !delayed) { delayed = true; await new Promise<void>(resolve => { (window as any).__finishSave = resolve; }); }
+      return result;
+    };
+  });
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('textbox', { name: '命令', exact: true }).fill('first-save');
+  await dialog.locator('[data-dialog-save]').click();
+  await expect.poll(() => page.evaluate(() => !!(window as any).__finishSave)).toBe(true);
+  await dialog.getByRole('button', { name: '配置文本', exact: true }).click();
+  const editor = dialog.getByRole('textbox', { name: '当前条目配置（格式化）', exact: true });
+  await editor.fill(JSON.stringify({ mcpServers: { [entryName]: { command: 'continued-config' } } }));
+  await page.evaluate(() => (window as any).__finishSave());
+  await expect(editor).toContainText('continued-config');
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: '转入表单草稿', exact: true }).click();
+  await expect(dialog.getByRole('textbox', { name: '命令', exact: true })).toHaveValue('continued-config');
+  await dialog.locator('[data-dialog-save]').click();
+  await expect.poll(() => page.evaluate(() => (window as any).__resourceScale.calls.filter((call: any) => call.command === 'save_mcp_definition').map((call: any) => call.args.draft.expectedVersion))).toEqual(fresh ? [null, 1] : [1, 2]);
+  await expect(dialog).toHaveCount(0);
+  expect(await page.evaluate(name => (window as any).__resourceScale.definitions.find((item: any) => item.name === name).command, entryName)).toBe('continued-config');
+});
+
+for (const field of ['protectedValues', 'unmappedFields']) for (const mode of ['form', 'batch']) test(`${mode} enable still blocks ${field} rather than discarding native configuration`, async ({ page }) => {
+  await library(page);
+  await page.evaluate(field => { const item = (window as any).__resourceScale.nativeEntries[0]; item.enabled = false; item[field] = field === 'protectedValues' ? true : ['future-field']; }, field);
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接', exact: true }).click();
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  if (mode === 'form') {
+    await page.getByRole('button', { name: 'mcp-001', exact: true }).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByRole('checkbox', { name: '启用', exact: true }).check();
+    await dialog.locator('[data-dialog-save]').click();
+    await expect(dialog.getByRole('alert')).toContainText(field === 'protectedValues' ? '脱敏' : 'future-field');
+  } else {
+    await page.getByRole('checkbox', { name: '选择 mcp-001', exact: true }).check();
+    await page.getByRole('combobox', { name: '批量操作', exact: true }).selectOption('enable');
+    await page.getByRole('button', { name: '启用', exact: true }).click();
+    await expect(page.getByRole('button', { name: '重试未成功项', exact: true })).toBeVisible();
+  }
+  const state = await page.evaluate(() => (window as any).__resourceScale);
+  expect(state.calls.filter((call: any) => call.command === 'save_mcp_definition')).toHaveLength(0);
+  expect(state.writes).toHaveLength(0);
+  expect(state.nativeEntries[0].enabled).toBe(false);
+});
+
+for (const mode of ['form', 'batch']) test(`disabled native MCP can be explicitly enabled through ${mode} without dropping configuration`, async ({ page }) => {
+  await library(page);
+  await page.evaluate(() => { (window as any).__resourceScale.nativeEntries[0].enabled = false; });
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接', exact: true }).click();
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  if (mode === 'form') {
+    await page.getByRole('button', { name: 'mcp-001', exact: true }).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByRole('button', { name: '配置文本', exact: true }).click();
+    await expect(dialog.getByRole('textbox', { name: '当前条目配置（格式化）', exact: true })).toContainText('"enabled": false');
+    await dialog.getByRole('button', { name: '转入表单草稿', exact: true }).click();
+    const enabled = dialog.getByRole('checkbox', { name: '启用', exact: true });
+    await expect(enabled).not.toBeChecked();
+    await enabled.check();
+    await dialog.locator('[data-dialog-save]').click();
+    await expect(dialog).toHaveCount(0);
+  } else {
+    await page.getByRole('checkbox', { name: '选择 mcp-001', exact: true }).check();
+    await page.getByRole('combobox', { name: '批量操作', exact: true }).selectOption('enable');
+    await page.getByRole('button', { name: '启用', exact: true }).click();
+  }
+  await expect.poll(() => page.evaluate(() => (window as any).__resourceScale.nativeEntries[0].enabled)).toBe(true);
+  expect(await page.evaluate(() => (window as any).__resourceScale.nativeEntries[0].args)).toEqual(['server-001.mjs']);
+});
+
+test('library paste refuses to silently discard disabled state', async ({ page }) => {
+  await library(page);
+  await page.getByRole('button', { name: '粘贴 MCP 配置', exact: true }).click();
+  await page.getByRole('textbox', { name: '粘贴 MCP 配置', exact: true }).fill('{"mcpServers":{"disabled-entry":{"command":"node","enabled":false}}}');
+  await page.getByRole('button', { name: '校验配置', exact: true }).click();
+  await expect(page.getByText('资料库定义不保存启停状态。', { exact: false })).toBeVisible();
+  await expect(page.getByRole('button', { name: '添加已校验条目', exact: true })).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).__resourceScale.calls.filter((call: any) => call.command === 'save_mcp_definition').length)).toBe(0);
 });
 
 test('500 Skills metadata stays searchable during delayed checks; one failure is isolated and package edits preserve browsing state', async ({ page }) => {

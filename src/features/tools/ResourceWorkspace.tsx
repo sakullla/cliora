@@ -283,25 +283,25 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
   }
 
   async function refreshMcp() { setNativeEntries(await native.listNativeMcp(target)); setDefinitions(await native.listMcpDefinitions()); }
-  function acceptConfiguration(value: McpDraft, copy: boolean) {
+  function acceptConfiguration(value: McpDraft, copy: boolean, nextEnabled?: boolean) {
     setConfigOpen(false); setConfigDirty(false);
     editorRevision.current++;
+    if (nextEnabled !== undefined) setEnabled(nextEnabled);
     if (copy) { editorGeneration.current++; setNativeOrigin(null); setCurrentConflict(null); }
     setDraft({ ...value, id: copy ? null : draft.id, expectedVersion: copy ? null : draft.expectedVersion });
     setEnvText(lines(value.env)); setHeaderText(lines(value.headers)); setComposing(true);
   }
   function mcpBatch(ids: string[]) {
-    const jobs: BatchJob[] = ids.map(name => ({ id: name, name, run: async () => {
-      if (batchAction === 'remove') { await native.removeNativeMcp(target, name); return; }
+    const jobs: BatchJob[] = ids.map(name => batchAction === 'remove' ? { id: name, name, run: async () => { await native.removeNativeMcp(target, name); } } : { id: name, name, prepare: async () => {
       const document = await native.readMcpDocument({ target, name, definitionId: null });
-      if (document.protectedValues || document.unmappedFields.length) throw new Error(t('library.experience.maskedConversion'));
+      if (document.protectedValues) throw new Error(t('library.experience.maskedConversion'));
+      if (document.unmappedFields.length) throw new Error(t('library.experience.unmapped', { fields: document.unmappedFields.join(', ') }));
       const parsed = await native.parseMcpPaste(target, name, document.text);
       if (parsed.length !== 1 || !parsed[0].draft) throw new Error(parsed.flatMap(item => item.diagnostics).join(' · '));
       const known = definitions.find(item => item.name === name);
       const item = await native.saveMcpDefinition({ ...parsed[0].draft, id: known?.id ?? null, expectedVersion: known?.version ?? null, inLibrary: known?.inLibrary === true });
-      const outcome = await native.runResourceBatch(crypto.randomUUID(), [{ action: 'mcp_apply', definitionId: item.id, target: { ...target, enabled: batchAction === 'enable' } }]);
-      return outcome.items[0] ?? { status: 'failed', detail: t('library.experience.invalidConfig') };
-    } }));
+      return { action: 'mcp_apply', definitionId: item.id, target: { ...target, enabled: batchAction === 'enable' } };
+    } });
     return <><select aria-label={t('library.experience.batchAction')} value={batchAction} onChange={event => setBatchAction(event.target.value)}>{['enable', 'disable', 'remove'].map(action => <option key={action} value={action}>{t(`library.experience.${action}`)}</option>)}</select><ResourceBatch key={batchAction} context={feedback.context + ':batch:' + batchAction} jobs={jobs} action={t(`library.experience.${batchAction}`)} destructive={batchAction !== 'enable'} onChanged={refreshMcp} /></>;
   }
   const head = (canAdd: boolean) => <div className={styles.workspaceHead}><div><h2>{t('tools.mcp.title')}</h2><p>{t('tools.mcp.description')}</p></div>{canAdd && <button type="button" className={styles.primary} disabled={busy || (scope === 'project' && !project)} onClick={() => void startNew()}><Icon name="plus" size={14} strokeWidth={2.2} />{t('tools.mcp.add')}</button>}</div>;
@@ -315,14 +315,14 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
     {head(true)}
     <FeedbackRegion context={feedback.context} />
     <div className={styles.layout}>
-    <ResourceList key={feedback.context} context={feedback.context} label={t('library.resources.mcpListAria')} addedId={addedName} toolbarActions={<McpPaste onAdded={item => setAddedName(item.name)} key={feedback.context} context={feedback.context} target={target} definitions={definitions} onDraft={value => acceptConfiguration(value, true)} onChanged={refreshMcp} />}
+    <ResourceList key={feedback.context} context={feedback.context} label={t('library.resources.mcpListAria')} addedId={addedName} toolbarActions={<McpPaste onAdded={item => setAddedName(item.name)} key={feedback.context} context={feedback.context} target={target} definitions={definitions} onDraft={(value, enabled) => acceptConfiguration(value, true, enabled)} onChanged={refreshMcp} />}
       rows={nativeEntries.map(item => ({ id: item.name, name: item.name, description: item.transport === 'http' ? item.url : [item.command, ...item.args].join(' '), metadata: `${toolId} · ${scope} · ${item.enabled ? t('tools.plugins.enabled') : t('tools.quota.disabled')}`, state: item.enabled ? 'enable' : 'disable' }))}
       actions={name => <button type="button" onClick={() => { const result = feedback.begin('copy:' + name); void native.readMcpDocument({ target, name, definitionId: null }).then(async document => { if (!await writeClipboard(document.text)) throw new Error(t('library.experience.copyFailed')); result.success(t('library.experience.copiedEntry')); }).catch(error => result.error(errorText(error))); }}>{t('library.experience.copy')}</button>}
       filters={['enable', 'disable'].map(value => ({ value, label: t(`library.experience.${value}`) }))} bulk={mcpBatch}
       onRefresh={() => void refreshMcp().catch(error => feedback.begin('refresh').error(errorText(error)))} onOpen={id => { const item = nativeEntries.find(item => item.name === id); if (item) void importNative(item); }} />
     <GuideDialog wide open={composing} title={draft.id || nativeOrigin ? t('tools.mcp.editTitle') : t('tools.mcp.add')} hint={t('tools.mcp.dialogHint')} onClose={() => void closeCompose()}>
     <div className={styles.panel} onChangeCapture={() => { editorRevision.current++; }}>
-      <McpDocumentPanel key={JSON.stringify([feedback.context, editorGeneration.current])} target={target} name={draft.name} sourceName={nativeOrigin?.name} getDraft={() => ({ ...draft, env: parseLines(envText), headers: parseLines(headerText) })} validateNative={async () => { const current = (await native.listNativeMcp(target)).find(item => item.name === nativeOrigin?.name); if (JSON.stringify(current) !== JSON.stringify(nativeOrigin)) throw new Error(t('library.experience.nativeChanged')); }} onModeChange={setConfigOpen} onDirtyChange={setConfigDirty} formDirty={formDirty} onDraft={acceptConfiguration} onChanged={refreshMcp} />
+      <McpDocumentPanel key={JSON.stringify([feedback.context, editorGeneration.current])} target={target} name={draft.name} sourceName={nativeOrigin?.name} getDraft={() => ({ ...draft, env: parseLines(envText), headers: parseLines(headerText) })} validateNative={async () => { const current = (await native.listNativeMcp(target)).find(item => item.name === nativeOrigin?.name); if (JSON.stringify(current) !== JSON.stringify(nativeOrigin)) throw new Error(t('library.experience.nativeChanged')); }} onTextChange={() => { editorRevision.current++; }} onModeChange={setConfigOpen} onDirtyChange={setConfigDirty} formDirty={formDirty} onDraft={acceptConfiguration} onChanged={refreshMcp} />
       <div hidden={configOpen} className={styles.fields}><label>{t('tools.mcp.name')}<input aria-label={t('tools.mcp.nameAria')} value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder={t('tools.mcp.namePlaceholder')} /></label>
       <div className={styles.typeField}><span>{t('tools.mcp.type')}</span><div className={styles.typeSwitch} role="radiogroup" aria-label={t('tools.mcp.transport')}>{([['http', 'HTTP'], ['stdio', 'stdio']] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={draft.transport === value} onClick={() => { editorRevision.current++; setDraft({ ...draft, transport: value }); }}>{label}</button>)}</div></div>
       {draft.transport === 'stdio' ? <>

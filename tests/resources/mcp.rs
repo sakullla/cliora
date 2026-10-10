@@ -3,6 +3,56 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 #[test]
+fn disabled_state_survives_documents_paste_and_equivalent_and_can_be_explicitly_enabled() {
+    use crate::resources::documents::{self, McpDocumentRequest};
+    // Antigravity/Claude/DeepSeek disable by deleting the native entry; these codecs
+    // retain a disabled entry and therefore support a document roundtrip.
+    for tool in ["codex", "pi"] {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("db")).unwrap();
+        let registry = fixture_registry();
+        let keys = MemoryStore::default();
+        let definition = sample(&db);
+        let source = target(tool, false);
+        let result = distribute(&db, &keys, &registry, temp.path(), &definition.id, previewed(&db, &registry, temp.path(), &definition.id, vec![source.clone()]));
+        assert_eq!(result[0].status, "written", "{tool}: {}", result[0].detail);
+        let document = documents::read(&db, &registry, temp.path(), &McpDocumentRequest { target: source.clone(), definition_id: None, name: definition.name.clone(), reveal: false }).unwrap();
+        assert_eq!(document.enabled, Some(false), "{tool}");
+        assert!(document.unmapped_fields.is_empty());
+        let generated = documents::read(&db, &registry, temp.path(), &McpDocumentRequest { target: source.clone(), definition_id: Some(definition.id.clone()), name: definition.name.clone(), reveal: false }).unwrap();
+        assert_eq!(generated.enabled, Some(false));
+        let pasted = documents::parse_paste(&db, &registry, temp.path(), &source, None, &document.text).unwrap();
+        assert_eq!(pasted[0].enabled, Some(false));
+        let rendered = documents::render_draft(&db, &registry, temp.path(), &source, pasted[0].draft.clone().unwrap()).unwrap();
+        assert_eq!(rendered.enabled, Some(false));
+        assert_eq!(documents::parse_paste(&db, &registry, temp.path(), &source, None, &rendered.text).unwrap()[0].enabled, Some(false));
+        let equivalent = documents::equivalent(&db, &registry, temp.path(), &source, &definition.name, &target("codex", true)).unwrap();
+        assert_eq!(equivalent.enabled, Some(false));
+        assert_eq!(documents::parse_paste(&db, &registry, temp.path(), &target("codex", true), None, &equivalent.text).unwrap()[0].enabled, Some(false));
+        assert!(documents::equivalent(&db, &registry, temp.path(), &source, &definition.name, &target("claude_code", true)).is_err());
+        assert!(documents::equivalent(&db, &registry, temp.path(), &source, &definition.name, &target("antigravity", true)).is_err());
+        assert!(documents::equivalent(&db, &registry, temp.path(), &source, &definition.name, &target("deepseek", true)).is_err());
+        assert!(documents::render_draft(&db, &registry, temp.path(), &target("claude_code", false), pasted[0].draft.clone().unwrap()).is_err());
+        let enabled = target(tool, true);
+        let result = distribute(&db, &keys, &registry, temp.path(), &definition.id, previewed(&db, &registry, temp.path(), &definition.id, vec![enabled.clone()]));
+        assert_eq!(result[0].status, "written", "{tool}: {}", result[0].detail);
+        assert!(list_native(&db, &registry, temp.path(), &enabled).unwrap()[0].enabled);
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("db")).unwrap();
+    let registry = fixture_registry();
+    let adapter = registry.get("deepseek").unwrap();
+    let definition = sample(&db);
+    let mut external = adapter.mcp_document(&definition, true, None).unwrap().unwrap();
+    external["disabled"] = serde_json::json!(true);
+    let decoded = adapter.mcp_decode(&definition.name, &external).unwrap();
+    assert!(!decoded.enabled);
+    assert!(decoded.unmapped_fields.is_empty());
+    external["futureField"] = serde_json::json!("preserve me");
+    assert!(!adapter.mcp_decode(&definition.name, &external).unwrap().unmapped_fields.is_empty());
+}
+
+#[test]
 fn unsaved_draft_render_roundtrips_without_persisting_or_reading_native_text() {
     use crate::resources::documents;
     for tool in ["codex", "claude_code", "antigravity", "deepseek"] {
