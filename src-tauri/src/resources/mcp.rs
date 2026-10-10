@@ -111,7 +111,7 @@ fn valid_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
 
-pub(super) fn is_reference(value: &str) -> bool {
+pub(crate) fn is_reference(value: &str) -> bool {
     let value = value.strip_prefix("Bearer ").unwrap_or(value);
     let reference = value
         .strip_prefix("${")
@@ -649,7 +649,7 @@ pub fn stdio_doc(
 
 /// Keeps a sensitive value already on disk when this definition does not mention that key.
 /// A value in the definition replaces it. An empty value removes it.
-fn protected_values(existing: Option<&Value>, field: &str) -> serde_json::Map<String, Value> {
+fn protected_values(existing: Option<&Value>, field: &str, reference: &dyn Fn(&str) -> bool) -> serde_json::Map<String, Value> {
     existing
         .and_then(Value::as_object)
         .and_then(|map| map.get(field))
@@ -657,7 +657,7 @@ fn protected_values(existing: Option<&Value>, field: &str) -> serde_json::Map<St
         .map(|map| {
             map.iter()
                 .filter(|(key, value)| {
-                    sensitive_key(key) && value.as_str().is_some_and(|text| !is_reference(text))
+                    sensitive_key(key) && value.as_str().is_some_and(|text| !reference(text))
                 })
                 .map(|(key, value)| (key.clone(), value.clone()))
                 .collect()
@@ -716,6 +716,16 @@ pub fn stdio_doc_with_env(
     existing: Option<&Value>,
     field: &str,
 ) -> serde_json::Map<String, Value> {
+    stdio_doc_with_reference(definition, existing, field, &is_reference)
+}
+
+/// Shared merge policy; the adapter supplies only its native reference syntax.
+pub fn stdio_doc_with_reference(
+    definition: &McpDefinition,
+    existing: Option<&Value>,
+    field: &str,
+    reference: &dyn Fn(&str) -> bool,
+) -> serde_json::Map<String, Value> {
     let mut map = existing
         .and_then(Value::as_object)
         .cloned()
@@ -728,7 +738,7 @@ pub fn stdio_doc_with_env(
     let (command, args) = stdio_command(&definition.command, &definition.args);
     map.insert("command".into(), Value::String(command));
     map.insert("args".into(), serde_json::json!(args));
-    let mut env = protected_values(existing, field);
+    let mut env = protected_values(existing, field, reference);
     for (key, value) in &definition.env {
         if value.is_empty() {
             env.remove(key);
@@ -747,6 +757,15 @@ pub fn http_doc(
     existing: Option<&Value>,
     header_field: &str,
 ) -> serde_json::Map<String, Value> {
+    http_doc_with_reference(definition, existing, header_field, &is_reference)
+}
+
+pub fn http_doc_with_reference(
+    definition: &McpDefinition,
+    existing: Option<&Value>,
+    header_field: &str,
+    reference: &dyn Fn(&str) -> bool,
+) -> serde_json::Map<String, Value> {
     let mut map = existing
         .and_then(Value::as_object)
         .cloned()
@@ -758,7 +777,7 @@ pub fn http_doc(
     map.remove("headers");
     map.remove("http_headers");
     map.insert("url".into(), Value::String(definition.url.clone()));
-    let mut headers = protected_values(existing, header_field);
+    let mut headers = protected_values(existing, header_field, reference);
     for (key, value) in &definition.headers {
         if value.is_empty() {
             headers.remove(key);

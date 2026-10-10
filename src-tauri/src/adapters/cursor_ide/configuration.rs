@@ -12,14 +12,20 @@ pub(super) const FIELDS: &[&str] = &[
 pub(super) fn reject_secrets(root: &Value) -> Result<(), String> {
     crate::native::profile::reject_plaintext_secrets(root)?;
     match root {
-        Value::Object(values) => for (key, value) in values {
-            // IDE extension settings use dotted keys rather than nested maps.
-            if let Some((_, leaf)) = key.rsplit_once('.') {
-                crate::native::profile::reject_plaintext_secrets(&json!({leaf: value}))?;
+        Value::Object(values) => {
+            for (key, value) in values {
+                // IDE extension settings use dotted keys rather than nested maps.
+                if let Some((_, leaf)) = key.rsplit_once('.') {
+                    crate::native::profile::reject_plaintext_secrets(&json!({leaf: value}))?;
+                }
+                reject_secrets(value)?;
             }
-            reject_secrets(value)?;
-        },
-        Value::Array(values) => for value in values { reject_secrets(value)?; },
+        }
+        Value::Array(values) => {
+            for value in values {
+                reject_secrets(value)?;
+            }
+        }
         _ => (),
     }
     Ok(())

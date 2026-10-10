@@ -117,12 +117,19 @@ impl CliAdapter for CursorIde {
     }
     fn write_connection_secret(
         &self,
-        _: &RegisteredProfile,
+        profile: &RegisteredProfile,
         _: Scope,
         _: &dyn CredentialStore,
         _: &mut NativeSecrets,
     ) -> Result<(), String> {
-        Err("Cursor IDE 凭据由客户端管理".into())
+        if profile.connection.is_none()
+            && profile.native_credentials.is_empty()
+            && profile.authentication == crate::native::profile::ProfileAuthentication::Native
+        {
+            Ok(())
+        } else {
+            Err("Cursor IDE 凭据由客户端管理".into())
+        }
     }
     fn has_native_secret(&self, _: &str, root: &Value) -> bool {
         configuration::reject_secrets(root).is_err()
@@ -178,6 +185,19 @@ impl CliAdapter for CursorIde {
                 .ok_or("Cursor mcpServers 必须是对象".into()),
         }
     }
+    fn mcp_is_reference(&self, value: &str) -> bool {
+        let value = value.strip_prefix("Bearer ").unwrap_or(value);
+        value
+            .strip_prefix("${env:")
+            .and_then(|tail| tail.strip_suffix('}'))
+            .is_some_and(|name| {
+                let mut bytes = name.bytes();
+                bytes
+                    .next()
+                    .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
+                    && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+            })
+    }
     fn mcp_decode(
         &self,
         name: &str,
@@ -217,8 +237,16 @@ impl CliAdapter for CursorIde {
             return Ok(None);
         }
         Ok(Some(Value::Object(match definition.transport {
-            McpTransport::Stdio => mcp::stdio_doc(definition, existing),
-            McpTransport::Http => mcp::http_doc(definition, existing, "headers"),
+            McpTransport::Stdio => {
+                mcp::stdio_doc_with_reference(definition, existing, "env", &|value| {
+                    self.mcp_is_reference(value)
+                })
+            }
+            McpTransport::Http => {
+                mcp::http_doc_with_reference(definition, existing, "headers", &|value| {
+                    self.mcp_is_reference(value)
+                })
+            }
         })))
     }
     fn mcp_disabled_description(&self) -> Option<&'static str> {

@@ -173,7 +173,9 @@ fn cursor_settings_paths_and_form_preserve_unknown_native_fields() {
         .validate_draft("settings", &json!({"mcpServers":{}}))
         .is_err());
     assert!(CursorIde.file_kind("cli-config").is_err());
-    assert!(CursorIde.validate_draft("settings", &json!({"extension.apiKey":"synthetic-key"})).is_err());
+    assert!(CursorIde
+        .validate_draft("settings", &json!({"extension.apiKey":"synthetic-key"}))
+        .is_err());
     assert!(CursorIde.has_native_secret("settings", &json!({"extension.apiKey":"synthetic-key"})));
 }
 #[test]
@@ -392,4 +394,236 @@ fn cursor_skills_keep_sources_separate_and_enforce_read_only_on_server() {
         false
     )
     .is_err());
+}
+
+#[cfg(windows)]
+#[test]
+fn cursor_a2_plain_settings_apply_through_shared_service() {
+    use crate::native::{apply, profile};
+    let temp = tempfile::tempdir().unwrap();
+    installation(temp.path());
+    let db = Database::open(&temp.path().join("db")).unwrap();
+    let registry = Registry::builtins();
+    let store = Store::default();
+    let project = temp.path().join("project");
+    fs::create_dir_all(&project).unwrap();
+    let draft: RegisteredProfile = serde_json::from_value(json!({
+        "id":"", "tool":"cursor_ide", "name":"IDE preferences", "version":1,
+        "inheritCommon":false, "files":{"settings":"{\"editor.fontSize\":19}"},
+        "editing":{"version":1,"selectedProvider":null,"intents":[]},
+        "authentication":{"kind":"native"}, "connection":null, "nativeCredentials":{}
+    }))
+    .unwrap();
+    let saved = profile::save_registered_profile(&db, &registry, draft, None).unwrap();
+    for (scope, project) in [
+        (Scope::Global, None),
+        (Scope::Project, Some(project.as_path())),
+    ] {
+        let path = paths::settings(temp.path(), scope, project).unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let original = include_str!("../fixtures/native/cursor-ide/settings.jsonc");
+        fs::write(&path, original).unwrap();
+        apply::preview_registered(&registry, &saved, None, scope).unwrap();
+        let result = apply::apply_registered_profile(
+            &registry,
+            &db,
+            &store,
+            "cursor_ide",
+            &saved.id,
+            scope,
+            temp.path(),
+            project,
+            None,
+            true,
+        )
+        .unwrap();
+        assert_eq!(result.status, "written_for_next_session");
+        let text = fs::read_to_string(&path).unwrap();
+        let value = crate::native::format::parse(FileKind::Jsonc, &text).unwrap();
+        assert_eq!(value["editor.fontSize"], 19);
+        assert_eq!(value["extensions.example"]["keep"], true);
+        assert!(text.contains("// IDE preferences"));
+    }
+    let mut unsupported = saved;
+    unsupported.authentication = profile::ProfileAuthentication::ApiKey;
+    assert!(CursorIde
+        .write_connection_secret(
+            &unsupported,
+            Scope::Global,
+            &store,
+            &mut NativeSecrets::default()
+        )
+        .is_err());
+    unsupported.authentication = profile::ProfileAuthentication::Native;
+    unsupported.native_credentials.insert(
+        "settings".into(),
+        BTreeMap::from([("apiKey".into(), "synthetic-reference".into())]),
+    );
+    assert!(CursorIde
+        .write_connection_secret(
+            &unsupported,
+            Scope::Global,
+            &store,
+            &mut NativeSecrets::default()
+        )
+        .is_err());
+}
+
+#[cfg(windows)]
+#[test]
+fn cursor_a2_native_reference_document_copy_paste_preserves_semantics() {
+    let temp = tempfile::tempdir().unwrap();
+    installation(temp.path());
+    let db = Database::open(&temp.path().join("db")).unwrap();
+    let registry = Registry::builtins();
+    let store = Store::default();
+    let path = temp.path().join(".cursor/mcp.json");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let mut root: Value =
+        serde_json::from_str(include_str!("../fixtures/native/cursor-ide/mcp.json")).unwrap();
+    // Preserve the original unmapped envFile example, plus its portable subset.
+    let mut portable = root["mcpServers"]["stdio-demo"].clone();
+    portable.as_object_mut().unwrap().remove("envFile");
+    root["mcpServers"]["stdio-portable"] = portable;
+    fs::write(&path, serde_json::to_string_pretty(&root).unwrap()).unwrap();
+    for name in ["stdio-demo", "stdio-portable", "remote-demo"] {
+        let request = documents::McpDocumentRequest {
+            target: target(),
+            definition_id: None,
+            name: name.into(),
+            reveal: false,
+        };
+        let doc = documents::read(&db, &registry, temp.path(), &request).unwrap();
+        assert!(!doc.protected_values, "{name}: {}", doc.text);
+        assert!(doc.text.contains("${env:DEMO_TOKEN}"));
+        assert!(doc.raw_text.as_ref().unwrap().contains("${env:DEMO_TOKEN}"));
+        assert!(!doc.text.contains("__CLIORA_REDACTED__"));
+        let pasted =
+            documents::parse_paste(&db, &registry, temp.path(), &target(), None, &doc.text)
+                .unwrap()
+                .remove(0);
+        if name == "stdio-demo" {
+            assert_eq!(pasted.unmapped_fields, vec!["envFile"]);
+            assert!(pasted.draft.is_none());
+            documents::save(
+                &db,
+                &store,
+                &registry,
+                temp.path(),
+                &target(),
+                name,
+                &doc.baseline,
+                &doc.text.replace("fixture.mjs", "updated.mjs"),
+            )
+            .unwrap();
+        } else {
+            let draft = pasted.draft.unwrap();
+            let expected = CursorIde
+                .mcp_decode(name, &root["mcpServers"][name])
+                .unwrap()
+                .draft;
+            assert_eq!(draft.env, expected.env);
+            assert_eq!(draft.headers, expected.headers);
+            let rendered =
+                documents::render_draft(&db, &registry, temp.path(), &target(), draft.clone())
+                    .unwrap();
+            let roundtrip = documents::parse_paste(
+                &db,
+                &registry,
+                temp.path(),
+                &target(),
+                None,
+                &rendered.text,
+            )
+            .unwrap()
+            .remove(0)
+            .draft
+            .unwrap();
+            assert_eq!(roundtrip.env, draft.env);
+            assert_eq!(roundtrip.headers, draft.headers);
+            let equivalent =
+                documents::equivalent(&db, &registry, temp.path(), &target(), name, &target())
+                    .unwrap();
+            assert!(!equivalent.protected_values);
+            assert!(equivalent.text.contains("${env:DEMO_TOKEN}"));
+            let mut other = target();
+            other.tool_id = "claude_code".into();
+            assert!(
+                documents::equivalent(&db, &registry, temp.path(), &target(), name, &other)
+                    .unwrap_err()
+                    .contains("环境变量引用语义")
+            );
+        }
+    }
+    for (transport, field) in [
+        (McpTransport::Stdio, "env"),
+        (McpTransport::Http, "headers"),
+    ] {
+        let definition = McpDefinition {
+            id: "fixture".into(),
+            name: "merge".into(),
+            transport,
+            command: "node".into(),
+            args: vec![],
+            url: "https://example.invalid/mcp".into(),
+            env: BTreeMap::new(),
+            headers: BTreeMap::new(),
+            in_library: false,
+            version: 1,
+        };
+        let existing = json!({field:{"REFERENCE_TOKEN":"${env:DEMO_TOKEN}","LITERAL_TOKEN":"literal-fixture-secret"}});
+        let merged = CursorIde
+            .mcp_document(&definition, true, Some(&existing))
+            .unwrap()
+            .unwrap();
+        assert!(merged[field].get("REFERENCE_TOKEN").is_none());
+        assert_eq!(merged[field]["LITERAL_TOKEN"], "literal-fixture-secret");
+    }
+    for secret in [
+        "literal-fixture-secret",
+        "Bearer literal-fixture-secret",
+        "${env:}",
+        "${env:TOKEN} literal-fixture-secret",
+    ] {
+        root["mcpServers"]["remote-demo"]["headers"]["Authorization"] = json!(secret);
+        fs::write(&path, serde_json::to_string(&root).unwrap()).unwrap();
+        let doc = documents::read(
+            &db,
+            &registry,
+            temp.path(),
+            &documents::McpDocumentRequest {
+                target: target(),
+                definition_id: None,
+                name: "remote-demo".into(),
+                reveal: false,
+            },
+        )
+        .unwrap();
+        assert!(doc.protected_values);
+        assert!(doc.text.contains("__CLIORA_REDACTED__"));
+        assert!(!doc.text.contains(secret));
+        assert!(
+            documents::parse_paste(&db, &registry, temp.path(), &target(), None, &doc.text)
+                .unwrap()[0]
+                .draft
+                .is_none()
+        );
+        documents::save(
+            &db,
+            &store,
+            &registry,
+            temp.path(),
+            &target(),
+            "remote-demo",
+            &doc.baseline,
+            &doc.text
+                .replace("example.invalid/mcp", "example.invalid/updated"),
+        )
+        .unwrap();
+        let saved: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            saved["mcpServers"]["remote-demo"]["headers"]["Authorization"],
+            secret
+        );
+    }
 }

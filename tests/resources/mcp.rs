@@ -1146,3 +1146,27 @@ fn pasted_stdio_command_line_is_split_before_a_client_spawns_it() {
     assert_eq!(saved.command, "npx");
     assert_eq!(saved.args, ["-y", "chrome-devtools-mcp@latest"]);
 }
+
+#[test]
+fn default_reference_grammar_stays_unchanged_in_document_copy_paste() {
+    use crate::resources::documents::{self, McpDocumentRequest};
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("db")).unwrap();
+    let registry = fixture_registry();
+    let source = target("codex", true);
+    let adapter = registry.get("codex").unwrap();
+    let (location, _) = target_location(&db, &registry, &source, temp.path()).unwrap();
+    std::fs::create_dir_all(location.path.parent().unwrap()).unwrap();
+    for value in ["${TOKEN}", "{env:TOKEN}", "Bearer ${TOKEN}", "Bearer {env:TOKEN}"] {
+        assert!(adapter.mcp_is_reference(value));
+        let entry = serde_json::json!({"url":"https://example.invalid/mcp","http_headers":{"Authorization":value}});
+        let text = adapter.mcp_render_entry(&location, "example", entry).unwrap();
+        std::fs::write(&location.path, &text).unwrap();
+        let doc = documents::read(&db, &registry, temp.path(), &McpDocumentRequest { target:source.clone(),definition_id:None,name:"example".into(),reveal:false }).unwrap();
+        assert!(!doc.protected_values);
+        let pasted = documents::parse_paste(&db, &registry, temp.path(), &source, None, &doc.text).unwrap();
+        assert_eq!(pasted[0].draft.as_ref().unwrap().headers["Authorization"], value);
+    }
+    assert!(!adapter.mcp_is_reference("${env:TOKEN}"));
+    assert!(!adapter.mcp_is_reference("Bearer literal-fixture-secret"));
+}
