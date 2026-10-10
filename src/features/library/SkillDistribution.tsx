@@ -36,8 +36,6 @@ export function SkillDistribution({ item, tools, projects, installations, initia
   const [pending, setPending] = useState<Array<SkillTargetPreview & { toolId: string }>>([]);
   const [busy, setBusy] = useState(false);
   const feedback = useFeedback(JSON.stringify(['distribute', item.id, scope, projectPath]));
-  const { setError } = feedback;
-  const { setNotice } = feedback;
   const activePath = scope === 'project' ? projectPath : null;
   const contexts = useResourceContexts(tools, mine, { scope, projectPath: activePath });
   const placed = installations.filter((entry) => entry.packageId === item.id);
@@ -51,12 +49,11 @@ export function SkillDistribution({ item, tools, projects, installations, initia
   }, [contexts.stamp, scope, activePath]);
 
   async function install(allowTakeover: boolean, ids = selected) {
-    const operationFeedback = feedback.begin('install');
+    const operationFeedback = feedback.begin(JSON.stringify(['install', [...ids].sort()]));
     if (scope === 'project' && !projectPath) { operationFeedback.error(t('tools.mcp.pickProject')); return; }
     ids = ids.filter((id) => contexts.ready(targetFor(id)));
     if (!ids.length) return;
-    setBusy(true); setError(''); setNotice('');
-    try {
+    setBusy(true); try {
       const conflicts: Array<SkillTargetPreview & { toolId: string }> = [];
       const notes: string[] = [];
       let failures = 0;
@@ -86,13 +83,14 @@ export function SkillDistribution({ item, tools, projects, installations, initia
     if (ids.length) void install(false, ids);
   }, [autoRun, initialTools, contexts.stamp]);
   async function remove(entry: SkillInstallation) {
-    const operationFeedback = feedback.begin('remove');
+    const operationFeedback = feedback.begin(JSON.stringify(['remove', entry.toolId, entry.scope, entry.projectPath, entry.contextId]));
     if (!contexts.ready(entry)) return;
     if (!await confirmAction(t('library.skillDist.confirmRemove', { tool: tools.find((tool) => tool.id === entry.toolId)?.name ?? entry.toolId, name: item.name }), () => true, { title: t('library.skillDist.removeTitle'), confirmLabel: t('library.skillDist.removeAction'), destructive: true })) return;
-    setBusy(true); setError('');
-    try {
-      await native.removeSkill(item.id, entry.toolId, entry.scope, entry.projectPath, await removalContext(entry));
+    setBusy(true); try {
+      const outcome = await native.removeSkill(item.id, entry.toolId, entry.scope, entry.projectPath, await removalContext(entry));
+      if (outcome.status === 'failed') { operationFeedback.error(outcome.detail); return; }
       await onChanged();
+      operationFeedback.complete();
     } catch (value) { operationFeedback.error(text(value)); }
     finally { setBusy(false); }
   }

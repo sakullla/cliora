@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 
 async function install(page: Page, seed: Record<string, boolean> = {}) {
   await page.addInitScript((initial: Record<string, boolean>) => {
-    const control = { copyDelay: 0, copyFails: false, launchFails: false, terminalFails: false, ruleSaveFails: false, resumeFails: false, projectsFail: false, withProject: false, renameFails: false, portableFails: false, settingsLoadFails: false, usageFails: false, librarySaveFails: false, libraryListFails: false, lastLibraryVersion: null as number | null, ...initial };
+    const control = { copyDelay: 0, themeFails: false, copyFails: false, launchFails: false, terminalFails: false, ruleSaveFails: false, resumeFails: false, projectsFail: false, withProject: false, renameFails: false, portableFails: false, settingsLoadFails: false, usageFails: false, librarySaveFails: false, libraryListFails: false, lastLibraryVersion: null as number | null, ...initial };
     const library = [{ id: 'prompt-1', kind: 'prompt', title: '发布检查', body: '请核对发布说明', category: '写作', projectId: null, version: 1, updatedAt: 1 }];
     let theme = 'light';
     let rule = '原规则';
@@ -18,7 +18,7 @@ async function install(page: Page, seed: Record<string, boolean> = {}) {
       __statusCopy: control,
       __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
         if (command === 'get_bootstrap') return bootstrap();
-        if (command === 'set_theme') { theme = args.theme ?? theme; return bootstrap(); }
+        if (command === 'set_theme') { if (control.themeFails) throw { message: '主题写入失败', action: '请重新选择主题' }; theme = args.theme ?? theme; return bootstrap(); }
         if (command === 'list_cli_adapters') return { registered: [codex], managedIds: ['codex'], preservedUnknown: [] };
         if (command === 'list_projects') {
           if (control.projectsFail) throw { message: '项目列表读取失败', action: '可再次启动，或在设置中检查终端。' };
@@ -130,7 +130,7 @@ test('a late copy result stays in the originating context and remains reachable 
   await nav.getByRole('button', { name: '快速开始' }).click();
   await expect(page.locator('main .feedback-item').filter({ hasText: '完整正文已复制' })).not.toBeVisible();
   await page.getByRole('button', { name: '操作消息', exact: true }).click();
-  await expect(page.locator('.feedback-center-panel').getByRole('status')).toContainText('完整正文已复制');
+  await expect(page.locator('.feedback-center-panel .feedback-item')).toContainText('完整正文已复制');
   await expect(page.getByRole('button', { name: '操作消息', exact: true })).toHaveAttribute('aria-expanded', 'true');
 });
 
@@ -164,3 +164,59 @@ test('reopening an editor cannot receive a late result from its previous opening
   await expect(page.getByRole('status').filter({ hasText: '完整正文已复制' })).toBeVisible();
 });
 
+
+test('terminal setting failure survives unrelated mode change and resolves on retry', async ({ page }) => {
+  await install(page, { terminalFails: true });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置' }).click();
+  const terminal = page.getByRole('region', { name: '外部终端' });
+  await terminal.getByLabel('启动终端').selectOption('windows_terminal');
+  await expect(terminal.getByRole('alert')).toContainText('终端不可用');
+  await terminal.locator('select').nth(1).selectOption('yolo');
+  await expect(terminal.getByRole('alert')).toContainText('终端不可用');
+  await page.evaluate(() => { (window as any).__statusCopy.terminalFails = false; });
+  await terminal.getByLabel('启动终端').selectOption('windows_terminal');
+  await expect(terminal.getByRole('alert')).toHaveCount(0);
+});
+
+test('shell-only failure is announced while collapsed without focus movement or repeated panel alerts', async ({ page }) => {
+  await install(page, { themeFails: true });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置' }).click();
+  const dark = page.getByRole('radiogroup', { name: '主题' }).getByRole('radio', { name: '深色' });
+  await dark.click();
+  await expect(dark).toBeFocused();
+  await expect(page.locator('.feedback-center > [aria-live=assertive]')).toContainText('主题写入失败');
+  const center = page.getByRole('button', { name: '操作消息', exact: true });
+  await expect(center).toHaveAttribute('aria-expanded', 'false');
+  await center.click();
+  await expect(page.locator('.feedback-center-panel .feedback-item')).toContainText('主题写入失败');
+  await expect(page.locator('.feedback-center-panel [role=alert]')).toHaveCount(0);
+});
+
+test('delayed MCP A save failure never appears in newly opened MCP B editor', async ({ page }) => {
+  await install(page);
+  await page.addInitScript(() => {
+    const host = window as any;
+    const invoke = host.__TAURI_INTERNALS__.invoke;
+    const definitions = ['A', 'B'].map(id => ({ id, name: `MCP ${id}`, transport: 'stdio', command: 'node', args: [], env: {}, headers: {}, url: '', version: 1, inLibrary: true }));
+    host.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command === 'list_mcp_definitions') return definitions;
+      if (command === 'list_mcp_placements') return [];
+      if (command === 'save_mcp_definition') return new Promise((_, reject) => { host.rejectMcpSave = () => reject({ message: `${args.draft.name} 写入失败` }); });
+      return invoke(command, args);
+    };
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  await page.getByRole('button', { name: 'MCP A', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '保存', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => typeof (window as any).rejectMcpSave)).toBe('function');
+  await page.getByRole('dialog').getByRole('button', { name: '关闭', exact: true }).click();
+  await page.getByRole('button', { name: 'MCP B', exact: true }).click();
+  await page.evaluate(() => (window as any).rejectMcpSave());
+  await expect(page.locator('main .feedback-item').filter({ hasText: 'MCP A 写入失败' })).toHaveCount(1);
+  await expect(page.getByRole('dialog').getByRole('alert')).toHaveCount(0);
+  await expect(page.getByRole('dialog').getByRole('textbox', { name: '名称', exact: true })).toHaveValue('MCP B');
+});

@@ -58,3 +58,5 @@ export function createNotificationStore(now = () => Date.now()) {
 }
 
 export const notifications = createNotificationStore();
+
+export type FeedbackOperation = ReturnType<typeof notifications.begin>;

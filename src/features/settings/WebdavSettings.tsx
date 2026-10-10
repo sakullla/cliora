@@ -14,35 +14,33 @@ export function WebdavSettings({ active, editing, onEdit }: { active: boolean; e
   const [busy, setBusy] = useState(false);
   const [previews, setPreviews] = useState<Record<string, ConflictPreview>>({});
   const feedback = useFeedback('webdav');
-  const { setError } = feedback;
-  const { setNotice: setMessage } = feedback;
   const latest = useRef(''); latest.current = JSON.stringify([status, previews, active]);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
   useEffect(() => {
     if (!active || !nativeAvailable) return;
-    let alive = true;
+    let alive = true; const result = feedback.begin('status');
     void native.getWebdavStatus().then((next) => {
       if (!alive) return;
-      setStatus(next);
+      setStatus(next); result.complete();
       if (next.endpoint) setSetup((old) => ({ ...old, endpoint: next.endpoint ?? '', enabled: next.enabled }));
-    }).catch((reason: { message?: string }) => { if (alive) setError(reason.message ?? t('settings.webdav.statusFailed')); });
+    }).catch((reason: { message?: string }) => { if (alive) result.error(reason.message ?? t('settings.webdav.statusFailed')); });
     return () => { alive = false; };
   }, [active]);
 
   async function configure() {
     const operationFeedback = feedback.begin('configure');
     if (busy) return;
-    setBusy(true); setError(''); setMessage('');
-    try {
+    setBusy(true); try {
       const next = await native.configureWebdav(setup);
       setStatus(next); onEdit(false);
       setSetup({ endpoint: next.endpoint ?? '', username: '', authPassword: '', encryptionPassword: '', previousEncryptionPassword: '', enabled: next.enabled });
       operationFeedback.success(t('settings.webdav.configured'));
       if (next.enabled) {
-        try { setStatus(await native.syncWebdavNow()); }
-        catch (reason) { feedback.begin('syncNow').error((reason as { message?: string }).message ?? t('settings.webdav.syncFailed')); }
+        const sync = feedback.begin('syncNow');
+        try { setStatus(await native.syncWebdavNow()); sync.complete(); }
+        catch (reason) { sync.error((reason as { message?: string }).message ?? t('settings.webdav.syncFailed')); }
       }
     } catch (reason) { operationFeedback.error((reason as { message?: string }).message ?? t('settings.webdav.configureFailed')); }
     finally { setBusy(false); }
@@ -51,8 +49,7 @@ export function WebdavSettings({ active, editing, onEdit }: { active: boolean; e
   async function toggleEnabled() {
     const operationFeedback = feedback.begin('toggleEnabled');
     if (busy || !status) return;
-    setBusy(true); setError('');
-    try { setStatus(await native.setWebdavEnabled(!status.enabled)); }
+    setBusy(true); try { setStatus(await native.setWebdavEnabled(!status.enabled)); operationFeedback.complete(); }
     catch (reason) { operationFeedback.error((reason as { message?: string }).message ?? t('settings.webdav.toggleFailed')); }
     finally { setBusy(false); }
   }
@@ -60,8 +57,7 @@ export function WebdavSettings({ active, editing, onEdit }: { active: boolean; e
   async function syncNow() {
     const operationFeedback = feedback.begin('syncNow');
     if (busy) return;
-    setBusy(true); setError(''); setMessage('');
-    operationFeedback.pending(t('common.feedback.running'));
+    setBusy(true); operationFeedback.pending(t('common.feedback.running'));
     try {
       const next = await native.syncWebdavNow(); setStatus(next);
       setPreviews({});
@@ -73,12 +69,11 @@ export function WebdavSettings({ active, editing, onEdit }: { active: boolean; e
   }
 
   async function resolve(key: string, versionId: string | null, deleted: boolean) {
-    const operationFeedback = feedback.begin('resolve');
+    const operationFeedback = feedback.begin(JSON.stringify(['resolve', key, versionId, deleted]));
     if (busy) return;
     const started = latest.current;
     if (versionId && !await confirmAction(deleted ? t('settings.webdav.confirmDelete') : t('settings.webdav.confirmReplace'), () => mounted.current && latest.current === started, { title: deleted ? t('settings.webdav.confirmDeleteTitle') : t('settings.webdav.confirmReplaceTitle'), confirmLabel: deleted ? t('settings.webdav.deleteLocal') : t('settings.webdav.replaceLocal'), destructive: deleted })) return;
-    setBusy(true); setError(''); setMessage('');
-    try { setStatus(await native.resolveWebdavConflict(key, versionId));
+    setBusy(true); try { setStatus(await native.resolveWebdavConflict(key, versionId));
       setPreviews((old) => { const next = { ...old }; delete next[key]; return next; });
       operationFeedback.success(t('settings.webdav.resolved')); }
     catch (reason) { operationFeedback.error((reason as { message?: string }).message ?? t('settings.webdav.resolveFailed')); }
@@ -86,10 +81,9 @@ export function WebdavSettings({ active, editing, onEdit }: { active: boolean; e
   }
 
   async function previewConflict(key: string) {
-    const operationFeedback = feedback.begin('previewConflict');
+    const operationFeedback = feedback.begin(JSON.stringify(['previewConflict', key]));
     if (busy) return;
-    setBusy(true); setError('');
-    try { const next = await native.previewWebdavConflict(key); setPreviews((old) => ({ ...old, [key]: next })); }
+    setBusy(true); try { const next = await native.previewWebdavConflict(key); setPreviews((old) => ({ ...old, [key]: next })); operationFeedback.complete(); }
     catch (reason) { operationFeedback.error((reason as { message?: string }).message ?? t('settings.webdav.previewFailed')); }
     finally { setBusy(false); }
   }

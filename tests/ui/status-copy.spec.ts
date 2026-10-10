@@ -139,7 +139,7 @@ test('terminal errors stay readable in light and dark and can be chosen again', 
   const alert = page.getByRole('region', { name: '外部终端' }).getByRole('alert');
   await expect(alert).toContainText('终端不可用');
   await expect(alert).toContainText('可以重新选择终端');
-  await expect(alert).toHaveClass(/setting-error/);
+  await expect(alert.locator('..')).toHaveAttribute('data-tone', 'error');
   await expect(alert).not.toHaveAttribute('style', /./);
   await expect.poll(async () => (await dangerColor(alert)).same).toBe(true);
   const light = await dangerColor(alert);
@@ -325,7 +325,8 @@ test('saved price stays visible when the following usage read fails', async ({ p
   await records.getByLabel('缓存写入单价').fill('1');
   await records.getByRole('button', { name: '保存价格' }).click();
   await expect(records.getByText('估算价格已保存；只影响本机统计。')).toBeVisible();
-  const usageAlert = records.getByRole('alert').filter({ hasText: '用量读取失败' });
+  const usageAlert = records.locator('.feedback-item[data-tone=partial]').filter({ hasText: '估算价格已保存' });
+  await usageAlert.getByText('详情', { exact: true }).click();
   await expect(usageAlert).toContainText('用量读取失败');
   await expect(usageAlert).toContainText('可点击刷新本机记录或调整筛选');
 });

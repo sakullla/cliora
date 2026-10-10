@@ -1,3 +1,4 @@
+import { useFeedback, FeedbackRegion } from '../../components/Feedback';
 import { uiAdapterFor } from '../../adapters';
 import { usageMetricLabel } from '../../adapters/providers';
 import { Icon } from '../../components/Icon';
@@ -107,19 +108,20 @@ export function ProfileQuota({ profileId, profileVersion, profileAccountId, tool
     onAddHandled?.();
   }, [addRequested, onAddHandled]);
   const [expanded, setExpanded] = useState(new Set<string>());
-  const [error, setError] = useState('');
+  const feedback = useFeedback(JSON.stringify(['profile-quota', profileId]));
   const queries = state.queries.filter(q => q.config.identity.profileId === profileId && (q.config.program.kind !== 'profile_builtin' || q.config.program.profileVersion === profileVersion));
   useEffect(() => {
-    let live = true;
-    if (nativeAvailable) void state.ensureProfile(profileId, profileVersion).catch(e => { if (live) setError(message(e)); });
+    let live = true; const result = feedback.begin('ensure');
+    if (nativeAvailable) void state.ensureProfile(profileId, profileVersion).then(() => { if (live) result.complete(); }).catch(e => { if (live) result.error(message(e)); });
     return () => { live = false; };
   }, [profileId, profileVersion, state.ensureProfile]);
   async function refresh(q: UsageQuery, cancel = false) {
-    try { setError(''); await (cancel ? native.cancelUsageRefresh(q.id) : native.refreshUsageQuery(q.id)); await state.reload(); } catch (e) { setError(message(e)); }
+    const result = feedback.begin(JSON.stringify(['refresh', q.id, cancel]));
+    try { await (cancel ? native.cancelUsageRefresh(q.id) : native.refreshUsageQuery(q.id)); await state.reload(); result.complete(); } catch (e) { result.error(message(e)); }
   }
   return <section className={styles.quota} aria-label={t('tools.quota.label')} data-empty={queries.length === 0}>
     {!nativeAvailable && queries.length > 0 && <small>{t('tools.quota.nativeUnavailable')}</small>}
-    {(error || state.error) && <p role="alert" className={styles.error}>{error || state.error}</p>}
+    {queries.length > 0 && <FeedbackRegion context={feedback.context} />}{state.error && <p role="alert" className={styles.error}>{state.error}</p>}
     {queries.map((q, index) => {
       const cache = state.cache.find(c => c.queryId === q.id && c.generation === q.generation);
       const now = Date.now();
@@ -160,9 +162,9 @@ export function QuotaEditor({ profileId, profileAccountId, toolId, query, preset
   const official = draft.config.program.kind === 'official' ? draft.config.program : null;
   const profileLinked = draft.config.program.kind === 'profile_builtin';
   const officialUi = official ? uiAdapterFor(official.tool).officialUsage : null;
-  useEffect(() => { let live = true; if (official) void native.listAccounts().then(items => { if (live) setAccounts(items ?? []); }).catch(() => { if (live) setError(t('tools.quota.accountsFailed')); }); return () => { live = false; }; }, [official?.tool]);
+  useEffect(() => { let live = true; const result = feedback.begin('accounts'); if (official) void native.listAccounts().then(items => { if (live) { setAccounts(items ?? []); result.complete(); } }).catch(() => { if (live) result.error(t('tools.quota.accountsFailed')); }); return () => { live = false; }; }, [official?.tool]);
   const [parameters, setParameters] = useState(() => JSON.stringify(draft.config.parameters, null, 2));
-  const [error, setError] = useState('');
+  const feedback = useFeedback(JSON.stringify(['quota-editor', profileId, query?.id ?? 'new']));
   const [report, setReport] = useState<DraftTestReport | null>(null);
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -176,7 +178,7 @@ export function QuotaEditor({ profileId, profileAccountId, toolId, query, preset
     execution.current = null;
   };
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; revision.current++; if (execution.current) void native.cancelUsageTest(execution.current).catch(() => {}); }; }, []);
-  function edit(next: UsageQueryDraft) { invalidate(); setError(''); setDraft(next); }
+  function edit(next: UsageQueryDraft) { invalidate();  setDraft(next); }
   function config(next: Partial<QueryConfig>) { edit({ ...draft, config: { ...draft.config, ...next } }); }
   function credential(index: number, next: Partial<CredentialDraft>) { edit({ ...draft, credentials: draft.credentials.map((c, i) => i === index ? { ...c, ...next } : c) }); }
   function materialize(): UsageQueryDraft {
@@ -185,7 +187,8 @@ export function QuotaEditor({ profileId, profileAccountId, toolId, query, preset
     return { ...draft, config: { ...draft.config, parameters: parsed as QueryConfig['parameters'] } };
   }
   async function test() {
-    invalidate(); setError('');
+    const operation = feedback.begin('test');
+    invalidate();
     const rev = revision.current;
     let id: string | null = null;
     try {
@@ -195,27 +198,30 @@ export function QuotaEditor({ profileId, profileAccountId, toolId, query, preset
       if (!mounted.current || rev !== revision.current) { await native.cancelUsageTest(id); return; }
       execution.current = id;
       const result = await native.testUsageQuery(id, rev, current);
-      if (mounted.current && rev === revision.current && result.execution.executionId === id && result.execution.draftRevision === rev) setReport(result);
-    } catch (e) { if (mounted.current && rev === revision.current) setError(message(e)); }
+      if (mounted.current && rev === revision.current && result.execution.executionId === id && result.execution.draftRevision === rev) { setReport(result); operation.complete(); }
+    } catch (e) { if (mounted.current && rev === revision.current) operation.error(message(e)); }
     finally { if (mounted.current && rev === revision.current) { setTesting(false); execution.current = null; } }
   }
   async function save() {
-    invalidate(); setError('');
-    try { const current = materialize(); setSaving(true); await native.saveUsageQuery(current); if (mounted.current) onSaved(); }
-    catch (e) { if (mounted.current) setError(message(e)); }
+    const operation = feedback.begin('save');
+    invalidate();
+    try { const current = materialize(); setSaving(true); await native.saveUsageQuery(current); if (mounted.current) { operation.complete(); onSaved(); } }
+    catch (e) { if (mounted.current) operation.error(message(e)); }
     finally { if (mounted.current) setSaving(false); }
   }
   async function remove() {
+    const operation = feedback.begin('remove');
     if (!query) return;
-    invalidate(); setSaving(true); setError('');
-    try { await native.deleteUsageQuery(query.id, query.version); if (mounted.current) onSaved(); }
-    catch (e) { if (mounted.current) setError(message(e)); }
+    invalidate(); setSaving(true);
+    try { await native.deleteUsageQuery(query.id, query.version); if (mounted.current) { operation.complete(); onSaved(); } }
+    catch (e) { if (mounted.current) operation.error(message(e)); }
     finally { if (mounted.current) setSaving(false); }
   }
   async function copyScript() {
+    const operation = feedback.begin('copyScript');
     const rev = revision.current;
-    try { const source = await native.usageBuiltinScript(materialize().config); if (mounted.current && rev === revision.current) config({ program: { kind: 'javascript', source } }); }
-    catch (e) { if (mounted.current && rev === revision.current) setError(message(e)); }
+    try { const source = await native.usageBuiltinScript(materialize().config); if (mounted.current && rev === revision.current) { config({ program: { kind: 'javascript', source } }); operation.complete(); } }
+    catch (e) { if (mounted.current && rev === revision.current) operation.error(message(e)); }
   }
   const line = report?.error?.scriptLine;
   return <GuideDialog open title={t('tools.quota.editorTitle')} hint={t('tools.quota.editorHint')} onClose={() => { if (!saving) { invalidate(); onClose(); } }}>
@@ -254,7 +260,7 @@ export function QuotaEditor({ profileId, profileAccountId, toolId, query, preset
       <label>{t('tools.quota.parameters')}</label><CodeEditor format="json" label={t('tools.quota.parametersEditorLabel')} value={parameters} onChange={v => { invalidate(); setParameters(v); }} readOnly={saving} compact />
 
       </>}
-      {error && <p role="alert" className={styles.error}>{error}</p>}
+      <FeedbackRegion context={feedback.context} />
       {report && <section aria-label={t('tools.quota.reportLabel')}><p>{t('tools.quota.reportMeta', { stage: report.stage, ms: report.elapsedMs })}</p>{!!report.requestOrigins?.length && <p>{t('tools.quota.reportOrigins', { origins: report.requestOrigins.join('、') })}</p>}{report.error && <p role="alert" className={styles.error}>{report.error.message}{line ? t('tools.quota.reportLine', { line }) : ''}</p>}{report.result && <UsageMetrics result={report.result} program={draft.config.program} />}<details><summary>{t('tools.quota.reportPreview')}</summary><pre>{report.preview || t('tools.quota.reportEmpty')}</pre></details></section>}
       <div className={`${styles.actions} ${styles.editorActions}`}><button type="button" disabled={testing} onClick={() => void test()}>{testing ? t('tools.quota.testing') : t('tools.quota.test')}</button>{testing && <button type="button" onClick={invalidate}>{t('tools.quota.cancelTest')}</button>}<button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint()} onClick={() => void save()}>{t('tools.quota.save')}</button>{query && <button type="button" onClick={() => void remove()}>{t('tools.quota.delete')}</button>}</div>
     </fieldset>
