@@ -17,6 +17,7 @@ impl Registry {
                 &PI,
                 &OPENCODE,
                 &ZCODE,
+                &CURSOR_IDE,
                 &qoder_cn::QODER_CN,
                 &KIMI_CODE,
                 &DEEPSEEK,

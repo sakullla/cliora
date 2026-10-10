@@ -1,4 +1,10 @@
 export default {
+  cursorIde: {
+    settingsLabel: 'Cursor IDE 设置',
+    settingsNote: '编辑 IDE 默认 Profile 或项目的 settings.json；账号、模型订阅与命令行配置仍由 Cursor 管理。原文页保留扩展设置。',
+    readOnlySource: '只读来源：{{source}}',
+    fields: { editor_fontSize: '编辑器字号', editor_tabSize: '缩进宽度', editor_wordWrap: '自动换行', files_autoSave: '自动保存', workbench_colorTheme: '颜色主题' },
+  },
   preview: {
     tabsLabel: '工具',
     configTitle: '{{name}} 配置',
@@ -389,6 +395,7 @@ export default {
     addSubmit: '添加',
   },
   skills: {
+    readOnlySource: '只读来源',
     pickProjectFirst: '请先在工具页打开项目目录。',
     dependencyFirst: '请先检查并确认 Skill 的环境依赖要求。',
     pickDirTitle: '选择包含 SKILL.md 的目录',

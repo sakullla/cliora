@@ -179,3 +179,35 @@ export function resourceExperienceFixture(options = {}) {
     return null;
   } };
 }
+
+
+/** Cursor IDE only. Install after resourceExperienceFixture; browser evidence only. */
+export function cursorIdeFixture(options = {}) {
+  const previous = window.__TAURI_INTERNALS__.invoke;
+  const calls = [];
+  const fields = [['editor.fontSize','number',15],['editor.tabSize','integer',2],['editor.wordWrap','string','on'],['files.autoSave','string','off'],['workbench.colorTheme','string','Default Dark Modern']];
+  const configuration = { version: 1, operations: ['set','reset'], fields: fields.map(([id,kind]) => ({ id,label:id,kind,required:false,advanced:false,choices:id==='editor.wordWrap'?['off','on','wordWrapColumn','bounded']:id==='files.autoSave'?['off','afterDelay','onFocusChange','onWindowChange']:[],minimum:kind==='number'?6:kind==='integer'?1:null,defaultSource:'Cursor IDE',unavailableReason:null })) };
+  const descriptor = { id:'cursor_ide',name:'Cursor IDE',launchForm:'desktop',launchDirectory:'unsupported',interfaceFormats:[],configuration,yoloAvailable:false,management:{accounts:false,mcp:true,skills:true,agents:false,plugins:false,projectPlugins:false},nativeConfig:{state:'available',reason:''},launch:{state:'available',reason:''},resources:{state:'available',reason:''},resume:{state:'unsupported',reason:'未验证'},history:{state:'unsupported',reason:'未验证'} };
+  const entries = ['primary','agents','claude'].map((source,index) => ({ name:'same-skill',path:`C:/fixtures/${source}/skills/same-skill`,source,readOnly:index>0,readOnlyReason:index>0?'兼容来源只读，安装与修改使用 .cursor/skills':null,state:'external',detail:`${source} Skill source`,digest:null,packageId:null }));
+  const contents = Object.fromEntries(entries.map(entry => [entry.path,`---\nname: mismatched\ndescription: \n---\n# ${entry.source} Skill\n`]));
+  const sessions = {};
+  window.__cursorIde = { calls, entries, contents, failLaunch:false };
+  window.__TAURI_INTERNALS__.invoke = async (command,args={}) => {
+    calls.push({command,args});
+    if(command==='get_bootstrap')return {preferences:{schema_version:1,managed_tools:['cursor_ide'],theme:options.theme??'light'},tools:[{id:'cursor_ide',name:'Cursor IDE'}]};
+    if(command==='list_cli_adapters')return {registered:[descriptor],managedIds:['cursor_ide'],preservedUnknown:[]};
+    if(command==='get_registered_tool_workspace')return {probe:{selectedPath:options.missing?null:'C:/fixtures/Cursor.exe',installations:options.missing?[]:[{path:'C:/fixtures/Cursor.exe',version:'3.24.9',source:'native',status:'available'}],nativeFiles:[{role:'settings',path:'C:/fixtures/Cursor/User/settings.json',format:'jsonc',exists:true,writable:!options.missing,sensitive:false,reason:null}],nativeWrites:{state:options.missing?'unknown':'supported',reason:options.missing?'未确认兼容的 Cursor IDE 安装标记':''},interfaceFormats:[],providerPresets:[],dependencies:[],installUrl:'https://cursor.com/downloads',upgradeHint:'',connectionPolicy:{apiKey:{state:'unsupported',reason:'IDE 客户端管理'},providerAddress:{state:'unsupported',reason:'IDE 客户端管理'},projection:'single_connection'}},profiles:[],common:null,binding:null,effectiveContextId:null,snapshots:[],recoveryNeeded:[],customPath:null};
+    if(command==='launch_cli'){if(window.__cursorIde.failLaunch)throw Error('Cursor IDE 启动失败');return {terminal:'desktop',status:'desktop_requested',mode:'normal'};}
+    if(command==='list_native_skill_metadata')return entries.map(entry=>({...entry,state:'unknown'}));
+    if(command==='resource_states')return args.requests.map((request,index)=>({index,status:'ready',detail:'',value:entries.find(entry=>entry.path===request.directory)}));
+    if(command==='read_native_skill'){const entry=entries.find(entry=>entry.path===args.directory);return {...entry,content:contents[entry.path]};}
+    if(command==='save_native_skill'){const entry=entries.find(entry=>entry.path===args.directory);if(entry.readOnly)throw Error(entry.readOnlyReason);if(contents[entry.path]!==args.baseline)throw Error('外部修改');contents[entry.path]=args.content;return null;}
+    if(command==='begin_configuration_draft'){
+      const request=args.request;const view=Object.fromEntries(fields.map(([id,,value])=>[id,value]));const files={settings:JSON.stringify(view,null,2)};
+      const value={sessionId:request.sessionId,revision:0,requestGeneration:0,subject:request.subject,scope:request.scope,projectPath:request.projectPath,contextId:null,profile:{id:'',tool:'cursor_ide',name:'Cursor IDE',version:1,revision:'',inheritCommon:false,files,suppressed:{},authentication:{kind:'native'},connection:null,nativeCredentials:{},editing:{version:1,selectedProvider:null,intents:[]}},baselineFiles:files,common:null,view,issues:[],descriptor:configuration,draftConnection:null,credential:{source:'native'},credentialStatus:'none',sourceCapabilities:[{source:'native',available:true,reason:null},{source:'account',available:false,reason:'客户端管理'},{source:'api_key',available:false,reason:'客户端管理'}],catalogSupport:{available:false,multiple:false,reason:'IDE 设置'}};sessions[value.sessionId]=value;return structuredClone(value);
+    }
+    if(command==='edit_configuration_draft'){const value=sessions[args.draft.sessionId];if(args.action.operation==='reset')delete value.view[args.action.field];else value.view[args.action.field]=args.action.value;value.profile.files.settings=JSON.stringify(value.view,null,2);value.revision++;return structuredClone(value);}
+    if(command==='cancel_configuration_draft')return null;
+    return previous(command,args);
+  };
+}
