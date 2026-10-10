@@ -1,4 +1,5 @@
 import type { MaintenanceResult } from '../types/native';
+import type { McpDocumentRequest, McpDocument, McpPasteItem, SkillPackageDocument, ResourceOperation, ResourceStateRequest, ResourceItemResult, ResourceBatchResult } from '../types/resources';
 import type { ConfigurationAction, ConfigurationDescriptor, ConfigurationDraft } from '../types/configuration';
 import type { RegisteredToolContext } from '../types/native';
 import { invoke, isTauri } from '@tauri-apps/api/core';
@@ -145,6 +146,17 @@ export const native = {
   resumeHistorySession: (id: string, mode: LaunchRequest['mode']) => command<LaunchResult>('resume_history_session', { id, mode }),
   exportHistorySession: (id: string, format: 'markdown' | 'json', destination: string) => command<string>('export_history_session', { id, format, destination }),
   listMcpDefinitions: () => command<McpDefinition[]>('list_mcp_definitions'),
+  readMcpDocument: (request: McpDocumentRequest) => command<McpDocument>('read_mcp_document', { request }),
+  saveMcpDocument: (target: McpTargetRequest, name: string, baseline: string, text: string) => command<McpDocument>('save_mcp_document', { target, name, baseline, text }),
+  parseMcpPaste: (target: McpTargetRequest, name: string | null, text: string) => command<McpPasteItem[]>('parse_mcp_paste', { target, name, text }),
+  equivalentMcpDocument: (source: McpTargetRequest, name: string, target: McpTargetRequest) => command<McpDocument>('equivalent_mcp_document', { source, name, target }),
+  readSkillPackageDocument: (packageId: string) => command<SkillPackageDocument>('read_skill_package_document', { packageId }),
+  saveSkillPackageDocument: (packageId: string, baseline: string, content: string) => command<SkillPackageDocument>('save_skill_package_document', { packageId, baseline, content }),
+  resourceStates: (requests: ResourceStateRequest[]) => command<ResourceItemResult[]>('resource_states', { requests }),
+  listNativeSkillMetadata: (target: McpTargetRequest) => command<NativeSkillEntry[]>('list_native_skill_metadata', { target }),
+  runResourceBatch: (operationId: string, operations: ResourceOperation[]) => command<ResourceBatchResult>('run_resource_batch', { operationId, operations }),
+  cancelResourceBatch: (operationId: string) => command<boolean>('cancel_resource_batch', { operationId }),
+  resourceSortPreference: (context: string, value: 'added' | 'name' | null = null) => command<'added' | 'name'>('resource_sort_preference', { context, value }),
   listMcpPlacements: () => command<McpPlacement[]>('list_mcp_placements'),
   saveMcpDefinition: (draft: McpDraft) => command<McpDefinition>('save_mcp_definition', { draft }),
   deleteMcpDefinition: (id: string, expectedVersion: number) => command<void>('delete_mcp_definition', { id, expectedVersion }),

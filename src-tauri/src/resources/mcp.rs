@@ -36,7 +36,7 @@ pub struct McpDefinition {
     pub version: u64,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpDraft {
     pub id: Option<String>,
@@ -56,7 +56,7 @@ fn default_in_library() -> bool {
     true
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpTargetRequest {
     #[serde(default)]
@@ -132,7 +132,7 @@ fn sensitive_key(name: &str) -> bool {
         .any(|word| name.contains(word))
 }
 
-fn validate(draft: &McpDraft) -> Result<(), String> {
+pub(super) fn validate(draft: &McpDraft) -> Result<(), String> {
     if !valid_name(&draft.name) {
         return Err("MCP 名称只可用 1–80 个字母、数字、连字符或下划线".into());
     }
@@ -162,7 +162,7 @@ fn validate(draft: &McpDraft) -> Result<(), String> {
 pub fn list_definitions(db: &Database) -> Result<Vec<McpDefinition>, String> {
     db.with_connection(|conn| {
         let mut statement = conn
-            .prepare("SELECT data_json FROM mcp_definitions ORDER BY name COLLATE NOCASE")
+            .prepare("SELECT data_json FROM mcp_definitions ORDER BY (SELECT sequence FROM resource_order WHERE kind='mcp' AND resource_id=mcp_definitions.id) DESC, name COLLATE NOCASE, id")
             .map_err(|error| error.to_string())?;
         let rows = statement
             .query_map([], |row| row.get::<_, String>(0))
@@ -267,7 +267,9 @@ pub fn remove_native(
     let adapter = registry.get(&target.tool_id).ok_or("此 CLI 尚无注册适配器")?;
     let name_owned = name.to_owned();
     let tool = target.tool_id.clone();
+    let order_id = native_order_id(&location, name);
     let commit = move |tx: &rusqlite::Transaction<'_>| {
+        tx.execute("DELETE FROM resource_order WHERE kind='native_mcp' AND resource_id=?1", [&order_id]).map_err(|e| e.to_string())?;
         tx.execute("DELETE FROM mcp_targets WHERE tool = ?1 AND scope_key = ?2 AND definition_id IN (SELECT id FROM mcp_definitions WHERE name = ?3)",
             params![tool, scope_key, name_owned]).map(|_| ()).map_err(|error| error.to_string())
     };
@@ -320,7 +322,7 @@ pub fn managed_enabled(db: &Database, definition_id: &str, target: &McpTargetReq
     db.with_connection(|conn|conn.query_row("SELECT enabled FROM mcp_targets WHERE definition_id=?1 AND tool=?2 AND scope_key=?3",params![definition_id,target.tool_id,key],|row|row.get(0)).optional().map_err(|e|e.to_string()))
 }
 
-fn target_location(
+pub(super) fn target_location(
     db: &Database,
     registry: &Registry,
     target: &McpTargetRequest,
@@ -378,7 +380,7 @@ fn target_location(
     Ok((location, crate::accounts::selection::key(&key)))
 }
 
-fn parse_native(location: &McpLocation) -> Result<(String, Value), String> {
+pub(super) fn parse_native(location: &McpLocation) -> Result<(String, Value), String> {
     let text = transaction::read_native(&location.path)?;
     let parsed = format::parse(location.kind, &text)?;
     Ok((text, parsed))
@@ -388,6 +390,10 @@ fn entry_hash(value: Option<&Value>) -> Result<String, String> {
     Ok(transaction::fingerprint(
         &serde_json::to_vec(&value).map_err(|error| error.to_string())?,
     ))
+}
+
+fn native_order_id(location: &McpLocation, name: &str) -> String {
+    transaction::fingerprint(format!("{}\0{name}", location.path.display()).as_bytes())
 }
 
 fn preview_token(
@@ -447,7 +453,7 @@ pub fn list_native(
     let (_, parsed) = parse_native(&location)?;
     let adapter = registry.get(&target.tool_id).ok_or("此 CLI 尚无注册适配器")?;
     let entries = adapter.mcp_entries(&parsed, &location)?;
-    Ok(entries
+    let mut result: Vec<_> = entries
         .iter()
         .filter_map(|(name, raw)| {
             let view = adapter.mcp_entry_view(raw);
@@ -506,7 +512,14 @@ pub fn list_native(
                 protected_values: false,
             })
         })
-        .collect())
+        .collect();
+    let order = db.with_connection(|conn| {
+        let mut statement = conn.prepare("SELECT resource_id,sequence FROM resource_order WHERE kind='native_mcp'").map_err(|e| e.to_string())?;
+        let result = statement.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))).map_err(|e| e.to_string())?.collect::<Result<BTreeMap<_,_>,_>>().map_err(|e| e.to_string())?;
+        Ok(result)
+    })?;
+    result.sort_by(|a,b| order.get(&native_order_id(&location, &b.name)).cmp(&order.get(&native_order_id(&location, &a.name))).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())).then_with(|| a.name.cmp(&b.name)));
+    Ok(result)
 }
 
 pub fn preview_targets(
@@ -597,10 +610,13 @@ pub fn distribute(
             let document = adapter.mcp_document_at(definition, target.enabled, existing, &location)?;
             let written_hash = entry_hash(document.as_ref())?;
             let unchanged = existing == document.as_ref();
+            let newly_added = existing.is_none() && document.is_some();
+            let order_id = native_order_id(&location, &definition.name);
             let change = adapter.mcp_change(&parsed, &location, &definition.name, document)?;
             let commit = |tx: &rusqlite::Transaction<'_>| {
                 let current: i64 = tx.query_row("SELECT version FROM mcp_definitions WHERE id = ?1", [&definition.id], |row| row.get(0)).map_err(|error| error.to_string())?;
                 if current != definition.version as i64 { return Err("MCP 定义在预览后变化；请重新预览".into()); }
+                if newly_added { tx.execute("INSERT OR IGNORE INTO resource_order(kind,resource_id) VALUES ('native_mcp',?1)", [&order_id]).map_err(|e| e.to_string())?; }
                 tx.execute("INSERT INTO mcp_targets (definition_id, tool, scope_key, enabled, managed_hash) VALUES (?1, ?2, ?3, ?4, ?5)
                      ON CONFLICT(definition_id, tool, scope_key) DO UPDATE SET enabled = excluded.enabled, managed_hash = excluded.managed_hash",
                     params![definition.id, target.tool_id, scope_key, target.enabled as i64, written_hash])

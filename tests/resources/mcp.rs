@@ -2,6 +2,139 @@ use super::*;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+#[test]
+fn v21_migration_does_not_invent_existing_resource_insertion_dates() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("db");
+    let db = Database::open(&path).unwrap();
+    let old = sample(&db);
+    db.with_connection(|conn| conn.execute_batch("DROP TRIGGER resource_mcp_added; DROP TRIGGER resource_mcp_deleted; DROP TRIGGER resource_skill_added; DROP TRIGGER resource_skill_deleted; DROP TRIGGER resource_skill_metadata_added; DROP TRIGGER resource_skill_metadata_changed; DROP TABLE resource_order; DROP TABLE resource_preferences; DROP TABLE skill_package_metadata; PRAGMA user_version=21;").map_err(|e| e.to_string())).unwrap();
+    drop(db);
+    let db = Database::open(&path).unwrap();
+    assert_eq!(list_definitions(&db).unwrap()[0].id, old.id);
+    db.with_connection(|conn| {
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM resource_order", [], |row| row.get::<_,i64>(0)).unwrap(), 0);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |row| row.get::<_,i64>(0)).unwrap(), 22);
+        Ok(())
+    }).unwrap();
+}
+
+#[test]
+fn resource_documents_preserve_raw_comments_secrets_unknown_fields_and_reject_stale_edits() {
+    use crate::resources::documents::{self, McpDocumentRequest};
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("db")).unwrap();
+    let registry = fixture_registry();
+    let target = target("codex", true);
+    let (location, _) = target_location(&db, &registry, &target, temp.path()).unwrap();
+    std::fs::create_dir_all(location.path.parent().unwrap()).unwrap();
+    let original = "# retained comment\nother = 42\n[mcp_servers.demo]\ncommand = 'node'\nargs = ['a', 'b']\ncustom = 7\n[mcp_servers.demo.env]\nAPI_KEY = 'fixture-private'\n";
+    std::fs::write(&location.path, original).unwrap();
+    let request = McpDocumentRequest { target: target.clone(), definition_id: None, name: "demo".into(), reveal: false };
+    let read = documents::read(&db, &registry, temp.path(), &request).unwrap();
+    assert!(read.protected_values);
+    assert!(!read.text.contains("fixture-private"));
+    assert!(read.raw_text.as_ref().unwrap().contains("# retained comment"));
+    assert!(!read.raw_text.as_ref().unwrap().contains("fixture-private"));
+    assert!(read.unmapped_fields.contains(&"custom".into()));
+    assert!(documents::equivalent(&db, &registry, temp.path(), &target, "demo", &target).is_err());
+    let revealed = documents::read(&db, &registry, temp.path(), &McpDocumentRequest { reveal: true, ..request }).unwrap();
+    assert_eq!(revealed.raw_text.as_deref(), Some(original));
+    let edited = read.text.replace("node", "new-command");
+    documents::save(&db, &MemoryStore::default(), &registry, temp.path(), &target, "demo", &read.baseline, &edited).unwrap();
+    let after = std::fs::read_to_string(&location.path).unwrap();
+    assert!(after.contains("# retained comment"));
+    assert!(after.contains("fixture-private"));
+    assert!(after.contains("other = 42"));
+    assert!(after.contains("custom = 7"));
+    assert!(documents::save(&db, &MemoryStore::default(), &registry, temp.path(), &target, "demo", &read.baseline, &edited).is_err());
+}
+
+#[test]
+fn paste_reports_each_invalid_or_lossy_item_and_sort_changes_only_on_insert() {
+    use crate::resources::{documents, batch};
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("db")).unwrap();
+    let registry = fixture_registry();
+    let items = documents::parse_paste(&db, &registry, temp.path(), &target("claude_code", true), None,
+        r#"{"mcpServers":{"valid":{"command":"node","args":["one","two"]},"bad":{"command":7},"lossy":{"command":"node","timeout":100},"mask":{"command":"node","env":{"TOKEN":"__CLIORA_REDACTED__"}}}}"#).unwrap();
+    assert_eq!(items.len(), 4);
+    assert!(items.iter().find(|i| i.name == "valid").unwrap().draft.is_some());
+    assert!(items.iter().filter(|i| i.name != "valid").all(|i| i.draft.is_none()));
+    let first = sample(&db);
+    let draft = items.into_iter().find(|i| i.name == "valid").unwrap().draft.unwrap();
+    let second = save_definition(&db, draft).unwrap();
+    assert_eq!(list_definitions(&db).unwrap()[0].id, second.id);
+    let mut edited = serde_json::from_value::<McpDraft>(serde_json::json!({"id":first.id,"name":first.name,"transport":"stdio","command":"updated","args":[],"url":"","env":{},"headers":{},"expectedVersion":first.version})).unwrap();
+    edited.in_library = true;
+    save_definition(&db, edited).unwrap();
+    assert_eq!(list_definitions(&db).unwrap()[0].id, second.id);
+    assert_eq!(batch::sort_preference(&db, "library:mcp", Some("name")).unwrap(), "name");
+    assert_eq!(batch::sort_preference(&db, "library:mcp", None).unwrap(), "name");
+    let snapshot = crate::portable::collect_snapshot(&db, &MemoryStore::default(), &registry).unwrap();
+    let before = serde_json::to_value(&snapshot).unwrap();
+    batch::sort_preference(&db, "library:mcp", Some("added")).unwrap();
+    let after = serde_json::to_value(crate::portable::collect_snapshot(&db, &MemoryStore::default(), &registry).unwrap()).unwrap();
+    assert!(before["entities"].is_array());
+    assert_eq!(before["entities"], after["entities"]);
+    let encoded = serde_json::to_string(&snapshot).unwrap();
+    assert!(!encoded.contains("resource_order"));
+    assert!(!encoded.contains("library:mcp"));
+    crate::portable::validate_snapshot(&serde_json::from_str(&encoded).unwrap()).unwrap();
+}
+
+#[test]
+fn resource_batch_rejects_duplicate_physical_targets_and_isolates_failures() {
+    use crate::resources::batch::{self, Operation, StateRequest};
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("db")).unwrap();
+    let registry = fixture_registry();
+    let definition = sample(&db);
+    let op = || Operation::McpApply { definition_id: definition.id.clone(), target: target("claude_code", true) };
+    let results = batch::run(&db, &MemoryStore::default(), &registry, temp.path(), &Uuid::new_v4().to_string(), vec![op(), op()]).unwrap();
+    assert!(results.items.iter().all(|i| i.status == "conflict"));
+    let mut valid_target = target("claude_code", true);
+    let preview = preview_targets(&db, &registry, temp.path(), &definition.id, vec![valid_target.clone()]).remove(0);
+    valid_target.baseline_hash = preview.baseline_hash;
+    valid_target.preview_token = preview.preview_token;
+    let results = batch::run(&db, &MemoryStore::default(), &registry, temp.path(), &Uuid::new_v4().to_string(), vec![Operation::McpApply { definition_id: "missing".into(), target: target("codex", true) }, Operation::McpApply { definition_id: definition.id.clone(), target: valid_target }]).unwrap();
+    assert_eq!(results.items[0].status, "failed");
+    assert_eq!(results.items[1].status, "written");
+    let states = batch::states(&db, &registry, temp.path(), vec![StateRequest::Skill { package_id: "missing".into() }, StateRequest::Mcp { definition_id: definition.id, target: target("claude_code", true) }]).unwrap();
+    assert_eq!(states[0].status, "failed");
+    assert_eq!(states[1].status, "ready");
+    assert!(batch::states(&db, &registry, temp.path(), (0..51).map(|_| StateRequest::Skill { package_id: "missing".into() }).collect()).is_err());
+}
+
+#[test]
+fn batch_cancellation_keeps_committed_item_and_marks_unstarted_item() {
+    use crate::resources::batch::{self, Operation};
+    struct CancelStore { id: String, inner: MemoryStore }
+    impl CredentialStore for CancelStore {
+        fn put(&self, key: &str, value: &str) -> Result<(), String> { self.inner.put(key,value)?; batch::cancel(&self.id)?; Ok(()) }
+        fn get(&self, key: &str) -> Result<String, String> { self.inner.get(key) }
+        fn delete(&self, key: &str) -> Result<(), String> { self.inner.delete(key) }
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("db")).unwrap();
+    let registry = fixture_registry();
+    let definition = sample(&db);
+    let operations = ["claude_code", "codex"].into_iter().map(|tool| {
+        let mut target = target(tool, true);
+        let preview = preview_targets(&db, &registry, temp.path(), &definition.id, vec![target.clone()]).remove(0);
+        target.baseline_hash = preview.baseline_hash;
+        target.preview_token = preview.preview_token;
+        Operation::McpApply { definition_id: definition.id.clone(), target }
+    }).collect();
+    let store = CancelStore { id: Uuid::new_v4().to_string(), inner: MemoryStore::default() };
+    let result = batch::run(&db, &store, &registry, temp.path(), &store.id, operations).unwrap();
+    assert!(result.cancelled);
+    assert_eq!(result.items[0].status, "written");
+    assert_eq!(result.items[1].status, "not_executed");
+    assert_eq!(list_native(&db, &registry, temp.path(), &target("claude_code", true)).unwrap().len(), 1);
+    assert!(list_native(&db, &registry, temp.path(), &target("codex", true)).unwrap().is_empty());
+}
+
 fn fixture_registry() -> Registry {
     Registry::builtins()
         .with_fixture_installation("codex", "0.158.0")
