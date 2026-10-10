@@ -185,6 +185,7 @@ impl CredentialStore for MemoryCredentials {
 
 #[test]
 fn sixth_adapter_uses_the_same_probe_native_transaction_and_launch_orchestration() {
+    assert_eq!(serde_json::to_value(SIXTH.descriptor()).unwrap()["launchDirectory"], "terminal");
     let registry =
         Registry::with_adapters(vec![&CODEX, &CLAUDE, &GROK, &PI, &OPENCODE, &SIXTH]).unwrap();
     let temp = tempfile::tempdir().unwrap();

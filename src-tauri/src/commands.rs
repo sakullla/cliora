@@ -2180,6 +2180,13 @@ pub async fn get_launch_settings(app: AppHandle) -> Result<launch::LaunchSetting
 }
 
 #[tauri::command]
+pub async fn set_launch_directory(app: AppHandle, tool_id: String, directory: Option<String>) -> Result<(), ApiError> {
+    blocking(move || app.state::<AppState>().with_database(&app, |db| {
+        launch::remember_directory(db, &adapters::Registry::builtins(), &tool_id, directory.as_deref()).map_err(native_error)
+    })).await
+}
+
+#[tauri::command]
 pub async fn set_preferred_terminal(
     app: AppHandle,
     terminal: launch::TerminalId,
@@ -2305,6 +2312,17 @@ pub(crate) fn launch_now_with_stage(
 ) -> Result<launch::LaunchResult, LaunchFailure> {
     use launch::LaunchStage;
     let home = home().map_err(|error| LaunchFailure::new(LaunchStage::ProjectDirectory, error))?;
+    // Reject unsupported workspace intent before applying any project profile.
+    let registry = adapters::Registry::builtins();
+    if let Some(adapter) = registry.get(&request.tool_id) {
+        if adapter.launch_form() == adapters::LaunchForm::Desktop
+            && (request.project_id.is_some() || request.directory.is_some())
+            && adapter.launch_directory() != adapters::LaunchDirectory::Workspace
+        {
+            return Err(LaunchFailure::new(LaunchStage::ProjectDirectory,
+                native_error("此桌面应用尚无已验证的打开工作区能力，请使用普通启动".into())));
+        }
+    }
     let project_id = request.project_id.clone();
     let project = project_id
         .as_deref()

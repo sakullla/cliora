@@ -46,6 +46,7 @@ pub struct AdapterDescriptor {
     pub project_model_override: bool,
     pub yolo_available: bool,
     pub launch_form: LaunchForm,
+    pub launch_directory: LaunchDirectory,
     pub native_config: Facet,
     pub launch: Facet,
     pub resume: Facet,
@@ -93,6 +94,16 @@ pub enum LaunchForm {
     #[default]
     Terminal,
     Desktop,
+}
+
+/// Explicit directory semantics, independent of process cwd. Desktop adapters
+/// opt in only after cold/warm workspace behavior is verified.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LaunchDirectory {
+    Terminal,
+    Workspace,
+    Unsupported,
 }
 
 #[derive(Default)]
@@ -349,11 +360,16 @@ pub trait CliAdapter: Sync {
     fn launch_form(&self) -> LaunchForm {
         LaunchForm::Terminal
     }
-    /// Directory-dependent arguments for a desktop launch, such as a workspace
-    /// flag. Only consulted for the desktop form; terminal launches set the
-    /// working directory instead.
-    fn desktop_launch_args(&self, _directory: &Path) -> Result<Vec<String>, String> {
-        Ok(Vec::new())
+    fn launch_directory(&self) -> LaunchDirectory {
+        match self.launch_form() {
+            LaunchForm::Terminal => LaunchDirectory::Terminal,
+            LaunchForm::Desktop => LaunchDirectory::Unsupported,
+        }
+    }
+    /// Called only for explicit workspace intent, never fallback process cwd.
+    /// Missing ports must reject rather than downgrade a project to bare launch.
+    fn desktop_launch_args(&self, _workspace: &Path) -> Result<Vec<String>, String> {
+        Err("此桌面应用尚无已验证的打开工作区能力".into())
     }
     fn history_sources(&self, _home: &Path) -> Result<Vec<HistorySource>, String> {
         Ok(Vec::new())
@@ -580,6 +596,7 @@ pub trait CliAdapter: Sync {
             project_model_override: self.supports_project_model_override(),
             yolo_available: self.launch_args(None, LaunchMode::Yolo).is_ok(),
             launch_form: self.launch_form(),
+            launch_directory: self.launch_directory(),
             native_config: Facet {
                 state: "available",
                 reason: "已确认 CLI 身份，可编辑受支持的原生文件格式",

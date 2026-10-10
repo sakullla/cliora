@@ -218,7 +218,7 @@ test('MCP committed version survives list failure; recovery reads without saving
   const save = consumer('src/features/library/LibraryResources.tsx', 'save', {
     feedback: { begin: key => store.begin('mcp', key), resume: result => result.retry() }, draft: { id: null, args: [] }, formKey: 1,
     busy: false, envText: '', headerText: '', keptArgs: x => x, parseLines: () => ({}), failure: e => e.message,
-    setBusy: noop, setDefinitions: noop, setDraft: value => { draft = value; }, draftOf: x => x, placements: [], willDistribute: false,
+    setBusy: noop, setAddedId: noop, setDefinitions: noop, setDraft: value => { draft = value; }, draftOf: x => x, placements: [], willDistribute: false,
     setPlacements: noop, setConflict: noop, saveOperation: { current: null }, editorGeneration: { current: 1 }, editorRevision: { current: 0 }, distributeRef: { current: null }, t: translate,
     native: { saveMcpDefinition: async () => { writes++; return { id: 'saved', version: 7 }; }, listMcpDefinitions: async () => { if (readsFail) throw Error('list failed'); return []; } },
   });
@@ -245,14 +245,14 @@ test('home profile B success preserves profile A failure; conflict retry resolve
 });
 
 test('home launch identity includes selected directory', async () => {
-  const store = createNotificationStore(); const directories = new Map([['tool', 'A']]);
+  const store = createNotificationStore(); const directories = { tool: 'A' };
   const launch = consumer('src/features/home/ManagedTools.tsx', 'launchTool', {
     notifications: store, states: { tool: {} }, acting: { current: new Set() }, requests: { current: new Map() }, setChecking: noop, setStates: noop,
-    tools: [{ id: 'tool' }], launchDirectories: directories, launchSettings: {}, preferredLaunchMode: () => 'normal', t: translate,
+    tools: [{ id: 'tool', launchForm: 'terminal', launchDirectory: 'terminal' }], launchDirectories: directories, setLaunchDirectories: noop, launchSettings: {}, preferredLaunchMode: () => 'normal', t: translate,
     lineNotice: (tone, text) => ({ text }), message: e => e.message, settle: x => x,
-    native: { launchCli: async ({ directory }) => { if (directory === 'A') throw Error('A failed'); } },
+    native: { setLaunchDirectory: async () => {}, launchCli: async ({ directory }) => { if (directory === 'A') throw Error('A failed'); } },
   });
-  await launch('tool'); directories.set('tool', 'B'); await launch('tool');
+  await launch('tool'); directories.tool = 'B'; await launch('tool');
   assert.deepEqual(store.getSnapshot().map(e => e.tone), ['error', 'success']);
 });
 
@@ -289,7 +289,7 @@ test('tool MCP accepts ID/version before list failure and read recovery never wr
   const save = consumer('src/features/tools/ResourceWorkspace.tsx', 'save', {
     feedback: { begin: key => store.begin('tool-mcp', key), resume: result => result.retry() }, draft: { name: 'new', args: [] },
     scope: 'global', project: null, nativeOrigin: null, editorGeneration: { current: 1 }, editorRevision: { current: 0 }, latestForm: latest, mounted: { current: true }, definitions: [], syncLibrary: true,
-    setBusy: noop, keptArgs: x => x, parseLines: () => ({}), envText: '', headerText: '', enabled: true, setDefinitions: noop,
+    setBusy: noop, setAddedName: noop, keptArgs: x => x, parseLines: () => ({}), envText: '', headerText: '', enabled: true, setDefinitions: noop,
     select: value => { accepted = value; latest.current = value.id; }, target: {}, setCurrentConflict: noop,
     applyItems: async (_, __, ___, result) => { applied++; result.success('written'); return true; }, leaveComposer: noop,
     t: translate, errorText: e => e.message,
