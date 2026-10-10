@@ -1,5 +1,11 @@
 import type { FeedbackOperation } from '../../lib/notifications';
 import { useFeedback, FeedbackRegion } from '../../components/Feedback';
+import { ResourceList } from '../../components/resources/ResourceList';
+import { ResourceBatch, type BatchJob } from '../../components/resources/ResourceBatch';
+import { McpDocumentPanel } from '../../components/resources/McpDocumentPanel';
+import { McpPaste } from '../../components/resources/McpPaste';
+import { readResourceStates } from '../../lib/resources';
+import { writeClipboard } from '../../lib/clipboard';
 import { CodeEditor } from '../../components/CodeEditor';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -44,6 +50,10 @@ function parseLines(value: string): Record<string, string> {
 export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyChange }: { toolId: string; scope: Scope; projectPath: string; contextId?: string | null; onDirtyChange?: (dirty: boolean) => void }) {
   const { t } = useTranslation();
   const [definitions, setDefinitions] = useState<McpDefinition[]>([]);
+  const [configOpen, setConfigOpen] = useState(false);
+  const [configDirty, setConfigDirty] = useState(false);
+  const [addedName, setAddedName] = useState<string | null>(null);
+  const [batchAction, setBatchAction] = useState('disable');
   const [draft, setDraft] = useState<McpDraft>(blank);
   const [envText, setEnvText] = useState('');
   const [headerText, setHeaderText] = useState('');
@@ -58,7 +68,8 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
   const [composing, setComposing] = useState(false);
   const [syncLibrary, setSyncLibrary] = useState(false);
   const project = scope === 'project' ? projectPath || null : null;
-  const dirty = JSON.stringify([draft, envText, headerText,enabled]) !== savedFingerprint;
+  const formDirty = JSON.stringify([draft, envText, headerText,enabled]) !== savedFingerprint;
+  const dirty = formDirty || configDirty;
   const editorGeneration = useRef(0);
   const editorRevision = useRef(0);
   const latestForm = useRef(''); latestForm.current = JSON.stringify([draft, envText, headerText, enabled]);
@@ -85,7 +96,6 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
     return () => { live = false; };
   }, [target, toolId, scope, project]);
 
-  const empty = !nativeEntries.length && !composing && !draft.id && !nativeOrigin;
 
   function select(item: McpDefinition, nextEnabled = true) {
     const next = draftOf(item);
@@ -118,12 +128,12 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
     setSavedFingerprint(JSON.stringify([blank(), '', '', true])); setComposing(true); }
   async function closeCompose() {
     if (!await canReplace()) return;
-    editorGeneration.current++;
+    editorGeneration.current++; setConfigDirty(false); setConfigOpen(false);
     const next = blank();
     setDraft(next); setEnvText(''); setHeaderText(''); setEnabled(true); setNativeOrigin(null); setCurrentConflict(null);
     setSavedFingerprint(JSON.stringify([next, '', '', true])); setComposing(false); }
   function leaveComposer() {
-    editorGeneration.current++;
+    editorGeneration.current++; setConfigDirty(false); setConfigOpen(false);
     const next = blank();
     setDraft(next); setEnvText(''); setHeaderText(''); setEnabled(true); setNativeOrigin(null); setCurrentConflict(null);
     setSavedFingerprint(JSON.stringify([next, '', '', true])); setComposing(false);
@@ -224,10 +234,16 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
       } } : undefined);
     }
     setBusy(true); try {
+      if (origin) {
+        const document = await native.readMcpDocument({ target, name: origin.name, definitionId: null });
+        if (document.protectedValues) throw new Error(t('library.experience.maskedConversion'));
+        if (document.unmappedFields.length) throw new Error(t('library.experience.unmapped', { fields: document.unmappedFields.join(', ') }));
+      }
       saved = await native.saveMcpDefinition({ ...draft, args: keptArgs(draft.args), id: draft.id ?? linked?.id ?? null, expectedVersion: draft.id ? draft.expectedVersion : linked?.version ?? draft.expectedVersion, inLibrary, env: parseLines(envText), headers: parseLines(headerText) });
       operationFeedback.identify('save:' + saved.id);
       operationFeedback.committed(t('tools.mcp.savedKeepEditing'));
       const accepted = saved;
+      if (!editing) setAddedName(accepted.name);
       if (mounted.current && editorGeneration.current === generation) {
         // Keep the saved snapshot in the list, while the draft retains the
         // revision it actually edited as its CAS baseline for the next save.
@@ -258,7 +274,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
       if (!inLibrary && draft.id && draft.expectedVersion !== null) await native.deleteMcpDefinition(draft.id, draft.expectedVersion);
       if (mounted.current) {
         setDefinitions(await native.listMcpDefinitions());
-        setNativeEntries(await native.listNativeMcp(target).catch(() => []));
+        setNativeEntries(await native.listNativeMcp(target));
         operationFeedback.success(t('tools.mcp.deleted'));
         leaveComposer();
       }
@@ -266,33 +282,48 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
     finally { if (mounted.current) setBusy(false); }
   }
 
+  async function refreshMcp() { setNativeEntries(await native.listNativeMcp(target)); setDefinitions(await native.listMcpDefinitions()); }
+  function acceptConfiguration(value: McpDraft, copy: boolean) {
+    setConfigOpen(false); setConfigDirty(false);
+    editorRevision.current++;
+    if (copy) { editorGeneration.current++; setNativeOrigin(null); setCurrentConflict(null); }
+    setDraft({ ...value, id: copy ? null : draft.id, expectedVersion: copy ? null : draft.expectedVersion });
+    setEnvText(lines(value.env)); setHeaderText(lines(value.headers)); setComposing(true);
+  }
+  function mcpBatch(ids: string[]) {
+    const jobs: BatchJob[] = ids.map(name => ({ id: name, name, run: async () => {
+      if (batchAction === 'remove') { await native.removeNativeMcp(target, name); return; }
+      const document = await native.readMcpDocument({ target, name, definitionId: null });
+      if (document.protectedValues || document.unmappedFields.length) throw new Error(t('library.experience.maskedConversion'));
+      const parsed = await native.parseMcpPaste(target, name, document.text);
+      if (parsed.length !== 1 || !parsed[0].draft) throw new Error(parsed.flatMap(item => item.diagnostics).join(' · '));
+      const known = definitions.find(item => item.name === name);
+      const item = await native.saveMcpDefinition({ ...parsed[0].draft, id: known?.id ?? null, expectedVersion: known?.version ?? null, inLibrary: known?.inLibrary === true });
+      const outcome = await native.runResourceBatch(crypto.randomUUID(), [{ action: 'mcp_apply', definitionId: item.id, target: { ...target, enabled: batchAction === 'enable' } }]);
+      return outcome.items[0] ?? { status: 'failed', detail: t('library.experience.invalidConfig') };
+    } }));
+    return <><select aria-label={t('library.experience.batchAction')} value={batchAction} onChange={event => setBatchAction(event.target.value)}>{['enable', 'disable', 'remove'].map(action => <option key={action} value={action}>{t(`library.experience.${action}`)}</option>)}</select><ResourceBatch key={batchAction} context={feedback.context + ':batch:' + batchAction} jobs={jobs} action={t(`library.experience.${batchAction}`)} destructive={batchAction !== 'enable'} onChanged={refreshMcp} /></>;
+  }
   const head = (canAdd: boolean) => <div className={styles.workspaceHead}><div><h2>{t('tools.mcp.title')}</h2><p>{t('tools.mcp.description')}</p></div>{canAdd && <button type="button" className={styles.primary} disabled={busy || (scope === 'project' && !project)} onClick={() => void startNew()}><Icon name="plus" size={14} strokeWidth={2.2} />{t('tools.mcp.add')}</button>}</div>;
 
   if (capabilityBlocked) {
     return <section className={styles.workspaceSection} aria-label={t('tools.mcp.title')}>{head(false)}<StatusBanner tone="error">{capabilityBlocked}</StatusBanner><p className={styles.muted}>{t('tools.mcp.blocked')}</p></section>;
   }
 
-  if (empty) {
-    return <section className={styles.workspaceSection} aria-label={t('tools.mcp.title')}>
-      {head(true)}
-      <FeedbackRegion context={feedback.context} />
-
-      <div className={styles.emptyState}><Icon name="connections" size={26} strokeWidth={1.4} /><strong>{t('tools.mcp.emptyTitle')}</strong><p>{t('tools.mcp.emptyDetail')}</p>{scope === 'project' && !project && <p className={styles.muted}>{t('tools.mcp.pickProjectFirst')}</p>}</div>
-    </section>;
-  }
 
   return <section className={styles.workspaceSection} aria-label={t('tools.mcp.title')}>
     {head(true)}
     <FeedbackRegion context={feedback.context} />
     <div className={styles.layout}>
-    <aside className={styles.list}>
-      <div className={styles.listHead}><strong>{t('tools.mcp.activeCount', { count: nativeEntries.length })}</strong></div>
-      {nativeEntries.map((item) => <button key={`native-${item.name}`} type="button" title={t('tools.mcp.clickEdit')} onClick={() => void importNative(item)}><strong>{item.name}<span className={styles.state} data-on={item.enabled || undefined}>{item.enabled ? t('tools.plugins.enabled') : t('tools.quota.disabled')}</span></strong><small className={styles.mono}>{(item.transport === 'http' ? item.url : [item.command, ...item.args].join(' ')) || item.transport}</small></button>)}
-      {!nativeEntries.length && <p>{t('tools.mcp.listEmpty')}</p>}
-    </aside>
-    <GuideDialog open={composing} title={draft.id || nativeOrigin ? t('tools.mcp.editTitle') : t('tools.mcp.add')} hint={t('tools.mcp.dialogHint')} onClose={() => void closeCompose()}>
+    <ResourceList key={feedback.context} context={feedback.context} label={t('library.resources.mcpListAria')} addedId={addedName} toolbarActions={<McpPaste onAdded={item => setAddedName(item.name)} key={feedback.context} context={feedback.context} target={target} definitions={definitions} onDraft={value => acceptConfiguration(value, true)} onChanged={refreshMcp} />}
+      rows={nativeEntries.map(item => ({ id: item.name, name: item.name, description: item.transport === 'http' ? item.url : [item.command, ...item.args].join(' '), metadata: `${toolId} · ${scope} · ${item.enabled ? t('tools.plugins.enabled') : t('tools.quota.disabled')}`, state: item.enabled ? 'enable' : 'disable' }))}
+      actions={name => <button type="button" onClick={() => { const result = feedback.begin('copy:' + name); void native.readMcpDocument({ target, name, definitionId: null }).then(async document => { if (!await writeClipboard(document.text)) throw new Error(t('library.experience.copyFailed')); result.success(t('library.experience.copiedEntry')); }).catch(error => result.error(errorText(error))); }}>{t('library.experience.copy')}</button>}
+      filters={['enable', 'disable'].map(value => ({ value, label: t(`library.experience.${value}`) }))} bulk={mcpBatch}
+      onRefresh={() => void refreshMcp().catch(error => feedback.begin('refresh').error(errorText(error)))} onOpen={id => { const item = nativeEntries.find(item => item.name === id); if (item) void importNative(item); }} />
+    <GuideDialog wide open={composing} title={draft.id || nativeOrigin ? t('tools.mcp.editTitle') : t('tools.mcp.add')} hint={t('tools.mcp.dialogHint')} onClose={() => void closeCompose()}>
     <div className={styles.panel} onChangeCapture={() => { editorRevision.current++; }}>
-      <label>{t('tools.mcp.name')}<input aria-label={t('tools.mcp.nameAria')} value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder={t('tools.mcp.namePlaceholder')} /></label>
+      <McpDocumentPanel key={JSON.stringify([feedback.context, editorGeneration.current])} target={target} name={draft.name} sourceName={nativeOrigin?.name} getDraft={() => ({ ...draft, env: parseLines(envText), headers: parseLines(headerText) })} validateNative={async () => { const current = (await native.listNativeMcp(target)).find(item => item.name === nativeOrigin?.name); if (JSON.stringify(current) !== JSON.stringify(nativeOrigin)) throw new Error(t('library.experience.nativeChanged')); }} onModeChange={setConfigOpen} onDirtyChange={setConfigDirty} formDirty={formDirty} onDraft={acceptConfiguration} onChanged={refreshMcp} />
+      <div hidden={configOpen} className={styles.fields}><label>{t('tools.mcp.name')}<input aria-label={t('tools.mcp.nameAria')} value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder={t('tools.mcp.namePlaceholder')} /></label>
       <div className={styles.typeField}><span>{t('tools.mcp.type')}</span><div className={styles.typeSwitch} role="radiogroup" aria-label={t('tools.mcp.transport')}>{([['http', 'HTTP'], ['stdio', 'stdio']] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={draft.transport === value} onClick={() => { editorRevision.current++; setDraft({ ...draft, transport: value }); }}>{label}</button>)}</div></div>
       {draft.transport === 'stdio' ? <>
         <label>{t('tools.mcp.command')}<input aria-label={t('tools.mcp.command')} value={draft.command} onChange={(event) => setDraft({ ...draft, command: event.target.value })} placeholder="npx" /></label>
@@ -306,8 +337,8 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
       {!(draft.id || nativeOrigin) && <label className={styles.inline}><input type="checkbox" checked={syncLibrary} onChange={(event) => setSyncLibrary(event.target.checked)} />{t('tools.mcp.quickSync')}<small className={styles.fieldHint}>{t('tools.mcp.quickSyncHint')}</small></label>}
       {currentConflict && <div className={styles.resultList} role="group" aria-label={t('tools.mcp.conflictLabel')}><strong>{t('tools.mcp.conflictTitle')}</strong>{currentConflict.items.map(item => <div className={styles.fileDiff} key={item.toolId}><CodeEditor compact label={t('tools.mcp.conflictCurrent')} format="json" readOnly value={JSON.stringify(item.existing, null, 2)} /><CodeEditor compact label={t('tools.mcp.conflictNext')} format="json" readOnly value={JSON.stringify(item.proposed, null, 2)} /></div>)}<div className={styles.actions}><button type="button" onClick={() => setCurrentConflict(null)}>{t('common.conflict.keepCurrent')}</button><button type="button" disabled={busy} onClick={() => void applyConflict()}>{t('tools.mcp.useNext')}</button></div></div>}
 
-      <FeedbackRegion context={feedback.context} />
-      <div className="dialog-footer">{(draft.id || nativeOrigin) && <button type="button" disabled={busy} onClick={() => void removeSaved()}>{t('tools.mcp.removeFromTool')}</button>}<span className="dialog-footer-gap" /><button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint()} disabled={busy || !draft.name.trim() || (scope === 'project' && !project)} onClick={() => void save()}>{draft.id || nativeOrigin ? t('home.launcher.save') : t('tools.mcp.addSubmit')}</button></div>
+      </div><FeedbackRegion context={feedback.context} />
+      <div hidden={configOpen} className="dialog-footer">{(draft.id || nativeOrigin) && <button type="button" disabled={busy} onClick={() => void removeSaved()}>{t('tools.mcp.removeFromTool')}</button>}<span className="dialog-footer-gap" /><button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint()} disabled={busy || configOpen || !draft.name.trim() || (scope === 'project' && !project)} onClick={() => void save()}>{draft.id || nativeOrigin ? t('home.launcher.save') : t('tools.mcp.addSubmit')}</button></div>
     </div>
     </GuideDialog>
   </div>
@@ -317,6 +348,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
 export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirtyChange }: { toolId: string; scope: Scope; projectPath: string; contextId?: string | null; onDirtyChange?: (dirty: boolean) => void }) {
   const { t } = useTranslation();
   const [packages, setPackages] = useState<SkillPackage[]>([]);
+  const [addedSkill, setAddedSkill] = useState<string | null>(null);
   const [nativeEntries, setNativeEntries] = useState<NativeSkillEntry[]>([]);
   const [recoveryIssues, setRecoveryIssues] = useState<SkillRecoveryIssue[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -325,7 +357,8 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
   const [archiveSelection, setArchiveSelection] = useState<{ source: string; local: boolean; entries: string[]; chosen: string | null } | null>(null);
   const [pendingImport, setPendingImport] = useState<{ preview: SkillImportPreview; kind: 'local' | 'zip' | 'local_zip'; source: string; subdirectory: string | null; installAfter: boolean } | null>(null);
   const [dependencyChecked, setDependencyChecked] = useState(false);
-  const [skillEnabled, setSkillEnabled] = useState(false);
+  const [skillEnabled, setSkillEnabled] = useState<boolean | null>(null);
+  const [installationLoadedFor, setInstallationLoadedFor] = useState<string | null>(null);
   const [pendingTarget, setPendingTarget] = useState<SkillTargetPreview | null>(null);
   const [adding, setAdding] = useState(false);
   const [guide, setGuide] = useState(false);
@@ -334,6 +367,11 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
   const [skillDoc, setSkillDoc] = useState<{ path: string; baseline: string; draft: string } | null>(null);
   const [skillLoading, setSkillLoading] = useState(false);
   const skillRequest = useRef(0);
+  const [visibleIds, setVisibleIds] = useState<string[]>([]);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [stateVersion, setStateVersion] = useState(0);
+  const [stateErrors, setStateErrors] = useState<Record<string, string>>({});
+  const [batchAction, setBatchAction] = useState('disable');
   const skillDirty = !!skillDoc && skillDoc.draft !== skillDoc.baseline;
   useLayoutEffect(() => { onDirtyChange?.(!!url.trim() || !!archiveSelection || !!pendingImport || adding || skillDirty); }, [url, archiveSelection, pendingImport, adding, skillDirty, onDirtyChange]);
   useEffect(() => () => { onDirtyChange?.(false); }, [onDirtyChange]);
@@ -347,7 +385,38 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
   const selected = packages.find((item) => item.id === selectedId);
   const project = scope === 'project' ? projectPath || null : null;
   const visibleIssues = recoveryIssues.filter((issue) => issue.toolId === toolId && (issue.scope === 'project' || (issue.contextId ?? null) === (contextId ?? null)));
-  const empty = !nativeEntries.length && !adding && !guide && !pendingImport && !archiveSelection;
+  const skillTarget = useMemo<McpTargetRequest>(() => ({ toolId, scope, projectPath: project, contextId, enabled: true }), [toolId, scope, project, contextId]);
+  async function refreshSkills() { setNativeEntries(await native.listNativeSkillMetadata(skillTarget)); setStateErrors({}); setStateVersion(value => value + 1); }
+  useEffect(() => {
+    let live = true;
+    const ids = [...new Set([...visibleIds, ...selectedIds])];
+    void (async () => {
+      for (let offset = 0; offset < ids.length && live; offset += 50) {
+        const chunk = ids.slice(offset, offset + 50);
+        const requests = chunk.map(path => ({ kind: 'native_skill' as const, target: skillTarget, name: nativeEntries.find(entry => entry.path === path)?.name ?? '' }));
+        try {
+          const results = await readResourceStates(requests, () => live);
+          if (!live) return;
+          for (const result of results) {
+            const path = chunk[result.index]; if (!path) continue;
+            if (result.status === 'ready' && result.value) {
+              setNativeEntries(old => old.map(entry => entry.path === path ? { ...entry, ...result.value as NativeSkillEntry, detail: entry.detail } : entry));
+              setStateErrors(old => { const next = { ...old }; delete next[path]; return next; });
+            } else setStateErrors(old => ({ ...old, [path]: result.detail || t('library.experience.failedState') }));
+          }
+        } catch (error) { if (live) setStateErrors(old => ({ ...old, ...Object.fromEntries(chunk.map(path => [path, errorText(error)])) })); }
+      }
+    })();
+    return () => { live = false; };
+  }, [skillTarget, JSON.stringify(visibleIds), JSON.stringify(selectedIds), stateVersion]);
+  function skillBatch(ids: string[]) {
+    const jobs: BatchJob[] = ids.map(path => {
+      const entry = nativeEntries.find(entry => entry.path === path)!;
+      if (!entry.packageId) return { id: path, name: entry.name, run: async () => { throw new Error(stateErrors[path] || t('library.experience.unknown')); } };
+      return { id: path, name: entry.name, operation: { action: batchAction === 'remove' ? 'skill_remove' : 'skill_enable', packageId: entry.packageId, target: { ...skillTarget, enabled: batchAction === 'enable' } } };
+    });
+    return <><select aria-label={t('library.experience.batchAction')} value={batchAction} onChange={event => setBatchAction(event.target.value)}>{['enable', 'disable', 'remove'].map(action => <option key={action} value={action}>{t(`library.experience.${action}`)}</option>)}</select><ResourceBatch key={batchAction} context={feedback.context + ':batch:' + batchAction} jobs={jobs} action={t(`library.experience.${batchAction}`)} destructive={batchAction !== 'enable'} onChanged={refreshSkills} /></>;
+  }
   useEffect(() => { setPendingTarget(null); }, [toolId, scope, project, selectedId]);
   useEffect(() => {
     skillRequest.current += 1;
@@ -366,16 +435,17 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
   useEffect(() => {
     if (!toolId || (scope === 'project' && !project)) { setNativeEntries([]); return; }
     let live = true; const result = feedback.begin('scan');
-    void native.scanNativeSkills(toolId, scope, project).then((entries) => { if (live) { setNativeEntries(entries); result.complete(); } })
+    void native.listNativeSkillMetadata(skillTarget).then((entries) => { if (live) { setNativeEntries(entries); result.complete(); } })
       .catch((value) => { if (live) result.error(errorText(value)); });
     return () => { live = false; };
   }, [toolId, scope, project]);
-  const installed = installations.find((item) => item.toolId === toolId && item.scope === scope && item.projectPath === project && (item.contextId ?? null) === (scope === 'global' ? contextId ?? null : null));
+  const installed = installations.find((item) => item.packageId === selectedId && item.toolId === toolId && item.scope === scope && item.projectPath === project && (item.contextId ?? null) === (scope === 'global' ? contextId ?? null : null));
   useEffect(() => { const result = feedback.begin('packages'); void native.listSkillPackages().then(value => { setPackages(value); result.complete(); }).catch(value => result.error(errorText(value))); }, []);
   useEffect(() => {
+    setSkillEnabled(null); setInstallationLoadedFor(null);
     if (!selectedId) return;
     let live = true; const result = feedback.begin('installations:' + selectedId);
-    void Promise.all([native.listSkillInstallations(selectedId),native.getSkillEnabled(selectedId,toolId,scope,project)]).then(([items,enabled]) => { if (live) {setInstallations(items);setSkillEnabled(enabled);result.complete();} })
+    void Promise.all([native.listSkillInstallations(selectedId),native.getSkillEnabled(selectedId,toolId,scope,project)]).then(([items,enabled]) => { if (live) {setInstallations(items);setSkillEnabled(enabled);setInstallationLoadedFor(selectedId);result.complete();} })
       .catch((value) => { if (live) result.error(errorText(value)); });
     return () => { live = false; };
   }, [selectedId, toolId, scope, project]);
@@ -390,7 +460,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
     const outcome = await native.installSkill(packageId, toolId, scope, project, targetPreview.previewToken, false);
     setResult(operationFeedback, outcome);
     setInstallations(await native.listSkillInstallations(packageId));
-    setNativeEntries(await native.scanNativeSkills(toolId, scope, project));
+    setNativeEntries(await native.listNativeSkillMetadata(skillTarget)); setStateVersion(value => value + 1);
     setSkillEnabled(await native.getSkillEnabled(packageId, toolId, scope, project));
     setRecoveryIssues(await native.listSkillRecoveryIssues());
     if (outcome.status !== 'failed') { setGuide(false); setAdding(false); }
@@ -404,6 +474,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
 
   async function finishImported(item: SkillPackage, installAfter: boolean, operationFeedback: FeedbackOperation) {
     setPackages(await native.listSkillPackages());
+    setAddedSkill(item.name);
     setSelectedId(item.id);
 
     setAdding(false);
@@ -498,6 +569,11 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
       if (skillRequest.current === request) setSkillLoading(false);
     }
   }
+  useEffect(() => {
+    if (!guide || !skillDoc) return;
+    const entry = nativeEntries.find(entry => entry.path === skillDoc.path);
+    if (entry?.packageId && entry.packageId !== selectedId) { setSelectedId(entry.packageId); setExternal(null); }
+  }, [guide, skillDoc?.path, nativeEntries, selectedId]);
   async function saveSkill() {
     const operationFeedback = feedback.begin(JSON.stringify(['saveSkill', skillDoc?.path]));
     if (!skillDoc || skillDoc.draft === skillDoc.baseline) return;
@@ -506,8 +582,8 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
     setBusy(true); try {
       await native.saveNativeSkill(toolId, scope, project, saved.path, saved.baseline, saved.draft);
       if (skillRequest.current !== request) return;
-      setSkillDoc({ ...saved, baseline: saved.draft });
-      setNativeEntries(await native.scanNativeSkills(toolId, scope, project));
+      setSkillDoc(current => current?.path === saved.path ? { ...current, baseline: saved.draft } : current);
+      setNativeEntries(await native.listNativeSkillMetadata(skillTarget)); setStateVersion(value => value + 1);
       setResult(operationFeedback, { toolId, scope, projectPath: project, path: saved.path, status: 'installed', detail: t('tools.skills.saved') });
     } catch (value) {
       if (skillRequest.current === request) operationFeedback.error(errorText(value));
@@ -544,7 +620,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
       setResult(operationFeedback, outcome);
       setPendingTarget(null);
       setInstallations(await native.listSkillInstallations(selected.id));
-      setNativeEntries(await native.scanNativeSkills(toolId, scope, project));
+      setNativeEntries(await native.listNativeSkillMetadata(skillTarget)); setStateVersion(value => value + 1);
       setSkillEnabled(await native.getSkillEnabled(selected.id,toolId,scope,project));
       setRecoveryIssues(await native.listSkillRecoveryIssues());
       if (outcome.status !== 'failed') { setGuide(false); setAdding(false); }
@@ -553,7 +629,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
   }
   async function toggleSkill(next: boolean) {
     const operationFeedback = feedback.begin(JSON.stringify(['toggle', selected?.id, next]));
-    if (!selected) return; setBusy(true);try {await native.setSkillEnabled(selected.id,toolId,scope,project,next,contextId);setSkillEnabled(await native.getSkillEnabled(selected.id,toolId,scope,project));setInstallations(await native.listSkillInstallations(selected.id));setNativeEntries(await native.scanNativeSkills(toolId,scope,project));operationFeedback.complete();}
+    if (!selected) return; setBusy(true);try {await native.setSkillEnabled(selected.id,toolId,scope,project,next,contextId);setSkillEnabled(await native.getSkillEnabled(selected.id,toolId,scope,project));setInstallations(await native.listSkillInstallations(selected.id));setNativeEntries(await native.listNativeSkillMetadata(skillTarget)); setStateVersion(value => value + 1);operationFeedback.complete();}
     catch(value){operationFeedback.error(errorText(value));}finally{setBusy(false);}
   }
   async function checkRecovery() {
@@ -568,19 +644,10 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
     : installed?.state === 'conflict' ? { label: t('tools.skills.stateConflict'), tone: 'warn' }
     : installed?.state === 'disabled' ? { label: t('tools.skills.stateDisabled'), tone: undefined }
     : installed?.state === 'missing' ? { label: t('tools.skills.stateMissing'), tone: 'warn' }
-    : { label: t('tools.skills.stateNotInstalled'), tone: undefined };
+    : { label: selectedId && installationLoadedFor !== selectedId ? t('library.experience.unknown') : t('tools.skills.stateNotInstalled'), tone: undefined };
 
   const head = <div className={styles.workspaceHead}><div><h2>Skill</h2><p>{t('tools.skills.description')}</p></div><button type="button" className={styles.primary} disabled={busy || (scope === 'project' && !project)} onClick={() => { setAdding(true); setSyncLibrary(false); setExternal(null); setGuide(true); }}><Icon name="plus" size={14} strokeWidth={2.2} />{t('tools.skills.add')}</button></div>;
 
-  if (empty) {
-    return <section className={styles.workspaceSection} aria-label="Skill">
-      {head}
-      {recovery}
-      <FeedbackRegion context={feedback.context} />
-
-      <div className={styles.emptyState}><Icon name="sparkle" size={26} strokeWidth={1.4} /><strong>{t('tools.skills.emptyTitle')}</strong><p>{t('tools.skills.emptyDetail')}</p>{scope === 'project' && !project && <p className={styles.muted}>{t('tools.mcp.pickProjectFirst')}</p>}</div>
-    </section>;
-  }
 
   return <section className={styles.workspaceSection} aria-label="Skill">
     {head}
@@ -588,12 +655,12 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
     <FeedbackRegion context={feedback.context} />
 
     <div className={styles.layout}>
-    <aside className={styles.list}>
-      <div className={styles.listHead}><strong>{t('tools.mcp.activeCount', { count: nativeEntries.length })}</strong></div>
-      {nativeEntries.map((entry) => <button type="button" key={entry.path} title={entry.state === 'unreadable' ? entry.detail : entry.path} onClick={() => void openNative(entry)}><strong>{entry.name}<span className={styles.state} data-on={entry.state === 'managed' || undefined} data-warn={entry.state === 'unreadable' || undefined}>{entry.state === 'managed' ? t('tools.skills.stateInstalled') : entry.state === 'external' ? t('tools.skills.stateExternal') : t('tools.skills.stateUnreadable')}</span></strong><small className={styles.mono}>{displayPath(entry.path)}</small></button>)}
-      {!nativeEntries.length && <p>{t('tools.skills.listEmpty')}</p>}
-    </aside>
-    <GuideDialog wide={!adding} open={guide} title={adding ? t('tools.skills.add') : t('tools.skills.currentTitle')} hint={adding ? t('tools.skills.addHint') : t('tools.skills.currentHint')} onClose={closeGuide}>
+    <ResourceList key={feedback.context} context={feedback.context} label={t('library.resources.skillListAria')} addedId={nativeEntries.find(entry => entry.name === addedSkill)?.path}
+      rows={nativeEntries.map(entry => ({ id: entry.path, name: entry.name, description: entry.detail || displayPath(entry.path), search: entry.path, metadata: `${toolId} · ${scope} · ${stateErrors[entry.path] ? t('library.experience.failedState') : entry.state === 'unknown' ? t('library.experience.unknown') : entry.state === 'managed' ? t('tools.skills.stateInstalled') : entry.state === 'external' ? t('tools.skills.stateExternal') : t('tools.skills.stateUnreadable')}`, state: stateErrors[entry.path] ? 'failed' : entry.state }))}
+      filters={['managed', 'external', 'unknown', 'failed'].map(value => ({ value, label: value === 'managed' ? t('tools.skills.stateInstalled') : value === 'external' ? t('tools.skills.stateExternal') : t(`library.experience.${value === 'failed' ? 'failedState' : value}`) }))}
+      actions={path => <button type="button" onClick={() => { const result = feedback.begin('copy:' + path); void native.readNativeSkill(toolId, scope, project, path).then(async document => { if (!await writeClipboard(document.content)) throw new Error(t('library.experience.copyFailed')); result.success(t('library.page.copied')); }).catch(error => result.error(errorText(error))); }}>{t('library.experience.copy')}</button>}
+      onVisible={setVisibleIds} onSelected={setSelectedIds} bulk={skillBatch} onRefresh={() => void refreshSkills().catch(error => feedback.begin('refresh').error(errorText(error)))} onOpen={id => { const entry = nativeEntries.find(entry => entry.path === id); if (entry) void openNative(entry); }} />
+    <GuideDialog wide={!adding} open={guide} title={adding ? t('tools.skills.add') : t('tools.skills.currentTitle')} hint={adding ? t('tools.skills.addHint') : t('tools.skills.currentHint')} onClose={() => { void (async () => { if (skillDirty && !await confirmAction(t('tools.mcp.confirmDiscard'), () => true, { title: t('common.app.leaveDirtyTitle'), confirmLabel: t('common.app.leaveDirtyConfirm') })) return; closeGuide(); })(); }}>
     <div className={styles.panel}>
       {!adding && <div className={styles.heading}><div><small>Skill</small><h2>{selected?.name ?? external?.name ?? t('tools.skills.currentTitle')}</h2></div></div>}
       {adding && <>
@@ -605,14 +672,14 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
         <label className={styles.urlField}>{t('tools.skills.zipUrl')}<span className={styles.urlRow}><input aria-label={t('tools.skills.zipUrlAria')} value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://example.com/skill.zip" /><button type="button" disabled={busy || !url.trim()} onClick={() => void archive(url.trim(), false)}>{t('tools.skills.importUrl')}</button></span></label>
       </>}
       {!adding && skillLoading && <p className={styles.muted} role="status">{t('tools.skills.loading')}</p>}
-      {!adding && skillDoc && <><p className={styles.muted}>{t('tools.skills.editorNote')}</p><CodeEditor format="markdown" label={t('tools.skills.editorLabel')} documentId={skillDoc.path} value={skillDoc.draft} onChange={(value) => setSkillDoc((current) => current ? { ...current, draft: value } : current)} readOnly={busy} /></>}
+      {!adding && skillDoc && <><p className={styles.muted}>{t('tools.skills.editorNote')}</p><CodeEditor format="markdown" label={t('tools.skills.editorLabel')} documentId={skillDoc.path} value={skillDoc.draft} onChange={(value) => setSkillDoc((current) => current ? { ...current, draft: value } : current)} readOnly={busy} /><button type="button" onClick={() => { const result = feedback.begin('copySkill:' + skillDoc.path); void writeClipboard(skillDoc.draft).then(ok => ok ? result.success(t('library.page.copied')) : result.error(t('library.experience.copyFailed'))); }}>{t('library.experience.copySkill')}</button></>}
       <FeedbackRegion context={feedback.context} />
 
       {selected && !adding && <>
         <p className={styles.muted}>{selected.description || t('tools.skills.fullPackage')} · {t('tools.skills.fileCount', { count: selected.fileCount })}</p><details className={styles.source}><summary title={displayPath(selected.source)}>{t('tools.skills.sourceLabel', { source: shortPath(selected.source) })}</summary><p>{displayPath(selected.source)}</p></details>
         {selected.compatibility && <label className={styles.inline}><input type="checkbox" checked={dependencyChecked} onChange={(event) => setDependencyChecked(event.target.checked)} />{t('tools.skills.compatibilityChecked', { requirement: selected.compatibility })}</label>}
-        <label className={styles.inline}><input type="checkbox" aria-label={t('tools.skills.enableAria')} checked={skillEnabled} disabled={busy || !installed && !nativeEntries.some(item=>item.name===selected.name) && !skillEnabled} onChange={event => void toggleSkill(event.target.checked)} />{skillEnabled ? t('tools.skills.enabledNote') : t('tools.skills.disabledNote')}</label>
-        <p className={styles.muted}><span className={styles.state} data-on={installState.tone === 'on' || undefined} data-warn={installState.tone === 'warn' || undefined}>{installState.label}</span>{skillEnabled ? t('tools.skills.enabledHint') : t('tools.skills.disabledHint')}</p>
+        <label className={styles.inline}><input type="checkbox" aria-label={t('tools.skills.enableAria')} checked={skillEnabled === true} disabled={busy || skillEnabled === null || !installed && !nativeEntries.some(item=>item.name===selected.name) && !skillEnabled} onChange={event => void toggleSkill(event.target.checked)} />{skillEnabled === null ? t('library.experience.unknown') : skillEnabled ? t('tools.skills.enabledNote') : t('tools.skills.disabledNote')}</label>
+        <p className={styles.muted}><span className={styles.state} data-on={installState.tone === 'on' || undefined} data-warn={installState.tone === 'warn' || undefined}>{installState.label}</span>{skillEnabled === null ? '' : skillEnabled ? t('tools.skills.enabledHint') : t('tools.skills.disabledHint')}</p>
         {pendingTarget && <div className={styles.resultList} role="group" aria-label={t('tools.skills.previewLabel')}><strong>{pendingTarget.status === 'conflict' ? t('tools.skills.conflictTitle') : t('tools.skills.confirmTitle')}</strong><p>{pendingTarget.detail} · {pendingTarget.path}</p>
           {pendingTarget.changes.map((change) => <details key={change.path} className={styles.fileChange}><summary>{change.path}</summary><div className={styles.fileDiff}><div><strong>{t('tools.skills.currentLabel')}</strong>{change.before !== null ? <pre>{change.before}</pre> : <small>{change.beforeSize === null ? t('tools.skills.notExists') : t('tools.skills.fileMeta', { size: change.beforeSize, digest: change.beforeDigest })}</small>}</div><div><strong>{t('tools.skills.afterLabel')}</strong>{change.after !== null ? <pre>{change.after}</pre> : <small>{change.afterSize === null ? t('tools.agents.delete') : t('tools.skills.fileMeta', { size: change.afterSize, digest: change.afterDigest })}</small>}</div></div></details>)}
           <div className={styles.actions}><button type="button" onClick={() => setPendingTarget(null)}>{t('common.dialog.cancel')}</button><button type="button" className={styles.primary} disabled={busy} onClick={() => void change(false)}>{pendingTarget.status === 'conflict' ? t('tools.skills.confirmTakeover') : t('tools.skills.confirmInstall')}</button></div>

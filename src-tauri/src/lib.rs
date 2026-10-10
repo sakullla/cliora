@@ -231,6 +231,7 @@ pub fn run() {
             commands::delete_library_item,
             commands::list_mcp_definitions,
             commands::read_mcp_document,
+            commands::render_mcp_draft,
             commands::save_mcp_document,
             commands::parse_mcp_paste,
             commands::equivalent_mcp_document,

@@ -362,6 +362,7 @@ for (const externalChange of [false, true]) test(`tool MCP continuous editing sa
     host.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
       if (command === 'get_registered_tool_workspace') { const workspace = await invoke(command, args); return { ...workspace, probe: { ...workspace.probe, dependencies: [], providerPresets: [], interfaceFormats: [], installUrl: '', upgradeHint: '' } }; }
       if (command === 'list_mcp_definitions') return [definition];
+      if (command === 'read_mcp_document') return { protectedValues: false, unmappedFields: [] };
       if (command === 'list_native_mcp') return [{ ...definition, enabled: true }];
       if (command === 'save_mcp_definition') {
         host.mcpSaveRequests.push(args.draft);

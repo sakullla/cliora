@@ -14,6 +14,8 @@
 /* ---------- List layout ------------------------------------------- */
 
 .layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; min-width: 0; }
+.layout > :global(dialog.guide-dialog-wide) { margin-right: 12px; width: min(800px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); }
+.fields[hidden] { display: none; }
 
 .list {
   display: flex;
@@ -184,3 +186,5 @@ div.error > button { justify-self: start; }
   .layout { grid-template-columns: minmax(0, 1fr); }
   .fileDiff { grid-template-columns: 1fr; }
 }
+
+.layout :global(.dialog-footer[hidden]) { display: none; }

@@ -6,7 +6,7 @@ export function workflowFixtures() {
   const tools = [
     ['pi', 'Pi'], ['open_code', 'OpenCode'], ['codex', 'Codex'], ['claude_code', 'Claude Code'],
     ['grok', 'Grok'], ['codebuddy', 'CodeBuddy'], ['zcode', 'ZCode'],
-  ].map(([id, name]) => ({ id, name, interfaceFormats: ['openai_responses'], management: { accounts: false, mcp: false, skills: false, agents: false, plugins: false, projectPlugins: false } }));
+  ].map(([id, name]) => ({ id, name, launchForm: id === 'zcode' ? 'desktop' : 'terminal', launchDirectory: id === 'zcode' ? 'unsupported' : 'terminal', interfaceFormats: ['openai_responses'], management: { accounts: false, mcp: false, skills: false, agents: false, plugins: false, projectPlugins: false } }));
   const projectDenied = {
     codex: 'Codex 项目层不能写入供应商密钥；请使用全局配置',
     pi: 'Pi 项目层不能写入供应商密钥；请使用全局配置',
@@ -91,4 +91,76 @@ export function workflowFixtures() {
     if (command === 'get_history_scan_progress') return { running: false, toolId: '', completedSources: 0, totalSources: 0 };
     return invoke(command, args);
   };
+}
+
+
+/** Browser-only 500 MCP / 500 Skill fixtures shared by regression and capture. */
+export function resourceExperienceFixture(options = {}) {
+  const count = options.count ?? 500;
+  const previous = window.__TAURI_INTERNALS__?.invoke;
+  const names = index => String(index + 1).padStart(3, '0');
+  const definitions = Array.from({ length: count }, (_, index) => ({ id: `mcp-${names(index)}`, name: `mcp-${names(index)}`, transport: index % 2 ? 'http' : 'stdio', command: 'node', args: [`server-${names(index)}.mjs`], url: `https://example.invalid/${names(index)}`, env: { TOKEN: '${TOKEN}' }, headers: {}, inLibrary: true, version: 1 }));
+  const packages = Array.from({ length: count }, (_, index) => ({ id: `skill-${names(index)}`, name: `skill-${names(index)}`, description: index === count - 1 ? 'needle-last full metadata description' : `Resource skill description ${names(index)}`, compatibility: null, source: `C:/fixtures/skills/${names(index)}`, digest: `digest-${index}`, fileCount: 3, updatedAt: 1, inLibrary: true }));
+  const contents = Object.fromEntries(packages.map(item => [item.id, `---\nname: ${item.name}\ndescription: ${item.description}\n---\n# ${item.name}\n\nOriginal Markdown and frontmatter.\n`]));
+  const metadata = () => packages.map(item => ({ name: item.name, path: `C:/fixtures/native/${item.name}`, digest: null, state: 'unknown', detail: item.description, packageId: null }));
+  const sorts = {};
+  const calls = [];
+  const writes = [];
+  const cancelled = new Set();
+  const state = { calls, writes, definitions, packages, stateDelay: options.stateDelay ?? 0, failState: options.failState ?? 'skill-002', failBatch: options.failBatch ?? 'mcp-002', active: 0, maxActive: 0, batchDelay: 0 };
+  window.__resourceScale = state;
+  window.isTauri = true;
+  const descriptor = { id: 'codex', name: 'Codex', launchForm: 'terminal', launchDirectory: 'terminal', interfaceFormats: [], management: { accounts: false, mcp: true, skills: true, agents: false, plugins: false, projectPlugins: false }, nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, resume: { state: 'unavailable', reason: '' }, history: { state: 'unavailable', reason: '' } };
+  const entryText = item => JSON.stringify({ mcpServers: { [item.name]: item.transport === 'http' ? { url: item.url, headers: item.headers } : { command: item.command, args: item.args, env: item.env } } }, null, 2);
+  window.__TAURI_INTERNALS__ = { ...(window.__TAURI_INTERNALS__ ?? {}), invoke: async (command, args = {}) => {
+    calls.push({ command, args });
+    if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: options.theme ?? 'light' }, tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }] };
+    if (command === 'list_cli_adapters') return { registered: [descriptor], managedIds: ['codex'], preservedUnknown: [] };
+    if (command === 'get_registered_tool_workspace') return { probe: { selectedPath: null, installations: [], nativeFiles: [], nativeWrites: { state: 'unknown', reason: '' }, interfaceFormats: [], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '', installCommand: null, upgradeCommand: null }, profiles: [], common: null, binding: null, effectiveContextId: null, snapshots: [], recoveryNeeded: [], customPath: null };
+    if (command === 'get_launch_settings') return { selected: 'auto', terminals: [], directories: {} };
+    if (command === 'resource_sort_preference') { if (args.value) { sorts[args.context] = args.value; localStorage.setItem('fixture-sort:' + args.context, args.value); } return sorts[args.context] ?? localStorage.getItem('fixture-sort:' + args.context) ?? 'added'; }
+    if (command === 'list_mcp_definitions') return definitions;
+    if (command === 'list_mcp_placements') return [];
+    if (command === 'list_native_mcp') return definitions.map(item => ({ ...item, enabled: true, protectedValues: false }));
+    if (command === 'list_skill_packages') return packages;
+    if (command === 'list_native_skill_metadata') return metadata();
+    if (command === 'list_skill_installations') return [];
+    if (command === 'resource_states') {
+      if (args.requests.length > 50) throw Error('unbounded state request');
+      state.maxActive = Math.max(state.maxActive, ++state.active);
+      await new Promise(resolve => setTimeout(resolve, state.stateDelay)); state.active--;
+      return args.requests.map((request, index) => ({ index, status: (request.packageId ?? request.name) === state.failState ? 'failed' : 'ready', detail: (request.packageId ?? request.name) === state.failState ? 'Injected item failure' : '', value: request.kind === 'native_skill' ? { ...metadata().find(item => item.name === request.name), state: 'managed', packageId: request.name } : [] }));
+    }
+    if (command === 'run_resource_batch') {
+      if (args.operations.length > 50) throw Error('unbounded write request');
+      const items = [];
+      for (const [index, operation] of args.operations.entries()) {
+        if (state.batchDelay) await new Promise(resolve => setTimeout(resolve, state.batchDelay));
+        const id = operation.definitionId ?? operation.packageId;
+        const status = cancelled.has(args.operationId) ? 'not_executed' : id === state.failBatch ? 'failed' : 'written';
+        if (status === 'written') writes.push({ id, operation });
+        items.push({ index, status, detail: status === 'failed' ? 'Injected write failure' : '', value: null });
+      }
+      return { operationId: args.operationId, cancelled: cancelled.has(args.operationId), items };
+    }
+    if (command === 'cancel_resource_batch') { cancelled.add(args.operationId); return true; }
+    if (command === 'read_skill_package_document') { const item = packages.find(item => item.id === args.packageId); return { packageId: item.id, name: item.name, digest: item.digest, content: contents[item.id] }; }
+    if (command === 'save_skill_package_document') { const item = packages.find(item => item.id === args.packageId); if (item.digest !== args.baseline) throw Error('External edit conflict'); contents[item.id] = args.content; item.digest += '-saved'; writes.push({ id: item.id, kind: 'skill-document' }); return { packageId: item.id, name: item.name, digest: item.digest, content: args.content }; }
+    if (command === 'read_native_skill') { const name = args.directory.split('/').at(-1); return { name, path: args.directory + '/SKILL.md', content: contents[name] }; }
+    if (command === 'save_native_skill') { const name = args.directory.split('/').at(-1); contents[name] = args.content; return { name, path: args.directory + '/SKILL.md', content: args.content }; }
+    if (command === 'get_skill_enabled') return true;
+    if (command === 'render_mcp_draft') return { source: 'equivalent', format: 'json', name: args.draft.name, text: entryText(args.draft), rawText: null, rawScope: null, sourcePath: null, baseline: '', targetToolId: args.target.toolId, protectedValues: false, unmappedFields: [], diagnostics: [] };
+    if (command === 'read_mcp_document') { const request = args.request; const item = definitions.find(item => item.id === request.definitionId || item.name === request.name); return { source: request.definitionId ? 'equivalent' : 'native_entry', name: item.name, format: 'json', text: entryText(item), rawText: request.definitionId ? null : '// Original fixture file\n' + entryText(item) + '\n// unrelated configuration', rawScope: request.definitionId ? null : 'native_file', sourcePath: request.definitionId ? null : 'C:/fixtures/mcp.jsonc', baseline: 'native-1', targetToolId: request.target.toolId, protectedValues: false, unmappedFields: [], diagnostics: [] }; }
+    if (command === 'parse_mcp_paste') {
+      const parsed = JSON.parse(args.text); const entries = parsed.mcpServers ?? (args.name ? { [args.name]: parsed } : {});
+      return Object.entries(entries).map(([name, value]) => { const unmappedFields = Object.keys(value).filter(key => !['command','args','env','url','headers'].includes(key)); return { name, draft: unmappedFields.length ? null : { id: null, expectedVersion: null, name, transport: value.url ? 'http' : 'stdio', command: value.command ?? '', args: value.args ?? [], url: value.url ?? '', env: value.env ?? {}, headers: value.headers ?? {}, inLibrary: true }, unmappedFields, diagnostics: [] }; });
+    }
+    if (command === 'save_mcp_definition') { const draft = args.draft; const index = definitions.findIndex(item => item.id === draft.id); if (index >= 0 && definitions[index].version !== draft.expectedVersion) throw Error('External version conflict'); const item = { ...draft, id: draft.id ?? 'new-' + definitions.length, version: (draft.expectedVersion ?? 0) + 1 }; if (index >= 0) definitions[index] = item; else definitions.unshift(item); return item; }
+    if (command === 'delete_mcp_definition') { const index = definitions.findIndex(item => item.id === args.id); if (index >= 0) definitions.splice(index, 1); return null; }
+    if (command === 'delete_skill_package') { const index = packages.findIndex(item => item.id === args.packageId); if (index >= 0) packages.splice(index, 1); return null; }
+    if (command === 'get_tray_status') return { available: true, error: null };
+    if (command === 'list_projects' || command === 'list_library_items' || command === 'list_accounts' || command === 'list_skill_recovery_issues' || command === 'account_capabilities' || command === 'list_usage_queries' || command === 'list_usage_cache') return [];
+    if (previous) return previous(command, args);
+    return null;
+  } };
 }

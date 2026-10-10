@@ -1,5 +1,5 @@
 import type { MaintenanceResult } from '../types/native';
-import type { McpDocumentRequest, McpDocument, McpPasteItem, SkillPackageDocument, ResourceOperation, ResourceStateRequest, ResourceItemResult, ResourceBatchResult } from '../types/resources';
+import type { McpDraftRenderRequest, McpDocumentRequest, McpDocument, McpPasteItem, SkillPackageDocument, ResourceOperation, ResourceStateRequest, ResourceItemResult, ResourceBatchResult } from '../types/resources';
 import type { ConfigurationAction, ConfigurationDescriptor, ConfigurationDraft } from '../types/configuration';
 import type { RegisteredToolContext } from '../types/native';
 import { invoke, isTauri } from '@tauri-apps/api/core';
@@ -147,6 +147,7 @@ export const native = {
   exportHistorySession: (id: string, format: 'markdown' | 'json', destination: string) => command<string>('export_history_session', { id, format, destination }),
   listMcpDefinitions: () => command<McpDefinition[]>('list_mcp_definitions'),
   readMcpDocument: (request: McpDocumentRequest) => command<McpDocument>('read_mcp_document', { request }),
+  renderMcpDraft: (target: McpTargetRequest, draft: McpDraft) => command<McpDocument>('render_mcp_draft', { target, draft } satisfies McpDraftRenderRequest),
   saveMcpDocument: (target: McpTargetRequest, name: string, baseline: string, text: string) => command<McpDocument>('save_mcp_document', { target, name, baseline, text }),
   parseMcpPaste: (target: McpTargetRequest, name: string | null, text: string) => command<McpPasteItem[]>('parse_mcp_paste', { target, name, text }),
   equivalentMcpDocument: (source: McpTargetRequest, name: string, target: McpTargetRequest) => command<McpDocument>('equivalent_mcp_document', { source, name, target }),

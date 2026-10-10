@@ -50,6 +50,8 @@
 
 /* Cards */
 .layout { display: grid; align-content: start; gap: 16px; min-width: 0; }
+.layout > :global(dialog.guide-dialog-wide) { margin-right: 12px; width: min(800px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); }
+.fields[hidden] { display: none; }
 .editLayout { min-width: 0; }
 .list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr)); gap: 10px; align-content: start; }
 .card {
@@ -274,3 +276,5 @@
   .toolbar { flex-wrap: wrap; }
   .sources { grid-template-columns: 1fr; }
 }
+
+.layout :global(.dialog-footer[hidden]) { display: none; }

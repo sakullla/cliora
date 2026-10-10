@@ -3,6 +3,39 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 #[test]
+fn unsaved_draft_render_roundtrips_without_persisting_or_reading_native_text() {
+    use crate::resources::documents;
+    for tool in ["codex", "claude_code", "antigravity", "deepseek"] {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("db")).unwrap();
+        let registry = fixture_registry();
+        let target = target(tool, true);
+        let (location, _) = target_location(&db, &registry, &target, temp.path()).unwrap();
+        std::fs::create_dir_all(location.path.parent().unwrap()).unwrap();
+        // Deliberately invalid text: a caller-owned draft never depends on parsing it.
+        let original = "unrelated external document; leave these bytes alone";
+        std::fs::write(&location.path, original).unwrap();
+        let draft: McpDraft = serde_json::from_value(serde_json::json!({"id":"not-persisted","expectedVersion":41,"name":"unsaved","transport":"stdio","command":"node","args":["one","two words"],"url":"","env":{"API_TOKEN":"${API_TOKEN}"},"headers":{},"inLibrary":true})).unwrap();
+        let output = documents::render_draft(&db, &registry, temp.path(), &target, draft.clone()).unwrap();
+        assert_eq!(output.source, "equivalent");
+        assert!(output.raw_text.is_none());
+        assert!(output.baseline.is_empty());
+        assert!(!output.protected_values);
+        let items = documents::parse_paste(&db, &registry, temp.path(), &target, None, &output.text).unwrap();
+        let parsed = items[0].draft.as_ref().unwrap();
+        assert_eq!(parsed.args, draft.args);
+        assert_eq!(parsed.env, draft.env);
+        assert_eq!(parsed.command, draft.command);
+        assert!(list_definitions(&db).unwrap().is_empty());
+        assert_eq!(std::fs::read_to_string(&location.path).unwrap(), original);
+        let mut masked = draft;
+        masked.env.insert("API_TOKEN".into(), "__CLIORA_REDACTED__".into());
+        assert!(documents::render_draft(&db, &registry, temp.path(), &target, masked).is_err());
+        assert!(list_definitions(&db).unwrap().is_empty());
+    }
+}
+
+#[test]
 fn adapter_text_roundtrips_known_aliases_structure_and_bearer_references() {
     use crate::resources::documents::{self, McpDocumentRequest};
     for tool in ["antigravity", "deepseek"] {
