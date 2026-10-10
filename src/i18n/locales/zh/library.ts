@@ -44,6 +44,7 @@ export default {
   "copyFailed": "复制失败，请重试",
   "maskedConversion": "含脱敏占位符，不能转换为新条目或表单；可继续原配置编辑，或显式读取原值后重新校验。",
   "draftChanged": "转换期间草稿已更改，已保留当前输入。请再次转换。",
+  "stateNotPortable": "资料库定义不保存启停状态。此条目已停用，请在工具的配置入口编辑或粘贴，保留停用状态。",
   "invalidConfig": "无法无损转换此配置，请检查诊断",
   "saveFormFirst": "请先保存表单修改，再读取对应配置",
   "form": "收起配置",

@@ -9,6 +9,9 @@ use crate::resources::mcp::{McpDraft, McpTransport};
 #[serde(rename_all = "camelCase")]
 pub struct DecodedMcp {
     pub draft: McpDraft,
+    /// Target state is separate from a portable definition. Consumers must
+    /// preserve it or explicitly select a different state for an enable action.
+    pub enabled: bool,
     /// Valid native fields which cannot be converted losslessly. Invalid known
     /// fields instead return Err from decode, including during native saves.
     pub unmapped_fields: Vec<String>,
@@ -37,7 +40,7 @@ pub fn decode(name: &str, entry: &Value) -> Result<DecodedMcp, String> {
             if value.as_str() == Some("sse") { unmapped_fields.push(key.into()); }
         }
     }
-    if object.get("enabled") == Some(&Value::Bool(false)) || object.get("disabled") == Some(&Value::Bool(true)) { unmapped_fields.push("disabled state".into()); }
+    let enabled = object.get("enabled") != Some(&Value::Bool(false)) && object.get("disabled") != Some(&Value::Bool(true));
     for key in ["enabled", "disabled"] { if object.get(key).is_some_and(|v| !v.is_boolean()) { return Err(format!("MCP {key} 必须是布尔值")); } }
     if let (Some(enabled), Some(disabled)) = (object.get("enabled"), object.get("disabled")) {
         if enabled == disabled { return Err("MCP enabled 与 disabled 状态冲突".into()); }
@@ -47,5 +50,5 @@ pub fn decode(name: &str, entry: &Value) -> Result<DecodedMcp, String> {
     if url.is_empty() && (object.contains_key("headers") || object.contains_key("http_headers")) { return Err("stdio MCP 不支持 HTTP 请求头".into()); }
     if object.contains_key("env") && object.contains_key("environment") { return Err("MCP 环境变量字段重复".into()); }
     if object.contains_key("headers") && object.contains_key("http_headers") { return Err("MCP 请求头字段重复".into()); }
-    Ok(DecodedMcp { draft: McpDraft { id: None, name: name.into(), transport: if url.is_empty() { McpTransport::Stdio } else { McpTransport::Http }, command, args, url, env: map(object.get("env").or_else(|| object.get("environment")))?, headers: map(object.get("headers").or_else(|| object.get("http_headers")))?, in_library: true, expected_version: None }, unmapped_fields })
+    Ok(DecodedMcp { draft: McpDraft { id: None, name: name.into(), transport: if url.is_empty() { McpTransport::Stdio } else { McpTransport::Http }, command, args, url, env: map(object.get("env").or_else(|| object.get("environment")))?, headers: map(object.get("headers").or_else(|| object.get("http_headers")))?, in_library: true, expected_version: None }, enabled, unmapped_fields })
 }

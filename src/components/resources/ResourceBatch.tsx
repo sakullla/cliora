@@ -8,8 +8,8 @@ import { FeedbackRegion, useFeedback } from '../Feedback';
 import type { FeedbackOperation } from '../../lib/notifications';
 import styles from './ResourceList.module.css';
 
-export type BatchJob = { id: string; name: string; operation?: ResourceOperation; run?: () => Promise<{ status: string; detail: string } | void> };
-export function ResourceBatch({ context, jobs, action, destructive, onChanged }: { context: string; jobs: BatchJob[]; action: string; destructive?: boolean; onChanged: () => Promise<void> }) {
+export type BatchJob = { id: string; name: string; operation?: ResourceOperation; prepare?: () => Promise<ResourceOperation>; committed?: () => boolean; run?: () => Promise<{ status: string; detail: string } | void> };
+export function ResourceBatch({ context, jobs, action, destructive, onChanged, onBusyChange }: { context: string; jobs: BatchJob[]; action: string; destructive?: boolean; onChanged: () => Promise<void>; onBusyChange?: (busy: boolean) => void }) {
   const { t } = useTranslation();
   const feedback = useFeedback(context);
   const [busy, setBusy] = useState(false);
@@ -31,21 +31,22 @@ export function ResourceBatch({ context, jobs, action, destructive, onChanged }:
     const result = retry && previousResult.current ? feedback.resume(previousResult.current) : feedback.begin(JSON.stringify(['batch', action, items.map(item => item.id)]));
     previousResult.current = result;
     const retained = retry ? results.filter(item => resourceSucceeded(item.status)) : [];
-    setBusy(true); control.current = { cancelled: false, active: null };
+    setBusy(true); onBusyChange?.(true); control.current = { cancelled: false, active: null };
     let outcomes: ResourceItemResult[] = [];
-    const show = (values: ResourceItemResult[]) => { if (live.current) setResults([...retained, ...values.map(item => ({ ...item, name: items[item.index].name, job: items[item.index] }))]); };
+    const show = (values: ResourceItemResult[]) => { if (live.current) setResults([...retained, ...values.map(item => ({ ...item, detail: !resourceSucceeded(item.status) && items[item.index].committed?.() ? `${t('tools.mcp.definitionSaved')} ${item.detail}` : item.detail, name: items[item.index].name, job: items[item.index] }))]); };
+    const confirmReplace: Parameters<typeof runResourceOperations>[3] = async (operation, preview) => confirmAction(t('library.resources.confirmReplace', { name: items.find(item => item.operation?.action === 'mcp_apply' && item.operation.definitionId === operation.definitionId)?.name ?? operation.definitionId, tool: preview.toolId }) + `\n${JSON.stringify(preview.existing, null, 2)}\n→\n${JSON.stringify(preview.proposed, null, 2)}`, () => live.current && !control.current.cancelled, { title: t('library.resources.replaceMcpTitle'), confirmLabel: t('library.page.replaceAction'), destructive: true });
     try {
-      if (items.every(item => item.operation)) outcomes = await runResourceOperations(items.map(item => item.operation!), control.current, show);
+      if (items.every(item => item.operation || item.prepare)) outcomes = await runResourceOperations(items.map(item => item.operation ?? item.prepare!), control.current, show, confirmReplace);
       else {
         for (let index = 0; index < items.length; index++) {
           if (control.current.cancelled) { outcomes.push({ index, status: 'not_executed', detail: '', value: null }); continue; }
-          if (items[index].operation) {
+          if (items[index].operation || items[index].prepare) {
             const start = index;
-            const chunk: ResourceOperation[] = [];
-            while (index < items.length && items[index].operation && chunk.length < 50) chunk.push(items[index++].operation!);
+            const chunk: Array<ResourceOperation | (() => Promise<ResourceOperation>)> = [];
+            while (index < items.length && (items[index].operation || items[index].prepare) && chunk.length < 50) { chunk.push(items[index].operation ?? items[index].prepare!); index++; }
             index--;
             const prefix = [...outcomes];
-            const written = await runResourceOperations(chunk, control.current, values => show([...prefix, ...values.map(item => ({ ...item, index: start + item.index }))]));
+            const written = await runResourceOperations(chunk, control.current, values => show([...prefix, ...values.map(item => ({ ...item, index: start + item.index }))]), confirmReplace);
             outcomes.push(...written.map(item => ({ ...item, index: start + item.index })));
             continue;
           }
@@ -60,7 +61,7 @@ export function ResourceBatch({ context, jobs, action, destructive, onChanged }:
       const summary = t('library.experience.result', { count: successful, failed });
       if (failed) result.partial(t('library.experience.batchNeedsAttention'), { detail: summary }); else result.success(t('library.experience.batchComplete'));
       try { await onChanged(); } catch (error) { result.error(resourceError(error)); }
-    } finally { if (live.current) setBusy(false); }
+    } finally { if (live.current) { setBusy(false); onBusyChange?.(false); } }
   }
   return <div className={styles.batch}>
     <div className={styles.actions}><span>{t('library.experience.batchScope', { count: jobs.length, action })}</span><button type="button" disabled={busy || !jobs.length} onClick={() => void run(jobs)}>{action}</button>{busy && <button type="button" onClick={cancel}>{t('library.experience.cancelBatch')}</button>}{!busy && results.some(item => !resourceSucceeded(item.status)) && <button type="button" onClick={() => void run(results.filter(item => !resourceSucceeded(item.status)).map(item => jobs.find(job => job.id === item.job.id) ?? item.job), true)}>{t('library.experience.retryFailed')}</button>}</div>

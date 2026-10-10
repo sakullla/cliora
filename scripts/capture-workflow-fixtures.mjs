@@ -107,11 +107,14 @@ export function resourceExperienceFixture(options = {}) {
   const calls = [];
   const writes = [];
   const cancelled = new Set();
-  const state = { calls, writes, definitions, packages, stateDelay: options.stateDelay ?? 0, failState: options.failState ?? 'skill-002', failBatch: options.failBatch ?? 'mcp-002', active: 0, maxActive: 0, batchDelay: 0 };
+  const nativeEntries = definitions.map(item => ({ ...structuredClone(item), enabled: true, protectedValues: false }));
+  const state = { calls, writes, definitions, packages, nativeEntries, conflicts: [], stateDelay: options.stateDelay ?? 0, failState: options.failState ?? 'skill-002', failBatch: options.failBatch ?? 'mcp-002', active: 0, maxActive: 0, batchDelay: 0 };
   window.__resourceScale = state;
   window.isTauri = true;
   const descriptor = { id: 'codex', name: 'Codex', launchForm: 'terminal', launchDirectory: 'terminal', interfaceFormats: [], management: { accounts: false, mcp: true, skills: true, agents: false, plugins: false, projectPlugins: false }, nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, resume: { state: 'unavailable', reason: '' }, history: { state: 'unavailable', reason: '' } };
-  const entryText = item => JSON.stringify({ mcpServers: { [item.name]: item.transport === 'http' ? { url: item.url, headers: item.headers } : { command: item.command, args: item.args, env: item.env } } }, null, 2);
+  const entryText = item => JSON.stringify({ mcpServers: { [item.name]: { ...(item.transport === 'http' ? { url: item.url, headers: item.headers } : { command: item.command, args: item.args, env: item.env }), ...(item.enabled === false ? { enabled: false } : {}) } } }, null, 2);
+  const baseline = name => JSON.stringify(nativeEntries.find(item => item.name === name) ?? null);
+  const token = (definition, target) => JSON.stringify([definition.id, definition.version, target.toolId, target.scope, target.projectPath ?? null, target.contextId ?? null, target.enabled, baseline(definition.name)]);
   window.__TAURI_INTERNALS__ = { ...(window.__TAURI_INTERNALS__ ?? {}), invoke: async (command, args = {}) => {
     calls.push({ command, args });
     if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: options.theme ?? 'light' }, tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }] };
@@ -121,7 +124,8 @@ export function resourceExperienceFixture(options = {}) {
     if (command === 'resource_sort_preference') { if (args.value) { sorts[args.context] = args.value; localStorage.setItem('fixture-sort:' + args.context, args.value); } return sorts[args.context] ?? localStorage.getItem('fixture-sort:' + args.context) ?? 'added'; }
     if (command === 'list_mcp_definitions') return definitions;
     if (command === 'list_mcp_placements') return [];
-    if (command === 'list_native_mcp') return definitions.map(item => ({ ...item, enabled: true, protectedValues: false }));
+    if (command === 'list_native_mcp') return structuredClone(nativeEntries);
+    if (command === 'preview_mcp_targets') { const definition = definitions.find(item => item.id === args.definitionId); return args.targets.map(target => ({ ...target, path: 'C:/fixtures/mcp.jsonc', status: state.conflicts.includes(definition.name) ? 'conflict' : 'ready', detail: 'Fixture native preview', baselineHash: baseline(definition.name), previewToken: token(definition, target), existing: nativeEntries.find(item => item.name === definition.name) ?? null, proposed: { name: definition.name, enabled: target.enabled } })); }
     if (command === 'list_skill_packages') return packages;
     if (command === 'list_native_skill_metadata') return metadata();
     if (command === 'list_skill_installations') return [];
@@ -137,23 +141,34 @@ export function resourceExperienceFixture(options = {}) {
       for (const [index, operation] of args.operations.entries()) {
         if (state.batchDelay) await new Promise(resolve => setTimeout(resolve, state.batchDelay));
         const id = operation.definitionId ?? operation.packageId;
-        const status = cancelled.has(args.operationId) ? 'not_executed' : id === state.failBatch ? 'failed' : 'written';
+        let status = cancelled.has(args.operationId) ? 'not_executed' : id === state.failBatch ? 'failed' : 'written';
+        let detail = status === 'failed' ? 'Injected write failure' : '';
+        if (status === 'written' && operation.action === 'mcp_apply') {
+          const definition = definitions.find(item => item.id === id); const target = operation.target;
+          if (!definition || target.baselineHash !== baseline(definition.name) || target.previewToken !== token(definition, target)) { status = 'failed'; detail = 'MCP definition, target or baseline changed; preview again'; }
+          else if (state.conflicts.includes(definition.name) && !target.allowReplace) { status = 'conflict'; detail = 'Explicit replacement required'; }
+          else { const entry = { ...structuredClone(definition), enabled: target.enabled, protectedValues: false }; const index = nativeEntries.findIndex(item => item.name === definition.name); if (index < 0) nativeEntries.push(entry); else nativeEntries[index] = entry; state.conflicts = state.conflicts.filter(name => name !== definition.name); }
+        }
         if (status === 'written') writes.push({ id, operation });
-        items.push({ index, status, detail: status === 'failed' ? 'Injected write failure' : '', value: null });
+        items.push({ index, status, detail, value: null });
       }
       return { operationId: args.operationId, cancelled: cancelled.has(args.operationId), items };
     }
     if (command === 'cancel_resource_batch') { cancelled.add(args.operationId); return true; }
+    if (command === 'distribute_mcp') {
+      const result = await window.__TAURI_INTERNALS__.invoke('run_resource_batch', { operationId: crypto.randomUUID(), operations: args.targets.map(target => ({ action: 'mcp_apply', definitionId: args.definitionId, target })) });
+      return result.items.map((item, index) => ({ ...args.targets[index], status: item.status, detail: item.detail }));
+    }
     if (command === 'read_skill_package_document') { const item = packages.find(item => item.id === args.packageId); return { packageId: item.id, name: item.name, digest: item.digest, content: contents[item.id] }; }
     if (command === 'save_skill_package_document') { const item = packages.find(item => item.id === args.packageId); if (item.digest !== args.baseline) throw Error('External edit conflict'); contents[item.id] = args.content; item.digest += '-saved'; writes.push({ id: item.id, kind: 'skill-document' }); return { packageId: item.id, name: item.name, digest: item.digest, content: args.content }; }
     if (command === 'read_native_skill') { const name = args.directory.split('/').at(-1); return { name, path: args.directory + '/SKILL.md', content: contents[name] }; }
     if (command === 'save_native_skill') { const name = args.directory.split('/').at(-1); contents[name] = args.content; return { name, path: args.directory + '/SKILL.md', content: args.content }; }
     if (command === 'get_skill_enabled') return true;
-    if (command === 'render_mcp_draft') return { source: 'equivalent', format: 'json', name: args.draft.name, text: entryText(args.draft), rawText: null, rawScope: null, sourcePath: null, baseline: '', targetToolId: args.target.toolId, protectedValues: false, unmappedFields: [], diagnostics: [] };
-    if (command === 'read_mcp_document') { const request = args.request; const item = definitions.find(item => item.id === request.definitionId || item.name === request.name); return { source: request.definitionId ? 'equivalent' : 'native_entry', name: item.name, format: 'json', text: entryText(item), rawText: request.definitionId ? null : '// Original fixture file\n' + entryText(item) + '\n// unrelated configuration', rawScope: request.definitionId ? null : 'native_file', sourcePath: request.definitionId ? null : 'C:/fixtures/mcp.jsonc', baseline: 'native-1', targetToolId: request.target.toolId, protectedValues: false, unmappedFields: [], diagnostics: [] }; }
+    if (command === 'render_mcp_draft') return { source: 'equivalent', format: 'json', name: args.draft.name, enabled: args.target.enabled, text: entryText({ ...args.draft, enabled: args.target.enabled }), rawText: null, rawScope: null, sourcePath: null, baseline: '', targetToolId: args.target.toolId, protectedValues: false, unmappedFields: [], diagnostics: [] };
+    if (command === 'read_mcp_document') { const request = args.request; const item = request.definitionId ? definitions.find(item => item.id === request.definitionId) : nativeEntries.find(item => item.name === request.name); return { source: request.definitionId ? 'equivalent' : 'native_entry', name: item.name, enabled: item.enabled ?? true, format: 'json', text: entryText(item), rawText: request.definitionId ? null : '// Original fixture file\n' + entryText(item) + '\n// unrelated configuration', rawScope: request.definitionId ? null : 'native_file', sourcePath: request.definitionId ? null : 'C:/fixtures/mcp.jsonc', baseline: 'native-1', targetToolId: request.target.toolId, protectedValues: !!item.protectedValues, unmappedFields: item.unmappedFields ?? [], diagnostics: [] }; }
     if (command === 'parse_mcp_paste') {
       const parsed = JSON.parse(args.text); const entries = parsed.mcpServers ?? (args.name ? { [args.name]: parsed } : {});
-      return Object.entries(entries).map(([name, value]) => { const unmappedFields = Object.keys(value).filter(key => !['command','args','env','url','headers'].includes(key)); return { name, draft: unmappedFields.length ? null : { id: null, expectedVersion: null, name, transport: value.url ? 'http' : 'stdio', command: value.command ?? '', args: value.args ?? [], url: value.url ?? '', env: value.env ?? {}, headers: value.headers ?? {}, inLibrary: true }, unmappedFields, diagnostics: [] }; });
+      return Object.entries(entries).map(([name, value]) => { const unmappedFields = Object.keys(value).filter(key => !['command','args','env','url','headers','enabled','disabled'].includes(key)); return { name, enabled: value.enabled !== false && value.disabled !== true, draft: unmappedFields.length ? null : { id: null, expectedVersion: null, name, transport: value.url ? 'http' : 'stdio', command: value.command ?? '', args: value.args ?? [], url: value.url ?? '', env: value.env ?? {}, headers: value.headers ?? {}, inLibrary: true }, unmappedFields, diagnostics: [] }; });
     }
     if (command === 'save_mcp_definition') { const draft = args.draft; const index = definitions.findIndex(item => item.id === draft.id); if (index >= 0 && definitions[index].version !== draft.expectedVersion) throw Error('External version conflict'); const item = { ...draft, id: draft.id ?? 'new-' + definitions.length, version: (draft.expectedVersion ?? 0) + 1 }; if (index >= 0) definitions[index] = item; else definitions.unshift(item); return item; }
     if (command === 'delete_mcp_definition') { const index = definitions.findIndex(item => item.id === args.id); if (index >= 0) definitions.splice(index, 1); return null; }

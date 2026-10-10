@@ -44,6 +44,7 @@ export default {
   "copyFailed": "Copy failed. Retry.",
   "maskedConversion": "Redacted placeholders cannot become a new entry or form. Continue editing the native configuration, or explicitly read original values and validate again.",
   "draftChanged": "The draft changed during conversion. Your current input is preserved; convert again to use it.",
+  "stateNotPortable": "Library definitions do not store enable state. Edit or paste this disabled entry in its tool configuration to preserve its state.",
   "invalidConfig": "This configuration cannot be converted without loss. Check diagnostics.",
   "saveFormFirst": "Save form changes before reading the corresponding configuration",
   "form": "Collapse configuration",

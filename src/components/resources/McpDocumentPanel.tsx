@@ -10,9 +10,9 @@ import { CodeEditor } from '../CodeEditor';
 import { FeedbackRegion, useFeedback } from '../Feedback';
 import styles from './ResourceList.module.css';
 
-export function McpDocumentPanel({ target, definitionId = null, name, formDirty, onDraft, onChanged, onModeChange, onDirtyChange, getDraft, sourceName, validateNative }: {
+export function McpDocumentPanel({ target, definitionId = null, name, formDirty, onDraft, onChanged, onModeChange, onDirtyChange, onTextChange, getDraft, sourceName, validateNative }: {
   getDraft: () => McpDraft; sourceName?: string; validateNative?: () => Promise<void>; target?: McpTargetRequest; definitionId?: string | null; name: string; formDirty: boolean;
-  onModeChange?: (open: boolean) => void; onDirtyChange?: (dirty: boolean) => void; onDraft: (draft: McpDraft, copy: boolean) => void; onChanged: () => Promise<void>;
+  onModeChange?: (open: boolean) => void; onDirtyChange?: (dirty: boolean) => void; onTextChange: () => void; onDraft: (draft: McpDraft, copy: boolean, enabled?: boolean) => void; onChanged: () => Promise<void>;
 }) {
   const { t } = useTranslation();
   const [tools, setTools] = useState<AdapterDescriptor[]>([]);
@@ -64,9 +64,10 @@ export function McpDocumentPanel({ target, definitionId = null, name, formDirty,
       if (document.protectedValues) throw new Error(t('library.experience.maskedConversion'));
       const parsed = await native.parseMcpPaste(destination, document.name, value);
       if (parsed.length !== 1 || !parsed[0].draft || parsed[0].unmappedFields.length) throw new Error(parsed.flatMap(item => [...item.diagnostics, ...item.unmappedFields]).join(' · ') || t('library.experience.invalidConfig'));
+      if (!target && parsed[0].enabled === false) throw new Error(t('library.experience.stateNotPortable'));
       if (live.current && request === epoch.current) {
         if (latest.current.text !== value) throw new Error(t('library.experience.draftChanged'));
-        onDraft({ ...parsed[0].draft, id: null, expectedVersion: null, name: copy ? `${parsed[0].name}-copy` : parsed[0].name }, copy); setOpen(false);
+        onDraft({ ...parsed[0].draft, id: null, expectedVersion: null, name: copy ? `${parsed[0].name}-copy` : parsed[0].name }, copy, parsed[0].enabled ?? undefined); setOpen(false);
       } result.complete();
     } catch (error) { result.error(resourceError(error)); }
     finally { if (live.current && request === epoch.current) setBusy(false); }
@@ -98,7 +99,7 @@ export function McpDocumentPanel({ target, definitionId = null, name, formDirty,
       {!!document.unmappedFields.length && <p>{t('library.experience.unmapped', { fields: document.unmappedFields.join(', ') })}</p>}
       {document.diagnostics.map((detail, index) => <p key={index}>{detail}</p>)}
       {document.rawText !== null && <label className={styles.check}><input type="checkbox" checked={raw} onChange={event => setRaw(event.target.checked)} />{t('library.experience.rawFile')}</label>}
-      <CodeEditor label={raw ? t('library.experience.rawFile') : t('library.experience.entryConfig')} format={document.format} value={raw ? document.rawText ?? '' : text} onChange={setText} readOnly={raw} documentId={`${name}:${toolId}:${raw}`} />
+      <CodeEditor label={raw ? t('library.experience.rawFile') : t('library.experience.entryConfig')} format={document.format} value={raw ? document.rawText ?? '' : text} onChange={value => { onTextChange(); setText(value); }} readOnly={raw} documentId={`${name}:${toolId}:${raw}`} />
       <div className={styles.actions}><button type="button" onClick={() => { const result = feedback.begin('copy-entry'); void writeClipboard(text).then(ok => ok ? result.success(t('library.experience.copiedEntry')) : result.error(t('library.experience.copyFailed'))); }}>{t('library.experience.copyEntry')}</button><button type="button" disabled={busy} onClick={() => void toForm(true)}>{t('library.experience.copyNew')}</button><button type="button" disabled={busy || raw} onClick={() => void toForm(false)}>{t('library.experience.useForm')}</button>{target && !raw && document.source === 'native_entry' && <button type="button" data-dialog-save disabled={busy || text === document.text} onClick={() => void save()}>{t('tools.skills.save')}</button>}{document.protectedValues && <button type="button" disabled={busy || text !== document.text} onClick={() => void load(toolId, true)}>{t('library.experience.reveal')}</button>}</div>
     </>}
     <FeedbackRegion context={feedback.context} />
