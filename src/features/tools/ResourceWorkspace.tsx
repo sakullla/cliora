@@ -187,7 +187,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
     const revision = editorRevision.current;
     const current = () => mounted.current && generation === editorGeneration.current && revision === editorRevision.current && acceptedForm === latestForm.current;
     const editing = !!(draft.id || nativeOrigin);
-    const linked = definitions.find((item) => item.id === draft.id) ?? definitions.find((item) => item.name === draft.name.trim());
+    const linked = draft.id ? definitions.find(item => item.id === draft.id) : definitions.find(item => item.name === draft.name.trim());
     const inLibrary = editing ? linked?.inLibrary !== false : syncLibrary || linked?.inLibrary === true;
     let saved: McpDefinition | null = null;
     async function finish(result: FeedbackOperation) {
@@ -224,17 +224,21 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
       } } : undefined);
     }
     setBusy(true); try {
-      saved = await native.saveMcpDefinition({ ...draft, args: keptArgs(draft.args), id: linked?.id ?? draft.id, expectedVersion: linked?.version ?? draft.expectedVersion, inLibrary, env: parseLines(envText), headers: parseLines(headerText) });
+      saved = await native.saveMcpDefinition({ ...draft, args: keptArgs(draft.args), id: draft.id ?? linked?.id ?? null, expectedVersion: draft.id ? draft.expectedVersion : linked?.version ?? draft.expectedVersion, inLibrary, env: parseLines(envText), headers: parseLines(headerText) });
       operationFeedback.identify('save:' + saved.id);
       operationFeedback.committed(t('tools.mcp.savedKeepEditing'));
+      const accepted = saved;
+      if (mounted.current && editorGeneration.current === generation) {
+        // Keep the saved snapshot in the list, while the draft retains the
+        // revision it actually edited as its CAS baseline for the next save.
+        setDefinitions(items => items.some(item => item.id === accepted.id) ? items.map(item => item.id === accepted.id && item.version <= accepted.version ? accepted : item) : [accepted, ...items]);
+      }
       if (!current()) {
-        if (mounted.current && editorGeneration.current === generation) setDraft(previous => ({ ...previous, id: saved!.id, expectedVersion: saved!.version }));
+        if (mounted.current && editorGeneration.current === generation) setDraft(previous => ({ ...previous, id: accepted.id, expectedVersion: accepted.version }));
         operationFeedback.partial(t('tools.mcp.dirtyAgain')); return;
       }
-      const accepted = saved;
       select(accepted, enabled);
       acceptedForm = latestForm.current;
-      setDefinitions(items => items.some(item => item.id === accepted.id) ? items.map(item => item.id === accepted.id ? accepted : item) : [accepted, ...items]);
       await finish(operationFeedback);
     } catch (value) { reportFailure(operationFeedback, value); }
     finally { if (mounted.current) setBusy(false); }

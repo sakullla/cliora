@@ -388,3 +388,45 @@ for (const written of [false, true]) test(`repeated list failures retain saved a
   const last = store.getSnapshot()[0]; assert.equal(last.tone, written ? 'success' : 'partial');
   if (!written) { assert.match(last.text, /definitionSaved/); assert.equal(last.detail, 'target denied'); }
 });
+
+
+for (const externalChange of [false, true]) test(`tool MCP consecutive saves use accepted draft version and preserve CAS (${externalChange})`, async () => {
+  const store = createNotificationStore(); const requests = []; let version = 1; let resolve;
+  let draft = { id: 'A', name: 'existing', command: 'initial', args: [], expectedVersion: 1 };
+  let definitions = [{ ...draft, version: 1, inLibrary: true }];
+  const form = { current: 'initial' }; const revision = { current: 0 };
+  const bindings = {
+    feedback: { begin: key => store.begin('mcp', key), resume: result => result.retry() }, scope: 'global', project: null,
+    nativeOrigin: null, editorGeneration: { current: 1 }, editorRevision: revision, latestForm: form, mounted: { current: true }, syncLibrary: false,
+    setBusy: noop, keptArgs: x => x, parseLines: () => ({}), envText: '', headerText: '', enabled: true,
+    setDefinitions: update => { definitions = typeof update === 'function' ? update(definitions) : update; },
+    setDraft: update => { draft = typeof update === 'function' ? update(draft) : update; },
+    select: value => { draft = { ...value, expectedVersion: value.version }; form.current = value.command; },
+    target: {}, setCurrentConflict: noop, applyItems: async () => false, leaveComposer: noop, t: translate, errorText: e => e.message,
+    native: { saveMcpDefinition: async request => {
+      requests.push(request);
+      if (request.expectedVersion !== version) throw Error('external version conflict');
+      const saved = { ...request, version: ++version };
+      if (requests.length === 1) return new Promise(done => { resolve = () => done(saved); });
+      return saved;
+    }, listMcpDefinitions: async () => definitions, previewMcpTargets: async () => [{ status: 'ready' }] },
+  };
+  const save = () => consumer('src/features/tools/ResourceWorkspace.tsx', 'save', { ...bindings, draft, definitions })();
+  const pending = save();
+  draft = { ...draft, command: 'continued input' }; form.current = draft.command; revision.current++;
+  resolve(); await pending;
+  assert.equal(draft.command, 'continued input'); assert.equal(draft.expectedVersion, 2); assert.equal(definitions[0].version, 2);
+  if (externalChange) {
+    version = 3;
+    // Even a freshly read list cannot silently rebase an already edited draft.
+    definitions = [{ ...definitions[0], version: 3, command: 'external edit' }];
+  }
+  await save();
+  assert.deepEqual(requests.map(item => item.expectedVersion), [1, 2]);
+  assert.equal(requests[1].command, 'continued input');
+  if (externalChange) {
+    assert.equal(draft.expectedVersion, 2); assert.equal(draft.command, 'continued input');
+    assert.equal(store.getSnapshot()[0].text, 'external version conflict');
+    assert.equal(store.getSnapshot()[0].tone, 'error');
+  } else { assert.equal(draft.expectedVersion, 3); assert.equal(store.getSnapshot().some(item => item.tone === 'error'), false); }
+});
