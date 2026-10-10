@@ -7,12 +7,20 @@ fn native_skill_metadata_supports_five_hundred_without_reading_package_contents(
     let registry = Registry::builtins();
     let root = temp.path().join(".claude/skills");
     for index in 0..500 { fs::create_dir_all(root.join(format!("skill-{index:03}"))).unwrap(); }
-    // Listing must not parse even an invalid manifest until this row is requested.
+    // An invalid header must not make the metadata list fail.
     fs::write(root.join("skill-000/SKILL.md"), [255]).unwrap();
+    fs::write(root.join("skill-499/SKILL.md"), "---\nname: mismatched\ndescription: >-\n  off-page semantic needle\n  remains searchable\n---\n").unwrap();
+    // A package-wide scan would reject this oversized attachment. Metadata
+    // must still expose the description without visiting companion files.
+    fs::create_dir_all(root.join("skill-499/attachments")).unwrap();
+    fs::File::create(root.join("skill-499/attachments/ignored.bin")).unwrap().set_len((MAX_BYTES + 1) as u64).unwrap();
     let target = crate::resources::mcp::McpTargetRequest { context_id: None, tool_id: "claude_code".into(), scope: Scope::Global, project_path: None, enabled: true, baseline_hash: None, allow_replace: false, preview_token: None };
     let metadata = native_metadata(&db, &registry, temp.path(), &target).unwrap();
     assert_eq!(metadata.len(), 500);
     assert!(metadata.iter().all(|e| e.state == "unknown" && e.digest.is_none()));
+    let matches: Vec<_> = metadata.iter().filter(|entry| entry.detail.contains("off-page semantic needle remains searchable")).collect();
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].name, "skill-499");
     assert!(native_state(&db, &registry, temp.path(), &target, "../outside").is_err());
     let states = crate::resources::batch::states(&db, &registry, temp.path(), vec![crate::resources::batch::StateRequest::NativeSkill { target, name: "skill-000".into() }]).unwrap();
     assert_eq!(states[0].status, "failed");

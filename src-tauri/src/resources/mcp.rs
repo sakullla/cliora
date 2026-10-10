@@ -111,7 +111,7 @@ fn valid_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
 
-fn is_reference(value: &str) -> bool {
+pub(super) fn is_reference(value: &str) -> bool {
     let value = value.strip_prefix("Bearer ").unwrap_or(value);
     let reference = value
         .strip_prefix("${")
@@ -610,7 +610,9 @@ pub fn distribute(
             let document = adapter.mcp_document_at(definition, target.enabled, existing, &location)?;
             let written_hash = entry_hash(document.as_ref())?;
             let unchanged = existing == document.as_ref();
-            let newly_added = existing.is_none() && document.is_some();
+            // A deletion-based disable leaves the placement ledger in place.
+            // Re-enabling an old placement must preserve its unknown/old rank.
+            let newly_added = existing.is_none() && document.is_some() && owned.is_none();
             let order_id = native_order_id(&location, &definition.name);
             let change = adapter.mcp_change(&parsed, &location, &definition.name, document)?;
             let commit = |tx: &rusqlite::Transaction<'_>| {

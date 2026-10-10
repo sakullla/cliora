@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{Cursor, Read};
+use std::io::{BufRead, BufReader, Cursor, Read};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -210,28 +210,50 @@ fn manifest_info(
     };
     let text = String::from_utf8(STANDARD.decode(encoded).map_err(|_| "SKILL.md 编码错误")?)
         .map_err(|_| "SKILL.md 应为 UTF-8")?;
+    Ok(manifest_metadata(&text))
+}
+
+fn manifest_metadata(text: &str) -> (String, Option<String>) {
     let mut lines = text.lines();
     if lines.next().map(str::trim) != Some("---") {
-        return Ok((String::new(), None));
+        return (String::new(), None);
     }
-    let mut description = String::new();
-    let mut compatibility = None;
+    let mut header = String::new();
     for line in lines {
         if line.trim() == "---" {
-            break;
+            let Ok(value) = serde_yaml::from_str::<serde_yaml::Value>(&header) else { return (String::new(), None); };
+            let description = value.get("description").and_then(serde_yaml::Value::as_str).unwrap_or("").to_owned();
+            let compatibility = value.get("compatibility").and_then(serde_yaml::Value::as_str).filter(|v| !v.is_empty() && v.len() <= 500).map(str::to_owned);
+            return (description, compatibility);
         }
-        if let Some((key, value)) = line.split_once(':') {
-            let value = value.trim().trim_matches('"').trim_matches('\'').to_owned();
-            match key.trim() {
-                "description" => description = value,
-                "compatibility" if !value.is_empty() && value.len() <= 500 => {
-                    compatibility = Some(value);
-                }
-                _ => {}
-            }
-        }
+        header.push_str(line);
+        header.push('\n');
     }
-    Ok((description, compatibility))
+    (String::new(), None)
+}
+
+/// Read only the bounded frontmatter, never attachments or the Markdown body.
+/// Follow the same directory-link policy as package reads; reject a linked file.
+fn native_manifest_description(directory: &Path) -> Result<String, String> {
+    let file = resolved_skill_dir(directory)?.join("SKILL.md");
+    if file.is_symlink() { return Err("不跟随 SKILL.md 符号链接".into()); }
+    let file = match fs::File::open(file) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(String::new()),
+        Err(_) => return Err("SKILL.md 暂不可读取".into()),
+    };
+    let mut reader = BufReader::new(file).take(64 * 1024);
+    let mut header = String::new();
+    let mut line = String::new();
+    reader.read_line(&mut line).map_err(|_| "SKILL.md 应为 UTF-8")?;
+    if line.trim() != "---" { return Ok(String::new()); }
+    header.push_str(&line);
+    loop {
+        line.clear();
+        if reader.read_line(&mut line).map_err(|_| "SKILL.md 应为 UTF-8")? == 0 { return Ok(String::new()); }
+        header.push_str(&line);
+        if line.trim() == "---" { return Ok(manifest_metadata(&header).0); }
+    }
 }
 
 fn skill_markdown(
@@ -1190,7 +1212,8 @@ pub fn native_metadata(db: &Database, registry: &Registry, home: &Path, target_r
         let name = entry.file_name().to_string_lossy().to_string();
         if name.starts_with('.') || !entry.path().is_dir() { continue; }
         if entries.len() >= 4096 { return Err("原生 Skills 目录超过 4096 个".into()); }
-        entries.push(NativeSkillEntry { package_id: packages.get(&name).cloned(), name, path: entry.path().display().to_string(), digest: None, state: "unknown", detail: String::new() });
+        let detail = native_manifest_description(&entry.path()).unwrap_or_default();
+        entries.push(NativeSkillEntry { package_id: packages.get(&name).cloned(), name, path: entry.path().display().to_string(), digest: None, state: "unknown", detail });
     }
     sort_native(db, &mut entries)?;
     Ok(entries)

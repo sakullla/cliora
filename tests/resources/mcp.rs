@@ -3,15 +3,126 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 #[test]
+fn adapter_text_roundtrips_known_aliases_structure_and_bearer_references() {
+    use crate::resources::documents::{self, McpDocumentRequest};
+    for tool in ["antigravity", "deepseek"] {
+        for transport in [McpTransport::Stdio, McpTransport::Http] {
+            let temp = tempfile::tempdir().unwrap();
+            let db = Database::open(&temp.path().join("db")).unwrap();
+            let registry = fixture_registry();
+            let mut draft: McpDraft = serde_json::from_value(serde_json::json!({"id":null,"name":"roundtrip","transport":"stdio","command":"node","args":["one","two"],"url":"","env":{},"headers":{},"expectedVersion":null})).unwrap();
+            draft.transport = transport;
+            if transport == McpTransport::Http {
+                draft.command.clear(); draft.args.clear(); draft.url = "https://example.com/mcp".into();
+                draft.headers.insert("Authorization".into(), "Bearer ${API_TOKEN}".into());
+                draft.headers.insert("X-Api-Key".into(), "Bearer {env:OTHER_TOKEN}".into());
+            }
+            let definition = save_definition(&db, draft).unwrap();
+            let source = target(tool, true);
+            let generated = documents::read(&db, &registry, temp.path(), &McpDocumentRequest { target: source.clone(), definition_id: Some(definition.id.clone()), name: definition.name.clone(), reveal: false }).unwrap();
+            assert!(!generated.protected_values, "{tool}");
+            let pasted = documents::parse_paste(&db, &registry, temp.path(), &source, None, &generated.text).unwrap();
+            assert!(pasted[0].draft.is_some(), "{tool}: {:?}", pasted[0]);
+            let result = distribute(&db, &MemoryStore::default(), &registry, temp.path(), &definition.id, previewed(&db, &registry, temp.path(), &definition.id, vec![source.clone()]));
+            assert_eq!(result[0].status, "written", "{tool}: {}", result[0].detail);
+            let native = documents::read(&db, &registry, temp.path(), &McpDocumentRequest { target: source.clone(), definition_id: None, name: definition.name.clone(), reveal: false }).unwrap();
+            assert!(!native.protected_values);
+            if transport == McpTransport::Http { assert!(native.raw_text.unwrap().contains("Bearer ${API_TOKEN}")); }
+            let equivalent = documents::equivalent(&db, &registry, temp.path(), &source, &definition.name, &target("codex", true)).unwrap();
+            let pasted = documents::parse_paste(&db, &registry, temp.path(), &target("codex", true), None, &equivalent.text).unwrap();
+            let draft = pasted[0].draft.as_ref().unwrap();
+            assert_eq!(draft.args, definition.args); assert_eq!(draft.headers, definition.headers); assert_eq!(draft.url, definition.url);
+            let (location, _) = target_location(&db, &registry, &source, temp.path()).unwrap();
+            let (_, parsed) = parse_native(&location).unwrap();
+            let adapter = registry.get(tool).unwrap();
+            let mut entry = adapter.mcp_entries(&parsed, &location).unwrap()[&definition.name].clone();
+            entry.as_object_mut().unwrap().insert("futureSetting".into(), serde_json::json!({"keep":true}));
+            assert!(!adapter.mcp_decode(&definition.name, &entry).unwrap().unmapped_fields.is_empty());
+        }
+    }
+}
+
+#[test]
+fn native_text_rejects_invalid_known_types_but_keeps_valid_unknown_fields() {
+    use crate::resources::documents::{self, McpDocumentRequest};
+    let temp = tempfile::tempdir().unwrap(); let db = Database::open(&temp.path().join("db")).unwrap();
+    let registry = fixture_registry(); let target = target("codex", true);
+    let (location, _) = target_location(&db, &registry, &target, temp.path()).unwrap();
+    std::fs::create_dir_all(location.path.parent().unwrap()).unwrap();
+    let original = "[mcp_servers.demo]\ncommand = 'node'\nenabled = true\n";
+    std::fs::write(&location.path, original).unwrap();
+    let read = documents::read(&db, &registry, temp.path(), &McpDocumentRequest { target: target.clone(), definition_id: None, name: "demo".into(), reveal: false }).unwrap();
+    for (key, value) in [("enabled", serde_json::json!("invalid")), ("disabled", serde_json::json!(1)), ("type", serde_json::json!(123)), ("type", serde_json::json!("http")), ("transport", serde_json::json!("invalid")), ("args", serde_json::json!([1])), ("env", serde_json::json!({"PORT":5}))] {
+        let text = format::set_path(location.kind, &read.text, &["mcp_servers".into(),"demo".into(),key.into()], Some(&value)).unwrap();
+        assert!(documents::save(&db, &MemoryStore::default(), &registry, temp.path(), &target, "demo", &read.baseline, &text).is_err(), "{key}: {value}");
+        assert_eq!(std::fs::read_to_string(&location.path).unwrap(), original);
+    }
+    let text = format::set_path(location.kind, &read.text, &["mcp_servers".into(),"demo".into(),"future".into()], Some(&serde_json::json!({"keep":true}))).unwrap();
+    documents::save(&db, &MemoryStore::default(), &registry, temp.path(), &target, "demo", &read.baseline, &text).unwrap();
+    assert_eq!(parse_native(&location).unwrap().1["mcp_servers"]["demo"]["future"]["keep"], true);
+}
+
+#[test]
+fn native_toml_inline_tables_support_redaction_and_leaf_edits() {
+    use crate::resources::documents::{self, McpDocumentRequest};
+    let temp = tempfile::tempdir().unwrap(); let db = Database::open(&temp.path().join("db")).unwrap();
+    let registry = fixture_registry(); let target = target("codex", true);
+    let (location, _) = target_location(&db, &registry, &target, temp.path()).unwrap();
+    std::fs::create_dir_all(location.path.parent().unwrap()).unwrap();
+    let original = "# keep header\n[mcp_servers.demo]\ncommand='node'\nenv = { API_KEY = 'fixture-private', PORT = '1000' } # keep env comment\n[mcp_servers.other]\ncommand='other'\nenv = { PASSWORD = 'other-private' }\n";
+    std::fs::write(&location.path, original).unwrap();
+    let read = documents::read(&db, &registry, temp.path(), &McpDocumentRequest { target: target.clone(), definition_id: None, name: "demo".into(), reveal: false }).unwrap();
+    assert!(!read.raw_text.as_ref().unwrap().contains("fixture-private"));
+    assert!(!read.raw_text.as_ref().unwrap().contains("other-private"));
+    assert!(read.raw_text.as_ref().unwrap().contains("# keep env comment"));
+    let edited = read.text.replace("1000", "2000");
+    documents::save(&db, &MemoryStore::default(), &registry, temp.path(), &target, "demo", &read.baseline, &edited).unwrap();
+    let text = std::fs::read_to_string(&location.path).unwrap();
+    let value = format::parse(location.kind, &text).unwrap();
+    assert_eq!(value["mcp_servers"]["demo"]["env"]["API_KEY"], "fixture-private");
+    assert_eq!(value["mcp_servers"]["demo"]["env"]["PORT"], "2000");
+    assert!(text.contains("# keep header") && text.contains("# keep env comment"));
+    assert!(text.contains("env = { PASSWORD = 'other-private' }"));
+}
+
+#[test]
+fn deletion_based_toggle_preserves_legacy_unknown_and_existing_native_order() {
+    let temp = tempfile::tempdir().unwrap(); let db = Database::open(&temp.path().join("db")).unwrap();
+    let registry = fixture_registry(); let definition = sample(&db); let store = MemoryStore::default();
+    for tool in ["claude_code", "antigravity", "deepseek"] {
+        let apply = |enabled| {
+            let result = distribute(&db, &store, &registry, temp.path(), &definition.id, previewed(&db, &registry, temp.path(), &definition.id, vec![target(tool, enabled)]));
+            assert_eq!(result[0].status, "written", "{tool}: {}", result[0].detail);
+        };
+        let (location, _) = target_location(&db, &registry, &target(tool, true), temp.path()).unwrap();
+        let id = native_order_id(&location, &definition.name);
+        let rank = || db.with_connection(|conn| conn.query_row("SELECT sequence FROM resource_order WHERE kind='native_mcp' AND resource_id=?1", [&id], |r| r.get::<_,i64>(0)).optional().map_err(|e| e.to_string())).unwrap();
+        apply(true); let initial = rank(); assert!(initial.is_some());
+        apply(false); apply(true); assert_eq!(rank(), initial);
+        // v21 placements intentionally have no insertion fact after migration.
+        db.with_connection(|conn| conn.execute("DELETE FROM resource_order WHERE kind='native_mcp' AND resource_id=?1", [&id]).map(|_|()).map_err(|e| e.to_string())).unwrap();
+        apply(false); apply(true); assert_eq!(rank(), None);
+        remove_native(&db, &store, &registry, temp.path(), &target(tool, true), &definition.name).unwrap();
+        apply(true); assert!(rank().is_some());
+    }
+}
+
+#[test]
 fn v21_migration_does_not_invent_existing_resource_insertion_dates() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("db");
     let db = Database::open(&path).unwrap();
     let old = sample(&db);
+    let registry = fixture_registry();
+    let store = MemoryStore::default();
+    assert_eq!(distribute(&db, &store, &registry, temp.path(), &old.id, previewed(&db, &registry, temp.path(), &old.id, vec![target("claude_code", true)]))[0].status, "written");
     db.with_connection(|conn| conn.execute_batch("DROP TRIGGER resource_mcp_added; DROP TRIGGER resource_mcp_deleted; DROP TRIGGER resource_skill_added; DROP TRIGGER resource_skill_deleted; DROP TRIGGER resource_skill_metadata_added; DROP TRIGGER resource_skill_metadata_changed; DROP TABLE resource_order; DROP TABLE resource_preferences; DROP TABLE skill_package_metadata; PRAGMA user_version=21;").map_err(|e| e.to_string())).unwrap();
     drop(db);
     let db = Database::open(&path).unwrap();
     assert_eq!(list_definitions(&db).unwrap()[0].id, old.id);
+    for enabled in [false, true] {
+        assert_eq!(distribute(&db, &store, &registry, temp.path(), &old.id, previewed(&db, &registry, temp.path(), &old.id, vec![target("claude_code", enabled)]))[0].status, "written");
+    }
     db.with_connection(|conn| {
         assert_eq!(conn.query_row("SELECT COUNT(*) FROM resource_order", [], |row| row.get::<_,i64>(0)).unwrap(), 0);
         assert_eq!(conn.query_row("PRAGMA user_version", [], |row| row.get::<_,i64>(0)).unwrap(), 22);
