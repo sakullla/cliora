@@ -1,3 +1,4 @@
+import { useFeedback, FeedbackRegion } from '../../components/Feedback';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
@@ -96,8 +97,9 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   const [workspace, setWorkspace] = useState<RegisteredToolWorkspace | null>(null);
   const [scopedContext, setScopedContext] = useState<{ key: string; value: RegisteredToolContext } | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
+  const feedback = useFeedback(JSON.stringify(['workspace', toolId, scope, projectPath]));
+  const { setError } = feedback;
+  const { setNotice } = feedback;
   const [busy, setBusy] = useState(false);
   const [maintenance, setMaintenance] = useState<{ tool: string; name: string; running: boolean; action: 'install' | 'upgrade' | 'install_native' | 'uninstall_npm'; source?: string; cancelling?: boolean; output: string; error: string; version?: string | null } | null>(null);
   const [applying, setApplying] = useState<string | null>(null);
@@ -175,6 +177,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     setFrame({ key: crypto.randomUUID(), subject, profile, title: title ?? (subject === 'current' ? t('tools.workspace.frameCurrent') : subject === 'common' ? t('tools.workspace.frameCommon') : profile?.id ? t('tools.workspace.frameProfile', { name: profile.name }) : t('tools.workspace.frameNew')) });
   }
   async function launch() {
+    const operationFeedback = feedback.begin('launch');
     if (!nativeAvailable || launching) return;
     setLaunching(true);
     try {
@@ -182,9 +185,9 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
       const directory = await open({ directory: true, multiple: false, title: t('tools.workspace.launchPickTitle', { name: descriptor?.name ?? toolId }) });
       if (typeof directory !== 'string') return;
       await native.launchCli({ toolId, projectId: null, sessionId: null, mode: preferredLaunchMode(settings, 'cli', descriptor?.yoloAvailable ?? false), directory });
-      setNotice(t('tools.workspace.launched', { name: descriptor?.name ?? toolId }));
+      operationFeedback.success(t('tools.workspace.launched', { name: descriptor?.name ?? toolId }));
     } catch (failure) {
-      setError(errorText(failure));
+      operationFeedback.error(errorText(failure));
     } finally {
       setLaunching(false);
     }
@@ -203,7 +206,8 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   }
   async function switchTool(id: string) { if (id === toolId || !await mayLeave()) return; discard(); setTool(id); restoreContext(id); }
   async function switchResource(next: ResourceView) { if (next === resource || !await mayLeave()) return; discard(); setResource(next); }
-  async function pickProject() { const started = currentContext.current; try { const value = await open({ directory: true, multiple: false, title: t('tools.workspace.pickProjectTitle') }); if (typeof value === 'string' && alive.current && started === currentContext.current) await switchScope('project', value); } catch (failure) { setError(errorText(failure)); } }
+  async function pickProject() {
+    const operationFeedback = feedback.begin('pickProject'); const started = currentContext.current; try { const value = await open({ directory: true, multiple: false, title: t('tools.workspace.pickProjectTitle') }); if (typeof value === 'string' && alive.current && started === currentContext.current) await switchScope('project', value); } catch (failure) { operationFeedback.error(errorText(failure)); } }
   const openTarget = async (profileId: string, target?: AccountImpactScope) => {
     if (!await mayLeave()) return;
     if (target && (target.toolId !== toolId || !target.scope || target.scope === 'project' && !target.projectPath)) { setError(t('tools.workspace.scopeChanged')); return; }
@@ -274,20 +278,23 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     discard();
   }, [discardSignal]);
   async function apply(profile: RegisteredProfile) {
+    const operationFeedback = feedback.begin('apply');
     if (!await mayLeave()) return;
     const identity = currentContext.current; setApplying(profile.id); setError(''); setNotice('');
-    try { await native.applyRegisteredNativeProfile(toolId, profile.id, scope, projectPath || undefined, false); if (identity !== currentContext.current || !alive.current) return; await reload(toolId, scope, projectPath, true); setNotice(t('tools.workspace.applied')); }
-    catch (failure) { if (identity !== currentContext.current || !alive.current) return; setError(errorText(failure)); try { const value = await native.compareRegisteredApplication(profile.id, scope, projectPath); if (identity === currentContext.current) setComparison(value); } catch {} }
+    try { await native.applyRegisteredNativeProfile(toolId, profile.id, scope, projectPath || undefined, false); if (identity !== currentContext.current || !alive.current) return; await reload(toolId, scope, projectPath, true); operationFeedback.success(t('tools.workspace.applied')); }
+    catch (failure) { if (identity !== currentContext.current || !alive.current) return; operationFeedback.error(errorText(failure)); try { const value = await native.compareRegisteredApplication(profile.id, scope, projectPath); if (identity === currentContext.current) setComparison(value); } catch {} }
     finally { if (identity === currentContext.current) setApplying(null); }
   }
   async function compareUse() {
+    const operationFeedback = feedback.begin('compareUse');
     if (!comparison) return; const value = comparison; const identity = currentContext.current; setBusy(true); setError('');
-    try { await native.applyComparedApplication(value, scope, projectPath); if (identity === currentContext.current && alive.current) { setComparison(null); await reload(toolId, scope, projectPath, true); setNotice(t('tools.workspace.appliedShort')); } }
-    catch (failure) { if (identity === currentContext.current) setError(errorText(failure)); }
+    try { await native.applyComparedApplication(value, scope, projectPath); if (identity === currentContext.current && alive.current) { setComparison(null); await reload(toolId, scope, projectPath, true); operationFeedback.success(t('tools.workspace.appliedShort')); } }
+    catch (failure) { if (identity === currentContext.current) operationFeedback.error(errorText(failure)); }
     finally { if (identity === currentContext.current) setBusy(false); }
   }
   async function duplicate(profile: RegisteredProfile) { if (!await mayLeave()) return; const copy = structuredClone(profile); copy.id = ''; copy.version = 0; delete copy.revision; copy.name += t('tools.workspace.copySuffix'); await openFrame('profile', copy, true, t('tools.workspace.frameCopy', { name: profile.name })); }
-  async function remove(profile: RegisteredProfile) { const identity = currentContext.current; if (!await confirmAction(t('tools.workspace.confirmDelete', { name: profile.name }), () => alive.current && identity === currentContext.current, { title: t('tools.workspace.deleteTitle'), confirmLabel: t('tools.agents.delete'), destructive: true })) return; setBusy(true); try { await native.deleteNativeProfile(profile.id, profile.version, profile.revision ?? ''); if (identity === currentContext.current) await reload(toolId, scope, projectPath, true); } catch (failure) { setError(errorText(failure)); } finally { if (identity === currentContext.current) setBusy(false); } }
+  async function remove(profile: RegisteredProfile) {
+    const operationFeedback = feedback.begin('remove'); const identity = currentContext.current; if (!await confirmAction(t('tools.workspace.confirmDelete', { name: profile.name }), () => alive.current && identity === currentContext.current, { title: t('tools.workspace.deleteTitle'), confirmLabel: t('tools.agents.delete'), destructive: true })) return; setBusy(true); try { await native.deleteNativeProfile(profile.id, profile.version, profile.revision ?? ''); if (identity === currentContext.current) await reload(toolId, scope, projectPath, true); } catch (failure) { operationFeedback.error(errorText(failure)); } finally { if (identity === currentContext.current) setBusy(false); } }
   function stored(result: ConfigurationSaveResult) { if (result.profile) setWorkspace(value => value ? { ...value, profiles: [...value.profiles.filter(profile => profile.id !== result.profile!.id), result.profile!] } : value); if (result.common) setWorkspace(value => value ? { ...value, common: result.common } : value); }
   function changed(_draft: ConfigurationDraft) { epoch.current++; }
   function cancelMaintenance() {
@@ -318,9 +325,12 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
       }
     }
   }
-  async function savePath() { if (!await mayLeave()) return; setBusy(true); try { await native.setRegisteredCustomCliPath(toolId, customPath.trim() || null); await reload(toolId, scope, projectPath, true); } catch (failure) { setError(errorText(failure)); } finally { setBusy(false); } }
-  async function usePath(path: string) { if (!await mayLeave()) return; setBusy(true); try { await native.setRegisteredCustomCliPath(toolId, path); await reload(toolId, scope, projectPath, true); } catch (failure) { setError(errorText(failure)); } finally { setBusy(false); } }
-  async function openAccountQuota(queryId: string) { if (!await mayLeave()) return; const query = quota.queries.find(item => item.id === queryId); if (!query) { void quota.reload(); setError(t('tools.workspace.quotaChanged')); return; } setAccountUsageQuery(query); }
+  async function savePath() {
+    const operationFeedback = feedback.begin('savePath'); if (!await mayLeave()) return; setBusy(true); try { await native.setRegisteredCustomCliPath(toolId, customPath.trim() || null); await reload(toolId, scope, projectPath, true); } catch (failure) { operationFeedback.error(errorText(failure)); } finally { setBusy(false); } }
+  async function usePath(path: string) {
+    const operationFeedback = feedback.begin('usePath'); if (!await mayLeave()) return; setBusy(true); try { await native.setRegisteredCustomCliPath(toolId, path); await reload(toolId, scope, projectPath, true); } catch (failure) { operationFeedback.error(errorText(failure)); } finally { setBusy(false); } }
+  async function openAccountQuota(queryId: string) {
+    const operationFeedback = feedback.begin('openAccountQuota'); if (!await mayLeave()) return; const query = quota.queries.find(item => item.id === queryId); if (!query) { void quota.reload(); operationFeedback.error(t('tools.workspace.quotaChanged')); return; } setAccountUsageQuery(query); }
   const quotaIds = new Set(quota.queries.map(query => query.config.identity.profileId));
   const currentFile = workspace?.snapshots.some(snapshot => snapshot.fingerprint && !workspace.probe.nativeFiles.find(file => file.role === snapshot.role)?.sensitive);
   const modelOf = (profile: RegisteredProfile) => workspace?.profileModelSummaries ? workspace.profileModelSummaries[profile.id]?.model : profile.connection?.model;
@@ -357,7 +367,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     <div className={styles.toolbar}><ToolSwitcher tools={managedTools} selected={toolId} onSelect={id => void switchTool(id)} /></div>
     <div className={styles.taskBar}><div className={styles.views} role="tablist" aria-label={t('tools.workspace.tasksAria')} onKeyDown={navigateChoices}>{resourceViews.filter((id) => supported[id]).map((id) => { const label = t(`tools.workspace.view.${id}`); const shortcutIndex = resourceViews.findIndex((view) => view === id) + 1; return <button role="tab" key={id} aria-selected={resource === id} aria-keyshortcuts={`Alt+${shortcutIndex}`} tabIndex={resource === id ? 0 : -1} title={t('tools.workspace.viewTitle', { label, index: shortcutIndex })} className={resource === id ? styles.selected : ''} onClick={() => void switchResource(id)}>{label}</button>; })}</div><div className={styles.scopeBar}><FilterSelect className={styles.projectSelect} label={t('tools.workspace.scopeLabel')} value={scope === 'global' ? '__global__' : projectPath} forceSearch searchLabel={t('home.launcher.searchLabel')} options={[{ value: '__global__', label: t('tools.workspace.scopeGlobal') }, ...projects.map(project => ({ value: project.path ?? project.id, label: project.name, detail: project.path ? shortPath(project.path) : undefined, disabled: !project.available || !project.path })), ...(projectPath && !projects.some(project => project.path === projectPath) ? [{ value: projectPath, label: projectPath.split(/[\\/]/).at(-1) ?? projectPath }] : [])]} onChange={value => void switchScope(value === '__global__' ? 'global' : 'project', value === '__global__' ? '' : value)} onPickFolder={() => void pickProject()} pickFolderLabel={t('common.filterSelect.pickFolder')} /></div></div>
     </div>
-    {(error || notice) && <div className={styles.feedback}>{error && <StatusBanner tone="error" onDismiss={() => setError('')}>{error}</StatusBanner>}{notice && <StatusBanner tone="success" autoDismissMs={8000} onDismiss={() => setNotice('')}>{notice}</StatusBanner>}</div>}
+    <FeedbackRegion context={feedback.context} />
     <div hidden={resource !== 'config'}>
       {workspace && <InstallPanel toolName={descriptor.name} probe={workspace.probe} customPath={customPath} busy={busy} loading={loading} onCustomPath={setCustomPath} onSavePath={() => void savePath()} onMaintain={(action, source) => void maintain(action, source)} onUsePath={path => void usePath(path)} />}
       {workspace?.nativeContextError && <div className={styles.feedback}><StatusBanner tone="error">{workspace.nativeContextError}</StatusBanner></div>}

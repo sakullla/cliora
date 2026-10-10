@@ -1,3 +1,4 @@
+import { useFeedback, FeedbackRegion } from '../../../components/Feedback';
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { uiAdapterFor } from '../../../adapters';
@@ -55,8 +56,9 @@ export function ConfigurationWorkspaceEditor(props: Props) {
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState(false);
   const [valid, setValid] = useState(true);
-  const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
+  const feedback = useFeedback(JSON.stringify(['config', toolId, subject, scope, projectPath, props.profile?.id]));
+  const { error, setError } = feedback;
+  const { setNotice } = feedback;
   const [legacyInputs, setLegacyInputs] = useState<Connection | null>(props.profile?.connection ?? null);
   const [nameInput, setNameInput] = useState(props.profile?.name ?? '');
   const [view, setView] = useState<'models' | 'settings' | 'raw' | 'preview'>(subject === 'common' ? 'settings' : 'models');
@@ -144,6 +146,7 @@ export function ConfigurationWorkspaceEditor(props: Props) {
   useEffect(() => { if (error) problems.current?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' }); }, [error]);
   const updateValidity = () => { setValid(session.current?.canSubmit ?? false); setPending(session.current?.pending ?? false); };
   async function edit(work: (current: ConfigurationDraft) => Promise<ConfigurationDraft>, raw = false) {
+    const operationFeedback = feedback.begin('edit');
     const owner = session.current;
     if (!owner) throw new Error(t('tools.config.draftNotLoaded'));
     if (requestCancellation.current) throw new Error(t('tools.config.cancellingError'));
@@ -156,7 +159,7 @@ export function ConfigurationWorkspaceEditor(props: Props) {
       const next = owner.draft; setDraft(next);
       if (!raw) setRawInputs(next.profile.files);
       latest.current.onDraftChange(next);
-    } catch (failure) { if (alive.current && session.current === owner) setError(messageOf(failure)); throw failure; }
+    } catch (failure) { if (alive.current && session.current === owner) operationFeedback.error(messageOf(failure)); throw failure; }
     finally { if (alive.current && session.current === owner) updateValidity(); }
   }
   const fire = (work: (current: ConfigurationDraft) => Promise<ConfigurationDraft>) => { void edit(work).catch(() => {}); };
@@ -236,6 +239,7 @@ export function ConfigurationWorkspaceEditor(props: Props) {
     } catch {}
   }
   async function query(kind: 'directory' | 'check', paid = false) {
+    const operationFeedback = feedback.begin('query');
     const consent = session.current?.draft;
     if (paid && !await confirmAction(t('tools.config.paidConfirm'), () => alive.current && session.current?.draft.sessionId === consent?.sessionId && session.current?.draft.revision === consent?.revision, { title: t('tools.config.paidTitle'), confirmLabel: t('tools.config.paidAction') })) return;
     setQuerying(true); setError('');
@@ -249,10 +253,11 @@ export function ConfigurationWorkspaceEditor(props: Props) {
       if (!alive.current || session.current !== owner || token !== sequence.current || !configurationRequestMatches(owner.draft, started, result)) return;
       if ('directory' in result) { setDirectory(result.directory); setDirectoryOpen(true); setChosen(new Set()); catalogCache.current = { key: `${started.credential?.source ?? ''}|${configurationCredentialIdentity(started)}`, models: result.directory.models }; }
       else setCheck(result.check);
-    } catch (failure) { if (alive.current && (token === undefined || token === sequence.current)) setError(messageOf(failure)); }
+    } catch (failure) { if (alive.current && (token === undefined || token === sequence.current)) operationFeedback.error(messageOf(failure)); }
     finally { if (alive.current && (token === undefined || token === sequence.current)) setQuerying(false); }
   }
   async function cancelRequests() {
+    const operationFeedback = feedback.begin('cancelRequests');
     const owner = session.current;
     if (!owner || owner.pending || requestCancellation.current) return;
     const started = owner.draft;
@@ -264,7 +269,7 @@ export function ConfigurationWorkspaceEditor(props: Props) {
       if (!owner.acceptSaved(next)) return;
       setDraft(owner.draft); setQuerying(false); updateValidity();
     } catch (failure) {
-      if (alive.current && session.current === owner) setError(messageOf(failure));
+      if (alive.current && session.current === owner) operationFeedback.error(messageOf(failure));
     } finally { requestCancellation.current = false; if (alive.current && session.current === owner) setCancelling(false); }
   }
   async function addModels() {
@@ -279,25 +284,28 @@ export function ConfigurationWorkspaceEditor(props: Props) {
     }).catch(() => {});
   }
   async function showPreview() {
+    const operationFeedback = feedback.begin('showPreview');
     const owner = session.current; if (!owner || !owner.canSubmit) return;
     const started = owner.draft; const token = ++sequence.current; setView('preview'); setPreviewLoading(true);
     try { const value = await native.previewRegisteredNativeProfile(started.profile, scope); if (alive.current && owner === session.current && token === sequence.current && owner.draft.revision === started.revision) setPreview(value); }
-    catch (failure) { if (alive.current && token === sequence.current) setError(messageOf(failure)); }
+    catch (failure) { if (alive.current && token === sequence.current) operationFeedback.error(messageOf(failure)); }
     finally { if (alive.current && token === sequence.current) setPreviewLoading(false); }
   }
   async function applyStored(result: ConfigurationSaveResult) {
+    const operationFeedback = feedback.begin('applyStored');
     if (result.profile) {
       try { await native.applyRegisteredNativeProfile(toolId, result.profile.id, scope, projectPath || undefined, false); }
-      catch (failure) { setNotice(t('tools.config.savedNotUsed')); setError(messageOf(failure)); setComparison(await native.compareRegisteredApplication(result.profile.id, scope, projectPath).catch(() => null)); return false; }
+      catch (failure) { operationFeedback.success(t('tools.config.savedNotUsed')); operationFeedback.error(messageOf(failure)); setComparison(await native.compareRegisteredApplication(result.profile.id, scope, projectPath).catch(() => null)); return false; }
     } else if (result.common && influence) {
       const outcomes = await applyCommonConfiguration(result.common, influence.targets); setApplications(outcomes);
-      if (outcomes.some(item => item.status === 'failed')) { setNotice(t('tools.config.commonPartial')); return false; }
+      if (outcomes.some(item => item.status === 'failed')) { operationFeedback.success(t('tools.config.commonPartial')); return false; }
     }
     return true;
   }
   async function save(use = false) {
+    const operationFeedback = feedback.begin('save');
     const owner = session.current; if (!owner || !owner.canSubmit || busy) return;
-    if (subject === 'profile' && !owner.draft.profile.name.trim()) { setError(t('tools.config.nameRequired')); document.querySelector<HTMLInputElement>(`[aria-label="${t('tools.config.name')}"]`)?.focus(); return; }
+    if (subject === 'profile' && !owner.draft.profile.name.trim()) { operationFeedback.error(t('tools.config.nameRequired')); document.querySelector<HTMLInputElement>(`[aria-label="${t('tools.config.name')}"]`)?.focus(); return; }
     setBusy(true); setError(''); setNotice('');
     try {
       await flushSecret(); if (!alive.current || owner !== session.current || !owner.canSubmit) return;
@@ -306,24 +314,25 @@ export function ConfigurationWorkspaceEditor(props: Props) {
       if (!owner.acceptSaved(result.draft)) return; acceptApiCredential(owner.draft); setDraft(owner.draft); setRawInputs(owner.draft.profile.files);
       baseline.current = JSON.stringify(owner.draft.profile); baselineRevision.current = owner.draft.revision; setSaved(result); latest.current.onStored(result); updateValidity();
       if (use && !await applyStored(result)) return;
-      setNotice(subject === 'current' ? t('tools.config.savedCurrent') : use ? t('tools.config.savedUsed') : t('tools.config.savedKept'));
+      operationFeedback.success(subject === 'current' ? t('tools.config.savedCurrent') : use ? t('tools.config.savedUsed') : t('tools.config.savedKept'));
       latest.current.onDone(result, use);
     } catch (failure) {
       if (!alive.current || owner !== session.current) return;
-      setError(messageOf(failure));
+      operationFeedback.error(messageOf(failure));
       if (subject === 'current') {
         await compareCurrent();
       }
     } finally { if (alive.current) setBusy(false); }
   }
   async function compareCurrent() {
+    const operationFeedback = feedback.begin('compareCurrent');
     const owner = session.current; if (!owner || owner.pending) return;
     const started = owner.draft; const token = ++sequence.current;
     try {
       const value = await compareConfigurationCurrent(started);
       if (!alive.current || token !== sequence.current || owner !== session.current || owner.draft.revision !== started.revision) return;
       setCurrentConflict(value); setConflictChoices({}); setView('raw');
-    } catch (failure) { if (alive.current && token === sequence.current) setError(messageOf(failure)); }
+    } catch (failure) { if (alive.current && token === sequence.current) operationFeedback.error(messageOf(failure)); }
   }
   async function chooseCurrent(role: string, choice: 'current' | 'edited') {
     const captured = currentConflict; if (!captured) return;
@@ -336,17 +345,20 @@ export function ConfigurationWorkspaceEditor(props: Props) {
     })).then(() => { if (alive.current) { setCurrentConflict(null); setNotice(t('tools.config.rebased')); setRawResetEpoch(value => value + 1); } }).catch(() => {});
   }
   async function showHistory() {
+    const operationFeedback = feedback.begin('showHistory');
     const owner = session.current; if (!owner) return; const started = owner.draft;
     setHistory(true); setBackup(null); setError('');
     try { const rows = await native.listNativeBackups(toolId, scope, projectPath, rawRole); if (alive.current && owner === session.current && owner.draft.revision === started.revision) setBackups(rows); }
-    catch (failure) { if (alive.current) setError(messageOf(failure)); }
+    catch (failure) { if (alive.current) operationFeedback.error(messageOf(failure)); }
   }
   async function selectBackup(id: string) {
+    const operationFeedback = feedback.begin('selectBackup');
     const owner = session.current; if (!owner) return; const started = owner.draft; const token = ++sequence.current;
     try { const value = await previewConfigurationBackup(started, rawRole, id); if (alive.current && token === sequence.current && owner === session.current && owner.draft.revision === started.revision) setBackup(value); }
-    catch (failure) { if (alive.current && token === sequence.current) setError(messageOf(failure)); }
+    catch (failure) { if (alive.current && token === sequence.current) operationFeedback.error(messageOf(failure)); }
   }
   async function restoreBackup() {
+    const operationFeedback = feedback.begin('restoreBackup');
     const owner = session.current; const target = backup; if (!owner || !target || owner.pending) return;
     if (dirty && !await confirmAction(t('tools.config.restoreConfirm'), () => alive.current && owner === session.current && owner.draft.revision === target.revision, { title: t('tools.config.restoreTitle'), confirmLabel: t('tools.config.restoreAction') })) return;
     setBusy(true); setError('');
@@ -354,16 +366,17 @@ export function ConfigurationWorkspaceEditor(props: Props) {
       const result = await restoreConfigurationBackup(owner.draft, target.role, target.transactionId);
       if (!alive.current || owner !== session.current || !owner.acceptSaved(result.draft)) return;
       setDraft(owner.draft); setRawInputs(owner.draft.profile.files); setRawResetEpoch(value => value + 1); setHistory(false); setBackup(null); latest.current.onDraftChange(owner.draft); updateValidity();
-      setNotice(t('tools.config.restored'));
-    } catch (failure) { if (alive.current) setError(messageOf(failure)); }
+      operationFeedback.success(t('tools.config.restored'));
+    } catch (failure) { if (alive.current) operationFeedback.error(messageOf(failure)); }
     finally { if (alive.current) setBusy(false); }
   }
 
   async function applyComparison() {
+    const operationFeedback = feedback.begin('applyComparison');
     if (!comparison) return;
     setBusy(true);
-    try { await native.applyComparedApplication(comparison, scope, projectPath); if (alive.current) { setComparison(null); setNotice(t('tools.workspace.appliedShort')); } }
-    catch (failure) { if (alive.current) setError(messageOf(failure)); }
+    try { await native.applyComparedApplication(comparison, scope, projectPath); if (alive.current) { setComparison(null); operationFeedback.success(t('tools.workspace.appliedShort')); } }
+    catch (failure) { if (alive.current) operationFeedback.error(messageOf(failure)); }
     finally { if (alive.current) setBusy(false); }
   }
 
@@ -506,7 +519,7 @@ export function ConfigurationWorkspaceEditor(props: Props) {
       <div ref={problems} className={styles.problems}>
       {draft.issues.length > 0 && <div role="alert" className={styles.errors}>{draft.issues.map((issue, index) => <p key={index}>{issue.message}</p>)}</div>}
       {!valid && !pending && !draft.issues.length && <p role="alert" className={styles.warning}>{t('tools.config.invalidWarning', { fields: invalidList.length ? t('tools.config.invalidFields', { fields: invalidList.join('；') }) : '' })}</p>}
-      {error && <p role="alert" className={styles.errors}>{error}</p>}{notice && <p role="status" className={styles.success}>{notice}</p>}
+      <FeedbackRegion context={feedback.context} />
       </div>
     </div>
     <footer className={`${styles.footer} ${sharedStyles.controls}`}><button onClick={props.onClose}>{t('common.dialog.cancel')}</button>{status.jump ? <button type="button" className={styles.status} data-tone={status.tone} title={t('tools.config.statusJumpTitle')} onClick={() => problems.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })}>{status.text}</button> : <span className={styles.status} data-tone={status.tone} title={status.text}>{status.text}</span>}{!picking && !history && <div className={styles.actions}><button className={subject === 'profile' && workspace.probe.nativeWrites.state === 'supported' ? undefined : styles.primary} data-dialog-save title={saveShortcutHint()} disabled={!canSubmit || subject === 'current' && workspace.probe.nativeWrites.state !== 'supported'} onClick={() => void save()}>{subject === 'current' ? t('tools.config.saveCurrent') : subject === 'common' ? t('tools.config.saveCommon') : t('tools.config.saveProfile')}</button>{subject === 'profile' && workspace.probe.nativeWrites.state === 'supported' && <button className={styles.primary} disabled={!canSubmit} onClick={() => void save(true)}>{t('tools.config.saveAndUse')}</button>}{(subject === 'common' || saved) && <details><summary>{t('tools.config.moreSaveActions')}</summary>{subject === 'common' && <button disabled={!canSubmit || !influence?.targets.length} onClick={() => void save(true)}>{t('tools.config.saveAndApply')}</button>}{saved && <button disabled={busy || cancelling} onClick={() => { setBusy(true); void applyStored(saved).finally(() => { if (alive.current) setBusy(false); }); }}>{t('tools.config.retryUse')}</button>}</details>}</div>}</footer>

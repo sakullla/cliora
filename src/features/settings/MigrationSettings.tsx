@@ -1,3 +1,4 @@
+import { useFeedback, FeedbackRegion } from '../../components/Feedback';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { open, save } from '@tauri-apps/plugin-dialog';
@@ -26,8 +27,9 @@ export function MigrationSettings({ active, onImported }: { active: boolean; onI
   const [applyTargets, setApplyTargets] = useState<Record<string, string>>({});
   const [revealPassword, setRevealPassword] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
+  const feedback = useFeedback('migration');
+  const { setNotice: setMessage } = feedback;
+  const { setError } = feedback;
 
   useEffect(() => {
     if (!active || !nativeAvailable) return;
@@ -55,6 +57,7 @@ export function MigrationSettings({ active, onImported }: { active: boolean; onI
   }
 
   async function exportBundle() {
+    const operationFeedback = feedback.begin('exportBundle');
     if (busy || exportPassword.length < 12 || !exportSelected.length) return;
     const destination = await save({ title: t('settings.migration.saveTitle'),
       defaultPath: `cliora-${new Date().toISOString().slice(0, 10)}.cliora`,
@@ -63,13 +66,14 @@ export function MigrationSettings({ active, onImported }: { active: boolean; onI
     setBusy(true); setError(''); setMessage('');
     try {
       const count = await native.exportPortableBundle(destination, exportPassword, exportSelected);
-      setMessage(t('settings.migration.exported', { count }));
+      operationFeedback.success(t('settings.migration.exported', { count }));
       setExportPassword(''); setOperation(null); setRevealPassword(false);
-    } catch (reason) { setError(formatFailure(reason, t('settings.migration.exportFailed'), t('settings.migration.exportFailedNext'))); }
+    } catch (reason) { operationFeedback.error(formatFailure(reason, t('settings.migration.exportFailed'), t('settings.migration.exportFailedNext'))); }
     finally { setBusy(false); }
   }
 
   async function importBundle() {
+    const operationFeedback = feedback.begin('importBundle');
     if (busy || !importPassword) return;
     const source = await open({ title: t('settings.migration.openTitle'), multiple: false,
       filters: [{ name: t('settings.migration.bundleName'), extensions: ['cliora'] }] });
@@ -82,7 +86,7 @@ export function MigrationSettings({ active, onImported }: { active: boolean; onI
       setProjects(await native.listProjects().catch(() => []));
       setProjectLinks({}); setApplyTargets({});
       setImportPassword('');
-    } catch (reason) { setError(formatFailure(reason, t('settings.migration.previewFailed'), t('settings.migration.previewFailedNext'))); }
+    } catch (reason) { operationFeedback.error(formatFailure(reason, t('settings.migration.previewFailed'), t('settings.migration.previewFailedNext'))); }
     finally { setBusy(false); }
   }
 
@@ -97,6 +101,7 @@ export function MigrationSettings({ active, onImported }: { active: boolean; onI
   }
 
   async function applyPreview() {
+    const operationFeedback = feedback.begin('applyPreview');
     if (!preview || busy) return;
     setBusy(true); setError(''); setMessage('');
     try {
@@ -107,7 +112,7 @@ export function MigrationSettings({ active, onImported }: { active: boolean; onI
       const report = await native.applyPortableBundle(preview.previewId, importSelected, links, targets);
       setPreview(null); setImportSelected([]);
       setProjectLinks({}); setApplyTargets({});
-      setMessage(t('settings.migration.restored', { count: report.imported, detail: report.targets.map((target) => t('settings.migration.targetResult', { label: target.label, status: target.status === 'failed' ? t('settings.migration.targetFailed', { detail: target.detail }) : target.status === 'linked' ? t('settings.migration.targetLinked') : t('settings.migration.targetApplied') })).join(t('settings.migration.separator')) || t('settings.migration.noTargets') }));
+      (report.targets.some(target => target.status === 'failed') ? operationFeedback.partial : operationFeedback.success)(t('settings.migration.restored', { count: report.imported, detail: report.targets.map((target) => t('settings.migration.targetResult', { label: target.label, status: target.status === 'failed' ? t('settings.migration.targetFailed', { detail: target.detail }) : target.status === 'linked' ? t('settings.migration.targetLinked') : t('settings.migration.targetApplied') })).join(t('settings.migration.separator')) || t('settings.migration.noTargets') }));
       setOperation(null); setRevealPassword(false);
       onImported?.();
       try {
@@ -118,7 +123,7 @@ export function MigrationSettings({ active, onImported }: { active: boolean; onI
         setListReady(false);
         setListError(formatFailure(reason, t('settings.migration.listFailed'), t('settings.migration.listFailedNext')));
       }
-    } catch (reason) { setError(formatFailure(reason, t('settings.migration.importFailed'), t('settings.migration.importFailedNext'))); }
+    } catch (reason) { operationFeedback.error(formatFailure(reason, t('settings.migration.importFailed'), t('settings.migration.importFailedNext'))); }
     finally { setBusy(false); }
   }
 
@@ -132,14 +137,14 @@ export function MigrationSettings({ active, onImported }: { active: boolean; onI
   const dialogOpen = operation === 'export' || operation === 'import';
   const allExportSelected = !!items.length && items.every((item) => exportSelected.includes(item.key));
   const revealButton = <button type="button" aria-label={revealPassword ? t('settings.migration.hidePassword') : t('settings.migration.showPassword')} aria-pressed={revealPassword} onClick={() => setRevealPassword((value) => !value)}>{revealPassword ? t('settings.migration.hide') : t('settings.migration.show')}</button>;
-  const bannerError = error || listError;
+  const bannerError = listError;
   return <div className={styles.page}>
     {!dialogOpen && bannerError && <div className={styles.error} role="alert">{bannerError}</div>}
-    {!dialogOpen && message && <div className={styles.message} role="status">{message}</div>}
+    <FeedbackRegion context={feedback.context} />
     <section className="migration-card"><h2>{t('settings.migration.cardTitle')}</h2><p>{t('settings.migration.cardDetail')}</p><div className="migration-actions"><button className="button primary" type="button" onClick={() => setOperation('export')}>{t('settings.migration.export')}</button><button className="button" type="button" onClick={() => setOperation('import')}>{t('settings.migration.import')}</button></div><small>{t('settings.migration.cardNote')}</small></section>
     <GuideDialog open={dialogOpen} title={operation === 'import' ? t('settings.migration.import') : t('settings.migration.export')} hint={operation === 'import' ? t('settings.migration.importHint') : t('settings.migration.exportHint')} onClose={() => { setOperation(null); setRevealPassword(false); }}>
     {bannerError && <div className={styles.error} role="alert">{bannerError}</div>}
-    {message && <div className={styles.message} role="status">{message}</div>}
+    <FeedbackRegion context={feedback.context} />
     {operation === 'export' && <section className="settings-group">
       <div className={styles.listBar}><span><strong>{t('settings.migration.selectedCount', { selected: exportSelected.filter((key) => items.some((item) => item.key === key)).length, total: items.length })}</strong>{t('settings.migration.exportNote')}</span>
         {!!items.length && <button type="button" className="text-button" disabled={busy} onClick={() => setExportSelected(allExportSelected ? [] : items.map((item) => item.key))}>{allExportSelected ? t('settings.migration.deselectAll') : t('settings.migration.selectAll')}</button>}</div>

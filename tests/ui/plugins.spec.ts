@@ -125,6 +125,10 @@ test('failed native operation retains rescanned state and allows explicit recove
   const card = page.getByRole('listitem').filter({ has: page.getByText('Fixture plugin', { exact: true }) });
   await card.getByRole('button', { name: '禁用' }).click(); await expect(page.getByRole('alert')).toContainText('可能留下部分变更');
   await expect(card.getByRole('button', { name: '禁用' })).toBeEnabled(); await page.getByRole('button', { name: '重新扫描' }).click();
+  // Reading fresh state does not establish that the failed mutation succeeded.
+  await expect(page.getByRole('alert')).toContainText('可能留下部分变更');
+  await page.evaluate(() => { (window as any).pluginsHarness.fail = false; });
+  await card.getByRole('button', { name: '禁用' }).click();
   await expect(page.getByRole('alert')).toHaveCount(0);
   expect(await page.evaluate(() => (window as any).pluginsHarness.calls.filter((c: any) => c.command === 'scan_native_plugins').length)).toBeGreaterThan(1);
 });

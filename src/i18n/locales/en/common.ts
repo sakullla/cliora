@@ -1,4 +1,5 @@
 export default {
+  feedback: { dismiss: 'Dismiss result', running: 'Operation in progress…', retry: 'Retry', title: 'Activity', summary: '{{count}} unresolved', empty: 'Results for the current page appear beside its controls.', partial: 'Partially completed.', details: 'Details', stale: 'This context has changed. Reopen the item and try again.', retryFailed: 'Retry failed. The original result remains available.' },
   language: {
     zh: '中文',
     en: 'English',
