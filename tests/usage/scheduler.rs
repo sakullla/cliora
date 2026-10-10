@@ -187,7 +187,7 @@ fn v14_queries_without_cache_are_due_but_new_saves_wait_for_interval() {
     let cache = list_cache(&db).unwrap();
     assert!(!due(&cache[0], &q, false, now()));
     db.with_connection(|c| {
-        c.execute_batch("DROP TABLE auth_accounts; ALTER TABLE applied_bindings DROP COLUMN context_id; ALTER TABLE history_usage DROP COLUMN request_count; DROP TABLE usage_cache; DROP TABLE usage_samples; PRAGMA user_version=14;")
+        c.execute_batch("DROP TABLE auth_accounts; ALTER TABLE applied_bindings DROP COLUMN context_id; ALTER TABLE history_usage DROP COLUMN request_count; DROP TABLE usage_cache; DROP TABLE usage_samples; DROP TRIGGER resource_mcp_added; DROP TRIGGER resource_mcp_deleted; DROP TRIGGER resource_skill_added; DROP TRIGGER resource_skill_deleted; DROP TRIGGER resource_skill_metadata_added; DROP TRIGGER resource_skill_metadata_changed; DROP TABLE resource_order; DROP TABLE resource_preferences; DROP TABLE skill_package_metadata; DROP TABLE launch_directories; PRAGMA user_version=14;")
             .map_err(|e| e.to_string())
     })
     .unwrap();
@@ -213,7 +213,7 @@ fn v14_queries_without_cache_are_due_but_new_saves_wait_for_interval() {
         let version: u32 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(|e| e.to_string())?;
-        assert_eq!(version, 22);
+        assert_eq!(version, 23);
         Ok(())
     })
     .unwrap();

@@ -370,6 +370,7 @@ impl CliAdapter for Devin {
             project_model_override: false,
             yolo_available: true,
             launch_form: self.launch_form(),
+            launch_directory: self.launch_directory(),
             native_config: Facet {
                 state: "available",
                 reason: "已确认 CLI 身份，可编辑用户级 config.json（JSONC 内容）；项目 .devin/config.json 为次要角色",

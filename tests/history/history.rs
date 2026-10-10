@@ -1347,7 +1347,7 @@ fn v17_history_upgrade_rereads_unchanged_sources_and_preserves_associations() {
     db.with_connection(|conn| {
         conn.execute_batch("ALTER TABLE history_usage DROP COLUMN request_count;
             UPDATE history_sessions SET project_id='linked-project', usage_json='[]';
-            PRAGMA user_version = 17;").map_err(|error| error.to_string())
+            DROP TRIGGER resource_mcp_added; DROP TRIGGER resource_mcp_deleted; DROP TRIGGER resource_skill_added; DROP TRIGGER resource_skill_deleted; DROP TRIGGER resource_skill_metadata_added; DROP TRIGGER resource_skill_metadata_changed; DROP TABLE resource_order; DROP TABLE resource_preferences; DROP TABLE skill_package_metadata; DROP TABLE launch_directories; PRAGMA user_version = 17;").map_err(|error| error.to_string())
     }).unwrap();
     drop(db);
     let db = Database::open(&db_path).unwrap();

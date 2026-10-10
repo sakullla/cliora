@@ -191,12 +191,8 @@ impl CliAdapter for ZCode {
     fn launch_form(&self) -> LaunchForm {
         LaunchForm::Desktop
     }
-    /// Official desktop argument: `--open-workspace=<path>` is forwarded to a
-    /// running instance through the single-instance lock
-    /// (packages/desktop desktopDeepLinkUrl.ts OPEN_WORKSPACE_ARG).
-    fn desktop_launch_args(&self, directory: &Path) -> Result<Vec<String>, String> {
-        Ok(vec![format!("--open-workspace={}", directory.display())])
-    }
+    // Directory forwarding remains unavailable: upstream flags alone do not
+    // establish reliable cold/warm workspace behavior on the installed 3.14.5.
     fn supports_mcp(&self) -> bool {
         true
     }
@@ -316,13 +312,14 @@ impl CliAdapter for ZCode {
             project_model_override: false,
             yolo_available: false,
             launch_form: self.launch_form(),
+            launch_directory: self.launch_directory(),
             native_config: Facet {
                 state: "available",
                 reason: "可分别编辑 setting.json 与 provider_config.json（JSON）",
             },
             launch: Facet {
                 state: "available",
-                reason: "可直接启动已安装的 ZCode 桌面应用并打开工作区",
+                reason: "可直接启动已安装的 ZCode 桌面应用；目录工作区未验证可靠，暂不提供目录启动",
             },
             resume: Facet {
                 state: "unsupported",
@@ -442,7 +439,7 @@ mod tests {
     }
 
     #[test]
-    fn desktop_launch_declares_workspace_arg_and_guards_yolo_and_resume() {
+    fn desktop_launch_hides_unverified_workspace_and_guards_yolo_and_resume() {
         assert_eq!(ZCode.launch_form(), LaunchForm::Desktop);
         assert_eq!(
             ZCode.launch_args(None, LaunchMode::Normal).unwrap(),
@@ -451,10 +448,8 @@ mod tests {
         assert!(ZCode.launch_args(None, LaunchMode::Yolo).is_err());
         assert!(ZCode.launch_args(Some("sess_1"), LaunchMode::Normal).is_err());
         let dir = Path::new("/work/demo");
-        assert_eq!(
-            ZCode.desktop_launch_args(dir).unwrap(),
-            vec![format!("--open-workspace={}", dir.display())]
-        );
+        assert!(ZCode.desktop_launch_args(dir).is_err());
+        assert_eq!(ZCode.launch_directory(), super::super::LaunchDirectory::Unsupported);
         let descriptor = ZCode.descriptor();
         assert_eq!(descriptor.launch_form, LaunchForm::Desktop);
         assert!(!descriptor.yolo_available);

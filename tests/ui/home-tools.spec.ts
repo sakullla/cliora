@@ -41,9 +41,9 @@ async function installHome(page: Page, detect = false) {
       },
       __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, string> = {}) => {
         if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }] };
-        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], yoloAvailable: true }], managedIds: ['codex'], preservedUnknown: [] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], yoloAvailable: true, launchForm: 'terminal', launchDirectory: 'terminal' }], managedIds: ['codex'], preservedUnknown: [] };
         if (command === 'list_projects' || command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_skill_recovery_issues' || command === 'scan_native_skills' || command === 'list_native_mcp') return [];
-        if (command === 'get_launch_settings') return { selected: 'auto', terminals: [{ id: 'auto', label: '系统默认', available: true }], cliMode: 'normal', projectMode: 'normal' };
+        if (command === 'get_launch_settings') return { selected: 'auto', terminals: [{ id: 'auto', label: '系统默认', available: true }], cliMode: 'normal', projectMode: 'normal', directories: JSON.parse(localStorage.getItem('fixture-launch-directories') ?? '{}') };
         if (command === 'get_tray_status') return { available: false, error: null };
         if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
         if (command === 'get_registered_tool_workspace') {
@@ -53,6 +53,12 @@ async function installHome(page: Page, detect = false) {
           const result = workspace();
           if (state.__probeMode === 'failed' || state.__probeMode === 'absent') return { ...result, probe: { ...result.probe, selectedPath: null, nativeWrites: { state: 'unknown', reason: '未确认 CLI 身份' }, installations: state.__probeMode === 'absent' ? [] : [{ path: 'C:/codex.cmd', version: null, status: 'probe_failed', detail: '版本命令超时' }] } };
           return result;
+        }
+        if (command === 'set_launch_directory') {
+          const saved = JSON.parse(localStorage.getItem('fixture-launch-directories') ?? '{}');
+          if (args.directory) saved[args.toolId] = args.directory; else delete saved[args.toolId];
+          localStorage.setItem('fixture-launch-directories', JSON.stringify(saved));
+          return null;
         }
         if (command === 'plugin:dialog|open') return new Promise((resolve) => dialogs.push(resolve));
         if (command === 'launch_cli') {
@@ -161,7 +167,7 @@ test('launch failure names the tool and replaces the previous success', { tag: '
   await expect(tools).not.toContainText('会话已开始');
   await expect(tools).not.toContainText('检测失败');
   await expect(tools.getByRole('button', { name: '启动', exact: true })).toBeEnabled();
-  await expect(tools.getByRole('button', { name: '编辑配置 →' })).toBeEnabled();
+  await expect(tools.getByRole('button', { name: '编辑配置' })).toBeEnabled();
 });
 
 test('the launch directory is remembered, and right-click picks another', async ({ page }) => {
@@ -313,10 +319,10 @@ test('a project tool is searched and switched from the card', async ({ page }) =
       __toolCalls: [] as unknown[],
       __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
         if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ids, theme: 'system' }, tools: ids.map((id) => ({ id, name: names[id] })) };
-        if (command === 'list_cli_adapters') return { registered: ids.map((id) => ({ id, name: names[id], interfaceFormats: [], yoloAvailable: true })), managedIds: ids, preservedUnknown: [] };
+        if (command === 'list_cli_adapters') return { registered: ids.map((id) => ({ id, name: names[id], interfaceFormats: [], yoloAvailable: true, launchForm: 'terminal', launchDirectory: 'terminal' })), managedIds: ids, preservedUnknown: [] };
         if (command === 'list_projects') return [project()];
         if (command === 'get_registered_tool_workspace') return { probe: { selectedPath: `C:/${args.toolId}.cmd`, installations: [{ path: `C:/${args.toolId}.cmd`, version: '1.0.0', status: 'available' }], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' } }, profiles: [], binding: null, snapshots: [], recoveryNeeded: [], common: null, customPath: null };
-        if (command === 'get_launch_settings') return { selected: 'auto', terminals: [], cliMode: 'normal', projectMode: 'normal' };
+        if (command === 'get_launch_settings') return { selected: 'auto', terminals: [], cliMode: 'normal', projectMode: 'normal', directories: JSON.parse(localStorage.getItem('fixture-launch-directories') ?? '{}') };
         if (command === 'get_tray_status') return { available: false, error: null };
         if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
         if (command === 'set_project_tool') { preferred = args.toolId; (window as unknown as { __toolCalls: unknown[] }).__toolCalls.push(args); return project(); }
@@ -349,7 +355,7 @@ test('detection failure names the tool and points at edit or reread', async ({ p
   await expect(alert).toHaveText('Codex 检测失败。可重新检测或编辑配置。 找不到 Codex 可执行文件');
   await expect(tools.getByRole('status')).toHaveCount(0);
   await expect(tools).not.toContainText('操作失败，请重试');
-  await expect(tools.getByRole('button', { name: '编辑配置 →' })).toBeEnabled();
+  await expect(tools.getByRole('button', { name: '编辑配置' })).toBeEnabled();
   await oneLine(alert);
   const color = await alert.evaluate((el) => {
     const probe = document.createElement('span');
@@ -518,10 +524,135 @@ test('missing installations do not loop and a manual recheck discovers a new ins
   await page.goto('/');
   const tools = page.getByLabel('管理中的工具');
   await expect(tools).toContainText('未发现安装');
+  const install = tools.getByRole('button', { name: '去安装', exact: true });
+  await expect(install).toHaveAttribute('title', '去安装');
+  await expect(install).toHaveText('');
   await page.clock.fastForward(30_000);
   expect(await page.evaluate(() => (window as unknown as { __probeCalls: unknown[] }).__probeCalls.length)).toBe(1);
   await page.evaluate(() => { (window as unknown as { __probeMode: string }).__probeMode = 'available'; });
   await tools.getByRole('button', { name: '重新检测', exact: true }).click();
   await expect(tools.getByRole('button', { name: '启动', exact: true })).toBeEnabled();
   expect(await page.evaluate(() => (window as unknown as { __probeCalls: Array<{ fresh: boolean }> }).__probeCalls[1].fresh)).toBe(true);
+});
+
+
+async function installDesktop(page: Page, directory: 'unsupported' | 'workspace') {
+  await page.addInitScript((capability) => {
+    const tool = { id: capability === 'unsupported' ? 'zcode' : 'desktop_fixture', name: capability === 'unsupported' ? 'ZCode' : 'Desktop fixture', launchForm: 'desktop', launchDirectory: capability, yoloAvailable: false };
+    const requests: unknown[] = [];
+    const dialogs: Array<(value: string | null) => void> = [];
+    Object.assign(window, {
+      isTauri: true, __launchRequests: requests, __dialogCalls: 0, __invalidDirectory: '', __failLaunch: false, __failMemory: false,
+      __resolveDialog: (value: string | null) => { const resolve = dialogs.shift(); if (!resolve) throw new Error('no dialog'); resolve(value); },
+      __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
+        const state = window as unknown as { __dialogCalls: number; __invalidDirectory: string; __failLaunch: boolean; __failMemory: boolean };
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: [tool.id], theme: 'system' }, tools: [tool] };
+        if (command === 'list_cli_adapters') return { registered: [tool], managedIds: [tool.id], preservedUnknown: [] };
+        if (command === 'get_registered_tool_workspace') return { probe: { selectedPath: 'C:/fixture.exe', installations: [{ path: 'C:/fixture.exe', version: '3.14.5', status: 'available' }], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' } }, profiles: [], binding: null, snapshots: [], recoveryNeeded: [] };
+        if (command === 'get_launch_settings') return { selected: 'auto', terminals: [], directories: JSON.parse(localStorage.getItem('desktop-directories') ?? '{}') };
+        if (command === 'set_launch_directory') { if (state.__failMemory) throw { message: '保存目录失败' }; const saved = JSON.parse(localStorage.getItem('desktop-directories') ?? '{}'); if (args.directory) saved[args.toolId] = args.directory; else delete saved[args.toolId]; localStorage.setItem('desktop-directories', JSON.stringify(saved)); return null; }
+        if (command === 'plugin:dialog|open') { state.__dialogCalls++; return new Promise(resolve => dialogs.push(resolve)); }
+        if (command === 'launch_cli') { requests.push(args.request); if (state.__failLaunch) throw { message: '应用启动失败' }; if (args.request.directory && args.request.directory === state.__invalidDirectory) throw { message: '目录不存在，请更换目录' }; return { terminal: 'desktop', status: 'desktop_requested', mode: 'normal' }; }
+        if (command === 'get_tray_status') return { available: false, error: null };
+        if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+        if (command.startsWith('list_') || command === 'scan_native_skills') return [];
+        return null;
+      } },
+    });
+  }, directory);
+}
+
+for (const theme of ['light', 'dark'] as const) {
+  test(`desktop bare launch hides unsupported directory actions and shows accessible icons (${theme})`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: theme });
+    await page.setViewportSize({ width: 640, height: 768 });
+    await installDesktop(page, 'unsupported');
+    await page.goto('/');
+    const tools = page.getByLabel('管理中的工具');
+    const configure = tools.getByRole('button', { name: '编辑配置', exact: true });
+    await expect(configure).toHaveAttribute('title', '编辑配置');
+    await expect(configure).toHaveText('');
+    await configure.focus();
+    await expect(configure).toBeFocused();
+    const launch = tools.getByRole('button', { name: '启动', exact: true });
+    await launch.click();
+    await expect(tools.getByRole('status')).toHaveText('ZCode 已请求启动桌面应用。');
+    await expect(tools.getByRole('button', { name: '启动目录' })).toHaveCount(0);
+    await launch.click({ button: 'right' });
+    expect(await page.evaluate(() => (window as any).__dialogCalls)).toBe(0);
+    expect(await page.evaluate(() => (window as any).__launchRequests)).toEqual([{ toolId: 'zcode', projectId: null, sessionId: null, mode: 'normal', directory: null }]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await expect(tools).not.toContainText('已打开');
+  });
+}
+
+test('desktop workspace menu persists across reload, stays separate from bare launch and can replace invalid paths', async ({ page }) => {
+  await installDesktop(page, 'workspace');
+  await page.goto('/');
+  const tools = page.getByLabel('管理中的工具');
+  const launch = tools.getByRole('button', { name: '启动', exact: true });
+  const choose = async (path: string | null) => {
+    await tools.getByRole('button', { name: '启动目录' }).click();
+    await page.getByRole('menuitem', { name: '选择其他目录…' }).click();
+    await page.evaluate(value => (window as any).__resolveDialog(value), path);
+    await expect(launch).toBeEnabled();
+  };
+  await expect(launch).toBeEnabled();
+  await choose(null);
+  expect(await page.evaluate(() => (window as any).__launchRequests)).toEqual([]);
+  await choose('C:/中文 workspace one');
+  await expect(tools.getByRole('status')).toHaveText('Desktop fixture 已请求启动桌面应用。');
+  await page.reload();
+  await expect(launch).toBeEnabled();
+  await launch.click();
+  await expect(tools.getByRole('status')).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__launchRequests[0].directory)).toBeNull();
+  await tools.getByRole('button', { name: '启动目录' }).click();
+  await page.getByRole('menuitem', { name: '用记住的目录启动：C:/中文 workspace one' }).click();
+  await expect(launch).toBeEnabled();
+  expect(await page.evaluate(() => (window as any).__launchRequests[1].directory)).toBe('C:/中文 workspace one');
+  expect(await page.evaluate(() => (window as any).__dialogCalls)).toBe(0);
+  await page.evaluate(() => { (window as any).__invalidDirectory = 'C:/中文 workspace one'; });
+  await tools.getByRole('button', { name: '启动目录' }).click();
+  await page.getByRole('menuitem', { name: '用记住的目录启动：C:/中文 workspace one' }).click();
+  await expect(tools.getByRole('alert')).toContainText('目录不存在，请更换目录');
+  await expect(tools).not.toContainText('已打开');
+  await choose('D:/workspace two');
+  expect(await page.evaluate(() => (window as any).__launchRequests.at(-1).directory)).toBe('D:/workspace two');
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('desktop-directories') ?? '{}').desktop_fixture)).toBe('D:/workspace two');
+});
+
+test('terminal directory memory survives a new frontend session', async ({ page }) => {
+  await installHome(page);
+  await page.goto('/');
+  const tools = page.getByLabel('管理中的工具');
+  await tools.getByRole('button', { name: '启动', exact: true }).click();
+  await page.evaluate(() => (window as any).__resolveDialog('C:/terminal work'));
+  await expect(tools.getByRole('status')).toBeVisible();
+  await page.reload();
+  await tools.getByRole('button', { name: '启动', exact: true }).click();
+  await expect(tools.getByRole('status')).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__launchRequests[0].directory)).toBe('C:/terminal work');
+});
+
+
+test('desktop launch and memory failures report the completed stage honestly', async ({ page }) => {
+  await installDesktop(page, 'workspace');
+  await page.goto('/');
+  const tools = page.getByLabel('管理中的工具');
+  const choose = async () => {
+    await tools.getByRole('button', { name: '启动目录' }).click();
+    await page.getByRole('menuitem', { name: '选择其他目录…' }).click();
+    await page.evaluate(() => (window as any).__resolveDialog('C:/not yet saved'));
+    await expect(tools.getByRole('button', { name: '启动', exact: true })).toBeEnabled();
+  };
+  await page.evaluate(() => { (window as any).__failLaunch = true; });
+  await choose();
+  await expect(tools.getByRole('alert')).toContainText('启动失败');
+  expect(await page.evaluate(() => localStorage.getItem('desktop-directories'))).toBeNull();
+  await page.evaluate(() => { (window as any).__failLaunch = false; (window as any).__failMemory = true; });
+  await choose();
+  await expect(tools.getByRole('alert')).toHaveText('Desktop fixture 已请求启动，但目录未能记住：保存目录失败');
+  await expect(tools).not.toContainText('已打开');
+  expect(await page.evaluate(() => localStorage.getItem('desktop-directories'))).toBeNull();
 });

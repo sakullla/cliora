@@ -365,6 +365,7 @@ impl CliAdapter for Antigravity {
             project_model_override: false,
             yolo_available: true,
             launch_form: self.launch_form(),
+            launch_directory: self.launch_directory(),
             native_config: Facet {
                 state: "available",
                 reason: "已确认 CLI 身份，可编辑 ~/.gemini/antigravity-cli/settings.json（纯 JSON）；keyring 登录态不接管",

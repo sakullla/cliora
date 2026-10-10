@@ -1,6 +1,8 @@
 export type IconName = 'home' | 'connections' | 'library' | 'records' | 'settings' | 'leaf' | 'migration' | 'tool'
-  | 'sun' | 'moon' | 'monitor' | 'alert' | 'info' | 'close' | 'check' | 'trash' | 'sparkle' | 'folder' | 'search' | 'clock' | 'archive' | 'copy' | 'arrowDown' | 'arrowLeft' | 'chevronRight' | 'plus' | 'refresh' | 'sidebarClose' | 'sidebarOpen' | 'play';
+  | 'sun' | 'moon' | 'monitor' | 'alert' | 'info' | 'close' | 'check' | 'trash' | 'sparkle' | 'folder' | 'search' | 'clock' | 'archive' | 'copy' | 'arrowDown' | 'arrowLeft' | 'chevronRight' | 'plus' | 'refresh' | 'sidebarClose' | 'sidebarOpen' | 'play' | 'edit' | 'download';
 const paths: Record<IconName, string> = {
+  edit: 'm15 4 5 5M4 20l5-1L20 8a2.1 2.1 0 0 0-5-5L4 14z',
+  download: 'M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5',
   sidebarClose: 'M3 4h18v16H3zM9 4v16m7-11-3 3 3 3',
   sidebarOpen: 'M3 4h18v16H3zM9 4v16m4-11 3 3-3 3',
   home: 'M3 10.5 12 3l9 7.5M5.5 9v11h13V9M10 20v-6h4v6',

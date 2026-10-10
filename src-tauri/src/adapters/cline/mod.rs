@@ -318,6 +318,7 @@ impl CliAdapter for Cline {
             project_model_override: false,
             yolo_available: false,
             launch_form: self.launch_form(),
+            launch_directory: self.launch_directory(),
             native_config: Facet {
                 state: "available",
                 reason: "可编辑用户级 ~/.cline/global-settings.json；providers.json 含明文密钥，绝不进入管理面",

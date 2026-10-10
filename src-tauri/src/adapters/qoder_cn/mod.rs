@@ -350,6 +350,7 @@ impl CliAdapter for QoderAdapter {
             project_model_override: false,
             yolo_available: self.launch_args(None, LaunchMode::Yolo).is_ok(),
             launch_form: self.launch_form(),
+            launch_directory: self.launch_directory(),
             native_config: Facet {
                 state: "available",
                 reason: "已确认 CLI 身份，可编辑 settings.json（JSON）与项目 settings.local.json",

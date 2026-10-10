@@ -116,7 +116,7 @@ fn v21_migration_does_not_invent_existing_resource_insertion_dates() {
     let registry = fixture_registry();
     let store = MemoryStore::default();
     assert_eq!(distribute(&db, &store, &registry, temp.path(), &old.id, previewed(&db, &registry, temp.path(), &old.id, vec![target("claude_code", true)]))[0].status, "written");
-    db.with_connection(|conn| conn.execute_batch("DROP TRIGGER resource_mcp_added; DROP TRIGGER resource_mcp_deleted; DROP TRIGGER resource_skill_added; DROP TRIGGER resource_skill_deleted; DROP TRIGGER resource_skill_metadata_added; DROP TRIGGER resource_skill_metadata_changed; DROP TABLE resource_order; DROP TABLE resource_preferences; DROP TABLE skill_package_metadata; PRAGMA user_version=21;").map_err(|e| e.to_string())).unwrap();
+    db.with_connection(|conn| conn.execute_batch("DROP TRIGGER resource_mcp_added; DROP TRIGGER resource_mcp_deleted; DROP TRIGGER resource_skill_added; DROP TRIGGER resource_skill_deleted; DROP TRIGGER resource_skill_metadata_added; DROP TRIGGER resource_skill_metadata_changed; DROP TABLE resource_order; DROP TABLE resource_preferences; DROP TABLE skill_package_metadata; DROP TABLE launch_directories; PRAGMA user_version=21;").map_err(|e| e.to_string())).unwrap();
     drop(db);
     let db = Database::open(&path).unwrap();
     assert_eq!(list_definitions(&db).unwrap()[0].id, old.id);
@@ -125,7 +125,7 @@ fn v21_migration_does_not_invent_existing_resource_insertion_dates() {
     }
     db.with_connection(|conn| {
         assert_eq!(conn.query_row("SELECT COUNT(*) FROM resource_order", [], |row| row.get::<_,i64>(0)).unwrap(), 0);
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |row| row.get::<_,i64>(0)).unwrap(), 22);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |row| row.get::<_,i64>(0)).unwrap(), 23);
         Ok(())
     }).unwrap();
 }

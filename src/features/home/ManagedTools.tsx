@@ -29,8 +29,6 @@ function rememberHome(toolId: string, workspace: RegisteredToolWorkspace) {
   if (workspace.probe.selectedPath) rememberedHome.set(toolId, { workspace, at: Date.now() });
   else rememberedHome.delete(toolId);
 }
-const launchDirectories = new Map<string, string>();
-let lastLaunchDirectory = '';
 
 function message(value: unknown): string {
   return value && typeof value === 'object' && 'message' in value ? String(value.message) : i18n.t('home.tools.operationFailed');
@@ -96,6 +94,8 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
     const workspace = cached && Date.now() - cached.at < 60_000 ? cached.workspace : null;
     return workspace ? [[tool.id, { workspace, error: null, busy: false, activity: null }]] : [];
   })));
+  const [launchDirectories, setLaunchDirectories] = useState<Record<string, string>>({});
+  const [launchSettingsReady, setLaunchSettingsReady] = useState(!nativeAvailable);
   const [launchSettings, setLaunchSettings] = useState<LaunchSettings | null>(null);
   const [conflict, setConflict] = useState<{ toolId: string; toolName: string; profileName: string; comparison: ApplyComparison } | null>(null);
   const conflictFeedback = useFeedback('home-tool:' + (conflict?.toolId ?? ''));
@@ -107,7 +107,7 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
   useEffect(() => {
     if (!nativeAvailable) return;
     let active = true;
-    void native.getLaunchSettings().then((value) => { if (active) setLaunchSettings(value); }).catch(() => {});
+    void native.getLaunchSettings().then((value) => { if (active) { setLaunchSettings(value); setLaunchDirectories(value.directories ?? {}); } }).catch(() => {}).finally(() => { if (active) setLaunchSettingsReady(true); });
     return () => { active = false; };
   }, []);
 
@@ -163,30 +163,43 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
     return () => { active = false; generation.current++; clearRetries(); recheck.current = () => {}; unsubscribe?.(); };
   }, [tools.map((item) => item.id).join('|')]);
 
-  async function launchTool(toolId: string, pickDirectory = false) {
+  async function launchTool(toolId: string, intent: 'ordinary' | 'choose' | 'reuse' = 'ordinary') {
     const feedback = notifications.begin('home-tool:' + toolId, 'pickLaunchDirectory');
     const previous = states[toolId];
     if (!previous || previous.busy || acting.current.has(toolId)) return;
     acting.current.add(toolId);
     requests.current.set(toolId, (requests.current.get(toolId) ?? 0) + 1);
     setChecking(old => { const next = new Set(old); next.delete(toolId); return next; });
-    const toolName = tools.find((item) => item.id === toolId)?.name ?? toolId;
+    const tool = tools.find((item) => item.id === toolId);
+    const toolName = tool?.name ?? toolId;
     setStates((old) => ({ ...old, [toolId]: { ...previous, busy: true, activity: 'launch', error: null } }));
     try {
-      const remembered = launchDirectories.get(toolId);
-      let directory = pickDirectory ? undefined : remembered;
-      if (!directory) {
-        const picked = await open({ directory: true, multiple: false, title: t('home.tools.pickDirectoryTitle'), defaultPath: remembered || lastLaunchDirectory || undefined });
+      const remembered = launchDirectories[toolId];
+      const needsDirectory = tool?.launchDirectory === 'terminal' || intent !== 'ordinary';
+      // A desktop's ordinary launch always stays bare, including after a
+      // previous workspace launch. Menus opt in through the registry capability.
+      if (intent !== 'ordinary' && tool?.launchDirectory !== 'terminal' && tool?.launchDirectory !== 'workspace') return;
+      let directory = needsDirectory && intent !== 'choose' ? remembered : undefined;
+      if (needsDirectory && !directory) {
+        const picked = await open({ directory: true, multiple: false, title: t('home.tools.pickDirectoryTitle'), defaultPath: remembered || undefined });
         if (typeof picked !== 'string') {
-          setStates((old) => ({ ...old, [toolId]: settle(previous) }));
+          feedback.complete();
           return;
         }
         directory = picked;
-        launchDirectories.set(toolId, picked);
-        lastLaunchDirectory = picked;
       }
-      feedback.identify(JSON.stringify(['launch', directory, preferredLaunchMode(launchSettings, 'cli', !!tools.find((item) => item.id === toolId)?.yoloAvailable)]));
-      await native.launchCli({ toolId, projectId: null, sessionId: null, mode: preferredLaunchMode(launchSettings, 'cli', !!tools.find((item) => item.id === toolId)?.yoloAvailable), directory });
+      const mode = preferredLaunchMode(launchSettings, 'cli', !!tool?.yoloAvailable);
+      feedback.identify(JSON.stringify(['launch', directory ?? null, mode]));
+      await native.launchCli({ toolId, projectId: null, sessionId: null, mode, directory: directory ?? null });
+      if (directory) {
+        try {
+          await native.setLaunchDirectory(toolId, directory);
+          setLaunchDirectories(old => ({ ...old, [toolId]: directory }));
+        } catch (error) {
+          feedback.error(t('home.tools.directoryNotRemembered', { name: toolName, reason: message(error) }));
+          return;
+        }
+      }
       const notice = lineNotice('ok', tools.find((item) => item.id === toolId)?.launchForm === 'desktop' ? t('home.tools.launchedDesktop', { name: toolName }) : t('home.tools.launchedCli', { name: toolName }));
       setStates((old) => ({ ...old, [toolId]: settle(previous) }));
       feedback.success(notice.text);
@@ -194,16 +207,20 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
       feedback.error(lineNotice('error', t('home.tools.launchFailed', { name: toolName }), message(error)).text);
       setStates((old) => ({ ...old, [toolId]: settle(previous) }));
     } finally {
+      setStates((old) => ({ ...old, [toolId]: settle(previous) }));
       acting.current.delete(toolId);
     }
   }
 
-  function clearRememberedDir(toolId: string) {
-    launchDirectories.delete(toolId);
-    setStates((old) => {
-      const current = old[toolId];
-      return current ? { ...old, [toolId]: { ...current } } : old;
-    });
+  async function clearRememberedDir(toolId: string) {
+    const feedback = notifications.begin('home-tool:' + toolId, 'clearLaunchDirectory');
+    try {
+      await native.setLaunchDirectory(toolId, null);
+      setLaunchDirectories(old => { const next = { ...old }; delete next[toolId]; return next; });
+      feedback.complete();
+    } catch (error) {
+      feedback.error(message(error));
+    }
   }
 
   async function switchProfile(toolId: string, profileId: string) {
@@ -293,10 +310,12 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
       const writable = workspace?.probe.nativeWrites.state === 'supported';
       const launchMode = preferredLaunchMode(launchSettings, 'cli', !!tool.yoloAvailable);
       const desktop = tool.launchForm === 'desktop';
-      const rememberedDir = launchDirectories.get(tool.id);
+      const rememberedDir = launchDirectories[tool.id];
+      const directoryAvailable = tool.launchDirectory === 'terminal' || tool.launchDirectory === 'workspace';
+      const configureLabel = workspace && !installed ? t('home.tools.goInstall') : t('home.tools.editConfig');
       const switchTitle = !workspace ? undefined : !writable ? workspace.probe.nativeWrites.reason || t('home.tools.notWritable') : t('home.tools.switchHint');
       const launchTitle = !installed && workspace ? t('home.tools.launchRelaunch')
-        : desktop ? [rememberedDir ? t('home.tools.launchOpenDir', { dir: displayPath(rememberedDir) }) : t('home.tools.launchDesktop')].join(t('home.tools.titleSeparator'))
+        : desktop ? t('home.tools.launchDesktop')
         : [rememberedDir ? t('home.tools.launchInDir', { dir: displayPath(rememberedDir) }) : '', launchMode === 'yolo' ? t('home.tools.launchYolo') : launchSettings?.cliMode === 'yolo' ? t('home.tools.launchYoloFallback') : ''].filter(Boolean).join(t('home.tools.titleSeparator')) || undefined;
       const line = loaded?.error
         ? lineNotice('error', t('home.tools.probeFailedNotice', { name: tool.name }), loaded.error)
@@ -310,7 +329,7 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
             : profiles.length ? <div role="radiogroup" aria-label={t('home.tools.switchProfileLabel', { name: tool.name })} title={switchTitle}>{profiles.map((item) => <button key={item.id} type="button" role="radio" aria-checked={item.id === selected?.id} className={item.id === selected?.id ? styles.activeConfig : ''} disabled={loaded?.busy || !writable} title={profileLabel(item.name, item.connection)} onClick={() => { if (item.id !== selected?.id || !appliedCurrent) void switchProfile(tool.id, item.id); }}>{item.name}{item.id === selected?.id && item.connection?.model?.trim() ? <em className={styles.modelHint}>{item.connection.model.trim()}</em> : null}</button>)}</div>
             : <button type="button" className={styles.addConfig} onClick={() => onOpenTool(tool.id, { create: true })}>{t('home.tools.newProfile')}</button>}
         </div>
-        <div className={styles.rowActions}>{!installed && (workspace || loaded?.error) ? <button type="button" className={styles.recheck} disabled={checking.has(tool.id) || loaded?.busy} onClick={() => recheck.current(tool.id)}><Icon name="refresh" size={13} strokeWidth={2} />{checking.has(tool.id) ? t('home.tools.statusChecking') : t('home.tools.recheck')}</button> : <button type="button" className={styles.launch} disabled={!installed || loaded?.busy} aria-busy={loaded?.activity === 'launch' || undefined} title={launchTitle} onClick={() => void launchTool(tool.id)} onContextMenu={(event) => { event.preventDefault(); void launchTool(tool.id, true); }}>{loaded?.activity === 'launch' ? <span className="spinner" aria-hidden="true" /> : <Icon name="play" size={13} strokeWidth={2} />}{loaded?.activity === 'launch' ? t('home.tools.launching') : t('home.tools.launch')}</button>}<RowMenu label={t('home.tools.launchDirMenu')}><button role="menuitem" disabled={!installed || !!loaded?.busy} onClick={() => void launchTool(tool.id, true)}>{t('home.tools.chooseOtherDir')}</button>{rememberedDir && <button role="menuitem" onClick={() => clearRememberedDir(tool.id)}>{t('home.tools.clearRememberedDir')}</button>}</RowMenu><button type="button" className={styles.configure} onClick={() => onOpenTool(tool.id, { resource: 'config' })}>{workspace && !installed ? t('home.tools.goInstall') : t('home.tools.editConfig')}</button></div>
+        <div className={styles.rowActions}>{!installed && (workspace || loaded?.error) ? <button type="button" className={styles.recheck} disabled={checking.has(tool.id) || loaded?.busy} onClick={() => recheck.current(tool.id)}><Icon name="refresh" size={13} strokeWidth={2} />{checking.has(tool.id) ? t('home.tools.statusChecking') : t('home.tools.recheck')}</button> : <button type="button" className={styles.launch} disabled={!installed || !launchSettingsReady || loaded?.busy} aria-busy={loaded?.activity === 'launch' || undefined} title={launchTitle} onClick={() => void launchTool(tool.id)} onContextMenu={directoryAvailable ? (event) => { event.preventDefault(); void launchTool(tool.id, 'choose'); } : undefined}>{loaded?.activity === 'launch' ? <span className="spinner" aria-hidden="true" /> : <Icon name="play" size={13} strokeWidth={2} />}{loaded?.activity === 'launch' ? t('home.tools.launching') : t('home.tools.launch')}</button>}{directoryAvailable && <RowMenu label={t('home.tools.launchDirMenu')}>{desktop && rememberedDir && <button role="menuitem" disabled={!installed || !launchSettingsReady || !!loaded?.busy} title={displayPath(rememberedDir)} onClick={() => void launchTool(tool.id, 'reuse')}>{t('home.tools.reuseDirectory', { dir: displayPath(rememberedDir) })}</button>}<button role="menuitem" disabled={!installed || !launchSettingsReady || !!loaded?.busy} onClick={() => void launchTool(tool.id, 'choose')}>{t('home.tools.chooseOtherDir')}</button>{rememberedDir && <button role="menuitem" disabled={!!loaded?.busy} onClick={() => void clearRememberedDir(tool.id)}>{t('home.tools.clearRememberedDir')}</button>}</RowMenu>}<button type="button" className={styles.configure} title={configureLabel} aria-label={configureLabel} onClick={() => onOpenTool(tool.id, { resource: 'config' })}><Icon name={workspace && !installed ? 'download' : 'edit'} size={17} /></button></div>
         <FeedbackRegion context={'home-tool:' + tool.id} />
         {line && <div className={styles.note} data-tone={line.tone} role={line.tone === 'error' ? 'alert' : 'status'} title={line.title}>{line.text}</div>}
       </div>;

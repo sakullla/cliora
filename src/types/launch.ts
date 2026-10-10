@@ -4,7 +4,7 @@ export type TerminalId = 'auto' | 'windows_terminal' | 'power_shell' | 'cmd' | '
 export type TerminalOption = { id: TerminalId; label: string; available: boolean };
 export type CustomTerminal = { program: string; args: string[] };
 export type TerminalPreset = { id: string; label: string; program: string; args: string[] };
-export type LaunchSettings = { selected: TerminalId; terminals: TerminalOption[]; presets?: TerminalPreset[]; custom?: CustomTerminal | null; cliMode?: LaunchMode; projectMode?: LaunchMode };
+export type LaunchSettings = { selected: TerminalId; terminals: TerminalOption[]; presets?: TerminalPreset[]; custom?: CustomTerminal | null; cliMode?: LaunchMode; projectMode?: LaunchMode; directories?: Record<string, string> };
 
 export function preferredLaunchMode(settings: LaunchSettings | null, target: 'cli' | 'project', yoloAvailable: boolean): LaunchMode {
   const preferred = target === 'cli' ? settings?.cliMode : settings?.projectMode;
@@ -24,6 +24,7 @@ export type Project = {
   reapplyProfiles: Record<string, string>;
 };
 
+// directory is explicit terminal cwd or desktop workspace intent; null is bare desktop launch.
 export type LaunchRequest = { toolId: string; projectId: string | null; sessionId: string | null; mode: LaunchMode; directory?: string | null; initialPrompt?: string | null };
 export type LaunchResult = { toolId: string; projectId: string | null; mode: LaunchMode; terminal: TerminalId; status: 'terminal_requested' | 'desktop_requested' };
 export type TrayStatus = { available: boolean; error: string | null };
