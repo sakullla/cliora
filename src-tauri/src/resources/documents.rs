@@ -55,7 +55,7 @@ fn redact(value: &mut Value) -> bool {
     let mut changed = false;
     match value {
         Value::Object(map) => for (key, value) in map {
-            if sensitive(key) && value.is_string() && !value.as_str().is_some_and(|v| v.starts_with("${") || v.starts_with("{env:")) {
+            if sensitive(key) && value.is_string() && !value.as_str().is_some_and(mcp::is_reference) {
                 *value = Value::String(MASK.into()); changed = true;
             } else { changed |= redact(value); }
         },
@@ -71,7 +71,7 @@ fn raw_text(location: &McpLocation, text: &str, parsed: &Value, reveal: bool) ->
         match value {
             Value::Object(map) => for (key, child) in map {
                 path.push(key.clone());
-                if sensitive(key) && child.is_string() && !child.as_str().is_some_and(|v| v.starts_with("${") || v.starts_with("{env:")) { output.push(path.clone()); }
+                if sensitive(key) && child.is_string() && !child.as_str().is_some_and(mcp::is_reference) { output.push(path.clone()); }
                 else { collect(child, path, output); }
                 path.pop();
             },
