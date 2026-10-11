@@ -1,5 +1,3 @@
-import type { FeedbackOperation } from '../../lib/notifications';
-import { useFeedback, FeedbackRegion } from '../../components/Feedback';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { uiAdapterFor } from '../../adapters';
@@ -29,12 +27,12 @@ export function AccountPicker({ toolId, selectedAccountId, onSelect, onBack }: A
   const [method, setMethod] = useState<'browser' | 'device'>('browser');
   const [creating, setCreating] = useState(false);
   const [busy, setBusy] = useState(false);
-  const feedback = useFeedback(JSON.stringify(['login', toolId]));
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [loginAccountId, setLoginAccountId] = useState<string | null>(null);
   const currentTool = useRef(toolId); currentTool.current = toolId;
   const sequence = useRef(0);
   const alive = useRef(true);
-  const loginResult = useRef<FeedbackOperation | null>(null);
   const ownedAttempt = useRef<{ accountId: string; attemptId: string; version: number } | null>(null);
   const cancelledAccounts = useRef(new Set<string>());
   const cancelling = useRef(false);
@@ -47,7 +45,7 @@ export function AccountPicker({ toolId, selectedAccountId, onSelect, onBack }: A
     };
   }, []);
   useEffect(() => {
-    sequence.current++; setCreating(false); setLoginAccountId(null); setBusy(false);
+    sequence.current++; setCreating(false); setLoginAccountId(null); setError(''); setNotice(''); setBusy(false);
     setLabel(metadata?.defaultLabel ?? t('tools.accounts.newAccount')); setMethod('browser');
     const attempt = ownedAttempt.current; ownedAttempt.current = null;
     if (attempt) void native.cancelAccountLogin(attempt.accountId, attempt.attemptId).catch(() => {});
@@ -59,11 +57,10 @@ export function AccountPicker({ toolId, selectedAccountId, onSelect, onBack }: A
   const selectedMethod = methods.includes(method) ? method : methods[0];
 
   async function login(existing?: AuthAccount) {
-    const operationFeedback = feedback.begin(JSON.stringify(['login', existing?.id ?? 'new', selectedMethod]));
     if (!state.capability?.managedLogin || !selectedMethod) return;
-    loginResult.current = operationFeedback;
     const request = ++sequence.current;
-    setBusy(true); let started: AuthAccount | undefined;
+    setBusy(true); setError(''); setNotice('');
+    let started: AuthAccount | undefined;
     try {
       const account = existing ?? await native.createAccount(toolId, label.trim());
       // Returning before creation finishes must not open a new login terminal.
@@ -75,9 +72,9 @@ export function AccountPicker({ toolId, selectedAccountId, onSelect, onBack }: A
         return;
       }
       ownedAttempt.current = started.pendingLogin ? { accountId: started.id, attemptId: started.pendingLogin.id, version: started.version } : null;
-      operationFeedback.success(t('tools.accounts.opened'));
       await state.refresh();
-    } catch (value) { if (isCurrent(request)) operationFeedback.error(errorText(value)); }
+      if (isCurrent(request)) setNotice(t('tools.accounts.opened'));
+    } catch (value) { if (isCurrent(request)) setError(errorText(value)); }
     finally { if (isCurrent(request)) setBusy(false); }
   }
 
@@ -86,17 +83,17 @@ export function AccountPicker({ toolId, selectedAccountId, onSelect, onBack }: A
   useEffect(() => {
     if (loginAccount && !loginAccount.pendingLogin && ownedAttempt.current?.accountId === loginAccount.id && loginAccount.version >= ownedAttempt.current.version) {
       ownedAttempt.current = null;
-      if (loginAccount.state === 'signed_in' && loginAccount.identity && loginAccount.context) loginResult.current?.success(t('tools.accounts.verified'));
-      else loginResult.current?.success(t('tools.accounts.incomplete'));
+      if (loginAccount.state === 'signed_in' && loginAccount.identity && loginAccount.context) setNotice(t('tools.accounts.verified'));
+      else setNotice(t('tools.accounts.incomplete'));
     }
   }, [loginAccount]);
 
   async function cancel(back = false) {
-    const operationFeedback = feedback.begin('cancel:' + loginAccountId);
     if (cancelling.current) return;
     cancelling.current = true;
     const request = ++sequence.current;
-    setBusy(true); const attempt = ownedAttempt.current ?? (loginAccount?.pendingLogin ? { accountId: loginAccount.id, attemptId: loginAccount.pendingLogin.id } : null);
+    setBusy(true); setError('');
+    const attempt = ownedAttempt.current ?? (loginAccount?.pendingLogin ? { accountId: loginAccount.id, attemptId: loginAccount.pendingLogin.id } : null);
     try {
       if (attempt) {
         await native.cancelAccountLogin(attempt.accountId, attempt.attemptId);
@@ -104,31 +101,31 @@ export function AccountPicker({ toolId, selectedAccountId, onSelect, onBack }: A
         await state.refresh();
       }
       if (!isCurrent(request)) return;
-      operationFeedback.success(t('tools.accounts.cancelled'));
+      setNotice(t('tools.accounts.cancelled'));
       if (back) onBack();
-    } catch (value) { if (isCurrent(request)) operationFeedback.error(errorText(value)); }
+    } catch (value) { if (isCurrent(request)) setError(errorText(value)); }
     finally { cancelling.current = false; if (isCurrent(request)) setBusy(false); }
   }
 
   async function select(account: AuthAccount) {
-    const operationFeedback = feedback.begin('select:' + account.id);
     const request = ++sequence.current;
-    setBusy(true); try {
+    setBusy(true); setError('');
+    try {
       const checked = await native.checkAccount(account.id);
       if (!isCurrent(request)) return;
       if (checked.toolId !== toolId || checked.id !== account.id || checked.state !== 'signed_in' || !checked.identity || !checked.context || checked.pendingLogin || cancelledAccounts.current.has(checked.id)) {
         await state.refresh();
         throw new Error(t('tools.accounts.notVerified'));
       }
-      operationFeedback.complete(); onSelect(checked);
-    } catch (value) { if (isCurrent(request)) operationFeedback.error(errorText(value)); }
+      onSelect(checked);
+    } catch (value) { if (isCurrent(request)) setError(errorText(value)); }
     finally { if (isCurrent(request)) setBusy(false); }
   }
 
   async function check(account: AuthAccount) {
-    const operationFeedback = feedback.begin('check:' + account.id);
-    const request = ++sequence.current; setBusy(true); try { await native.checkAccount(account.id); operationFeedback.complete(); await state.refresh(); }
-    catch (value) { if (isCurrent(request)) operationFeedback.error(errorText(value)); }
+    const request = ++sequence.current; setBusy(true); setError('');
+    try { await native.checkAccount(account.id); await state.refresh(); }
+    catch (value) { if (isCurrent(request)) setError(errorText(value)); }
     finally { if (isCurrent(request)) setBusy(false); }
   }
 
@@ -136,7 +133,8 @@ export function AccountPicker({ toolId, selectedAccountId, onSelect, onBack }: A
     <header><div><h3>{t('tools.accounts.pickerTitle')}</h3><p>{metadata?.description ?? t('tools.accounts.pickerDefaultDescription')}</p></div><button onClick={() => void cancel(true)}>{t('tools.accounts.back')}</button></header>
     <p>{t('tools.accounts.note')}</p>
     {!nativeAvailable && <p role="alert">{t('tools.accounts.pickerNativeOnly')}</p>}
-    <FeedbackRegion context={feedback.context} relatedContexts={[state.readContext]} />
+    {(error || state.error) && <p role="alert">{error || state.error}</p>}
+    {notice && <p role="status">{notice}</p>}
     {state.loading && <p role="status">{t('tools.accounts.loading')}</p>}
     {!state.loading && !state.accounts.length && <p>{t('tools.accounts.pickerEmpty')}</p>}
     <ul>{state.accounts.map(account => {
@@ -147,7 +145,8 @@ export function AccountPicker({ toolId, selectedAccountId, onSelect, onBack }: A
         <div className={styles.actions}><button className={styles.primary} disabled={busy || waiting || !selectable} onClick={() => void select(account)}>{t('tools.accounts.selectAndBack')}</button>
           {account.pendingLogin && account.id === loginAccountId && <button disabled={busy} onClick={() => void cancel()}>{t('tools.accounts.cancelLogin')}</button>}
           {account.pendingLogin?.operation === 'login' && account.id === loginAccountId && state.capability?.browserLink && <button disabled={busy} onClick={() => {
-            const result = feedback.begin('openLoginLink:' + account.id); const request = ++sequence.current; setBusy(true); void native.openAccountLoginLink(account.id, account.pendingLogin!.id).then(() => result.complete()).catch(value => { if (isCurrent(request)) result.error(errorText(value)); }).finally(() => { if (isCurrent(request)) setBusy(false); });
+            const request = ++sequence.current; setBusy(true); setError('');
+            void native.openAccountLoginLink(account.id, account.pendingLogin!.id).catch(value => { if (isCurrent(request)) setError(errorText(value)); }).finally(() => { if (isCurrent(request)) setBusy(false); });
           }}>{t('tools.accounts.openAuthPage')}</button>}
           {!account.pendingLogin && !selectable && <><button disabled={busy || waiting} onClick={() => void check(account)}>{t('tools.accounts.checkStatus')}</button>{state.capability?.managedLogin && <button disabled={busy || waiting} onClick={() => void login(account)}>{t('tools.accounts.retryLogin')}</button>}</>}
         </div>

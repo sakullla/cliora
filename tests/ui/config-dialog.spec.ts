@@ -797,6 +797,7 @@ test('diff editor loading states are explicit and a failed chunk can be retried'
   const dialog = page.getByRole('dialog');
   await dialog.getByRole('button', { name: '原生文本', exact: true }).click();
   await expect(dialog.getByText('正在准备编辑器…')).toBeVisible();
+  await expect.poll(() => release !== null).toBe(true);
   mode = 'fail';
   release!();
   const failed = dialog.getByRole('alert').filter({ hasText: '编辑器加载失败' });

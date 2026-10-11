@@ -605,7 +605,6 @@ impl CliAdapter for MiMoCode {
             project_model_override: false,
             yolo_available: true,
             launch_form: self.launch_form(),
-            launch_directory: self.launch_directory(),
             native_config: Facet {
                 state: "available",
                 reason: "已确认 CLI 身份，可编辑用户级 mimocode.jsonc（JSONC）与 tui.json",
@@ -782,7 +781,6 @@ mod tests {
     #[test]
     fn mcp_documents_match_the_official_local_and_remote_shapes() {
         let definition = McpDefinition {
-            reference_source: None, reference_scope: None,
             id: "fixture-definition".into(),
             name: "example".into(),
             transport: McpTransport::Stdio,

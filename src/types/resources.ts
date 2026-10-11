@@ -17,9 +17,6 @@ export type McpDefinition = {
   url: string;
   env: Record<string, string>;
   headers: Record<string, string>;
-  /** Adapter owning native interpolation syntax; missing in legacy snapshots. */
-  referenceSource?: string | null;
-  referenceScope?: Scope | null;
   inLibrary: boolean;
   version: number;
 };
@@ -28,20 +25,6 @@ export type McpPlacement = { contextId?: string | null; definitionId: string; to
 export type McpTargetRequest = { contextId?: string | null; toolId: string; scope: Scope; projectPath: string | null; enabled: boolean; baselineHash?: string | null; previewToken?: string | null; allowReplace?: boolean };
 export type McpTargetResult = { contextId?: string | null; toolId: string; scope: Scope; projectPath: string | null; path: string | null; status: 'ready' | 'conflict' | 'unsupported' | 'written' | 'failed'; detail: string; baselineHash: string | null; previewToken: string | null; existing: unknown | null; proposed: unknown | null };
 export type NativeMcpEntry = Omit<McpDefinition, 'id' | 'version'> & { enabled: boolean; protectedValues: boolean };
-
-export type McpDocumentRequest = { target: McpTargetRequest; definitionId: string | null; name: string; reveal?: boolean };
-/** Read-only adapter rendering; never saves the draft or resolves secret references. */
-export type McpDraftRenderRequest = { target: McpTargetRequest; draft: McpDraft };
-export type McpDocument = { enabled: boolean | null; source: 'native_entry' | 'equivalent'; format: 'json' | 'jsonc' | 'toml' | 'yaml'; name: string; text: string; rawText: string | null; rawScope: 'native_file' | null; sourcePath: string | null; baseline: string; targetToolId: string; protectedValues: boolean; unmappedFields: string[]; diagnostics: string[] };
-export type McpPasteItem = { name: string; enabled: boolean | null; draft: McpDraft | null; unmappedFields: string[]; diagnostics: string[] };
-export type SkillPackageDocument = { packageId: string; name: string; content: string; digest: string };
-export type ResourceOperation =
-  | { action: 'mcp_apply'; definitionId: string; target: McpTargetRequest }
-  | { action: 'skill_install'; packageId: string; target: McpTargetRequest; previewToken: string | null; allowTakeover: boolean }
-  | { action: 'skill_remove' | 'skill_enable'; packageId: string; target: McpTargetRequest };
-export type ResourceStateRequest = { kind: 'skill'; packageId: string } | { kind: 'mcp'; definitionId: string; target: McpTargetRequest } | { kind: 'native_skill'; target: McpTargetRequest; name: string; directory?: string };
-export type ResourceItemResult = { index: number; status: 'ready' | 'written' | 'installed' | 'removed' | 'already_current' | 'failed' | 'conflict' | 'not_executed'; detail: string; value: unknown | null };
-export type ResourceBatchResult = { operationId: string; cancelled: boolean; items: ResourceItemResult[] };
 
 export type RuleTarget = { contextId?: string | null; toolId: string; scope: Scope; projectPath: string | null; baselineHash?: string | null };
 export type RulePreview = { target: RuleTarget; path: string | null; status: 'ready' | 'unsupported'; detail: string; existing: string; proposed: string; changed: boolean };
@@ -56,8 +39,8 @@ export type SkillImportPreview = { name: string; source: string; digest: string;
 export type SkillInstallation = { contextId?: string | null; packageId: string; toolId: string; scope: Scope; projectPath: string | null; targetPath: string; digest: string; state: 'current' | 'update_available' | 'missing' | 'conflict' | 'unavailable' | 'disabled' };
 export type SkillTargetResult = { toolId: string; scope: Scope; projectPath: string | null; path: string | null; status: 'installed' | 'removed' | 'already_current' | 'failed'; detail: string };
 export type SkillRecoveryIssue = { contextId?: string | null; operationId: string; toolId: string; scope: Scope; projectPath: string | null; targetPath: string; backupPath: string; detail: string };
-export type NativeSkillEntry = { source?: string; readOnly?: boolean; readOnlyReason?: string | null; name: string; path: string; digest: string | null; state: 'managed' | 'external' | 'unreadable' | 'unknown'; detail: string; packageId: string | null };
-export type NativeSkillDocument = { source?: string; readOnly?: boolean; readOnlyReason?: string | null; name: string; path: string; content: string };
+export type NativeSkillEntry = { name: string; path: string; digest: string | null; state: 'managed' | 'external' | 'unreadable'; detail: string; packageId: string | null };
+export type NativeSkillDocument = { name: string; path: string; content: string };
 export type SkillTargetPreview = { path: string; status: 'ready' | 'conflict'; detail: string; previewToken: string | null; existingDigest: string | null; packageDigest: string; changes: SkillFileChange[] };
 
 export type AgentEntry = { id: string; name: string; description: string; path: string; format: 'toml' | 'markdown' | 'json'; content: string; enabled: boolean; readOnly: boolean; builtin: boolean; owner: string; detail: string };

@@ -80,6 +80,25 @@ test('the tool switcher stays one horizontal row', async ({ page }) => {
   await expect.poll(() => list.evaluate((root) => root.scrollLeft)).toBeGreaterThan(0);
   await expect(list).toHaveAttribute('data-fade-start', 'true');
 
+  const back = page.getByRole('button', { name: '向左查看更多工具' });
+  const forward = page.getByRole('button', { name: '向右查看更多工具' });
+  await expect(back).toBeVisible();
+  await back.click();
+  await expect.poll(() => list.evaluate((root) => root.scrollLeft)).toBe(0);
+  await expect(back).toBeHidden();
+  await forward.click();
+  await expect.poll(() => list.evaluate((root) => root.scrollLeft)).toBeGreaterThan(0);
+  await list.evaluate((root) => { root.scrollLeft = 0; });
+
+  // Dragging scrolls the strip and does not select the tab under the pointer.
+  const strip = (await list.boundingBox())!;
+  await page.mouse.move(strip.x + strip.width / 2, strip.y + strip.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(strip.x + strip.width / 2 - 200, strip.y + strip.height / 2, { steps: 8 });
+  await page.mouse.up();
+  await expect.poll(() => list.evaluate((root) => root.scrollLeft)).toBeGreaterThan(150);
+  await expect(list.getByRole('tab', { name: 'Codex', exact: true })).toHaveAttribute('aria-selected', 'true');
+
   await list.getByRole('tab', { name: 'Kiro', exact: true }).click();
   await expect(list.getByRole('tab', { name: 'Kiro', exact: true })).toHaveAttribute('aria-selected', 'true');
   await expect(list.getByRole('tab', { name: 'Codex', exact: true })).toHaveAttribute('aria-selected', 'false');

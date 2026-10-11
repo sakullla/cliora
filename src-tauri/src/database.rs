@@ -23,7 +23,7 @@ impl Database {
     pub fn open(path: &Path) -> Result<Self, OpenError> {
         let mut connection = Connection::open(path)?;
         let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 23 {
+        if version > 21 {
             return Err(OpenError::UnsupportedVersion(version));
         }
         connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
@@ -446,29 +446,6 @@ impl Database {
             tx.execute_batch("CREATE TABLE IF NOT EXISTS usage_samples (query_id TEXT NOT NULL REFERENCES usage_queries(id) ON DELETE CASCADE, measured_at INTEGER NOT NULL, payload TEXT NOT NULL); CREATE INDEX IF NOT EXISTS idx_usage_samples_query_time ON usage_samples(query_id, measured_at); PRAGMA user_version = 21;")?;
             tx.commit()?;
         }
-        if version < 22 {
-            let tx = connection.transaction()?;
-            // Local insertion order, never an invented external creation date.
-            // No portable/sync entities include these device preferences.
-            tx.execute_batch("CREATE TABLE resource_order (sequence INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, resource_id TEXT NOT NULL, UNIQUE(kind, resource_id));
-                CREATE TABLE resource_preferences (context TEXT PRIMARY KEY NOT NULL, sort TEXT NOT NULL CHECK(sort IN ('added', 'name')));
-                CREATE TABLE skill_package_metadata (package_id TEXT PRIMARY KEY NOT NULL REFERENCES skill_packages(id) ON DELETE CASCADE, file_count INTEGER NOT NULL, manifest TEXT);
-                INSERT INTO skill_package_metadata SELECT id, (SELECT COUNT(*) FROM json_each(files_json)), json_extract(files_json, '$.\"SKILL.md\"') FROM skill_packages;
-                CREATE TRIGGER resource_skill_metadata_added AFTER INSERT ON skill_packages BEGIN INSERT INTO skill_package_metadata VALUES (NEW.id,(SELECT COUNT(*) FROM json_each(NEW.files_json)),json_extract(NEW.files_json, '$.\"SKILL.md\"')); END;
-                CREATE TRIGGER resource_skill_metadata_changed AFTER UPDATE OF files_json ON skill_packages BEGIN UPDATE skill_package_metadata SET file_count=(SELECT COUNT(*) FROM json_each(NEW.files_json)),manifest=json_extract(NEW.files_json, '$.\"SKILL.md\"') WHERE package_id=NEW.id; END;
-                CREATE TRIGGER resource_mcp_added AFTER INSERT ON mcp_definitions BEGIN INSERT OR IGNORE INTO resource_order(kind,resource_id) VALUES ('mcp',NEW.id); END;
-                CREATE TRIGGER resource_skill_added AFTER INSERT ON skill_packages BEGIN INSERT OR IGNORE INTO resource_order(kind,resource_id) VALUES ('skill',NEW.id); END;
-                CREATE TRIGGER resource_mcp_deleted AFTER DELETE ON mcp_definitions BEGIN DELETE FROM resource_order WHERE kind='mcp' AND resource_id=OLD.id; END;
-                CREATE TRIGGER resource_skill_deleted AFTER DELETE ON skill_packages BEGIN DELETE FROM resource_order WHERE kind='skill' AND resource_id=OLD.id; END;
-                PRAGMA user_version = 22;")?;
-            tx.commit()?;
-        }
-        if version < 23 {
-            let tx = connection.transaction()?;
-            // Local paths never enter portable or sync data.
-            tx.execute_batch("CREATE TABLE launch_directories (tool_id TEXT PRIMARY KEY NOT NULL, path TEXT NOT NULL); PRAGMA user_version = 23;")?;
-            tx.commit()?;
-        }
         Ok(Self {
             connection: Mutex::new(connection),
             read_path: (path != Path::new(":memory:") && !path.as_os_str().is_empty()).then(|| path.to_owned()),
@@ -701,7 +678,7 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
-            assert_eq!(version, 23);
+            assert_eq!(version, 21);
             let count: i64 = conn
                 .query_row("SELECT COUNT(*) FROM native_profiles", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;

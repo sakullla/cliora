@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{BufRead, BufReader, Cursor, Read};
+use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -62,9 +62,6 @@ pub struct SkillTargetResult {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeSkillEntry {
-    pub source: String,
-    pub read_only: bool,
-    pub read_only_reason: Option<String>,
     pub name: String,
     pub path: String,
     pub digest: Option<String>,
@@ -76,9 +73,6 @@ pub struct NativeSkillEntry {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeSkillDocument {
-    pub source: String,
-    pub read_only: bool,
-    pub read_only_reason: Option<String>,
     pub name: String,
     pub path: String,
     pub content: String,
@@ -216,117 +210,56 @@ fn manifest_info(
     };
     let text = String::from_utf8(STANDARD.decode(encoded).map_err(|_| "SKILL.md 编码错误")?)
         .map_err(|_| "SKILL.md 应为 UTF-8")?;
-    Ok(manifest_metadata(&text))
-}
-
-fn manifest_metadata(text: &str) -> (String, Option<String>) {
     let mut lines = text.lines();
     if lines.next().map(str::trim) != Some("---") {
-        return (String::new(), None);
+        return Ok((String::new(), None));
     }
-    let mut header = String::new();
+    let mut description = String::new();
+    let mut compatibility = None;
     for line in lines {
         if line.trim() == "---" {
-            let Ok(value) = serde_yaml::from_str::<serde_yaml::Value>(&header) else { return (String::new(), None); };
-            let description = value.get("description").and_then(serde_yaml::Value::as_str).unwrap_or("").to_owned();
-            let compatibility = value.get("compatibility").and_then(serde_yaml::Value::as_str).filter(|v| !v.is_empty() && v.len() <= 500).map(str::to_owned);
-            return (description, compatibility);
+            break;
         }
-        header.push_str(line);
-        header.push('\n');
-    }
-    (String::new(), None)
-}
-
-/// Read only the bounded frontmatter, never attachments or the Markdown body.
-/// Follow the same directory-link policy as package reads; reject a linked file.
-fn native_manifest_description(directory: &Path) -> Result<String, String> {
-    let file = resolved_skill_dir(directory)?.join("SKILL.md");
-    if file.is_symlink() { return Err("不跟随 SKILL.md 符号链接".into()); }
-    let file = match fs::File::open(file) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(String::new()),
-        Err(_) => return Err("SKILL.md 暂不可读取".into()),
-    };
-    let mut reader = BufReader::new(file).take(64 * 1024);
-    let mut header = String::new();
-    let mut line = String::new();
-    reader.read_line(&mut line).map_err(|_| "SKILL.md 应为 UTF-8")?;
-    if line.trim() != "---" { return Ok(String::new()); }
-    header.push_str(&line);
-    loop {
-        line.clear();
-        if reader.read_line(&mut line).map_err(|_| "SKILL.md 应为 UTF-8")? == 0 { return Ok(String::new()); }
-        header.push_str(&line);
-        if line.trim() == "---" { return Ok(manifest_metadata(&header).0); }
-    }
-}
-
-fn read_roots(registry: &Registry, home: &Path, tool: &str, scope: Scope, project_path: Option<&str>) -> Result<Vec<crate::adapters::SkillReadRoot>, String> {
-    let adapter = registry.get(tool).ok_or("此 CLI 尚无注册适配器")?;
-    let project = if scope == Scope::Project { Some(projects::checked_directory(project_path.ok_or("请选择项目目录")?)?) } else { None };
-    Ok(adapter.skill_read_roots(scope, home, project.as_deref()))
-}
-
-// Read-only physical roots take precedence over writable aliases. No client
-// path can select another tool's or project's undeclared Skill source.
-fn skill_directory(registry: &Registry, home: &Path, tool: &str, scope: Scope, project_path: Option<&str>, directory: &str) -> Result<(PathBuf, String, Option<String>), String> {
-    let requested = Path::new(directory);
-    let canonical = requested.canonicalize().map_err(|_| "Skill 目录不存在")?;
-    if !canonical.is_dir() { return Err("Skill 不是目录".into()); }
-    for source in read_roots(registry, home, tool, scope, project_path)? {
-        let Ok(root) = source.path.canonicalize() else { continue; };
-        if let Ok(relative) = canonical.strip_prefix(&root) {
-            if (1..=8).contains(&relative.components().count()) { return Ok((canonical, source.id.into(), Some(source.reason.into()))); }
-        }
-    }
-    let name = requested.file_name().and_then(|v| v.to_str()).filter(|v| !v.is_empty() && *v != "." && *v != "..").ok_or("Skill 目录名无效")?;
-    let (path, _) = target(registry, home, tool, scope, project_path, name)?;
-    if path.canonicalize().ok().as_ref() != Some(&canonical) { return Err("Skill 不在当前工具与范围的已声明目录".into()); }
-    Ok((path, "primary".into(), None))
-}
-
-fn check_skill_write(registry: &Registry, home: &Path, tool: &str, scope: Scope, project_path: Option<&str>, path: &Path) -> Result<(), String> {
-    registry.get(tool).ok_or("未注册工具")?.validate_skill_write(home)?;
-    let mut current = path.to_path_buf();
-    while !current.exists() { current = current.parent().ok_or("Skill 目标目录无效")?.to_path_buf(); }
-    let existing = current.canonicalize().map_err(|_| "Skill 目标目录不可读")?;
-    for source in read_roots(registry, home, tool, scope, project_path)? {
-        if source.path.canonicalize().is_ok_and(|root| existing.starts_with(root)) { return Err(source.reason.into()); }
-    }
-    Ok(())
-}
-
-fn readonly_metadata(registry: &Registry, home: &Path, tool: &str, scope: Scope, project_path: Option<&str>, entries: &mut Vec<NativeSkillEntry>) -> Result<(), String> {
-    let mut seen: std::collections::HashSet<PathBuf> = entries.iter().filter_map(|e| Path::new(&e.path).canonicalize().ok()).collect();
-    let mut roots_seen = std::collections::HashSet::new();
-    let mut visited = 0;
-    for source in read_roots(registry, home, tool, scope, project_path)? {
-        let Ok(root) = source.path.canonicalize() else { continue; };
-        if !roots_seen.insert(root.clone()) { continue; }
-        for entry in entries.iter_mut() {
-            if Path::new(&entry.path).canonicalize().is_ok_and(|p| p.starts_with(&root)) { entry.source = source.id.into(); entry.read_only = true; entry.read_only_reason = Some(source.reason.into()); entry.package_id = None; }
-        }
-        let mut pending = vec![(root.clone(), 0usize)];
-        while let Some((parent, depth)) = pending.pop() {
-            for item in fs::read_dir(&parent).map_err(|_| "Skill 只读来源暂不可读取")? {
-                let item = item.map_err(|_| "Skill 只读来源暂不可读取")?;
-                visited += 1;
-                if visited > 16384 { return Err("Skill 来源目录过大，请缩小范围".into()); }
-                let path = item.path();
-                let name = item.file_name().to_string_lossy().to_string();
-                if name.starts_with('.') || path.is_symlink() || !path.is_dir() { continue; }
-                let canonical = path.canonicalize().map_err(|_| "Skill 目录不可读取")?;
-                if !canonical.starts_with(&root) { continue; }
-                if path.join("SKILL.md").is_file() {
-                    if !seen.insert(canonical.clone()) { continue; }
-                    if entries.len() >= 4096 { return Err("原生 Skills 目录超过 4096 个".into()); }
-                    entries.push(NativeSkillEntry { name, path: canonical.display().to_string(), digest: None, state: "unknown", detail: native_manifest_description(&path).unwrap_or_default(), package_id: None, source: source.id.into(), read_only: true, read_only_reason: Some(source.reason.into()) });
-                } else if depth < 7 { pending.push((path, depth + 1)); }
+        if let Some((key, value)) = line.split_once(':') {
+            let value = value.trim().trim_matches('"').trim_matches('\'').to_owned();
+            match key.trim() {
+                "description" => description = value,
+                "compatibility" if !value.is_empty() && value.len() <= 500 => {
+                    compatibility = Some(value);
+                }
+                _ => {}
             }
         }
     }
-    Ok(())
+    Ok((description, compatibility))
+}
+
+fn skill_markdown(
+    registry: &Registry,
+    home: &Path,
+    tool: &str,
+    scope: Scope,
+    project_path: Option<&str>,
+    directory: &str,
+) -> Result<(String, PathBuf), String> {
+    let (placeholder, _) = target(registry, home, tool, scope, project_path, "placeholder")?;
+    let root = placeholder.parent().ok_or("Skills 原生目录无效")?;
+    let requested = Path::new(directory);
+    let name = requested
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|name| !name.is_empty() && *name != "." && *name != ".." && !name.contains(['/', '\\']))
+        .ok_or("Skills 目录名无效")?;
+    let dir = root.join(name);
+    if !dir.is_dir() {
+        return Err("Skill 不在当前工具的 Skills 目录".into());
+    }
+    let requested_canon = requested.canonicalize().map_err(|_| "Skill 目录不存在".to_string())?;
+    let dir_canon = dir.canonicalize().map_err(|_| "Skill 目录不存在".to_string())?;
+    if requested_canon != dir_canon {
+        return Err("Skill 不在当前工具的 Skills 目录".into());
+    }
+    Ok((name.to_owned(), dir.join("SKILL.md")))
 }
 
 pub fn read_document(
@@ -339,10 +272,9 @@ pub fn read_document(
     directory: &str,
 ) -> Result<NativeSkillDocument, String> {
     let _context = crate::accounts::selection::enter_bound(db, home, tool, scope, project_path.map(Path::new))?;
-    let (path, source, reason) = skill_directory(registry, home, tool, scope, project_path, directory)?;
-    let name = path.file_name().and_then(|v| v.to_str()).ok_or("Skill 名称无效")?.to_owned();
-    let content = transaction::read_native(&path.join("SKILL.md"))?;
-    Ok(NativeSkillDocument { name, path: directory.to_owned(), content, source, read_only: reason.is_some(), read_only_reason: reason })
+    let (name, file) = skill_markdown(registry, home, tool, scope, project_path, directory)?;
+    let content = transaction::read_native(&file)?;
+    Ok(NativeSkillDocument { name, path: directory.to_owned(), content })
 }
 
 pub fn save_document(
@@ -358,10 +290,7 @@ pub fn save_document(
     content: &str,
 ) -> Result<(), String> {
     let _context = crate::accounts::selection::enter_bound(db, home, tool, scope, project_path.map(Path::new))?;
-    let (path, _, reason) = skill_directory(registry, home, tool, scope, project_path, directory)?;
-    if let Some(reason) = reason { return Err(reason); }
-    check_skill_write(registry, home, tool, scope, project_path, &path)?;
-    let file = path.join("SKILL.md");
+    let (_, file) = skill_markdown(registry, home, tool, scope, project_path, directory)?;
     let exists = file.is_file();
     let current = if exists { transaction::read_native(&file)? } else { String::new() };
     if current != baseline {
@@ -1037,14 +966,16 @@ pub fn set_in_library(db: &Database, id: &str, in_library: bool) -> Result<(), S
 }
 
 pub fn list(db: &Database) -> Result<Vec<SkillPackage>, String> {
+    let _ = recover_report(db)?;
     db.with_connection(|conn| {
-        let mut statement = conn.prepare("SELECT id, name, description, source, digest, metadata.manifest, updated_at, in_library, metadata.file_count FROM skill_packages JOIN skill_package_metadata metadata ON metadata.package_id=id ORDER BY (SELECT sequence FROM resource_order WHERE kind='skill' AND resource_id=skill_packages.id) DESC, name COLLATE NOCASE, id")
+        let mut statement = conn.prepare("SELECT id, name, description, source, digest, files_json, updated_at, in_library FROM skill_packages ORDER BY name COLLATE NOCASE")
             .map_err(|error| error.to_string())?;
         let rows = statement.query_map([], |row| {
-            let manifest: Option<String> = row.get(5)?;
-            let file_count = row.get::<_, i64>(8)?.max(0) as usize;
+            let json: String = row.get(5)?;
+            let file_count = serde_json::from_str::<BTreeMap<String, String>>(&json).map_or(0, |files| files.len());
             let name: String = row.get(1)?;
-            let compatibility = manifest.and_then(|manifest| manifest_info(&BTreeMap::from([("SKILL.md".into(), manifest)]), &name).ok()).and_then(|(_, compatibility)| compatibility);
+            let compatibility = serde_json::from_str::<BTreeMap<String, String>>(&json).ok()
+                .and_then(|files| manifest_info(&files, &name).ok()).and_then(|(_, compatibility)| compatibility);
             Ok(SkillPackage { id: row.get(0)?, name, description: row.get(2)?, compatibility, source: row.get(3)?, digest: row.get(4)?, file_count, updated_at: row.get::<_, i64>(6)?.max(0) as u64, in_library: row.get::<_, i64>(7)? != 0 })
         }).map_err(|error| error.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?;
         Ok(rows)
@@ -1064,43 +995,7 @@ fn package(db: &Database, id: &str) -> Result<(SkillPackage, BTreeMap<String, St
         Ok((package, files))
     })
 }
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PackageDocument {
-    pub package_id: String,
-    pub name: String,
-    pub content: String,
-    pub digest: String,
-}
-
-pub fn read_package_document(db: &Database, id: &str) -> Result<PackageDocument, String> {
-    let (package, files) = package(db, id)?;
-    let content = String::from_utf8(STANDARD.decode(files.get("SKILL.md").ok_or("SKILL.md 不存在")?).map_err(|_| "SKILL.md 编码错误")?).map_err(|_| "SKILL.md 应为 UTF-8")?;
-    Ok(PackageDocument { package_id: id.into(), name: package.name, content, digest: package.digest })
-}
-
-pub fn save_package_document(db: &Database, id: &str, baseline: &str, content: &str) -> Result<PackageDocument, String> {
-    let _guard = lock().lock().map_err(|_| "Skills 服务暂时不可用")?;
-    // A package lives in SQLite, not a native directory. The same recovery lock
-    // prevents overlap with install/recovery; the CAS commits its complete blob
-    // atomically without touching any installed copy or accompanying file.
-    let _ = recover_locked_report(db)?;
-    let (package, mut files) = package(db, id)?;
-    if package.digest != baseline { return Err("Skills 包已变化，请重新读取后合并草稿".into()); }
-    files.insert("SKILL.md".into(), STANDARD.encode(content.as_bytes()));
-    let bytes = files.values().try_fold(0usize, |total, encoded| STANDARD.decode(encoded).map(|bytes| total + bytes.len()).map_err(|_| "Skills 包内容损坏"))?;
-    if bytes > MAX_BYTES { return Err("Skills 包超过 12 MiB".into()); }
-    let checksum = digest(&files)?;
-    let (description, _) = manifest_info(&files, &package.name)?;
-    db.with_connection(|conn| {
-        let changed = conn.execute("UPDATE skill_packages SET files_json=?2, digest=?3, description=?4, updated_at=?5 WHERE id=?1 AND digest=?6", params![id, serde_json::to_string(&files).map_err(|e| e.to_string())?, checksum, description, timestamp() as i64, baseline]).map_err(|e| e.to_string())?;
-        if changed != 1 { return Err("Skills 包已变化，请重新读取".into()); }
-        Ok(())
-    })?;
-    read_package_document(db, id)
-}
-pub(super) fn target(
+fn target(
     registry: &Registry,
     home: &Path,
     tool: &str,
@@ -1131,18 +1026,6 @@ fn on_disk(path: &Path) -> Result<Option<String>, String> {
         .and_then(|value| value.to_str())
         .ok_or("Skills 目录名无效")?;
     on_disk_as(path, name)
-}
-
-fn native_order_id(path: &Path) -> String { transaction::fingerprint(path.to_string_lossy().as_bytes()) }
-
-fn sort_native(db: &Database, entries: &mut [NativeSkillEntry]) -> Result<(), String> {
-    let order = db.with_connection(|conn| {
-        let mut statement = conn.prepare("SELECT resource_id,sequence FROM resource_order WHERE kind='native_skill'").map_err(|e| e.to_string())?;
-        let rows = statement.query_map([], |r| Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?))).map_err(|e| e.to_string())?.collect::<Result<BTreeMap<_,_>,_>>().map_err(|e| e.to_string())?;
-        Ok(rows)
-    })?;
-    entries.sort_by(|a,b| order.get(&native_order_id(Path::new(&b.path))).cmp(&order.get(&native_order_id(Path::new(&a.path)))).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())).then_with(|| a.name.cmp(&b.name)));
-    Ok(())
 }
 fn on_disk_as(path: &Path, name: &str) -> Result<Option<String>, String> {
     if !path.exists() {
@@ -1189,9 +1072,7 @@ pub fn scan_native(
     let (placeholder, scope_key) = target(registry, home, tool, scope, project_path, "scan")?;
     let root = placeholder.parent().ok_or("Skills 原生目录无效")?;
     if !root.exists() {
-        let mut entries = Vec::new();
-        readonly_metadata(registry, home, tool, scope, project_path, &mut entries)?;
-        return Ok(entries);
+        return Ok(Vec::new());
     }
     let mut entries = Vec::new();
     for entry in fs::read_dir(root).map_err(|error| error.to_string())? {
@@ -1200,8 +1081,8 @@ pub fn scan_native(
         if name.starts_with('.') || !entry.path().is_dir() {
             continue;
         }
-        if entries.len() >= 4096 {
-            return Err("原生 Skills 目录超过 4096 个，请缩小管理范围".into());
+        if entries.len() >= 128 {
+            return Err("原生 Skills 目录超过 128 个，请缩小管理范围".into());
         }
         let path = entry.path();
         let inspected = snapshot(&path);
@@ -1231,7 +1112,6 @@ pub fn scan_native(
             "external"
         };
         entries.push(NativeSkillEntry {
-            source: "primary".into(), read_only: false, read_only_reason: None,
             name,
             path: path.display().to_string(),
             digest: checksum,
@@ -1240,52 +1120,8 @@ pub fn scan_native(
             package_id,
         });
     }
-    readonly_metadata(registry, home, tool, scope, project_path, &mut entries)?;
-    sort_native(db, &mut entries)?;
+    entries.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(entries)
-}
-
-/// Fast listing does not hash package contents or run recovery for every row.
-/// Unknown is explicit until a visible-page resource_states request resolves it.
-pub fn native_metadata(db: &Database, registry: &Registry, home: &Path, target_request: &super::mcp::McpTargetRequest) -> Result<Vec<NativeSkillEntry>, String> {
-    let t = target_request;
-    let _context = crate::accounts::selection::enter_bound(db, home, &t.tool_id, t.scope, t.project_path.as_deref().map(Path::new))?;
-    crate::accounts::selection::validate_expected(&t.tool_id, t.context_id.as_deref())?;
-    let (placeholder, _) = target(registry, home, &t.tool_id, t.scope, t.project_path.as_deref(), "metadata")?;
-    let root = placeholder.parent().ok_or("Skills 原生目录无效")?;
-
-    let packages = db.with_connection(|conn| {
-        let mut statement = conn.prepare("SELECT name,id FROM skill_packages").map_err(|e| e.to_string())?;
-        let rows = statement.query_map([], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))).map_err(|e| e.to_string())?.collect::<Result<BTreeMap<_,_>,_>>().map_err(|e| e.to_string())?;
-        Ok(rows)
-    })?;
-    let mut entries = Vec::new();
-    for entry in if root.exists() { Some(fs::read_dir(root).map_err(|e| e.to_string())?) } else { None }.into_iter().flatten() {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name.starts_with('.') || !entry.path().is_dir() { continue; }
-        if entries.len() >= 4096 { return Err("原生 Skills 目录超过 4096 个".into()); }
-        let detail = native_manifest_description(&entry.path()).unwrap_or_default();
-        entries.push(NativeSkillEntry { source: "primary".into(), read_only: false, read_only_reason: None, package_id: packages.get(&name).cloned(), name, path: entry.path().display().to_string(), digest: None, state: "unknown", detail });
-    }
-    readonly_metadata(registry, home, &t.tool_id, t.scope, t.project_path.as_deref(), &mut entries)?;
-    sort_native(db, &mut entries)?;
-    Ok(entries)
-}
-
-pub(super) fn native_state(db: &Database, registry: &Registry, home: &Path, target_request: &super::mcp::McpTargetRequest, name: &str, directory: Option<&str>) -> Result<NativeSkillEntry, String> {
-    if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\', ':']) { return Err("Skills 目录名无效".into()); }
-    let t = target_request;
-    let _context = crate::accounts::selection::enter_bound(db, home, &t.tool_id, t.scope, t.project_path.as_deref().map(Path::new))?;
-    crate::accounts::selection::validate_expected(&t.tool_id, t.context_id.as_deref())?;
-    let (main, scope_key) = target(registry, home, &t.tool_id, t.scope, t.project_path.as_deref(), name)?;
-    let (path, source, reason) = skill_directory(registry, home, &t.tool_id, t.scope, t.project_path.as_deref(), directory.unwrap_or(&main.display().to_string()))?;
-    if path.file_name().and_then(|v| v.to_str()) != Some(name) { return Err("Skill 名称与来源目录不匹配".into()); }
-    let (_, detail, _, _, digest) = snapshot(&path)?;
-    let package_id: Option<String> = db.with_connection(|conn| conn.query_row("SELECT id FROM skill_packages WHERE name=?1", [name], |r| r.get(0)).optional().map_err(|e| e.to_string()))?;
-    let package_id = if reason.is_some() { None } else { package_id };
-    let managed: Option<String> = db.with_connection(|conn| conn.query_row("SELECT digest FROM skill_installations WHERE package_id=?1 AND tool=?2 AND scope_key=?3 AND target_path=?4", params![package_id, t.tool_id, scope_key, path.display().to_string()], |r| r.get(0)).optional().map_err(|e| e.to_string()))?;
-    Ok(NativeSkillEntry { source, read_only: reason.is_some(), read_only_reason: reason, name: name.into(), path: path.display().to_string(), state: if managed.as_deref() == Some(&digest) { "managed" } else { "external" }, detail, digest: Some(digest), package_id })
 }
 
 pub fn preview_target(
@@ -1352,10 +1188,6 @@ pub fn installations(
     package_id: &str,
 ) -> Result<Vec<SkillInstallation>, String> {
     let _ = recover_report(db)?;
-    installations_ready(db, registry, home, package_id)
-}
-
-pub(super) fn installations_ready(db: &Database, registry: &Registry, home: &Path, package_id: &str) -> Result<Vec<SkillInstallation>, String> {
     let (package, _) = package(db, package_id)?;
     let records = db.with_connection(|conn| {
         let mut statement = conn.prepare("SELECT tool,scope_key,target_path,digest,0 FROM skill_installations WHERE package_id=?1 UNION ALL SELECT tool,scope_key,target_path,old_digest,1 FROM skill_operations WHERE package_id=?1 AND status='disabled' ORDER BY tool,scope_key")
@@ -1416,7 +1248,6 @@ pub fn enabled(db: &Database, registry: &Registry, home: &Path, package_id: &str
 pub fn set_enabled(db: &Database, credentials: &dyn crate::credentials::CredentialStore, registry: &Registry, home: &Path, package_id: &str, tool: &str, scope: Scope, project_path: Option<&str>, enabled: bool) -> Result<(),String> {
     let _context = crate::accounts::selection::enter_bound(db,home,tool,scope,project_path.map(Path::new))?;
     let (package,_)=package(db,package_id)?; let (path,key)=target(registry,home,tool,scope,project_path,&package.name)?;
-    check_skill_write(registry, home, tool, scope, project_path, &path)?;
     let adapter=registry.get(tool).ok_or("未注册的 CLI")?;
     if let Some(location)=adapter.skill_switch_location(scope,home,project_path.map(Path::new),&package.name) {
         if !path.is_dir() { return Err("请先安装此 Skill".into()); }
@@ -1451,7 +1282,6 @@ fn enable_archived(db: &Database, registry: &Registry, home: &Path, package_id: 
     let _context = crate::accounts::selection::enter_bound(db,home,tool,scope,project_path.map(Path::new))?;
     let _guard=lock().lock().map_err(|_| "Skills 写入服务暂时不可用")?;
     let (package,_)=package(db,package_id)?; let (path,key)=target(registry,home,tool,scope,project_path,&package.name)?;
-    check_skill_write(registry, home, tool, scope, project_path, &path)?;
     let op:Option<(String,String,String)>=db.with_connection(|conn| conn.query_row("SELECT id,backup_path,old_digest FROM skill_operations WHERE package_id=?1 AND tool=?2 AND scope_key=?3 AND status='disabled' ORDER BY rowid DESC LIMIT 1",params![package_id,tool,key],|row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).optional().map_err(|e| e.to_string()))?;
     let Some((id,backup,digest))=op else {return Err("没有可恢复的停用包，请先安装".into());};
     let archive=path.parent().and_then(Path::parent).ok_or("Skills 路径无效")?.join(".cliora-disabled-skills").join(format!(".cliora-backup-{id}"));
@@ -1558,7 +1388,6 @@ fn operate(
         let issues = recover_locked_report(db)?;
         let (package, files) = package(db, package_id)?;
         let (path, key) = target(registry, home, tool_id, scope, project_path, &package.name)?;
-        check_skill_write(registry, home, tool_id, scope, project_path, &path)?;
         if let Some(issue) = issues.iter().find(|issue| issue.affects(tool_id, &key)) {
             return Err(issue.message());
         }
@@ -1693,12 +1522,6 @@ fn operate(
         }
         let saved = db.with_connection(|conn| {
             let tx = conn.transaction().map_err(|error| error.to_string())?;
-            let order_id = native_order_id(&path);
-            if !removing && actual.is_none() {
-                tx.execute("INSERT OR IGNORE INTO resource_order(kind,resource_id) VALUES ('native_skill',?1)", [&order_id]).map_err(|e| e.to_string())?;
-            } else if removing && !disabling {
-                tx.execute("DELETE FROM resource_order WHERE kind='native_skill' AND resource_id=?1", [&order_id]).map_err(|e| e.to_string())?;
-            }
             if removing { tx.execute("DELETE FROM skill_installations WHERE package_id = ?1 AND tool = ?2 AND scope_key = ?3", params![package_id, tool_id, key]) }
             else { tx.execute("INSERT INTO skill_installations (package_id, tool, scope_key, target_path, digest) VALUES (?1, ?2, ?3, ?4, ?5)
                 ON CONFLICT(package_id, tool, scope_key) DO UPDATE SET target_path = excluded.target_path, digest = excluded.digest",

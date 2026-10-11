@@ -1,5 +1,4 @@
 import type { MaintenanceResult } from '../types/native';
-import type { McpDraftRenderRequest, McpDocumentRequest, McpDocument, McpPasteItem, SkillPackageDocument, ResourceOperation, ResourceStateRequest, ResourceItemResult, ResourceBatchResult } from '../types/resources';
 import type { ConfigurationAction, ConfigurationDescriptor, ConfigurationDraft } from '../types/configuration';
 import type { RegisteredToolContext } from '../types/native';
 import { invoke, isTauri } from '@tauri-apps/api/core';
@@ -146,18 +145,6 @@ export const native = {
   resumeHistorySession: (id: string, mode: LaunchRequest['mode']) => command<LaunchResult>('resume_history_session', { id, mode }),
   exportHistorySession: (id: string, format: 'markdown' | 'json', destination: string) => command<string>('export_history_session', { id, format, destination }),
   listMcpDefinitions: () => command<McpDefinition[]>('list_mcp_definitions'),
-  readMcpDocument: (request: McpDocumentRequest) => command<McpDocument>('read_mcp_document', { request }),
-  renderMcpDraft: (target: McpTargetRequest, draft: McpDraft) => command<McpDocument>('render_mcp_draft', { target, draft } satisfies McpDraftRenderRequest),
-  saveMcpDocument: (target: McpTargetRequest, name: string, baseline: string, text: string) => command<McpDocument>('save_mcp_document', { target, name, baseline, text }),
-  parseMcpPaste: (target: McpTargetRequest, name: string | null, text: string) => command<McpPasteItem[]>('parse_mcp_paste', { target, name, text }),
-  equivalentMcpDocument: (source: McpTargetRequest, name: string, target: McpTargetRequest) => command<McpDocument>('equivalent_mcp_document', { source, name, target }),
-  readSkillPackageDocument: (packageId: string) => command<SkillPackageDocument>('read_skill_package_document', { packageId }),
-  saveSkillPackageDocument: (packageId: string, baseline: string, content: string) => command<SkillPackageDocument>('save_skill_package_document', { packageId, baseline, content }),
-  resourceStates: (requests: ResourceStateRequest[]) => command<ResourceItemResult[]>('resource_states', { requests }),
-  listNativeSkillMetadata: (target: McpTargetRequest) => command<NativeSkillEntry[]>('list_native_skill_metadata', { target }),
-  runResourceBatch: (operationId: string, operations: ResourceOperation[]) => command<ResourceBatchResult>('run_resource_batch', { operationId, operations }),
-  cancelResourceBatch: (operationId: string) => command<boolean>('cancel_resource_batch', { operationId }),
-  resourceSortPreference: (context: string, value: 'added' | 'name' | null = null) => command<'added' | 'name'>('resource_sort_preference', { context, value }),
   listMcpPlacements: () => command<McpPlacement[]>('list_mcp_placements'),
   saveMcpDefinition: (draft: McpDraft) => command<McpDefinition>('save_mcp_definition', { draft }),
   deleteMcpDefinition: (id: string, expectedVersion: number) => command<void>('delete_mcp_definition', { id, expectedVersion }),
@@ -201,7 +188,6 @@ export const native = {
   setProjectTool: (projectId: string, toolId: string | null) => command<Project>('set_project_tool', { projectId, toolId }),
   setProjectModelOverride: (projectId: string, toolId: string, model: string | null) => command<Project>('set_project_model_override', { projectId, toolId, model }),
   getLaunchSettings: () => command<LaunchSettings>('get_launch_settings'),
-  setLaunchDirectory: (toolId: string, directory: string | null) => command<void>('set_launch_directory', { toolId, directory }),
   setPreferredTerminal: (terminal: TerminalId) => command<LaunchSettings>('set_preferred_terminal', { terminal }),
   setCustomTerminal: (program: string, args: string[]) => command<LaunchSettings>('set_custom_terminal', { program, args }),
   setDefaultLaunchMode: (target: 'cli' | 'project', mode: LaunchMode) => command<LaunchSettings>('set_default_launch_mode', { target, mode }),

@@ -139,7 +139,7 @@ test('terminal errors stay readable in light and dark and can be chosen again', 
   const alert = page.getByRole('region', { name: '外部终端' }).getByRole('alert');
   await expect(alert).toContainText('终端不可用');
   await expect(alert).toContainText('可以重新选择终端');
-  await expect(alert.locator('..')).toHaveAttribute('data-tone', 'error');
+  await expect(alert).toHaveClass(/setting-error/);
   await expect(alert).not.toHaveAttribute('style', /./);
   await expect.poll(async () => (await dangerColor(alert)).same).toBe(true);
   const light = await dangerColor(alert);
@@ -179,7 +179,7 @@ test('project launch success and failure replace each other', async ({ page }) =
   await expect(region.getByRole('alert')).toContainText('可再次启动，或在设置中检查终端');
 });
 
-test('record copy and resume resolve their own results independently', async ({ page }) => {
+test('record copy and resume replace the previous result', async ({ page }) => {
   await install(page);
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
@@ -200,7 +200,7 @@ test('record copy and resume resolve their own results independently', async ({ 
   await page.evaluate(() => { (window as unknown as { __statusCopy: { resumeFails: boolean } }).__statusCopy.resumeFails = true; });
   await records.getByRole('button', { name: '在外部终端继续' }).click();
   await expect(records.getByRole('alert')).toContainText('终端没有打开');
-  await expect(records.getByText('已复制原生恢复命令，粘贴后由终端执行。')).toBeVisible();
+  await expect(records.getByText('已复制')).toHaveCount(0);
   await expect(records.getByText('已请求外部终端恢复会话')).toHaveCount(0);
   await page.evaluate(() => { (window as unknown as { __statusCopy: { resumeFails: boolean } }).__statusCopy.resumeFails = false; });
   await records.getByRole('button', { name: '在外部终端继续' }).click();
@@ -225,9 +225,8 @@ test('native rule save failure is an alert and success stays a status', async ({
   const alert = library.getByRole('alert');
   await expect(alert).toContainText('规则保存失败');
   await expect(alert).toContainText('可以再次点击该 CLI 图标');
-  // The successful library save is a different operation from writing the native rule.
-  await expect(library.getByRole('status')).toContainText('已保存在本机资料库');
-  const color = await dangerColor(alert);
+  await expect(library.getByRole('status')).toHaveCount(0);
+  const color = await dangerColor(alert.locator('.toast-icon').first());
   expect(color.same).toBe(true);
   expect(color.fixed).toBe(false);
   await page.evaluate(() => { (window as unknown as { __statusCopy: { ruleSaveFails: boolean } }).__statusCopy.ruleSaveFails = false; });
@@ -325,8 +324,7 @@ test('saved price stays visible when the following usage read fails', async ({ p
   await records.getByLabel('缓存写入单价').fill('1');
   await records.getByRole('button', { name: '保存价格' }).click();
   await expect(records.getByText('估算价格已保存；只影响本机统计。')).toBeVisible();
-  const usageAlert = records.locator('.feedback-item[data-tone=partial]').filter({ hasText: '估算价格已保存' });
-  await usageAlert.getByText('详情', { exact: true }).click();
+  const usageAlert = records.getByRole('alert').filter({ hasText: '用量读取失败' });
   await expect(usageAlert).toContainText('用量读取失败');
   await expect(usageAlert).toContainText('可点击刷新本机记录或调整筛选');
 });
@@ -339,13 +337,12 @@ test('dialog launch success stays with the list failure after the dialog closes'
   const dialog = page.getByRole('dialog');
   await page.evaluate(() => { (window as unknown as { __statusCopy: { projectsFail: boolean } }).__statusCopy.projectsFail = true; });
   await dialog.getByRole('button', { name: 'YOLO' }).click();
-  const pageStatus = region.locator(':scope > .feedback-region [role="status"]');
-  const pageAlert = region.locator(':scope > .feedback-region [role="alert"]');
-  await expect(pageStatus).toHaveCount(0);
-  await expect(pageAlert).toHaveCount(0);
-  await expect(dialog.getByRole('alert')).toContainText('项目列表读取失败');
+  const pageStatus = region.locator(':scope > [role="status"]');
+  const pageAlert = region.locator(':scope > [role="alert"]');
+  await expect(pageStatus).toContainText('已向外部终端发送启动 YOLO请求');
+  await expect(pageAlert).toContainText('项目列表读取失败');
   await expect(dialog.getByRole('status')).toContainText('已向外部终端发送启动 YOLO请求');
-  await dialog.getByRole('button', { name: '关闭', exact: true }).click();
+  await dialog.getByRole('button', { name: '关闭' }).click();
   await expect(dialog).toHaveCount(0);
   await expect(pageStatus).toContainText('已向外部终端发送启动 YOLO请求');
   await expect(pageAlert).toContainText('项目列表读取失败');
@@ -361,19 +358,16 @@ test('saved library item stays visible when the following list read fails', asyn
   await dialog.getByLabel('标题').fill('发布检查已更新');
   await page.evaluate(() => { (window as unknown as { __statusCopy: { libraryListFails: boolean } }).__statusCopy.libraryListFails = true; });
   await dialog.getByRole('button', { name: '保存', exact: true }).click();
-  await expect(dialog.getByRole('alert')).toContainText('部分完成');
-  await expect(dialog.getByRole('alert')).toContainText('已保存在本机资料库');
-  await dialog.getByText('详情', { exact: true }).click();
-  const dialogAlert = dialog.locator('.feedback-item');
+  await expect(dialog.getByRole('status').filter({ hasText: '已保存在本机资料库' })).toContainText('已保存在本机资料库');
+  const dialogAlert = dialog.getByRole('alert');
   await expect(dialogAlert).toContainText('资料列表读取失败');
   await expect(dialogAlert).toContainText('关闭');
   await expect(dialogAlert).not.toContainText('搜索');
   await expect(dialogAlert).not.toContainText('新建');
-  await dialog.getByRole('button', { name: '关闭', exact: true }).click();
+  await dialog.getByRole('button', { name: '关闭' }).click();
   await expect(dialog).toHaveCount(0);
-  await expect(library.getByRole('alert')).toContainText('已保存在本机资料库');
-  await library.getByText('详情', { exact: true }).click();
-  const alert = library.locator('.feedback-item');
+  await expect(library.getByRole('status')).toContainText('已保存在本机资料库');
+  const alert = library.getByRole('alert');
   await expect(alert).toContainText('资料列表读取失败');
   await expect(alert).not.toContainText('搜索');
   await expect(alert).not.toContainText('新建');

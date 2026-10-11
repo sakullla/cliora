@@ -8,13 +8,13 @@ import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, ScanSt
 import { displayPath } from '../../lib/paths';
 import { FilterSelect } from '../../components/FilterSelect';
 import { SearchField } from '../../components/SearchField';
-import { useFeedback, FeedbackRegion } from '../../components/Feedback';
+import { ToastStack, type Toast } from '../../components/Toast';
 import { ToolIcon, toolOptions } from '../../components/ToolIcon';
 import { Icon } from '../../components/Icon';
 import { EmptyState } from '../../components/EmptyState';
 import { searchShortcutHint } from '../../lib/shortcut';
 import { formatFailure } from '../../lib/feedback';
-import { UsageDashboard } from './UsageDashboard';
+import { UsageDashboard, type UsageNotify } from './UsageDashboard';
 import { SessionReader } from './SessionReader';
 import { DateRangeFilter, type RangeKey } from './DateRangeFilter';
 import { useDisclosure } from './useDisclosure';
@@ -141,7 +141,14 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
   const scanRequest = useRef(0);
   const scanningRef = useRef(false);
   const lastScan = useRef(0);
-  const feedback = useFeedback('records');
+  const [error, setError] = useState<Toast | null>(null);
+  const [notice, setNotice] = useState<Toast | null>(null);
+  const toastSequence = useRef(0);
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), 4500);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
   const [copyFlash, setCopyFlash] = useState(0);
   useEffect(() => {
     if (!copyFlash) return;
@@ -150,6 +157,20 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
   }, [copyFlash]);
   const copied = !!copyFlash;
   const protectSave = useRef(false);
+  function showError(value: unknown) {
+    protectSave.current = false;
+    setNotice(null);
+    setError({ id: ++toastSequence.current, tone: 'alert', text: typeof value === 'string' ? value : errorText(value) });
+  }
+  function showReadError(value: unknown) {
+    if (!protectSave.current) setNotice(null);
+    setError({ id: ++toastSequence.current, tone: 'alert', text: typeof value === 'string' ? value : formatFailure(value, t('records.page.readFailed'), recordNext()) });
+  }
+  function showNotice(text: string, protect = false) {
+    setError(null);
+    setNotice({ id: ++toastSequence.current, tone: 'status', text });
+    protectSave.current = protect;
+  }
   const initialized = useRef(false);
   const request = useRef(0);
   const detailRequest = useRef(0);
@@ -165,7 +186,6 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
   const filterRef = useRef(filter); filterRef.current = filter;
   const loadedFilter = useRef('');
   const load = useCallback(async (current: HistoryFilter) => {
-    const result = feedback.begin('load:' + JSON.stringify(current));
     if (!nativeAvailable) return false;
     const sequence = ++request.current;
     const key = JSON.stringify(current); setFilterLoading(true); setListError(false);
@@ -173,13 +193,14 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
       const items = await native.listHistorySessions(current);
       if (sequence !== request.current || key !== JSON.stringify(filterRef.current)) return false;
       loadedFilter.current = key;
-      setSessions(items); setModelCatalog((old) => { const next = [...new Set([...old, ...items.flatMap((item) => item.model ? [item.model] : [])])].sort(); return next.length === old.length ? old : next; });
+      setSessions(items); setError(null);
+      setModelCatalog((old) => { const next = [...new Set([...old, ...items.flatMap((item) => item.model ? [item.model] : [])])].sort(); return next.length === old.length ? old : next; });
       const pending = pendingSession.current;
       pendingSession.current = null;
       setSelectedId((old) => pending && items.some((item) => item.id === pending) ? pending : old && items.some((item) => item.id === old) ? old : items[0]?.id ?? null);
-      result.complete(); return true;
+      return true;
     } catch (value) {
-      if (sequence === request.current && key === JSON.stringify(filterRef.current)) { setListError(true); result.error(formatFailure(value, t('records.page.readFailed'), recordNext())); }
+      if (sequence === request.current && key === JSON.stringify(filterRef.current)) { setListError(true); showReadError(value); }
       return false;
     }
     finally { if (sequence === request.current) setFilterLoading(false); }
@@ -187,10 +208,10 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
 
   useEffect(() => {
     if (!active || !nativeAvailable || initialized.current) return;
-    initialized.current = true; const result = feedback.begin('initialize');
+    initialized.current = true;
     void Promise.all([native.listProjects(), native.listHistoryPrices()])
-      .then(([knownProjects, knownPrices]) => { setProjects(knownProjects); setPrices(knownPrices); result.complete(); })
-      .catch(value => result.error(formatFailure(value, t('records.page.readFailed'), recordNext())));
+      .then(([knownProjects, knownPrices]) => { setProjects(knownProjects); setPrices(knownPrices); })
+      .catch(value => showReadError(value));
   }, [active]);
 
   // Scans are incremental, so the index is refreshed whenever the page is shown and
@@ -248,63 +269,59 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
     return () => window.clearInterval(timer);
   }, [scanning, active]);
   async function refresh(announce = true, auto = false) {
-    const result = feedback.begin('refresh');
     if (!nativeAvailable || scanningRef.current) return;
     const sequence = ++scanRequest.current; scanningRef.current = true; lastScan.current = Date.now();
     setScanning(true); setScanMode(auto ? 'auto' : 'manual');
-    if (!auto) { protectSave.current = false; }
+    if (!auto) { protectSave.current = false; setNotice(null); setError(null); }
     try {
       const reports = await native.refreshHistory();
       if (sequence !== scanRequest.current) return;
       setScans(reports); setLastScanAt(Date.now()); setScanVersion((value) => value + 1);
       const loaded = await load(filterRef.current);
-      if (sequence !== scanRequest.current || !loaded) return;
-      if (!announce) { result.complete(); return; }
-      result.success(t('records.page.refreshed'));
-    } catch (value) { if (sequence === scanRequest.current && !auto) result.error(errorText(value)); }
+      if (sequence !== scanRequest.current || !loaded || !announce) return;
+      showNotice(t('records.page.refreshed'));
+    } catch (value) { if (sequence === scanRequest.current && !auto) showError(value); }
     finally { if (sequence === scanRequest.current) { scanningRef.current = false; setScanning(false); setScanProgress(null); } }
   }
   async function cancelScan() {
-    const result = feedback.begin('cancelScan');
-    scanRequest.current++; scanningRef.current = false; setScanning(false); setScanProgress(null); protectSave.current = false; try { await native.cancelHistoryRefresh(); result.success(t('records.page.scanStopped')); }
-    catch (value) { result.error(errorText(value)); }
+    scanRequest.current++; scanningRef.current = false; setScanning(false); setScanProgress(null); protectSave.current = false; setNotice(null); setError(null);
+    try { await native.cancelHistoryRefresh(); showNotice(t('records.page.scanStopped')); }
+    catch (value) { showError(value); }
   }
 
   async function favorite() {
-    const result = feedback.begin('favorite:' + selected?.session.id);
     if (!selected || favoriteBusy) return;
     setFavoriteBusy(true);
     try {
       await native.setHistoryFavorite(selected.session.id, !selected.session.favorite);
       setDetail((current) => current?.session.id === selected.session.id ? { ...current, session: { ...current.session, favorite: !selected.session.favorite } } : current);
-      await load(filter); result.complete();
-    } catch (value) { result.error(errorText(value)); }
+      await load(filter);
+    } catch (value) { showError(value); }
     finally { setFavoriteBusy(false); }
   }
 
   async function assignProject(next: string) {
-    const result = feedback.begin('assignProject:' + selected?.session.id);
     if (!selected) return;
     try {
       await native.setHistoryProject(selected.session.id, next || null);
       const updated = await native.getHistorySession(selected.session.id);
       setDetail((current) => current?.session.id === updated.session.id ? updated : current);
-      await load(filter); result.complete();
-    } catch (value) { result.error(errorText(value)); }
+      await load(filter);
+    } catch (value) { showError(value); }
   }
 
   async function copy() {
     if (!readyCommand) return;
-    const result = feedback.begin(JSON.stringify(['copy-command', selectedId, mode]));
-    protectSave.current = false; try { await navigator.clipboard.writeText(readyCommand); result.success(copiedCommandText()); setCopyFlash((value) => value + 1); }
-    catch { setCopyFlash(0); if (commandRef.current) commandRef.current.open = true; result.error(t('records.page.copyFailed')); }
+    protectSave.current = false; setNotice(null); setError(null);
+    try { await navigator.clipboard.writeText(readyCommand); showNotice(copiedCommandText()); setCopyFlash((value) => value + 1); }
+    catch { setCopyFlash(0); if (commandRef.current) commandRef.current.open = true; showError(t('records.page.copyFailed')); }
   }
 
   async function resume() {
     if (!selected || !readyCommand) return;
-    const result = feedback.begin(JSON.stringify(['resume-session', selectedId, mode]));
-    setBusy(true); protectSave.current = false; try { await native.resumeHistorySession(selected.session.id, mode); result.success(t('records.page.resumeRequested')); }
-    catch (value) { result.error(errorText(value)); }
+    setBusy(true); protectSave.current = false; setNotice(null); setError(null);
+    try { await native.resumeHistorySession(selected.session.id, mode); showNotice(t('records.page.resumeRequested')); }
+    catch (value) { showError(value); }
     finally { setBusy(false); }
   }
 
@@ -326,15 +343,15 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
   }
 
   async function exportSession(format: 'markdown' | 'json') {
-    const result = feedback.begin(JSON.stringify(['exportSession', selected?.session.id, format]));
     if (!selected) return;
     try {
       const destination = await save({ title: t('records.page.exportTitle'), defaultPath: `cliora-session-${selected.session.nativeId ?? selected.session.id.slice(0, 8)}.${format === 'json' ? 'json' : 'md'}`,
         filters: [{ name: format === 'json' ? 'JSON' : 'Markdown', extensions: [format === 'json' ? 'json' : 'md'] }] });
       if (!destination) return;
-      protectSave.current = false; const path = await native.exportHistorySession(selected.session.id, format, destination);
-      result.success(t('records.page.exported', { path }));
-    } catch (value) { result.error(errorText(value)); }
+      protectSave.current = false; setNotice(null); setError(null);
+      const path = await native.exportHistorySession(selected.session.id, format, destination);
+      showNotice(t('records.page.exported', { path }));
+    } catch (value) { showError(value); }
   }
 
   const toolName = (id: string) => tools.find((item) => item.id === id)?.name ?? id;
@@ -386,6 +403,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
     setToolId(''); setSearch(''); setFavoriteOnly(false); setProjectId(''); setModel(''); setRangeKey('all');
   }
 
+  const notify: UsageNotify = { status: (text, protect) => showNotice(text, protect), alert: showError, readAlert: showReadError, clear: () => { protectSave.current = false; setNotice(null); setError(null); } };
   function openSession(id: string) {
     pendingSession.current = search.trim() || favoriteOnly || toolId || model || projectId || rangeKey !== 'all' ? id : null;
     clearAllFilters();
@@ -402,7 +420,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
       <button type="button" role="tab" id="records-usage-tab" aria-controls="records-usage-panel" tabIndex={tab === 'usage' ? 0 : -1} aria-selected={tab === 'usage'} onClick={() => setTab('usage')}><Icon name="connections" size={15} />{t('records.page.usage')}</button>
     </div><button type="button" className={styles.refresh} disabled={scanning} aria-label={t('records.page.refreshAria')} aria-busy={scanning || undefined} onClick={() => void refresh()}>{scanning ? <span className="spinner" aria-hidden="true" /> : <Icon name="refresh" size={15} />}<span>{scanning ? t('records.page.refreshing') : t('records.page.refresh')}</span></button></div>
     {scanning && scanMode === 'manual' && <p className={styles.caveat} role="status">{t('records.page.scanning', { tool: tools.find(item => item.id === scanProgress?.toolId)?.name ?? scanProgress?.toolId ?? '', progress: scanProgress?.totalSources ? `${scanProgress.completedSources} / ${scanProgress.totalSources}` : t('records.page.discovering') })}<span className={styles.progress} aria-hidden="true"><span style={scanProgress?.totalSources ? { width: `${Math.min(100, (scanProgress.completedSources / scanProgress.totalSources) * 100)}%` } : undefined} data-indeterminate={!scanProgress?.totalSources || undefined} /></span><button type="button" onClick={() => void cancelScan()}>{t('records.page.stopScan')}</button></p>}
-    <FeedbackRegion context={feedback.context} />
+    <ToastStack status={notice} alert={error} onDismiss={(tone) => { if (tone === 'alert') setError(null); else setNotice(null); }} />
     <div className={styles.columns} id="records-sessions-panel" role="tabpanel" aria-labelledby="records-sessions-tab" hidden={tab !== 'sessions'}>
       <aside className={styles.sessionLibrary} aria-label={t('records.page.libraryAria')}>
         <div className={styles.filters}>
@@ -457,7 +475,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
       : <div className={styles.empty}><span className="empty-symbol"><Icon name="records" size={20} /></span><p>{t('records.page.pickSession')}</p></div>}</div>
     </div>
     <div className={styles.usagePane} id="records-usage-panel" role="tabpanel" aria-labelledby="records-usage-tab" hidden={tab !== 'usage'}><UsageDashboard search={search} favoriteOnly={favoriteOnly} onClearSearch={() => setSearch('')} onClearFavoriteOnly={() => setFavoriteOnly(false)} active={active && tab === 'usage'} tools={tools} projects={projects} prices={prices} onPricesChange={setPrices}
-      scanVersion={scanVersion} scanning={scanning} lastScanAt={lastScanAt} onOpenSession={openSession} /></div>
+      scanVersion={scanVersion} scanning={scanning} lastScanAt={lastScanAt} onOpenSession={openSession} notify={notify} /></div>
     </div>
   </section>;
 }

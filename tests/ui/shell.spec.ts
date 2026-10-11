@@ -138,7 +138,7 @@ test('native settings result drives the home list and empty management stays rec
   await expect(themes.getByRole('radio', { name: '深色' })).toBeFocused();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始' }).click();
-  await expect(page.getByRole('button', { name: '去安装', exact: true })).toHaveCount(1);
+  await expect(page.getByRole('button', { name: '去安装 →' })).toHaveCount(1);
   await expect(page.locator('[aria-label="管理中的工具"]')).toContainText('Codex');
 });
 
@@ -156,7 +156,7 @@ test('settings default YOLO mode launches both a CLI and a project', async ({ pa
       __launchRequests: requests,
       __TAURI_INTERNALS__: { invoke: async (command: string, args: { target?: 'cli' | 'project'; mode?: string; request?: { mode: string } } = {}) => {
         if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['grok', 'pi'], theme: 'system' }, tools: [{ id: 'grok', name: 'Grok' }, { id: 'pi', name: 'Pi' }] };
-        if (command === 'list_cli_adapters') return { registered: [{ id: 'grok', name: 'Grok', interfaceFormats: [], yoloAvailable: true, launchForm: 'terminal', launchDirectory: 'terminal' }, { id: 'pi', name: 'Pi', interfaceFormats: [], yoloAvailable: false, launchForm: 'terminal', launchDirectory: 'terminal' }], managedIds: ['grok', 'pi'], preservedUnknown: [] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'grok', name: 'Grok', interfaceFormats: [], yoloAvailable: true }, { id: 'pi', name: 'Pi', interfaceFormats: [], yoloAvailable: false }], managedIds: ['grok', 'pi'], preservedUnknown: [] };
         if (command === 'list_projects') return [
           { id: 'desk', name: '栖点', path: 'C:/Projects/cliora', available: true, preferredTool: 'grok', lastOpened: 2, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {} },
           { id: 'notes', name: '笔记', path: 'C:/Projects/notes', available: true, preferredTool: 'pi', lastOpened: 1, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {} },
@@ -165,8 +165,7 @@ test('settings default YOLO mode launches both a CLI and a project', async ({ pa
         if (command === 'get_launch_settings') return settings();
         if (command === 'set_default_launch_mode') { if (args.target === 'cli' || args.target === 'project') modes = { ...modes, [args.target === 'cli' ? 'cliMode' : 'projectMode']: args.mode }; return settings(); }
         if (command === 'get_tray_status') return { available: false, error: null };
-        if (command === 'plugin:dialog|open') return (window as any).__cancelDirectory ? null : 'C:/chosen';
-        if (command === 'set_launch_directory') return null;
+        if (command === 'plugin:dialog|open') return 'C:/chosen';
         if (command === 'launch_cli') { requests.push(args.request); return { mode: args.request?.mode, status: 'terminal_requested' }; }
         throw new Error(`Unexpected IPC: ${command}`);
       } },
@@ -185,11 +184,6 @@ test('settings default YOLO mode launches both a CLI and a project', async ({ pa
   await expect(projects.getByRole('button', { name: '启动', exact: true })).toHaveCount(2);
   const toolLaunch = tools.getByRole('button', { name: '启动', exact: true });
   const projectLaunch = projects.getByRole('button', { name: '启动', exact: true });
-  await page.evaluate(() => { (window as any).__cancelDirectory = true; });
-  await toolLaunch.nth(0).click();
-  await expect(toolLaunch.nth(0)).toBeEnabled();
-  expect(await page.evaluate(() => (window as any).__launchRequests)).toEqual([]);
-  await page.evaluate(() => { (window as any).__cancelDirectory = false; });
   await toolLaunch.nth(0).click();
   await toolLaunch.nth(1).click();
   await projectLaunch.nth(0).click();
@@ -286,13 +280,12 @@ test('custom tool icons persist across reload, preserve theme and management, an
         localStorage.setItem('icon-preferences', JSON.stringify(next));
         return bootstrap();
       }
-      if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], launchForm: 'terminal', launchDirectory: 'terminal' }], managedIds: read().managed_tools, preservedUnknown: [] };
+      if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [] }], managedIds: read().managed_tools, preservedUnknown: [] };
       if (command === 'list_projects' || command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_skill_recovery_issues' || command === 'scan_native_skills' || command === 'list_native_mcp') return [];
       if (command === 'get_registered_tool_workspace') return { probe: { selectedPath: 'C:/codex.cmd', installations: [], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: [], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '' }, profiles: [], common: null, binding: null, snapshots: [], recoveryNeeded: [], customPath: null };
       if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
       if (command === 'get_tray_status') return { available: false, error: null };
       if (command === 'plugin:dialog|open') return 'C:/chosen project';
-      if (command === 'set_launch_directory') return null;
       if (command === 'launch_cli') return { mode: args.request.mode, status: 'terminal_requested' };
       throw new Error(`Unexpected IPC: ${command}`);
     } } });

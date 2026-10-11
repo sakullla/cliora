@@ -1,4 +1,3 @@
-import { useFeedback, FeedbackRegion } from '../../components/Feedback';
 import { removalContext, useResourceContexts, useAccountLabels } from './resourceContexts';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -35,7 +34,8 @@ export function SkillDistribution({ item, tools, projects, installations, initia
   const [selected, setSelected] = useState<string[]>(initialTools.length ? initialTools : openOnProject ? mine.filter((entry) => entry.scope === 'project' && samePath(entry.projectPath, firstProject?.projectPath)).map((entry) => entry.toolId) : globalIds);
   const [pending, setPending] = useState<Array<SkillTargetPreview & { toolId: string }>>([]);
   const [busy, setBusy] = useState(false);
-  const feedback = useFeedback(JSON.stringify(['distribute', item.id, scope, projectPath]));
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const activePath = scope === 'project' ? projectPath : null;
   const contexts = useResourceContexts(tools, mine, { scope, projectPath: activePath });
   const placed = installations.filter((entry) => entry.packageId === item.id);
@@ -49,30 +49,23 @@ export function SkillDistribution({ item, tools, projects, installations, initia
   }, [contexts.stamp, scope, activePath]);
 
   async function install(allowTakeover: boolean, ids = selected) {
-    const operationFeedback = feedback.begin(JSON.stringify(['install', [...ids].sort()]));
-    if (scope === 'project' && !projectPath) { operationFeedback.error(t('tools.mcp.pickProject')); return; }
+    if (scope === 'project' && !projectPath) { setError(t('tools.mcp.pickProject')); return; }
     ids = ids.filter((id) => contexts.ready(targetFor(id)));
     if (!ids.length) return;
-    setBusy(true); try {
+    setBusy(true); setError(''); setNotice('');
+    try {
       const conflicts: Array<SkillTargetPreview & { toolId: string }> = [];
       const notes: string[] = [];
-      let failures = 0;
       for (const toolId of ids) {
         const preview = allowTakeover ? pending.find((entry) => entry.toolId === toolId) ?? null : await native.previewSkillTarget(item.id, toolId, scope, activePath);
         if (!allowTakeover && preview?.status === 'conflict') { conflicts.push({ ...preview, toolId }); continue; }
         const outcome = await native.installSkill(item.id, toolId, scope, activePath, preview?.previewToken ?? null, allowTakeover && preview?.status === 'conflict');
-        if (outcome.status === 'failed') failures++;
         notes.push(t('library.distribute.writeEntry', { target: tools.find((tool) => tool.id === toolId)?.name ?? toolId, detail: outcome.status === 'failed' ? outcome.detail : t('tools.skills.stateInstalled') }));
       }
       setPending(conflicts);
-      if (notes.length) {
-        const summary = notes.join(t('tools.quota.errorSeparator'));
-        if (failures === notes.length) operationFeedback.error(summary);
-        else if (failures || conflicts.length) operationFeedback.partial(summary);
-        else operationFeedback.success(summary);
-      }
+      if (notes.length) setNotice(notes.join(t('tools.quota.errorSeparator')));
       await onChanged();
-    } catch (value) { operationFeedback.error(text(value)); }
+    } catch (value) { setError(text(value)); }
     finally { setBusy(false); }
   }
   const started = useRef(new Set<string>());
@@ -83,15 +76,13 @@ export function SkillDistribution({ item, tools, projects, installations, initia
     if (ids.length) void install(false, ids);
   }, [autoRun, initialTools, contexts.stamp]);
   async function remove(entry: SkillInstallation) {
-    const operationFeedback = feedback.begin(JSON.stringify(['remove', entry.toolId, entry.scope, entry.projectPath, entry.contextId]));
     if (!contexts.ready(entry)) return;
     if (!await confirmAction(t('library.skillDist.confirmRemove', { tool: tools.find((tool) => tool.id === entry.toolId)?.name ?? entry.toolId, name: item.name }), () => true, { title: t('library.skillDist.removeTitle'), confirmLabel: t('library.skillDist.removeAction'), destructive: true })) return;
-    setBusy(true); try {
-      const outcome = await native.removeSkill(item.id, entry.toolId, entry.scope, entry.projectPath, await removalContext(entry));
-      if (outcome.status === 'failed') { operationFeedback.error(outcome.detail); return; }
+    setBusy(true); setError('');
+    try {
+      await native.removeSkill(item.id, entry.toolId, entry.scope, entry.projectPath, await removalContext(entry));
       await onChanged();
-      operationFeedback.complete();
-    } catch (value) { operationFeedback.error(text(value)); }
+    } catch (value) { setError(text(value)); }
     finally { setBusy(false); }
   }
 
@@ -131,8 +122,8 @@ export function SkillDistribution({ item, tools, projects, installations, initia
       {pending.map((entry) => <p key={entry.toolId}>{tools.find((tool) => tool.id === entry.toolId)?.name ?? entry.toolId} · {entry.detail}</p>)}
       <div className={styles.actions}><button type="button" className={styles.primary} disabled={busy} onClick={() => void install(true)}>{t('library.skillDist.confirmReplace')}</button></div>
     </section>}
-    <FeedbackRegion context={feedback.context} />
+    {notice && <p className={styles.notice} role="status">{notice}</p>}
     {contexts.issues.map((issue) => <p key={issue.key} role="status">{t('library.distribute.issue', { tool: tools.find((tool) => tool.id === issue.toolId)?.name ?? issue.toolId, scope: scopeLabel(issue.scope, issue.projectPath, projects), detail: issue.detail })}</p>)}
-
+    {error && <p className={styles.error} role="alert">{error}</p>}
   </div>;
 }

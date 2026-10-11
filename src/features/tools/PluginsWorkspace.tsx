@@ -1,4 +1,3 @@
-import { useFeedback, FeedbackRegion } from '../../components/Feedback';
 import { uiAdapterFor } from '../../adapters';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -8,6 +7,7 @@ import type { Scope } from '../../types/native';
 import type { PluginAction, PluginEntry, PluginSnapshot, PluginTarget } from '../../types/resources';
 import styles from './ManagementPanel.module.css';
 import { useAccountLabels } from '../library/resourceContexts';
+import { StatusBanner } from '../../components/StatusBanner';
 import { SearchField } from '../../components/SearchField';
 import i18n from '../../i18n';
 
@@ -40,48 +40,49 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId }: { to
   const [source, setSource] = useState('');
   const [trusted, setTrusted] = useState(false);
   const [busy, setBusy] = useState(false);
-  const feedback = useFeedback(JSON.stringify(['plugins', toolId, scope, projectPath, contextId]));
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
   const generation = useRef(0);
   const accountLabel = useAccountLabels();
   const entries = snapshot?.entries ?? [];
   const filtered = entries.filter(entry => `${entry.name} ${entry.source}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()) && (filter === 'all' || (filter === 'readonly' ? entry.readOnly : filter === 'enabled' ? entry.enabled === true : entry.enabled === false)));
-  useEffect(() => { const result = feedback.begin('refresh'); const id = ++generation.current; setSnapshot(null); setBusy(true);
+  useEffect(() => { const id = ++generation.current; setSnapshot(null); setError(''); setNotice(''); setBusy(true);
     const cached = remembered.get(cacheKey);
     if (cached && Date.now() - cached.at < 30_000) { setSnapshot(cached.snapshot); setBusy(false); return () => { generation.current++; }; }
     let completed = false;
     void native.previewNativePlugins(target).then(value => { if (value && !completed && id === generation.current) setSnapshot(value); }).catch(() => { /* The authoritative scan reports errors; preview is optional. */ });
-    void scanOnce(target).then(value => { if (id === generation.current) { remember(cacheKey, value); setSnapshot(value); result.complete(); } }).catch(value => { if (id === generation.current) { remembered.delete(cacheKey); result.error(message(value)); } }).finally(() => { completed = true; if (id === generation.current) setBusy(false); });
+    void scanOnce(target).then(value => { if (id === generation.current) { remember(cacheKey, value); setSnapshot(value); } }).catch(value => { if (id === generation.current) { remembered.delete(cacheKey); setError(message(value)); } }).finally(() => { completed = true; if (id === generation.current) setBusy(false); });
     return () => { generation.current++; };
   }, [target]);
-  async function refresh() {
-    const operationFeedback = feedback.begin('refresh'); const id = ++generation.current; setBusy(true); try { const value = await native.scanNativePlugins(target); if (id === generation.current) { remember(cacheKey, value); setSnapshot(value); operationFeedback.complete(); } }
-    catch (value) { if (id === generation.current) { remembered.delete(cacheKey); operationFeedback.error(message(value)); setSnapshot(null); } }
+  async function refresh() { const id = ++generation.current; setBusy(true); setError('');
+    try { const value = await native.scanNativePlugins(target); if (id === generation.current) { remember(cacheKey, value); setSnapshot(value); } }
+    catch (value) { if (id === generation.current) { remembered.delete(cacheKey); setError(message(value)); setSnapshot(null); } }
     finally { if (id === generation.current) setBusy(false); }
   }
   async function operate(action: PluginAction, entry?: PluginEntry) {
-    const operationFeedback = feedback.begin(JSON.stringify(['operate', action, entry?.id ?? source.trim()]));
     if (!snapshot?.baseline || busy) return;
     const id = generation.current;
     if (action === 'uninstall' && !await confirmAction(t('tools.plugins.confirmUninstall', { name: entry?.name }), () => id === generation.current, { title: t('tools.plugins.uninstallTitle'), confirmLabel: actionLabel('uninstall') })) return;
     if (id !== generation.current) return;
-    setBusy(true); try {
+    setBusy(true); setError(''); setNotice('');
+    try {
       const result = await native.operateNativePlugin({ target, action, source: entry?.id ?? source.trim(), baseline: snapshot.baseline, trusted });
       if (id !== generation.current) return;
       remembered.delete(cacheKey);
       if (result.snapshot) remember(cacheKey, result.snapshot);
-      setSnapshot(result.snapshot);
-      if (result.status === 'failed_possible_side_effects') operationFeedback.partial(t('tools.plugins.sideEffects'), { detail: result.detail });
-      else { operationFeedback.success(result.detail); if (action === 'install') { setSource(''); setTrusted(false); } }
-    } catch (value) { if (id === generation.current) operationFeedback.error(message(value)); }
+      setSnapshot(result.snapshot); setNotice(result.detail);
+      if (result.status === 'failed_possible_side_effects') setError(t('tools.plugins.sideEffects'));
+      else if (action === 'install') { setSource(''); setTrusted(false); }
+    } catch (value) { if (id === generation.current) setError(message(value)); }
     finally { if (id === generation.current) setBusy(false); }
   }
   return <section className={styles.panel} aria-label={t('tools.plugins.label')}>
     <div className={styles.header}><div><h2>{t('tools.plugins.title')}</h2><p>{t('tools.plugins.description')}</p></div><div className={styles.actions}><button disabled={busy} onClick={() => void refresh()}>{t('tools.plugins.rescan')}</button></div></div>
     <div className={styles.context}><span>{scope === 'global' ? scopeLabel('user') : projectPath}</span><span>{accountLabel(contextId)}</span></div>
     {busy && <p role="status">{snapshot ? snapshot.baseline ? t('tools.plugins.operating') : t('tools.plugins.verifying') : t('tools.plugins.loading')}</p>}
-    <FeedbackRegion context={feedback.context} />
+    {error && <StatusBanner tone="error" onDismiss={() => setError('')}>{error}</StatusBanner>}{notice && <StatusBanner tone="success" onDismiss={() => setNotice('')}>{notice}</StatusBanner>}
     {snapshot && <>
       {snapshot.capability.actions.some(action => action === 'install' || action === 'update') && <div className={styles.installBox}><div className={styles.create}><label>{t('tools.plugins.source')}<input aria-label={t('tools.plugins.source')} value={source} onChange={event => { setSource(event.target.value); setTrusted(false); }} placeholder={snapshot.capability.sources} disabled={busy} /></label>
         <button className={styles.primary} disabled={busy || !source.trim() || !trusted || !snapshot.capability.actions.includes('install')} onClick={() => void operate('install')}>{uiAdapterFor(toolId).plugins?.installLabel ?? t('tools.plugins.installDefault')}</button></div>

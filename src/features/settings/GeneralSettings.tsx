@@ -1,4 +1,3 @@
-import { useFeedback, FeedbackRegion } from '../../components/Feedback';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getVersion } from '@tauri-apps/api/app';
@@ -8,9 +7,11 @@ import { check, type Update } from '@tauri-apps/plugin-updater';
 import { Icon } from '../../components/Icon';
 import type { IconName } from '../../components/Icon';
 import { ToolIcon } from '../../components/ToolIcon';
+import { ToastStack } from '../../components/Toast';
 import { ToolIconSettings } from './ToolIconSettings';
 import { TerminalSettings } from './TerminalSettings';
 import { nativeAvailable } from '../../lib/native';
+import { useToasts } from '../../lib/toast';
 import { setLanguage, supportedLanguages, type AppLanguage } from '../../i18n';
 import type { Theme } from '../../types/domain';
 import styles from './GeneralSettings.module.css';
@@ -178,7 +179,7 @@ export function GeneralSettings({ tools, managed, preservedUnknown, icons, busy,
   onOpenShortcutHelp: () => void;
 }) {
   const { t, i18n } = useTranslation();
-  const feedback = useFeedback('icons');
+  const toasts = useToasts();
   const language: AppLanguage = i18n.language === 'en' ? 'en' : 'zh';
   const catalogKey = tools.map((item) => item.id).join('\0');
   const [managedExpanded, setManagedExpanded] = useState(false);
@@ -196,10 +197,9 @@ export function GeneralSettings({ tools, managed, preservedUnknown, icons, busy,
     });
   const managedHidden = tools.length - managedShown.length;
   async function handleIconChange(toolId: string, dataUrl: string | null) {
-    const result = feedback.begin('icon:' + toolId);
     try {
       await onIconChange(toolId, dataUrl);
-      result.success(dataUrl ? t('settings.icons.updated') : t('settings.icons.restored'));
+      toasts.showNotice(dataUrl ? t('settings.icons.updated') : t('settings.icons.restored'));
     } catch { /* 失败原因由页面顶部错误条展示。 */ }
   }
   return <>
@@ -221,6 +221,6 @@ export function GeneralSettings({ tools, managed, preservedUnknown, icons, busy,
       <div className="setting-row"><span><strong>{t('settings.shortcuts.label')}</strong><small>{t('settings.shortcuts.hint')}</small></span><button className="button" type="button" aria-label={t('settings.shortcuts.label')} onClick={onOpenShortcutHelp}>{t('settings.shortcuts.action')}</button></div>
       <div className="setting-row"><span><strong>{t('settings.migrationEntry.label')}</strong><small>{t('settings.migrationEntry.hint')}</small></span><button className="button" type="button" onClick={onOpenMigration}>{t('settings.migrationEntry.action')}</button></div>
     </section>
-    <FeedbackRegion context={feedback.context} />
+    <ToastStack status={toasts.notice} alert={toasts.error} onDismiss={toasts.dismiss} />
   </>;
 }

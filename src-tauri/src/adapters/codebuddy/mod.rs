@@ -500,7 +500,6 @@ mod tests {
             .unwrap();
         assert!(project.path.to_string_lossy().replace('\\', "/").ends_with("/work/demo/.mcp.json"));
         let definition = McpDefinition {
-            reference_source: None, reference_scope: None,
             id: "m1".into(),
             name: "fetch".into(),
             transport: McpTransport::Stdio,

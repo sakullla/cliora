@@ -734,53 +734,6 @@ pub async fn list_mcp_definitions(
 }
 
 #[tauri::command]
-pub async fn read_mcp_document(app: AppHandle, request: resources::documents::McpDocumentRequest) -> Result<resources::documents::McpDocument, ApiError> {
-    blocking(move || { let db = app.state::<AppState>().database(&app)?; resources::documents::read(&db, &adapters::Registry::builtins(), &home()?, &request).map_err(native_error) }).await
-}
-#[tauri::command]
-pub async fn render_mcp_draft(app: AppHandle, target: resources::mcp::McpTargetRequest, draft: resources::mcp::McpDraft) -> Result<resources::documents::McpDocument, ApiError> {
-    blocking(move || { let db = app.state::<AppState>().database(&app)?; resources::documents::render_draft(&db, &adapters::Registry::builtins(), &home()?, &target, draft).map_err(native_error) }).await
-}
-#[tauri::command]
-pub async fn save_mcp_document(app: AppHandle, target: resources::mcp::McpTargetRequest, name: String, baseline: String, text: String) -> Result<resources::documents::McpDocument, ApiError> {
-    blocking(move || { let db = app.state::<AppState>().database(&app)?; resources::documents::save(&db, &SystemCredentialStore, &adapters::Registry::builtins(), &home()?, &target, &name, &baseline, &text).map_err(native_error) }).await
-}
-#[tauri::command]
-pub async fn parse_mcp_paste(app: AppHandle, target: resources::mcp::McpTargetRequest, name: Option<String>, text: String) -> Result<Vec<resources::documents::McpPasteItem>, ApiError> {
-    blocking(move || { let db = app.state::<AppState>().database(&app)?; resources::documents::parse_paste(&db, &adapters::Registry::builtins(), &home()?, &target, name.as_deref(), &text).map_err(native_error) }).await
-}
-#[tauri::command]
-pub async fn equivalent_mcp_document(app: AppHandle, source: resources::mcp::McpTargetRequest, name: String, target: resources::mcp::McpTargetRequest) -> Result<resources::documents::McpDocument, ApiError> {
-    blocking(move || { let db = app.state::<AppState>().database(&app)?; resources::documents::equivalent(&db, &adapters::Registry::builtins(), &home()?, &source, &name, &target).map_err(native_error) }).await
-}
-#[tauri::command]
-pub async fn read_skill_package_document(app: AppHandle, package_id: String) -> Result<resources::skills::PackageDocument, ApiError> {
-    blocking(move || app.state::<AppState>().with_database(&app, |db| resources::skills::read_package_document(db, &package_id).map_err(native_error))).await
-}
-#[tauri::command]
-pub async fn save_skill_package_document(app: AppHandle, package_id: String, baseline: String, content: String) -> Result<resources::skills::PackageDocument, ApiError> {
-    blocking(move || app.state::<AppState>().with_database(&app, |db| resources::skills::save_package_document(db, &package_id, &baseline, &content).map_err(native_error))).await
-}
-#[tauri::command]
-pub async fn resource_states(app: AppHandle, requests: Vec<resources::batch::StateRequest>) -> Result<Vec<resources::batch::ItemResult>, ApiError> {
-    blocking(move || { let db = app.state::<AppState>().database(&app)?; resources::batch::states(&db, &adapters::Registry::builtins(), &home()?, requests).map_err(native_error) }).await
-}
-#[tauri::command]
-pub async fn list_native_skill_metadata(app: AppHandle, target: resources::mcp::McpTargetRequest) -> Result<Vec<resources::skills::NativeSkillEntry>, ApiError> {
-    blocking(move || { let db = app.state::<AppState>().database(&app)?; resources::skills::native_metadata(&db, &adapters::Registry::builtins(), &home()?, &target).map_err(native_error) }).await
-}
-#[tauri::command]
-pub async fn run_resource_batch(app: AppHandle, operation_id: String, operations: Vec<resources::batch::Operation>) -> Result<resources::batch::BatchResult, ApiError> {
-    blocking(move || { let db = app.state::<AppState>().database(&app)?; resources::batch::run(&db, &SystemCredentialStore, &adapters::Registry::builtins(), &home()?, &operation_id, operations).map_err(native_error) }).await
-}
-#[tauri::command]
-pub fn cancel_resource_batch(operation_id: String) -> Result<bool, ApiError> { resources::batch::cancel(&operation_id).map_err(native_error) }
-#[tauri::command]
-pub async fn resource_sort_preference(app: AppHandle, context: String, value: Option<String>) -> Result<String, ApiError> {
-    blocking(move || app.state::<AppState>().with_database(&app, |db| resources::batch::sort_preference(db, &context, value.as_deref()).map_err(native_error))).await
-}
-
-#[tauri::command]
 pub async fn save_mcp_definition(
     app: AppHandle,
     draft: resources::mcp::McpDraft,
@@ -2184,13 +2137,6 @@ pub async fn get_launch_settings(app: AppHandle) -> Result<launch::LaunchSetting
 }
 
 #[tauri::command]
-pub async fn set_launch_directory(app: AppHandle, tool_id: String, directory: Option<String>) -> Result<(), ApiError> {
-    blocking(move || app.state::<AppState>().with_database(&app, |db| {
-        launch::remember_directory(db, &adapters::Registry::builtins(), &tool_id, directory.as_deref()).map_err(native_error)
-    })).await
-}
-
-#[tauri::command]
 pub async fn set_preferred_terminal(
     app: AppHandle,
     terminal: launch::TerminalId,
@@ -2316,17 +2262,6 @@ pub(crate) fn launch_now_with_stage(
 ) -> Result<launch::LaunchResult, LaunchFailure> {
     use launch::LaunchStage;
     let home = home().map_err(|error| LaunchFailure::new(LaunchStage::ProjectDirectory, error))?;
-    // Reject unsupported workspace intent before applying any project profile.
-    let registry = adapters::Registry::builtins();
-    if let Some(adapter) = registry.get(&request.tool_id) {
-        if adapter.launch_form() == adapters::LaunchForm::Desktop
-            && (request.project_id.is_some() || request.directory.is_some())
-            && adapter.launch_directory() != adapters::LaunchDirectory::Workspace
-        {
-            return Err(LaunchFailure::new(LaunchStage::ProjectDirectory,
-                native_error("此桌面应用尚无已验证的打开工作区能力，请使用普通启动".into())));
-        }
-    }
     let project_id = request.project_id.clone();
     let project = project_id
         .as_deref()

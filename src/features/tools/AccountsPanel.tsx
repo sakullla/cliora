@@ -1,4 +1,3 @@
-import { useFeedback, FeedbackRegion } from '../../components/Feedback';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { native, nativeAvailable } from '../../lib/native';
@@ -42,28 +41,28 @@ export function useAccounts(tool: string, active = true) {
   const request = useRef(0);
   const [accounts, setAccounts] = useState<AuthAccount[]>([]);
   const [capability, setCapability] = useState<AccountCapability | null>(null);
-  const readFeedback = useFeedback(JSON.stringify(['accounts-read', tool]));
+  const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const refresh = async () => {
     const scope = generation.current; const currentRequest = ++request.current;
-    const result = readFeedback.begin('refresh');
     try {
       const [all, caps] = await Promise.all([native.listAccounts(), native.accountCapabilities()]);
-      if (mounted.current && generation.current === scope && request.current === currentRequest && currentTool.current === tool) { const matching = all.filter(account => account.toolId === tool); setAccounts(matching); result.complete(); setCapability(caps.find(cap => cap.toolId === tool) ?? null); return matching; }
+      if (mounted.current && generation.current === scope && request.current === currentRequest && currentTool.current === tool) { const matching = all.filter(account => account.toolId === tool); setAccounts(matching); setCapability(caps.find(cap => cap.toolId === tool) ?? null); setError(''); return matching; }
       return null;
     } catch (value) {
-      if (mounted.current && generation.current === scope && request.current === currentRequest && currentTool.current === tool) result.error(value && typeof value === 'object' && 'message' in value ? String(value.message) : i18n.t('tools.accounts.readFailed'));
-      return null;
+      if (mounted.current && generation.current === scope && request.current === currentRequest && currentTool.current === tool) setError(value && typeof value === 'object' && 'message' in value ? String(value.message) : i18n.t('tools.accounts.readFailed'));
+      throw value;
     }
   };
   useEffect(() => {
     mounted.current = true; const scope = ++generation.current;
     if (!nativeAvailable || !active) { setLoading(false); return () => { mounted.current = false; generation.current++; }; }
-    setLoading(true); setAccounts([]); setCapability(null); const read = () => refresh().catch(() => {}).finally(() => { if (mounted.current && generation.current === scope) setLoading(false); });
+    setLoading(true); setAccounts([]); setCapability(null); setError('');
+    const read = () => refresh().catch(() => {}).finally(() => { if (mounted.current && generation.current === scope) setLoading(false); });
     void read(); const timer = window.setInterval(() => void read(), 2500);
     return () => { mounted.current = false; generation.current++; window.clearInterval(timer); };
   }, [tool, active]);
-  return { accounts, capability, readContext: readFeedback.context, refresh, loading };
+  return { accounts, capability, error, refresh, loading };
 }
 type AccountNavigation = {
   onOpenProfile?: (profileId: string, target?: AccountImpactScope) => void;
@@ -74,37 +73,40 @@ function AccountImpactView({ account, active, refreshAccounts, onOpenProfile, on
   const [impact, setImpact] = useState<AccountImpact | null>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
-  const feedback = useFeedback(JSON.stringify(['account', account.id]));
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [refreshEpoch, setRefreshEpoch] = useState(0);
+  const successfulReapply = useRef<{ accountId: string; contextId: string; notice: string } | null>(null);
   const request = useRef(0);
   const current = useRef(account); current.current = account;
   async function refresh() {
-    const operationFeedback = feedback.begin('refresh');
-    const sequence = ++request.current; setLoading(true); try {
+    const sequence = ++request.current; setLoading(true); setError('');
+    try {
       const value = await native.accountImpact(account.id);
       if (sequence !== request.current || current.current.id !== account.id || current.current.version !== account.version) return;
       if (value.accountId !== account.id || value.toolId !== account.toolId || value.accountVersion !== account.version) throw new Error(t('tools.accounts.changedError'));
-      setImpact(value); operationFeedback.complete();
-    } catch (value) { if (sequence === request.current) operationFeedback.error(value && typeof value === 'object' && 'message' in value ? String(value.message) : t('tools.accounts.impactFailed')); }
+      setImpact(value);
+    } catch (value) { if (sequence === request.current) setError(value && typeof value === 'object' && 'message' in value ? String(value.message) : t('tools.accounts.impactFailed')); }
     finally { if (sequence === request.current) setLoading(false); }
   }
   useEffect(() => {
-    setImpact(null); setBusy(false);
+    const success = successfulReapply.current;
+    if (success && (success.accountId !== account.id || success.contextId !== account.context?.id || account.state !== 'signed_in')) successfulReapply.current = null;
+    setImpact(null); setNotice(successfulReapply.current?.notice ?? ''); setBusy(false);
     if (active && nativeAvailable) void refresh();
     return () => { request.current++; };
   }, [active, account.id, account.version, refreshEpoch]);
   async function refreshWithAccounts() {
-    const operationFeedback = feedback.begin('refreshWithAccounts');
-    const sequence = request.current; setBusy(true); try {
+    const sequence = request.current; setBusy(true); setError('');
+    try {
       const updated = await refreshAccounts();
       if (request.current === sequence && updated?.some(item => item.id === account.id)) setRefreshEpoch(value => value + 1);
-      operationFeedback.complete();
-    } catch (value) { if (request.current === sequence) operationFeedback.error(value && typeof value === 'object' && 'message' in value ? String(value.message) : t('tools.accounts.refreshFailed')); }
+    } catch (value) { if (request.current === sequence) setError(value && typeof value === 'object' && 'message' in value ? String(value.message) : t('tools.accounts.refreshFailed')); }
     finally { if (request.current === sequence && current.current.id === account.id) setBusy(false); }
   }
   async function reapply(scope: AccountImpactScope) {
-    const operationFeedback = feedback.begin('reapply:' + scope.bindingId);
-    const sequence = ++request.current; setBusy(true); try {
+    const sequence = ++request.current; setBusy(true); setError(''); setNotice(''); successfulReapply.current = null;
+    try {
       const fresh = await native.accountImpact(account.id);
       if (sequence !== request.current) return;
       const target = fresh.scopes.find(item => item.bindingId === scope.bindingId);
@@ -112,18 +114,18 @@ function AccountImpactView({ account, active, refreshAccounts, onOpenProfile, on
       await native.reapplyAccountProfile(scope.reapplyRequest!);
       if (sequence !== request.current) return;
       const successNotice = t('tools.accounts.reapplied', { profile: target.profileName ?? target.profileId, scope: scopeName(target) });
-      operationFeedback.success(successNotice);
+      successfulReapply.current = { accountId: account.id, contextId: scope.reapplyRequest!.expectedContextId, notice: successNotice }; setNotice(successNotice);
       // Shared apply checks the identity and can advance its version. Refresh the
       // parent first; the next render reads impacts against the accepted version.
       const updated = await refreshAccounts();
       if (request.current === sequence && updated?.some(item => item.id === account.id)) setRefreshEpoch(value => value + 1);
-    } catch (value) { if (sequence === request.current) operationFeedback.error(value && typeof value === 'object' && 'message' in value ? String(value.message) : t('tools.accounts.reapplyFailed')); }
+    } catch (value) { if (sequence === request.current) setError(value && typeof value === 'object' && 'message' in value ? String(value.message) : t('tools.accounts.reapplyFailed')); }
     finally { if (request.current === sequence && current.current.id === account.id) setBusy(false); }
   }
   if (!active) return null;
   return <section className={accountStyles.impact} aria-label={t('tools.accounts.impactAria', { label: account.label })}>
     <div className={accountStyles.impactHeader}><strong>{t('tools.accounts.impactTitle')}</strong><button disabled={loading || busy} onClick={() => void refreshWithAccounts()}>{t('tools.accounts.refreshImpact')}</button></div>
-    {loading && !impact && <p role="status">{t('tools.accounts.loadingImpact')}</p>}<FeedbackRegion context={feedback.context} />
+    {loading && !impact && <p role="status">{t('tools.accounts.loadingImpact')}</p>}{error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
     {impact && <><ul>{impact.profiles.map(profile => <li key={profile.id}><div className={styles.actions}><span>{profile.name}</span>{onOpenProfile && <button disabled={busy} onClick={() => onOpenProfile(profile.id)}>{t('tools.accounts.editProfile')}</button>}</div></li>)}</ul>{!impact.profiles.length && <p>{t('tools.accounts.noProfiles')}</p>}
       <h4>{t('tools.accounts.scopesTitle')}</h4><ul>{impact.scopes.map(scope => <li key={scope.bindingId}>
         <strong>{scope.profileName ?? t('tools.accounts.deletedProfile')} · {scopeName(scope)}</strong><p>{scope.active ? t('tools.accounts.scopeActive') : t('tools.accounts.scopeHistory')} · {contextName(scope.contextKind)}{scope.needsReapply ? t('tools.accounts.needsReapply') : ''}</p>
@@ -142,7 +144,8 @@ export function AccountsPanel({ toolId, state, onOpenProfile, onOpenUsage }: { t
   const [label, setLabel] = useState(metadata?.defaultLabel ?? t('tools.accounts.newAccount'));
   const [method, setMethod] = useState<'browser' | 'device'>('browser');
   const [busy, setBusy] = useState(false);
-  const feedback = useFeedback(JSON.stringify(['accounts', toolId]));
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
   const [editing, setEditing] = useState<string | null>(null);
   const [renamed, setRenamed] = useState('');
   const [creating, setCreating] = useState(false);
@@ -159,11 +162,11 @@ export function AccountsPanel({ toolId, state, onOpenProfile, onOpenUsage }: { t
     finally { if (live.current && discoverySequence.current === sequence) setNativeLoading(false); }
   }
   useEffect(() => {
-    setNativeLogins(null); setNativeError(''); setEditing(null); setCreating(false); setExpanded(new Set()); setLabel(metadata?.defaultLabel ?? t('tools.accounts.newAccount')); setMethod('browser');
+    setNativeLogins(null); setNativeError(''); setMessage(''); setError(''); setEditing(null); setCreating(false); setExpanded(new Set()); setLabel(metadata?.defaultLabel ?? t('tools.accounts.newAccount')); setMethod('browser');
     if (nativeAvailable) void discover();
     return () => { discoverySequence.current++; };
   }, [toolId]);
-  async function run(operation: string, work: () => Promise<unknown>, notice: string) { const result = feedback.begin(operation); setBusy(true); try { const outcome = await work(); if (outcome === false || !live.current || currentTool.current !== toolId) return; result.success(notice); await state.refresh(); } catch (value) { if (!live.current || currentTool.current !== toolId) return; result.error(value && typeof value === 'object' && 'message' in value ? String(value.message) : t('tools.accounts.actionFailed')); } finally { if (live.current && currentTool.current === toolId) setBusy(false); } }
+  async function run(work: () => Promise<unknown>, notice: string) { setBusy(true); setError(''); setMessage(''); try { const outcome = await work(); if (outcome === false || !live.current || currentTool.current !== toolId) return; await state.refresh(); if (live.current && currentTool.current === toolId) setMessage(notice); } catch (value) { if (!live.current || currentTool.current !== toolId) return; setError(value && typeof value === 'object' && 'message' in value ? String(value.message) : t('tools.accounts.actionFailed')); } finally { if (live.current && currentTool.current === toolId) setBusy(false); } }
   return <section className={styles.panel} aria-label={t('tools.accounts.label')}>
     <div className={styles.header}><div><h2>{t('tools.accounts.title')}</h2><p>{metadata?.description ?? t('tools.accounts.defaultDescription')}</p></div>{state.capability?.managedLogin && <button className={styles.primary} onClick={() => setCreating(value => !value)}>{creating ? t('tools.accounts.collapseAdd') : t('tools.accounts.add')}</button>}</div>
     {!nativeAvailable && <p role="alert">{t('tools.accounts.nativeOnly')}</p>}
@@ -176,36 +179,36 @@ export function AccountsPanel({ toolId, state, onOpenProfile, onOpenUsage }: { t
     {creating && <div className={`${styles.create} ${accountStyles.addForm}`}><label>{t('tools.accounts.accountName')}<input value={label} onChange={event => setLabel(event.target.value)} placeholder={t('tools.accounts.namePlaceholder')} /></label>
       <label>{t('tools.accounts.loginMethod')}<select value={state.capability?.methods.includes(method) ? method : state.capability?.methods[0] ?? ''} onChange={event => setMethod(event.target.value as 'browser' | 'device')}>{state.capability?.methods.map(value => <option key={value} value={value}>{metadata?.methods?.[value] ?? (value === 'device' ? t('tools.accounts.methodDevice') : t('tools.accounts.methodBrowser'))}</option>)}</select></label>
       <p>{metadata?.managedDescription}</p>
-      <button className={styles.primary} disabled={busy || !nativeAvailable || !label.trim() || !state.capability?.managedLogin || !state.capability.methods.length} onClick={() => void run('create:' + label, async () => { const account = await native.createAccount(toolId, label.trim()); if (!live.current || currentTool.current !== toolId) return; await native.startAccountLogin(account.id, account.version, state.capability!.methods.includes(method) ? method : state.capability!.methods[0]); }, t('tools.accounts.loginRequested'))}>{t('tools.accounts.addAndLogin')}</button>
-      {state.capability?.importNative && <button disabled={busy || !nativeAvailable || !label.trim()} onClick={() => void run('adopt:' + label, () => native.adoptNativeAccount(toolId, label), t('tools.accounts.adopted'))}>{t('tools.accounts.adopt')}</button>}
+      <button className={styles.primary} disabled={busy || !nativeAvailable || !label.trim() || !state.capability?.managedLogin || !state.capability.methods.length} onClick={() => void run(async () => { const account = await native.createAccount(toolId, label.trim()); if (!live.current || currentTool.current !== toolId) return; await native.startAccountLogin(account.id, account.version, state.capability!.methods.includes(method) ? method : state.capability!.methods[0]); }, t('tools.accounts.loginRequested'))}>{t('tools.accounts.addAndLogin')}</button>
+      {state.capability?.importNative && <button disabled={busy || !nativeAvailable || !label.trim()} onClick={() => void run(() => native.adoptNativeAccount(toolId, label), t('tools.accounts.adopted'))}>{t('tools.accounts.adopt')}</button>}
     </div>}
-    <FeedbackRegion context={feedback.context} relatedContexts={[state.readContext]} />
+    {(error || state.error) && <p role="alert">{error || state.error}</p>}{message && <p role="status">{message}</p>}
     <div className={styles.sectionTitle}><h3>{t('tools.accounts.managedTitle')}</h3><span>{t('tools.accounts.count', { count: state.accounts.length })}</span></div>
     {state.loading ? <SkeletonRows count={2} /> : state.accounts.length === 0 && <p className={styles.empty}>{state.capability?.managedLogin ? t('tools.accounts.emptyManaged') : t('tools.accounts.emptyReadonly')}</p>}
     <ul className={styles.list}>{state.accounts.map(account => <li key={account.id}>
       <div><strong>{account.label}</strong><span data-state={account.state === 'signed_in' && !account.identity ? 'unknown' : account.state}>{account.state === 'signed_in' && !account.identity ? t('tools.accounts.statusPendingIdentity') : accountStateLabel(account.state)}</span></div>
       <p>{account.identity?.email ?? account.identity?.subject ?? t('tools.accounts.noIdentity')}{account.identity?.plan ? ` · ${account.identity.plan}` : ''}</p>
       {account.pendingLogin && <p>{t('tools.accounts.pendingNote')}</p>}
-      {account.pendingLogin && <div className={styles.actions}><button disabled={busy} onClick={() => void run('cancel:' + account.id, () => native.cancelAccountLogin(account.id, account.pendingLogin!.id), t('tools.accounts.cancelledNotice'))}>{t('tools.accounts.cancelLogin')}</button>{account.pendingLogin.operation === 'login' && state.capability?.browserLink && <button disabled={busy} onClick={() => void run('open-link:' + account.id, () => native.openAccountLoginLink(account.id, account.pendingLogin!.id), t('tools.accounts.browserRequested'))}>{t('tools.accounts.openAuthPage')}</button>}</div>}
+      {account.pendingLogin && <div className={styles.actions}><button disabled={busy} onClick={() => void run(() => native.cancelAccountLogin(account.id, account.pendingLogin!.id), t('tools.accounts.cancelledNotice'))}>{t('tools.accounts.cancelLogin')}</button>{account.pendingLogin.operation === 'login' && state.capability?.browserLink && <button disabled={busy} onClick={() => void run(() => native.openAccountLoginLink(account.id, account.pendingLogin!.id), t('tools.accounts.browserRequested'))}>{t('tools.accounts.openAuthPage')}</button>}</div>}
       {account.retiredContexts.length > 0 && <button onClick={() => setExpanded(previous => new Set(previous).add(account.id))}>{t('tools.accounts.viewRetired')}</button>}
       <details className={accountStyles.management} open={expanded.has(account.id)} onToggle={event => { const open = event.currentTarget.open; setExpanded(previous => { const next = new Set(previous); if (open) next.add(account.id); else next.delete(account.id); return next; }); }}><summary>{t('tools.accounts.manageSummary')}</summary>
       <div className={accountStyles.accountActions}>
         <div className={styles.actions}>
-          <button disabled={busy} onClick={() => void run('check:' + account.id, () => native.checkAccount(account.id), t('tools.accounts.checkedNotice'))}>{t('tools.accounts.checkStatus')}</button>
+          <button disabled={busy} onClick={() => void run(() => native.checkAccount(account.id), t('tools.accounts.checkedNotice'))}>{t('tools.accounts.checkStatus')}</button>
           <button disabled={busy} onClick={() => { setEditing(account.id); setRenamed(account.label); }}>{t('tools.accounts.rename')}</button>
-          {!account.pendingLogin && state.capability?.managedLogin && <button disabled={busy || !state.capability.methods.length} onClick={() => void run('login:' + account.id, () => native.startAccountLogin(account.id, account.version, state.capability!.methods.includes(method) ? method : state.capability!.methods[0]), t('tools.accounts.reauthRequested'))}>{account.state === 'signed_in' ? t('tools.accounts.reauthenticate') : t('tools.accounts.login')}</button>}
+          {!account.pendingLogin && state.capability?.managedLogin && <button disabled={busy || !state.capability.methods.length} onClick={() => void run(() => native.startAccountLogin(account.id, account.version, state.capability!.methods.includes(method) ? method : state.capability!.methods[0]), t('tools.accounts.reauthRequested'))}>{account.state === 'signed_in' ? t('tools.accounts.reauthenticate') : t('tools.accounts.login')}</button>}
         </div>
-        {editing === account.id && <label>{t('tools.accounts.newName')}<input value={renamed} onChange={event => setRenamed(event.target.value)} /><button disabled={busy || !renamed.trim()} onClick={() => void run('rename:' + account.id, async () => { await native.renameAccount(account.id, account.version, renamed); setEditing(null); }, t('tools.accounts.renamed'))}>{t('tools.accounts.saveName')}</button><button disabled={busy} onClick={() => setEditing(null)}>{t('tools.accounts.cancelRename')}</button></label>}
+        {editing === account.id && <label>{t('tools.accounts.newName')}<input value={renamed} onChange={event => setRenamed(event.target.value)} /><button disabled={busy || !renamed.trim()} onClick={() => void run(async () => { await native.renameAccount(account.id, account.version, renamed); setEditing(null); }, t('tools.accounts.renamed'))}>{t('tools.accounts.saveName')}</button><button disabled={busy} onClick={() => setEditing(null)}>{t('tools.accounts.cancelRename')}</button></label>}
         <details className={accountStyles.moreActions}><summary>{t('tools.accounts.moreActions')}</summary>
           <div className={styles.actions}>
-            {!account.pendingLogin && <button disabled={busy || account.state === 'signed_out'} onClick={() => void run('logout:' + account.id, async () => {
+            {!account.pendingLogin && <button disabled={busy || account.state === 'signed_out'} onClick={() => void run(async () => {
               const impact = await native.accountImpact(account.id);
               if (!live.current || currentTool.current !== toolId) return;
               if (!await confirmAction(t('tools.accounts.logoutConfirm', { label: account.label, impact: impactSummary(impact) }), () => live.current && currentTool.current === toolId, { title: t('tools.accounts.logout'), confirmLabel: t('tools.accounts.logout'), destructive: true })) return false;
               await native.logoutAccount(account.id, account.version);
             }, t('tools.accounts.logoutRequested'))}>{t('tools.accounts.logout')}</button>}
             <button className={styles.destructive} disabled={busy || !!account.pendingLogin} aria-describedby={account.pendingLogin ? `account-delete-hint-${account.id}` : undefined} title={account.pendingLogin ? t('tools.accounts.deleteDisabledTitle') : t('tools.accounts.deleteTitle')} onClick={() => void (async () => {
-              await run('delete:' + account.id, async () => {
+              await run(async () => {
                 const impact = await native.accountImpact(account.id);
                 if (!live.current || currentTool.current !== toolId) return;
                 if (!await confirmAction(t('tools.accounts.deleteConfirm', { label: account.label, impact: impactSummary(impact) }), () => live.current && currentTool.current === toolId, { title: t('tools.accounts.deleteAction'), confirmLabel: t('tools.accounts.deleteAction'), destructive: true })) return false;

@@ -11,7 +11,6 @@ export type AdapterDescriptor = {
   projectModelOverride: boolean;
   yoloAvailable: boolean;
   launchForm: 'terminal' | 'desktop';
-  launchDirectory: 'terminal' | 'workspace' | 'unsupported';
   nativeConfig: AdapterFacet;
   launch: AdapterFacet;
   resume: AdapterFacet;

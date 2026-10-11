@@ -1,5 +1,3 @@
-import { useFeedback, FeedbackRegion } from '../../components/Feedback';
-import { notifications } from '../../lib/notifications';
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
@@ -22,13 +20,15 @@ import styles from './ManagedTools.module.css';
 
 type Notice = { tone: 'ok' | 'error' | 'pending'; text: string; title: string };
 type Activity = 'launch' | 'apply' | null;
-type Loaded = { workspace: RegisteredToolWorkspace | null; error: string | null; busy: boolean; activity: Activity };
+type Loaded = { workspace: RegisteredToolWorkspace | null; error: string | null; busy: boolean; activity: Activity; notice: Notice | null };
 
 const rememberedHome = new Map<string, { workspace: RegisteredToolWorkspace; at: number }>();
 function rememberHome(toolId: string, workspace: RegisteredToolWorkspace) {
   if (workspace.probe.selectedPath) rememberedHome.set(toolId, { workspace, at: Date.now() });
   else rememberedHome.delete(toolId);
 }
+const launchDirectories = new Map<string, string>();
+let lastLaunchDirectory = '';
 
 function message(value: unknown): string {
   return value && typeof value === 'object' && 'message' in value ? String(value.message) : i18n.t('home.tools.operationFailed');
@@ -40,8 +40,8 @@ function lineNotice(tone: Notice['tone'], text: string, detail = ''): Notice {
   return { tone, text: full, title: full };
 }
 
-function settle(previous: Loaded): Loaded {
-  return { ...previous, busy: false, activity: null };
+function settle(previous: Loaded, next: Notice | null): Loaded {
+  return { ...previous, busy: false, activity: null, error: null, notice: next };
 }
 
 function profileLabel(name: string, connection: { model?: string | null } | null | undefined): string {
@@ -92,22 +92,42 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
   const [states, setStates] = useState<Record<string, Loaded>>(() => Object.fromEntries(tools.flatMap((tool) => {
     const cached = rememberedHome.get(tool.id);
     const workspace = cached && Date.now() - cached.at < 60_000 ? cached.workspace : null;
-    return workspace ? [[tool.id, { workspace, error: null, busy: false, activity: null }]] : [];
+    return workspace ? [[tool.id, { workspace, error: null, busy: false, activity: null, notice: null }]] : [];
   })));
-  const [launchDirectories, setLaunchDirectories] = useState<Record<string, string>>({});
-  const [launchSettingsReady, setLaunchSettingsReady] = useState(!nativeAvailable);
   const [launchSettings, setLaunchSettings] = useState<LaunchSettings | null>(null);
   const [conflict, setConflict] = useState<{ toolId: string; toolName: string; profileName: string; comparison: ApplyComparison } | null>(null);
-  const conflictFeedback = useFeedback('home-tool:' + (conflict?.toolId ?? ''));
+  const [conflictError, setConflictError] = useState('');
   const generation = useRef(0);
   const requests = useRef(new Map<string, number>());
   const recheck = useRef<(toolId: string) => void>(() => {});
   const [checking, setChecking] = useState(new Set<string>());
   const acting = useRef(new Set<string>());
+  const noticeTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+
+  useEffect(() => {
+    const timers = noticeTimers.current;
+    return () => { timers.forEach((timer) => clearTimeout(timer)); timers.clear(); };
+  }, []);
+
+  function clearNoticeLater(toolId: string, notice: Notice) {
+    const timers = noticeTimers.current;
+    const old = timers.get(toolId);
+    if (old) clearTimeout(old);
+    if (notice.tone !== 'ok') { timers.delete(toolId); return; }
+    timers.set(toolId, setTimeout(() => {
+      timers.delete(toolId);
+      setStates((old) => {
+        const current = old[toolId];
+        if (!current || current.notice !== notice) return old;
+        return { ...old, [toolId]: { ...current, notice: null } };
+      });
+    }, 5000));
+  }
+
   useEffect(() => {
     if (!nativeAvailable) return;
     let active = true;
-    void native.getLaunchSettings().then((value) => { if (active) { setLaunchSettings(value); setLaunchDirectories(value.directories ?? {}); } }).catch(() => {}).finally(() => { if (active) setLaunchSettingsReady(true); });
+    void native.getLaunchSettings().then((value) => { if (active) setLaunchSettings(value); }).catch(() => {});
     return () => { active = false; };
   }, []);
 
@@ -132,12 +152,12 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
         const workspace = await native.getRegisteredToolWorkspace(toolId, 'global', undefined, true, fresh);
         if (!valid()) return;
         rememberHome(toolId, workspace);
-        setStates(old => ({ ...old, [toolId]: { workspace, error: null, busy: old[toolId]?.busy ?? false, activity: old[toolId]?.activity ?? null } }));
+        setStates(old => ({ ...old, [toolId]: { workspace, error: null, busy: old[toolId]?.busy ?? false, activity: old[toolId]?.activity ?? null, notice: old[toolId]?.notice ?? null } }));
         if (!workspace.probe.selectedPath && workspace.probe.installations.some(item => item.status === 'probe_failed')) retry(toolId, current, attempt, request);
       } catch (error) {
         if (!valid()) return;
         rememberedHome.delete(toolId);
-        setStates(old => ({ ...old, [toolId]: { workspace: null, error: message(error), busy: false, activity: null } }));
+        setStates(old => ({ ...old, [toolId]: { workspace: null, error: message(error), busy: false, activity: null, notice: null } }));
         retry(toolId, current, attempt, request);
       } finally {
         if (active && requests.current.get(toolId) === request) setChecking(old => { const next = new Set(old); next.delete(toolId); return next; });
@@ -163,68 +183,47 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
     return () => { active = false; generation.current++; clearRetries(); recheck.current = () => {}; unsubscribe?.(); };
   }, [tools.map((item) => item.id).join('|')]);
 
-  async function launchTool(toolId: string, intent: 'ordinary' | 'choose' | 'reuse' = 'ordinary') {
-    const feedback = notifications.begin('home-tool:' + toolId, 'pickLaunchDirectory');
+  async function launchTool(toolId: string, pickDirectory = false) {
     const previous = states[toolId];
     if (!previous || previous.busy || acting.current.has(toolId)) return;
     acting.current.add(toolId);
     requests.current.set(toolId, (requests.current.get(toolId) ?? 0) + 1);
     setChecking(old => { const next = new Set(old); next.delete(toolId); return next; });
-    const tool = tools.find((item) => item.id === toolId);
-    const toolName = tool?.name ?? toolId;
-    setStates((old) => ({ ...old, [toolId]: { ...previous, busy: true, activity: 'launch', error: null } }));
+    const toolName = tools.find((item) => item.id === toolId)?.name ?? toolId;
+    setStates((old) => ({ ...old, [toolId]: { ...previous, busy: true, activity: 'launch', error: null, notice: null } }));
     try {
-      const remembered = launchDirectories[toolId];
-      const needsDirectory = tool?.launchDirectory === 'terminal' || intent !== 'ordinary';
-      // A desktop's ordinary launch always stays bare, including after a
-      // previous workspace launch. Menus opt in through the registry capability.
-      if (intent !== 'ordinary' && tool?.launchDirectory !== 'terminal' && tool?.launchDirectory !== 'workspace') return;
-      let directory = needsDirectory && intent !== 'choose' ? remembered : undefined;
-      if (needsDirectory && !directory) {
-        const picked = await open({ directory: true, multiple: false, title: t('home.tools.pickDirectoryTitle'), defaultPath: remembered || undefined });
+      const remembered = launchDirectories.get(toolId);
+      let directory = pickDirectory ? undefined : remembered;
+      if (!directory) {
+        const picked = await open({ directory: true, multiple: false, title: t('home.tools.pickDirectoryTitle'), defaultPath: remembered || lastLaunchDirectory || undefined });
         if (typeof picked !== 'string') {
-          feedback.complete();
+          setStates((old) => ({ ...old, [toolId]: settle(previous, null) }));
           return;
         }
         directory = picked;
+        launchDirectories.set(toolId, picked);
+        lastLaunchDirectory = picked;
       }
-      const mode = preferredLaunchMode(launchSettings, 'cli', !!tool?.yoloAvailable);
-      feedback.identify(JSON.stringify(['launch', directory ?? null, mode]));
-      await native.launchCli({ toolId, projectId: null, sessionId: null, mode, directory: directory ?? null });
-      if (directory) {
-        try {
-          await native.setLaunchDirectory(toolId, directory);
-          setLaunchDirectories(old => ({ ...old, [toolId]: directory }));
-        } catch (error) {
-          feedback.error(t('home.tools.directoryNotRemembered', { name: toolName, reason: message(error) }));
-          return;
-        }
-      }
+      await native.launchCli({ toolId, projectId: null, sessionId: null, mode: preferredLaunchMode(launchSettings, 'cli', !!tools.find((item) => item.id === toolId)?.yoloAvailable), directory });
       const notice = lineNotice('ok', tools.find((item) => item.id === toolId)?.launchForm === 'desktop' ? t('home.tools.launchedDesktop', { name: toolName }) : t('home.tools.launchedCli', { name: toolName }));
-      setStates((old) => ({ ...old, [toolId]: settle(previous) }));
-      feedback.success(notice.text);
+      setStates((old) => ({ ...old, [toolId]: settle(previous, notice) }));
+      clearNoticeLater(toolId, notice);
     } catch (error) {
-      feedback.error(lineNotice('error', t('home.tools.launchFailed', { name: toolName }), message(error)).text);
-      setStates((old) => ({ ...old, [toolId]: settle(previous) }));
+      setStates((old) => ({ ...old, [toolId]: settle(previous, lineNotice('error', t('home.tools.launchFailed', { name: toolName }), message(error))) }));
     } finally {
-      setStates((old) => ({ ...old, [toolId]: settle(previous) }));
       acting.current.delete(toolId);
     }
   }
 
-  async function clearRememberedDir(toolId: string) {
-    const feedback = notifications.begin('home-tool:' + toolId, 'clearLaunchDirectory');
-    try {
-      await native.setLaunchDirectory(toolId, null);
-      setLaunchDirectories(old => { const next = { ...old }; delete next[toolId]; return next; });
-      feedback.complete();
-    } catch (error) {
-      feedback.error(message(error));
-    }
+  function clearRememberedDir(toolId: string) {
+    launchDirectories.delete(toolId);
+    setStates((old) => {
+      const current = old[toolId];
+      return current ? { ...old, [toolId]: { ...current } } : old;
+    });
   }
 
   async function switchProfile(toolId: string, profileId: string) {
-    const feedback = notifications.begin('home-tool:' + toolId, JSON.stringify(['apply', profileId]));
     if (!profileId) return;
     const previous = states[toolId];
     if (!previous?.workspace || previous.busy || acting.current.has(toolId)) return;
@@ -232,8 +231,7 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
     requests.current.set(toolId, (requests.current.get(toolId) ?? 0) + 1);
     setChecking(old => { const next = new Set(old); next.delete(toolId); return next; });
     const toolName = tools.find((item) => item.id === toolId)?.name ?? toolId;
-    feedback.pending(t('home.tools.applying', { name: toolName }));
-    setStates((old) => ({ ...old, [toolId]: { ...previous, busy: true, activity: 'apply', error: null } }));
+    setStates((old) => ({ ...old, [toolId]: { ...previous, busy: true, activity: 'apply', error: null, notice: null } }));
     try {
       await native.applyRegisteredNativeProfile(toolId, profileId, 'global', undefined, false);
       const notice = lineNotice('ok', t('home.tools.applied', { name: toolName }));
@@ -243,9 +241,9 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
         const version = current.workspace.profiles.find((item) => item.id === profileId)?.version ?? current.workspace.binding?.profileVersion ?? 0;
         const workspace = { ...current.workspace, binding: { scopeKey: 'global', tool: toolId, profileId, profileVersion: version, managed: {} } };
         rememberHome(toolId, workspace);
-        return { ...old, [toolId]: { ...current, busy: false, activity: null, error: null, workspace } };
+        return { ...old, [toolId]: { ...current, busy: false, activity: null, error: null, notice, workspace } };
       });
-      feedback.success(notice.text);
+      clearNoticeLater(toolId, notice);
     } catch (error) {
       const detail = message(error);
       const profile = previous.workspace?.profiles.find((item) => item.id === profileId);
@@ -253,20 +251,18 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
         try {
           const comparison = await native.compareRegisteredApplication(profileId, 'global', '');
           setConflict({ toolId, toolName, profileName: profile.name, comparison });
-          feedback.complete();
-          setStates((old) => ({ ...old, [toolId]: settle(previous) }));
+          setConflictError('');
+          setStates((old) => ({ ...old, [toolId]: settle(previous, null) }));
           return;
         } catch (compareError) {
           const reason = message(compareError);
           const text = t('home.tools.compareFailed', { name: toolName, reason });
-          feedback.error(text);
-          setStates((old) => ({ ...old, [toolId]: settle(previous) }));
+          setStates((old) => ({ ...old, [toolId]: settle(previous, { tone: 'error', text, title: text }) }));
           return;
         }
       }
       const text = t('home.tools.notSwitched', { name: toolName, detail });
-      feedback.error(text);
-          setStates((old) => ({ ...old, [toolId]: settle(previous) }));
+      setStates((old) => ({ ...old, [toolId]: settle(previous, { tone: 'error', text, title: text }) }));
     } finally {
       acting.current.delete(toolId);
     }
@@ -275,9 +271,9 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
   async function useComparedFile() {
     if (!conflict) return;
     const { toolId, toolName, comparison } = conflict;
-    const feedback = conflictFeedback.begin(JSON.stringify(['apply', comparison.profile.id]));
     requests.current.set(toolId, (requests.current.get(toolId) ?? 0) + 1);
     const previous = states[toolId];
+    setConflictError('');
     try {
       await native.applyComparedApplication(comparison, 'global', '');
       setConflict(null);
@@ -288,12 +284,12 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
         const version = current.workspace.profiles.find((item) => item.id === comparison.profile.id)?.version ?? comparison.profile.version;
         const workspace = { ...current.workspace, binding: { scopeKey: 'global', tool: toolId, profileId: comparison.profile.id, profileVersion: version, managed: {} } };
         rememberHome(toolId, workspace);
-        return { ...old, [toolId]: { ...current, busy: false, activity: null, error: null, workspace } };
+        return { ...old, [toolId]: { ...current, busy: false, activity: null, error: null, notice, workspace } };
       });
-      feedback.success(notice.text);
+      clearNoticeLater(toolId, notice);
     } catch (error) {
-      feedback.error(message(error));
-      if (previous) setStates((old) => ({ ...old, [toolId]: settle(previous) }));
+      setConflictError(message(error));
+      if (previous) setStates((old) => ({ ...old, [toolId]: settle(previous, null) }));
     }
   }
 
@@ -310,16 +306,16 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
       const writable = workspace?.probe.nativeWrites.state === 'supported';
       const launchMode = preferredLaunchMode(launchSettings, 'cli', !!tool.yoloAvailable);
       const desktop = tool.launchForm === 'desktop';
-      const rememberedDir = launchDirectories[tool.id];
-      const directoryAvailable = tool.launchDirectory === 'terminal' || tool.launchDirectory === 'workspace';
-      const configureLabel = workspace && !installed ? t('home.tools.goInstall') : t('home.tools.editConfig');
+      const rememberedDir = launchDirectories.get(tool.id);
       const switchTitle = !workspace ? undefined : !writable ? workspace.probe.nativeWrites.reason || t('home.tools.notWritable') : t('home.tools.switchHint');
       const launchTitle = !installed && workspace ? t('home.tools.launchRelaunch')
-        : desktop ? t('home.tools.launchDesktop')
+        : desktop ? [rememberedDir ? t('home.tools.launchOpenDir', { dir: displayPath(rememberedDir) }) : t('home.tools.launchDesktop')].join(t('home.tools.titleSeparator'))
         : [rememberedDir ? t('home.tools.launchInDir', { dir: displayPath(rememberedDir) }) : '', launchMode === 'yolo' ? t('home.tools.launchYolo') : launchSettings?.cliMode === 'yolo' ? t('home.tools.launchYoloFallback') : ''].filter(Boolean).join(t('home.tools.titleSeparator')) || undefined;
       const line = loaded?.error
         ? lineNotice('error', t('home.tools.probeFailedNotice', { name: tool.name }), loaded.error)
-        : null;
+        : loaded?.activity === 'apply'
+          ? lineNotice('pending', t('home.tools.applying', { name: tool.name }))
+          : loaded?.notice ?? null;
       return <div className={styles.row} data-tool-row key={tool.id}>
         <div className={styles.name}><ToolIcon toolId={tool.id} size={34} /><span><strong title={tool.name}>{tool.name}</strong><small className={styles.status} data-state={loaded?.error ? 'error' : !workspace ? 'loading' : installed ? 'ok' : 'warn'}>{checking.has(tool.id) && !installed ? t('home.tools.statusChecking') : loaded?.error ? t('home.tools.statusFailed') : workspace ? installed ? workspace.probe.installations.find((item) => item.path === workspace.probe.selectedPath)?.version ?? t('home.tools.statusInstalled') : probeFailed ? t('home.tools.statusProbeFailed') : t('home.tools.statusNotFound') : t('home.tools.statusChecking')}</small></span></div>
         <div className={styles.switch}>
@@ -329,13 +325,12 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
             : profiles.length ? <div role="radiogroup" aria-label={t('home.tools.switchProfileLabel', { name: tool.name })} title={switchTitle}>{profiles.map((item) => <button key={item.id} type="button" role="radio" aria-checked={item.id === selected?.id} className={item.id === selected?.id ? styles.activeConfig : ''} disabled={loaded?.busy || !writable} title={profileLabel(item.name, item.connection)} onClick={() => { if (item.id !== selected?.id || !appliedCurrent) void switchProfile(tool.id, item.id); }}>{item.name}{item.id === selected?.id && item.connection?.model?.trim() ? <em className={styles.modelHint}>{item.connection.model.trim()}</em> : null}</button>)}</div>
             : <button type="button" className={styles.addConfig} onClick={() => onOpenTool(tool.id, { create: true })}>{t('home.tools.newProfile')}</button>}
         </div>
-        <div className={styles.rowActions}>{!installed && (workspace || loaded?.error) ? <button type="button" className={styles.recheck} disabled={checking.has(tool.id) || loaded?.busy} onClick={() => recheck.current(tool.id)}><Icon name="refresh" size={13} strokeWidth={2} />{checking.has(tool.id) ? t('home.tools.statusChecking') : t('home.tools.recheck')}</button> : <button type="button" className={styles.launch} disabled={!installed || !launchSettingsReady || loaded?.busy} aria-busy={loaded?.activity === 'launch' || undefined} title={launchTitle} onClick={() => void launchTool(tool.id)} onContextMenu={directoryAvailable ? (event) => { event.preventDefault(); void launchTool(tool.id, 'choose'); } : undefined}>{loaded?.activity === 'launch' ? <span className="spinner" aria-hidden="true" /> : <Icon name="play" size={13} strokeWidth={2} />}{loaded?.activity === 'launch' ? t('home.tools.launching') : t('home.tools.launch')}</button>}{directoryAvailable && <RowMenu label={t('home.tools.launchDirMenu')}>{desktop && rememberedDir && <button role="menuitem" disabled={!installed || !launchSettingsReady || !!loaded?.busy} title={displayPath(rememberedDir)} onClick={() => void launchTool(tool.id, 'reuse')}>{t('home.tools.reuseDirectory', { dir: displayPath(rememberedDir) })}</button>}<button role="menuitem" disabled={!installed || !launchSettingsReady || !!loaded?.busy} onClick={() => void launchTool(tool.id, 'choose')}>{t('home.tools.chooseOtherDir')}</button>{rememberedDir && <button role="menuitem" disabled={!!loaded?.busy} onClick={() => void clearRememberedDir(tool.id)}>{t('home.tools.clearRememberedDir')}</button>}</RowMenu>}<button type="button" className={styles.configure} title={configureLabel} aria-label={configureLabel} onClick={() => onOpenTool(tool.id, { resource: 'config' })}><Icon name={workspace && !installed ? 'download' : 'edit'} size={17} /></button></div>
-        <FeedbackRegion context={'home-tool:' + tool.id} />
+        <div className={styles.rowActions}>{!installed && (workspace || loaded?.error) ? <button type="button" className={styles.recheck} disabled={checking.has(tool.id) || loaded?.busy} onClick={() => recheck.current(tool.id)}><Icon name="refresh" size={13} strokeWidth={2} />{checking.has(tool.id) ? t('home.tools.statusChecking') : t('home.tools.recheck')}</button> : <button type="button" className={styles.launch} disabled={!installed || loaded?.busy} aria-busy={loaded?.activity === 'launch' || undefined} title={launchTitle} onClick={() => void launchTool(tool.id)} onContextMenu={(event) => { event.preventDefault(); void launchTool(tool.id, true); }}>{loaded?.activity === 'launch' ? <span className="spinner" aria-hidden="true" /> : <Icon name="play" size={13} strokeWidth={2} />}{loaded?.activity === 'launch' ? t('home.tools.launching') : t('home.tools.launch')}</button>}<RowMenu label={t('home.tools.launchDirMenu')}><button role="menuitem" disabled={!installed || !!loaded?.busy} onClick={() => void launchTool(tool.id, true)}>{t('home.tools.chooseOtherDir')}</button>{rememberedDir && <button role="menuitem" onClick={() => clearRememberedDir(tool.id)}>{t('home.tools.clearRememberedDir')}</button>}</RowMenu><button type="button" className={styles.configure} onClick={() => onOpenTool(tool.id, { resource: 'config' })}>{workspace && !installed ? t('home.tools.goInstall') : t('home.tools.editConfig')}</button></div>
         {line && <div className={styles.note} data-tone={line.tone} role={line.tone === 'error' ? 'alert' : 'status'} title={line.title}>{line.text}</div>}
       </div>;
     })}
-    <GuideDialog open={!!conflict} title={t('home.conflict.title')} hint={conflict ? t('home.conflict.hint', { tool: conflict.toolName, profile: conflict.profileName }) : undefined} onClose={() => { setConflict(null); }}>
-      {conflict && <div aria-label={t('home.conflict.label')}>{conflict.comparison.files.map((file, index) => <ConflictCompare key={file.role} title={file.role} banner={index === 0 ? t('home.conflict.banner') : undefined} currentContent={file.current} nextContent={file.proposedText ?? ''} format={file.format} actions={false} onKeepCurrent={() => { setConflict(null); }} onUseNext={() => void useComparedFile()} />)}<FeedbackRegion context={conflictFeedback.context} /><div className="file-conflict-actions"><button type="button" onClick={() => { setConflict(null); }}>{t('common.conflict.keepCurrent')}</button><button type="button" onClick={() => void useComparedFile()}>{t('common.conflict.useNext')}</button></div></div>}
+    <GuideDialog open={!!conflict} title={t('home.conflict.title')} hint={conflict ? t('home.conflict.hint', { tool: conflict.toolName, profile: conflict.profileName }) : undefined} onClose={() => { setConflict(null); setConflictError(''); }}>
+      {conflict && <div aria-label={t('home.conflict.label')}>{conflict.comparison.files.map((file, index) => <ConflictCompare key={file.role} title={file.role} banner={index === 0 ? t('home.conflict.banner') : undefined} currentContent={file.current} nextContent={file.proposedText ?? ''} format={file.format} actions={false} onKeepCurrent={() => { setConflict(null); setConflictError(''); }} onUseNext={() => void useComparedFile()} />)}{conflictError && <p role="alert">{conflictError}</p>}<div className="file-conflict-actions"><button type="button" onClick={() => { setConflict(null); setConflictError(''); }}>{t('common.conflict.keepCurrent')}</button><button type="button" onClick={() => void useComparedFile()}>{t('common.conflict.useNext')}</button></div></div>}
     </GuideDialog>
   </div>;
 }

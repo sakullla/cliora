@@ -1,5 +1,0 @@
-{
-  // IDE preferences, unrelated extension fields survive
-  "editor.fontSize": 15,
-  "extensions.example": {"keep": true},
-}

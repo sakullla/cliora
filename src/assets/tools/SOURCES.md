@@ -40,5 +40,3 @@ These assets render offline. Product symbols remain in their original colors; cu
   SHA-256: `774cbc1c7ecec8c935a6091595583d7a92fc8289d6f1db3f071c0f50c61c369f`.
 
 Declare future icons in the independent `src/adapters/<tool>/index.ts` module using `ToolUiAdapter.icon` (`light`, optional `dark`, `fit`, `tile`, `scale`, and `source`) and register the module in `adapters/index.ts`. All pages use `src/components/ToolIcon.tsx`; tools without icon metadata receive a neutral SVG symbol beside their text name. No network requests are needed for ordinary icon rendering.
-
-- `minimax_code.svg`: Cliora-created MC text badge for MiniMax Code; not an official logo. SHA-256: `2cdfb17c60495d4f32651107991ee60875348a863ab04fdf2cf17a4467c6412d`.

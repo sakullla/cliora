@@ -1,17 +1,4 @@
 export default {
-  minimaxCode: {
-    settingsLabel: 'MiniMax Code settings',
-    connectionNote: 'Use minimax_api for the official API, or a distinct ID for a custom service. Enter the endpoint for your region. Subscription login remains managed by mcode.',
-    applyConnection: 'Update connection draft',
-    settingsNote: 'User config.yaml. Official login remains managed by mcode; bring your own key through MiniMax API or a custom connection. Manage project MCP and Skills in Resources.',
-    fields: { defaultModel: 'Default model', permissionMode: 'Permission mode', minimaxModelSource: 'MiniMax model source', skills_external_enabled: 'Enable external Skills', skills_external_walkUp: 'Search parent directories for Skills' },
-  },
-  cursorIde: {
-    settingsLabel: 'Cursor IDE settings',
-    settingsNote: 'Edit settings.json for the default IDE profile or project. Accounts, model subscriptions and CLI configuration remain managed by Cursor. Extension settings remain in the raw document.',
-    readOnlySource: 'Read-only source: {{source}}',
-    fields: { editor_fontSize: 'Editor font size', editor_tabSize: 'Tab size', editor_wordWrap: 'Word wrap', files_autoSave: 'Auto save', workbench_colorTheme: 'Color theme' },
-  },
   preview: {
     tabsLabel: 'Tools',
     configTitle: '{{name}} configuration',
@@ -359,7 +346,6 @@ export default {
     confirmDiscard: 'The MCP draft is unsaved. Switching discards the changes.',
     importedNotice: 'Read the entry from the current tool. Saving only updates this CLI.',
     written: 'Written to the current tool.',
-    definitionSaved: 'Definition saved.',
     partialFailed: 'Some writes failed. You can retry.',
     pickProject: 'Choose a project.',
     dirtyAgain: 'The form changed again before writing to the current tool. Save once more.',
@@ -402,7 +388,6 @@ export default {
     addSubmit: 'Add',
   },
   skills: {
-    readOnlySource: 'Read-only source',
     pickProjectFirst: 'Open the project directory on the tools page first.',
     dependencyFirst: 'Check and confirm the Skills environment requirements first.',
     pickDirTitle: 'Choose a directory containing SKILL.md',
@@ -599,6 +584,8 @@ export default {
       plugins: 'Plugins',
     },
     discardMessage: 'The current draft is unsaved. Continuing discards these changes. Discard them?',
+    scrollToolsBack: 'Show earlier tools',
+    scrollToolsForward: 'Show more tools',
     frameCurrent: 'Edit the files in use',
     frameCommon: 'Edit common configuration',
     frameProfile: 'Edit profile · {{name}}',
