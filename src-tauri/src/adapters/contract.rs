@@ -551,7 +551,8 @@ pub trait CliAdapter: Sync {
     ) -> Vec<SkillObservation> {
         Vec::new()
     }
-    /// Public MCP views omit literal secrets. Disk values stay in place.
+    /// Public MCP views omit literal secrets. Removing the entry keeps those
+    /// values in the credential store until the next enable writes them back.
     fn mcp_redacts_secrets(&self) -> bool {
         false
     }

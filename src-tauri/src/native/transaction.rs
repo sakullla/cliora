@@ -446,6 +446,17 @@ pub fn read_native(path: &Path) -> Result<String, String> {
     }
 }
 
+fn read_bytes(path: &Path) -> Result<Vec<u8>, String> {
+    if path.is_symlink() {
+        return Err(format!("不跟随符号链接：{}", path.display()));
+    }
+    match fs::read(path) {
+        Ok(bytes) => Ok(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(_) => Err(format!("无法读取原生配置：{}", path.display())),
+    }
+}
+
 fn value_at<'a>(root: &'a Value, path: &[String]) -> Option<&'a Value> {
     path.iter()
         .try_fold(root, |value, segment| if value.is_array() {
@@ -456,7 +467,7 @@ fn value_at<'a>(root: &'a Value, path: &[String]) -> Option<&'a Value> {
 fn prepare(
     patches: &[FilePatch],
     integrity: &[u8; 32],
-) -> Result<Vec<(JournalFile, String)>, String> {
+) -> Result<Vec<(JournalFile, Vec<u8>)>, String> {
     let mut seen = HashSet::new();
     let mut result = Vec::new();
     for patch in patches {
@@ -499,19 +510,20 @@ fn prepare(
         } else {
             false
         };
+        let bytes = output.into_bytes();
         result.push((
             JournalFile {
                 path: patch.path.clone(),
                 existed,
                 old_hash: keyed_fingerprint(integrity, current_text.as_bytes()),
-                new_hash: keyed_fingerprint(integrity, output.as_bytes()),
+                new_hash: keyed_fingerprint(integrity, &bytes),
                 backup: None,
                 nonce: None,
                 old_readonly,
                 new_exists: true,
                 sensitive: patch.sensitive,
             },
-            output,
+            bytes,
         ));
     }
     Ok(result)
@@ -620,8 +632,8 @@ fn restore(
     let key: [u8; 32] = bytes.try_into().map_err(|_| "原生备份密钥长度错误")?;
     let mut problems = Vec::new();
     for item in journal.files.iter().rev() {
-        let current = match read_native(&item.path) {
-            Ok(text) => text,
+        let current = match read_bytes(&item.path) {
+            Ok(bytes) => bytes,
             Err(error) => {
                 problems.push(error);
                 continue;
@@ -633,7 +645,7 @@ fn restore(
                 let _ = fs::remove_file(stage);
             }
         }
-        let hash = keyed_fingerprint(integrity, current.as_bytes());
+        let hash = keyed_fingerprint(integrity, &current);
         if hash == item.old_hash && item.path.exists() == item.existed {
             continue;
         }
@@ -908,7 +920,7 @@ where F: FnOnce(&rusqlite::Transaction<'_>, &str) -> Result<(),String> {
                 new_exists: true,
                 sensitive: patch.sensitive,
             },
-            patch.contents.clone(),
+            patch.contents.clone().into_bytes(),
         ));
     }
     apply_prepared(db, credentials, &integrity, prepared, commit)
@@ -954,16 +966,99 @@ where F: FnOnce(&rusqlite::Transaction<'_>) -> Result<(),String> {
         let current = read_native(&change.path)?;
         if change.path.exists() != change.baseline.is_some() || current != change.baseline.as_deref().unwrap_or("") { return Err(format!("文件已被外部修改：{}",change.path.display())); }
         if change.baseline == change.contents { continue; }
-        prepared.push((JournalFile { path: change.path.clone(), existed: change.baseline.is_some(), new_exists: change.contents.is_some(), old_hash: keyed_fingerprint(&integrity,current.as_bytes()), new_hash: keyed_fingerprint(&integrity,change.contents.as_deref().unwrap_or("").as_bytes()), backup: None, nonce: None, old_readonly: fs::metadata(&change.path).is_ok_and(|m|m.permissions().readonly()), sensitive: true }, change.contents.clone().unwrap_or_default()));
+        let bytes = change.contents.clone().unwrap_or_default().into_bytes();
+        prepared.push((JournalFile { path: change.path.clone(), existed: change.baseline.is_some(), new_exists: change.contents.is_some(), old_hash: keyed_fingerprint(&integrity, current.as_bytes()), new_hash: keyed_fingerprint(&integrity, &bytes), backup: None, nonce: None, old_readonly: fs::metadata(&change.path).is_ok_and(|m|m.permissions().readonly()), sensitive: true }, bytes));
     }
     apply_prepared(db,credentials,&integrity,prepared,|tx,_|commit(tx))
+}
+
+/// Raw file create/remove. Text callers keep `FileMutation`; plugin trees use this
+/// so a non-UTF-8 file does not abort the whole directory transaction.
+#[derive(Clone, Debug)]
+pub struct ByteMutation {
+    pub path: PathBuf,
+    pub baseline: Option<Vec<u8>>,
+    pub contents: Option<Vec<u8>>,
+}
+
+pub fn apply_bytes<F>(
+    db: &Database,
+    credentials: &dyn CredentialStore,
+    changes: &[ByteMutation],
+    commit: F,
+) -> Result<ApplyOutcome, String>
+where
+    F: FnOnce(&rusqlite::Transaction<'_>) -> Result<(), String>,
+{
+    #[cfg(test)]
+    let fixture_lock = fixture_write_lock(db)?;
+    #[cfg(test)]
+    let _guard = fixture_lock.lock().map_err(|_| "原生事务不可用")?;
+    #[cfg(not(test))]
+    let _guard = write_lock().lock().map_err(|_| "原生事务不可用")?;
+    let integrity = integrity_key(db, credentials)?;
+    let mut seen = HashSet::new();
+    let mut prepared = Vec::new();
+    for change in changes {
+        if !change.path.is_absolute()
+            || change
+                .path
+                .components()
+                .any(|component| matches!(component, std::path::Component::ParentDir))
+        {
+            return Err("文件目标必须是规范绝对路径".into());
+        }
+        if !seen.insert(&change.path) {
+            return Err("重复的文件目标".into());
+        }
+        for ancestor in change.path.ancestors() {
+            if let Ok(meta) = fs::symlink_metadata(ancestor) {
+                #[cfg(windows)]
+                {
+                    use std::os::windows::fs::MetadataExt;
+                    if meta.file_attributes() & 0x400 != 0 {
+                        return Err("不修改重解析点中的文件".into());
+                    }
+                }
+                if meta.file_type().is_symlink() && !crate::path_policy::is_platform_directory_alias(ancestor)
+                {
+                    return Err("不修改符号链接中的文件".into());
+                }
+            }
+        }
+        let current = read_bytes(&change.path)?;
+        if change.path.exists() != change.baseline.is_some()
+            || current.as_slice() != change.baseline.as_deref().unwrap_or(b"")
+        {
+            return Err(format!("文件已被外部修改：{}", change.path.display()));
+        }
+        if change.baseline.as_deref() == change.contents.as_deref() {
+            continue;
+        }
+        let bytes = change.contents.clone().unwrap_or_default();
+        prepared.push((
+            JournalFile {
+                path: change.path.clone(),
+                existed: change.baseline.is_some(),
+                new_exists: change.contents.is_some(),
+                old_hash: keyed_fingerprint(&integrity, &current),
+                new_hash: keyed_fingerprint(&integrity, &bytes),
+                backup: None,
+                nonce: None,
+                old_readonly: fs::metadata(&change.path).is_ok_and(|meta| meta.permissions().readonly()),
+                sensitive: true,
+            },
+            bytes,
+        ));
+    }
+    apply_prepared(db, credentials, &integrity, prepared, |tx, _| commit(tx))
 }
 
 fn apply_prepared<F>(
     db: &Database,
     credentials: &dyn CredentialStore,
     integrity: &[u8; 32],
-    prepared: Vec<(JournalFile, String)>,
+    prepared: Vec<(JournalFile, Vec<u8>)>,
     commit: F,
 ) -> Result<ApplyOutcome, String>
 where
@@ -1016,19 +1111,19 @@ where
     let attempt = (|| {
         set_status(db, &id, "applying")?;
         for (item, output) in &prepared {
-            let current = read_native(&item.path)?;
-            if item.path.exists() != item.existed || keyed_fingerprint(&integrity, current.as_bytes()) != item.old_hash {
+            let current = read_bytes(&item.path)?;
+            if item.path.exists() != item.existed || keyed_fingerprint(&integrity, &current) != item.old_hash {
                 return Err(format!("原生文件写入前发生变化：{}", item.path.display()));
             }
-            if item.new_exists { write_replacement(&item.path, output.as_bytes(), &id, item.sensitive)?; }
+            if item.new_exists { write_replacement(&item.path, output, &id, item.sensitive)?; }
             else { fs::remove_file(&item.path).map_err(|_| "无法移除原生文件")?; }
-            let written = read_native(&item.path)?.into_bytes();
+            let written = read_bytes(&item.path)?;
             if keyed_fingerprint(&integrity, &written) != item.new_hash {
                 return Err("原生写入后校验失败".into());
             }
         }
         for (item, _) in &prepared {
-            let written = read_native(&item.path)?.into_bytes();
+            let written = read_bytes(&item.path)?;
             if item.path.exists() != item.new_exists { return Err("提交前文件存在状态改变".into()); }
             if keyed_fingerprint(&integrity, &written) != item.new_hash {
                 return Err(format!("提交前发现外部修改：{}", item.path.display()));

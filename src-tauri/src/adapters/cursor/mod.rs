@@ -99,7 +99,7 @@ impl CliAdapter for Cursor {
         Ok(Some(Value::Object(document)))
     }
     fn mcp_disabled_description(&self) -> Option<&'static str> {
-        Some("停用会从当前范围的 mcp.json 移除该条目；定义仍保留，密钥只留在原文件")
+        Some("停用会从当前范围的 mcp.json 移除该条目；受保护的环境变量和请求头留在本机凭据库，再次启用时写回，不进入页面或资料库")
     }
     fn supports_skills(&self) -> bool {
         true
@@ -374,7 +374,8 @@ mod tests {
     use crate::credentials::CredentialStore;
     use crate::database::Database;
     use crate::resources::mcp::{
-        distribute, list_native, preview_targets, save_definition, McpDraft, McpTransport,
+        distribute, get_definition, list_native, preview_targets, save_definition, McpDraft,
+        McpTransport,
     };
     use crate::resources::plugins::{operate, scan, PluginRequest, PluginTarget};
     use crate::resources::rules::{self, RuleTarget};
@@ -549,6 +550,57 @@ mod tests {
         let disk = std::fs::read_to_string(&path).unwrap();
         assert!(disk.contains("sk-test-cursor-secret"));
         assert!(Cursor.native_files(Scope::Global, temp.path(), None, true).is_empty());
+        let mut root: serde_json::Value = serde_json::from_str(&disk).unwrap();
+        root["mcpServers"]["other"] = serde_json::json!({"command": "other", "args": []});
+        std::fs::write(&path, serde_json::to_vec_pretty(&root).unwrap()).unwrap();
+        let mut disable = request.clone();
+        disable.enabled = false;
+        let disable_preview = preview_targets(&db, &registry, temp.path(), &definition.id, vec![disable.clone()]);
+        let disable_body = format!("{:?}", disable_preview[0]);
+        assert!(!disable_body.contains("sk-test-cursor-secret"), "{disable_body}");
+        disable.allow_replace = true;
+        disable.baseline_hash = disable_preview[0].baseline_hash.clone();
+        disable.preview_token = disable_preview[0].preview_token.clone();
+        let removed = distribute(&db, &keys, &registry, temp.path(), &definition.id, vec![disable]);
+        assert_eq!(removed[0].status, "written", "{:?}", removed[0]);
+        let disk = std::fs::read_to_string(&path).unwrap();
+        assert!(!disk.contains("sk-test-cursor-secret"), "{disk}");
+        assert!(disk.contains("other"), "{disk}");
+        assert!(!disk.contains("\"local\""), "{disk}");
+        let retained: Vec<String> = keys
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(id, value)| id.starts_with("mcp-retain-") && value.contains("sk-test-cursor-secret"))
+            .map(|(_, value)| value.clone())
+            .collect();
+        assert_eq!(retained.len(), 1);
+        assert!(!retained[0].contains("visible"));
+        let stored = get_definition(&db, &definition.id).unwrap();
+        assert!(!serde_json::to_string(&stored).unwrap().contains("sk-test-cursor-secret"));
+        let mut enable = request.clone();
+        enable.enabled = true;
+        let enable_preview = preview_targets(&db, &registry, temp.path(), &definition.id, vec![enable.clone()]);
+        let enable_body = format!("{:?}", enable_preview[0]);
+        assert!(!enable_body.contains("sk-test-cursor-secret"), "{enable_body}");
+        enable.allow_replace = true;
+        enable.baseline_hash = enable_preview[0].baseline_hash.clone();
+        enable.preview_token = enable_preview[0].preview_token.clone();
+        let restored = distribute(&db, &keys, &registry, temp.path(), &definition.id, vec![enable]);
+        assert_eq!(restored[0].status, "written", "{:?}", restored[0]);
+        let disk = std::fs::read_to_string(&path).unwrap();
+        assert!(disk.contains("sk-test-cursor-secret"), "{disk}");
+        assert!(disk.contains("other"), "{disk}");
+        assert!(disk.contains("visible"), "{disk}");
+        let listed = list_native(&db, &registry, temp.path(), &request).unwrap();
+        let local = listed.iter().find(|entry| entry.name == "local").unwrap();
+        assert!(!local.env.contains_key("API_TOKEN"));
+        assert!(local.protected_values);
+        assert!(listed.iter().any(|entry| entry.name == "other"));
+        assert!(keys.0.lock().unwrap().keys().all(|id| !id.starts_with("mcp-retain-")));
+        let stored = get_definition(&db, &definition.id).unwrap();
+        assert!(!serde_json::to_string(&stored).unwrap().contains("sk-test-cursor-secret"));
     }
 
     #[test]
@@ -626,6 +678,9 @@ mod tests {
         copy_fixture("bundled.md", &source.join("skills/bundled/SKILL.md"));
         copy_fixture("hook.md", &source.join("hooks/README.md"));
         copy_fixture("plugin-mcp.json", &source.join("mcp.json"));
+        let icon = [0xff, 0xfe, 0x00, 0x80, 0xff];
+        std::fs::create_dir_all(source.join("assets")).unwrap();
+        std::fs::write(source.join("assets/icon.bin"), icon).unwrap();
         std::fs::create_dir_all(temp.path().join(".cursor/plugins/local/managed")).unwrap();
         std::fs::write(
             temp.path().join(".cursor/plugins/local/managed/README.md"),
@@ -657,6 +712,10 @@ mod tests {
         let snapshot = installed.snapshot.unwrap();
         let entry = snapshot.entries.iter().find(|entry| entry.id == "source-plugin").unwrap();
         assert!(!entry.read_only);
+        assert_eq!(
+            std::fs::read(temp.path().join(".cursor/plugins/local/source-plugin/assets/icon.bin")).unwrap(),
+            icon
+        );
         assert!(entry.resources.iter().any(|resource| resource.kind == "skills"));
         assert!(entry.resources.iter().any(|resource| resource.kind == "hooks"));
         assert!(entry.resources.iter().any(|resource| resource.kind == "mcp"));
@@ -675,6 +734,14 @@ mod tests {
         .unwrap();
         assert_eq!(disabled.status, "local_directory_updated", "{disabled:?}");
         assert!(!temp.path().join(".cursor/plugins/local/source-plugin").exists());
+        assert_eq!(
+            std::fs::read(
+                temp.path()
+                    .join(".cursor/plugins/.cliora-disabled-plugins/source-plugin/assets/icon.bin")
+            )
+            .unwrap(),
+            icon
+        );
         assert!(temp
             .path()
             .join(".cursor/plugins/.cliora-disabled-plugins/source-plugin/.cursor-plugin/plugin.json")
@@ -694,6 +761,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(enabled.status, "local_directory_updated", "{enabled:?}");
+        assert_eq!(
+            std::fs::read(temp.path().join(".cursor/plugins/local/source-plugin/assets/icon.bin")).unwrap(),
+            icon
+        );
         let removed = operate(
             &db,
             &keys,

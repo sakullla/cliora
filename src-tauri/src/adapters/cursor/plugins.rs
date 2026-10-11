@@ -7,11 +7,11 @@ use serde_json::Value;
 use super::super::plugins::{PluginAdapter, PluginCapability};
 use super::Cursor;
 use crate::native::format::FileKind;
-use crate::native::transaction::FileMutation;
+use crate::native::transaction::ByteMutation;
 use crate::resources::plugins::{PluginEntry, PluginRequest, PluginResource, PluginTarget};
 
 const MAX_FILES: usize = 2000;
-const MAX_BYTES: usize = 32 * 1024 * 1024;
+const MAX_BYTES: u64 = 32 * 1024 * 1024;
 
 impl PluginAdapter for Cursor {
     fn discovery_only(&self) -> bool {
@@ -127,7 +127,7 @@ impl PluginAdapter for Cursor {
         home: &Path,
         request: &PluginRequest,
         entry: Option<&PluginEntry>,
-    ) -> Result<Vec<FileMutation>, String> {
+    ) -> Result<Vec<ByteMutation>, String> {
         match request.action.as_str() {
             "install" => plan_install(home, &request.source),
             "enable" => plan_move(home, entry, true),
@@ -247,7 +247,7 @@ fn collect_manifests(dir: &Path, files: &mut Vec<PathBuf>) {
     }
 }
 
-fn plan_install(home: &Path, source: &str) -> Result<Vec<FileMutation>, String> {
+fn plan_install(home: &Path, source: &str) -> Result<Vec<ByteMutation>, String> {
     let meta = fs::symlink_metadata(source).map_err(|_| "插件来源目录不存在")?;
     if meta.file_type().is_symlink() || !meta.is_dir() {
         return Err("请选择包含清单的本地目录".into());
@@ -272,7 +272,7 @@ fn plan_install(home: &Path, source: &str) -> Result<Vec<FileMutation>, String> 
     copy_tree(&source, &dest)
 }
 
-fn plan_move(home: &Path, entry: Option<&PluginEntry>, enable: bool) -> Result<Vec<FileMutation>, String> {
+fn plan_move(home: &Path, entry: Option<&PluginEntry>, enable: bool) -> Result<Vec<ByteMutation>, String> {
     let entry = entry.ok_or("插件已不存在，请重新扫描")?;
     safe_segment(&entry.id)?;
     let from = if enable { disabled_dir(home) } else { local_dir(home) }.join(&entry.id);
@@ -291,7 +291,7 @@ fn plan_move(home: &Path, entry: Option<&PluginEntry>, enable: bool) -> Result<V
     Ok(changes)
 }
 
-fn plan_remove(home: &Path, entry: Option<&PluginEntry>) -> Result<Vec<FileMutation>, String> {
+fn plan_remove(home: &Path, entry: Option<&PluginEntry>) -> Result<Vec<ByteMutation>, String> {
     let entry = entry.ok_or("插件已不存在，请重新扫描")?;
     safe_segment(&entry.id)?;
     let local = local_dir(home).join(&entry.id);
@@ -309,12 +309,12 @@ fn plan_remove(home: &Path, entry: Option<&PluginEntry>) -> Result<Vec<FileMutat
     delete_tree(&root)
 }
 
-fn copy_tree(source: &Path, dest: &Path) -> Result<Vec<FileMutation>, String> {
+fn copy_tree(source: &Path, dest: &Path) -> Result<Vec<ByteMutation>, String> {
     let files = collect_files(source)?;
     files
         .into_iter()
         .map(|(relative, contents)| {
-            Ok(FileMutation {
+            Ok(ByteMutation {
                 path: dest.join(relative),
                 baseline: None,
                 contents: Some(contents),
@@ -323,11 +323,11 @@ fn copy_tree(source: &Path, dest: &Path) -> Result<Vec<FileMutation>, String> {
         .collect()
 }
 
-fn delete_tree(source: &Path) -> Result<Vec<FileMutation>, String> {
+fn delete_tree(source: &Path) -> Result<Vec<ByteMutation>, String> {
     collect_files(source)?
         .into_iter()
         .map(|(relative, contents)| {
-            Ok(FileMutation {
+            Ok(ByteMutation {
                 path: source.join(relative),
                 baseline: Some(contents),
                 contents: None,
@@ -336,9 +336,9 @@ fn delete_tree(source: &Path) -> Result<Vec<FileMutation>, String> {
         .collect()
 }
 
-fn collect_files(root: &Path) -> Result<Vec<(PathBuf, String)>, String> {
+fn collect_files(root: &Path) -> Result<Vec<(PathBuf, Vec<u8>)>, String> {
     let mut files = Vec::new();
-    let mut bytes = 0usize;
+    let mut bytes = 0u64;
     walk_files(root, root, &mut files, &mut bytes)?;
     if files.is_empty() {
         return Err("插件目录没有可写入的文件".into());
@@ -349,8 +349,8 @@ fn collect_files(root: &Path) -> Result<Vec<(PathBuf, String)>, String> {
 fn walk_files(
     root: &Path,
     dir: &Path,
-    files: &mut Vec<(PathBuf, String)>,
-    bytes: &mut usize,
+    files: &mut Vec<(PathBuf, Vec<u8>)>,
+    bytes: &mut u64,
 ) -> Result<(), String> {
     let entries = fs::read_dir(dir).map_err(|error| format!("无法读取插件目录：{error}"))?;
     for entry in entries {
@@ -370,18 +370,20 @@ fn walk_files(
         if files.len() >= MAX_FILES {
             return Err("插件文件超过 2000 个".into());
         }
-        let text = fs::read_to_string(&path).map_err(|_| {
-            format!("插件包含非 UTF-8 文件，现有文本事务不能复制：{}", path.display())
-        })?;
-        *bytes += text.len();
-        if *bytes > MAX_BYTES {
+        let len = meta.len();
+        if bytes.saturating_add(len) > MAX_BYTES {
             return Err("插件文件超过 32 MiB".into());
         }
+        let data = fs::read(&path).map_err(|_| format!("无法读取插件文件：{}", path.display()))?;
+        if data.len() as u64 != len {
+            return Err("插件文件在读取期间发生变化".into());
+        }
+        *bytes += len;
         let relative = path.strip_prefix(root).map_err(|_| "插件路径无效")?.to_path_buf();
         if relative.components().any(|component| matches!(component, Component::ParentDir)) {
             return Err("插件路径无效".into());
         }
-        files.push((relative, text));
+        files.push((relative, data));
     }
     Ok(())
 }
