@@ -359,6 +359,12 @@ mod tests {
         assert!(probe.install_url.contains("cursor.com"));
         assert!(!probe.upgrade_hint.to_ascii_lowercase().contains("npm"));
         assert!(!probe.upgrade_hint.to_ascii_lowercase().contains("agent "));
+        assert!(!Cursor.history_supported());
+        assert!(Cursor.history_sources(Path::new("/home/example")).unwrap().is_empty());
+        let descriptor = registry.get("cursor").unwrap().descriptor();
+        assert_eq!(descriptor.history.state, "unsupported");
+        assert!(descriptor.history.reason.contains("没有已核对"));
+        assert_eq!(descriptor.resume.state, "unsupported");
         for item in &probe.installations {
             assert!(Path::new(&item.path)
                 .file_name()
@@ -394,6 +400,65 @@ mod tests {
             self.0.lock().unwrap().remove(key);
             Ok(())
         }
+    }
+
+    struct ReadFail<'a>(&'a MemoryStore);
+    impl CredentialStore for ReadFail<'_> {
+        fn put(&self, key: &str, value: &str) -> Result<(), String> {
+            self.0.put(key, value)
+        }
+        fn get(&self, key: &str) -> Result<String, String> {
+            if self.0.get(key).is_ok() {
+                Err("无法从系统凭据服务读取".into())
+            } else {
+                Err("missing".into())
+            }
+        }
+        fn delete(&self, key: &str) -> Result<(), String> {
+            self.0.delete(key)
+        }
+    }
+
+    fn retained_cursor_secrets(keys: &MemoryStore) -> Vec<String> {
+        keys.0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(id, value)| id.starts_with("mcp-retain-") && value.contains("sk-test-cursor-secret"))
+            .map(|(_, value)| value.clone())
+            .collect()
+    }
+
+    fn write_cursor_mcp(
+        db: &Database,
+        keys: &dyn CredentialStore,
+        home: &Path,
+        definition_id: &str,
+        enabled: bool,
+    ) -> crate::resources::mcp::McpTargetResult {
+        let registry = crate::adapters::Registry::builtins();
+        let request = crate::resources::mcp::McpTargetRequest {
+            context_id: None,
+            tool_id: "cursor".into(),
+            scope: Scope::Global,
+            project_path: None,
+            enabled,
+            baseline_hash: None,
+            allow_replace: false,
+            preview_token: None,
+        };
+        let preview = preview_targets(db, &registry, home, definition_id, vec![request.clone()]);
+        let body = format!("{:?}", preview[0]);
+        assert!(!body.contains("sk-test-cursor-secret"), "{body}");
+        assert_ne!(preview[0].status, "failed", "{}", preview[0].detail);
+        let mut ready = request;
+        ready.allow_replace = true;
+        ready.baseline_hash = preview[0].baseline_hash.clone();
+        ready.preview_token = preview[0].preview_token.clone();
+        distribute(db, keys, &registry, home, definition_id, vec![ready])
+            .into_iter()
+            .next()
+            .unwrap()
     }
 
     fn copy_fixture(from: &str, to: &Path) {
@@ -601,6 +666,130 @@ mod tests {
         assert!(keys.0.lock().unwrap().keys().all(|id| !id.starts_with("mcp-retain-")));
         let stored = get_definition(&db, &definition.id).unwrap();
         assert!(!serde_json::to_string(&stored).unwrap().contains("sk-test-cursor-secret"));
+    }
+
+    #[test]
+    fn secretless_same_name_entry_does_not_drop_the_retained_mcp_secret() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("test.db")).unwrap();
+        let keys = MemoryStore(Mutex::new(HashMap::new()));
+        let registry = crate::adapters::Registry::builtins();
+        let path = temp.path().join(".cursor/mcp.json");
+        copy_fixture("mcp.json", &path);
+        let definition = save_definition(
+            &db,
+            McpDraft {
+                id: None,
+                name: "local".into(),
+                transport: McpTransport::Stdio,
+                command: "echo".into(),
+                args: vec!["ok".into()],
+                url: String::new(),
+                env: std::collections::BTreeMap::from([("SAFE".into(), "visible".into())]),
+                headers: std::collections::BTreeMap::new(),
+                in_library: true,
+                expected_version: None,
+            },
+        )
+        .unwrap();
+        let disabled = write_cursor_mcp(&db, &keys, temp.path(), &definition.id, false);
+        assert_eq!(disabled.status, "written", "{}", disabled.detail);
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("sk-test-cursor-secret"));
+        assert_eq!(retained_cursor_secrets(&keys).len(), 1);
+
+        let secretless = serde_json::json!({
+            "command": "echo",
+            "args": ["ok"],
+            "env": { "SAFE": "visible" }
+        });
+        let mut root: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        root["mcpServers"]["local"] = secretless.clone();
+        std::fs::write(&path, serde_json::to_vec_pretty(&root).unwrap()).unwrap();
+        let disabled_again = write_cursor_mcp(&db, &keys, temp.path(), &definition.id, false);
+        assert_eq!(disabled_again.status, "written", "{}", disabled_again.detail);
+        let disk = std::fs::read_to_string(&path).unwrap();
+        assert!(!disk.contains("\"local\""), "{disk}");
+        assert!(!disk.contains("sk-test-cursor-secret"), "{disk}");
+        assert_eq!(retained_cursor_secrets(&keys).len(), 1);
+
+        root["mcpServers"]["local"] = secretless;
+        std::fs::write(&path, serde_json::to_vec_pretty(&root).unwrap()).unwrap();
+        let enabled = write_cursor_mcp(&db, &keys, temp.path(), &definition.id, true);
+        assert_eq!(enabled.status, "written", "{}", enabled.detail);
+        let disk = std::fs::read_to_string(&path).unwrap();
+        assert!(disk.contains("sk-test-cursor-secret"), "{disk}");
+        assert!(disk.contains("visible"), "{disk}");
+        assert!(retained_cursor_secrets(&keys).is_empty());
+        let listed = list_native(
+            &db,
+            &registry,
+            temp.path(),
+            &crate::resources::mcp::McpTargetRequest {
+                context_id: None,
+                tool_id: "cursor".into(),
+                scope: Scope::Global,
+                project_path: None,
+                enabled: true,
+                baseline_hash: None,
+                allow_replace: false,
+                preview_token: None,
+            },
+        )
+        .unwrap();
+        let local = listed.iter().find(|entry| entry.name == "local").unwrap();
+        assert!(!local.env.contains_key("API_TOKEN"));
+        assert!(local.protected_values);
+        assert!(!serde_json::to_string(&get_definition(&db, &definition.id).unwrap()).unwrap().contains("sk-test-cursor-secret"));
+
+        let disabled = write_cursor_mcp(&db, &keys, temp.path(), &definition.id, false);
+        assert_eq!(disabled.status, "written", "{}", disabled.detail);
+        assert_eq!(retained_cursor_secrets(&keys).len(), 1);
+        let mut root: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        root["mcpServers"]["local"] = serde_json::json!({
+            "command": "echo",
+            "args": ["ok"],
+            "env": { "API_TOKEN": "other-secret", "SAFE": "visible" }
+        });
+        std::fs::write(&path, serde_json::to_vec_pretty(&root).unwrap()).unwrap();
+        let kept = write_cursor_mcp(&db, &keys, temp.path(), &definition.id, true);
+        assert_eq!(kept.status, "written", "{}", kept.detail);
+        let disk = std::fs::read_to_string(&path).unwrap();
+        assert!(disk.contains("other-secret"), "{disk}");
+        assert!(!disk.contains("sk-test-cursor-secret"), "{disk}");
+        assert_eq!(retained_cursor_secrets(&keys).len(), 1);
+
+        root["mcpServers"].as_object_mut().unwrap().remove("local");
+        std::fs::write(&path, serde_json::to_vec_pretty(&root).unwrap()).unwrap();
+        let failed = write_cursor_mcp(&db, &ReadFail(&keys), temp.path(), &definition.id, true);
+        assert_ne!(failed.status, "written");
+        assert!(failed.detail.contains("无法读取"), "{}", failed.detail);
+        let disk = std::fs::read_to_string(&path).unwrap();
+        assert!(!disk.contains("sk-test-cursor-secret"), "{disk}");
+        assert!(!disk.contains("\"local\""), "{disk}");
+        assert_eq!(retained_cursor_secrets(&keys).len(), 1);
+
+        let cleared = save_definition(
+            &db,
+            McpDraft {
+                id: Some(definition.id.clone()),
+                name: "local".into(),
+                transport: McpTransport::Stdio,
+                command: "echo".into(),
+                args: vec!["ok".into()],
+                url: String::new(),
+                env: std::collections::BTreeMap::from([("API_TOKEN".into(), String::new())]),
+                headers: std::collections::BTreeMap::new(),
+                in_library: true,
+                expected_version: Some(definition.version),
+            },
+        )
+        .unwrap();
+        let removed = write_cursor_mcp(&db, &keys, temp.path(), &cleared.id, true);
+        assert_eq!(removed.status, "written", "{}", removed.detail);
+        let disk = std::fs::read_to_string(&path).unwrap();
+        assert!(!disk.contains("sk-test-cursor-secret"), "{disk}");
+        assert!(retained_cursor_secrets(&keys).is_empty());
+        assert!(!serde_json::to_string(&get_definition(&db, &cleared.id).unwrap()).unwrap().contains("sk-test-cursor-secret"));
     }
 
     #[test]
