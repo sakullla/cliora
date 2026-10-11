@@ -730,6 +730,14 @@ mod tests {
     fn project_resume_latest_command_has_continue_directory_and_no_session() {
         let temp = tempfile::tempdir().unwrap();
         let db = crate::database::Database::open(&temp.path().join("cliora.db")).unwrap();
+        // This test constructs commands without spawning them. Select a known
+        // executable explicitly so headless CI needs no installed GUI terminal.
+        crate::launch::set_custom_terminal(
+            &db,
+            std::env::current_exe().unwrap().display().to_string(),
+            vec!["{script}".into()],
+        )
+        .unwrap();
         let registry = crate::adapters::Registry::builtins()
             .with_fixture_installation("minimax_code", "0.6.8");
         let workspace = temp.path().join("workspace");
@@ -755,6 +763,7 @@ mod tests {
             }
         };
         let latest = crate::launch::plan(&db, &registry, temp.path(), request(None, true, LaunchMode::Normal)).unwrap();
+        assert_eq!(latest.terminal, crate::launch::TerminalId::Custom);
         assert_eq!(latest.directory, canonical);
         assert_eq!(latest.cli_args, vec!["--continue".to_string()]);
         assert!(latest.cli_args.iter().all(|arg| arg != "--session" && !arg.contains("permission")));
