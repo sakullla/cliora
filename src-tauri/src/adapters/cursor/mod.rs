@@ -6,6 +6,7 @@
 //! Cancelling the preference does not delete local Cursor files.
 
 mod agents;
+mod history;
 mod install;
 mod plugins;
 mod rules;
@@ -264,6 +265,32 @@ impl CliAdapter for Cursor {
     fn desktop_launch_args(&self, directory: &Path) -> Result<Vec<String>, String> {
         Ok(vec![directory.display().to_string()])
     }
+    fn history_sources(&self, home: &Path) -> Result<Vec<crate::history::HistorySource>, String> {
+        history::sources(home)
+    }
+    fn parse_history(
+        &self,
+        source: &crate::history::HistorySource,
+    ) -> Result<crate::history::ParsedSession, String> {
+        history::parse(source)
+    }
+    fn history_sources_controlled(
+        &self,
+        home: &Path,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Vec<crate::history::HistorySource>, String> {
+        history::sources_controlled(home, cancelled)
+    }
+    fn parse_history_controlled(
+        &self,
+        source: &crate::history::HistorySource,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<crate::history::ParsedSession, String> {
+        history::parse_controlled(source, cancelled)
+    }
+    fn history_supported(&self) -> bool {
+        true
+    }
     fn node_required_when_missing(&self) -> bool {
         false
     }
@@ -301,8 +328,8 @@ impl CliAdapter for Cursor {
                 reason: "可管理项目规则、Skills、两级 MCP、子 Agent 和用户本地插件",
             },
             history: Facet {
-                state: "unsupported",
-                reason: "没有已核对的、不接触登录凭证的稳定会话格式",
+                state: "available",
+                reason: "可只读索引本机 Agent 记录。记录没有模型和 token 时，这两项保持未知，不显示 0",
             },
             login: None,
             management: ManagementCapabilities {
@@ -410,11 +437,11 @@ mod tests {
         assert!(probe.install_url.contains("cursor.com"));
         assert!(!probe.upgrade_hint.to_ascii_lowercase().contains("npm"));
         assert!(!probe.upgrade_hint.to_ascii_lowercase().contains("agent "));
-        assert!(!Cursor.history_supported());
+        assert!(Cursor.history_supported());
         assert!(Cursor.history_sources(Path::new("/home/example")).unwrap().is_empty());
         let descriptor = registry.get("cursor").unwrap().descriptor();
-        assert_eq!(descriptor.history.state, "unsupported");
-        assert!(descriptor.history.reason.contains("没有已核对"));
+        assert_eq!(descriptor.history.state, "available");
+        assert!(descriptor.history.reason.contains("不显示 0"));
         assert_eq!(descriptor.resume.state, "unsupported");
         for item in &probe.installations {
             assert!(Path::new(&item.path)

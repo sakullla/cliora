@@ -81,6 +81,8 @@ pub struct AccountCapability {
     pub methods: Vec<&'static str>,
     pub reason: &'static str,
     pub identity_source: &'static str,
+    /// A signed-in account can be chosen without an id or email only when this is false.
+    pub identity_required: bool,
     pub refresh_owner: &'static str,
     pub acceptance: &'static str,
 }

@@ -167,6 +167,7 @@ export default {
     pickerEmpty: 'No managed accounts yet. The current CLI sign-in stays read-only; go back to use the current native source.',
     opened: 'Native sign-in opened. After verification, explicitly choose the account to return; the draft is kept.',
     verified: 'Identity verified. Explicitly choose the account to return; the profile is not applied yet.',
+    selectableWithoutIdentity: 'Signed in, but the status file has no account id or email. This account can still be chosen; choosing does not apply the profile.',
     incomplete: 'Sign-in has not completed verification. Check the status or retry.',
     cancelled: 'Attempt cancelled. Close the external terminal yourself; late results will not select the account.',
     notVerified: 'This account is not verified as a usable identity. Check or sign in again before choosing it.',
@@ -235,6 +236,7 @@ export default {
       disabled: 'Disabled',
       state_unknown: 'Declaration modified externally · state to confirm',
       inventory_pending: 'Verifying plugin state',
+      not_installed: 'Not installed, not loaded',
     },
     scope: {
       user: 'Global',
@@ -274,6 +276,7 @@ export default {
     discoveredPrefix: 'Discovered ',
     count: '{{count}} plugins',
     countFiltered: '{{filtered}} / {{total}} plugins',
+    catalogSummary: 'Not installed ({{count}}, not loaded)',
     emptyInstallable: 'No plugins in this scope yet. Enter a source and confirm trust to install.',
     emptyNone: 'No user plugins found in this scope.',
     stateUnknown: 'State unknown',

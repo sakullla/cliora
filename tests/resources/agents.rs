@@ -716,3 +716,98 @@ fn qoder_cn_builtins_are_read_only_and_allow_custom_overrides() {
     assert!(custom.enabled && !custom.read_only);
     assert!(!after.entries.iter().find(|entry| entry.builtin && entry.name == "Explore").unwrap().enabled);
 }
+
+#[test]
+fn minimax_code_agents_use_directory_agent_md_and_keep_builtins_read_only() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let db = Database::open(&home.join("test.db")).unwrap();
+    let store = MemoryStore::default();
+    let data = home.join(".minimax");
+    let target = PluginTarget {
+        tool_id: "minimax_code".into(),
+        scope: Scope::Global,
+        project_path: None,
+        context_id: None,
+    };
+    assert!(snapshot_inner(home, &target, &[]).unwrap_err().contains("数据目录不存在"));
+    assert!(!data.exists());
+    fs::create_dir(&data).unwrap();
+    let project = home.join("project");
+    fs::create_dir(&project).unwrap();
+    let project_target = PluginTarget {
+        tool_id: "minimax_code".into(),
+        scope: Scope::Project,
+        project_path: Some(project.display().to_string()),
+        context_id: None,
+    };
+    assert!(snapshot_inner(home, &project_target, &[])
+        .unwrap_err()
+        .contains("项目作用域没有独立目录"));
+
+    let builtin = "---\nname: explore\ndescription: Explore\ntools:\n  - Read\nfeatures:\n  mavis: false\n  delegation: false\n  webSearch: true\nx-mavis:\n  displayName: Explore\n---\nExplore.\n";
+    write(&data.join("agents/.builtin/explore/agent.md"), builtin);
+    write(&data.join("agents/.builtin/mavis/agent.md"), "---\nname: mavis\ndescription: Built-in\nfeatures:\n  mavis: true\n  delegation: true\n  webSearch: true\n---\nMavis.\n");
+    write(&data.join("agents/reviewer/agent.md"), "---\nname: reviewer\ndescription: Review code\n---\nReview.\n");
+    write(&data.join("agents/reviewer/crons/daily.md"), "---\nname: daily\ndescription: Cron\n---\nDaily.\n");
+    write(&data.join("agents/reviewer/memory/MEMORY.md"), "---\nname: memory\ndescription: Memory\n---\nMemory.\n");
+    write(&data.join("agents/notes.md"), "---\nname: notes\ndescription: Notes\n---\nNotes.\n");
+    write(&data.join("agents/mavis/agent.md"), "---\nname: mavis\ndescription: Reserved\n---\nReserved.\n");
+    write(&data.join("agents/main/agent.md"), "---\nname: main\ndescription: Reserved\n---\nReserved.\n");
+    write(&data.join("agents/helper/agent.md"), "---\nname: other\ndescription: Mismatch\n---\nOther.\n");
+
+    let snapshot = snapshot_inner(home, &target, &[]).unwrap();
+    let names: Vec<_> = snapshot.entries.iter().map(|entry| entry.name.as_str()).collect();
+    assert!(names.contains(&"explore"));
+    assert!(names.contains(&"mavis"));
+    assert!(names.contains(&"reviewer"));
+    assert!(names.contains(&"other"));
+    assert!(!names.iter().any(|name| matches!(*name, "daily" | "memory" | "notes" | "main" | "agent")));
+    let explore = snapshot.entries.iter().find(|entry| entry.name == "explore").unwrap();
+    assert!(explore.read_only && explore.owner.contains("内置"));
+    assert!(operate_inner(&db, &store, home, &request(home, &target, "delete", Some(explore), ""), &[]).is_err());
+    let mavis = snapshot.entries.iter().find(|entry| entry.name == "mavis").unwrap();
+    assert!(mavis.read_only);
+    assert!(Path::new(&mavis.path).ends_with(Path::new("agents/.builtin/mavis/agent.md")));
+    let reviewer = snapshot.entries.iter().find(|entry| entry.name == "reviewer").unwrap();
+    assert!(!reviewer.read_only && reviewer.enabled);
+    let helper = snapshot.entries.iter().find(|entry| entry.name == "other").unwrap();
+    assert!(helper.detail.contains("name 必须与目录名一致"));
+
+    let template = snapshot.capability.template;
+    let second_body = template.replace("name: reviewer", "name: second");
+    let mut uppercase = request(home, &target, "create", None, template);
+    uppercase.name = "Reviewer".into();
+    assert!(operate_inner(&db, &store, home, &uppercase, &[]).is_err());
+    let mut permission = request(home, &target, "create", None, "---\nname: reviewer\ndescription: Review\npermissionMode: bypassPermissions\n---\nReview.\n");
+    permission.name = "second".into();
+    assert!(operate_inner(&db, &store, home, &permission, &[])
+        .unwrap_err()
+        .contains("permissionMode"));
+    let mut mismatch = request(home, &target, "create", None, "---\nname: other\ndescription: Other\n---\nOther.\n");
+    mismatch.name = "second".into();
+    assert!(operate_inner(&db, &store, home, &mismatch, &[])
+        .unwrap_err()
+        .contains("name 必须与目录名一致"));
+
+    let mut create = request(home, &target, "create", None, &second_body);
+    create.name = "second".into();
+    let created = operate_inner(&db, &store, home, &create, &[]).unwrap();
+    let second = created.snapshot.entries.iter().find(|entry| entry.name == "second").unwrap();
+    assert!(!second.read_only && second.enabled);
+    assert!(Path::new(&second.path).ends_with(Path::new("agents/second/agent.md")));
+    assert!(data.join("agents/second/agent.md").is_file());
+
+    let mut disable = request(home, &target, "disable", Some(second), &second.content);
+    disable.baseline = created.snapshot.baseline;
+    let disabled = operate_inner(&db, &store, home, &disable, &[]).unwrap();
+    let parked = disabled.snapshot.entries.iter().find(|entry| entry.name == "second").unwrap();
+    assert!(!parked.enabled && !parked.read_only);
+    assert!(Path::new(&parked.path).ends_with(Path::new(".cliora-disabled-agents/agents/second/agent.md")));
+    let mut enable = request(home, &target, "enable", Some(parked), &parked.content);
+    enable.baseline = disabled.snapshot.baseline;
+    let enabled = operate_inner(&db, &store, home, &enable, &[]).unwrap();
+    let restored = enabled.snapshot.entries.iter().find(|entry| entry.name == "second").unwrap();
+    assert!(restored.enabled);
+    assert!(Path::new(&restored.path).ends_with(Path::new("agents/second/agent.md")));
+}

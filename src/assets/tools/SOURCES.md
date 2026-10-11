@@ -38,5 +38,9 @@ These assets render offline. Product symbols remain in their original colors; cu
   SHA-256: `de7911c3d206a3d2fe3d5b4e76e84b185c581d7a259406f64db247b5b824f02e`.
 - `kiro.svg`: Official https://kiro.dev/icon.svg retained unchanged. Original white mark on its #9046FF rounded tile.
   SHA-256: `774cbc1c7ecec8c935a6091595583d7a92fc8289d6f1db3f071c0f50c61c369f`.
+- `cursor.svg`: Official https://cursor.com/favicon.svg retained unchanged. Original light cube on its own #14120b rounded tile.
+  SHA-256: `0375fe0bba07813d31cdac4a3bdd45f60669273ecf9bdb1ae34dd5935d1f4612`.
+- `minimax_code.svg`: Official MiniMax symbol path and #E21680–#FF633A gradient extracted unchanged from https://mintcdn.com/minimax-zh/1UjvBcdoC6r0UeyA/logo/light.svg (the same symbol is in logo/dark.svg). The wordmark is omitted because it does not read inside the 22px chip. The viewBox adds even padding so the bars stay inside the rounded chip.
+  SHA-256: `3ee276f8391cee26ea984974069a1ac07953a0ddb506b068ccb51e45d7455c80`.
 
 Declare future icons in the independent `src/adapters/<tool>/index.ts` module using `ToolUiAdapter.icon` (`light`, optional `dark`, `fit`, `tile`, `scale`, and `source`) and register the module in `adapters/index.ts`. All pages use `src/components/ToolIcon.tsx`; tools without icon metadata receive a neutral SVG symbol beside their text name. No network requests are needed for ordinary icon rendering.

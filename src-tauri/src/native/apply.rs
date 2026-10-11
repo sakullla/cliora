@@ -842,22 +842,27 @@ pub struct ApplyComparisonFile { pub role:String, pub format:String, pub current
 pub struct ApplyComparison { #[serde(default)] pub context_id: Option<String>, pub profile:RegisteredProfile, pub common:Option<RegisteredCommon>, pub files:Vec<ApplyComparisonFile> }
 
 fn comparison_files(native:&[NativeFile],documents:&BTreeMap<String,Value>,required:&BTreeSet<String>)->Result<Vec<ApplyComparisonFile>,String> {
-    // Authentication cleanup may touch another declared config file even when it
-    // has no document overlay. Capture its actual bytes, including missing files.
+    // Writable files stay in the snapshot so apply can detect a later edit.
+    // A file this profile does not own keeps its current text. An empty stand-in
+    // would look like a request to delete unmanaged content such as mcpServers.
     // Dedicated native identity/credential files stay outside this editor.
     let roles:BTreeSet<_>=required.iter().cloned().chain(native.iter().filter(|file|file.writable && !file.sensitive).map(|file|file.role.to_owned())).collect();
     let mut files=Vec::new();
     for role in roles {
         let file=native.iter().find(|file|file.role==role && !file.sensitive).ok_or("当前范围的原生文件不可编辑")?;
-        let proposed = documents.get(&role).cloned().unwrap_or_else(|| json!({}));
         let kind = match file.format {
             "toml" => format::FileKind::Toml,
             "jsonc" => format::FileKind::Jsonc,
             "yaml" => format::FileKind::Yaml,
             _ => format::FileKind::Json,
         };
-        let proposed_text = format::render(kind, &proposed)?;
-        files.push(ApplyComparisonFile { role: role.clone(), format: file.format.into(), current: transaction::read_native(Path::new(&file.path))?, proposed, proposed_text });
+        let current = transaction::read_native(Path::new(&file.path))?;
+        let (proposed, proposed_text) = if let Some(value) = documents.get(&role) {
+            (value.clone(), format::render(kind, value)?)
+        } else {
+            (format::parse(kind, &current).unwrap_or_else(|_| json!({})), current.clone())
+        };
+        files.push(ApplyComparisonFile { role: role.clone(), format: file.format.into(), current, proposed, proposed_text });
     }
     Ok(files)
 }

@@ -90,6 +90,7 @@ impl AccountAdapter for Codex {
             },
             reason,
             identity_source: identity,
+            identity_required: true,
             refresh_owner: "native_cli",
             acceptance: "源码/协议与隔离合成回归；真实授权账号及跨平台尚未验收",
         }

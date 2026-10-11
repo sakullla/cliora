@@ -12,6 +12,11 @@ import i18n from '../../i18n';
 export function accountStateLabel(state: string): string {
   return i18n.t(`tools.accounts.state.${state}`, { defaultValue: state });
 }
+/** Identity is optional only when the capability says so. A missing flag stays required. */
+export function accountReadyForSelection(account: Pick<AuthAccount, 'state' | 'identity' | 'context' | 'pendingLogin'>, capability: AccountCapability | null | undefined) {
+  const identityReady = !!account.identity || capability?.identityRequired === false;
+  return account.state === 'signed_in' && identityReady && !!account.context && !account.pendingLogin;
+}
 function contextName(kind: AccountImpactContextKind): string {
   return i18n.t(`tools.accounts.context.${kind}`, { defaultValue: kind });
 }
@@ -186,7 +191,7 @@ export function AccountsPanel({ toolId, state, onOpenProfile, onOpenUsage }: { t
     <div className={styles.sectionTitle}><h3>{t('tools.accounts.managedTitle')}</h3><span>{t('tools.accounts.count', { count: state.accounts.length })}</span></div>
     {state.loading ? <SkeletonRows count={2} /> : state.accounts.length === 0 && <p className={styles.empty}>{state.capability?.managedLogin ? t('tools.accounts.emptyManaged') : t('tools.accounts.emptyReadonly')}</p>}
     <ul className={styles.list}>{state.accounts.map(account => <li key={account.id}>
-      <div><strong>{account.label}</strong><span data-state={account.state === 'signed_in' && !account.identity ? 'unknown' : account.state}>{account.state === 'signed_in' && !account.identity ? t('tools.accounts.statusPendingIdentity') : accountStateLabel(account.state)}</span></div>
+      <div><strong>{account.label}</strong><span data-state={account.state}>{accountStateLabel(account.state)}</span></div>
       <p>{account.identity?.email ?? account.identity?.subject ?? t('tools.accounts.noIdentity')}{account.identity?.plan ? ` · ${account.identity.plan}` : ''}</p>
       {account.pendingLogin && <p>{t('tools.accounts.pendingNote')}</p>}
       {account.pendingLogin && <div className={styles.actions}><button disabled={busy} onClick={() => void run(() => native.cancelAccountLogin(account.id, account.pendingLogin!.id), t('tools.accounts.cancelledNotice'))}>{t('tools.accounts.cancelLogin')}</button>{account.pendingLogin.operation === 'login' && state.capability?.browserLink && <button disabled={busy} onClick={() => void run(() => native.openAccountLoginLink(account.id, account.pendingLogin!.id), t('tools.accounts.browserRequested'))}>{t('tools.accounts.openAuthPage')}</button>}</div>}

@@ -11,10 +11,14 @@ test('plugin search and read-only filter expose relevant actions without changin
   await expect(page.getByRole('listitem').getByRole('button', { name: '卸载', exact: true })).toBeDisabled();
 });
 
-async function setup(page: Page, deferFull = false, deferWorkspace = false, deferContext = deferWorkspace) {
-  await page.addInitScript(({ holdFull, holdWorkspace, holdContext }) => {
+async function setup(page: Page, deferFull = false, deferWorkspace = false, deferContext = deferWorkspace, catalog = false, extended = false) {
+  const extendedPath = String.raw`\\?\C:\Users\fixture\.grok\plugins\sakullla-dev`;
+  const extendedResource = String.raw`\\?\UNC\server\share\plugins\sakullla-dev\agents`;
+  await page.addInitScript(({ holdFull, holdWorkspace, holdContext, catalog, extended, extendedPath, extendedResource }) => {
     const entry = { id: 'fixture@market', name: 'Fixture plugin', source: 'fixture@market', version: '1.0.0', scope: 'user', enabled: true, state: 'installed_load_unknown', policy: 'AVAILABLE · ON_INSTALL', readOnly: false, root: '/fixture/plugins/fixture', resources: [{ kind: 'agents', path: '/fixture/plugins/fixture/agents', ownerId: 'fixture@market' }] };
     const state = { calls: [] as any[], entries: [entry, { ...entry, id: 'required@market', name: 'Organization plugin', policy: 'REQUIRED', readOnly: true }], fail: false, releaseFull: null as (() => void) | null, releaseWorkspace: null as (() => void) | null, releaseContext: null as (() => void) | null, contextId: 'ctx-fixture' };
+    if (catalog) state.entries.push({ ...entry, id: 'lark@official', name: 'Lark', source: 'lark@official', enabled: null, readOnly: true, state: 'not_installed', policy: '官方市场条目未安装', resources: [] });
+    if (extended) state.entries.push({ ...entry, id: 'sakullla-dev', name: 'sakullla-dev', source: extendedPath, root: extendedPath, readOnly: true, resources: [{ kind: 'agents', path: extendedResource, ownerId: 'sakullla-dev' }] });
     const snapshot = (target: any) => ({ target, capability: { version: '2.1.287', sources: 'plugin@marketplace', actions: ['install', 'update', 'enable', 'disable', 'uninstall'], project: true, detail: '重启会话后加载' }, entries: state.entries, baseline: 'fixture-baseline', detail: '静态列表，加载未验证' });
     Object.assign(window, { isTauri: true, pluginsHarness: state, __TAURI_INTERNALS__: { invoke: async (command: string, args: any) => {
       state.calls.push({ command, args });
@@ -49,7 +53,7 @@ async function setup(page: Page, deferFull = false, deferWorkspace = false, defe
       }
       return null;
     } } });
-  }, { holdFull: deferFull, holdWorkspace: deferWorkspace, holdContext: deferContext });
+  }, { holdFull: deferFull, holdWorkspace: deferWorkspace, holdContext: deferContext, catalog, extended, extendedPath, extendedResource });
   await page.goto('/'); await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
   await page.getByRole('tab', { name: '插件', exact: true }).click();
   if (!deferWorkspace) await expect(page.getByText('Fixture plugin', { exact: true })).toBeVisible();
@@ -154,4 +158,32 @@ test('returning to plugins uses the scoped snapshot and explicit scan refreshes 
   await page.getByRole('button', { name: '重新扫描' }).click();
   await expect(page.getByRole('button', { name: '重新扫描' })).toBeEnabled();
   expect(await scans()).toBe(first + 1);
+});
+
+test('windows extended plugin paths are shown as ordinary paths', async ({ page }) => {
+  await setup(page, false, false, false, false, true);
+  const card = page.getByRole('listitem').filter({ has: page.getByText('sakullla-dev', { exact: true }) });
+  const drive = 'C:\\Users\\fixture\\.grok\\plugins\\sakullla-dev';
+  await expect(card.getByText(`${drive} · 全局`)).toBeVisible();
+  await expect(card).not.toContainText('\\\\?\\');
+  await card.getByText('安装位置').click();
+  await expect(card.getByText(drive, { exact: true })).toBeVisible();
+  await card.getByText('包内资源（随插件管理）').click();
+  await expect(card.getByText('agents · \\\\server\\share\\plugins\\sakullla-dev\\agents')).toBeVisible();
+  const market = page.getByRole('listitem').filter({ has: page.getByText('Fixture plugin', { exact: true }) });
+  await expect(market.getByText('fixture@market · 全局')).toBeVisible();
+});
+
+test('uninstalled catalog rows stay out of the installed plugin count', async ({ page }) => {
+  await setup(page, false, false, false, true);
+  await expect(page.getByText('Fixture plugin', { exact: true })).toBeVisible();
+  await expect(page.getByText('2 个插件')).toBeVisible();
+  const summary = page.getByText('未安装（1，当前不会加载）');
+  await expect(summary).toBeVisible();
+  await summary.click();
+  const lark = page.getByRole('listitem').filter({ has: page.getByText('Lark', { exact: true }) });
+  await expect(lark).toBeVisible();
+  await expect(lark.getByText('未安装，当前不会加载').first()).toBeVisible();
+  await expect(lark.getByRole('button', { name: '禁用', exact: true })).toHaveCount(0);
+  await expect(lark.getByRole('button', { name: '卸载', exact: true })).toHaveCount(0);
 });

@@ -70,7 +70,16 @@ mod tests {
                 }
                 assert_eq!(adapter.upgrade_command("npm_shim"), Some(command));
             } else {
-                panic!("{} 声明了 npm 包，但没有安装命令", adapter.id());
+                let package = adapter.npm_package();
+                assert_eq!(
+                    adapter.latest_version_url().as_deref(),
+                    Some(format!("https://registry.npmjs.org/{package}/latest")).as_deref(),
+                    "{}",
+                    adapter.id()
+                );
+                assert!(adapter.install_command().is_none(), "{}", adapter.id());
+                assert!(adapter.upgrade_command("npm_shim").is_none(), "{}", adapter.id());
+                assert!(adapter.npm_uninstall_command().is_none(), "{}", adapter.id());
             }
         }
         assert!(registry.get("devin").unwrap().latest_version_url().unwrap().contains("static.devin.ai"));

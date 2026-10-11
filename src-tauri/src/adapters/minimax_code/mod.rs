@@ -5,7 +5,9 @@
 //! `0.6.8`. Cancelling the preference does not delete local MiniMax files.
 
 mod accounts;
+mod agents;
 mod configuration;
+mod history;
 mod plugins;
 mod usage;
 
@@ -15,7 +17,7 @@ use serde_json::{json, Value};
 
 use super::{
     AdapterDescriptor, CliAdapter, Facet, InspectionFields, LaunchForm, LaunchMode,
-    ManagementCapabilities,
+    ManagementCapabilities, SkillObservation,
 };
 use crate::credentials::CredentialStore;
 use crate::native::adapter::{NativeFile, Scope};
@@ -99,12 +101,9 @@ impl CliAdapter for MiniMaxCode {
         "mcode"
     }
     fn npm_package(&self) -> &'static str {
-        // A package name would enable the shared npm install command and the
-        // npm registry version query. Neither is a verified mcode channel.
-        ""
-    }
-    fn latest_version_url(&self) -> Option<String> {
-        None
+        // The public registry document supplies the version card. Install and
+        // uninstall stay on the official guide and are not enabled by this name.
+        "@minimax-ai/code"
     }
     fn version_identity(&self, basename: &str, output: &str) -> bool {
         command_name(basename) == "mcode" && semver::Version::parse(output.trim().trim_start_matches('v')).is_ok()
@@ -211,6 +210,45 @@ impl CliAdapter for MiniMaxCode {
     fn mcp_disabled_description(&self) -> Option<&'static str> {
         Some("停用会写入 enabled: false，原生条目保留")
     }
+    fn supports_skills(&self) -> bool {
+        true
+    }
+    fn skill_requires_manifest(&self) -> bool {
+        true
+    }
+    fn skill_root(&self, scope: Scope, home: &Path, _project: Option<&Path>) -> Option<PathBuf> {
+        if scope != Scope::Global {
+            return None;
+        }
+        let DataDir::Directory(dir) = data_dir(home) else {
+            return None;
+        };
+        // The CLI joins `<data-dir>/skills` even when that folder is absent.
+        // The data directory itself must already exist; a missing one is not a
+        // place to create a parallel root.
+        dir.is_dir().then(|| dir.join("skills"))
+    }
+    fn skill_observations(
+        &self,
+        scope: Scope,
+        home: &Path,
+        _project: Option<&Path>,
+    ) -> Vec<SkillObservation> {
+        if scope != Scope::Global {
+            return Vec::new();
+        }
+        let DataDir::Directory(dir) = data_dir(home) else {
+            return Vec::new();
+        };
+        let root = dir.join(".builtin-skills");
+        if !root.is_dir() {
+            return Vec::new();
+        }
+        vec![SkillObservation {
+            root,
+            detail: "MiniMax Code 内置 Skill，只读",
+        }]
+    }
     fn rule_path(&self, scope: Scope, _home: &Path, project: Option<&Path>) -> Option<PathBuf> {
         match scope {
             Scope::Project => Some(project?.join("AGENTS.md")),
@@ -218,6 +256,9 @@ impl CliAdapter for MiniMaxCode {
         }
     }
     fn plugins(&self) -> Option<&dyn super::plugins::PluginAdapter> {
+        Some(self)
+    }
+    fn agents(&self) -> Option<&dyn super::agents::AgentAdapter> {
         Some(self)
     }
     fn accounts(&self) -> Option<&dyn super::accounts::AccountAdapter> {
@@ -345,6 +386,32 @@ impl CliAdapter for MiniMaxCode {
         }
         Ok(vec!["--continue".into()])
     }
+    fn history_sources(&self, home: &Path) -> Result<Vec<crate::history::HistorySource>, String> {
+        history::sources(home)
+    }
+    fn parse_history(
+        &self,
+        source: &crate::history::HistorySource,
+    ) -> Result<crate::history::ParsedSession, String> {
+        history::parse(source)
+    }
+    fn history_sources_controlled(
+        &self,
+        home: &Path,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Vec<crate::history::HistorySource>, String> {
+        history::sources_controlled(home, cancelled)
+    }
+    fn parse_history_controlled(
+        &self,
+        source: &crate::history::HistorySource,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<crate::history::ParsedSession, String> {
+        history::parse_controlled(source, cancelled)
+    }
+    fn history_supported(&self) -> bool {
+        true
+    }
     fn node_required_when_missing(&self) -> bool {
         false
     }
@@ -352,6 +419,9 @@ impl CliAdapter for MiniMaxCode {
         None
     }
     fn npm_install_command(&self) -> Option<String> {
+        None
+    }
+    fn npm_uninstall_command(&self) -> Option<String> {
         None
     }
     fn upgrade_command(&self, _source: &str) -> Option<String> {
@@ -406,11 +476,11 @@ impl CliAdapter for MiniMaxCode {
             },
             resources: Facet {
                 state: "available",
-                reason: "项目 AGENTS.md、数据目录 mcp.json 与本地插件按已核对契约管理",
+                reason: "项目 AGENTS.md、数据目录 agents、skills 与 mcp.json，以及已安装插件按已核对契约管理",
             },
             history: Facet {
-                state: "unsupported",
-                reason: "没有已核对的会话索引格式",
+                state: "available",
+                reason: "可只读索引本机 mcode 会话。记录没有标题、目录或 token 时，这些项保持未知，不显示 0",
             },
         }
     }
@@ -518,12 +588,47 @@ mod tests {
             .is_empty());
         assert!(MiniMaxCode.mcp_location(Scope::Global, home, None).is_none());
         assert!(MiniMaxCode.skill_root(Scope::Global, home, None).is_none());
+        assert!(MiniMaxCode
+            .skill_observations(Scope::Global, home, None)
+            .is_empty());
         let project = Path::new("/work/demo");
         assert_eq!(
             MiniMaxCode.rule_path(Scope::Project, home, Some(project)),
             Some(project.join("AGENTS.md"))
         );
         assert!(MiniMaxCode.rule_path(Scope::Global, home, None).is_none());
+    }
+
+    #[test]
+    fn skills_use_the_data_directory_and_keep_builtins_read_only() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let data = home.join(".minimax");
+        let user = data.join("skills").join("demo");
+        let builtin = data.join(".builtin-skills").join("bundled");
+        std::fs::create_dir_all(&user).unwrap();
+        std::fs::create_dir_all(&builtin).unwrap();
+        std::fs::write(user.join("SKILL.md"), "---\nname: demo\ndescription: Demo\n---\n").unwrap();
+        std::fs::write(builtin.join("SKILL.md"), "---\nname: bundled\n---\n").unwrap();
+
+        assert!(MiniMaxCode.supports_skills());
+        assert!(MiniMaxCode.skill_requires_manifest());
+        assert_eq!(
+            MiniMaxCode.skill_root(Scope::Global, home, None),
+            Some(data.join("skills"))
+        );
+        assert!(MiniMaxCode
+            .skill_root(Scope::Project, home, Some(Path::new("/work/demo")))
+            .is_none());
+        let observed = MiniMaxCode.skill_observations(Scope::Global, home, None);
+        assert_eq!(observed.len(), 1);
+        assert_eq!(observed[0].root, data.join(".builtin-skills"));
+        assert!(observed[0].detail.contains("只读"));
+        assert!(MiniMaxCode
+            .skill_observations(Scope::Project, home, None)
+            .is_empty());
+        assert!(MiniMaxCode.descriptor().management.skills);
+        assert!(MiniMaxCode.descriptor().resources.reason.contains("skills"));
     }
 
     #[test]
@@ -534,9 +639,19 @@ mod tests {
         assert!(!MiniMaxCode.version_identity("mcode", "mcode 1.0.0"));
         assert!(MiniMaxCode.install_command().is_none());
         assert!(MiniMaxCode.npm_install_command().is_none());
+        assert!(MiniMaxCode.npm_uninstall_command().is_none());
         assert!(!MiniMaxCode.node_required_when_missing());
-        assert!(MiniMaxCode.npm_package().is_empty());
-        assert!(MiniMaxCode.latest_version_url().is_none());
+        assert_eq!(MiniMaxCode.npm_package(), "@minimax-ai/code");
+        assert_eq!(
+            MiniMaxCode.latest_version_url().as_deref(),
+            Some("https://registry.npmjs.org/@minimax-ai/code/latest")
+        );
+        assert_eq!(
+            MiniMaxCode
+                .parse_latest_version(r#"{"name":"@minimax-ai/code","version":"0.6.8"}"#)
+                .as_deref(),
+            Some("0.6.8")
+        );
         assert!(MiniMaxCode.upgrade_command("npm_shim").is_none());
         assert!(MiniMaxCode.upgrade_command("unknown").is_none());
         assert!(MiniMaxCode.upgrade_command("native").is_none());
@@ -604,14 +719,11 @@ mod tests {
             .unwrap_err();
         assert_eq!(error, "MiniMax Code 没有已核对的交互式全权限参数");
         assert!(!MiniMaxCode.descriptor().yolo_available);
-        assert!(!MiniMaxCode.descriptor().management.agents);
-        assert!(MiniMaxCode.agents().is_none());
-        assert!(!MiniMaxCode.history_supported());
-        assert_eq!(
-            MiniMaxCode.descriptor().history.reason,
-            "没有已核对的会话索引格式"
-        );
-        assert_eq!(MiniMaxCode.descriptor().history.state, "unsupported");
+        assert!(MiniMaxCode.descriptor().management.agents);
+        assert!(MiniMaxCode.agents().unwrap().capability().supported);
+        assert!(MiniMaxCode.history_supported());
+        assert!(MiniMaxCode.descriptor().history.reason.contains("不显示 0"));
+        assert_eq!(MiniMaxCode.descriptor().history.state, "available");
     }
 
     #[test]
@@ -999,13 +1111,10 @@ mod tests {
         assert_eq!(local.state, "installed_load_unknown");
         assert!(!local.read_only);
         let official = entries.iter().find(|entry| entry.id == "lark@official").unwrap();
-        assert_eq!(official.state, "未安装");
+        assert_eq!(official.state, "not_installed");
         assert!(official.read_only);
         assert!(official.enabled.is_none());
-        assert_eq!(
-            MiniMaxCode.list_command_args(),
-            ["plugin", "list", "--json", "--available"]
-        );
+        assert_eq!(MiniMaxCode.list_command_args(), ["plugin", "list", "--json"]);
         assert_eq!(
             MiniMaxCode.command_args("install", "lark@official", false).unwrap(),
             ["plugin", "add", "lark@official"]
@@ -1023,7 +1132,7 @@ mod tests {
             ["plugin", "remove", "review@local"]
         );
         assert!(!MiniMaxCode.plugins().unwrap().capability().project);
-        assert!(MiniMaxCode.agents().is_none());
+        assert!(MiniMaxCode.agents().unwrap().capability().supported);
     }
 
     #[test]
@@ -1062,7 +1171,7 @@ mod tests {
     }
 
     #[test]
-    fn login_is_terminal_and_status_stays_unconfirmed() {
+    fn login_is_terminal_and_isolated_until_auth_state_exists() {
         use crate::accounts::AccountState;
         use crate::adapters::accounts::AccountAdapter;
         assert_eq!(CliAdapter::login_args(&MiniMaxCode).unwrap(), vec!["login".to_string()]);
@@ -1076,17 +1185,20 @@ mod tests {
         );
         assert_eq!(MiniMaxCode.logout_args(), vec!["logout".to_string()]);
         assert!(MiniMaxCode.terminal_logout());
-        let home = Path::new("/home/example");
-        let context = MiniMaxCode
-            .context(home.join(".minimax"), "native".into())
-            .unwrap();
-        assert!(context.auth_files.is_empty());
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path().join(".minimax");
+        let context = MiniMaxCode.context(root.clone(), "native".into()).unwrap();
+        assert_eq!(
+            context.environment.get("MINIMAX_DATA_DIR").map(String::as_str),
+            Some(root.to_string_lossy().as_ref())
+        );
+        assert!(!context.auth_files.is_empty());
         assert!(MiniMaxCode.private_directories(&context).is_empty());
         let observation = MiniMaxCode.observe(Path::new("mcode"), &context).unwrap();
-        assert_eq!(observation.state, AccountState::Unknown);
+        assert_eq!(observation.state, AccountState::SignedOut);
         assert!(observation.identity.is_none());
-        assert!(observation.detail.unwrap().contains("未确认"));
         assert!(!AccountAdapter::capability(&MiniMaxCode).import_native);
+        assert!(!AccountAdapter::sign_in_requires_identity(&MiniMaxCode));
     }
 
     #[derive(Default)]
@@ -1103,6 +1215,72 @@ mod tests {
             self.0.lock().unwrap().remove(id);
             Ok(())
         }
+    }
+
+    #[test]
+    fn applying_a_profile_does_not_require_a_settings_role_or_clear_mcp() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let data = home.join(".minimax");
+        std::fs::create_dir_all(&data).unwrap();
+        let mcp = "{\"mcpServers\":{}}\n";
+        std::fs::write(data.join("mcp.json"), mcp).unwrap();
+        std::fs::write(data.join("config.yaml"), "permissionMode: default\n").unwrap();
+        let db = crate::database::Database::open(&dir.path().join("cliora.db")).unwrap();
+        let registry = crate::adapters::Registry::builtins();
+        let profile = crate::native::profile::save_registered_profile(
+            &db,
+            &registry,
+            RegisteredProfile {
+                editing: Some(crate::adapters::configuration::EditingState::default()),
+                id: String::new(),
+                tool: "minimax_code".into(),
+                name: "mcode".into(),
+                version: 0,
+                revision: String::new(),
+                inherit_common: false,
+                files: BTreeMap::from([(
+                    "config".into(),
+                    "minimaxModelSource: token_plan\ndefaultModel: MiniMax-M2\npermissionMode: default\n".into(),
+                )]),
+                suppressed: BTreeMap::new(),
+                authentication: ProfileAuthentication::Native,
+                connection: None,
+                native_credentials: BTreeMap::new(),
+            },
+            None,
+        )
+        .unwrap();
+        let comparison = crate::native::apply::compare_registered_application(
+            &registry,
+            &db,
+            &home,
+            Scope::Global,
+            None,
+            &profile.id,
+        )
+        .unwrap();
+        let mcp_file = comparison.files.iter().find(|file| file.role == "mcp").unwrap();
+        assert_eq!(mcp_file.current, mcp);
+        assert_eq!(mcp_file.proposed_text, mcp);
+        assert!(!mcp_file.proposed_text.contains("没有此原生文件角色"));
+        let native = MiniMaxCode.native_files(Scope::Global, &home, None, true);
+        crate::native::apply::apply_registered_validated(
+            &registry,
+            &db,
+            &MemoryStore::default(),
+            &profile,
+            None,
+            &native,
+            "global",
+            Scope::Global,
+            false,
+        )
+        .expect("apply uses config.yaml and must not ask for a settings role");
+        assert_eq!(std::fs::read_to_string(data.join("mcp.json")).unwrap(), mcp);
+        let written = std::fs::read_to_string(data.join("config.yaml")).unwrap();
+        assert!(written.contains("MiniMax-M2"), "{written}");
+        assert!(!written.contains("没有此原生文件角色"));
     }
 
     #[test]

@@ -167,6 +167,7 @@ export default {
     pickerEmpty: '尚无已管理账号。CLI 当前登录保持只读，可返回配置使用当前原生来源。',
     opened: '已打开原生登录。完成身份核验后，请明确选择账号返回配置；配置草稿会保留。',
     verified: '身份已核验。请明确选择账号返回配置；尚未应用配置。',
+    selectableWithoutIdentity: '已登录，但状态文件没有账号 ID 或邮箱。仍可选择此账号；选择不会应用配置。',
     incomplete: '登录尚未完成身份核验，请检查状态或重试登录。',
     cancelled: '已取消此尝试；外部终端由你关闭，迟到结果不会选中账号。',
     notVerified: '该账号尚未核验为可用身份，请检查或重新登录后再选择。',
@@ -235,6 +236,7 @@ export default {
       disabled: '已禁用',
       state_unknown: '声明已被外部修改 · 状态待核对',
       inventory_pending: '正在核对插件状态',
+      not_installed: '未安装，当前不会加载',
     },
     scope: {
       user: '全局',
@@ -274,6 +276,7 @@ export default {
     discoveredPrefix: '已发现 ',
     count: '{{count}} 个插件',
     countFiltered: '{{filtered}} / {{total}} 个插件',
+    catalogSummary: '未安装（{{count}}，当前不会加载）',
     emptyInstallable: '此作用域还没有插件。填写来源并确认信任后即可安装。',
     emptyNone: '此作用域没有发现用户插件。',
     stateUnknown: '状态未知',

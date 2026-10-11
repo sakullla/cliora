@@ -553,6 +553,7 @@ fn snapshot_with_packages(
         let value: Value = serde_json::from_str(&output).map_err(|_| "原生插件输出格式不兼容")?;
         parse_list(&target.tool_id, &value, target)?
     };
+    adapter.supplement(home, target, &mut entries)?;
     let (path, _) = config(home, target)?;
     let mut basis = serde_json::to_string(&(target, &entries)).map_err(|_| "无法序列化插件")?;
     basis.push_str(&transaction::read_native(&path)?);

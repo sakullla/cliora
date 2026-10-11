@@ -451,7 +451,7 @@ impl crate::adapters::accounts::AccountAdapter for Sixth {
     fn remove_environment(&self)-> &'static [&'static str] {&["SIXTH_API_KEY"]}
     fn capability(&self)->crate::accounts::AccountCapability {crate::accounts::AccountCapability {
         browser_link: false,
-        tool_id:"sixth_fixture",provider:"fixture",version:"1.2.3",managed_login:true,import_native:false,methods:vec!["browser"],reason:"fixture",identity_source:"fixture",refresh_owner:"native_cli",acceptance:"synthetic",
+        tool_id:"sixth_fixture",provider:"fixture",version:"1.2.3",managed_login:true,import_native:false,methods:vec!["browser"],reason:"fixture",identity_source:"fixture",identity_required:true,refresh_owner:"native_cli",acceptance:"synthetic",
     }}
     fn context(&self,root:std::path::PathBuf,id:String)->Result<crate::accounts::NativeContext,String> {
         Ok(crate::accounts::NativeContext{id,tool_id:"sixth_fixture".into(),config_root:root.clone(),resource_root:root.clone(),auth_files:vec![root.join("fixture-auth.json")],history_roots:vec![],environment:BTreeMap::new(),remove_environment:vec![],cli_args:vec![],root})
