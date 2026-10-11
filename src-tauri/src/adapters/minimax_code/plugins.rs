@@ -1,13 +1,14 @@
 //! Local plugins live under `<data-dir>/plugins/<name>/.minimax-plugin/plugin.json`.
 //! `plugin list --json --available` also returns official marketplace rows that
-//! are not installed. Plugin skills stay on the plugin entry.
+//! are not installed. `skills` entries are relative paths from the plugin root;
+//! an existing `SKILL.md` stays on the plugin entry.
 use super::{data_dir, DataDir, MiniMaxCode};
 use crate::adapters::plugins::{PluginAdapter, PluginCapability};
 use crate::native::adapter::Scope;
 use crate::native::format::FileKind;
 use crate::resources::plugins::{PluginEntry, PluginResource, PluginTarget};
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 impl PluginAdapter for MiniMaxCode {
     fn capability(&self) -> PluginCapability {
@@ -99,16 +100,23 @@ impl PluginAdapter for MiniMaxCode {
         let Some(skills) = manifest.get("skills").and_then(Value::as_array) else {
             return Ok(());
         };
+        let Ok(root_canon) = root.canonicalize() else {
+            return Ok(());
+        };
         for skill in skills {
-            let Some(name) = skill.as_str() else {
+            let Some(declared) = skill.as_str() else {
                 continue;
             };
-            if !safe_segment(name) {
+            let Some(path) = contained_skill(root, &root_canon, declared) else {
+                continue;
+            };
+            let display = path.display().to_string();
+            if entry.resources.iter().any(|item| item.path == display) {
                 continue;
             }
             entry.resources.push(PluginResource {
                 kind: "skills".into(),
-                path: root.join("skills").join(name).join("SKILL.md").display().to_string(),
+                path: display,
                 owner_id: entry.id.clone(),
             });
         }
@@ -184,4 +192,123 @@ fn safe_segment(name: &str) -> bool {
     !name.is_empty()
         && !name.contains(['/', '\\', '.'])
         && name.chars().all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
+}
+
+/// `plugin.json` `skills` values are paths relative to the plugin root, such as
+/// `skills/<name>/SKILL.md`. Absolute paths, `..`, and links that leave the
+/// plugin are omitted. The declared path is not rewritten under `skills/`.
+fn contained_skill(root: &Path, root_canon: &Path, declared: &str) -> Option<PathBuf> {
+    let relative = Path::new(declared.trim());
+    if declared.trim().is_empty() || relative.is_absolute() {
+        return None;
+    }
+    let mut path = root.to_path_buf();
+    for component in relative.components() {
+        match component {
+            Component::Normal(part) => path.push(part),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    if path.file_name().and_then(|name| name.to_str()) != Some("SKILL.md") {
+        return None;
+    }
+    let file_canon = path.canonicalize().ok()?;
+    if !file_canon.starts_with(root_canon) || !file_canon.is_file() {
+        return None;
+    }
+    Some(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::adapters::plugins::PluginAdapter;
+
+    fn entry(root: &Path) -> PluginEntry {
+        PluginEntry {
+            name: "Review".into(),
+            id: "review@local".into(),
+            source: "review@local".into(),
+            version: None,
+            scope: "user".into(),
+            enabled: Some(true),
+            state: "installed_load_unknown".into(),
+            policy: String::new(),
+            read_only: false,
+            root: Some(root.display().to_string()),
+            resources: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn official_relative_skill_paths_stay_inside_the_plugin() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("review");
+        let skill = root.join("skills").join("literature-review").join("SKILL.md");
+        let doubled = root
+            .join("skills")
+            .join("skills")
+            .join("literature-review")
+            .join("SKILL.md")
+            .join("SKILL.md");
+        let outside = temp.path().join("outside").join("SKILL.md");
+        let absolute = temp.path().join("absolute").join("SKILL.md");
+        for path in [&skill, &doubled, &outside, &absolute] {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "# skill\n").unwrap();
+        }
+        let manifest_dir = root.join(".minimax-plugin");
+        std::fs::create_dir_all(&manifest_dir).unwrap();
+        let manifest = serde_json::json!({
+            "name": "review",
+            "skills": [
+                "skills/literature-review/SKILL.md",
+                "../outside/SKILL.md",
+                absolute.display().to_string(),
+                "skills/literature-review/SKILL.md/../../../outside/SKILL.md",
+                "skills/missing/SKILL.md"
+            ]
+        });
+        std::fs::write(manifest_dir.join("plugin.json"), manifest.to_string()).unwrap();
+
+        let mut listed = entry(&root);
+        MiniMaxCode.fill_missing_resources(&mut listed).unwrap();
+        assert_eq!(listed.resources.len(), 1);
+        assert_eq!(listed.resources[0].kind, "skills");
+        assert_eq!(listed.resources[0].owner_id, "review@local");
+        assert_eq!(PathBuf::from(&listed.resources[0].path), skill);
+        assert_ne!(PathBuf::from(&listed.resources[0].path), doubled);
+
+        let bare_root = temp.path().join("bare");
+        let bare_skill = bare_root.join("skills").join("literature-review").join("SKILL.md");
+        std::fs::create_dir_all(bare_skill.parent().unwrap()).unwrap();
+        std::fs::write(&bare_skill, "# skill\n").unwrap();
+        let bare_manifest = bare_root.join(".minimax-plugin");
+        std::fs::create_dir_all(&bare_manifest).unwrap();
+        std::fs::write(bare_manifest.join("plugin.json"), r#"{"skills":["literature-review"]}"#).unwrap();
+        let mut bare = entry(&bare_root);
+        MiniMaxCode.fill_missing_resources(&mut bare).unwrap();
+        assert!(bare.resources.is_empty());
+
+        let decoy_root = temp.path().join("decoy");
+        let decoy_only = decoy_root
+            .join("skills")
+            .join("skills")
+            .join("literature-review")
+            .join("SKILL.md")
+            .join("SKILL.md");
+        std::fs::create_dir_all(decoy_only.parent().unwrap()).unwrap();
+        std::fs::write(&decoy_only, "# decoy\n").unwrap();
+        let decoy_manifest = decoy_root.join(".minimax-plugin");
+        std::fs::create_dir_all(&decoy_manifest).unwrap();
+        std::fs::write(
+            decoy_manifest.join("plugin.json"),
+            r#"{"skills":["skills/literature-review/SKILL.md"]}"#,
+        )
+        .unwrap();
+        let mut missing = entry(&decoy_root);
+        MiniMaxCode.fill_missing_resources(&mut missing).unwrap();
+        assert!(missing.resources.is_empty());
+    }
 }
