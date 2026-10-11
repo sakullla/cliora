@@ -574,6 +574,11 @@ fn operate_inner(
                                 contents: Some(adapter.enable_content(&entry.content)?),
                             });
                         } else {
+                            if enabled {
+                                // Rescan adopts the current body. Enable may move the file
+                                // back only when that body is still the last committed write.
+                                transaction::require_latest_postimage(db, credentials, &path)?;
+                            }
                             let relative = if enabled {
                                 path.strip_prefix(root.join(".cliora-disabled-agents"))
                                     .map_err(|_| "禁用文件位置无效")?
