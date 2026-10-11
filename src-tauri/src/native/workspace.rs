@@ -145,10 +145,16 @@ fn refresh(registry: &Registry, mut draft: ConfigurationDraft) -> ConfigurationD
         profile::validate_registered_files(registry, &draft.profile.tool, &draft.profile.files)?;
         let documents = configuration::documents(registry, &draft.profile)?;
         adapter.validate_documents(draft.scope, &documents)?;
-        if let Some(mut inspected) =
+        // No settings role and no files: inspection cannot run, and an empty
+        // named draft is still valid. Do not turn that into a document error.
+        let inspected = if adapter.file_kind("settings").is_err() && draft.profile.files.is_empty()
+        {
+            None
+        } else {
             super::intake::inspect_registered(registry, &draft.profile.tool, &draft.profile.files)?
                 .connection
-        {
+        };
+        if let Some(mut inspected) = inspected {
             inspected.secret_ref = draft
                 .profile
                 .connection
@@ -156,6 +162,11 @@ fn refresh(registry: &Registry, mut draft: ConfigurationDraft) -> ConfigurationD
                 .filter(|previous| same_connection(previous, &inspected))
                 .and_then(|previous| previous.secret_ref.clone());
             draft.profile.connection = Some(inspected);
+        }
+        let policy = adapter.connection_policy(draft.scope);
+        if policy.api_key.state == "unsupported" && policy.provider_address.state == "unsupported"
+        {
+            draft.profile.connection = None;
         }
         draft.draft_connection = draft.profile.connection.clone();
         draft.view = json!({"opaque":true});

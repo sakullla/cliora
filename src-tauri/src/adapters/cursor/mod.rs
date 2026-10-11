@@ -330,6 +330,57 @@ mod tests {
     use crate::native::adapter::Scope;
 
     #[test]
+    fn new_profile_keeps_login_and_model_off_the_draft() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("db")).unwrap();
+        let registry = crate::adapters::Registry::builtins();
+        let sessions = crate::native::workspace::DraftSessions::default();
+        let profile = serde_json::from_value(serde_json::json!({
+            "id": "",
+            "tool": "cursor",
+            "name": "新配置",
+            "version": 0,
+            "inheritCommon": false,
+            "files": {},
+            "connection": null,
+            "nativeCredentials": {}
+        }))
+        .unwrap();
+        let draft = sessions
+            .begin(
+                &registry,
+                &db,
+                crate::native::workspace::ConfigurationBeginRequest {
+                    tool_id: "cursor".into(),
+                    scope: Scope::Global,
+                    project_path: None,
+                    session_id: "cursor-new".into(),
+                    subject: crate::adapters::configuration::ConfigurationSubject::Profile,
+                    profile: Some(profile),
+                },
+                None,
+                Vec::new(),
+            )
+            .unwrap();
+        assert!(draft.issues.is_empty(), "{:?}", draft.issues);
+        assert!(draft.profile.connection.is_none());
+        assert!(draft.draft_connection.is_none());
+        assert!(matches!(
+            draft.credential,
+            Some(crate::native::workspace::ConfigurationCredential::Native)
+        ));
+        assert!(draft.source_capabilities.iter().any(|item| item.source == "api_key" && !item.available));
+        let keys = MemoryStore(Mutex::new(HashMap::new()));
+        let saved = sessions
+            .save_database(&registry, &db, &keys, draft)
+            .unwrap();
+        let profile = saved.profile.expect("named profile");
+        assert!(profile.connection.is_none());
+        assert!(profile.files.is_empty());
+        assert!(keys.0.lock().unwrap().is_empty());
+    }
+
+    #[test]
     fn selected_directory_is_one_positional_path() {
         let directory = Path::new("/work/demo");
         let args = Cursor.desktop_launch_args(directory).unwrap();
