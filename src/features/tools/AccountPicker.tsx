@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { uiAdapterFor } from '../../adapters';
 import { native, nativeAvailable } from '../../lib/native';
 import type { AuthAccount } from '../../types/accounts';
-import { accountStateLabel, useAccounts } from './AccountsPanel';
+import { accountReadyForSelection, accountStateLabel, useAccounts } from './AccountsPanel';
 import i18n from '../../i18n';
 import styles from './AccountPicker.module.css';
 
@@ -83,7 +83,7 @@ export function AccountPicker({ toolId, selectedAccountId, onSelect, onBack }: A
   useEffect(() => {
     if (loginAccount && !loginAccount.pendingLogin && ownedAttempt.current?.accountId === loginAccount.id && loginAccount.version >= ownedAttempt.current.version) {
       ownedAttempt.current = null;
-      if (loginAccount.state === 'signed_in' && loginAccount.identity && loginAccount.context) setNotice(t('tools.accounts.verified'));
+      if (accountReadyForSelection(loginAccount, state.capability)) setNotice(loginAccount.identity ? t('tools.accounts.verified') : t('tools.accounts.selectableWithoutIdentity'));
       else setNotice(t('tools.accounts.incomplete'));
     }
   }, [loginAccount]);
@@ -113,7 +113,7 @@ export function AccountPicker({ toolId, selectedAccountId, onSelect, onBack }: A
     try {
       const checked = await native.checkAccount(account.id);
       if (!isCurrent(request)) return;
-      if (checked.toolId !== toolId || checked.id !== account.id || checked.state !== 'signed_in' || !checked.identity || !checked.context || checked.pendingLogin || cancelledAccounts.current.has(checked.id)) {
+      if (checked.toolId !== toolId || checked.id !== account.id || !accountReadyForSelection(checked, state.capability) || cancelledAccounts.current.has(checked.id)) {
         await state.refresh();
         throw new Error(t('tools.accounts.notVerified'));
       }
@@ -138,9 +138,9 @@ export function AccountPicker({ toolId, selectedAccountId, onSelect, onBack }: A
     {state.loading && <p role="status">{t('tools.accounts.loading')}</p>}
     {!state.loading && !state.accounts.length && <p>{t('tools.accounts.pickerEmpty')}</p>}
     <ul>{state.accounts.map(account => {
-      const selectable = account.state === 'signed_in' && !!account.identity && !!account.context && !account.pendingLogin && !cancelledAccounts.current.has(account.id);
+      const selectable = accountReadyForSelection(account, state.capability) && !cancelledAccounts.current.has(account.id);
       return <li key={account.id} aria-label={account.label}>
-        <div><strong>{account.label}</strong><span>{cancelledAccounts.current.has(account.id) ? t('tools.accounts.statusCancelled') : account.state === 'signed_in' && !account.identity ? t('tools.accounts.statusPendingIdentity') : accountStateLabel(account.state)}{account.id === selectedAccountId ? t('tools.accounts.draftSelected') : ''}</span></div>
+        <div><strong>{account.label}</strong><span>{cancelledAccounts.current.has(account.id) ? t('tools.accounts.statusCancelled') : accountStateLabel(account.state)}{account.id === selectedAccountId ? t('tools.accounts.draftSelected') : ''}</span></div>
         <p>{account.identity?.email ?? account.identity?.subject ?? t('tools.accounts.noIdentity')}</p>
         <div className={styles.actions}><button className={styles.primary} disabled={busy || waiting || !selectable} onClick={() => void select(account)}>{t('tools.accounts.selectAndBack')}</button>
           {account.pendingLogin && account.id === loginAccountId && <button disabled={busy} onClick={() => void cancel()}>{t('tools.accounts.cancelLogin')}</button>}

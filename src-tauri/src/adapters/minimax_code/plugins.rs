@@ -1,7 +1,8 @@
 //! Local plugins live under `<data-dir>/plugins/<name>/.minimax-plugin/plugin.json`.
-//! `plugin list --json --available` also returns official marketplace rows that
-//! are not installed. `skills` entries are relative paths from the plugin root;
-//! an existing `SKILL.md` stays on the plugin entry.
+//! `plugin list --json` is the installed set, which is what mcode can enable.
+//! An `available` array, when a response includes one, stays not installed and
+//! is not treated as loaded. `skills` entries are relative paths from the plugin
+//! root; an existing `SKILL.md` stays on the plugin entry.
 use super::{data_dir, DataDir, MiniMaxCode};
 use crate::adapters::plugins::{PluginAdapter, PluginCapability};
 use crate::native::adapter::Scope;
@@ -17,8 +18,79 @@ impl PluginAdapter for MiniMaxCode {
             sources: "name@official 或 name@local",
             actions: vec!["install", "enable", "disable", "uninstall"],
             project: false,
-            detail: "通过 mcode plugin 管理用户数据目录中的本地插件。官方市场条目标为未安装，不记成已安装。",
+            detail: "列表是 mcode 已安装的插件，可以启用、停用和移除。未安装的官方市场不在这份列表里；添加时填写 name@official 或 name@local。",
         }
+    }
+    fn preview(&self, home: &Path, target: &PluginTarget) -> Result<Option<Vec<PluginEntry>>, String> {
+        if target.scope != Scope::Global {
+            return Ok(None);
+        }
+        let DataDir::Directory(dir) = data_dir(home) else {
+            return Ok(None);
+        };
+        if !dir.is_dir() {
+            return Ok(None);
+        }
+        let plugins = dir.join("plugins");
+        if !plugins.is_dir() {
+            return Ok(Some(Vec::new()));
+        }
+        let mut entries = Vec::new();
+        for item in std::fs::read_dir(&plugins).map_err(|_| "无法读取 MiniMax Code 插件目录")? {
+            if entries.len() >= 256 {
+                break;
+            }
+            let item = item.map_err(|_| "无法读取 MiniMax Code 插件目录")?;
+            let path = item.path();
+            let Ok(meta) = std::fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if !meta.is_dir() || meta.file_type().is_symlink() {
+                continue;
+            }
+            let file_name = item.file_name();
+            let Some(name) = file_name.to_str().filter(|segment| safe_segment(segment)) else {
+                continue;
+            };
+            let manifest_path = path.join(".minimax-plugin").join("plugin.json");
+            let Ok(manifest_meta) = std::fs::symlink_metadata(&manifest_path) else {
+                continue;
+            };
+            if !manifest_meta.is_file()
+                || manifest_meta.file_type().is_symlink()
+                || manifest_meta.len() > 1024 * 1024
+            {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&manifest_path) else {
+                continue;
+            };
+            let Ok(manifest) = serde_json::from_str::<Value>(&text) else {
+                continue;
+            };
+            let id = format!("{name}@local");
+            let display = manifest
+                .get("displayName")
+                .and_then(Value::as_str)
+                .or_else(|| manifest.get("name").and_then(Value::as_str))
+                .filter(|value| !value.is_empty())
+                .unwrap_or(name);
+            entries.push(PluginEntry {
+                name: display.to_owned(),
+                id: id.clone(),
+                source: id,
+                version: manifest.get("version").and_then(Value::as_str).map(str::to_owned),
+                scope: "user".into(),
+                enabled: None,
+                state: "inventory_pending".into(),
+                policy: "本地插件目录预览；启停以 mcode plugin list 为准".into(),
+                read_only: true,
+                root: Some(path.display().to_string()),
+                resources: Vec::new(),
+            });
+        }
+        entries.sort_by(|left, right| left.id.cmp(&right.id));
+        Ok(Some(entries))
     }
     fn version_policy(&self) -> crate::adapters::version::VersionPolicy {
         crate::adapters::version::VersionPolicy::same_major("0.6.8")
@@ -69,7 +141,7 @@ impl PluginAdapter for MiniMaxCode {
         Ok(vec!["plugin".into(), verb.into(), source.into()])
     }
     fn list_command_args(&self) -> Vec<String> {
-        vec!["plugin".into(), "list".into(), "--json".into(), "--available".into()]
+        vec!["plugin".into(), "list".into(), "--json".into()]
     }
     fn parse_list(&self, value: &Value, _target: &PluginTarget) -> Result<Vec<PluginEntry>, String> {
         let object = value.as_object().ok_or("MiniMax Code 插件列表不是已核对的对象")?;
@@ -158,7 +230,7 @@ fn row_entry(row: &Value, from_installed: bool) -> Result<PluginEntry, String> {
         scope: "user".into(),
         enabled: if installed { enabled } else { None },
         state: if !installed {
-            "未安装".into()
+            "not_installed".into()
         } else if enabled == Some(false) {
             "disabled".into()
         } else {
@@ -224,6 +296,8 @@ fn contained_skill(root: &Path, root_canon: &Path, declared: &str) -> Option<Pat
 mod tests {
     use super::*;
     use crate::adapters::plugins::PluginAdapter;
+    use crate::native::adapter::Scope;
+    use crate::resources::plugins::PluginTarget;
 
     fn entry(root: &Path) -> PluginEntry {
         PluginEntry {
@@ -310,5 +384,51 @@ mod tests {
         let mut missing = entry(&decoy_root);
         MiniMaxCode.fill_missing_resources(&mut missing).unwrap();
         assert!(missing.resources.is_empty());
+    }
+
+    #[test]
+    fn preview_reads_only_local_plugin_manifests() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let review = home
+            .join(".minimax")
+            .join("plugins")
+            .join("review")
+            .join(".minimax-plugin");
+        let skipped = home.join(".minimax").join("plugins").join("notes");
+        std::fs::create_dir_all(&review).unwrap();
+        std::fs::create_dir_all(&skipped).unwrap();
+        std::fs::write(
+            review.join("plugin.json"),
+            r#"{"name":"review","displayName":"Review","version":"1.0.0"}"#,
+        )
+        .unwrap();
+        std::fs::write(skipped.join("README.md"), "not a plugin").unwrap();
+        let dotted = home.join(".minimax").join("plugins").join("bad.name").join(".minimax-plugin");
+        std::fs::create_dir_all(&dotted).unwrap();
+        std::fs::write(dotted.join("plugin.json"), r#"{"name":"bad.name"}"#).unwrap();
+
+        let target = PluginTarget {
+            tool_id: "minimax_code".into(),
+            scope: Scope::Global,
+            project_path: None,
+            context_id: None,
+        };
+        let entries = MiniMaxCode.preview(home, &target).unwrap().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, "review@local");
+        assert_eq!(entries[0].name, "Review");
+        assert_eq!(entries[0].version.as_deref(), Some("1.0.0"));
+        assert!(entries[0].root.as_deref().unwrap().contains("plugins"));
+        assert_eq!(
+            MiniMaxCode.list_command_args(),
+            ["plugin", "list", "--json"]
+        );
+        let project = PluginTarget {
+            scope: Scope::Project,
+            project_path: Some("/work/demo".into()),
+            ..target
+        };
+        assert!(MiniMaxCode.preview(home, &project).unwrap().is_none());
     }
 }

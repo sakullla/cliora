@@ -19,7 +19,131 @@ pub fn now() -> i64 {
     chrono::Utc::now().timestamp()
 }
 
+pub const LOGIN_TIMEOUT_DETAIL: &str = "原生认证操作超时，已停止接纳结果。外部终端仍由用户控制，请关闭；候选目录不会自动激活。";
+
 static OPERATION_ADMISSION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+static WATCHING: std::sync::Mutex<std::collections::BTreeSet<String>> =
+    std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+/// Restart observation for a login that was still pending when the process restarted.
+pub fn resume_pending(db: &Arc<Database>, home: &Path, accounts: &[AuthAccount]) {
+    for account in accounts {
+        let Some(pending) = &account.pending_login else {
+            continue;
+        };
+        if now() >= pending.expires_at {
+            continue;
+        }
+        let mut watching = match WATCHING.lock() {
+            Ok(watching) => watching,
+            Err(_) => return,
+        };
+        if !watching.insert(pending.id.clone()) {
+            continue;
+        }
+        drop(watching);
+        let executable = match native::executable(db, home, &account.tool_id) {
+            Ok(path) => path,
+            Err(_) => {
+                if let Ok(mut watching) = WATCHING.lock() {
+                    watching.remove(&pending.id);
+                }
+                continue;
+            }
+        };
+        watch(db.clone(), account.clone(), executable);
+    }
+}
+
+/// A timed-out attempt can still have finished in the CLI's own data directory.
+/// Only adapters that can sign in without an account id are considered, and only
+/// while the timeout detail is still the current one. A second account does not
+/// take a directory another account already owns.
+pub fn recover_completed_login(db: &Database, home: &Path, accounts: &[AuthAccount]) {
+    for account in accounts {
+        if account.context.is_some()
+            || account.pending_login.is_some()
+            || account.state != AccountState::SignedOut
+            || account.detail.as_deref() != Some(LOGIN_TIMEOUT_DETAIL)
+        {
+            continue;
+        }
+        let Ok(adapter) = crate::adapters::accounts::get(&account.tool_id) else {
+            continue;
+        };
+        if adapter.sign_in_requires_identity() {
+            continue;
+        }
+        // Process environment redirects only the real user home, matching data_dir.
+        // A stand-in home used by tests stays on `home` plus the CLI's default folder.
+        let environment = if dirs::home_dir().as_deref() == Some(home) {
+            adapter
+                .native_environment_keys()
+                .iter()
+                .filter_map(|key| std::env::var(key).ok().map(|value| ((*key).to_owned(), value)))
+                .collect()
+        } else {
+            std::collections::BTreeMap::new()
+        };
+        let Ok(Some(context)) = adapter.native_context(home, &environment) else {
+            continue;
+        };
+        let Ok(observation) = adapter.observe(Path::new(""), &context) else {
+            continue;
+        };
+        if observation.state != AccountState::SignedIn {
+            continue;
+        }
+        let Ok(mut current) = get(db, &account.id) else {
+            continue;
+        };
+        if current.version != account.version
+            || current.context.is_some()
+            || current.pending_login.is_some()
+            || current.state != AccountState::SignedOut
+            || current.detail.as_deref() != Some(LOGIN_TIMEOUT_DETAIL)
+        {
+            continue;
+        }
+        if native_context_taken(db, &current.id, &context) {
+            continue;
+        }
+        current.context = Some(context);
+        if observation.identity.is_some() {
+            current.identity = observation.identity;
+        }
+        current.state = AccountState::SignedIn;
+        current.detail = observation.detail;
+        current.checked_at = Some(now());
+        let _ = store::replace(db, &mut current);
+    }
+}
+
+fn native_context_taken(db: &Database, account_id: &str, context: &NativeContext) -> bool {
+    let Ok(accounts) = store::list(db) else {
+        return true;
+    };
+    accounts.iter().any(|other| {
+        other.id != account_id
+            && other
+                .context
+                .iter()
+                .chain(&other.retired_contexts)
+                .chain(other.pending_login.iter().map(|pending| &pending.context))
+                .any(|owned| owned.id == context.id || same_native_root(&owned.root, &context.root))
+    })
+}
+
+fn same_native_root(left: &Path, right: &Path) -> bool {
+    let left = left.canonicalize().unwrap_or_else(|_| left.to_path_buf());
+    let right = right.canonicalize().unwrap_or_else(|_| right.to_path_buf());
+    if cfg!(windows) {
+        left.to_string_lossy().eq_ignore_ascii_case(&right.to_string_lossy())
+    } else {
+        left == right
+    }
+}
 
 pub fn list(db: &Database) -> Result<Vec<AuthAccount>, String> {
     let accounts = store::list(db)?;
@@ -198,20 +322,25 @@ pub fn complete(
         account.pending_login = None;
         account.detail =
             Some("已核验所选上下文本地退出；未撤销服务端其他设备。已有终端可能仍持有令牌。".into());
-    } else {
-        if observation.state != AccountState::SignedIn || observation.identity.is_none() {
-            if observation.detail != account.detail {
-                account.detail = observation.detail;
-                account.checked_at = Some(at);
-                store::replace(db, &mut account)?;
-            }
-            return Ok(account);
+    } else if observation.state != AccountState::SignedIn
+        || (observation.identity.is_none()
+            && crate::adapters::accounts::get(&account.tool_id)
+                .map(|adapter| adapter.sign_in_requires_identity())
+                .unwrap_or(true))
+    {
+        if observation.detail != account.detail {
+            account.detail = observation.detail;
+            account.checked_at = Some(at);
+            store::replace(db, &mut account)?;
         }
-        let identity = observation.identity.ok_or("原生身份缺失")?;
+        return Ok(account);
+    } else {
+        let identity = observation.identity;
         if account
             .identity
             .as_ref()
-            .is_some_and(|old| old.subject != identity.subject)
+            .zip(identity.as_ref())
+            .is_some_and(|(old, new)| old.subject != new.subject)
         {
             account.state = pending.previous_state;
             account.pending_login = None;
@@ -224,7 +353,9 @@ pub fn complete(
                 account.retired_contexts.push(previous);
             }
             account.context = Some(pending.context);
-            account.identity = Some(identity);
+            if identity.is_some() {
+                account.identity = identity;
+            }
             account.state = AccountState::SignedIn;
             account.pending_login = None;
             account.detail = observation.detail;
@@ -255,7 +386,7 @@ pub fn cancel(
         if pending.operation == "logout" {
             "已停止等待原生退出。原生退出可能已生效，请检查状态；如打开了原生终端，请自行关闭。"
         } else if timed_out {
-            "原生认证操作超时，已停止接纳结果。外部终端仍由用户控制，请关闭；候选目录不会自动激活。"
+            LOGIN_TIMEOUT_DETAIL
         } else {
             "已取消结果接纳。外部原生终端仍由用户控制，请关闭；迟到授权不会激活候选目录。"
         }
@@ -308,6 +439,7 @@ fn watch(db: Arc<Database>, account: AuthAccount, executable: std::path::PathBuf
             return;
         }
         let receipt = pending.context.root.join(".cliora-auth-exit");
+        let mut login_finished = false;
         if pending.operation == "login" && context::check_path(&receipt).is_ok() {
             use std::io::Read;
             let code = std::fs::File::open(&receipt).ok().and_then(|file| {
@@ -319,9 +451,13 @@ fn watch(db: Arc<Database>, account: AuthAccount, executable: std::path::PathBuf
                 let _ = fail_login(&db, &account.id, &pending.id, "原生登录命令未成功（可能拒绝授权或流程失败）；原账号保持不变，请查看原生终端后重试。");
                 return;
             }
+            login_finished = code == Some(0);
         }
         // Fresh login directories have no auth until the native flow completes.
+        // A zero exit is also worth one observation: some CLIs record status
+        // outside the file list captured when the attempt started.
         if pending.operation == "logout"
+            || login_finished
             || pending.context.auth_files.iter().any(|path| path.is_file())
         {
             match native::observe(&executable, &pending.context) {
@@ -390,7 +526,11 @@ pub fn check(db: &Database, home: &Path, id: &str) -> Result<AuthAccount, String
     let mut account = get(db, id)?;
     reapply::before_check(&account)?;
     let before_check = account.clone();
-    let executable = native::executable(db, home, &account.tool_id)?;
+    let executable = if crate::adapters::accounts::get(&account.tool_id)?.observation_needs_executable() {
+        native::executable(db, home, &account.tool_id)?
+    } else {
+        std::path::PathBuf::new()
+    };
     if let Some(pending) = account.pending_login.clone() {
         if now() >= pending.expires_at {
             return cancel(db, id, &pending.id, true);

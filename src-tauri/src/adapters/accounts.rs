@@ -24,12 +24,23 @@ pub trait AccountAdapter: Sync {
     fn discovery_needs_executable(&self) -> bool {
         true
     }
+    /// Login and logout still resolve an executable. Status reads can opt out.
+    fn observation_needs_executable(&self) -> bool {
+        true
+    }
     fn discover(
         &self,
         executable: Option<&Path>,
         context: &NativeContext,
     ) -> Result<Vec<NativeLogin>, String> {
-        let observation = self.observe(executable.ok_or("未找到可核验的 CLI 安装")?, context)?;
+        // File-backed discovery opts out with `discovery_needs_executable`.
+        // Those adapters still use `observe`, which ignores the path.
+        let path = match executable {
+            Some(path) => path,
+            None if !self.discovery_needs_executable() => Path::new(""),
+            None => return Err("未找到可核验的 CLI 安装".into()),
+        };
+        let observation = self.observe(path, context)?;
         Ok(vec![NativeLogin {
             provider: self.capability().provider.into(),
             auth_kind: "oauth".into(),
@@ -57,6 +68,11 @@ pub trait AccountAdapter: Sync {
     }
     fn observe(&self, _executable: &Path, _context: &NativeContext) -> Result<Observation, String> {
         Err(self.capability().reason.into())
+    }
+    /// Pending login stays pending until an account id or email is present.
+    /// MiniMax's secret-free status file has neither, so it opts out.
+    fn sign_in_requires_identity(&self) -> bool {
+        true
     }
     fn login_args(&self, _method: &str) -> Result<Vec<String>, String> {
         Err(self.capability().reason.into())

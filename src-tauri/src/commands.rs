@@ -89,7 +89,17 @@ pub async fn adopt_native_codex_account(app: AppHandle, label: String) -> Result
 #[tauri::command]
 pub async fn list_accounts(app: AppHandle) -> Result<Vec<crate::accounts::AuthAccount>, ApiError> {
     let db = app.state::<AppState>().database(&app)?;
-    blocking(move || crate::accounts::list(&db).map_err(native_error)).await
+    let home = dirs::home_dir();
+    blocking(move || {
+        let accounts = crate::accounts::list(&db).map_err(native_error)?;
+        if let Some(home) = home {
+            crate::accounts::recover_completed_login(&db, &home, &accounts);
+            let accounts = crate::accounts::list(&db).map_err(native_error)?;
+            crate::accounts::resume_pending(&db, &home, &accounts);
+            return Ok(accounts);
+        }
+        Ok(accounts)
+    }).await
 }
 
 #[tauri::command]

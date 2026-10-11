@@ -233,18 +233,19 @@ test.beforeAll(async () => {
   pickerHarness = `<html><head><meta charset="utf-8"><style>${css}</style></head><body><div id="root"></div><script type="module">${code.replace(/<\/script/gi, '<\\/script')}</script></body></html>`;
 });
 
-async function mountPicker(page: Page, toolId = 'codex', managedLogin = true) {
-  await page.addInitScript(({ toolId, managedLogin }) => {
+async function mountPicker(page: Page, toolId = 'codex', managedLogin = true, identityRequired?: boolean, omitIdentity = false) {
+  await page.addInitScript(({ toolId, managedLogin, identityRequired, omitIdentity }) => {
     const account = (id: string, label: string) => ({ id, label, toolId, provider: 'fixture-provider', version: 1, state: 'signed_in', identity: { subject: id, email: `${id}@example.test`, plan: null, source: 'fixture' }, context: { id: `ctx-${id}` }, retiredContexts: [], pendingLogin: null, detail: null, checkedAt: null });
     const fixture = {
       toolId, accounts: [account('first', '第一个账号'), account('second', '第二个账号')] as any[], selections: [] as string[], backs: 0,
-      calls: [] as {command: string; args: any}[], managedLogin, failCheck: false, failLogin: false, delayStart: false, delayCheck: false, cancelFailure: '',
+      calls: [] as {command: string; args: any}[], managedLogin, identityRequired, failCheck: false, failLogin: false, delayStart: false, delayCheck: false, cancelFailure: '',
       releaseStart: null as (() => void) | null, releaseCheck: null as (() => void) | null,
     };
+    if (omitIdentity) fixture.accounts[0].identity = null;
     Object.assign(window, { isTauri: true, pickerFixture: fixture, __TAURI_INTERNALS__: { invoke: async (command: string, args: any) => {
       fixture.calls.push({ command, args });
       if (command === 'list_accounts') return structuredClone(fixture.accounts);
-      if (command === 'account_capabilities') return [{ toolId, managedLogin: fixture.managedLogin, importNative: false, methods: fixture.managedLogin ? ['browser', 'device'] : [], browserLink: true, reason: fixture.managedLogin ? '注册适配器提供原生登录' : '当前平台不支持受管登录' }];
+      if (command === 'account_capabilities') return [{ toolId, managedLogin: fixture.managedLogin, importNative: false, identityRequired: fixture.identityRequired, methods: fixture.managedLogin ? ['browser', 'device'] : [], browserLink: true, reason: fixture.managedLogin ? '注册适配器提供原生登录' : '当前平台不支持受管登录' }];
       if (command === 'create_account') { const value = { ...account('new', args.label), state: 'signed_out', context: null, identity: null }; fixture.accounts.push(value); return structuredClone(value); }
       const value = fixture.accounts.find(item => item.id === args.id);
       if (command === 'start_account_login') {
@@ -262,13 +263,32 @@ async function mountPicker(page: Page, toolId = 'codex', managedLogin = true) {
       }
       return null;
     } } });
-  }, { toolId, managedLogin });
+  }, { toolId, managedLogin, identityRequired, omitIdentity });
   await page.route('**/__account_picker_test', route => route.fulfill({ contentType: 'text/html; charset=utf-8', body: pickerHarness }));
   await page.goto('/__account_picker_test');
   await page.getByLabel('配置名称').fill('保留的配置草稿');
   await page.getByRole('button', { name: '选择账号', exact: true }).click();
-  await expect(page.getByRole('button', { name: '选择并返回' }).first()).toBeEnabled();
+  const selectable = page.getByRole('button', { name: '选择并返回' });
+  if (omitIdentity && identityRequired !== false) await expect(selectable.nth(1)).toBeEnabled();
+  else await expect(selectable.first()).toBeEnabled();
 }
+
+test('picker selects a signed-in account when the capability does not require an identity', async ({ page }) => {
+  await mountPicker(page, 'minimax_code', true, false, true);
+  const card = page.getByRole('listitem', { name: '第一个账号' });
+  await expect(card.getByText('尚无已核验身份')).toBeVisible();
+  await expect(card.getByRole('button', { name: '选择并返回' })).toBeEnabled();
+  await expect(card.getByRole('button', { name: '检查状态' })).toHaveCount(0);
+  await card.getByRole('button', { name: '选择并返回' }).click();
+  expect(JSON.parse(await page.getByLabel('原配置草稿').innerText()).accountId).toBe('first');
+});
+
+test('picker still blocks a signed-in account without an identity when identity is required', async ({ page }) => {
+  await mountPicker(page, 'codex', true, undefined, true);
+  const card = page.getByRole('listitem', { name: '第一个账号' });
+  await expect(card.getByRole('button', { name: '选择并返回' })).toBeDisabled();
+  await expect(card.getByRole('button', { name: '检查状态' })).toBeVisible();
+});
 
 test('picker requires an explicit verified selection and keeps the calling draft', async ({ page }) => {
   await mountPicker(page);

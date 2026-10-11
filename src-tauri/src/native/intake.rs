@@ -139,6 +139,37 @@ pub fn inspect(tool: CliId, files: &BTreeMap<String, String>) -> Result<NativeIn
     )
 }
 
+fn parse_role(
+    adapter: &dyn crate::adapters::CliAdapter,
+    files: &BTreeMap<String, String>,
+    role: &str,
+) -> Result<Option<Value>, String> {
+    let Ok(kind) = adapter.file_kind(role) else {
+        return Ok(None);
+    };
+    Ok(Some(format::parse(
+        kind,
+        files.get(role).map(String::as_str).unwrap_or(""),
+    )?))
+}
+
+/// Prefer the historical settings role. Otherwise use the adapter's connection
+/// document, such as MiniMax `config.yaml`.
+fn settings_document(
+    adapter: &dyn crate::adapters::CliAdapter,
+    files: &BTreeMap<String, String>,
+) -> Result<Value, String> {
+    if let Some(value) = parse_role(adapter, files, "settings")? {
+        return Ok(value);
+    }
+    for role in adapter.connection_roles() {
+        if let Some(value) = parse_role(adapter, files, role)? {
+            return Ok(value);
+        }
+    }
+    Ok(json!({}))
+}
+
 pub fn inspect_registered(
     registry: &crate::adapters::Registry,
     id: &str,
@@ -147,10 +178,9 @@ pub fn inspect_registered(
     let adapter = registry
         .get(id)
         .ok_or("未注册的 CLI 适配器，不能解析原生配置")?;
-    let settings = format::parse(
-        adapter.file_kind("settings")?,
-        files.get("settings").map(String::as_str).unwrap_or(""),
-    )?;
+    // Adapters whose native config is not named settings still need inspection
+    // during apply. Missing that role is not a user-facing file error.
+    let settings = settings_document(adapter, files)?;
     let local_settings = if let Ok(kind) = adapter.file_kind("local_settings") {
         format::parse(
             kind,

@@ -402,6 +402,93 @@ fn unsupported_methods_and_grok_do_not_create_pseudo_accounts() {
 }
 
 #[test]
+fn timed_out_login_uses_an_authenticated_default_directory_without_an_account_id() {
+    let (temp, db) = fixture();
+    let root = temp.path().join(".minimax");
+    let state = root
+        .join("auth")
+        .join("prod")
+        .join("cn")
+        .join("mcode-public")
+        .join("auth-state.json");
+    std::fs::create_dir_all(state.parent().unwrap()).unwrap();
+    std::fs::write(
+        &state,
+        r#"{"schemaVersion":2,"status":"authenticated","storeKind":"file","clientId":"mcode-public","scopes":["agent.default"],"audience":"agent-backend","buildEnv":"prod","region":"cn","generation":1}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        state.parent().unwrap().join("auth.json"),
+        r#"{"accessToken":"synthetic-token-must-not-leak"}"#,
+    )
+    .unwrap();
+
+    let mut timed_out = create(&db, "minimax_code", "MiniMax").unwrap();
+    timed_out.detail = Some(LOGIN_TIMEOUT_DETAIL.into());
+    store::replace(&db, &mut timed_out).unwrap();
+    let mut cancelled = create(&db, "minimax_code", "Cancelled").unwrap();
+    cancelled.detail = Some("已取消结果接纳。外部原生终端仍由用户控制，请关闭；迟到授权不会激活候选目录。".into());
+    store::replace(&db, &mut cancelled).unwrap();
+    let mut codex = create(&db, "codex", "Codex").unwrap();
+    codex.detail = Some(LOGIN_TIMEOUT_DETAIL.into());
+    store::replace(&db, &mut codex).unwrap();
+    let mut second = create(&db, "minimax_code", "Second").unwrap();
+    second.detail = Some(LOGIN_TIMEOUT_DETAIL.into());
+    store::replace(&db, &mut second).unwrap();
+
+    recover_completed_login(&db, temp.path(), &list(&db).unwrap());
+
+    let recovered = get(&db, &timed_out.id).unwrap();
+    assert_eq!(recovered.state, AccountState::SignedIn);
+    assert!(recovered.pending_login.is_none());
+    assert!(recovered.identity.is_none());
+    assert_eq!(recovered.context.as_ref().unwrap().root, root);
+    let rendered = serde_json::to_string(&recovered).unwrap();
+    assert!(!rendered.contains("synthetic-token"));
+    assert!(recovered.detail.as_deref().unwrap().contains("已登录"));
+    assert_eq!(get(&db, &cancelled.id).unwrap().state, AccountState::SignedOut);
+    assert!(get(&db, &cancelled.id).unwrap().context.is_none());
+    assert_eq!(get(&db, &codex.id).unwrap().state, AccountState::SignedOut);
+    assert!(get(&db, &codex.id).unwrap().context.is_none());
+    let second = get(&db, &second.id).unwrap();
+    assert_eq!(second.state, AccountState::SignedOut);
+    assert!(second.context.is_none());
+    assert_eq!(second.detail.as_deref(), Some(LOGIN_TIMEOUT_DETAIL));
+}
+
+#[test]
+fn minimax_check_reads_the_status_file_without_an_identity() {
+    use crate::adapters::accounts::AccountAdapter;
+    let (temp, db) = fixture();
+    let root = temp.path().join("account");
+    let state = root
+        .join("auth")
+        .join("prod")
+        .join("cn")
+        .join("mcode-public")
+        .join("auth-state.json");
+    std::fs::create_dir_all(state.parent().unwrap()).unwrap();
+    std::fs::write(
+        &state,
+        r#"{"schemaVersion":2,"status":"authenticated","storeKind":"file","clientId":"mcode-public","scopes":["agent.default"],"audience":"agent-backend","buildEnv":"prod","region":"cn","generation":1}"#,
+    )
+    .unwrap();
+    let mut account = create(&db, "minimax_code", "MiniMax").unwrap();
+    account.state = AccountState::SignedIn;
+    account.context = Some(
+        crate::adapters::MINIMAX_CODE
+            .context(root, "native-default".into())
+            .unwrap(),
+    );
+    store::replace(&db, &mut account).unwrap();
+    let checked = check(&db, temp.path(), &account.id).unwrap();
+    assert_eq!(checked.state, AccountState::SignedIn);
+    assert!(checked.identity.is_none());
+    assert!(!checked.detail.as_deref().unwrap_or("").contains("未找到可核验的 CLI 安装"));
+    assert!(!checked.detail.as_deref().unwrap_or("").contains("synthetic"));
+}
+
+#[test]
 fn authentication_file_output_is_bounded_and_errors_do_not_echo_secrets() {
     let temp = tempfile::tempdir().unwrap();
     let context = context::create_context(temp.path(), "pi").unwrap();

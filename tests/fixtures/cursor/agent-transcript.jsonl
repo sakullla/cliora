@@ -1,0 +1,6 @@
+{"role":"user","message":{"content":[{"type":"text","text":"<timestamp>2026-10-11T10:00:00Z</timestamp>\n<user_query>\n修复会话列表\n</user_query>"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"我会查看记录页。"},{"type":"tool_use","name":"Read","input":{"path":"src/records.rs"}}]}}
+{"type":"turn_ended","status":"success"}
+{"role":"user","message":{"content":[{"type":"text","text":"<manually_attached_skills>\ninternal\n</manually_attached_skills>"}]}}
+not-json
+{"role":"assistant","message":{"content":[{"type":"text","text":"记录里没有 token。"}]}}

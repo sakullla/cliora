@@ -153,7 +153,12 @@ pub(crate) fn entry(
 ) -> AgentEntry {
     let parsed = contract::validate(tool, format, &content, fallback);
     let (name, description, mut detail) = match parsed {
-        Ok((n, d)) => (n, d, String::new()),
+        Ok((n, d)) => {
+            let detail = mismatched_directory_name(tool, path, &n)
+                .unwrap_or_default()
+                .to_owned();
+            (n, d, detail)
+        }
         Err(e) => (fallback.into(), String::new(), e),
     };
     let native_disabled = contract::get(tool).is_ok_and(|a| a.native_disabled(format, &content));
@@ -216,19 +221,21 @@ fn snapshot_inner(
     let extension = adapter.extension();
     let mut entries = Vec::new();
     let mut basis = serde_json::to_string(target).map_err(|_| "目标无效")?;
-    for name in adapter.definition_dirs() {
-        for (dir, enabled) in [
-            (root.join(name), true),
-            (root.join(".cliora-disabled-agents").join(name), false),
-        ] {
-            scan_directory(
-                &target.tool_id,
-                &dir,
-                extension,
-                enabled,
-                "独立定义",
-                &mut entries,
-            )?;
+    if adapter.scans_definition_directories() {
+        for name in adapter.definition_dirs() {
+            for (dir, enabled) in [
+                (root.join(name), true),
+                (root.join(".cliora-disabled-agents").join(name), false),
+            ] {
+                scan_directory(
+                    &target.tool_id,
+                    &dir,
+                    extension,
+                    enabled,
+                    "独立定义",
+                    &mut entries,
+                )?;
+            }
         }
     }
     for path in config_files(home, target)? {
@@ -305,27 +312,24 @@ pub(crate) fn scan_directory(
     owner: &str,
     entries: &mut Vec<AgentEntry>,
 ) -> Result<(), String> {
+    let adapter = contract::get(tool)?;
     let mut files = Vec::new();
-    walk(
-        dir,
-        extension,
-        &mut files,
-        0,
-        contract::get(tool)?.recursive(),
-    )?;
+    walk(dir, extension, &mut files, 0, adapter.recursive())?;
     for path in files {
-        let fallback = if contract::get(tool)?.namespaced_names() {
+        let fallback = adapter.definition_fallback(&path).unwrap_or_else(|| {
+            if adapter.namespaced_names() {
             path.strip_prefix(dir)
                 .unwrap_or(&path)
                 .with_extension("")
                 .to_string_lossy()
                 .replace('\\', "/")
-        } else {
-            path.file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned()
-        };
+            } else {
+                path.file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned()
+            }
+        });
         entries.push(entry(
             tool,
             &path,
@@ -341,6 +345,67 @@ pub(crate) fn scan_directory(
         ));
     }
     Ok(())
+}
+pub(crate) fn push_file(
+    tool: &str,
+    path: &Path,
+    enabled: bool,
+    owner: &str,
+    entries: &mut Vec<AgentEntry>,
+) -> Result<(), String> {
+    let adapter = contract::get(tool)?;
+    let fallback = adapter.definition_fallback(path).unwrap_or_else(|| {
+        path.file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned()
+    });
+    let format = if adapter.extension() == "toml" {
+        "toml"
+    } else {
+        "markdown"
+    };
+    entries.push(entry(
+        tool,
+        path,
+        format,
+        read(path)?,
+        &fallback,
+        enabled,
+        owner,
+    ));
+    Ok(())
+}
+fn mismatched_directory_name(tool: &str, path: &Path, name: &str) -> Option<&'static str> {
+    let adapter = contract::get(tool).ok()?;
+    if !adapter.directory_name_matches_definition() {
+        return None;
+    }
+    let expected = path
+        .parent()
+        .and_then(|parent| parent.file_name())
+        .and_then(|segment| segment.to_str())
+        .unwrap_or("");
+    (name != expected).then_some("name 必须与目录名一致")
+}
+fn require_directory_name(
+    adapter: &dyn contract::AgentAdapter,
+    path: &Path,
+    name: &str,
+) -> Result<(), String> {
+    if !adapter.directory_name_matches_definition() {
+        return Ok(());
+    }
+    let expected = path
+        .parent()
+        .and_then(|parent| parent.file_name())
+        .and_then(|segment| segment.to_str())
+        .unwrap_or("");
+    if name == expected {
+        Ok(())
+    } else {
+        Err("name 必须与目录名一致".into())
+    }
 }
 /// Plugin-owned definitions only exist for CLIs that expose a plugins port.
 /// A missing port means "no plugin sources", never an agents capability error.
@@ -484,15 +549,7 @@ fn operate_inner(
             if !contract::valid_name(&request.name) {
                 return Err("文件名只能包含字母、数字、连字符和下划线".into());
             }
-            let extension = adapter.extension();
-            path = root
-                .join(
-                    adapter
-                        .definition_dirs()
-                        .first()
-                        .ok_or("此 CLI 未提供可写定义目录")?,
-                )
-                .join(format!("{}.{extension}", request.name));
+            path = adapter.writable_definition(&root, &request.name)?;
             if path.exists() {
                 return Err("同名文件已存在".into());
             }
@@ -502,6 +559,7 @@ fn operate_inner(
                 &request.content,
                 &request.name,
             )?;
+            require_directory_name(adapter, &path, &name)?;
             if before.entries.iter().any(|e| !e.builtin && e.name == name) {
                 return Err("同名定义已存在（包含禁用或插件定义）".into());
             }
@@ -533,6 +591,7 @@ fn operate_inner(
                             &request.content,
                             &entry.name,
                         )?;
+                        require_directory_name(adapter, &path, &name)?;
                         if before
                             .entries
                             .iter()
@@ -554,12 +613,13 @@ fn operate_inner(
                     "enable" | "disable" => {
                         let enabled = request.action == "enable";
                         if enabled {
-                            contract::validate(
+                            let (name, _) = contract::validate(
                                 &target.tool_id,
                                 &entry.format,
                                 &entry.content,
                                 &entry.name,
                             )?;
+                            require_directory_name(adapter, &path, &name)?;
                         }
                         if entry.enabled == enabled {
                             return Err("状态未改变".into());

@@ -111,6 +111,15 @@ pub trait PluginAdapter: Sync {
     ) -> Result<Vec<PluginEntry>, String> {
         Ok(vec![])
     }
+    /// Plugins the native list command does not return. The default adds none.
+    fn supplement(
+        &self,
+        _home: &Path,
+        _target: &PluginTarget,
+        _entries: &mut Vec<PluginEntry>,
+    ) -> Result<(), String> {
+        Ok(())
+    }
     fn project_trust(&self) -> bool {
         false
     }

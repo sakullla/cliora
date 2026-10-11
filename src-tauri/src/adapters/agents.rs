@@ -198,6 +198,28 @@ pub trait AgentAdapter: Sync {
     fn definition_dirs(&self) -> &'static [&'static str] {
         &["agents"]
     }
+    /// When false, only `additional_sources` supplies file-backed rows.
+    fn scans_definition_directories(&self) -> bool {
+        true
+    }
+    fn writable_definition(&self, root: &Path, name: &str) -> Result<PathBuf, String> {
+        let directory = self
+            .definition_dirs()
+            .first()
+            .copied()
+            .ok_or("此 CLI 未提供可写定义目录")?;
+        Ok(root
+            .join(directory)
+            .join(format!("{name}.{}", self.extension())))
+    }
+    /// Frontmatter `name` must equal the parent directory of the definition file.
+    fn directory_name_matches_definition(&self) -> bool {
+        false
+    }
+    /// Scan fallback when the file stem is not the agent name.
+    fn definition_fallback(&self, _path: &Path) -> Option<String> {
+        None
+    }
     fn config_entries(
         &self,
         _target: &crate::resources::plugins::PluginTarget,

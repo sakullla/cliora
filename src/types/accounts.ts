@@ -20,6 +20,8 @@ export type AccountCapability = {
   browserLink?: boolean;
   toolId: string; provider: string; version: string; managedLogin: boolean; importNative: boolean;
   methods: ('browser' | 'device')[]; reason: string; identitySource: string;
+  /** Missing means an id or email is required before the account can be chosen. */
+  identityRequired?: boolean;
   refreshOwner: 'native_cli'; acceptance: string;
 };
 

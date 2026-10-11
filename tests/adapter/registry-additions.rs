@@ -732,9 +732,9 @@ fn cursor_and_minimax_code_stay_separate_from_the_minimax_quota_provider() {
     assert!(!cursor.descriptor().management.rules.global);
     assert!(cursor.descriptor().management.rules.project);
     assert!(cursor.descriptor().management.rules.catalog);
-    assert!(cursor.descriptor().history.state == "unsupported");
+    assert_eq!(cursor.descriptor().history.state, "available");
     assert!(cursor.descriptor().resume.state == "unsupported");
-    assert!(!cursor.history_supported());
+    assert!(cursor.history_supported());
     assert!(cursor.history_sources(home).unwrap().is_empty());
     assert!(cursor
         .native_files(crate::native::adapter::Scope::Global, home, None, true)
@@ -780,12 +780,13 @@ fn cursor_and_minimax_code_stay_separate_from_the_minimax_quota_provider() {
     assert!(code.official_usage().is_some());
     assert!(code.accounts().is_some());
     assert!(code.descriptor().login.is_some());
-    assert!(!code.descriptor().management.agents);
+    assert!(code.descriptor().management.agents);
     assert!(code.supports_mcp());
-    assert!(!code.supports_skills());
-    assert!(!code.history_supported());
-    assert_eq!(code.descriptor().history.state, "unsupported");
-    assert!(code.descriptor().history.reason.contains("没有已核对"));
+    assert!(code.supports_skills());
+    assert!(code.history_supported());
+    assert_eq!(code.descriptor().history.state, "available");
+    assert!(code.descriptor().history.reason.contains("不显示 0"));
+    assert!(code.history_sources(home).unwrap().is_empty());
     assert!(code
         .native_files(crate::native::adapter::Scope::Global, home, None, true)
         .is_empty());

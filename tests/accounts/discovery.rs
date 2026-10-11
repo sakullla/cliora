@@ -233,3 +233,38 @@ fn native_contexts_do_not_force_managed_storage_and_respect_each_adapters_direct
         assert_eq!(context.root, custom);
     }
 }
+
+#[test]
+fn minimax_authenticated_state_is_discovered_without_a_cli_binary() {
+    let (temp, db) = fixture();
+    let state = temp
+        .path()
+        .join(".minimax")
+        .join("auth")
+        .join("prod")
+        .join("cn")
+        .join("mcode-public")
+        .join("auth-state.json");
+    std::fs::create_dir_all(state.parent().unwrap()).unwrap();
+    std::fs::write(
+        &state,
+        r#"{"schemaVersion":2,"status":"authenticated","storeKind":"file","clientId":"mcode-public","scopes":["agent.default"],"audience":"agent-backend","buildEnv":"prod","region":"cn","generation":1}"#,
+    )
+    .unwrap();
+    let snapshot = discovery::discover_with(
+        &db,
+        temp.path(),
+        "minimax_code",
+        &crate::adapters::MINIMAX_CODE,
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    assert_eq!(snapshot.logins.len(), 1);
+    assert_eq!(snapshot.logins[0].state, AccountState::SignedIn);
+    assert!(snapshot.logins[0].identity.is_none());
+    assert!(!serde_json::to_string(&snapshot)
+        .unwrap()
+        .contains("未找到可核验的 CLI 安装"));
+}
+
+
