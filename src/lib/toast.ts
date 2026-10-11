@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import type { Toast } from '../components/Toast';
 import { formatFailure } from './feedback';
 
@@ -7,12 +7,6 @@ export function useToasts() {
   const [notice, setNotice] = useState<Toast | null>(null);
   const sequence = useRef(0);
   const protect = useRef(false);
-
-  useEffect(() => {
-    if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(null), 4500);
-    return () => window.clearTimeout(timer);
-  }, [notice]);
 
   function showError(text: string) {
     protect.current = false;
@@ -42,5 +36,11 @@ export function useToasts() {
     setError({ id: ++sequence.current, tone: 'alert', text: errorText });
   }
 
-  return { error, notice, showError, showFailure, showNotice, showMixed, dismiss, setError, setNotice };
+  function clear() {
+    protect.current = false;
+    setNotice(null);
+    setError(null);
+  }
+
+  return { error, notice, showError, showFailure, showNotice, showMixed, dismiss, clear, setError, setNotice };
 }
