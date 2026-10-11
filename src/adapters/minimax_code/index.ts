@@ -1,7 +1,9 @@
 import type { ToolUiAdapter } from '../contract';
+import { MiniMaxCodeConfigurationEditor } from './ConfigurationEditor';
 
 export const minimaxCodeUiAdapter: ToolUiAdapter = {
   id: 'minimax_code',
+  configuration: { Editor: MiniMaxCodeConfigurationEditor },
   accounts: {
     description: '在终端执行 mcode login。默认中国区；国际区使用 --region global。状态未确认，不读取登录凭证。',
     nativeDescription: '未确认。没有已核对的、不输出凭证的状态命令。',

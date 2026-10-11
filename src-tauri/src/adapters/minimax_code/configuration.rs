@@ -2,8 +2,9 @@
 //! Plan, the MiniMax API key, and a custom provider do not replace each other.
 use super::{custom_secret_env, env_reference, referenced_env, MiniMaxCode, DEFAULT_SECRET_ENV, TOKEN_PLAN_PROFILE_URL};
 use crate::adapters::configuration::{
-    ConfigurationAction, ConfigurationAdapter, ConfigurationDescriptor, ConfigurationField,
-    ConfigurationIssue, Documents, EditingState, PortableFieldKind, EDITING_VERSION,
+    CommonParameter, ConfigurationAction, ConfigurationAdapter, ConfigurationDescriptor,
+    ConfigurationField, ConfigurationIssue, Documents, EditingState, PortableFieldKind,
+    EDITING_VERSION,
 };
 use crate::native::format::{self, FileKind};
 use crate::native::intake::NativeInspection;
@@ -15,14 +16,34 @@ use std::collections::BTreeMap;
 const PERMISSIONS: &[&str] = &["default", "auto", "bypassPermissions", "off"];
 
 impl ConfigurationAdapter for MiniMaxCode {
+    fn common_parameters(&self, _scope: Scope) -> Vec<CommonParameter> {
+        vec![CommonParameter {
+            field: field("permissionMode", "权限模式", "choice", PERMISSIONS),
+            role: "config",
+            path: vec!["permissionMode".into()],
+            target: json!({"kind": "settings"}),
+        }]
+    }
     fn describe(&self, _scope: Scope) -> ConfigurationDescriptor {
         ConfigurationDescriptor {
             version: EDITING_VERSION,
-            operations: vec!["set".into(), "reset".into()],
+            operations: vec![
+                "set".into(),
+                "reset".into(),
+                "select_provider".into(),
+                "configure_provider".into(),
+            ],
             fields: vec![
+                field("provider", "供应商", "string", &[]),
+                field("name", "自定义供应商名称", "string", &[]),
+                field("baseUrl", "请求地址", "string", &[]),
                 field("source", "登录来源", "choice", &["token_plan", "minimax_api_key"]),
-                field("model", "模型", "text", &[]),
-                field("baseUrl", "请求地址", "text", &[]),
+                field("interfaceFormat", "接口格式", "choice", &[
+                    "anthropic_messages",
+                    "openai_completions",
+                    "openai_responses",
+                ]),
+                field("model", "模型", "string", &[]),
                 field("permissionMode", "权限模式", "choice", PERMISSIONS),
             ],
         }
@@ -32,17 +53,37 @@ impl ConfigurationAdapter for MiniMaxCode {
             "source" => vec!["minimaxModelSource".into()],
             "model" => vec!["defaultModel".into()],
             "permissionMode" => vec!["permissionMode".into()],
+            "baseUrl" => vec!["minimax_api".into(), "baseURL".into()],
             _ => return Vec::new(),
         };
         vec![("config".into(), path)]
     }
-    fn read(&self, documents: &Documents, _state: &EditingState) -> Result<Value, String> {
+    fn read(&self, documents: &Documents, state: &EditingState) -> Result<Value, String> {
         let root = documents.get("config").cloned().unwrap_or_else(|| json!({}));
+        let object = root.as_object().cloned().unwrap_or_default();
+        let provider = active_provider(&object, state);
+        let custom = provider != "token_plan" && provider != "minimax";
+        let source = if provider == "minimax" {
+            "minimax_api_key"
+        } else if custom {
+            object
+                .get("minimaxModelSource")
+                .and_then(Value::as_str)
+                .unwrap_or("token_plan")
+        } else {
+            "token_plan"
+        };
         Ok(json!({
-            "source": root.get("minimaxModelSource").and_then(Value::as_str).unwrap_or("token_plan"),
-            "model": root.get("defaultModel").and_then(Value::as_str).unwrap_or(""),
-            "permissionMode": root.get("permissionMode").and_then(Value::as_str).unwrap_or(""),
-            "baseUrl": root.pointer("/minimax_api/baseURL").and_then(Value::as_str).unwrap_or(""),
+            "providerId": provider,
+            "providers": custom_ids(&object),
+            "name": if custom { custom_name(&object, &provider).unwrap_or(provider.clone()) } else { provider.clone() },
+            "source": source,
+            "model": view_model(&root, state, &provider),
+            "baseUrl": view_base(&root, &provider),
+            "interfaceFormat": view_format(&root, &provider),
+            "addressLocked": provider == "token_plan",
+            "formatLocked": provider == "token_plan",
+            "permissionMode": object.get("permissionMode").and_then(Value::as_str).unwrap_or(""),
         }))
     }
     fn edit(
@@ -51,37 +92,69 @@ impl ConfigurationAdapter for MiniMaxCode {
         state: &mut EditingState,
         action: &ConfigurationAction,
     ) -> Result<(), String> {
-        if !matches!(action.operation.as_str(), "set" | "reset") {
-            return Err("MiniMax Code 未声明此编辑动作".into());
-        }
-        let field = action.field.clone().unwrap_or_default();
         let root = documents.entry("config".into()).or_insert_with(|| json!({}));
         let object = root.as_object_mut().ok_or("config.yaml 顶层必须是对象")?;
-        match (action.operation.as_str(), field.as_str()) {
-            ("reset", "permissionMode") => {
-                object.remove("permissionMode");
-            }
-            ("set", "permissionMode") => {
-                let value = text(action).ok_or("权限模式不在已核对取值内")?;
-                if !PERMISSIONS.contains(&value) {
-                    return Err("权限模式不在已核对取值内".into());
+        match action.operation.as_str() {
+            "reset" => match action.field.as_deref().unwrap_or("") {
+                "permissionMode" => {
+                    object.remove("permissionMode");
                 }
-                object.insert(field, json!(value));
-            }
-            ("set", "source") => {
-                let value = text(action).ok_or("登录来源不在已核对取值内")?;
-                if !matches!(value, "token_plan" | "minimax_api_key") {
-                    return Err("登录来源不在已核对取值内".into());
+                "baseUrl" => set_base_url(object, state, "")?,
+                _ => return Err("MiniMax Code 未声明此恢复动作".into()),
+            },
+            "set" => match action.field.as_deref().unwrap_or("") {
+                "permissionMode" => {
+                    let value = text(action).ok_or("权限模式不在已核对取值内")?;
+                    if !PERMISSIONS.contains(&value) {
+                        return Err("权限模式不在已核对取值内".into());
+                    }
+                    object.insert("permissionMode".into(), json!(value));
                 }
-                object.insert("minimaxModelSource".into(), json!(value));
+                "source" => {
+                    let value = text(action).ok_or("登录来源不在已核对取值内")?;
+                    let provider = match value {
+                        "token_plan" => "token_plan",
+                        "minimax_api_key" => "minimax",
+                        _ => return Err("登录来源不在已核对取值内".into()),
+                    };
+                    set_provider(object, state, provider)?;
+                }
+                "provider" => set_provider(object, state, text(action).ok_or("请填写供应商")?)?,
+                "name" => set_name(object, state, text(action).ok_or("请填写自定义供应商名称")?)?,
+                "baseUrl" => set_base_url(object, state, text(action).unwrap_or(""))?,
+                "interfaceFormat" => {
+                    set_interface(object, state, text(action).ok_or("请选择接口格式")?)?
+                }
+                "model" => set_model(object, state, text(action).ok_or("请填写模型")?)?,
+                _ => return Err("此字段请通过连接或原始配置修改".into()),
+            },
+            "select_provider" => set_provider(object, state, &provider_from_action(action)?)?,
+            "configure_provider" => {
+                let id = provider_from_action(action)?;
+                set_provider(object, state, &id)?;
+                let value = action.value.as_ref().and_then(Value::as_object);
+                if let Some(url) = value.and_then(|value| value.get("baseUrl")).and_then(Value::as_str) {
+                    set_base_url(object, state, url)?;
+                }
+                if let Some(format) = value
+                    .and_then(|value| value.get("interfaceFormat"))
+                    .and_then(Value::as_str)
+                {
+                    set_interface(object, state, format)?;
+                }
+                if let Some(name) = value.and_then(|value| value.get("name")).and_then(Value::as_str) {
+                    if !name.trim().is_empty() {
+                        set_name(object, state, name)?;
+                    }
+                }
+                if let Some(model) = value.and_then(|value| value.get("model")).and_then(Value::as_str) {
+                    if !model.trim().is_empty() {
+                        set_model(object, state, model)?;
+                    }
+                }
             }
-            ("set", "model") => {
-                let value = text(action).filter(|value| !value.is_empty()).ok_or("请填写模型")?;
-                object.insert("defaultModel".into(), json!(value));
-            }
-            _ => return Err("此字段请通过连接或原始配置修改".into()),
+            _ => return Err("MiniMax Code 未声明此编辑动作".into()),
         }
-        state.intents.push(action.clone());
         Ok(())
     }
     fn reconcile_text(
@@ -93,6 +166,9 @@ impl ConfigurationAdapter for MiniMaxCode {
     ) -> Result<(), String> {
         let root = next.get("config").cloned().unwrap_or(Value::Null);
         state.intents.retain(|action| {
+            if action.field.as_deref() == Some("officialModel") && action.operation == "set" {
+                return true;
+            }
             let Some(field) = action.field.as_deref() else {
                 return false;
             };
@@ -175,6 +251,397 @@ fn field(id: &str, label: &str, kind: &str, choices: &[&str]) -> ConfigurationFi
 
 fn text(action: &ConfigurationAction) -> Option<&str> {
     action.value.as_ref().and_then(Value::as_str)
+}
+
+fn provider_from_action(action: &ConfigurationAction) -> Result<String, String> {
+    action
+        .target
+        .get("provider")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .or_else(|| text(action).filter(|id| !id.is_empty()))
+        .or_else(|| {
+            action
+                .value
+                .as_ref()
+                .and_then(|value| value.get("name"))
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+        })
+        .map(str::to_owned)
+        .ok_or_else(|| "请填写供应商".into())
+}
+
+fn active_provider(object: &serde_json::Map<String, Value>, state: &EditingState) -> String {
+    if let Some(id) = state.selected_provider.as_deref().filter(|id| !id.is_empty()) {
+        return id.to_owned();
+    }
+    let model = object.get("defaultModel").and_then(Value::as_str).unwrap_or("");
+    if let Some(rest) = model.strip_prefix("custom_provider:") {
+        if let Some((id, _)) = rest.split_once('/') {
+            if !id.is_empty() {
+                return id.to_owned();
+            }
+        }
+    }
+    if object.get("minimaxModelSource").and_then(Value::as_str) == Some("minimax_api_key") {
+        "minimax".into()
+    } else {
+        "token_plan".into()
+    }
+}
+
+fn custom_ids(object: &serde_json::Map<String, Value>) -> Vec<String> {
+    object
+        .get("custom_provider")
+        .and_then(Value::as_object)
+        .map(|providers| providers.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
+fn custom_name(object: &serde_json::Map<String, Value>, id: &str) -> Option<String> {
+    object
+        .get("custom_provider")
+        .and_then(|providers| providers.get(id))
+        .and_then(|entry| entry.get("name"))
+        .and_then(Value::as_str)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+}
+
+fn view_base(root: &Value, provider: &str) -> String {
+    if provider == "token_plan" {
+        return TOKEN_PLAN_PROFILE_URL.into();
+    }
+    if provider == "minimax" {
+        return root
+            .pointer("/minimax_api/baseURL")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_owned();
+    }
+    root.pointer(&format!(
+        "/custom_provider/{}/options/baseURL",
+        pointer_token(provider)
+    ))
+    .and_then(Value::as_str)
+    .unwrap_or("")
+    .trim()
+    .to_owned()
+}
+
+fn view_format(root: &Value, provider: &str) -> String {
+    if provider == "token_plan" || provider == "minimax" {
+        return "anthropic_messages".into();
+    }
+    let api = root
+        .pointer(&format!("/custom_provider/{}/api", pointer_token(provider)))
+        .and_then(Value::as_str)
+        .unwrap_or("anthropic-messages");
+    interface_kind(api).unwrap_or("anthropic_messages").into()
+}
+
+fn view_model(root: &Value, state: &EditingState, provider: &str) -> String {
+    if provider == "token_plan" || provider == "minimax" {
+        return retained_official(root, state);
+    }
+    let current = root.get("defaultModel").and_then(Value::as_str).unwrap_or("");
+    let prefix = format!("custom_provider:{provider}/");
+    if let Some(rest) = current.strip_prefix(&prefix) {
+        let (bare, _) = split_variant(rest).unwrap_or((rest.to_owned(), None));
+        let variant = root.get("defaultModelVariant").and_then(Value::as_str).unwrap_or("");
+        if !bare.is_empty() {
+            return if variant.is_empty() || bare.contains('#') {
+                bare
+            } else {
+                format!("{bare}#{variant}")
+            };
+        }
+    }
+    root.pointer(&format!("/custom_provider/{}/models", pointer_token(provider)))
+        .and_then(Value::as_object)
+        .and_then(|models| models.keys().next().cloned())
+        .unwrap_or_default()
+}
+
+fn retained_official(root: &Value, state: &EditingState) -> String {
+    let current = root.get("defaultModel").and_then(Value::as_str).unwrap_or("");
+    if !current.is_empty() && !current.starts_with("custom_provider:") {
+        return display_model(current, root);
+    }
+    retained_official_intent(state).unwrap_or_default()
+}
+
+fn retained_official_intent(state: &EditingState) -> Option<String> {
+    state.intents.iter().rev().find_map(|action| {
+        (action.field.as_deref() == Some("officialModel") && action.operation == "set")
+            .then(|| action.value.as_ref().and_then(Value::as_str))
+            .flatten()
+            .filter(|model| !model.is_empty())
+            .map(str::to_owned)
+    })
+}
+
+fn remember_official(state: &mut EditingState, model: &str) {
+    if model.trim().is_empty() {
+        return;
+    }
+    state.intents.retain(|action| action.field.as_deref() != Some("officialModel"));
+    state.intents.push(ConfigurationAction {
+        version: EDITING_VERSION,
+        target: json!({"kind": "provider", "provider": "token_plan"}),
+        operation: "set".into(),
+        field: Some("officialModel".into()),
+        value: Some(json!(model)),
+    });
+}
+
+fn shown_official(object: &serde_json::Map<String, Value>) -> Option<String> {
+    let current = object.get("defaultModel").and_then(Value::as_str)?;
+    if current.is_empty() || current.starts_with("custom_provider:") {
+        return None;
+    }
+    Some(display_model(current, &Value::Object(object.clone())))
+}
+
+fn set_provider(
+    object: &mut serde_json::Map<String, Value>,
+    state: &mut EditingState,
+    id: &str,
+) -> Result<(), String> {
+    if id == "token_plan" || id == "minimax" {
+        if let Some(model) = shown_official(object) {
+            remember_official(state, &model);
+        }
+        object.insert(
+            "minimaxModelSource".into(),
+            json!(if id == "token_plan" { "token_plan" } else { "minimax_api_key" }),
+        );
+        state.selected_provider = Some(id.to_owned());
+        restore_official_default(object, state)?;
+        return Ok(());
+    }
+    let id = custom_id(id)?;
+    if let Some(model) = shown_official(object) {
+        remember_official(state, &model);
+    }
+    ensure_custom(object, &id)?;
+    state.selected_provider = Some(id.clone());
+    if let Some(model) = active_custom_model(object, &id) {
+        write_custom_default(object, &id, &model)?;
+    }
+    Ok(())
+}
+
+fn restore_official_default(
+    object: &mut serde_json::Map<String, Value>,
+    state: &EditingState,
+) -> Result<(), String> {
+    let current = object.get("defaultModel").and_then(Value::as_str).unwrap_or("");
+    if !current.is_empty() && !current.starts_with("custom_provider:") {
+        return Ok(());
+    }
+    if let Some(model) = retained_official_intent(state) {
+        write_official_model(object, &model)?;
+    } else if current.starts_with("custom_provider:") {
+        object.remove("defaultModel");
+        object.remove("defaultModelVariant");
+    }
+    Ok(())
+}
+
+fn active_custom_model(object: &serde_json::Map<String, Value>, id: &str) -> Option<String> {
+    let current = object.get("defaultModel").and_then(Value::as_str).unwrap_or("");
+    let prefix = format!("custom_provider:{id}/");
+    if let Some(rest) = current.strip_prefix(&prefix) {
+        let bare = rest.split_once('#').map(|(model, _)| model).unwrap_or(rest);
+        if !bare.is_empty() {
+            let variant = object.get("defaultModelVariant").and_then(Value::as_str).unwrap_or("");
+            return Some(if variant.is_empty() || bare.contains('#') {
+                bare.to_owned()
+            } else {
+                format!("{bare}#{variant}")
+            });
+        }
+    }
+    let name = object
+        .get("custom_provider")?
+        .get(id)?
+        .get("models")?
+        .as_object()?
+        .keys()
+        .next()?
+        .clone();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
+}
+
+fn set_name(
+    object: &mut serde_json::Map<String, Value>,
+    state: &mut EditingState,
+    name: &str,
+) -> Result<(), String> {
+    let name = name.trim();
+    if name.is_empty() || name.contains(['/', '\\']) {
+        return Err("自定义供应商名称无效".into());
+    }
+    let provider = active_provider(object, state);
+    if provider == "token_plan" || provider == "minimax" {
+        return set_provider(object, state, name);
+    }
+    let id = custom_id(&provider)?;
+    ensure_custom(object, &id)?;
+    let entry = custom_entry(object, &id)?;
+    entry.insert("name".into(), json!(name));
+    Ok(())
+}
+
+fn set_base_url(
+    object: &mut serde_json::Map<String, Value>,
+    state: &EditingState,
+    url: &str,
+) -> Result<(), String> {
+    let url = url.trim();
+    let provider = active_provider(object, state);
+    if provider == "token_plan" {
+        return Ok(());
+    }
+    if provider == "minimax" {
+        let api = object.entry("minimax_api".to_owned()).or_insert_with(|| json!({}));
+        let api = api.as_object_mut().ok_or("minimax_api 必须是对象")?;
+        if url.is_empty() {
+            api.remove("baseURL");
+        } else {
+            api.insert("baseURL".into(), json!(url));
+        }
+        return Ok(());
+    }
+    let id = custom_id(&provider)?;
+    ensure_custom(object, &id)?;
+    let entry = custom_entry(object, &id)?;
+    let options = entry.entry("options".to_owned()).or_insert_with(|| json!({}));
+    let options = options.as_object_mut().ok_or("自定义供应商选项必须是对象")?;
+    if url.is_empty() {
+        options.remove("baseURL");
+    } else {
+        options.insert("baseURL".into(), json!(url));
+    }
+    Ok(())
+}
+
+fn set_interface(
+    object: &mut serde_json::Map<String, Value>,
+    state: &EditingState,
+    interface: &str,
+) -> Result<(), String> {
+    let provider = active_provider(object, state);
+    if provider == "token_plan" || provider == "minimax" {
+        return if interface == "anthropic_messages" {
+            Ok(())
+        } else {
+            Err("官方来源的接口格式固定为 Anthropic Messages；请改用自定义供应商".into())
+        };
+    }
+    let api = api_kind(interface)?;
+    let id = custom_id(&provider)?;
+    ensure_custom(object, &id)?;
+    let entry = custom_entry(object, &id)?;
+    entry.insert("api".into(), json!(api));
+    Ok(())
+}
+
+fn set_model(
+    object: &mut serde_json::Map<String, Value>,
+    state: &mut EditingState,
+    model: &str,
+) -> Result<(), String> {
+    let provider = active_provider(object, state);
+    if provider == "token_plan" || provider == "minimax" {
+        write_official_model(object, model)?;
+        if let Some(shown) = shown_official(object) {
+            remember_official(state, &shown);
+        }
+        return Ok(());
+    }
+    let id = custom_id(&provider)?;
+    write_custom_default(object, &id, model)
+}
+
+fn write_official_model(object: &mut serde_json::Map<String, Value>, model: &str) -> Result<(), String> {
+    let (model, variant) = official_model(model)?;
+    object.insert("defaultModel".into(), json!(model));
+    write_variant(object, variant);
+    Ok(())
+}
+
+fn write_custom_default(
+    object: &mut serde_json::Map<String, Value>,
+    id: &str,
+    model: &str,
+) -> Result<(), String> {
+    let (bare, variant) = custom_model(model)?;
+    ensure_custom(object, id)?;
+    {
+        let entry = custom_entry(object, id)?;
+        let models = entry.entry("models".to_owned()).or_insert_with(|| json!({}));
+        let models = models.as_object_mut().ok_or("自定义模型必须是对象")?;
+        models.entry(bare.clone()).or_insert_with(|| json!({}));
+    }
+    object.insert("defaultModel".into(), json!(format!("custom_provider:{id}/{bare}")));
+    write_variant(object, variant);
+    Ok(())
+}
+
+fn write_variant(object: &mut serde_json::Map<String, Value>, variant: Option<String>) {
+    match variant.filter(|value| !value.is_empty()) {
+        Some(variant) => {
+            object.insert("defaultModelVariant".into(), json!(variant));
+        }
+        None => {
+            object.remove("defaultModelVariant");
+        }
+    }
+}
+
+fn ensure_custom(object: &mut serde_json::Map<String, Value>, id: &str) -> Result<(), String> {
+    let providers = object.entry("custom_provider".to_owned()).or_insert_with(|| json!({}));
+    let providers = providers.as_object_mut().ok_or("custom_provider 必须是对象")?;
+    if !providers.contains_key(id) {
+        providers.insert(
+            id.to_owned(),
+            json!({
+                "name": id,
+                "api": "anthropic-messages",
+                "enabled": true,
+                "models": {},
+                "options": {}
+            }),
+        );
+        return Ok(());
+    }
+    let entry = providers.get_mut(id).and_then(Value::as_object_mut).ok_or("自定义供应商必须是对象")?;
+    entry.entry("name".to_owned()).or_insert_with(|| json!(id));
+    entry.entry("api".to_owned()).or_insert_with(|| json!("anthropic-messages"));
+    entry.entry("enabled".to_owned()).or_insert_with(|| json!(true));
+    entry.entry("models".to_owned()).or_insert_with(|| json!({}));
+    entry.entry("options".to_owned()).or_insert_with(|| json!({}));
+    Ok(())
+}
+
+fn custom_entry<'a>(
+    object: &'a mut serde_json::Map<String, Value>,
+    id: &str,
+) -> Result<&'a mut serde_json::Map<String, Value>, String> {
+    object
+        .get_mut("custom_provider")
+        .and_then(Value::as_object_mut)
+        .and_then(|providers| providers.get_mut(id))
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| "自定义供应商不存在".into())
 }
 
 pub(crate) fn overlay(connection: &Connection) -> Result<Value, String> {

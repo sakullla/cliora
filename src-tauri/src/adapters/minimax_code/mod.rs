@@ -764,6 +764,121 @@ mod tests {
     }
 
     #[test]
+    fn configuration_editor_actions_write_address_format_name_and_model() {
+        let registry = crate::adapters::Registry::builtins();
+        let profile = serde_json::from_value(json!({
+            "id": "",
+            "tool": "minimax_code",
+            "name": "新建",
+            "version": 0,
+            "inheritCommon": false,
+            "files": {},
+            "connection": null,
+            "nativeCredentials": {}
+        }))
+        .unwrap();
+        let mut draft = crate::native::configuration::open(
+            &registry,
+            profile,
+            crate::native::adapter::Scope::Global,
+            "mcode-editor".into(),
+        )
+        .unwrap();
+        let set = |field: &str, value: Value| crate::adapters::configuration::ConfigurationAction {
+            version: crate::adapters::configuration::EDITING_VERSION,
+            target: json!({"kind": "connection"}),
+            operation: "set".into(),
+            field: Some(field.into()),
+            value: Some(value),
+        };
+        let edit = |draft, action| {
+            let next = crate::native::configuration::edit(&registry, draft, action).unwrap();
+            assert!(next.issues.is_empty(), "{:?}", next.issues);
+            next
+        };
+        draft = edit(draft, set("permissionMode", json!("bypassPermissions")));
+        draft = edit(draft, set("source", json!("minimax_api_key")));
+        draft = edit(draft, set("baseUrl", json!("https://api.minimaxi.com/anthropic")));
+        draft = edit(draft, set("interfaceFormat", json!("anthropic_messages")));
+        draft = edit(draft, set("model", json!("MiniMax-M2")));
+        let root = format::parse(FileKind::Yaml, draft.profile.files.get("config").unwrap()).unwrap();
+        assert_eq!(root["minimaxModelSource"], json!("minimax_api_key"));
+        assert_eq!(root["defaultModel"], json!("minimax/MiniMax-M2"));
+        assert_eq!(root["permissionMode"], json!("bypassPermissions"));
+        assert_eq!(
+            root.pointer("/minimax_api/baseURL").and_then(Value::as_str),
+            Some("https://api.minimaxi.com/anthropic")
+        );
+        assert!(root.pointer("/minimax_api/apiKey").is_none());
+        assert!(!serde_json::to_string(&root).unwrap().contains("sk-"));
+        let connection = draft.profile.connection.as_ref().unwrap();
+        assert_eq!(connection.provider_id, "minimax");
+        assert_eq!(connection.interface_format, "anthropic_messages");
+        assert_eq!(connection.model, "MiniMax-M2");
+        assert_eq!(draft.view["providerId"], json!("minimax"));
+
+        draft = edit(draft, set("provider", json!("demo")));
+        draft = edit(draft, set("name", json!("Demo")));
+        draft = edit(draft, set("baseUrl", json!("https://example.com/v1")));
+        draft = edit(draft, set("interfaceFormat", json!("openai_completions")));
+        draft = edit(draft, set("model", json!("demo-model")));
+        let root = format::parse(FileKind::Yaml, draft.profile.files.get("config").unwrap()).unwrap();
+        assert_eq!(root["defaultModel"], json!("custom_provider:demo/demo-model"));
+        assert_eq!(root.pointer("/custom_provider/demo/name").and_then(Value::as_str), Some("Demo"));
+        assert_eq!(
+            root.pointer("/custom_provider/demo/api").and_then(Value::as_str),
+            Some("openai-completions")
+        );
+        assert_eq!(
+            root.pointer("/custom_provider/demo/options/baseURL").and_then(Value::as_str),
+            Some("https://example.com/v1")
+        );
+        assert!(root.pointer("/custom_provider/demo/options/apiKey").is_none());
+        assert_eq!(
+            root.pointer("/minimax_api/baseURL").and_then(Value::as_str),
+            Some("https://api.minimaxi.com/anthropic")
+        );
+        assert_eq!(root["permissionMode"], json!("bypassPermissions"));
+        let custom = draft.profile.connection.as_ref().unwrap();
+        assert_eq!(custom.provider_id, "demo");
+        assert_eq!(custom.base_url, "https://example.com/v1");
+        assert_eq!(custom.interface_format, "openai_completions");
+        assert_eq!(custom.model, "demo-model");
+
+        draft = edit(draft, set("source", json!("token_plan")));
+        let root = format::parse(FileKind::Yaml, draft.profile.files.get("config").unwrap()).unwrap();
+        assert_eq!(root["minimaxModelSource"], json!("token_plan"));
+        assert_eq!(root["defaultModel"], json!("minimax/MiniMax-M2"));
+        assert_eq!(
+            root.pointer("/minimax_api/baseURL").and_then(Value::as_str),
+            Some("https://api.minimaxi.com/anthropic")
+        );
+        assert_eq!(
+            root.pointer("/custom_provider/demo/options/baseURL").and_then(Value::as_str),
+            Some("https://example.com/v1")
+        );
+        assert!(root.pointer("/custom_provider/demo/models/demo-model").is_some());
+        assert_eq!(root["permissionMode"], json!("bypassPermissions"));
+        let token = draft.profile.connection.as_ref().unwrap();
+        assert_eq!(token.provider_id, "token_plan");
+        assert_eq!(token.base_url, TOKEN_PLAN_PROFILE_URL);
+        assert_eq!(token.model, "MiniMax-M2");
+        assert!(!draft.profile.files["config"].contains(TOKEN_PLAN_PROFILE_URL));
+        assert!(!draft.profile.files["config"].contains("sk-"));
+
+        draft = edit(draft, set("provider", json!("demo")));
+        let root = format::parse(FileKind::Yaml, draft.profile.files.get("config").unwrap()).unwrap();
+        assert_eq!(root["defaultModel"], json!("custom_provider:demo/demo-model"));
+        assert_eq!(
+            root.pointer("/minimax_api/baseURL").and_then(Value::as_str),
+            Some("https://api.minimaxi.com/anthropic")
+        );
+        assert_eq!(draft.view["model"], json!("demo-model"));
+        assert_eq!(draft.view["baseUrl"], json!("https://example.com/v1"));
+        assert_eq!(draft.view["interfaceFormat"], json!("openai_completions"));
+    }
+
+    #[test]
     fn token_plan_projection_does_not_bind_the_api_key_quota() {
         let parsed = format::parse(FileKind::Yaml, MIXED).unwrap();
         let mut documents = BTreeMap::new();
