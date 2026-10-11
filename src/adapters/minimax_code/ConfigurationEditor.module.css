@@ -1,0 +1,5 @@
+.editor { display: grid; gap: 14px; min-width: 0; }
+.editor [hidden] { display: none !important; }
+.row { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.row input { flex: 1; min-width: 0; }
+.note { margin: 0; color: var(--text-2); font-size: .86em; line-height: 1.5; }
