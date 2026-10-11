@@ -668,6 +668,22 @@ mod tests {
         assert!(fresh.cli_args.is_empty());
         let yolo = crate::launch::plan(&db, &registry, temp.path(), request(None, true, LaunchMode::Yolo)).unwrap_err();
         assert!(yolo.contains("全权限"));
+        let unscoped = crate::launch::plan(
+            &db,
+            &registry,
+            temp.path(),
+            crate::launch::LaunchRequest {
+                tool_id: "minimax_code".into(),
+                project_id: None,
+                session_id: Some("sess-1".into()),
+                directory: None,
+                initial_prompt: None,
+                mode: LaunchMode::Normal,
+                resume_latest: false,
+            },
+        )
+        .unwrap_err();
+        assert!(unscoped.contains("原工作目录"), "{unscoped}");
     }
 
     #[test]
