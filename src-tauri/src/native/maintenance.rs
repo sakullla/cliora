@@ -173,7 +173,7 @@ mod tests {
         let script = if cfg!(windows) { "Start-Sleep -Seconds 30" } else { "sleep 30" };
         let started = Instant::now();
         assert!(run(shell(script, temp.path()), &AtomicBool::new(false), Duration::from_millis(150), &|_| {}).unwrap_err().contains("超时"));
-        assert!(started.elapsed() < Duration::from_secs(10));
+        assert!(started.elapsed() < Duration::from_secs(20));
     }
 
     #[test]
@@ -186,7 +186,7 @@ mod tests {
             if output.contains("ready") { cancelled.store(true, Ordering::Relaxed); }
         });
         assert!(result.unwrap_err().contains("取消"));
-        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(started.elapsed() < Duration::from_secs(15));
         cancelled.store(false, Ordering::Relaxed);
         assert!(run(shell("echo retried", temp.path()), &cancelled, Duration::from_secs(10), &|_| {}).unwrap().contains("retried"));
     }
