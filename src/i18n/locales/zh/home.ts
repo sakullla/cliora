@@ -45,7 +45,7 @@ export default {
     switchHint: '点一下即切换，下次启动会读取这份配置',
     launchRelaunch: '请重新检测安装状态后启动',
     launchOpenDir: '在 {{dir}} 打开；右键更换目录',
-    launchDesktop: '启动已安装的桌面应用',
+    launchDesktop: '直接启动已安装的桌面应用，不选择目录',
     launchInDir: '在 {{dir}} 启动；右键更换目录',
     launchYolo: '按此 CLI 的原生参数跳过审批',
     launchYoloFallback: '此 CLI 未提供已确认的 YOLO 参数，将用普通模式启动',

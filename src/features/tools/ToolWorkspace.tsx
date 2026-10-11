@@ -207,13 +207,18 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   }
   async function launch() {
     if (!nativeAvailable || launching) return;
+    const desktop = descriptor?.launchForm === 'desktop';
     setLaunching(true);
     try {
       const settings = await native.getLaunchSettings();
-      const directory = await open({ directory: true, multiple: false, title: t('tools.workspace.launchPickTitle', { name: descriptor?.name ?? toolId }) });
-      if (typeof directory !== 'string') return;
+      let directory: string | null = null;
+      if (!desktop) {
+        const picked = await open({ directory: true, multiple: false, title: t('tools.workspace.launchPickTitle', { name: descriptor?.name ?? toolId }) });
+        if (typeof picked !== 'string') return;
+        directory = picked;
+      }
       await native.launchCli({ toolId, projectId: null, sessionId: null, mode: preferredLaunchMode(settings, 'cli', descriptor?.yoloAvailable ?? false), directory });
-      setNotice(t('tools.workspace.launched', { name: descriptor?.name ?? toolId }));
+      setNotice(desktop ? t('tools.workspace.launchedDesktop', { name: descriptor?.name ?? toolId }) : t('tools.workspace.launched', { name: descriptor?.name ?? toolId }));
     } catch (failure) {
       setError(errorText(failure));
     } finally {
@@ -397,7 +402,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
         ? <div className={styles.loadingList} role="status" aria-label={t('tools.workspace.loading')}><span className="skeleton-block short" /><span className="skeleton-block" /><span className="skeleton-block" /></div>
         : <div className={styles.taskEmpty} data-tone={nativeAvailable ? 'error' : undefined}><Icon name={nativeAvailable ? 'alert' : 'monitor'} size={22} strokeWidth={1.5} /><div><strong>{nativeAvailable ? t('tools.workspace.loadFailed') : t('tools.workspace.needDesktop')}</strong><p>{nativeAvailable ? t('tools.workspace.loadFailedHint') : t('tools.workspace.previewHint')}</p></div>{nativeAvailable && <button className={styles.primary} onClick={() => void reload(toolId, scope, projectPath)}>{t('tools.workspace.retryLoad')}</button>}</div>)
       : <div className={styles.profileList} aria-label={t('tools.workspace.listAria')}>
-        <div className={styles.listHeading}><strong>{t('tools.workspace.profilesTitle')}{workspace.profiles.length > 0 && <span className="count-chip">{workspace.profiles.length}</span>}</strong><span className={styles.listActions}><button title={t('tools.workspace.launchTitle', { name: descriptor.name })} disabled={launching || !workspace} onClick={() => void launch()}><Icon name="play" size={14} strokeWidth={2} />{launching ? t('tools.workspace.launching') : t('home.tools.launch')}</button><button title={t('tools.workspace.commonTitle')} onClick={() => void openFrame('common')}><Icon name="settings" size={14} strokeWidth={2} />{t('tools.workspace.common')}</button><button className={styles.primary} onClick={() => void createProfile()}><Icon name="plus" size={14} strokeWidth={2} />{t('tools.workspace.frameNew')}</button></span></div>
+        <div className={styles.listHeading}><strong>{t('tools.workspace.profilesTitle')}{workspace.profiles.length > 0 && <span className="count-chip">{workspace.profiles.length}</span>}</strong><span className={styles.listActions}><button title={descriptor.launchForm === 'desktop' ? t('tools.workspace.launchTitleDesktop', { name: descriptor.name }) : t('tools.workspace.launchTitle', { name: descriptor.name })} disabled={launching || !workspace} onClick={() => void launch()} onContextMenu={(event) => { event.preventDefault(); void launch(); }}><Icon name="play" size={14} strokeWidth={2} />{launching ? t('tools.workspace.launching') : t('home.tools.launch')}</button><button title={t('tools.workspace.commonTitle')} onClick={() => void openFrame('common')}><Icon name="settings" size={14} strokeWidth={2} />{t('tools.workspace.common')}</button><button className={styles.primary} onClick={() => void createProfile()}><Icon name="plus" size={14} strokeWidth={2} />{t('tools.workspace.frameNew')}</button></span></div>
         {currentFile && <div className={styles.profileRow} data-kind="native"><span><button className={styles.profileName} onClick={() => void openFrame('current')}>{t('tools.workspace.currentFile')}</button><small>{t('tools.workspace.currentFileHint')}</small></span><button onClick={() => void openFrame('current')}>{t('tools.workspace.edit')}</button></div>}
         {workspace.profiles.length > 6 && <label className={styles.profileFilter}><SearchField type="search" label={t('home.tools.searchProfile')} pageSearch title={searchShortcutHint()} placeholder={t('tools.workspace.searchPlaceholder')} value={filter} onChange={setFilter} />{query && <span>{profileGroups.reduce((total, group) => total + group.visible.length, 0)} / {workspace.profiles.length}</span>}</label>}
         {!workspace.profiles.length && <div className={styles.profileEmpty}><strong>{t('tools.workspace.emptyTitle')}</strong><span>{t('tools.workspace.emptyDetail')}{currentFile ? t('tools.workspace.emptyCurrent') : ''}</span><button onClick={() => void createProfile()}><Icon name="plus" size={14} strokeWidth={2.2} />{t('tools.workspace.emptyCreate')}</button></div>}

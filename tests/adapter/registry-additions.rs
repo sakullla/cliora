@@ -745,10 +745,12 @@ fn cursor_and_minimax_code_stay_separate_from_the_minimax_quota_provider() {
     assert!(cursor
         .launch_args(None, crate::adapters::LaunchMode::Yolo)
         .is_err());
-    assert!(cursor
-        .desktop_launch_args(Path::new("/work/p"))
-        .unwrap()
-        .is_empty());
+    let cursor_directory = Path::new("/work/p");
+    let cursor_args = cursor.desktop_launch_args(cursor_directory).unwrap();
+    assert_eq!(cursor_args, vec![cursor_directory.display().to_string()]);
+    assert_eq!(cursor_args.len(), 1);
+    assert!(!cursor_args[0].starts_with('-'));
+    assert!(!cursor_args[0].to_ascii_lowercase().contains("agent"));
     assert_eq!(
         cursor
             .connection_policy(crate::native::adapter::Scope::Global)
