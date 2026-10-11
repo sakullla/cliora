@@ -192,6 +192,21 @@ pub trait PluginAdapter: Sync {
             value: Some(json!(items)),
         }])
     }
+    /// Filesystem add, enable, disable, or remove. The shared service applies it.
+    fn local_mutation(&self, _action: &str) -> bool {
+        false
+    }
+    fn plan_local_mutation(
+        &self,
+        _home: &Path,
+        _request: &PluginRequest,
+        _entry: Option<&PluginEntry>,
+    ) -> Result<Vec<crate::native::transaction::FileMutation>, String> {
+        Err("此插件操作没有本机目录变更".into())
+    }
+    fn cleanup_local_mutation(&self, _home: &Path, _request: &PluginRequest) -> Result<(), String> {
+        Ok(())
+    }
 }
 pub fn get(tool: &str) -> Result<&'static dyn PluginAdapter, String> {
     get_registered(&super::Registry::builtins(), tool)

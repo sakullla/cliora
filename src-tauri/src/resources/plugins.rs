@@ -692,7 +692,8 @@ pub fn operate(
     selection::validate_expected(&target.tool_id, target.context_id.as_deref())?;
     let adapter = adapters::plugins::get(&target.tool_id)?;
     let configured_operation = adapter.config_only(&request.action, None);
-    let needs_executable = !configured_operation || (!adapter.discovery_only() && adapter.config_field().is_none());
+    let local = adapter.local_mutation(&request.action);
+    let needs_executable = !local && (!configured_operation || (!adapter.discovery_only() && adapter.config_field().is_none()));
     let exe = if needs_executable { Some(executable(db, home, target, true)?) } else { None };
     let before = snapshot_inner(db, home, target, exe.as_deref())?;
     if before.baseline != request.baseline {
@@ -740,6 +741,11 @@ pub fn operate(
     adapter.validate_operation(request, entry)?;
     let result = if config_only {
         mutate_config(db, credentials, home, request).map(Some)
+    } else if local {
+        let changes = adapter.plan_local_mutation(home, request, entry)?;
+        let outcome = transaction::apply_files(db, credentials, &changes, |_| Ok(()))?;
+        adapter.cleanup_local_mutation(home, request)?;
+        Ok(Some(outcome.transaction_id))
     } else {
         let (path, _) = config(home, target)?;
         let source = adapter.operation_source(request, &path)?;
@@ -755,7 +761,9 @@ pub fn operate(
     let snapshot = snapshot_inner(db, home, target, exe.as_deref());
     match result {
         Ok(transaction_id) => Ok(PluginResult {
-            status: if config_only {
+            status: if local {
+                "local_directory_updated"
+            } else if config_only {
                 "configuration_written"
             } else {
                 "native_command_completed"
@@ -763,7 +771,9 @@ pub fn operate(
             .into(),
             detail: format!(
                 "{}；现有会话未热加载。{}",
-                if config_only && request.action == "uninstall" {
+                if local {
+                    "本机插件目录已更新，未执行钩子"
+                } else if config_only && request.action == "uninstall" {
                     "插件声明及禁用恢复记录已移除；本地包和依赖缓存保留"
                 } else if config_only {
                     "配置已写入，依赖安装与加载尚未验证"

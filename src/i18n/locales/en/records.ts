@@ -214,6 +214,7 @@ export default {
     scanFailed: ' · {{count}} failed',
     scanIncomplete: ' · scan incomplete',
     scanEmpty: 'Refresh to see local record sources.',
+    historyUnavailable: '{{tool}}: {{reason}}',
     backToList: '← Back to session list',
     unfavoriteAria: 'Remove favorite',
     favoriteAria: 'Favorite session',

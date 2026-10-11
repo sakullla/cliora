@@ -214,6 +214,7 @@ export default {
     scanFailed: ' · {{count}} 个失败',
     scanIncomplete: ' · 扫描不完整',
     scanEmpty: '刷新后查看本机记录来源。',
+    historyUnavailable: '{{tool}}：{{reason}}',
     backToList: '← 返回会话列表',
     unfavoriteAria: '取消收藏',
     favoriteAria: '收藏会话',

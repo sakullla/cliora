@@ -346,10 +346,7 @@ impl CliAdapter for Cline {
                 agents: false,
                 plugins: false,
                 project_plugins: false,
-                rules: RuleSupport {
-                    global: false,
-                    project: false,
-                },
+                rules: RuleSupport::bare(false, false),
             },
         }
     }

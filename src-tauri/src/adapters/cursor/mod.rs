@@ -5,7 +5,10 @@
 //! session directory is one positional path. A direct launch passes none.
 //! Cancelling the preference does not delete local Cursor files.
 
+mod agents;
 mod install;
+mod plugins;
+mod rules;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -14,13 +17,14 @@ use serde_json::Value;
 
 use super::{
     AdapterDescriptor, CliAdapter, Facet, InspectionFields, LaunchForm, LaunchMode,
-    ManagementCapabilities, RuleSupport,
+    ManagementCapabilities, McpLocation, RuleFileSpec, RuleSupport, SkillObservation,
 };
 use crate::credentials::CredentialStore;
 use crate::native::adapter::{NativeFile, Scope};
 use crate::native::apply::NativeSecrets;
 use crate::native::format::FileKind;
 use crate::native::profile::{Connection, RegisteredProfile};
+use crate::resources::mcp::{self, McpDefinition, McpTransport};
 
 pub struct Cursor;
 
@@ -60,6 +64,139 @@ impl CliAdapter for Cursor {
             .into_iter()
             .filter_map(|item| PathBuf::from(item.path).parent().map(Path::to_path_buf))
             .collect()
+    }
+    fn supports_mcp(&self) -> bool {
+        true
+    }
+    fn mcp_redacts_secrets(&self) -> bool {
+        true
+    }
+    fn mcp_location(&self, scope: Scope, home: &Path, project: Option<&Path>) -> Option<McpLocation> {
+        let path = match scope {
+            Scope::Global => home.join(".cursor").join("mcp.json"),
+            Scope::Project => project?.join(".cursor").join("mcp.json"),
+        };
+        Some(McpLocation {
+            path,
+            kind: FileKind::Json,
+            root: "mcpServers",
+            child: None,
+        })
+    }
+    fn mcp_document(
+        &self,
+        definition: &McpDefinition,
+        enabled: bool,
+        existing: Option<&Value>,
+    ) -> Result<Option<Value>, String> {
+        if !enabled {
+            return Ok(None);
+        }
+        let document = match definition.transport {
+            McpTransport::Stdio => mcp::stdio_doc(definition, existing),
+            McpTransport::Http => mcp::http_doc(definition, existing, "headers"),
+        };
+        Ok(Some(Value::Object(document)))
+    }
+    fn mcp_disabled_description(&self) -> Option<&'static str> {
+        Some("停用会从当前范围的 mcp.json 移除该条目；定义仍保留，密钥只留在原文件")
+    }
+    fn supports_skills(&self) -> bool {
+        true
+    }
+    fn skill_root(&self, scope: Scope, home: &Path, project: Option<&Path>) -> Option<PathBuf> {
+        match scope {
+            Scope::Global => Some(home.join(".cursor").join("skills")),
+            Scope::Project => Some(project?.join(".cursor").join("skills")),
+        }
+    }
+    fn skill_requires_manifest(&self) -> bool {
+        true
+    }
+    fn skill_observations(
+        &self,
+        scope: Scope,
+        home: &Path,
+        project: Option<&Path>,
+    ) -> Vec<SkillObservation> {
+        let mut roots = Vec::new();
+        match scope {
+            Scope::Global => {
+                roots.push(SkillObservation {
+                    root: home.join(".cursor").join("skills-cursor"),
+                    detail: "Cursor 内置 Skill，只读",
+                });
+                roots.push(SkillObservation {
+                    root: home.join(".claude").join("skills"),
+                    detail: "兼容目录，只读",
+                });
+                roots.push(SkillObservation {
+                    root: home.join(".codex").join("skills"),
+                    detail: "兼容目录，只读",
+                });
+                roots.push(SkillObservation {
+                    root: home.join(".agents").join("skills"),
+                    detail: "兼容目录，只读",
+                });
+            }
+            Scope::Project => {
+                let Some(project) = project else {
+                    return roots;
+                };
+                for (relative, detail) in [
+                    (".agents/skills", "兼容目录，只读"),
+                    (".claude/skills", "兼容目录，只读"),
+                    (".codex/skills", "兼容目录，只读"),
+                ] {
+                    roots.push(SkillObservation {
+                        root: project.join(relative),
+                        detail,
+                    });
+                }
+            }
+        }
+        roots
+    }
+    fn agents(&self) -> Option<&dyn super::agents::AgentAdapter> {
+        Some(self)
+    }
+    fn plugins(&self) -> Option<&dyn super::plugins::PluginAdapter> {
+        Some(self)
+    }
+    fn uses_rule_catalog(&self, scope: Scope) -> bool {
+        scope == Scope::Project
+    }
+    fn rule_file_specs(
+        &self,
+        scope: Scope,
+        _home: &Path,
+        project: Option<&Path>,
+    ) -> Result<Vec<RuleFileSpec>, String> {
+        if scope != Scope::Project {
+            return Err(rules::GLOBAL_REASON.into());
+        }
+        rules::list_specs(project.ok_or("请选择项目目录")?)
+    }
+    fn rule_create_path(&self, project: &Path, name: &str) -> Result<PathBuf, String> {
+        rules::create_path(project, name)
+    }
+    fn rule_relocate(&self, project: &Path, path: &Path, enabled: bool) -> Result<PathBuf, String> {
+        rules::relocate(project, path, enabled)
+    }
+    fn rule_unavailable_reason(&self, scope: Scope) -> Option<&'static str> {
+        match scope {
+            Scope::Global => Some(rules::GLOBAL_REASON),
+            Scope::Project => Some(rules::COMPOSE_REASON),
+        }
+    }
+    fn rule_support(&self) -> RuleSupport {
+        RuleSupport {
+            global: false,
+            project: true,
+            global_reason: rules::GLOBAL_REASON,
+            project_reason: "",
+            catalog: true,
+        }
     }
     fn native_files(
         &self,
@@ -160,8 +297,8 @@ impl CliAdapter for Cursor {
                 reason: "Cursor 没有已核对的稳定会话恢复契约",
             },
             resources: Facet {
-                state: "planned",
-                reason: "规则、Skills、MCP、子 Agent 与本地插件尚未按已核对契约交付",
+                state: "available",
+                reason: "可管理项目规则、Skills、两级 MCP、子 Agent 和用户本地插件",
             },
             history: Facet {
                 state: "unsupported",
@@ -170,15 +307,14 @@ impl CliAdapter for Cursor {
             login: None,
             management: ManagementCapabilities {
                 accounts: false,
-                mcp: false,
-                skills: false,
-                agents: false,
-                plugins: false,
+                mcp: self.supports_mcp(),
+                skills: self.supports_skills(),
+                agents: self.agents().is_some_and(|adapter| adapter.capability().supported),
+                plugins: self
+                    .plugins()
+                    .is_some_and(|adapter| !adapter.capability().actions.is_empty()),
                 project_plugins: false,
-                rules: RuleSupport {
-                    global: false,
-                    project: false,
-                },
+                rules: self.rule_support(),
             },
             configuration: None,
         }
@@ -230,5 +366,349 @@ mod tests {
                 .is_some_and(|name| name.eq_ignore_ascii_case("Cursor.exe")));
             assert!(!item.path.to_ascii_lowercase().contains("agent"));
         }
+    }
+
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    use crate::credentials::CredentialStore;
+    use crate::database::Database;
+    use crate::resources::mcp::{
+        distribute, list_native, preview_targets, save_definition, McpDraft, McpTransport,
+    };
+    use crate::resources::plugins::{operate, scan, PluginRequest, PluginTarget};
+    use crate::resources::rules::{self, RuleTarget};
+    use crate::resources::{agents, skills};
+
+    struct MemoryStore(Mutex<HashMap<String, String>>);
+    impl CredentialStore for MemoryStore {
+        fn put(&self, key: &str, value: &str) -> Result<(), String> {
+            self.0.lock().unwrap().insert(key.into(), value.into());
+            Ok(())
+        }
+        fn get(&self, key: &str) -> Result<String, String> {
+            self.0.lock().unwrap().get(key).cloned().ok_or_else(|| "missing".into())
+        }
+        fn delete(&self, key: &str) -> Result<(), String> {
+            self.0.lock().unwrap().remove(key);
+            Ok(())
+        }
+    }
+
+    fn copy_fixture(from: &str, to: &Path) {
+        let text = match from {
+            "review.mdc" => include_str!("../../../../tests/fixtures/cursor/rules/review.mdc"),
+            "notes.md" => include_str!("../../../../tests/fixtures/cursor/rules/notes.md"),
+            "AGENTS.md" => include_str!("../../../../tests/fixtures/cursor/AGENTS.md"),
+            "SKILL.md" => include_str!("../../../../tests/fixtures/cursor/skills/review/SKILL.md"),
+            "mcp.json" => include_str!("../../../../tests/fixtures/cursor/mcp.json"),
+            "helper.md" => include_str!("../../../../tests/fixtures/cursor/agents/helper.md"),
+            "plugin.json" => include_str!("../../../../tests/fixtures/cursor/plugin/.cursor-plugin/plugin.json"),
+            "bundled.md" => include_str!("../../../../tests/fixtures/cursor/plugin/skills/bundled/SKILL.md"),
+            "hook.md" => include_str!("../../../../tests/fixtures/cursor/plugin/hooks/README.md"),
+            "plugin-mcp.json" => include_str!("../../../../tests/fixtures/cursor/plugin/mcp.json"),
+            _ => panic!("unknown fixture"),
+        };
+        if let Some(parent) = to.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(to, text).unwrap();
+    }
+
+    #[test]
+    fn project_rules_keep_unknown_frontmatter_and_plain_markdown_is_inert() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("test.db")).unwrap();
+        let keys = MemoryStore(Mutex::new(HashMap::new()));
+        let registry = crate::adapters::Registry::builtins();
+        let project = temp.path().join("project");
+        std::fs::create_dir_all(project.join(".cursor/rules")).unwrap();
+        copy_fixture("review.mdc", &project.join(".cursor/rules/review.mdc"));
+        copy_fixture("notes.md", &project.join(".cursor/rules/notes.md"));
+        copy_fixture("AGENTS.md", &project.join("AGENTS.md"));
+        let target = RuleTarget {
+            context_id: None,
+            tool_id: "cursor".into(),
+            scope: Scope::Project,
+            project_path: Some(project.display().to_string()),
+            baseline_hash: None,
+        };
+        let files = rules::list_files(&db, &registry, temp.path(), &target).unwrap();
+        let mdc = files.iter().find(|file| file.kind == "mdc").unwrap();
+        let inert = files.iter().find(|file| file.kind == "inert").unwrap();
+        let agents = files.iter().find(|file| file.kind == "agents").unwrap();
+        assert!(mdc.text.contains("owner: kept"));
+        assert!(mdc.writable && mdc.enabled);
+        assert!(!inert.writable);
+        assert!(inert.detail.contains("不会被"));
+        assert!(agents.writable);
+        let saved = rules::save_file(
+            &db,
+            &keys,
+            &registry,
+            temp.path(),
+            &target,
+            &mdc.path,
+            &mdc.text,
+            &format!("{}\nExtra line.\n", mdc.text),
+        );
+        assert!(saved.is_ok(), "{saved:?}");
+        let again = std::fs::read_to_string(project.join(".cursor/rules/review.mdc")).unwrap();
+        assert!(again.contains("owner: kept"));
+        assert!(again.contains("Extra line."));
+        let rejected = rules::save_file(
+            &db,
+            &keys,
+            &registry,
+            temp.path(),
+            &target,
+            &inert.path,
+            &inert.text,
+            "changed\n",
+        );
+        assert!(rejected.unwrap_err().contains("不会被"));
+        let moved = rules::set_file_enabled(
+            &db,
+            &keys,
+            &registry,
+            temp.path(),
+            &target,
+            &mdc.path,
+            false,
+            &again,
+        );
+        assert!(moved.is_ok(), "{moved:?}");
+        assert!(!project.join(".cursor/rules/review.mdc").exists());
+        assert!(project
+            .join(".cursor/.cliora-disabled-rules/review.mdc")
+            .is_file());
+        let global = RuleTarget {
+            context_id: None,
+            tool_id: "cursor".into(),
+            scope: Scope::Global,
+            project_path: None,
+            baseline_hash: None,
+        };
+        let reason = rules::read_current(&db, &registry, temp.path(), &global).unwrap_err();
+        assert!(reason.contains("没有已核对"));
+    }
+
+    #[test]
+    fn mcp_secrets_stay_off_the_page_and_out_of_the_definition() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("test.db")).unwrap();
+        let keys = MemoryStore(Mutex::new(HashMap::new()));
+        let registry = crate::adapters::Registry::builtins();
+        let path = temp.path().join(".cursor/mcp.json");
+        copy_fixture("mcp.json", &path);
+        let request = crate::resources::mcp::McpTargetRequest {
+            context_id: None,
+            tool_id: "cursor".into(),
+            scope: Scope::Global,
+            project_path: None,
+            enabled: true,
+            baseline_hash: None,
+            allow_replace: false,
+            preview_token: None,
+        };
+        let entries = list_native(&db, &registry, temp.path(), &request).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(!entries[0].env.contains_key("API_TOKEN"));
+        assert_eq!(entries[0].env.get("SAFE").map(String::as_str), Some("visible"));
+        assert!(entries[0].protected_values);
+        let definition = save_definition(
+            &db,
+            McpDraft {
+                id: None,
+                name: "local".into(),
+                transport: McpTransport::Stdio,
+                command: "echo".into(),
+                args: vec!["ok".into()],
+                url: String::new(),
+                env: std::collections::BTreeMap::from([
+                    ("SAFE".into(), "visible".into()),
+                    ("REF".into(), "${TOKEN}".into()),
+                ]),
+                headers: std::collections::BTreeMap::new(),
+                in_library: true,
+                expected_version: None,
+            },
+        )
+        .unwrap();
+        let stored = serde_json::to_string(&definition).unwrap();
+        assert!(!stored.contains("sk-test-cursor-secret"));
+        let preview = preview_targets(&db, &registry, temp.path(), &definition.id, vec![request.clone()]);
+        let body = format!("{:?}", preview[0]);
+        assert!(!body.contains("sk-test-cursor-secret"), "{body}");
+        let mut ready = request.clone();
+        ready.allow_replace = true;
+        ready.baseline_hash = preview[0].baseline_hash.clone();
+        ready.preview_token = preview[0].preview_token.clone();
+        let written = distribute(&db, &keys, &registry, temp.path(), &definition.id, vec![ready]);
+        assert_eq!(written[0].status, "written", "{:?}", written[0]);
+        let disk = std::fs::read_to_string(&path).unwrap();
+        assert!(disk.contains("sk-test-cursor-secret"));
+        assert!(Cursor.native_files(Scope::Global, temp.path(), None, true).is_empty());
+    }
+
+    #[test]
+    fn skills_and_agents_keep_compat_and_builtins_read_only() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("test.db")).unwrap();
+        let keys = MemoryStore(Mutex::new(HashMap::new()));
+        let registry = crate::adapters::Registry::builtins();
+        let project = temp.path().join("project");
+        copy_fixture("SKILL.md", &project.join(".cursor/skills/review/SKILL.md"));
+        std::fs::create_dir_all(project.join(".cursor/skills/loose")).unwrap();
+        std::fs::write(project.join(".cursor/skills/loose/README.md"), "no manifest\n").unwrap();
+        copy_fixture("SKILL.md", &project.join(".claude/skills/compat/SKILL.md"));
+        copy_fixture("helper.md", &project.join(".cursor/agents/helper.md"));
+        std::fs::create_dir_all(project.join(".codex/agents")).unwrap();
+        std::fs::write(
+            project.join(".codex/agents/compat.md"),
+            "---\nname: compat\ndescription: shared\n---\n\nbody\n",
+        )
+        .unwrap();
+        let skills = skills::scan_native(
+            &db,
+            &registry,
+            temp.path(),
+            "cursor",
+            Scope::Project,
+            Some(&project.display().to_string()),
+        )
+        .unwrap();
+        assert!(skills.iter().any(|entry| entry.name == "review" && entry.state == "external"));
+        assert!(skills.iter().all(|entry| entry.name != "loose"));
+        let compat = skills.iter().find(|entry| entry.name == "compat").unwrap();
+        assert_eq!(compat.state, "read_only");
+        let rejected = skills::save_document(
+            &db,
+            &keys,
+            &registry,
+            temp.path(),
+            "cursor",
+            Scope::Project,
+            Some(&project.display().to_string()),
+            &compat.path,
+            &std::fs::read_to_string(project.join(".claude/skills/compat/SKILL.md")).unwrap(),
+            "changed\n",
+        );
+        assert!(rejected.unwrap_err().contains("只读"));
+        let snapshot = agents::scan(
+            &db,
+            temp.path(),
+            &PluginTarget {
+                tool_id: "cursor".into(),
+                scope: Scope::Project,
+                project_path: Some(project.display().to_string()),
+                context_id: None,
+            },
+        )
+        .unwrap();
+        let owned = snapshot.entries.iter().find(|entry| entry.name == "helper").unwrap();
+        assert!(!owned.read_only);
+        assert!(owned.content.contains("owner: kept"));
+        let foreign = snapshot.entries.iter().find(|entry| entry.path.contains(".codex")).unwrap();
+        assert!(foreign.read_only);
+        for name in ["Explore", "Browser", "Agent"] {
+            assert!(snapshot.entries.iter().any(|entry| entry.name == name && entry.read_only && entry.builtin));
+        }
+    }
+
+    #[test]
+    fn local_plugins_move_only_manifest_directories() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("test.db")).unwrap();
+        let keys = MemoryStore(Mutex::new(HashMap::new()));
+        let source = temp.path().join("source-plugin");
+        copy_fixture("plugin.json", &source.join(".cursor-plugin/plugin.json"));
+        copy_fixture("bundled.md", &source.join("skills/bundled/SKILL.md"));
+        copy_fixture("hook.md", &source.join("hooks/README.md"));
+        copy_fixture("plugin-mcp.json", &source.join("mcp.json"));
+        std::fs::create_dir_all(temp.path().join(".cursor/plugins/local/managed")).unwrap();
+        std::fs::write(
+            temp.path().join(".cursor/plugins/local/managed/README.md"),
+            "no manifest\n",
+        )
+        .unwrap();
+        let target = PluginTarget {
+            tool_id: "cursor".into(),
+            scope: Scope::Global,
+            project_path: None,
+            context_id: None,
+        };
+        let first = scan(&db, temp.path(), &target).unwrap();
+        assert!(first.entries.iter().any(|entry| entry.id == "managed" && entry.read_only));
+        let installed = operate(
+            &db,
+            &keys,
+            temp.path(),
+            &PluginRequest {
+                target: target.clone(),
+                action: "install".into(),
+                source: source.display().to_string(),
+                baseline: first.baseline.clone(),
+                trusted: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(installed.status, "local_directory_updated", "{installed:?}");
+        let snapshot = installed.snapshot.unwrap();
+        let entry = snapshot.entries.iter().find(|entry| entry.id == "source-plugin").unwrap();
+        assert!(!entry.read_only);
+        assert!(entry.resources.iter().any(|resource| resource.kind == "skills"));
+        assert!(entry.resources.iter().any(|resource| resource.kind == "hooks"));
+        assert!(entry.resources.iter().any(|resource| resource.kind == "mcp"));
+        let disabled = operate(
+            &db,
+            &keys,
+            temp.path(),
+            &PluginRequest {
+                target: target.clone(),
+                action: "disable".into(),
+                source: entry.id.clone(),
+                baseline: snapshot.baseline.clone(),
+                trusted: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(disabled.status, "local_directory_updated", "{disabled:?}");
+        assert!(!temp.path().join(".cursor/plugins/local/source-plugin").exists());
+        assert!(temp
+            .path()
+            .join(".cursor/plugins/.cliora-disabled-plugins/source-plugin/.cursor-plugin/plugin.json")
+            .is_file());
+        let after_disable = disabled.snapshot.unwrap();
+        let enabled = operate(
+            &db,
+            &keys,
+            temp.path(),
+            &PluginRequest {
+                target: target.clone(),
+                action: "enable".into(),
+                source: "source-plugin".into(),
+                baseline: after_disable.baseline,
+                trusted: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(enabled.status, "local_directory_updated", "{enabled:?}");
+        let removed = operate(
+            &db,
+            &keys,
+            temp.path(),
+            &PluginRequest {
+                target,
+                action: "uninstall".into(),
+                source: "source-plugin".into(),
+                baseline: enabled.snapshot.unwrap().baseline,
+                trusted: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(removed.status, "local_directory_updated", "{removed:?}");
+        assert!(!temp.path().join(".cursor/plugins/local/source-plugin").exists());
+        assert!(temp.path().join(".cursor/plugins/local/managed/README.md").is_file());
     }
 }

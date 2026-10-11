@@ -18,7 +18,7 @@ export type AdapterDescriptor = {
   resources: AdapterFacet;
   history: AdapterFacet;
   login?: { hint: string } | null;
-  management?: { accounts: boolean; mcp: boolean; skills: boolean; agents: boolean; plugins: boolean; projectPlugins: boolean; rules?: { global: boolean; project: boolean } };
+  management?: { accounts: boolean; mcp: boolean; skills: boolean; agents: boolean; plugins: boolean; projectPlugins: boolean; rules?: { global: boolean; project: boolean; globalReason?: string; projectReason?: string; catalog?: boolean } };
 };
 export type AdapterCatalog = {
   registered: AdapterDescriptor[];

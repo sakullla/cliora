@@ -8,7 +8,7 @@ use crate::database::Database;
 use crate::library::{self, LibraryKind};
 use crate::native::adapter::Scope;
 use crate::adapters::Registry;
-use crate::native::transaction::{self, TextPatch};
+use crate::native::transaction::{self, FileMutation, TextPatch};
 use crate::projects;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -61,7 +61,12 @@ fn path_for(
     };
     adapter
         .rule_path(target.scope, home, project.as_deref())
-        .ok_or_else(|| "此 CLI 在当前范围没有已确认的原生规则文件".into())
+        .ok_or_else(|| {
+            adapter
+                .rule_unavailable_reason(target.scope)
+                .unwrap_or("此 CLI 在当前范围没有已确认的原生规则文件")
+                .to_owned()
+        })
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -87,6 +92,278 @@ pub fn enabled(db: &Database, registry: &Registry, home: &Path, target: &RuleTar
     let file=read_current(db,registry,home,target)?;
     Ok(!file.text.is_empty())
 }
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeRuleFile {
+    pub id: String,
+    pub path: String,
+    pub name: String,
+    pub kind: String,
+    pub enabled: bool,
+    pub writable: bool,
+    pub detail: String,
+    pub text: String,
+    pub fingerprint: String,
+}
+
+fn catalog_project(target: &RuleTarget) -> Result<std::path::PathBuf, String> {
+    if target.scope != Scope::Project {
+        return Err("目录型规则只存在于项目范围".into());
+    }
+    projects::checked_directory(target.project_path.as_deref().ok_or("请选择项目目录")?)
+}
+
+fn require_catalog<'a>(
+    registry: &'a Registry,
+    target: &RuleTarget,
+) -> Result<&'a dyn crate::adapters::CliAdapter, String> {
+    let adapter = registry.get(&target.tool_id).ok_or("此 CLI 尚无注册适配器")?;
+    if adapter.uses_rule_catalog(target.scope) {
+        Ok(adapter)
+    } else {
+        Err(adapter
+            .rule_unavailable_reason(target.scope)
+            .unwrap_or("此 CLI 没有目录型规则")
+            .to_owned())
+    }
+}
+
+pub fn list_files(
+    db: &Database,
+    registry: &Registry,
+    home: &Path,
+    target: &RuleTarget,
+) -> Result<Vec<NativeRuleFile>, String> {
+    let _context = crate::accounts::selection::enter_bound(
+        db,
+        home,
+        &target.tool_id,
+        target.scope,
+        target.project_path.as_deref().map(Path::new),
+    )?;
+    let adapter = require_catalog(registry, target)?;
+    let project = catalog_project(target)?;
+    let specs = adapter.rule_file_specs(target.scope, home, Some(&project))?;
+    specs
+        .into_iter()
+        .map(|spec| {
+            let text = transaction::read_native(&spec.path)?;
+            if text.len() > 1024 * 1024 {
+                return Err("规则内容超过 1 MiB".into());
+            }
+            Ok(NativeRuleFile {
+                id: spec.id,
+                path: spec.path.display().to_string(),
+                name: spec.name,
+                kind: spec.kind.to_owned(),
+                enabled: spec.enabled,
+                writable: spec.writable,
+                detail: spec.detail.to_owned(),
+                fingerprint: transaction::fingerprint(text.as_bytes()),
+                text,
+            })
+        })
+        .collect()
+}
+
+fn find_spec<'a>(
+    specs: &'a [crate::adapters::RuleFileSpec],
+    path: &str,
+) -> Result<&'a crate::adapters::RuleFileSpec, String> {
+    specs
+        .iter()
+        .find(|spec| spec.path == Path::new(path))
+        .ok_or_else(|| "规则不在已扫描的目录".into())
+}
+
+pub fn save_file(
+    db: &Database,
+    credentials: &dyn CredentialStore,
+    registry: &Registry,
+    home: &Path,
+    target: &RuleTarget,
+    path: &str,
+    original: &str,
+    edited: &str,
+) -> Result<transaction::ApplyOutcome, String> {
+    let _context = crate::accounts::selection::enter_bound(
+        db,
+        home,
+        &target.tool_id,
+        target.scope,
+        target.project_path.as_deref().map(Path::new),
+    )?;
+    crate::accounts::selection::validate_expected(&target.tool_id, target.context_id.as_deref())?;
+    if edited.len() > 1024 * 1024 {
+        return Err("规则内容超过 1 MiB".into());
+    }
+    let adapter = require_catalog(registry, target)?;
+    let project = catalog_project(target)?;
+    let specs = adapter.rule_file_specs(target.scope, home, Some(&project))?;
+    let spec = find_spec(&specs, path)?;
+    if spec.kind == "inert" || !spec.writable {
+        return Err(if spec.detail.is_empty() {
+            "此规则不能保存".into()
+        } else {
+            spec.detail.to_owned()
+        });
+    }
+    let current = transaction::read_native(&spec.path)?;
+    if current != original {
+        return Err("规则已被外部修改，请重新打开".into());
+    }
+    if current == edited {
+        return Ok(transaction::ApplyOutcome {
+            transaction_id: String::new(),
+            changed_files: Vec::new(),
+            status: "already_matching",
+        });
+    }
+    transaction::apply_text(
+        db,
+        credentials,
+        &[TextPatch {
+            path: spec.path.clone(),
+            baseline: original.into(),
+            contents: edited.into(),
+            sensitive: false,
+        }],
+        |_| Ok(()),
+    )
+}
+
+pub fn create_file(
+    db: &Database,
+    credentials: &dyn CredentialStore,
+    registry: &Registry,
+    home: &Path,
+    target: &RuleTarget,
+    name: &str,
+    text: &str,
+) -> Result<transaction::ApplyOutcome, String> {
+    let _context = crate::accounts::selection::enter_bound(
+        db,
+        home,
+        &target.tool_id,
+        target.scope,
+        target.project_path.as_deref().map(Path::new),
+    )?;
+    crate::accounts::selection::validate_expected(&target.tool_id, target.context_id.as_deref())?;
+    let text = if text.is_empty() {
+        "---\ndescription: \"\"\nalwaysApply: false\n---\n"
+    } else {
+        text
+    };
+    if text.len() > 1024 * 1024 {
+        return Err("规则内容超过 1 MiB".into());
+    }
+    let adapter = require_catalog(registry, target)?;
+    let project = catalog_project(target)?;
+    let path = adapter.rule_create_path(&project, name)?;
+    transaction::apply_files(
+        db,
+        credentials,
+        &[FileMutation {
+            path,
+            baseline: None,
+            contents: Some(text.to_owned()),
+        }],
+        |_| Ok(()),
+    )
+}
+
+pub fn delete_file(
+    db: &Database,
+    credentials: &dyn CredentialStore,
+    registry: &Registry,
+    home: &Path,
+    target: &RuleTarget,
+    path: &str,
+    original: &str,
+) -> Result<transaction::ApplyOutcome, String> {
+    let _context = crate::accounts::selection::enter_bound(
+        db,
+        home,
+        &target.tool_id,
+        target.scope,
+        target.project_path.as_deref().map(Path::new),
+    )?;
+    crate::accounts::selection::validate_expected(&target.tool_id, target.context_id.as_deref())?;
+    let adapter = require_catalog(registry, target)?;
+    let project = catalog_project(target)?;
+    let specs = adapter.rule_file_specs(target.scope, home, Some(&project))?;
+    let spec = find_spec(&specs, path)?;
+    if spec.kind != "mdc" {
+        return Err("只有 .mdc 规则可以删除".into());
+    }
+    let current = transaction::read_native(&spec.path)?;
+    if current != original {
+        return Err("规则已被外部修改，请重新打开".into());
+    }
+    transaction::apply_files(
+        db,
+        credentials,
+        &[FileMutation {
+            path: spec.path.clone(),
+            baseline: Some(current),
+            contents: None,
+        }],
+        |_| Ok(()),
+    )
+}
+
+pub fn set_file_enabled(
+    db: &Database,
+    credentials: &dyn CredentialStore,
+    registry: &Registry,
+    home: &Path,
+    target: &RuleTarget,
+    path: &str,
+    enabled: bool,
+    original: &str,
+) -> Result<transaction::ApplyOutcome, String> {
+    let _context = crate::accounts::selection::enter_bound(
+        db,
+        home,
+        &target.tool_id,
+        target.scope,
+        target.project_path.as_deref().map(Path::new),
+    )?;
+    crate::accounts::selection::validate_expected(&target.tool_id, target.context_id.as_deref())?;
+    let adapter = require_catalog(registry, target)?;
+    let project = catalog_project(target)?;
+    let specs = adapter.rule_file_specs(target.scope, home, Some(&project))?;
+    let spec = find_spec(&specs, path)?;
+    if spec.kind != "mdc" {
+        return Err("只有 .mdc 规则可以启停".into());
+    }
+    if spec.enabled == enabled {
+        return Err("状态未改变".into());
+    }
+    let current = transaction::read_native(&spec.path)?;
+    if current != original {
+        return Err("规则已被外部修改，请重新打开".into());
+    }
+    let dest = adapter.rule_relocate(&project, &spec.path, enabled)?;
+    transaction::apply_files(
+        db,
+        credentials,
+        &[
+            FileMutation {
+                path: spec.path.clone(),
+                baseline: Some(current.clone()),
+                contents: None,
+            },
+            FileMutation {
+                path: dest,
+                baseline: None,
+                contents: Some(current),
+            },
+        ],
+        |_| Ok(()),
+    )
+}
+
 pub fn set_enabled(db: &Database, credentials: &dyn CredentialStore, registry: &Registry, home: &Path, target: &RuleTarget, enabled: bool) -> Result<(),String> {
     let _context=crate::accounts::selection::enter_bound(db,home,&target.tool_id,target.scope,target.project_path.as_deref().map(Path::new))?;
     crate::accounts::selection::validate_expected(&target.tool_id,target.context_id.as_deref())?;

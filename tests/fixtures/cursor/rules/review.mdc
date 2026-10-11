@@ -1,0 +1,8 @@
+---
+description: review changes
+globs: "**/*.rs"
+alwaysApply: false
+owner: kept
+---
+
+Review the diff.

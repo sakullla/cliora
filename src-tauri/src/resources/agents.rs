@@ -349,7 +349,10 @@ fn plugin_owned(
     home: &Path,
     target: &PluginTarget,
 ) -> Result<Vec<plugins::PluginEntry>, String> {
-    if crate::adapters::plugins::get(&target.tool_id).is_err() {
+    let Some(adapter) = crate::adapters::plugins::get(&target.tool_id).ok() else {
+        return Ok(Vec::new());
+    };
+    if target.scope == Scope::Project && !adapter.capability().project {
         return Ok(Vec::new());
     }
     // Do not lose package ownership when native discovery fails.

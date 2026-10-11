@@ -234,6 +234,30 @@ fn manifest_info(
     Ok((description, compatibility))
 }
 
+struct SkillFile {
+    name: String,
+    file: PathBuf,
+    writable: bool,
+}
+
+fn skill_directory_name(directory: &str) -> Result<&str, String> {
+    Path::new(directory)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|name| !name.is_empty() && *name != "." && *name != ".." && !name.contains(['/', '\\']))
+        .ok_or_else(|| "Skills 目录名无效".into())
+}
+
+fn same_directory(requested: &Path, dir: &Path) -> bool {
+    let Ok(requested) = requested.canonicalize() else {
+        return false;
+    };
+    let Ok(dir) = dir.canonicalize() else {
+        return false;
+    };
+    requested == dir
+}
+
 fn skill_markdown(
     registry: &Registry,
     home: &Path,
@@ -241,25 +265,36 @@ fn skill_markdown(
     scope: Scope,
     project_path: Option<&str>,
     directory: &str,
-) -> Result<(String, PathBuf), String> {
+) -> Result<SkillFile, String> {
     let (placeholder, _) = target(registry, home, tool, scope, project_path, "placeholder")?;
     let root = placeholder.parent().ok_or("Skills 原生目录无效")?;
     let requested = Path::new(directory);
-    let name = requested
-        .file_name()
-        .and_then(|value| value.to_str())
-        .filter(|name| !name.is_empty() && *name != "." && *name != ".." && !name.contains(['/', '\\']))
-        .ok_or("Skills 目录名无效")?;
+    let name = skill_directory_name(directory)?;
     let dir = root.join(name);
-    if !dir.is_dir() {
-        return Err("Skill 不在当前工具的 Skills 目录".into());
+    if dir.is_dir() && same_directory(requested, &dir) {
+        return Ok(SkillFile {
+            name: name.to_owned(),
+            file: dir.join("SKILL.md"),
+            writable: true,
+        });
     }
-    let requested_canon = requested.canonicalize().map_err(|_| "Skill 目录不存在".to_string())?;
-    let dir_canon = dir.canonicalize().map_err(|_| "Skill 目录不存在".to_string())?;
-    if requested_canon != dir_canon {
-        return Err("Skill 不在当前工具的 Skills 目录".into());
+    let adapter = registry.get(tool).ok_or("此 CLI 尚无注册适配器")?;
+    let project = if scope == Scope::Project {
+        Some(projects::checked_directory(project_path.ok_or("请选择项目目录")?)?)
+    } else {
+        None
+    };
+    for observation in adapter.skill_observations(scope, home, project.as_deref()) {
+        let dir = observation.root.join(name);
+        if dir.is_dir() && same_directory(requested, &dir) {
+            return Ok(SkillFile {
+                name: name.to_owned(),
+                file: dir.join("SKILL.md"),
+                writable: false,
+            });
+        }
     }
-    Ok((name.to_owned(), dir.join("SKILL.md")))
+    Err("Skill 不在当前工具的 Skills 目录".into())
 }
 
 pub fn read_document(
@@ -272,9 +307,9 @@ pub fn read_document(
     directory: &str,
 ) -> Result<NativeSkillDocument, String> {
     let _context = crate::accounts::selection::enter_bound(db, home, tool, scope, project_path.map(Path::new))?;
-    let (name, file) = skill_markdown(registry, home, tool, scope, project_path, directory)?;
-    let content = transaction::read_native(&file)?;
-    Ok(NativeSkillDocument { name, path: directory.to_owned(), content })
+    let located = skill_markdown(registry, home, tool, scope, project_path, directory)?;
+    let content = transaction::read_native(&located.file)?;
+    Ok(NativeSkillDocument { name: located.name, path: directory.to_owned(), content })
 }
 
 pub fn save_document(
@@ -290,7 +325,11 @@ pub fn save_document(
     content: &str,
 ) -> Result<(), String> {
     let _context = crate::accounts::selection::enter_bound(db, home, tool, scope, project_path.map(Path::new))?;
-    let (_, file) = skill_markdown(registry, home, tool, scope, project_path, directory)?;
+    let located = skill_markdown(registry, home, tool, scope, project_path, directory)?;
+    if !located.writable {
+        return Err("兼容目录和内置 Skill 只读，不能保存".into());
+    }
+    let file = located.file;
     let exists = file.is_file();
     let current = if exists { transaction::read_native(&file)? } else { String::new() };
     if current != baseline {
@@ -1069,12 +1108,50 @@ pub fn scan_native(
 ) -> Result<Vec<NativeSkillEntry>, String> {
     let _context = crate::accounts::selection::enter_bound(db,home,tool,scope,project_path.map(Path::new))?;
     let _ = recover_report(db)?;
+    let adapter = registry.get(tool).ok_or("此 CLI 尚无注册适配器")?;
+    let require_manifest = adapter.skill_requires_manifest();
     let (placeholder, scope_key) = target(registry, home, tool, scope, project_path, "scan")?;
     let root = placeholder.parent().ok_or("Skills 原生目录无效")?;
-    if !root.exists() {
-        return Ok(Vec::new());
-    }
+    let project = if scope == Scope::Project {
+        Some(projects::checked_directory(project_path.ok_or("请选择项目目录")?)?)
+    } else {
+        None
+    };
     let mut entries = Vec::new();
+    if root.exists() {
+        scan_skill_children(db, tool, &scope_key, root, None, require_manifest, &mut entries)?;
+    }
+    for observation in adapter.skill_observations(scope, home, project.as_deref()) {
+        if observation.root.exists() {
+            scan_skill_children(
+                db,
+                tool,
+                &scope_key,
+                &observation.root,
+                Some(observation.detail),
+                require_manifest,
+                &mut entries,
+            )?;
+        }
+    }
+    entries.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(entries)
+}
+
+fn has_skill_manifest(path: &Path) -> bool {
+    let file = path.join("SKILL.md");
+    fs::symlink_metadata(&file).is_ok_and(|meta| meta.is_file() && !meta.file_type().is_symlink())
+}
+
+fn scan_skill_children(
+    db: &Database,
+    tool: &str,
+    scope_key: &str,
+    root: &Path,
+    read_only_detail: Option<&str>,
+    require_manifest: bool,
+    entries: &mut Vec<NativeSkillEntry>,
+) -> Result<(), String> {
     for entry in fs::read_dir(root).map_err(|error| error.to_string())? {
         let entry = entry.map_err(|error| error.to_string())?;
         let name = entry.file_name().to_string_lossy().to_string();
@@ -1085,26 +1162,43 @@ pub fn scan_native(
             return Err("原生 Skills 目录超过 128 个，请缩小管理范围".into());
         }
         let path = entry.path();
+        if require_manifest && !has_skill_manifest(&path) {
+            continue;
+        }
         let inspected = snapshot(&path);
-        let (checksum, detail) = match inspected {
+        let (checksum, mut detail) = match inspected {
             Ok((_, description, _, _, checksum)) => (Some(checksum), description),
             Err(error) => (None, error),
         };
-        let package_id: Option<String> = db.with_connection(|conn| {
-            conn.query_row(
-                "SELECT id FROM skill_packages WHERE name = ?1",
-                [&name],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|error| error.to_string())
-        })?;
+        let read_only = read_only_detail.is_some();
+        if let Some(note) = read_only_detail {
+            detail = if detail.is_empty() {
+                note.to_owned()
+            } else {
+                format!("{note} · {detail}")
+            };
+        }
+        let package_id: Option<String> = if read_only {
+            None
+        } else {
+            db.with_connection(|conn| {
+                conn.query_row(
+                    "SELECT id FROM skill_packages WHERE name = ?1",
+                    [&name],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|error| error.to_string())
+            })?
+        };
         let managed: Option<String> = if let Some(id) = package_id.as_deref() {
             db.with_connection(|conn| conn.query_row("SELECT digest FROM skill_installations WHERE package_id = ?1 AND tool = ?2 AND scope_key = ?3 AND target_path = ?4", params![id, tool, scope_key, path.display().to_string()], |row| row.get(0)).optional().map_err(|error| error.to_string()))?
         } else {
             None
         };
-        let state = if checksum.is_none() {
+        let state = if read_only {
+            "read_only"
+        } else if checksum.is_none() {
             "unreadable"
         } else if managed.as_deref() == checksum.as_deref() {
             "managed"
@@ -1120,8 +1214,7 @@ pub fn scan_native(
             package_id,
         });
     }
-    entries.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(entries)
+    Ok(())
 }
 
 pub fn preview_target(
