@@ -1,8 +1,0 @@
-defaultModel: minimax_api/MiniMax-M2.7
-minimaxModelSource: minimax_api_key
-minimax_api:
-  apiKey: synthetic-fixture-key
-  baseURL: https://example.invalid/anthropic
-  modelContextLimits:
-    MiniMax-M2.7: 204800
-permissionMode: default

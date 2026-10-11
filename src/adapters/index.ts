@@ -5,8 +5,6 @@ import { grokUiAdapter } from './grok';
 import { piUiAdapter } from './pi';
 import { opencodeUiAdapter } from './opencode';
 import { zcodeUiAdapter } from './zcode';
-import { cursorIdeUiAdapter } from './cursor_ide';
-import { minimaxCodeUiAdapter } from './minimax_code';
 import { qoderCnUiAdapter } from './qoder_cn';
 import { kimiCodeUiAdapter } from './kimi_code';
 import { deepseekUiAdapter } from './deepseek';
@@ -26,8 +24,6 @@ const specialized = new Map<string, ToolUiAdapter>([
   [piUiAdapter.id, piUiAdapter],
   [opencodeUiAdapter.id, opencodeUiAdapter],
   [zcodeUiAdapter.id, zcodeUiAdapter],
-  [cursorIdeUiAdapter.id, cursorIdeUiAdapter],
-  [minimaxCodeUiAdapter.id, minimaxCodeUiAdapter],
   [qoderCnUiAdapter.id, qoderCnUiAdapter],
   [kimiCodeUiAdapter.id, kimiCodeUiAdapter],
   [deepseekUiAdapter.id, deepseekUiAdapter],

@@ -46,7 +46,6 @@ pub struct AdapterDescriptor {
     pub project_model_override: bool,
     pub yolo_available: bool,
     pub launch_form: LaunchForm,
-    pub launch_directory: LaunchDirectory,
     pub native_config: Facet,
     pub launch: Facet,
     pub resume: Facet,
@@ -96,16 +95,6 @@ pub enum LaunchForm {
     Desktop,
 }
 
-/// Explicit directory semantics, independent of process cwd. Desktop adapters
-/// opt in only after cold/warm workspace behavior is verified.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LaunchDirectory {
-    Terminal,
-    Workspace,
-    Unsupported,
-}
-
 #[derive(Default)]
 pub struct InspectionFields {
     pub provider: Option<String>,
@@ -128,14 +117,6 @@ pub struct NativeCredentialTarget {
     pub role: String,
     pub path: Vec<String>,
     pub remove_paths: Vec<Vec<String>>,
-}
-
-/// Additional adapter-owned Skill roots are discovery-only. Shared services
-/// retain filesystem validation; these roots never become installation targets.
-pub struct SkillReadRoot {
-    pub id: &'static str,
-    pub path: PathBuf,
-    pub reason: &'static str,
 }
 
 pub trait CliAdapter: Sync {
@@ -368,16 +349,11 @@ pub trait CliAdapter: Sync {
     fn launch_form(&self) -> LaunchForm {
         LaunchForm::Terminal
     }
-    fn launch_directory(&self) -> LaunchDirectory {
-        match self.launch_form() {
-            LaunchForm::Terminal => LaunchDirectory::Terminal,
-            LaunchForm::Desktop => LaunchDirectory::Unsupported,
-        }
-    }
-    /// Called only for explicit workspace intent, never fallback process cwd.
-    /// Missing ports must reject rather than downgrade a project to bare launch.
-    fn desktop_launch_args(&self, _workspace: &Path) -> Result<Vec<String>, String> {
-        Err("此桌面应用尚无已验证的打开工作区能力".into())
+    /// Directory-dependent arguments for a desktop launch, such as a workspace
+    /// flag. Only consulted for the desktop form; terminal launches set the
+    /// working directory instead.
+    fn desktop_launch_args(&self, _directory: &Path) -> Result<Vec<String>, String> {
+        Ok(Vec::new())
     }
     fn history_sources(&self, _home: &Path) -> Result<Vec<HistorySource>, String> {
         Ok(Vec::new())
@@ -465,54 +441,12 @@ pub trait CliAdapter: Sync {
             .and_then(Value::as_object).cloned().unwrap_or_default())
     }
     /// Normalize an entry for display, including its native enabled/disabled state.
-    /// Recognize a complete native reference without resolving it. Existing
-    /// adapters retain ${NAME}/{env:NAME}, optionally prefixed by Bearer.
-    /// Override for another native grammar; shared redaction owns protection.
-    fn mcp_is_reference(&self, value: &str) -> bool {
-        crate::resources::mcp::is_reference(value)
-    }
-    /// Conversion checks include interpolation inside URLs and arguments.
-    /// Redaction still uses whole-value recognition: mixed values may contain
-    /// literal secrets alongside references.
-    fn mcp_reference_fragments(&self, value: &str) -> Vec<String> {
-        crate::adapters::mcp_codec::reference_fragments(value, &|part| self.mcp_is_reference(part))
-    }
-    /// Most clients share one grammar across scopes. An adapter with distinct
-    /// global/project interpolation must reject ambiguous legacy provenance.
-    fn mcp_reference_fragments_at(&self, value: &str, _scope: Option<Scope>) -> Result<Vec<String>, String> {
-        Ok(self.mcp_reference_fragments(value))
-    }
-    fn mcp_is_reference_at(&self, value: &str, _scope: Scope) -> bool { self.mcp_is_reference(value) }
     fn mcp_entry_view(&self, entry: &Value) -> Value { entry.clone() }
-    /// Native loaders may interpret the same fields differently by scope.
-    fn mcp_entry_view_at(&self, entry: &Value, _scope: Scope) -> Value { self.mcp_entry_view(entry) }
-    /// Decode a native entry into the portable model. Consumers must inspect
-    /// unmapped fields before converting; raw editing retains the original.
-    fn mcp_decode(&self, name: &str, entry: &Value) -> Result<crate::adapters::mcp_codec::DecodedMcp, String> {
-        crate::adapters::mcp_codec::decode(name, &self.mcp_entry_view(entry))
-    }
-    fn mcp_decode_at(&self, name: &str, entry: &Value, _scope: Scope) -> Result<crate::adapters::mcp_codec::DecodedMcp, String> {
-        self.mcp_decode(name, entry)
-    }
-    fn mcp_parse_text(&self, location: &McpLocation, text: &str) -> Result<Value, String> {
-        crate::native::format::parse(location.kind, text).map_err(|_| "MCP 配置语法无效，请检查文件格式".into())
-    }
-    fn mcp_render_text(&self, location: &McpLocation, value: &Value) -> Result<String, String> {
-        crate::native::format::render(location.kind, value)
-    }
-    fn mcp_render_entry(&self, location: &McpLocation, name: &str, entry: Value) -> Result<String, String> {
-        let empty = self.mcp_parse_text(location, "")?;
-        let change = self.mcp_change(&empty, location, name, Some(entry))?;
-        crate::native::format::set_path(location.kind, "", &change.path, change.value.as_ref())
-    }
     fn mcp_change(&self, _parsed: &Value, location: &McpLocation, name: &str, value: Option<Value>) -> Result<crate::native::transaction::FieldChange, String> {
         let mut path = vec![location.root.to_owned()];
         if let Some(child) = location.child { path.push(child.to_owned()); }
         path.push(name.to_owned());
         Ok(crate::native::transaction::FieldChange { path, value })
-    }
-    fn mcp_change_in_scope(&self, parsed: &Value, location: &McpLocation, name: &str, value: Option<Value>, _scope: Scope) -> Result<crate::native::transaction::FieldChange, String> {
-        self.mcp_change(parsed, location, name, value)
     }
     fn mcp_location_for_version(
         &self,
@@ -540,14 +474,9 @@ pub trait CliAdapter: Sync {
     ) -> Result<Option<Value>, String> {
         self.mcp_document(definition, enabled, existing)
     }
-    fn mcp_document_in_scope(&self, definition: &McpDefinition, enabled: bool, existing: Option<&Value>, location: &McpLocation, _scope: Scope) -> Result<Option<Value>, String> {
-        self.mcp_document_at(definition, enabled, existing, location)
-    }
     fn mcp_disabled_description(&self) -> Option<&'static str> {
         None
     }
-    fn validate_skill_write(&self, _home: &Path) -> Result<(), String> { Ok(()) }
-    fn skill_read_roots(&self, _scope: Scope, _home: &Path, _project: Option<&Path>) -> Vec<SkillReadRoot> { Vec::new() }
     fn skill_root(&self, _scope: Scope, _home: &Path, _project: Option<&Path>) -> Option<PathBuf> {
         None
     }
@@ -635,7 +564,6 @@ pub trait CliAdapter: Sync {
             project_model_override: self.supports_project_model_override(),
             yolo_available: self.launch_args(None, LaunchMode::Yolo).is_ok(),
             launch_form: self.launch_form(),
-            launch_directory: self.launch_directory(),
             native_config: Facet {
                 state: "available",
                 reason: "已确认 CLI 身份，可编辑受支持的原生文件格式",

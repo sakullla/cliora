@@ -97,7 +97,7 @@
 
 .rowActions { display: grid; grid-column: 3 / -1; grid-template-columns: subgrid; align-items: center; justify-items: end; column-gap: 6px; }
 .rowActions > .launch, .rowActions > .recheck { grid-column: 1; justify-self: stretch; }
-.rowActions > .configure { grid-column: 3; width: var(--control-h-sm); padding: 0; }
+.rowActions > .configure { grid-column: 3; }
 .rowActions > button { min-height: var(--control-h-sm); }
 .rowActions .launch { min-width: 68px; border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
 .rowActions .launch:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }

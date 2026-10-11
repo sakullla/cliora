@@ -1,23 +1,15 @@
-import type { FeedbackOperation } from '../../lib/notifications';
-import { useFeedback, FeedbackRegion } from '../../components/Feedback';
-import { removalContext, useAccountLabels, useResourceContexts } from './resourceContexts';
+import { removalContext, useAccountLabels } from './resourceContexts';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { open as pickPath } from '@tauri-apps/plugin-dialog';
 import { GuideDialog } from '../../components/GuideDialog';
-import { ResourceList } from '../../components/resources/ResourceList';
-import { ResourceBatch, type BatchJob } from '../../components/resources/ResourceBatch';
-import { SkillDocumentEditor } from '../../components/resources/SkillDocumentEditor';
-import { McpDocumentPanel } from '../../components/resources/McpDocumentPanel';
-import { McpPaste } from '../../components/resources/McpPaste';
-import { readResourceStates, resourceError } from '../../lib/resources';
-import { writeClipboard } from '../../lib/clipboard';
+import { SearchField } from '../../components/SearchField';
 import { Icon } from '../../components/Icon';
 import { ScopeMarks, samePath, scopeLabel } from './CliMarks';
 import { confirmAction } from '../../lib/confirm';
 import { CliTargetGrid } from './CliTargetGrid';
 import { native } from '../../lib/native';
-import { saveShortcutHint } from '../../lib/shortcut';
+import { saveShortcutHint, searchShortcutHint } from '../../lib/shortcut';
 import type { Project } from '../../types/launch';
 import type { AdapterDescriptor, Scope } from '../../types/native';
 import type { McpDefinition, McpDraft, McpPlacement, McpTargetRequest, SkillImportPreview, SkillInstallation, SkillPackage } from '../../types/resources';
@@ -30,7 +22,7 @@ function blank(): McpDraft {
   return { id: null, name: '', transport: 'stdio', command: '', args: [], url: '', env: {}, headers: {}, inLibrary: true, expectedVersion: null };
 }
 function draftOf(item: McpDefinition): McpDraft {
-  return { id: item.id, name: item.name, transport: item.transport, command: item.command, args: item.args, url: item.url, env: item.env, headers: item.headers, referenceSource: item.referenceSource, referenceScope: item.referenceScope, inLibrary: item.inLibrary !== false, expectedVersion: item.version };
+  return { id: item.id, name: item.name, transport: item.transport, command: item.command, args: item.args, url: item.url, env: item.env, headers: item.headers, inLibrary: item.inLibrary !== false, expectedVersion: item.version };
 }
 function lines(value: Record<string, string>): string {
   return Object.entries(value).map(([key, item]) => `${key}=${item}`).join('\n');
@@ -51,6 +43,10 @@ function failure(error: unknown) {
   return error && typeof error === 'object' && 'message' in error ? String(error.message) : i18n.t('tools.workspace.operationFailed');
 }
 
+function installStateLabel(state: SkillInstallation['state']): string {
+  return i18n.t(`library.resources.installState.${state}`);
+}
+
 export function LibraryResources({ section, active, tools, projects, createSignal = 0 }: { section: 'mcp' | 'skill'; active: boolean; tools: AdapterDescriptor[]; projects: Project[]; createSignal?: number }) {
   const { t } = useTranslation();
   const contextLabel = useAccountLabels();
@@ -60,118 +56,51 @@ export function LibraryResources({ section, active, tools, projects, createSigna
   const [conflict, setConflict] = useState(false);
   const [formKey, setFormKey] = useState(0);
   const distributeRef = useRef<McpDistributeHandle>(null);
-  const editorGeneration = useRef(0);
-  const editorRevision = useRef(0);
-  const saveOperation = useRef<FeedbackOperation | null>(null);
-  useEffect(() => () => { editorGeneration.current++; }, []);
   const [packages, setPackages] = useState<SkillPackage[]>([]);
   const [installations, setInstallations] = useState<SkillInstallation[]>([]);
   const [draft, setDraft] = useState<McpDraft | null>(null);
   const [envText, setEnvText] = useState('');
   const [headerText, setHeaderText] = useState('');
   const [busy, setBusy] = useState(false);
-  const feedback = useFeedback(JSON.stringify(['resources', section]));
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(''), 4000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+  const [dialogError, setDialogError] = useState('');
   const [skillOpen, setSkillOpen] = useState(false);
   const [skillUrl, setSkillUrl] = useState('');
   const [archiveSelection, setArchiveSelection] = useState<{ source: string; local: boolean; entries: string[]; chosen: string | null } | null>(null);
   const [pendingImport, setPendingImport] = useState<{ preview: SkillImportPreview; kind: 'local' | 'zip' | 'local_zip'; source: string; subdirectory: string | null } | null>(null);
   const [skillTarget, setSkillTarget] = useState<SkillPackage | null>(null);
-  const [skillDirty, setSkillDirty] = useState(false);
-  const [configOpen, setConfigOpen] = useState(false);
-  const [configDirty, setConfigDirty] = useState(false);
   const [skillSeed, setSkillSeed] = useState<string[]>([]);
   const [installTools, setInstallTools] = useState<string[]>([]);
-  const [visibleIds, setVisibleIds] = useState<string[]>([]);
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [stateVersion, setStateVersion] = useState(0);
-  const [skillStates, setSkillStates] = useState<Record<string, 'ready' | 'failed'>>({});
-  const [addedId, setAddedId] = useState<string | null>(null);
-  const [batchTool, setBatchTool] = useState('');
-  const [batchScope, setBatchScope] = useState('');
-  const [batchAction, setBatchAction] = useState('distribute');
-  const batchTarget: McpTargetRequest = { toolId: batchTool, scope: batchScope ? 'project' : 'global', projectPath: batchScope || null, enabled: batchAction !== 'disable' };
-  const batchContexts = useResourceContexts(batchTool ? [{ id: batchTool }] : [], [], batchTarget);
-  if (batchTool && batchContexts.ready(batchTarget)) batchTarget.contextId = batchContexts.context(batchTarget);
-  useEffect(() => {
-    if (section !== 'skill') return;
-    let live = true;
-    const ids = [...new Set([...visibleIds, ...selectedIds])];
-    void (async () => {
-      for (let offset = 0; offset < ids.length && live; offset += 50) {
-        const chunk = ids.slice(offset, offset + 50);
-        try {
-          const results = await readResourceStates(chunk.map(packageId => ({ kind: 'skill' as const, packageId })), () => live);
-          if (!live) return;
-          for (const result of results) {
-            const id = chunk[result.index]; if (!id) continue;
-            setSkillStates(old => ({ ...old, [id]: result.status === 'ready' ? 'ready' : 'failed' }));
-            if (result.status === 'ready' && Array.isArray(result.value)) setInstallations(old => [...old.filter(entry => entry.packageId !== id), ...result.value as SkillInstallation[]]);
-          }
-        } catch { if (live) setSkillStates(old => ({ ...old, ...Object.fromEntries(chunk.map(id => [id, 'failed'])) })); }
-      }
-    })();
-    return () => { live = false; };
-  }, [section, JSON.stringify(visibleIds), JSON.stringify(selectedIds), stateVersion]);
-  async function refreshResources() {
-    if (section === 'skill') await reloadSkills();
-    else { const [items, placed] = await Promise.all([native.listMcpDefinitions(), native.listMcpPlacements()]); setDefinitions(items); setPlacements(placed); }
-  }
-  function batch(ids: string[]) {
-    const items = section === 'skill' ? packages : definitions;
-    const jobs: BatchJob[] = ids.map(id => {
-      const item = items.find(item => item.id === id)!;
-      if (batchAction === 'delete') return { id, name: item.name, run: async () => { if (section === 'skill') await native.deleteSkillPackage(id); else await native.deleteMcpDefinition(id, (item as McpDefinition).version); } };
-      return { id, name: item.name, operation: section === 'mcp' ? { action: 'mcp_apply', definitionId: id, target: batchTarget } : batchAction === 'distribute' ? { action: 'skill_install', packageId: id, target: batchTarget, previewToken: null, allowTakeover: false } : { action: batchAction === 'remove' ? 'skill_remove' : 'skill_enable', packageId: id, target: batchTarget } };
-    });
-    return <div><div className={styles.actions}>
-      <label>{t('library.experience.batchAction')}<select aria-label={t('library.experience.batchAction')} value={batchAction} onChange={event => setBatchAction(event.target.value)}>{['distribute', 'enable', 'disable', ...(section === 'skill' ? ['remove'] : []), 'delete'].map(action => <option key={action} value={action}>{t(`library.experience.${action}`)}</option>)}</select></label>
-      {batchAction !== 'delete' && <><label>{t('library.experience.batchTarget')}<select aria-label={t('library.experience.batchTarget')} value={batchTool} onChange={event => setBatchTool(event.target.value)}><option value="">—</option>{tools.filter(tool => tool.management?.[section === 'skill' ? 'skills' : 'mcp'] !== false).map(tool => <option key={tool.id} value={tool.id}>{tool.name}</option>)}</select></label><label>{t('library.experience.scope')}<select aria-label={t('library.experience.scope')} value={batchScope} onChange={event => setBatchScope(event.target.value)}><option value="">{t('tools.apply.global')}</option>{projects.filter(project => project.available && project.path).map(project => <option key={project.id} value={project.path!}>{project.name}</option>)}</select></label></>}
-    </div>{(batchTool && batchContexts.ready(batchTarget) || batchAction === 'delete') && <ResourceBatch key={JSON.stringify([section, batchTool, batchScope, batchAction])} context={JSON.stringify(['library-batch', section, batchTarget, batchAction])} jobs={jobs} action={t(`library.experience.${batchAction}`)} destructive={['delete', 'remove', 'disable'].includes(batchAction)} onChanged={refreshResources} />}</div>;
-  }
-  async function copyResource(id: string) {
-    const result = feedback.begin(JSON.stringify(['copy', section, id]));
-    try {
-      let text: string;
-      if (section === 'skill') text = (await native.readSkillPackageDocument(id)).content;
-      else {
-        const toolId = tools.find(tool => tool.management?.mcp !== false)?.id;
-        if (!toolId) throw new Error(t('library.experience.invalidConfig'));
-        text = (await native.readMcpDocument({ target: { toolId, scope: 'global', projectPath: null, enabled: true }, definitionId: id, name: definitions.find(item => item.id === id)!.name })).text;
-      }
-      if (!await writeClipboard(text)) throw new Error(t('library.experience.copyFailed'));
-      result.success(section === 'skill' ? t('library.page.copied') : t('library.experience.copiedEntry'));
-    } catch (error) { result.error(resourceError(error)); }
-  }
-  function acceptDraft(value: McpDraft, copy = false) {
-    setConfigOpen(false); setConfigDirty(false);
-    editorRevision.current++;
-    if (copy) { editorGeneration.current++; setFormKey(value => value + 1); }
-    setDraft({ ...value, id: copy ? null : draft?.id ?? null, expectedVersion: copy ? null : draft?.expectedVersion ?? null, inLibrary: true });
-    setEnvText(lines(value.env)); setHeaderText(lines(value.headers));
-  }
+  const [search, setSearch] = useState('');
+  useEffect(() => { setSearch(''); }, [section]);
 
   useEffect(() => {
     if (!active) return;
-    let live = true; const operationFeedback = feedback.begin('load');
+    let live = true;
     const load = section === 'mcp'
       ? Promise.all([native.listMcpDefinitions(), native.listMcpPlacements()]).then(([items, placed]) => { if (live) { setDefinitions(items); setPlacements(placed); } })
       : native.listSkillPackages().then(async (items) => {
         if (!live) return;
         setPackages(items);
-        if (live) setStateVersion(value => value + 1);
+        const found = (await Promise.all(items.map((item) => native.listSkillInstallations(item.id)))).flat();
+        if (live) setInstallations(found);
       });
-    void load.then(() => { if (live) operationFeedback.complete(); }).catch((value) => { if (live) operationFeedback.error(failure(value)); });
+    void load.catch((value) => { if (live) setError(failure(value)); });
     return () => { live = false; };
   }, [active, section]);
 
   function editMcp(item?: McpDefinition) {
-    editorGeneration.current++;
-    setConfigOpen(false);
-    saveOperation.current = null;
     const next = item ? draftOf(item) : blank();
     setDraft(next);
     setEnvText(item ? lines(item.env) : '');
     setHeaderText(item ? lines(item.headers) : '');
+    setDialogError('');
     setWillDistribute(false);
     setConflict(false);
     setFormKey((value) => value + 1);
@@ -182,38 +111,38 @@ export function LibraryResources({ section, active, tools, projects, createSigna
     if (createSignal === handledCreate.current) return;
     handledCreate.current = createSignal;
     if (section === 'mcp') editMcp();
-    else if (!busy) { setSkillOpen(true); }
+    else if (!busy) { setDialogError(''); setSkillOpen(true); }
   }, [createSignal]);
 
   async function remove(item: McpDefinition) {
-    const operationFeedback = feedback.begin(JSON.stringify(['remove', item.id]));
     if (busy || !await confirmAction(t('library.resources.confirmRemoveMcp', { name: item.name }), () => true, { title: t('tools.mcp.removeTitle'), confirmLabel: t('tools.agents.delete'), destructive: true })) return;
-    setBusy(true); try {
+    setBusy(true); setError('');
+    try {
       await native.deleteMcpDefinition(item.id, item.version);
       setDefinitions(await native.listMcpDefinitions());
       setDraft(null);
-      operationFeedback.success(t('library.resources.removed'));
-    } catch (value) { operationFeedback.error(failure(value)); }
+      setNotice(t('library.resources.removed'));
+    } catch (value) { setError(failure(value)); }
     finally { setBusy(false); }
   }
 
   async function reloadSkills() {
     const items = await native.listSkillPackages();
     setPackages(items);
-    setStateVersion(value => value + 1);
+    setInstallations((await Promise.all(items.map((entry) => native.listSkillInstallations(entry.id)))).flat());
   }
 
   function closeSkill() {
     setSkillOpen(false);
     setArchiveSelection(null);
     setPendingImport(null);
-    }
+    setDialogError('');
+  }
 
-  async function finishSkillImport(operationFeedback: FeedbackOperation, item?: SkillPackage) {
+  async function finishSkillImport(item?: SkillPackage) {
     const prior = item ? installations.filter((entry) => entry.packageId === item.id && entry.state !== 'conflict' && entry.state !== 'disabled' && entry.state !== 'unavailable') : [];
     const checked = installTools.filter((toolId) => !prior.some((entry) => entry.toolId === toolId && entry.scope === 'global'));
     await reloadSkills();
-    if (item) setAddedId(item.id);
     closeSkill();
     setInstallTools([]);
     const targets = [
@@ -223,29 +152,29 @@ export function LibraryResources({ section, active, tools, projects, createSigna
     if (item && targets.length) {
       const notes: string[] = [];
       const conflicts: string[] = [];
-      const failed: string[] = [];
       for (const target of targets) {
         const name = tools.find((tool) => tool.id === target.toolId)?.name ?? target.toolId;
-        try {
         const preview = await native.previewSkillTarget(item.id, target.toolId, target.scope, target.projectPath);
         if (preview?.status === 'conflict') { conflicts.push(name); continue; }
         const outcome = await native.installSkill(item.id, target.toolId, target.scope, target.projectPath, preview?.previewToken ?? null, false);
-        if (outcome.status === 'failed') failed.push(name + ': ' + outcome.detail);
         notes.push(t('library.resources.syncEntry', { name, result: outcome.status === 'failed' ? outcome.detail : t('library.resources.synced') }));
-        } catch (value) { failed.push(name + ': ' + failure(value)); }
       }
       await reloadSkills();
-      if (conflicts.length || failed.length) {
+      const failed = notes.filter((line) => !line.endsWith(t('library.resources.synced')));
+      if (conflicts.length) {
         setSkillSeed([]);
         setSkillTarget(item);
-        operationFeedback.partial(t('library.resources.addedToLibrary'), { detail: [...(conflicts.length ? [t('library.resources.conflictsNotice', { names: conflicts.join('、') })] : []), ...failed].join(' · ') });
-      } else operationFeedback.success(notes.join(t('tools.quota.errorSeparator')) || t('library.resources.syncedAll'));
+        setNotice(t('library.resources.conflictsNotice', { names: conflicts.join('、') }));
+      } else if (failed.length) setError(failed.join(t('tools.quota.errorSeparator')));
+      else setNotice(notes.join(t('tools.quota.errorSeparator')) || t('library.resources.syncedAll'));
+      if (!failed.length) setError('');
       return;
     }
-    operationFeedback.success(t('library.resources.addedToLibrary'));
-    }
+    setNotice(t('library.resources.addedToLibrary'));
+    setError('');
+  }
 
-  async function importPreview(preview: SkillImportPreview, kind: 'local' | 'zip' | 'local_zip', source: string, subdirectory: string | null, operationFeedback: FeedbackOperation) {
+  async function importPreview(preview: SkillImportPreview, kind: 'local' | 'zip' | 'local_zip', source: string, subdirectory: string | null) {
     if (preview.existingDigest && preview.existingDigest !== preview.digest) {
       setPendingImport({ preview, kind, source, subdirectory });
       setArchiveSelection(null);
@@ -256,22 +185,22 @@ export function LibraryResources({ section, active, tools, projects, createSigna
       : kind === 'local_zip'
         ? await native.importSkillLocalZip(source, subdirectory, preview.digest, preview.existingDigest)
         : await native.importSkillHttpsZip(source, subdirectory, preview.digest, preview.existingDigest);
-    if (item) await finishSkillImport(operationFeedback, item);
+    if (item) await finishSkillImport(item);
   }
 
   async function addFolder() {
-    const operationFeedback = feedback.begin('addFolder');
     try {
       const source = await pickPath({ directory: true, multiple: false, title: t('tools.skills.pickDirTitle') });
       if (typeof source !== 'string') return;
-      setBusy(true); await importPreview(await native.previewSkillLocal(source), 'local', source, null, operationFeedback);
-    } catch (value) { operationFeedback.error(failure(value)); }
+      setBusy(true); setDialogError('');
+      await importPreview(await native.previewSkillLocal(source), 'local', source, null);
+    } catch (value) { setDialogError(failure(value)); }
     finally { setBusy(false); }
   }
 
   async function addArchive(source: string, localZip: boolean, chosen?: string) {
-    const operationFeedback = feedback.begin(JSON.stringify(['addArchive', source, chosen]));
-    setBusy(true); try {
+    setBusy(true); setDialogError('');
+    try {
       let child = chosen ?? null;
       if (chosen === undefined) {
         const entries = await native.listSkillZipEntries(source, localZip);
@@ -279,207 +208,162 @@ export function LibraryResources({ section, active, tools, projects, createSigna
         child = entries[0] || null;
       }
       const preview = localZip ? await native.previewSkillLocalZip(source, child) : await native.previewSkillHttpsZip(source, child);
-      await importPreview(preview, localZip ? 'local_zip' : 'zip', source, child, operationFeedback);
+      await importPreview(preview, localZip ? 'local_zip' : 'zip', source, child);
       if (!localZip) setSkillUrl('');
-    } catch (value) { operationFeedback.error(failure(value)); }
+    } catch (value) { setDialogError(failure(value)); }
     finally { setBusy(false); }
   }
 
   async function addZip() {
-    const operationFeedback = feedback.begin('addZip');
     try {
       const source = await pickPath({ directory: false, multiple: false, title: t('tools.skills.pickZipTitle'), filters: [{ name: 'ZIP', extensions: ['zip'] }] });
       if (typeof source === 'string') await addArchive(source, true);
-    } catch (value) { operationFeedback.error(failure(value)); }
+    } catch (value) { setDialogError(failure(value)); }
   }
 
   async function confirmSkillImport() {
-    const operationFeedback = feedback.begin(JSON.stringify(['confirmSkillImport', pendingImport?.preview.name]));
     if (!pendingImport) return;
-    setBusy(true); try {
+    setBusy(true); setDialogError('');
+    try {
       const { preview, kind, source, subdirectory } = pendingImport;
       const item = kind === 'local' ? await native.importSkillLocal(source, preview.digest, preview.existingDigest)
         : kind === 'local_zip' ? await native.importSkillLocalZip(source, subdirectory, preview.digest, preview.existingDigest)
         : await native.importSkillHttpsZip(source, subdirectory, preview.digest, preview.existingDigest);
-      await finishSkillImport(operationFeedback, item);
-    } catch (value) { operationFeedback.error(failure(value)); }
+      await finishSkillImport(item);
+    } catch (value) { setDialogError(failure(value)); }
     finally { setBusy(false); }
   }
 
   async function removePackage(item: SkillPackage) {
-    const operationFeedback = feedback.begin(JSON.stringify(['removePackage', item.id]));
     const placed = installations.some((entry) => entry.packageId === item.id);
     const message = placed ? t('library.resources.confirmDeletePlaced', { name: item.name }) : t('library.resources.confirmDelete', { name: item.name });
     if (busy || !await confirmAction(message, () => true, { title: t('library.resources.deleteSkillTitle'), confirmLabel: t('tools.agents.delete'), destructive: true })) return;
-    setBusy(true); try {
+    setBusy(true); setError('');
+    try {
       await native.deleteSkillPackage(item.id);
       await reloadSkills();
-      operationFeedback.success(t('library.resources.removed'));
-    } catch (value) { operationFeedback.error(failure(value)); }
+      setNotice(t('library.resources.removed'));
+    } catch (value) { setError(failure(value)); }
     finally { setBusy(false); }
   }
 
   async function save() {
     if (!draft || busy) return;
-    const operationFeedback = feedback.begin(JSON.stringify(['save', draft.id ?? 'new:' + formKey]));
-    saveOperation.current = operationFeedback;
-    const generation = editorGeneration.current;
-    const revision = editorRevision.current;
-    const current = () => editorGeneration.current === generation && editorRevision.current === revision;
-    const distribution = distributeRef.current;
-    const distribute = willDistribute || placements.some(item => item.definitionId === draft.id);
-    let saved: McpDefinition | null = null;
-    let writtenNotice: string | null = null;
-    async function finish(result: FeedbackOperation) {
-      if (!saved) return;
-      const items = await native.listMcpDefinitions();
-      if (!current()) { reportLate(result); return; }
-      setDefinitions(items);
-      if (distribute && !writtenNotice) {
-        const outcome = await distribution?.run(saved);
-        if (outcome?.status === 'written') writtenNotice = outcome.notice;
-        if (!current()) { reportLate(result); return; }
-        if (!writtenNotice) {
-          setConflict(outcome?.status === 'pending');
-          result.partial(t('library.resources.saved'), { detail: outcome?.status === 'failed' ? outcome.message : t('library.resources.savedNotDistributed') });
-          return;
-        }
-      }
-      if (writtenNotice) {
-        result.committed(writtenNotice);
-        const placed = await native.listMcpPlacements();
-        if (!current()) { reportLate(result); return; }
-        setPlacements(placed);
-      }
-      setConflict(false); setDraft(null); result.success(writtenNotice ?? t('library.resources.saved'));
-    }
-    function reportLate(result: FeedbackOperation) {
-      if (distribute && !writtenNotice) result.partial(t('library.resources.saved'), { detail: t('library.resources.savedNotDistributed') });
-      else result.success(writtenNotice ?? t('library.resources.saved'));
-    }
-    function reportFailure(result: FeedbackOperation, value: unknown) {
-      result.error(failure(value), saved ? { recovery: {
-        label: t('common.feedback.retry'), valid: current,
-        run: async () => {
-          if (!current()) return;
-          const retry = feedback.resume(result); saveOperation.current = retry;
-          retry.committed(writtenNotice ?? t('library.resources.saved'));
-          setBusy(true);
-          try {
-            const items = await native.listMcpDefinitions();
-            if (current()) setDefinitions(items);
-            if (writtenNotice) {
-              const placed = await native.listMcpPlacements();
-              if (current()) setPlacements(placed);
-            }
-            // Refresh recovery never changes drafts, closes an editor or writes
-            // targets. An unfinished distribution remains explicitly partial.
-            reportLate(retry);
-          } catch (error) { reportFailure(retry, error); }
-          finally { setBusy(false); }
-        },
-      } } : undefined);
-    }
-    setBusy(true);
+    setBusy(true); setDialogError('');
     try {
-      saved = await native.saveMcpDefinition({ ...draft, args: keptArgs(draft.args), inLibrary: true, env: parseLines(envText), headers: parseLines(headerText) });
-      operationFeedback.identify(JSON.stringify(['save', saved.id]));
-      operationFeedback.committed(t('library.resources.saved'));
-      if (!current()) {
-        if (editorGeneration.current === generation) setDraft(previous => previous ? { ...previous, id: saved!.id, expectedVersion: saved!.version } : previous);
-        reportLate(operationFeedback); return;
+      const saved = await native.saveMcpDefinition({ ...draft, args: keptArgs(draft.args), inLibrary: true, env: parseLines(envText), headers: parseLines(headerText) });
+      setDefinitions(await native.listMcpDefinitions());
+      setDraft(draftOf(saved));
+      const alreadyPlaced = placements.some((item) => item.definitionId === saved.id);
+      if (willDistribute || alreadyPlaced) {
+        const outcome = await distributeRef.current?.run(saved);
+        setPlacements(await native.listMcpPlacements().catch(() => []));
+        if (outcome?.status === 'written') { setConflict(false); setDialogError(''); setDraft(null); setNotice(outcome.notice); }
+        else if (outcome?.status === 'pending') setConflict(true);
+        else {
+          setConflict(false);
+          setDialogError(outcome?.status === 'failed' ? outcome.message : t('library.resources.savedNotDistributed'));
+        }
+      } else {
+        setPlacements(await native.listMcpPlacements().catch(() => []));
+        setDraft(null);
+        setNotice(t('library.resources.saved'));
       }
-      const accepted = saved;
-      if (!draft.id) setAddedId(accepted.id);
-      setDraft(draftOf(accepted));
-      setDefinitions(items => items.some(item => item.id === accepted.id) ? items.map(item => item.id === accepted.id ? accepted : item) : [accepted, ...items]);
-      await finish(operationFeedback);
-    } catch (value) { reportFailure(operationFeedback, value); }
+      setError('');
+    } catch (value) { setDialogError(failure(value)); }
     finally { setBusy(false); }
   }
 
   async function replaceDistribution() {
-    if (busy || !draft) return;
-    const operationFeedback = saveOperation.current ? feedback.resume(saveOperation.current) : feedback.begin(JSON.stringify(['save', draft.id]));
-    saveOperation.current = operationFeedback;
-    operationFeedback.committed(t('library.resources.saved'));
-    const generation = editorGeneration.current;
-    const revision = editorRevision.current;
-    const current = () => editorGeneration.current === generation && editorRevision.current === revision;
-    const distribution = distributeRef.current;
-    setBusy(true);
+    if (busy) return;
+    setBusy(true); setDialogError('');
     try {
-      const outcome = await distribution?.commit();
-      if (outcome?.status === 'written') {
-        operationFeedback.committed(outcome.notice);
-        operationFeedback.success(outcome.notice);
-        if (!current()) return;
-        const placed = await native.listMcpPlacements();
-        if (!current()) return;
-        setPlacements(placed); setConflict(false); setDraft(null);
-      } else if (outcome?.status === 'failed') operationFeedback.error(outcome.message);
-    } catch (value) { operationFeedback.error(failure(value)); }
+      const outcome = await distributeRef.current?.commit();
+      setPlacements(await native.listMcpPlacements().catch(() => []));
+      if (outcome?.status === 'written') { setConflict(false); setDraft(null); setNotice(outcome.notice); setError(''); }
+    } catch (value) { setDialogError(failure(value)); }
     finally { setBusy(false); }
   }
 
   async function toggleMcp(item: McpDefinition, toolId: string, scope: Scope, projectPath: string | null, contextId: string | null) {
-    const operationFeedback = feedback.begin(JSON.stringify(['toggleMcp', item.id, toolId, scope, projectPath, contextId]));
     if (busy) return;
     const toolName = tools.find((tool) => tool.id === toolId)?.name ?? toolId;
     const where = scope === 'project' ? t('library.page.whereScope', { scope: scopeLabel(scope, projectPath, projects) }) : '';
     const place = placements.find((entry) => entry.definitionId === item.id && entry.toolId === toolId && entry.scope === scope && (entry.contextId ?? null) === contextId && (scope === 'global' || samePath(entry.projectPath, projectPath)));
-    setBusy(true); try {
+    setBusy(true); setError(''); setNotice('');
+    try {
       if (place) {
         await native.removeNativeMcp({ toolId, scope, projectPath: place.projectPath, contextId: await removalContext(place), enabled: place.enabled }, item.name);
-        operationFeedback.success(t('library.page.removed', { where, tool: toolName }));
+        setNotice(t('library.page.removed', { where, tool: toolName }));
       } else {
         const target: McpTargetRequest = { toolId, scope, projectPath, enabled: true };
         const preview = await native.previewMcpTargets(item.id, [target]);
         const first = preview[0];
-        if (!first || (first.status !== 'ready' && first.status !== 'conflict')) { operationFeedback.error(first?.detail || t('library.resources.cannotWrite', { tool: toolName })); return; }
+        if (!first || (first.status !== 'ready' && first.status !== 'conflict')) { setError(first?.detail || t('library.resources.cannotWrite', { tool: toolName })); return; }
         if (first.status === 'conflict' && !await confirmAction(t('library.resources.confirmReplace', { name: item.name, tool: toolName }), () => true, { title: t('library.resources.replaceMcpTitle'), confirmLabel: t('library.page.replaceAction') })) return;
-        const outcomes = await native.distributeMcp(item.id, [{ ...target, contextId: first.contextId, baselineHash: first.baselineHash, previewToken: first.previewToken, allowReplace: first.status === 'conflict' }]);
-        const failed = outcomes.filter(result => result.status !== 'written');
-        if (failed.length) { operationFeedback.error(failed.map(result => result.detail).join(' · ')); return; }
-        operationFeedback.success(t('library.page.written', { where, tool: toolName }));
+        await native.distributeMcp(item.id, [{ ...target, contextId: first.contextId, baselineHash: first.baselineHash, previewToken: first.previewToken, allowReplace: first.status === 'conflict' }]);
+        setNotice(t('library.page.written', { where, tool: toolName }));
       }
       setPlacements(await native.listMcpPlacements().catch(() => placements));
-    } catch (value) { operationFeedback.error(failure(value)); }
+    } catch (value) { setError(failure(value)); }
     finally { setBusy(false); }
   }
 
   async function toggleSkill(item: SkillPackage, toolId: string, scope: Scope, projectPath: string | null, contextId: string | null) {
-    const operationFeedback = feedback.begin(JSON.stringify(['toggleSkill', item.id, toolId, scope, projectPath, contextId]));
     if (busy) return;
     const toolName = tools.find((tool) => tool.id === toolId)?.name ?? toolId;
     const where = scope === 'project' ? t('library.page.whereScope', { scope: scopeLabel(scope, projectPath, projects) }) : '';
     const place = installations.find((entry) => entry.packageId === item.id && entry.toolId === toolId && entry.scope === scope && (entry.contextId ?? null) === contextId && (scope === 'global' || samePath(entry.projectPath, projectPath)));
-    setBusy(true); try {
+    setBusy(true); setError(''); setNotice('');
+    try {
       if (place) {
-        const outcome = await native.removeSkill(item.id, toolId, scope, place.projectPath, await removalContext(place));
-        if (outcome.status === 'failed') { operationFeedback.error(outcome.detail); return; }
-        operationFeedback.success(t('library.page.removed', { where, tool: toolName }));
+        await native.removeSkill(item.id, toolId, scope, place.projectPath, await removalContext(place));
+        setNotice(t('library.page.removed', { where, tool: toolName }));
       } else {
         const preview = await native.previewSkillTarget(item.id, toolId, scope, projectPath);
         if (preview?.status === 'conflict' && !await confirmAction(t('library.resources.confirmReplace', { name: item.name, tool: toolName }), () => true, { title: t('library.resources.replaceSkillTitle'), confirmLabel: t('library.resources.replaceInstall') })) return;
         const outcome = await native.installSkill(item.id, toolId, scope, projectPath, preview?.previewToken ?? null, preview?.status === 'conflict');
-        if (outcome.status === 'failed') { operationFeedback.error(outcome.detail); return; }
-        operationFeedback.success(t('library.resources.installedTo', { where, tool: toolName }));
+        if (outcome.status === 'failed') { setError(outcome.detail); return; }
+        setNotice(t('library.resources.installedTo', { where, tool: toolName }));
       }
       await reloadSkills();
-    } catch (value) { operationFeedback.error(failure(value)); }
+    } catch (value) { setError(failure(value)); }
     finally { setBusy(false); }
   }
 
+  const needle = search.trim().toLowerCase();
+  const libraryDefinitions = definitions.filter((item) => item.inLibrary !== false)
+    .filter((item) => !needle || `${item.name} ${item.command} ${item.args.join(' ')} ${item.url ?? ''}`.toLowerCase().includes(needle));
+  const libraryPackages = packages.filter((item) => item.inLibrary !== false)
+    .filter((item) => !needle || `${item.name} ${item.description ?? ''}`.toLowerCase().includes(needle));
+
   if (section === 'skill') {
     return <div className={styles.layout}>
-      <FeedbackRegion context={feedback.context} />
-      <ResourceList key="library-skill" context="library:skill" label={t('library.resources.skillListAria')} addedId={addedId}
-        rows={packages.filter(item => item.inLibrary !== false).map(item => ({ id: item.id, name: item.name, description: item.description || t('library.resources.fullPackage'), search: item.source + ' ' + (item.compatibility ?? ''), metadata: `${t('library.experience.library')} · ${t('tools.skills.fileCount', { count: item.fileCount })} · ${skillStates[item.id] === 'failed' ? t('library.experience.failedState') : skillStates[item.id] ? t('library.experience.loaded') : t('library.experience.unknown')}`, facets: installations.filter(entry => entry.packageId === item.id).flatMap(entry => ['tool:' + entry.toolId, 'scope:' + entry.scope]), state: skillStates[item.id] === 'ready' ? installations.some(entry => entry.packageId === item.id) ? 'installed' : 'notInstalled' : skillStates[item.id] ?? 'unknown' }))}
-        filters={[...['installed', 'notInstalled', 'unknown', 'failed'].map(value => ({ value, label: t(`library.experience.${value === 'failed' ? 'failedState' : value}`) })), ...tools.map(tool => ({ value: 'tool:' + tool.id, label: tool.name })), { value: 'scope:global', label: t('tools.apply.global') }, { value: 'scope:project', label: t('tools.accounts.scopeProject') }]}
-        onVisible={setVisibleIds} onSelected={setSelectedIds} onRefresh={() => { void refreshResources().catch(error => feedback.begin('refresh').error(resourceError(error))); }} bulk={batch}
-        onOpen={id => { setSkillSeed([]); setSkillTarget(packages.find(item => item.id === id)!); }}
-        actions={id => <><button type="button" onClick={() => void copyResource(id)}>{t('library.experience.copy')}</button><button type="button" disabled={busy} onClick={() => void removePackage(packages.find(item => item.id === id)!)}>{t('tools.agents.delete')}</button></>} />
+      <SearchField className={styles.searchBox} label={t('library.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={setSearch} placeholder={t('library.resources.searchSkillPlaceholder')} />
+      {error && <div className={styles.error} role="alert">{error}</div>}
+      {notice && <div className={styles.notice} role="status">{notice}</div>}
+      <div className={styles.list} aria-label={t('library.resources.skillListAria')}>
+        {libraryPackages.length ? libraryPackages.map((item) => {
+          return <article className={styles.card} key={item.id}>
+            <div className={styles.cardHead}>
+              <button className={styles.cardTitle} type="button" onClick={() => { setSkillSeed([]); setSkillTarget(item); }}>{item.name}</button>
+              <span className={styles.badge}>{t('tools.skills.fileCount', { count: item.fileCount })}</span>
+            </div>
+            <p>{item.description || t('library.resources.fullPackage')}</p>
+            <div className={styles.cardBar}>
+              <ScopeMarks contextLabel={contextLabel} accountContexts label={t('library.page.cliMarks', { title: item.name })} tools={tools} places={installations.filter((entry) => entry.packageId === item.id)} projects={projects} busy={busy} onToggle={(toolId, scope, projectPath, contextId) => void toggleSkill(item, toolId, scope, projectPath, contextId)} mark={(place) => {
+                if (!place) return { pressed: false, state: 'off', status: t('tools.skills.stateNotInstalled') };
+                if (place.state === 'current') return { pressed: true, state: 'current', status: t('library.page.markCurrent') };
+                if (place.state === 'conflict' || place.state === 'update_available') return { pressed: true, state: 'drifted', status: installStateLabel(place.state) };
+                return { pressed: true, state: 'unavailable', status: installStateLabel(place.state) };
+              }} />
+              <div className={styles.cardActions}><button type="button" className={styles.dangerQuiet} disabled={busy} onClick={() => void removePackage(item)}>{t('tools.agents.delete')}</button><button type="button" className={styles.quiet} disabled={busy} onClick={() => { setSkillSeed([]); setSkillTarget(item); }}>{t('tools.workspace.edit')}</button></div>
+            </div>
+          </article>;
+        }) : needle
+          ? <div className={styles.empty}><Icon name="search" size={28} strokeWidth={1.3} />{t('library.resources.noSkillMatch', { query: search.trim() })}</div>
+          : <div className={styles.empty}><Icon name="sparkle" size={28} strokeWidth={1.3} /><strong>{t('library.resources.emptySkillTitle')}</strong>{t('library.resources.emptySkillDetail')}<button type="button" disabled={busy} onClick={() => { setDialogError(''); setSkillOpen(true); }}><Icon name="plus" size={14} strokeWidth={2.2} />{t('tools.skills.add')}</button></div>}
+      </div>
       <GuideDialog open={skillOpen} title={t('tools.skills.add')} hint={t('library.resources.addSkillHint')} onClose={closeSkill}>
         <div className={styles.skillAdd}>
           {!archiveSelection && !pendingImport && <>
@@ -507,28 +391,45 @@ export function LibraryResources({ section, active, tools, projects, createSigna
             <p>{t('library.resources.existingNote', { source: pendingImport.preview.source, count: pendingImport.preview.fileCount, install: installTools.length ? t('library.resources.existingInstall') : '' })}</p>
             <div className={styles.actions}><button type="button" onClick={() => setPendingImport(null)}>{t('library.resources.back')}</button><button type="button" className={styles.primary} disabled={busy} onClick={() => void confirmSkillImport()}>{installations.some((entry) => packages.some((item) => item.id === entry.packageId && item.name === pendingImport.preview.name)) ? t('library.resources.updateAndSync') : t('library.resources.confirmUpdate')}</button></div>
           </section>}
-          <FeedbackRegion context={feedback.context} />
+          {dialogError && <p className={styles.error} role="alert">{dialogError}</p>}
         </div>
       </GuideDialog>
-      <GuideDialog wide open={!!skillTarget} title={t('library.resources.editSkillTitle')} hint={t('library.resources.editSkillHint')} onClose={() => { void (async () => { if (skillDirty && !await confirmAction(t('tools.mcp.confirmDiscard'), () => true, { title: t('common.app.leaveDirtyTitle'), confirmLabel: t('common.app.leaveDirtyConfirm') })) return; setSkillTarget(null); setSkillSeed([]); setSkillDirty(false); })(); }}>
-        {skillTarget && <><SkillDocumentEditor key={skillTarget.id} packageId={skillTarget.id} onDirtyChange={setSkillDirty} onChanged={reloadSkills} /><ScopeMarks contextLabel={contextLabel} accountContexts label={t('library.page.cliMarks', { title: skillTarget.name })} tools={tools} places={installations.filter(entry => entry.packageId === skillTarget.id)} projects={projects} busy={busy || skillStates[skillTarget.id] !== 'ready'} onToggle={(toolId, scope, projectPath, contextId) => void toggleSkill(skillTarget, toolId, scope, projectPath, contextId)} mark={place => ({ pressed: !!place, state: !place ? 'off' : place.state === 'current' ? 'current' : 'unavailable', status: !place ? skillStates[skillTarget.id] === 'ready' ? t('tools.skills.stateNotInstalled') : t('library.experience.unknown') : t(`library.resources.installState.${place.state}`) })} /><SkillDistribution item={skillTarget} tools={tools} projects={projects} installations={installations} initialTools={skillSeed} autoRun={skillSeed.length > 0} onChanged={reloadSkills} /></>}
+      <GuideDialog open={!!skillTarget} title={t('library.resources.editSkillTitle')} hint={t('library.resources.editSkillHint')} onClose={() => { setSkillTarget(null); setSkillSeed([]); }}>
+        {skillTarget && <SkillDistribution item={skillTarget} tools={tools} projects={projects} installations={installations} initialTools={skillSeed} autoRun={skillSeed.length > 0} onChanged={reloadSkills} />}
       </GuideDialog>
     </div>;
   }
 
   return <div className={styles.layout}>
-    <FeedbackRegion context={feedback.context} />
-    <ResourceList key="library-mcp" context="library:mcp" label={t('library.resources.mcpListAria')} addedId={addedId} toolbarActions={<McpPaste onAdded={item => setAddedId(item.id)} context="library:mcp" definitions={definitions} onDraft={value => { editMcp(); acceptDraft(value, true); }} onChanged={refreshResources} />}
-      rows={definitions.filter(item => item.inLibrary !== false).map(item => ({ id: item.id, name: item.name, description: item.transport === 'http' ? item.url : [item.command, ...item.args].join(' '), search: Object.keys(item.env).join(' ') + ' ' + Object.keys(item.headers).join(' '), metadata: `${t('library.experience.library')} · ${item.transport} · ${placements.filter(entry => entry.definitionId === item.id).map(entry => tools.find(tool => tool.id === entry.toolId)?.name ?? entry.toolId).join(', ')}`, state: item.transport, facets: placements.filter(entry => entry.definitionId === item.id).flatMap(entry => ['tool:' + entry.toolId, 'scope:' + entry.scope, entry.enabled ? 'enable' : 'disable']) }))}
-      filters={[...['stdio', 'http'].map(value => ({ value, label: value.toUpperCase() })), ...tools.map(tool => ({ value: 'tool:' + tool.id, label: tool.name })), { value: 'scope:global', label: t('tools.apply.global') }, { value: 'scope:project', label: t('tools.accounts.scopeProject') }, ...['enable','disable'].map(value => ({ value, label: t(`library.experience.${value}`) }))]} bulk={batch}
-      onRefresh={() => { void refreshResources().catch(error => feedback.begin('refresh').error(resourceError(error))); }} onOpen={id => editMcp(definitions.find(item => item.id === id)!)}
-      actions={id => <><button type="button" onClick={() => void copyResource(id)}>{t('library.experience.copy')}</button><button type="button" disabled={busy} onClick={() => void remove(definitions.find(item => item.id === id)!)}>{t('tools.agents.delete')}</button></>} />
-    <GuideDialog wide open={!!draft} title={draft?.id ? t('tools.mcp.editTitle') : t('library.resources.newMcpTitle')} hint={t('library.resources.mcpDialogHint')} onClose={() => { void (async () => { if (configDirty && !await confirmAction(t('tools.mcp.confirmDiscard'), () => true, { title: t('common.app.leaveDirtyTitle'), confirmLabel: t('common.app.leaveDirtyConfirm') })) return; editorGeneration.current++; setDraft(null); setConfigDirty(false); setConflict(false); })(); }}>
+    <SearchField className={styles.searchBox} label={t('library.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={setSearch} placeholder={t('library.resources.searchMcpPlaceholder')} />
+    {error && <div className={styles.error} role="alert">{error}</div>}
+    {notice && <div className={styles.notice} role="status">{notice}</div>}
+    <div className={styles.list} aria-label={t('library.resources.mcpListAria')}>
+      {libraryDefinitions.length ? libraryDefinitions.map((item) => {
+        return <article className={styles.card} key={item.id}>
+          <div className={styles.cardHead}>
+            <button className={styles.cardTitle} type="button" onClick={() => editMcp(item)}>{item.name}</button>
+            <span className={styles.badge} data-accent={item.transport === 'http' || undefined}>{item.transport === 'http' ? 'HTTP' : 'stdio'}</span>
+          </div>
+          <p className={styles.mono}>{item.transport === 'http' ? item.url || t('library.resources.noUrl') : [item.command, ...item.args].filter(Boolean).join(' ') || t('library.resources.noCommand')}</p>
+          <div className={styles.cardBar}>
+            <ScopeMarks contextLabel={contextLabel} accountContexts label={t('library.page.cliMarks', { title: item.name })} tools={tools} places={placements.filter((entry) => entry.definitionId === item.id)} projects={projects} busy={busy} onToggle={(toolId, scope, projectPath, contextId) => void toggleMcp(item, toolId, scope, projectPath, contextId)} mark={(place) => {
+              if (!place) return { pressed: false, state: 'off', status: t('library.page.markOff') };
+              if (!place.enabled) return { pressed: true, state: 'unavailable', status: t('library.resources.markDisabled') };
+              return { pressed: true, state: 'current', status: t('library.page.markCurrent') };
+            }} />
+            <div className={styles.cardActions}><button type="button" className={styles.dangerQuiet} disabled={busy} onClick={() => void remove(item)}>{t('tools.agents.delete')}</button><button type="button" className={styles.quiet} onClick={() => editMcp(item)}>{t('tools.workspace.edit')}</button></div>
+          </div>
+        </article>;
+      }) : needle
+        ? <div className={styles.empty}><Icon name="search" size={28} strokeWidth={1.3} />{t('library.resources.noMcpMatch', { query: search.trim() })}</div>
+        : <div className={styles.empty}><Icon name="connections" size={28} strokeWidth={1.3} /><strong>{t('library.resources.emptyMcpTitle')}</strong>{t('library.resources.emptyMcpDetail')}<button type="button" onClick={() => editMcp()}><Icon name="plus" size={14} strokeWidth={2.2} />{t('library.resources.emptyMcpCreate')}</button></div>}
+    </div>
+    <GuideDialog open={!!draft} title={draft?.id ? t('tools.mcp.editTitle') : t('library.resources.newMcpTitle')} hint={t('library.resources.mcpDialogHint')} onClose={() => { setDraft(null); setConflict(false); }}>
       {draft && <>
-        <McpDocumentPanel key={formKey} definitionId={draft.id} getDraft={() => ({ ...draft, env: parseLines(envText), headers: parseLines(headerText) })} name={draft.name} onTextChange={() => { editorRevision.current++; }} onModeChange={setConfigOpen} onDirtyChange={setConfigDirty} formDirty={JSON.stringify(draft) !== JSON.stringify(draftOf(definitions.find(item => item.id === draft.id) ?? { ...draft, id: draft.id ?? '', version: draft.expectedVersion ?? 0 })) || envText !== lines(draft.env) || headerText !== lines(draft.headers)} onDraft={acceptDraft} onChanged={refreshResources} />
-        <div hidden={configOpen} className={styles.fields} onChangeCapture={() => { editorRevision.current++; }}>
+        <div className={styles.fields}>
           <label className={styles.span}>{t('tools.mcp.name')}<input aria-label={t('tools.mcp.nameAria')} value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder={t('tools.mcp.namePlaceholder')} /></label>
-          <div className={`${styles.typeField} ${styles.span}`}><span>{t('tools.mcp.type')}</span><div className={styles.typeSwitch} role="radiogroup" aria-label={t('tools.mcp.transport')}>{([['http', 'HTTP'], ['stdio', 'stdio']] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={draft.transport === value} onClick={() => { editorRevision.current++; setDraft({ ...draft, transport: value }); }}>{label}</button>)}</div></div>
+          <div className={`${styles.typeField} ${styles.span}`}><span>{t('tools.mcp.type')}</span><div className={styles.typeSwitch} role="radiogroup" aria-label={t('tools.mcp.transport')}>{([['http', 'HTTP'], ['stdio', 'stdio']] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={draft.transport === value} onClick={() => setDraft({ ...draft, transport: value })}>{label}</button>)}</div></div>
           {draft.transport === 'stdio' ? <>
             <label className={styles.span}>{t('tools.mcp.command')}<input aria-label={t('tools.mcp.command')} value={draft.command} onChange={(event) => setDraft({ ...draft, command: event.target.value })} placeholder="npx" /></label>
             <label className={styles.span}>{t('tools.mcp.args')}<textarea rows={3} value={draft.args.join('\n')} onChange={(event) => setDraft({ ...draft, args: event.target.value.split(/\r?\n/) })} placeholder={'-y\nchrome-devtools-mcp@latest'} /></label>
@@ -538,10 +439,9 @@ export function LibraryResources({ section, active, tools, projects, createSigna
             <label className={styles.span}>{t('tools.mcp.headers')}<textarea rows={4} value={headerText} onChange={(event) => setHeaderText(event.target.value)} placeholder="Authorization=Bearer ${API_TOKEN}" /></label>
           </>}
         </div>
-        {draft.id && <ScopeMarks contextLabel={contextLabel} accountContexts label={t('library.page.cliMarks', { title: draft.name })} tools={tools} places={placements.filter(entry => entry.definitionId === draft.id)} projects={projects} busy={busy} onToggle={(toolId, scope, projectPath, contextId) => { const item = definitions.find(item => item.id === draft.id); if (item) void toggleMcp(item, toolId, scope, projectPath, contextId); }} mark={place => ({ pressed: !!place, state: place?.enabled ? 'current' : 'off', status: place?.enabled ? t('library.page.markCurrent') : t('library.page.markOff') })} />}
-        <div onChangeCapture={() => { editorRevision.current++; }} onClickCapture={() => { editorRevision.current++; }}><McpDistribution key={formKey} ref={distributeRef} definition={definitions.find((item) => item.id === draft.id) ?? { ...draft, id: draft.id ?? '', version: draft.expectedVersion ?? 0 }} tools={tools} projects={projects} placements={placements} formStamp={JSON.stringify([draft.name, draft.transport, draft.command, draft.args, draft.url, envText, headerText])} onWillDistribute={setWillDistribute} onConflictChange={setConflict} /></div>
-        <FeedbackRegion context={feedback.context} />
-        <div hidden={configOpen} className="dialog-footer">{draft.id && <button type="button" disabled={busy} onClick={() => { const current = definitions.find((item) => item.id === draft.id); if (current) void remove(current); }}>{t('tools.agents.delete')}</button>}<span className="dialog-footer-gap" />{conflict && <button type="button" disabled={busy} onClick={() => { setConflict(false); distributeRef.current?.dismiss(); }}>{t('common.conflict.keepCurrent')}</button>}<button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint()} disabled={busy || configOpen || !draft.name.trim()} onClick={() => void (conflict ? replaceDistribution() : save())}>{conflict ? t('library.resources.replaceDistribute') : willDistribute ? t('library.resources.saveDistribute') : t('home.launcher.save')}</button></div>
+        <McpDistribution key={formKey} ref={distributeRef} definition={definitions.find((item) => item.id === draft.id) ?? { ...draft, id: draft.id ?? '', version: draft.expectedVersion ?? 0 }} tools={tools} projects={projects} placements={placements} formStamp={JSON.stringify([draft.name, draft.transport, draft.command, draft.args, draft.url, envText, headerText])} onWillDistribute={setWillDistribute} onConflictChange={setConflict} />
+        {dialogError && <p className={styles.error} role="alert">{dialogError}</p>}
+        <div className="dialog-footer">{draft.id && <button type="button" disabled={busy} onClick={() => { const current = definitions.find((item) => item.id === draft.id); if (current) void remove(current); }}>{t('tools.agents.delete')}</button>}<span className="dialog-footer-gap" />{conflict && <button type="button" disabled={busy} onClick={() => { setConflict(false); distributeRef.current?.dismiss(); }}>{t('common.conflict.keepCurrent')}</button>}<button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint()} disabled={busy || !draft.name.trim()} onClick={() => void (conflict ? replaceDistribution() : save())}>{conflict ? t('library.resources.replaceDistribute') : willDistribute ? t('library.resources.saveDistribute') : t('home.launcher.save')}</button></div>
       </>}
     </GuideDialog>
   </div>;

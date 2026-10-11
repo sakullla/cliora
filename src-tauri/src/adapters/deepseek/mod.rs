@@ -141,19 +141,6 @@ impl CliAdapter for DeepSeek {
         }
         config
     }
-    fn mcp_decode(&self, name: &str, entry: &Value) -> Result<crate::adapters::mcp_codec::DecodedMcp, String> {
-        let object = entry.as_object().ok_or("dsh MCP 条目必须是对象")?;
-        if object.get("name").and_then(Value::as_str) != Some("@deepseek-ai/dsh-mcp-client") { return Err("dsh MCP 模块名称无效".into()); }
-        if object.get("id").is_some_and(|id| !id.is_string()) { return Err("dsh MCP id 必须是字符串".into()); }
-        let mut config = object.get("config").and_then(Value::as_object).ok_or("dsh MCP config 必须是对象")?.clone();
-        if config.remove("serverName").and_then(|v| v.as_str().map(str::to_owned)).as_deref() != Some(name) { return Err("dsh MCP serverName 与条目名称不一致".into()); }
-        // The switch belongs to the wrapper, not config. Preserve its actual
-        // type so the common validator can reject malformed flags.
-        if let Some(disabled) = object.get("disabled") { config.insert("disabled".into(), disabled.clone()); }
-        let mut decoded = crate::adapters::mcp_codec::decode(name, &Value::Object(config))?;
-        decoded.unmapped_fields.extend(object.keys().filter(|key| !["id", "name", "config", "disabled"].contains(&key.as_str())).map(|key| format!("entry.{key}")));
-        Ok(decoded)
-    }
     fn mcp_change(&self, parsed: &Value, _location: &McpLocation, name: &str, value: Option<Value>) -> Result<crate::native::transaction::FieldChange, String> {
         mcp::change(parsed, name, value)
     }
@@ -342,7 +329,6 @@ impl CliAdapter for DeepSeek {
             project_model_override: false,
             yolo_available: self.launch_args(None, LaunchMode::Yolo).is_ok(),
             launch_form: self.launch_form(),
-            launch_directory: self.launch_directory(),
             native_config: Facet {
                 state: "available",
                 reason: "已确认 desktop profile 的 cordis.patch.yml YAML 编辑面",
@@ -384,7 +370,6 @@ mod tests {
 
     fn definition(name: &str, transport: McpTransport) -> McpDefinition {
         McpDefinition {
-            reference_source: None, reference_scope: None,
             id: "def-1".into(),
             name: name.into(),
             transport,
@@ -518,9 +503,10 @@ mod tests {
             DeepSeek.launch_args(None, LaunchMode::Normal).unwrap(),
             Vec::<String>::new()
         );
-        assert_eq!(DeepSeek.launch_directory(), crate::adapters::LaunchDirectory::Unsupported);
-        let workspace = DeepSeek.desktop_launch_args(Path::new("/work/app")).unwrap_err();
-        assert!(workspace.contains("工作区"));
+        assert_eq!(
+            DeepSeek.desktop_launch_args(Path::new("/work/app")).unwrap(),
+            Vec::<String>::new()
+        );
         let yolo = DeepSeek.launch_args(None, LaunchMode::Yolo).unwrap_err();
         assert!(yolo.contains("跳审批"));
         let resume = DeepSeek.launch_args(Some("session 1"), LaunchMode::Normal).unwrap_err();

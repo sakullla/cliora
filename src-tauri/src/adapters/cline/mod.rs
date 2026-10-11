@@ -318,7 +318,6 @@ impl CliAdapter for Cline {
             project_model_override: false,
             yolo_available: false,
             launch_form: self.launch_form(),
-            launch_directory: self.launch_directory(),
             native_config: Facet {
                 state: "available",
                 reason: "可编辑用户级 ~/.cline/global-settings.json；providers.json 含明文密钥，绝不进入管理面",
@@ -468,7 +467,6 @@ mod tests {
     #[test]
     fn mcp_documents_write_only_the_generic_shape_and_preserve_unknown_fields() {
         let definition = McpDefinition {
-            reference_source: None, reference_scope: None,
             id: "fixture-definition".into(),
             name: "example".into(),
             transport: McpTransport::Stdio,

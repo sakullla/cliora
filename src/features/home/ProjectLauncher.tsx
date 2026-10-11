@@ -1,4 +1,3 @@
-import { useFeedback, FeedbackRegion } from '../../components/Feedback';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
@@ -29,7 +28,10 @@ export function ProjectLauncher({ tools, repair, spotlight }: { tools: AdapterDe
   const [globalTool, setGlobalTool] = useState('');
   const [sessionId, setSessionId] = useState('');
   const [busy, setBusy] = useState('');
-  const messages = useFeedback('projects');
+  const [error, setError] = useState('');
+  const [feedback, setFeedback] = useState('');
+  const [dialogError, setDialogError] = useState('');
+  const [dialogFeedback, setDialogFeedback] = useState('');
   const [launchSettings, setLaunchSettings] = useState<LaunchSettings | null>(null);
   const [relink, setRelink] = useState<Record<string, string>>({});
   const [pasteOpen, setPasteOpen] = useState<Record<string, boolean>>({});
@@ -43,8 +45,18 @@ export function ProjectLauncher({ tools, repair, spotlight }: { tools: AdapterDe
   const focusedRepair = useRef(0);
   const latestProjects = useRef(projects); latestProjects.current = projects;
   const mounted = useRef(true);
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  function begin(id: string) { setBusy(id); }
+  const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; if (feedbackTimer.current) clearTimeout(feedbackTimer.current); }; }, []);
+  function showPageError(value: unknown) { setFeedback(''); setError(formatFailure(value, t('home.launcher.operationFailed'), projectNext)); }
+  function showPageFeedback(text: string) {
+    setError('');
+    setFeedback(text);
+    if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
+    feedbackTimer.current = setTimeout(() => { feedbackTimer.current = null; setFeedback((current) => current === text ? '' : current); }, 5000);
+  }
+  function showDialogError(value: unknown) { setDialogFeedback(''); setDialogError(formatFailure(value, t('home.launcher.operationFailed'), projectNext)); }
+  function showDialogFeedback(text: string) { setDialogError(''); setDialogFeedback(text); }
+  function begin(id: string) { setBusy(id); setError(''); setFeedback(''); setDialogError(''); setDialogFeedback(''); }
 
   useEffect(() => {
     if (!repair?.projectId || focusedRepair.current === repair.sequence) return;
@@ -84,14 +96,13 @@ export function ProjectLauncher({ tools, repair, spotlight }: { tools: AdapterDe
   }, [spotlight?.id, spotlight?.token, projects, projectQuery]);
 
   async function refresh() {
-    const operationFeedback = messages.begin('refresh');
     if (!nativeAvailable) return;
     try {
       const result = await native.listProjects();
       if (!Array.isArray(result)) throw new Error(t('home.launcher.invalidData'));
-      setProjects(result); operationFeedback.complete();
+      setProjects(result);
     }
-    catch (value) { operationFeedback.error(formatFailure(value, t('home.launcher.listFailed'), projectNext)); }
+    catch (value) { setError((current) => current || formatFailure(value, t('home.launcher.listFailed'), projectNext)); }
     finally { setListLoading(false); }
   }
 
@@ -121,113 +132,105 @@ export function ProjectLauncher({ tools, repair, spotlight }: { tools: AdapterDe
   const directMode = preferredLaunchMode(launchSettings, 'cli', !!directTool?.yoloAvailable);
 
   async function remove(project: Project) {
-    const operationFeedback = messages.begin('remove:' + project?.id);
     if (!await confirmAction(t('home.launcher.removeConfirm', { name: project.name }), () => mounted.current && latestProjects.current.some(item => item.id === project.id && JSON.stringify(item) === JSON.stringify(project)), { title: t('home.launcher.removeAction'), confirmLabel: t('home.launcher.removeAction'), destructive: true })) return;
     begin(project.id);
-    try { await native.removeProject(project.id); await refresh(); operationFeedback.complete(); }
-    catch (value) { operationFeedback.error(formatFailure(value, t('home.launcher.operationFailed'), projectNext)); } finally { setBusy(''); }
+    try { await native.removeProject(project.id); await refresh(); }
+    catch (value) { showDialogError(value); } finally { setBusy(''); }
   }
   async function rename(project: Project) {
-    const operationFeedback = messages.begin('rename:' + project?.id);
     begin(project.id);
     try {
       await native.renameProject(project.id, names[project.id] ?? project.name);
       await refresh();
-      setEditingId(null); operationFeedback.success(t('home.launcher.renamed'));
-    } catch (value) { operationFeedback.error(formatFailure(value, t('home.launcher.operationFailed'), projectNext)); } finally { setBusy(''); }
+      setEditingId(null); setDialogError(''); setDialogFeedback('');
+      showPageFeedback(t('home.launcher.renamed'));
+    } catch (value) { showDialogError(value); } finally { setBusy(''); }
   }
   async function chooseDirectory(project?: Project) {
-    const operationFeedback = messages.begin('chooseDirectory:' + project?.id);
     try {
       const picked = await open({ directory: true, multiple: false, title: project ? t('home.launcher.relinkTitle') : t('home.launcher.pickTitle') });
       if (typeof picked !== 'string') return;
-      if (!project) { begin('add'); await native.addProject(picked, undefined, defaultTool || undefined); await refresh(); operationFeedback.success(t('home.launcher.added')); return; }
+      if (!project) { begin('add'); await native.addProject(picked, undefined, defaultTool || undefined); await refresh(); showPageFeedback(t('home.launcher.added')); return; }
       begin(project.id);
       const updated = await native.relinkProject(project.id, picked);
-      setProjects((old) => old.map((item) => item.id === project.id ? updated : item)); operationFeedback.complete();
-    } catch (value) { if (project) operationFeedback.error(formatFailure(value, t('home.launcher.operationFailed'), projectNext)); else operationFeedback.error(formatFailure(value, t('home.launcher.operationFailed'), projectNext)); }
+      setProjects((old) => old.map((item) => item.id === project.id ? updated : item));
+    } catch (value) { if (project) showDialogError(value); else showPageError(value); }
     finally { setBusy(''); }
   }
 
   async function updateTool(project: Project, toolId: string) {
-    const operationFeedback = messages.begin('updateTool:' + project?.id);
     begin(project.id);
     try {
       const updated = await native.setProjectTool(project.id, toolId || null);
-      setProjects((old) => old.map((item) => item.id === project.id ? updated : item)); operationFeedback.complete();
-    } catch (value) { operationFeedback.error(formatFailure(value, t('home.launcher.operationFailed'), projectNext)); }
+      setProjects((old) => old.map((item) => item.id === project.id ? updated : item));
+    } catch (value) { showPageError(value); }
     finally { setBusy(''); }
   }
 
   async function saveModel(project: Project, toolId: string) {
-    const operationFeedback = messages.begin(JSON.stringify(['saveModel', project.id, toolId]));
     const key = `${project.id}:${toolId}`;
     const model = (modelEdits[key] ?? project.modelOverrides[toolId] ?? '').trim();
     begin(project.id);
     try {
       const updated = await native.setProjectModelOverride(project.id, toolId, model || null);
-      setProjects((old) => old.map((item) => item.id === project.id ? updated : item)); operationFeedback.complete();
-      setEditingId(null); operationFeedback.success(model ? t('home.launcher.modelSaved') : t('home.launcher.modelCleared'));
-    } catch (value) { operationFeedback.error(formatFailure(value, t('home.launcher.operationFailed'), projectNext)); }
+      setProjects((old) => old.map((item) => item.id === project.id ? updated : item));
+      setEditingId(null); setDialogError(''); setDialogFeedback('');
+      showPageFeedback(model ? t('home.launcher.modelSaved') : t('home.launcher.modelCleared'));
+    } catch (value) { showDialogError(value); }
     finally { setBusy(''); }
   }
 
   async function relinkProject(project: Project) {
-    const operationFeedback = messages.begin('relinkProject:' + project?.id);
     const next = relink[project.id]?.trim();
     if (!next) return;
     begin(project.id);
     try {
       const updated = await native.relinkProject(project.id, next);
-      setProjects((old) => old.map((item) => item.id === project.id ? updated : item)); operationFeedback.complete();
+      setProjects((old) => old.map((item) => item.id === project.id ? updated : item));
       setRelink((old) => ({ ...old, [project.id]: '' }));
-    } catch (value) { operationFeedback.error(formatFailure(value, t('home.launcher.operationFailed'), projectNext)); }
+    } catch (value) { showDialogError(value); }
     finally { setBusy(''); }
   }
 
   async function openProject(project: Project) {
-    const operationFeedback = messages.begin('openProject:' + project?.id);
-    try { await native.openProjectDirectory(project.id); operationFeedback.complete(); }
-    catch (value) { operationFeedback.error(formatFailure(value, t('home.launcher.operationFailed'), projectNext)); }
+    setDialogError(''); setDialogFeedback('');
+    try { await native.openProjectDirectory(project.id); }
+    catch (value) { showDialogError(value); }
   }
 
   async function copyPath(project: Project) {
-    const operationFeedback = messages.begin(JSON.stringify(['copyPath', project.id]));
     if (!project.path) return;
     const value = displayPath(project.path);
     const copied = await writeClipboard(value);
     window.clearTimeout(copiedTimer.current);
-    setCopiedPath(copied ? value : '');
-    if (copied) operationFeedback.success(t('home.launcher.copied')); else operationFeedback.error(t('home.launcher.copyFailed'));
+    setCopiedPath(copied ? value : `fail:${value}`);
     copiedTimer.current = window.setTimeout(() => setCopiedPath(''), 1600);
   }
 
   async function applySelected(project: Project, toolId: string) {
-    const operationFeedback = messages.begin(JSON.stringify(['applySelected', project.id, toolId, project.selectedProfiles[toolId]]));
     const profileId = project.selectedProfiles[toolId];
     if (!profileId || !project.path) return;
     begin(project.id);
     try {
       await native.applyRegisteredNativeProfile(toolId, profileId, 'project', project.path, false);
       await refresh();
-      operationFeedback.success(t('home.launcher.applied'));
-    } catch (value) { operationFeedback.error(formatFailure(value, t('home.launcher.operationFailed'), projectNext)); }
+      showPageFeedback(t('home.launcher.applied'));
+    } catch (value) { showPageError(value); }
     finally { setBusy(''); }
   }
 
   async function launch(toolId: string, projectId: string | null, mode: 'normal' | 'yolo', resumeId?: string, surface: 'page' | 'dialog' = 'page') {
-    const operationFeedback = messages.begin(JSON.stringify(['launch', toolId, projectId, mode, resumeId]));
     begin(projectId ?? 'global');
     const text = (resultMode: string) => t('home.launcher.launched', { action: t(resumeId?.trim() ? 'home.launcher.actionResume' : 'home.launcher.actionLaunch'), mode: resultMode === 'yolo' ? ' YOLO' : '' });
     try {
       const result = await native.launchCli({ toolId, projectId, sessionId: resumeId?.trim() || null, mode, directory: null });
       const message = text(result.mode);
       if (surface === 'dialog') {
-        operationFeedback.success(message);
-
-      } else operationFeedback.success(message);
+        showDialogFeedback(message);
+        setFeedback(message);
+      } else showPageFeedback(message);
       await refresh();
-    } catch (value) { if (surface === 'dialog') operationFeedback.error(formatFailure(value, t('home.launcher.operationFailed'), projectNext)); else operationFeedback.error(formatFailure(value, t('home.launcher.operationFailed'), projectNext)); }
+    } catch (value) { if (surface === 'dialog') showDialogError(value); else showPageError(value); }
     finally { setBusy(''); }
   }
 
@@ -235,8 +238,8 @@ export function ProjectLauncher({ tools, repair, spotlight }: { tools: AdapterDe
   const projectNeedle = projectQuery.trim().toLowerCase();
   const visibleProjects = projectNeedle ? projects.filter((project) => `${project.name} ${project.path ?? ''}`.toLowerCase().includes(projectNeedle)) : projects;
   return <section className={`${styles.workspace} home-launcher`} aria-label={t('home.launcher.label')}>
-
-    <FeedbackRegion context={messages.context} />
+    {error && <div className={styles.error} role="alert">{error}</div>}
+    {feedback && <div className={styles.feedback} role="status">{feedback}</div>}
     {!managed.length && <p className={styles.note}>{t('home.launcher.enableFirst')}</p>}
     <div className={styles.heading}><strong>{t('home.projects.title')}{!!projects.length && <span className="count-chip" aria-hidden="true">{projects.length}</span>}</strong><button type="button" className={styles.secondary} disabled={!!busy} onClick={() => void chooseDirectory()}><Icon name="plus" size={14} strokeWidth={2.2} />{t('home.launcher.add')}</button></div>
     {projects.length > 4 && <SearchField className={styles.projectSearch} label={t('home.launcher.searchLabel')} value={projectQuery} placeholder={t('home.launcher.searchPlaceholder')} onChange={setProjectQuery} />}
@@ -254,9 +257,9 @@ export function ProjectLauncher({ tools, repair, spotlight }: { tools: AdapterDe
         <div className={styles.controls}><FilterSelect className={styles.toolSelect} label={t('home.launcher.toolFor', { name: project.name })} value={toolId} options={[{ value: '', label: t('home.launcher.pickTool') }, ...toolOptions(managed)]} placeholder={t('home.launcher.pickTool')} disabled={busy === project.id || !managed.length} searchLabel={t('home.launcher.searchTool')} onChange={(value) => void updateTool(project, value)} triggerRef={repair?.projectId === project.id ? repairToolSelect : undefined} /><div className={styles.actions}><button type="button" disabled={!!busy || !project.available || !toolId} title={!project.available ? t('home.launcher.dirUnavailable') : projectMode === 'yolo' ? t('home.tools.launchYolo') : launchSettings?.projectMode === 'yolo' ? t('home.tools.launchYoloFallback') : undefined} onClick={() => void launch(toolId, project.id, projectMode)}>{t('home.tools.launch')}</button><button type="button" className={styles.iconAction} aria-label={t('home.launcher.openDirAria', { name: project.name })} title={t('home.launcher.openDirTitle')} disabled={!!busy || !project.available} onClick={() => void openProject(project)}><Icon name="folder" size={15} /></button><button type="button" className={styles.secondary} onClick={() => setEditingId(project.id)}>{t('home.launcher.edit')}</button></div></div>
         {!toolId && <div className={styles.hint}>{t('home.launcher.toolUnmanaged')}</div>}
         {pendingProfile && <div className={styles.extra} data-tone="pending"><span>{project.reapplyProfiles?.[toolId] ? t('home.launcher.reapplyRelinked') : t('home.launcher.pendingProfile')}</span><button type="button" className={styles.secondary} disabled={!!busy || !project.available} onClick={() => void applySelected(project, toolId)}>{t('home.launcher.apply')}</button></div>}
-        <GuideDialog open={editingId === project.id} title={t('home.launcher.editTitle', { name: project.name })} hint={t('home.launcher.editHint')} onClose={() => { setEditingId(null); }}>
-
-          <FeedbackRegion context={messages.context} />
+        <GuideDialog open={editingId === project.id} title={t('home.launcher.editTitle', { name: project.name })} hint={t('home.launcher.editHint')} onClose={() => { setEditingId(null); setDialogError(''); setDialogFeedback(''); }}>
+          {dialogError && <div className={styles.error} role="alert">{dialogError}</div>}
+          {dialogFeedback && <div className={styles.feedback} role="status">{dialogFeedback}</div>}
           {project.path && <div className={styles.projectPath}><small>{displayPath(project.path)}</small><button type="button" className={styles.secondary} data-copied={copiedPath === displayPath(project.path) || undefined} onClick={() => void copyPath(project)}>{copiedPath === displayPath(project.path) ? t('home.launcher.copied') : copiedPath === `fail:${displayPath(project.path)}` ? t('home.launcher.copyFailed') : t('home.launcher.copyPath')}</button></div>}
           <div className={styles.extra}><label>{t('home.launcher.nameLabel')}<input aria-label={t('home.launcher.nameAria', { name: project.name })} value={names[project.id] ?? project.name} onChange={event => setNames({ ...names,[project.id]:event.target.value })} /></label><button type="button" disabled={!!busy || !names[project.id]?.trim()} onClick={() => void rename(project)}>{t('home.launcher.saveName')}</button><button type="button" className={styles.secondary} disabled={!!busy} onClick={() => void remove(project)}>{t('home.launcher.removeAction')}</button></div>
           <button type="button" className={styles.secondary} disabled={!!busy || !project.available} onClick={() => void openProject(project)}>{t('home.launcher.openDir')}</button>

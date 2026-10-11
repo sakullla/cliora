@@ -12,14 +12,6 @@ struct Sixth;
 static SIXTH: Sixth = Sixth;
 
 impl CliAdapter for Sixth {
-    fn mcp_location(&self, _: Scope, home: &Path, _: Option<&Path>) -> Option<crate::adapters::McpLocation> {
-        Some(crate::adapters::McpLocation { path: home.join(".sixth/mcp.jsonc"), kind: FileKind::Jsonc, root: "servers", child: None })
-    }
-    fn mcp_document(&self, definition: &crate::resources::mcp::McpDefinition, enabled: bool, existing: Option<&Value>) -> Result<Option<Value>, String> {
-        let mut value = crate::resources::mcp::stdio_doc(definition, existing);
-        value.insert("enabled".into(), json!(enabled));
-        Ok(Some(Value::Object(value)))
-    }
     fn configuration(&self) -> Option<&dyn crate::adapters::configuration::ConfigurationAdapter> { Some(self) }
     fn portable_root_fields(&self, role: &str) -> &'static [&'static str] {
         if role == "settings" { &["model", "models", "temperature", "provider", "baseUrl", "interfaceFormat", "unknown"] } else { &[] }
@@ -138,22 +130,6 @@ impl CliAdapter for Sixth {
 struct MemoryCredentials(Mutex<HashMap<String, String>>);
 
 #[test]
-fn sixth_mcp_text_codec_extends_without_service_dispatch() {
-    use crate::resources::{documents, mcp};
-    let registry = Registry::with_adapters(vec![&SIXTH]).unwrap();
-    let temp = tempfile::tempdir().unwrap();
-    let db = crate::database::Database::open(&temp.path().join("db")).unwrap();
-    let target = mcp::McpTargetRequest { context_id: None, tool_id: "sixth_fixture".into(), scope: Scope::Global, project_path: None, enabled: true, baseline_hash: None, allow_replace: false, preview_token: None };
-    let parsed = documents::parse_paste(&db, &registry, temp.path(), &target, None, "{\"servers\":{\"hello\":{\"command\":\"node\",\"args\":[\"one\",\"two\"]}}}").unwrap();
-    let definition = mcp::save_definition(&db, parsed.into_iter().next().unwrap().draft.unwrap()).unwrap();
-    let document = documents::read(&db, &registry, temp.path(), &documents::McpDocumentRequest { target, definition_id: Some(definition.id), name: definition.name, reveal: false }).unwrap();
-    assert_eq!(document.source, "equivalent");
-    assert_eq!(document.format, "jsonc");
-    assert!(document.text.contains("servers"));
-    assert!(document.raw_text.is_none());
-}
-
-#[test]
 fn sixth_release_and_install_policy_extend_through_registry() {
     let registry = Registry::with_adapters(vec![&SIXTH]).unwrap();
     let adapter = registry.get("sixth_fixture").unwrap();
@@ -185,7 +161,6 @@ impl CredentialStore for MemoryCredentials {
 
 #[test]
 fn sixth_adapter_uses_the_same_probe_native_transaction_and_launch_orchestration() {
-    assert_eq!(serde_json::to_value(SIXTH.descriptor()).unwrap()["launchDirectory"], "terminal");
     let registry =
         Registry::with_adapters(vec![&CODEX, &CLAUDE, &GROK, &PI, &OPENCODE, &SIXTH]).unwrap();
     let temp = tempfile::tempdir().unwrap();

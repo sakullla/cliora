@@ -1,17 +1,4 @@
 export default {
-  minimaxCode: {
-    settingsLabel: 'MiniMax Code 设置',
-    connectionNote: '官方自备密钥使用供应商 ID minimax_api；自定义服务填写独立 ID。地址按实际区域填写。官方订阅登录请继续在 mcode 中管理。',
-    applyConnection: '更新连接草稿',
-    settingsNote: '用户级 config.yaml。官方登录由 mcode 管理；自备 API key 使用 MiniMax API 或自定义连接。项目 MCP 与 Skills 在资源页管理。',
-    fields: { defaultModel: '默认模型', permissionMode: '权限模式', minimaxModelSource: 'MiniMax 模型来源', skills_external_enabled: '启用外部 Skills', skills_external_walkUp: '查找父目录 Skills' },
-  },
-  cursorIde: {
-    settingsLabel: 'Cursor IDE 设置',
-    settingsNote: '编辑 IDE 默认 Profile 或项目的 settings.json；账号、模型订阅与命令行配置仍由 Cursor 管理。原文页保留扩展设置。',
-    readOnlySource: '只读来源：{{source}}',
-    fields: { editor_fontSize: '编辑器字号', editor_tabSize: '缩进宽度', editor_wordWrap: '自动换行', files_autoSave: '自动保存', workbench_colorTheme: '颜色主题' },
-  },
   preview: {
     tabsLabel: '工具',
     configTitle: '{{name}} 配置',
@@ -359,7 +346,6 @@ export default {
     confirmDiscard: 'MCP 草稿尚未保存，切换后会丢失修改。',
     importedNotice: '已读取当前工具上的条目。保存只更新这个 CLI。',
     written: '已写入当前工具。',
-    definitionSaved: '定义已保存。',
     partialFailed: '部分写入失败，可重试。',
     pickProject: '请选择项目。',
     dirtyAgain: '已写入当前工具前，表单又有改动，请再保存一次。',
@@ -402,7 +388,6 @@ export default {
     addSubmit: '添加',
   },
   skills: {
-    readOnlySource: '只读来源',
     pickProjectFirst: '请先在工具页打开项目目录。',
     dependencyFirst: '请先检查并确认 Skill 的环境依赖要求。',
     pickDirTitle: '选择包含 SKILL.md 的目录',
@@ -599,6 +584,8 @@ export default {
       plugins: '插件',
     },
     discardMessage: '当前草稿尚未保存，继续会丢失这些修改。是否放弃修改？',
+    scrollToolsBack: '向左查看更多工具',
+    scrollToolsForward: '向右查看更多工具',
     frameCurrent: '修改正在使用的文件',
     frameCommon: '修改通用配置',
     frameProfile: '修改配置 · {{name}}',

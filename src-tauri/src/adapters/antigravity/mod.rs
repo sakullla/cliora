@@ -167,17 +167,6 @@ impl CliAdapter for Antigravity {
         }
         entry.clone()
     }
-    fn mcp_decode(&self, name: &str, entry: &Value) -> Result<crate::adapters::mcp_codec::DecodedMcp, String> {
-        let mut native = entry.as_object().ok_or("Antigravity MCP 条目必须是对象")?.clone();
-        if native.contains_key("url") || native.contains_key("httpUrl") {
-            return Err("Antigravity 旧版 url/httpUrl 条目只读，请先在原生配置中确认".into());
-        }
-        if let Some(url) = native.remove("serverUrl") {
-            if !url.is_string() { return Err("Antigravity serverUrl 必须是字符串".into()); }
-            native.insert("url".into(), url);
-        }
-        crate::adapters::mcp_codec::decode(name, &Value::Object(native))
-    }
     fn mcp_document(
         &self,
         definition: &McpDefinition,
@@ -365,7 +354,6 @@ impl CliAdapter for Antigravity {
             project_model_override: false,
             yolo_available: true,
             launch_form: self.launch_form(),
-            launch_directory: self.launch_directory(),
             native_config: Facet {
                 state: "available",
                 reason: "已确认 CLI 身份，可编辑 ~/.gemini/antigravity-cli/settings.json（纯 JSON）；keyring 登录态不接管",
@@ -434,7 +422,6 @@ mod tests {
 
     fn definition(transport: McpTransport) -> McpDefinition {
         McpDefinition {
-            reference_source: None, reference_scope: None,
             id: "fixture-definition".into(),
             name: "example".into(),
             transport,

@@ -549,7 +549,6 @@ impl CliAdapter for KimiCode {
             project_model_override: false,
             yolo_available: true,
             launch_form: self.launch_form(),
-            launch_directory: self.launch_directory(),
             native_config: Facet {
                 state: "available",
                 reason: "已确认 CLI 身份，可编辑用户级 config.toml（TOML）",
@@ -858,7 +857,6 @@ mod tests {
         let definition = mcp::save_definition(
             &db,
             mcp::McpDraft {
-                reference_source: None, reference_scope: None,
                 id: None,
                 name: "example".into(),
                 transport: McpTransport::Stdio,

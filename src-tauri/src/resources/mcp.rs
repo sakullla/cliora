@@ -31,17 +31,12 @@ pub struct McpDefinition {
     pub url: String,
     pub env: BTreeMap<String, String>,
     pub headers: BTreeMap<String, String>,
-    /// Native adapter that owns the interpolation grammar; absent in legacy data.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reference_source: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reference_scope: Option<Scope>,
     #[serde(default = "default_in_library")]
     pub in_library: bool,
     pub version: u64,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpDraft {
     pub id: Option<String>,
@@ -52,11 +47,6 @@ pub struct McpDraft {
     pub url: String,
     pub env: BTreeMap<String, String>,
     pub headers: BTreeMap<String, String>,
-    /// Native adapter that owns the interpolation grammar; absent in legacy data.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reference_source: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reference_scope: Option<Scope>,
     #[serde(default = "default_in_library")]
     pub in_library: bool,
     pub expected_version: Option<u64>,
@@ -66,7 +56,7 @@ fn default_in_library() -> bool {
     true
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpTargetRequest {
     #[serde(default)]
@@ -109,11 +99,6 @@ pub struct NativeMcpEntry {
     pub url: String,
     pub env: BTreeMap<String, String>,
     pub headers: BTreeMap<String, String>,
-    /// Native adapter that owns the interpolation grammar; absent in legacy data.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reference_source: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reference_scope: Option<Scope>,
     pub enabled: bool,
     pub protected_values: bool,
 }
@@ -126,7 +111,7 @@ fn valid_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
 
-pub(crate) fn is_reference(value: &str) -> bool {
+fn is_reference(value: &str) -> bool {
     let value = value.strip_prefix("Bearer ").unwrap_or(value);
     let reference = value
         .strip_prefix("${")
@@ -147,7 +132,7 @@ fn sensitive_key(name: &str) -> bool {
         .any(|word| name.contains(word))
 }
 
-pub(super) fn validate(draft: &McpDraft) -> Result<(), String> {
+fn validate(draft: &McpDraft) -> Result<(), String> {
     if !valid_name(&draft.name) {
         return Err("MCP 名称只可用 1–80 个字母、数字、连字符或下划线".into());
     }
@@ -177,7 +162,7 @@ pub(super) fn validate(draft: &McpDraft) -> Result<(), String> {
 pub fn list_definitions(db: &Database) -> Result<Vec<McpDefinition>, String> {
     db.with_connection(|conn| {
         let mut statement = conn
-            .prepare("SELECT data_json FROM mcp_definitions ORDER BY (SELECT sequence FROM resource_order WHERE kind='mcp' AND resource_id=mcp_definitions.id) DESC, name COLLATE NOCASE, id")
+            .prepare("SELECT data_json FROM mcp_definitions ORDER BY name COLLATE NOCASE")
             .map_err(|error| error.to_string())?;
         let rows = statement
             .query_map([], |row| row.get::<_, String>(0))
@@ -206,13 +191,10 @@ pub fn get_definition(db: &Database, id: &str) -> Result<McpDefinition, String> 
     })
 }
 
-pub fn save_definition(db: &Database, mut draft: McpDraft) -> Result<McpDefinition, String> {
+pub fn save_definition(db: &Database, draft: McpDraft) -> Result<McpDefinition, String> {
     validate(&draft)?;
     if let Some(id) = draft.id.as_deref() {
         let previous = get_definition(db, id)?;
-        // Older clients may omit provenance while editing a known definition.
-        if draft.reference_source.is_none() { draft.reference_source = previous.reference_source.clone(); }
-        if draft.reference_scope.is_none() && draft.reference_source == previous.reference_source { draft.reference_scope = previous.reference_scope; }
         if previous.name != draft.name.trim() {
             let installed: bool = db.with_connection(|conn| {
                 conn.query_row(
@@ -242,8 +224,6 @@ pub fn save_definition(db: &Database, mut draft: McpDraft) -> Result<McpDefiniti
         url: draft.url.trim().into(),
         env: draft.env,
         headers: draft.headers,
-        reference_source: draft.reference_source,
-        reference_scope: draft.reference_scope,
         in_library: draft.in_library,
         version,
     };
@@ -287,14 +267,12 @@ pub fn remove_native(
     let adapter = registry.get(&target.tool_id).ok_or("此 CLI 尚无注册适配器")?;
     let name_owned = name.to_owned();
     let tool = target.tool_id.clone();
-    let order_id = native_order_id(&location, name);
     let commit = move |tx: &rusqlite::Transaction<'_>| {
-        tx.execute("DELETE FROM resource_order WHERE kind='native_mcp' AND resource_id=?1", [&order_id]).map_err(|e| e.to_string())?;
         tx.execute("DELETE FROM mcp_targets WHERE tool = ?1 AND scope_key = ?2 AND definition_id IN (SELECT id FROM mcp_definitions WHERE name = ?3)",
             params![tool, scope_key, name_owned]).map(|_| ()).map_err(|error| error.to_string())
     };
     if adapter.mcp_entries(&parsed, &location)?.contains_key(name) {
-        let change = adapter.mcp_change_in_scope(&parsed, &location, name, None, target.scope)?;
+        let change = adapter.mcp_change(&parsed, &location, name, None)?;
         transaction::apply(db, credentials, &[transaction::FilePatch {
             path: location.path.clone(), kind: location.kind, baseline,
             changes: vec![change],
@@ -342,7 +320,7 @@ pub fn managed_enabled(db: &Database, definition_id: &str, target: &McpTargetReq
     db.with_connection(|conn|conn.query_row("SELECT enabled FROM mcp_targets WHERE definition_id=?1 AND tool=?2 AND scope_key=?3",params![definition_id,target.tool_id,key],|row|row.get(0)).optional().map_err(|e|e.to_string()))
 }
 
-pub(super) fn target_location(
+fn target_location(
     db: &Database,
     registry: &Registry,
     target: &McpTargetRequest,
@@ -400,7 +378,7 @@ pub(super) fn target_location(
     Ok((location, crate::accounts::selection::key(&key)))
 }
 
-pub(super) fn parse_native(location: &McpLocation) -> Result<(String, Value), String> {
+fn parse_native(location: &McpLocation) -> Result<(String, Value), String> {
     let text = transaction::read_native(&location.path)?;
     let parsed = format::parse(location.kind, &text)?;
     Ok((text, parsed))
@@ -410,10 +388,6 @@ fn entry_hash(value: Option<&Value>) -> Result<String, String> {
     Ok(transaction::fingerprint(
         &serde_json::to_vec(&value).map_err(|error| error.to_string())?,
     ))
-}
-
-fn native_order_id(location: &McpLocation, name: &str) -> String {
-    transaction::fingerprint(format!("{}\0{name}", location.path.display()).as_bytes())
 }
 
 fn preview_token(
@@ -473,10 +447,10 @@ pub fn list_native(
     let (_, parsed) = parse_native(&location)?;
     let adapter = registry.get(&target.tool_id).ok_or("此 CLI 尚无注册适配器")?;
     let entries = adapter.mcp_entries(&parsed, &location)?;
-    let mut result: Vec<_> = entries
+    Ok(entries
         .iter()
         .filter_map(|(name, raw)| {
-            let view = adapter.mcp_entry_view_at(raw, target.scope);
+            let view = adapter.mcp_entry_view(raw);
             let raw = view.as_object()?;
             let command = raw.get("command");
             let (command, args) = match command {
@@ -520,8 +494,6 @@ pub fn list_native(
                 url,
                 env,
                 headers,
-                reference_source: Some(target.tool_id.clone()),
-                reference_scope: Some(target.scope),
                 enabled: raw
                     .get("enabled")
                     .and_then(Value::as_bool)
@@ -534,14 +506,7 @@ pub fn list_native(
                 protected_values: false,
             })
         })
-        .collect();
-    let order = db.with_connection(|conn| {
-        let mut statement = conn.prepare("SELECT resource_id,sequence FROM resource_order WHERE kind='native_mcp'").map_err(|e| e.to_string())?;
-        let result = statement.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))).map_err(|e| e.to_string())?.collect::<Result<BTreeMap<_,_>,_>>().map_err(|e| e.to_string())?;
-        Ok(result)
-    })?;
-    result.sort_by(|a,b| order.get(&native_order_id(&location, &b.name)).cmp(&order.get(&native_order_id(&location, &a.name))).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())).then_with(|| a.name.cmp(&b.name)));
-    Ok(result)
+        .collect())
 }
 
 pub fn preview_targets(
@@ -569,7 +534,7 @@ pub fn preview_targets(
                     let existing = entries.get(&definition.name);
                     let actual = entry_hash(existing)?;
                     let owned = managed_hash(db, definition_id, &target.tool_id, &scope_key)?;
-                    let proposal = render_target(registry, adapter, definition, target.enabled, existing, target.scope, &location)?;
+                    let proposal = adapter.mcp_document_at(definition, target.enabled, existing, &location)?;
                     Ok::<_, String>((existing.is_some(), actual, owned, visible_entry(existing), visible_entry(proposal.as_ref()), preview_token(definition, &target, &location, &scope_key, &entry_hash(existing)?)?))
                 })();
                 match inspected {
@@ -615,7 +580,6 @@ pub fn distribute(
             result.path = Some(location.path.display().to_string());
             let (baseline, parsed) = parse_native(&location)?;
             let adapter = registry.get(&target.tool_id).ok_or("此 CLI 尚无注册适配器")?;
-            validate_references(registry, adapter, definition, target.scope)?;
             let entries = adapter.mcp_entries(&parsed, &location)?;
             let existing = entries.get(&definition.name);
             let actual_hash = entry_hash(existing)?;
@@ -630,18 +594,13 @@ pub fn distribute(
                     return Err("同名原生条目未受当前定义管理或已被外部修改；请预览后确认替换".into());
                 }
             }
-            let document = render_target(registry, adapter, definition, target.enabled, existing, target.scope, &location)?;
+            let document = adapter.mcp_document_at(definition, target.enabled, existing, &location)?;
             let written_hash = entry_hash(document.as_ref())?;
             let unchanged = existing == document.as_ref();
-            // A deletion-based disable leaves the placement ledger in place.
-            // Re-enabling an old placement must preserve its unknown/old rank.
-            let newly_added = existing.is_none() && document.is_some() && owned.is_none();
-            let order_id = native_order_id(&location, &definition.name);
-            let change = adapter.mcp_change_in_scope(&parsed, &location, &definition.name, document, target.scope)?;
+            let change = adapter.mcp_change(&parsed, &location, &definition.name, document)?;
             let commit = |tx: &rusqlite::Transaction<'_>| {
                 let current: i64 = tx.query_row("SELECT version FROM mcp_definitions WHERE id = ?1", [&definition.id], |row| row.get(0)).map_err(|error| error.to_string())?;
                 if current != definition.version as i64 { return Err("MCP 定义在预览后变化；请重新预览".into()); }
-                if newly_added { tx.execute("INSERT OR IGNORE INTO resource_order(kind,resource_id) VALUES ('native_mcp',?1)", [&order_id]).map_err(|e| e.to_string())?; }
                 tx.execute("INSERT INTO mcp_targets (definition_id, tool, scope_key, enabled, managed_hash) VALUES (?1, ?2, ?3, ?4, ?5)
                      ON CONFLICT(definition_id, tool, scope_key) DO UPDATE SET enabled = excluded.enabled, managed_hash = excluded.managed_hash",
                     params![definition.id, target.tool_id, scope_key, target.enabled as i64, written_hash])
@@ -663,49 +622,6 @@ pub fn distribute(
     }).collect()
 }
 
-/// The single generation boundary for previews, documents and actual writes.
-/// No interpolation is evaluated here. Adapters own syntax, and source literals
-/// must not become references (or references become literals) in another client.
-pub(super) fn validate_references(
-    registry: &Registry,
-    target: &dyn crate::adapters::CliAdapter,
-    definition: &McpDefinition,
-    target_scope: Scope,
-) -> Result<(), String> {
-    let source = definition.reference_source.as_deref()
-        .map(|id| registry.get(id).ok_or("MCP 引用来源工具未注册，无法确认环境变量引用语义"))
-        .transpose()?;
-    for value in std::iter::once(&definition.command).chain(&definition.args)
-        .chain(std::iter::once(&definition.url)).chain(definition.env.values()).chain(definition.headers.values()) {
-        // Legacy definitions have no source. Treat any known native grammar as
-        // a reference conservatively instead of silently exporting it literally.
-        let mut source_references = match source {
-            None => registry.iter().flat_map(|adapter| adapter.mcp_reference_fragments(value)).collect::<Vec<_>>(),
-            Some(adapter) => adapter.mcp_reference_fragments_at(value, definition.reference_scope)?,
-        };
-        let mut target_references = target.mcp_reference_fragments_at(value, Some(target_scope))?;
-        source_references.sort(); source_references.dedup();
-        target_references.sort(); target_references.dedup();
-        if source_references != target_references {
-            return Err("目标格式不能保留来源工具的环境变量引用语义；请保留原始配置".into());
-        }
-    }
-    Ok(())
-}
-
-pub(super) fn render_target(
-    registry: &Registry,
-    adapter: &dyn crate::adapters::CliAdapter,
-    definition: &McpDefinition,
-    enabled: bool,
-    existing: Option<&Value>,
-    scope: Scope,
-    location: &McpLocation,
-) -> Result<Option<Value>, String> {
-    validate_references(registry, adapter, definition, scope)?;
-    adapter.mcp_document_in_scope(definition, enabled, existing, location, scope)
-}
-
 pub fn stdio_doc(
     definition: &McpDefinition,
     existing: Option<&Value>,
@@ -715,7 +631,7 @@ pub fn stdio_doc(
 
 /// Keeps a sensitive value already on disk when this definition does not mention that key.
 /// A value in the definition replaces it. An empty value removes it.
-fn protected_values(existing: Option<&Value>, field: &str, reference: &dyn Fn(&str) -> bool) -> serde_json::Map<String, Value> {
+fn protected_values(existing: Option<&Value>, field: &str) -> serde_json::Map<String, Value> {
     existing
         .and_then(Value::as_object)
         .and_then(|map| map.get(field))
@@ -723,7 +639,7 @@ fn protected_values(existing: Option<&Value>, field: &str, reference: &dyn Fn(&s
         .map(|map| {
             map.iter()
                 .filter(|(key, value)| {
-                    sensitive_key(key) && value.as_str().is_some_and(|text| !reference(text))
+                    sensitive_key(key) && value.as_str().is_some_and(|text| !is_reference(text))
                 })
                 .map(|(key, value)| (key.clone(), value.clone()))
                 .collect()
@@ -782,16 +698,6 @@ pub fn stdio_doc_with_env(
     existing: Option<&Value>,
     field: &str,
 ) -> serde_json::Map<String, Value> {
-    stdio_doc_with_reference(definition, existing, field, &is_reference)
-}
-
-/// Shared merge policy; the adapter supplies only its native reference syntax.
-pub fn stdio_doc_with_reference(
-    definition: &McpDefinition,
-    existing: Option<&Value>,
-    field: &str,
-    reference: &dyn Fn(&str) -> bool,
-) -> serde_json::Map<String, Value> {
     let mut map = existing
         .and_then(Value::as_object)
         .cloned()
@@ -804,7 +710,7 @@ pub fn stdio_doc_with_reference(
     let (command, args) = stdio_command(&definition.command, &definition.args);
     map.insert("command".into(), Value::String(command));
     map.insert("args".into(), serde_json::json!(args));
-    let mut env = protected_values(existing, field, reference);
+    let mut env = protected_values(existing, field);
     for (key, value) in &definition.env {
         if value.is_empty() {
             env.remove(key);
@@ -823,15 +729,6 @@ pub fn http_doc(
     existing: Option<&Value>,
     header_field: &str,
 ) -> serde_json::Map<String, Value> {
-    http_doc_with_reference(definition, existing, header_field, &is_reference)
-}
-
-pub fn http_doc_with_reference(
-    definition: &McpDefinition,
-    existing: Option<&Value>,
-    header_field: &str,
-    reference: &dyn Fn(&str) -> bool,
-) -> serde_json::Map<String, Value> {
     let mut map = existing
         .and_then(Value::as_object)
         .cloned()
@@ -843,7 +740,7 @@ pub fn http_doc_with_reference(
     map.remove("headers");
     map.remove("http_headers");
     map.insert("url".into(), Value::String(definition.url.clone()));
-    let mut headers = protected_values(existing, header_field, reference);
+    let mut headers = protected_values(existing, header_field);
     for (key, value) in &definition.headers {
         if value.is_empty() {
             headers.remove(key);

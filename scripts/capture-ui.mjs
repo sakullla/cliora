@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { chromium, expect } from '@playwright/test';
-import { workflowFixtures, resourceExperienceFixture, cursorIdeFixture, minimaxCodeFixture } from './capture-workflow-fixtures.mjs';
+import { workflowFixtures } from './capture-workflow-fixtures.mjs';
 import { captureConfiguration, configurationScenarios, installCaptureConfigurationProtocol } from './capture-configuration.mjs';
 const historyScenarioNames=['grok-precise-detail','grok-inferred-time','grok-no-usage','grok-statistics','grok-statistics-details'];
 const scenarioNames=[...configurationScenarios.map(item=>item.name),...historyScenarioNames];
@@ -21,9 +21,9 @@ if((process.argv.includes('--features')||process.argv.includes('--workflows')||p
 if(process.argv.includes('--list')){console.log(selectedScenarios.join('\n'));process.exit(0);}
 const root=fileURLToPath(new URL('../',import.meta.url)).replace(/\\/g,'/').replace(/\/$/,'');
 const workflowsOnly=process.argv.includes('--features')||process.argv.includes('--workflows');
-const fullCapture=!process.argv.some(arg=>['--features','--workflows','--records','--sessions','--connections','--skills','--home','--resources','--cursor-ide','--minimax-code'].includes(arg));
-const captureMode=process.argv.includes('--minimax-code')?'minimax-code':process.argv.includes('--cursor-ide')?'cursor-ide':process.argv.includes('--resources')?'resources':process.argv.includes('--home')?'home':workflowsOnly?'features':process.argv.includes('--sessions')?'sessions':process.argv.includes('--records')?'records':process.argv.includes('--connections')?'connections':process.argv.includes('--skills')?'skills':'full';
-const manifestName=`capture-ui${['features','sessions','records','connections','skills','home','resources','cursor-ide','minimax-code'].includes(captureMode)?'-'+captureMode:''}-manifest.json`;
+const fullCapture=!process.argv.some(arg=>['--features','--workflows','--records','--sessions','--connections','--skills'].includes(arg));
+const captureMode=workflowsOnly?'features':process.argv.includes('--sessions')?'sessions':process.argv.includes('--records')?'records':process.argv.includes('--connections')?'connections':process.argv.includes('--skills')?'skills':'full';
+const manifestName=`capture-ui${['features','sessions','records','connections','skills'].includes(captureMode)?'-'+captureMode:''}-manifest.json`;
 const out=process.env.CLIORA_CAPTURE_OUT ?? root+'/docs/verification/ui'; fs.mkdirSync(out,{recursive:true});
 const previewUrl=process.env.CLIORA_PREVIEW_URL??'http://127.0.0.1:14736';
 let previewReady=false;
@@ -73,7 +73,7 @@ async function mock(initialTheme){
   window.__uiCalls.push({command,args});
   if(command.startsWith('plugin:event|'))return 1;
   if(command==='get_bootstrap'||command==='set_theme'||command==='set_tool_icon'){if(command==='set_theme')theme=args.theme;if(command==='set_tool_icon'){if(args.dataUrl)tool_icons[args.toolId]=args.dataUrl;else delete tool_icons[args.toolId];}return {preferences:{schema_version:1,managed_tools:ids,theme,tool_icons},tools:ids.map(id=>({id,name:names[id],installation:'not_checked',configuration:'not_checked'}))};}
-  if(command==='list_cli_adapters'||command==='set_registered_managed_tools')return {registered:ids.map(id=>({id,name:names[id],launchForm:'terminal',launchDirectory:'terminal',management:{accounts:id!=='grok',mcp:true,skills:true,agents:id!=='pi',plugins:true,projectPlugins:true},interfaceFormats:['openai_chat'],yoloAvailable:true,projectModelOverride:id==='grok',nativeConfig:{state:'available',reason:''},launch:{state:'available',reason:''},resume:{state:'available',reason:''},resources:{state:'available',reason:''},history:{state:'available',reason:''}})),managedIds:args.managedIds??ids,preservedUnknown:[]};
+  if(command==='list_cli_adapters'||command==='set_registered_managed_tools')return {registered:ids.map(id=>({id,name:names[id],management:{accounts:id!=='grok',mcp:true,skills:true,agents:id!=='pi',plugins:true,projectPlugins:true},interfaceFormats:['openai_chat'],yoloAvailable:true,projectModelOverride:id==='grok',nativeConfig:{state:'available',reason:''},launch:{state:'available',reason:''},resume:{state:'available',reason:''},resources:{state:'available',reason:''},history:{state:'available',reason:''}})),managedIds:args.managedIds??ids,preservedUnknown:[]};
   if(command==='list_accounts')return window.__captureNativeOnly ? accounts.filter(account=>account.toolId!=='open_code') : accounts.map(account=>window.__captureLoginPending && account.toolId==='open_code'?{...account,state:'pending',pendingLogin:{id:'capture-attempt',operation:'login',expiresAt:1999999999}}:account);
   if(command==='account_impact')return {accountId:args.id,accountVersion:1,toolId:accounts.find(account=>account.id===args.id)?.toolId??'codex',currentContextId:null,contexts:[],profiles:[],scopes:[],usageReferences:[]};
   if(command==='discover_native_logins')return {toolId:args.toolId,checkedAt:1790992800,logins:args.toolId==='open_code'?[{provider:'openai',authKind:'oauth',state:'signed_in',identity:null,detail:'已发现本地 OAuth 登录，CLI 未提供账号身份；未在线核验。',managedAccountId:null},{provider:'anthropic',authKind:'api_key',state:'signed_in',identity:null,detail:'已配置原生 API Key；不是 OAuth 订阅账号，未在线核验。',managedAccountId:null}]:[{provider:'chatgpt',authKind:'oauth',state:'signed_in',identity:{subject:'native-user',email:'native@example.test',plan:'plus',source:'synthetic'},detail:'原生本地账号状态；未在线核验。',managedAccountId:null}]};
@@ -91,16 +91,12 @@ async function mock(initialTheme){
   if(command==='inspect_registered_native_draft')return {model:null,providerId:null,connection:null,reasoningEffort:'high',projectedModels:null};
   if(command==='preview_registered_native_profile')return {documents:{settings:{model:'gpt-6-astra',model_reasoning_effort:'high'}},sources:{settings:{model:'命名配置'}}};
   if(command==='read_registered_native_file_for_edit')return '# 完整磁盘原文\nmodel = "gpt-6-astra"';
-  if(command==='get_launch_settings')return {selected:'power_shell',directories:{},terminals:[{id:'auto',label:'系统默认',available:true},{id:'power_shell',label:'PowerShell',available:true},{id:'windows_terminal',label:'Windows Terminal',available:true}]};
+  if(command==='get_launch_settings')return {selected:'power_shell',terminals:[{id:'auto',label:'系统默认',available:true},{id:'power_shell',label:'PowerShell',available:true},{id:'windows_terminal',label:'Windows Terminal',available:true}]};
   if(command==='get_tray_status')return {available:true,error:null};
   if(command==='list_library_items')return library.filter(i=>i.kind===args.kind&&(!args.search||(i.title+i.body+i.category).includes(args.search)));
   if(command==='list_mcp_definitions')return definitions;
   if(command==='list_mcp_placements')return [{definitionId:'mcp-1',toolId:'codex',scope:'global',projectPath:null,enabled:true}];
   if(command==='list_native_mcp')return [{...definitions[0],enabled:true,protectedValues:false}];
-  if(command==='resource_sort_preference')return args.value??'added';
-  if(command==='list_native_skill_metadata')return (await window.__TAURI_INTERNALS__.invoke('scan_native_skills',{toolId:args.target.toolId,scope:args.target.scope,projectPath:args.target.projectPath})).map(item=>({...item,state:'unknown',packageId:null}));
-  if(command==='resource_states')return Promise.all(args.requests.map(async(request,index)=>({index,status:'ready',detail:'',value:request.kind==='native_skill'?(await window.__TAURI_INTERNALS__.invoke('scan_native_skills',{toolId:request.target.toolId,scope:request.target.scope,projectPath:request.target.projectPath})).find(item=>item.name===request.name):await window.__TAURI_INTERNALS__.invoke('list_skill_installations',{packageId:request.packageId})})));
-  if(command==='read_skill_package_document')return {packageId:args.packageId,name:'code-review',digest:'abc',content:'---\nname: code-review\n---\n# Code review\n'};
   if(command==='list_skill_packages')return skills;
   if(command==='list_skill_installations')return [{packageId:'skill-1',toolId:'codex',scope:'global',projectPath:null,targetPath:'C:/Users/local/.codex/skills/code-review',state:'current'}];
   if(command==='list_skill_recovery_issues')return [];
@@ -157,9 +153,9 @@ async function captureSkillViews(page,capture){
  const list=page.getByRole('region',{name:'Skill'});
  const dialog=page.getByRole('dialog',{name:'当前 Skill'});
  await list.getByRole('button',{name:/code-review/}).waitFor();
- await expect(list.locator('article').filter({has:list.getByRole('button',{name:'code-review',exact:true})})).toContainText('已安装');
- await expect(list.locator('article').filter({has:list.getByRole('button',{name:'crud-page',exact:true})})).toContainText('本机目录');
- await expect(list.locator('article').filter({has:list.getByRole('button',{name:'lark-apps',exact:true})})).toContainText('本机目录');
+ await expect(list.getByRole('button',{name:/code-review/})).toContainText('已安装');
+ await expect(list.getByRole('button',{name:/crud-page/})).toContainText('本机目录');
+ await expect(list.getByRole('button',{name:/lark-apps/})).toContainText('本机目录');
  await expect(list.getByText('暂不可读取')).toHaveCount(0);
  await capture('skills');
  async function openSkill(name,sample){
@@ -264,83 +260,9 @@ const ids=['scenario','theme','width','query'];const controls=ids.map(id=>docume
 
 if(!workflowsOnly){
 for(const width of widths)for(const theme of themes){
- const page=await browser.newPage({viewport:{width,height:1000}});page.on('pageerror',e=>failures.push(e.message));await page.addInitScript(mock,theme);await installCaptureConfigurationProtocol(page);if(process.argv.includes('--resources'))await page.addInitScript(resourceExperienceFixture,{theme,count:500,stateDelay:120});if(process.argv.includes('--minimax-code')){await page.addInitScript(resourceExperienceFixture,{theme,count:2});await page.addInitScript(minimaxCodeFixture,{theme});}if(process.argv.includes('--cursor-ide')){await page.addInitScript(resourceExperienceFixture,{theme,count:2});await page.addInitScript(cursorIdeFixture,{theme});}await page.goto(process.env.CLIORA_PREVIEW_URL ?? 'http://127.0.0.1:14736');await page.getByText('正在读取本机设置').waitFor({state:'hidden'});await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);
+ const page=await browser.newPage({viewport:{width,height:1000}});page.on('pageerror',e=>failures.push(e.message));await page.addInitScript(mock,theme);await installCaptureConfigurationProtocol(page);await page.goto(process.env.CLIORA_PREVIEW_URL ?? 'http://127.0.0.1:14736');await page.getByText('正在读取本机设置').waitFor({state:'hidden'});await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);
  const nav=page.getByRole('navigation',{name:'页面'});
  async function capture(name){await captureImage(page,name,theme,width);}
- if(process.argv.includes('--minimax-code')){
-  await expect(page.getByLabel('管理中的工具').getByText('MiniMax Code',{exact:true})).toBeVisible();await capture('minimax-code-home');
-  await nav.getByRole('button',{name:'工具与连接',exact:true}).click();await page.getByRole('button',{name:'新建配置',exact:true}).click();
-  await expect(page.getByRole('button',{name:'更新连接草稿',exact:true})).toBeVisible();await capture('minimax-code-connection');
-  await page.getByRole('button',{name:'常用设置',exact:true}).click();await expect(page.getByRole('textbox',{name:'默认模型',exact:true})).toBeVisible();await capture('minimax-code-settings');
-  await page.getByRole('dialog').getByRole('button',{name:'关闭',exact:true}).click();
-  await page.getByRole('tab',{name:'MCP',exact:true}).click();await page.getByRole('button',{name:'mcp-001',exact:true}).click();await page.getByRole('button',{name:'配置文本',exact:true}).click();await page.getByRole('textbox',{name:'当前条目配置（格式化）',exact:true}).waitFor();await capture('minimax-code-mcp-document');
-  await page.getByRole('dialog').getByRole('button',{name:'关闭',exact:true}).click();await page.getByRole('tab',{name:'Skill',exact:true}).click();
-  const rows=page.getByRole('region',{name:'Skill',exact:true}).locator('article');await expect(rows).toHaveCount(3);await capture('minimax-code-skill-sources');
-  await rows.filter({hasText:'minimax_builtin Skill source'}).getByRole('button',{name:'same-skill',exact:true}).click();await expect(page.getByRole('textbox',{name:'SKILL.md',exact:true})).toHaveAttribute('contenteditable','false');await capture('minimax-code-readonly-skill');
-  await page.close();continue;
- }
- if(process.argv.includes('--cursor-ide')){
-  await page.getByLabel('管理中的工具').getByRole('button',{name:'启动',exact:true}).click();
-  await expect(page.getByLabel('管理中的工具').getByRole('status')).toContainText('已请求启动桌面应用');
-  await capture('cursor-ide-home');
-  await nav.getByRole('button',{name:'工具与连接',exact:true}).click();
-  await page.getByRole('button',{name:'新建配置',exact:true}).click();
-  await expect(page.getByRole('textbox',{name:'编辑器字号'})).toBeVisible();
-  await capture('cursor-ide-settings');
-  await page.getByRole('dialog').getByRole('button',{name:'关闭',exact:true}).click();
-  await page.getByRole('tab',{name:'Skill',exact:true}).click();
-  const rows=page.getByRole('region',{name:'Skill',exact:true}).locator('article');
-  await expect(rows).toHaveCount(3);await capture('cursor-ide-skill-sources');
-  await rows.filter({hasText:'agents Skill source'}).getByRole('button',{name:'same-skill',exact:true}).click();
-  await expect(page.getByRole('textbox',{name:'SKILL.md',exact:true})).toHaveAttribute('contenteditable','false');
-  await capture('cursor-ide-readonly-skill');
-  await page.close();continue;
- }
- if(process.argv.includes('--resources')){
-  await nav.getByRole('button',{name:'资料库',exact:true}).click();
-  await page.getByRole('tab',{name:'MCP',exact:true}).click();
-  let list=page.locator('[data-resource-list="library:mcp"]');
-  await expect(list.locator('article')).toHaveCount(50);
-  await capture('resource-library-mcp-500');
-  await list.getByRole('button',{name:'mcp-001',exact:true}).click();
-  await page.getByRole('button',{name:'配置文本',exact:true}).click();
-  await page.getByRole('textbox',{name:'当前条目配置（格式化）',exact:true}).waitFor();
-  await capture('resource-mcp-equivalent');
-  await page.getByRole('dialog').getByRole('button',{name:'关闭',exact:true}).click();
-  await list.getByRole('button',{name:'选择全部筛选结果（500）',exact:true}).click();
-  await list.getByRole('combobox',{name:'批量目标',exact:true}).selectOption('codex');
-  await list.getByRole('button',{name:'分发 / 安装',exact:true}).click();
-  await expect(list.getByText('成功 499 项，未成功 1 项',{exact:true}).first()).toBeVisible();
-  await capture('resource-batch-partial');
-  await page.getByRole('tab',{name:'Skill',exact:true}).click();
-  list=page.locator('[data-resource-list="library:skill"]');
-  await expect(list.locator('article')).toHaveCount(50);
-  await expect(list.locator('article').filter({hasText:'状态读取失败'})).toHaveCount(1);
-  await capture('resource-library-skills-500');
-  await list.getByRole('button',{name:'skill-001',exact:true}).click();
-  await page.getByRole('textbox',{name:'SKILL.md',exact:true}).waitFor();
-  await capture('resource-package-editor');
-  await page.getByRole('dialog').getByRole('button',{name:'关闭',exact:true}).click();
-  await nav.getByRole('button',{name:'工具与连接',exact:true}).click();
-  await page.getByRole('tab',{name:'MCP',exact:true}).click();
-  await page.getByRole('button',{name:'mcp-001',exact:true}).click();
-  await page.getByRole('button',{name:'配置文本',exact:true}).click();
-  await page.getByRole('checkbox',{name:'原文件全文（只读，包含其他条目）',exact:true}).check();
-  await capture('resource-native-mcp-source');
-  await page.getByRole('dialog').getByRole('button',{name:'关闭',exact:true}).click();
-  await page.getByRole('tab',{name:'Skill',exact:true}).click();
-  list=page.getByRole('region',{name:'Skill',exact:true});
-  await expect(list.locator('article')).toHaveCount(50);
-  await capture('resource-native-skills-500');
-  await list.getByRole('textbox',{name:'搜索资料',exact:true}).fill('needle-last');
-  await list.getByRole('button',{name:'skill-500',exact:true}).click();
-  await page.getByRole('textbox',{name:'SKILL.md',exact:true}).waitFor();
-  await capture('resource-native-skill-editor');
-  const evidence=await page.evaluate(()=>({counts:{mcp:window.__resourceScale.definitions.length,skills:window.__resourceScale.packages.length},stateCalls:window.__resourceScale.calls.filter(item=>item.command==='resource_states').length,maxStateInFlight:window.__resourceScale.maxActive,maxStateBatch:Math.max(0,...window.__resourceScale.calls.filter(item=>item.command==='resource_states').map(item=>item.args.requests.length)),maxWriteBatch:Math.max(0,...window.__resourceScale.calls.filter(item=>item.command==='run_resource_batch').map(item=>item.args.operations.length))}));
-  if(evidence.maxStateBatch>50||evidence.maxWriteBatch>50||evidence.maxStateInFlight>1)failures.push({name:'resource-bounds',theme,width,evidence});
-  console.log(JSON.stringify({resourceEvidence:evidence,theme,width}));
-  await page.close();continue;
- }
  if(process.argv.includes('--records') || process.argv.includes('--sessions')){
   await nav.getByRole('button',{name:'使用记录'}).click();
   await page.getByLabel('会话列表').getByRole('button').first().waitFor();if(width>760)await page.getByRole('button',{name:'复制代码',exact:true}).waitFor();await capture('sessions');
@@ -390,7 +312,6 @@ for(const width of widths)for(const theme of themes){
   await page.close(); continue;
  }
  await capture('home');
- if(process.argv.includes('--home')){await page.close();continue;}
  await nav.getByRole('button',{name:'工具与连接'}).click();const profiles=page.getByRole('region',{name:'工具与连接'}).getByLabel('配置列表');await profiles.waitFor();await capture('tools');
  await profiles.getByRole('button',{name:'修改'}).first().click();await page.getByRole('dialog').waitFor();await capture('native-config');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
  await profiles.getByRole('button',{name:'修改'}).nth(1).click();await page.getByRole('dialog').waitFor();await capture('config-form');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});

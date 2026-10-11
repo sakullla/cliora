@@ -339,7 +339,6 @@ impl CliAdapter for Kiro {
             project_model_override: false,
             yolo_available: true,
             launch_form: self.launch_form(),
-            launch_directory: self.launch_directory(),
             native_config: Facet {
                 state: "available",
                 reason: "已登记官方命令身份，可编辑用户级 ~/.kiro/settings/cli.json（JSON；KIRO_HOME 覆盖整个根目录）",
@@ -480,7 +479,6 @@ mod tests {
     #[test]
     fn mcp_documents_match_the_native_stdio_and_remote_shapes() {
         let definition = McpDefinition {
-            reference_source: None, reference_scope: None,
             id: "fixture-definition".into(),
             name: "example".into(),
             transport: McpTransport::Stdio,

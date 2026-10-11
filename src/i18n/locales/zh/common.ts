@@ -1,5 +1,4 @@
 export default {
-  feedback: { dismiss: '忽略此消息', running: '操作进行中…', retry: '重试', title: '操作消息', summary: '{{count}} 项待处理', empty: '当前页面的结果显示在操作区旁。', partial: '部分完成。', details: '详情', stale: '操作对象已变化，请重新打开对应条目后重试。', retryFailed: '重试失败，原操作结果仍保留。' },
   language: {
     zh: '中文',
     en: 'English',

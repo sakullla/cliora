@@ -43,3 +43,4 @@ docs/verification/configuration-redesign-ui/*
 !docs/verification/configuration-redesign-ui/kimi-default-1160x780.png
 !docs/verification/configuration-redesign-ui/kimi-wide-1600x960.png
 !docs/verification/configuration-redesign-ui/kimi-first-screen-1160x780.png
+.zcode/

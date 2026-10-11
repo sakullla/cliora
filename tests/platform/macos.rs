@@ -54,7 +54,6 @@ fn five_cli_mcp_and_skills_work_in_macos_global_and_project_directories() {
     let definition = mcp::save_definition(
         &db,
         mcp::McpDraft {
-            reference_source: None, reference_scope: None,
             id: None,
             name: "macos-example".into(),
             transport: mcp::McpTransport::Stdio,

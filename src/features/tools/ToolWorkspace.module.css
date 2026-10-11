@@ -33,6 +33,26 @@
   scrollbar-width: none;
   overscroll-behavior-x: contain;
 }
+.switcherFrame { position: relative; width: fit-content; max-width: 100%; min-width: 0; }
+.switcherScroll {
+  position: absolute;
+  top: 50%;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-2);
+  box-shadow: var(--shadow-sm);
+  transform: translateY(-50%);
+}
+.switcherScroll:hover { color: var(--text); border-color: var(--line-strong); }
+.switcherScroll[data-side="start"] { left: 6px; }
+.switcherScroll[data-side="end"] { right: 6px; }
 .toolSwitcher::-webkit-scrollbar { display: none; }
 .toolSwitcher[data-fade-end] { mask-image: linear-gradient(to right, #000 calc(100% - 48px), transparent); }
 .toolSwitcher[data-fade-start] { mask-image: linear-gradient(to left, #000 calc(100% - 48px), transparent); }

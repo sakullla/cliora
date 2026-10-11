@@ -3,5 +3,3 @@ pub mod plugins;
 pub mod rules;
 pub mod skills;
 pub mod agents;
-pub mod documents;
-pub mod batch;

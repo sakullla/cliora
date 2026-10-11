@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -9,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::database::Database;
 use crate::native::adapter::{self, Scope};
-use crate::adapters::{self, CliAdapter, LaunchDirectory, LaunchForm, LaunchMode, Registry};
+use crate::adapters::{self, CliAdapter, LaunchForm, LaunchMode, Registry};
 use crate::credentials::{CredentialStore, SystemCredentialStore};
 use crate::projects;
 use crate::resources::skills;
@@ -93,7 +92,6 @@ pub struct LaunchSettings {
     pub custom: Option<CustomTerminal>,
     pub cli_mode: LaunchMode,
     pub project_mode: LaunchMode,
-    pub directories: BTreeMap<String, String>,
 }
 
 /// A saved launch command. `{script}` is replaced with the script file; arguments are not passed through a shell.
@@ -136,8 +134,6 @@ pub struct LaunchRequest {
     pub project_id: Option<String>,
     pub session_id: Option<String>,
     #[serde(default)]
-    /// Explicit terminal cwd or desktop workspace. None means bare desktop
-    /// launch; fallback process cwd never supplies workspace intent.
     pub directory: Option<String>,
     #[serde(default)]
     pub initial_prompt: Option<String>,
@@ -174,7 +170,6 @@ pub struct LaunchPlan {
     pub mode: LaunchMode,
     pub executable: PathBuf,
     pub cli_args: Vec<String>,
-    /// Process cwd only, distinct from explicit desktop workspace arguments.
     pub directory: PathBuf,
     pub terminal: TerminalId,
     pub session_markers: &'static [&'static str],
@@ -444,32 +439,6 @@ pub fn settings(db: &Database) -> Result<LaunchSettings, String> {
         custom: stored_custom(db)?,
         cli_mode,
         project_mode,
-        directories: remembered_directories(db)?,
-    })
-}
-
-/// Device-local paths deliberately live outside portable/sync entities.
-fn remembered_directories(db: &Database) -> Result<BTreeMap<String, String>, String> {
-    db.with_connection(|conn| {
-        let mut statement = conn.prepare("SELECT tool_id, path FROM launch_directories").map_err(|e| e.to_string())?;
-        let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?))).map_err(|e| e.to_string())?;
-        rows.collect::<Result<BTreeMap<String, String>, _>>().map_err(|e| e.to_string())
-    })
-}
-
-pub fn remember_directory(db: &Database, registry: &Registry, tool_id: &str, directory: Option<&str>) -> Result<(), String> {
-    let adapter = registry.get(tool_id).ok_or("未注册的工具")?;
-    if directory.is_some() && adapter.launch_directory() == LaunchDirectory::Unsupported {
-        return Err("此工具尚无已验证的目录启动能力".into());
-    }
-    let path = directory.map(projects::checked_directory).transpose()?;
-    db.with_connection(|conn| {
-        if let Some(path) = path {
-            conn.execute("INSERT INTO launch_directories(tool_id, path) VALUES (?1, ?2) ON CONFLICT(tool_id) DO UPDATE SET path=excluded.path", params![tool_id, path.display().to_string()])
-        } else {
-            conn.execute("DELETE FROM launch_directories WHERE tool_id=?1", [tool_id])
-        }.map_err(|e| e.to_string())?;
-        Ok(())
     })
 }
 
@@ -723,11 +692,6 @@ fn plan_with_stage_at(
         .map(|id| projects::get(db, id))
         .transpose()
         .map_err(|message| LaunchPlanError::new(LaunchStage::ProjectDirectory, message))?;
-    let explicit_directory = directory_override.is_some() || project.is_some();
-    if launch_form == LaunchForm::Desktop && explicit_directory && adapter.launch_directory() != LaunchDirectory::Workspace {
-        return Err(LaunchPlanError::new(LaunchStage::ProjectDirectory,
-            "此桌面应用尚无已验证的打开工作区能力，请使用普通启动".into()));
-    }
     let directory = match (directory_override, project.as_ref()) {
         (Some(path), _) => projects::checked_directory(path.to_str().ok_or_else(|| {
             LaunchPlanError::new(
@@ -845,10 +809,11 @@ fn plan_with_stage_at(
             let mut args = adapter
                 .launch_args(None, request.mode)
                 .map_err(|message| LaunchPlanError::new(LaunchStage::Tool, message))?;
-            if explicit_directory {
-                args.extend(adapter.desktop_launch_args(&directory)
-                    .map_err(|message| LaunchPlanError::new(LaunchStage::Tool, message))?);
-            }
+            args.extend(
+                adapter
+                    .desktop_launch_args(&directory)
+                    .map_err(|message| LaunchPlanError::new(LaunchStage::Tool, message))?,
+            );
             args
         }
     };
@@ -1581,9 +1546,6 @@ mod desktop_launch {
         fn launch_form(&self) -> LaunchForm {
             LaunchForm::Desktop
         }
-        fn launch_directory(&self) -> LaunchDirectory {
-            LaunchDirectory::Workspace
-        }
         fn desktop_launch_args(&self, directory: &Path) -> Result<Vec<String>, String> {
             Ok(vec![format!("--open-workspace={}", directory.display())])
         }
@@ -1610,64 +1572,9 @@ mod desktop_launch {
         assert_eq!(descriptor.launch_form, LaunchForm::Desktop);
         let value = serde_json::to_value(&descriptor).unwrap();
         assert_eq!(value["launchForm"], "desktop");
-        assert_eq!(value["launchDirectory"], "workspace");
         let builtin = Registry::builtins().get("grok").unwrap().descriptor();
         assert_eq!(builtin.launch_form, LaunchForm::Terminal);
         assert_eq!(serde_json::to_value(&builtin).unwrap()["launchForm"], "terminal");
-    }
-
-    #[test]
-    fn bare_desktop_does_not_convert_process_cwd_into_workspace_arguments() {
-        let temp = tempfile::tempdir().unwrap();
-        let db = Database::open(&temp.path().join("app.db")).unwrap();
-        let registry = desktop_registry().with_fixture_installation("desktop_fixture", "1.2.3");
-        let result = plan(&db, &registry, temp.path(), request(None, None, LaunchMode::Normal)).unwrap();
-        assert!(result.cli_args.is_empty());
-        assert!(result.directory.is_dir());
-        assert_eq!(result.terminal, TerminalId::Desktop);
-    }
-
-    #[test]
-    fn unsupported_workspace_rejects_explicit_directory_and_project_without_fallback() {
-        let temp = tempfile::tempdir().unwrap();
-        let db = Database::open(&temp.path().join("app.db")).unwrap();
-        let registry = Registry::builtins().with_fixture_installation("zcode", "3.14.5");
-        let mut explicit = request(Some(temp.path().display().to_string()), None, LaunchMode::Normal);
-        explicit.tool_id = "zcode".into();
-        let error = plan_with_stage(&db, &registry, temp.path(), explicit.clone()).unwrap_err();
-        assert_eq!(error.stage, LaunchStage::ProjectDirectory);
-        assert!(error.message.contains("工作区"));
-        let project = projects::add(&db, &registry, &temp.path().display().to_string(), None, None).unwrap();
-        explicit.directory = None;
-        explicit.project_id = Some(project.id);
-        let error = plan_with_stage(&db, &registry, temp.path(), explicit).unwrap_err();
-        assert_eq!(error.stage, LaunchStage::ProjectDirectory);
-    }
-
-    #[test]
-    fn launch_directory_memory_survives_reopen_and_rejects_invalid_or_unsupported_paths() {
-        let temp = tempfile::tempdir().unwrap();
-        let file = temp.path().join("app.db");
-        let registry = desktop_registry();
-        let workspace = temp.path().join("中文 workspace");
-        std::fs::create_dir(&workspace).unwrap();
-        let path = workspace.display().to_string();
-        {
-            let db = Database::open(&file).unwrap();
-            remember_directory(&db, &registry, "desktop_fixture", Some(&path)).unwrap();
-            assert!(remember_directory(&db, &registry, "desktop_fixture", Some("/missing-directory-for-test")).is_err());
-            assert!(remember_directory(&db, &Registry::builtins(), "zcode", Some(&path)).is_err());
-            assert!(remember_directory(&db, &registry, "unknown", Some(&path)).is_err());
-        }
-        let db = Database::open(&file).unwrap();
-        let saved = settings(&db).unwrap().directories;
-        assert_eq!(saved.len(), 1);
-        assert!(Path::new(&saved["desktop_fixture"]).is_dir());
-        std::fs::remove_dir(&workspace).unwrap();
-        let error = plan_with_stage(&db, &registry, temp.path(), request(Some(saved["desktop_fixture"].clone()), None, LaunchMode::Normal)).unwrap_err();
-        assert_eq!(error.stage, LaunchStage::ProjectDirectory);
-        remember_directory(&db, &registry, "desktop_fixture", None).unwrap();
-        assert!(settings(&db).unwrap().directories.is_empty());
     }
 
     #[test]

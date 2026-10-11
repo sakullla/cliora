@@ -50,6 +50,7 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
   const [enabled, setEnabled] = useState(() => initialPlaced.length === 0 || initialPlaced.some((item) => item.enabled));
   const [previewState, setPreview] = useState<{ epoch: number; items: McpTargetResult[] } | null>(null);
   const [results, setResults] = useState<McpTargetResult[] | null>(null);
+  const [error, setError] = useState('');
   const activePath = scope === 'project' ? projectPath : null;
   const contexts = useResourceContexts(tools, mine, { scope, projectPath: activePath });
   const targetFor = (toolId: string) => ({ toolId, scope, projectPath: activePath });
@@ -145,13 +146,13 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
     if (failedWrites.length) {
       setResults(written);
       const message = failedWrites.map((item) => t('library.distribute.writeEntry', { target: placeLabel(item.toolId, item.scope, item.projectPath), detail: item.detail || t('library.distribute.noWrite') })).join(t('tools.quota.errorSeparator'));
-
+      setError(message);
       return { status: 'failed', message };
     }
     const failedRemoves = await removeDropped(saved, removed);
     if (!mounted.current) return { status: 'stale' };
     if (failedRemoves.length) {
-
+      setError(failedRemoves.join(t('tools.quota.errorSeparator')));
       return { status: 'failed', message: failedRemoves.join(t('tools.quota.errorSeparator')) };
     }
     onConflictChange(false);
@@ -163,16 +164,16 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
     if (!saved.id) return { status: 'failed', message: t('library.distribute.unsaved') };
     const requested = targets(ids);
     if (!requested.length && !removed.length) return { status: 'failed', message: t('library.distribute.noneSelected') };
-    if (scope === 'project' && !projectPath && ids.length) { const message = t('tools.mcp.pickProject');  return { status: 'failed', message }; }
+    if (scope === 'project' && !projectPath && ids.length) { const message = t('tools.mcp.pickProject'); setError(message); return { status: 'failed', message }; }
     const epoch = epochRef.current.epoch;
     const request = ++requestRef.current;
-    setPreview(null); setResults(null);
+    setPreview(null); setResults(null); setError('');
     onConflictChange(false);
     try {
       if (!requested.length) {
         const failed = await removeDropped(saved, removed);
         if (!mounted.current || request !== requestRef.current || epoch !== epochRef.current.epoch) return { status: 'stale' };
-        if (failed.length) {  return { status: 'failed', message: failed.join(t('tools.quota.errorSeparator')) }; }
+        if (failed.length) { setError(failed.join(t('tools.quota.errorSeparator'))); return { status: 'failed', message: failed.join(t('tools.quota.errorSeparator')) }; }
         return { status: 'written', notice: noticeFor([], removed) };
       }
       let items = await native.previewMcpTargets(saved.id, requested);
@@ -180,7 +181,7 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
       const writable = items.filter((item) => item.status === 'ready' || item.status === 'conflict');
       if (!writable.length) {
         const message = items.map((item) => item.detail).filter(Boolean).join(t('tools.quota.errorSeparator')) || t('library.distribute.noWritable');
-
+        setError(message);
         return { status: 'failed', message };
       }
       if (items.some((item) => item.status === 'conflict')) {
@@ -214,7 +215,7 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
       return finish(saved, written, removed);
     } catch (value) {
       const message = text(value);
-
+      if (request === requestRef.current && epoch === epochRef.current.epoch) setError(message);
       return { status: 'failed', message };
     }
   }
@@ -225,7 +226,7 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
     const request = ++requestRef.current;
     const active = current.filter((item) => item.status === 'ready' || item.status === 'conflict');
     const removed = dropRef.current;
-
+    setError('');
     try {
       const written = await native.distributeMcp(definition.id, active.map((item): McpTargetRequest => {
         const inView = item.scope === scope && (scope === 'global' || samePath(item.projectPath, activePath));
@@ -237,7 +238,7 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
       return finish(definition, written, removed);
     } catch (value) {
       const message = text(value);
-
+      if (request === requestRef.current) setError(message);
       return { status: 'failed', message };
     }
   }
@@ -271,6 +272,6 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
       </div>)}
     </div>}
     {results && <div role="status">{results.map((item) => <p key={JSON.stringify([item.toolId, item.scope, item.projectPath, item.contextId])}>{t('library.distribute.resultEntry', { tool: toolName(item.toolId), result: item.status === 'written' ? t('library.distribute.resultWritten') : item.detail })}</p>)}</div>}
-
+    {error && <p className={styles.error} role="alert">{error}</p>}
   </div>;
 });
