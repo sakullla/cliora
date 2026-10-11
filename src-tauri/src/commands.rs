@@ -1,4 +1,4 @@
-use crate::adapters::{self, AdapterCatalog, UnknownAdapterRecord};
+use crate::adapters::{self, AdapterCatalog, PublishedDescriptor, UnknownAdapterRecord};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -2682,7 +2682,15 @@ fn adapter_catalog(database: &Database) -> Result<AdapterCatalog, ApiError> {
         })
         .map_err(storage_error)?;
     Ok(AdapterCatalog {
-        registered: registry.descriptors(),
+        registered: registry
+            .iter()
+            .map(|adapter| PublishedDescriptor {
+                resume_latest_available: adapter
+                    .resume_latest_args(adapters::LaunchMode::Normal)
+                    .is_ok(),
+                descriptor: adapter.descriptor(),
+            })
+            .collect(),
         managed_ids: preferences
             .managed_tools
             .iter()

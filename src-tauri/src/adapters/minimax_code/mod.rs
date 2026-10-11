@@ -88,15 +88,6 @@ pub(crate) fn existing_data_dir(home: &Path) -> Option<PathBuf> {
     }
 }
 
-impl MiniMaxCode {
-    /// Resume the latest session in the selected workspace. Not combined with
-    /// `--session`. The shared launch request only carries a session id, so
-    /// callers that want the latest session use this command on its own.
-    pub fn resume_latest_args() -> Vec<String> {
-        vec!["--continue".into()]
-    }
-}
-
 impl CliAdapter for MiniMaxCode {
     fn id(&self) -> &'static str {
         "minimax_code"
@@ -108,7 +99,12 @@ impl CliAdapter for MiniMaxCode {
         "mcode"
     }
     fn npm_package(&self) -> &'static str {
-        "@minimax-ai/code"
+        // A package name would enable the shared npm install command and the
+        // npm registry version query. Neither is a verified mcode channel.
+        ""
+    }
+    fn latest_version_url(&self) -> Option<String> {
+        None
     }
     fn version_identity(&self, basename: &str, output: &str) -> bool {
         command_name(basename) == "mcode" && semver::Version::parse(output.trim().trim_start_matches('v')).is_ok()
@@ -337,9 +333,17 @@ impl CliAdapter for MiniMaxCode {
             if id.starts_with('-') || id.chars().any(char::is_whitespace) {
                 return Err("会话 ID 无效".into());
             }
+            // Numbered resume is only `--session`. `--continue` is a separate
+            // request and is never added here.
             return Ok(vec!["--session".into(), id.into()]);
         }
         Ok(Vec::new())
+    }
+    fn resume_latest_args(&self, mode: LaunchMode) -> Result<Vec<String>, String> {
+        if matches!(mode, LaunchMode::Yolo) {
+            return Err("MiniMax Code 没有已核对的交互式全权限参数".into());
+        }
+        Ok(vec!["--continue".into()])
     }
     fn node_required_when_missing(&self) -> bool {
         false
@@ -350,8 +354,11 @@ impl CliAdapter for MiniMaxCode {
     fn npm_install_command(&self) -> Option<String> {
         None
     }
-    fn upgrade_command(&self, source: &str) -> Option<String> {
-        (source == "npm_shim").then(|| "mcode update".into())
+    fn upgrade_command(&self, _source: &str) -> Option<String> {
+        // `mcode update` is the documented updater, but only after the
+        // installation channel is identified. This adapter has no verified
+        // Windows install path, so npm, native, and unknown all stay empty.
+        None
     }
     fn install_guidance(&self) -> (&'static str, &'static str) {
         (
@@ -528,10 +535,9 @@ mod tests {
         assert!(MiniMaxCode.install_command().is_none());
         assert!(MiniMaxCode.npm_install_command().is_none());
         assert!(!MiniMaxCode.node_required_when_missing());
-        assert_eq!(
-            MiniMaxCode.upgrade_command("npm_shim").as_deref(),
-            Some("mcode update")
-        );
+        assert!(MiniMaxCode.npm_package().is_empty());
+        assert!(MiniMaxCode.latest_version_url().is_none());
+        assert!(MiniMaxCode.upgrade_command("npm_shim").is_none());
         assert!(MiniMaxCode.upgrade_command("unknown").is_none());
         assert!(MiniMaxCode.upgrade_command("native").is_none());
         let (url, text) = MiniMaxCode.install_guidance();
@@ -547,9 +553,47 @@ mod tests {
             .launch_args(None, LaunchMode::Normal)
             .unwrap()
             .is_empty());
-        let latest = MiniMaxCode::resume_latest_args();
-        assert!(latest.contains(&"--continue".to_string()));
+        let latest = CliAdapter::resume_latest_args(&MiniMaxCode, LaunchMode::Normal).unwrap();
+        assert_eq!(latest, vec!["--continue".to_string()]);
         assert!(!latest.iter().any(|arg| arg == "--session"));
+        assert!(CliAdapter::resume_latest_args(&MiniMaxCode, LaunchMode::Yolo).is_err());
+        let published = crate::adapters::PublishedDescriptor {
+            resume_latest_available: MiniMaxCode
+                .resume_latest_args(LaunchMode::Normal)
+                .is_ok(),
+            descriptor: MiniMaxCode.descriptor(),
+        };
+        assert!(published.resume_latest_available);
+        assert!(!published.descriptor.yolo_available);
+        let planned = crate::native::registered::plan_launch(
+            &crate::adapters::Registry::builtins(),
+            "minimax_code",
+            "0.6.8",
+            None,
+            true,
+            LaunchMode::Normal,
+        )
+        .unwrap();
+        assert_eq!(planned, vec!["--continue".to_string()]);
+        assert!(crate::native::registered::plan_launch(
+            &crate::adapters::Registry::builtins(),
+            "minimax_code",
+            "0.6.8",
+            Some("sess-1"),
+            true,
+            LaunchMode::Normal,
+        )
+        .is_err());
+        assert!(crate::native::registered::plan_launch(
+            &crate::adapters::Registry::builtins(),
+            "minimax_code",
+            "0.6.8",
+            None,
+            false,
+            LaunchMode::Normal,
+        )
+        .unwrap()
+        .is_empty());
         let session = MiniMaxCode
             .launch_args(Some("sess-1"), LaunchMode::Normal)
             .unwrap();
@@ -568,6 +612,62 @@ mod tests {
             "没有已核对的会话索引格式"
         );
         assert_eq!(MiniMaxCode.descriptor().history.state, "unsupported");
+    }
+
+    #[test]
+    fn project_resume_latest_command_has_continue_directory_and_no_session() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = crate::database::Database::open(&temp.path().join("cliora.db")).unwrap();
+        let registry = crate::adapters::Registry::builtins()
+            .with_fixture_installation("minimax_code", "0.6.8");
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir(&workspace).unwrap();
+        let project = crate::projects::add(
+            &db,
+            &registry,
+            workspace.to_str().unwrap(),
+            Some("demo"),
+            Some("minimax_code"),
+        )
+        .unwrap();
+        let canonical = workspace.canonicalize().unwrap();
+        let request = |session_id: Option<String>, resume_latest: bool, mode: LaunchMode| {
+            crate::launch::LaunchRequest {
+                tool_id: "minimax_code".into(),
+                project_id: Some(project.id.clone()),
+                session_id,
+                directory: None,
+                initial_prompt: None,
+                mode,
+                resume_latest,
+            }
+        };
+        let latest = crate::launch::plan(&db, &registry, temp.path(), request(None, true, LaunchMode::Normal)).unwrap();
+        assert_eq!(latest.directory, canonical);
+        assert_eq!(latest.cli_args, vec!["--continue".to_string()]);
+        assert!(latest.cli_args.iter().all(|arg| arg != "--session" && !arg.contains("permission")));
+        let command = crate::launch::native_command(&latest).unwrap();
+        assert!(command.contains("--continue"), "{command}");
+        assert!(!command.contains("--session"), "{command}");
+        let shown = canonical.display().to_string();
+        let shown = shown.strip_prefix(r"\\?\").unwrap_or(&shown);
+        assert!(command.contains(shown), "{command}");
+
+        let numbered = crate::launch::plan(
+            &db,
+            &registry,
+            temp.path(),
+            request(Some("sess-1".into()), false, LaunchMode::Normal),
+        )
+        .unwrap();
+        assert_eq!(numbered.cli_args, vec!["--session".to_string(), "sess-1".to_string()]);
+        assert!(!numbered.cli_args.iter().any(|arg| arg == "--continue"));
+        assert_eq!(numbered.directory, canonical);
+
+        let fresh = crate::launch::plan(&db, &registry, temp.path(), request(None, false, LaunchMode::Normal)).unwrap();
+        assert!(fresh.cli_args.is_empty());
+        let yolo = crate::launch::plan(&db, &registry, temp.path(), request(None, true, LaunchMode::Yolo)).unwrap_err();
+        assert!(yolo.contains("全权限"));
     }
 
     #[test]

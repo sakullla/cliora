@@ -102,6 +102,7 @@ pub fn plan_launch(
     id: &str,
     version: &str,
     session: Option<&str>,
+    resume_latest: bool,
     mode: LaunchMode,
 ) -> Result<Vec<String>, String> {
     let adapter = registry
@@ -112,6 +113,12 @@ pub fn plan_launch(
     }
     if adapter.explicitly_incompatible_launch_version(version) {
         return Err("此 CLI 版本不支持所请求的启动参数".into());
+    }
+    if resume_latest {
+        if session.is_some() {
+            return Err("恢复最近会话不能同时指定会话编号".into());
+        }
+        return adapter.resume_latest_args(mode);
     }
     if session.is_some_and(|value| value.is_empty() || value.contains(['\r', '\n', '\0'])) {
         return Err("会话 ID 无效".into());

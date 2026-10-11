@@ -372,26 +372,28 @@ fn sixth_adapter_uses_the_same_probe_native_transaction_and_launch_orchestration
             "sixth_fixture",
             "1.0.0",
             Some("session 01"),
+            false,
             LaunchMode::Normal
         )
         .unwrap(),
         ["--resume", "session 01"]
     );
-    assert!(plan_launch(&registry, "sixth_fixture", "1.0.0", None, LaunchMode::Yolo).is_err());
+    assert!(plan_launch(&registry, "sixth_fixture", "1.0.0", None, false, LaunchMode::Yolo).is_err());
     assert!(plan_launch(
         &registry,
         "sixth_fixture",
         "1.1.0",
         None,
+        false,
         LaunchMode::Normal
     )
     .is_ok());
-    assert!(plan_launch(&registry, "sixth_fixture", "", None, LaunchMode::Normal).is_err());
+    assert!(plan_launch(&registry, "sixth_fixture", "", None, false, LaunchMode::Normal).is_err());
     assert!(
         adapter::probe_registered(&registry, "unregistered", None, home, None, Scope::Global)
             .is_err()
     );
-    assert!(plan_launch(&registry, "unregistered", "1.0.0", None, LaunchMode::Normal).is_err());
+    assert!(plan_launch(&registry, "unregistered", "1.0.0", None, false, LaunchMode::Normal).is_err());
     assert!(apply_registered_fields(
         &registry,
         "unregistered",
