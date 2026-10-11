@@ -8,7 +8,7 @@ import type { ApiError, Bootstrap, CliId, Theme } from '../types/domain';
 import type { AdapterCatalog, ApplyComparison, ApplyOutcome, CommonConfig, CommonSaveResult, Connection, ConnectionCheck, ModelDirectory, NativeImport, NativeInspection, NativePreview, NativeProfile, PreservedProfile, RegisteredCommon, RegisteredCommonSaveResult, RegisteredProfile, RegisteredToolWorkspace, Scope, ToolWorkspace } from '../types/native';
 import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, TerminalId, TrayStatus } from '../types/launch';
 import type { LibraryDraft, LibraryItem, LibraryKind } from '../types/library';
-import type { McpDefinition, McpDraft, McpPlacement, McpTargetRequest, McpTargetResult, NativeMcpEntry, RuleTarget, RulePreview, RuleApplyResult, RulePlacement, RuleClientSelection, RuleSyncResult, SkillPackage, SkillImportPreview, SkillInstallation, SkillTargetResult, NativeSkillDocument, NativeSkillEntry, SkillTargetPreview, SkillRecoveryIssue } from '../types/resources';
+import type { McpDefinition, McpDraft, McpPlacement, McpTargetRequest, McpTargetResult, NativeMcpEntry, NativeRuleFile, RuleTarget, RulePreview, RuleApplyResult, RulePlacement, RuleClientSelection, RuleSyncResult, SkillPackage, SkillImportPreview, SkillInstallation, SkillTargetResult, NativeSkillDocument, NativeSkillEntry, SkillTargetPreview, SkillRecoveryIssue } from '../types/resources';
 import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, ScanStatus, UsageReport } from '../types/history';
 import type { ConflictPreview, PortableApplyTarget, PortableImportReport, PortableItem, PortablePreview, PortableProjectLink, SyncStatus, WebdavSetup } from '../types/portable';
 import type { QueryConfig, UsageCache, UsagePreset, UsageSample, DeleteQueryResult, DraftTestReport, SaveQueryResult, UsageError, UsageQuery, UsageQueryDraft } from '../types/usage';
@@ -234,6 +234,11 @@ export const native = {
   setNativeRuleEnabled: (target: RuleTarget, enabled: boolean) => command<void>('set_native_rule_enabled', { target, enabled }),
   readNativeRule: (target: RuleTarget) => command<{ contextId: string | null; path: string; text: string; fingerprint: string }>('read_native_rule', { target }),
   saveNativeRule: (target: RuleTarget, original: string, edited: string) => command<ApplyOutcome>('save_native_rule', { target, original, edited }),
+  listNativeRuleFiles: (target: RuleTarget) => command<NativeRuleFile[]>('list_native_rule_files', { target }),
+  saveNativeRuleFile: (target: RuleTarget, path: string, original: string, edited: string) => command<ApplyOutcome>('save_native_rule_file', { target, path, original, edited }),
+  createNativeRuleFile: (target: RuleTarget, name: string, text: string) => command<ApplyOutcome>('create_native_rule_file', { target, name, text }),
+  deleteNativeRuleFile: (target: RuleTarget, path: string, original: string) => command<ApplyOutcome>('delete_native_rule_file', { target, path, original }),
+  setNativeRuleFileEnabled: (target: RuleTarget, path: string, enabled: boolean, original: string) => command<ApplyOutcome>('set_native_rule_file_enabled', { target, path, enabled, original }),
   launchCliLogin: (toolId: string) => command<LaunchResult>('launch_cli_login', { toolId }),
   getConnectionSecret: (secretRef: string) => command<string>('get_connection_secret', { secretRef }),
   setConnectionSecret: (secret: string) => command<string>('set_connection_secret', { secret }),

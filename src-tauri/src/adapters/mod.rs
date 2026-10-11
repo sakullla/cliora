@@ -36,8 +36,8 @@ pub static CLAUDE: claude::Claude = claude::Claude;
 pub static GROK: grok::Grok = grok::Grok;
 pub static PI: pi::Pi = pi::Pi;
 pub static OPENCODE: opencode::OpenCode = opencode::OpenCode;
-// Default-off additions registered with non-enumerated stable ids; honest
-// stubs until the dedicated adapter tasks deliver verified capabilities.
+// Default-off additions registered with non-enumerated stable ids.
+// Each adapter exposes only the capabilities it has actually verified.
 pub static ZCODE: zcode::ZCode = zcode::ZCode;
 pub static KIMI_CODE: kimi_code::KimiCode = kimi_code::KimiCode;
 pub static DEEPSEEK: deepseek::DeepSeek = deepseek::DeepSeek;

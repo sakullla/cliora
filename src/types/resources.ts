@@ -27,6 +27,7 @@ export type McpTargetResult = { contextId?: string | null; toolId: string; scope
 export type NativeMcpEntry = Omit<McpDefinition, 'id' | 'version'> & { enabled: boolean; protectedValues: boolean };
 
 export type RuleTarget = { contextId?: string | null; toolId: string; scope: Scope; projectPath: string | null; baselineHash?: string | null };
+export type NativeRuleFile = { id: string; path: string; name: string; kind: 'mdc' | 'inert' | 'agents' | string; enabled: boolean; writable: boolean; detail: string; text: string; fingerprint: string };
 export type RulePreview = { target: RuleTarget; path: string | null; status: 'ready' | 'unsupported'; detail: string; existing: string; proposed: string; changed: boolean };
 export type RuleApplyResult = { target: RuleTarget; path: string | null; status: 'written' | 'failed'; detail: string };
 export type RulePlacement = { contextId?: string | null; ruleId: string; toolId: string; scope: Scope; projectPath: string | null; state?: 'current' | 'drifted' | 'unavailable' };
@@ -39,7 +40,7 @@ export type SkillImportPreview = { name: string; source: string; digest: string;
 export type SkillInstallation = { contextId?: string | null; packageId: string; toolId: string; scope: Scope; projectPath: string | null; targetPath: string; digest: string; state: 'current' | 'update_available' | 'missing' | 'conflict' | 'unavailable' | 'disabled' };
 export type SkillTargetResult = { toolId: string; scope: Scope; projectPath: string | null; path: string | null; status: 'installed' | 'removed' | 'already_current' | 'failed'; detail: string };
 export type SkillRecoveryIssue = { contextId?: string | null; operationId: string; toolId: string; scope: Scope; projectPath: string | null; targetPath: string; backupPath: string; detail: string };
-export type NativeSkillEntry = { name: string; path: string; digest: string | null; state: 'managed' | 'external' | 'unreadable'; detail: string; packageId: string | null };
+export type NativeSkillEntry = { name: string; path: string; digest: string | null; state: 'managed' | 'external' | 'unreadable' | 'read_only'; detail: string; packageId: string | null };
 export type NativeSkillDocument = { name: string; path: string; content: string };
 export type SkillTargetPreview = { path: string; status: 'ready' | 'conflict'; detail: string; previewToken: string | null; existingDigest: string | null; packageDigest: string; changes: SkillFileChange[] };
 

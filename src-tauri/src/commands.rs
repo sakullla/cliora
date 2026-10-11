@@ -1650,6 +1650,31 @@ pub async fn save_native_rule(app: AppHandle, target: rules::RuleTarget, origina
 }
 
 #[tauri::command]
+pub async fn list_native_rule_files(app: AppHandle, target: rules::RuleTarget) -> Result<Vec<rules::NativeRuleFile>, ApiError> {
+    blocking(move || app.state::<AppState>().with_database(&app, |db| rules::list_files(db, &adapters::Registry::builtins(), &home()?, &target).map_err(native_error))).await
+}
+
+#[tauri::command]
+pub async fn save_native_rule_file(app: AppHandle, target: rules::RuleTarget, path: String, original: String, edited: String) -> Result<transaction::ApplyOutcome, ApiError> {
+    blocking(move || app.state::<AppState>().with_database(&app, |db| rules::save_file(db, &SystemCredentialStore, &adapters::Registry::builtins(), &home()?, &target, &path, &original, &edited).map_err(native_error))).await
+}
+
+#[tauri::command]
+pub async fn create_native_rule_file(app: AppHandle, target: rules::RuleTarget, name: String, text: String) -> Result<transaction::ApplyOutcome, ApiError> {
+    blocking(move || app.state::<AppState>().with_database(&app, |db| rules::create_file(db, &SystemCredentialStore, &adapters::Registry::builtins(), &home()?, &target, &name, &text).map_err(native_error))).await
+}
+
+#[tauri::command]
+pub async fn delete_native_rule_file(app: AppHandle, target: rules::RuleTarget, path: String, original: String) -> Result<transaction::ApplyOutcome, ApiError> {
+    blocking(move || app.state::<AppState>().with_database(&app, |db| rules::delete_file(db, &SystemCredentialStore, &adapters::Registry::builtins(), &home()?, &target, &path, &original).map_err(native_error))).await
+}
+
+#[tauri::command]
+pub async fn set_native_rule_file_enabled(app: AppHandle, target: rules::RuleTarget, path: String, enabled: bool, original: String) -> Result<transaction::ApplyOutcome, ApiError> {
+    blocking(move || app.state::<AppState>().with_database(&app, |db| rules::set_file_enabled(db, &SystemCredentialStore, &adapters::Registry::builtins(), &home()?, &target, &path, enabled, &original).map_err(native_error))).await
+}
+
+#[tauri::command]
 pub async fn launch_cli_login(app: AppHandle, tool_id: String) -> Result<launch::LaunchResult, ApiError> {
     blocking(move || {
         let home = home()?;

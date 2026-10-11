@@ -403,6 +403,7 @@ export default {
     stateMissing: 'Native directory missing',
     stateNotInstalled: 'Not installed',
     stateExternal: 'Local directory',
+    stateReadOnly: 'Read-only',
     stateUnreadable: 'Temporarily unreadable',
     recoveryTitle: 'Skills installation needs checking',
     recoveryDetail: 'Launches of the related CLI are paused. Abnormal backups are kept; recovery can be retried after checking the directory.',
@@ -683,6 +684,7 @@ export default {
     contextRetry: 'Read again',
   },
   adapters: {
+    cursor: { installLabel: 'Add local plugin' },
     shared: {
       modelAria: 'Model {{id}}',
       modelId: 'Model ID',

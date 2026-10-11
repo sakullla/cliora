@@ -633,10 +633,7 @@ impl CliAdapter for MiMoCode {
                 agents: true,
                 plugins: true,
                 project_plugins: true,
-                rules: RuleSupport {
-                    global: false,
-                    project: false,
-                },
+                rules: RuleSupport::bare(false, false),
             },
         }
     }

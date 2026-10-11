@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "local": {
+      "command": "echo",
+      "args": ["ok"],
+      "env": {
+        "API_TOKEN": "sk-test-cursor-secret",
+        "SAFE": "visible",
+        "REF": "${TOKEN}"
+      }
+    }
+  }
+}

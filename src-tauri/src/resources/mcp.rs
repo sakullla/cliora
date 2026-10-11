@@ -410,8 +410,30 @@ fn preview_token(
     Ok(transaction::fingerprint(&bound))
 }
 
-fn visible_entry(value: Option<&Value>) -> Option<Value> {
-    value.cloned()
+fn visible_entry(value: Option<&Value>, redact: bool) -> Option<Value> {
+    let value = value?;
+    if !redact {
+        return Some(value.clone());
+    }
+    Some(redact_mcp_value(value))
+}
+
+pub(crate) fn redact_mcp_value(value: &Value) -> Value {
+    let Some(object) = value.as_object() else {
+        return value.clone();
+    };
+    let mut map = object.clone();
+    for field in ["env", "environment", "headers", "http_headers"] {
+        if let Some(Value::Object(entries)) = map.get_mut(field) {
+            entries.retain(|key, item| {
+                !(sensitive_key(key) && item.as_str().is_some_and(|text| !is_reference(text)))
+            });
+        }
+        if matches!(map.get(field), Some(Value::Object(entries)) if entries.is_empty()) {
+            map.remove(field);
+        }
+    }
+    Value::Object(map)
 }
 
 fn managed_hash(
@@ -425,16 +447,25 @@ fn managed_hash(
         params![id, tool, scope_key], |row| row.get(0)).optional().map_err(|error| error.to_string()))
 }
 
-fn visible_map(value: Option<&Value>) -> BTreeMap<String, String> {
-    value
+fn visible_secret_map(value: Option<&Value>, redact: bool) -> (BTreeMap<String, String>, bool) {
+    let mut protected = false;
+    let map = value
         .and_then(Value::as_object)
         .map(|items| {
             items
                 .iter()
-                .filter_map(|(key, value)| value.as_str().map(|text| (key.clone(), text.to_owned())))
+                .filter_map(|(key, value)| {
+                    let text = value.as_str()?;
+                    if redact && sensitive_key(key) && !is_reference(text) {
+                        protected = true;
+                        return None;
+                    }
+                    Some((key.clone(), text.to_owned()))
+                })
                 .collect()
         })
-        .unwrap_or_default()
+        .unwrap_or_default();
+    (map, protected)
 }
 
 pub fn list_native(
@@ -447,6 +478,7 @@ pub fn list_native(
     let (_, parsed) = parse_native(&location)?;
     let adapter = registry.get(&target.tool_id).ok_or("此 CLI 尚无注册适配器")?;
     let entries = adapter.mcp_entries(&parsed, &location)?;
+    let redact = adapter.mcp_redacts_secrets();
     Ok(entries
         .iter()
         .filter_map(|(name, raw)| {
@@ -480,8 +512,8 @@ pub fn list_native(
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_owned();
-            let env = visible_map(raw.get("env").or_else(|| raw.get("environment")));
-            let headers = visible_map(raw.get("headers").or_else(|| raw.get("http_headers")));
+            let (env, env_protected) = visible_secret_map(raw.get("env").or_else(|| raw.get("environment")), redact);
+            let (headers, header_protected) = visible_secret_map(raw.get("headers").or_else(|| raw.get("http_headers")), redact);
             Some(NativeMcpEntry {
                 name: name.clone(),
                 transport: if url.is_empty() {
@@ -503,7 +535,7 @@ pub fn list_native(
                             .map(|value| !value)
                     })
                     .unwrap_or(true),
-                protected_values: false,
+                protected_values: env_protected || header_protected,
             })
         })
         .collect())
@@ -535,7 +567,8 @@ pub fn preview_targets(
                     let actual = entry_hash(existing)?;
                     let owned = managed_hash(db, definition_id, &target.tool_id, &scope_key)?;
                     let proposal = adapter.mcp_document_at(definition, target.enabled, existing, &location)?;
-                    Ok::<_, String>((existing.is_some(), actual, owned, visible_entry(existing), visible_entry(proposal.as_ref()), preview_token(definition, &target, &location, &scope_key, &entry_hash(existing)?)?))
+                    let redact = adapter.mcp_redacts_secrets();
+                    Ok::<_, String>((existing.is_some(), actual, owned, visible_entry(existing, redact), visible_entry(proposal.as_ref(), redact), preview_token(definition, &target, &location, &scope_key, &entry_hash(existing)?)?))
                 })();
                 match inspected {
                     Ok((exists, actual, owned, before, after, token)) => {

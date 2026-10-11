@@ -724,9 +724,18 @@ fn cursor_and_minimax_code_stay_separate_from_the_minimax_quota_provider() {
     assert!(cursor.accounts().is_none());
     assert!(cursor.descriptor().login.is_none());
     assert!(!cursor.descriptor().yolo_available);
-    assert!(!cursor.descriptor().management.mcp);
-    assert!(!cursor.supports_skills());
+    assert!(cursor.descriptor().management.mcp);
+    assert!(cursor.supports_skills());
+    assert!(cursor.agents().is_some());
+    assert!(cursor.plugins().is_some());
+    assert!(!cursor.descriptor().management.project_plugins);
+    assert!(!cursor.descriptor().management.rules.global);
+    assert!(cursor.descriptor().management.rules.project);
+    assert!(cursor.descriptor().management.rules.catalog);
+    assert!(cursor.descriptor().history.state == "unsupported");
+    assert!(cursor.descriptor().resume.state == "unsupported");
     assert!(!cursor.history_supported());
+    assert!(cursor.history_sources(home).unwrap().is_empty());
     assert!(cursor
         .native_files(crate::native::adapter::Scope::Global, home, None, true)
         .is_empty());

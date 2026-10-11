@@ -403,6 +403,7 @@ export default {
     stateMissing: '原生目录缺失',
     stateNotInstalled: '未安装',
     stateExternal: '本机目录',
+    stateReadOnly: '只读',
     stateUnreadable: '暂不可读取',
     recoveryTitle: 'Skill 安装需要检查',
     recoveryDetail: '相关 CLI 启动会暂停。异常备份已保留；检查目录后可重新尝试恢复。',
@@ -683,6 +684,7 @@ export default {
     contextRetry: '重新读取',
   },
   adapters: {
+    cursor: { installLabel: '添加本地插件' },
     shared: {
       modelAria: '模型 {{id}}',
       modelId: '模型 ID',

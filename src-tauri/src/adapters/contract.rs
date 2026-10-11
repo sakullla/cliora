@@ -68,7 +68,52 @@ pub struct ManagementCapabilities {
     pub rules: RuleSupport,
 }
 #[derive(Clone, Debug, Serialize)]
-pub struct RuleSupport { pub global: bool, pub project: bool }
+#[serde(rename_all = "camelCase")]
+pub struct RuleSupport {
+    pub global: bool,
+    pub project: bool,
+    #[serde(default, skip_serializing_if = "str::is_empty")]
+    pub global_reason: &'static str,
+    #[serde(default, skip_serializing_if = "str::is_empty")]
+    pub project_reason: &'static str,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub catalog: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+impl RuleSupport {
+    pub const fn bare(global: bool, project: bool) -> Self {
+        Self {
+            global,
+            project,
+            global_reason: "",
+            project_reason: "",
+            catalog: false,
+        }
+    }
+}
+
+/// One file inside a directory-shaped rule catalog.
+#[derive(Clone, Debug)]
+pub struct RuleFileSpec {
+    pub id: String,
+    pub path: PathBuf,
+    pub name: String,
+    pub kind: &'static str,
+    pub enabled: bool,
+    pub writable: bool,
+    pub detail: &'static str,
+}
+
+/// A skill directory that can be listed but not written by this CLI.
+#[derive(Clone, Debug)]
+pub struct SkillObservation {
+    pub root: PathBuf,
+    pub detail: &'static str,
+}
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -493,16 +538,56 @@ pub trait CliAdapter: Sync {
     fn skill_root(&self, _scope: Scope, _home: &Path, _project: Option<&Path>) -> Option<PathBuf> {
         None
     }
+    /// Directories without SKILL.md are not skills for this CLI.
+    fn skill_requires_manifest(&self) -> bool {
+        false
+    }
+    /// Extra skill roots. They are discovered and stay read-only.
+    fn skill_observations(
+        &self,
+        _scope: Scope,
+        _home: &Path,
+        _project: Option<&Path>,
+    ) -> Vec<SkillObservation> {
+        Vec::new()
+    }
+    /// Public MCP views omit literal secrets. Disk values stay in place.
+    fn mcp_redacts_secrets(&self) -> bool {
+        false
+    }
     fn rule_path(&self, _scope: Scope, _home: &Path, _project: Option<&Path>) -> Option<PathBuf> {
+        None
+    }
+    /// Project or user rules stored as many files instead of one document.
+    fn uses_rule_catalog(&self, _scope: Scope) -> bool {
+        false
+    }
+    fn rule_file_specs(
+        &self,
+        _scope: Scope,
+        _home: &Path,
+        _project: Option<&Path>,
+    ) -> Result<Vec<RuleFileSpec>, String> {
+        Err("此 CLI 没有目录型规则".into())
+    }
+    fn rule_create_path(&self, _project: &Path, _name: &str) -> Result<PathBuf, String> {
+        Err("此 CLI 不能新建目录型规则".into())
+    }
+    fn rule_relocate(&self, _project: &Path, _path: &Path, _enabled: bool) -> Result<PathBuf, String> {
+        Err("此 CLI 不能启停目录型规则".into())
+    }
+    fn rule_unavailable_reason(&self, _scope: Scope) -> Option<&'static str> {
         None
     }
     fn rule_support(&self) -> RuleSupport {
         let home = Path::new("/__cliora_capability_home__");
         let project = Path::new("/__cliora_capability_project__");
-        RuleSupport {
-            global: self.rule_path(Scope::Global, home, None).is_some(),
-            project: self.rule_path(Scope::Project, home, Some(project)).is_some(),
-        }
+        let mut support = RuleSupport::bare(
+            self.rule_path(Scope::Global, home, None).is_some() || self.uses_rule_catalog(Scope::Global),
+            self.rule_path(Scope::Project, home, Some(project)).is_some() || self.uses_rule_catalog(Scope::Project),
+        );
+        support.catalog = self.uses_rule_catalog(Scope::Global) || self.uses_rule_catalog(Scope::Project);
+        support
     }
     fn install_guidance(&self) -> (&'static str, &'static str);
     fn node_required_when_missing(&self) -> bool {
