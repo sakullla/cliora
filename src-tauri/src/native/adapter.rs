@@ -965,7 +965,10 @@ mod tests {
         let started = Instant::now();
         let result = run_version_controlled(&path, &adapters::KIMI_CODE, &|| started.elapsed() > Duration::from_millis(300));
         assert!(result.detail.unwrap().contains("取消"));
-        assert!(started.elapsed() < Duration::from_secs(3));
+        // The probe also stops itself at 4s. Wall time includes PowerShell
+        // startup while the full suite runs in parallel, and must stay
+        // below the 30s sleep that runs only when cancellation is ignored.
+        assert!(started.elapsed() < Duration::from_secs(15));
     }
 
     #[test]
