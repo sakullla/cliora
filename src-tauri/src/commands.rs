@@ -1295,14 +1295,14 @@ fn native_snapshot(file: &adapter::NativeFile) -> NativeSnapshot {
             error: Some("受保护的原生凭据文件不在通用编辑器中显示".into()),
         };
     }
-    match transaction::read_native(Path::new(&file.path)) {
-        Ok(_) if Path::new(&file.path).is_file() => NativeSnapshot {
+    match transaction::native_file_present(Path::new(&file.path)) {
+        Ok(true) => NativeSnapshot {
             role: file.role.into(),
             fingerprint: Some("present".into()),
             text: None,
             error: Some("点击“编辑当前磁盘原文”可查看和修改完整文件".into()),
         },
-        Ok(_) => NativeSnapshot {
+        Ok(false) => NativeSnapshot {
             role: file.role.into(),
             fingerprint: None,
             text: None,
@@ -2801,6 +2801,45 @@ pub fn set_tool_icon(app: AppHandle, state: State<'_, AppState>, tool_id: String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn configuration_snapshot_checks_presence_without_decoding_content() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.json");
+        let mut file = adapter::NativeFile { role: "settings", path: path.display().to_string(), format: "json", writable: true, reason: None, sensitive: false };
+        assert!(native_snapshot(&file).fingerprint.is_none());
+        std::fs::write(&path, [0xff, 0xfe]).unwrap();
+        let present = native_snapshot(&file);
+        assert_eq!(present.fingerprint.as_deref(), Some("present"));
+        assert!(present.text.is_none());
+        // Decoding failures still surface when opening the editor.
+        assert!(transaction::read_native(&path).is_err());
+        file.sensitive = true;
+        assert!(native_snapshot(&file).fingerprint.is_none());
+        file.sensitive = false;
+        file.path = temp.path().display().to_string();
+        let directory = native_snapshot(&file);
+        assert!(directory.fingerprint.is_none());
+        assert!(directory.error.unwrap().contains("无法读取"));
+    }
+
+    #[test]
+    #[ignore = "synthetic performance measurement; writes only a temporary config"]
+    fn performance_configuration_snapshot() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.json");
+        std::fs::write(&path, " ".repeat(16 * 1024 * 1024)).unwrap();
+        let file = adapter::NativeFile { role: "settings", path: path.display().to_string(), format: "json", writable: true, reason: None, sensitive: false };
+        for pass in 0..3 {
+            let start = std::time::Instant::now();
+            for _ in 0..40 {
+                let snapshot = native_snapshot(&file);
+                assert_eq!(snapshot.fingerprint.as_deref(), Some("present"));
+                assert!(snapshot.text.is_none());
+            }
+            eprintln!("BENCH config pass={pass} bytes=16777216 reads=40 elapsed_ms={:.2}", start.elapsed().as_secs_f64()*1000.0);
+        }
+    }
 
     #[test]
     fn unknown_profiles_are_explicitly_readable_but_never_writable_as_known_tool() {

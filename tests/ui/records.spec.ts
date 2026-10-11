@@ -38,7 +38,7 @@ test('records only lists managed CLIs and scopes session reads to them', async (
       __historyFilters: filters,
       __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
         if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['claude_code'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }, { id: 'claude_code', name: 'Claude Code' }] };
-        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', yoloAvailable: true }, { id: 'claude_code', name: 'Claude Code', yoloAvailable: true }], managedIds: ['claude_code'], preservedUnknown: [] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', yoloAvailable: true, history: { state: 'available', reason: '' } }, { id: 'claude_code', name: 'Claude Code', yoloAvailable: true, history: { state: 'available', reason: '' } }], managedIds: ['claude_code'], preservedUnknown: [] };
         if (command === 'list_projects' || command === 'list_history_prices' || command === 'refresh_history') return [];
         if (command === 'list_history_sessions') { filters.push(args.filter); return []; }
         if (command === 'get_usage_report') return report;
@@ -78,7 +78,7 @@ test('records keep search, show native resume command and only launch on request
       isTauri: true, __recordLaunches: launches, __recordClipboard: clipboard, __recordControl: control, __reportFilters: [] as unknown[],
       __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
         if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }] };
-        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', yoloAvailable: true, interfaceFormats: [] }], managedIds: ['codex'], preservedUnknown: [] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', yoloAvailable: true, interfaceFormats: [], history: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
         if (command === 'list_projects') return [{ id: 'project-new', name: 'New project', path: 'C:\\new-project', available: true, preferredTool: 'codex', lastOpened: 0, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {} }];
         if (command === 'refresh_history') return [{ toolId: 'codex', scannedAt: 1, sourceCount: 2, failedCount: 0, incomplete: false, detail: '' }];
         if (command === 'list_history_prices') return [];
@@ -245,7 +245,7 @@ test('usage dashboard splits tokens, follows rows into filters and opens heavy s
       __reportFilters: filters,
       __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
         if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }] };
-        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', yoloAvailable: false, interfaceFormats: [] }], managedIds: ['codex'], preservedUnknown: [] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', yoloAvailable: false, interfaceFormats: [], history: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
         if (command === 'list_projects' || command === 'list_history_prices' || command === 'refresh_history') return [];
         if (command === 'list_history_sessions') return records.filter((item) => !args.filter.search || item.title.includes(args.filter.search));
         if (command === 'get_history_session') return { session: records.find((item) => item.id === args.id), messages: [], usage: [], resumeReason: '原始记录没有可验证的恢复 ID' };
@@ -352,7 +352,7 @@ test('usage failure replaces stale data and can retry with the same filters', as
       isTauri: true,
       __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
         if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }] };
-        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', yoloAvailable: false }], managedIds: ['codex'], preservedUnknown: [] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', yoloAvailable: false, history: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
         if (command === 'list_projects' || command === 'list_history_prices' || command === 'refresh_history' || command === 'list_history_sessions') return [];
         if (command === 'get_usage_report') {
           if (args.filter.model && !failed) { failed = true; throw new Error('Read failed'); }
@@ -387,7 +387,7 @@ test('Grok details preserve exact token buckets and show inferred clocks and unk
       isTauri: true, __accuracyFilters: [],
       __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
         if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['grok'], theme: 'system' }, tools: [{ id: 'grok', name: 'Grok' }] };
-        if (command === 'list_cli_adapters') return { registered: [{ id: 'grok', name: 'Grok', yoloAvailable: true }], managedIds: ['grok'], preservedUnknown: [] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'grok', name: 'Grok', yoloAvailable: true, history: { state: 'available', reason: '' } }], managedIds: ['grok'], preservedUnknown: [] };
         if (['list_projects', 'list_history_prices', 'refresh_history'].includes(command)) return [];
         if (command === 'list_history_sessions') return records.filter((item) => (!args.filter.search || item.title.includes(args.filter.search)) && (!args.filter.favoriteOnly || item.favorite));
         if (command === 'get_history_session') {
@@ -463,7 +463,7 @@ test('all-time trend averages include only dated elapsed buckets for tokens and 
       isTauri: true,
       __TAURI_INTERNALS__: { invoke: async (command: string) => {
         if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['grok'], theme: 'system' }, tools: [{ id: 'grok', name: 'Grok' }] };
-        if (command === 'list_cli_adapters') return { registered: [{ id: 'grok', name: 'Grok' }], managedIds: ['grok'], preservedUnknown: [] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'grok', name: 'Grok', history: { state: 'available', reason: '' } }], managedIds: ['grok'], preservedUnknown: [] };
         if (['list_projects', 'list_history_prices', 'refresh_history', 'list_history_sessions'].includes(command)) return [];
         if (command === 'get_usage_report') return report;
         if (command === 'get_history_scan_progress') return { running: false, toolId: '', completedSources: 0, totalSources: 0 };

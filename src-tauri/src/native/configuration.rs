@@ -262,16 +262,13 @@ pub fn model_summary(
 ) -> Result<Option<ModelSummary>, String> {
     let adapter = registry.get(&profile.tool).ok_or("适配器未注册")?;
     let documents = effective_documents(registry, profile, common)?;
-    let files = documents.iter().map(|(role, value)| {
-        Ok((role.clone(), format::render(adapter.file_kind(role)?, value)?))
-    }).collect::<Result<_, String>>()?;
-    let inspection = super::intake::inspect_registered(registry, &profile.tool, &files)?;
+    let inspection = super::intake::inspect_document_fields(adapter, &documents);
     // Legacy unnormalized records still apply their declared connection overlay.
     let legacy = if profile.editing.is_none() { profile.connection.as_ref() } else { None };
     let model = legacy.map(|connection| connection.model.clone()).or(inspection.model)
         .or_else(|| profile.connection.as_ref().map(|connection| connection.model.clone()));
     Ok(model.filter(|model| !model.trim().is_empty() && !model.chars().any(char::is_control)).map(|model| ModelSummary {
-        provider_id: legacy.map(|connection| connection.provider_id.clone()).or(inspection.provider_id)
+        provider_id: legacy.map(|connection| connection.provider_id.clone()).or(inspection.provider)
             .or_else(|| profile.connection.as_ref().map(|connection| connection.provider_id.clone())),
         model,
     }))

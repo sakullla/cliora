@@ -159,15 +159,30 @@ fn settings_document(
     adapter: &dyn crate::adapters::CliAdapter,
     files: &BTreeMap<String, String>,
 ) -> Result<Value, String> {
-    if let Some(value) = parse_role(adapter, files, "settings")? {
-        return Ok(value);
-    }
-    for role in adapter.connection_roles() {
-        if let Some(value) = parse_role(adapter, files, role)? {
-            return Ok(value);
-        }
-    }
-    Ok(json!({}))
+    settings_role(adapter)
+        .map(|role| parse_role(adapter, files, role))
+        .transpose()
+        .map(|value| value.flatten().unwrap_or_else(|| json!({})))
+}
+
+fn settings_role(adapter: &dyn crate::adapters::CliAdapter) -> Option<&str> {
+    std::iter::once("settings")
+        .chain(adapter.connection_roles().iter().copied())
+        .find(|role| adapter.file_kind(role).is_ok())
+}
+
+/// Inspect already resolved documents without rendering and parsing them again
+/// or projecting entire provider model catalogs just to display a model label.
+pub(crate) fn inspect_document_fields(
+    adapter: &dyn crate::adapters::CliAdapter,
+    documents: &crate::adapters::configuration::Documents,
+) -> crate::adapters::InspectionFields {
+    let empty = json!({});
+    let document = |role: &str| {
+        if adapter.file_kind(role).is_ok() { documents.get(role).unwrap_or(&empty) } else { &empty }
+    };
+    let settings = settings_role(adapter).map(document).unwrap_or(&empty);
+    adapter.inspect_values(settings, document("local_settings"), document("models"))
 }
 
 pub fn inspect_registered(
@@ -709,7 +724,28 @@ mod tests {
             assert!(found.model.is_some(), "{tool:?}");
             assert!(found.provider_id.is_some(), "{tool:?}");
             assert!(found.connection.is_some(), "{tool:?}");
+            let registry = crate::adapters::Registry::builtins();
+            let adapter = registry.get(tool.stable_id()).unwrap();
+            let documents = BTreeMap::from([(role.into(), format::parse(adapter.file_kind(role).unwrap(), text).unwrap())]);
+            let fields = inspect_document_fields(adapter, &documents);
+            assert_eq!(fields.model, found.model);
+            assert_eq!(fields.provider, found.provider_id);
         }
+    }
+
+    #[test]
+    fn document_inspection_uses_adapter_connection_role_for_yaml() {
+        let registry = crate::adapters::Registry::builtins();
+        let adapter = registry.get("minimax_code").unwrap();
+        let role = settings_role(adapter).unwrap();
+        let text = include_str!("../../../tests/fixtures/minimax-code/config-plaintext.yaml");
+        let files = BTreeMap::from([(role.into(), text.into())]);
+        let original = inspect_registered(&registry, adapter.id(), &files).unwrap();
+        let documents = BTreeMap::from([(role.into(), format::parse(adapter.file_kind(role).unwrap(), text).unwrap())]);
+        let fields = inspect_document_fields(adapter, &documents);
+        assert!(original.model.is_some());
+        assert_eq!(fields.model, original.model);
+        assert_eq!(fields.provider, original.provider_id);
     }
 
     #[test]

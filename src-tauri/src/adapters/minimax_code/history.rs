@@ -28,6 +28,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use rusqlite::{Connection, OpenFlags};
@@ -36,6 +37,7 @@ use sha2::{Digest, Sha256};
 
 use super::{data_dir, DataDir};
 use crate::history::usage;
+use crate::history::source_cache::RevisionCache;
 use crate::history::{
     check_cancelled, read_jsonl_filtered, source_fingerprint_controlled, timestamp, valid_native_id,
     HistorySource, ParsedSession, UsageEvent, MAX_SOURCES,
@@ -93,7 +95,8 @@ fn sources_in(root: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<HistorySo
     collect_sessions(&sessions, cancelled, &mut directories)?;
     directories.sort();
     let identities = runtime_database(&sessions)
-        .map(|path| identities(&path))
+        .map(|path| identities(&path, cancelled))
+        .transpose()?
         .unwrap_or_default();
     let mut result = Vec::new();
     for directory in directories {
@@ -167,8 +170,11 @@ pub fn parse_controlled(
     {
         return Err("会话 ID 与清单不一致".into());
     }
-    let identity = runtime_database(directory)
-        .and_then(|path| identities(&path).remove(&manifest.id));
+    let identities = runtime_database(directory)
+        .map(|path| identities(&path, cancelled))
+        .transpose()?
+        .unwrap_or_default();
+    let identity = identities.get(&manifest.id);
     let mut session = ParsedSession::new();
     session.native_id = Some(manifest.id);
     session.started_at = manifest.created_at;
@@ -425,27 +431,31 @@ fn session_directory(path: &Path) -> Option<&Path> {
     name.contains("-session_").then_some(directory)
 }
 
-fn identities(database: &Path) -> HashMap<String, Identity> {
+fn identities(database: &Path, cancelled: &dyn Fn() -> bool) -> Result<Arc<HashMap<String, Identity>>, String> {
+    // Discovery primes this shared cache before the concurrent session parsers.
+    // Arc avoids copying every identity for each transcript. The shared cache
+    // checks both DB and WAL revisions and never retains failed reads.
+    static CACHE: LazyLock<RevisionCache<Arc<HashMap<String, Identity>>>> = LazyLock::new(RevisionCache::new);
+    let result = CACHE.read(database, cancelled, || read_identities(database, cancelled).map(Arc::new));
+    check_cancelled(cancelled)?;
+    // Identity is optional: preserve transcript access when SQLite is busy or
+    // unavailable, and retry the metadata on the next read.
+    Ok(result.unwrap_or_default())
+}
+
+fn read_identities(database: &Path, cancelled: &dyn Fn() -> bool) -> Result<HashMap<String, Identity>, String> {
     let mut found = HashMap::new();
-    let Ok(connection) = Connection::open_with_flags(
+    let connection = Connection::open_with_flags(
         database,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    ) else {
-        return found;
-    };
-    if connection.busy_timeout(Duration::from_millis(500)).is_err() {
-        return found;
-    }
-    if connection.pragma_update(None, "query_only", 1).is_err() {
-        return found;
-    }
-    let Ok(mut statement) = connection.prepare(
+    ).map_err(|error| error.to_string())?;
+    connection.busy_timeout(Duration::from_millis(500)).map_err(|error| error.to_string())?;
+    connection.pragma_update(None, "query_only", 1).map_err(|error| error.to_string())?;
+    let mut statement = connection.prepare(
         "SELECT session_id, title, workspace_dir, project_workspace_dir, session_kind, visibility, archived, parent_session_id
          FROM local_runtime_sessions",
-    ) else {
-        return found;
-    };
-    let Ok(rows) = statement.query_map([], |row| {
+    ).map_err(|error| error.to_string())?;
+    let rows = statement.query_map([], |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, Option<String>>(1)?,
@@ -456,11 +466,18 @@ fn identities(database: &Path) -> HashMap<String, Identity> {
             row.get::<_, Option<i64>>(6)?,
             row.get::<_, Option<String>>(7)?,
         ))
-    }) else {
-        return found;
-    };
-    for row in rows.flatten() {
-        let (id, title, workspace, project, kind, visibility, archived, parent) = row;
+    }).map_err(|error| error.to_string())?;
+    for row in rows {
+        check_cancelled(cancelled)?;
+        let (id, title, workspace, project, kind, visibility, archived, parent) = match row {
+            Ok(row) => row,
+            // Preserve the previous per-row tolerance without caching actual
+            // database read failures or losing other rows' visibility rules.
+            Err(rusqlite::Error::InvalidColumnType(..)
+                | rusqlite::Error::FromSqlConversionFailure(..)
+                | rusqlite::Error::IntegralValueOutOfRange(..)) => continue,
+            Err(error) => return Err(error.to_string()),
+        };
         if !valid_session_id(&id) {
             continue;
         }
@@ -473,7 +490,7 @@ fn identities(database: &Path) -> HashMap<String, Identity> {
             },
         );
     }
-    found
+    Ok(found)
 }
 
 fn include_session(kind: Option<&str>, visibility: Option<&str>, archived: Option<i64>, parent: Option<&str>) -> bool {
@@ -556,9 +573,91 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    #[test]
+    #[ignore = "synthetic performance measurement; writes only temporary fixtures"]
+    fn performance_minimax_history() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        write_runtime(home, &[]);
+        let database = home.join(".minimax/v2/sqlite/runtime-state.sqlite");
+        let mut connection = Connection::open(&database).unwrap();
+        let tx = connection.transaction().unwrap();
+        for index in 0..300 {
+            let id = format!("mvs_{index:032x}");
+            tx.execute("INSERT INTO local_runtime_sessions (session_id,title,session_kind,visibility,archived) VALUES (?1,'Benchmark','conversation','visible',0)", [&id]).unwrap();
+            let directory = home.join(format!(".minimax/v2/sessions/2026/10/11/01-00-00-{index:03}-session_{index}"));
+            fs::create_dir_all(&directory).unwrap();
+            write_manifest(&directory, &id, LOCAL_SOURCE);
+            fs::write(directory.join("messages.jsonl"), format!("{}\n", assistant_line(Some(json!({"input":100,"output":20,"cacheRead":10,"cacheWrite":0}))))).unwrap();
+        }
+        tx.commit().unwrap();
+        drop(connection);
+        for pass in 0..3 {
+            let start = std::time::Instant::now();
+            let sources = sources_in(&home.join(".minimax"), &|| false).unwrap();
+            assert_eq!(sources.len(), 300);
+            let discovered = start.elapsed();
+            let records: usize = sources.iter().map(|source| parse(source).unwrap().usage.len()).sum();
+            assert_eq!(records, 300);
+            eprintln!("BENCH minimax pass={pass} sources=300 discover_ms={:.2} discover_parse_ms={:.2}", discovered.as_secs_f64()*1000.0, start.elapsed().as_secs_f64()*1000.0);
+        }
+    }
+
     const SESSION: &str = "mvs_0123456789abcdef0123456789abcdef";
     const EMPTY: &str = "mvs_abcdef0123456789abcdef0123456789";
     const SECRET: &str = "sk-test-minimax-secret";
+
+    #[test]
+    fn identity_cache_reuses_snapshot_and_tracks_wal_changes() {
+        let temp = tempfile::tempdir().unwrap();
+        write_runtime(temp.path(), &[(SESSION, Some("old"), None, "conversation", "visible", 0, None)]);
+        let database = temp.path().join(".minimax/v2/sqlite/runtime-state.sqlite");
+        let connection = Connection::open(&database).unwrap();
+        connection.execute_batch("PRAGMA journal_mode=WAL").unwrap();
+        // Materialize the WAL before measuring reuse; opening the first reader
+        // of a newly switched database can itself change the source revision.
+        connection.execute("UPDATE local_runtime_sessions SET title='old'", []).unwrap();
+        let first = identities(&database, &|| false).unwrap();
+        let again = identities(&database, &|| false).unwrap();
+        assert!(Arc::ptr_eq(&first, &again));
+        connection.execute("UPDATE local_runtime_sessions SET title='new', archived=1", []).unwrap();
+        let changed = identities(&database, &|| false).unwrap();
+        assert!(!Arc::ptr_eq(&first, &changed));
+        assert_eq!(changed[SESSION].title.as_deref(), Some("new"));
+        assert!(!changed[SESSION].include);
+        assert_eq!(first[SESSION].title.as_deref(), Some("old"));
+        connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)").unwrap();
+        assert_eq!(identities(&database, &|| false).unwrap()[SESSION].title.as_deref(), Some("new"));
+        assert!(identities(&database, &|| true).is_err());
+    }
+
+    #[test]
+    fn unavailable_identity_schema_is_retried() {
+        let temp = tempfile::tempdir().unwrap();
+        let database = temp.path().join(".minimax/v2/sqlite/runtime-state.sqlite");
+        fs::create_dir_all(database.parent().unwrap()).unwrap();
+        drop(Connection::open(&database).unwrap());
+        assert!(identities(&database, &|| false).unwrap().is_empty());
+        write_runtime(temp.path(), &[(SESSION, Some("recovered"), None, "conversation", "visible", 0, None)]);
+        assert_eq!(identities(&database, &|| false).unwrap()[SESSION].title.as_deref(), Some("recovered"));
+    }
+
+    #[test]
+    fn malformed_identity_does_not_discard_valid_titles_or_visibility() {
+        let temp = tempfile::tempdir().unwrap();
+        write_runtime(temp.path(), &[
+            (SESSION, Some("visible"), None, "conversation", "visible", 0, None),
+            (EMPTY, Some("archived"), None, "conversation", "visible", 1, None),
+        ]);
+        let database = temp.path().join(".minimax/v2/sqlite/runtime-state.sqlite");
+        let connection = Connection::open(&database).unwrap();
+        connection.execute("INSERT INTO local_runtime_sessions (session_id, title) VALUES ('mvs_11111111111111111111111111111111', x'ff')", []).unwrap();
+        let found = identities(&database, &|| false).unwrap();
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[SESSION].title.as_deref(), Some("visible"));
+        assert!(found[SESSION].include);
+        assert!(!found[EMPTY].include);
+    }
 
     fn write_manifest(dir: &Path, id: &str, source: &str) {
         let manifest = json!({

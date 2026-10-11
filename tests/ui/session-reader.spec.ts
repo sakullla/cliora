@@ -32,7 +32,7 @@ test.beforeEach(async ({ page }) => {
       isTauri: true, __reader: control, __readerRecords: records, __readerMessages: messages,
       __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
         if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }] };
-        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', yoloAvailable: false }], managedIds: ['codex'], preservedUnknown: [] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', yoloAvailable: false, history: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
         if (command === 'list_projects' || command === 'list_history_prices' || command === 'refresh_history') return [];
         if (command === 'list_history_sessions') { control.filters.push(args.filter); return structuredClone(records); }
         if (command === 'get_history_session') {
