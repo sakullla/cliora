@@ -662,6 +662,17 @@ pub fn plan_history_context(db: &Database, registry: &Registry, home: &Path, req
     plan_with_stage_at(db, registry, home, request, Some(cwd), Some(context))
 }
 
+/// Directory of the desktop executable. A direct launch, or a selected
+/// directory whose adapter returns no desktop arguments, starts here instead
+/// of the user home or the project path.
+fn executable_directory(executable: &Path) -> PathBuf {
+    executable
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
 fn plan_with_stage_at(
     db: &Database,
     registry: &Registry,
@@ -796,6 +807,10 @@ fn plan_with_stage_at(
             "此 CLI 版本的精确会话恢复命令尚未验证".into(),
         ));
     }
+    // A desktop direct launch has neither a request/session directory nor a
+    // project. Home stays the global scope root and is not a launch argument.
+    let selected_directory = directory_override.is_some() || project.is_some();
+    let mut attached_desktop_directory = false;
     let mut cli_args = match launch_form {
         LaunchForm::Terminal => adapters::plan_launch(
             registry,
@@ -809,11 +824,13 @@ fn plan_with_stage_at(
             let mut args = adapter
                 .launch_args(None, request.mode)
                 .map_err(|message| LaunchPlanError::new(LaunchStage::Tool, message))?;
-            args.extend(
-                adapter
+            if selected_directory {
+                let desktop_args = adapter
                     .desktop_launch_args(&directory)
-                    .map_err(|message| LaunchPlanError::new(LaunchStage::Tool, message))?,
-            );
+                    .map_err(|message| LaunchPlanError::new(LaunchStage::Tool, message))?;
+                attached_desktop_directory = !desktop_args.is_empty();
+                args.extend(desktop_args);
+            }
             args
         }
     };
@@ -841,6 +858,11 @@ fn plan_with_stage_at(
         }
         cli_args.push(prompt.to_owned());
     }
+    let process_directory = if launch_form == LaunchForm::Desktop && !attached_desktop_directory {
+        executable_directory(Path::new(selected_path))
+    } else {
+        directory
+    };
     Ok(LaunchPlan {
         account_version: account_context.as_ref().map(|(id,_)|crate::accounts::get(db,id).map(|account|account.version)).transpose().map_err(|message|LaunchPlanError::new(LaunchStage::Configuration,message))?,
         account_context,
@@ -849,7 +871,7 @@ fn plan_with_stage_at(
         mode: request.mode,
         executable: PathBuf::from(selected_path),
         cli_args,
-        directory,
+        directory: process_directory,
         session_markers: if launch_form == LaunchForm::Desktop {
             // Session markers scope nested terminal sessions; a desktop app
             // never inherits a terminal environment.
@@ -1410,6 +1432,8 @@ pub fn spawn(db: &Database, plan: LaunchPlan) -> Result<LaunchResult, String> {
 /// Desktop launches start the installed application directly: detached from
 /// any terminal, owning its own windows and lifetime. The status only reports
 /// that the start was requested, never that the application came up.
+/// `plan.directory` is the executable directory unless the plan attached a
+/// non-empty desktop directory argument, in which case it is that directory.
 fn spawn_desktop(plan: &LaunchPlan, credential: Option<&(String, String)>) -> Result<LaunchResult, String> {
     if !plan.executable.is_file() {
         return Err("桌面应用可执行文件不存在，请在工具页重新检测".into());
@@ -1726,6 +1750,117 @@ mod desktop_launch {
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
         assert!(marker.exists(), "detached desktop process did not run");
+    }
+
+    #[test]
+    fn desktop_direct_launch_keeps_home_out_of_the_arguments() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        let registry = desktop_registry().with_fixture_installation("desktop_fixture", "1.2.3");
+        let home = temp.path().canonicalize().unwrap();
+        let plan = plan(
+            &db,
+            &registry,
+            temp.path(),
+            request(None, None, LaunchMode::Normal),
+        )
+        .unwrap();
+        assert!(plan.cli_args.is_empty());
+        assert_eq!(plan.directory, PathBuf::from("fixture-cli"));
+        assert_ne!(plan.directory, home);
+        let home_text = home.display().to_string();
+        assert!(plan.cli_args.iter().all(|arg| !arg.contains(&home_text)));
+    }
+}
+
+#[cfg(test)]
+mod installed_desktop_launch {
+    use std::path::PathBuf;
+
+    use super::*;
+
+    fn fresh() -> (tempfile::TempDir, Database, Registry) {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("app.db")).unwrap();
+        let registry = Registry::builtins()
+            .with_fixture_installation("zcode", "1.0.0")
+            .with_fixture_installation("deepseek", "1.0.0")
+            .with_fixture_installation("cursor", "1.0.0");
+        (temp, db, registry)
+    }
+
+    fn direct(tool: &str) -> LaunchRequest {
+        LaunchRequest {
+            tool_id: tool.into(),
+            project_id: None,
+            session_id: None,
+            directory: None,
+            initial_prompt: None,
+            mode: LaunchMode::Normal,
+        }
+    }
+
+    #[test]
+    fn direct_launch_has_no_directory_argument_and_uses_the_executable_directory() {
+        let (temp, db, registry) = fresh();
+        let home = temp.path().canonicalize().unwrap().display().to_string();
+        for tool in ["zcode", "deepseek", "cursor"] {
+            let plan = plan(&db, &registry, temp.path(), direct(tool)).unwrap();
+            assert!(plan.cli_args.is_empty(), "{tool}");
+            assert_eq!(plan.directory, PathBuf::from("fixture-cli"), "{tool}");
+            assert!(plan.cli_args.iter().all(|arg| !arg.contains(&home)), "{tool}");
+            assert_eq!(plan.terminal, TerminalId::Desktop, "{tool}");
+            let mut session = direct(tool);
+            session.session_id = Some("session-1".into());
+            assert!(plan_with_stage(&db, &registry, temp.path(), session).is_err(), "{tool}");
+            let mut prompt = direct(tool);
+            prompt.initial_prompt = Some("hello".into());
+            assert!(plan_with_stage(&db, &registry, temp.path(), prompt).is_err(), "{tool}");
+        }
+    }
+
+    #[test]
+    fn selected_project_directory_follows_each_desktop_contract() {
+        let (temp, db, registry) = fresh();
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir(&workspace).unwrap();
+        let project = crate::projects::add(
+            &db,
+            &registry,
+            workspace.to_str().unwrap(),
+            Some("demo"),
+            Some("zcode"),
+        )
+        .unwrap();
+        let canonical = workspace.canonicalize().unwrap();
+        let request = |tool: &str| LaunchRequest {
+            tool_id: tool.into(),
+            project_id: Some(project.id.clone()),
+            session_id: None,
+            directory: None,
+            initial_prompt: None,
+            mode: LaunchMode::Normal,
+        };
+        let zcode = plan(&db, &registry, temp.path(), request("zcode")).unwrap();
+        assert_eq!(zcode.directory, canonical);
+        assert_eq!(
+            zcode.cli_args,
+            vec![format!("--open-workspace={}", canonical.display())]
+        );
+
+        let deepseek = plan(&db, &registry, temp.path(), request("deepseek")).unwrap();
+        assert!(deepseek.cli_args.is_empty());
+        assert_eq!(deepseek.directory, PathBuf::from("fixture-cli"));
+        assert_ne!(deepseek.directory, canonical);
+        let project_text = canonical.display().to_string();
+        assert!(deepseek.cli_args.iter().all(|arg| !arg.contains(&project_text)));
+
+        let cursor = plan(&db, &registry, temp.path(), request("cursor")).unwrap();
+        assert_eq!(cursor.directory, canonical);
+        assert_eq!(cursor.cli_args, vec![canonical.display().to_string()]);
+        assert_eq!(cursor.cli_args.len(), 1);
+        assert!(!cursor.cli_args[0].starts_with('-'));
+        assert!(!cursor.cli_args[0].to_ascii_lowercase().contains("agent"));
     }
 }
 

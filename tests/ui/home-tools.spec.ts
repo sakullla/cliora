@@ -523,3 +523,168 @@ test('missing installations do not loop and a manual recheck discovers a new ins
   await expect(tools.getByRole('button', { name: '启动', exact: true })).toBeEnabled();
   expect(await page.evaluate(() => (window as unknown as { __probeCalls: Array<{ fresh: boolean }> }).__probeCalls[1].fresh)).toBe(true);
 });
+
+test('desktop tools launch directly and an uninstalled editor keeps official guidance', async ({ page }) => {
+  await page.addInitScript(() => {
+    const management = { accounts: false, mcp: false, skills: false, agents: false, plugins: false, projectPlugins: false, rules: { global: false, project: false } };
+    const descriptor = (id: string, name: string, launchForm: 'desktop' | 'terminal') => ({
+      id, name, launchForm, interfaceFormats: [], projectModelOverride: false, yoloAvailable: false, management,
+    });
+    const installed = (id: string) => ({
+      tool: id, latestVersionSupported: false, selectedPath: `C:/Apps/${id}.exe`,
+      installations: [{ path: `C:/Apps/${id}.exe`, version: '1.0.0', source: 'native', status: 'available', detail: null }],
+      nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: [], providerPresets: [], dependencies: [],
+      installUrl: '', upgradeHint: '', installCommand: null, upgradeCommand: null, nativeInstallCommand: null, npmInstallCommand: null,
+    });
+    const cursorMissing = {
+      tool: 'cursor', latestVersionSupported: false, selectedPath: null, installations: [],
+      nativeFiles: [], nativeWrites: { state: 'unknown', reason: '未发现可确认身份的 CLI' }, interfaceFormats: [], providerPresets: [], dependencies: [],
+      installUrl: 'https://cursor.com/docs/configuration/shell', upgradeHint: 'Cursor 桌面编辑器请从官网安装后启动。不探测、不回退到 agent，也不提供猜测的安装命令。',
+      installCommand: null, upgradeCommand: null, nativeInstallCommand: null, npmInstallCommand: null,
+    };
+    const dialogs: Array<(value: string | null) => void> = [];
+    const state = {
+      cursorInstalled: false,
+      launchRequests: [] as unknown[],
+      dialogs,
+    };
+    const workspace = (toolId: string) => ({
+      probe: toolId === 'cursor' && !state.cursorInstalled ? cursorMissing : installed(toolId),
+      profiles: [], binding: null, snapshots: [], recoveryNeeded: [], common: null, customPath: null,
+    });
+    Object.assign(window, {
+      isTauri: true,
+      __desktop: state,
+      __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['zcode', 'deepseek', 'cursor', 'codex'], theme: 'system', tool_icons: {} }, tools: [] };
+        if (command === 'list_cli_adapters') return {
+          registered: [
+            descriptor('zcode', 'ZCode', 'desktop'),
+            descriptor('deepseek', 'DeepSeek Harness', 'desktop'),
+            descriptor('cursor', 'Cursor', 'desktop'),
+            descriptor('codex', 'Codex', 'terminal'),
+          ],
+          managedIds: ['zcode', 'deepseek', 'cursor', 'codex'],
+          preservedUnknown: [],
+        };
+        if (command === 'get_registered_tool_workspace') return workspace(String(args.toolId));
+        if (command === 'get_registered_tool_context') return { effectiveContextId: null, nativeContextError: null };
+        if (command === 'get_launch_settings') return { selected: 'auto', terminals: [{ id: 'auto', label: '系统默认', available: true }], cliMode: 'normal', projectMode: 'normal' };
+        if (command === 'get_tray_status') return { available: false, error: null };
+        if (command === 'list_projects') return [{ id: 'proj-1', name: '演示项目', path: 'C:/work/demo', available: true, preferredTool: 'zcode', lastOpened: 1, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {} }];
+        if (command === 'plugin:dialog|open') return new Promise((resolve) => dialogs.push(resolve));
+        if (command === 'launch_cli') {
+          state.launchRequests.push(args.request);
+          return { mode: args.request.mode, status: args.request.toolId === 'codex' ? 'terminal_requested' : 'desktop_requested', toolId: args.request.toolId, projectId: args.request.projectId, terminal: args.request.toolId === 'codex' ? 'auto' : 'desktop' };
+        }
+        if (command === 'open_external_url') return null;
+        if (command.startsWith('plugin:event|') || command.startsWith('plugin:window|')) return 1;
+        if (command.startsWith('list_') || command === 'usage_presets' || command === 'account_capabilities') return [];
+        return null;
+      } },
+    });
+  });
+  await page.setViewportSize({ width: 1360, height: 900 });
+  await page.goto('/');
+  const tools = page.getByLabel('管理中的工具');
+  const row = (name: string) => tools.locator('[data-tool-row]').filter({ hasText: name });
+  const dialogs = () => page.evaluate(() => (window as unknown as { __desktop: { dialogs: unknown[] } }).__desktop.dialogs.length);
+  const requests = () => page.evaluate(() => (window as unknown as { __desktop: { launchRequests: Array<{ toolId: string; projectId: string | null; sessionId: string | null; directory: string | null; mode: string }> } }).__desktop.launchRequests);
+
+  async function launchDirect(name: string, toolId: string) {
+    const launch = row(name).getByRole('button', { name: '启动', exact: true });
+    const before = await dialogs();
+    await launch.click();
+    await expect(row(name).getByRole('status')).toContainText('已请求启动桌面应用');
+    await expect(launch).toBeEnabled();
+    await launch.click();
+    await expect(launch).toBeEnabled();
+    await launch.click({ button: 'right' });
+    await expect(launch).toBeEnabled();
+    expect(await dialogs()).toBe(before);
+    const mine = (await requests()).filter((item) => item.toolId === toolId && item.projectId == null);
+    expect(mine.length).toBeGreaterThanOrEqual(3);
+    for (const item of mine) {
+      expect(item.directory).toBeNull();
+      expect(item.sessionId).toBeNull();
+      expect(item.mode).toBe('normal');
+    }
+    await expect(row(name).getByRole('button', { name: '启动目录' })).toHaveCount(0);
+    await expect(row(name)).not.toContainText('选择其他目录');
+    await expect(row(name)).not.toContainText('清除记住的目录');
+  }
+
+  await expect(row('ZCode').getByRole('button', { name: '启动', exact: true })).toBeEnabled();
+  await launchDirect('ZCode', 'zcode');
+  await launchDirect('DeepSeek Harness', 'deepseek');
+  const cursor = row('Cursor');
+  await expect(cursor.getByRole('button', { name: '重新检测', exact: true })).toBeVisible();
+  await expect(cursor.getByRole('button', { name: '启动', exact: true })).toHaveCount(0);
+  await expect(cursor.getByRole('button', { name: '启动目录' })).toHaveCount(0);
+  await expect(cursor).not.toContainText('选择其他目录');
+  await expect(cursor).not.toContainText('清除记住的目录');
+
+  const codex = row('Codex');
+  await expect(codex.getByRole('button', { name: '启动目录' })).toBeVisible();
+  await codex.getByRole('button', { name: '启动目录' }).click();
+  await expect(page.getByRole('menuitem', { name: '选择其他目录…' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await codex.getByRole('button', { name: '启动', exact: true }).click();
+  await expect.poll(dialogs).toBe(1);
+  await page.evaluate(() => {
+    const pending = (window as unknown as { __desktop: { dialogs: Array<(value: string | null) => void> } }).__desktop.dialogs.shift();
+    pending?.('C:/chosen');
+  });
+  await expect(codex.getByRole('status')).toContainText('已向外部终端发出请求');
+  const codexRequest = (await requests()).find((item) => item.toolId === 'codex');
+  expect(codexRequest?.directory).toBe('C:/chosen');
+  expect(await dialogs()).toBe(0);
+
+  const projects = page.getByLabel('项目与启动');
+  const projectLaunch = projects.getByRole('button', { name: '启动', exact: true });
+  await projectLaunch.click();
+  await expect(projects.getByRole('status')).toContainText('ZCode 已请求启动桌面应用');
+  await expect(projects).not.toContainText('已向外部终端');
+  expect(await dialogs()).toBe(0);
+  const projectRequest = (await requests()).find((item) => item.projectId === 'proj-1');
+  expect(projectRequest).toMatchObject({ toolId: 'zcode', projectId: 'proj-1', sessionId: null, directory: null, mode: 'normal' });
+
+  await cursor.getByRole('button', { name: '去安装 →', exact: true }).click();
+  const workspace = page.getByRole('region', { name: '工具与连接' });
+  await expect(workspace.getByRole('tab', { name: 'Cursor', selected: true })).toBeVisible();
+  const guide = workspace.getByRole('link', { name: '官方安装说明 ↗' });
+  await expect(guide).toBeVisible();
+  await expect(guide).toHaveAttribute('href', /cursor\.com/);
+  await expect(workspace.getByRole('button', { name: '安装', exact: true })).toHaveCount(0);
+  await expect(workspace.getByRole('button', { name: '安装 npm' })).toHaveCount(0);
+  await expect(workspace).not.toContainText('npm');
+  await expect(workspace).not.toContainText('agent');
+  await workspace.getByRole('tab', { name: 'ZCode' }).click();
+  const toolLaunch = workspace.getByRole('button', { name: '启动', exact: true });
+  await expect(toolLaunch).toHaveAttribute('title', '直接启动已安装的 ZCode，不选择目录');
+  const beforeTool = await dialogs();
+  await toolLaunch.click();
+  await expect(workspace.getByRole('status')).toContainText('ZCode 已请求启动桌面应用');
+  await toolLaunch.click({ button: 'right' });
+  await expect(toolLaunch).toBeEnabled();
+  expect(await dialogs()).toBe(beforeTool);
+  const toolRequests = (await requests()).filter((item) => item.toolId === 'zcode' && item.projectId == null);
+  expect(toolRequests.at(-1)?.directory).toBeNull();
+  expect(toolRequests.at(-2)?.directory).toBeNull();
+
+  await page.evaluate(() => { (window as unknown as { __desktop: { cursorInstalled: boolean } }).__desktop.cursorInstalled = true; });
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始' }).click();
+  await launchDirect('Cursor', 'cursor');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await workspace.getByRole('tab', { name: 'Cursor' }).click();
+  const cursorLaunch = workspace.getByRole('button', { name: '启动', exact: true });
+  await expect(cursorLaunch).toHaveAttribute('title', '直接启动已安装的 Cursor，不选择目录');
+  const beforeCursor = await dialogs();
+  await cursorLaunch.click();
+  await cursorLaunch.click({ button: 'right' });
+  await expect(workspace.getByRole('status')).toContainText('Cursor 已请求启动桌面应用');
+  expect(await dialogs()).toBe(beforeCursor);
+  const cursorRequests = (await requests()).filter((item) => item.toolId === 'cursor' && item.projectId == null);
+  expect(cursorRequests.length).toBeGreaterThanOrEqual(2);
+  for (const item of cursorRequests) expect(item.directory).toBeNull();
+});

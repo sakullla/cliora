@@ -194,6 +194,8 @@ impl CliAdapter for ZCode {
     /// Official desktop argument: `--open-workspace=<path>` is forwarded to a
     /// running instance through the single-instance lock
     /// (packages/desktop desktopDeepLinkUrl.ts OPEN_WORKSPACE_ARG).
+    /// The launcher asks for this only when a project or session directory was
+    /// already selected. A direct launch does not call it.
     fn desktop_launch_args(&self, directory: &Path) -> Result<Vec<String>, String> {
         Ok(vec![format!("--open-workspace={}", directory.display())])
     }

@@ -185,6 +185,11 @@ impl CliAdapter for DeepSeek {
     fn launch_form(&self) -> LaunchForm {
         LaunchForm::Desktop
     }
+    /// The official desktop binary accepts no workspace argument. An empty
+    /// result tells the launcher not to use a selected project as current_dir.
+    fn desktop_launch_args(&self, _directory: &Path) -> Result<Vec<String>, String> {
+        Ok(Vec::new())
+    }
     fn launch_args(
         &self,
         session: Option<&str>,

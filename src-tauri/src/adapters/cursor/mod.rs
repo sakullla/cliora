@@ -1,12 +1,14 @@
 //! Cursor desktop editor, registered default-off.
 //!
 //! The stable id is `cursor` and the command is the editor `cursor`. This
-//! adapter does not detect or fall back to `agent`. Directory arguments stay
-//! empty while every resolved directory is still forwarded by the shared
-//! launcher. Cancelling the preference does not delete local Cursor files.
+//! adapter does not detect or fall back to `agent`. A selected project or
+//! session directory is one positional path. A direct launch passes none.
+//! Cancelling the preference does not delete local Cursor files.
+
+mod install;
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
@@ -41,6 +43,23 @@ impl CliAdapter for Cursor {
     /// evidence, and `agent` is a different product.
     fn version_identity(&self, _basename: &str, _output: &str) -> bool {
         false
+    }
+    fn native_installations(&self, _home: &Path) -> Vec<crate::native::adapter::Installation> {
+        install::installations()
+    }
+    fn recognizes_native_install_path(&self, path: &Path) -> bool {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("Cursor.exe"))
+            && install::installations()
+                .iter()
+                .any(|item| Path::new(&item.path) == path)
+    }
+    fn native_binary_directories(&self, _home: &Path) -> Vec<PathBuf> {
+        install::installations()
+            .into_iter()
+            .filter_map(|item| PathBuf::from(item.path).parent().map(Path::to_path_buf))
+            .collect()
     }
     fn native_files(
         &self,
@@ -103,9 +122,10 @@ impl CliAdapter for Cursor {
         }
         Ok(Vec::new())
     }
-    fn desktop_launch_args(&self, _directory: &Path) -> Result<Vec<String>, String> {
-        // The shared launcher still appends this for every resolved directory.
-        Ok(Vec::new())
+    /// Official editor command: `cursor path/to/folder/`. One positional path,
+    /// and only when the launcher already has a selected directory.
+    fn desktop_launch_args(&self, directory: &Path) -> Result<Vec<String>, String> {
+        Ok(vec![directory.display().to_string()])
     }
     fn node_required_when_missing(&self) -> bool {
         false
@@ -161,6 +181,54 @@ impl CliAdapter for Cursor {
                 },
             },
             configuration: None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::*;
+    use crate::adapters::LaunchMode;
+    use crate::native::adapter::Scope;
+
+    #[test]
+    fn selected_directory_is_one_positional_path() {
+        let directory = Path::new("/work/demo");
+        let args = Cursor.desktop_launch_args(directory).unwrap();
+        assert_eq!(args, vec![directory.display().to_string()]);
+        assert!(Cursor.launch_args(None, LaunchMode::Normal).unwrap().is_empty());
+        assert!(Cursor.launch_args(None, LaunchMode::Yolo).is_err());
+        assert!(Cursor.launch_args(Some("session"), LaunchMode::Normal).is_err());
+        assert!(Cursor.install_command().is_none());
+        assert!(Cursor.npm_install_command().is_none());
+    }
+
+    #[test]
+    fn missing_or_recorded_probe_has_no_install_command() {
+        let registry = crate::adapters::Registry::builtins();
+        let probe = crate::native::adapter::probe_registered(
+            &registry,
+            "cursor",
+            None,
+            Path::new("/home/example"),
+            None,
+            Scope::Global,
+        )
+        .unwrap();
+        assert!(probe.install_command.is_none());
+        assert!(probe.npm_install_command.is_none());
+        assert!(probe.native_install_command.is_none());
+        assert!(probe.install_url.contains("cursor.com"));
+        assert!(!probe.upgrade_hint.to_ascii_lowercase().contains("npm"));
+        assert!(!probe.upgrade_hint.to_ascii_lowercase().contains("agent "));
+        for item in &probe.installations {
+            assert!(Path::new(&item.path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.eq_ignore_ascii_case("Cursor.exe")));
+            assert!(!item.path.to_ascii_lowercase().contains("agent"));
         }
     }
 }

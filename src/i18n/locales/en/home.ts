@@ -45,7 +45,7 @@ export default {
     switchHint: 'Click to switch; the next launch reads this profile',
     launchRelaunch: 'Re-check the installation status before launching',
     launchOpenDir: 'Open in {{dir}}; right-click to change directory',
-    launchDesktop: 'Launch the installed desktop app',
+    launchDesktop: 'Launch the installed desktop app without choosing a directory',
     launchInDir: 'Launch in {{dir}}; right-click to change directory',
     launchYolo: 'Skip approvals with this CLI’s native flag',
     launchYoloFallback: 'This CLI has no confirmed YOLO flag; it will launch in normal mode',

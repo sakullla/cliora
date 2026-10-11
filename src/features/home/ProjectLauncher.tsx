@@ -224,7 +224,10 @@ export function ProjectLauncher({ tools, repair, spotlight }: { tools: AdapterDe
     const text = (resultMode: string) => t('home.launcher.launched', { action: t(resumeId?.trim() ? 'home.launcher.actionResume' : 'home.launcher.actionLaunch'), mode: resultMode === 'yolo' ? ' YOLO' : '' });
     try {
       const result = await native.launchCli({ toolId, projectId, sessionId: resumeId?.trim() || null, mode, directory: null });
-      const message = text(result.mode);
+      const launchedTool = managed.find((item) => item.id === toolId);
+      const message = launchedTool?.launchForm === 'desktop'
+        ? t('home.tools.launchedDesktop', { name: launchedTool.name })
+        : text(result.mode);
       if (surface === 'dialog') {
         showDialogFeedback(message);
         setFeedback(message);
