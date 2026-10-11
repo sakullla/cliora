@@ -648,6 +648,10 @@ test('desktop tools launch directly and an uninstalled editor keeps official gui
   expect(await dialogs()).toBe(0);
   const projectRequest = (await requests()).find((item) => item.projectId === 'proj-1');
   expect(projectRequest).toMatchObject({ toolId: 'zcode', projectId: 'proj-1', sessionId: null, directory: null, mode: 'normal' });
+  await projects.getByRole('button', { name: '修改', exact: true }).click();
+  const projectEdit = page.getByRole('dialog');
+  await expect(projectEdit.getByRole('button', { name: '这次用 YOLO', exact: true })).toHaveCount(0);
+  await projectEdit.getByRole('button', { name: '关闭', exact: true }).click();
 
   await cursor.getByRole('button', { name: '去安装 →', exact: true }).click();
   const workspace = page.getByRole('region', { name: '工具与连接' });
