@@ -1,0 +1,23 @@
+{
+  "installed": [
+    {
+      "pluginId": "review@local",
+      "name": "review",
+      "displayName": "Review",
+      "marketplaceName": "local",
+      "version": "1.0.0",
+      "installed": true,
+      "enabled": true
+    }
+  ],
+  "available": [
+    {
+      "pluginId": "lark@official",
+      "name": "lark",
+      "displayName": "Lark",
+      "marketplaceName": "official",
+      "installed": false,
+      "enabled": false
+    }
+  ]
+}

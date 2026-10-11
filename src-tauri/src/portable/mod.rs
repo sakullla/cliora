@@ -491,12 +491,21 @@ fn collect_snapshot_on(
                 }
             });
         }
+        let export_connection_secret = registry
+            .get(&profile.tool)
+            .is_none_or(|adapter| adapter.exports_connection_secret());
         let connection_secret = if let Some(connection) = profile.connection.as_mut() {
-            connection
-                .secret_ref
-                .take()
-                .map(|id| store.get(&id))
-                .transpose()?
+            let id = connection.secret_ref.take();
+            if export_connection_secret {
+                id.map(|id| store.get(&id)).transpose()?
+            } else {
+                if id.is_some() {
+                    profile.authentication =
+                        crate::native::profile::ProfileAuthentication::RebindRequired;
+                    pending_fields.push("OAuth 账号需要在此设备重新绑定".into());
+                }
+                None
+            }
         } else {
             None
         };
@@ -513,11 +522,15 @@ fn collect_snapshot_on(
                     || name.to_ascii_lowercase().contains("session")
                 {
                     pending_fields.push(format!("{role}.{name} 本机登录凭据"));
+                } else if !export_connection_secret {
+                    pending_fields.push(format!("{role}.{name} 需要在此设备重新绑定"));
                 } else {
                     values.insert(name, store.get(&id)?);
                 }
             }
-            native_secrets.insert(role, values);
+            if export_connection_secret || !values.is_empty() {
+                native_secrets.insert(role, values);
+            }
         }
         pending_fields.sort();
         pending_fields.dedup();
