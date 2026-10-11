@@ -743,7 +743,7 @@ pub fn operate(
         mutate_config(db, credentials, home, request).map(Some)
     } else if local {
         let changes = adapter.plan_local_mutation(home, request, entry)?;
-        let outcome = transaction::apply_files(db, credentials, &changes, |_| Ok(()))?;
+        let outcome = transaction::apply_bytes(db, credentials, &changes, |_| Ok(()))?;
         adapter.cleanup_local_mutation(home, request)?;
         Ok(Some(outcome.transaction_id))
     } else {

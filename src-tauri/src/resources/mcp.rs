@@ -627,7 +627,22 @@ pub fn distribute(
                     return Err("同名原生条目未受当前定义管理或已被外部修改；请预览后确认替换".into());
                 }
             }
-            let document = adapter.mcp_document_at(definition, target.enabled, existing, &location)?;
+            let retained_id = if adapter.mcp_redacts_secrets() {
+                Some(retained_mcp_secret_id(&target.tool_id, &scope_key, &definition.name)?)
+            } else {
+                None
+            };
+            if !target.enabled {
+                retain_disabled_secrets(credentials, retained_id.as_deref(), existing)?;
+            }
+            let restored = if target.enabled && existing.is_none() {
+                restore_retained_secrets(credentials, retained_id.as_deref())?
+            } else {
+                None
+            };
+            let existing_owned = existing.cloned();
+            let source = existing_owned.as_ref().or(restored.as_ref());
+            let document = adapter.mcp_document_at(definition, target.enabled, source, &location)?;
             let written_hash = entry_hash(document.as_ref())?;
             let unchanged = existing == document.as_ref();
             let change = adapter.mcp_change(&parsed, &location, &definition.name, document)?;
@@ -648,11 +663,139 @@ pub fn distribute(
                     changes: vec![change], sensitive: false, force_restrict: false,
                 }], commit)?
             };
-            Ok(outcome.status.to_owned())
+            let clear_retained = target.enabled && (existing.is_some() || restored.is_some());
+            Ok((outcome.status.to_owned(), clear_retained.then(|| retained_id).flatten()))
         })();
-        match attempt { Ok(status) => { result.status = "written"; result.detail = status; }, Err(error) => result.detail = error }
+        match attempt {
+            Ok((status, clear)) => {
+                if let Some(id) = clear {
+                    let _ = credentials.delete(&id);
+                }
+                result.status = "written";
+                result.detail = status;
+            }
+            Err(error) => result.detail = error,
+        }
         result
     }).collect()
+}
+
+fn retained_mcp_secret_id(tool: &str, scope_key: &str, name: &str) -> Result<String, String> {
+    if !valid_name(name)
+        || tool.is_empty()
+        || tool.len() > 64
+        || !tool
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+    {
+        return Err("无法为受保护的 MCP 值建立凭据标识".into());
+    }
+    let digest = transaction::fingerprint(format!("{tool}\n{scope_key}\n{name}").as_bytes());
+    let id = format!("mcp-retain-{digest}");
+    if id.len() > 128
+        || !id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        return Err("无法为受保护的 MCP 值建立凭据标识".into());
+    }
+    Ok(id)
+}
+
+fn merge_protected(existing: &Value, fields: &[&str]) -> serde_json::Map<String, Value> {
+    let mut merged = serde_json::Map::new();
+    for field in fields {
+        for (key, value) in protected_values(Some(existing), field) {
+            merged.entry(key).or_insert(value);
+        }
+    }
+    merged
+}
+
+/// Only literal secrets. References and ordinary values stay out of the credential copy.
+fn retained_secret_document(existing: &Value) -> Value {
+    let mut root = serde_json::Map::new();
+    let env = merge_protected(existing, &["env", "environment"]);
+    let headers = merge_protected(existing, &["headers", "http_headers"]);
+    if !env.is_empty() {
+        root.insert("env".into(), Value::Object(env));
+    }
+    if !headers.is_empty() {
+        root.insert("headers".into(), Value::Object(headers));
+    }
+    Value::Object(root)
+}
+
+fn retain_disabled_secrets(
+    credentials: &dyn CredentialStore,
+    id: Option<&str>,
+    existing: Option<&Value>,
+) -> Result<(), String> {
+    let Some(id) = id else {
+        return Ok(());
+    };
+    let Some(existing) = existing else {
+        return Ok(());
+    };
+    let kept = retained_secret_document(existing);
+    if kept.as_object().is_some_and(|map| map.is_empty()) {
+        if credentials.get(id).is_ok() {
+            credentials.delete(id)?;
+        }
+        return Ok(());
+    }
+    let encoded = serde_json::to_string(&kept).map_err(|_| "无法保存受保护的 MCP 值")?;
+    credentials.put(id, &encoded)
+}
+
+fn parse_retained(text: &str) -> Option<Value> {
+    if text.len() > 64 * 1024 {
+        return None;
+    }
+    let value: Value = serde_json::from_str(text).ok()?;
+    let object = value.as_object()?;
+    if object.keys().any(|key| key != "env" && key != "headers") {
+        return None;
+    }
+    let mut clean = serde_json::Map::new();
+    for field in ["env", "headers"] {
+        let Some(entries) = object.get(field) else {
+            continue;
+        };
+        let entries = entries.as_object()?;
+        let mut kept = serde_json::Map::new();
+        for (key, item) in entries {
+            let literal = item.as_str()?;
+            if !sensitive_key(key) || is_reference(literal) || literal.chars().any(char::is_control) {
+                return None;
+            }
+            kept.insert(key.clone(), Value::String(literal.to_owned()));
+        }
+        if !kept.is_empty() {
+            clean.insert(field.into(), Value::Object(kept));
+        }
+    }
+    if clean.is_empty() {
+        None
+    } else {
+        Some(Value::Object(clean))
+    }
+}
+
+fn restore_retained_secrets(
+    credentials: &dyn CredentialStore,
+    id: Option<&str>,
+) -> Result<Option<Value>, String> {
+    let Some(id) = id else {
+        return Ok(None);
+    };
+    let text = match credentials.get(id) {
+        Ok(text) => text,
+        Err(_) => return Ok(None),
+    };
+    parse_retained(&text)
+        .map(Some)
+        .ok_or_else(|| "受保护的 MCP 值无法读取，已停止写回".into())
 }
 
 pub fn stdio_doc(
