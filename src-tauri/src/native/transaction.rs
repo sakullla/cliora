@@ -435,6 +435,27 @@ fn fixture_write_lock(db: &Database) -> Result<std::sync::Arc<Mutex<()>>, String
     let lock=Arc::new(Mutex::new(()));locks.insert(path,Arc::downgrade(&lock));Ok(lock)
 }
 
+/// A list row needs presence and read access, not the whole document. Content
+/// decoding and exact baselines remain the responsibility of `read_native`.
+pub fn native_file_present(path: &Path) -> Result<bool, String> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(_) => return Err(format!("无法读取原生配置：{}", path.display())),
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(format!("不跟随符号链接：{}", path.display()));
+    }
+    if !metadata.is_file() {
+        return Err(format!("无法读取原生配置：{}", path.display()));
+    }
+    match fs::File::open(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(_) => Err(format!("无法读取原生配置：{}", path.display())),
+    }
+}
+
 pub fn read_native(path: &Path) -> Result<String, String> {
     if path.is_symlink() {
         return Err(format!("不跟随符号链接：{}", path.display()));
