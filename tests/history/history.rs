@@ -1028,6 +1028,7 @@ fn exports_are_separate_read_only_files_and_resume_arguments_are_native() {
                 tool,
                 version,
                 Some("session_123"),
+                false,
                 LaunchMode::Normal
             )
             .unwrap(),
@@ -1039,6 +1040,7 @@ fn exports_are_separate_read_only_files_and_resume_arguments_are_native() {
                 tool,
                 version,
                 Some("session_123"),
+                false,
                 LaunchMode::Yolo
             )
             .unwrap()
@@ -1048,6 +1050,7 @@ fn exports_are_separate_read_only_files_and_resume_arguments_are_native() {
                 tool,
                 version,
                 Some("session_123"),
+                false,
                 LaunchMode::Yolo
             )
             .is_err()),
@@ -1126,7 +1129,7 @@ fn copied_and_direct_resume_use_original_directory_after_project_relink() {
     assert!(next.contains("'--yolo'"));
     assert!(!next.contains(&format!("'{}'", relinked_dir.display())));
     let direct = crate::launch::plan(&db, &registry, &home, crate::launch::LaunchRequest {
-        tool_id: "grok".into(), project_id: None, session_id: Some("44444444-4444-4444-8444-444444444444".into()), directory: Some(relinked_dir.display().to_string()), initial_prompt: None, mode: LaunchMode::Normal,
+        tool_id: "grok".into(), project_id: None, session_id: Some("44444444-4444-4444-8444-444444444444".into()), directory: Some(relinked_dir.display().to_string()), initial_prompt: None, mode: LaunchMode::Normal, resume_latest: false,
     }).unwrap();
     assert_eq!(direct.directory, original_dir.canonicalize().unwrap());
 }

@@ -58,13 +58,19 @@ mod tests {
         let registry = crate::adapters::Registry::builtins();
         for adapter in registry.iter() {
             if adapter.npm_package().is_empty() {
-                assert!(adapter.latest_version_url().is_none_or(|url| !url.contains("registry.npmjs.org")));
-            } else {
-                let command = adapter.npm_install_command().unwrap();
+                assert!(
+                    adapter.latest_version_url().is_none_or(|url| !url.contains("registry.npmjs.org")),
+                    "{}",
+                    adapter.id()
+                );
+                assert!(adapter.npm_install_command().is_none(), "{}", adapter.id());
+            } else if let Some(command) = adapter.npm_install_command() {
                 for flag in ["@latest", "--include=optional", "--ignore-scripts=false", "--foreground-scripts"] {
                     assert!(command.contains(flag), "{}: {flag}", adapter.id());
                 }
                 assert_eq!(adapter.upgrade_command("npm_shim"), Some(command));
+            } else {
+                panic!("{} 声明了 npm 包，但没有安装命令", adapter.id());
             }
         }
         assert!(registry.get("devin").unwrap().latest_version_url().unwrap().contains("static.devin.ai"));

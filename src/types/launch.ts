@@ -24,7 +24,7 @@ export type Project = {
   reapplyProfiles: Record<string, string>;
 };
 
-export type LaunchRequest = { toolId: string; projectId: string | null; sessionId: string | null; mode: LaunchMode; directory?: string | null; initialPrompt?: string | null };
+export type LaunchRequest = { toolId: string; projectId: string | null; sessionId: string | null; mode: LaunchMode; directory?: string | null; initialPrompt?: string | null; resumeLatest?: boolean };
 export type LaunchResult = { toolId: string; projectId: string | null; mode: LaunchMode; terminal: TerminalId; status: 'terminal_requested' | 'desktop_requested' };
 export type TrayStatus = { available: boolean; error: string | null };
 

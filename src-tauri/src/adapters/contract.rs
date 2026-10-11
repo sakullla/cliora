@@ -350,6 +350,13 @@ pub trait CliAdapter: Sync {
         ""
     }
     fn launch_args(&self, session: Option<&str>, mode: LaunchMode) -> Result<Vec<String>, String>;
+    /// Resume the latest session in the working directory. This is not a
+    /// session id and must not be combined with `launch_args`'s session flag.
+    /// The default has no verified flag.
+    fn resume_latest_args(&self, mode: LaunchMode) -> Result<Vec<String>, String> {
+        let _ = mode;
+        Err("此 CLI 没有已核对的恢复最近会话参数".into())
+    }
     /// Declares whether launches open an interactive terminal or start the
     /// installed desktop application directly. Defaults to terminal.
     fn launch_form(&self) -> LaunchForm {
@@ -638,10 +645,20 @@ pub struct UnknownAdapterRecord {
     pub reason: &'static str,
 }
 
+/// Catalog entry. Resume-latest is published here so existing descriptor
+/// literals stay valid; it is never inferred from the tool id.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublishedDescriptor {
+    #[serde(flatten)]
+    pub descriptor: AdapterDescriptor,
+    pub resume_latest_available: bool,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AdapterCatalog {
-    pub registered: Vec<AdapterDescriptor>,
+    pub registered: Vec<PublishedDescriptor>,
     pub managed_ids: Vec<String>,
     pub preserved_unknown: Vec<UnknownAdapterRecord>,
 }

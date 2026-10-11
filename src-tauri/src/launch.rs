@@ -138,6 +138,10 @@ pub struct LaunchRequest {
     #[serde(default)]
     pub initial_prompt: Option<String>,
     pub mode: LaunchMode,
+    /// Continue the latest session in the selected directory. Never combined
+    /// with `session_id`. Absent requests stay a normal launch.
+    #[serde(default)]
+    pub resume_latest: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -620,6 +624,12 @@ pub fn plan_with_stage(
     home: &Path,
     request: LaunchRequest,
 ) -> Result<LaunchPlan, LaunchPlanError> {
+    if request.resume_latest && request.session_id.is_some() {
+        return Err(LaunchPlanError::new(
+            LaunchStage::Tool,
+            "恢复最近会话不能同时指定会话编号".into(),
+        ));
+    }
     if let Some(native_id)=&request.session_id {
         if let Some(id)=crate::history::unique_session_id(db,&request.tool_id,native_id).map_err(|message|LaunchPlanError::new(LaunchStage::Configuration,message))? {
             return crate::history::resume_plan(db,registry,home,&id,request.mode).map_err(|message|LaunchPlanError::new(LaunchStage::Configuration,message));
@@ -691,6 +701,18 @@ fn plan_with_stage_at(
         .get(&request.tool_id)
         .ok_or_else(|| LaunchPlanError::new(LaunchStage::Tool, "未注册的 CLI 不能启动".into()))?;
     let launch_form = adapter.launch_form();
+    if request.resume_latest && request.session_id.is_some() {
+        return Err(LaunchPlanError::new(
+            LaunchStage::Tool,
+            "恢复最近会话不能同时指定会话编号".into(),
+        ));
+    }
+    if request.resume_latest && launch_form != LaunchForm::Terminal {
+        return Err(LaunchPlanError::new(
+            LaunchStage::Tool,
+            "桌面应用没有已核对的恢复最近会话参数".into(),
+        ));
+    }
     let project = request
         .project_id
         .as_deref()
@@ -818,6 +840,7 @@ fn plan_with_stage_at(
             &request.tool_id,
             version,
             request.session_id.as_deref(),
+            request.resume_latest,
             request.mode,
         )
         .map_err(|message| LaunchPlanError::new(LaunchStage::Tool, message))?,
@@ -1588,6 +1611,7 @@ mod desktop_launch {
             directory,
             initial_prompt: None,
             mode,
+            resume_latest: false,
         }
     }
 
@@ -1809,6 +1833,7 @@ mod installed_desktop_launch {
             directory: None,
             initial_prompt: None,
             mode: LaunchMode::Normal,
+            resume_latest: false,
         }
     }
 
@@ -1854,6 +1879,7 @@ mod installed_desktop_launch {
             directory: None,
             initial_prompt: None,
             mode: LaunchMode::Normal,
+            resume_latest: false,
         };
         let zcode = plan(&db, &registry, temp.path(), request("zcode")).unwrap();
         assert_eq!(zcode.directory, canonical);
@@ -1923,6 +1949,7 @@ mod installed_desktop_launch {
                     directory: None,
                     initial_prompt: None,
                     mode: LaunchMode::Normal,
+                    resume_latest: false,
                 },
             )
             .unwrap_or_else(|error| panic!("{tool}: {error}"));

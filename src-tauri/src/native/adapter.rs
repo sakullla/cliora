@@ -1083,6 +1083,7 @@ mod tests {
             "codex",
             "0.159.0",
             None,
+            false,
             adapters::LaunchMode::Normal
         )
         .is_ok());

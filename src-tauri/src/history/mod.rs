@@ -1309,6 +1309,7 @@ pub fn resume_plan(
             directory: None,
             initial_prompt: None,
             mode,
+            resume_latest: false,
         },
         &cwd,
         context,
