@@ -1132,7 +1132,7 @@ mod tests {
         fs::write(&executable, script).unwrap();
         let result = thread::scope(|scope| {
             let applying = scope.spawn(|| apply_profile(&db, &store, CliId::Codex, &named.id, Scope::Project, &home, Some(&project), Some(&executable), false));
-            let deadline = Instant::now() + Duration::from_secs(3);
+            let deadline = Instant::now() + Duration::from_secs(12);
             while !ready.exists() && Instant::now() < deadline { thread::sleep(Duration::from_millis(5)); }
             let reached_probe = ready.exists();
             if reached_probe { portable::apply_import(&db, &store, &registry, &import, &selected).unwrap(); }

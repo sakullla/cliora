@@ -8,7 +8,9 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const nodeTests = readdirSync(new URL('../tests/native/', import.meta.url))
   .filter(name => name.endsWith('.test.mjs')).sort().map(name => `tests/native/${name}`);
 const started = performance.now();
-const threads = Math.min(16, Math.max(2, availableParallelism() * 2));
+// Version and install tests start real shells. More than four threads makes
+// those startups exceed the probe deadline on a busy Windows host.
+const threads = Math.min(4, Math.max(2, availableParallelism()));
 const results = await Promise.all([
   ['Rust units', 'cargo', ['test', '--manifest-path', 'src-tauri/Cargo.toml', '--lib', '--', `--test-threads=${threads}`]],
   ['Node units', process.execPath, ['--test', ...nodeTests]],
