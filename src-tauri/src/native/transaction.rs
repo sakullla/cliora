@@ -713,6 +713,49 @@ pub fn recent_backups(db: &Database, target: &Path) -> Result<Vec<BackupRecord>,
     })
 }
 
+/// The file must still be the newest committed write. A missing journal, a
+/// later delete, or a credential failure is not treated as a match.
+pub fn require_latest_postimage(
+    db: &Database,
+    credentials: &dyn CredentialStore,
+    path: &Path,
+) -> Result<(), String> {
+    let integrity = integrity_key(db, credentials)?;
+    if !path.is_file() {
+        return Err("停用文件已不存在，请重新扫描".into());
+    }
+    let current = read_bytes(path)?;
+    let expected = latest_postimage_hash(db, path)?;
+    if keyed_fingerprint(&integrity, &current) != expected {
+        return Err("停用后的定义已被外部修改，未移回扫描目录".into());
+    }
+    Ok(())
+}
+
+fn latest_postimage_hash(db: &Database, path: &Path) -> Result<String, String> {
+    db.with_connection(|conn| {
+        let mut query = conn
+            .prepare(
+                "SELECT data FROM native_transactions WHERE status='committed' ORDER BY rowid DESC",
+            )
+            .map_err(|error| error.to_string())?;
+        let rows = query
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|error| error.to_string())?;
+        for row in rows {
+            let data = row.map_err(|error| error.to_string())?;
+            let journal: Journal = serde_json::from_str(&data).map_err(|_| "原生修改记录损坏")?;
+            if let Some(file) = journal.files.iter().find(|item| item.path == path) {
+                if !file.new_exists {
+                    return Err("停用文件没有可核对的写入记录，未移回扫描目录".into());
+                }
+                return Ok(file.new_hash.clone());
+            }
+        }
+        Err("没有停用时的写入记录，未移回扫描目录".into())
+    })
+}
+
 pub fn preview_backup(db: &Database, credentials: &dyn CredentialStore, target: &Path, id: &str) -> Result<BackupPreview, String> {
     let data: String = db.with_connection(|conn| conn.query_row("SELECT data FROM native_transactions WHERE id=?1 AND status='committed'", [id], |row| row.get(0)).map_err(|_| "找不到可恢复的修改记录".into()))?;
     let journal: Journal = serde_json::from_str(&data).map_err(|_| "原生修改记录损坏")?;

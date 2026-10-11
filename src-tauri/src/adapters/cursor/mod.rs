@@ -1022,4 +1022,85 @@ mod tests {
         assert!(!temp.path().join(".cursor/plugins/local/source-plugin").exists());
         assert!(temp.path().join(".cursor/plugins/local/managed/README.md").is_file());
     }
+
+    #[test]
+    fn enabling_a_disabled_agent_rejects_an_external_edit() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("test.db")).unwrap();
+        let keys = MemoryStore(Mutex::new(HashMap::new()));
+        let project = temp.path().join("project");
+        copy_fixture("helper.md", &project.join(".cursor/agents/helper.md"));
+        let target = PluginTarget {
+            tool_id: "cursor".into(),
+            scope: Scope::Project,
+            project_path: Some(project.display().to_string()),
+            context_id: None,
+        };
+        let before = agents::scan(&db, temp.path(), &target).unwrap();
+        let helper = before.entries.iter().find(|entry| entry.name == "helper").unwrap();
+        let disabled = agents::operate(
+            &db,
+            &keys,
+            temp.path(),
+            &agents::AgentRequest {
+                target: target.clone(),
+                action: "disable".into(),
+                id: Some(helper.id.clone()),
+                name: helper.name.clone(),
+                content: helper.content.clone(),
+                baseline: before.baseline.clone(),
+                transaction_id: None,
+            },
+        );
+        assert!(disabled.is_ok(), "{disabled:?}");
+        let parked = project.join(".cursor/.cliora-disabled-agents/agents/helper.md");
+        let active = project.join(".cursor/agents/helper.md");
+        assert!(parked.is_file());
+        assert!(!active.exists());
+        let original = std::fs::read(&parked).unwrap();
+        std::fs::write(&parked, "---\nname: helper\ndescription: reviews code\nowner: kept\n---\n\nexternal edit\n").unwrap();
+        let rescanned = agents::scan(&db, temp.path(), &target).unwrap();
+        let parked_entry = rescanned.entries.iter().find(|entry| entry.name == "helper").unwrap();
+        assert!(!parked_entry.enabled);
+        assert!(parked_entry.content.contains("external edit"));
+        let rejected = agents::operate(
+            &db,
+            &keys,
+            temp.path(),
+            &agents::AgentRequest {
+                target: target.clone(),
+                action: "enable".into(),
+                id: Some(parked_entry.id.clone()),
+                name: parked_entry.name.clone(),
+                content: parked_entry.content.clone(),
+                baseline: rescanned.baseline.clone(),
+                transaction_id: None,
+            },
+        );
+        let message = rejected.unwrap_err();
+        assert!(message.contains("外部修改"), "{message}");
+        assert_eq!(std::fs::read(&parked).unwrap(), b"---\nname: helper\ndescription: reviews code\nowner: kept\n---\n\nexternal edit\n");
+        assert!(!active.exists());
+        std::fs::write(&parked, &original).unwrap();
+        let restored = agents::scan(&db, temp.path(), &target).unwrap();
+        let parked_entry = restored.entries.iter().find(|entry| entry.name == "helper").unwrap();
+        let enabled = agents::operate(
+            &db,
+            &keys,
+            temp.path(),
+            &agents::AgentRequest {
+                target,
+                action: "enable".into(),
+                id: Some(parked_entry.id.clone()),
+                name: parked_entry.name.clone(),
+                content: parked_entry.content.clone(),
+                baseline: restored.baseline,
+                transaction_id: None,
+            },
+        );
+        assert!(enabled.is_ok(), "{enabled:?}");
+        assert!(active.is_file());
+        assert!(!parked.exists());
+        assert_eq!(std::fs::read(&active).unwrap(), original);
+    }
 }
