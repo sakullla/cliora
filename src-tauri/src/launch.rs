@@ -691,12 +691,6 @@ fn plan_with_stage_at(
         .get(&request.tool_id)
         .ok_or_else(|| LaunchPlanError::new(LaunchStage::Tool, "未注册的 CLI 不能启动".into()))?;
     let launch_form = adapter.launch_form();
-    if launch_form == LaunchForm::Desktop && request.session_id.is_some() {
-        return Err(LaunchPlanError::new(
-            LaunchStage::Tool,
-            "此 CLI 是桌面应用，官方没有已验证的会话恢复契约".into(),
-        ));
-    }
     let project = request
         .project_id
         .as_deref()
@@ -801,7 +795,12 @@ fn plan_with_stage_at(
         ));
     }
     let version = installation_version.unwrap_or("");
-    if request.session_id.is_some() && !adapter.history_resume_version_supported(version) {
+    // Desktop apps have no resume command. A session id only names a directory
+    // that was already selected, so the terminal resume-version gate does not apply.
+    if launch_form == LaunchForm::Terminal
+        && request.session_id.is_some()
+        && !adapter.history_resume_version_supported(version)
+    {
         return Err(LaunchPlanError::new(
             LaunchStage::Tool,
             "此 CLI 版本的精确会话恢复命令尚未验证".into(),
@@ -809,6 +808,8 @@ fn plan_with_stage_at(
     }
     // A desktop direct launch has neither a request/session directory nor a
     // project. Home stays the global scope root and is not a launch argument.
+    // launch_args stays session-less; only a non-empty desktop_launch_args
+    // attaches the selected directory.
     let selected_directory = directory_override.is_some() || project.is_some();
     let mut attached_desktop_directory = false;
     let mut cli_args = match launch_form {
@@ -1666,16 +1667,27 @@ mod desktop_launch {
         let temp = tempfile::tempdir().unwrap();
         let db = Database::open(&temp.path().join("app.db")).unwrap();
         let registry = desktop_registry().with_fixture_installation("desktop_fixture", "1.2.3");
-        let home = temp.path().display().to_string();
-        let resume = plan_with_stage(
+        let workspace = temp.path().join("session-workspace");
+        std::fs::create_dir(&workspace).unwrap();
+        let selected = plan_with_stage(
             &db,
             &registry,
             temp.path(),
-            request(Some(home.clone()), Some("session 1".into()), LaunchMode::Normal),
+            request(
+                Some(workspace.display().to_string()),
+                Some("session 1".into()),
+                LaunchMode::Normal,
+            ),
         )
-        .unwrap_err();
-        assert_eq!(resume.stage, LaunchStage::Tool);
-        assert!(resume.message.contains("会话恢复"));
+        .unwrap();
+        let canonical = workspace.canonicalize().unwrap();
+        assert_eq!(selected.directory, canonical);
+        assert_eq!(
+            selected.cli_args,
+            vec![format!("--open-workspace={}", canonical.display())]
+        );
+        assert!(selected.cli_args.iter().all(|arg| arg != "session 1"));
+        let home = temp.path().display().to_string();
         let yolo = plan_with_stage(
             &db,
             &registry,
@@ -1811,8 +1823,10 @@ mod installed_desktop_launch {
             assert!(plan.cli_args.iter().all(|arg| !arg.contains(&home)), "{tool}");
             assert_eq!(plan.terminal, TerminalId::Desktop, "{tool}");
             let mut session = direct(tool);
-            session.session_id = Some("session-1".into());
-            assert!(plan_with_stage(&db, &registry, temp.path(), session).is_err(), "{tool}");
+            session.session_id = Some("missing-session".into());
+            let missing = plan_with_stage(&db, &registry, temp.path(), session).unwrap_err();
+            assert_eq!(missing.stage, LaunchStage::ProjectDirectory, "{tool}");
+            assert!(missing.message.contains("原工作目录"), "{tool}");
             let mut prompt = direct(tool);
             prompt.initial_prompt = Some("hello".into());
             assert!(plan_with_stage(&db, &registry, temp.path(), prompt).is_err(), "{tool}");
@@ -1861,6 +1875,107 @@ mod installed_desktop_launch {
         assert_eq!(cursor.cli_args.len(), 1);
         assert!(!cursor.cli_args[0].starts_with('-'));
         assert!(!cursor.cli_args[0].to_ascii_lowercase().contains("agent"));
+    }
+
+    fn index_session(db: &Database, tool: &str, native_id: &str, cwd: &std::path::Path) -> String {
+        let id = format!("hist-{tool}");
+        let source_key = format!("source-{tool}");
+        let cwd_text = cwd.to_str().unwrap().to_owned();
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO history_sessions (id, tool, source_key, source_path, source_fingerprint, native_id, title, cwd, model, started_at, updated_at, messages_json, usage_json, message_count, usage_count, partial, stale, favorite, project_id)
+                 VALUES (?1, ?2, ?3, ?4, '', ?5, 'demo', ?6, NULL, 1, 1, '[]', '[]', 0, 0, 0, 0, 0, NULL)",
+                rusqlite::params![id, tool, source_key, cwd_text, native_id, cwd_text],
+            )
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+        })
+        .unwrap();
+        id
+    }
+
+    #[test]
+    fn indexed_session_directory_follows_each_desktop_contract() {
+        let (temp, db, registry) = fresh();
+        let workspace = temp.path().join("session-workspace");
+        std::fs::create_dir(&workspace).unwrap();
+        let canonical = workspace.canonicalize().unwrap();
+        let project_text = canonical.display().to_string();
+        for tool in ["zcode", "deepseek", "cursor"] {
+            let native_id = format!("native-{tool}");
+            let row_id = index_session(&db, tool, &native_id, &workspace);
+            let resumed = crate::history::resume_plan(
+                &db,
+                &registry,
+                temp.path(),
+                &row_id,
+                LaunchMode::Normal,
+            )
+            .unwrap_or_else(|error| panic!("{tool}: {error}"));
+            let via_native = plan(
+                &db,
+                &registry,
+                temp.path(),
+                LaunchRequest {
+                    tool_id: tool.into(),
+                    project_id: None,
+                    session_id: Some(native_id.clone()),
+                    directory: None,
+                    initial_prompt: None,
+                    mode: LaunchMode::Normal,
+                },
+            )
+            .unwrap_or_else(|error| panic!("{tool}: {error}"));
+            assert_eq!(resumed.cli_args, via_native.cli_args, "{tool}");
+            assert_eq!(resumed.directory, via_native.directory, "{tool}");
+            assert!(
+                resumed.cli_args.iter().all(|arg| arg != &native_id),
+                "{tool}"
+            );
+            let command = crate::history::copy_resume_command(
+                &db,
+                &registry,
+                temp.path(),
+                &row_id,
+                LaunchMode::Normal,
+            )
+            .unwrap_or_else(|error| panic!("{tool}: {error}"));
+            assert!(!command.contains(&native_id), "{tool}");
+            assert!(crate::history::resume_plan(
+                &db,
+                &registry,
+                temp.path(),
+                &row_id,
+                LaunchMode::Yolo,
+            )
+            .is_err(), "{tool}");
+            match tool {
+                "zcode" => {
+                    assert_eq!(resumed.directory, canonical);
+                    assert_eq!(
+                        resumed.cli_args,
+                        vec![format!("--open-workspace={}", canonical.display())]
+                    );
+                    assert!(command.contains("--open-workspace="));
+                }
+                "deepseek" => {
+                    assert!(resumed.cli_args.is_empty());
+                    assert_eq!(resumed.directory, PathBuf::from("fixture-cli"));
+                    assert_ne!(resumed.directory, canonical);
+                    assert!(resumed.cli_args.iter().all(|arg| !arg.contains(&project_text)));
+                    assert!(!command.contains(&project_text));
+                }
+                "cursor" => {
+                    assert_eq!(resumed.directory, canonical);
+                    assert_eq!(resumed.cli_args, vec![canonical.display().to_string()]);
+                    assert_eq!(resumed.cli_args.len(), 1);
+                    assert!(!resumed.cli_args[0].starts_with('-'));
+                    assert!(!resumed.cli_args[0].to_ascii_lowercase().contains("agent"));
+                    assert!(!command.to_ascii_lowercase().contains("agent"));
+                }
+                _ => unreachable!(),
+            }
+        }
     }
 }
 
