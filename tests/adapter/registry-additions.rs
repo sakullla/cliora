@@ -102,7 +102,9 @@ fn checking_new_ids_flows_through_the_unknown_managed_channel() {
     let mut ids = legacy_ids();
     ids.push("zcode".into());
     ids.push("qoder_cn".into());
-    preferences.set_registered_managed(&ids, registered).unwrap();
+    preferences
+        .set_registered_managed(&ids, registered)
+        .unwrap();
     assert_eq!(preferences.managed_tools, CliId::ALL.to_vec());
     assert_eq!(
         preferences.unknown_managed_tools(),
@@ -113,7 +115,9 @@ fn checking_new_ids_flows_through_the_unknown_managed_channel() {
         .set_registered_managed(&["hernes".into()], registered)
         .is_err());
     // Unchecking removes the ids from the managed set only.
-    preferences.set_registered_managed(&legacy_ids(), registered).unwrap();
+    preferences
+        .set_registered_managed(&legacy_ids(), registered)
+        .unwrap();
     assert!(preferences.unknown_managed_tools().is_empty());
     // A previously stored unregistered id stays preserved read-only while a
     // registered selection is applied (preserved_unknown semantics).
@@ -187,11 +191,16 @@ fn five_added_adapters_declare_their_delivered_dimensions() {
     let zcode = registry.get("zcode").unwrap();
     assert!(zcode.history_supported());
     assert!(zcode.agents().is_some());
-    assert_eq!(zcode.plugins().unwrap().capability().actions, ["install", "update", "enable", "disable", "uninstall"]);
+    assert_eq!(
+        zcode.plugins().unwrap().capability().actions,
+        ["install", "update", "enable", "disable", "uninstall"]
+    );
     assert!(!zcode.descriptor().management.project_plugins);
     assert_eq!(zcode.descriptor().resume.state, "unsupported");
     assert!(!zcode.descriptor().yolo_available);
-    assert!(zcode.launch_args(None, crate::adapters::LaunchMode::Yolo).is_err());
+    assert!(zcode
+        .launch_args(None, crate::adapters::LaunchMode::Yolo)
+        .is_err());
     // Qoder CN: terminal CLI with full plugin verbs and project scope, agents and
     // YOLO; the session dimension stays planned because the transcript fields
     // are undocumented and usage is metered in Credits only.
@@ -220,7 +229,10 @@ fn five_added_adapters_declare_their_delivered_dimensions() {
     let deepseek = registry.get("deepseek").unwrap();
     assert!(deepseek.history_supported());
     assert!(deepseek.agents().is_none());
-    assert_eq!(deepseek.plugins().unwrap().capability().actions, ["enable", "disable"]);
+    assert_eq!(
+        deepseek.plugins().unwrap().capability().actions,
+        ["enable", "disable"]
+    );
     assert!(!deepseek.descriptor().management.agents);
     assert!(deepseek.descriptor().management.plugins);
     assert_eq!(deepseek.descriptor().resume.state, "unsupported");
@@ -299,7 +311,9 @@ fn checking_six_ids_flows_through_the_unknown_managed_channel() {
     ids.push("mimo_code".into());
     ids.push("devin".into());
     ids.push("command_code".into());
-    preferences.set_registered_managed(&ids, registered).unwrap();
+    preferences
+        .set_registered_managed(&ids, registered)
+        .unwrap();
     assert_eq!(preferences.managed_tools, CliId::ALL.to_vec());
     assert_eq!(
         preferences.unknown_managed_tools(),
@@ -310,7 +324,9 @@ fn checking_six_ids_flows_through_the_unknown_managed_channel() {
         ]
     );
     // Unchecking removes the scaffold ids from the managed set only.
-    preferences.set_registered_managed(&legacy_ids(), registered).unwrap();
+    preferences
+        .set_registered_managed(&legacy_ids(), registered)
+        .unwrap();
     assert!(preferences.unknown_managed_tools().is_empty());
     // A stored unregistered alias stays preserved read-only while a registered
     // scaffold selection is applied (preserved_unknown semantics).
@@ -324,7 +340,11 @@ fn checking_six_ids_flows_through_the_unknown_managed_channel() {
     assert_eq!(stored.managed_tools, Vec::new());
     assert_eq!(
         stored.unknown_managed_tools(),
-        &["agy".to_string(), "antigravity".to_string(), "kiro".to_string()]
+        &[
+            "agy".to_string(),
+            "antigravity".to_string(),
+            "kiro".to_string()
+        ]
     );
 }
 
@@ -402,7 +422,12 @@ fn six_added_adapters_declare_their_delivered_dimensions() {
         .launch_args(Some("ses_x"), crate::adapters::LaunchMode::Normal)
         .is_ok());
     assert!(mimo
-        .native_files(crate::native::adapter::Scope::Project, home, Some(work), true)
+        .native_files(
+            crate::native::adapter::Scope::Project,
+            home,
+            Some(work),
+            true
+        )
         .is_empty());
     // cline ([src] cline/cline@main 3.0.69): global-settings.json editing,
     // --id resume, MCP (cline_mcp_settings.json) + Skills, sessions/<id>/ +
@@ -425,7 +450,12 @@ fn six_added_adapters_declare_their_delivered_dimensions() {
         .launch_args(Some("ses_1"), crate::adapters::LaunchMode::Normal)
         .is_ok());
     assert!(cline
-        .native_files(crate::native::adapter::Scope::Project, home, Some(work), true)
+        .native_files(
+            crate::native::adapter::Scope::Project,
+            home,
+            Some(work),
+            true
+        )
         .is_empty());
     // devin (local verified 3000.11.3): config.json JSONC editing (project
     // .devin/config.json as the secondary role), --resume/-c, MCP
@@ -455,11 +485,7 @@ fn six_added_adapters_declare_their_delivered_dimensions() {
     assert!(devin
         .launch_args(Some("serene-example"), crate::adapters::LaunchMode::Normal)
         .is_ok());
-    assert!(devin
-        .descriptor()
-        .history
-        .reason
-        .contains("用量已交付"));
+    assert!(devin.descriptor().history.reason.contains("用量已交付"));
     // The delivered usage assertion runs the registry adapter over the
     // sanitized transcript fixture: two inclusive-bucket events whose session
     // sums cross-check the fixture's final_metrics totals.
@@ -482,11 +508,19 @@ fn six_added_adapters_declare_their_delivered_dimensions() {
         .iter()
         .all(|event| event.input_includes_cache && event.request_count == Some(1)));
     assert_eq!(
-        parsed.usage.iter().map(|event| event.input.unwrap()).sum::<u64>(),
+        parsed
+            .usage
+            .iter()
+            .map(|event| event.input.unwrap())
+            .sum::<u64>(),
         3550
     );
     assert_eq!(
-        parsed.usage.iter().map(|event| event.cache_read.unwrap()).sum::<u64>(),
+        parsed
+            .usage
+            .iter()
+            .map(|event| event.cache_read.unwrap())
+            .sum::<u64>(),
         2700
     );
     assert!(devin
@@ -494,7 +528,12 @@ fn six_added_adapters_declare_their_delivered_dimensions() {
         .is_err());
     assert_eq!(
         devin
-            .native_files(crate::native::adapter::Scope::Project, home, Some(work), true)
+            .native_files(
+                crate::native::adapter::Scope::Project,
+                home,
+                Some(work),
+                true
+            )
             .len(),
         1
     );
@@ -517,7 +556,12 @@ fn six_added_adapters_declare_their_delivered_dimensions() {
         Some("COMMAND_CODE_API_KEY")
     );
     assert!(command_code
-        .native_files(crate::native::adapter::Scope::Project, home, Some(work), true)
+        .native_files(
+            crate::native::adapter::Scope::Project,
+            home,
+            Some(work),
+            true
+        )
         .is_empty());
     // antigravity (local agy 1.3.1 + [RE] codeburn on 1.2.x): settings.json
     // editing, --conversation resume, MCP (config/mcp_config.json) + Skills,
@@ -537,7 +581,12 @@ fn six_added_adapters_declare_their_delivered_dimensions() {
         Some("GEMINI_API_KEY")
     );
     assert!(antigravity
-        .native_files(crate::native::adapter::Scope::Project, home, Some(work), true)
+        .native_files(
+            crate::native::adapter::Scope::Project,
+            home,
+            Some(work),
+            true
+        )
         .is_empty());
     // kiro (official docs + [RE] agentsview/threadle + real local data root
     // %LOCALAPPDATA%\kiro-cli): cli.json editing, --resume-id, dual-scope MCP,
@@ -558,7 +607,12 @@ fn six_added_adapters_declare_their_delivered_dimensions() {
     );
     assert!(kiro.descriptor().history.reason.contains("无 token 字段"));
     assert!(kiro
-        .native_files(crate::native::adapter::Scope::Project, home, Some(work), true)
+        .native_files(
+            crate::native::adapter::Scope::Project,
+            home,
+            Some(work),
+            true
+        )
         .is_empty());
     // Truthful per-client config locations from 02 ADR-2 evidence.
     let suffix = |id: &str, role: &str| -> String {
@@ -579,4 +633,198 @@ fn six_added_adapters_declare_their_delivered_dimensions() {
     assert!(suffix("command_code", "settings").ends_with(".commandcode/settings.json"));
     assert!(suffix("antigravity", "settings").ends_with(".gemini/antigravity-cli/settings.json"));
     assert!(suffix("kiro", "settings").ends_with(".kiro/settings/cli.json"));
+}
+
+const REGISTERED_TOOL_IDS: [&str; 2] = ["cursor", "minimax_code"];
+
+#[test]
+fn cursor_and_minimax_code_register_default_off_and_hide_the_unchecked_one() {
+    let registry = Registry::builtins();
+    for id in REGISTERED_TOOL_IDS {
+        assert!(registry.get(id).is_some(), "{id} 应注册进内置注册表");
+        assert!(CliId::from_stable_id(id).is_none(), "{id} 不得进入枚举");
+        assert_eq!(
+            registry
+                .descriptors()
+                .iter()
+                .filter(|item| item.id == id)
+                .count(),
+            1,
+            "{id} 描述符应恰好一条"
+        );
+    }
+    assert!(registry.get("agent").is_none());
+    assert!(registry.get("mmx").is_none());
+    assert!(registry.get("mcode").is_none());
+    assert!(registry.get("minimax").is_none());
+    let defaults = Preferences::default();
+    assert_eq!(defaults.managed_tools, CliId::ALL.to_vec());
+    for id in REGISTERED_TOOL_IDS {
+        assert!(!defaults.managed_tool_ids().iter().any(|item| item == id));
+    }
+
+    let registered = |id: &str| registry.get(id).is_some();
+    let mut preferences = Preferences::default();
+    let mut only_cursor = legacy_ids();
+    only_cursor.push("cursor".into());
+    preferences
+        .set_registered_managed(&only_cursor, registered)
+        .unwrap();
+    assert_eq!(preferences.managed_tools, CliId::ALL.to_vec());
+    assert_eq!(preferences.unknown_managed_tools(), &["cursor".to_string()]);
+    assert!(!preferences
+        .managed_tool_ids()
+        .iter()
+        .any(|id| id == "minimax_code"));
+
+    let mut only_code = legacy_ids();
+    only_code.push("minimax_code".into());
+    preferences
+        .set_registered_managed(&only_code, registered)
+        .unwrap();
+    assert_eq!(
+        preferences.unknown_managed_tools(),
+        &["minimax_code".to_string()]
+    );
+    assert!(!preferences
+        .managed_tool_ids()
+        .iter()
+        .any(|id| id == "cursor"));
+
+    let temp = tempfile::tempdir().unwrap();
+    let cursor_file = temp.path().join(".cursor").join("mcp.json");
+    let code_file = temp.path().join(".minimax").join("config.yaml");
+    std::fs::create_dir_all(cursor_file.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(code_file.parent().unwrap()).unwrap();
+    std::fs::write(&cursor_file, "{\"mcpServers\":{}}").unwrap();
+    std::fs::write(&code_file, "defaultModel: MiniMax-M2\n").unwrap();
+    preferences
+        .set_registered_managed(&legacy_ids(), registered)
+        .unwrap();
+    assert!(preferences.unknown_managed_tools().is_empty());
+    assert_eq!(
+        std::fs::read_to_string(&cursor_file).unwrap(),
+        "{\"mcpServers\":{}}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&code_file).unwrap(),
+        "defaultModel: MiniMax-M2\n"
+    );
+}
+
+#[test]
+fn cursor_and_minimax_code_stay_separate_from_the_minimax_quota_provider() {
+    let registry = Registry::builtins();
+    let home = Path::new("/home/example");
+    let cursor = registry.get("cursor").unwrap();
+    assert_eq!(cursor.id(), "cursor");
+    assert_eq!(cursor.command(), "cursor");
+    assert_eq!(cursor.launch_form(), crate::adapters::LaunchForm::Desktop);
+    assert!(cursor.official_usage().is_none());
+    assert!(cursor.accounts().is_none());
+    assert!(cursor.descriptor().login.is_none());
+    assert!(!cursor.descriptor().yolo_available);
+    assert!(!cursor.descriptor().management.mcp);
+    assert!(!cursor.supports_skills());
+    assert!(!cursor.history_supported());
+    assert!(cursor
+        .native_files(crate::native::adapter::Scope::Global, home, None, true)
+        .is_empty());
+    assert!(cursor.install_command().is_none());
+    assert!(cursor.npm_install_command().is_none());
+    assert!(!cursor.node_required_when_missing());
+    assert!(!cursor.version_identity("agent", "cursor 1.0.0"));
+    assert!(!cursor.version_identity("cursor", "1.0.0"));
+    assert!(cursor
+        .launch_args(None, crate::adapters::LaunchMode::Normal)
+        .unwrap()
+        .is_empty());
+    assert!(cursor
+        .launch_args(Some("session"), crate::adapters::LaunchMode::Normal)
+        .is_err());
+    assert!(cursor
+        .launch_args(None, crate::adapters::LaunchMode::Yolo)
+        .is_err());
+    assert!(cursor
+        .desktop_launch_args(Path::new("/work/p"))
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        cursor
+            .connection_policy(crate::native::adapter::Scope::Global)
+            .api_key
+            .state,
+        "unsupported"
+    );
+    assert!(cursor
+        .connection_documents(&env_key_connection(), crate::native::adapter::Scope::Global)
+        .is_err());
+
+    let code = registry.get("minimax_code").unwrap();
+    assert_eq!(code.id(), "minimax_code");
+    assert_eq!(code.command(), "mcode");
+    assert_ne!(code.id(), "minimax");
+    assert_ne!(code.id(), "mimo_code");
+    assert_eq!(code.launch_form(), crate::adapters::LaunchForm::Terminal);
+    assert!(code.official_usage().is_none());
+    assert!(code.accounts().is_none());
+    assert!(code.descriptor().login.is_none());
+    assert!(!code.descriptor().management.agents);
+    assert!(!code.supports_mcp());
+    assert!(!code.history_supported());
+    assert!(code
+        .native_files(crate::native::adapter::Scope::Global, home, None, true)
+        .is_empty());
+    assert!(code.install_command().is_none());
+    assert!(code.npm_install_command().is_none());
+    assert!(!code.node_required_when_missing());
+    assert!(!code.version_identity("mmx", "1.0.0"));
+    assert!(!code.version_identity("mcode", "mcode 1.0.0"));
+    assert!(code
+        .launch_args(None, crate::adapters::LaunchMode::Normal)
+        .unwrap()
+        .is_empty());
+    assert!(code
+        .launch_args(Some("1"), crate::adapters::LaunchMode::Normal)
+        .is_err());
+    assert!(code
+        .launch_args(None, crate::adapters::LaunchMode::Yolo)
+        .is_err());
+    assert!(code
+        .connection_documents(&env_key_connection(), crate::native::adapter::Scope::Global)
+        .unwrap_err()
+        .contains("minimax"));
+
+    let providers = crate::adapters::providers::ProviderRegistry::builtins();
+    assert_eq!(providers.get("minimax").unwrap().id(), "minimax");
+    assert!(providers.get("minimax_code").is_err());
+    assert!(providers.get("mcode").is_err());
+    assert!(providers.get("cursor").is_err());
+    let preset = providers
+        .presets()
+        .into_iter()
+        .find(|item| item.id == "minimax-cn-token-plan")
+        .expect("minimax preset");
+    match &preset.config.program {
+        crate::usage::QueryProgram::Builtin {
+            provider,
+            template_version,
+        } => {
+            assert_eq!(provider, "minimax");
+            assert_eq!(
+                *template_version,
+                crate::adapters::providers::BUILTIN_TEMPLATE_VERSION
+            );
+        }
+        other => panic!("minimax 额度预设被改挂：{other:?}"),
+    }
+    let script = providers.script(&preset.config).expect("minimax query");
+    assert!(script.contains("function minimaxEpoch"));
+    for preset in providers.presets() {
+        if let crate::usage::QueryProgram::Builtin { provider, .. } = preset.config.program {
+            assert_ne!(provider, "mcode");
+            assert_ne!(provider, "minimax_code");
+            assert_ne!(provider, "cursor");
+        }
+    }
 }
