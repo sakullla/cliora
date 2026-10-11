@@ -27,6 +27,8 @@ impl Registry {
                 &COMMAND_CODE,
                 &ANTIGRAVITY,
                 &KIRO,
+                &CURSOR,
+                &MINIMAX_CODE,
             ],
             #[cfg(test)]
             fixture_installations: BTreeMap::new(),
