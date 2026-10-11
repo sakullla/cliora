@@ -204,6 +204,7 @@ export default {
     loadingHint: '正在读取本机记录。',
     noMatchHint: '试试其他关键词，或清除筛选。',
     emptyHint: '使用受管理的 CLI 后，回到这里查找与继续对话。',
+    indexTitle: '此工具没有可索引的会话',
     retryList: '重新读取列表',
     syncing: '正在同步本机记录…',
     syncedAt: '{{time}} 已同步',

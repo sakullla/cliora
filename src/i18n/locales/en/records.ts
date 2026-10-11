@@ -204,6 +204,7 @@ export default {
     loadingHint: 'Reading local records.',
     noMatchHint: 'Try another keyword, or clear the filters.',
     emptyHint: 'After using a managed CLI, come back here to find and continue conversations.',
+    indexTitle: 'This tool has no indexable sessions',
     retryList: 'Reload the list',
     syncing: 'Syncing local records…',
     syncedAt: 'Synced at {{time}}',
