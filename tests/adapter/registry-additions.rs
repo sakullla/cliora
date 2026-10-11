@@ -768,12 +768,15 @@ fn cursor_and_minimax_code_stay_separate_from_the_minimax_quota_provider() {
     assert_ne!(code.id(), "minimax");
     assert_ne!(code.id(), "mimo_code");
     assert_eq!(code.launch_form(), crate::adapters::LaunchForm::Terminal);
-    assert!(code.official_usage().is_none());
-    assert!(code.accounts().is_none());
-    assert!(code.descriptor().login.is_none());
+    assert!(code.official_usage().is_some());
+    assert!(code.accounts().is_some());
+    assert!(code.descriptor().login.is_some());
     assert!(!code.descriptor().management.agents);
-    assert!(!code.supports_mcp());
+    assert!(code.supports_mcp());
+    assert!(!code.supports_skills());
     assert!(!code.history_supported());
+    assert_eq!(code.descriptor().history.state, "unsupported");
+    assert!(code.descriptor().history.reason.contains("没有已核对"));
     assert!(code
         .native_files(crate::native::adapter::Scope::Global, home, None, true)
         .is_empty());
@@ -782,20 +785,22 @@ fn cursor_and_minimax_code_stay_separate_from_the_minimax_quota_provider() {
     assert!(!code.node_required_when_missing());
     assert!(!code.version_identity("mmx", "1.0.0"));
     assert!(!code.version_identity("mcode", "mcode 1.0.0"));
+    assert!(code.version_identity("mcode", "0.6.8"));
     assert!(code
         .launch_args(None, crate::adapters::LaunchMode::Normal)
         .unwrap()
         .is_empty());
-    assert!(code
+    let session = code
         .launch_args(Some("1"), crate::adapters::LaunchMode::Normal)
-        .is_err());
+        .unwrap();
+    assert_eq!(session, vec!["--session".to_string(), "1".to_string()]);
+    assert!(!session.iter().any(|arg| arg == "--continue"));
     assert!(code
         .launch_args(None, crate::adapters::LaunchMode::Yolo)
         .is_err());
     assert!(code
         .connection_documents(&env_key_connection(), crate::native::adapter::Scope::Global)
-        .unwrap_err()
-        .contains("minimax"));
+        .is_err());
 
     let providers = crate::adapters::providers::ProviderRegistry::builtins();
     assert_eq!(providers.get("minimax").unwrap().id(), "minimax");

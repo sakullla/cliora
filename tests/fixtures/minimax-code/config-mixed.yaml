@@ -1,0 +1,21 @@
+logLevel: info
+permissionMode: bypassPermissions
+minimaxModelSource: token_plan
+defaultModel: minimax/MiniMax-M2
+provider:
+  minimax:
+    name: MiniMax
+    npm: "@ai-sdk/anthropic"
+minimax_api:
+  baseURL: https://api.minimaxi.com/anthropic
+  apiKey: ${MCODE_PROVIDER_API_KEY}
+custom_provider:
+  demo:
+    name: demo
+    api: openai-completions
+    enabled: true
+    models:
+      demo-model: {}
+    options:
+      baseURL: https://example.com/v1
+      apiKey: ${MCODE_CUSTOM_DEMO_API_KEY}
