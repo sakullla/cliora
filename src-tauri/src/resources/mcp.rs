@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use rusqlite::{params, OptionalExtension};
@@ -632,20 +632,29 @@ pub fn distribute(
             } else {
                 None
             };
-            if !target.enabled {
-                retain_disabled_secrets(credentials, retained_id.as_deref(), existing)?;
-            }
-            let restored = if target.enabled && existing.is_none() {
-                restore_retained_secrets(credentials, retained_id.as_deref())?
-            } else {
-                None
-            };
+            let retained = read_retained(credentials, retained_id.as_deref())?;
             let existing_owned = existing.cloned();
-            let source = existing_owned.as_ref().or(restored.as_ref());
-            let document = adapter.mcp_document_at(definition, target.enabled, source, &location)?;
+            let staged = if target.enabled {
+                None
+            } else {
+                stage_disabled_secrets(existing_owned.as_ref(), retained.as_ref())
+            };
+            if let (Some(id), Some(staged_value)) = (retained_id.as_deref(), staged.as_ref()) {
+                if retained.as_ref() != Some(staged_value) {
+                    let encoded = serde_json::to_string(staged_value)
+                        .map_err(|_| "无法保存受保护的 MCP 值")?;
+                    credentials.put(id, &encoded)?;
+                }
+            }
+            let source = if target.enabled {
+                merge_missing_secrets(existing_owned.as_ref(), retained.as_ref(), definition)
+            } else {
+                existing_owned.clone()
+            };
+            let document = adapter.mcp_document_at(definition, target.enabled, source.as_ref(), &location)?;
             let written_hash = entry_hash(document.as_ref())?;
             let unchanged = existing == document.as_ref();
-            let change = adapter.mcp_change(&parsed, &location, &definition.name, document)?;
+            let change = adapter.mcp_change(&parsed, &location, &definition.name, document.clone())?;
             let commit = |tx: &rusqlite::Transaction<'_>| {
                 let current: i64 = tx.query_row("SELECT version FROM mcp_definitions WHERE id = ?1", [&definition.id], |row| row.get(0)).map_err(|error| error.to_string())?;
                 if current != definition.version as i64 { return Err("MCP 定义在预览后变化；请重新预览".into()); }
@@ -663,14 +672,22 @@ pub fn distribute(
                     changes: vec![change], sensitive: false, force_restrict: false,
                 }], commit)?
             };
-            let clear_retained = target.enabled && (existing.is_some() || restored.is_some());
-            Ok((outcome.status.to_owned(), clear_retained.then(|| retained_id).flatten()))
+            let settle_from = if target.enabled {
+                retained.as_ref()
+            } else {
+                staged.as_ref().or(retained.as_ref())
+            };
+            settle_retained(
+                credentials,
+                retained_id.as_deref(),
+                settle_from,
+                document.as_ref().filter(|_| target.enabled),
+                definition,
+            )?;
+            Ok(outcome.status.to_owned())
         })();
         match attempt {
-            Ok((status, clear)) => {
-                if let Some(id) = clear {
-                    let _ = credentials.delete(&id);
-                }
+            Ok(status) => {
                 result.status = "written";
                 result.detail = status;
             }
@@ -726,26 +743,192 @@ fn retained_secret_document(existing: &Value) -> Value {
     Value::Object(root)
 }
 
-fn retain_disabled_secrets(
+fn read_retained(
     credentials: &dyn CredentialStore,
     id: Option<&str>,
-    existing: Option<&Value>,
-) -> Result<(), String> {
+) -> Result<Option<Value>, String> {
     let Some(id) = id else {
-        return Ok(());
+        return Ok(None);
     };
-    let Some(existing) = existing else {
-        return Ok(());
+    let text = match credentials.lookup(id) {
+        Ok(Some(text)) => text,
+        Ok(None) => return Ok(None),
+        Err(error) => return Err(format!("受保护的 MCP 值无法读取，已停止写回：{error}")),
     };
-    let kept = retained_secret_document(existing);
-    if kept.as_object().is_some_and(|map| map.is_empty()) {
-        if credentials.get(id).is_ok() {
-            credentials.delete(id)?;
-        }
-        return Ok(());
+    parse_retained(&text)
+        .map(Some)
+        .ok_or_else(|| "受保护的 MCP 值无法读取，已停止写回".into())
+}
+
+/// Copies disk literals into the retained document without dropping keys the disk entry no longer has.
+fn stage_disabled_secrets(existing: Option<&Value>, retained: Option<&Value>) -> Option<Value> {
+    let mut root = retained
+        .cloned()
+        .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+    if let Some(existing) = existing {
+        overlay_secret_document(&mut root, &retained_secret_document(existing));
     }
-    let encoded = serde_json::to_string(&kept).map_err(|_| "无法保存受保护的 MCP 值")?;
-    credentials.put(id, &encoded)
+    if root.as_object().is_some_and(|map| map.is_empty()) {
+        None
+    } else {
+        Some(root)
+    }
+}
+
+fn overlay_secret_document(target: &mut Value, incoming: &Value) {
+    let Some(target_map) = target.as_object_mut() else {
+        return;
+    };
+    let Some(incoming_map) = incoming.as_object() else {
+        return;
+    };
+    for field in ["env", "headers"] {
+        let Some(entries) = incoming_map.get(field).and_then(Value::as_object) else {
+            continue;
+        };
+        if entries.is_empty() {
+            continue;
+        }
+        let slot = target_map
+            .entry(field)
+            .or_insert_with(|| Value::Object(serde_json::Map::new()));
+        let Some(slot_map) = slot.as_object_mut() else {
+            continue;
+        };
+        for (key, value) in entries {
+            slot_map.insert(key.clone(), value.clone());
+        }
+    }
+}
+
+/// Fills keys missing from both the disk entry and the definition. Neither source is overwritten.
+fn merge_missing_secrets(
+    existing: Option<&Value>,
+    retained: Option<&Value>,
+    definition: &McpDefinition,
+) -> Option<Value> {
+    let Some(retained) = retained else {
+        return existing.cloned();
+    };
+    let mut base = existing
+        .cloned()
+        .filter(Value::is_object)
+        .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+    let Some(root) = base.as_object_mut() else {
+        return existing.cloned();
+    };
+    let mut added = false;
+    for (field, defined, aliases) in [
+        ("env", &definition.env, &["env", "environment"][..]),
+        ("headers", &definition.headers, &["headers", "http_headers"][..]),
+    ] {
+        let Some(incoming) = retained.get(field).and_then(Value::as_object) else {
+            continue;
+        };
+        let occupied = field_keys(existing, aliases);
+        let mut target = root
+            .get(field)
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        for (key, value) in incoming {
+            if occupied.contains(key) || defined.contains_key(key) || target.contains_key(key) {
+                continue;
+            }
+            target.insert(key.clone(), value.clone());
+            added = true;
+        }
+        if !target.is_empty() {
+            root.insert(field.to_owned(), Value::Object(target));
+        }
+    }
+    if added || existing.is_none() {
+        Some(base)
+    } else {
+        existing.cloned()
+    }
+}
+
+fn field_keys(value: Option<&Value>, fields: &[&str]) -> BTreeSet<String> {
+    let mut keys = BTreeSet::new();
+    let Some(root) = value.and_then(Value::as_object) else {
+        return keys;
+    };
+    for field in fields {
+        if let Some(map) = root.get(*field).and_then(Value::as_object) {
+            keys.extend(map.keys().cloned());
+        }
+    }
+    keys
+}
+
+fn entry_has_literal(entry: Option<&Value>, fields: &[&str], key: &str, literal: &str) -> bool {
+    let Some(root) = entry.and_then(Value::as_object) else {
+        return false;
+    };
+    fields.iter().any(|field| {
+        root.get(*field)
+            .and_then(Value::as_object)
+            .and_then(|map| map.get(key))
+            .and_then(Value::as_str)
+            == Some(literal)
+    })
+}
+
+/// Drops a retained key only after the written entry contains that literal, or the definition clears it.
+fn prune_retained(
+    retained: &Value,
+    written: Option<&Value>,
+    definition: &McpDefinition,
+) -> Option<Value> {
+    let mut root = serde_json::Map::new();
+    for (field, defined, aliases) in [
+        ("env", &definition.env, &["env", "environment"][..]),
+        ("headers", &definition.headers, &["headers", "http_headers"][..]),
+    ] {
+        let Some(entries) = retained.get(field).and_then(Value::as_object) else {
+            continue;
+        };
+        let mut kept = serde_json::Map::new();
+        for (key, value) in entries {
+            let Some(literal) = value.as_str() else {
+                continue;
+            };
+            let cleared = defined.get(key).is_some_and(|text| text.is_empty());
+            if cleared || entry_has_literal(written, aliases, key, literal) {
+                continue;
+            }
+            kept.insert(key.clone(), value.clone());
+        }
+        if !kept.is_empty() {
+            root.insert(field.to_owned(), Value::Object(kept));
+        }
+    }
+    if root.is_empty() {
+        None
+    } else {
+        Some(Value::Object(root))
+    }
+}
+
+fn settle_retained(
+    credentials: &dyn CredentialStore,
+    id: Option<&str>,
+    before: Option<&Value>,
+    written: Option<&Value>,
+    definition: &McpDefinition,
+) -> Result<(), String> {
+    let (Some(id), Some(before)) = (id, before) else {
+        return Ok(());
+    };
+    match prune_retained(before, written, definition) {
+        Some(next) if &next != before => {
+            let encoded = serde_json::to_string(&next).map_err(|_| "无法保存受保护的 MCP 值")?;
+            credentials.put(id, &encoded)
+        }
+        Some(_) => Ok(()),
+        None => credentials.delete(id),
+    }
 }
 
 fn parse_retained(text: &str) -> Option<Value> {
@@ -780,22 +963,6 @@ fn parse_retained(text: &str) -> Option<Value> {
     } else {
         Some(Value::Object(clean))
     }
-}
-
-fn restore_retained_secrets(
-    credentials: &dyn CredentialStore,
-    id: Option<&str>,
-) -> Result<Option<Value>, String> {
-    let Some(id) = id else {
-        return Ok(None);
-    };
-    let text = match credentials.get(id) {
-        Ok(text) => text,
-        Err(_) => return Ok(None),
-    };
-    parse_retained(&text)
-        .map(Some)
-        .ok_or_else(|| "受保护的 MCP 值无法读取，已停止写回".into())
 }
 
 pub fn stdio_doc(

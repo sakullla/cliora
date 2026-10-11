@@ -4,6 +4,16 @@ pub trait CredentialStore {
     fn put(&self, id: &str, secret: &str) -> Result<(), String>;
     fn get(&self, id: &str) -> Result<String, String>;
     fn delete(&self, id: &str) -> Result<(), String>;
+    /// `Ok(None)` only when the store confirms the id is absent.
+    /// A read failure stays `Err` and must not be treated as absence.
+    /// Test stores report absence with the exact error `missing`.
+    fn lookup(&self, id: &str) -> Result<Option<String>, String> {
+        match self.get(id) {
+            Ok(secret) => Ok(Some(secret)),
+            Err(error) if error == "missing" => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
 }
 
 pub struct SystemCredentialStore;
@@ -35,6 +45,14 @@ impl CredentialStore for SystemCredentialStore {
             .map_err(|_| "无法从系统凭据服务读取".into())
     }
 
+    fn lookup(&self, id: &str) -> Result<Option<String>, String> {
+        match Self::entry(id)?.get_password() {
+            Ok(secret) => Ok(Some(secret)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(_) => Err("无法从系统凭据服务读取".into()),
+        }
+    }
+
     fn delete(&self, id: &str) -> Result<(), String> {
         Self::entry(id)?
             .delete_credential()
@@ -62,5 +80,6 @@ mod tests {
         store.put(&id, "test-only-value").unwrap();
         assert_eq!(store.get(&id).unwrap(), "test-only-value");
         store.delete(&id).unwrap();
+        assert_eq!(store.lookup(&id).unwrap(), None);
     }
 }
