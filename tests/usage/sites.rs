@@ -61,7 +61,19 @@ fn parse(id: &str, responses: Value) -> UsageResult {
 
 #[test]
 fn site_catalog_versions_subjects_and_credentials_are_explicit() {
-    assert_eq!(usage_presets().len(), 20);
+    assert_eq!(usage_presets().len(), 21);
+    let token_plan = preset("official-minimax_code");
+    assert_eq!(token_plan.config.site, "https://agent.minimax.io");
+    assert_eq!(
+        token_plan.config.program,
+        QueryProgram::Official {
+            tool: "minimax_code".into(),
+            adapter_version: 1,
+        }
+    );
+    assert!(token_plan.credentials.is_empty());
+    assert!(token_plan.description.contains("CLI"));
+    assert!(token_plan.description.contains("不显示 0"));
     for p in usage_presets().into_iter().filter(|p| matches!(&p.config.program,QueryProgram::Builtin{provider,..} if provider=="sub2api" || provider=="newapi")) {
         p.config.validate().unwrap();
         assert_eq!(p.config.refresh_interval_seconds, 0);
