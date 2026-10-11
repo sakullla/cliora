@@ -1195,6 +1195,25 @@ test('a CLI without a managed provider connection drops the connection step enti
   await expect(dialog.getByLabel('模型', { exact: true })).toBeVisible();
 });
 
+test('a tool without a configuration port or provider connection hides login and model', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'cursor', false, false, ['cursor'], true, true);
+  await page.getByRole('button', { name: '新建配置' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByText('此工具不提供供应商、请求地址、登录或模型连接')).toBeVisible();
+  await expect(dialog.getByRole('list', { name: '连接顺序' })).toHaveCount(0);
+  await expect(dialog.getByLabel('兼容配置连接')).toHaveCount(0);
+  await expect(dialog.getByLabel('供应商 ID', { exact: true })).toHaveCount(0);
+  await expect(dialog.getByLabel('请求地址', { exact: true })).toHaveCount(0);
+  await expect(dialog.getByRole('radio', { name: '使用 CLI 当前登录或凭据', exact: true })).toHaveCount(0);
+  await expect(dialog.getByRole('radio', { name: '为此连接提供 API 密钥', exact: true })).toHaveCount(0);
+  await expect(dialog.getByLabel('模型', { exact: true })).toHaveCount(0);
+  await expect(dialog.getByText('模型目录与连接检查', { exact: true })).toHaveCount(0);
+  await dialog.getByRole('button', { name: '保存配置', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).configurationProtocol.calls.some((call: any) => call.command === 'save_configuration_draft'))).toBe(true);
+  const saved = await page.evaluate(() => (window as any).configurationProtocol.calls.filter((call: any) => call.command === 'save_configuration_draft').map((call: any) => call.args.draft.profile.connection ?? null));
+  expect(saved).toEqual([null]);
+});
+
 test('sign-in sits between the request address and the model for every dedicated editor', async ({ page }) => {
   for (const tool of ['claude_code', 'kimi_code', 'pi', 'open_code'] as const) {
     await setupConfigurationWorkspace(page, tool);
