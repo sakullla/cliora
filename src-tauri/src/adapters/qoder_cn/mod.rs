@@ -379,7 +379,6 @@ mod tests {
     use super::*;
     use crate::adapters::agents as agent_port;
     use crate::resources::mcp::McpTransport;
-    use std::collections::BTreeMap;
 
     const SETTINGS_FIXTURE: &str =
         include_str!("../../../../tests/fixtures/native/qoder-1.1.63.json");
@@ -392,8 +391,8 @@ mod tests {
             command: "npx -y fixture-mcp@1.0.0".into(),
             args: vec![],
             url: String::new(),
-            env: BTreeMap::from([("FIXTURE_TOKEN".into(), "${FIXTURE_TOKEN}".into())]),
-            headers: BTreeMap::new(),
+            env: indexmap::IndexMap::from([("FIXTURE_TOKEN".into(), "${FIXTURE_TOKEN}".into())]),
+            headers: indexmap::IndexMap::new(),
             in_library: true,
             version: 1,
         }
@@ -407,8 +406,8 @@ mod tests {
             command: String::new(),
             args: vec![],
             url: "https://mcp.example.test/mcp".into(),
-            env: BTreeMap::new(),
-            headers: BTreeMap::from([("Authorization".into(), "${MCP_FIXTURE_TOKEN}".into())]),
+            env: indexmap::IndexMap::new(),
+            headers: indexmap::IndexMap::from([("Authorization".into(), "${MCP_FIXTURE_TOKEN}".into())]),
             in_library: true,
             version: 1,
         }

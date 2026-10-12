@@ -516,11 +516,11 @@ mod tests {
                 command: "npx".into(),
                 args: vec!["-y".into(), "example-mcp".into()],
                 url: String::new(),
-                env: std::collections::BTreeMap::from([(
+                env: indexmap::IndexMap::from([(
                     "API_KEY".into(),
                     "${EXAMPLE_KEY}".into(),
                 )]),
-                headers: std::collections::BTreeMap::new(),
+                headers: indexmap::IndexMap::new(),
                 in_library: true,
                 expected_version: None,
             },

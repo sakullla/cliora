@@ -506,8 +506,8 @@ mod tests {
             command: "npx".into(),
             args: vec!["-y".into(), "fetch".into()],
             url: String::new(),
-            env: BTreeMap::from([("API_TOKEN".into(), "${FETCH_TOKEN}".into())]),
-            headers: BTreeMap::new(),
+            env: indexmap::IndexMap::from([("API_TOKEN".into(), "${FETCH_TOKEN}".into())]),
+            headers: indexmap::IndexMap::new(),
             in_library: true,
             version: 1,
         };

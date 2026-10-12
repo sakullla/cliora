@@ -666,7 +666,15 @@ fn sixth_configuration_port_round_trips_logical_edits_and_rejects_invalid_drafts
     let restored: crate::portable::PortableSnapshot = serde_json::from_str(&serde_json::to_string(&snapshot).unwrap()).unwrap();
     let portable = restored.entities.iter().find_map(|entity| if let crate::portable::PortablePayload::Profile(value) = &entity.payload { Some(value) } else { None }).unwrap();
     assert_eq!(portable.profile.editing, saved.editing);
-    assert_eq!(portable.profile.files, saved.files);
+    // serde_json preserve_order keeps insertion order instead of a canonical key
+    // sort, so file texts may differ only in key order; compare parsed content.
+    let parsed_files = |files: &BTreeMap<String, String>| {
+        files
+            .iter()
+            .map(|(role, text)| (role.clone(), serde_json::from_str::<Value>(text).unwrap()))
+            .collect::<BTreeMap<_, _>>()
+    };
+    assert_eq!(parsed_files(&portable.profile.files), parsed_files(&saved.files));
     let destination = tempfile::tempdir().unwrap();
     let imported_db = crate::database::Database::open(&destination.path().join("app.db")).unwrap();
     let preview = crate::portable::preview_import(&imported_db, &credentials, &registry, restored).unwrap();
@@ -674,7 +682,7 @@ fn sixth_configuration_port_round_trips_logical_edits_and_rejects_invalid_drafts
     crate::portable::apply_import(&imported_db, &credentials, &registry, &preview, &selected).unwrap();
     let imported = crate::native::profile::get_registered_profile(&imported_db, &saved.id).unwrap();
     assert_eq!(imported.editing, saved.editing);
-    assert_eq!(imported.files, saved.files);
+    assert_eq!(parsed_files(&imported.files), parsed_files(&saved.files));
 }
 
 #[test]

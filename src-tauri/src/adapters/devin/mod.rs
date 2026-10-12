@@ -526,8 +526,8 @@ mod tests {
             command: "fixture-runner".into(),
             args: vec!["-y".into(), "example-mcp".into()],
             url: "https://mcp.example.com/sse".into(),
-            env: BTreeMap::from([("EXAMPLE_MODE".into(), "fixture".into())]),
-            headers: BTreeMap::from([("X-Example".into(), "1".into())]),
+            env: indexmap::IndexMap::from([("EXAMPLE_MODE".into(), "fixture".into())]),
+            headers: indexmap::IndexMap::from([("X-Example".into(), "1".into())]),
             in_library: true,
             version: 0,
         }

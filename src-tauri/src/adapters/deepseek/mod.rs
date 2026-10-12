@@ -381,8 +381,8 @@ mod tests {
             command: "npx".into(),
             args: vec!["-y".into(), "@modelcontextprotocol/server-memory".into()],
             url: "https://mcp.example.test/sse".into(),
-            env: BTreeMap::from([("LOG_LEVEL".into(), "debug".into())]),
-            headers: BTreeMap::from([("X-Api-Key".into(), "${MCP_TOKEN}".into())]),
+            env: indexmap::IndexMap::from([("LOG_LEVEL".into(), "debug".into())]),
+            headers: indexmap::IndexMap::from([("X-Api-Key".into(), "${MCP_TOKEN}".into())]),
             in_library: true,
             version: 1,
         }

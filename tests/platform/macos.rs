@@ -1,7 +1,9 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+
+use indexmap::IndexMap;
 
 use crate::credentials::CredentialStore;
 use crate::database::Database;
@@ -60,8 +62,8 @@ fn five_cli_mcp_and_skills_work_in_macos_global_and_project_directories() {
             command: "npx".into(),
             args: vec!["-y".into(), "example-mcp".into()],
             url: String::new(),
-            env: BTreeMap::new(),
-            headers: BTreeMap::new(),
+            env: IndexMap::new(),
+            headers: IndexMap::new(),
             in_library: true,
             expected_version: None,
         },
