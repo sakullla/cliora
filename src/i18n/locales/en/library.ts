@@ -177,7 +177,6 @@ export default {
     pasteImportError: 'Could not recognize this content. The form is unchanged.',
     duplicate: 'Duplicate',
     duplicated: 'Duplicated as "{{name}}".',
-    copySuffix: 'copy',
     copyJson: 'Copy JSON',
     copyCommand: 'Copy command',
     copied: 'Copied.',
