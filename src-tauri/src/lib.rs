@@ -232,6 +232,7 @@ pub fn run() {
             commands::list_mcp_definitions,
             commands::save_mcp_definition,
             commands::delete_mcp_definition,
+            commands::export_mcp_definition,
             commands::remove_native_mcp,
             commands::list_native_mcp,
             commands::list_mcp_placements,

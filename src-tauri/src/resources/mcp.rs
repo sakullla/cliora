@@ -210,6 +210,52 @@ pub fn get_definition(db: &Database, id: &str) -> Result<McpDefinition, String> 
     })
 }
 
+/// Exports a definition as standard MCP JSON (`{"mcpServers": {...}}`) with
+/// literal sensitive values replaced by `${KEY}` references. Reference-shaped
+/// and non-sensitive values pass through unchanged; key order follows the
+/// definition (IndexMap).
+pub fn export_definition(db: &Database, id: &str) -> Result<String, String> {
+    let definition = get_definition(db, id)?;
+    let mut server = serde_json::Map::new();
+    match definition.transport {
+        McpTransport::Stdio => {
+            server.insert("command".into(), Value::String(definition.command.clone()));
+            server.insert("args".into(), serde_json::json!(definition.args));
+            if !definition.env.is_empty() {
+                server.insert("env".into(), Value::Object(masked_export_map(&definition.env)));
+            }
+        }
+        McpTransport::Http => {
+            server.insert("url".into(), Value::String(definition.url.clone()));
+            if !definition.headers.is_empty() {
+                server.insert(
+                    "headers".into(),
+                    Value::Object(masked_export_map(&definition.headers)),
+                );
+            }
+        }
+    }
+    let mut servers = serde_json::Map::new();
+    servers.insert(definition.name.clone(), Value::Object(server));
+    let mut root = serde_json::Map::new();
+    root.insert("mcpServers".into(), Value::Object(servers));
+    serde_json::to_string_pretty(&Value::Object(root)).map_err(|error| error.to_string())
+}
+
+fn masked_export_map(values: &IndexMap<String, String>) -> serde_json::Map<String, Value> {
+    values
+        .iter()
+        .map(|(key, value)| {
+            let exported = if sensitive_key(key) && !is_reference(value) {
+                format!("${{{key}}}")
+            } else {
+                value.clone()
+            };
+            (key.clone(), Value::String(exported))
+        })
+        .collect()
+}
+
 pub fn save_definition(db: &Database, draft: McpDraft) -> Result<McpDefinition, String> {
     validate(&draft)?;
     if let Some(id) = draft.id.as_deref() {
