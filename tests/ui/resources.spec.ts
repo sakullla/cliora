@@ -235,7 +235,7 @@ test('paste import fills an HTTP MCP and rejects unrecognizable content without 
   await expect(dialog.getByRole('textbox', { name: '网址' })).toHaveValue('https://example.com/mcp');
 });
 
-test('MCP card duplicates a definition under a distinct name', async ({ page }) => {
+test('MCP card duplicates a definition under a distinct backend-valid name', async ({ page }) => {
   await mockResources(page);
   await page.goto('/');
   await page.evaluate(() => {
@@ -244,12 +244,33 @@ test('MCP card duplicates a definition under a distinct name', async ({ page }) 
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
   await page.getByRole('button', { name: '创建副本' }).click();
-  await expect(page.getByRole('status').filter({ hasText: '已创建副本「filesystem 副本」' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'filesystem 副本' })).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: '已创建副本「filesystem-copy」' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'filesystem-copy' })).toBeVisible();
   const copies = await page.evaluate(() => (window as unknown as { __resourceMcpDefinitions: Array<{ id: string; name: string; command: string }> }).__resourceMcpDefinitions);
-  expect(copies.map((item) => item.name)).toEqual(['filesystem', 'filesystem 副本']);
+  expect(copies.map((item) => item.name)).toEqual(['filesystem', 'filesystem-copy']);
+  // The backend valid_name only accepts ASCII alphanumerics, '-' and '_' within 1–80 bytes.
+  expect(copies[1].name).toMatch(/^[A-Za-z0-9_-]{1,80}$/);
   expect(copies[1].id).not.toBe('mcp-1');
   expect(copies[1].command).toBe('npx');
+  await page.getByRole('button', { name: '创建副本' }).first().click();
+  const tripled = await page.evaluate(() => (window as unknown as { __resourceMcpDefinitions: Array<{ name: string }> }).__resourceMcpDefinitions.map((item) => item.name));
+  expect(tripled).toEqual(['filesystem', 'filesystem-copy', 'filesystem-copy-2']);
+});
+
+test('MCP duplicate name stays within the 80 byte backend limit when the source name is long', async ({ page }) => {
+  await mockResources(page);
+  await page.goto('/');
+  await page.evaluate(() => {
+    (window as unknown as { __resourceMcpDefinitions: Array<Record<string, unknown>> }).__resourceMcpDefinitions.push({ id: 'mcp-1', name: 'a'.repeat(78), transport: 'stdio', command: 'npx', args: [], url: '', env: {}, headers: {}, inLibrary: true, version: 1 });
+  });
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  await page.getByRole('button', { name: '创建副本' }).click();
+  const copies = await page.evaluate(() => (window as unknown as { __resourceMcpDefinitions: Array<{ name: string }> }).__resourceMcpDefinitions);
+  expect(copies).toHaveLength(2);
+  expect(copies[1].name).toMatch(/^[A-Za-z0-9_-]{1,80}$/);
+  expect(copies[1].name.endsWith('-copy')).toBe(true);
+  expect(copies[1].name).not.toBe(copies[0].name);
 });
 
 test('MCP card copies masked JSON and the stdio command text', async ({ page }) => {

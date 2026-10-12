@@ -1,4 +1,3 @@
-import i18n from '../i18n';
 import type { McpDefinition, McpDraft, McpTransport } from '../types/resources';
 
 export type KeyValueRow = { key: string; value: string };
@@ -63,13 +62,19 @@ export function mcpCommandText(item: { command: string; args: string[] }): strin
   return [item.command, ...item.args].filter((part) => part.trim()).join(' ');
 }
 
+// The backend valid_name (mcp.rs) only accepts ASCII alphanumerics, '-' and
+// '_' within 1–80 bytes, so the copy suffix is fixed ASCII instead of a
+// localized word. The base name is truncated to keep the result in range.
 export function mcpCopyName(name: string, existing: string[]): string {
-  const suffix = i18n.t('library.resources.copySuffix');
-  let candidate = `${name} ${suffix}`;
-  let index = 2;
+  const build = (index: number) => {
+    const suffix = index < 2 ? '-copy' : `-copy-${index}`;
+    return `${name.slice(0, Math.max(1, 80 - suffix.length))}${suffix}`;
+  };
+  let index = 1;
+  let candidate = build(index);
   while (existing.includes(candidate)) {
-    candidate = `${name} ${suffix} ${index}`;
     index += 1;
+    candidate = build(index);
   }
   return candidate;
 }
