@@ -148,6 +148,7 @@ export const native = {
   listMcpPlacements: () => command<McpPlacement[]>('list_mcp_placements'),
   saveMcpDefinition: (draft: McpDraft) => command<McpDefinition>('save_mcp_definition', { draft }),
   deleteMcpDefinition: (id: string, expectedVersion: number) => command<void>('delete_mcp_definition', { id, expectedVersion }),
+  exportMcpDefinition: (id: string) => command<string>('export_mcp_definition', { id }),
   removeNativeMcp: (target: McpTargetRequest, name: string) => command<void>('remove_native_mcp', { target, name }),
   listNativeMcp: (target: McpTargetRequest) => command<NativeMcpEntry[]>('list_native_mcp', { target }),
   getManagedMcpEnabled: (definitionId: string, target: McpTargetRequest) => command<boolean | null>('get_managed_mcp_enabled', {definitionId,target}),

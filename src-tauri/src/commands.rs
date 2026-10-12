@@ -762,6 +762,11 @@ pub async fn delete_mcp_definition(app: AppHandle, id: String, expected_version:
 }
 
 #[tauri::command]
+pub async fn export_mcp_definition(app: AppHandle, id: String) -> Result<String, ApiError> {
+    blocking(move || app.state::<AppState>().with_database(&app, |db| resources::mcp::export_definition(db, &id).map_err(native_error))).await
+}
+
+#[tauri::command]
 pub async fn remove_native_mcp(app: AppHandle, target: resources::mcp::McpTargetRequest, name: String) -> Result<(), ApiError> {
     blocking(move || {
         let home = home()?;

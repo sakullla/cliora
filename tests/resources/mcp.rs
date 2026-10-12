@@ -1054,3 +1054,91 @@ fn list_orders_by_recent_update_and_legacy_null_rows_fall_back_to_name() {
         "修改后条目移动到列表最前"
     );
 }
+
+#[test]
+fn export_masks_literal_secrets_and_keeps_reference_and_plain_values() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let saved = save_definition(
+        &db,
+        McpDraft {
+            id: None,
+            name: "stdio-export".into(),
+            transport: McpTransport::Stdio,
+            command: "npx".into(),
+            args: vec!["-y".into(), "stdio-mcp".into()],
+            url: String::new(),
+            env: IndexMap::from([
+                ("API_KEY".into(), "sk-literal-secret".into()),
+                ("REF_TOKEN".into(), "${REF_TOKEN}".into()),
+                ("LOG_LEVEL".into(), "debug".into()),
+            ]),
+            headers: IndexMap::new(),
+            in_library: true,
+            expected_version: None,
+        },
+    )
+    .unwrap();
+    let text = export_definition(&db, &saved.id).unwrap();
+    assert!(!text.contains("sk-literal-secret"), "字面敏感值不得出现在导出文本中");
+    let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let server = &parsed["mcpServers"]["stdio-export"];
+    assert_eq!(server["command"], "npx");
+    assert_eq!(server["args"], serde_json::json!(["-y", "stdio-mcp"]));
+    assert_eq!(server["env"]["API_KEY"], "${API_KEY}", "字面敏感值以引用占位符代替");
+    assert_eq!(server["env"]["REF_TOKEN"], "${REF_TOKEN}", "引用形态值原样导出");
+    assert_eq!(server["env"]["LOG_LEVEL"], "debug", "非敏感值原样导出");
+    assert_eq!(
+        server["env"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        ["API_KEY", "REF_TOKEN", "LOG_LEVEL"],
+        "导出应保持定义中的键序"
+    );
+}
+
+#[test]
+fn export_http_masks_headers_and_unknown_ids_error() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let saved = save_definition(
+        &db,
+        McpDraft {
+            id: None,
+            name: "http-export".into(),
+            transport: McpTransport::Http,
+            command: String::new(),
+            args: vec![],
+            url: "https://example.com/mcp".into(),
+            env: IndexMap::new(),
+            headers: IndexMap::from([
+                ("Authorization".into(), "Bearer ${API_TOKEN}".into()),
+                ("X-Api-Key".into(), "literal-header-secret".into()),
+                ("Accept".into(), "application/json".into()),
+            ]),
+            in_library: true,
+            expected_version: None,
+        },
+    )
+    .unwrap();
+    let text = export_definition(&db, &saved.id).unwrap();
+    assert!(!text.contains("literal-header-secret"), "字面敏感请求头不得出现在导出文本中");
+    let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let server = &parsed["mcpServers"]["http-export"];
+    assert_eq!(server["url"], "https://example.com/mcp");
+    assert!(server.get("command").is_none(), "http 形态不导出 command");
+    assert_eq!(
+        server["headers"]["Authorization"], "Bearer ${API_TOKEN}",
+        "引用形态请求头原样导出"
+    );
+    assert_eq!(server["headers"]["X-Api-Key"], "${X-Api-Key}", "字面敏感请求头以引用占位符代替");
+    assert_eq!(server["headers"]["Accept"], "application/json", "非敏感请求头原样导出");
+    assert_eq!(
+        export_definition(&db, "missing").unwrap_err(),
+        "MCP 定义不存在",
+        "不存在的定义返回明确错误"
+    );
+}
