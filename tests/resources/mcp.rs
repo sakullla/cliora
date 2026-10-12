@@ -872,3 +872,78 @@ fn env_order_is_preserved_from_save_to_native_write() {
         "读回原生条目应保持键序"
     );
 }
+
+#[test]
+fn reordering_env_keys_rewrites_the_native_file_in_the_new_order() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let keys = MemoryStore::default();
+    let registry = fixture_registry();
+    let save = |env: [(&str, &str); 2], id: Option<String>, version: Option<u64>| {
+        save_definition(
+            &db,
+            McpDraft {
+                id,
+                name: "reorder".into(),
+                transport: McpTransport::Stdio,
+                command: "npx".into(),
+                args: vec!["-y".into(), "reorder-mcp".into()],
+                url: String::new(),
+                env: IndexMap::from(
+                    env.map(|(key, value)| (key.to_owned(), value.to_owned())),
+                ),
+                headers: IndexMap::new(),
+                in_library: true,
+                expected_version: version,
+            },
+        )
+        .unwrap()
+    };
+    let saved = save([("A_FIRST", "1"), ("B_SECOND", "2")], None, None);
+    // JSON (claude_code) 与 TOML (codex) 两类目标同一 unchanged 判定路径，一并覆盖。
+    let claude_path = temp.path().join(".claude.json");
+    let codex_path = temp.path().join(".codex/config.toml");
+    let assert_order = |before_first: bool, stage: &str| {
+        for path in [&claude_path, &codex_path] {
+            let text = std::fs::read_to_string(path).unwrap();
+            let a = text.find("A_FIRST").expect("原生文件缺少 A_FIRST");
+            let b = text.find("B_SECOND").expect("原生文件缺少 B_SECOND");
+            assert_eq!(a < b, before_first, "{stage} 键序不符合预期: {text}");
+        }
+    };
+    for tool in ["claude_code", "codex"] {
+        let written = distribute(
+            &db,
+            &keys,
+            &registry,
+            temp.path(),
+            &saved.id,
+            previewed(&db, &registry, temp.path(), &saved.id, vec![target(tool, true)]),
+        );
+        assert_eq!(written[0].status, "written", "{written:?}");
+    }
+    assert_order(true, "首次写入");
+    let updated = save(
+        [("B_SECOND", "2"), ("A_FIRST", "1")],
+        Some(saved.id.clone()),
+        Some(saved.version),
+    );
+    for tool in ["claude_code", "codex"] {
+        let rewritten = distribute(
+            &db,
+            &keys,
+            &registry,
+            temp.path(),
+            &updated.id,
+            previewed(&db, &registry, temp.path(), &updated.id, vec![target(tool, true)]),
+        );
+        assert_eq!(rewritten[0].status, "written", "{rewritten:?}");
+    }
+    assert_order(false, "仅调序后再分发");
+    let listed = list_native(&db, &registry, temp.path(), &target("codex", true)).unwrap();
+    assert_eq!(
+        listed[0].env.keys().cloned().collect::<Vec<_>>(),
+        vec!["B_SECOND".to_owned(), "A_FIRST".to_owned()],
+        "TOML 读回应保持新键序"
+    );
+}

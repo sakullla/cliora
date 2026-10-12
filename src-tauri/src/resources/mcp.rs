@@ -673,7 +673,16 @@ pub fn distribute(
             };
             let document = adapter.mcp_document_at(definition, target.enabled, source.as_ref(), &location)?;
             let written_hash = entry_hash(document.as_ref())?;
-            let unchanged = existing == document.as_ref();
+            // Value equality ignores object key order, but key order is part of the
+            // desired native state (R3): a pure reorder must still reach the disk.
+            // Byte comparison over preserve_order serialization is order-sensitive.
+            let unchanged = match (existing, document.as_ref()) {
+                (Some(existing), Some(document)) => {
+                    serde_json::to_vec(existing).ok() == serde_json::to_vec(document).ok()
+                }
+                (None, None) => true,
+                _ => false,
+            };
             let change = adapter.mcp_change(&parsed, &location, &definition.name, document.clone())?;
             let commit = |tx: &rusqlite::Transaction<'_>| {
                 let current: i64 = tx.query_row("SELECT version FROM mcp_definitions WHERE id = ?1", [&definition.id], |row| row.get(0)).map_err(|error| error.to_string())?;
