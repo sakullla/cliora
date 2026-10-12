@@ -84,7 +84,7 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
   const [projectFilter, setProjectFilter] = useState('*');
   const [categoryFilter, setCategoryFilter] = useState('*');
   const [items, setItems] = useState<LibraryItem[]>([]);
-  const [counts, setCounts] = useState<Partial<Record<LibraryKind, number>>>({});
+  const [counts, setCounts] = useState<Partial<Record<LibrarySection, number>>>({});
   const [countStamp, setCountStamp] = useState(0);
   const [projects, setProjects] = useState<Project[]>([]);
   const [draft, setDraft] = useState<LibraryDraft | null>(null);
@@ -131,8 +131,8 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
   useEffect(() => {
     if (!nativeAvailable || !active) return;
     let live = true;
-    void Promise.all([native.listLibraryItems('prompt', null, ''), native.listLibraryItems('rule', null, '')])
-      .then(([prompts, rules]) => { if (live) setCounts({ prompt: prompts.length, rule: rules.length }); })
+    void Promise.all([native.listLibraryItems('prompt', null, ''), native.listLibraryItems('rule', null, ''), native.listMcpDefinitions(), native.listSkillPackages()])
+      .then(([prompts, rules, mcps, skills]) => { if (live) setCounts({ prompt: prompts.length, rule: rules.length, mcp: mcps.filter((item) => item.inLibrary !== false).length, skill: skills.filter((item) => item.inLibrary !== false).length }); })
       .catch(() => {});
     return () => { live = false; };
   }, [active, countStamp]);
@@ -306,12 +306,12 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
       <div className={styles.tabs} role="tablist" aria-label={t('library.page.typesAria')} onKeyDown={navigateChoices}>
         <button type="button" role="tab" aria-selected={section === 'prompt'} tabIndex={section === 'prompt' ? 0 : -1} onClick={() => void openSection('prompt')}>{t('library.page.prompt')}{counts.prompt != null && <span className={styles.tabCount} aria-hidden="true">{counts.prompt}</span>}</button>
         <button type="button" role="tab" aria-selected={section === 'rule'} tabIndex={section === 'rule' ? 0 : -1} onClick={() => void openSection('rule')}>{t('library.page.rule')}{counts.rule != null && <span className={styles.tabCount} aria-hidden="true">{counts.rule}</span>}</button>
-        <button type="button" role="tab" aria-selected={section === 'mcp'} tabIndex={section === 'mcp' ? 0 : -1} onClick={() => void openSection('mcp')}>MCP</button>
-        <button type="button" role="tab" aria-selected={section === 'skill'} tabIndex={section === 'skill' ? 0 : -1} onClick={() => void openSection('skill')}>Skill</button>
+        <button type="button" role="tab" aria-selected={section === 'mcp'} tabIndex={section === 'mcp' ? 0 : -1} onClick={() => void openSection('mcp')}>MCP{counts.mcp != null && <span className={styles.tabCount} aria-hidden="true">{counts.mcp}</span>}</button>
+        <button type="button" role="tab" aria-selected={section === 'skill'} tabIndex={section === 'skill' ? 0 : -1} onClick={() => void openSection('skill')}>Skill{counts.skill != null && <span className={styles.tabCount} aria-hidden="true">{counts.skill}</span>}</button>
       </div>
       <button type="button" className={styles.primary} onClick={() => { if (section === 'prompt' || section === 'rule') start(kind); else setCreateSignal((value) => value + 1); }}><Icon name="plus" size={14} strokeWidth={2.2} />{section === 'mcp' ? t('library.resources.newMcp') : section === 'skill' ? t('tools.skills.add') : t('library.page.new', { kind: kindName(kind) })}</button>
     </div>
-    {(section === 'mcp' || section === 'skill') && <LibraryResources section={section} active={active} tools={managedTools} projects={projects} createSignal={createSignal} />}
+    {(section === 'mcp' || section === 'skill') && <LibraryResources section={section} active={active} tools={managedTools} projects={projects} createSignal={createSignal} onCountChange={(count) => setCounts((prev) => prev[section] === count ? prev : { ...prev, [section]: count })} />}
     {(section === 'prompt' || section === 'rule') && <>
     <div className={styles.filters}>
       <SearchField className={styles.searchBox} label={t('library.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={setSearch} placeholder={t('library.page.searchPlaceholder')} />

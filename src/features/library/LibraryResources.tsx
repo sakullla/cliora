@@ -7,8 +7,7 @@ import { SearchField } from '../../components/SearchField';
 import { Icon } from '../../components/Icon';
 import { ScopeMarks, samePath, scopeLabel } from './CliMarks';
 import { confirmAction } from '../../lib/confirm';
-import { writeClipboard } from '../../lib/clipboard';
-import { blankMcpDraft, editableRowsOf, keptMcpArgs, mcpCommandText, mcpCopyName, mcpDraftOf, parseMcpServerJson, recordOfRows, type KeyValueRow } from '../../lib/mcp';
+import { blankMcpDraft, editableRowsOf, keptMcpArgs, mcpCopyName, mcpDraftOf, parseMcpServerJson, recordOfRows, type KeyValueRow } from '../../lib/mcp';
 import { McpFormFields } from '../../components/mcp/McpFormFields';
 import { CliTargetGrid } from './CliTargetGrid';
 import { native } from '../../lib/native';
@@ -29,7 +28,7 @@ function installStateLabel(state: SkillInstallation['state']): string {
   return i18n.t(`library.resources.installState.${state}`);
 }
 
-export function LibraryResources({ section, active, tools, projects, createSignal = 0 }: { section: 'mcp' | 'skill'; active: boolean; tools: AdapterDescriptor[]; projects: Project[]; createSignal?: number }) {
+export function LibraryResources({ section, active, tools, projects, createSignal = 0, onCountChange }: { section: 'mcp' | 'skill'; active: boolean; tools: AdapterDescriptor[]; projects: Project[]; createSignal?: number; onCountChange?: (count: number) => void }) {
   const { t } = useTranslation();
   const contextLabel = useAccountLabels();
   const [definitions, setDefinitions] = useState<McpDefinition[]>([]);
@@ -46,13 +45,12 @@ export function LibraryResources({ section, active, tools, projects, createSigna
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState('');
   const [pasteError, setPasteError] = useState('');
-  const [copiedId, setCopiedId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   useEffect(() => {
     if (!notice) return;
-    const timer = window.setTimeout(() => { setNotice(''); setCopiedId(null); }, 4000);
+    const timer = window.setTimeout(() => setNotice(''), 4000);
     return () => window.clearTimeout(timer);
   }, [notice]);
   const [dialogError, setDialogError] = useState('');
@@ -80,6 +78,13 @@ export function LibraryResources({ section, active, tools, projects, createSigna
     void load.catch((value) => { if (live) setError(failure(value)); });
     return () => { live = false; };
   }, [active, section]);
+
+  useEffect(() => {
+    if (section === 'mcp') onCountChange?.(definitions.filter((item) => item.inLibrary !== false).length);
+  }, [section, definitions, onCountChange]);
+  useEffect(() => {
+    if (section === 'skill') onCountChange?.(packages.filter((item) => item.inLibrary !== false).length);
+  }, [section, packages, onCountChange]);
 
   function editMcp(item?: McpDefinition) {
     const next = item ? mcpDraftOf(item) : blankMcpDraft();
@@ -247,17 +252,6 @@ export function LibraryResources({ section, active, tools, projects, createSigna
     setPasteError('');
     setPasteOpen(false);
     setDialogError('');
-  }
-
-  async function copyMcp(item: McpDefinition, kind: 'json' | 'command') {
-    if (busy) return;
-    setError(''); setNotice(''); setCopiedId(null);
-    try {
-      const text = kind === 'json' ? await native.exportMcpDefinition(item.id) : mcpCommandText(item);
-      if (!await writeClipboard(text)) { setError(t('library.page.copyFailed')); return; }
-      setNotice(t('library.resources.copied'));
-      setCopiedId(`${item.id}:${kind}`);
-    } catch (value) { setError(failure(value)); }
   }
 
   async function duplicateMcp(item: McpDefinition) {
@@ -446,8 +440,6 @@ export function LibraryResources({ section, active, tools, projects, createSigna
             <div className={styles.cardActions}>
               <button type="button" className={styles.dangerQuiet} disabled={busy} onClick={() => void remove(item)}>{t('tools.agents.delete')}</button>
               <button type="button" className={styles.quiet} disabled={busy} onClick={() => void duplicateMcp(item)}>{t('library.resources.duplicate')}</button>
-              <button type="button" className={styles.quiet} data-copied={copiedId === `${item.id}:json` || undefined} disabled={busy} onClick={() => void copyMcp(item, 'json')}>{t('library.resources.copyJson')}</button>
-              {item.transport === 'stdio' && <button type="button" className={styles.quiet} data-copied={copiedId === `${item.id}:command` || undefined} disabled={busy} onClick={() => void copyMcp(item, 'command')}>{t('library.resources.copyCommand')}</button>}
               <button type="button" className={styles.quiet} onClick={() => editMcp(item)}>{t('tools.workspace.edit')}</button>
             </div>
           </div>
