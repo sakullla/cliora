@@ -7,6 +7,9 @@ import { SearchField } from '../../components/SearchField';
 import { Icon } from '../../components/Icon';
 import { ScopeMarks, samePath, scopeLabel } from './CliMarks';
 import { confirmAction } from '../../lib/confirm';
+import { writeClipboard } from '../../lib/clipboard';
+import { blankMcpDraft, editableRowsOf, keptMcpArgs, mcpCommandText, mcpCopyName, mcpDraftOf, parseMcpServerJson, recordOfRows, type KeyValueRow } from '../../lib/mcp';
+import { McpFormFields } from '../../components/mcp/McpFormFields';
 import { CliTargetGrid } from './CliTargetGrid';
 import { native } from '../../lib/native';
 import { saveShortcutHint, searchShortcutHint } from '../../lib/shortcut';
@@ -18,27 +21,6 @@ import { SkillDistribution } from './SkillDistribution';
 import i18n from '../../i18n';
 import styles from './LibraryPage.module.css';
 
-function blank(): McpDraft {
-  return { id: null, name: '', transport: 'stdio', command: '', args: [], url: '', env: {}, headers: {}, inLibrary: true, expectedVersion: null };
-}
-function draftOf(item: McpDefinition): McpDraft {
-  return { id: item.id, name: item.name, transport: item.transport, command: item.command, args: item.args, url: item.url, env: item.env, headers: item.headers, inLibrary: item.inLibrary !== false, expectedVersion: item.version };
-}
-function lines(value: Record<string, string>): string {
-  return Object.entries(value).map(([key, item]) => `${key}=${item}`).join('\n');
-}
-function keptArgs(args: string[]) {
-  return args.map((item) => item.trim()).filter((item) => item.length > 0);
-}
-function parseLines(value: string): Record<string, string> {
-  const output: Record<string, string> = {};
-  for (const line of value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)) {
-    const equals = line.indexOf('=');
-    if (equals < 1) throw new Error(i18n.t('tools.mcp.parseError'));
-    output[line.slice(0, equals).trim()] = line.slice(equals + 1).trim();
-  }
-  return output;
-}
 function failure(error: unknown) {
   return error && typeof error === 'object' && 'message' in error ? String(error.message) : i18n.t('tools.workspace.operationFailed');
 }
@@ -59,14 +41,18 @@ export function LibraryResources({ section, active, tools, projects, createSigna
   const [packages, setPackages] = useState<SkillPackage[]>([]);
   const [installations, setInstallations] = useState<SkillInstallation[]>([]);
   const [draft, setDraft] = useState<McpDraft | null>(null);
-  const [envText, setEnvText] = useState('');
-  const [headerText, setHeaderText] = useState('');
+  const [envRows, setEnvRows] = useState<KeyValueRow[]>([{ key: '', value: '' }]);
+  const [headerRows, setHeaderRows] = useState<KeyValueRow[]>([{ key: '', value: '' }]);
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [pasteText, setPasteText] = useState('');
+  const [pasteError, setPasteError] = useState('');
+  const [copiedId, setCopiedId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   useEffect(() => {
     if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(''), 4000);
+    const timer = window.setTimeout(() => { setNotice(''); setCopiedId(null); }, 4000);
     return () => window.clearTimeout(timer);
   }, [notice]);
   const [dialogError, setDialogError] = useState('');
@@ -96,11 +82,14 @@ export function LibraryResources({ section, active, tools, projects, createSigna
   }, [active, section]);
 
   function editMcp(item?: McpDefinition) {
-    const next = item ? draftOf(item) : blank();
+    const next = item ? mcpDraftOf(item) : blankMcpDraft();
     setDraft(next);
-    setEnvText(item ? lines(item.env) : '');
-    setHeaderText(item ? lines(item.headers) : '');
+    setEnvRows(editableRowsOf(item?.env ?? {}));
+    setHeaderRows(editableRowsOf(item?.headers ?? {}));
     setDialogError('');
+    setPasteOpen(false);
+    setPasteText('');
+    setPasteError('');
     setWillDistribute(false);
     setConflict(false);
     setFormKey((value) => value + 1);
@@ -247,13 +236,49 @@ export function LibraryResources({ section, active, tools, projects, createSigna
     finally { setBusy(false); }
   }
 
+  function applyPaste() {
+    if (!draft) return;
+    const parsed = parseMcpServerJson(pasteText);
+    if (!parsed) { setPasteError(t('library.resources.pasteImportError')); return; }
+    setDraft({ ...draft, name: parsed.name || draft.name, transport: parsed.transport, command: parsed.command, args: parsed.args, url: parsed.url });
+    setEnvRows(editableRowsOf(parsed.env));
+    setHeaderRows(editableRowsOf(parsed.headers));
+    setPasteText('');
+    setPasteError('');
+    setPasteOpen(false);
+    setDialogError('');
+  }
+
+  async function copyMcp(item: McpDefinition, kind: 'json' | 'command') {
+    if (busy) return;
+    setError(''); setNotice(''); setCopiedId(null);
+    try {
+      const text = kind === 'json' ? await native.exportMcpDefinition(item.id) : mcpCommandText(item);
+      if (!await writeClipboard(text)) { setError(t('library.page.copyFailed')); return; }
+      setNotice(t('library.resources.copied'));
+      setCopiedId(`${item.id}:${kind}`);
+    } catch (value) { setError(failure(value)); }
+  }
+
+  async function duplicateMcp(item: McpDefinition) {
+    if (busy) return;
+    setBusy(true); setError(''); setNotice('');
+    try {
+      const name = mcpCopyName(item.name, definitions.map((entry) => entry.name));
+      await native.saveMcpDefinition({ ...mcpDraftOf(item), id: null, expectedVersion: null, name });
+      setDefinitions(await native.listMcpDefinitions());
+      setNotice(t('library.resources.duplicated', { name }));
+    } catch (value) { setError(failure(value)); }
+    finally { setBusy(false); }
+  }
+
   async function save() {
     if (!draft || busy) return;
     setBusy(true); setDialogError('');
     try {
-      const saved = await native.saveMcpDefinition({ ...draft, args: keptArgs(draft.args), inLibrary: true, env: parseLines(envText), headers: parseLines(headerText) });
+      const saved = await native.saveMcpDefinition({ ...draft, args: keptMcpArgs(draft.args), inLibrary: true, env: recordOfRows(envRows), headers: recordOfRows(headerRows) });
       setDefinitions(await native.listMcpDefinitions());
-      setDraft(draftOf(saved));
+      setDraft(mcpDraftOf(saved));
       const alreadyPlaced = placements.some((item) => item.definitionId === saved.id);
       if (willDistribute || alreadyPlaced) {
         const outcome = await distributeRef.current?.run(saved);
@@ -418,7 +443,13 @@ export function LibraryResources({ section, active, tools, projects, createSigna
               if (!place.enabled) return { pressed: true, state: 'unavailable', status: t('library.resources.markDisabled') };
               return { pressed: true, state: 'current', status: t('library.page.markCurrent') };
             }} />
-            <div className={styles.cardActions}><button type="button" className={styles.dangerQuiet} disabled={busy} onClick={() => void remove(item)}>{t('tools.agents.delete')}</button><button type="button" className={styles.quiet} onClick={() => editMcp(item)}>{t('tools.workspace.edit')}</button></div>
+            <div className={styles.cardActions}>
+              <button type="button" className={styles.dangerQuiet} disabled={busy} onClick={() => void remove(item)}>{t('tools.agents.delete')}</button>
+              <button type="button" className={styles.quiet} disabled={busy} onClick={() => void duplicateMcp(item)}>{t('library.resources.duplicate')}</button>
+              <button type="button" className={styles.quiet} data-copied={copiedId === `${item.id}:json` || undefined} disabled={busy} onClick={() => void copyMcp(item, 'json')}>{t('library.resources.copyJson')}</button>
+              {item.transport === 'stdio' && <button type="button" className={styles.quiet} data-copied={copiedId === `${item.id}:command` || undefined} disabled={busy} onClick={() => void copyMcp(item, 'command')}>{t('library.resources.copyCommand')}</button>}
+              <button type="button" className={styles.quiet} onClick={() => editMcp(item)}>{t('tools.workspace.edit')}</button>
+            </div>
           </div>
         </article>;
       }) : needle
@@ -427,19 +458,17 @@ export function LibraryResources({ section, active, tools, projects, createSigna
     </div>
     <GuideDialog open={!!draft} title={draft?.id ? t('tools.mcp.editTitle') : t('library.resources.newMcpTitle')} hint={t('library.resources.mcpDialogHint')} onClose={() => { setDraft(null); setConflict(false); }}>
       {draft && <>
-        <div className={styles.fields}>
-          <label className={styles.span}>{t('tools.mcp.name')}<input aria-label={t('tools.mcp.nameAria')} value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder={t('tools.mcp.namePlaceholder')} /></label>
-          <div className={`${styles.typeField} ${styles.span}`}><span>{t('tools.mcp.type')}</span><div className={styles.typeSwitch} role="radiogroup" aria-label={t('tools.mcp.transport')}>{([['http', 'HTTP'], ['stdio', 'stdio']] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={draft.transport === value} onClick={() => setDraft({ ...draft, transport: value })}>{label}</button>)}</div></div>
-          {draft.transport === 'stdio' ? <>
-            <label className={styles.span}>{t('tools.mcp.command')}<input aria-label={t('tools.mcp.command')} value={draft.command} onChange={(event) => setDraft({ ...draft, command: event.target.value })} placeholder="npx" /></label>
-            <label className={styles.span}>{t('tools.mcp.args')}<textarea rows={3} value={draft.args.join('\n')} onChange={(event) => setDraft({ ...draft, args: event.target.value.split(/\r?\n/) })} placeholder={'-y\nchrome-devtools-mcp@latest'} /></label>
-            <label className={styles.span}>{t('tools.mcp.env')}<textarea rows={4} value={envText} onChange={(event) => setEnvText(event.target.value)} placeholder={'KEY=value\nAPI_TOKEN=${API_TOKEN}'} /></label>
-          </> : <>
-            <label className={styles.span}>URL<input aria-label={t('tools.mcp.urlAria')} value={draft.url} onChange={(event) => setDraft({ ...draft, url: event.target.value })} placeholder="https://example.com/mcp" /></label>
-            <label className={styles.span}>{t('tools.mcp.headers')}<textarea rows={4} value={headerText} onChange={(event) => setHeaderText(event.target.value)} placeholder="Authorization=Bearer ${API_TOKEN}" /></label>
-          </>}
+        <div className={styles.pasteBar}>
+          <button type="button" className={styles.pasteToggle} aria-expanded={pasteOpen} onClick={() => { setPasteOpen((value) => !value); setPasteError(''); }}>{t('library.resources.pasteImport')}</button>
         </div>
-        <McpDistribution key={formKey} ref={distributeRef} definition={definitions.find((item) => item.id === draft.id) ?? { ...draft, id: draft.id ?? '', version: draft.expectedVersion ?? 0 }} tools={tools} projects={projects} placements={placements} formStamp={JSON.stringify([draft.name, draft.transport, draft.command, draft.args, draft.url, envText, headerText])} onWillDistribute={setWillDistribute} onConflictChange={setConflict} />
+        {pasteOpen && <div className={styles.pasteBox}>
+          <p className={styles.muted}>{t('library.resources.pasteImportHint')}</p>
+          <textarea aria-label={t('library.resources.pasteImportAria')} rows={5} value={pasteText} onChange={(event) => setPasteText(event.target.value)} placeholder={'{"mcpServers":{"name":{"command":"npx","args":["-y","pkg"]}}}'} />
+          {pasteError && <p className={styles.error} role="alert">{pasteError}</p>}
+          <div className={styles.actions}><button type="button" onClick={() => { setPasteOpen(false); setPasteError(''); }}>{t('library.resources.back')}</button><button type="button" className={styles.primary} disabled={!pasteText.trim()} onClick={applyPaste}>{t('library.resources.pasteImportApply')}</button></div>
+        </div>}
+        <McpFormFields draft={draft} onChange={setDraft} envRows={envRows} onEnvRowsChange={setEnvRows} headerRows={headerRows} onHeaderRowsChange={setHeaderRows} />
+        <McpDistribution key={formKey} ref={distributeRef} definition={definitions.find((item) => item.id === draft.id) ?? { ...draft, id: draft.id ?? '', version: draft.expectedVersion ?? 0 }} tools={tools} projects={projects} placements={placements} formStamp={JSON.stringify([draft.name, draft.transport, draft.command, draft.args, draft.url, envRows, headerRows])} onWillDistribute={setWillDistribute} onConflictChange={setConflict} />
         {dialogError && <p className={styles.error} role="alert">{dialogError}</p>}
         <div className="dialog-footer">{draft.id && <button type="button" disabled={busy} onClick={() => { const current = definitions.find((item) => item.id === draft.id); if (current) void remove(current); }}>{t('tools.agents.delete')}</button>}<span className="dialog-footer-gap" />{conflict && <button type="button" disabled={busy} onClick={() => { setConflict(false); distributeRef.current?.dismiss(); }}>{t('common.conflict.keepCurrent')}</button>}<button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint()} disabled={busy || !draft.name.trim()} onClick={() => void (conflict ? replaceDistribution() : save())}>{conflict ? t('library.resources.replaceDistribute') : willDistribute ? t('library.resources.saveDistribute') : t('home.launcher.save')}</button></div>
       </>}
