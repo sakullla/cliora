@@ -952,10 +952,13 @@ pub fn apply_import(
                 }
                 PortablePayload::Mcp(value) => {
                     let definition = &value.definition;
-                    tx.execute("INSERT INTO mcp_definitions (id,name,transport,data_json,version) VALUES (?1,?2,?3,?4,?5)
-                        ON CONFLICT(id) DO UPDATE SET name=excluded.name,transport=excluded.transport,data_json=excluded.data_json,version=excluded.version",
+                    let updated_at = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |time| time.as_secs());
+                    tx.execute("INSERT INTO mcp_definitions (id,name,transport,data_json,version,updated_at) VALUES (?1,?2,?3,?4,?5,?6)
+                        ON CONFLICT(id) DO UPDATE SET name=excluded.name,transport=excluded.transport,data_json=excluded.data_json,version=excluded.version,updated_at=excluded.updated_at",
                         params![definition.id,definition.name,if definition.transport==crate::resources::mcp::McpTransport::Stdio {"stdio"} else {"http"},
-                            serde_json::to_string(definition).map_err(|error| error.to_string())?,definition.version as i64]).map_err(|error| error.to_string())?;
+                            serde_json::to_string(definition).map_err(|error| error.to_string())?,definition.version as i64,updated_at as i64]).map_err(|error| error.to_string())?;
                 }
                 PortablePayload::Skill(value) => {
                     tx.execute("INSERT INTO skill_packages (id,name,description,source,digest,files_json,updated_at) VALUES (?1,?2,?3,'迁移资料包',?4,?5,0)

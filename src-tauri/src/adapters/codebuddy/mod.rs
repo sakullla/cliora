@@ -510,6 +510,7 @@ mod tests {
             headers: indexmap::IndexMap::new(),
             in_library: true,
             version: 1,
+            updated_at: None,
         };
         let doc = CodeBuddy
             .mcp_document(&definition, true, None)

@@ -1157,6 +1157,7 @@ mod tests {
             headers: indexmap::IndexMap::new(),
             in_library: true,
             version: 1,
+            updated_at: None,
         };
         let document = MiniMaxCode.mcp_document(&definition, true, None).unwrap().unwrap();
         assert_eq!(document["type"], json!("stdio"));

@@ -19,6 +19,7 @@ export type McpDefinition = {
   headers: Record<string, string>;
   inLibrary: boolean;
   version: number;
+  readonly updatedAt?: number;
 };
 export type McpDraft = Omit<McpDefinition, 'id' | 'version'> & { id: string | null; expectedVersion: number | null };
 export type McpPlacement = { contextId?: string | null; definitionId: string; toolId: string; scope: Scope; projectPath: string | null; enabled: boolean };

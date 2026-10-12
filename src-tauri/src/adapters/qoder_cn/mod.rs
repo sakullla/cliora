@@ -395,6 +395,7 @@ mod tests {
             headers: indexmap::IndexMap::new(),
             in_library: true,
             version: 1,
+            updated_at: None,
         }
     }
 
@@ -410,6 +411,7 @@ mod tests {
             headers: indexmap::IndexMap::from([("Authorization".into(), "${MCP_FIXTURE_TOKEN}".into())]),
             in_library: true,
             version: 1,
+            updated_at: None,
         }
     }
 

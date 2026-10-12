@@ -788,6 +788,7 @@ mod tests {
             headers: indexmap::IndexMap::new(),
             in_library: true,
             version: 0,
+            updated_at: None,
         };
         let local = MiMoCode
             .mcp_document(&definition, true, None)
