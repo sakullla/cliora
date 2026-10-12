@@ -11,41 +11,22 @@ import { GuideDialog } from '../../components/GuideDialog';
 import { saveShortcutHint } from '../../lib/shortcut';
 import { Icon } from '../../components/Icon';
 import { StatusBanner } from '../../components/StatusBanner';
+import { blankMcpDraft, editableRowsOf, keptMcpArgs, mcpDraftOf, recordOfRows, type KeyValueRow } from '../../lib/mcp';
+import { McpFormFields } from '../../components/mcp/McpFormFields';
 import i18n from '../../i18n';
 import styles from './ResourceWorkspace.module.css';
 
 function errorText(error: unknown) {
   return error && typeof error === 'object' && 'message' in error ? String(error.message) : i18n.t('common.operationFailed');
 }
-function blank(): McpDraft {
-  return { id: null, name: '', transport: 'stdio', command: '', args: [], url: '', env: {}, headers: {}, inLibrary: false, expectedVersion: null };
-}
-function draftOf(item: McpDefinition): McpDraft {
-  return { id: item.id, name: item.name, transport: item.transport, command: item.command, args: item.args, url: item.url, env: item.env, headers: item.headers, inLibrary: item.inLibrary !== false, expectedVersion: item.version };
-}
-function lines(value: Record<string, string>): string {
-  return Object.entries(value).map(([key, item]) => `${key}=${item}`).join('\n');
-}
-function keptArgs(args: string[]) {
-  return args.map((item) => item.trim()).filter((item) => item.length > 0);
-}
-function parseLines(value: string): Record<string, string> {
-  const output: Record<string, string> = {};
-  for (const line of value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)) {
-    const equals = line.indexOf('=');
-    if (equals < 1) throw new Error(i18n.t('tools.mcp.parseError'));
-    output[line.slice(0, equals).trim()] = line.slice(equals + 1).trim();
-  }
-  return output;
-}
 
 export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyChange }: { toolId: string; scope: Scope; projectPath: string; contextId?: string | null; onDirtyChange?: (dirty: boolean) => void }) {
   const { t } = useTranslation();
   const [definitions, setDefinitions] = useState<McpDefinition[]>([]);
-  const [draft, setDraft] = useState<McpDraft>(blank);
-  const [envText, setEnvText] = useState('');
-  const [headerText, setHeaderText] = useState('');
-  const [savedFingerprint, setSavedFingerprint] = useState(JSON.stringify([blank(), '', '',true]));
+  const [draft, setDraft] = useState<McpDraft>(blankMcpDraft);
+  const [envRows, setEnvRows] = useState<KeyValueRow[]>(editableRowsOf({}));
+  const [headerRows, setHeaderRows] = useState<KeyValueRow[]>(editableRowsOf({}));
+  const [savedFingerprint, setSavedFingerprint] = useState(JSON.stringify([blankMcpDraft(), editableRowsOf({}), editableRowsOf({}), true]));
   const [nativeEntries, setNativeEntries] = useState<NativeMcpEntry[]>([]);
   const [enabled, setEnabled] = useState(true);
   const [nativeOrigin, setNativeOrigin] = useState<NativeMcpEntry | null>(null);
@@ -57,8 +38,8 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
   const [composing, setComposing] = useState(false);
   const [syncLibrary, setSyncLibrary] = useState(false);
   const project = scope === 'project' ? projectPath || null : null;
-  const dirty = JSON.stringify([draft, envText, headerText,enabled]) !== savedFingerprint;
-  const latestForm = useRef(''); latestForm.current = JSON.stringify([draft, envText, headerText, enabled]);
+  const dirty = JSON.stringify([draft, envRows, headerRows, enabled]) !== savedFingerprint;
+  const latestForm = useRef(''); latestForm.current = JSON.stringify([draft, envRows, headerRows, enabled]);
   const mounted = useRef(true);
   useEffect(() => { mounted.current=true;return () => { mounted.current=false; }; },[]);
   useEffect(() => {
@@ -66,7 +47,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
     const timer = window.setTimeout(() => setNotice(''), 5000);
     return () => window.clearTimeout(timer);
   }, [notice]);
-  const previewContext = JSON.stringify([draft, envText, headerText, toolId, scope, project, enabled]);
+  const previewContext = JSON.stringify([draft, envRows, headerRows, toolId, scope, project, enabled]);
   const previewEpochRef = useRef({ context: previewContext, epoch: 0 });
   if (previewEpochRef.current.context !== previewContext) {
     previewEpochRef.current = { context: previewContext, epoch: previewEpochRef.current.epoch + 1 };
@@ -90,11 +71,13 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
   const empty = !nativeEntries.length && !composing && !draft.id && !nativeOrigin;
 
   function select(item: McpDefinition, nextEnabled = true) {
-    const next = draftOf(item);
+    const next = mcpDraftOf(item);
+    const nextEnvRows = editableRowsOf(item.env);
+    const nextHeaderRows = editableRowsOf(item.headers);
     setNativeOrigin(null); setCurrentConflict(null); setComposing(true);
-    setDraft(next); setEnvText(lines(item.env)); setHeaderText(lines(item.headers));
-    setEnabled(nextEnabled);setSavedFingerprint(JSON.stringify([next, lines(item.env), lines(item.headers),nextEnabled]));
-    latestForm.current=JSON.stringify([next,lines(item.env),lines(item.headers),nextEnabled]);
+    setDraft(next); setEnvRows(nextEnvRows); setHeaderRows(nextHeaderRows);
+    setEnabled(nextEnabled);setSavedFingerprint(JSON.stringify([next, nextEnvRows, nextHeaderRows, nextEnabled]));
+    latestForm.current=JSON.stringify([next,nextEnvRows,nextHeaderRows,nextEnabled]);
     setError('');
   }
   async function canReplace() {
@@ -107,26 +90,29 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
     const found = definitions.find((definition) => definition.name === item.name);
     const next: McpDraft = { id: found?.id ?? null, name: item.name, transport: item.transport, command: item.command, args: item.args, url: item.url,
       env: item.env, headers: item.headers, inLibrary: found?.inLibrary === true, expectedVersion: found?.version ?? null };
-    setSavedFingerprint(JSON.stringify([next, lines(item.env), lines(item.headers),item.enabled]));
+    const nextEnvRows = editableRowsOf(item.env);
+    const nextHeaderRows = editableRowsOf(item.headers);
+    setSavedFingerprint(JSON.stringify([next, nextEnvRows, nextHeaderRows, item.enabled]));
     setDraft(next);
-    setEnvText(lines(item.env)); setHeaderText(lines(item.headers)); setEnabled(item.enabled);
+    setEnvRows(nextEnvRows); setHeaderRows(nextHeaderRows); setEnabled(item.enabled);
     setNotice(t('tools.mcp.importedNotice'));
   }
   async function startNew() {
     if (!await canReplace()) return;
-    setDraft(blank()); setEnvText(''); setHeaderText(''); setEnabled(true); setNativeOrigin(null); setCurrentConflict(null); setSyncLibrary(false);
-    setSavedFingerprint(JSON.stringify([blank(), '', '', true])); setComposing(true); setNotice(''); setError('');
+    const next = blankMcpDraft();
+    setDraft(next); setEnvRows(editableRowsOf({})); setHeaderRows(editableRowsOf({})); setEnabled(true); setNativeOrigin(null); setCurrentConflict(null); setSyncLibrary(false);
+    setSavedFingerprint(JSON.stringify([next, editableRowsOf({}), editableRowsOf({}), true])); setComposing(true); setNotice(''); setError('');
   }
   async function closeCompose() {
     if (!await canReplace()) return;
-    const next = blank();
-    setDraft(next); setEnvText(''); setHeaderText(''); setEnabled(true); setNativeOrigin(null); setCurrentConflict(null);
-    setSavedFingerprint(JSON.stringify([next, '', '', true])); setComposing(false); setNotice(''); setError('');
+    const next = blankMcpDraft();
+    setDraft(next); setEnvRows(editableRowsOf({})); setHeaderRows(editableRowsOf({})); setEnabled(true); setNativeOrigin(null); setCurrentConflict(null);
+    setSavedFingerprint(JSON.stringify([next, editableRowsOf({}), editableRowsOf({}), true])); setComposing(false); setNotice(''); setError('');
   }
   function leaveComposer() {
-    const next = blank();
-    setDraft(next); setEnvText(''); setHeaderText(''); setEnabled(true); setNativeOrigin(null); setCurrentConflict(null);
-    setSavedFingerprint(JSON.stringify([next, '', '', true])); setComposing(false);
+    const next = blankMcpDraft();
+    setDraft(next); setEnvRows(editableRowsOf({})); setHeaderRows(editableRowsOf({})); setEnabled(true); setNativeOrigin(null); setCurrentConflict(null);
+    setSavedFingerprint(JSON.stringify([next, editableRowsOf({}), editableRowsOf({}), true])); setComposing(false);
   }
   async function applyItems(id: string, items: McpTargetResult[], replace: boolean) {
     const targets = items.filter(item => item.status === 'ready' || item.status === 'conflict').map((item): McpTargetRequest => ({ toolId: item.toolId, scope: item.scope,
@@ -145,11 +131,11 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
     const inLibrary = editing ? linked?.inLibrary !== false : syncLibrary || linked?.inLibrary === true;
     setBusy(true); setError(''); setNotice('');
     try {
-      const saved = await native.saveMcpDefinition({ ...draft, args: keptArgs(draft.args), id: linked?.id ?? draft.id, expectedVersion: linked?.version ?? draft.expectedVersion, inLibrary, env: parseLines(envText), headers: parseLines(headerText) });
+      const saved = await native.saveMcpDefinition({ ...draft, args: keptMcpArgs(draft.args), id: linked?.id ?? draft.id, expectedVersion: linked?.version ?? draft.expectedVersion, inLibrary, env: recordOfRows(envRows), headers: recordOfRows(headerRows) });
       setDefinitions(await native.listMcpDefinitions());
       if (!mounted.current || started !== latestForm.current) { setNotice(t('tools.mcp.dirtyAgain')); return; }
       select(saved,enabled);
-      const savedForm=JSON.stringify([draftOf(saved),lines(saved.env),lines(saved.headers),enabled]);
+      const savedForm=JSON.stringify([mcpDraftOf(saved),editableRowsOf(saved.env),editableRowsOf(saved.headers),enabled]);
       const items = await native.previewMcpTargets(saved.id, [target]);
       const fresh = origin ? await native.listNativeMcp(target) : [];
       if (!mounted.current || savedForm!==latestForm.current) {setNotice(t('tools.mcp.savedKeepEditing'));return;}
@@ -210,16 +196,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
     </aside>
     <GuideDialog open={composing} title={draft.id || nativeOrigin ? t('tools.mcp.editTitle') : t('tools.mcp.add')} hint={t('tools.mcp.dialogHint')} onClose={() => void closeCompose()}>
     <div className={styles.panel}>
-      <label>{t('tools.mcp.name')}<input aria-label={t('tools.mcp.nameAria')} value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder={t('tools.mcp.namePlaceholder')} /></label>
-      <div className={styles.typeField}><span>{t('tools.mcp.type')}</span><div className={styles.typeSwitch} role="radiogroup" aria-label={t('tools.mcp.transport')}>{([['http', 'HTTP'], ['stdio', 'stdio']] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={draft.transport === value} onClick={() => setDraft({ ...draft, transport: value })}>{label}</button>)}</div></div>
-      {draft.transport === 'stdio' ? <>
-        <label>{t('tools.mcp.command')}<input aria-label={t('tools.mcp.command')} value={draft.command} onChange={(event) => setDraft({ ...draft, command: event.target.value })} placeholder="npx" /></label>
-        <label>{t('tools.mcp.args')}<textarea rows={3} value={draft.args.join('\n')} onChange={(event) => setDraft({ ...draft, args: event.target.value.split(/\r?\n/) })} placeholder={'-y\nchrome-devtools-mcp@latest'} /></label>
-        <label>{t('tools.mcp.env')}<textarea rows={4} value={envText} onChange={(event) => setEnvText(event.target.value)} placeholder={'KEY=value\nAPI_TOKEN=${API_TOKEN}'} /></label>
-      </> : <>
-        <label>URL<input aria-label={t('tools.mcp.urlAria')} value={draft.url} onChange={(event) => setDraft({ ...draft, url: event.target.value })} placeholder="https://example.com/mcp" /></label>
-        <label>{t('tools.mcp.headers')}<textarea rows={4} value={headerText} onChange={(event) => setHeaderText(event.target.value)} placeholder="Authorization=Bearer ${API_TOKEN}" /></label>
-      </>}
+      <McpFormFields draft={draft} onChange={setDraft} envRows={envRows} onEnvRowsChange={setEnvRows} headerRows={headerRows} onHeaderRowsChange={setHeaderRows} />
       <label className={styles.inline}><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} />{t('tools.plugins.action.enable')}</label>
       {!(draft.id || nativeOrigin) && <label className={styles.inline}><input type="checkbox" checked={syncLibrary} onChange={(event) => setSyncLibrary(event.target.checked)} />{t('tools.mcp.quickSync')}<small className={styles.fieldHint}>{t('tools.mcp.quickSyncHint')}</small></label>}
       {currentConflict && <div className={styles.resultList} role="group" aria-label={t('tools.mcp.conflictLabel')}><strong>{t('tools.mcp.conflictTitle')}</strong>{currentConflict.items.map(item => <div className={styles.fileDiff} key={item.toolId}><CodeEditor compact label={t('tools.mcp.conflictCurrent')} format="json" readOnly value={JSON.stringify(item.existing, null, 2)} /><CodeEditor compact label={t('tools.mcp.conflictNext')} format="json" readOnly value={JSON.stringify(item.proposed, null, 2)} /></div>)}<div className={styles.actions}><button type="button" onClick={() => setCurrentConflict(null)}>{t('common.conflict.keepCurrent')}</button><button type="button" disabled={busy} onClick={() => { setBusy(true); void applyItems(currentConflict.id, currentConflict.items, true).then(ok => { if (ok) leaveComposer(); }).catch(value => setError(errorText(value))).finally(() => setBusy(false)); }}>{t('tools.mcp.useNext')}</button></div></div>}
