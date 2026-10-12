@@ -1153,8 +1153,8 @@ mod tests {
             command: "echo".into(),
             args: vec!["hi".into()],
             url: String::new(),
-            env: BTreeMap::from([("TOKEN".into(), "${MCP_TOKEN}".into())]),
-            headers: BTreeMap::new(),
+            env: indexmap::IndexMap::from([("TOKEN".into(), "${MCP_TOKEN}".into())]),
+            headers: indexmap::IndexMap::new(),
             in_library: true,
             version: 1,
         };
@@ -1167,8 +1167,8 @@ mod tests {
             command: String::new(),
             args: vec![],
             url: "https://example.com/mcp".into(),
-            env: BTreeMap::new(),
-            headers: BTreeMap::new(),
+            env: indexmap::IndexMap::new(),
+            headers: indexmap::IndexMap::new(),
             ..definition
         };
         let existing = json!({"type": "sse", "timeout": 30, "headers": {"Authorization": "kept"}});

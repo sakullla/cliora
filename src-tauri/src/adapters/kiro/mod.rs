@@ -482,8 +482,8 @@ mod tests {
             command: "fixture-runner".into(),
             args: vec!["-y".into(), "example-mcp".into()],
             url: String::new(),
-            env: BTreeMap::from([("API_KEY".into(), "${EXAMPLE_KEY}".into())]),
-            headers: BTreeMap::new(),
+            env: indexmap::IndexMap::from([("API_KEY".into(), "${EXAMPLE_KEY}".into())]),
+            headers: indexmap::IndexMap::new(),
             in_library: true,
             version: 0,
         };
@@ -499,7 +499,7 @@ mod tests {
         let remote_definition = McpDefinition {
             transport: McpTransport::Http,
             url: "https://mcp.example.com/mcp".into(),
-            headers: BTreeMap::from([("X-Example".into(), "1".into())]),
+            headers: indexmap::IndexMap::from([("X-Example".into(), "1".into())]),
             ..definition
         };
         let existing = json!({"autoApprove": ["list_tools"], "disabled": false});

@@ -1,6 +1,7 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::Path;
 
+use indexmap::IndexMap;
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -29,8 +30,8 @@ pub struct McpDefinition {
     pub command: String,
     pub args: Vec<String>,
     pub url: String,
-    pub env: BTreeMap<String, String>,
-    pub headers: BTreeMap<String, String>,
+    pub env: IndexMap<String, String>,
+    pub headers: IndexMap<String, String>,
     #[serde(default = "default_in_library")]
     pub in_library: bool,
     pub version: u64,
@@ -45,8 +46,8 @@ pub struct McpDraft {
     pub command: String,
     pub args: Vec<String>,
     pub url: String,
-    pub env: BTreeMap<String, String>,
-    pub headers: BTreeMap<String, String>,
+    pub env: IndexMap<String, String>,
+    pub headers: IndexMap<String, String>,
     #[serde(default = "default_in_library")]
     pub in_library: bool,
     pub expected_version: Option<u64>,
@@ -97,8 +98,8 @@ pub struct NativeMcpEntry {
     pub command: String,
     pub args: Vec<String>,
     pub url: String,
-    pub env: BTreeMap<String, String>,
-    pub headers: BTreeMap<String, String>,
+    pub env: IndexMap<String, String>,
+    pub headers: IndexMap<String, String>,
     pub enabled: bool,
     pub protected_values: bool,
 }
@@ -385,8 +386,27 @@ fn parse_native(location: &McpLocation) -> Result<(String, Value), String> {
 }
 
 fn entry_hash(value: Option<&Value>) -> Result<String, String> {
+    // Key order is a presentation detail (files may legitimately reorder keys, e.g.
+    // TOML emits scalar values before sub-tables), so the fingerprint is computed
+    // over a recursively key-sorted form, matching the pre-IndexMap BTreeMap order.
+    fn sorted(value: &Value) -> Value {
+        match value {
+            Value::Object(map) => {
+                let mut entries: Vec<_> = map.iter().collect();
+                entries.sort_by(|a, b| a.0.cmp(b.0));
+                Value::Object(
+                    entries
+                        .into_iter()
+                        .map(|(key, value)| (key.clone(), sorted(value)))
+                        .collect(),
+                )
+            }
+            Value::Array(items) => Value::Array(items.iter().map(sorted).collect()),
+            other => other.clone(),
+        }
+    }
     Ok(transaction::fingerprint(
-        &serde_json::to_vec(&value).map_err(|error| error.to_string())?,
+        &serde_json::to_vec(&value.map(sorted)).map_err(|error| error.to_string())?,
     ))
 }
 
@@ -447,7 +467,7 @@ fn managed_hash(
         params![id, tool, scope_key], |row| row.get(0)).optional().map_err(|error| error.to_string()))
 }
 
-fn visible_secret_map(value: Option<&Value>, redact: bool) -> (BTreeMap<String, String>, bool) {
+fn visible_secret_map(value: Option<&Value>, redact: bool) -> (IndexMap<String, String>, bool) {
     let mut protected = false;
     let map = value
         .and_then(Value::as_object)

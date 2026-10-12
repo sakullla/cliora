@@ -470,8 +470,8 @@ mod tests {
             command: "fixture-runner".into(),
             args: vec!["-y".into(), "example-mcp".into()],
             url: String::new(),
-            env: std::collections::BTreeMap::from([("EXAMPLE_MODE".into(), "fixture".into())]),
-            headers: std::collections::BTreeMap::new(),
+            env: indexmap::IndexMap::from([("EXAMPLE_MODE".into(), "fixture".into())]),
+            headers: indexmap::IndexMap::new(),
             in_library: true,
             version: 0,
         };
@@ -498,7 +498,7 @@ mod tests {
         let remote_definition = McpDefinition {
             transport: McpTransport::Http,
             url: "https://mcp.example.com/sse".into(),
-            headers: std::collections::BTreeMap::from([("X-Example".into(), "1".into())]),
+            headers: indexmap::IndexMap::from([("X-Example".into(), "1".into())]),
             ..definition
         };
         let remote = Cline

@@ -425,8 +425,8 @@ mod tests {
             command: "npx -y example-mcp".into(),
             args: Vec::new(),
             url: "https://mcp.example.com/sse".into(),
-            env: std::collections::BTreeMap::from([("EXAMPLE_MODE".into(), "fixture".into())]),
-            headers: std::collections::BTreeMap::from([("X-Example".into(), "1".into())]),
+            env: indexmap::IndexMap::from([("EXAMPLE_MODE".into(), "fixture".into())]),
+            headers: indexmap::IndexMap::from([("X-Example".into(), "1".into())]),
             in_library: true,
             version: 0,
         }

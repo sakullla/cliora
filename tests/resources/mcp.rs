@@ -41,8 +41,8 @@ fn sample(db: &Database) -> McpDefinition {
             command: "npx".into(),
             args: vec!["-y".into(), "example-mcp".into()],
             url: String::new(),
-            env: BTreeMap::from([("API_KEY".into(), "${EXAMPLE_KEY}".into())]),
-            headers: BTreeMap::new(),
+            env: IndexMap::from([("API_KEY".into(), "${EXAMPLE_KEY}".into())]),
+            headers: IndexMap::new(),
             in_library: true,
             expected_version: None,
         },
@@ -331,8 +331,8 @@ fn literal_mcp_credential_is_saved_and_visible() {
             command: String::new(),
             args: Vec::new(),
             url: "https://example.com/mcp".into(),
-            env: BTreeMap::new(),
-            headers: BTreeMap::from([("Authorization".into(), "Bearer ${API_TOKEN}".into())]),
+            env: IndexMap::new(),
+            headers: IndexMap::from([("Authorization".into(), "Bearer ${API_TOKEN}".into())]),
             in_library: true,
             expected_version: None,
         },
@@ -370,8 +370,8 @@ fn literal_mcp_credential_is_saved_and_visible() {
             command: String::new(),
             args: Vec::new(),
             url: "https://example.com/mcp".into(),
-            env: BTreeMap::from([("MYSQL_PASSWORD".into(), "local-secret".into())]),
-            headers: BTreeMap::from([("Authorization".into(), "Bearer plaintext".into())]),
+            env: IndexMap::from([("MYSQL_PASSWORD".into(), "local-secret".into())]),
+            headers: IndexMap::from([("Authorization".into(), "Bearer plaintext".into())]),
             in_library: true,
             expected_version: None,
         },
@@ -403,8 +403,8 @@ fn omitted_native_secret_stays_until_an_empty_value_removes_it() {
             command: "npx".into(),
             args: vec!["server".into()],
             url: String::new(),
-            env: BTreeMap::from([("MYSQL_PORT".into(), "3216".into())]),
-            headers: BTreeMap::new(),
+            env: IndexMap::from([("MYSQL_PORT".into(), "3216".into())]),
+            headers: IndexMap::new(),
             in_library: true,
             expected_version: None,
         },
@@ -432,11 +432,11 @@ fn omitted_native_secret_stays_until_an_empty_value_removes_it() {
             command: "npx".into(),
             args: vec!["server".into()],
             url: String::new(),
-            env: BTreeMap::from([
+            env: IndexMap::from([
                 ("MYSQL_PORT".into(), "3216".into()),
                 ("MYSQL_PASSWORD".into(), String::new()),
             ]),
-            headers: BTreeMap::new(),
+            headers: IndexMap::new(),
             in_library: true,
             expected_version: Some(saved.version),
         },
@@ -809,8 +809,8 @@ fn pasted_stdio_command_line_is_split_before_a_client_spawns_it() {
             command: "npx -y chrome-devtools-mcp@latest".into(),
             args: vec![],
             url: String::new(),
-            env: BTreeMap::new(),
-            headers: BTreeMap::new(),
+            env: IndexMap::new(),
+            headers: IndexMap::new(),
             in_library: true,
             expected_version: None,
         },
@@ -818,4 +818,57 @@ fn pasted_stdio_command_line_is_split_before_a_client_spawns_it() {
     .unwrap();
     assert_eq!(saved.command, "npx");
     assert_eq!(saved.args, ["-y", "chrome-devtools-mcp@latest"]);
+}
+
+#[test]
+fn env_order_is_preserved_from_save_to_native_write() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let keys = MemoryStore::default();
+    let registry = fixture_registry();
+    let saved = save_definition(
+        &db,
+        McpDraft {
+            id: None,
+            name: "ordered".into(),
+            transport: McpTransport::Stdio,
+            command: "npx".into(),
+            args: vec!["-y".into(), "ordered-mcp".into()],
+            url: String::new(),
+            env: IndexMap::from([
+                ("Z_FOO".into(), "z".into()),
+                ("A_BAR".into(), "a".into()),
+            ]),
+            headers: IndexMap::new(),
+            in_library: true,
+            expected_version: None,
+        },
+    )
+    .unwrap();
+    let expected = vec!["Z_FOO".to_owned(), "A_BAR".to_owned()];
+    let read = get_definition(&db, &saved.id).unwrap();
+    assert_eq!(
+        read.env.keys().cloned().collect::<Vec<_>>(),
+        expected,
+        "保存后读回应保持定义顺序"
+    );
+    let written = distribute(
+        &db,
+        &keys,
+        &registry,
+        temp.path(),
+        &saved.id,
+        previewed(&db, &registry, temp.path(), &saved.id, vec![target("claude_code", true)]),
+    );
+    assert_eq!(written[0].status, "written", "{written:?}");
+    let text = std::fs::read_to_string(temp.path().join(".claude.json")).unwrap();
+    let z = text.find("Z_FOO").expect("原生文件缺少 Z_FOO");
+    let a = text.find("A_BAR").expect("原生文件缺少 A_BAR");
+    assert!(z < a, "原生文件键序应与定义一致: {text}");
+    let listed = list_native(&db, &registry, temp.path(), &target("claude_code", true)).unwrap();
+    assert_eq!(
+        listed[0].env.keys().cloned().collect::<Vec<_>>(),
+        expected,
+        "读回原生条目应保持键序"
+    );
 }
