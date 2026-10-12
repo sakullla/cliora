@@ -22,7 +22,6 @@ async function mockResources(page: Page) {
       __resourceMcpConflict: false,
       __resourceDeferMcpPreview: false,
       __resourcePendingPreviews: pendingPreviews,
-      __resourceClipboard: [] as string[],
       __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
         if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }] };
         if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], nativeConfig: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
@@ -48,15 +47,6 @@ async function mockResources(page: Page) {
         if (command === 'list_mcp_definitions') return definitions;
         if (command === 'list_mcp_placements') return placements;
         if (command === 'get_managed_mcp_enabled') return managed[`${args.definitionId}:${args.target.toolId}:${args.target.scope}:${args.target.projectPath}`] ?? null;
-        if (command === 'export_mcp_definition') {
-          const found = definitions.find((item) => item.id === args.id);
-          if (!found) throw new Error('MCP 定义已被修改或不存在，请重新读取');
-          const mask = (map: Record<string, string>) => Object.fromEntries(Object.entries(map).map(([key, value]) => [key, /token|secret|password|key|credential/i.test(key) ? `\${${key}}` : value]));
-          const entry = found.transport === 'http'
-            ? { url: found.url, headers: mask((found.headers as Record<string, string>) ?? {}) }
-            : { command: found.command, args: found.args, env: mask((found.env as Record<string, string>) ?? {}) };
-          return JSON.stringify({ mcpServers: { [String(found.name)]: entry } }, null, 2);
-        }
         if (command === 'save_mcp_definition') {
           const item = { ...args.draft, id: args.draft.id ?? `mcp-${definitions.length + 1}`, version: (args.draft.expectedVersion ?? 0) + 1 };
           const index = definitions.findIndex((old) => old.id === item.id);
@@ -115,10 +105,6 @@ async function mockResources(page: Page) {
         if (command === 'get_tray_status') return { available: false, error: null };
         throw new Error(`Unexpected IPC: ${command}`);
       } },
-    });
-    Object.defineProperty(navigator, 'clipboard', {
-      configurable: true,
-      value: { writeText: async (text: string) => { (window as typeof window & { __resourceClipboard: string[] }).__resourceClipboard.push(text); } },
     });
   });
 }
@@ -273,25 +259,20 @@ test('MCP duplicate name stays within the 80 byte backend limit when the source 
   expect(copies[1].name).not.toBe(copies[0].name);
 });
 
-test('MCP card copies masked JSON and the stdio command text', async ({ page }) => {
+test('MCP card keeps only delete, duplicate, and edit actions', async ({ page }) => {
   await mockResources(page);
   await page.goto('/');
   await page.evaluate(() => {
-    (window as unknown as { __resourceMcpDefinitions: Array<Record<string, unknown>> }).__resourceMcpDefinitions.push({ id: 'mcp-1', name: 'filesystem', transport: 'stdio', command: 'npx', args: ['-y', 'pkg'], url: '', env: { API_TOKEN: 'local-secret', PLAIN: 'visible' }, headers: {}, inLibrary: true, version: 1 });
+    (window as unknown as { __resourceMcpDefinitions: Array<Record<string, unknown>> }).__resourceMcpDefinitions.push({ id: 'mcp-1', name: 'filesystem', transport: 'stdio', command: 'npx', args: ['-y', 'pkg'], url: '', env: {}, headers: {}, inLibrary: true, version: 1 });
   });
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
-  await page.getByRole('button', { name: '复制 JSON' }).click();
-  await expect(page.getByRole('status').filter({ hasText: '已复制。' })).toBeVisible();
-  let clipboard = await page.evaluate(() => (window as unknown as { __resourceClipboard: string[] }).__resourceClipboard);
-  expect(clipboard).toHaveLength(1);
-  expect(clipboard[0]).toContain('"mcpServers"');
-  expect(clipboard[0]).toContain('"${API_TOKEN}"');
-  expect(clipboard[0]).toContain('visible');
-  expect(clipboard[0]).not.toContain('local-secret');
-  await page.getByRole('button', { name: '复制命令' }).click();
-  clipboard = await page.evaluate(() => (window as unknown as { __resourceClipboard: string[] }).__resourceClipboard);
-  expect(clipboard[1]).toBe('npx -y pkg');
+  const card = page.locator('article', { hasText: 'filesystem' });
+  await expect(card.getByRole('button', { name: '删除' })).toBeVisible();
+  await expect(card.getByRole('button', { name: '创建副本' })).toBeVisible();
+  await expect(card.getByRole('button', { name: '修改' })).toBeVisible();
+  await expect(card.getByRole('button', { name: '复制 JSON' })).toHaveCount(0);
+  await expect(card.getByRole('button', { name: '复制命令' })).toHaveCount(0);
 });
 
 test('MCP replacement shows both native entries and can be canceled', async ({ page }) => {

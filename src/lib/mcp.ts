@@ -58,10 +58,6 @@ export function parseKeyValueLines(text: string): KeyValueRow[] | null {
   return rows;
 }
 
-export function mcpCommandText(item: { command: string; args: string[] }): string {
-  return [item.command, ...item.args].filter((part) => part.trim()).join(' ');
-}
-
 // The backend valid_name (mcp.rs) only accepts ASCII alphanumerics, '-' and
 // '_' within 1–80 bytes, so the copy suffix is fixed ASCII instead of a
 // localized word. The base name is truncated to keep the result in range.

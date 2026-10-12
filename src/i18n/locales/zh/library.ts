@@ -177,9 +177,6 @@ export default {
     pasteImportError: '无法识别这段内容，表单未改动。',
     duplicate: '创建副本',
     duplicated: '已创建副本「{{name}}」。',
-    copyJson: '复制 JSON',
-    copyCommand: '复制命令',
-    copied: '已复制。',
   },
   distribute: {
     written: '已写入 {{targets}}。',
