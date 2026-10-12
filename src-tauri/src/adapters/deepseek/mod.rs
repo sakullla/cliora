@@ -385,6 +385,7 @@ mod tests {
             headers: indexmap::IndexMap::from([("X-Api-Key".into(), "${MCP_TOKEN}".into())]),
             in_library: true,
             version: 1,
+            updated_at: None,
         }
     }
 

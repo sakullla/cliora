@@ -523,6 +523,7 @@ mod tests {
             headers: indexmap::IndexMap::new(),
             in_library: true,
             version: 0,
+            updated_at: None,
         };
         let enabled = CommandCode
             .mcp_document(&definition, true, None)

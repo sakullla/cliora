@@ -35,6 +35,10 @@ pub struct McpDefinition {
     #[serde(default = "default_in_library")]
     pub in_library: bool,
     pub version: u64,
+    /// Last-write time (Unix seconds) lives in the table column only, never in
+    /// data_json, so portable digests stay content-based; legacy rows carry none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -112,6 +116,12 @@ fn valid_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
 
+fn timestamp() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |time| time.as_secs())
+}
+
 fn is_reference(value: &str) -> bool {
     let value = value.strip_prefix("Bearer ").unwrap_or(value);
     let reference = value
@@ -163,14 +173,19 @@ fn validate(draft: &McpDraft) -> Result<(), String> {
 pub fn list_definitions(db: &Database) -> Result<Vec<McpDefinition>, String> {
     db.with_connection(|conn| {
         let mut statement = conn
-            .prepare("SELECT data_json FROM mcp_definitions ORDER BY name COLLATE NOCASE")
+            .prepare("SELECT data_json, updated_at FROM mcp_definitions ORDER BY updated_at IS NULL, updated_at DESC, name COLLATE NOCASE")
             .map_err(|error| error.to_string())?;
         let rows = statement
-            .query_map([], |row| row.get::<_, String>(0))
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?))
+            })
             .map_err(|error| error.to_string())?
             .map(|row| {
-                serde_json::from_str(&row.map_err(|error| error.to_string())?)
-                    .map_err(|_| "MCP 资料格式无法识别".into())
+                let (text, updated_at) = row.map_err(|error| error.to_string())?;
+                let mut definition: McpDefinition = serde_json::from_str(&text)
+                    .map_err(|_| "MCP 资料格式无法识别".to_string())?;
+                definition.updated_at = updated_at.map(|value| value.max(0) as u64);
+                Ok(definition)
             })
             .collect();
         rows
@@ -179,16 +194,19 @@ pub fn list_definitions(db: &Database) -> Result<Vec<McpDefinition>, String> {
 
 pub fn get_definition(db: &Database, id: &str) -> Result<McpDefinition, String> {
     db.with_connection(|conn| {
-        let text: Option<String> = conn
+        let row: Option<(String, Option<i64>)> = conn
             .query_row(
-                "SELECT data_json FROM mcp_definitions WHERE id = ?1",
+                "SELECT data_json, updated_at FROM mcp_definitions WHERE id = ?1",
                 [id],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()
             .map_err(|error| error.to_string())?;
-        serde_json::from_str(&text.ok_or("MCP 定义不存在")?)
-            .map_err(|_| "MCP 资料格式无法识别".into())
+        let (text, updated_at) = row.ok_or("MCP 定义不存在")?;
+        let mut definition: McpDefinition = serde_json::from_str(&text)
+            .map_err(|_| "MCP 资料格式无法识别")?;
+        definition.updated_at = updated_at.map(|value| value.max(0) as u64);
+        Ok(definition)
     })
 }
 
@@ -216,7 +234,7 @@ pub fn save_definition(db: &Database, draft: McpDraft) -> Result<McpDefinition, 
         McpTransport::Stdio => stdio_command(&draft.command, &draft.args),
         McpTransport::Http => (draft.command.trim().into(), draft.args.clone()),
     };
-    let definition = McpDefinition {
+    let mut definition = McpDefinition {
         id: id.clone(),
         name: draft.name.trim().into(),
         transport: draft.transport,
@@ -227,18 +245,21 @@ pub fn save_definition(db: &Database, draft: McpDraft) -> Result<McpDefinition, 
         headers: draft.headers,
         in_library: draft.in_library,
         version,
+        updated_at: None,
     };
     let data = serde_json::to_string(&definition).map_err(|error| error.to_string())?;
+    let now = timestamp();
     db.with_connection(|conn| {
         let changed = match draft.expected_version {
-            Some(old) => conn.execute("UPDATE mcp_definitions SET name = ?2, transport = ?3, data_json = ?4, version = ?5 WHERE id = ?1 AND version = ?6",
-                params![id, definition.name, format!("{:?}", definition.transport), data, version as i64, old as i64]),
-            None => conn.execute("INSERT INTO mcp_definitions (id, name, transport, data_json, version) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![id, definition.name, format!("{:?}", definition.transport), data, version as i64]),
+            Some(old) => conn.execute("UPDATE mcp_definitions SET name = ?2, transport = ?3, data_json = ?4, version = ?5, updated_at = ?6 WHERE id = ?1 AND version = ?7",
+                params![id, definition.name, format!("{:?}", definition.transport), data, version as i64, now as i64, old as i64]),
+            None => conn.execute("INSERT INTO mcp_definitions (id, name, transport, data_json, version, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![id, definition.name, format!("{:?}", definition.transport), data, version as i64, now as i64]),
         }.map_err(|error| format!("无法保存 MCP 定义；名称可能已被使用：{error}"))?;
         if changed != 1 { return Err("MCP 定义已被修改，请重新读取".into()); }
         Ok(())
     })?;
+    definition.updated_at = Some(now);
     Ok(definition)
 }
 

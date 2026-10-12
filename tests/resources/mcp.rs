@@ -947,3 +947,110 @@ fn reordering_env_keys_rewrites_the_native_file_in_the_new_order() {
         "TOML 读回应保持新键序"
     );
 }
+
+#[test]
+fn list_orders_by_recent_update_and_legacy_null_rows_fall_back_to_name() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    // 存量行：直接落库、不经 save_definition，updated_at 为 NULL。
+    let legacy_json = |id: &str, name: &str| {
+        serde_json::to_string(&McpDefinition {
+            id: id.into(),
+            name: name.into(),
+            transport: McpTransport::Stdio,
+            command: "npx".into(),
+            args: vec![],
+            url: String::new(),
+            env: IndexMap::new(),
+            headers: IndexMap::new(),
+            in_library: true,
+            version: 1,
+            updated_at: None,
+        })
+        .unwrap()
+    };
+    db.with_connection(|conn| {
+        conn.execute(
+            "INSERT INTO mcp_definitions (id,name,transport,data_json,version) VALUES ('legacy-b','bravo','Stdio',?1,1)",
+            [legacy_json("legacy-b", "bravo")],
+        )
+        .map_err(|error| error.to_string())?;
+        conn.execute(
+            "INSERT INTO mcp_definitions (id,name,transport,data_json,version) VALUES ('legacy-a','alpha','Stdio',?1,1)",
+            [legacy_json("legacy-a", "alpha")],
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(())
+    })
+    .unwrap();
+    let names = |db: &Database| {
+        list_definitions(db)
+            .unwrap()
+            .iter()
+            .map(|definition| definition.name.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(names(&db), ["alpha", "bravo"], "存量 NULL 行按名称兜底");
+
+    let saved = sample(&db);
+    assert!(saved.updated_at.is_some(), "新建条目应写入 updated_at");
+    assert_eq!(
+        names(&db),
+        ["example", "alpha", "bravo"],
+        "新建条目排在存量 NULL 行之前"
+    );
+    let read = get_definition(&db, &saved.id).unwrap();
+    assert_eq!(read.updated_at, saved.updated_at, "读回应透传 updated_at");
+
+    // 修改后 updated_at 刷新并排到最前：先用确定的时间戳固定其余行，
+    // 再把目标行拨回过去，保存后它应带着当前时间回到首位。
+    db.with_connection(|conn| {
+        conn.execute(
+            "INSERT INTO mcp_definitions (id,name,transport,data_json,version,updated_at) VALUES ('fixed-mike','mike','Stdio',?1,1,200)",
+            [legacy_json("fixed-mike", "mike")],
+        )
+        .map_err(|error| error.to_string())?;
+        conn.execute(
+            "INSERT INTO mcp_definitions (id,name,transport,data_json,version,updated_at) VALUES ('fixed-zulu','zulu','Stdio',?1,1,100)",
+            [legacy_json("fixed-zulu", "zulu")],
+        )
+        .map_err(|error| error.to_string())?;
+        conn.execute(
+            "UPDATE mcp_definitions SET updated_at = 1 WHERE id = ?1",
+            [&saved.id],
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(
+        names(&db),
+        ["mike", "zulu", "example", "alpha", "bravo"],
+        "updated_at 倒序优先于名称兜底"
+    );
+    let updated = save_definition(
+        &db,
+        McpDraft {
+            id: Some(saved.id.clone()),
+            name: saved.name.clone(),
+            transport: saved.transport,
+            command: "updated-runner".into(),
+            args: saved.args.clone(),
+            url: saved.url.clone(),
+            env: saved.env.clone(),
+            headers: saved.headers.clone(),
+            in_library: true,
+            expected_version: Some(saved.version),
+        },
+    )
+    .unwrap();
+    assert!(
+        updated.updated_at.unwrap() > 200,
+        "修改后 updated_at 应刷新为当前时间"
+    );
+    assert_eq!(
+        names(&db),
+        ["example", "mike", "zulu", "alpha", "bravo"],
+        "修改后条目移动到列表最前"
+    );
+}

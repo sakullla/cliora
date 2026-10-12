@@ -474,6 +474,7 @@ mod tests {
             headers: indexmap::IndexMap::new(),
             in_library: true,
             version: 0,
+            updated_at: None,
         };
         let existing = json!({ "autoApprove": ["tool"], "timeout": 5000 });
         let local = Cline

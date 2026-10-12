@@ -530,6 +530,7 @@ mod tests {
             headers: indexmap::IndexMap::from([("X-Example".into(), "1".into())]),
             in_library: true,
             version: 0,
+            updated_at: None,
         }
     }
 
