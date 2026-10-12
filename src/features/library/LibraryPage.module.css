@@ -274,3 +274,11 @@
   .toolbar { flex-wrap: wrap; }
   .sources { grid-template-columns: 1fr; }
 }
+
+.muted { margin: 0; color: var(--text-3); font-size: 12px; font-weight: 450; }
+.pasteBar { display: flex; justify-content: flex-end; margin-bottom: 10px; }
+.pasteToggle { min-height: var(--control-h-sm); padding: 0 12px; border-style: dashed; box-shadow: none; color: var(--text-2); font-size: 12px; font-weight: 560; }
+.pasteToggle:hover:not(:disabled),
+.pasteToggle[aria-expanded='true'] { border-style: solid; color: var(--accent); }
+.pasteBox { display: grid; gap: 8px; margin-bottom: 12px; padding: 10px 12px; border: 1px dashed var(--line-strong); border-radius: var(--radius); }
+.pasteBox textarea { width: 100%; font-family: var(--font-mono); font-size: 12px; }
