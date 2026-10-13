@@ -11,7 +11,7 @@
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 
-  --font-mono: "Cascadia Code", "JetBrains Mono", Consolas, "SFMono-Regular", Menlo, monospace;
+  --font-mono: "Cascadia Code", "JetBrains Mono", Consolas, "SF Mono", "SFMono-Regular", Menlo, monospace;
   --font-sans: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
 
   /* Surfaces. Warm paper, so the leaf accent is not painted across the whole window. */
@@ -139,6 +139,9 @@ h1, h2, h3, p { margin: 0; }
 h1, h2, h3 { text-wrap: balance; }
 [hidden] { display: none !important; }
 ::selection { background: var(--accent-ring); }
+/* Desktop chrome: navigation, buttons and tabs never pick up a text selection or a drag ghost. */
+:where(.sidebar, button, [role="tab"], [role="radio"], label, .page-head h1, .section-heading) { -webkit-user-select: none; user-select: none; }
+:where(img, a) { -webkit-user-drag: none; }
 
 button, input, select, textarea { font: inherit; color: inherit; letter-spacing: inherit; }
 button, summary { -webkit-tap-highlight-color: transparent; }
@@ -257,9 +260,15 @@ details[open] > :not(summary) { animation: reveal var(--medium) var(--ease); }
   overflow: hidden;
   background: var(--bg);
 }
-html[data-native="macos"] .shell { padding-top: 38px; }
 .titlebar-drag { display: none; }
-html[data-native="macos"] .titlebar-drag { display: block; position: fixed; z-index: 5; top: 0; left: 0; right: 0; height: 38px; }
+/* macOS overlay title bar: the sidebar runs to the top edge and carries the
+   traffic lights; the content column keeps a quiet 28px title band. The brand
+   row and the page title line up on the same baseline below it. */
+html[data-native="macos"] { --titlebar-h: 28px; }
+html[data-native="macos"] .titlebar-drag { display: block; position: fixed; z-index: 5; top: 0; left: 0; right: 0; height: var(--titlebar-h); }
+html[data-native="macos"] .sidebar { padding-top: calc(var(--titlebar-h) + 16px); }
+html[data-native="macos"] .content { margin-top: var(--titlebar-h); }
+html[data-native="macos"] .content-inner { padding-top: 16px; }
 
 .sidebar {
   display: flex;
@@ -281,6 +290,8 @@ html[data-native="macos"] .titlebar-drag { display: block; position: fixed; z-in
   object-fit: cover;
   box-shadow: 0 1px 2px rgb(29 36 32 / 12%);
 }
+/* The paper-coloured tile glares on the dark sidebar; dim it to sit with the surfaces. */
+:root[data-theme="dark"] .brandmark { filter: brightness(.86); box-shadow: 0 0 0 1px rgb(255 255 255 / 6%); }
 .brand strong { display: block; font-size: 16px; letter-spacing: .01em; line-height: 1.15; font-weight: 680; }
 .brand small { display: block; color: var(--text-3); font-size: 9px; font-weight: 650; letter-spacing: .22em; margin-top: 2px; }
 
@@ -784,6 +795,8 @@ label.setting-row:hover { background: var(--surface-2); }
   .shell[data-sidebar-collapsed="true"] .theme-switch { grid-template-columns: 1fr; width: 32px; margin-inline: auto; padding: 3px; gap: 2px; }
   .shell[data-sidebar-collapsed="true"] .theme-switch button { width: 26px; min-height: 26px; }
   .shell[data-sidebar-collapsed="true"] .sidebar-status { justify-content: center; padding: 4px 0; }
+  /* Wide enough that the sidebar edge never cuts through the traffic lights. */
+  html[data-native="macos"] .shell[data-sidebar-collapsed="true"] { grid-template-columns: 80px minmax(0, 1fr); }
 }
 .shell[data-sidebar-collapsed="true"] .brand-name,
 .shell[data-sidebar-collapsed="true"] .nav-text,

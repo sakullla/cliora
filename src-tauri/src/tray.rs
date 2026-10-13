@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use serde::Serialize;
-use tauri::menu::{Menu, MenuItem, Submenu};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -199,7 +199,7 @@ fn profile_state_label(
             if binding.profile_version == 0 { " · 导入内容待应用".into() }
             else { format!(" · 有未应用修改（已应用 v{}）", binding.profile_version) }
         };
-        format!("✓ {}{}", profile.name, status)
+        format!("{}{}", profile.name, status)
     } else if pending {
         format!("{} · 待重新应用", profile.name)
     } else {
@@ -235,11 +235,24 @@ fn simple_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
     Ok(menu)
 }
 
+/// macOS menu bar extras open their menu on a left click and use a monochrome
+/// template image that follows the menu bar appearance. Windows and Linux keep
+/// the colour icon and left click to show the window.
+const MENU_BAR_STYLE: bool = cfg!(target_os = "macos");
+
+fn tray_icon(app: &tauri::App) -> Option<tauri::image::Image<'static>> {
+    if MENU_BAR_STYLE {
+        Some(tauri::include_image!("icons/tray-template.png"))
+    } else {
+        app.default_window_icon().map(|icon| icon.clone().to_owned())
+    }
+}
+
 pub fn setup(app: &mut tauri::App) {
     let handle = app.handle().clone();
     let state = TrayState::default();
     app.manage(state);
-    let icon = app.default_window_icon().cloned();
+    let icon = tray_icon(app);
     let Some(icon) = icon else {
         app.state::<TrayState>()
             .set_error("应用图标不可用；主窗口将保持打开".into());
@@ -257,10 +270,11 @@ pub fn setup(app: &mut tauri::App) {
         .icon(icon)
         .tooltip("栖点 · Cliora")
         .menu(&menu)
-        .show_menu_on_left_click(false)
+        .icon_as_template(MENU_BAR_STYLE)
+        .show_menu_on_left_click(MENU_BAR_STYLE)
         .on_menu_event(|app, event| on_menu(app, event.id.as_ref()))
         .on_tray_icon_event(|tray, event| {
-            if matches!(
+            if !MENU_BAR_STYLE && matches!(
                 event,
                 TrayIconEvent::Click {
                     button: MouseButton::Left,
@@ -312,6 +326,45 @@ fn register_action(
     new_item(app, &id, text, enabled)
 }
 
+fn register_check_action(
+    app: &AppHandle,
+    actions: &mut HashMap<String, Action>,
+    counter: &mut usize,
+    generation: u64,
+    action: Action,
+    text: &str,
+    checked: bool,
+) -> Result<CheckMenuItem<tauri::Wry>, String> {
+    *counter += 1;
+    let id = format!("g{generation}-action-{counter}");
+    actions.insert(id.clone(), action);
+    CheckMenuItem::with_id(app, &id, text, true, checked, None::<&str>)
+        .map_err(|error| error.to_string())
+}
+
+fn separator(app: &AppHandle) -> Result<PredefinedMenuItem<tauri::Wry>, String> {
+    PredefinedMenuItem::separator(app).map_err(|error| error.to_string())
+}
+
+/// Disabled, non-interactive row used as a section heading.
+fn section_label(app: &AppHandle, text: &str) -> Result<MenuItem<tauri::Wry>, String> {
+    MenuItem::new(app, text, false, None::<&str>).map_err(|error| error.to_string())
+}
+
+/// Tray menu layout (kept short and scannable, one decision per level):
+///
+/// ```text
+/// 显示主窗口
+/// ──────────
+/// 全局配置                      (section label)
+/// Codex · 日常开发          ▸   ✓ 日常开发 / GLM 官方套餐
+/// ──────────
+/// 最近项目 · 普通启动            (section label)
+/// 栖点 · 桌面工具           ▸   启动 Codex / ── / Codex · 日常开发 ▸
+/// 旧项目 · 目录需重关联           (opens repair)
+/// ──────────
+/// 完全退出栖点
+/// ```
 pub fn refresh(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<TrayState>();
     let _refresh_guard = state
@@ -370,77 +423,30 @@ pub fn refresh(app: &AppHandle) -> Result<(), String> {
         })
         .map_err(|error| error.message)?;
     let (tools, recent, project_mode) = data;
-    for (tool, name, profiles, global) in &tools {
-        let submenu = Submenu::new(app, name, true).map_err(|error| error.to_string())?;
-        let global_name = applied_label(profiles, global.as_ref());
-        submenu
-            .append(&new_item(
-                app,
-                &format!("current-{tool}"),
-                &format!("全局 · {global_name}"),
-                false,
-            )?)
+
+    if !tools.is_empty() {
+        menu.append(&separator(app)?).map_err(|error| error.to_string())?;
+        menu.append(&section_label(app, "全局配置")?)
             .map_err(|error| error.to_string())?;
-        for profile in profiles {
-            submenu
-                .append(&register_action(
-                    app,
-                    &mut actions,
-                    &mut counter,
-                    generation,
-                    Action::Switch {
-                        tool: tool.clone(),
-                        profile: profile.id.clone(),
-                        project: None,
-                    },
-                    &profile_state_label(profile, global.as_ref(), false),
-                    true,
-                )?)
-                .map_err(|error| error.to_string())?;
+        for (tool, name, profiles, global) in &tools {
+            let submenu = profile_submenu(
+                app,
+                &mut actions,
+                &mut counter,
+                generation,
+                ProfileTarget { tool, name, profiles, binding: global.as_ref(), project: None },
+            )?;
+            menu.append(&submenu).map_err(|error| error.to_string())?;
         }
-        for project in recent.iter().filter(|project| project.available).take(5) {
-            let key = format!("project:{}", project.path.as_deref().unwrap_or_default());
-            let binding = app
-                .state::<AppState>()
-                .with_database(app, |db| {
-                    apply::get_registered_binding(db, tool, &key).map_err(commands::native_error)
-                })
-                .map_err(|error| error.message)?;
-            for profile in profiles {
-                let pending = binding
-                    .as_ref()
-                    .is_none_or(|active| active.profile_id != profile.id)
-                    && project
-                        .selected_profiles
-                        .get(tool)
-                        .is_some_and(|id| id == &profile.id);
-                submenu
-                    .append(&register_action(
-                        app,
-                        &mut actions,
-                        &mut counter,
-                        generation,
-                        Action::Switch {
-                            tool: tool.clone(),
-                            profile: profile.id.clone(),
-                            project: Some(project.id.clone()),
-                        },
-                        &format!(
-                            "{} · {} · 项目",
-                            project.name,
-                            profile_state_label(profile, binding.as_ref(), pending)
-                        ),
-                        true,
-                    )?)
-                    .map_err(|error| error.to_string())?;
-            }
-        }
-        menu.append(&submenu).map_err(|error| error.to_string())?;
     }
-    let recent_title = if project_mode == LaunchMode::Yolo { "最近项目 · YOLO 启动" } else { "最近项目 · 普通启动" };
-    let recent_menu = Submenu::new(app, recent_title, !recent.is_empty())
-        .map_err(|error| error.to_string())?;
-    for project in recent.iter().take(8) {
+
+    let shown: Vec<_> = recent.iter().take(RECENT_PROJECT_LIMIT).collect();
+    if !shown.is_empty() {
+        menu.append(&separator(app)?).map_err(|error| error.to_string())?;
+        menu.append(&section_label(app, recent_section_title(project_mode))?)
+            .map_err(|error| error.to_string())?;
+    }
+    for project in shown {
         let tool = project
             .preferred_tool
             .as_ref()
@@ -449,37 +455,67 @@ pub fn refresh(app: &AppHandle) -> Result<(), String> {
             registry.get(id).is_some_and(|adapter| adapter.launch_args(None, LaunchMode::Yolo).is_ok())
         });
         let mode = if project_mode == LaunchMode::Yolo && yolo { LaunchMode::Yolo } else { LaunchMode::Normal };
-        let label = if !project.available {
-            format!("{} · 目录需重关联 · 点击修复", project.name)
-        } else if tool.is_none() {
-            format!("{} · 选择工具 · 点击修复", project.name)
-        } else {
-            let name = tools
-                .iter()
-                .find(|entry| &entry.0 == tool.unwrap())
-                .map(|entry| entry.1.as_str())
-                .unwrap_or("");
-            if project_mode == LaunchMode::Yolo && mode == LaunchMode::Normal {
-                format!("{} · {} · 普通模式", project.name, name)
-            } else {
-                format!("{} · {}", project.name, name)
-            }
-        };
         let action = recent_action(&project.id, tool.map(String::as_str), project.available, mode);
-        recent_menu
+        if !project.available {
+            menu.append(&register_action(
+                app,
+                &mut actions,
+                &mut counter,
+                generation,
+                action,
+                &format!("{} · 目录需重关联", project.name),
+                true,
+            )?)
+            .map_err(|error| error.to_string())?;
+            continue;
+        }
+        let submenu = Submenu::new(app, &project.name, true).map_err(|error| error.to_string())?;
+        let tool_name = tool.and_then(|id| tools.iter().find(|entry| &entry.0 == id)).map(|entry| entry.1.as_str());
+        submenu
             .append(&register_action(
                 app,
                 &mut actions,
                 &mut counter,
                 generation,
                 action,
-                &label,
+                &launch_label(tool_name, project_mode, mode),
                 true,
             )?)
             .map_err(|error| error.to_string())?;
+        if !tools.is_empty() {
+            submenu.append(&separator(app)?).map_err(|error| error.to_string())?;
+            submenu
+                .append(&section_label(app, "项目配置")?)
+                .map_err(|error| error.to_string())?;
+        }
+        let key = format!("project:{}", project.path.as_deref().unwrap_or_default());
+        for (tool, name, profiles, _) in &tools {
+            let binding = app
+                .state::<AppState>()
+                .with_database(app, |db| {
+                    apply::get_registered_binding(db, tool, &key).map_err(commands::native_error)
+                })
+                .map_err(|error| error.message)?;
+            let pending = project.selected_profiles.get(tool).map(String::as_str);
+            let nested = profile_submenu(
+                app,
+                &mut actions,
+                &mut counter,
+                generation,
+                ProfileTarget {
+                    tool,
+                    name,
+                    profiles,
+                    binding: binding.as_ref(),
+                    project: Some((&project.id, pending)),
+                },
+            )?;
+            submenu.append(&nested).map_err(|error| error.to_string())?;
+        }
+        menu.append(&submenu).map_err(|error| error.to_string())?;
     }
-    menu.append(&recent_menu)
-        .map_err(|error| error.to_string())?;
+
+    menu.append(&separator(app)?).map_err(|error| error.to_string())?;
     menu.append(&register_action(
         app,
         &mut actions,
@@ -506,6 +542,74 @@ pub fn refresh(app: &AppHandle) -> Result<(), String> {
         *error = None;
     }
     Ok(())
+}
+
+const RECENT_PROJECT_LIMIT: usize = 5;
+
+fn recent_section_title(mode: LaunchMode) -> &'static str {
+    if mode == LaunchMode::Yolo { "最近项目 · YOLO 启动" } else { "最近项目 · 普通启动" }
+}
+
+/// First entry of a project submenu. A missing tool opens the project card so
+/// the user can pick one; a YOLO preference the CLI cannot honour is spelled out.
+fn launch_label(tool_name: Option<&str>, preferred: LaunchMode, mode: LaunchMode) -> String {
+    match tool_name {
+        None => "选择启动工具…".into(),
+        Some(name) if preferred == LaunchMode::Yolo && mode == LaunchMode::Normal => {
+            format!("启动 {name} · 普通模式")
+        }
+        Some(name) => format!("启动 {name}"),
+    }
+}
+
+struct ProfileTarget<'a> {
+    tool: &'a str,
+    name: &'a str,
+    profiles: &'a [profile::RegisteredProfile],
+    binding: Option<&'a apply::AppliedBinding>,
+    /// Project id and the profile the project card last selected for this tool.
+    project: Option<(&'a str, Option<&'a str>)>,
+}
+
+/// `Codex · 日常开发 ▸` with one checkable row per saved profile. The title
+/// shows the applied profile so the current state is readable without opening it.
+fn profile_submenu(
+    app: &AppHandle,
+    actions: &mut HashMap<String, Action>,
+    counter: &mut usize,
+    generation: u64,
+    target: ProfileTarget<'_>,
+) -> Result<Submenu<tauri::Wry>, String> {
+    let title = format!("{} · {}", target.name, applied_label(target.profiles, target.binding));
+    let submenu = Submenu::new(app, &title, true).map_err(|error| error.to_string())?;
+    if target.profiles.is_empty() {
+        submenu
+            .append(&section_label(app, "还没有保存的配置")?)
+            .map_err(|error| error.to_string())?;
+    }
+    for profile in target.profiles {
+        let pending = target
+            .project
+            .and_then(|(_, selected)| selected)
+            .is_some_and(|selected| selected == profile.id)
+            && target.binding.is_none_or(|active| active.profile_id != profile.id);
+        let checked = target.binding.is_some_and(|active| active.profile_id == profile.id);
+        let item = register_check_action(
+            app,
+            actions,
+            counter,
+            generation,
+            Action::Switch {
+                tool: target.tool.to_owned(),
+                profile: profile.id.clone(),
+                project: target.project.map(|(id, _)| id.to_owned()),
+            },
+            &profile_state_label(profile, target.binding, pending),
+            checked,
+        )?;
+        submenu.append(&item).map_err(|error| error.to_string())?;
+    }
+    Ok(submenu)
 }
 
 fn on_menu(app: &AppHandle, id: &str) {
@@ -558,6 +662,7 @@ fn on_menu(app: &AppHandle, id: &str) {
                     Ok(Some(project)) if project.available => project.path,
                     Ok(None) => None,
                     _ => {
+                        let _ = refresh(&app);
                         report_error(
                             &app,
                             "项目目录已移动，请重新关联".into(),
@@ -576,6 +681,8 @@ fn on_menu(app: &AppHandle, id: &str) {
                 if let Err(error) =
                     commands::apply_registered_now(&app, &tool, &profile, scope, path, false)
                 {
+                    // Native check items toggle on click; rebuild so the menu shows the real state.
+                    let _ = refresh(&app);
                     report_error(&app, error.message, Some(repair));
                     return;
                 }
@@ -655,17 +762,27 @@ mod tests {
         );
         assert_eq!(
             profile_state_label(&profile, Some(&binding), false),
-            "✓ 日常 · 有未应用修改（已应用 v1）"
+            "日常 · 有未应用修改（已应用 v1）"
         );
         assert_eq!(
             profile_state_label(&profile, Some(&binding), true),
-            "✓ 日常 · 有未应用修改（已应用 v1）"
+            "日常 · 有未应用修改（已应用 v1）"
         );
         assert_eq!(
             profile_state_label(&profile, None, true),
             "日常 · 待重新应用"
         );
         assert_eq!(applied_label(&[saved_profile(1)], Some(&binding)), "日常");
+    }
+
+    #[test]
+    fn project_launch_row_names_the_tool_and_a_downgraded_mode() {
+        assert_eq!(launch_label(Some("Codex"), LaunchMode::Normal, LaunchMode::Normal), "启动 Codex");
+        assert_eq!(launch_label(Some("Codex"), LaunchMode::Yolo, LaunchMode::Yolo), "启动 Codex");
+        assert_eq!(launch_label(Some("Pi"), LaunchMode::Yolo, LaunchMode::Normal), "启动 Pi · 普通模式");
+        assert_eq!(launch_label(None, LaunchMode::Normal, LaunchMode::Normal), "选择启动工具…");
+        assert_eq!(recent_section_title(LaunchMode::Yolo), "最近项目 · YOLO 启动");
+        assert_eq!(recent_section_title(LaunchMode::Normal), "最近项目 · 普通启动");
     }
 
     #[test]
