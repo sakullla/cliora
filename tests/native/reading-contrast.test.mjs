@@ -324,3 +324,33 @@ test('comments, syntax colors, and secondary text stay readable on selection and
     }
   }
 });
+
+test('conflict diff marks keep body text readable at rest and under the encoded selection', () => {
+  const compare = readFileSync(new URL('src/components/configuration/ConflictCompare.module.css', root), 'utf8');
+  const declaredMix = (kind, token) => {
+    const match = compare.match(new RegExp(String.raw`\.row\[data-kind='${kind}'\] mark \{[^}]*color-mix\(in srgb, var\(--${token}\) ([\d.]+)%`));
+    assert.ok(match, `${kind} mark mix`);
+    return Number(match[1]) / 100;
+  };
+  const marks = [
+    ['delete', 'danger'],
+    ['insert', 'accent'],
+  ];
+  const resting = {};
+  for (const [name, theme] of themes) {
+    const ring = parseColor(theme['accent-ring']);
+    const text = hexBytes(theme.text);
+    for (const [kind, token] of marks) {
+      const row = hexBytes(theme[`${token}-soft`]);
+      const rest = composite(hexBytes(theme[token]), row, declaredMix(kind, token));
+      const selected = composite(ring.rgb, rest, ring.alpha);
+      if (name === 'light') resting[kind] = rest;
+      atLeast(absLc(text, rest), 75, `${name} --text on the ${kind} mark`);
+      atLeast(absLc(text, selected), 75, `${name} --text on selection over the ${kind} mark`);
+    }
+  }
+  assert.ok(
+    resting.delete[0] - resting.delete[1] > resting.insert[0] - resting.insert[1],
+    'deletion and insertion marks stay distinguishable',
+  );
+});
