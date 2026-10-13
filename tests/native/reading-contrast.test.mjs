@@ -177,6 +177,8 @@ test('warning, danger, and info text stay readable on the page and the card', ()
         atLeast(absLc(hexBytes(theme[token]), hexBytes(theme[surface])), 75, `${name} --${token} on --${surface}`);
       }
     }
+    atLeast(absLc(hexBytes(theme.warning), hexBytes(theme['surface-3'])), 75, `${name} --warning on --surface-3`);
+    if (name === 'light') atLeast(absLc(hexBytes(theme.warning), hexBytes(theme['accent-soft'])), 75, 'light --warning on --accent-soft');
     for (const token of ['accent', 'warning', 'danger', 'info']) {
       atLeast(absLc(hexBytes(theme[token]), hexBytes(theme[`${token}-soft`])), 75, `${name} --${token} on --${token}-soft`);
     }
