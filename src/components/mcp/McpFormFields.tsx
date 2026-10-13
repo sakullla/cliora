@@ -1,4 +1,4 @@
-import { useId, useState, type ClipboardEvent } from 'react';
+import { useEffect, useId, useState, type ClipboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { mcpCommandLine, mcpDraftIssues, parseMcpServerJson, type KeyValueRow, type McpParsedServer } from '../../lib/mcp';
 import type { McpDraft, McpTransport } from '../../types/resources';
@@ -33,6 +33,11 @@ export function McpFormFields({ draft, onChange, envRows, onEnvRowsChange, heade
   const [pasteError, setPasteError] = useState('');
   const [pasteNotice, setPasteNotice] = useState('');
   const [urlBlurred, setUrlBlurred] = useState(false);
+  useEffect(() => {
+    if (!pasteNotice) return;
+    const timer = window.setTimeout(() => setPasteNotice(''), 4000);
+    return () => window.clearTimeout(timer);
+  }, [pasteNotice]);
   const issues = mcpDraftIssues(draft);
   const nameIssue = issues.name === 'nameInvalid' || (showIssues && issues.name) ? issues.name : undefined;
   const commandIssue = showIssues ? issues.command : undefined;
@@ -64,6 +69,7 @@ export function McpFormFields({ draft, onChange, envRows, onEnvRowsChange, heade
   return <div className={styles.form}>
     {(onImport || title) && <div className={styles.formHead}>
       {title ? <h3>{title}</h3> : <span />}
+      {pasteNotice && <span className={styles.pasteNotice} role="status"><Icon name="check" size={13} strokeWidth={2.2} />{pasteNotice}</span>}
       {onImport && <button type="button" className={styles.pasteToggle} aria-expanded={pasteOpen} disabled={disabled} onClick={() => { setPasteOpen((value) => !value); setPasteError(''); setPasteNotice(''); }}><Icon name="clipboard" size={13} />{t('library.resources.pasteImport')}</button>}
     </div>}
     {onImport && pasteOpen && <div className={styles.pasteBox}>
@@ -72,7 +78,6 @@ export function McpFormFields({ draft, onChange, envRows, onEnvRowsChange, heade
       {pasteError && <p className={styles.fieldError} role="alert">{pasteError}</p>}
       <div className={styles.pasteActions}><button type="button" onClick={() => { setPasteOpen(false); setPasteError(''); }}>{t('library.resources.back')}</button><button type="button" className={styles.primary} disabled={!pasteText.trim()} onClick={applyPaste}>{t('library.resources.pasteImportApply')}</button></div>
     </div>}
-    {pasteNotice && <p className={styles.pasteNotice} role="status"><Icon name="check" size={13} strokeWidth={2.2} />{pasteNotice}</p>}
     <div className={styles.identity}>
       <label className={styles.field}>{t('tools.mcp.name')}
         <input aria-label={t('tools.mcp.nameAria')} aria-invalid={!!nameIssue || undefined} aria-describedby={nameIssue ? `${id}-name` : undefined} value={draft.name} disabled={disabled} spellCheck={false} autoComplete="off" onChange={(event) => onChange({ ...draft, name: event.target.value })} onPaste={pasteIntoName} placeholder={t('tools.mcp.namePlaceholder')} />
@@ -85,18 +90,18 @@ export function McpFormFields({ draft, onChange, envRows, onEnvRowsChange, heade
     <p className={styles.transportHint}>{draft.transport === 'stdio' ? t('tools.mcp.stdioHint') : t('tools.mcp.httpHint')}</p>
     {draft.transport === 'stdio' ? <>
       <label className={styles.field}>{t('tools.mcp.command')}
-        <input className={styles.mono} aria-label={t('tools.mcp.command')} aria-invalid={!!commandIssue || undefined} aria-describedby={commandIssue ? `${id}-command` : undefined} value={draft.command} disabled={disabled} spellCheck={false} autoComplete="off" onChange={(event) => onChange({ ...draft, command: event.target.value })} placeholder="npx" />
+        <input className={styles.mono} aria-label={t('tools.mcp.command')} aria-invalid={!!commandIssue || undefined} aria-describedby={commandIssue ? `${id}-command` : undefined} value={draft.command} disabled={disabled} spellCheck={false} autoComplete="off" onChange={(event) => onChange({ ...draft, command: event.target.value })} placeholder={t('tools.mcp.commandPlaceholder')} />
         {commandIssue && <small id={`${id}-command`} className={styles.fieldError}>{t(`tools.mcp.issue.${commandIssue}`)}</small>}
       </label>
-      <KeyValueRows single label={t('tools.mcp.args')} rows={draft.args.length ? draft.args.map((value) => ({ key: '', value })) : [{ key: '', value: '' }]} disabled={disabled} onChange={(rows) => onChange({ ...draft, args: rows.map((row) => row.value) })} valuePlaceholder="-y" />
+      <KeyValueRows single label={t('tools.mcp.args')} rows={draft.args.length ? draft.args.map((value) => ({ key: '', value })) : [{ key: '', value: '' }]} disabled={disabled} onChange={(rows) => onChange({ ...draft, args: rows.map((row) => row.value) })} valuePlaceholder={t('tools.mcp.argPlaceholder')} />
       {preview && <div className={styles.preview}><span>{t('tools.mcp.commandPreview')}</span><code>{preview}</code></div>}
-      <KeyValueRows maskSensitive label={t('tools.mcp.env')} rows={envRows} disabled={disabled} onChange={onEnvRowsChange} keyPlaceholder="API_TOKEN" valuePlaceholder="${API_TOKEN}" />
+      <KeyValueRows maskSensitive label={t('tools.mcp.env')} rows={envRows} disabled={disabled} onChange={onEnvRowsChange} keyPlaceholder={t('tools.mcp.envKeyPlaceholder')} valuePlaceholder={t('tools.mcp.envValuePlaceholder')} />
     </> : <>
       <label className={styles.field}>URL
-        <input className={styles.mono} aria-label={t('tools.mcp.urlAria')} aria-invalid={!!urlIssue || undefined} aria-describedby={urlIssue ? `${id}-url` : undefined} value={draft.url} disabled={disabled} spellCheck={false} autoComplete="off" inputMode="url" onBlur={() => setUrlBlurred(true)} onChange={(event) => onChange({ ...draft, url: event.target.value })} placeholder="https://example.com/mcp" />
+        <input className={styles.mono} aria-label={t('tools.mcp.urlAria')} aria-invalid={!!urlIssue || undefined} aria-describedby={urlIssue ? `${id}-url` : undefined} value={draft.url} disabled={disabled} spellCheck={false} autoComplete="off" inputMode="url" onBlur={() => setUrlBlurred(true)} onChange={(event) => onChange({ ...draft, url: event.target.value })} placeholder={t('tools.mcp.urlPlaceholder')} />
         {urlIssue && <small id={`${id}-url`} className={styles.fieldError}>{t(`tools.mcp.issue.${urlIssue}`)}</small>}
       </label>
-      <KeyValueRows maskSensitive label={t('tools.mcp.headers')} rows={headerRows} disabled={disabled} onChange={onHeaderRowsChange} keyPlaceholder="Authorization" valuePlaceholder="Bearer ${API_TOKEN}" />
+      <KeyValueRows maskSensitive label={t('tools.mcp.headers')} rows={headerRows} disabled={disabled} onChange={onHeaderRowsChange} keyPlaceholder={t('tools.mcp.headerKeyPlaceholder')} valuePlaceholder={t('tools.mcp.headerValuePlaceholder')} />
     </>}
   </div>;
 }

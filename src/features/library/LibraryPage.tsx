@@ -19,7 +19,7 @@ import { shortPath } from '../../lib/paths';
 import { saveShortcutHint, searchShortcutHint } from '../../lib/shortcut';
 import { formatFailure } from '../../lib/feedback';
 import { useToasts } from '../../lib/toast';
-import { ToastStack } from '../../components/Toast';
+import { ToastScope } from '../../components/Toast';
 import { SkeletonRows } from '../../components/Skeleton';
 import { navigateChoices } from '../../lib/choiceNavigation';
 import { ScopeMarks, samePath, scopeLabel } from './CliMarks';
@@ -302,7 +302,7 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
   }
 
   if (!nativeAvailable) return <EmptyState icon="library" title={t('library.page.nativeOnly')} />;
-  return <section className={styles.page} aria-label={t('library.page.label')}>
+  return <section className={styles.page} aria-label={t('library.page.label')}><ToastScope toasts={toasts}>
     <div className={styles.toolbar}>
       <div className={styles.tabs} role="tablist" aria-label={t('library.page.typesAria')} onKeyDown={navigateChoices}>
         <button type="button" role="tab" aria-selected={section === 'prompt'} tabIndex={section === 'prompt' ? 0 : -1} onClick={() => void openSection('prompt')}>{t('library.page.prompt')}{counts.prompt != null && <span className={styles.tabCount} aria-hidden="true">{counts.prompt}</span>}</button>
@@ -389,6 +389,5 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
       </div>}
     </GuideDialog>
     </>}
-    <ToastStack status={toasts.notice} alert={toasts.error} onDismiss={toasts.dismiss} />
-  </section>;
+  </ToastScope></section>;
 }

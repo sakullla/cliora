@@ -1,10 +1,14 @@
 .form { display: grid; gap: 14px; min-width: 0; container-type: inline-size; }
 .formHead { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 28px; }
+.formHead h3 { flex: none; }
 .formHead h3 { margin: 0; color: var(--text); font-size: 13px; font-weight: 650; }
 
 .field { display: grid; gap: 6px; min-width: 0; color: var(--text-2); font-size: 12px; font-weight: 560; }
 .field input { width: 100%; color: var(--text); font-weight: 400; }
 .field input[aria-invalid='true'] { border-color: var(--danger); }
+/* Examples stay visibly apart from typed values (see KeyValueRows). */
+.field input:placeholder-shown:not(:focus):not([aria-invalid='true']) { border-style: dashed; background: transparent; box-shadow: none; }
+.field input::placeholder { color: color-mix(in srgb, var(--text-3) 72%, transparent); font-family: var(--font-sans); font-style: italic; font-size: 12px; }
 .field input[aria-invalid='true']:focus { box-shadow: 0 0 0 3px var(--danger-soft); }
 .mono { font-family: var(--font-mono); font-size: 12.5px !important; }
 .fieldError { margin: 0; color: var(--danger); font-size: 11.5px; font-weight: 500; line-height: 1.45; }
@@ -67,7 +71,8 @@
 .pasteActions { display: flex; justify-content: flex-end; gap: 8px; }
 .primary, .primary:hover:not(:disabled) { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
 .primary:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }
-.pasteNotice { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--accent); font-size: 12px; font-weight: 540; animation: reveal var(--medium) var(--ease); }
+/* Sits in the header row beside the paste button, so it never pushes fields down. */
+.pasteNotice { display: inline-flex; flex: 1; justify-content: flex-end; align-items: center; gap: 5px; min-width: 0; overflow: hidden; color: var(--accent); font-size: 12px; font-weight: 540; white-space: nowrap; text-overflow: ellipsis; animation: fade-in var(--medium) var(--ease); }
 
 @container (max-width: 460px) {
   .identity { grid-template-columns: minmax(0, 1fr); }

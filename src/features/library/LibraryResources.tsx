@@ -9,6 +9,7 @@ import { ScopeMarks, samePath, scopeLabel } from './CliMarks';
 import { confirmAction } from '../../lib/confirm';
 import { CliTargetGrid } from './CliTargetGrid';
 import { native } from '../../lib/native';
+import { useFeedback } from '../../lib/toast';
 import { searchShortcutHint } from '../../lib/shortcut';
 import type { Project } from '../../types/launch';
 import type { AdapterDescriptor, Scope } from '../../types/native';
@@ -32,13 +33,8 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
   const [packages, setPackages] = useState<SkillPackage[]>([]);
   const [installations, setInstallations] = useState<SkillInstallation[]>([]);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
-  useEffect(() => {
-    if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(''), 4000);
-    return () => window.clearTimeout(timer);
-  }, [notice]);
+  // Page results float as toasts so the card grid never jumps.
+  const { setError, setNotice } = useFeedback();
   const [dialogError, setDialogError] = useState('');
   const [skillOpen, setSkillOpen] = useState(false);
   const [skillUrl, setSkillUrl] = useState('');
@@ -222,8 +218,6 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
 
   return <div className={styles.layout}>
     <SearchField className={styles.searchBox} label={t('library.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={setSearch} placeholder={t('library.resources.searchSkillPlaceholder')} />
-    {error && <div className={styles.error} role="alert">{error}</div>}
-    {notice && <div className={styles.notice} role="status">{notice}</div>}
     <div className={styles.list} aria-label={t('library.resources.skillListAria')}>
       {libraryPackages.length ? libraryPackages.map((item) => {
         return <article className={styles.card} key={item.id}>

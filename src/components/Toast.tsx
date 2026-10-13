@@ -1,12 +1,15 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon, type IconName } from './Icon';
+import { ToastContext, useToasts, type ToastController } from '../lib/toast';
 
+/** `status` is a success result; `alert` is a failure and stays until dismissed. */
 export type ToastTone = 'status' | 'alert' | 'info' | 'warning';
-export type Toast = { id: number; tone: ToastTone; text: string };
+export type Toast = { id: number; tone: ToastTone; text: string; count: number };
 
-export const TOAST_AUTO_DISMISS_MS = 4500;
-const TOAST_EXIT_MS = 190;
+export const TOAST_AUTO_DISMISS_MS = 4000;
+const TOAST_DURATION: Record<ToastTone, number | null> = { status: TOAST_AUTO_DISMISS_MS, info: TOAST_AUTO_DISMISS_MS, warning: 8000, alert: null };
+const TOAST_EXIT_MS = 180;
 
 const toneIcon: Record<ToastTone, IconName> = { status: 'check', alert: 'alert', info: 'info', warning: 'alert' };
 
@@ -36,33 +39,31 @@ function ToastItem({ toast, leaving, onDismiss }: { toast: Toast; leaving: boole
   const { t } = useTranslation();
   const dismissRef = useRef(onDismiss);
   dismissRef.current = onDismiss;
-  const remaining = useRef(TOAST_AUTO_DISMISS_MS);
+  const duration = TOAST_DURATION[toast.tone];
+  const remaining = useRef(duration ?? 0);
   const startedAt = useRef(0);
   const timer = useRef<number | null>(null);
-
-  const timed = toast.tone !== 'alert';
 
   const clearTimer = () => {
     if (timer.current !== null) { window.clearTimeout(timer.current); timer.current = null; }
   };
 
   useEffect(() => {
-    if (!timed) return;
-    remaining.current = TOAST_AUTO_DISMISS_MS;
+    if (duration === null) return;
+    remaining.current = duration;
     startedAt.current = Date.now();
     timer.current = window.setTimeout(() => dismissRef.current(), remaining.current);
     return clearTimer;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [toast.id, timed]);
+  }, [toast.id, duration]);
 
   function pause() {
-    if (!timed || timer.current === null) return;
+    if (duration === null || timer.current === null) return;
     clearTimer();
     remaining.current = Math.max(120, remaining.current - (Date.now() - startedAt.current));
   }
 
   function resume() {
-    if (!timed || timer.current !== null) return;
+    if (duration === null || timer.current !== null) return;
     startedAt.current = Date.now();
     timer.current = window.setTimeout(() => dismissRef.current(), remaining.current);
   }
@@ -78,21 +79,26 @@ function ToastItem({ toast, leaving, onDismiss }: { toast: Toast; leaving: boole
       onPointerLeave={resume}
       onFocus={pause}
       onBlur={resume}
-      onKeyDown={(event) => { if (event.key === 'Escape') dismissRef.current(); }}
+      onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); dismissRef.current(); } }}
     >
-      <span className="toast-icon"><Icon name={toneIcon[toast.tone]} size={14} strokeWidth={2.2} /></span>
+      <span className="toast-icon" aria-hidden="true"><Icon name={toneIcon[toast.tone]} size={12} strokeWidth={2.6} /></span>
       <span className="toast-text">{toast.text}</span>
+      {toast.count > 1 && <span className="toast-count" data-count={toast.count} aria-hidden="true" />}
       <button
         type="button"
         className="toast-close"
         aria-label={toast.tone === 'alert' ? t('common.dismissError') : t('common.dismiss')}
         onClick={() => dismissRef.current()}
       ><Icon name="close" size={12} strokeWidth={2.2} /></button>
-      {timed && <span className="toast-progress" style={{ animationDuration: `${TOAST_AUTO_DISMISS_MS}ms` }} aria-hidden="true" />}
+      {duration !== null && <span key={toast.id} className="toast-progress" style={{ animationDuration: `${duration}ms` }} aria-hidden="true" />}
     </div>
   );
 }
 
+/**
+ * Floating feedback for one page. It is fixed to the viewport corner, so a
+ * message appearing or leaving never pushes the page content around.
+ */
 export function ToastStack({ status, alert, onDismiss }: { status: Toast | null; alert: Toast | null; onDismiss: (tone: Toast['tone']) => void }) {
   const renderedAlert = useRendered(alert);
   const renderedStatus = useRendered(status);
@@ -103,4 +109,18 @@ export function ToastStack({ status, alert, onDismiss }: { status: Toast | null;
       {renderedStatus.toast && <ToastItem key={`status-${renderedStatus.toast.id}`} toast={renderedStatus.toast} leaving={renderedStatus.leaving} onDismiss={() => onDismiss('status')} />}
     </div>
   );
+}
+
+/** Shares a page's toast controller with its children and renders the stack. */
+export function ToastScope({ toasts, children }: { toasts: ToastController; children: ReactNode }) {
+  return <ToastContext.Provider value={toasts}>
+    {children}
+    <ToastStack status={toasts.notice} alert={toasts.error} onDismiss={toasts.dismiss} />
+  </ToastContext.Provider>;
+}
+
+/** A self-contained scope for areas without their own controller. */
+export function ToastHost({ children }: { children: ReactNode }) {
+  const toasts = useToasts();
+  return <ToastScope toasts={toasts}>{children}</ToastScope>;
 }

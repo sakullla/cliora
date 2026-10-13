@@ -9,7 +9,7 @@ import { displayPath, shortPath } from '../../lib/paths';
 import { GuideDialog } from '../../components/GuideDialog';
 import { saveShortcutHint } from '../../lib/shortcut';
 import { Icon } from '../../components/Icon';
-import { StatusBanner } from '../../components/StatusBanner';
+import { useFeedback } from '../../lib/toast';
 import i18n from '../../i18n';
 import styles from './ResourceWorkspace.module.css';
 
@@ -265,6 +265,13 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
 
   const recovery = !!visibleIssues.length && <div className={styles.error} role="alert"><strong>{t('tools.skills.recoveryTitle')}</strong><p>{t('tools.skills.recoveryDetail')}</p>{visibleIssues.map((issue) => <div key={issue.operationId} className={styles.fileChange}><strong>{issue.scope === 'global' ? t('tools.apply.global') : t('tools.skills.recoveryProject', { path: issue.projectPath ?? '' })}</strong><p>{issue.detail}</p><p>{t('tools.skills.recoveryTarget', { path: issue.targetPath })}</p><p>{t('tools.skills.recoveryBackup', { path: issue.backupPath })}</p><button type="button" onClick={() => void navigator.clipboard.writeText(issue.backupPath).catch((value) => setError(errorText(value)))}>{t('tools.skills.recoveryCopy')}</button></div>)}<button type="button" onClick={() => void checkRecovery()}>{t('tools.skills.recoveryRecheck')}</button></div>;
   const outcome = result && (result.status === 'failed' || result.detail === t('tools.skills.saved') ? result.detail : result.detail === t('tools.skills.addedToLibrary') ? t('tools.skills.addedToLibraryNote') : result.status === 'removed' ? t('tools.skills.removed', { path: result.path ?? '' }) : t('tools.skills.installed', { path: result.path ?? '' }));
+  // Outside the editor, results float as page toasts instead of pushing the list down.
+  const feedback = useFeedback();
+  useEffect(() => {
+    if (guide) return;
+    if (error) { feedback.setError(error); setError(''); }
+    else if (outcome) { if (result?.status === 'failed') feedback.setWarning(outcome); else feedback.setNotice(outcome); setResult(null); }
+  }, [guide, error, outcome, result, feedback]);
   const installState: { label: string; tone: 'on' | 'warn' | undefined } = installed?.state === 'current' ? { label: t('tools.skills.stateInstalled'), tone: 'on' }
     : installed?.state === 'update_available' ? { label: t('tools.skills.stateUpdate'), tone: 'warn' }
     : installed?.state === 'conflict' ? { label: t('tools.skills.stateConflict'), tone: 'warn' }
@@ -278,8 +285,6 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
     return <section className={styles.workspaceSection} aria-label="Skill">
       {head}
       {recovery}
-      {outcome && <StatusBanner tone={result?.status === 'failed' ? 'warning' : 'success'} onDismiss={() => setResult(null)}>{outcome}</StatusBanner>}
-      {error && <StatusBanner tone="error" onDismiss={() => setError('')}>{error}</StatusBanner>}
       <div className={styles.emptyState}><Icon name="sparkle" size={26} strokeWidth={1.4} /><strong>{t('tools.skills.emptyTitle')}</strong><p>{t('tools.skills.emptyDetail')}</p>{scope === 'project' && !project && <p className={styles.muted}>{t('tools.mcp.pickProjectFirst')}</p>}</div>
     </section>;
   }
@@ -287,8 +292,6 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
   return <section className={styles.workspaceSection} aria-label="Skill">
     {head}
     {recovery}
-    {!guide && outcome && <StatusBanner tone={result?.status === 'failed' ? 'warning' : 'success'} onDismiss={() => setResult(null)}>{outcome}</StatusBanner>}
-    {!guide && error && <StatusBanner tone="error" onDismiss={() => setError('')}>{error}</StatusBanner>}
     <div className={styles.layout}>
     <aside className={styles.list}>
       <div className={styles.listHead}><strong>{t('tools.mcp.activeCount', { count: nativeEntries.length })}</strong></div>

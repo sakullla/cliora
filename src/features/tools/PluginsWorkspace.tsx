@@ -8,7 +8,7 @@ import type { Scope } from '../../types/native';
 import type { PluginAction, PluginEntry, PluginSnapshot, PluginTarget } from '../../types/resources';
 import styles from './ManagementPanel.module.css';
 import { useAccountLabels } from '../library/resourceContexts';
-import { StatusBanner } from '../../components/StatusBanner';
+import { useFeedback } from '../../lib/toast';
 import { SearchField } from '../../components/SearchField';
 import i18n from '../../i18n';
 
@@ -60,8 +60,7 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId }: { to
   const [source, setSource] = useState('');
   const [trusted, setTrusted] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
+  const { setError, setNotice } = useFeedback();
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
   const generation = useRef(0);
@@ -105,7 +104,6 @@ export function PluginsWorkspace({ toolId, scope, projectPath, contextId }: { to
     <div className={styles.header}><div><h2>{t('tools.plugins.title')}</h2><p>{t('tools.plugins.description')}</p></div><div className={styles.actions}><button disabled={busy} onClick={() => void refresh()}>{t('tools.plugins.rescan')}</button></div></div>
     <div className={styles.context}><span>{scope === 'global' ? scopeLabel('user') : projectPath}</span><span>{accountLabel(contextId)}</span></div>
     {busy && <p role="status">{snapshot ? snapshot.baseline ? t('tools.plugins.operating') : t('tools.plugins.verifying') : t('tools.plugins.loading')}</p>}
-    {error && <StatusBanner tone="error" onDismiss={() => setError('')}>{error}</StatusBanner>}{notice && <StatusBanner tone="success" onDismiss={() => setNotice('')}>{notice}</StatusBanner>}
     {snapshot && <>
       {snapshot.capability.actions.some(action => action === 'install' || action === 'update') && <div className={styles.installBox}><div className={styles.create}><label>{t('tools.plugins.source')}<input aria-label={t('tools.plugins.source')} value={source} onChange={event => { setSource(event.target.value); setTrusted(false); }} placeholder={snapshot.capability.sources} disabled={busy} /></label>
         <button className={styles.primary} disabled={busy || !source.trim() || !trusted || !snapshot.capability.actions.includes('install')} onClick={() => void operate('install')}>{uiAdapterFor(toolId).plugins?.installLabel ?? t('tools.plugins.installDefault')}</button></div>
