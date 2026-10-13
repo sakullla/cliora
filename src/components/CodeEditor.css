@@ -16,7 +16,7 @@
 .code-editor .cm-gutters { border-right: 1px solid var(--line); background: var(--surface-2); color: var(--text-3); font-size: 11px; }
 .code-editor .cm-lineNumbers .cm-gutterElement { padding: 0 10px 0 12px; }
 .code-editor .cm-activeLine { background: color-mix(in srgb, var(--accent) 6%, transparent); }
-.code-editor .cm-activeLineGutter { background: color-mix(in srgb, var(--accent) 8%, transparent); color: var(--text-2); }
+.code-editor .cm-activeLineGutter { background: color-mix(in srgb, var(--accent) 7%, transparent); color: var(--text-2); }
 .code-editor .cm-selectionBackground, .code-editor .cm-focused .cm-selectionBackground { background: var(--accent-ring) !important; }
 .code-editor .cm-focused { outline: none; }
 .code-editor .cm-cursor { border-left: 2px solid var(--accent); }

@@ -386,7 +386,7 @@ html[data-native="macos"] .content-inner { padding-top: 16px; }
 .error-copy { display: grid; gap: 3px; min-width: 0; flex: 1; }
 .error-copy span { color: var(--text-2); }
 .error-banner strong { font-weight: 650; }
-.error-banner code { font-size: 11px; white-space: normal; overflow-wrap: anywhere; color: var(--text-2); background: color-mix(in srgb, var(--danger) 8%, transparent); }
+.error-banner code { font-size: 11px; white-space: normal; overflow-wrap: anywhere; color: var(--text-2); background: color-mix(in srgb, var(--danger) 6%, transparent); }
 .error-banner button { min-height: 26px; width: 26px; padding: 0; border: 0; background: transparent; color: inherit; box-shadow: none; }
 .error-banner button:hover:not(:disabled) { background: color-mix(in srgb, var(--danger) 12%, transparent); }
 
@@ -884,7 +884,7 @@ button[data-copied="true"], button[data-copied="true"]:hover:not(:disabled) { bo
   width: 20px;
   height: 20px;
   border-radius: 99px;
-  background: color-mix(in srgb, var(--toast-tone) 14%, transparent);
+  background: color-mix(in srgb, var(--toast-tone) 6%, transparent);
   color: var(--toast-tone);
 }
 .toast-text {
