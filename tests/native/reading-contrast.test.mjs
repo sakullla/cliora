@@ -262,3 +262,32 @@ test('body text on the translucent selection stays inside the reading band', () 
     }
   }
 });
+
+test('description text stays readable on the third surface', () => {
+  for (const [name, theme] of themes) {
+    atLeast(absLc(hexBytes(theme['text-3']), hexBytes(theme['surface-3'])), 75, `${name} --text-3 on --surface-3`);
+  }
+});
+
+test('comments, syntax colors, and secondary text stay readable on selection and the cursor line', () => {
+  const declared = editor.match(/\.cm-activeLine\s*\{[^}]*color-mix\(in srgb, var\(--accent\) ([\d.]+)%/);
+  assert.ok(declared, 'cursor line accent mix');
+  const cursorAlpha = Number(declared[1]) / 100;
+  for (const [name, theme, code] of themes) {
+    const ring = parseColor(theme['accent-ring']);
+    const surface = hexBytes(theme['surface-2']);
+    const selected = composite(ring.rgb, surface, ring.alpha);
+    const cursorLine = composite(hexBytes(theme.accent), surface, cursorAlpha);
+    const samples = [
+      ['text-2', hexBytes(theme['text-2'])],
+      ['text-3', hexBytes(theme['text-3'])],
+      ['code-property', hexBytes(code['code-property'])],
+      ['code-string', hexBytes(code['code-string'])],
+      ['code-literal', hexBytes(code['code-literal'])],
+    ];
+    for (const [token, rgb] of samples) {
+      atLeast(absLc(rgb, selected), 75, `${name} --${token} on selection over --surface-2`);
+      atLeast(absLc(rgb, cursorLine), 75, `${name} --${token} on the cursor line`);
+    }
+  }
+});
