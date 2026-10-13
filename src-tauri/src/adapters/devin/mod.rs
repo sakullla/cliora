@@ -117,17 +117,16 @@ impl CliAdapter for Devin {
         }
     }
     fn native_binary_directories(&self, home: &Path) -> Vec<PathBuf> {
+        let mut dirs = vec![home.join(".local/bin")];
         if cfg!(windows) {
-            vec![home.join("AppData/Local/devin/cli/bin")]
-        } else {
-            Vec::new()
+            dirs.push(home.join("AppData/Local/devin/cli/bin"));
         }
+        dirs
     }
     fn recognizes_native_install_path(&self, path: &Path) -> bool {
-        cfg!(windows)
-            && path
-                .parent()
-                .is_some_and(|parent| parent.ends_with("devin/cli/bin"))
+        let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
+        let devin = name.eq_ignore_ascii_case("devin") || name.eq_ignore_ascii_case("devin.exe");
+        devin && path.parent().is_some_and(|parent| parent.ends_with("devin/cli/bin") || parent.ends_with(".local/bin"))
     }
     fn native_files(
         &self,
@@ -355,11 +354,24 @@ impl CliAdapter for Devin {
     fn install_guidance(&self) -> (&'static str, &'static str) {
         (
             "https://devin.ai",
-            "Devin CLI 经官方 setup.ps1/install.sh 安装并自更新（AppData\\Local\\devin\\cli\\bin）；登录由 devin auth login 原生完成，Cliora 不接管凭据。",
+            "Windows：irm https://static.devin.ai/cli/install.ps1 | iex，安装到 %LOCALAPPDATA%\\devin\\cli\\bin。macOS/Linux 使用 https://cli.devin.ai/install.sh，命令放在 ~/.local/bin。已安装后重新执行同一安装命令。登录由 devin auth login 原生完成，Cliora 不接管凭据。",
         )
     }
     fn install_command(&self) -> Option<String> {
-        None
+        self.native_install_command()
+    }
+    fn native_install_command(&self) -> Option<String> {
+        Some(
+            if cfg!(windows) {
+                "irm https://static.devin.ai/cli/install.ps1 | iex"
+            } else {
+                "curl -fsSL https://cli.devin.ai/install.sh | bash"
+            }
+            .into(),
+        )
+    }
+    fn upgrade_command(&self, source: &str) -> Option<String> {
+        (source == "native").then(|| self.native_install_command()).flatten()
     }
     fn descriptor(&self) -> AdapterDescriptor {
         AdapterDescriptor {
@@ -441,7 +453,13 @@ mod tests {
         assert!(!Devin.history_resume_version_supported("3001.0.0"));
         assert!(!Devin.history_resume_version_supported("2999.9.9"));
         assert!(!Devin.node_required_when_missing());
-        assert_eq!(Devin.install_command(), None);
+        let install = Devin.install_command().unwrap();
+        assert!(install.contains(if cfg!(windows) { "install.ps1" } else { "install.sh" }));
+        assert_eq!(Devin.upgrade_command("native"), Devin.native_install_command());
+        assert!(Devin.upgrade_command("unknown").is_none());
+        assert!(Devin.recognizes_native_install_path(Path::new(r"C:\Users\me\AppData\Local\devin\cli\bin\devin.exe")));
+        assert!(Devin.recognizes_native_install_path(Path::new("/home/example/.local/bin/devin")));
+        assert!(!Devin.recognizes_native_install_path(Path::new("/home/example/.local/bin/other")));
     }
 
     #[test]

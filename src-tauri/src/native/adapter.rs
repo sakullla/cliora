@@ -153,6 +153,12 @@ fn provider_presets(adapter: &dyn CliAdapter, known: bool) -> Vec<ProviderPreset
 }
 
 fn source_of(path: &Path, adapter: &dyn CliAdapter) -> &'static str {
+    // Official prefix launchers can mention node_modules while living in the
+    // adapter's install directory. That directory is the native channel, so
+    // an npm global reinstall must not be offered for it.
+    if adapter.recognizes_native_install_path(path) {
+        return "native";
+    }
     #[cfg(target_os = "macos")]
     if !adapter.npm_package().is_empty() && path.canonicalize().is_ok_and(|target| {
         target.to_string_lossy().contains(&format!("/node_modules/{}/", adapter.npm_package()))
@@ -180,9 +186,6 @@ fn source_of(path: &Path, adapter: &dyn CliAdapter) -> &'static str {
                 return "npm_shim";
             }
         }
-    }
-    if adapter.recognizes_native_install_path(path) {
-        return "native";
     }
     "unknown"
 }
@@ -1209,6 +1212,24 @@ mod tests {
             node_dependency_status(adapters::known(CliId::Pi), Some((22, 19, 0))),
             "found"
         );
+
+        let prefix = temp.path().join(".minimax-code");
+        std::fs::create_dir_all(&prefix).unwrap();
+        let official = prefix.join("mcode.cmd");
+        std::fs::write(&official, "@\"%~dp0node_modules\\@minimax-ai\\code\\cli.js\" %*\r\n").unwrap();
+        assert_eq!(source_of(&official, &adapters::MINIMAX_CODE), "native");
+        assert_eq!(
+            adapters::MINIMAX_CODE.upgrade_command("native").as_deref(),
+            Some("mcode update")
+        );
+        let npm_dir = temp.path().join("npm");
+        std::fs::create_dir_all(&npm_dir).unwrap();
+        let npm = npm_dir.join("mcode.cmd");
+        std::fs::write(&npm, "@\"%dp0%\\node_modules\\@minimax-ai\\code\\cli.js\" %*\r\n").unwrap();
+        assert_eq!(source_of(&npm, &adapters::MINIMAX_CODE), "npm_shim");
+        let npm_upgrade = adapters::MINIMAX_CODE.upgrade_command("npm_shim").unwrap();
+        assert!(npm_upgrade.contains("@minimax-ai/code@latest"));
+        assert!(npm_upgrade.contains("better-sqlite3"));
     }
 
     #[test]

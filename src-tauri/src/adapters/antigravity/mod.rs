@@ -338,12 +338,30 @@ impl CliAdapter for Antigravity {
     }
     fn install_guidance(&self) -> (&'static str, &'static str) {
         (
-            "https://antigravity.google",
-            "Antigravity CLI（agy）经官方 install.ps1 安装到 %LOCALAPPDATA%\\agy\\bin。",
+            "https://antigravity.google/cli",
+            "Windows：irm https://antigravity.google/cli/install.ps1 | iex，安装到 %LOCALAPPDATA%\\agy\\bin。macOS/Linux 使用 install.sh，安装到 ~/.local/bin。已安装后用 agy update；安装脚本发现已有二进制时不会覆盖。",
         )
     }
+    fn recognizes_native_install_path(&self, path: &Path) -> bool {
+        let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
+        let agy = name.eq_ignore_ascii_case("agy") || name.eq_ignore_ascii_case("agy.exe");
+        agy && path.parent().is_some_and(|parent| parent.ends_with("agy/bin") || parent.ends_with(".local/bin"))
+    }
     fn install_command(&self) -> Option<String> {
-        None
+        self.native_install_command()
+    }
+    fn native_install_command(&self) -> Option<String> {
+        Some(
+            if cfg!(windows) {
+                "irm https://antigravity.google/cli/install.ps1 | iex"
+            } else {
+                "curl -fsSL https://antigravity.google/cli/install.sh | bash"
+            }
+            .into(),
+        )
+    }
+    fn upgrade_command(&self, source: &str) -> Option<String> {
+        (source == "native").then(|| "agy update".to_owned())
     }
     fn descriptor(&self) -> AdapterDescriptor {
         AdapterDescriptor {
@@ -489,6 +507,13 @@ mod tests {
         assert_eq!(Antigravity.file_kind("settings").unwrap(), FileKind::Json);
         assert!(Antigravity.file_kind("config").is_err());
         assert!(!Antigravity.node_required_when_missing());
+        let install = Antigravity.install_command().unwrap();
+        assert!(install.contains(if cfg!(windows) { "install.ps1" } else { "install.sh" }));
+        assert_eq!(Antigravity.upgrade_command("native").as_deref(), Some("agy update"));
+        assert!(Antigravity.upgrade_command("unknown").is_none());
+        assert!(Antigravity.recognizes_native_install_path(Path::new(r"C:\Users\me\AppData\Local\agy\bin\agy.exe")));
+        assert!(Antigravity.recognizes_native_install_path(Path::new("/home/example/.local/bin/agy")));
+        assert!(!Antigravity.recognizes_native_install_path(Path::new("/home/example/.local/bin/other")));
         // The official installer's binary directory is probed even when PATH
         // registration is lost.
         for directory in Antigravity.native_binary_directories(home) {
