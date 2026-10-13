@@ -1,7 +1,7 @@
 .code-editor {
-  --code-property: #6d4514;
-  --code-string: #1f5936;
-  --code-literal: #543c8f;
+  --code-property: #693414;
+  --code-string: #1f4b36;
+  --code-literal: #53298f;
   min-width: 0;
   overflow: hidden;
   border: 1px solid var(--line-strong);
@@ -27,7 +27,7 @@
 .code-editor .code-comment { color: var(--text-3); font-style: italic; }
 .code-editor .code-heading, .code-editor .code-strong { color: var(--accent); font-weight: 650; }
 .code-editor-compact .cm-editor, .code-editor-compact .cm-scroller { min-height: 110px; max-height: 260px; }
-:root[data-theme="dark"] .code-editor { --code-property: #f5d8a7; --code-string: #b4e0be; --code-literal: #e3d3fc; }
+:root[data-theme="dark"] .code-editor { --code-property: #f7e0b9; --code-string: #ccead3; --code-literal: #eadefd; }
 
 .code-menu { position: fixed; z-index: 1000; width: 200px; padding: 4px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-lg); animation: dialog-in 140ms var(--ease); }
 .code-menu button { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 30px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; box-shadow: none; color: var(--text); font-size: 12.5px; line-height: 1.5; font-weight: 450; text-align: left; cursor: pointer; }
