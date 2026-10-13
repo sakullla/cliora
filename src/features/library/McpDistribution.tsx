@@ -1,5 +1,5 @@
 import { removalContext, useResourceContexts, useAccountLabels } from './resourceContexts';
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { forwardRef, useEffect, useId, useImperativeHandle, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CodeEditor } from '../../components/CodeEditor';
 import { FilterSelect } from '../../components/FilterSelect';
@@ -9,9 +9,12 @@ import type { Project } from '../../types/launch';
 import type { AdapterDescriptor, Scope } from '../../types/native';
 import type { McpDefinition, McpPlacement, McpTargetRequest, McpTargetResult } from '../../types/resources';
 import { samePath, scopeLabel } from './CliMarks';
-import { CliTargetGrid } from './CliTargetGrid';
+import { ToolIcon } from '../../components/ToolIcon';
+import { Icon } from '../../components/Icon';
 import i18n from '../../i18n';
-import styles from './LibraryPage.module.css';
+import styles from './LibraryMcp.module.css';
+
+type TargetState = 'loading' | 'blocked' | 'placed' | 'removing' | 'adding' | 'idle';
 
 function text(error: unknown) {
   return error && typeof error === 'object' && 'message' in error ? String(error.message) : i18n.t('common.operationFailed');
@@ -34,6 +37,7 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
   onConflictChange: (active: boolean) => void;
 }>(function McpDistribution({ definition, tools, projects, placements, formStamp, onWillDistribute, onConflictChange }, ref) {
   const { t } = useTranslation();
+  const panelId = useId();
   const placedFor = (nextScope: Scope, nextPath: string | null) => placements.filter((item) => item.definitionId === definition.id && contexts.matches(item) && item.scope === nextScope && (nextScope === 'global' || samePath(item.projectPath, nextPath)));
   const idsFor = (nextScope: Scope, nextPath: string | null) => placedFor(nextScope, nextPath).map((item) => item.toolId);
   const contextLabel = useAccountLabels();
@@ -249,29 +253,76 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
     dismiss: () => { setPreview(null); setResults(null); onConflictChange(false); },
   }), [selected, scope, activePath, enabled, definition, placements, formStamp, preview, contexts.stamp]);
 
-  const placedNow = new Set(idsFor(scope, activePath));
+  const placedHere = placedFor(scope, activePath);
+  const scopeName = scopeLabel(scope, activePath, projects);
+  const rows = tools.map((tool) => {
+    const target = targetFor(tool.id);
+    const result = contexts.result(target);
+    const place = placedHere.find((item) => item.toolId === tool.id);
+    const checked = selected.includes(tool.id);
+    const state: TargetState = result.status === 'pending' ? 'loading' : result.status === 'failed' ? 'blocked' : place && checked ? 'placed' : place ? 'removing' : checked ? 'adding' : 'idle';
+    const status = state === 'loading' ? t('library.distribute.stateLoading')
+      : result.status === 'failed' ? result.error
+      : state === 'placed' ? (place?.enabled === false ? t('library.distribute.statePlacedDisabled') : t('library.distribute.statePlaced'))
+      : state === 'removing' ? t('library.distribute.stateRemoving')
+      : state === 'adding' ? t('library.distribute.stateAdding')
+      : t('library.distribute.stateIdle');
+    return { tool, state, status, checked };
+  });
+  const inView = (issue: { toolId: string; scope: Scope; projectPath: string | null }) => issue.scope === scope && samePath(issue.projectPath, activePath) && tools.some((tool) => tool.id === issue.toolId);
+  const otherAccounts = mine.filter((item) => contexts.ready(item) && !contexts.matches(item));
+  const adding = rows.filter((row) => row.state === 'adding').map((row) => row.tool.name);
+  const removing = rows.filter((row) => row.state === 'removing').map((row) => row.tool.name);
+  const outside = outsidePlacements().length;
+  const summary = [
+    adding.length ? t('library.distribute.summaryAdd', { names: adding.join('、') }) : '',
+    removing.length ? t('library.distribute.summaryRemove', { names: removing.join('、') }) : '',
+    outside ? t('library.distribute.summaryOutside', { count: outside }) : '',
+  ].filter(Boolean);
 
-  return <div className={styles.distribute}>
-    <h3 className={styles.sectionTitle}>{t('library.distribute.title')}</h3>
-    <p>{t('library.distribute.description')}</p>
-    <FilterSelect className={styles.scopePick} label={t('library.distribute.scopeLabel')} triggerDetail={false} value={scope === 'global' ? '__global__' : projectPath ?? ''} options={[
-      { value: '__global__', label: t('tools.apply.global') },
-      ...projects.map((item) => ({ value: item.path ?? `id:${item.id}`, label: item.name, detail: item.path ? shortPath(item.path) : undefined, note: item.available && item.path ? undefined : t('library.page.staleDir'), disabled: !item.available || !item.path })),
-      ...(scope === 'project' && projectPath && !projects.some((item) => samePath(item.path, projectPath)) ? [{ value: projectPath, label: projectPath.split(/[\\/]/).filter(Boolean).at(-1) || projectPath, detail: shortPath(projectPath), note: t('library.distribute.projectUnlinked') }] : []),
-    ]} placeholder={t('library.distribute.projectPlaceholder')} searchLabel={t('home.launcher.searchLabel')} onChange={(value) => { if (value === '__global__') applyScope('global'); else applyScope('project', value); }} />
-    <label className={styles.choice}><input type="checkbox" checked={enabled} onChange={(event) => { setEnabled(event.target.checked); setPreview(null); setResults(null); onConflictChange(false); }} />{t('library.distribute.enableAfterWrite')}</label>
-    <CliTargetGrid tools={tools} selected={selected} disabled={(id) => !contexts.ready(targetFor(id))} titleFor={(id) => placedNow.has(id) ? t('library.distribute.placedTitle') : t('library.distribute.unplacedTitle')} onToggle={(id, checked) => choose(checked ? [...selected, id] : selected.filter((item) => item !== id))} />
-    {mine.filter((item) => contexts.ready(item) && !contexts.matches(item)).map((item) => <p key={JSON.stringify([item.toolId, item.scope, item.projectPath, item.contextId])}>{toolName(item.toolId)} · {scopeLabel(item.scope, item.projectPath, projects)} · {contextLabel(item.contextId)}{t('library.distribute.otherAccountSuffix')}</p>)}
-    {contexts.issues.map((issue) => <p key={issue.key} role="status">{t('library.distribute.issue', { tool: toolName(issue.toolId), scope: scopeLabel(issue.scope, issue.projectPath, projects), detail: issue.detail })}</p>)}
-    {preview && <div className={styles.distribute} role="group" aria-label={t('tools.mcp.conflictLabel')}>
-      <p><strong>{t('library.distribute.conflictTitle')}</strong>{t('library.distribute.conflictHint')}</p>
-      {preview.map((item) => <div key={JSON.stringify([item.toolId, item.scope, item.projectPath, item.contextId])}>
-        <p><strong>{toolName(item.toolId)}</strong> · {item.status === 'conflict' ? t('library.distribute.statusConflict') : item.status === 'ready' ? t('library.distribute.statusReady') : t('library.distribute.statusBlocked')}{item.path ? ` · ${item.path}` : ''}</p>
-        <p>{item.detail}</p>
-        {(item.existing !== null || item.proposed !== null) && <div className={styles.fields}><CodeEditor compact label={t('tools.mcp.conflictCurrent')} format="json" readOnly value={item.existing === null ? 'null' : JSON.stringify(item.existing, null, 2)} /><CodeEditor compact label={t('library.distribute.writtenMcp')} format="json" readOnly value={item.proposed === null ? 'null' : JSON.stringify(item.proposed, null, 2)} /></div>}
+  return <div className={styles.distributeContents}>
+    <section className={styles.targetPanel} aria-labelledby={`${panelId}-title`}>
+      <div className={styles.panelHead}>
+        <h3 id={`${panelId}-title`}>{t('library.distribute.title')}</h3>
+        <p>{t('library.distribute.description')}</p>
+      </div>
+      <FilterSelect className={styles.scopePick} label={t('library.distribute.scopeLabel')} triggerDetail={false} value={scope === 'global' ? '__global__' : projectPath ?? ''} options={[
+        { value: '__global__', label: t('tools.apply.global') },
+        ...projects.map((item) => ({ value: item.path ?? `id:${item.id}`, label: item.name, detail: item.path ? shortPath(item.path) : undefined, note: item.available && item.path ? undefined : t('library.page.staleDir'), disabled: !item.available || !item.path })),
+        ...(scope === 'project' && projectPath && !projects.some((item) => samePath(item.path, projectPath)) ? [{ value: projectPath, label: projectPath.split(/[\\/]/).filter(Boolean).at(-1) || projectPath, detail: shortPath(projectPath), note: t('library.distribute.projectUnlinked') }] : []),
+      ]} placeholder={t('library.distribute.projectPlaceholder')} searchLabel={t('home.launcher.searchLabel')} onChange={(value) => { if (value === '__global__') applyScope('global'); else applyScope('project', value); }} />
+      <ul className={styles.targetList} aria-label={t('library.distribute.targetsAria', { scope: scopeName })}>{rows.map((row) => <li key={row.tool.id} data-state={row.state}>
+        <label title={row.state === 'placed' ? t('library.distribute.placedTitle') : row.state === 'idle' ? t('library.distribute.unplacedTitle') : undefined}>
+          <ToolIcon toolId={row.tool.id} size={22} />
+          <span className={styles.targetText}><span className={styles.targetName}>{row.tool.name}</span><small id={`${panelId}-${row.tool.id}`}>{row.status}</small></span>
+          <input type="checkbox" aria-label={row.tool.name} aria-describedby={`${panelId}-${row.tool.id}`} disabled={row.state === 'loading' || row.state === 'blocked'} checked={row.checked} onChange={(event) => choose(event.target.checked ? [...selected, row.tool.id] : selected.filter((item) => item !== row.tool.id))} />
+        </label>
+      </li>)}</ul>
+      <label className={styles.choice}><input type="checkbox" checked={enabled} onChange={(event) => { setEnabled(event.target.checked); setPreview(null); setResults(null); onConflictChange(false); }} />{t('library.distribute.enableAfterWrite')}</label>
+      {summary.length === 0 && !selected.length && !mine.length && <p className={styles.summary} data-quiet>{t('library.distribute.summaryNone')}</p>}
+      {summary.length > 0 && <p className={styles.summary}>{summary.join('；')}</p>}
+      {otherAccounts.length > 0 && <div className={styles.notes}>
+        <p>{t('library.distribute.otherAccountHint')}</p>
+        {otherAccounts.map((item) => <p key={JSON.stringify([item.toolId, item.scope, item.projectPath, item.contextId])}>{toolName(item.toolId)} · {scopeLabel(item.scope, item.projectPath, projects)} · {contextLabel(item.contextId)}{t('library.distribute.otherAccountSuffix')}</p>)}
+      </div>}
+      {contexts.issues.some((issue) => !inView(issue)) && <div className={styles.notes} data-tone="warning">
+        {contexts.issues.filter((issue) => !inView(issue)).map((issue) => <p key={issue.key} role="status">{t('library.distribute.issue', { tool: toolName(issue.toolId), scope: scopeLabel(issue.scope, issue.projectPath, projects), detail: issue.detail })}</p>)}
+      </div>}
+      {results && <div className={styles.notes} role="status">{results.map((item) => <p key={JSON.stringify([item.toolId, item.scope, item.projectPath, item.contextId])}>{t('library.distribute.resultEntry', { tool: toolName(item.toolId), result: item.status === 'written' ? t('library.distribute.resultWritten') : item.detail })}</p>)}</div>}
+      {error && <p className={styles.error} role="alert">{error}</p>}
+    </section>
+    {preview && <div className={styles.conflict} role="group" aria-label={t('tools.mcp.conflictLabel')}>
+      <div className={styles.conflictHead}><Icon name="alert" size={15} /><p><strong>{t('library.distribute.conflictTitle')}</strong>{t('library.distribute.conflictHint')}</p></div>
+      {preview.map((item) => <div className={styles.conflictItem} key={JSON.stringify([item.toolId, item.scope, item.projectPath, item.contextId])}>
+        <div className={styles.conflictTarget}>
+          <ToolIcon toolId={item.toolId} size={18} />
+          <strong>{toolName(item.toolId)}</strong>
+          <span className={styles.conflictState} data-state={item.status}>{item.status === 'conflict' ? t('library.distribute.statusConflict') : item.status === 'ready' ? t('library.distribute.statusReady') : t('library.distribute.statusBlocked')}</span>
+          {item.path && <code title={item.path}>{item.path}</code>}
+        </div>
+        {item.detail && <p>{item.detail}</p>}
+        {(item.existing !== null || item.proposed !== null) && <div className={styles.diff}><CodeEditor compact label={t('tools.mcp.conflictCurrent')} format="json" readOnly value={item.existing === null ? 'null' : JSON.stringify(item.existing, null, 2)} /><CodeEditor compact label={t('library.distribute.writtenMcp')} format="json" readOnly value={item.proposed === null ? 'null' : JSON.stringify(item.proposed, null, 2)} /></div>}
       </div>)}
     </div>}
-    {results && <div role="status">{results.map((item) => <p key={JSON.stringify([item.toolId, item.scope, item.projectPath, item.contextId])}>{t('library.distribute.resultEntry', { tool: toolName(item.toolId), result: item.status === 'written' ? t('library.distribute.resultWritten') : item.detail })}</p>)}</div>}
-    {error && <p className={styles.error} role="alert">{error}</p>}
   </div>;
 });

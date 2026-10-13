@@ -21,9 +21,9 @@ if((process.argv.includes('--features')||process.argv.includes('--workflows')||p
 if(process.argv.includes('--list')){console.log(selectedScenarios.join('\n'));process.exit(0);}
 const root=fileURLToPath(new URL('../',import.meta.url)).replace(/\\/g,'/').replace(/\/$/,'');
 const workflowsOnly=process.argv.includes('--features')||process.argv.includes('--workflows');
-const fullCapture=!process.argv.some(arg=>['--features','--workflows','--records','--sessions','--connections','--skills'].includes(arg));
-const captureMode=workflowsOnly?'features':process.argv.includes('--sessions')?'sessions':process.argv.includes('--records')?'records':process.argv.includes('--connections')?'connections':process.argv.includes('--skills')?'skills':'full';
-const manifestName=`capture-ui${['features','sessions','records','connections','skills'].includes(captureMode)?'-'+captureMode:''}-manifest.json`;
+const fullCapture=!process.argv.some(arg=>['--features','--workflows','--records','--sessions','--connections','--skills','--mcp'].includes(arg));
+const captureMode=workflowsOnly?'features':process.argv.includes('--sessions')?'sessions':process.argv.includes('--records')?'records':process.argv.includes('--connections')?'connections':process.argv.includes('--skills')?'skills':process.argv.includes('--mcp')?'mcp':'full';
+const manifestName=`capture-ui${['features','sessions','records','connections','skills','mcp'].includes(captureMode)?'-'+captureMode:''}-manifest.json`;
 const out=process.env.CLIORA_CAPTURE_OUT ?? root+'/docs/verification/ui'; fs.mkdirSync(out,{recursive:true});
 const previewUrl=process.env.CLIORA_PREVIEW_URL??'http://127.0.0.1:14736';
 let previewReady=false;
@@ -56,7 +56,8 @@ async function mock(initialTheme){
    byProject:[{...group('project:cliora','栖点 · 桌面工具',null,null,.71),projectId:'cliora'},{...group('dir:c:/projects/site','site',null,null,.21)},{...group('unknown','未归类',null,null,.08)}],
    topSessions:records.slice(0,5).map((r,i)=>({id:r.id,toolId:r.toolId,title:r.title,model:r.model,updatedAt:r.updatedAt,totals:part([.31,.22,.14,.09,.05][i])})),
    models:['deepseek-v4.1-flash','devin/swe-2','glm-5.3','gpt-6-astra','gpt-6.1-sol'],untimedRequests:0,duplicateRequests:3,partialSessions:1,staleSessions:0,mixedCurrency:false,latestEventAt:now-120000,priceSources:['codex / gpt-6-astra · OpenAI 公开价'],scans};};
- const definitions=[{id:'mcp-1',name:'filesystem',transport:'stdio',command:'npx',args:['-y','@modelcontextprotocol/server-filesystem','C:/Projects'],url:null,env:{},headers:{},version:1}];
+ const definitions=[{id:'mcp-1',name:'filesystem',transport:'stdio',command:'npx',args:['-y','@modelcontextprotocol/server-filesystem','C:/Projects'],url:null,env:{},headers:{},version:1},{id:'mcp-2',name:'github',transport:'http',command:'',args:[],url:'https://api.githubcopilot.com/mcp/',env:{},headers:{Authorization:'Bearer ${GITHUB_TOKEN}'},version:1},{id:'mcp-3',name:'chrome-devtools',transport:'stdio',command:'npx',args:['-y','chrome-devtools-mcp@latest'],url:null,env:{CHROME_PATH:'C:/Program Files/Google/Chrome/Application/chrome.exe'},headers:{},version:1}];
+ const mcpPlacements=[{definitionId:'mcp-1',toolId:'codex',scope:'global',projectPath:null,enabled:true},{definitionId:'mcp-1',toolId:'claude_code',scope:'global',projectPath:null,enabled:true},{definitionId:'mcp-2',toolId:'claude_code',scope:'project',projectPath:'C:\\Projects\\cliora',enabled:true},{definitionId:'mcp-3',toolId:'codex',scope:'global',projectPath:null,enabled:false}];
  const skills=[{id:'skill-1',name:'code-review',description:'检查变更中的正确性、边界条件与可维护性',fileCount:3,digest:'abc',source:'local_directory',version:1}];
  const sync={configured:false,enabled:false,endpoint:null,lastSuccess:null,lastError:null,pendingChanges:0,retryAfter:null,uploaded:0,downloaded:0,conflicts:[]};
  const quotaConfig={schemaVersion:1,label:'GLM Coding Plan · 中国大陆',site:'https://open.bigmodel.cn',identity:{profileId:'codex-work',accountId:null,contextId:null,subject:'plan',subjectId:null},program:{kind:'profile_builtin',provider:'glm',templateVersion:1,profileVersion:1},parameters:{region:'cn'},targets:[{origin:'https://open.bigmodel.cn',allowPrivateNetwork:false}],enabled:true,refreshIntervalSeconds:0};
@@ -87,7 +88,7 @@ async function mock(initialTheme){
   if(command==='scan_native_plugins')return {target:args.target,capability:{version:versions[args.target.toolId],sources:'plugin@marketplace',actions:['install','update','enable','disable','uninstall'],project:true,detail:'静态安装状态；重启会话后加载'},entries:[pluginEntry,{...pluginEntry,id:'required@org',name:'Organization Plugin',policy:'REQUIRED',readOnly:true}],baseline:'capture-plugins',detail:'合成插件列表，实际加载未验证'};
   if(command==='scan_native_agents')return {target:args.target,capability:{version:versions[args.target.toolId],supported:true,format:'markdown',template:agentEntry.content,detail:'下一次委派读取定义'},entries:[agentEntry,{...agentEntry,id:'plugin-reviewer',name:'plugin-reviewer',owner:'插件：code-review@official',readOnly:true}],baseline:'capture-agents',detail:'合成原生定义，插件所属定义只读'};
   if(command==='list_projects')return projects;
-  if(command==='get_registered_tool_workspace'){const id=args.toolId;const format=id==='codex'||id==='grok'?'toml':'json';const file=format==='toml'?'config.toml':'settings.json';const text=format==='toml'?'# 日常开发\nmodel = "gpt-6-astra"\nmodel_reasoning_effort = "high"\n\n[projects."C:/Projects/cliora"]\ntrust_level = "trusted"':JSON.stringify({model:'claude-sonnet-4-6',permissions:{allow:['Read','Edit']}},null,2);const profile={id:id+'-daily',tool:id,name:'日常开发',version:1,revision:'r1',inheritCommon:true,files:{settings:text},suppressed:{},nativeCredentials:{},connection:null};return {probe:{selectedPath:'C:/Tools/'+id+'.cmd',installations:[{path:'C:/Tools/'+id+'.cmd',version:versions[id],status:'available',source:'npm_shim'}],nativeFiles:[{role:'settings',path:'C:/Users/local/.'+id+'/'+file,format,writable:true,sensitive:false}],nativeWrites:{state:'supported',reason:'可编辑与应用原生配置'},interfaceFormats:['openai_chat'],providerPresets:[],dependencies:[],installUrl:'https://example.com',upgradeHint:'沿用官方安装方式升级',installCommand:'npm install -g '+id,upgradeCommand:null,connectionPolicy:connectionPolicy(id,args.scope??'global')},profiles:[profile,{...profile,id:id+'-work',name:id==='codex'?'GLM 官方套餐':'工作项目',version:1,inheritCommon:false,authentication:{kind:'api_key'},connection:id==='codex'?{providerId:'glm',interfaceFormat:'openai_responses',baseUrl:'https://open.bigmodel.cn/api/coding/paas/v4',model:'glm-5.3',secretRef:'synthetic-profile-key',authEnvVar:null}:null}],common:{tool:id,version:1,revision:'c1',files:{settings:format==='toml'?'# 所有配置共享的设置':'{}'}},binding:{profileId:profile.id,profileVersion:1},snapshots:[{role:'settings',fingerprint:'hash',error:null}],recoveryNeeded:[],customPath:null};}
+  if(command==='get_registered_tool_workspace'){const id=args.toolId;const format=id==='codex'||id==='grok'?'toml':'json';const file=format==='toml'?'config.toml':'settings.json';const text=format==='toml'?'# 日常开发\nmodel = "gpt-6-astra"\nmodel_reasoning_effort = "high"\n\n[projects."C:/Projects/cliora"]\ntrust_level = "trusted"':JSON.stringify({model:'claude-sonnet-4-6',permissions:{allow:['Read','Edit']}},null,2);const profile={id:id+'-daily',tool:id,name:'日常开发',version:1,revision:'r1',inheritCommon:true,files:{settings:text},suppressed:{},nativeCredentials:{},connection:null};return {probe:{selectedPath:'C:/Tools/'+id+'.cmd',installations:[{path:'C:/Tools/'+id+'.cmd',version:versions[id],status:'available',source:'npm_shim'}],nativeFiles:[{role:'settings',path:'C:/Users/local/.'+id+'/'+file,format,writable:true,sensitive:false}],nativeWrites:{state:'supported',reason:'可编辑与应用原生配置'},interfaceFormats:['openai_chat'],providerPresets:[],dependencies:[],installUrl:'https://example.com',upgradeHint:'沿用官方安装方式升级',installCommand:'npm install -g '+id,upgradeCommand:null,connectionPolicy:connectionPolicy(id,args.scope??'global')},profiles:[profile,{...profile,id:id+'-work',name:id==='codex'?'GLM 官方套餐':'工作项目',version:1,inheritCommon:false,authentication:{kind:'api_key'},connection:id==='codex'?{providerId:'glm',interfaceFormat:'openai_responses',baseUrl:'https://open.bigmodel.cn/api/coding/paas/v4',model:'glm-5.3',secretRef:'synthetic-profile-key',authEnvVar:null}:null}],common:{tool:id,version:1,revision:'c1',files:{settings:format==='toml'?'# 所有配置共享的设置':'{}'}},binding:{profileId:profile.id,profileVersion:1},snapshots:[{role:'settings',fingerprint:'hash',error:null}],recoveryNeeded:[],customPath:null,effectiveContextId:null};}
   if(command==='inspect_registered_native_draft')return {model:null,providerId:null,connection:null,reasoningEffort:'high',projectedModels:null};
   if(command==='preview_registered_native_profile')return {documents:{settings:{model:'gpt-6-astra',model_reasoning_effort:'high'}},sources:{settings:{model:'命名配置'}}};
   if(command==='read_registered_native_file_for_edit')return '# 完整磁盘原文\nmodel = "gpt-6-astra"';
@@ -95,8 +96,8 @@ async function mock(initialTheme){
   if(command==='get_tray_status')return {available:true,error:null};
   if(command==='list_library_items')return library.filter(i=>i.kind===args.kind&&(!args.search||(i.title+i.body+i.category).includes(args.search)));
   if(command==='list_mcp_definitions')return definitions;
-  if(command==='list_mcp_placements')return [{definitionId:'mcp-1',toolId:'codex',scope:'global',projectPath:null,enabled:true}];
-  if(command==='list_native_mcp')return [{...definitions[0],enabled:true,protectedValues:false}];
+  if(command==='list_mcp_placements')return mcpPlacements;
+  if(command==='list_native_mcp')return args.target?.scope==='project'?[]:[{...definitions[0],enabled:true,protectedValues:false},{...definitions[2],enabled:false,protectedValues:false},{name:'sequential-thinking',transport:'stdio',command:'npx',args:['-y','@modelcontextprotocol/server-sequential-thinking'],url:'',env:{},headers:{},enabled:true,protectedValues:false}];
   if(command==='list_skill_packages')return skills;
   if(command==='list_skill_installations')return [{packageId:'skill-1',toolId:'codex',scope:'global',projectPath:null,targetPath:'C:/Users/local/.codex/skills/code-review',state:'current'}];
   if(command==='list_skill_recovery_issues')return [];
@@ -302,6 +303,26 @@ for(const width of widths)for(const theme of themes){
    await page.keyboard.press('Escape');
    await dialog.waitFor({state:'hidden'});
   }
+  await page.close(); continue;
+ }
+ if(process.argv.includes('--mcp')){
+  await page.setViewportSize({width,height:Math.max(1000,page.viewportSize()?.height??1000)});
+  await nav.getByRole('button',{name:'工具与连接'}).click();
+  const region=page.getByRole('region',{name:'工具与连接'});
+  await region.getByLabel('配置列表').waitFor();
+  await region.getByRole('tablist',{name:'CLI'}).getByRole('tab',{name:'Codex',exact:true}).click();
+  await page.getByRole('tab',{name:'MCP',exact:true}).click();
+  const tool=page.getByRole('region',{name:'MCP 服务器'});
+  await tool.getByRole('button',{name:/filesystem/}).first().waitFor();
+  await capture('mcp-tool');
+  await tool.getByRole('button',{name:/filesystem/}).first().click();await page.getByRole('dialog').waitFor();await capture('mcp-tool-edit');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
+  await tool.getByRole('button',{name:'添加 MCP',exact:true}).first().click();await page.getByRole('dialog').waitFor();await capture('mcp-tool-new');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
+  await nav.getByRole('button',{name:'资料库'}).click();
+  await page.getByRole('tab',{name:/^MCP/}).click();await page.getByLabel('MCP 列表').getByRole('button',{name:'filesystem',exact:true}).waitFor();await capture('mcp-library');
+  await page.getByLabel('MCP 列表').getByRole('button',{name:'filesystem',exact:true}).click();await page.getByRole('dialog').waitFor();await capture('mcp-library-edit');
+  await page.getByRole('dialog').evaluate(el=>{const body=el.querySelector('.guide-dialog-body')??el;body.scrollTop=body.scrollHeight;});await capture('mcp-library-edit-targets');
+  await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
+  await page.getByRole('button',{name:'新建 MCP',exact:true}).first().click();await page.getByRole('dialog').waitFor();await capture('mcp-library-new');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
   await page.close(); continue;
  }
  if(process.argv.includes('--skills')){

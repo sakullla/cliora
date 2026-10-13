@@ -8,6 +8,7 @@ import type { LibraryDraft, LibraryItem, LibraryKind } from '../../types/library
 import type { AdapterDescriptor, Scope } from '../../types/native';
 import type { RulePlacement } from '../../types/resources';
 import { LibraryResources } from './LibraryResources';
+import { LibraryMcp } from './LibraryMcp';
 import { FilterSelect } from '../../components/FilterSelect';
 import { SearchField } from '../../components/SearchField';
 import { GuideDialog } from '../../components/GuideDialog';
@@ -311,7 +312,8 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
       </div>
       <button type="button" className={styles.primary} onClick={() => { if (section === 'prompt' || section === 'rule') start(kind); else setCreateSignal((value) => value + 1); }}><Icon name="plus" size={14} strokeWidth={2.2} />{section === 'mcp' ? t('library.resources.newMcp') : section === 'skill' ? t('tools.skills.add') : t('library.page.new', { kind: kindName(kind) })}</button>
     </div>
-    {(section === 'mcp' || section === 'skill') && <LibraryResources section={section} active={active} tools={managedTools} projects={projects} createSignal={createSignal} onCountChange={(count) => setCounts((prev) => prev[section] === count ? prev : { ...prev, [section]: count })} />}
+    {section === 'mcp' && <LibraryMcp active={active} tools={managedTools} projects={projects} createSignal={createSignal} onCountChange={(count) => setCounts((prev) => prev.mcp === count ? prev : { ...prev, mcp: count })} />}
+    {section === 'skill' && <LibraryResources active={active} tools={managedTools} projects={projects} createSignal={createSignal} onCountChange={(count) => setCounts((prev) => prev.skill === count ? prev : { ...prev, skill: count })} />}
     {(section === 'prompt' || section === 'rule') && <>
     <div className={styles.filters}>
       <SearchField className={styles.searchBox} label={t('library.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={setSearch} placeholder={t('library.page.searchPlaceholder')} />

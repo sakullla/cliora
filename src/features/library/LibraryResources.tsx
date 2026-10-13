@@ -7,15 +7,12 @@ import { SearchField } from '../../components/SearchField';
 import { Icon } from '../../components/Icon';
 import { ScopeMarks, samePath, scopeLabel } from './CliMarks';
 import { confirmAction } from '../../lib/confirm';
-import { blankMcpDraft, editableRowsOf, keptMcpArgs, mcpCopyName, mcpDraftOf, parseMcpServerJson, recordOfRows, type KeyValueRow } from '../../lib/mcp';
-import { McpFormFields } from '../../components/mcp/McpFormFields';
 import { CliTargetGrid } from './CliTargetGrid';
 import { native } from '../../lib/native';
-import { saveShortcutHint, searchShortcutHint } from '../../lib/shortcut';
+import { searchShortcutHint } from '../../lib/shortcut';
 import type { Project } from '../../types/launch';
 import type { AdapterDescriptor, Scope } from '../../types/native';
-import type { McpDefinition, McpDraft, McpPlacement, McpTargetRequest, SkillImportPreview, SkillInstallation, SkillPackage } from '../../types/resources';
-import { McpDistribution, type McpDistributeHandle } from './McpDistribution';
+import type { SkillImportPreview, SkillInstallation, SkillPackage } from '../../types/resources';
 import { SkillDistribution } from './SkillDistribution';
 import i18n from '../../i18n';
 import styles from './LibraryPage.module.css';
@@ -28,23 +25,12 @@ function installStateLabel(state: SkillInstallation['state']): string {
   return i18n.t(`library.resources.installState.${state}`);
 }
 
-export function LibraryResources({ section, active, tools, projects, createSignal = 0, onCountChange }: { section: 'mcp' | 'skill'; active: boolean; tools: AdapterDescriptor[]; projects: Project[]; createSignal?: number; onCountChange?: (count: number) => void }) {
+/** Skill library section. MCP lives in LibraryMcp. */
+export function LibraryResources({ active, tools, projects, createSignal = 0, onCountChange }: { active: boolean; tools: AdapterDescriptor[]; projects: Project[]; createSignal?: number; onCountChange?: (count: number) => void }) {
   const { t } = useTranslation();
   const contextLabel = useAccountLabels();
-  const [definitions, setDefinitions] = useState<McpDefinition[]>([]);
-  const [placements, setPlacements] = useState<McpPlacement[]>([]);
-  const [willDistribute, setWillDistribute] = useState(false);
-  const [conflict, setConflict] = useState(false);
-  const [formKey, setFormKey] = useState(0);
-  const distributeRef = useRef<McpDistributeHandle>(null);
   const [packages, setPackages] = useState<SkillPackage[]>([]);
   const [installations, setInstallations] = useState<SkillInstallation[]>([]);
-  const [draft, setDraft] = useState<McpDraft | null>(null);
-  const [envRows, setEnvRows] = useState<KeyValueRow[]>([{ key: '', value: '' }]);
-  const [headerRows, setHeaderRows] = useState<KeyValueRow[]>([{ key: '', value: '' }]);
-  const [pasteOpen, setPasteOpen] = useState(false);
-  const [pasteText, setPasteText] = useState('');
-  const [pasteError, setPasteError] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -62,14 +48,11 @@ export function LibraryResources({ section, active, tools, projects, createSigna
   const [skillSeed, setSkillSeed] = useState<string[]>([]);
   const [installTools, setInstallTools] = useState<string[]>([]);
   const [search, setSearch] = useState('');
-  useEffect(() => { setSearch(''); }, [section]);
 
   useEffect(() => {
     if (!active) return;
     let live = true;
-    const load = section === 'mcp'
-      ? Promise.all([native.listMcpDefinitions(), native.listMcpPlacements()]).then(([items, placed]) => { if (live) { setDefinitions(items); setPlacements(placed); } })
-      : native.listSkillPackages().then(async (items) => {
+    const load = native.listSkillPackages().then(async (items) => {
         if (!live) return;
         setPackages(items);
         const found = (await Promise.all(items.map((item) => native.listSkillInstallations(item.id)))).flat();
@@ -77,48 +60,18 @@ export function LibraryResources({ section, active, tools, projects, createSigna
       });
     void load.catch((value) => { if (live) setError(failure(value)); });
     return () => { live = false; };
-  }, [active, section]);
+  }, [active]);
 
   useEffect(() => {
-    if (section === 'mcp') onCountChange?.(definitions.filter((item) => item.inLibrary !== false).length);
-  }, [section, definitions, onCountChange]);
-  useEffect(() => {
-    if (section === 'skill') onCountChange?.(packages.filter((item) => item.inLibrary !== false).length);
-  }, [section, packages, onCountChange]);
-
-  function editMcp(item?: McpDefinition) {
-    const next = item ? mcpDraftOf(item) : blankMcpDraft();
-    setDraft(next);
-    setEnvRows(editableRowsOf(item?.env ?? {}));
-    setHeaderRows(editableRowsOf(item?.headers ?? {}));
-    setDialogError('');
-    setPasteOpen(false);
-    setPasteText('');
-    setPasteError('');
-    setWillDistribute(false);
-    setConflict(false);
-    setFormKey((value) => value + 1);
-  }
+    onCountChange?.(packages.filter((item) => item.inLibrary !== false).length);
+  }, [packages, onCountChange]);
 
   const handledCreate = useRef(createSignal);
   useEffect(() => {
     if (createSignal === handledCreate.current) return;
     handledCreate.current = createSignal;
-    if (section === 'mcp') editMcp();
-    else if (!busy) { setDialogError(''); setSkillOpen(true); }
+    if (!busy) { setDialogError(''); setSkillOpen(true); }
   }, [createSignal]);
-
-  async function remove(item: McpDefinition) {
-    if (busy || !await confirmAction(t('library.resources.confirmRemoveMcp', { name: item.name }), () => true, { title: t('tools.mcp.removeTitle'), confirmLabel: t('tools.agents.delete'), destructive: true })) return;
-    setBusy(true); setError('');
-    try {
-      await native.deleteMcpDefinition(item.id, item.version);
-      setDefinitions(await native.listMcpDefinitions());
-      setDraft(null);
-      setNotice(t('library.resources.removed'));
-    } catch (value) { setError(failure(value)); }
-    finally { setBusy(false); }
-  }
 
   async function reloadSkills() {
     const items = await native.listSkillPackages();
@@ -241,93 +194,6 @@ export function LibraryResources({ section, active, tools, projects, createSigna
     finally { setBusy(false); }
   }
 
-  function applyPaste() {
-    if (!draft) return;
-    const parsed = parseMcpServerJson(pasteText);
-    if (!parsed) { setPasteError(t('library.resources.pasteImportError')); return; }
-    setDraft({ ...draft, name: parsed.name || draft.name, transport: parsed.transport, command: parsed.command, args: parsed.args, url: parsed.url });
-    setEnvRows(editableRowsOf(parsed.env));
-    setHeaderRows(editableRowsOf(parsed.headers));
-    setPasteText('');
-    setPasteError('');
-    setPasteOpen(false);
-    setDialogError('');
-  }
-
-  async function duplicateMcp(item: McpDefinition) {
-    if (busy) return;
-    setBusy(true); setError(''); setNotice('');
-    try {
-      const name = mcpCopyName(item.name, definitions.map((entry) => entry.name));
-      await native.saveMcpDefinition({ ...mcpDraftOf(item), id: null, expectedVersion: null, name });
-      setDefinitions(await native.listMcpDefinitions());
-      setNotice(t('library.resources.duplicated', { name }));
-    } catch (value) { setError(failure(value)); }
-    finally { setBusy(false); }
-  }
-
-  async function save() {
-    if (!draft || busy) return;
-    setBusy(true); setDialogError('');
-    try {
-      const saved = await native.saveMcpDefinition({ ...draft, args: keptMcpArgs(draft.args), inLibrary: true, env: recordOfRows(envRows), headers: recordOfRows(headerRows) });
-      setDefinitions(await native.listMcpDefinitions());
-      setDraft(mcpDraftOf(saved));
-      const alreadyPlaced = placements.some((item) => item.definitionId === saved.id);
-      if (willDistribute || alreadyPlaced) {
-        const outcome = await distributeRef.current?.run(saved);
-        setPlacements(await native.listMcpPlacements().catch(() => []));
-        if (outcome?.status === 'written') { setConflict(false); setDialogError(''); setDraft(null); setNotice(outcome.notice); }
-        else if (outcome?.status === 'pending') setConflict(true);
-        else {
-          setConflict(false);
-          setDialogError(outcome?.status === 'failed' ? outcome.message : t('library.resources.savedNotDistributed'));
-        }
-      } else {
-        setPlacements(await native.listMcpPlacements().catch(() => []));
-        setDraft(null);
-        setNotice(t('library.resources.saved'));
-      }
-      setError('');
-    } catch (value) { setDialogError(failure(value)); }
-    finally { setBusy(false); }
-  }
-
-  async function replaceDistribution() {
-    if (busy) return;
-    setBusy(true); setDialogError('');
-    try {
-      const outcome = await distributeRef.current?.commit();
-      setPlacements(await native.listMcpPlacements().catch(() => []));
-      if (outcome?.status === 'written') { setConflict(false); setDraft(null); setNotice(outcome.notice); setError(''); }
-    } catch (value) { setDialogError(failure(value)); }
-    finally { setBusy(false); }
-  }
-
-  async function toggleMcp(item: McpDefinition, toolId: string, scope: Scope, projectPath: string | null, contextId: string | null) {
-    if (busy) return;
-    const toolName = tools.find((tool) => tool.id === toolId)?.name ?? toolId;
-    const where = scope === 'project' ? t('library.page.whereScope', { scope: scopeLabel(scope, projectPath, projects) }) : '';
-    const place = placements.find((entry) => entry.definitionId === item.id && entry.toolId === toolId && entry.scope === scope && (entry.contextId ?? null) === contextId && (scope === 'global' || samePath(entry.projectPath, projectPath)));
-    setBusy(true); setError(''); setNotice('');
-    try {
-      if (place) {
-        await native.removeNativeMcp({ toolId, scope, projectPath: place.projectPath, contextId: await removalContext(place), enabled: place.enabled }, item.name);
-        setNotice(t('library.page.removed', { where, tool: toolName }));
-      } else {
-        const target: McpTargetRequest = { toolId, scope, projectPath, enabled: true };
-        const preview = await native.previewMcpTargets(item.id, [target]);
-        const first = preview[0];
-        if (!first || (first.status !== 'ready' && first.status !== 'conflict')) { setError(first?.detail || t('library.resources.cannotWrite', { tool: toolName })); return; }
-        if (first.status === 'conflict' && !await confirmAction(t('library.resources.confirmReplace', { name: item.name, tool: toolName }), () => true, { title: t('library.resources.replaceMcpTitle'), confirmLabel: t('library.page.replaceAction') })) return;
-        await native.distributeMcp(item.id, [{ ...target, contextId: first.contextId, baselineHash: first.baselineHash, previewToken: first.previewToken, allowReplace: first.status === 'conflict' }]);
-        setNotice(t('library.page.written', { where, tool: toolName }));
-      }
-      setPlacements(await native.listMcpPlacements().catch(() => placements));
-    } catch (value) { setError(failure(value)); }
-    finally { setBusy(false); }
-  }
-
   async function toggleSkill(item: SkillPackage, toolId: string, scope: Scope, projectPath: string | null, contextId: string | null) {
     if (busy) return;
     const toolName = tools.find((tool) => tool.id === toolId)?.name ?? toolId;
@@ -351,119 +217,67 @@ export function LibraryResources({ section, active, tools, projects, createSigna
   }
 
   const needle = search.trim().toLowerCase();
-  const libraryDefinitions = definitions.filter((item) => item.inLibrary !== false)
-    .filter((item) => !needle || `${item.name} ${item.command} ${item.args.join(' ')} ${item.url ?? ''}`.toLowerCase().includes(needle));
   const libraryPackages = packages.filter((item) => item.inLibrary !== false)
     .filter((item) => !needle || `${item.name} ${item.description ?? ''}`.toLowerCase().includes(needle));
 
-  if (section === 'skill') {
-    return <div className={styles.layout}>
-      <SearchField className={styles.searchBox} label={t('library.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={setSearch} placeholder={t('library.resources.searchSkillPlaceholder')} />
-      {error && <div className={styles.error} role="alert">{error}</div>}
-      {notice && <div className={styles.notice} role="status">{notice}</div>}
-      <div className={styles.list} aria-label={t('library.resources.skillListAria')}>
-        {libraryPackages.length ? libraryPackages.map((item) => {
-          return <article className={styles.card} key={item.id}>
-            <div className={styles.cardHead}>
-              <button className={styles.cardTitle} type="button" onClick={() => { setSkillSeed([]); setSkillTarget(item); }}>{item.name}</button>
-              <span className={styles.badge}>{t('tools.skills.fileCount', { count: item.fileCount })}</span>
-            </div>
-            <p>{item.description || t('library.resources.fullPackage')}</p>
-            <div className={styles.cardBar}>
-              <ScopeMarks contextLabel={contextLabel} accountContexts label={t('library.page.cliMarks', { title: item.name })} tools={tools} places={installations.filter((entry) => entry.packageId === item.id)} projects={projects} busy={busy} onToggle={(toolId, scope, projectPath, contextId) => void toggleSkill(item, toolId, scope, projectPath, contextId)} mark={(place) => {
-                if (!place) return { pressed: false, state: 'off', status: t('tools.skills.stateNotInstalled') };
-                if (place.state === 'current') return { pressed: true, state: 'current', status: t('library.page.markCurrent') };
-                if (place.state === 'conflict' || place.state === 'update_available') return { pressed: true, state: 'drifted', status: installStateLabel(place.state) };
-                return { pressed: true, state: 'unavailable', status: installStateLabel(place.state) };
-              }} />
-              <div className={styles.cardActions}><button type="button" className={styles.dangerQuiet} disabled={busy} onClick={() => void removePackage(item)}>{t('tools.agents.delete')}</button><button type="button" className={styles.quiet} disabled={busy} onClick={() => { setSkillSeed([]); setSkillTarget(item); }}>{t('tools.workspace.edit')}</button></div>
-            </div>
-          </article>;
-        }) : needle
-          ? <div className={styles.empty}><Icon name="search" size={28} strokeWidth={1.3} />{t('library.resources.noSkillMatch', { query: search.trim() })}</div>
-          : <div className={styles.empty}><Icon name="sparkle" size={28} strokeWidth={1.3} /><strong>{t('library.resources.emptySkillTitle')}</strong>{t('library.resources.emptySkillDetail')}<button type="button" disabled={busy} onClick={() => { setDialogError(''); setSkillOpen(true); }}><Icon name="plus" size={14} strokeWidth={2.2} />{t('tools.skills.add')}</button></div>}
-      </div>
-      <GuideDialog open={skillOpen} title={t('tools.skills.add')} hint={t('library.resources.addSkillHint')} onClose={closeSkill}>
-        <div className={styles.skillAdd}>
-          {!archiveSelection && !pendingImport && <>
-            <section className={styles.skillSection}>
-              <h3>{t('library.resources.installAfterImport')}</h3>
-              <p>{t('library.resources.installAfterHint')}</p>
-              <CliTargetGrid tools={tools} selected={installTools} onToggle={(id, checked) => setInstallTools(checked ? [...installTools, id] : installTools.filter((item) => item !== id))} />
-            </section>
-            <section className={styles.skillSection}>
-              <h3>{t('library.resources.importFrom')}</h3>
-              <div className={styles.sources}>
-                <button type="button" aria-label={t('tools.skills.pickFolder')} disabled={busy} onClick={() => void addFolder()}><Icon name="folder" size={17} /><strong>{t('tools.skills.pickFolder')}</strong><span>{t('tools.skills.pickFolderHint')}</span></button>
-                <button type="button" aria-label={t('tools.skills.importZip')} disabled={busy} onClick={() => void addZip()}><Icon name="archive" size={17} /><strong>{t('tools.skills.importZip')}</strong><span>{t('tools.skills.importZipHint')}</span></button>
-              </div>
-              <label>{t('tools.skills.zipUrl')}<span className={styles.urlRow}><input aria-label={t('tools.skills.zipUrlAria')} value={skillUrl} onChange={(event) => setSkillUrl(event.target.value)} placeholder="https://example.com/skill.zip" /><button type="button" disabled={busy || !skillUrl.trim()} onClick={() => void addArchive(skillUrl.trim(), false)}>{t('tools.skills.importUrl')}</button></span></label>
-            </section>
-          </>}
-          {archiveSelection && <section className={styles.skillSection}>
-            <h3>{t('library.resources.archiveMultiTitle')}</h3>
-            <label>{t('library.resources.archiveChoose')}<select aria-label={t('tools.skills.archiveAria')} value={archiveSelection.chosen ?? '__choose__'} onChange={(event) => setArchiveSelection({ ...archiveSelection, chosen: event.target.value === '__choose__' ? null : event.target.value })}><option value="__choose__">{t('tools.skills.archivePlaceholder')}</option>{archiveSelection.entries.map((entry) => <option key={entry} value={entry}>{entry || t('tools.skills.archiveRoot')}</option>)}</select></label>
-            <div className={styles.actions}><button type="button" onClick={() => setArchiveSelection(null)}>{t('library.resources.back')}</button><button type="button" className={styles.primary} disabled={busy || archiveSelection.chosen === null} onClick={() => void addArchive(archiveSelection.source, archiveSelection.local, archiveSelection.chosen ?? undefined)}>{t('tools.skills.archiveImport')}</button></div>
-          </section>}
-          {pendingImport && <section className={styles.skillSection} role="group" aria-label={t('tools.skills.importLabel')}>
-            <h3>{t('library.resources.existingTitle', { name: pendingImport.preview.name })}</h3>
-            <p>{t('library.resources.existingNote', { source: pendingImport.preview.source, count: pendingImport.preview.fileCount, install: installTools.length ? t('library.resources.existingInstall') : '' })}</p>
-            <div className={styles.actions}><button type="button" onClick={() => setPendingImport(null)}>{t('library.resources.back')}</button><button type="button" className={styles.primary} disabled={busy} onClick={() => void confirmSkillImport()}>{installations.some((entry) => packages.some((item) => item.id === entry.packageId && item.name === pendingImport.preview.name)) ? t('library.resources.updateAndSync') : t('library.resources.confirmUpdate')}</button></div>
-          </section>}
-          {dialogError && <p className={styles.error} role="alert">{dialogError}</p>}
-        </div>
-      </GuideDialog>
-      <GuideDialog open={!!skillTarget} title={t('library.resources.editSkillTitle')} hint={t('library.resources.editSkillHint')} onClose={() => { setSkillTarget(null); setSkillSeed([]); }}>
-        {skillTarget && <SkillDistribution item={skillTarget} tools={tools} projects={projects} installations={installations} initialTools={skillSeed} autoRun={skillSeed.length > 0} onChanged={reloadSkills} />}
-      </GuideDialog>
-    </div>;
-  }
-
   return <div className={styles.layout}>
-    <SearchField className={styles.searchBox} label={t('library.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={setSearch} placeholder={t('library.resources.searchMcpPlaceholder')} />
+    <SearchField className={styles.searchBox} label={t('library.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={setSearch} placeholder={t('library.resources.searchSkillPlaceholder')} />
     {error && <div className={styles.error} role="alert">{error}</div>}
     {notice && <div className={styles.notice} role="status">{notice}</div>}
-    <div className={styles.list} aria-label={t('library.resources.mcpListAria')}>
-      {libraryDefinitions.length ? libraryDefinitions.map((item) => {
+    <div className={styles.list} aria-label={t('library.resources.skillListAria')}>
+      {libraryPackages.length ? libraryPackages.map((item) => {
         return <article className={styles.card} key={item.id}>
           <div className={styles.cardHead}>
-            <button className={styles.cardTitle} type="button" onClick={() => editMcp(item)}>{item.name}</button>
-            <span className={styles.badge} data-accent={item.transport === 'http' || undefined}>{item.transport === 'http' ? 'HTTP' : 'stdio'}</span>
+            <button className={styles.cardTitle} type="button" onClick={() => { setSkillSeed([]); setSkillTarget(item); }}>{item.name}</button>
+            <span className={styles.badge}>{t('tools.skills.fileCount', { count: item.fileCount })}</span>
           </div>
-          <p className={styles.mono}>{item.transport === 'http' ? item.url || t('library.resources.noUrl') : [item.command, ...item.args].filter(Boolean).join(' ') || t('library.resources.noCommand')}</p>
+          <p>{item.description || t('library.resources.fullPackage')}</p>
           <div className={styles.cardBar}>
-            <ScopeMarks contextLabel={contextLabel} accountContexts label={t('library.page.cliMarks', { title: item.name })} tools={tools} places={placements.filter((entry) => entry.definitionId === item.id)} projects={projects} busy={busy} onToggle={(toolId, scope, projectPath, contextId) => void toggleMcp(item, toolId, scope, projectPath, contextId)} mark={(place) => {
-              if (!place) return { pressed: false, state: 'off', status: t('library.page.markOff') };
-              if (!place.enabled) return { pressed: true, state: 'unavailable', status: t('library.resources.markDisabled') };
-              return { pressed: true, state: 'current', status: t('library.page.markCurrent') };
+            <ScopeMarks contextLabel={contextLabel} accountContexts label={t('library.page.cliMarks', { title: item.name })} tools={tools} places={installations.filter((entry) => entry.packageId === item.id)} projects={projects} busy={busy} onToggle={(toolId, scope, projectPath, contextId) => void toggleSkill(item, toolId, scope, projectPath, contextId)} mark={(place) => {
+              if (!place) return { pressed: false, state: 'off', status: t('tools.skills.stateNotInstalled') };
+              if (place.state === 'current') return { pressed: true, state: 'current', status: t('library.page.markCurrent') };
+              if (place.state === 'conflict' || place.state === 'update_available') return { pressed: true, state: 'drifted', status: installStateLabel(place.state) };
+              return { pressed: true, state: 'unavailable', status: installStateLabel(place.state) };
             }} />
-            <div className={styles.cardActions}>
-              <button type="button" className={styles.dangerQuiet} disabled={busy} onClick={() => void remove(item)}>{t('tools.agents.delete')}</button>
-              <button type="button" className={styles.quiet} disabled={busy} onClick={() => void duplicateMcp(item)}>{t('library.resources.duplicate')}</button>
-              <button type="button" className={styles.quiet} onClick={() => editMcp(item)}>{t('tools.workspace.edit')}</button>
-            </div>
+            <div className={styles.cardActions}><button type="button" className={styles.dangerQuiet} disabled={busy} onClick={() => void removePackage(item)}>{t('tools.agents.delete')}</button><button type="button" className={styles.quiet} disabled={busy} onClick={() => { setSkillSeed([]); setSkillTarget(item); }}>{t('tools.workspace.edit')}</button></div>
           </div>
         </article>;
       }) : needle
-        ? <div className={styles.empty}><Icon name="search" size={28} strokeWidth={1.3} />{t('library.resources.noMcpMatch', { query: search.trim() })}</div>
-        : <div className={styles.empty}><Icon name="connections" size={28} strokeWidth={1.3} /><strong>{t('library.resources.emptyMcpTitle')}</strong>{t('library.resources.emptyMcpDetail')}<button type="button" onClick={() => editMcp()}><Icon name="plus" size={14} strokeWidth={2.2} />{t('library.resources.emptyMcpCreate')}</button></div>}
+        ? <div className={styles.empty}><Icon name="search" size={28} strokeWidth={1.3} />{t('library.resources.noSkillMatch', { query: search.trim() })}</div>
+        : <div className={styles.empty}><Icon name="sparkle" size={28} strokeWidth={1.3} /><strong>{t('library.resources.emptySkillTitle')}</strong>{t('library.resources.emptySkillDetail')}<button type="button" disabled={busy} onClick={() => { setDialogError(''); setSkillOpen(true); }}><Icon name="plus" size={14} strokeWidth={2.2} />{t('tools.skills.add')}</button></div>}
     </div>
-    <GuideDialog open={!!draft} title={draft?.id ? t('tools.mcp.editTitle') : t('library.resources.newMcpTitle')} hint={t('library.resources.mcpDialogHint')} onClose={() => { setDraft(null); setConflict(false); }}>
-      {draft && <>
-        <div className={styles.pasteBar}>
-          <button type="button" className={styles.pasteToggle} aria-expanded={pasteOpen} onClick={() => { setPasteOpen((value) => !value); setPasteError(''); }}>{t('library.resources.pasteImport')}</button>
-        </div>
-        {pasteOpen && <div className={styles.pasteBox}>
-          <p className={styles.muted}>{t('library.resources.pasteImportHint')}</p>
-          <textarea aria-label={t('library.resources.pasteImportAria')} rows={5} value={pasteText} onChange={(event) => setPasteText(event.target.value)} placeholder={'{"mcpServers":{"name":{"command":"npx","args":["-y","pkg"]}}}'} />
-          {pasteError && <p className={styles.error} role="alert">{pasteError}</p>}
-          <div className={styles.actions}><button type="button" onClick={() => { setPasteOpen(false); setPasteError(''); }}>{t('library.resources.back')}</button><button type="button" className={styles.primary} disabled={!pasteText.trim()} onClick={applyPaste}>{t('library.resources.pasteImportApply')}</button></div>
-        </div>}
-        <McpFormFields draft={draft} onChange={setDraft} envRows={envRows} onEnvRowsChange={setEnvRows} headerRows={headerRows} onHeaderRowsChange={setHeaderRows} />
-        <McpDistribution key={formKey} ref={distributeRef} definition={definitions.find((item) => item.id === draft.id) ?? { ...draft, id: draft.id ?? '', version: draft.expectedVersion ?? 0 }} tools={tools} projects={projects} placements={placements} formStamp={JSON.stringify([draft.name, draft.transport, draft.command, draft.args, draft.url, envRows, headerRows])} onWillDistribute={setWillDistribute} onConflictChange={setConflict} />
+    <GuideDialog open={skillOpen} title={t('tools.skills.add')} hint={t('library.resources.addSkillHint')} onClose={closeSkill}>
+      <div className={styles.skillAdd}>
+        {!archiveSelection && !pendingImport && <>
+          <section className={styles.skillSection}>
+            <h3>{t('library.resources.installAfterImport')}</h3>
+            <p>{t('library.resources.installAfterHint')}</p>
+            <CliTargetGrid tools={tools} selected={installTools} onToggle={(id, checked) => setInstallTools(checked ? [...installTools, id] : installTools.filter((item) => item !== id))} />
+          </section>
+          <section className={styles.skillSection}>
+            <h3>{t('library.resources.importFrom')}</h3>
+            <div className={styles.sources}>
+              <button type="button" aria-label={t('tools.skills.pickFolder')} disabled={busy} onClick={() => void addFolder()}><Icon name="folder" size={17} /><strong>{t('tools.skills.pickFolder')}</strong><span>{t('tools.skills.pickFolderHint')}</span></button>
+              <button type="button" aria-label={t('tools.skills.importZip')} disabled={busy} onClick={() => void addZip()}><Icon name="archive" size={17} /><strong>{t('tools.skills.importZip')}</strong><span>{t('tools.skills.importZipHint')}</span></button>
+            </div>
+            <label>{t('tools.skills.zipUrl')}<span className={styles.urlRow}><input aria-label={t('tools.skills.zipUrlAria')} value={skillUrl} onChange={(event) => setSkillUrl(event.target.value)} placeholder="https://example.com/skill.zip" /><button type="button" disabled={busy || !skillUrl.trim()} onClick={() => void addArchive(skillUrl.trim(), false)}>{t('tools.skills.importUrl')}</button></span></label>
+          </section>
+        </>}
+        {archiveSelection && <section className={styles.skillSection}>
+          <h3>{t('library.resources.archiveMultiTitle')}</h3>
+          <label>{t('library.resources.archiveChoose')}<select aria-label={t('tools.skills.archiveAria')} value={archiveSelection.chosen ?? '__choose__'} onChange={(event) => setArchiveSelection({ ...archiveSelection, chosen: event.target.value === '__choose__' ? null : event.target.value })}><option value="__choose__">{t('tools.skills.archivePlaceholder')}</option>{archiveSelection.entries.map((entry) => <option key={entry} value={entry}>{entry || t('tools.skills.archiveRoot')}</option>)}</select></label>
+          <div className={styles.actions}><button type="button" onClick={() => setArchiveSelection(null)}>{t('library.resources.back')}</button><button type="button" className={styles.primary} disabled={busy || archiveSelection.chosen === null} onClick={() => void addArchive(archiveSelection.source, archiveSelection.local, archiveSelection.chosen ?? undefined)}>{t('tools.skills.archiveImport')}</button></div>
+        </section>}
+        {pendingImport && <section className={styles.skillSection} role="group" aria-label={t('tools.skills.importLabel')}>
+          <h3>{t('library.resources.existingTitle', { name: pendingImport.preview.name })}</h3>
+          <p>{t('library.resources.existingNote', { source: pendingImport.preview.source, count: pendingImport.preview.fileCount, install: installTools.length ? t('library.resources.existingInstall') : '' })}</p>
+          <div className={styles.actions}><button type="button" onClick={() => setPendingImport(null)}>{t('library.resources.back')}</button><button type="button" className={styles.primary} disabled={busy} onClick={() => void confirmSkillImport()}>{installations.some((entry) => packages.some((item) => item.id === entry.packageId && item.name === pendingImport.preview.name)) ? t('library.resources.updateAndSync') : t('library.resources.confirmUpdate')}</button></div>
+        </section>}
         {dialogError && <p className={styles.error} role="alert">{dialogError}</p>}
-        <div className="dialog-footer">{draft.id && <button type="button" disabled={busy} onClick={() => { const current = definitions.find((item) => item.id === draft.id); if (current) void remove(current); }}>{t('tools.agents.delete')}</button>}<span className="dialog-footer-gap" />{conflict && <button type="button" disabled={busy} onClick={() => { setConflict(false); distributeRef.current?.dismiss(); }}>{t('common.conflict.keepCurrent')}</button>}<button type="button" className={styles.primary} data-dialog-save title={saveShortcutHint()} disabled={busy || !draft.name.trim()} onClick={() => void (conflict ? replaceDistribution() : save())}>{conflict ? t('library.resources.replaceDistribute') : willDistribute ? t('library.resources.saveDistribute') : t('home.launcher.save')}</button></div>
-      </>}
+      </div>
+    </GuideDialog>
+    <GuideDialog open={!!skillTarget} title={t('library.resources.editSkillTitle')} hint={t('library.resources.editSkillHint')} onClose={() => { setSkillTarget(null); setSkillSeed([]); }}>
+      {skillTarget && <SkillDistribution item={skillTarget} tools={tools} projects={projects} installations={installations} initialTools={skillSeed} autoRun={skillSeed.length > 0} onChanged={reloadSkills} />}
     </GuideDialog>
   </div>;
 }
