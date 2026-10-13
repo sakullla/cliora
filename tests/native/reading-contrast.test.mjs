@@ -325,6 +325,44 @@ test('comments, syntax colors, and secondary text stay readable on selection and
   }
 });
 
+test('error paths and active line numbers stay readable on their resting tints', () => {
+  const declaredMix = (css, pattern) => {
+    const match = css.match(pattern);
+    assert.ok(match, pattern);
+    return Number(match[1]) / 100;
+  };
+  const dangerMix = declaredMix(style, /\.error-banner code\s*\{[^}]*color-mix\(in srgb, var\(--danger\) ([\d.]+)%/);
+  const gutterMix = declaredMix(editor, /\.cm-activeLineGutter\s*\{[^}]*color-mix\(in srgb, var\(--accent\) ([\d.]+)%/);
+  assert.match(style, /\.error-banner code\s*\{[^}]*color:\s*var\(--text-2\)/);
+  assert.match(editor, /\.cm-activeLineGutter\s*\{[^}]*color:\s*var\(--text-2\)/);
+  for (const [name, theme] of themes) {
+    const path = composite(hexBytes(theme.danger), hexBytes(theme['danger-soft']), dangerMix);
+    atLeast(absLc(hexBytes(theme['text-2']), path), 75, `${name} --text-2 on the error path`);
+    const gutter = composite(hexBytes(theme.accent), hexBytes(theme['surface-2']), gutterMix);
+    atLeast(absLc(hexBytes(theme['text-2']), gutter), 75, `${name} --text-2 on the active line number`);
+  }
+});
+
+test('toast icons stay readable on their resting tint', () => {
+  const declaredMix = (pattern) => {
+    const match = style.match(pattern);
+    assert.ok(match, pattern);
+    return Number(match[1]) / 100;
+  };
+  const surfaceMix = declaredMix(/\.toast\s*\{[^}]*color-mix\(in srgb, var\(--surface\) ([\d.]+)%/);
+  const toneMix = declaredMix(/\.toast-icon\s*\{[^}]*color-mix\(in srgb, var\(--toast-tone\) ([\d.]+)%/);
+  assert.match(style, /\.toast-icon\s*\{[^}]*color:\s*var\(--toast-tone\)/);
+  for (const [name, theme] of themes) {
+    for (const backdrop of ['bg', 'surface', 'surface-2', 'surface-3']) {
+      const toast = composite(hexBytes(theme.surface), hexBytes(theme[backdrop]), surfaceMix);
+      for (const tone of ['accent', 'danger', 'warning', 'info']) {
+        const icon = composite(hexBytes(theme[tone]), toast, toneMix);
+        atLeast(absLc(hexBytes(theme[tone]), icon), 75, `${name} --${tone} on the toast icon over --${backdrop}`);
+      }
+    }
+  }
+});
+
 test('conflict diff marks keep body text readable at rest and under the encoded selection', () => {
   const compare = readFileSync(new URL('src/components/configuration/ConflictCompare.module.css', root), 'utf8');
   const declaredMix = (kind, token) => {
