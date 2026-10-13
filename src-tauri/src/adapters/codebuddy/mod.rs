@@ -396,6 +396,12 @@ impl CliAdapter for CodeBuddy {
     fn node_dependency_detail(&self) -> &'static str {
         "codebuddy 的 npm 安装需要 Node.js 18.20 或更新版本"
     }
+    fn native_binary_directories(&self, home: &Path) -> Vec<PathBuf> {
+        vec![home.join("AppData/Local/codebuddy/bin")]
+    }
+    fn recognizes_native_install_path(&self, path: &Path) -> bool {
+        path.parent().is_some_and(|parent| parent.ends_with("codebuddy/bin"))
+    }
     fn upgrade_command(&self, source: &str) -> Option<String> {
         match source {
             "npm_shim" => self.npm_install_command(),
@@ -440,6 +446,10 @@ mod tests {
     fn bare_version_output_identifies_only_codebuddy_binaries() {
         assert!(CodeBuddy.version_identity("codebuddy", "2.161.1\n"));
         assert!(!CodeBuddy.version_identity("renamed", "2.161.1"));
+        assert!(CodeBuddy.recognizes_native_install_path(Path::new(r"C:\Users\me\AppData\Local\codebuddy\bin\codebuddy.exe")));
+        assert!(!CodeBuddy.recognizes_native_install_path(Path::new(r"C:\Users\me\AppData\Roaming\npm\codebuddy.cmd")));
+        assert_eq!(CodeBuddy.upgrade_command("native").as_deref(), Some("codebuddy update"));
+        assert!(CodeBuddy.npm_install_command().unwrap().contains("@tencent-ai/codebuddy-code@latest"));
     }
 
     #[test]

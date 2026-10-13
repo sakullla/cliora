@@ -790,8 +790,9 @@ fn cursor_and_minimax_code_stay_separate_from_the_minimax_quota_provider() {
     assert!(code
         .native_files(crate::native::adapter::Scope::Global, home, None, true)
         .is_empty());
-    assert!(code.install_command().is_none());
-    assert!(code.npm_install_command().is_none());
+    assert!(code.install_command().unwrap().contains(if cfg!(windows) { "install.ps1" } else { "install.sh" }));
+    assert!(code.npm_install_command().unwrap().contains("@minimax-ai/code@latest"));
+    assert_eq!(code.upgrade_command("native").as_deref(), Some("mcode update"));
     assert!(!code.node_required_when_missing());
     assert!(!code.version_identity("mmx", "1.0.0"));
     assert!(!code.version_identity("mcode", "mcode 1.0.0"));

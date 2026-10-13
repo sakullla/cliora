@@ -30,7 +30,7 @@ pub struct MiniMaxCode;
 
 pub(crate) const DEFAULT_SECRET_ENV: &str = "MCODE_PROVIDER_API_KEY";
 pub(crate) const TOKEN_PLAN_PROFILE_URL: &str = "https://agent.minimax.io/token-plan";
-const GUIDANCE_URL: &str = "https://agent.minimax.io/docs/cli/configuration";
+const GUIDANCE_URL: &str = "https://agent.minimax.io/docs/cli/quick-start";
 
 /// Resolved data directory. `Unavailable` means an explicit env value was not a
 /// safe absolute path, so neither the other variable nor `~/.minimax` is read.
@@ -101,8 +101,6 @@ impl CliAdapter for MiniMaxCode {
         "mcode"
     }
     fn npm_package(&self) -> &'static str {
-        // The public registry document supplies the version card. Install and
-        // uninstall stay on the official guide and are not enabled by this name.
         "@minimax-ai/code"
     }
     fn version_identity(&self, basename: &str, output: &str) -> bool {
@@ -415,25 +413,49 @@ impl CliAdapter for MiniMaxCode {
     fn node_required_when_missing(&self) -> bool {
         false
     }
+    fn minimum_node_version(&self) -> Option<(u32, u32, u32)> {
+        Some((22, 19, 0))
+    }
+    fn node_dependency_detail(&self) -> &'static str {
+        "npm 安装的 @minimax-ai/code 需要 Node.js 22.19+ 或 24–26；Node.js 23 没有对应的 SQLite 运行时。官方安装器会自行准备运行时"
+    }
+    fn npm_script_dependencies(&self) -> &'static [&'static str] {
+        // postinstall runs verify-native-install.mjs, which loads this optional native module.
+        &["better-sqlite3"]
+    }
+    fn native_binary_directories(&self, home: &Path) -> Vec<PathBuf> {
+        // Windows launchers sit in ~/.minimax-code; Unix launchers sit in bin/.
+        vec![home.join(".minimax-code"), home.join(".minimax-code").join("bin")]
+    }
+    fn recognizes_native_install_path(&self, path: &Path) -> bool {
+        path.ancestors().any(|ancestor| {
+            ancestor.file_name().and_then(|name| name.to_str()) == Some(".minimax-code")
+        })
+    }
     fn install_command(&self) -> Option<String> {
-        None
+        self.native_install_command()
     }
-    fn npm_install_command(&self) -> Option<String> {
-        None
+    fn native_install_command(&self) -> Option<String> {
+        Some(
+            if cfg!(windows) {
+                "irm https://filecdn.minimax.chat/public/install.ps1 | iex"
+            } else {
+                "curl -fsSL https://filecdn.minimax.chat/public/install.sh | bash"
+            }
+            .into(),
+        )
     }
-    fn npm_uninstall_command(&self) -> Option<String> {
-        None
-    }
-    fn upgrade_command(&self, _source: &str) -> Option<String> {
-        // `mcode update` is the documented updater, but only after the
-        // installation channel is identified. This adapter has no verified
-        // Windows install path, so npm, native, and unknown all stay empty.
-        None
+    fn upgrade_command(&self, source: &str) -> Option<String> {
+        match source {
+            "npm_shim" => self.npm_install_command(),
+            "native" => Some("mcode update".into()),
+            _ => None,
+        }
     }
     fn install_guidance(&self) -> (&'static str, &'static str) {
         (
             GUIDANCE_URL,
-            "MiniMax Code CLI 的命令是 mcode。未找到时只显示官方说明和重新检查，不提供桌面端、mmx 或 npm 安装命令。",
+            "MiniMax Code CLI 的命令是 mcode，不是桌面端或 mmx。Windows：irm https://filecdn.minimax.chat/public/install.ps1 | iex；macOS/Linux 使用 install.sh，目录 ~/.minimax-code。npm 需要 Node.js 22.19+ 或 24–26。官方目录更新用 mcode update，npm 安装用 npm 更新。",
         )
     }
     fn descriptor(&self) -> AdapterDescriptor {
@@ -637,10 +659,8 @@ mod tests {
         assert!(MiniMaxCode.version_identity("mcode.cmd", "v0.6.8\r\n"));
         assert!(!MiniMaxCode.version_identity("mmx", "0.6.8"));
         assert!(!MiniMaxCode.version_identity("mcode", "mcode 1.0.0"));
-        assert!(MiniMaxCode.install_command().is_none());
-        assert!(MiniMaxCode.npm_install_command().is_none());
-        assert!(MiniMaxCode.npm_uninstall_command().is_none());
         assert!(!MiniMaxCode.node_required_when_missing());
+        assert_eq!(MiniMaxCode.minimum_node_version(), Some((22, 19, 0)));
         assert_eq!(MiniMaxCode.npm_package(), "@minimax-ai/code");
         assert_eq!(
             MiniMaxCode.latest_version_url().as_deref(),
@@ -652,14 +672,24 @@ mod tests {
                 .as_deref(),
             Some("0.6.8")
         );
-        assert!(MiniMaxCode.upgrade_command("npm_shim").is_none());
+        let npm = MiniMaxCode.npm_install_command().unwrap();
+        assert!(npm.contains("@minimax-ai/code@latest"));
+        assert!(npm.contains("--allow-scripts=@minimax-ai/code,better-sqlite3"));
+        assert_eq!(MiniMaxCode.upgrade_command("npm_shim").as_deref(), Some(npm.as_str()));
+        assert_eq!(MiniMaxCode.npm_uninstall_command().as_deref(), Some("npm uninstall -g @minimax-ai/code"));
         assert!(MiniMaxCode.upgrade_command("unknown").is_none());
-        assert!(MiniMaxCode.upgrade_command("native").is_none());
+        assert_eq!(MiniMaxCode.upgrade_command("native").as_deref(), Some("mcode update"));
+        let native = MiniMaxCode.native_install_command().unwrap();
+        assert!(native.contains(if cfg!(windows) { "install.ps1" } else { "install.sh" }));
+        assert_eq!(MiniMaxCode.install_command().as_deref(), Some(native.as_str()));
+        let home = Path::new("/home/example");
+        assert!(MiniMaxCode.recognizes_native_install_path(&home.join(".minimax-code").join("mcode.cmd")));
+        assert!(MiniMaxCode.recognizes_native_install_path(&home.join(".minimax-code").join("bin").join("mcode")));
+        assert!(!MiniMaxCode.recognizes_native_install_path(&home.join("AppData/Roaming/npm/mcode.cmd")));
         let (url, text) = MiniMaxCode.install_guidance();
         assert!(url.contains("agent.minimax.io"));
-        assert!(text.contains("重新检查"));
         assert!(text.contains("mmx"));
-        assert!(!text.contains("npm install"));
+        assert!(text.contains("mcode update"));
     }
 
     #[test]

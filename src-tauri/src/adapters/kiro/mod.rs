@@ -298,11 +298,40 @@ impl CliAdapter for Kiro {
     fn install_guidance(&self) -> (&'static str, &'static str) {
         (
             "https://cli.kiro.dev",
-            "Kiro CLI 经官方脚本（cli.kiro.dev 的 curl/PowerShell 命令）安装；登录 Builder ID/Google/GitHub/IAM IdC 由 CLI 原生管理。",
+            "Windows：irm https://cli.kiro.dev/install.ps1 | iex，安装到 Program Files\\Kiro-Cli。macOS/Linux：curl -fsSL https://cli.kiro.dev/install | bash。已安装后重新执行同一安装命令。登录由 CLI 原生管理。",
         )
     }
+    fn native_binary_directories(&self, home: &Path) -> Vec<PathBuf> {
+        let mut dirs = vec![home.join(".local/bin")];
+        #[cfg(windows)]
+        if let Some(program_files) = std::env::var_os("ProgramFiles") {
+            dirs.push(PathBuf::from(program_files).join("Kiro-Cli"));
+        }
+        dirs
+    }
+    fn recognizes_native_install_path(&self, path: &Path) -> bool {
+        let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
+        let kiro = name.eq_ignore_ascii_case("kiro-cli") || name.eq_ignore_ascii_case("kiro-cli.exe");
+        kiro && path.parent().is_some_and(|parent| {
+            parent.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.eq_ignore_ascii_case("Kiro-Cli"))
+                || parent.ends_with(".local/bin")
+        })
+    }
     fn install_command(&self) -> Option<String> {
-        None
+        self.native_install_command()
+    }
+    fn native_install_command(&self) -> Option<String> {
+        Some(
+            if cfg!(windows) {
+                "irm https://cli.kiro.dev/install.ps1 | iex"
+            } else {
+                "curl -fsSL https://cli.kiro.dev/install | bash"
+            }
+            .into(),
+        )
+    }
+    fn upgrade_command(&self, source: &str) -> Option<String> {
+        (source == "native").then(|| self.native_install_command()).flatten()
     }
     fn history_sources(&self, home: &Path) -> Result<Vec<crate::history::HistorySource>, String> {
         history::sources(home)
@@ -413,7 +442,13 @@ mod tests {
         assert_eq!(Kiro.file_kind("settings").unwrap(), FileKind::Json);
         assert!(Kiro.file_kind("mcp").is_err());
         assert!(!Kiro.node_required_when_missing());
-        assert!(Kiro.install_command().is_none());
+        let install = Kiro.install_command().unwrap();
+        assert!(install.contains(if cfg!(windows) { "install.ps1" } else { "cli.kiro.dev/install" }));
+        assert_eq!(Kiro.upgrade_command("native"), Kiro.native_install_command());
+        assert!(Kiro.upgrade_command("unknown").is_none());
+        assert!(Kiro.recognizes_native_install_path(Path::new(r"C:\Program Files\Kiro-Cli\kiro-cli.exe")));
+        assert!(Kiro.recognizes_native_install_path(Path::new("/home/example/.local/bin/kiro-cli")));
+        assert!(!Kiro.recognizes_native_install_path(Path::new(r"C:\npm\kiro-cli.cmd")));
         // An existing ~/.kiro wins over the Windows fallback candidates.
         let temp = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(temp.path().join(".kiro")).unwrap();
