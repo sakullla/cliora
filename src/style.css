@@ -36,7 +36,7 @@
   --accent-hover: #264938;
   --accent-soft: #e7efe9;
   --accent-line: #c3d4c8;
-  --accent-ring: rgb(46 86 68 / 6%);
+  --accent-ring: rgb(240 252 236 / 58%);
   --on-accent: #f7fbf8;
 
   /* Status */
@@ -101,7 +101,7 @@
   --accent-hover: #d4e6da;
   --accent-soft: #24302a;
   --accent-line: #527566;
-  --accent-ring: rgb(199 218 205 / 6%);
+  --accent-ring: rgb(31 37 22 / 64%);
   --on-accent: #142019;
 
   --danger: #fcd6d0;

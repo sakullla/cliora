@@ -247,8 +247,6 @@ test('body text on the translucent selection stays inside the reading band', () 
   assert.deepEqual(composite([46, 86, 68], [244, 242, 237], 0.1), [224, 226, 220]);
   for (const [name, theme] of themes) {
     const ring = parseColor(theme['accent-ring']);
-    const accent = hexBytes(theme.accent);
-    assert.deepEqual(ring.rgb, accent, `${name} selection ring does not use the accent color`);
     const text = hexBytes(theme.text);
     for (const surface of ['bg', 'surface', 'surface-2']) {
       const mixed = composite(ring.rgb, hexBytes(theme[surface]), ring.alpha);
@@ -262,6 +260,38 @@ test('body text on the translucent selection stays inside the reading band', () 
         }
       }
     }
+  }
+});
+
+test('encoded selection composite keeps text readable on the third surface and soft status backgrounds', () => {
+  const distance = (left, right) => Math.hypot(...left.map((channel, index) => channel - right[index]));
+  const shift = (mixed, background) => Math.max(...mixed.map((channel, index) => Math.abs(channel - background[index])));
+  for (const [name, theme] of themes) {
+    const ring = parseColor(theme['accent-ring']);
+    const accent = hexBytes(theme.accent);
+    const surfaces = ['bg', 'surface', 'surface-2', 'surface-3'].map((token) => hexBytes(theme[token]));
+    const nearest = Math.min(...surfaces.map((surface) => distance(ring.rgb, surface)));
+    assert.ok(nearest < distance(ring.rgb, accent), `${name} selection source stays near the surfaces`);
+  }
+  const lightRing = parseColor(light['accent-ring']);
+  const lightSurface = hexBytes(light['surface-3']);
+  const lightSurfaceMix = composite(lightRing.rgb, lightSurface, lightRing.alpha);
+  assert.ok(shift(lightSurfaceMix, lightSurface) >= 8, 'light selection tint on --surface-3');
+  for (const token of ['text', 'text-2', 'text-3']) {
+    atLeast(absLc(hexBytes(light[token]), lightSurfaceMix), 75, `light --${token} on selection over --surface-3`);
+  }
+  for (const token of ['accent', 'danger', 'warning', 'info']) {
+    const background = hexBytes(light[`${token}-soft`]);
+    const mixed = composite(lightRing.rgb, background, lightRing.alpha);
+    assert.ok(shift(mixed, background) >= 8, `light selection tint on --${token}-soft`);
+    atLeast(absLc(hexBytes(light[token]), mixed), 75, `light --${token} on selection over --${token}-soft`);
+  }
+  const darkRing = parseColor(dark['accent-ring']);
+  for (const token of ['accent', 'warning', 'info']) {
+    const background = hexBytes(dark[`${token}-soft`]);
+    const mixed = composite(darkRing.rgb, background, darkRing.alpha);
+    assert.ok(shift(mixed, background) >= 8, `dark selection tint on --${token}-soft`);
+    atLeast(absLc(hexBytes(dark[token]), mixed), 75, `dark --${token} on selection over --${token}-soft`);
   }
 });
 
