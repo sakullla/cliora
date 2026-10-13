@@ -20,6 +20,12 @@
 .row[data-single='true'] { grid-template-columns: minmax(0, 1fr) auto; }
 .row input { width: 100%; min-height: var(--control-h-sm); font-family: var(--font-mono); font-size: 12px; font-weight: 400; }
 .row input[aria-invalid='true'] { border-color: var(--danger); }
+/* Empty cells read as "to fill": dashed, flat, with an example in light
+   italic sans text, so an example never looks like a value already typed. */
+.row input:placeholder-shown:not(:focus) { border-style: dashed; background: transparent; box-shadow: none; }
+.row input::placeholder { color: color-mix(in srgb, var(--text-3) 72%, transparent); font-family: var(--font-sans); font-style: italic; font-size: 11.5px; letter-spacing: 0; }
+.row[data-blank] .rowOps { opacity: .55; }
+.row[data-blank]:hover .rowOps, .row[data-blank]:focus-within .rowOps { opacity: 1; }
 /* Keeps role=textbox (unlike type=password) while hiding a literal secret. */
 .row input[data-masked] { -webkit-text-security: disc; letter-spacing: .08em; }
 .rowOps { display: inline-flex; flex: none; align-items: center; gap: 2px; }

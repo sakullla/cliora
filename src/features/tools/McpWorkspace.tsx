@@ -10,6 +10,7 @@ import { SearchField } from '../../components/SearchField';
 import { saveShortcutHint } from '../../lib/shortcut';
 import { Icon } from '../../components/Icon';
 import { StatusBanner } from '../../components/StatusBanner';
+import { useFeedback } from '../../lib/toast';
 import { applyParsedServer, blankMcpDraft, editableRowsOf, hasMcpIssues, keptMcpArgs, mcpDraftIssues, mcpDraftOf, mcpSummary, recordOfRows, type KeyValueRow, type McpParsedServer } from '../../lib/mcp';
 import { McpFormFields } from '../../components/mcp/McpFormFields';
 import i18n from '../../i18n';
@@ -52,6 +53,14 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
     const timer = window.setTimeout(() => setNotice(''), 5000);
     return () => window.clearTimeout(timer);
   }, [notice]);
+  // Inside the editor, feedback stays next to the form. Once the editor is
+  // closed, results move to the page toast so the list never shifts.
+  const feedback = useFeedback();
+  useEffect(() => {
+    if (composing) return;
+    if (error) { feedback.setError(error); setError(''); }
+    else if (notice) { feedback.setNotice(notice); setNotice(''); }
+  }, [composing, error, notice, feedback]);
   const previewContext = JSON.stringify([draft, envRows, headerRows, toolId, scope, project, enabled]);
   const previewEpochRef = useRef({ context: previewContext, epoch: 0 });
   if (previewEpochRef.current.context !== previewContext) {
@@ -190,14 +199,8 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
     return <section className={styles.section} aria-label={t('tools.mcp.title')}>{head(false)}<StatusBanner tone="error">{capabilityBlocked}</StatusBanner><p className={styles.muted}>{t('tools.mcp.blocked')}</p></section>;
   }
 
-  const banners = <>
-    {!composing && notice && <StatusBanner tone="success" onDismiss={() => setNotice('')}>{notice}</StatusBanner>}
-    {!composing && error && <StatusBanner tone="error" onDismiss={() => setError('')}>{error}</StatusBanner>}
-  </>;
-
   return <section className={styles.section} aria-label={t('tools.mcp.title')}>
     {head(true)}
-    {banners}
     {empty ? <div className={styles.empty}>
       <span className={styles.emptyIcon}><Icon name="connections" size={22} strokeWidth={1.5} /></span>
       <strong>{t('tools.mcp.emptyTitle')}</strong>

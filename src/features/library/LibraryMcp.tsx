@@ -9,6 +9,7 @@ import { confirmAction } from '../../lib/confirm';
 import { applyParsedServer, blankMcpDraft, editableRowsOf, hasMcpIssues, keptMcpArgs, mcpCopyName, mcpDraftIssues, mcpDraftOf, mcpSummary, recordOfRows, type KeyValueRow, type McpParsedServer } from '../../lib/mcp';
 import { McpFormFields } from '../../components/mcp/McpFormFields';
 import { native } from '../../lib/native';
+import { useFeedback } from '../../lib/toast';
 import { saveShortcutHint, searchShortcutHint } from '../../lib/shortcut';
 import type { Project } from '../../types/launch';
 import type { AdapterDescriptor, Scope } from '../../types/native';
@@ -45,15 +46,10 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
   const [baseline, setBaseline] = useState('');
   const [showIssues, setShowIssues] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
+  // Page results float as toasts so the card grid never jumps.
+  const { setError, setNotice } = useFeedback();
   const [dialogError, setDialogError] = useState('');
   const [search, setSearch] = useState('');
-  useEffect(() => {
-    if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(''), 4000);
-    return () => window.clearTimeout(timer);
-  }, [notice]);
 
   useEffect(() => {
     if (!active) return;
@@ -206,8 +202,6 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
 
   return <div className={styles.layout}>
     <SearchField className={styles.searchBox} label={t('library.page.searchLabel')} pageSearch title={searchShortcutHint()} value={search} onChange={setSearch} placeholder={t('library.resources.searchMcpPlaceholder')} />
-    {error && <div className={styles.error} role="alert">{error}</div>}
-    {notice && <div className={styles.notice} role="status">{notice}</div>}
     <div className={styles.list} aria-label={t('library.resources.mcpListAria')}>
       {shown.length ? shown.map((item) => {
         const places = placements.filter((entry) => entry.definitionId === item.id);
@@ -243,7 +237,7 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
         </article>;
       }) : needle
         ? <div className={styles.empty}><Icon name="search" size={28} strokeWidth={1.3} />{t('library.resources.noMcpMatch', { query: search.trim() })}</div>
-        : loaded || error ? <div className={styles.empty}>
+        : loaded ? <div className={styles.empty}>
           <span className={styles.emptyIcon}><Icon name="connections" size={22} strokeWidth={1.5} /></span>
           <strong>{t('library.resources.emptyMcpTitle')}</strong>
           {t('library.resources.emptyMcpDetail')}

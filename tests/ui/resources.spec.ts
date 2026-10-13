@@ -771,3 +771,47 @@ test('saving an unmanaged native MCP keeps it out of the library unless asked', 
   expect(saved).toEqual([expect.objectContaining({ name: 'native-one', inLibrary: true })]);
   await expect(row).toContainText('资料库');
 });
+
+test('MCP card results float as a toast and never push the card list down', async ({ page }) => {
+  await mockResources(page);
+  await page.goto('/');
+  await page.evaluate(() => {
+    const state = window as typeof window & { __resourceMcpDefinitions: Array<Record<string, unknown>>; __resourceMcpPlacements: Array<Record<string, unknown>> };
+    state.__resourceMcpDefinitions.push({ id: 'mcp-1', name: 'filesystem', transport: 'stdio', command: 'npx', args: [], url: '', env: {}, headers: {}, inLibrary: true, version: 1 });
+    state.__resourceMcpPlacements.push({ definitionId: 'mcp-1', toolId: 'codex', scope: 'global', projectPath: null, enabled: true });
+  });
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  const list = page.getByLabel('MCP 列表', { exact: true });
+  const before = await list.boundingBox();
+  await page.getByRole('button', { name: 'Codex · 已生效' }).click();
+  const status = page.getByRole('region', { name: '资料库内容' }).getByRole('status').filter({ hasText: '已从 Codex 移除。' });
+  await expect(status).toBeVisible();
+  expect(await status.evaluate((element) => getComputedStyle(element.parentElement as Element).position)).toBe('fixed');
+  expect((await list.boundingBox())?.y).toBe(before?.y);
+  await status.getByRole('button', { name: '关闭提示' }).click();
+  await expect(status).toHaveCount(0);
+});
+
+test('MCP empty rows show an example that cannot be mistaken for a typed value', async ({ page }) => {
+  await mockResources(page);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  await page.getByRole('button', { name: '新建 MCP' }).click();
+  const dialog = page.getByRole('dialog');
+  const args = dialog.getByRole('group', { name: '参数，每行一项' });
+  const first = args.getByRole('textbox', { name: '参数，每行一项 第 1 行' });
+  await first.fill('-y');
+  await args.getByRole('button', { name: '添加一行' }).click();
+  const second = args.getByRole('textbox', { name: '参数，每行一项 第 2 行' });
+  await expect(second).toBeFocused();
+  await expect(second).toHaveValue('');
+  await expect(second).toHaveAttribute('placeholder', '例如 -y');
+  await dialog.getByRole('heading', { name: '新建 MCP' }).click();
+  const style = (locator: typeof first) => locator.evaluate((element) => getComputedStyle(element).borderTopStyle);
+  expect(await style(first)).toBe('solid');
+  expect(await style(second)).toBe('dashed');
+  const env = dialog.getByRole('group', { name: '环境变量' });
+  await expect(env.getByRole('textbox', { name: '环境变量 第 1 行键名' })).toHaveAttribute('placeholder', '变量名，例如 API_TOKEN');
+});

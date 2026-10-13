@@ -23,6 +23,8 @@ import { AgentsWorkspace } from './AgentsWorkspace';
 import { ToolIcon } from '../../components/ToolIcon';
 import { Icon } from '../../components/Icon';
 import { StatusBanner } from '../../components/StatusBanner';
+import { ToastScope } from '../../components/Toast';
+import { useToasts } from '../../lib/toast';
 import { FilterSelect } from '../../components/FilterSelect';
 import { SearchField } from '../../components/SearchField';
 import { GuideDialog } from '../../components/GuideDialog';
@@ -128,8 +130,12 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   const [workspace, setWorkspace] = useState<RegisteredToolWorkspace | null>(null);
   const [scopedContext, setScopedContext] = useState<{ key: string; value: RegisteredToolContext } | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
+  // Action results float as toasts; persistent problems stay inline below.
+  const toasts = useToasts();
+  const [{ setError, setNotice }] = useState(() => ({
+    setError: (text: string) => { if (text) toasts.showError(text); else toasts.dismiss('alert'); },
+    setNotice: (text: string) => { if (text) toasts.showNotice(text); else toasts.dismiss('status'); },
+  }));
   const [busy, setBusy] = useState(false);
   const [maintenance, setMaintenance] = useState<{ tool: string; name: string; running: boolean; action: 'install' | 'upgrade' | 'install_native' | 'uninstall_npm'; source?: string; cancelling?: boolean; output: string; error: string; version?: string | null } | null>(null);
   const [applying, setApplying] = useState<string | null>(null);
@@ -389,12 +395,11 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   const resourceContext = scopedContext?.key === context ? scopedContext.value : null;
   const resourcesReady = resourceContext !== null && !resourceContext.nativeContextError;
   if (!descriptor) return <p>{t('tools.workspace.noTools')}</p>;
-  return <section className={styles.workspace} aria-label={t('common.nav.connections')}>
+  return <section className={styles.workspace} aria-label={t('common.nav.connections')}><ToastScope toasts={toasts}>
     <div className={styles.chrome}>
     <div className={styles.toolbar}><ToolSwitcher tools={managedTools} selected={toolId} onSelect={id => void switchTool(id)} /></div>
     <div className={styles.taskBar}><div className={styles.views} role="tablist" aria-label={t('tools.workspace.tasksAria')} onKeyDown={navigateChoices}>{resourceViews.filter((id) => supported[id]).map((id) => { const label = t(`tools.workspace.view.${id}`); const shortcutIndex = resourceViews.findIndex((view) => view === id) + 1; return <button role="tab" key={id} aria-selected={resource === id} aria-keyshortcuts={`Alt+${shortcutIndex}`} tabIndex={resource === id ? 0 : -1} title={t('tools.workspace.viewTitle', { label, index: shortcutIndex })} className={resource === id ? styles.selected : ''} onClick={() => void switchResource(id)}>{label}</button>; })}</div><div className={styles.scopeBar}><FilterSelect className={styles.projectSelect} label={t('tools.workspace.scopeLabel')} value={scope === 'global' ? '__global__' : projectPath} forceSearch searchLabel={t('home.launcher.searchLabel')} options={[{ value: '__global__', label: t('tools.workspace.scopeGlobal') }, ...projects.map(project => ({ value: project.path ?? project.id, label: project.name, detail: project.path ? shortPath(project.path) : undefined, disabled: !project.available || !project.path })), ...(projectPath && !projects.some(project => project.path === projectPath) ? [{ value: projectPath, label: projectPath.split(/[\\/]/).at(-1) ?? projectPath }] : [])]} onChange={value => void switchScope(value === '__global__' ? 'global' : 'project', value === '__global__' ? '' : value)} onPickFolder={() => void pickProject()} pickFolderLabel={t('common.filterSelect.pickFolder')} /></div></div>
     </div>
-    {(error || notice) && <div className={styles.feedback}>{error && <StatusBanner tone="error" onDismiss={() => setError('')}>{error}</StatusBanner>}{notice && <StatusBanner tone="success" autoDismissMs={8000} onDismiss={() => setNotice('')}>{notice}</StatusBanner>}</div>}
     <div hidden={resource !== 'config'}>
       {workspace && <InstallPanel toolName={descriptor.name} probe={workspace.probe} customPath={customPath} busy={busy} loading={loading} onCustomPath={setCustomPath} onSavePath={() => void savePath()} onMaintain={(action, source) => void maintain(action, source)} onUsePath={path => void usePath(path)} />}
       {workspace?.nativeContextError && <div className={styles.feedback}><StatusBanner tone="error">{workspace.nativeContextError}</StatusBanner></div>}
@@ -430,5 +435,5 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
           : <>{maintenance.error && maintenance.tool === toolId && <button disabled={busy} onClick={() => void maintain(maintenance.action, maintenance.source, true)}>{t('tools.workspace.maintenanceRetry')}</button>}<button onClick={() => setMaintenance(null)}>{t('tools.workspace.maintenanceClose')}</button></>}</div>
       </>}
     </GuideDialog>
-  </section>;
+  </ToastScope></section>;
 }
