@@ -98,18 +98,11 @@ function absLc(text, bg) {
   return Math.abs(lc(text, bg));
 }
 
-function srgbLinear(channel) {
-  const encoded = channel / 255;
-  return encoded <= 0.04045 ? encoded / 12.92 : ((encoded + 0.055) / 1.055) ** 2.4;
-}
-
-function srgbEncode(channel) {
-  const encoded = channel <= 0.0031308 ? channel * 12.92 : 1.055 * channel ** (1 / 2.4) - 0.055;
-  return Math.round(Math.min(1, Math.max(0, encoded)) * 255);
-}
-
 function composite(foreground, background, alpha) {
-  return foreground.map((channel, index) => srgbEncode(srgbLinear(channel) * alpha + srgbLinear(background[index]) * (1 - alpha)));
+  return foreground.map((channel, index) => {
+    const mixed = channel * alpha + background[index] * (1 - alpha);
+    return Math.min(255, Math.max(0, Math.round(mixed)));
+  });
 }
 
 function wcag(text, bg) {
@@ -251,6 +244,7 @@ test('surfaces, charts, font stacks, and theme count stay put', () => {
 });
 
 test('body text on the translucent selection stays inside the reading band', () => {
+  assert.deepEqual(composite([46, 86, 68], [244, 242, 237], 0.1), [224, 226, 220]);
   for (const [name, theme] of themes) {
     const ring = parseColor(theme['accent-ring']);
     const accent = hexBytes(theme.accent);
@@ -258,7 +252,15 @@ test('body text on the translucent selection stays inside the reading band', () 
     const text = hexBytes(theme.text);
     for (const surface of ['bg', 'surface', 'surface-2']) {
       const mixed = composite(ring.rgb, hexBytes(theme[surface]), ring.alpha);
-      inBand(absLc(text, mixed), 75, 90, `${name} --text on selection over --${surface}`);
+      const body = absLc(text, mixed);
+      inBand(body, 75, 90, `${name} --text on selection over --${surface}`);
+      if (name === 'light') {
+        for (const token of ['text-2', 'text-3', 'accent']) {
+          const contrast = absLc(hexBytes(theme[token]), mixed);
+          atLeast(contrast, 75, `light --${token} on selection over --${surface}`);
+          assert.ok(contrast < body, `light --${token} on selection over --${surface} |Lc| ${contrast.toFixed(2)} is not below body ${body.toFixed(2)}`);
+        }
+      }
     }
   }
 });
@@ -278,6 +280,7 @@ test('comments, syntax colors, and secondary text stay readable on selection and
     const surface = hexBytes(theme['surface-2']);
     const selected = composite(ring.rgb, surface, ring.alpha);
     const cursorLine = composite(hexBytes(theme.accent), surface, cursorAlpha);
+    if (name === 'dark') atLeast(absLc(hexBytes(theme.accent), selected), 75, 'dark --accent on selection over --surface-2');
     const samples = [
       ['text-2', hexBytes(theme['text-2'])],
       ['text-3', hexBytes(theme['text-3'])],
