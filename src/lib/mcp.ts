@@ -75,7 +75,61 @@ export function mcpCopyName(name: string, existing: string[]): string {
   return candidate;
 }
 
+// Mirrors backend validate() in resources/mcp.rs so the form can point at the
+// field before a save round-trip fails.
+export const MCP_NAME_PATTERN = /^[A-Za-z0-9_-]{1,80}$/;
+
+export type McpFieldIssue = 'nameEmpty' | 'nameInvalid' | 'commandEmpty' | 'urlEmpty' | 'urlInvalid';
+export type McpDraftIssues = { name?: McpFieldIssue; command?: McpFieldIssue; url?: McpFieldIssue };
+
+export function mcpDraftIssues(draft: Pick<McpDraft, 'name' | 'transport' | 'command' | 'url'>): McpDraftIssues {
+  const issues: McpDraftIssues = {};
+  const name = draft.name.trim();
+  if (!name) issues.name = 'nameEmpty';
+  else if (!MCP_NAME_PATTERN.test(name)) issues.name = 'nameInvalid';
+  if (draft.transport === 'stdio' && !draft.command.trim()) issues.command = 'commandEmpty';
+  if (draft.transport === 'http') {
+    const url = draft.url.trim();
+    if (!url) issues.url = 'urlEmpty';
+    else {
+      try {
+        const parsed = new URL(url);
+        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') issues.url = 'urlInvalid';
+      } catch { issues.url = 'urlInvalid'; }
+    }
+  }
+  return issues;
+}
+
+export function hasMcpIssues(issues: McpDraftIssues): boolean {
+  return !!(issues.name || issues.command || issues.url);
+}
+
+// Same words the backend treats as sensitive when exporting.
+export function isSensitiveKey(key: string): boolean {
+  const name = key.toLowerCase();
+  return ['key', 'token', 'secret', 'authorization', 'password'].some((word) => name.includes(word));
+}
+
+// `${VAR}` / `$VAR` references carry no secret themselves and stay readable.
+export function isValueReference(value: string): boolean {
+  return /\$\{[^}]+\}|^\$[A-Za-z_][A-Za-z0-9_]*$/.test(value.trim());
+}
+
+function quoteArg(value: string): string {
+  return /[\s"']/.test(value) ? `"${value.replace(/"/g, '\\"')}"` : value;
+}
+
+export function mcpCommandLine(command: string, args: string[]): string {
+  return [command.trim(), ...keptMcpArgs(args)].filter(Boolean).map(quoteArg).join(' ');
+}
+
+export function mcpSummary(item: { transport: McpTransport; command: string; args: string[]; url: string | null }): string {
+  return item.transport === 'http' ? (item.url ?? '').trim() : mcpCommandLine(item.command, item.args);
+}
+
 export type McpParsedServer = {
+  total: number;
   name: string;
   transport: McpTransport;
   command: string;
@@ -95,21 +149,42 @@ function stringMap(value: unknown): Record<string, string> {
   return output;
 }
 
-// Accepts an mcpServers wrapper or a bare server object; returns null when the
-// text is not recognizable MCP JSON so callers keep the form untouched.
+function plainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function looksLikeServer(value: unknown): value is Record<string, unknown> {
+  return plainObject(value) && (typeof value.command === 'string' || typeof value.url === 'string' || typeof value.serverUrl === 'string');
+}
+
+// A `"name": { ... }` snippet copied out of an mcpServers block is not valid
+// JSON on its own; wrapping it in braces (and dropping a trailing comma) is.
+function parseLenient(text: string): unknown {
+  const trimmed = text.trim();
+  try { return JSON.parse(trimmed); } catch { /* try the snippet form */ }
+  if (!trimmed.startsWith('"')) return null;
+  try { return JSON.parse(`{${trimmed.replace(/,\s*$/, '')}}`); } catch { return null; }
+}
+
+// Accepts an mcpServers / servers wrapper, a `name: server` map, or a bare
+// server object; returns null when the text is not recognizable MCP JSON so
+// callers keep the form untouched. Only the first server is used; `total`
+// lets callers say how many were skipped.
 export function parseMcpServerJson(text: string): McpParsedServer | null {
-  let parsed: unknown;
-  try { parsed = JSON.parse(text); } catch { return null; }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const parsed = parseLenient(text);
+  if (!plainObject(parsed)) return null;
   let name = '';
-  let server = parsed as Record<string, unknown>;
-  const wrapped = server.mcpServers;
-  if (wrapped && typeof wrapped === 'object' && !Array.isArray(wrapped)) {
-    const entries = Object.entries(wrapped as Record<string, unknown>);
+  let total = 1;
+  let server = parsed;
+  const wrapped = plainObject(parsed.mcpServers) ? parsed.mcpServers : plainObject(parsed.servers) ? parsed.servers : null;
+  const map = wrapped ?? (!looksLikeServer(parsed) && Object.values(parsed).some(looksLikeServer) ? parsed : null);
+  if (map) {
+    const entries = Object.entries(map).filter(([, value]) => plainObject(value));
     const first = entries[0];
-    if (!first || !first[1] || typeof first[1] !== 'object' || Array.isArray(first[1])) return null;
+    if (!first) return null;
     [name] = first;
     server = first[1] as Record<string, unknown>;
+    total = entries.length;
   }
   const command = typeof server.command === 'string' ? server.command : '';
   const url = typeof server.url === 'string' ? server.url : typeof server.serverUrl === 'string' ? server.serverUrl : '';
@@ -118,5 +193,13 @@ export function parseMcpServerJson(text: string): McpParsedServer | null {
   if (transport === 'http' && !url) return null;
   if (transport === 'stdio' && !command) return null;
   const args = Array.isArray(server.args) ? server.args.filter((item): item is string => typeof item === 'string') : [];
-  return { name, transport, command, args, url, env: stringMap(server.env), headers: stringMap(server.headers) };
+  return { total, name, transport, command, args, url, env: stringMap(server.env), headers: stringMap(server.headers) };
+}
+
+export function applyParsedServer(draft: McpDraft, parsed: McpParsedServer): { draft: McpDraft; envRows: KeyValueRow[]; headerRows: KeyValueRow[] } {
+  return {
+    draft: { ...draft, name: parsed.name || draft.name, transport: parsed.transport, command: parsed.command, args: parsed.args, url: parsed.url },
+    envRows: editableRowsOf(parsed.env),
+    headerRows: editableRowsOf(parsed.headers),
+  };
 }

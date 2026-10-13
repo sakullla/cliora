@@ -125,9 +125,20 @@ test('tiled CLI targets share one grid in the skill and MCP dialogs', async ({ p
   await expect(dialog.getByRole('checkbox', { name: 'Codex', exact: true })).toBeEnabled();
   await expect(dialog.getByRole('checkbox', { name: 'Claude Code', exact: true })).toBeDisabled();
   await dialog.getByRole('checkbox', { name: 'OpenCode', exact: true }).check();
+  // MCP targets are a status list: each row names the CLI and says what saving will do.
+  const targets = dialog.getByRole('list', { name: '全局 的 CLI' });
+  await expect(targets.getByRole('listitem')).toHaveCount(tools.length);
+  await expect(dialog.getByRole('checkbox', { name: 'OpenCode', exact: true })).toHaveAccessibleDescription('保存时写入');
+  await expect(dialog.getByRole('checkbox', { name: 'Grok', exact: true })).toHaveAccessibleDescription('未写入');
+  await expect(dialog.getByRole('checkbox', { name: 'Claude Code', exact: true })).toHaveAccessibleDescription('账号绑定不可读');
+  const rows = await targets.getByRole('listitem').evaluateAll((nodes) => nodes.map((node) => {
+    const label = node.querySelector('label') as HTMLElement;
+    const box = label.getBoundingClientRect();
+    return { width: Math.round(box.width), right: box.right, opacity: getComputedStyle(label).opacity, clipped: label.scrollWidth > label.clientWidth + 1 };
+  }));
   const mcpBox = await dialog.boundingBox();
-  const mcp = await chipMetrics(dialog);
-  expectEvenGrid(mcp, mcpBox!.x + mcpBox!.width);
-  expect(mcp.find((item) => item.name === 'OpenCode')!.color).toBe(mcp.find((item) => item.name === 'Grok')!.color);
-  expect(mcp.find((item) => item.name === 'Claude Code')!.opacity).toBe('0.7');
+  expect(new Set(rows.map((item) => item.width)).size).toBe(1);
+  expect(Math.max(...rows.map((item) => item.right))).toBeLessThanOrEqual(mcpBox!.x + mcpBox!.width + 1);
+  expect(rows.every((item) => !item.clipped)).toBe(true);
+  expect(rows[tools.findIndex(([id]) => id === 'claude_code')].opacity).toBe('0.7');
 });

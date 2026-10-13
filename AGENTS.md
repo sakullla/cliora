@@ -48,6 +48,7 @@ node scripts/capture-ui.mjs --skills --theme light --size 1360
 - `--size all|1360,900,640` chooses widths. The default is `all`.
 - `--skills` captures the Skill list and the SKILL.md editor.
 - `--connections`, `--records`, `--sessions`, and `--features` capture those areas. `--workflows` is an alias of `--features`.
+- `--mcp` captures the tool MCP tab and its editor, plus the library MCP list, editor, and CLI target panel.
 - `--list` prints feature scenario names. `--only 'kimi-*'` limits those scenarios. It does not filter `--skills`.
 - `CLIORA_CAPTURE_OUT` sets the output directory. The default is `docs/verification/ui`.
 - `CLIORA_PREVIEW_URL` sets the preview. The default is `http://127.0.0.1:14736`.
