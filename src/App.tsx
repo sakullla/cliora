@@ -167,6 +167,16 @@ export default function App() {
     const internals = (window as Window & { __TAURI_INTERNALS__?: { metadata?: unknown } }).__TAURI_INTERNALS__;
     if (!nativeAvailable || !internals?.metadata) return;
     if (/Mac/i.test(navigator.userAgent)) document.documentElement.dataset.native = 'macos';
+    // Release builds load from tauri://localhost or http://tauri.localhost; the dev server has a port and keeps Inspect.
+    if (location.port !== '') return;
+    // The WebView menu (Back / Reload / Print) is not part of a desktop app. Keep it where it helps:
+    // text fields (cut, copy, paste) and an active text selection (copy).
+    const onContextMenu = (event: MouseEvent) => {
+      if (isEditableTarget(event.target) || (window.getSelection()?.toString() ?? '') !== '') return;
+      event.preventDefault();
+    };
+    window.addEventListener('contextmenu', onContextMenu);
+    return () => window.removeEventListener('contextmenu', onContextMenu);
   }, []);
   useEffect(() => {
     const mode = bootstrap.preferences.theme;

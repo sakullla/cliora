@@ -99,8 +99,11 @@
 .rowActions > .launch, .rowActions > .recheck { grid-column: 1; justify-self: stretch; }
 .rowActions > .configure { grid-column: 3; }
 .rowActions > button { min-height: var(--control-h-sm); }
-.rowActions .launch { min-width: 68px; border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
-.rowActions .launch:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }
+/* Five identical solid buttons compete with each other. Launch stays tinted at rest and fills in
+   for the row under the pointer or keyboard focus, so the active row reads as the next action. */
+.rowActions .launch { min-width: 68px; border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); box-shadow: none; }
+.row:hover .rowActions .launch:not(:disabled), .row:focus-within .rowActions .launch:not(:disabled) { border-color: var(--accent); background: var(--accent); color: var(--on-accent); box-shadow: var(--shadow-xs); }
+.rowActions .launch:hover:not(:disabled), .row .rowActions .launch:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); color: var(--on-accent); }
 .rowActions .configure, .rowActions .configure:hover:not(:disabled) { border-color: transparent; background: transparent; box-shadow: none; color: var(--text-2); }
 .rowActions .configure:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
 
