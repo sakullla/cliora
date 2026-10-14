@@ -111,6 +111,7 @@ pub struct ToolProbe {
     pub dependencies: Vec<Dependency>,
     pub install_command: Option<String>,
     pub upgrade_command: Option<String>,
+    pub major_upgrade: Option<crate::adapters::MajorUpgradeAction>,
     pub native_install_command: Option<String>,
     pub npm_install_command: Option<String>,
     pub provider_presets: Vec<ProviderPreset>,
@@ -159,10 +160,13 @@ fn source_of(path: &Path, adapter: &dyn CliAdapter) -> &'static str {
     if adapter.recognizes_native_install_path(path) {
         return "native";
     }
+    // Every declared install line contributes its own package identity, so a
+    // 2.x shim is recognized exactly like a 1.x shim without ID branching.
+    let packages = adapter.npm_packages();
     #[cfg(target_os = "macos")]
-    if !adapter.npm_package().is_empty() && path.canonicalize().is_ok_and(|target| {
-        target.to_string_lossy().contains(&format!("/node_modules/{}/", adapter.npm_package()))
-    }) {
+    if packages.iter().any(|package| path.canonicalize().is_ok_and(|target| {
+        target.to_string_lossy().contains(&format!("/node_modules/{package}/"))
+    })) {
         return "npm_shim";
     }
     let ext = path.extension().and_then(|v| v.to_str()).unwrap_or("");
@@ -173,16 +177,16 @@ fn source_of(path: &Path, adapter: &dyn CliAdapter) -> &'static str {
                 return "unknown";
             }
             let sample = String::from_utf8_lossy(&bytes).replace('\\', "/");
-            if sample.contains("node_modules/") && sample.contains(adapter.npm_package()) {
+            if sample.contains("node_modules/") && packages.iter().any(|package| sample.contains(package)) {
                 return "npm_shim";
             }
         }
     }
     // Unix npm links the global binary to the package inside node_modules.
-    if !cfg!(windows) && !adapter.npm_package().is_empty() {
+    if !cfg!(windows) && !packages.is_empty() {
         if let Ok(real) = path.canonicalize() {
             let sample = real.to_string_lossy().replace('\\', "/");
-            if sample.contains("node_modules/") && sample.contains(adapter.npm_package()) {
+            if sample.contains("node_modules/") && packages.iter().any(|package| sample.contains(package)) {
                 return "npm_shim";
             }
         }
@@ -342,8 +346,8 @@ fn install_command(adapter: &dyn CliAdapter) -> Option<String> {
     adapter.install_command()
 }
 
-fn upgrade_command(adapter: &dyn CliAdapter, source: &str) -> Option<String> {
-    adapter.upgrade_command(source)
+fn upgrade_command(adapter: &dyn CliAdapter, source: &str, version: Option<&str>) -> Option<String> {
+    adapter.upgrade_command_for_version(source, version)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -905,6 +909,8 @@ fn finish_probe(
     };
     let (install_url, upgrade_hint) = adapter.install_guidance();
     let source = selected.map(|item| item.source).unwrap_or("unknown");
+    // The identified version selects the install line every command follows.
+    let selected_version = selected.and_then(|item| item.version.clone());
     let no_candidates = installations.is_empty();
     let runnable = selected.is_some();
     Ok(ToolProbe {
@@ -927,7 +933,8 @@ fn finish_probe(
         } else {
             install_command(adapter)
         },
-        upgrade_command: upgrade_command(adapter, source),
+        upgrade_command: upgrade_command(adapter, source, selected_version.as_deref()),
+        major_upgrade: adapter.major_upgrade(source, selected_version.as_deref()),
         native_install_command: adapter.native_install_command(),
         npm_install_command: adapter.npm_install_command(),
         provider_presets: provider_presets(adapter, writable),
@@ -999,6 +1006,81 @@ mod tests {
             version_from_output(&adapters::OPENCODE, Path::new("opencode.ps1"), "claude 1.19.0"),
             None
         );
+    }
+
+    #[test]
+    fn opencode_install_lines_drive_source_update_and_major_upgrade() {
+        let temp = tempfile::tempdir().unwrap();
+        let opencode = adapters::known(CliId::OpenCode);
+
+        // npm shims are recognized per declared line.
+        let shim_v2 = temp.path().join("opencode.ps1");
+        std::fs::write(&shim_v2, "$basedir/node_modules/@opencode/cli/bin/opencode.exe").unwrap();
+        assert_eq!(source_of(&shim_v2, opencode), "npm_shim");
+        let shim_v1 = temp.path().join("opencode.cmd");
+        std::fs::write(&shim_v1, "@\"%~dp0\\node_modules\\opencode-ai\\bin\\opencode.exe\" %*").unwrap();
+        assert_eq!(source_of(&shim_v1, opencode), "npm_shim");
+        // Both lines install into the adapter's native launcher directory.
+        assert_eq!(source_of(&temp.path().join(".opencode/bin/opencode.exe"), opencode), "native");
+        std::fs::write(&shim_v2, "unrelated launcher").unwrap();
+        assert_eq!(source_of(&shim_v2, opencode), "unknown");
+
+        // Regular updates stay inside the identified line.
+        let update_v2 = upgrade_command(opencode, "npm_shim", Some("2.0.29")).unwrap();
+        assert!(update_v2.contains("@opencode/cli@latest"), "{update_v2}");
+        assert!(!update_v2.contains("opencode-ai@latest"), "{update_v2}");
+        let update_v1 = upgrade_command(opencode, "npm_shim", Some("1.19.0")).unwrap();
+        assert!(update_v1.contains("opencode-ai@latest"), "{update_v1}");
+        assert!(!update_v1.contains("@opencode/cli"), "{update_v1}");
+        // Unknown versions and unknown sources never produce an update command.
+        assert_eq!(upgrade_command(opencode, "npm_shim", None), None);
+        assert_eq!(upgrade_command(opencode, "npm_shim", Some("3.0.0")), None);
+        assert_eq!(upgrade_command(opencode, "unknown", Some("2.0.29")), None);
+        assert_eq!(
+            opencode.npm_uninstall_command_for_version(Some("2.0.29")).as_deref(),
+            Some("npm uninstall -g @opencode/cli")
+        );
+        assert_eq!(
+            opencode.npm_uninstall_command_for_version(Some("1.19.0")).as_deref(),
+            Some("npm uninstall -g opencode-ai")
+        );
+
+        // The explicit major upgrade follows the official 1.19.0 path only.
+        let action = opencode.major_upgrade("npm_shim", Some("1.19.0")).unwrap();
+        assert_eq!(action.label, "升级到 OpenCode 2");
+        assert_eq!(action.command.as_deref(), Some("opencode upgrade --major"));
+        assert_eq!(action.guidance, None);
+        assert_eq!(
+            opencode.major_upgrade("native", Some("1.19.0")).unwrap().command.as_deref(),
+            Some("opencode upgrade --major")
+        );
+        let guidance = opencode.major_upgrade("npm_shim", Some("1.18.34")).unwrap();
+        assert_eq!(guidance.command, None);
+        assert!(guidance.guidance.unwrap().contains("1.19.0"));
+        assert_eq!(opencode.major_upgrade("npm_shim", Some("2.0.29")), None);
+        assert_eq!(opencode.major_upgrade("unknown", Some("1.19.0")), None);
+        assert_eq!(opencode.major_upgrade("npm_shim", None), None);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn opencode_probe_exposes_line_scoped_update_and_major_upgrade_actions() {
+        let registry = Registry::builtins();
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let executable = home.join("opencode.ps1");
+        std::fs::write(
+            &executable,
+            "# node_modules/opencode-ai/bin/opencode.exe\nWrite-Output 'opencode 1.19.0'\n",
+        )
+        .unwrap();
+        let probe = probe_registered_summary(&registry, "open_code", Some(&executable), home, None, Scope::Global).unwrap();
+        assert_eq!(probe.installations[0].source, "npm_shim");
+        assert_eq!(probe.installations[0].version.as_deref(), Some("1.19.0"));
+        assert!(probe.upgrade_command.as_deref().unwrap().contains("opencode-ai@latest"));
+        let action = probe.major_upgrade.as_ref().unwrap();
+        assert_eq!(action.label, "升级到 OpenCode 2");
+        assert_eq!(action.command.as_deref(), Some("opencode upgrade --major"));
     }
 
     #[test]
@@ -1196,7 +1278,8 @@ mod tests {
         assert_eq!(
             upgrade_command(
                 adapters::known(CliId::Grok),
-                source_of(&shim, adapters::known(CliId::Grok))
+                source_of(&shim, adapters::known(CliId::Grok)),
+                None
             )
             .as_deref(),
             Some("npm install -g @xai-official/grok@latest --include=optional --ignore-scripts=false --foreground-scripts --allow-scripts=@xai-official/grok --no-audit --no-fund --fetch-retries=3 --fetch-timeout=60000 --fetch-retry-mintimeout=1000 --fetch-retry-maxtimeout=10000")
@@ -1204,7 +1287,7 @@ mod tests {
         std::fs::write(&shim, "unrelated launcher").unwrap();
         assert_eq!(source_of(&shim, adapters::known(CliId::Grok)), "unknown");
         assert_eq!(
-            upgrade_command(adapters::known(CliId::Grok), "unknown"),
+            upgrade_command(adapters::known(CliId::Grok), "unknown", None),
             None
         );
 
@@ -1220,7 +1303,7 @@ mod tests {
             Some("npm install -g @earendil-works/pi-coding-agent@latest --include=optional --ignore-scripts=false --foreground-scripts --allow-scripts=@earendil-works/pi-coding-agent,esbuild,@google/genai,protobufjs --no-audit --no-fund --fetch-retries=3 --fetch-timeout=60000 --fetch-retry-mintimeout=1000 --fetch-retry-maxtimeout=10000")
         );
         assert_eq!(
-            upgrade_command(adapters::known(CliId::Pi), "npm_shim").as_deref(),
+            upgrade_command(adapters::known(CliId::Pi), "npm_shim", None).as_deref(),
             Some("npm install -g @earendil-works/pi-coding-agent@latest --include=optional --ignore-scripts=false --foreground-scripts --allow-scripts=@earendil-works/pi-coding-agent,esbuild,@google/genai,protobufjs --no-audit --no-fund --fetch-retries=3 --fetch-timeout=60000 --fetch-retry-mintimeout=1000 --fetch-retry-maxtimeout=10000")
         );
         assert_eq!(parse_node_version("v22.18.9"), Some((22, 18, 9)));

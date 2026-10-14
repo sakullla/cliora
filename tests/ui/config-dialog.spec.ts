@@ -120,7 +120,7 @@ test('install panel updates the active source and can switch to the native CLI',
   await page.getByRole('button', { name: '使用', exact: true }).click();
   const maintain = await page.evaluate(() => (window as unknown as { __maintainCalls: Array<{ action: string; source: string | null }> }).__maintainCalls);
   const paths = await page.evaluate(() => (window as unknown as { __pathCalls: Array<{ path: string }> }).__pathCalls);
-  expect(maintain).toEqual([{ toolId: 'codex', action: 'upgrade', source: 'npm_shim' }]);
+  expect(maintain).toEqual([{ toolId: 'codex', action: 'upgrade', source: 'npm_shim', version: '0.159.3' }]);
   expect(paths).toEqual([{ toolId: 'codex', path: 'C:/Users/me/AppData/Local/Programs/OpenAI/Codex/bin/codex.exe' }]);
 });
 
@@ -152,7 +152,7 @@ test('a missing CLI asks which install channel to use', async ({ page }) => {
   await page.getByRole('button', { name: '安装 npm', exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: '安装', exact: true }).click();
   const maintain = await page.evaluate(() => (window as unknown as { __maintainCalls: Array<{ action: string; source: string | null }> }).__maintainCalls);
-  expect(maintain).toEqual([{ toolId: 'codex', action: 'install', source: 'npm_shim' }]);
+  expect(maintain).toEqual([{ toolId: 'codex', action: 'install', source: 'npm_shim', version: null }]);
 });
 
 test('saving a configuration closes the dialog', async ({ page }) => {

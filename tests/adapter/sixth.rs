@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use serde_json::{json, Value};
 
 use super::*;
-use crate::adapters::{CliAdapter,Registry};
+use crate::adapters::{CliAdapter,InstallLine,Registry};
 use crate::native::adapter;
 
 struct Sixth;
@@ -33,6 +33,12 @@ impl CliAdapter for Sixth {
         "@fixture/sixth"
     }
     fn npm_script_dependencies(&self) -> &'static [&'static str] { &["@fixture/native"] }
+    fn install_lines(&self) -> Vec<InstallLine> {
+        vec![
+            InstallLine { major: 1, npm_package: "@fixture/sixth-one", npm_entry: Some("node_modules/@fixture/sixth-one/bin/cli") },
+            InstallLine { major: 2, npm_package: "@fixture/sixth-two", npm_entry: Some("node_modules/@fixture/sixth-two/bin/cli") },
+        ]
+    }
     fn version_probe_environment(&self) -> &'static [(&'static str, &'static str)] { &[("CLIORA_FIXTURE_PROBE", "yes")] }
     fn latest_version_url(&self) -> Option<String> { Some("https://example.invalid/sixth/releases".into()) }
     fn parse_latest_version(&self, text: &str) -> Option<String> { text.strip_prefix("release=").map(str::to_owned) }
@@ -139,6 +145,55 @@ fn sixth_release_and_install_policy_extend_through_registry() {
     let command = adapter.npm_install_command().unwrap();
     assert!(command.contains("--allow-scripts=@fixture/sixth,@fixture/native"));
     assert_eq!(adapter.upgrade_command("npm_shim"), Some(command));
+}
+
+/// A multi-line declaration is the only extension point: shared services
+/// derive the package, update, uninstall and release queries per identified
+/// major without any change to version, release or maintenance services.
+#[test]
+fn sixth_multi_line_install_declaration_reaches_shared_services() {
+    let registry = Registry::with_adapters(vec![&SIXTH]).unwrap();
+    let adapter = registry.get("sixth_fixture").unwrap();
+    assert_eq!(adapter.npm_packages(), vec!["@fixture/sixth-one", "@fixture/sixth-two"]);
+    let update_v2 = adapter.upgrade_command_for_version("npm_shim", Some("2.1.0")).unwrap();
+    assert!(update_v2.contains("@fixture/sixth-two@latest"), "{update_v2}");
+    assert!(update_v2.contains("--allow-scripts=@fixture/sixth-two,@fixture/native"), "{update_v2}");
+    let update_v1 = adapter.upgrade_command_for_version("npm_shim", Some("1.4.0")).unwrap();
+    assert!(update_v1.contains("@fixture/sixth-one@latest"), "{update_v1}");
+    assert!(adapter.upgrade_command_for_version("npm_shim", None).is_none());
+    assert!(adapter.upgrade_command_for_version("npm_shim", Some("3.0.0")).is_none());
+    assert_eq!(adapter.npm_uninstall_command_for_version(Some("2.1.0")).unwrap(), "npm uninstall -g @fixture/sixth-two");
+    assert_eq!(
+        adapter.latest_version_url_for_version(Some("2.1.0")).as_deref(),
+        Some("https://registry.npmjs.org/@fixture%2Fsixth-two/latest")
+    );
+    assert!(adapter.latest_version_url_for_version(None).is_none());
+    assert!(adapter.major_upgrade("npm_shim", Some("1.4.0")).is_none());
+}
+
+#[test]
+#[cfg(windows)]
+fn sixth_multi_line_npm_shim_is_recognized_through_the_registry() {
+    let registry = Registry::with_adapters(vec![&SIXTH]).unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let executable = temp.path().join("sixth_fixture.ps1");
+    std::fs::write(
+        &executable,
+        "# node_modules/@fixture/sixth-two/bin/cli\nWrite-Output 'sixth_fixture 2.1.0'\n",
+    )
+    .unwrap();
+    let probe = adapter::probe_registered_summary(
+        &registry,
+        "sixth_fixture",
+        Some(&executable),
+        temp.path(),
+        None,
+        Scope::Global,
+    )
+    .unwrap();
+    assert_eq!(probe.installations[0].source, "npm_shim");
+    assert_eq!(probe.installations[0].version.as_deref(), Some("2.1.0"));
+    assert!(probe.upgrade_command.as_deref().unwrap().contains("@fixture/sixth-two@latest"));
 }
 impl CredentialStore for MemoryCredentials {
     fn put(&self, id: &str, secret: &str) -> Result<(), String> {

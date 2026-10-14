@@ -28,14 +28,17 @@ function versionParts(value: string) {
 }
 
 const latestVersions = new Map<string, { at: number; request: Promise<string> }>();
-function latestVersion(tool: string, fresh: boolean) {
-  const cached = latestVersions.get(tool);
+function latestVersion(tool: string, version: string, fresh: boolean) {
+  // One release query per install line: a 1.x and a 2.x install ask different
+  // packages, so the cache key carries the identified version.
+  const key = `${tool}:${version}`;
+  const cached = latestVersions.get(key);
   if (!fresh && cached && Date.now() - cached.at < 300_000) return cached.request;
-  const request = native.cliLatestVersion(tool).catch(error => {
-    if (latestVersions.get(tool)?.request === request) latestVersions.delete(tool);
+  const request = native.cliLatestVersion(tool, version || undefined).catch(error => {
+    if (latestVersions.get(key)?.request === request) latestVersions.delete(key);
     throw error;
   });
-  latestVersions.set(tool, { at: Date.now(), request });
+  latestVersions.set(key, { at: Date.now(), request });
   return request;
 }
 
@@ -75,7 +78,7 @@ export function InstallPanel({ toolName, probe, customPath, busy, loading, onCus
   loading: boolean;
   onCustomPath: (value: string) => void;
   onSavePath: () => void;
-  onMaintain: (action: 'install' | 'upgrade' | 'install_native' | 'uninstall_npm', source?: string) => void;
+  onMaintain: (action: 'install' | 'upgrade' | 'install_native' | 'uninstall_npm' | 'upgrade_major', source?: string, version?: string) => void;
   onUsePath: (path: string) => void;
 }) {
   const { t } = useTranslation();
@@ -87,20 +90,20 @@ export function InstallPanel({ toolName, probe, customPath, busy, loading, onCus
   const multiple = Boolean(probe.nativeInstallCommand && probe.npmInstallCommand);
   const preferNative = probe.installCommand === probe.nativeInstallCommand;
   const problems = probe.dependencies.filter(item => item.status !== 'found');
-  const versionKey = `${probe.tool}:${selected?.version ?? ''}`;
+  const selectedVersion = selected?.version?.trim() ?? '';
   const [retry, setRetry] = useState(0);
   const [latest, setLatest] = useState<{ state: 'loading' | 'ready' | 'unknown' | 'unsupported'; version: string }>({ state: 'loading', version: '' });
   useEffect(() => {
     if (probe.latestVersionSupported === false) { setLatest({ state: 'unsupported', version: '' }); return; }
     let live = true;
     setLatest({ state: 'loading', version: '' });
-    void latestVersion(probe.tool, retry > 0).then((version) => {
+    void latestVersion(probe.tool, selectedVersion, retry > 0).then((version) => {
       if (!live) return;
       const text = typeof version === 'string' ? version.trim() : '';
       setLatest(text ? { state: 'ready', version: text } : { state: 'unknown', version: '' });
     }).catch(() => { if (live) setLatest({ state: 'unknown', version: '' }); });
     return () => { live = false; };
-  }, [probe.tool, versionKey, probe.latestVersionSupported, retry]);
+  }, [probe.tool, selectedVersion, probe.latestVersionSupported, retry]);
   const currentVersion = selected?.version?.trim() ?? '';
   const behind = Boolean(selected && currentVersion && latest.state === 'ready' && compareVersions(currentVersion, latest.version) < 0);
   const current = !selected || latest.state !== 'ready' || !currentVersion ? false : compareVersions(currentVersion, latest.version) >= 0;
@@ -138,6 +141,7 @@ export function InstallPanel({ toolName, probe, customPath, busy, loading, onCus
     {failed.map(item => <p className={styles.installFail} key={item.path} title={item.detail ?? item.path}>{t('tools.install.runFailed', { file: fileName(item.path) })}</p>)}
     {hasNpm && hasNative && <p className={styles.installNote}>{t('tools.install.duplicatesNote')}</p>}
     {problems.map(item => <p className={styles.installNote} key={item.name}>{item.name} {item.status === 'outdated' ? t('tools.install.outdated') : t('tools.install.missing')}{item.helpUrl && <ExternalLink href={item.helpUrl}>{t('tools.install.installLink')}</ExternalLink>}</p>)}
+    {selected && !probe.majorUpgrade?.command && probe.majorUpgrade?.guidance && <p className={styles.installNote}>{probe.majorUpgrade.guidance}</p>}
     <div className={styles.installActions}>
       {!selected && multiple && <>
         <button type="button" className={preferNative ? styles.primary : undefined} disabled={busy} onClick={() => onMaintain('install_native', 'native')}>{t('tools.install.installNative')}</button>
@@ -145,7 +149,8 @@ export function InstallPanel({ toolName, probe, customPath, busy, loading, onCus
       </>}
       {selected && multiple && !hasNative && <button type="button" disabled={busy} onClick={() => onMaintain('install_native', 'native')}>{t('tools.install.installNative')}</button>}
       {!selected && !multiple && probe.installCommand && <button type="button" className={styles.primary} disabled={busy} onClick={() => onMaintain('install')}>{t('tools.install.install')}</button>}
-      {selected && probe.upgradeCommand && (behind || latest.state === 'unknown' || latest.state === 'unsupported') && <button type="button" className={styles.primary} disabled={busy || loading} onClick={() => onMaintain('upgrade', selected.source)}>{updateLabel}</button>}
+      {selected && probe.upgradeCommand && (behind || latest.state === 'unknown' || latest.state === 'unsupported') && <button type="button" className={styles.primary} disabled={busy || loading} onClick={() => onMaintain('upgrade', selected.source, selected.version ?? undefined)}>{updateLabel}</button>}
+      {selected && probe.majorUpgrade?.command && <button type="button" disabled={busy || loading} onClick={() => onMaintain('upgrade_major', selected.source, selected.version ?? undefined)}>{probe.majorUpgrade.label}</button>}
       {probe.installUrl && <ExternalLink href={probe.installUrl}>{t('tools.install.officialGuide')}</ExternalLink>}
     </div>
     <details className={styles.pathCustom}><summary>{t('tools.install.customPath')}</summary><div><input aria-label={t('tools.install.pathAria')} value={customPath} onChange={event => onCustomPath(event.target.value)} placeholder={t('tools.install.pathPlaceholder')} /><button type="button" disabled={busy} onClick={onSavePath}>{t('tools.install.saveAndRecheck')}</button></div></details>

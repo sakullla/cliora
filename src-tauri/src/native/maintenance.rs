@@ -31,7 +31,7 @@ pub fn cancel(tool: &str) {
     }
 }
 
-fn script(adapter: &dyn CliAdapter, action: &str, source: &str) -> Result<String, String> {
+fn script(adapter: &dyn CliAdapter, action: &str, source: &str, version: Option<&str>) -> Result<String, String> {
     if !matches!(source, "npm_shim" | "native" | "unknown") { return Err("未知安装来源".into()); }
     match action {
         "install" => match source {
@@ -40,8 +40,11 @@ fn script(adapter: &dyn CliAdapter, action: &str, source: &str) -> Result<String
             _ => adapter.install_command(),
         },
         "install_native" => adapter.native_install_command(),
-        "upgrade" => adapter.upgrade_command(source),
-        "uninstall_npm" => adapter.npm_uninstall_command(),
+        // Regular updates and uninstalls follow the identified install line;
+        // the explicit major upgrade only runs the adapter-declared command.
+        "upgrade" => adapter.upgrade_command_for_version(source, version),
+        "upgrade_major" => adapter.major_upgrade(source, version).and_then(|action| action.command),
+        "uninstall_npm" => adapter.npm_uninstall_command_for_version(version),
         _ => None,
     }.ok_or_else(|| "没有可直接执行的命令".into())
 }
@@ -130,10 +133,10 @@ fn run(mut command: Command, cancelled: &AtomicBool, timeout: Duration, progress
     }
 }
 
-pub fn maintain(registry: &Registry, tool: &str, action: &str, source: &str, home: &Path, progress: impl Fn(MaintenanceProgress)) -> Result<MaintenanceResult, String> {
+pub fn maintain(registry: &Registry, tool: &str, action: &str, source: &str, version: Option<&str>, home: &Path, progress: impl Fn(MaintenanceProgress)) -> Result<MaintenanceResult, String> {
     let source = if source == "claude_native" { "native" } else { source };
     let adapter = registry.get(tool).ok_or("此 CLI 适配器未注册")?;
-    let script = script(adapter, action, source)?;
+    let script = script(adapter, action, source, version)?;
     let cancelled = Arc::new(AtomicBool::new(false));
     {
         let mut active = ACTIVE.lock().unwrap_or_else(|e| e.into_inner());
@@ -148,7 +151,15 @@ pub fn maintain(registry: &Registry, tool: &str, action: &str, source: &str, hom
     adapter::invalidate_probe_cache(tool);
     let output = output?;
     if action == "uninstall_npm" { return Ok(MaintenanceResult { output, version: None }); }
-    let installation = adapter::verify_installation(registry, tool, home, script.starts_with("npm "), &|| cancelled.load(Ordering::Relaxed))?;
+    let npm = script.starts_with("npm ");
+    let verify = |npm: bool| adapter::verify_installation(registry, tool, home, npm, &|| cancelled.load(Ordering::Relaxed));
+    // The official cross-major path may move the install between channels, so
+    // it accepts whichever verified channel the upgraded CLI actually uses.
+    let installation = if action == "upgrade_major" {
+        verify(npm).or_else(|_| verify(!npm))?
+    } else {
+        verify(npm)?
+    };
     Ok(MaintenanceResult { output, version: installation.version.clone() })
 }
 
@@ -174,6 +185,34 @@ mod tests {
         let started = Instant::now();
         assert!(run(shell(script, temp.path()), &AtomicBool::new(false), Duration::from_millis(150), &|_| {}).unwrap_err().contains("超时"));
         assert!(started.elapsed() < Duration::from_secs(20));
+    }
+
+    #[test]
+    fn install_line_selection_controls_update_uninstall_and_major_upgrade_scripts() {
+        let opencode = &crate::adapters::OPENCODE;
+        let upgrade_v2 = script(opencode, "upgrade", "npm_shim", Some("2.0.29")).unwrap();
+        assert!(upgrade_v2.contains("@opencode/cli@latest"), "{upgrade_v2}");
+        let upgrade_v1 = script(opencode, "upgrade", "npm_shim", Some("1.19.0")).unwrap();
+        assert!(upgrade_v1.contains("opencode-ai@latest"), "{upgrade_v1}");
+        assert_eq!(
+            script(opencode, "uninstall_npm", "npm_shim", Some("2.0.29")).unwrap(),
+            "npm uninstall -g @opencode/cli"
+        );
+        assert_eq!(
+            script(opencode, "upgrade_major", "npm_shim", Some("1.19.0")).unwrap(),
+            "opencode upgrade --major"
+        );
+        // Unknown versions or sources never produce a line-specific command.
+        assert!(script(opencode, "upgrade", "npm_shim", None).is_err());
+        assert!(script(opencode, "uninstall_npm", "npm_shim", None).is_err());
+        assert!(script(opencode, "upgrade_major", "unknown", Some("1.19.0")).is_err());
+        assert!(script(opencode, "upgrade_major", "npm_shim", Some("1.18.34")).is_err());
+        // A legacy single-line adapter keeps its exact command policy.
+        let pi = &crate::adapters::PI;
+        assert_eq!(
+            script(pi, "upgrade", "npm_shim", None).unwrap(),
+            pi.npm_install_command().unwrap()
+        );
     }
 
     #[test]

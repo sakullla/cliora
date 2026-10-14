@@ -80,7 +80,8 @@ pub fn command(
     context: &NativeContext,
     args: &[&str],
 ) -> Result<Command, String> {
-    let mut executable = executable.to_path_buf();
+    let probed = executable.to_path_buf();
+    let mut executable = probed.clone();
     #[cfg(windows)]
     if executable
         .extension()
@@ -99,8 +100,16 @@ pub fn command(
         // npm's PowerShell pipeline buffers stdin and cannot carry a duplex JSON
         // protocol. Resolve only the known, version-probed npm entry adjacent to
         // that exact shim; never shell-evaluate or guess a different installation.
+        // The entry follows the identified install line of the probed binary.
+        let version = adapter::probe_registered_path(
+            &Registry::builtins(),
+            &context.tool_id,
+            &probed,
+        )
+        .ok()
+        .and_then(|installation| installation.version);
         let relative = crate::adapters::accounts::get(&context.tool_id)?
-            .npm_entry()
+            .npm_entry_for_version(version.as_deref())
             .ok_or("此 CLI 未提供后台协议入口")?;
         let directory = executable.parent().ok_or("CLI 入口缺少目录")?;
         let target = directory.join(relative);
@@ -287,4 +296,45 @@ pub fn perform_logout(executable: &Path, context: &NativeContext) -> Result<Obse
         return Err("原生退出后仍检测到认证材料，请重新检查状态".into());
     }
     Ok(observation)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture_context(root: &Path) -> NativeContext {
+        NativeContext {
+            id: "fixture".into(),
+            tool_id: "open_code".into(),
+            config_root: root.to_path_buf(),
+            resource_root: root.to_path_buf(),
+            auth_files: vec![],
+            history_roots: vec![],
+            environment: std::collections::BTreeMap::new(),
+            remove_environment: vec![],
+            cli_args: vec![],
+            root: root.to_path_buf(),
+        }
+    }
+
+    /// The background protocol resolves the shim entry of the installed line;
+    /// a 2.x shim must never resolve the 1.x entry and vice versa.
+    #[test]
+    #[cfg(windows)]
+    fn npm_entry_resolution_follows_the_identified_install_line() {
+        for (version, entry) in [
+            ("2.0.29", "node_modules/@opencode/cli/bin/opencode.exe"),
+            ("1.19.0", "node_modules/opencode-ai/bin/opencode.exe"),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let target = temp.path().join(entry);
+            std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+            std::fs::write(&target, "").unwrap();
+            let shim = temp.path().join("opencode.ps1");
+            std::fs::write(&shim, format!("# {entry}\nWrite-Output 'opencode v{version}'\n")).unwrap();
+            let resolved = command(&shim, &fixture_context(temp.path()), &["auth", "status"]).unwrap();
+            assert_eq!(resolved.get_program(), target.as_os_str());
+            assert_eq!(resolved.get_args().last().unwrap(), "status");
+        }
+    }
 }

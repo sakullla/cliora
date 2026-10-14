@@ -161,6 +161,11 @@ impl AccountAdapter for OpenCode {
     fn npm_entry(&self) -> Option<&'static str> {
         Some("node_modules/opencode-ai/bin/opencode.exe")
     }
+    fn npm_entry_for_version(&self, version: Option<&str>) -> Option<&'static str> {
+        // The shim entry follows the installed line; an unidentified version
+        // resolves no entry instead of guessing the 1.x layout.
+        super::install_line(version).and_then(|line| line.npm_entry)
+    }
     fn observe(&self, _executable: &Path, context: &NativeContext) -> Result<Observation, String> {
         Ok(parse_oauth_record(
             &read_auth_file(context)?,

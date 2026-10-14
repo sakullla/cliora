@@ -2223,12 +2223,15 @@ pub async fn set_default_launch_mode(
 }
 
 #[tauri::command]
-pub async fn cli_latest_version(tool_id: String) -> Result<String, ApiError> {
+pub async fn cli_latest_version(
+    tool_id: String,
+    version: Option<String>,
+) -> Result<String, ApiError> {
     blocking(move || {
         let registry = adapters::Registry::builtins();
         let adapter = registry.get(&tool_id)
             .ok_or_else(|| native_error("此 CLI 适配器未注册".into()))?;
-        crate::native::releases::latest(adapter).map_err(native_error)
+        crate::native::releases::latest_for(adapter, version.as_deref()).map_err(native_error)
     }).await
 }
 
@@ -2238,11 +2241,12 @@ pub async fn maintain_registered_cli(
     tool_id: String,
     action: String,
     source: Option<String>,
+    version: Option<String>,
 ) -> Result<crate::native::maintenance::MaintenanceResult, ApiError> {
     blocking(move || {
         crate::native::maintenance::maintain(
             &adapters::Registry::builtins(), &tool_id, &action,
-            source.as_deref().unwrap_or("unknown"), &home()?,
+            source.as_deref().unwrap_or("unknown"), version.as_deref(), &home()?,
             |progress| { let _ = app.emit("cliora:maintenance-progress", progress); },
         ).map_err(native_error)
     }).await
