@@ -76,6 +76,7 @@ mod path_policy {
 mod external;
 mod background_process;
 mod process_environment;
+mod windows_frame;
 mod windows_registry;
 #[cfg(windows)]
 mod windows_security;
@@ -111,6 +112,7 @@ pub fn run() {
             use tauri::{Listener, Manager};
             // The window must remain available when local storage needs repair.
             app.manage(commands::AppState::default());
+            windows_frame::install(app);
             tray::setup(app);
             let usage_handle = app.handle().clone();
             std::thread::spawn(move || loop {
