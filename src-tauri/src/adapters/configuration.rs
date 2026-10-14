@@ -94,6 +94,12 @@ pub struct EditingState {
     pub selected_provider: Option<String>,
     #[serde(default)]
     pub intents: Vec<ConfigurationAction>,
+    /// Adapter-owned native form token resolved once from the selected
+    /// installation (for example OpenCode v1/v2 config keys). `None` keeps
+    /// each adapter's legacy default; adapters that gate on it mark the
+    /// unresolved state explicitly and refuse writes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_form: Option<String>,
 }
 impl Default for EditingState {
     fn default() -> Self {
@@ -101,6 +107,7 @@ impl Default for EditingState {
             version: EDITING_VERSION,
             selected_provider: None,
             intents: Vec::new(),
+            native_form: None,
         }
     }
 }
@@ -179,6 +186,17 @@ pub struct SuppressionChange {
 
 pub trait ConfigurationAdapter: Sync {
     fn credential_paths(&self, _connection: &Connection) -> Vec<(&'static str, Vec<String>)> { Vec::new() }
+    /// Credential locations for a resolved native form token; adapters whose
+    /// paths moved between forms override this. `None` keeps the legacy form.
+    fn credential_paths_for_form(&self, connection: &Connection, _form: Option<&str>) -> Vec<(&'static str, Vec<String>)> {
+        self.credential_paths(connection)
+    }
+    /// True when drafts and application must resolve the selected installation
+    /// version before any native write; the shared services only probe then.
+    fn configuration_requires_version(&self) -> bool { false }
+    /// Adapter-owned mapping from an identified installation version to its
+    /// native form token. `None` means the form cannot be verified.
+    fn native_form_for_version(&self, _version: Option<&str>) -> Option<String> { None }
     fn native_verification_module(&self) -> Option<&'static str> { None }
     fn common_parameters(&self, _scope: Scope) -> Vec<CommonParameter> { Vec::new() }
     fn common_forbidden_paths(&self) -> Vec<(&'static str, &'static str)> { Vec::new() }
@@ -312,9 +330,11 @@ pub trait ConfigurationAdapter: Sync {
         PortableFieldKind::Unknown
     }
     /// Native logical identities and field locations remain adapter-owned.
+    /// The editing state carries the adapter's resolved native form token.
     fn suppression_changes(
         &self,
         _action: &ConfigurationAction,
+        _state: &EditingState,
     ) -> Result<Vec<SuppressionChange>, String> {
         Ok(Vec::new())
     }

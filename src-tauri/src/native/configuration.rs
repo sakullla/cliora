@@ -130,26 +130,95 @@ fn annotate_field_origins(
     }
 }
 
+/// Resolve the adapter-owned native form token for the selected installation.
+/// Returns `Ok(None)` when the adapter does not gate configuration on the
+/// installed version; an unresolved required form is returned as the adapter's
+/// explicit unverified token so drafts can keep viewing but refuse writes.
+pub fn resolve_native_form(
+    registry: &Registry,
+    db: &crate::database::Database,
+    tool: &str,
+    scope: Scope,
+    home: &std::path::Path,
+    project: Option<&std::path::Path>,
+) -> Result<Option<String>, String> {
+    let Some(port) = registry.get(tool).and_then(|adapter| adapter.configuration()) else {
+        return Ok(None);
+    };
+    if !port.configuration_requires_version() {
+        return Ok(None);
+    }
+    let custom: Option<String> = db.with_connection(|conn| {
+        use rusqlite::OptionalExtension;
+        conn.query_row(
+            "SELECT path FROM installation_choices WHERE tool = ?1",
+            [tool],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())
+    })?;
+    let probe = super::adapter::probe_registered(
+        registry,
+        tool,
+        custom.as_deref().map(std::path::Path::new),
+        home,
+        project,
+        scope,
+    )?;
+    Ok(Some(
+        port.native_form_for_version(probe_version(&probe).as_deref())
+            .unwrap_or_else(|| "unverified".into()),
+    ))
+}
+
+/// Version of the installation the probe actually selected.
+pub fn probe_version(probe: &super::adapter::ToolProbe) -> Option<String> {
+    probe
+        .selected_path
+        .as_ref()
+        .and_then(|selected| {
+            probe
+                .installations
+                .iter()
+                .find(|item| &item.path == selected)
+        })
+        .and_then(|item| item.version.clone())
+}
+
 /// Upgrade at the editing/import boundary once. Connection is no longer an
 /// editable source after this function; its secret reference is retained.
+/// `native_form` records the resolved native form token for version-gated
+/// adapters; `None` leaves persisted states untouched.
 pub fn normalize_legacy(
     registry: &Registry,
     profile: &mut RegisteredProfile,
     scope: Scope,
+    native_form: Option<&str>,
 ) -> Result<(), String> {
     let adapter = registry.get(&profile.tool).ok_or("未注册的 CLI 适配器")?;
-    if let Some(state) = &profile.editing {
+    let port = adapter.configuration();
+    let requires_version = port.is_some_and(|port| port.configuration_requires_version());
+    if let Some(state) = &mut profile.editing {
         validate_state(state)?;
+        if requires_version {
+            if let Some(form) = native_form {
+                state.native_form = Some(form.to_owned());
+            }
+        }
         return Ok(());
     }
-    if adapter.configuration().is_none() {
+    if port.is_none() {
         return Ok(());
     }
     let mut parsed = documents(registry, profile)?;
     if let Some(connection) = &profile.connection {
-        for (role, overlay) in
-            adapter.connection_documents_for_existing(connection, scope, &parsed)?
-        {
+        for (role, overlay) in adapter.connection_documents_for_existing_for_version(
+            connection,
+            scope,
+            &parsed,
+            if requires_version { native_form } else { None },
+        )? {
             let base = parsed.entry(role).or_insert_with(|| serde_json::json!({}));
             *base = format::resolve(base, &overlay, &[])?.0;
         }
@@ -163,13 +232,17 @@ pub fn normalize_legacy(
             ))
         })
         .collect::<Result<_, String>>()?;
-    profile.editing = Some(EditingState {
+    let mut state = EditingState {
         selected_provider: profile
             .connection
             .as_ref()
             .map(|connection| connection.provider_id.clone()),
         ..EditingState::default()
-    });
+    };
+    if requires_version {
+        state.native_form = native_form.map(str::to_owned);
+    }
+    profile.editing = Some(state);
     // Keep the old opaque references until the complete effective identity is
     // available. Own files alone may omit an inherited provider/address.
     Ok(())
@@ -336,7 +409,7 @@ pub fn open_with_common(
     if session_id.is_empty() {
         return Err("缺少配置编辑会话标识".into());
     }
-    normalize_legacy(registry, &mut profile, scope)?;
+    normalize_legacy(registry, &mut profile, scope, None)?;
     if profile.editing.is_none() {
         return Err("此 CLI 尚无专属配置编辑能力，请使用原有原文编辑入口".into());
     }
@@ -383,7 +456,7 @@ pub fn replace_text(
         // Raw removals use the same inheritance exclusions as form deletion.
         for action in &state.intents {
             if matches!(action.operation.as_str(), "delete" | "rename") {
-                for change in port.suppression_changes(action)? {
+                for change in port.suppression_changes(action, &state)? {
                     let paths = draft.profile.suppressed.entry(change.role).or_default();
                     if change.suppressed && !paths.contains(&change.path) {
                         paths.push(change.path);
@@ -450,7 +523,7 @@ pub fn edit(
     state.intents.push(action);
     validate_state(state)?;
     let suppression_changes = if subject == crate::adapters::configuration::ConfigurationSubject::Common { Vec::new() }
-        else { port.suppression_changes(state.intents.last().unwrap())? };
+        else { port.suppression_changes(state.intents.last().unwrap(), state)? };
     for change in suppression_changes {
         let entries = next.profile.suppressed.entry(change.role).or_default();
         if change.suppressed {
@@ -480,7 +553,7 @@ pub fn validate_profile(
     profile: &mut RegisteredProfile,
     scope: Scope,
 ) -> Result<(), String> {
-    normalize_legacy(registry, profile, scope)?;
+    normalize_legacy(registry, profile, scope, None)?;
     let parsed = documents(registry, profile)?;
     validate_documents(registry, profile, &parsed, scope)
 }

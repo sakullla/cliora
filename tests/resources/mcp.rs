@@ -679,6 +679,75 @@ fn opencode_v2_probe_writes_nested_servers_and_disabled_flag() {
 }
 
 #[test]
+fn opencode_v2_remote_writes_servers_shape_and_flips_disabled() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let registry = fixture_registry().with_fixture_installation("open_code", "2.1.0");
+    let keys = MemoryStore::default();
+    let path = temp.path().join(".config/opencode/opencode.json");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "{\"mcp\":{\"timeout\":{\"startup\":45000}}}").unwrap();
+    let definition = save_definition(
+        &db,
+        McpDraft {
+            id: None,
+            name: "example".into(),
+            transport: McpTransport::Http,
+            command: String::new(),
+            args: Vec::new(),
+            url: "https://example.com/mcp".into(),
+            env: IndexMap::new(),
+            headers: IndexMap::from([("Authorization".into(), "Bearer ${API_TOKEN}".into())]),
+            in_library: true,
+            expected_version: None,
+        },
+    )
+    .unwrap();
+    let written = distribute(
+        &db,
+        &keys,
+        &registry,
+        temp.path(),
+        &definition.id,
+        previewed(
+            &db,
+            &registry,
+            temp.path(),
+            &definition.id,
+            vec![target("open_code", true)],
+        ),
+    );
+    assert_eq!(written[0].status, "written", "{written:?}");
+    let parsed: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    // Unknown keys in the same file stay byte-identical in spirit: untouched.
+    assert_eq!(parsed["mcp"]["timeout"]["startup"], 45000);
+    let remote = &parsed["mcp"]["servers"]["example"];
+    assert_eq!(remote["type"], "remote");
+    assert_eq!(remote["url"], "https://example.com/mcp");
+    assert_eq!(remote["headers"]["Authorization"], "Bearer ${API_TOKEN}");
+    assert_eq!(remote["disabled"], false);
+    assert!(remote["enabled"].is_null());
+    let disabled = distribute(
+        &db,
+        &keys,
+        &registry,
+        temp.path(),
+        &definition.id,
+        previewed(
+            &db,
+            &registry,
+            temp.path(),
+            &definition.id,
+            vec![target("open_code", false)],
+        ),
+    );
+    assert_eq!(disabled[0].status, "written", "{disabled:?}");
+    let parsed: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    assert_eq!(parsed["mcp"]["servers"]["example"]["disabled"], true);
+    assert_eq!(parsed["mcp"]["timeout"]["startup"], 45000);
+}
+
+#[test]
 fn one_invalid_target_does_not_prevent_another_and_can_be_retried() {
     let temp = tempfile::tempdir().unwrap();
     let db = Database::open(&temp.path().join("cliora.db")).unwrap();

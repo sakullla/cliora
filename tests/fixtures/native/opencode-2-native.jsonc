@@ -1,0 +1,31 @@
+// OpenCode 2.x native configuration sample. Field shapes verified against a
+// real @opencode/cli 2.0.29 load (`opencode debug config` / `opencode models`
+// with an isolated XDG root): `providers.<id>.package` with the `aisdk:`
+// prefix, `settings.baseURL`/`settings.apiKey`, model `capabilities` and
+// `settings`, `variants` as an array of `{ id, ... }` entries, the default
+// model as `provider/model#variant`, and the light model in
+// `agents.title.model`.
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "myprov/my-model#reasoning",
+  "providers": {
+    "myprov": {
+      "package": "aisdk:@ai-sdk/openai-compatible",
+      "settings": {
+        "baseURL": "https://myprov.example/v1",
+        "apiKey": "{env:myprov_key}"
+      },
+      "models": {
+        "my-model": {
+          "name": "My Model",
+          "limit": { "context": 200000, "output": 8192 },
+          "capabilities": { "tools": true, "input": ["text"], "output": ["text"] },
+          "settings": { "temperature": 0.4 },
+          "variants": [ { "id": "reasoning", "reasoning": true } ],
+          "unknownExtension": { "keep": true }
+        }
+      }
+    }
+  },
+  "agents": { "title": { "model": "myprov/my-model" } }
+}

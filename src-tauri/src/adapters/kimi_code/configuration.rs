@@ -965,6 +965,7 @@ impl ConfigurationAdapter for KimiCode {
     fn suppression_changes(
         &self,
         action: &ConfigurationAction,
+        _state: &crate::adapters::configuration::EditingState,
     ) -> Result<Vec<SuppressionChange>, String> {
         let (kind, _, id) = target(action)?;
         let path = if kind == "settings" {

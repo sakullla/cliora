@@ -387,6 +387,7 @@ mod tests {
                 },
                 None,
                 Vec::new(),
+                None,
             )
             .unwrap();
         assert!(draft.issues.is_empty(), "{:?}", draft.issues);

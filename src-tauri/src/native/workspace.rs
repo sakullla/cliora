@@ -306,7 +306,15 @@ impl DraftSessions {
             (crate::accounts::selection::current(&request.tool_id).map(|context| context.id),
              registry.get(&request.tool_id).ok_or("适配器未注册")?.native_files(request.scope, home, project, true))
         } else { (None, Vec::new()) };
-        self.begin(registry, db, request, context_id, files)
+        let native_form = configuration::resolve_native_form(
+            registry,
+            db,
+            &request.tool_id,
+            request.scope,
+            home,
+            project,
+        )?;
+        self.begin(registry, db, request, context_id, files, native_form.as_deref())
     }
     pub fn begin(
         &self,
@@ -315,6 +323,7 @@ impl DraftSessions {
         request: ConfigurationBeginRequest,
         context_id: Option<String>,
         native_files: Vec<NativeFile>,
+        native_form: Option<&str>,
     ) -> Result<ConfigurationDraft, String> {
         if request.session_id.is_empty() || request.session_id.len() > 200 {
             return Err("草稿会话标识无效".into());
@@ -434,7 +443,7 @@ impl DraftSessions {
                 }
             }
         }
-        configuration::normalize_legacy(registry, &mut source, request.scope)?;
+        configuration::normalize_legacy(registry, &mut source, request.scope, native_form)?;
         let baseline_files = source.files.clone();
         let mut draft = ConfigurationDraft {
             session_id: request.session_id.clone(),
@@ -1296,7 +1305,12 @@ impl DraftSessions {
                     adapter.configuration(),
                     &credential_profile.profile.connection,
                 ) {
-                    for (target, path) in port.credential_paths(connection) {
+                    let form = credential_profile
+                        .profile
+                        .editing
+                        .as_ref()
+                        .and_then(|state| state.native_form.clone());
+                    for (target, path) in port.credential_paths_for_form(connection, form.as_deref()) {
                         if target == role {
                             contents = format::set_path(kind, &contents, &path, None)?;
                         }
@@ -1901,7 +1915,11 @@ fn clear_credential_references(
 ) -> Result<(), String> {
     let adapter = registry.get(&profile.tool).ok_or("适配器未注册")?;
     if let (Some(port), Some(connection)) = (adapter.configuration(), &profile.connection) {
-        for (role, path) in port.credential_paths(connection) {
+        let form = profile
+            .editing
+            .as_ref()
+            .and_then(|state| state.native_form.clone());
+        for (role, path) in port.credential_paths_for_form(connection, form.as_deref()) {
             if let Some(text) = profile.files.get_mut(role) {
                 *text = format::set_path(adapter.file_kind(role)?, text, &path, None)?;
             }

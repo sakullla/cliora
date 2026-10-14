@@ -821,6 +821,7 @@ export default {
         limitOutput: 'Maximum output per request; does not replace the context window.',
         reasoning: 'Declares the reasoning capability of the model; concrete reasoning variants are configured in variants.',
         options: 'Native request options for this model; existing unknown options are kept.',
+        variants: 'Overrides keyed by variant id; saved as the native array shape on OpenCode 2.',
       },
     },
     kimi: {

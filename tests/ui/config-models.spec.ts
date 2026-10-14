@@ -206,6 +206,21 @@ test('OpenCode edits options and modalities while preserving unknown native choi
   ]);
 });
 
+test('OpenCode surfaces the native-form capability note for conflicts and unverified versions', async ({ page }) => {
+  await page.goto('/__multi_model_editor?tool=opencode');
+  await expect(page.getByText('原生能力未核验')).toBeVisible();
+  await page.evaluate(() => (window as unknown as { __replaceView: (fn: (view: any) => any) => void }).__replaceView(view => {
+    view.capabilityReason = '同一供应商同时存在 v1/v2 同义条目；保存被拒绝，请先在原文只保留一种形态';
+    return view;
+  }));
+  await expect(page.getByText(/同义条目/)).toBeVisible();
+  await page.evaluate(() => (window as unknown as { __replaceView: (fn: (view: any) => any) => void }).__replaceView(view => {
+    view.capabilityReason = 'OpenCode 安装版本尚未核验（未验证）；请先确认安装版本后再编辑或保存配置';
+    return view;
+  }));
+  await expect(page.getByText('未验证')).toBeVisible();
+});
+
 test('pending and failed actions retain input and recover by retry or explicit cancellation', async ({ page }) => {
   await page.goto('/__multi_model_editor?tool=kimi');
   const first = page.getByRole('article', { name: '模型 first', exact: true });

@@ -307,7 +307,7 @@ mod tests {
         );
         assert_eq!(own["settings"], documents["settings"]);
         assert_eq!(
-            Claude.suppression_changes(&edit).unwrap()[0].role,
+            Claude.suppression_changes(&edit, &crate::adapters::configuration::EditingState::default()).unwrap()[0].role,
             "local_settings"
         );
     }
@@ -606,6 +606,7 @@ impl ConfigurationAdapter for Claude {
     fn suppression_changes(
         &self,
         action: &ConfigurationAction,
+        _state: &crate::adapters::configuration::EditingState,
     ) -> Result<Vec<SuppressionChange>, String> {
         if action.operation == "unify" {
             return Ok(ROLES

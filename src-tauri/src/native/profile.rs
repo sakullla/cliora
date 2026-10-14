@@ -500,7 +500,7 @@ pub fn save_registered_profile(
     if profile.name.chars().count() > 100 {
         return Err("配置名称不能超过 100 个字符".into());
     }
-    super::configuration::normalize_legacy(registry, &mut profile, super::adapter::Scope::Global)?;
+    super::configuration::normalize_legacy(registry, &mut profile, super::adapter::Scope::Global, None)?;
     if profile.editing.is_some() {
         let common = get_registered_common(db, &profile.tool)?;
         let mut roles: std::collections::BTreeSet<_> = profile.files.keys().cloned().collect();
