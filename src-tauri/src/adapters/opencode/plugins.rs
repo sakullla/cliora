@@ -9,7 +9,7 @@ use std::{fs, path::Path};
 
 impl PluginAdapter for OpenCode {
     fn capability(&self) -> PluginCapability {
-        let (version,sources,actions,project,detail) = ("1.18.34", "npm 包@版本或 file:///绝对路径", vec!["install", "enable", "disable", "uninstall"], true, "维护 plugin 数组声明；依赖由 OpenCode 启动安装，安装及加载尚未验证。更新请卸载声明后添加新版本。自动发现的 plugins 目录项只读。");
+        let (version,sources,actions,project,detail) = ("1.18.34 / 2.0.29", "npm 包@版本或 file:///绝对路径", vec!["install", "enable", "disable", "uninstall"], true, "维护 plugin 数组声明；依赖由 OpenCode 启动安装，安装及加载尚未验证。更新请卸载声明后添加新版本。自动发现的 plugins 目录项只读。");
         PluginCapability {
             version,
             sources,
@@ -17,6 +17,10 @@ impl PluginAdapter for OpenCode {
             project,
             detail,
         }
+    }
+    fn version_policy(&self) -> crate::adapters::version::VersionPolicy {
+        // Two verified install lines; the shared plugin gate accepts either family.
+        crate::adapters::version::VersionPolicy::same_majors(&["1.18.34", "2.0.29"])
     }
     fn command_args(
         &self,

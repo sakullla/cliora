@@ -842,3 +842,25 @@ fn claude_ledger_is_fast_file_discovery_with_scope_and_enablement_baselines() {
     fs::write(ledger, r#"{"version":3,"plugins":{}}"#).unwrap();
     assert!(scan(&db, home.path(), &target("claude_code")).is_err());
 }
+
+#[test]
+fn opencode_plugin_policy_accepts_both_verified_major_lines() {
+    let adapter = adapters::plugins::get("open_code").unwrap();
+    let policy = adapter.version_policy();
+    for version in ["1.18.34", "1.19.0", "1.99.9", "2.0.29", "2.1.0", "v2.0.29"] {
+        assert!(policy.accepts(version), "{version}");
+    }
+    for version in ["0.99.9", "3.0.0", "2.0.29-beta.1", "unknown", "2.0"] {
+        assert!(!policy.accepts(version), "{version}");
+    }
+    assert_eq!(
+        policy.accepted_text(),
+        ">=1.0.0, <2.0.0 或 >=2.0.0, <3.0.0"
+    );
+    let capability = adapter.capability();
+    assert!(
+        capability.version.contains("1.18.34") && capability.version.contains("2.0.29"),
+        "{}",
+        capability.version
+    );
+}

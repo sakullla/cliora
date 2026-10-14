@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 impl AgentAdapter for OpenCode {
     fn capability(&self) -> AgentCapability {
-        let (version,supported,format,detail,template) = ("1.18.34", true, "markdown", "原生 agent/agents/**/*.md 与配置中的 agent 对象；model、permission、tools 可编辑。重启会话加载。文件名决定默认名称。", "---\ndescription: Review code\nmode: subagent\npermission:\n  edit: deny\n  bash: ask\n---\nReview code and report findings.\n");
+        let (version,supported,format,detail,template) = ("1.18.34 / 2.0.29", true, "markdown", "原生 agent/agents/**/*.md 与配置中的 agent 对象；model、permission、tools 可编辑。重启会话加载。文件名决定默认名称。", "---\ndescription: Review code\nmode: subagent\npermission:\n  edit: deny\n  bash: ask\n---\nReview code and report findings.\n");
         AgentCapability {
             version,
             supported,

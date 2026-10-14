@@ -267,4 +267,34 @@ fn minimax_authenticated_state_is_discovered_without_a_cli_binary() {
         .contains("未找到可核验的 CLI 安装"));
 }
 
+#[test]
+fn opencode_account_policy_accepts_both_verified_major_lines() {
+    let adapter = &crate::adapters::OPENCODE;
+    let policy = adapter.version_policy();
+    for version in [
+        "1.18.34",
+        "1.19.0",
+        "1.99.9",
+        "2.0.29",
+        "2.1.0",
+        "v2.0.29",
+        "2.0.29+build.1",
+    ] {
+        assert!(policy.accepts(version), "{version}");
+    }
+    for version in ["0.99.9", "3.0.0", "2.0.29-beta.1", "unknown", "2.0"] {
+        assert!(!policy.accepts(version), "{version}");
+    }
+    assert_eq!(
+        policy.accepted_text(),
+        ">=1.0.0, <2.0.0 或 >=2.0.0, <3.0.0"
+    );
+    let capability = adapter.capability();
+    assert!(
+        capability.version.contains("1.18.34") && capability.version.contains("2.0.29"),
+        "{}",
+        capability.version
+    );
+}
+
 
