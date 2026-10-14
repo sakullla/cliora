@@ -255,6 +255,45 @@ pub trait AgentAdapter: Sync {
     ) -> Result<String, String> {
         Err("此 CLI 未提供内联定义编辑".into())
     }
+    /// Whether native agent fields follow the installed major line. Only
+    /// adapters with several verified native forms opt in; the default keeps
+    /// today's behavior and never asks the service for a version.
+    fn config_requires_version(&self) -> bool {
+        false
+    }
+    /// Version-aware native switch detection for scanned definitions. The
+    /// default ignores the version so fixed-shape adapters stay unchanged.
+    fn native_disabled_for_version(
+        &self,
+        format: &str,
+        content: &str,
+        version: Option<&str>,
+    ) -> bool {
+        let _ = version;
+        self.native_disabled(format, content)
+    }
+    /// Version-aware enable rewrite. The default ignores the version.
+    fn enable_content_for_version(
+        &self,
+        content: &str,
+        version: Option<&str>,
+    ) -> Result<String, String> {
+        let _ = version;
+        self.enable_content(content)
+    }
+    /// Version-aware inline definition edit. The default delegates to the
+    /// historical method so fixed-shape adapters stay byte-identical;
+    /// adapters whose fields follow the install line override this and
+    /// refuse writes when the version is unresolved.
+    fn config_edit_for_version(
+        &self,
+        entry: &crate::resources::agents::AgentEntry,
+        request: &crate::resources::agents::AgentRequest,
+        version: Option<&str>,
+    ) -> Result<String, String> {
+        let _ = version;
+        self.config_edit(entry, request)
+    }
 }
 pub fn get(tool: &str) -> Result<&'static dyn AgentAdapter, String> {
     get_registered(&super::Registry::builtins(), tool)

@@ -15,7 +15,8 @@ test('Agent search and status filters preserve access to read-only definitions',
 async function setup(page: Page) {
   await page.addInitScript(() => {
     const entry = { id: 'fixture', name: 'reviewer', description: 'Reviews code', path: '/fixture/agents/reviewer.md', format: 'markdown', content: '---\nname: reviewer\ndescription: Reviews code\ntools: Read\ncustom: preserved\n---\nReview code.\n', enabled: true, readOnly: false, owner: '独立定义', detail: '' };
-    const state = { calls: [] as any[], entries: [entry, { ...entry, id: 'owned', name: 'plugin-agent', owner: '插件：fixture@market', readOnly: true }], fail: false };
+    const conflicted = { ...entry, id: 'conflicted', name: 'planner', description: 'Plan', path: '/fixture/opencode.json', format: 'json', content: '{"description":"Plan"}', readOnly: true, detail: 'agent 与 agents 同义并存，原生形态冲突；请在原生配置统一为一种形态后再编辑' };
+    const state = { calls: [] as any[], entries: [entry, { ...entry, id: 'owned', name: 'plugin-agent', owner: '插件：fixture@market', readOnly: true }, conflicted], fail: false };
     const snapshot = (target: any) => ({ target, capability: { version: '2.1.287', supported: true, format: 'markdown', template: entry.content, detail: '下一次委派加载' }, entries: state.entries, baseline: 'fixture-baseline', detail: '原生定义管理' });
     Object.assign(window, { isTauri: true, agentsHarness: state, __TAURI_INTERNALS__: { invoke: async (command: string, args: any) => {
       state.calls.push({ command, args });
@@ -79,4 +80,16 @@ test('external conflict preserves draft and navigating prompts before discarding
   await page.getByRole('button', { name: '保存定义' }).click(); await expect(page.getByRole('alert')).toContainText('外部修改'); await expect(editor).toContainText('unsaved draft');
   await page.getByRole('tab', { name: '配置', exact: true }).click(); await expect(page.getByRole('dialog')).toContainText('尚未保存');
   await page.getByRole('dialog').getByRole('button', { name: '取消' }).click(); await expect(editor).toContainText('unsaved draft');
+});
+
+test('synonym coexistence entries stay listed with the conflict reason and no write actions', async ({ page }) => {
+  await setup(page);
+  const card = page.getByRole('listitem').filter({ has: page.getByText('planner', { exact: true }) });
+  await expect(page.getByText('planner', { exact: true })).toBeVisible();
+  await card.getByText('定义详情').click();
+  await expect(card.getByText(/同义并存/)).toBeVisible();
+  await expect(card.getByRole('button', { name: '禁用', exact: true })).toBeDisabled();
+  await expect(card.getByRole('button', { name: '删除', exact: true })).toBeDisabled();
+  const actions = await page.evaluate(() => (window as any).agentsHarness.calls.filter((c: any) => c.command === 'operate_native_agent').map((c: any) => c.args.request.action));
+  expect(actions).toEqual([]);
 });

@@ -10,6 +10,7 @@ use crate::{
         transaction::{self, FileMutation},
     },
 };
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use serde_json::Value;
@@ -151,6 +152,18 @@ pub(crate) fn entry(
     enabled: bool,
     owner: &str,
 ) -> AgentEntry {
+    entry_versioned(tool, path, format, content, fallback, enabled, owner, None)
+}
+pub(crate) fn entry_versioned(
+    tool: &str,
+    path: &Path,
+    format: &str,
+    content: String,
+    fallback: &str,
+    enabled: bool,
+    owner: &str,
+    version: Option<&str>,
+) -> AgentEntry {
     let parsed = contract::validate(tool, format, &content, fallback);
     let (name, description, mut detail) = match parsed {
         Ok((n, d)) => {
@@ -161,7 +174,8 @@ pub(crate) fn entry(
         }
         Err(e) => (fallback.into(), String::new(), e),
     };
-    let native_disabled = contract::get(tool).is_ok_and(|a| a.native_disabled(format, &content));
+    let native_disabled = contract::get(tool)
+        .is_ok_and(|a| a.native_disabled_for_version(format, &content, version));
     if native_disabled {
         detail.push_str(
             contract::get(tool)
@@ -200,6 +214,7 @@ fn snapshot_inner(
     home: &Path,
     target: &PluginTarget,
     plugins: &[plugins::PluginEntry],
+    version: Option<&str>,
 ) -> Result<AgentSnapshot, String> {
     let capability = contract::capability(&target.tool_id)?;
     if !capability.supported {
@@ -227,13 +242,14 @@ fn snapshot_inner(
                 (root.join(name), true),
                 (root.join(".cliora-disabled-agents").join(name), false),
             ] {
-                scan_directory(
+                scan_directory_versioned(
                     &target.tool_id,
                     &dir,
                     extension,
                     enabled,
                     "独立定义",
                     &mut entries,
+                    version,
                 )?;
             }
         }
@@ -312,6 +328,17 @@ pub(crate) fn scan_directory(
     owner: &str,
     entries: &mut Vec<AgentEntry>,
 ) -> Result<(), String> {
+    scan_directory_versioned(tool, dir, extension, enabled, owner, entries, None)
+}
+pub(crate) fn scan_directory_versioned(
+    tool: &str,
+    dir: &Path,
+    extension: &str,
+    enabled: bool,
+    owner: &str,
+    entries: &mut Vec<AgentEntry>,
+    version: Option<&str>,
+) -> Result<(), String> {
     let adapter = contract::get(tool)?;
     let mut files = Vec::new();
     walk(dir, extension, &mut files, 0, adapter.recursive())?;
@@ -330,7 +357,7 @@ pub(crate) fn scan_directory(
                     .into_owned()
             }
         });
-        entries.push(entry(
+        entries.push(entry_versioned(
             tool,
             &path,
             if extension == "toml" {
@@ -342,6 +369,7 @@ pub(crate) fn scan_directory(
             &fallback,
             enabled,
             owner,
+            version,
         ));
     }
     Ok(())
@@ -423,7 +451,53 @@ fn plugin_owned(
     // Do not lose package ownership when native discovery fails.
     Ok(plugins::scan_resources(db, home, target)?.entries)
 }
+/// Installed line for adapters whose agent fields follow the native major
+/// version. Other adapters keep their static shapes without a probe. The
+/// lookup uses the shared cached probe, so a scan and a later write on the
+/// same operation resolve the same evidence.
+fn selected_version(
+    registry: &Registry,
+    db: &Database,
+    home: &Path,
+    target: &PluginTarget,
+) -> Result<Option<String>, String> {
+    let adapter = contract::get_registered(registry, &target.tool_id)?;
+    if !adapter.config_requires_version() {
+        return Ok(None);
+    }
+    let custom: Option<String> = db.with_connection(|conn| {
+        conn.query_row(
+            "SELECT path FROM installation_choices WHERE tool=?1",
+            [&target.tool_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|_| "无法读取 CLI 路径".into())
+    })?;
+    let probe = crate::native::adapter::probe_registered_cached(
+        registry,
+        &target.tool_id,
+        custom.as_deref().map(Path::new),
+        home,
+        project(target)?.as_deref(),
+        target.scope,
+        false,
+    )?;
+    Ok(probe
+        .selected_path
+        .as_ref()
+        .and_then(|selected| probe.installations.iter().find(|item| &item.path == selected))
+        .and_then(|item| item.version.clone()))
+}
 pub fn scan(db: &Database, home: &Path, target: &PluginTarget) -> Result<AgentSnapshot, String> {
+    scan_registered(&Registry::builtins(), db, home, target)
+}
+fn scan_registered(
+    registry: &Registry,
+    db: &Database,
+    home: &Path,
+    target: &PluginTarget,
+) -> Result<AgentSnapshot, String> {
     let _context = selection::enter_bound(
         db,
         home,
@@ -433,12 +507,24 @@ pub fn scan(db: &Database, home: &Path, target: &PluginTarget) -> Result<AgentSn
     )?;
     selection::validate_expected(&target.tool_id, target.context_id.as_deref())?;
     if !contract::capability(&target.tool_id)?.supported {
-        return snapshot_inner(home, target, &[]);
+        return snapshot_inner(home, target, &[], None);
     }
+    // Reads stay available without a resolved version; the adapter then shows
+    // every native shape it can parse.
+    let version = selected_version(registry, db, home, target).ok().flatten();
     let plugins = plugin_owned(db, home, target)?;
-    snapshot_inner(home, target, &plugins)
+    snapshot_inner(home, target, &plugins, version.as_deref())
 }
 pub fn operate(
+    db: &Database,
+    credentials: &dyn CredentialStore,
+    home: &Path,
+    request: &AgentRequest,
+) -> Result<AgentResult, String> {
+    operate_registered(&Registry::builtins(), db, credentials, home, request)
+}
+fn operate_registered(
+    registry: &Registry,
     db: &Database,
     credentials: &dyn CredentialStore,
     home: &Path,
@@ -455,7 +541,8 @@ pub fn operate(
     )?;
     selection::validate_expected(&target.tool_id, target.context_id.as_deref())?;
     let plugins = plugin_owned(db, home, target)?;
-    operate_inner(db, credentials, home, request, &plugins)
+    let version = selected_version(registry, db, home, target)?;
+    operate_inner(db, credentials, home, request, &plugins, version.as_deref())
 }
 fn operate_inner(
     db: &Database,
@@ -463,9 +550,10 @@ fn operate_inner(
     home: &Path,
     request: &AgentRequest,
     plugins: &[plugins::PluginEntry],
+    version: Option<&str>,
 ) -> Result<AgentResult, String> {
     let target = &request.target;
-    let before = snapshot_inner(home, target, plugins)?;
+    let before = snapshot_inner(home, target, plugins, version)?;
     if !before.capability.supported {
         return Err(before.capability.detail.into());
     }
@@ -576,7 +664,7 @@ fn operate_inner(
             path = PathBuf::from(&entry.path);
             if entry.format == "json" {
                 let old = read(&path)?;
-                let output = adapter.config_edit(entry, request)?;
+                let output = adapter.config_edit_for_version(entry, request, version)?;
                 changes.push(FileMutation {
                     path: path.clone(),
                     baseline: Some(old),
@@ -625,13 +713,20 @@ fn operate_inner(
                             return Err("状态未改变".into());
                         }
                         if enabled
-                            && adapter.native_disabled(&entry.format, &entry.content)
+                            && adapter.native_disabled_for_version(
+                                &entry.format,
+                                &entry.content,
+                                version,
+                            )
                             && !path.starts_with(root.join(".cliora-disabled-agents"))
                         {
                             changes.push(FileMutation {
                                 path: path.clone(),
                                 baseline: Some(entry.content.clone()),
-                                contents: Some(adapter.enable_content(&entry.content)?),
+                                contents: Some(adapter.enable_content_for_version(
+                                    &entry.content,
+                                    version,
+                                )?),
                             });
                         } else {
                             if enabled {
@@ -668,9 +763,16 @@ fn operate_inner(
                                 baseline: None,
                                 contents: Some(
                                     if enabled
-                                        && adapter.native_disabled(&entry.format, &entry.content)
+                                        && adapter.native_disabled_for_version(
+                                            &entry.format,
+                                            &entry.content,
+                                            version,
+                                        )
                                     {
-                                        adapter.enable_content(&entry.content)?
+                                        adapter.enable_content_for_version(
+                                            &entry.content,
+                                            version,
+                                        )?
                                     } else {
                                         entry.content.clone()
                                     },
@@ -685,7 +787,7 @@ fn operate_inner(
         restore_path = path.display().to_string();
         outcome = transaction::apply_files(db, credentials, &changes, |_| Ok(()))?;
     }
-    let snapshot = snapshot_inner(home, target, plugins).map_err(|error| {
+    let snapshot = snapshot_inner(home, target, plugins, version).map_err(|error| {
         format!(
             "原生定义已写入（事务 {}），重新扫描失败：{error}；请重新扫描",
             outcome.transaction_id
