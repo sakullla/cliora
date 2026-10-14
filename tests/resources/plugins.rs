@@ -73,6 +73,37 @@ fn request(tool: &str, action: &str, source: &str) -> PluginRequest {
         trusted: true,
     }
 }
+/// Deterministic install line for tests; never probes the developer machine.
+fn fixture(tool: &str, version: &str) -> Registry {
+    Registry::builtins().with_fixture_installation(tool, version)
+}
+/// Version-tracked adapters need a deterministic install line; adapters with
+/// one native shape keep their static field and never probe.
+fn tool_registry(tool: &str) -> Registry {
+    match tool {
+        "open_code" => fixture("open_code", "1.18.34"),
+        _ => Registry::builtins(),
+    }
+}
+/// The service serializes native plugin operations process-wide with a
+/// non-blocking lock. Tests that drive it must not race each other onto it.
+fn operate_serial(
+    registry: &Registry,
+    db: &Database,
+    credentials: &dyn CredentialStore,
+    home: &Path,
+    request: &PluginRequest,
+) -> Result<PluginResult, String> {
+    static SERIAL: Mutex<()> = Mutex::new(());
+    let _guard = SERIAL.lock().unwrap();
+    operate_registered(registry, db, credentials, home, request)
+}
+fn request_with_baseline(tool: &str, action: &str, source: &str, baseline: &str) -> PluginRequest {
+    PluginRequest {
+        baseline: baseline.into(),
+        ..request(tool, action, source)
+    }
+}
 
 #[test]
 fn command_contract_does_not_invent_cross_cli_parity() {
@@ -95,25 +126,26 @@ fn command_contract_does_not_invent_cross_cli_parity() {
 }
 #[test]
 fn native_list_policy_and_scope_are_preserved() {
-    let entries = parse_list("codex", &json!({"installed":[{"pluginId":"x@m","enabled":true,"version":"1","installPolicy":"REQUIRED"}]}), &target("codex")).unwrap();
+    let builtins = Registry::builtins();
+    let entries = parse_list_registered(&builtins, "codex", &json!({"installed":[{"pluginId":"x@m","enabled":true,"version":"1","installPolicy":"REQUIRED"}]}), &target("codex")).unwrap();
     assert!(entries[0].read_only);
     assert_eq!(entries[0].enabled, Some(true));
-    assert!(parse_list("grok", &json!({"unknown":[]}), &target("grok")).is_err());
+    assert!(parse_list_registered(&builtins, "grok", &json!({"unknown":[]}), &target("grok")).is_err());
     let rows = json!([{"id":"x@m","scope":"user","enabled":true},{"id":"x@m","scope":"project","projectPath":"/fixture/a","enabled":false},{"id":"managed@m","scope":"managed"}]);
-    let global = parse_list("claude_code", &rows, &target("claude_code")).unwrap();
+    let global = parse_list_registered(&builtins, "claude_code", &rows, &target("claude_code")).unwrap();
     assert_eq!(global.len(), 2);
     assert!(global[1].read_only);
     let mut project = target("claude_code");
     project.scope = Scope::Project;
     project.project_path = Some("/fixture/a".into());
-    let project = parse_list("claude_code", &rows, &project).unwrap();
+    let project = parse_list_registered(&builtins, "claude_code", &rows, &project).unwrap();
     assert_eq!(project.len(), 1);
     assert_eq!(project[0].enabled, Some(false));
     let mut other = target("claude_code");
     other.scope = Scope::Project;
     other.project_path = Some("/fixture/b".into());
     assert!(
-        parse_list("claude_code", &rows, &other).unwrap().is_empty(),
+        parse_list_registered(&builtins, "claude_code", &rows, &other).unwrap().is_empty(),
         "native list includes other project installations; do not expose them for mutation"
     );
 }
@@ -128,13 +160,14 @@ fn config_disable_restore_preserves_filters_unknown_fields_and_context() {
     let original = json!({"customFuture":{"on":true},"packages":[{"source":"npm:fixture@1","extensions":["!old.ts"],"skills":[],"future":42},"npm:another"]});
     fs::write(&path, serde_json::to_string(&original).unwrap()).unwrap();
     mutate_config(
+        &Registry::builtins(),
         &db,
         &credentials,
         home,
         &request("pi", "disable", "npm:fixture@1"),
     )
     .unwrap();
-    let entries = config_entries(&db, home, &target("pi")).unwrap();
+    let entries = config_entries(&Registry::builtins(), &db, home, &target("pi")).unwrap();
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[0].enabled, Some(false));
     let disabled_file: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
@@ -145,6 +178,7 @@ fn config_disable_restore_preserves_filters_unknown_fields_and_context() {
     other.context_id = Some("different-account".into());
     assert!(disabled(&db, &other).unwrap().is_empty());
     mutate_config(
+        &Registry::builtins(),
         &db,
         &credentials,
         home,
@@ -183,6 +217,7 @@ fn codex_switch_preserves_native_fields() {
     )
     .unwrap();
     mutate_config(
+        &Registry::builtins(),
         &db,
         &MemoryStore::default(),
         home,
@@ -244,20 +279,27 @@ fn opencode_configuration_is_not_reported_as_installed() {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::open(&dir.path().join("db")).unwrap();
     let credentials = MemoryStore::default();
+    let registry = fixture("open_code", "1.18.33");
     mutate_config(
+        &registry,
         &db,
         &credentials,
         dir.path(),
         &request("open_code", "install", "example@1.0.0"),
     )
     .unwrap();
-    let entries = config_entries(&db, dir.path(), &target("open_code")).unwrap();
+    let entries = config_entries(&registry, &db, dir.path(), &target("open_code")).unwrap();
     assert_eq!(entries[0].state, "configured_load_unknown");
-    let inventory = preview(&db, dir.path(), &target("open_code")).unwrap().unwrap();
+    let inventory = preview_registered(&registry, &db, dir.path(), &target("open_code")).unwrap().unwrap();
     assert_eq!(inventory.entries.len(), entries.len());
     assert!(inventory.baseline.is_empty() && inventory.capability.actions.is_empty());
     assert!(inventory.entries.iter().all(|entry| entry.read_only && entry.enabled.is_none()));
+    let (path, _) = config(&registry, dir.path(), &target("open_code")).unwrap();
+    let parsed: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(parsed["plugin"], json!(["example@1.0.0"]));
+    assert!(parsed.get("plugins").is_none());
     mutate_config(
+        &registry,
         &db,
         &credentials,
         dir.path(),
@@ -265,13 +307,14 @@ fn opencode_configuration_is_not_reported_as_installed() {
     )
     .unwrap();
     mutate_config(
+        &registry,
         &db,
         &credentials,
         dir.path(),
         &request("open_code", "uninstall", "example@1.0.0"),
     )
     .unwrap();
-    assert!(config_entries(&db, dir.path(), &target("open_code"))
+    assert!(config_entries(&registry, &db, dir.path(), &target("open_code"))
         .unwrap()
         .is_empty());
 }
@@ -287,7 +330,7 @@ fn captured_native_shapes_and_snapshot_drift_are_checked() {
         ("grok", include_str!("../fixtures/plugins/grok-list.json")),
     ] {
         let entries =
-            parse_list(tool, &serde_json::from_str(fixture).unwrap(), &target(tool)).unwrap();
+            parse_list_registered(&Registry::builtins(), tool, &serde_json::from_str(fixture).unwrap(), &target(tool)).unwrap();
         assert_eq!(entries.len(), 1);
         assert!(!entries[0].read_only);
         assert_eq!(entries[0].version.as_deref(), Some("1.0.0"));
@@ -295,18 +338,19 @@ fn captured_native_shapes_and_snapshot_drift_are_checked() {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::open(&dir.path().join("db")).unwrap();
     let credentials = MemoryStore::default();
+    let registry = fixture("open_code", "1.18.33");
     let req = request("open_code", "install", "fixture@1");
-    mutate_config(&db, &credentials, dir.path(), &req).unwrap();
-    let before = snapshot_inner(&db, dir.path(), &req.target, Some(Path::new("unused"))).unwrap();
-    let (path, _) = config(dir.path(), &req.target).unwrap();
+    mutate_config(&registry, &db, &credentials, dir.path(), &req).unwrap();
+    let before = snapshot_inner(&registry, &db, dir.path(), &req.target, Some(Path::new("unused"))).unwrap();
+    let (path, _) = config(&registry, dir.path(), &req.target).unwrap();
     fs::write(path, r#"{"plugin":["fixture@2"],"future":true}"#).unwrap();
-    let after = snapshot_inner(&db, dir.path(), &req.target, Some(Path::new("unused"))).unwrap();
+    let after = snapshot_inner(&registry, &db, dir.path(), &req.target, Some(Path::new("unused"))).unwrap();
     assert_ne!(before.baseline, after.baseline);
     let mut context = req.target.clone();
     context.context_id = Some("another-account".into());
     assert_ne!(
         after.baseline,
-        snapshot_inner(&db, dir.path(), &context, Some(Path::new("unused")))
+        snapshot_inner(&registry, &db, dir.path(), &context, Some(Path::new("unused")))
             .unwrap()
             .baseline
     );
@@ -436,7 +480,7 @@ fn pi_npm_git_manifest_ownership_and_package_edits_change_baseline() {
         fs::write(package.join("custom-prompts/review.md"), "fixture").unwrap();
         fs::write(package.join("package.json"), serde_json::to_vec(&json!({"name":relative,"version":"1.2.3","pi":{"extensions":["custom-code/*.ts"],"prompts":["custom-prompts/review.md"],"themes":[]}})).unwrap()).unwrap();
     }
-    let before = snapshot_inner(&db, home, &target("pi"), Some(Path::new("unused"))).unwrap();
+    let before = snapshot_inner(&Registry::builtins(), &db, home, &target("pi"), Some(Path::new("unused"))).unwrap();
     assert_eq!(before.entries.len(), 2);
     for entry in &before.entries {
         assert!(!entry.read_only, "{}", entry.policy);
@@ -453,7 +497,7 @@ fn pi_npm_git_manifest_ownership_and_package_edits_change_baseline() {
         "// external edit",
     )
     .unwrap();
-    let npm_changed = snapshot_inner(&db, home, &target("pi"), Some(Path::new("unused"))).unwrap();
+    let npm_changed = snapshot_inner(&Registry::builtins(), &db, home, &target("pi"), Some(Path::new("unused"))).unwrap();
     assert_ne!(before.baseline, npm_changed.baseline);
     fs::write(
         base.join("git/github.com/team/pkg/custom-prompts/review.md"),
@@ -462,7 +506,7 @@ fn pi_npm_git_manifest_ownership_and_package_edits_change_baseline() {
     .unwrap();
     assert_ne!(
         npm_changed.baseline,
-        snapshot_inner(&db, home, &target("pi"), Some(Path::new("unused")))
+        snapshot_inner(&Registry::builtins(), &db, home, &target("pi"), Some(Path::new("unused")))
             .unwrap()
             .baseline
     );
@@ -471,7 +515,7 @@ fn pi_npm_git_manifest_ownership_and_package_edits_change_baseline() {
         r#"{"packages":["npm:not-installed@1"]}"#,
     )
     .unwrap();
-    let missing = config_entries(&db, home, &target("pi")).unwrap();
+    let missing = config_entries(&Registry::builtins(), &db, home, &target("pi")).unwrap();
     assert!(missing[0].read_only);
     assert!(missing[0].policy.contains("安装目录未找到"));
     assert!(crate::adapters::pi::plugins::pi_installed_root("npm:../../outside", &base, home).is_err());
@@ -485,6 +529,7 @@ fn backup_restore_reconciles_only_exact_original_then_allows_management() {
         let home = dir.path();
         let db = Database::open(&home.join("db")).unwrap();
         let credentials = MemoryStore::default();
+        let registry = tool_registry(tool);
         let package = home.join("package");
         fs::create_dir(&package).unwrap();
         let source = package.display().to_string();
@@ -494,16 +539,16 @@ fn backup_restore_reconciles_only_exact_original_then_allows_management() {
         } else {
             json!({"plugin":[source]})
         };
-        let (path, _) = config(home, &req.target).unwrap();
+        let (path, _) = config(&registry, home, &req.target).unwrap();
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
-        let id = mutate_config(&db, &credentials, home, &req).unwrap();
-        let disabled_entries = config_entries(&db, home, &req.target).unwrap();
+        let id = mutate_config(&registry, &db, &credentials, home, &req).unwrap();
+        let disabled_entries = config_entries(&registry, &db, home, &req.target).unwrap();
         assert_eq!(disabled_entries[0].enabled, Some(false));
         assert!(!disabled_entries[0].read_only);
         let current = fs::read_to_string(&path).unwrap();
         transaction::restore_backup(&db, &credentials, &path, &id, &current, |_| Ok(())).unwrap();
-        let restored = config_entries(&db, home, &req.target).unwrap();
+        let restored = config_entries(&registry, &db, home, &req.target).unwrap();
         assert_eq!(restored[0].enabled, Some(true));
         assert!(!restored[0].read_only);
         assert!(disabled(&db, &req.target).unwrap().is_empty());
@@ -511,10 +556,10 @@ fn backup_restore_reconciles_only_exact_original_then_allows_management() {
             serde_json::from_str::<Value>(&fs::read_to_string(&path).unwrap()).unwrap(),
             original
         );
-        mutate_config(&db, &credentials, home, &req).unwrap();
-        mutate_config(&db, &credentials, home, &request(tool, "enable", &source)).unwrap();
+        mutate_config(&registry, &db, &credentials, home, &req).unwrap();
+        mutate_config(&registry, &db, &credentials, home, &request(tool, "enable", &source)).unwrap();
         assert_eq!(
-            config_entries(&db, home, &req.target).unwrap()[0].enabled,
+            config_entries(&registry, &db, home, &req.target).unwrap()[0].enabled,
             Some(true)
         );
     }
@@ -530,18 +575,18 @@ fn unknown_external_change_does_not_claim_disabled_or_overwrite_files() {
     fs::create_dir(&package).unwrap();
     let source = package.display().to_string();
     let req = request("pi", "disable", &source);
-    let (path, _) = config(home, &req.target).unwrap();
+    let (path, _) = config(&Registry::builtins(), home, &req.target).unwrap();
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(
         &path,
         serde_json::to_vec(&json!({"packages":[{"source":source,"future":1}]})).unwrap(),
     )
     .unwrap();
-    mutate_config(&db, &credentials, home, &req).unwrap();
+    mutate_config(&Registry::builtins(), &db, &credentials, home, &req).unwrap();
     let external =
         serde_json::to_string(&json!({"packages":[{"source":source,"future":2}]})).unwrap();
     fs::write(&path, &external).unwrap();
-    let entry = &config_entries(&db, home, &req.target).unwrap()[0];
+    let entry = &config_entries(&Registry::builtins(), &db, home, &req.target).unwrap()[0];
     assert_eq!(entry.enabled, None);
     assert_eq!(entry.state, "state_unknown");
     assert!(entry.read_only);
@@ -557,11 +602,12 @@ fn specific_backup_restores_disabled_metadata_after_enable_or_uninstall() {
             let home = dir.path();
             let db = Database::open(&home.join("db")).unwrap();
             let credentials = MemoryStore::default();
+            let registry = tool_registry(tool);
             let package = home.join("package");
             fs::create_dir(&package).unwrap();
             let source = package.display().to_string();
             let t = target(tool);
-            let (path, _) = config(home, &t).unwrap();
+            let (path, _) = config(&registry, home, &t).unwrap();
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             let original = if tool == "pi" {
                 json!({"packages":[{"source":source,"autoload":false,"extensions":["!old.ts"],"future":"backup-metadata-private-marker"}]})
@@ -570,11 +616,11 @@ fn specific_backup_restores_disabled_metadata_after_enable_or_uninstall() {
             };
             fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
             let disable_id =
-                mutate_config(&db, &credentials, home, &request(tool, "disable", &source)).unwrap();
+                mutate_config(&registry, &db, &credentials, home, &request(tool, "disable", &source)).unwrap();
             let disabled_file = fs::read_to_string(&path).unwrap();
             let disabled_metadata = disabled(&db, &t).unwrap();
             let action_id =
-                mutate_config(&db, &credentials, home, &request(tool, action, &source)).unwrap();
+                mutate_config(&registry, &db, &credentials, home, &request(tool, action, &source)).unwrap();
             assert_ne!(disable_id, action_id);
             assert!(!action_id.is_empty());
             assert!(disabled(&db, &t).unwrap().is_empty());
@@ -590,7 +636,7 @@ fn specific_backup_restores_disabled_metadata_after_enable_or_uninstall() {
             .unwrap();
             assert_eq!(fs::read_to_string(&path).unwrap(), disabled_file);
             assert_eq!(disabled(&db, &t).unwrap(), disabled_metadata);
-            let entries = config_entries(&db, home, &t).unwrap();
+            let entries = config_entries(&registry, &db, home, &t).unwrap();
             assert_eq!(entries.len(), 1);
             assert_eq!(entries[0].enabled, Some(false));
             assert!(!entries[0].read_only);
@@ -615,9 +661,9 @@ fn specific_backup_restores_disabled_metadata_after_enable_or_uninstall() {
                 |_| Ok(()),
             )
             .unwrap();
-            mutate_config(&db, &credentials, home, &request(tool, "enable", &source)).unwrap();
+            mutate_config(&registry, &db, &credentials, home, &request(tool, "enable", &source)).unwrap();
             assert_eq!(
-                config_entries(&db, home, &t).unwrap()[0].enabled,
+                config_entries(&registry, &db, home, &t).unwrap()[0].enabled,
                 Some(true)
             );
             assert_eq!(
@@ -646,12 +692,14 @@ fn configuration_edit_backup_also_preserves_plugin_recovery_and_failed_restore_i
     let home = dir.path();
     let db = Database::open(&home.join("db")).unwrap();
     let credentials = MemoryStore::default();
+    let registry = tool_registry("open_code");
     let source = "fixture@1";
     let t = target("open_code");
-    let (path, _) = config(home, &t).unwrap();
+    let (path, _) = config(&registry, home, &t).unwrap();
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(&path, r#"{"plugin":["fixture@1"]}"#).unwrap();
     mutate_config(
+        &registry,
         &db,
         &credentials,
         home,
@@ -674,6 +722,7 @@ fn configuration_edit_backup_also_preserves_plugin_recovery_and_failed_restore_i
     )
     .unwrap();
     mutate_config(
+        &registry,
         &db,
         &credentials,
         home,
@@ -718,6 +767,7 @@ fn configuration_edit_backup_also_preserves_plugin_recovery_and_failed_restore_i
     assert_eq!(fs::read_to_string(&path).unwrap(), disabled_file);
     assert_eq!(disabled(&db, &t).unwrap(), metadata);
     mutate_config(
+        &registry,
         &db,
         &credentials,
         home,
@@ -725,7 +775,7 @@ fn configuration_edit_backup_also_preserves_plugin_recovery_and_failed_restore_i
     )
     .unwrap();
     assert_eq!(
-        config_entries(&db, home, &t).unwrap()[0].enabled,
+        config_entries(&registry, &db, home, &t).unwrap()[0].enabled,
         Some(true)
     );
 }
@@ -737,8 +787,9 @@ fn plugin_edits_preserve_restricted_secret_file_acl_under_permissive_parent() {
     let home = dir.path();
     let db = Database::open(&home.join("db")).unwrap();
     let credentials = MemoryStore::default();
+    let registry = tool_registry("open_code");
     let req = request("open_code", "install", "fixture@1");
-    let (path, _) = config(home, &req.target).unwrap();
+    let (path, _) = config(&registry, home, &req.target).unwrap();
     let parent = path.parent().unwrap();
     fs::create_dir_all(parent).unwrap();
     let icacls = PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32/icacls.exe");
@@ -766,6 +817,7 @@ fn plugin_edits_preserve_restricted_secret_file_acl_under_permissive_parent() {
     .unwrap();
     for action in ["install", "disable", "uninstall"] {
         mutate_config(
+            &registry,
             &db,
             &credentials,
             home,
@@ -808,16 +860,16 @@ fn dsh_user_bundle_toggle_is_transactional_and_retains_official_layers() {
     let mut req = request("deepseek", "disable", "@fixture/user-plugin");
     req.baseline = before.baseline;
     let store = MemoryStore::default();
-    let disabled = operate(&db, &store, home.path(), &req).unwrap();
+    let disabled = operate_serial(&Registry::builtins(), &db, &store, home.path(), &req).unwrap();
     assert_eq!(disabled.status, "configuration_written");
     assert_eq!(disabled.snapshot.as_ref().unwrap().entries[0].enabled, Some(false));
     let parsed: Value = serde_json::from_str(&fs::read_to_string(&config).unwrap()).unwrap();
     assert_eq!(parsed["custom"], "retain");
     assert_eq!(parsed.pointer("/dsh/profile/bundles").unwrap(), &json!(["@deepseek-ai/dsh-base"]));
     assert!(package.join("package.json").is_file());
-    assert!(operate(&db, &store, home.path(), &req).is_err(), "old baseline must not write twice");
+    assert!(operate_serial(&Registry::builtins(), &db, &store, home.path(), &req).is_err(), "old baseline must not write twice");
     req.action = "enable".into(); req.baseline = disabled.snapshot.unwrap().baseline;
-    let enabled = operate(&db, &store, home.path(), &req).unwrap();
+    let enabled = operate_serial(&Registry::builtins(), &db, &store, home.path(), &req).unwrap();
     assert_eq!(enabled.snapshot.unwrap().entries[0].enabled, Some(true));
     assert_eq!(transaction::recent_backups(&db, &config).unwrap().len(), 2);
 }
@@ -863,4 +915,178 @@ fn opencode_plugin_policy_accepts_both_verified_major_lines() {
         "{}",
         capability.version
     );
+    // R12: the 2.x page must state that V1 implementations do not load natively.
+    assert!(
+        capability.detail.contains("plugins") && capability.detail.contains("2.x 原生不加载"),
+        "{}",
+        capability.detail
+    );
+}
+
+#[test]
+fn object_plugin_declarations_identify_their_package() {
+    assert_eq!(
+        declaration_source(&json!({"package":"pkg@1","options":{"mode":"fast"}})).as_deref(),
+        Some("pkg@1")
+    );
+    assert_eq!(declaration_source(&json!("pkg@2")).as_deref(), Some("pkg@2"));
+    assert_eq!(
+        declaration_source(&json!(["pkg@3", {"a":1}])).as_deref(),
+        Some("pkg@3")
+    );
+    assert_eq!(
+        declaration_source(&json!({"source":"pkg@4"})).as_deref(),
+        Some("pkg@4")
+    );
+}
+
+#[test]
+fn opencode_unverified_install_line_refuses_declaration_writes() {
+    let adapter = adapters::plugins::get("open_code").unwrap();
+    assert!(declaration_field(adapter, None).unwrap_err().contains("尚未验证"));
+    assert!(declaration_field(adapter, Some("3.0.0"))
+        .unwrap_err()
+        .contains("契约范围"));
+    assert_eq!(declaration_field(adapter, Some("2.1.0")).unwrap(), Some("plugins"));
+    assert_eq!(declaration_field(adapter, Some("1.19.0")).unwrap(), Some("plugin"));
+    // Fixed-shape adapters keep their static field without a probed version.
+    let pi = adapters::plugins::get("pi").unwrap();
+    assert_eq!(declaration_field(pi, None).unwrap(), Some("packages"));
+}
+
+#[test]
+fn opencode_v2_plugin_declarations_use_plugins_array_and_keep_object_options() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let db = Database::open(&home.join("db")).unwrap();
+    let credentials = MemoryStore::default();
+    let registry = fixture("open_code", "2.1.0");
+    let t = target("open_code");
+    let (path, _) = config(&registry, home, &t).unwrap();
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        &path,
+        r#"{"plugins":[{"package":"object@2","options":{"mode":"fast"},"future":true}],"future":42}"#,
+    )
+    .unwrap();
+    let before = scan_registered(&registry, &db, home, &t, true).unwrap();
+    assert_eq!(before.entries.len(), 1);
+    assert_eq!(before.entries[0].id, "object@2");
+    assert_eq!(before.entries[0].enabled, Some(true));
+    // Disable removes the declaration but Cliora remembers the verbatim object.
+    let disabled = operate_serial(
+        &registry,
+        &db,
+        &credentials,
+        home,
+        &request_with_baseline("open_code", "disable", "object@2", &before.baseline),
+    )
+    .unwrap();
+    assert_eq!(disabled.status, "configuration_written");
+    let after_disable: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(after_disable["future"], 42);
+    assert_eq!(after_disable["plugins"], json!([]));
+    let disabled_snapshot = disabled.snapshot.unwrap();
+    assert_eq!(disabled_snapshot.entries[0].enabled, Some(false));
+    // Enable restores the object entry with its options.
+    let enabled = operate_serial(
+        &registry,
+        &db,
+        &credentials,
+        home,
+        &request_with_baseline("open_code", "enable", "object@2", &disabled_snapshot.baseline),
+    )
+    .unwrap();
+    let enabled_snapshot = enabled.snapshot.unwrap();
+    assert_eq!(enabled_snapshot.entries[0].enabled, Some(true));
+    let object: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(
+        object["plugins"][0],
+        json!({"package":"object@2","options":{"mode":"fast"},"future":true})
+    );
+    // Install appends a v2 declaration to the versioned array.
+    let installed = operate_serial(
+        &registry,
+        &db,
+        &credentials,
+        home,
+        &request_with_baseline("open_code", "install", "string@1.0.0", &enabled_snapshot.baseline),
+    )
+    .unwrap();
+    assert_eq!(installed.status, "configuration_written");
+    let parsed: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(
+        parsed["plugins"],
+        json!([
+            {"package":"object@2","options":{"mode":"fast"},"future":true},
+            "string@1.0.0"
+        ])
+    );
+    assert!(parsed.get("plugin").is_none());
+}
+
+#[test]
+fn opencode_v1_plugin_declarations_stay_in_plugin_array() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let db = Database::open(&home.join("db")).unwrap();
+    let credentials = MemoryStore::default();
+    let registry = fixture("open_code", "1.18.34");
+    let t = target("open_code");
+    let (path, _) = config(&registry, home, &t).unwrap();
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, r#"{"plugin":[],"unknown":1}"#).unwrap();
+    let before = scan_registered(&registry, &db, home, &t, true).unwrap();
+    let written = operate_serial(
+        &registry,
+        &db,
+        &credentials,
+        home,
+        &request_with_baseline("open_code", "install", "legacy@1.0.0", &before.baseline),
+    )
+    .unwrap();
+    assert_eq!(written.status, "configuration_written");
+    let parsed: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(parsed["plugin"], json!(["legacy@1.0.0"]));
+    assert_eq!(parsed["unknown"], 1);
+    assert!(parsed.get("plugins").is_none());
+}
+
+#[test]
+fn opencode_auto_discovery_lists_both_plugin_directories_read_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let db = Database::open(&home.join("db")).unwrap();
+    let registry = fixture("open_code", "2.1.0");
+    let t = target("open_code");
+    let (path, _) = config(&registry, home, &t).unwrap();
+    let base = path.parent().unwrap();
+    fs::create_dir_all(base.join("plugin")).unwrap();
+    fs::write(base.join("plugin/alpha.ts"), "// fixture").unwrap();
+    fs::create_dir_all(base.join("plugins")).unwrap();
+    fs::write(base.join("plugins/beta.js"), "// fixture").unwrap();
+    fs::write(base.join("plugins/ignored.txt"), "fixture").unwrap();
+    let entries = config_entries(&registry, &db, home, &t).unwrap();
+    let names: Vec<_> = entries.iter().map(|entry| entry.name.as_str()).collect();
+    assert_eq!(entries.len(), 2, "{names:?}");
+    assert!(names.contains(&"alpha.ts") && names.contains(&"beta.js"));
+    assert!(entries
+        .iter()
+        .all(|entry| entry.read_only && entry.scope == "auto" && entry.enabled == Some(true)));
+    // Project scope reads both native auto-discovery directories as well.
+    let project_dir = home.join("project");
+    fs::create_dir_all(project_dir.join(".opencode/plugin")).unwrap();
+    fs::write(project_dir.join(".opencode/plugin/gamma.ts"), "// fixture").unwrap();
+    fs::create_dir_all(project_dir.join(".opencode/plugins")).unwrap();
+    fs::write(project_dir.join(".opencode/plugins/delta.js"), "// fixture").unwrap();
+    let project = PluginTarget {
+        scope: Scope::Project,
+        project_path: Some(project_dir.display().to_string()),
+        ..target("open_code")
+    };
+    let entries = config_entries(&registry, &db, home, &project).unwrap();
+    let names: Vec<_> = entries.iter().map(|entry| entry.name.as_str()).collect();
+    assert_eq!(entries.len(), 2, "{names:?}");
+    assert!(names.contains(&"gamma.ts") && names.contains(&"delta.js"));
+    assert!(entries.iter().all(|entry| entry.read_only && entry.scope == "auto"));
 }

@@ -79,6 +79,27 @@ pub trait PluginAdapter: Sync {
     fn config_field(&self) -> Option<&'static str> {
         None
     }
+    /// Whether the declaration format follows the installed major line. Only
+    /// adapters with several verified native forms opt in; the default keeps
+    /// the static field and never asks the service for a version.
+    fn config_requires_version(&self) -> bool {
+        false
+    }
+    /// Declaration field for a detected install line. The default keeps the
+    /// static field so single-shape adapters stay unchanged.
+    fn config_field_for_version(&self, _version: Option<&str>) -> Option<&'static str> {
+        self.config_field()
+    }
+    /// Declaration field inside a parsed native document. A known install line
+    /// is authoritative; otherwise the adapter may recognize the shape already
+    /// present so read-only inventory still works before the version is verified.
+    fn config_field_for_document(
+        &self,
+        _document: &Value,
+        version: Option<&str>,
+    ) -> Option<&'static str> {
+        self.config_field_for_version(version)
+    }
     fn disabled_declaration(&self, _original: &Value, _source: &str) -> Option<Value> {
         None
     }
@@ -143,63 +164,21 @@ pub trait PluginAdapter: Sync {
         request: &PluginRequest,
     ) -> Result<Vec<FieldChange>, String> {
         let field = self.config_field().ok_or("此操作没有配置声明格式")?;
-        let mut items = parsed
-            .get(field)
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let index = items
-            .iter()
-            .position(|item| declaration_source(item).as_deref() == Some(request.source.as_str()));
-        match request.action.as_str() {
-            "disable" => {
-                let index = index.ok_or("插件声明已消失")?;
-                if saved.contains_key(&request.source) {
-                    return Err("此包已禁用，请重新扫描".into());
-                }
-                let original = items[index].clone();
-                if let Some(disabled) = self.disabled_declaration(&original, &request.source) {
-                    items[index] = disabled;
-                } else {
-                    items.remove(index);
-                }
-                saved.insert(request.source.clone(), original);
-            }
-            "enable" => {
-                let original = saved
-                    .remove(&request.source)
-                    .ok_or("没有可恢复的插件声明")?;
-                if let Some(index) = index {
-                    if self
-                        .disabled_declaration(&original, &request.source)
-                        .as_ref()
-                        != Some(&items[index])
-                    {
-                        return Err("相同来源已被外部修改；重新扫描后处理冲突".into());
-                    }
-                    items[index] = original;
-                } else {
-                    items.push(original);
-                }
-            }
-            "install" => {
-                if index.is_some() || saved.contains_key(&request.source) {
-                    return Err("此来源已配置；请启用或先移除".into());
-                }
-                items.push(json!(request.source));
-            }
-            "uninstall" => {
-                if let Some(index) = index {
-                    items.remove(index);
-                }
-                saved.remove(&request.source);
-            }
-            _ => return Err("不支持的配置操作".into()),
-        }
-        Ok(vec![FieldChange {
-            path: vec![field.into()],
-            value: Some(json!(items)),
-        }])
+        declaration_changes(self, field, parsed, saved, request)
+    }
+    /// Version-aware declaration lifecycle. The default delegates to the
+    /// historical method so fixed-shape adapters stay byte-identical; adapters
+    /// whose field follows the install line override this and reuse
+    /// [`declaration_changes`] with the version-selected field.
+    fn config_changes_for_version(
+        &self,
+        parsed: &Value,
+        saved: &mut serde_json::Map<String, Value>,
+        request: &PluginRequest,
+        version: Option<&str>,
+    ) -> Result<Vec<FieldChange>, String> {
+        let _ = version;
+        self.config_changes(parsed, saved, request)
     }
     /// Filesystem add, enable, disable, or remove. The shared service applies it.
     fn local_mutation(&self, _action: &str) -> bool {
@@ -216,6 +195,76 @@ pub trait PluginAdapter: Sync {
     fn cleanup_local_mutation(&self, _home: &Path, _request: &PluginRequest) -> Result<(), String> {
         Ok(())
     }
+}
+/// Apply one lifecycle change to a top-level declaration array. Shared by the
+/// default `config_changes` and by adapters whose field follows the install
+/// line (`config_changes_for_version`). A string source, a `[source, options]`
+/// tuple and a `{package|source, options}` record keep their original shape
+/// while disabled and are restored verbatim.
+pub(crate) fn declaration_changes(
+    adapter: &(impl PluginAdapter + ?Sized),
+    field: &str,
+    parsed: &Value,
+    saved: &mut serde_json::Map<String, Value>,
+    request: &PluginRequest,
+) -> Result<Vec<FieldChange>, String> {
+    let mut items = parsed
+        .get(field)
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let index = items
+        .iter()
+        .position(|item| declaration_source(item).as_deref() == Some(request.source.as_str()));
+    match request.action.as_str() {
+        "disable" => {
+            let index = index.ok_or("插件声明已消失")?;
+            if saved.contains_key(&request.source) {
+                return Err("此包已禁用，请重新扫描".into());
+            }
+            let original = items[index].clone();
+            if let Some(disabled) = adapter.disabled_declaration(&original, &request.source) {
+                items[index] = disabled;
+            } else {
+                items.remove(index);
+            }
+            saved.insert(request.source.clone(), original);
+        }
+        "enable" => {
+            let original = saved
+                .remove(&request.source)
+                .ok_or("没有可恢复的插件声明")?;
+            if let Some(index) = index {
+                if adapter
+                    .disabled_declaration(&original, &request.source)
+                    .as_ref()
+                    != Some(&items[index])
+                {
+                    return Err("相同来源已被外部修改；重新扫描后处理冲突".into());
+                }
+                items[index] = original;
+            } else {
+                items.push(original);
+            }
+        }
+        "install" => {
+            if index.is_some() || saved.contains_key(&request.source) {
+                return Err("此来源已配置；请启用或先移除".into());
+            }
+            items.push(json!(request.source));
+        }
+        "uninstall" => {
+            if let Some(index) = index {
+                items.remove(index);
+            }
+            saved.remove(&request.source);
+        }
+        _ => return Err("不支持的配置操作".into()),
+    }
+    Ok(vec![FieldChange {
+        path: vec![field.into()],
+        value: Some(json!(items)),
+    }])
 }
 pub fn get(tool: &str) -> Result<&'static dyn PluginAdapter, String> {
     get_registered(&super::Registry::builtins(), tool)
@@ -312,7 +361,7 @@ pub(crate) fn text(value: &Value, names: &[&str]) -> Option<String> {
 
 /// The source identity of one config declaration: a spec string, a
 /// `[spec, options]` tuple (native installers write this when the package
-/// exports config options), or a `{source}` record.
+/// exports config options), or a `{source}` / v2 `{package, options}` record.
 pub fn declaration_source(item: &Value) -> Option<String> {
     item.as_str()
         .map(str::to_owned)
@@ -322,7 +371,7 @@ pub fn declaration_source(item: &Value) -> Option<String> {
                 .and_then(Value::as_str)
                 .map(str::to_owned)
         })
-        .or_else(|| text(item, &["source"]))
+        .or_else(|| text(item, &["source", "package"]))
 }
 
 fn string_source(value: &Value) -> String {
