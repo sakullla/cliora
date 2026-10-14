@@ -140,6 +140,56 @@ pub enum LaunchForm {
     Desktop,
 }
 
+/// One declared install line: a verified major contract family with its own
+/// npm package and npm entry. The default declaration wraps the legacy
+/// single-line fields so a single-channel adapter keeps its exact behavior.
+/// Native directories and the native source predicate stay in the adapter
+/// ports that already own them (`native_binary_directories`,
+/// `recognizes_native_install_path`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InstallLine {
+    /// Major version family served by this line; 0 marks the version-agnostic
+    /// default line of a single-channel adapter.
+    pub major: u32,
+    pub npm_package: &'static str,
+    /// npm entry relative to the shim directory, used to resolve a PowerShell
+    /// shim to the real executable. `None` keeps the account port's entry.
+    pub npm_entry: Option<&'static str>,
+}
+
+/// Parses the major family of a probed version string (`2.0.29`,
+/// `v2.0.29-beta.1`).
+pub fn version_major(version: &str) -> Option<u32> {
+    version.trim().trim_start_matches('v').split('.').next()?.parse().ok()
+}
+
+/// Selects a declared line for an identified installed version. A line only
+/// matches its own major; the version-agnostic default line (major 0) covers
+/// every version. An unknown version only matches the default line, so a
+/// specific family is never guessed.
+pub fn install_line_for(lines: &[InstallLine], version: Option<&str>) -> Option<InstallLine> {
+    match version.and_then(version_major) {
+        Some(major) => lines
+            .iter()
+            .find(|line| line.major == major)
+            .or_else(|| lines.iter().find(|line| line.major == 0))
+            .copied(),
+        None => lines.iter().find(|line| line.major == 0).copied(),
+    }
+}
+
+/// Explicit cross-major upgrade declared by the adapter for the identified
+/// install. The shared UI only renders it; the service only runs `command`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MajorUpgradeAction {
+    pub label: &'static str,
+    /// Official command. `None` means the identified install has no supported
+    /// official path; `guidance` explains the manual route instead.
+    pub command: Option<String>,
+    pub guidance: Option<&'static str>,
+}
+
 #[derive(Default)]
 pub struct InspectionFields {
     pub provider: Option<String>,
@@ -162,6 +212,23 @@ pub struct NativeCredentialTarget {
     pub role: String,
     pub path: Vec<String>,
     pub remove_paths: Vec<Vec<String>>,
+}
+
+/// npm registry `latest` URL. A scoped name encodes its separating slash so
+/// the query never depends on registry redirects.
+fn npm_registry_url(package: &str) -> Option<String> {
+    (!package.is_empty()).then(|| format!("https://registry.npmjs.org/{}/latest", package.replace('/', "%2F")))
+}
+
+/// Shared npm install policy: optional dependencies, lifecycle scripts and
+/// bounded network retries, with the top-level package always script-allowed.
+fn npm_install_command_for(package: &str, script_dependencies: &[&str]) -> Option<String> {
+    let scripts = std::iter::once(package).chain(script_dependencies.iter().copied()).collect::<Vec<_>>().join(",");
+    (!package.is_empty()).then(|| format!("npm install -g {package}@latest --include=optional --ignore-scripts=false --foreground-scripts --allow-scripts={scripts} --no-audit --no-fund --fetch-retries=3 --fetch-timeout=60000 --fetch-retry-mintimeout=1000 --fetch-retry-maxtimeout=10000"))
+}
+
+fn npm_uninstall_command_for(package: &str) -> Option<String> {
+    (!package.is_empty()).then(|| format!("npm uninstall -g {package}"))
 }
 
 pub trait CliAdapter: Sync {
@@ -189,11 +256,45 @@ pub trait CliAdapter: Sync {
     fn name(&self) -> &'static str;
     fn command(&self) -> &'static str;
     fn npm_package(&self) -> &'static str;
+    /// Declared install lines. The default wraps the legacy single-line fields
+    /// so a single-channel adapter keeps its behavior; an adapter with several
+    /// verified major families declares one line per family.
+    fn install_lines(&self) -> Vec<InstallLine> {
+        vec![InstallLine {
+            major: 0,
+            npm_package: self.npm_package(),
+            npm_entry: None,
+        }]
+    }
+    /// The declared line selected for an identified installed version. `None`
+    /// means the version cannot select a line; callers must not guess one.
+    fn install_line_for_version(&self, version: Option<&str>) -> Option<InstallLine> {
+        install_line_for(&self.install_lines(), version)
+    }
+    /// npm package names that identify this adapter's npm shims. Derived from
+    /// the declared lines so a multi-line adapter recognizes every shim.
+    fn npm_packages(&self) -> Vec<&'static str> {
+        self.install_lines()
+            .into_iter()
+            .map(|line| line.npm_package)
+            .filter(|package| !package.is_empty())
+            .collect()
+    }
     /// Public release metadata belongs to the adapter; transport and caching
     /// belong to the shared native service. No npm request for standalone CLIs.
     fn latest_version_url(&self) -> Option<String> {
         let package = self.npm_package();
         (!package.is_empty()).then(|| format!("https://registry.npmjs.org/{package}/latest"))
+    }
+    /// Release URL for the identified install line. The default keeps the
+    /// adapter's single-line policy; a multi-line adapter derives the registry
+    /// query from the selected line and returns `None` for unknown versions.
+    fn latest_version_url_for_version(&self, version: Option<&str>) -> Option<String> {
+        match self.install_line_for_version(version) {
+            Some(line) if line.major != 0 => npm_registry_url(line.npm_package),
+            Some(_) => self.latest_version_url(),
+            None => None,
+        }
     }
     fn parse_latest_version(&self, text: &str) -> Option<String> {
         serde_json::from_str::<Value>(text).ok()?.get("version")?.as_str().map(str::to_owned)
@@ -616,9 +717,17 @@ pub trait CliAdapter: Sync {
         None
     }
     fn npm_install_command(&self) -> Option<String> {
-        let package = self.npm_package();
-        let scripts = std::iter::once(package).chain(self.npm_script_dependencies().iter().copied()).collect::<Vec<_>>().join(",");
-        (!package.is_empty()).then(|| format!("npm install -g {package}@latest --include=optional --ignore-scripts=false --foreground-scripts --allow-scripts={scripts} --no-audit --no-fund --fetch-retries=3 --fetch-timeout=60000 --fetch-retry-mintimeout=1000 --fetch-retry-maxtimeout=10000"))
+        npm_install_command_for(self.npm_package(), self.npm_script_dependencies())
+    }
+    /// npm install command for the identified install line. A multi-line
+    /// adapter derives it from the selected line; the default single line keeps
+    /// the adapter's own command policy.
+    fn npm_install_command_for_version(&self, version: Option<&str>) -> Option<String> {
+        match self.install_line_for_version(version) {
+            Some(line) if line.major != 0 => npm_install_command_for(line.npm_package, self.npm_script_dependencies()),
+            Some(_) => self.npm_install_command(),
+            None => None,
+        }
     }
     /// npm 11.17+ script policy. Adapters declare native build dependencies;
     /// the top-level package is always included, scoped to this invocation.
@@ -626,9 +735,35 @@ pub trait CliAdapter: Sync {
     fn upgrade_command(&self, source: &str) -> Option<String> {
         (source == "npm_shim").then(|| self.npm_install_command()).flatten()
     }
+    /// Regular update command for the identified install line. An npm install
+    /// stays inside the selected line's package, so a 1.x install never jumps
+    /// majors through a routine update. Unknown versions yield no command.
+    fn upgrade_command_for_version(&self, source: &str, version: Option<&str>) -> Option<String> {
+        if source != "npm_shim" {
+            return self.upgrade_command(source);
+        }
+        match self.install_line_for_version(version) {
+            Some(line) if line.major != 0 => npm_install_command_for(line.npm_package, self.npm_script_dependencies()),
+            Some(_) => self.upgrade_command(source),
+            None => None,
+        }
+    }
     fn npm_uninstall_command(&self) -> Option<String> {
-        let package = self.npm_package();
-        (!package.is_empty()).then(|| format!("npm uninstall -g {package}"))
+        npm_uninstall_command_for(self.npm_package())
+    }
+    /// npm uninstall command for the identified install line.
+    fn npm_uninstall_command_for_version(&self, version: Option<&str>) -> Option<String> {
+        match self.install_line_for_version(version) {
+            Some(line) if line.major != 0 => npm_uninstall_command_for(line.npm_package),
+            Some(_) => self.npm_uninstall_command(),
+            None => None,
+        }
+    }
+    /// Explicit cross-major upgrade declared by the adapter for the identified
+    /// install. `None` hides the action; a declared action without a command
+    /// only shows official guidance and never changes the installation.
+    fn major_upgrade(&self, _source: &str, _version: Option<&str>) -> Option<MajorUpgradeAction> {
+        None
     }
     fn anthropic_base_url(&self) -> &'static str {
         "https://api.anthropic.com/v1"

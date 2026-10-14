@@ -9,8 +9,9 @@ use std::env;
 use std::path::{Path, PathBuf};
 
 use super::{
-    assign_existing_fields, file, pointer_token, project_root, CliAdapter, InspectionFields,
-    LaunchMode, McpLocation, NativeCredentialRefs, PendingSecrets,
+    assign_existing_fields, file, install_line_for, pointer_token, project_root, CliAdapter,
+    InspectionFields, InstallLine, LaunchMode, MajorUpgradeAction, McpLocation, NativeCredentialRefs,
+    PendingSecrets,
 };
 use crate::credentials::CredentialStore;
 use crate::native::adapter::{NativeFile, Scope};
@@ -22,6 +23,37 @@ use crate::native::profile::{self, Connection, ModelRecord, RegisteredProfile};
 use crate::resources::mcp::{self, McpDefinition, McpTransport};
 
 pub struct OpenCode;
+
+/// Two verified install lines. 1.x publishes `opencode-ai`; 2.x publishes the
+/// scoped `@opencode/cli`. Both ship the same command and shim entry layout.
+pub(crate) const INSTALL_LINES: [InstallLine; 2] = [
+    InstallLine {
+        major: 1,
+        npm_package: "opencode-ai",
+        npm_entry: Some("node_modules/opencode-ai/bin/opencode.exe"),
+    },
+    InstallLine {
+        major: 2,
+        npm_package: "@opencode/cli",
+        npm_entry: Some("node_modules/@opencode/cli/bin/opencode.exe"),
+    },
+];
+
+/// The declared line for an identified version; `None` when it cannot be
+/// selected (the two lines are never guessed).
+pub(crate) fn install_line(version: Option<&str>) -> Option<InstallLine> {
+    install_line_for(&INSTALL_LINES, version)
+}
+
+/// Both verified lines install their launcher here (the 1.x curl script and
+/// the 2.x installer), so the directory is the native channel for either line.
+const NATIVE_BIN: &str = ".opencode/bin";
+
+/// `opencode upgrade --major` (the official 1.x → OpenCode 2 path) appeared in
+/// 1.19.0; older 1.x installs only get the manual migration guidance.
+fn major_upgrade_minimum() -> semver::Version {
+    semver::Version::new(1, 19, 0)
+}
 
 fn unescape_pointer(segment: &str) -> String {
     segment.replace("~1", "/").replace("~0", "~")
@@ -157,8 +189,14 @@ impl CliAdapter for OpenCode {
     fn npm_package(&self) -> &'static str {
         "opencode-ai"
     }
+    fn install_lines(&self) -> Vec<InstallLine> {
+        INSTALL_LINES.to_vec()
+    }
     fn native_binary_directories(&self, home: &Path) -> Vec<PathBuf> {
-        vec![home.join(".opencode/bin")]
+        vec![home.join(NATIVE_BIN)]
+    }
+    fn recognizes_native_install_path(&self, path: &Path) -> bool {
+        path.parent().is_some_and(|parent| parent.ends_with(NATIVE_BIN))
     }
     fn version_identity(&self, basename: &str, output: &str) -> bool {
         output.contains("opencode")
@@ -760,10 +798,64 @@ impl CliAdapter for OpenCode {
     fn history_resume_version_supported(&self, version: &str) -> bool {
         version.starts_with("1.")
     }
+    fn major_upgrade(&self, source: &str, version: Option<&str>) -> Option<MajorUpgradeAction> {
+        // Only a recognized install channel may run the official self-upgrade;
+        // unknown sources keep the "no guessed command" policy.
+        if !matches!(source, "npm_shim" | "native") {
+            return None;
+        }
+        let parsed = semver::Version::parse(version?.trim().trim_start_matches('v')).ok()?;
+        if parsed.major != 1 {
+            return None;
+        }
+        let minimum = major_upgrade_minimum();
+        Some(MajorUpgradeAction {
+            label: "升级到 OpenCode 2",
+            command: (parsed >= minimum).then(|| "opencode upgrade --major".to_owned()),
+            guidance: (parsed < minimum).then_some(
+                "此安装低于 1.19.0，没有官方 upgrade --major；请按官方迁移指引手动升级到 OpenCode 2，Cliora 不会自动跨大版本。",
+            ),
+        })
+    }
     fn install_guidance(&self) -> (&'static str, &'static str) {
         (
             "https://opencode.ai/docs/",
             "使用 opencode upgrade 或原安装来源更新。",
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::adapters::accounts::AccountAdapter;
+
+    #[test]
+    fn install_lines_select_packages_and_npm_entries_per_major() {
+        assert_eq!(
+            OpenCode
+                .install_lines()
+                .iter()
+                .map(|line| (line.major, line.npm_package))
+                .collect::<Vec<_>>(),
+            vec![(1, "opencode-ai"), (2, "@opencode/cli")]
+        );
+        assert_eq!(OpenCode.npm_packages(), vec!["opencode-ai", "@opencode/cli"]);
+        assert_eq!(install_line(Some("1.19.0")).unwrap().npm_package, "opencode-ai");
+        assert_eq!(install_line(Some("v2.0.29")).unwrap().npm_package, "@opencode/cli");
+        assert_eq!(install_line(Some("2.0.29+build.1")).unwrap().npm_package, "@opencode/cli");
+        assert_eq!(install_line(None), None);
+        assert_eq!(install_line(Some("3.0.0")), None);
+        assert_eq!(
+            OpenCode.npm_entry_for_version(Some("1.19.0")),
+            Some("node_modules/opencode-ai/bin/opencode.exe")
+        );
+        assert_eq!(
+            OpenCode.npm_entry_for_version(Some("2.0.29")),
+            Some("node_modules/@opencode/cli/bin/opencode.exe")
+        );
+        assert_eq!(OpenCode.npm_entry_for_version(None), None);
+        assert!(OpenCode.recognizes_native_install_path(Path::new("/home/example/.opencode/bin/opencode")));
+        assert!(!OpenCode.recognizes_native_install_path(Path::new("/home/example/.local/bin/opencode")));
     }
 }

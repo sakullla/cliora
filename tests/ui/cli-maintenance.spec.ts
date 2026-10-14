@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
-async function setup(page: Page, supported = true, currentVersion = '3000.11.2', latestVersion = '3000.11.3') {
-  await page.addInitScript(({ supported, currentVersion, latestVersion }) => {
+async function setup(page: Page, supported = true, currentVersion = '3000.11.2', latestVersion = '3000.11.3', majorUpgrade: { label: string; command: string | null; guidance: string | null } | null = null) {
+  await page.addInitScript(({ supported, currentVersion, latestVersion, majorUpgrade }) => {
     let attempts = 0;
     let versionChecks = 0;
     let rejectInstall: ((error: unknown) => void) | undefined;
@@ -16,7 +16,7 @@ async function setup(page: Page, supported = true, currentVersion = '3000.11.2',
         if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['devin'], theme: 'light' }, tools: [{ id: 'devin', name: 'Devin' }] };
         if (command === 'list_cli_adapters') return { registered: [{ id: 'devin', name: 'Devin', management: { accounts: false, mcp: false, skills: false, agents: false, plugins: false } }], managedIds: ['devin'], preservedUnknown: [] };
         if (command === 'get_registered_tool_workspace') return {
-          probe: { tool: 'devin', latestVersionSupported: supported, selectedPath: '/fixture/devin', installations: [{ path: '/fixture/devin', version: currentVersion, status: 'available', source: 'native' }], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: [], providerPresets: [], dependencies: [], installUrl: 'https://devin.ai', upgradeHint: '', installCommand: null, upgradeCommand: 'fixture-update' }, profiles: [], binding: null, common: null, snapshots: [], recoveryNeeded: [], customPath: null,
+          probe: { tool: 'devin', latestVersionSupported: supported, selectedPath: '/fixture/devin', installations: [{ path: '/fixture/devin', version: currentVersion, status: 'available', source: 'native' }], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: [], providerPresets: [], dependencies: [], installUrl: 'https://devin.ai', upgradeHint: '', installCommand: null, upgradeCommand: 'fixture-update', majorUpgrade }, profiles: [], binding: null, common: null, snapshots: [], recoveryNeeded: [], customPath: null,
         };
         if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
         if (command === 'get_tray_status') return { available: false, error: null };
@@ -38,7 +38,7 @@ async function setup(page: Page, supported = true, currentVersion = '3000.11.2',
         return null;
       } },
     });
-  }, { supported, currentVersion, latestVersion });
+  }, { supported, currentVersion, latestVersion, majorUpgrade });
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
   await page.getByText('安装与更新', { exact: true }).click();
@@ -82,3 +82,26 @@ for (const latest of ['1.0.0-rc.10', '1.0.0']) {
     await expect(page.getByRole('button', { name: '更新', exact: true })).toBeVisible();
   });
 }
+
+test('major upgrade runs the explicit adapter-declared action', async ({ page }) => {
+  await setup(page, true, '1.19.0', '1.19.0', { label: '升级到 OpenCode 2', command: 'opencode upgrade --major', guidance: null });
+  await page.getByRole('button', { name: '重试查询' }).click();
+  // A routine update must not appear when the install is current, and the
+  // cross-major action stays a separate explicit button.
+  await expect(page.getByRole('button', { name: '更新', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: '升级到 OpenCode 2' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '升级', exact: true }).click();
+  const progress = page.getByRole('dialog', { name: 'Devin 安装与更新' });
+  await expect(progress.getByText('正在后台安装，请稍候…')).toBeVisible();
+  await progress.getByRole('button', { name: '取消安装' }).click();
+  await progress.getByRole('button', { name: '重试', exact: true }).click();
+  await expect(progress.getByText('操作完成 3000.11.3')).toBeVisible();
+  await expect(progress.getByLabel('安装日志')).toContainText('completed upgrade_major');
+});
+
+test('unsupported major upgrade path shows official guidance without an action', async ({ page }) => {
+  await setup(page, true, '1.18.34', '1.18.34', { label: '升级到 OpenCode 2', command: null, guidance: '此安装低于 1.19.0，没有官方 upgrade --major；请按官方迁移指引手动升级到 OpenCode 2。' });
+  await expect(page.getByRole('button', { name: '升级到 OpenCode 2' })).toHaveCount(0);
+  await expect(page.getByText('此安装低于 1.19.0，没有官方 upgrade --major；请按官方迁移指引手动升级到 OpenCode 2。')).toBeVisible();
+  await expect(page.getByRole('link', { name: '官方安装说明 ↗' })).toBeVisible();
+});

@@ -66,6 +66,11 @@ pub trait AccountAdapter: Sync {
     fn npm_entry(&self) -> Option<&'static str> {
         None
     }
+    /// npm entry relative to the shim directory for the identified install
+    /// line. The default keeps the adapter's single-line entry.
+    fn npm_entry_for_version(&self, _version: Option<&str>) -> Option<&'static str> {
+        self.npm_entry()
+    }
     fn observe(&self, _executable: &Path, _context: &NativeContext) -> Result<Observation, String> {
         Err(self.capability().reason.into())
     }

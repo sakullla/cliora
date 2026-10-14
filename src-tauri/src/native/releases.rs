@@ -17,8 +17,11 @@ fn parse_version(adapter: &dyn CliAdapter, bytes: &[u8]) -> Result<String, Strin
     Ok(version.trim_start_matches('v').to_owned())
 }
 
-pub fn latest(adapter: &dyn CliAdapter) -> Result<String, String> {
-    let url = adapter.latest_version_url().ok_or("此工具尚未提供公开版本查询，请查看官方安装说明")?;
+/// Queries the public release of the install line selected by the identified
+/// version. Unknown versions yield the adapter's own no-source error instead of
+/// guessing a line.
+pub fn latest_for(adapter: &dyn CliAdapter, version: Option<&str>) -> Result<String, String> {
+    let url = adapter.latest_version_url_for_version(version).ok_or("此工具尚未提供公开版本查询，请查看官方安装说明")?;
     if let Some((at, version)) = CACHE.lock().unwrap_or_else(|e| e.into_inner()).get(&url) {
         if at.elapsed() < Duration::from_secs(300) { return Ok(version.clone()); }
     }
@@ -85,11 +88,30 @@ mod tests {
         assert!(registry.get("devin").unwrap().latest_version_url().unwrap().contains("static.devin.ai"));
     }
     #[test]
+    fn opencode_release_queries_follow_the_identified_install_line() {
+        let adapter = &crate::adapters::OPENCODE;
+        assert_eq!(
+            adapter.latest_version_url_for_version(Some("1.19.0")).as_deref(),
+            Some("https://registry.npmjs.org/opencode-ai/latest")
+        );
+        assert_eq!(
+            adapter.latest_version_url_for_version(Some("v2.0.29")).as_deref(),
+            Some("https://registry.npmjs.org/@opencode%2Fcli/latest")
+        );
+        assert_eq!(adapter.latest_version_url_for_version(None), None);
+        assert_eq!(adapter.latest_version_url_for_version(Some("3.0.0")), None);
+        // A single-line adapter keeps its own release source for any version.
+        assert_eq!(
+            crate::adapters::DEVIN.latest_version_url_for_version(Some("3000.11.3")),
+            crate::adapters::DEVIN.latest_version_url()
+        );
+    }
+    #[test]
     #[ignore = "read-only public network verification"]
     fn live_release_sources() {
         let registry = crate::adapters::Registry::builtins();
-        for adapter in registry.iter().filter(|adapter| adapter.latest_version_url().is_some()) {
-            eprintln!("{}: {}", adapter.id(), latest(adapter).unwrap());
+        for adapter in registry.iter().filter(|adapter| adapter.latest_version_url_for_version(None).is_some()) {
+            eprintln!("{}: {}", adapter.id(), latest_for(adapter, None).unwrap());
         }
     }
 }
