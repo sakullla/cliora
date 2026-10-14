@@ -34,6 +34,7 @@ fn request(
     action: &str,
     entry: Option<&AgentEntry>,
     content: &str,
+    version: Option<&str>,
 ) -> AgentRequest {
     AgentRequest {
         target: target.clone(),
@@ -41,7 +42,9 @@ fn request(
         id: entry.map(|e| e.id.clone()),
         name: "reviewer".into(),
         content: content.into(),
-        baseline: snapshot_inner(home, target, &[]).unwrap().baseline,
+        baseline: snapshot_inner(home, target, &[], version)
+            .unwrap()
+            .baseline,
         transaction_id: None,
     }
 }
@@ -132,12 +135,14 @@ fn four_cli_file_lifecycles_and_group_restore_are_byte_preserving() {
         let store = MemoryStore::default();
         let target = target(tool, home);
         let cap = contract::capability(tool).unwrap();
+        let version = (tool == "open_code").then_some("1.18.34");
         let created = operate_inner(
             &db,
             &store,
             home,
-            &request(home, &target, "create", None, cap.template),
+            &request(home, &target, "create", None, cap.template, version),
             &[],
+            version,
         )
         .unwrap();
         let entry = &created.snapshot.entries[0];
@@ -147,8 +152,9 @@ fn four_cli_file_lifecycles_and_group_restore_are_byte_preserving() {
             &db,
             &store,
             home,
-            &request(home, &target, "disable", Some(entry), ""),
+            &request(home, &target, "disable", Some(entry), "", version),
             &[],
+            version,
         )
         .unwrap();
         assert!(!Path::new(&original).exists());
@@ -163,10 +169,10 @@ fn four_cli_file_lifecycles_and_group_restore_are_byte_preserving() {
         )
         .unwrap();
         assert_eq!(preview.affected_paths.len(), 2);
-        let mut restore = request(home, &target, "restore", None, "");
+        let mut restore = request(home, &target, "restore", None, "", version);
         restore.id = Some(original.clone());
         restore.transaction_id = Some(disabled.transaction_id.clone());
-        let restored = operate_inner(&db, &store, home, &restore, &[]).unwrap();
+        let restored = operate_inner(&db, &store, home, &restore, &[], version).unwrap();
         assert!(restored.snapshot.entries[0].enabled);
         assert_eq!(restored.snapshot.entries.len(), 1);
         let entry = &restored.snapshot.entries[0];
@@ -182,8 +188,9 @@ fn four_cli_file_lifecycles_and_group_restore_are_byte_preserving() {
             &db,
             &store,
             home,
-            &request(home, &target, "save", Some(entry), &edited),
+            &request(home, &target, "save", Some(entry), &edited, version),
             &[],
+            version,
         )
         .unwrap();
         assert_eq!(fs::read_to_string(&original).unwrap(), edited);
@@ -197,8 +204,10 @@ fn four_cli_file_lifecycles_and_group_restore_are_byte_preserving() {
                 "disable",
                 Some(&saved.snapshot.entries[0]),
                 "",
+                version,
             ),
             &[],
+            version,
         )
         .unwrap();
         let enabled = operate_inner(
@@ -211,8 +220,10 @@ fn four_cli_file_lifecycles_and_group_restore_are_byte_preserving() {
                 "enable",
                 Some(&disabled.snapshot.entries[0]),
                 "",
+                version,
             ),
             &[],
+            version,
         )
         .unwrap();
         assert!(enabled.snapshot.entries[0].enabled);
@@ -226,8 +237,10 @@ fn four_cli_file_lifecycles_and_group_restore_are_byte_preserving() {
                 "delete",
                 Some(&enabled.snapshot.entries[0]),
                 "",
+                version,
             ),
             &[],
+            version,
         )
         .unwrap();
         assert!(deleted.snapshot.entries.is_empty());
@@ -254,14 +267,15 @@ fn inline_opencode_preserves_comments_credentials_and_unknown_fields() {
     let target = target("open_code", home);
     let path = home.join("opencode.jsonc");
     write(&path,"{\n// keep\n\"provider\":{\"fixture\":{\"apiKey\":\"synthetic-only\"}},\"agent\":{\"reviewer\":{\"description\":\"review\",\"prompt\":\"do it\",\"options\":{\"extra\":7}}}}\n");
-    let snap = snapshot_inner(home, &target, &[]).unwrap();
+    let snap = snapshot_inner(home, &target, &[], Some("1.18.34")).unwrap();
     assert_eq!(snap.entries.len(), 1);
     let disabled = operate_inner(
         &db,
         &store,
         home,
-        &request(home, &target, "disable", Some(&snap.entries[0]), ""),
+        &request(home, &target, "disable", Some(&snap.entries[0]), "", Some("1.18.34")),
         &[],
+        Some("1.18.34"),
     )
     .unwrap();
     assert!(!disabled.snapshot.entries[0].enabled);
@@ -279,8 +293,10 @@ fn inline_opencode_preserves_comments_credentials_and_unknown_fields() {
             "enable",
             Some(&disabled.snapshot.entries[0]),
             "",
+            Some("1.18.34"),
         ),
         &[],
+        Some("1.18.34"),
     )
     .unwrap();
     assert!(enabled.snapshot.entries[0].enabled);
@@ -294,8 +310,10 @@ fn inline_opencode_preserves_comments_credentials_and_unknown_fields() {
             "delete",
             Some(&enabled.snapshot.entries[0]),
             "",
+            Some("1.18.34"),
         ),
         &[],
+        Some("1.18.34"),
     )
     .unwrap();
     assert!(fs::read_to_string(&path)
@@ -311,12 +329,12 @@ fn stale_baseline_duplicate_names_invalid_import_and_package_ownership_block_wri
     let store = MemoryStore::default();
     let target = target("claude_code", home);
     let template = contract::capability("claude_code").unwrap().template;
-    let initial = request(home, &target, "create", None, template);
-    let created = operate_inner(&db, &store, home, &initial, &[]).unwrap();
-    assert!(operate_inner(&db, &store, home, &initial, &[]).is_err());
-    let mut duplicate = request(home, &target, "create", None, template);
+    let initial = request(home, &target, "create", None, template, None);
+    let created = operate_inner(&db, &store, home, &initial, &[], None).unwrap();
+    assert!(operate_inner(&db, &store, home, &initial, &[], None).is_err());
+    let mut duplicate = request(home, &target, "create", None, template, None);
     duplicate.name = "other".into();
-    assert!(operate_inner(&db, &store, home, &duplicate, &[]).is_err());
+    assert!(operate_inner(&db, &store, home, &duplicate, &[], None).is_err());
     let original = created.snapshot.entries[0].content.clone();
     let invalid = request(
         home,
@@ -324,8 +342,9 @@ fn stale_baseline_duplicate_names_invalid_import_and_package_ownership_block_wri
         "save",
         Some(&created.snapshot.entries[0]),
         "invalid",
+        None,
     );
-    assert!(operate_inner(&db, &store, home, &invalid, &[]).is_err());
+    assert!(operate_inner(&db, &store, home, &invalid, &[], None).is_err());
     assert_eq!(
         read(Path::new(&created.snapshot.entries[0].path)).unwrap(),
         original
@@ -352,18 +371,18 @@ fn stale_baseline_duplicate_names_invalid_import_and_package_ownership_block_wri
             owner_id: "owned@market".into(),
         }],
     }];
-    let snap = snapshot_inner(home, &target, &plugins).unwrap();
+    let snap = snapshot_inner(home, &target, &plugins, None).unwrap();
     let owned = snap
         .entries
         .iter()
         .find(|e| e.name == "owned:owned")
         .unwrap();
     assert!(owned.read_only);
-    let mut req = request(home, &target, "delete", Some(owned), "");
+    let mut req = request(home, &target, "delete", Some(owned), "", None);
     req.baseline = snap.baseline;
-    assert!(operate_inner(&db, &store, home, &req, &plugins).is_err());
+    assert!(operate_inner(&db, &store, home, &req, &plugins, None).is_err());
     write(&home.join(".claude/agents/nested/same.md"), template);
-    let snap = snapshot_inner(home, &target, &[]).unwrap();
+    let snap = snapshot_inner(home, &target, &[], None).unwrap();
     assert!(snap.entries.iter().all(|e| e.read_only));
 }
 
@@ -380,7 +399,7 @@ fn codex_explicit_roles_are_discovered_read_only_and_cannot_be_shadowed() {
         &home.join(".codex/roles/legacy.toml"),
         "model = \"gpt-5\"\n",
     );
-    let snapshot = snapshot_inner(home, &target, &[]).unwrap();
+    let snapshot = snapshot_inner(home, &target, &[], None).unwrap();
     assert_eq!(snapshot.entries[0].name, "legacy");
     assert!(snapshot.entries[0].read_only);
     assert!(snapshot.entries[0].content.contains("gpt-5"));
@@ -469,14 +488,22 @@ fn opencode_native_disable_flag_is_visible_and_can_be_enabled_without_losing_com
         &path,
         "---\ndescription: Review\ndisable: true # keep\ncustom: retained\n---\nPrompt\n",
     );
-    let snapshot = snapshot_inner(home, &target, &[]).unwrap();
+    let snapshot = snapshot_inner(home, &target, &[], Some("1.18.34")).unwrap();
     assert!(!snapshot.entries[0].enabled);
     let result = operate_inner(
         &db,
         &store,
         home,
-        &request(home, &target, "enable", Some(&snapshot.entries[0]), ""),
+        &request(
+            home,
+            &target,
+            "enable",
+            Some(&snapshot.entries[0]),
+            "",
+            Some("1.18.34"),
+        ),
         &[],
+        Some("1.18.34"),
     )
     .unwrap();
     assert!(result.snapshot.entries[0].enabled);
@@ -488,7 +515,7 @@ fn opencode_native_disable_flag_is_visible_and_can_be_enabled_without_losing_com
         &nested,
         r#"{"agent":{"reviewer":{"description":"collision"}}}"#,
     );
-    let snapshot = snapshot_inner(home, &target, &[]).unwrap();
+    let snapshot = snapshot_inner(home, &target, &[], Some("1.18.34")).unwrap();
     assert_eq!(snapshot.entries.len(), 2);
     assert!(snapshot.entries.iter().all(|e| e.read_only));
 }
@@ -504,7 +531,7 @@ fn grok_only_scans_direct_agent_files_as_verified_by_native_inspect() {
         &home.join(".grok/agents/nested/other.md"),
         &text.replace("reviewer", "nested"),
     );
-    let snapshot = snapshot_inner(home, &target, &[]).unwrap();
+    let snapshot = snapshot_inner(home, &target, &[], None).unwrap();
     assert_eq!(snapshot.entries.len(), 1);
     assert_eq!(snapshot.entries[0].name, "reviewer");
 }
@@ -522,8 +549,9 @@ fn agent_save_undo_rejects_external_edits_after_rescan_but_explicit_preview_rest
             &db,
             &store,
             home,
-            &request(home, &target, "create", None, original),
+            &request(home, &target, "create", None, original, None),
             &[],
+            None,
         )
         .unwrap();
         let updated = original.replace("Review code", "Updated review");
@@ -537,28 +565,30 @@ fn agent_save_undo_rejects_external_edits_after_rescan_but_explicit_preview_rest
                 "save",
                 Some(&created.snapshot.entries[0]),
                 &updated,
+                None,
             ),
             &[],
+            None,
         )
         .unwrap();
         let path = Path::new(&saved.restore_path);
         let external = updated.replace("Updated review", "External edit");
         write(path, &external);
         // Fresh snapshot models the UI's rescan; retaining the undo record must not authorize C -> A.
-        let mut undo = request(home, &target, "restore", None, "");
+        let mut undo = request(home, &target, "restore", None, "", None);
         undo.id = Some(saved.restore_path.clone());
         undo.transaction_id = Some(saved.transaction_id.clone());
-        assert!(operate_inner(&db, &store, home, &undo, &[])
+        assert!(operate_inner(&db, &store, home, &undo, &[], None)
             .unwrap_err()
             .contains("修改"));
         assert_eq!(read(path).unwrap(), external);
         fs::remove_file(path).unwrap();
-        undo.baseline = snapshot_inner(home, &target, &[]).unwrap().baseline;
-        assert!(operate_inner(&db, &store, home, &undo, &[]).is_err());
+        undo.baseline = snapshot_inner(home, &target, &[], None).unwrap().baseline;
+        assert!(operate_inner(&db, &store, home, &undo, &[], None).is_err());
         assert!(!path.exists());
         write(path, &updated);
-        undo.baseline = snapshot_inner(home, &target, &[]).unwrap().baseline;
-        operate_inner(&db, &store, home, &undo, &[]).unwrap();
+        undo.baseline = snapshot_inner(home, &target, &[], None).unwrap().baseline;
+        operate_inner(&db, &store, home, &undo, &[], None).unwrap();
         assert_eq!(read(path).unwrap(), original);
         // The existing native-file editor has an explicit current/original diff and keeps its contract.
         write(path, &external);
@@ -589,7 +619,7 @@ fn inline_agent_undo_never_reverts_later_unrelated_config_after_rescan() {
         let path = home.join("opencode.jsonc");
         let original = format!("{{\n// preserved\n\"provider\":{{\"fixture\":{{\"options\":{{\"apiKey\":\"synthetic-only\"}}}}}},\"agent\":{{\"reviewer\":{{\"description\":\"original\",\"disable\":{}}}}}}}", action == "enable");
         write(&path, &original);
-        let snapshot = snapshot_inner(home, &target, &[]).unwrap();
+        let snapshot = snapshot_inner(home, &target, &[], Some("1.18.34")).unwrap();
         let result = operate_inner(
             &db,
             &store,
@@ -600,8 +630,10 @@ fn inline_agent_undo_never_reverts_later_unrelated_config_after_rescan() {
                 action,
                 Some(&snapshot.entries[0]),
                 r#"{"description":"updated","prompt":"review"}"#,
+                Some("1.18.34"),
             ),
             &[],
+            Some("1.18.34"),
         )
         .unwrap();
         let committed = read(&path).unwrap();
@@ -613,19 +645,21 @@ fn inline_agent_undo_never_reverts_later_unrelated_config_after_rescan() {
         )
         .unwrap();
         write(&path, &external);
-        let mut undo = request(home, &target, "restore", None, "");
+        let mut undo = request(home, &target, "restore", None, "", Some("1.18.34"));
         undo.id = Some(result.restore_path.clone());
         undo.transaction_id = Some(result.transaction_id.clone());
         assert!(
-            operate_inner(&db, &store, home, &undo, &[])
+            operate_inner(&db, &store, home, &undo, &[], Some("1.18.34"))
                 .unwrap_err()
                 .contains("修改"),
             "{action}"
         );
         assert_eq!(read(&path).unwrap(), external);
         write(&path, &committed);
-        undo.baseline = snapshot_inner(home, &target, &[]).unwrap().baseline;
-        operate_inner(&db, &store, home, &undo, &[]).unwrap();
+        undo.baseline = snapshot_inner(home, &target, &[], Some("1.18.34"))
+            .unwrap()
+            .baseline;
+        operate_inner(&db, &store, home, &undo, &[], Some("1.18.34")).unwrap();
         assert_eq!(read(&path).unwrap(), original, "{action}");
     }
 }
@@ -664,7 +698,7 @@ fn claude_plugin_namespace_keeps_local_same_names_editable_and_nested_plugins_di
             }],
         });
     }
-    let initial = snapshot_inner(home, &target, &plugins).unwrap();
+    let initial = snapshot_inner(home, &target, &plugins, None).unwrap();
     for name in [
         "my-plugin:reviewer",
         "other-plugin:reviewer",
@@ -680,9 +714,9 @@ fn claude_plugin_namespace_keeps_local_same_names_editable_and_nested_plugins_di
         assert!(!item.detail.contains("同名"));
         assert_eq!(read(Path::new(&item.path)).unwrap(), item.content);
     }
-    let mut create = request(home, &target, "create", None, template);
+    let mut create = request(home, &target, "create", None, template, None);
     create.baseline = initial.baseline;
-    let mut snapshot = operate_inner(&db, &store, home, &create, &plugins)
+    let mut snapshot = operate_inner(&db, &store, home, &create, &plugins, None)
         .unwrap()
         .snapshot;
     for action in ["save", "disable", "enable", "delete"] {
@@ -698,9 +732,10 @@ fn claude_plugin_namespace_keeps_local_same_names_editable_and_nested_plugins_di
             action,
             Some(local),
             &template.replace("Review code", "Local updated"),
+            None,
         );
         req.baseline = snapshot.baseline;
-        snapshot = operate_inner(&db, &store, home, &req, &plugins)
+        snapshot = operate_inner(&db, &store, home, &req, &plugins, None)
             .unwrap()
             .snapshot;
     }
@@ -713,15 +748,15 @@ fn qoder_cn_builtins_are_read_only_and_allow_custom_overrides() {
     let temp = tempfile::tempdir().unwrap(); let home = temp.path();
     let db = Database::open(&home.join("test.db")).unwrap();
     let target = PluginTarget { tool_id: "qoder_cn".into(), scope: Scope::Global, project_path: None, context_id: None };
-    let first = snapshot_inner(home, &target, &[]).unwrap();
+    let first = snapshot_inner(home, &target, &[], None).unwrap();
     assert_eq!(first.entries.len(), 5);
     assert!(first.entries.iter().all(|entry| entry.builtin && entry.read_only && entry.path.is_empty()));
     let builtin = first.entries.iter().find(|entry| entry.name == "Explore").unwrap();
-    assert!(operate_inner(&db, &MemoryStore::default(), home, &request(home, &target, "delete", Some(builtin), ""), &[]).is_err());
+    assert!(operate_inner(&db, &MemoryStore::default(), home, &request(home, &target, "delete", Some(builtin), "", None), &[], None).is_err());
     let content = "---\nname: Explore\ndescription: Custom explorer\n---\nRead the project.";
-    let mut create = request(home, &target, "create", None, content); create.name = "Explore".into();
-    operate_inner(&db, &MemoryStore::default(), home, &create, &[]).unwrap();
-    let after = snapshot_inner(home, &target, &[]).unwrap();
+    let mut create = request(home, &target, "create", None, content, None); create.name = "Explore".into();
+    operate_inner(&db, &MemoryStore::default(), home, &create, &[], None).unwrap();
+    let after = snapshot_inner(home, &target, &[], None).unwrap();
     let custom = after.entries.iter().find(|entry| !entry.builtin && entry.name == "Explore").unwrap();
     assert!(custom.enabled && !custom.read_only);
     assert!(!after.entries.iter().find(|entry| entry.builtin && entry.name == "Explore").unwrap().enabled);
@@ -740,7 +775,7 @@ fn minimax_code_agents_use_directory_agent_md_and_keep_builtins_read_only() {
         project_path: None,
         context_id: None,
     };
-    assert!(snapshot_inner(home, &target, &[]).unwrap_err().contains("数据目录不存在"));
+    assert!(snapshot_inner(home, &target, &[], None).unwrap_err().contains("数据目录不存在"));
     assert!(!data.exists());
     fs::create_dir(&data).unwrap();
     let project = home.join("project");
@@ -751,7 +786,7 @@ fn minimax_code_agents_use_directory_agent_md_and_keep_builtins_read_only() {
         project_path: Some(project.display().to_string()),
         context_id: None,
     };
-    assert!(snapshot_inner(home, &project_target, &[])
+    assert!(snapshot_inner(home, &project_target, &[], None)
         .unwrap_err()
         .contains("项目作用域没有独立目录"));
 
@@ -766,7 +801,7 @@ fn minimax_code_agents_use_directory_agent_md_and_keep_builtins_read_only() {
     write(&data.join("agents/main/agent.md"), "---\nname: main\ndescription: Reserved\n---\nReserved.\n");
     write(&data.join("agents/helper/agent.md"), "---\nname: other\ndescription: Mismatch\n---\nOther.\n");
 
-    let snapshot = snapshot_inner(home, &target, &[]).unwrap();
+    let snapshot = snapshot_inner(home, &target, &[], None).unwrap();
     let names: Vec<_> = snapshot.entries.iter().map(|entry| entry.name.as_str()).collect();
     assert!(names.contains(&"explore"));
     assert!(names.contains(&"mavis"));
@@ -775,7 +810,7 @@ fn minimax_code_agents_use_directory_agent_md_and_keep_builtins_read_only() {
     assert!(!names.iter().any(|name| matches!(*name, "daily" | "memory" | "notes" | "main" | "agent")));
     let explore = snapshot.entries.iter().find(|entry| entry.name == "explore").unwrap();
     assert!(explore.read_only && explore.owner.contains("内置"));
-    assert!(operate_inner(&db, &store, home, &request(home, &target, "delete", Some(explore), ""), &[]).is_err());
+    assert!(operate_inner(&db, &store, home, &request(home, &target, "delete", Some(explore), "", None), &[], None).is_err());
     let mavis = snapshot.entries.iter().find(|entry| entry.name == "mavis").unwrap();
     assert!(mavis.read_only);
     assert!(Path::new(&mavis.path).ends_with(Path::new("agents/.builtin/mavis/agent.md")));
@@ -786,38 +821,351 @@ fn minimax_code_agents_use_directory_agent_md_and_keep_builtins_read_only() {
 
     let template = snapshot.capability.template;
     let second_body = template.replace("name: reviewer", "name: second");
-    let mut uppercase = request(home, &target, "create", None, template);
+    let mut uppercase = request(home, &target, "create", None, template, None);
     uppercase.name = "Reviewer".into();
-    assert!(operate_inner(&db, &store, home, &uppercase, &[]).is_err());
-    let mut permission = request(home, &target, "create", None, "---\nname: reviewer\ndescription: Review\npermissionMode: bypassPermissions\n---\nReview.\n");
+    assert!(operate_inner(&db, &store, home, &uppercase, &[], None).is_err());
+    let mut permission = request(home, &target, "create", None, "---\nname: reviewer\ndescription: Review\npermissionMode: bypassPermissions\n---\nReview.\n", None);
     permission.name = "second".into();
-    assert!(operate_inner(&db, &store, home, &permission, &[])
+    assert!(operate_inner(&db, &store, home, &permission, &[], None)
         .unwrap_err()
         .contains("permissionMode"));
-    let mut mismatch = request(home, &target, "create", None, "---\nname: other\ndescription: Other\n---\nOther.\n");
+    let mut mismatch = request(home, &target, "create", None, "---\nname: other\ndescription: Other\n---\nOther.\n", None);
     mismatch.name = "second".into();
-    assert!(operate_inner(&db, &store, home, &mismatch, &[])
+    assert!(operate_inner(&db, &store, home, &mismatch, &[], None)
         .unwrap_err()
         .contains("name 必须与目录名一致"));
 
-    let mut create = request(home, &target, "create", None, &second_body);
+    let mut create = request(home, &target, "create", None, &second_body, None);
     create.name = "second".into();
-    let created = operate_inner(&db, &store, home, &create, &[]).unwrap();
+    let created = operate_inner(&db, &store, home, &create, &[], None).unwrap();
     let second = created.snapshot.entries.iter().find(|entry| entry.name == "second").unwrap();
     assert!(!second.read_only && second.enabled);
     assert!(Path::new(&second.path).ends_with(Path::new("agents/second/agent.md")));
     assert!(data.join("agents/second/agent.md").is_file());
 
-    let mut disable = request(home, &target, "disable", Some(second), &second.content);
+    let mut disable = request(home, &target, "disable", Some(second), &second.content, None);
     disable.baseline = created.snapshot.baseline;
-    let disabled = operate_inner(&db, &store, home, &disable, &[]).unwrap();
+    let disabled = operate_inner(&db, &store, home, &disable, &[], None).unwrap();
     let parked = disabled.snapshot.entries.iter().find(|entry| entry.name == "second").unwrap();
     assert!(!parked.enabled && !parked.read_only);
     assert!(Path::new(&parked.path).ends_with(Path::new(".cliora-disabled-agents/agents/second/agent.md")));
-    let mut enable = request(home, &target, "enable", Some(parked), &parked.content);
+    let mut enable = request(home, &target, "enable", Some(parked), &parked.content, None);
     enable.baseline = disabled.snapshot.baseline;
-    let enabled = operate_inner(&db, &store, home, &enable, &[]).unwrap();
+    let enabled = operate_inner(&db, &store, home, &enable, &[], None).unwrap();
     let restored = enabled.snapshot.entries.iter().find(|entry| entry.name == "second").unwrap();
     assert!(restored.enabled);
     assert!(Path::new(&restored.path).ends_with(Path::new("agents/second/agent.md")));
+}
+
+#[test]
+fn opencode_v2_inline_agents_use_native_fields_and_model_variant_survives() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let db = Database::open(&home.join("db.sqlite")).unwrap();
+    let store = MemoryStore::default();
+    let target = target("open_code", home);
+    let path = home.join("opencode.json");
+    write(
+        &path,
+        r#"{"agents":{"planner":{"description":"Plan","system":"Plan the work","disabled":false,"model":"anthropic/claude-sonnet-4-5#thinking","permissions":[{"action":"edit","resource":"*","effect":"deny"}]}}}"#,
+    );
+    let snapshot = snapshot_inner(home, &target, &[], Some("2.0.29")).unwrap();
+    assert_eq!(snapshot.entries.len(), 1);
+    assert!(snapshot.entries[0].enabled && !snapshot.entries[0].read_only);
+    let disabled = operate_inner(
+        &db,
+        &store,
+        home,
+        &request(
+            home,
+            &target,
+            "disable",
+            Some(&snapshot.entries[0]),
+            "",
+            Some("2.0.29"),
+        ),
+        &[],
+        Some("2.0.29"),
+    )
+    .unwrap();
+    assert!(!disabled.snapshot.entries[0].enabled);
+    let parsed: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(parsed["agents"]["planner"]["disabled"], true);
+    assert!(parsed["agent"].is_null());
+    assert_eq!(
+        parsed["agents"]["planner"]["model"],
+        "anthropic/claude-sonnet-4-5#thinking"
+    );
+    assert_eq!(parsed["agents"]["planner"]["permissions"][0]["action"], "edit");
+    assert_eq!(parsed["agents"]["planner"]["permissions"][0]["effect"], "deny");
+    let enabled = operate_inner(
+        &db,
+        &store,
+        home,
+        &request(
+            home,
+            &target,
+            "enable",
+            Some(&disabled.snapshot.entries[0]),
+            "",
+            Some("2.0.29"),
+        ),
+        &[],
+        Some("2.0.29"),
+    )
+    .unwrap();
+    assert!(enabled.snapshot.entries[0].enabled);
+    let parsed: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(parsed["agents"]["planner"]["disabled"], false);
+
+    // A 2.x save keeps one native shape: v1 synonym fields are rewritten and
+    // coexisting synonyms are refused with the file untouched.
+    let mut save = request(
+        home,
+        &target,
+        "save",
+        Some(&enabled.snapshot.entries[0]),
+        r#"{"description":"Plan","prompt":"Plan the work","model":"anthropic/claude-sonnet-4-5#thinking"}"#,
+        Some("2.0.29"),
+    );
+    let saved = operate_inner(&db, &store, home, &save, &[], Some("2.0.29")).unwrap();
+    let parsed: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(parsed["agents"]["planner"]["system"], "Plan the work");
+    assert!(parsed["agents"]["planner"]["prompt"].is_null());
+    assert_eq!(
+        parsed["agents"]["planner"]["model"],
+        "anthropic/claude-sonnet-4-5#thinking"
+    );
+    let before = fs::read_to_string(&path).unwrap();
+    save = request(
+        home,
+        &target,
+        "save",
+        Some(&saved.snapshot.entries[0]),
+        r#"{"description":"Plan","prompt":"a","system":"b"}"#,
+        Some("2.0.29"),
+    );
+    assert!(
+        operate_inner(&db, &store, home, &save, &[], Some("2.0.29"))
+            .unwrap_err()
+            .contains("同义并存")
+    );
+    assert_eq!(fs::read_to_string(&path).unwrap(), before);
+    // Native 2.x silently drops an agent whose `permissions` is not the rule
+    // array; validation rejects that shape instead of saving a dead agent.
+    save = request(
+        home,
+        &target,
+        "save",
+        Some(&saved.snapshot.entries[0]),
+        r#"{"description":"Plan","system":"p","permissions":{"edit":"deny"}}"#,
+        Some("2.0.29"),
+    );
+    assert!(
+        operate_inner(&db, &store, home, &save, &[], Some("2.0.29"))
+            .unwrap_err()
+            .contains("规则数组")
+    );
+    assert_eq!(fs::read_to_string(&path).unwrap(), before);
+}
+
+#[test]
+fn opencode_agent_listing_covers_both_shapes_and_synonym_coexistence_refuses_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let db = Database::open(&home.join("db.sqlite")).unwrap();
+    let store = MemoryStore::default();
+    let target = target("open_code", home);
+    let path = home.join("opencode.json");
+    write(
+        &path,
+        r#"{"agent":{"reviewer":{"description":"v1 line","prompt":"x","disable":false}},"agents":{"reviewer":{"description":"v2 line","system":"y","disabled":true},"planner":{"description":"Plan","system":"plan"}}}"#,
+    );
+    // Both native lines are read completely, without duplicates or omissions,
+    // and the synonym conflict keeps every entry from that file read-only.
+    for version in [Some("2.0.29"), Some("1.18.34"), None] {
+        let snapshot = snapshot_inner(home, &target, &[], version).unwrap();
+        assert_eq!(snapshot.entries.len(), 3, "{version:?}");
+        assert!(snapshot.entries.iter().all(|e| e.read_only), "{version:?}");
+        assert!(snapshot
+            .entries
+            .iter()
+            .all(|e| e.detail.contains("同义并存")), "{version:?}");
+        let reviewer_v1 = snapshot
+            .entries
+            .iter()
+            .find(|e| e.id.ends_with("#agent/reviewer"))
+            .unwrap();
+        assert!(reviewer_v1.enabled, "{version:?}");
+        let reviewer_v2 = snapshot
+            .entries
+            .iter()
+            .find(|e| e.id.ends_with("#agents/reviewer"))
+            .unwrap();
+        assert!(!reviewer_v2.enabled, "{version:?}");
+    }
+    let snapshot = snapshot_inner(home, &target, &[], Some("2.0.29")).unwrap();
+    let before = fs::read_to_string(&path).unwrap();
+    assert!(operate_inner(
+        &db,
+        &store,
+        home,
+        &request(
+            home,
+            &target,
+            "disable",
+            Some(snapshot.entries.iter().find(|e| e.name == "planner").unwrap()),
+            "",
+            Some("2.0.29")
+        ),
+        &[],
+        Some("2.0.29")
+    )
+    .is_err());
+    assert_eq!(fs::read_to_string(&path).unwrap(), before);
+
+    // A single-shape file stays writable: entries are not flagged by the
+    // presence of the other line elsewhere in the same document set.
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let single = PluginTarget {
+        tool_id: "open_code".into(),
+        scope: Scope::Project,
+        project_path: Some(home.display().to_string()),
+        context_id: None,
+    };
+    let path = home.join("opencode.json");
+    write(
+        &path,
+        r#"{"agents":{"planner":{"description":"Plan","system":"plan","disabled":false}}}"#,
+    );
+    let snapshot = snapshot_inner(home, &single, &[], Some("2.0.29")).unwrap();
+    assert_eq!(snapshot.entries.len(), 1);
+    assert!(!snapshot.entries[0].read_only);
+}
+
+#[test]
+fn opencode_v2_markdown_switch_uses_disabled_and_each_line_keeps_its_own_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let db = Database::open(&home.join("db.sqlite")).unwrap();
+    let store = MemoryStore::default();
+    let target = target("open_code", home);
+    let path = home.join(".opencode/agents/planner.md");
+    write(
+        &path,
+        "---\ndescription: Plan\ndisabled: true # keep\ncustom: retained\n---\nPlan.\n",
+    );
+    let snapshot = snapshot_inner(home, &target, &[], Some("2.0.29")).unwrap();
+    assert!(!snapshot.entries[0].enabled);
+    let result = operate_inner(
+        &db,
+        &store,
+        home,
+        &request(
+            home,
+            &target,
+            "enable",
+            Some(&snapshot.entries[0]),
+            "",
+            Some("2.0.29"),
+        ),
+        &[],
+        Some("2.0.29"),
+    )
+    .unwrap();
+    assert!(result.snapshot.entries[0].enabled);
+    let text = read(&path).unwrap();
+    assert!(text.contains("disabled: false # keep"));
+    assert!(text.contains("custom: retained"));
+    // Verified on native 2.0.29: markdown honors both switch keys, so a v1
+    // `disable: true` file stays disabled on the 2.x line too; the 1.x line
+    // only knows its own key and ignores `disabled`.
+    write(
+        &home.join(".opencode/agents/legacy.md"),
+        "---\ndescription: Legacy\ndisable: true\n---\nLegacy.\n",
+    );
+    write(
+        &home.join(".opencode/agents/future.md"),
+        "---\ndescription: Future\ndisabled: true\n---\nFuture.\n",
+    );
+    let snapshot = snapshot_inner(home, &target, &[], Some("2.0.29")).unwrap();
+    assert!(!snapshot
+        .entries
+        .iter()
+        .find(|e| e.name == "legacy")
+        .unwrap()
+        .enabled);
+    assert!(!snapshot
+        .entries
+        .iter()
+        .find(|e| e.name == "future")
+        .unwrap()
+        .enabled);
+    let snapshot = snapshot_inner(home, &target, &[], Some("1.18.34")).unwrap();
+    assert!(!snapshot
+        .entries
+        .iter()
+        .find(|e| e.name == "legacy")
+        .unwrap()
+        .enabled);
+    assert!(snapshot
+        .entries
+        .iter()
+        .find(|e| e.name == "future")
+        .unwrap()
+        .enabled);
+}
+
+#[test]
+fn opencode_agent_config_writes_refused_until_install_version_resolves() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let db = Database::open(&home.join("db.sqlite")).unwrap();
+    let store = MemoryStore::default();
+    let target = target("open_code", home);
+    let path = home.join("opencode.json");
+    write(
+        &path,
+        r#"{"agent":{"reviewer":{"description":"review","prompt":"do it"}}}"#,
+    );
+    let snapshot = snapshot_inner(home, &target, &[], None).unwrap();
+    assert_eq!(snapshot.entries.len(), 1);
+    assert!(!snapshot.entries[0].read_only);
+    let before = fs::read_to_string(&path).unwrap();
+    assert!(operate_inner(
+        &db,
+        &store,
+        home,
+        &request(home, &target, "disable", Some(&snapshot.entries[0]), "", None),
+        &[],
+        None
+    )
+    .unwrap_err()
+    .contains("未验证"));
+    assert_eq!(fs::read_to_string(&path).unwrap(), before);
+
+    // End to end: the shared probe selects the install line and the write
+    // follows it without any version being passed by the caller.
+    let registry = Registry::builtins().with_fixture_installation("open_code", "2.0.29");
+    write(
+        &path,
+        r#"{"agents":{"planner":{"description":"Plan","system":"plan","disabled":false}}}"#,
+    );
+    let mut req = request(
+        home,
+        &target,
+        "disable",
+        Some(&scan_registered(&registry, &db, home, &target).unwrap().entries[0]),
+        "",
+        Some("2.0.29"),
+    );
+    req.baseline = scan_registered(&registry, &db, home, &target)
+        .unwrap()
+        .baseline;
+    let result = operate_registered(&registry, &db, &store, home, &req).unwrap();
+    assert!(!result.snapshot.entries[0].enabled);
+    let parsed: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(parsed["agents"]["planner"]["disabled"], true);
+    assert!(parsed["agent"].is_null());
 }
