@@ -247,8 +247,24 @@ pub fn read_auth_file(context: &NativeContext) -> Result<Value, String> {
     serde_json::from_slice(&bytes).map_err(|_| "原生认证文件格式不兼容".into())
 }
 
+/// The identified install version of a resolved executable, when probeable.
+/// The shared layer owns probing; adapters only receive the version.
+pub fn installation_version(tool: &str, executable: &Path) -> Option<String> {
+    if executable.as_os_str().is_empty() {
+        return None;
+    }
+    adapter::probe_registered_path(&Registry::builtins(), tool, executable)
+        .ok()
+        .and_then(|installation| installation.version)
+}
+
 pub fn observe(executable: &Path, context: &NativeContext) -> Result<Observation, String> {
-    crate::adapters::accounts::get(&context.tool_id)?.observe(executable, context)
+    let version = installation_version(&context.tool_id, executable);
+    crate::adapters::accounts::get(&context.tool_id)?.observe_for_version(
+        executable,
+        context,
+        version.as_deref(),
+    )
 }
 
 pub fn login_args(tool: &str, method: &str) -> Result<Vec<String>, String> {
@@ -258,6 +274,20 @@ pub fn login_args(tool: &str, method: &str) -> Result<Vec<String>, String> {
         return Err(cap.reason.into());
     }
     adapter.login_args(method)
+}
+
+/// Login arguments for the identified install line of the resolved executable.
+pub fn login_args_for_version(
+    tool: &str,
+    version: Option<&str>,
+    method: &str,
+) -> Result<Vec<String>, String> {
+    let adapter = crate::adapters::accounts::get(tool)?;
+    let cap = adapter.capability();
+    if !cap.managed_login || !cap.methods.contains(&method) {
+        return Err(cap.reason.into());
+    }
+    adapter.login_args_for_version(version, method)
 }
 
 pub fn logout_args(tool: &str) -> Vec<String> {
@@ -290,7 +320,12 @@ pub fn login_url(db: &Database, id: &str, attempt: &str) -> Result<String, Strin
 }
 
 pub fn perform_logout(executable: &Path, context: &NativeContext) -> Result<Observation, String> {
-    crate::adapters::accounts::get(&context.tool_id)?.logout(executable, context)?;
+    let version = installation_version(&context.tool_id, executable);
+    crate::adapters::accounts::get(&context.tool_id)?.logout_for_version(
+        executable,
+        context,
+        version.as_deref(),
+    )?;
     let observation = observe(executable, context)?;
     if observation.state != AccountState::SignedOut {
         return Err("原生退出后仍检测到认证材料，请重新检查状态".into());

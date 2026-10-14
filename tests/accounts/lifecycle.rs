@@ -384,8 +384,11 @@ fn contexts_match_native_paths_and_never_rewrite_generic_home() {
             .any(|(key, value)| key == "OPENAI_API_KEY" && value.is_none()));
         if tool == "open_code" {
             assert_eq!(
-                context.auth_files[0],
-                context.root.join("data/opencode/auth.json")
+                context.auth_files,
+                vec![
+                    context.root.join("data/opencode/auth.json"),
+                    context.root.join("data/opencode/opencode.db"),
+                ]
             );
         }
     }
@@ -399,6 +402,62 @@ fn unsupported_methods_and_grok_do_not_create_pseudo_accounts() {
     assert_eq!(native::login_args("open_code", "browser").unwrap(), ["auth", "login", "--pure"]);
     assert!(native::login_args("open_code", "device").is_err());
     assert!(list(&db).unwrap().is_empty());
+}
+
+#[test]
+fn opencode_login_and_logout_arguments_follow_the_installed_line() {
+    // Verified 2.x surface (real @opencode/cli 2.0.29): the target and method
+    // pin the OpenAI ChatGPT OAuth flow and --standalone keeps the isolated
+    // context off the shared background-service port.
+    let v2 = ["auth", "login", "openai", "--method", "chatgpt-browser", "--standalone"];
+    assert_eq!(
+        native::login_args_for_version("open_code", Some("2.0.29"), "browser").unwrap(),
+        v2
+    );
+    assert_eq!(
+        native::login_args_for_version("open_code", Some("v2.1.0"), "browser").unwrap(),
+        v2
+    );
+    // The 1.x menu flow and an unidentified version keep the current args.
+    assert_eq!(
+        native::login_args_for_version("open_code", Some("1.19.0"), "browser").unwrap(),
+        ["auth", "login", "--pure"]
+    );
+    assert_eq!(
+        native::login_args_for_version("open_code", None, "browser").unwrap(),
+        ["auth", "login", "--pure"]
+    );
+    assert!(native::login_args_for_version("open_code", Some("2.0.29"), "device").is_err());
+    assert_eq!(
+        crate::adapters::accounts::get("open_code")
+            .unwrap()
+            .logout_args(),
+        ["auth", "logout", "openai", "--pure"]
+    );
+}
+
+#[test]
+fn opencode_v2_logout_without_saved_openai_credentials_never_spawns_native_commands() {
+    use crate::adapters::accounts::AccountAdapter;
+    let temp = tempfile::tempdir().unwrap();
+    let adapter = &crate::adapters::OPENCODE;
+    let context = adapter
+        .native_context(temp.path(), &std::collections::BTreeMap::new())
+        .unwrap()
+        .unwrap();
+    std::fs::create_dir_all(&context.root).unwrap();
+    // A store without OpenAI rows is already signed out; no native command is
+    // needed and the missing stores keep the shared SignedOut observation.
+    adapter
+        .logout_for_version(Path::new("definitely-not-installed"), &context, Some("2.0.29"))
+        .unwrap();
+    assert_eq!(
+        adapter
+            .observe_for_version(Path::new(""), &context, Some("2.0.29"))
+            .unwrap()
+            .state,
+        AccountState::SignedOut
+    );
 }
 
 #[test]
@@ -575,6 +634,7 @@ fn every_auth_family_contributes_conflicting_environment_removal() {
         "CLAUDE_CONFIG_DIR",
         "PI_CODING_AGENT_DIR",
         "OPENCODE_AUTH_CONTENT",
+        "OPENCODE_DB",
         "XAI_API_KEY",
         "GROK_HOME",
     ] {
