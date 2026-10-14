@@ -1,31 +1,58 @@
 //! Tested releases are evidence, not exact version locks. Native responses are still validated.
+
+/// Accepted native contract families. A release is accepted when it is not
+/// explicitly excluded and at least one verified family matches, so several
+/// verified major lines can coexist without pinning patch/minor releases.
 #[derive(Clone, Debug)]
 pub struct VersionPolicy {
-    pub requirement: String,
+    pub requirements: Vec<String>,
     pub excluded: &'static [&'static str],
 }
 impl VersionPolicy {
     /// Opt into a native contract family. For 0.x this is an empirical adapter
     /// policy, not a claim that SemVer guarantees pre-1.0 compatibility.
     pub fn same_major(tested: &str) -> Self {
-        let version = semver::Version::parse(tested).expect("adapter has a valid tested version");
+        Self::same_majors(&[tested])
+    }
+    /// Opt into several independently verified major contract families. Each
+    /// tested release only pins its own major line, so patch/minor updates on
+    /// any accepted line stay accepted.
+    pub fn same_majors(tested: &[&str]) -> Self {
         Self {
-            requirement: format!(">={}.0.0, <{}.0.0", version.major, version.major + 1),
+            requirements: tested
+                .iter()
+                .map(|tested| {
+                    let version =
+                        semver::Version::parse(tested).expect("adapter has a valid tested version");
+                    format!(">={}.0.0, <{}.0.0", version.major, version.major + 1)
+                })
+                .collect(),
             excluded: &[],
         }
+    }
+    /// User-facing union of the accepted intervals, e.g.
+    /// `">=1.0.0, <2.0.0 或 >=2.0.0, <3.0.0"`.
+    pub fn accepted_text(&self) -> String {
+        self.requirements.join(" 或 ")
     }
     pub fn accepts(&self, installed: &str) -> bool {
         let Ok(version) = semver::Version::parse(installed.trim().trim_start_matches('v')) else {
             return false;
         };
-        !self.excluded.iter().any(|excluded| {
+        if self.excluded.iter().any(|excluded| {
             semver::Version::parse(excluded).is_ok_and(|excluded| {
                 excluded.major == version.major
                     && excluded.minor == version.minor
                     && excluded.patch == version.patch
                     && excluded.pre == version.pre
             })
-        }) && semver::VersionReq::parse(&self.requirement).is_ok_and(|r| r.matches(&version))
+        }) {
+            return false;
+        }
+        self.requirements.iter().any(|requirement| {
+            semver::VersionReq::parse(requirement)
+                .is_ok_and(|requirement| requirement.matches(&version))
+        })
     }
 }
 #[cfg(test)]
@@ -50,9 +77,33 @@ mod tests {
         }
     }
     #[test]
+    fn several_verified_major_families_are_accepted_together() {
+        let policy = VersionPolicy::same_majors(&["1.18.34", "2.0.29"]);
+        for candidate in [
+            "1.0.0",
+            "1.18.34",
+            "1.19.0",
+            "1.99.99",
+            "2.0.0",
+            "2.0.29",
+            "2.5.0",
+            "v2.5.0",
+            "2.0.29+build.7",
+        ] {
+            assert!(policy.accepts(candidate), "{candidate}");
+        }
+        for candidate in ["0.99.9", "3.0.0", "2.0.29-beta.1", "unknown", "2.0"] {
+            assert!(!policy.accepts(candidate), "{candidate}");
+        }
+        assert_eq!(
+            policy.accepted_text(),
+            ">=1.0.0, <2.0.0 或 >=2.0.0, <3.0.0"
+        );
+    }
+    #[test]
     fn explicit_breakage_and_malformed_versions_remain_blocked() {
         let p = VersionPolicy {
-            requirement: ">=2.0.0, <3.0.0".into(),
+            requirements: vec![">=2.0.0, <3.0.0".into()],
             excluded: &["2.2.0"],
         };
         assert!(!p.accepts("2.2.0"));
@@ -61,5 +112,12 @@ mod tests {
         assert!(!p.accepts("2.2"));
         assert!(!p.accepts("unknown"));
         assert!(p.accepts("2.2.1"));
+        let multi = VersionPolicy {
+            requirements: VersionPolicy::same_majors(&["1.18.34", "2.0.29"]).requirements,
+            excluded: &["2.0.29"],
+        };
+        assert!(!multi.accepts("2.0.29"));
+        assert!(multi.accepts("1.19.0"));
+        assert!(multi.accepts("2.0.30"));
     }
 }

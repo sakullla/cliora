@@ -51,6 +51,16 @@ fn write(path: &Path, text: &str) {
 }
 
 #[test]
+fn opencode_agent_capability_reference_labels_both_verified_lines() {
+    let capability = contract::capability("open_code").unwrap();
+    assert!(
+        capability.version.contains("1.18.34") && capability.version.contains("2.0.29"),
+        "{}",
+        capability.version
+    );
+}
+
+#[test]
 fn native_formats_reject_invalid_fields_preserve_unknown_and_keep_pi_explicit() {
     for tool in ["codex", "claude_code", "grok", "open_code"] {
         let cap = contract::capability(tool).unwrap();

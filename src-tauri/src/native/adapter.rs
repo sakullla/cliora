@@ -980,6 +980,28 @@ mod tests {
     }
 
     #[test]
+    fn opencode_both_major_lines_resolve_from_native_version_output() {
+        // The 2.x line was probed natively (`opencode v2.0.29` from @opencode/cli);
+        // the 1.x line keeps printing a bare version.
+        assert_eq!(
+            version_from_output(&adapters::OPENCODE, Path::new("opencode.cmd"), "opencode v2.0.29\n"),
+            Some("2.0.29".into())
+        );
+        assert_eq!(
+            version_from_output(&adapters::OPENCODE, Path::new("opencode.exe"), "2.0.29"),
+            Some("2.0.29".into())
+        );
+        assert_eq!(
+            version_from_output(&adapters::OPENCODE, Path::new("opencode.ps1"), "1.19.0"),
+            Some("1.19.0".into())
+        );
+        assert_eq!(
+            version_from_output(&adapters::OPENCODE, Path::new("opencode.ps1"), "claude 1.19.0"),
+            None
+        );
+    }
+
+    #[test]
     #[cfg(windows)]
     fn version_reads_coalesce_and_recheck_replaced_shims() {
         let temp = tempfile::tempdir().unwrap();

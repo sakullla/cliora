@@ -138,7 +138,7 @@ fn executable(db: &Database, home: &Path, target: &PluginTarget, fresh: bool) ->
         return Err(format!(
             "插件参考核验版本 {}；当前 {version} 不满足原生契约范围 {}，请使用兼容版本或更新适配器",
             adapter.capability().version,
-            policy.requirement
+            policy.accepted_text()
         ));
     }
     Ok(selected.into())

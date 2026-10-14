@@ -65,9 +65,12 @@ pub fn executable(db: &Database, home: &Path, tool: &str) -> Result<PathBuf, Str
         .ok_or("无法核验 CLI 版本")?;
     if !policy.accepts(version) {
         return Err(format!(
-            "当前账号适配参考 {} {}；安装版本 {} 不满足原生契约范围",
-            tool, expected.version, version
-        ) + &format!("（{}）；请使用兼容版本或更新适配器", policy.requirement));
+            "当前账号适配参考 {} {}；安装版本 {} 不满足原生契约范围（{}）；请使用兼容版本或更新适配器",
+            tool,
+            expected.version,
+            version,
+            policy.accepted_text()
+        ));
     }
     Ok(PathBuf::from(selected))
 }

@@ -25,7 +25,7 @@ pub struct Pi;
 
 /// 0.99.2 and 1.0.0 share the verified auth/package/session protocols.
 pub(crate) fn version_policy() -> super::version::VersionPolicy {
-    super::version::VersionPolicy { requirement: ">=0.99.2, <2.0.0".into(), excluded: &[] }
+    super::version::VersionPolicy { requirements: vec![">=0.99.2, <2.0.0".into()], excluded: &[] }
 }
 
 fn apply_model_record_edits(models: &mut [Value], records: &[ModelRecord]) {

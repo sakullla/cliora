@@ -91,7 +91,7 @@ impl AccountAdapter for OpenCode {
         ]
     }
     fn capability(&self) -> AccountCapability {
-        let (provider, version, supported, reason, identity) = ("openai", "1.18.34", true,
+        let (provider, version, supported, reason, identity) = ("openai", "1.18.34 / 2.0.29", true,
             "仅内置 OpenAI ChatGPT OAuth：同时隔离 XDG data/config/state/cache；原生 auth.json 的 accountId 核验本地身份。其他提供方未核验。", "OpenCode native OpenAI OAuth accountId");
         AccountCapability {
             browser_link: false,
@@ -111,6 +111,10 @@ impl AccountAdapter for OpenCode {
             refresh_owner: "native_cli",
             acceptance: "源码/协议与隔离合成回归；真实授权账号及跨平台尚未验收",
         }
+    }
+    fn version_policy(&self) -> crate::adapters::version::VersionPolicy {
+        // Two verified install lines; the shared account gate accepts either family.
+        crate::adapters::version::VersionPolicy::same_majors(&["1.18.34", "2.0.29"])
     }
     fn context(&self, root: PathBuf, id: String) -> Result<NativeContext, String> {
         let mut environment = BTreeMap::new();
