@@ -1,4 +1,4 @@
-use crate::adapters::plugins::declaration_source;
+use crate::adapters::plugins::{declaration_source, PluginAdapter};
 use crate::adapters::{self, Registry};
 // Plugins are native packages, never flattened into the Skill library.
 use crate::{
@@ -94,9 +94,8 @@ pub(crate) fn project(target: &PluginTarget) -> Result<Option<PathBuf>, String> 
     }
     Ok(Some(path))
 }
-fn config(home: &Path, target: &PluginTarget) -> Result<(PathBuf, FileKind), String> {
-    if let Some(location) = adapters::plugins::get(&target.tool_id)?.config_location(home, target)? { return Ok(location); }
-    let registry = Registry::builtins();
+fn config(registry: &Registry, home: &Path, target: &PluginTarget) -> Result<(PathBuf, FileKind), String> {
+    if let Some(location) = adapters::plugins::get_registered(registry, &target.tool_id)?.config_location(home, target)? { return Ok(location); }
     let cli = registry.get(&target.tool_id).ok_or("未知 CLI")?;
     let project = project(target)?;
     let file = cli
@@ -106,7 +105,20 @@ fn config(home: &Path, target: &PluginTarget) -> Result<(PathBuf, FileKind), Str
         .ok_or("没有此作用域的插件配置")?;
     Ok((PathBuf::from(&file.path), FileKind::for_name(&file.path)?))
 }
-fn executable(db: &Database, home: &Path, target: &PluginTarget, fresh: bool) -> Result<PathBuf, String> {
+/// Installed line for adapters whose declaration format follows the native
+/// major version. Other adapters keep their static field without a probe.
+/// The lookup uses the shared cached probe, so reads and a later write on the
+/// same operation resolve the same evidence.
+fn declaration_version(
+    registry: &Registry,
+    db: &Database,
+    home: &Path,
+    target: &PluginTarget,
+) -> Result<Option<String>, String> {
+    let adapter = adapters::plugins::get_registered(registry, &target.tool_id)?;
+    if !adapter.config_requires_version() {
+        return Ok(None);
+    }
     let custom: Option<String> = db.with_connection(|conn| {
         conn.query_row(
             "SELECT path FROM installation_choices WHERE tool=?1",
@@ -117,7 +129,55 @@ fn executable(db: &Database, home: &Path, target: &PluginTarget, fresh: bool) ->
         .map_err(|_| "无法读取 CLI 路径".into())
     })?;
     let probe = adapter::probe_registered_cached(
-        &Registry::builtins(),
+        registry,
+        &target.tool_id,
+        custom.as_deref().map(Path::new),
+        home,
+        project(target)?.as_deref(),
+        target.scope,
+        false,
+    )?;
+    Ok(probe
+        .selected_path
+        .as_ref()
+        .and_then(|selected| probe.installations.iter().find(|item| &item.path == selected))
+        .and_then(|item| item.version.clone()))
+}
+/// Validate the install line before any declaration write. A version-tracked
+/// adapter must resolve to an accepted family with a verified field; adapters
+/// whose format is fixed keep today's behavior.
+fn declaration_field(
+    adapter: &dyn PluginAdapter,
+    version: Option<&str>,
+) -> Result<Option<&'static str>, String> {
+    if !adapter.config_requires_version() {
+        return Ok(adapter.config_field());
+    }
+    let version = version.ok_or("未识别 CLI 版本，插件声明形态尚未验证；请先确认安装")?;
+    if !adapter.version_policy().accepts(version) {
+        return Err(format!(
+            "插件参考核验版本 {}；当前 {version} 不满足原生契约范围 {}，请使用兼容版本或更新适配器",
+            adapter.capability().version,
+            adapter.version_policy().accepted_text()
+        ));
+    }
+    adapter
+        .config_field_for_version(Some(version))
+        .map(Some)
+        .ok_or_else(|| format!("{version} 的插件声明形态尚未验证；未执行写入"))
+}
+fn executable(registry: &Registry, db: &Database, home: &Path, target: &PluginTarget, fresh: bool) -> Result<PathBuf, String> {
+    let custom: Option<String> = db.with_connection(|conn| {
+        conn.query_row(
+            "SELECT path FROM installation_choices WHERE tool=?1",
+            [&target.tool_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|_| "无法读取 CLI 路径".into())
+    })?;
+    let probe = adapter::probe_registered_cached(
+        registry,
         &target.tool_id,
         custom.as_deref().map(Path::new),
         home,
@@ -132,7 +192,7 @@ fn executable(db: &Database, home: &Path, target: &PluginTarget, fresh: bool) ->
         .find(|item| item.path == selected)
         .and_then(|item| item.version.as_deref())
         .ok_or("未识别 CLI 版本")?;
-    let adapter = adapters::plugins::get(&target.tool_id)?;
+    let adapter = adapters::plugins::get_registered(registry, &target.tool_id)?;
     let policy = adapter.version_policy();
     if !policy.accepts(version) {
         return Err(format!(
@@ -144,12 +204,14 @@ fn executable(db: &Database, home: &Path, target: &PluginTarget, fresh: bool) ->
     Ok(selected.into())
 }
 fn run(
+    registry: &Registry,
     executable: &Path,
     home: &Path,
     target: &PluginTarget,
     args: &[String],
 ) -> Result<String, String> {
-    let (mut path, prefix) = adapters::plugins::get(&target.tool_id)?.command_program(executable)?;
+    let (mut path, prefix) =
+        adapters::plugins::get_registered(registry, &target.tool_id)?.command_program(executable)?;
     #[cfg(windows)]
     if path
         .extension()
@@ -241,13 +303,6 @@ fn run(
     }
 }
 
-fn parse_list(
-    tool: &str,
-    value: &Value,
-    target: &PluginTarget,
-) -> Result<Vec<PluginEntry>, String> {
-    parse_list_registered(&Registry::builtins(), tool, value, target)
-}
 pub(crate) fn parse_list_registered(
     registry: &Registry,
     tool: &str,
@@ -337,23 +392,28 @@ fn reconcile_disabled(
     Ok(saved)
 }
 fn config_entries(
+    registry: &Registry,
     db: &Database,
     home: &Path,
     target: &PluginTarget,
 ) -> Result<Vec<PluginEntry>, String> {
-    config_entries_with_recovery(db, home, target, true)
+    config_entries_with_recovery(registry, db, home, target, true)
 }
 fn config_entries_with_recovery(
+    registry: &Registry,
     db: &Database,
     home: &Path,
     target: &PluginTarget,
     reconcile: bool,
 ) -> Result<Vec<PluginEntry>, String> {
-    let (path, kind) = config(home, target)?;
+    let (path, kind) = config(registry, home, target)?;
     let baseline = transaction::read_native(&path)?;
     let parsed = format::parse(kind, &baseline)?;
-    let adapter = adapters::plugins::get(&target.tool_id)?;
-    let field = adapter.config_field().ok_or("插件没有配置声明格式")?;
+    let adapter = adapters::plugins::get_registered(registry, &target.tool_id)?;
+    let version = declaration_version(registry, db, home, target)?;
+    let field = adapter
+        .config_field_for_document(&parsed, version.as_deref())
+        .ok_or("插件没有配置声明格式")?;
     let empty = vec![];
     let entries = match parsed.get(field) {
         Some(value) => value.as_array().ok_or("插件配置不是数组")?,
@@ -524,37 +584,39 @@ fn digest_path(path: &Path, output: &mut String, budget: &mut (usize, u64)) -> R
 }
 
 fn snapshot_inner(
+    registry: &Registry,
     db: &Database,
     home: &Path,
     target: &PluginTarget,
     exe: Option<&Path>,
 ) -> Result<PluginSnapshot, String> {
-    snapshot_with_packages(db, home, target, exe, true)
+    snapshot_with_packages(registry, db, home, target, exe, true)
 }
 fn snapshot_with_packages(
+    registry: &Registry,
     db: &Database,
     home: &Path,
     target: &PluginTarget,
     exe: Option<&Path>,
     verify_packages: bool,
 ) -> Result<PluginSnapshot, String> {
-    let capability = adapters::plugins::capability(&target.tool_id)?;
+    let adapter = adapters::plugins::get_registered(registry, &target.tool_id)?;
+    let capability = adapter.capability();
     if target.scope == Scope::Project && !capability.project {
         return Err(capability.detail.into());
     }
-    let adapter = adapters::plugins::get(&target.tool_id)?;
     let mut entries = if adapter.discovery_only() {
-        let (path, _) = config(home, target)?;
+        let (path, _) = config(registry, home, target)?;
         adapter.discover(home, target, &path)?
     } else if adapter.config_field().is_some() {
-        config_entries(db, home, target)?
+        config_entries(registry, db, home, target)?
     } else {
-        let output = run(exe.ok_or("未找到 CLI 安装")?, home, target, &adapter.list_command_args())?;
+        let output = run(registry, exe.ok_or("未找到 CLI 安装")?, home, target, &adapter.list_command_args())?;
         let value: Value = serde_json::from_str(&output).map_err(|_| "原生插件输出格式不兼容")?;
-        parse_list(&target.tool_id, &value, target)?
+        parse_list_registered(registry, &target.tool_id, &value, target)?
     };
     adapter.supplement(home, target, &mut entries)?;
-    let (path, _) = config(home, target)?;
+    let (path, _) = config(registry, home, target)?;
     let mut basis = serde_json::to_string(&(target, &entries)).map_err(|_| "无法序列化插件")?;
     basis.push_str(&transaction::read_native(&path)?);
     for file in adapter.snapshot_files(home, target) {
@@ -594,24 +656,27 @@ fn snapshot_with_packages(
     Ok(PluginSnapshot { target: target.clone(), capability, entries, baseline: transaction::fingerprint(basis.as_bytes()), detail: "列表与本机文件快照；原生会话是否已加载无法从静态列表确认。配置事务可从配置页的原生备份恢复。".into() })
 }
 pub fn scan(db: &Database, home: &Path, target: &PluginTarget) -> Result<PluginSnapshot, String> {
-    scan_with_packages(db, home, target, true)
+    scan_registered(&Registry::builtins(), db, home, target, true)
 }
 /// Inventory can be shown while a native process builds the authoritative list.
 /// This snapshot has no operation baseline and grants no management actions.
 pub fn preview(db: &Database, home: &Path, target: &PluginTarget) -> Result<Option<PluginSnapshot>, String> {
+    preview_registered(&Registry::builtins(), db, home, target)
+}
+fn preview_registered(registry: &Registry, db: &Database, home: &Path, target: &PluginTarget) -> Result<Option<PluginSnapshot>, String> {
     let project = project(target)?;
     let _context = selection::enter_bound(db, home, &target.tool_id, target.scope, project.as_deref())?;
     selection::validate_expected(&target.tool_id, target.context_id.as_deref())?;
-    let adapter = adapters::plugins::get(&target.tool_id)?;
+    let adapter = adapters::plugins::get_registered(registry, &target.tool_id)?;
     let mut capability = adapter.capability();
     if target.scope == Scope::Project && !capability.project { return Ok(None); }
     let mut entries = if let Some(entries) = adapter.preview(home, target)? {
         entries
     } else if adapter.discovery_only() {
-        let (path, _) = config(home, target)?;
+        let (path, _) = config(registry, home, target)?;
         adapter.discover(home, target, &path)?
     } else if adapter.config_field().is_some() {
-        config_entries_with_recovery(db, home, target, false)?
+        config_entries_with_recovery(registry, db, home, target, false)?
     } else {
         return Ok(None);
     };
@@ -622,37 +687,42 @@ pub fn preview(db: &Database, home: &Path, target: &PluginTarget) -> Result<Opti
 /// Agent definitions have their own content baseline; they never mutate plugin
 /// packages, so enumerating their resources needs no whole-package digest.
 pub(super) fn scan_resources(db: &Database, home: &Path, target: &PluginTarget) -> Result<PluginSnapshot, String> {
-    scan_with_packages(db, home, target, false)
+    scan_registered(&Registry::builtins(), db, home, target, false)
 }
-fn scan_with_packages(db: &Database, home: &Path, target: &PluginTarget, verify_packages: bool) -> Result<PluginSnapshot, String> {
+fn scan_registered(registry: &Registry, db: &Database, home: &Path, target: &PluginTarget, verify_packages: bool) -> Result<PluginSnapshot, String> {
     let project = project(target)?;
     let _context =
         selection::enter_bound(db, home, &target.tool_id, target.scope, project.as_deref())?;
     selection::validate_expected(&target.tool_id, target.context_id.as_deref())?;
     // File-backed discovery validates native documents directly. It does not
     // require a runnable CLI (desktop apps have no version command).
-    let adapter = adapters::plugins::get(&target.tool_id)?;
+    let adapter = adapters::plugins::get_registered(registry, &target.tool_id)?;
     let exe = if adapter.discovery_only() || adapter.config_field().is_some() {
         None
     } else {
-        Some(executable(db, home, target, false)?)
+        Some(executable(registry, db, home, target, false)?)
     };
-    snapshot_with_packages(db, home, target, exe.as_deref(), verify_packages)
+    snapshot_with_packages(registry, db, home, target, exe.as_deref(), verify_packages)
 }
 
 fn mutate_config(
+    registry: &Registry,
     db: &Database,
     credentials: &dyn CredentialStore,
     home: &Path,
     request: &PluginRequest,
 ) -> Result<String, String> {
     let target = &request.target;
-    let (path, kind) = config(home, target)?;
+    let adapter = adapters::plugins::get_registered(registry, &target.tool_id)?;
+    let version = declaration_version(registry, db, home, target)?;
+    // Refuse an unverified or unsupported install line before touching the file.
+    declaration_field(adapter, version.as_deref())?;
+    let (path, kind) = config(registry, home, target)?;
     let baseline = transaction::read_native(&path)?;
     let parsed = format::parse(kind, &baseline)?;
     let mut saved = disabled(db, target)?;
     let changes =
-        adapters::plugins::get(&target.tool_id)?.config_changes(&parsed, &mut saved, request)?;
+        adapter.config_changes_for_version(&parsed, &mut saved, request, version.as_deref())?;
     let key = disabled_key(target);
     let value = serde_json::to_string(&saved).map_err(|_| "无法保存禁用记录")?;
     transaction::watch_file_metadata(db, &path, &key)?;
@@ -682,6 +752,15 @@ pub fn operate(
     home: &Path,
     request: &PluginRequest,
 ) -> Result<PluginResult, String> {
+    operate_registered(&Registry::builtins(), db, credentials, home, request)
+}
+fn operate_registered(
+    registry: &Registry,
+    db: &Database,
+    credentials: &dyn CredentialStore,
+    home: &Path,
+    request: &PluginRequest,
+) -> Result<PluginResult, String> {
     if request.baseline.is_empty() { return Err("插件状态尚未完成核对，请等待扫描完成后操作".into()); }
     let _operation = OPERATIONS
         .try_lock()
@@ -691,12 +770,16 @@ pub fn operate(
     let _context =
         selection::enter_bound(db, home, &target.tool_id, target.scope, project.as_deref())?;
     selection::validate_expected(&target.tool_id, target.context_id.as_deref())?;
-    let adapter = adapters::plugins::get(&target.tool_id)?;
+    let adapter = adapters::plugins::get_registered(registry, &target.tool_id)?;
+    let version = declaration_version(registry, db, home, target)?;
     let configured_operation = adapter.config_only(&request.action, None);
     let local = adapter.local_mutation(&request.action);
     let needs_executable = !local && (!configured_operation || (!adapter.discovery_only() && adapter.config_field().is_none()));
-    let exe = if needs_executable { Some(executable(db, home, target, true)?) } else { None };
-    let before = snapshot_inner(db, home, target, exe.as_deref())?;
+    let exe = if needs_executable { Some(executable(registry, db, home, target, true)?) } else { None };
+    // Version-tracked declarations refuse an unverified install line before a
+    // baseline is built, so a future/unknown form never reaches a write.
+    if configured_operation { declaration_field(adapter, version.as_deref())?; }
+    let before = snapshot_inner(registry, db, home, target, exe.as_deref())?;
     if before.baseline != request.baseline {
         return Err("插件配置或目录被外部修改，请重新扫描后重试；没有执行操作".into());
     }
@@ -741,14 +824,14 @@ pub fn operate(
     let config_only = adapter.config_only(&request.action, entry);
     adapter.validate_operation(request, entry)?;
     let result = if config_only {
-        mutate_config(db, credentials, home, request).map(Some)
+        mutate_config(registry, db, credentials, home, request).map(Some)
     } else if local {
         let changes = adapter.plan_local_mutation(home, request, entry)?;
         let outcome = transaction::apply_bytes(db, credentials, &changes, |_| Ok(()))?;
         adapter.cleanup_local_mutation(home, request)?;
         Ok(Some(outcome.transaction_id))
     } else {
-        let (path, _) = config(home, target)?;
+        let (path, _) = config(registry, home, target)?;
         let source = adapter.operation_source(request, &path)?;
         let args = adapters::plugins::command_args(
             &target.tool_id,
@@ -756,10 +839,10 @@ pub fn operate(
             &source,
             target.scope == Scope::Project,
         )?;
-        let command_exe = match &exe { Some(exe) => exe.clone(), None => executable(db, home, target, true)? };
-        run(&command_exe, home, target, &args).map(|_| None)
+        let command_exe = match &exe { Some(exe) => exe.clone(), None => executable(registry, db, home, target, true)? };
+        run(registry, &command_exe, home, target, &args).map(|_| None)
     };
-    let snapshot = snapshot_inner(db, home, target, exe.as_deref());
+    let snapshot = snapshot_inner(registry, db, home, target, exe.as_deref());
     match result {
         Ok(transaction_id) => Ok(PluginResult {
             status: if local {
