@@ -467,7 +467,7 @@ fn collect_snapshot_on(
         let mut profile: RegisteredProfile =
             serde_json::from_str(&text).map_err(|_| "命名配置格式错误")?;
         if registry.get(&profile.tool).is_some() {
-            crate::native::configuration::normalize_legacy(registry, &mut profile, crate::native::adapter::Scope::Global)?;
+            crate::native::configuration::normalize_legacy(registry, &mut profile, crate::native::adapter::Scope::Global, None)?;
         }
         profile.revision.clear();
         let (files, mut pending_fields) = portable_files(registry, &profile.tool, &profile.files)?;
@@ -866,7 +866,7 @@ pub fn apply_import(
         }
         if let PortablePayload::Profile(portable) = &mut entity.payload {
             if registry.get(&portable.profile.tool).is_some() {
-                crate::native::configuration::normalize_legacy(registry, &mut portable.profile, crate::native::adapter::Scope::Global)?;
+                crate::native::configuration::normalize_legacy(registry, &mut portable.profile, crate::native::adapter::Scope::Global, None)?;
             }
             portable.profile.revision = Uuid::new_v4().to_string();
             if let Some(secret) = portable.connection_secret.as_ref() {

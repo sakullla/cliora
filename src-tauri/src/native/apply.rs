@@ -323,18 +323,21 @@ pub fn desired_registered_documents(
     scope: Scope,
 ) -> Result<BTreeMap<String, Value>, String> {
     let mut normalized = profile.clone();
-    desired_documents_with_projection(registry, &mut normalized, common, scope)
+    desired_documents_with_projection(registry, &mut normalized, common, scope, None)
 }
 
 /// The mutable projection and the document are resolved together. Application
 /// keeps its original DB snapshot separately for the final transaction CAS.
+/// `native_form` carries the caller-resolved form token for version-gated
+/// configuration adapters; `None` keeps persisted states untouched.
 fn desired_documents_with_projection(
     registry: &crate::adapters::Registry,
     profile: &mut RegisteredProfile,
     common: Option<&RegisteredCommon>,
     scope: Scope,
+    native_form: Option<&str>,
 ) -> Result<BTreeMap<String, Value>, String> {
-    super::configuration::normalize_legacy(registry, profile, scope)?;
+    super::configuration::normalize_legacy(registry, profile, scope, native_form)?;
     let adapter = registry
         .get(&profile.tool)
         .ok_or("未注册的 CLI 适配器，不能应用")?;
@@ -357,7 +360,7 @@ fn desired_documents_with_projection(
     }
     if let Some(connection) = &profile.connection {
         if profile.editing.is_none() {
-        for (role, overlay) in adapter.connection_documents_for_existing(connection, scope, &result)? {
+        for (role, overlay) in adapter.connection_documents_for_existing_for_version(connection, scope, &result, native_form)? {
             let existing = result.entry(role).or_insert_with(|| json!({}));
             let (merged, _) = format::resolve(existing, &overlay, &[])?;
             *existing = merged;
@@ -470,22 +473,43 @@ pub fn apply_registered_validated(
     scope: Scope,
     allow_takeover: bool,
 ) -> Result<ApplyOutcome, String> {
-    apply_registered_validated_inner(registry,db,credentials,profile,common,native_files,key,scope,allow_takeover,None,None)
+    apply_registered_validated_inner(registry,db,credentials,profile,common,native_files,key,scope,allow_takeover,None,None,None)
 }
 
 fn apply_registered_validated_compared(
     registry:&crate::adapters::Registry,db:&Database,credentials:&dyn CredentialStore,
     profile:&RegisteredProfile,common:Option<&RegisteredCommon>,native_files:&[NativeFile],
     key:&str,scope:Scope,allow_takeover:bool,comparison:Option<&BTreeMap<String,String>>,
+    native_form: Option<&str>,
 )->Result<ApplyOutcome,String>{
-    apply_registered_validated_inner(registry,db,credentials,profile,common,native_files,key,scope,allow_takeover,comparison,None)
+    apply_registered_validated_inner(registry,db,credentials,profile,common,native_files,key,scope,allow_takeover,comparison,None,native_form)
+}
+
+/// Native form token for application, resolved from the probe the caller
+/// already ran. Version-gated configuration adapters refuse to write when the
+/// selected installation's form cannot be verified.
+fn probed_native_form(
+    registry: &crate::adapters::Registry,
+    tool: &str,
+    probe: &adapter::ToolProbe,
+) -> Result<Option<String>, String> {
+    let Some(port) = registry.get(tool).and_then(|adapter| adapter.configuration()) else {
+        return Ok(None);
+    };
+    if !port.configuration_requires_version() {
+        return Ok(None);
+    }
+    let version = super::configuration::probe_version(probe);
+    port.native_form_for_version(version.as_deref())
+        .map(Some)
+        .ok_or_else(|| "此 CLI 的安装版本尚未核验（未验证）；已拒绝写入原生配置".into())
 }
 
 fn apply_registered_validated_inner(
     registry: &crate::adapters::Registry, db: &Database, credentials: &dyn CredentialStore,
     profile: &RegisteredProfile, common: Option<&RegisteredCommon>, native_files: &[NativeFile],
     key: &str, scope: Scope, allow_takeover: bool, comparison: Option<&BTreeMap<String,String>>,
-    binding_expectation: Option<&AppliedBinding>,
+    binding_expectation: Option<&AppliedBinding>, native_form: Option<&str>,
 ) -> Result<ApplyOutcome,String> {
     let snapshot_profile = profile;
     let adapter = registry
@@ -494,6 +518,16 @@ fn apply_registered_validated_inner(
     // Scope/credential policy runs before parsing or planning any native writes.
     adapter.reject_new_secret(snapshot_profile, scope)?;
     let mut normalized = profile.clone();
+    // The apply-time installation is authoritative for the target native form;
+    // a draft edited under another form must be reopened instead of mixed.
+    if let Some(form) = native_form {
+        if let Some(state) = normalized.editing.as_mut() {
+            if state.native_form.as_deref().is_some_and(|existing| existing != form) {
+                return Err("安装主版本与配置草稿的编辑形态不一致；请重新打开草稿后再保存".into());
+            }
+            state.native_form = Some(form.to_owned());
+        }
+    }
     // Legacy modelRecords meant edits to the selected supplier's existing
     // native models. At explicit application, materialize that native baseline
     // before the one-time document upgrade; never do this while viewing/saving.
@@ -508,7 +542,7 @@ fn apply_registered_validated_inner(
                     }
                 }
             }
-            for (role, overlay) in adapter.connection_documents_for_existing(connection, scope, &existing)? {
+            for (role, overlay) in adapter.connection_documents_for_existing_for_version(connection, scope, &existing, native_form)? {
                 let own = format::parse(adapter.file_kind(&role)?, normalized.files.get(&role).map(String::as_str).unwrap_or(""))?;
                 let merged = format::resolve(&own, &overlay, &[])?.0;
                 normalized.files.insert(role.clone(), format::render(adapter.file_kind(&role)?, &merged)?);
@@ -516,7 +550,7 @@ fn apply_registered_validated_inner(
             profile::validate_registered_files(registry, &normalized.tool, &normalized.files)?;
         }
     }
-    let desired = desired_documents_with_projection(registry, &mut normalized, common, scope)?;
+    let desired = desired_documents_with_projection(registry, &mut normalized, common, scope, native_form)?;
     let profile = &normalized;
     if let Some(previous) = &snapshot_profile.connection {
         let same_identity = profile.connection.as_ref().is_some_and(|current| {
@@ -809,7 +843,7 @@ pub fn apply_registered_validated_expected(
     profile:&RegisteredProfile,common:Option<&RegisteredCommon>,native_files:&[NativeFile],
     key:&str,scope:Scope,expected:&AppliedBinding,
 )->Result<ApplyOutcome,String>{
-    apply_registered_validated_inner(registry,db,credentials,profile,common,native_files,key,scope,false,None,Some(expected))
+    apply_registered_validated_inner(registry,db,credentials,profile,common,native_files,key,scope,false,None,Some(expected),None)
 }
 fn check_binding_snapshot(tx:&rusqlite::Transaction<'_>,expected:&AppliedBinding)->Result<(),String>{
     let row:Option<(String,i64,String,Option<String>,Option<i64>,Option<String>,Option<String>)>=tx.query_row(
@@ -889,9 +923,10 @@ pub fn apply_compared_application(registry:&crate::adapters::Registry,db:&Databa
     if let Some(connection)=&profile.connection {auth::verify_stored_credential(connection,credentials)?;}
     let probe=adapter::probe_registered(registry,&profile.tool,custom,home,project,scope)?;
     if probe.native_writes.state!="supported" {return Err(probe.native_writes.reason.into());}
+    let native_form=probed_native_form(registry,&profile.tool,&probe)?;
     let mut baselines=BTreeMap::new();
     for file in &comparison.files {if file.current.len()>1024*1024 || baselines.insert(file.role.clone(),file.current.clone()).is_some(){return Err("比较文件无效".into());}}
-    apply_registered_validated_compared(registry,db,credentials,&profile,common.as_ref(),&probe.native_files,&scope_key(scope,project)?,scope,true,Some(&baselines))
+    apply_registered_validated_compared(registry,db,credentials,&profile,common.as_ref(),&probe.native_files,&scope_key(scope,project)?,scope,true,Some(&baselines),native_form.as_deref())
 }
 
 /// The snapshot can become stale during probe, credential reads or file preparation.
@@ -985,7 +1020,8 @@ pub fn apply_registered_profile(
     if probe.native_writes.state != "supported" {
         return Err(probe.native_writes.reason.into());
     }
-    apply_registered_validated(
+    let native_form = probed_native_form(registry, tool, &probe)?;
+    apply_registered_validated_inner(
         registry,
         db,
         credentials,
@@ -995,6 +1031,9 @@ pub fn apply_registered_profile(
         &key,
         scope,
         allow_takeover,
+        None,
+        None,
+        native_form.as_deref(),
     )
 }
 
@@ -1276,10 +1315,10 @@ mod tests {
         let compared=fs::read_to_string(&path).unwrap();
         let baselines=BTreeMap::from([("settings".into(),compared.clone())]);
         fs::write(&path,compared.replace("external","changed again")).unwrap();
-        assert!(apply_registered_validated_compared(&registry,&db,&store,&registered,None,&[native(&path)],"global",Scope::Global,true,Some(&baselines)).unwrap_err().contains("比较后"));
+        assert!(apply_registered_validated_compared(&registry,&db,&store,&registered,None,&[native(&path)],"global",Scope::Global,true,Some(&baselines), None).unwrap_err().contains("比较后"));
         assert!(fs::read_to_string(&path).unwrap().contains("changed again"));
         fs::write(&path,&compared).unwrap();
-        apply_registered_validated_compared(&registry,&db,&store,&registered,None,&[native(&path)],"global",Scope::Global,true,Some(&baselines)).unwrap();
+        apply_registered_validated_compared(&registry,&db,&store,&registered,None,&[native(&path)],"global",Scope::Global,true,Some(&baselines), None).unwrap();
         let chosen=fs::read_to_string(&path).unwrap();
         assert!(chosen.contains("model = \"a\""));assert!(chosen.contains("unrelated = 7"));
     }
@@ -1418,12 +1457,12 @@ mod tests {
             let baselines:BTreeMap<_,_>=comparison.files.iter().map(|file|(file.role.clone(),file.current.clone())).collect();
             assert_eq!(baselines.get("local_settings").unwrap(),&transaction::read_native(&local).unwrap());
             let mut incomplete=baselines.clone();incomplete.remove("local_settings");
-            assert!(apply_registered_validated_compared(&registry,&db,&store,&registered,None,&native,&key,Scope::Project,true,Some(&incomplete)).unwrap_err().contains("比较后"));
+            assert!(apply_registered_validated_compared(&registry,&db,&store,&registered,None,&native,&key,Scope::Project,true,Some(&incomplete), None).unwrap_err().contains("比较后"));
             fs::write(&local,"{\"external\":true}").unwrap();
-            assert!(apply_registered_validated_compared(&registry,&db,&store,&registered,None,&native,&key,Scope::Project,true,Some(&baselines)).unwrap_err().contains("比较后"));
+            assert!(apply_registered_validated_compared(&registry,&db,&store,&registered,None,&native,&key,Scope::Project,true,Some(&baselines), None).unwrap_err().contains("比较后"));
             assert_eq!(fs::read_to_string(&local).unwrap(),"{\"external\":true}");
             if has_local {fs::write(&local,&baselines["local_settings"]).unwrap();} else {fs::remove_file(&local).unwrap();}
-            apply_registered_validated_compared(&registry,&db,&store,&registered,None,&native,&key,Scope::Project,true,Some(&baselines)).unwrap();
+            apply_registered_validated_compared(&registry,&db,&store,&registered,None,&native,&key,Scope::Project,true,Some(&baselines), None).unwrap();
             let result:Value=serde_json::from_str(&fs::read_to_string(&project_settings).unwrap()).unwrap();
             assert_eq!(result["env"]["ANTHROPIC_MODEL"],"request-model");assert_eq!(result["unrelated"],7);
             if has_local {let result:Value=serde_json::from_str(&fs::read_to_string(&local).unwrap()).unwrap();assert!(result["env"].get("ANTHROPIC_API_KEY").is_none());assert_eq!(result["permissions"]["defaultMode"],"default");}
@@ -1522,7 +1561,7 @@ mod tests {
                 &settings
             })
             .unwrap();
-            let matching = apply_registered_validated_compared(&registry,&db,&store,&registered,None,&files,"global",Scope::Global,true,Some(&baselines)).unwrap();
+            let matching = apply_registered_validated_compared(&registry,&db,&store,&registered,None,&files,"global",Scope::Global,true,Some(&baselines), None).unwrap();
             assert_eq!(matching.status, "written_for_next_session", "{tool:?}");
             assert!(
                 matching.changed_files.iter().any(|path| path

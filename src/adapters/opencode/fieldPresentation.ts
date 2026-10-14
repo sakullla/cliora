@@ -7,5 +7,6 @@ export function openCodeFieldPresentation(id: string): FieldPresentation {
     'limit.output': { unit: 'Token', description: i18n.t('tools.adapters.opencode.fields.limitOutput') },
     reasoning: { description: i18n.t('tools.adapters.opencode.fields.reasoning') },
     options: { description: i18n.t('tools.adapters.opencode.fields.options') },
+    variants: { description: i18n.t('tools.adapters.opencode.fields.variants') },
   } as Record<string,FieldPresentation>)[id] };
 }

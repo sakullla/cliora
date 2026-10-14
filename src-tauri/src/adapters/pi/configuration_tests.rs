@@ -517,3 +517,125 @@ fn multi_native_a3_opencode_reuses_deleted_and_renamed_ids_for_default_and_small
         }
     }
 }
+
+// OpenCode dual-form configuration (v1 and v2 native keys). The v2 shapes come
+// from tests/fixtures/native/opencode-2-native.jsonc, verified against a real
+// @opencode/cli 2.0.29 load.
+fn opencode_v2_profile() -> RegisteredProfile {
+    let mut profile = blank("open_code");
+    profile.files.insert("settings".into(), include_str!("../../../../tests/fixtures/native/opencode-2-native.jsonc").into());
+    profile
+}
+fn with_form(mut draft: configuration::ConfigurationDraft, form: &str) -> configuration::ConfigurationDraft {
+    draft.profile.editing.as_mut().unwrap().native_form = Some(form.into());
+    draft
+}
+#[test]
+fn opencode_v2_native_fixture_is_read_before_and_after_the_form_is_resolved() {
+    let registry = Registry::builtins();
+    for form in ["v1", "v2"] {
+        let draft = with_form(configuration::open(&registry, opencode_v2_profile(), Scope::Global, format!("v2-read-{form}")).unwrap(), form);
+        assert!(draft.issues.is_empty(), "{form}: {:?}", draft.issues);
+        assert_eq!(draft.view["providerId"], "myprov", "{form}");
+        assert_eq!(draft.view["providers"], json!(["myprov"]), "{form}");
+        assert_eq!(draft.view["defaultModel"], "my-model", "{form}");
+        // The light model lives at agents.title.model in v2 files.
+        assert_eq!(draft.view["smallModel"], "my-model", "{form}");
+        assert_eq!(draft.view["connection"]["baseUrl"], "https://myprov.example/v1", "{form}");
+        assert_eq!(draft.view["connection"]["protocol"], "@ai-sdk/openai-compatible", "{form}");
+        let fields = &draft.view["models"].as_array().unwrap()[0]["fields"];
+        assert_eq!(fields["modalities"]["input"], json!(["text"]), "{form}");
+        assert_eq!(fields["options"]["temperature"], 0.4, "{form}");
+        // v2 variants project to the editor object form; unknown keys stay.
+        assert_eq!(fields["variants"]["reasoning"]["reasoning"], true, "{form}");
+        assert_eq!(fields["unknownExtension"]["keep"], true, "{form}");
+    }
+}
+#[test]
+fn opencode_v2_form_writes_native_v2_keys_and_keeps_unedited_entries() {
+    let registry = Registry::builtins();
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("db")).unwrap();
+    let store = Store::default();
+    let mut draft = with_form(configuration::open(&registry, opencode_v2_profile(), Scope::Global, "v2-edit".into()).unwrap(), "v2");
+    draft = configuration::edit(&registry, draft, action("set", "myprov", "my-model", Some("limit.context"), Some(json!(333333)))).unwrap();
+    draft = configuration::edit(&registry, draft, action("create", "myprov", "added", None,
+        Some(json!({"name":"Added","limit":{"context":1000,"output":10},"modalities":{"input":["text"],"output":["text"]},"options":{"temperature":0.1},"variants":{"fast":{}}})))).unwrap();
+    draft = configuration::edit(&registry, draft, action("small_default", "myprov", "added", None, None)).unwrap();
+    draft = configuration::edit(&registry, draft, action("configure_provider", "myprov", "", None,
+        Some(json!({"baseUrl":"https://edited.example/v1","interfaceFormat":"anthropic_messages"})))).unwrap();
+    assert!(draft.issues.is_empty(), "{:?}", draft.issues);
+    let settings = &configuration::documents(&registry, &draft.profile).unwrap()["settings"];
+    // The edited provider is rewritten in the target form.
+    assert_eq!(settings["providers"]["myprov"]["package"], "aisdk:@ai-sdk/anthropic");
+    assert_eq!(settings["providers"]["myprov"]["settings"]["baseURL"], "https://edited.example/v1");
+    // Edited fields land on v2 keys; unedited values keep their native shape.
+    assert_eq!(settings["providers"]["myprov"]["models"]["my-model"]["limit"]["context"], 333333);
+    assert_eq!(settings["providers"]["myprov"]["models"]["my-model"]["settings"]["temperature"], 0.4);
+    assert_eq!(settings["providers"]["myprov"]["models"]["my-model"]["capabilities"]["input"], json!(["text"]));
+    let added = &settings["providers"]["myprov"]["models"]["added"];
+    assert_eq!(added["capabilities"]["input"], json!(["text"]));
+    assert_eq!(added["settings"]["temperature"], 0.1);
+    assert_eq!(added["variants"], json!([{"id":"fast"}]));
+    // The light model moves to agents.title.model; the default ref keeps its variant.
+    assert_eq!(settings["agents"]["title"]["model"], "myprov/added");
+    assert_eq!(settings["model"], "myprov/my-model#reasoning");
+    assert!(settings.get("small_model").is_none());
+    // Application persists the v2 keys; unknown keys in the file survive. The
+    // seeded native file is foreign to this profile, so the apply adopts it
+    // explicitly (same takeover rule as v1).
+    let saved = profile::save_registered_profile(&db, &registry, draft.profile.clone(), None).unwrap();
+    let files = files(&registry, "open_code", temp.path());
+    std::fs::write(&files[0].path, include_str!("../../../../tests/fixtures/native/opencode-2-native.jsonc")).unwrap();
+    apply::apply_registered_validated(&registry, &db, &store, &saved, None, &files, "global", Scope::Global, true).unwrap();
+    let text = std::fs::read_to_string(&files[0].path).unwrap();
+    assert!(text.contains("providers"), "{text}");
+    let native = disk(&files, "settings");
+    assert_eq!(native["providers"]["myprov"]["package"], "aisdk:@ai-sdk/anthropic");
+    assert_eq!(native["providers"]["myprov"]["models"]["added"]["capabilities"]["input"], json!(["text"]));
+    assert_eq!(native["agents"]["title"]["model"], "myprov/added");
+    assert!(native["provider"].is_null());
+    assert_eq!(native["providers"]["myprov"]["models"]["my-model"]["unknownExtension"]["keep"], true);
+}
+#[test]
+fn opencode_same_id_synonyms_in_both_forms_block_writes_and_keep_the_file() {
+    let registry = Registry::builtins();
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("db")).unwrap();
+    let mut profile = opencode_v2_profile();
+    let mut settings = format::parse(FileKind::Jsonc, profile.files.get("settings").unwrap()).unwrap();
+    settings["provider"] = json!({"myprov": {"npm":"@ai-sdk/openai-compatible","options":{"baseURL":"https://v1.example/v1"},"models":{"legacy":{"name":"legacy model"}}}});
+    profile.files.insert("settings".into(), format::render(FileKind::Jsonc, &settings).unwrap());
+    let draft = configuration::open(&registry, profile, Scope::Global, "synonym".into()).unwrap();
+    // Viewing still lists entities; the synonym id itself is collapsed to one
+    // entry because two native shapes cannot both be authoritative.
+    let ids: Vec<&str> = draft.view["models"].as_array().unwrap().iter().map(|model| model["id"].as_str().unwrap()).collect();
+    assert!(ids.contains(&"my-model"), "{ids:?}");
+    assert!(draft.view["capabilityReason"].as_str().unwrap_or("").contains("同义"));
+    assert!(draft.issues.iter().any(|issue| issue.message.contains("同义")), "{:?}", draft.issues);
+    // Every write is refused and the documents stay byte-identical.
+    let before = draft.profile.files.clone();
+    for operation in ["set", "create", "delete"] {
+        let error = configuration::edit(&registry, draft.clone(), action(operation, "myprov", "my-model", Some("limit.context"), Some(json!(1)))).unwrap_err();
+        assert!(error.contains("同义"), "{operation}: {error}");
+    }
+    assert_eq!(draft.profile.files, before);
+    assert!(profile::save_registered_profile(&db, &registry, draft.profile, None).is_err());
+}
+#[test]
+fn opencode_unverified_form_views_but_refuses_edits() {
+    let registry = Registry::builtins();
+    let draft = with_form(configuration::open(&registry, opencode_v2_profile(), Scope::Global, "unverified".into()).unwrap(), "unverified");
+    // Viewing (including provider navigation) keeps working.
+    let draft = configuration::edit(&registry, draft, action("select_provider", "myprov", "", None, None)).unwrap();
+    assert_eq!(draft.view["providerId"], "myprov");
+    assert!(!draft.view["models"].as_array().unwrap().is_empty());
+    // Model edits, provider configuration and settings writes are all refused.
+    for operation in ["set", "create", "delete", "default", "small_default"] {
+        let error = configuration::edit(&registry, draft.clone(), action(operation, "myprov", "my-model", Some("limit.context"), Some(json!(1)))).unwrap_err();
+        assert!(error.contains("未验证"), "{operation}: {error}");
+    }
+    let error = configuration::edit(&registry, draft.clone(), action("configure_provider", "myprov", "", None,
+        Some(json!({"baseUrl":"https://edited.example/v1","interfaceFormat":"openai_completions"})))).unwrap_err();
+    assert!(error.contains("未验证"), "{error}");
+}

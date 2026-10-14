@@ -8,7 +8,12 @@ export type ConfigurationAction = {
   field: string | null;
   value: unknown | null;
 };
-export type EditingState = { version: number; selectedProvider: string | null; intents: ConfigurationAction[] };
+export type EditingState = {
+  version: number; selectedProvider: string | null; intents: ConfigurationAction[];
+  /** Adapter-resolved native form token (e.g. OpenCode v1/v2 config keys);
+   *  absent keeps the adapter legacy default; "unverified" blocks writes. */
+  nativeForm?: string | null;
+};
 export type ConfigurationField = {
   id: string; label: string; kind: string; required: boolean; advanced: boolean;
   choices: string[]; minimum: number | null; defaultSource: string | null; unavailableReason: string | null;

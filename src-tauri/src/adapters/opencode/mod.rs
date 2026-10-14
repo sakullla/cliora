@@ -18,7 +18,7 @@ use crate::native::adapter::{NativeFile, Scope};
 use crate::native::apply::{read_secret, set_json, NativeSecrets};
 use crate::native::format::FileKind;
 use crate::native::intake::NativeInspection;
-use crate::native::intake::{api_format, string_at};
+use crate::native::intake::string_at;
 use crate::native::profile::{self, Connection, ModelRecord, RegisteredProfile};
 use crate::resources::mcp::{self, McpDefinition, McpTransport};
 
@@ -135,13 +135,13 @@ fn replace_model_fields(fields: &mut BTreeMap<String, Value>, prefix: &str, mode
     write_leaves(fields, prefix, model, &mut Vec::new());
 }
 
-fn draft_models(profile: &RegisteredProfile, provider: &str) -> Result<serde_json::Map<String, Value>, String> {
+fn draft_models(profile: &RegisteredProfile, form: configuration::Form, provider: &str) -> Result<serde_json::Map<String, Value>, String> {
     let Some(text) = profile.files.get("settings") else {
         return Ok(serde_json::Map::new());
     };
     let parsed = crate::native::format::parse(FileKind::Jsonc, text)?;
     Ok(parsed
-        .get("provider")
+        .get(form.providers_key())
         .and_then(|root| root.get(provider))
         .and_then(|entry| entry.get("models"))
         .and_then(Value::as_object)
@@ -428,12 +428,14 @@ impl CliAdapter for OpenCode {
         let Some(provider) = provider.filter(|id| !id.is_empty()) else {
             return Some(Vec::new());
         };
-        let Some(models) = settings
-            .get("provider")
-            .and_then(|root| root.get(provider))
-            .and_then(|entry| entry.get("models"))
-            .and_then(Value::as_object)
-        else {
+        // Models project from either native form of the provider entry.
+        let Some(models) = ["provider", "providers"].iter().find_map(|key| {
+            settings
+                .get(*key)
+                .and_then(|root| root.get(provider))
+                .and_then(|entry| entry.get("models"))
+                .and_then(Value::as_object)
+        }) else {
             return Some(Vec::new());
         };
         Some(
@@ -449,13 +451,41 @@ impl CliAdapter for OpenCode {
     fn connection_documents(
         &self,
         connection: &Connection,
-        _scope: Scope,
+        scope: Scope,
     ) -> Result<BTreeMap<String, Value>, String> {
+        self.connection_documents_for_version(connection, scope, None)
+    }
+    fn connection_documents_for_existing(
+        &self,
+        connection: &Connection,
+        scope: Scope,
+        existing: &BTreeMap<String, Value>,
+    ) -> Result<BTreeMap<String, Value>, String> {
+        self.connection_documents_for_existing_for_version(connection, scope, existing, None)
+    }
+    /// Connection documents in the native form of the selected installation:
+    /// v1 `provider.<id>.npm/options` or v2 `providers.<id>.package/settings`
+    /// (verified against a native 2.0.29 load).
+    fn connection_documents_for_version(
+        &self,
+        connection: &Connection,
+        _scope: Scope,
+        form: Option<&str>,
+    ) -> Result<BTreeMap<String, Value>, String> {
+        let form = if form == Some("v2") {
+            configuration::Form::V2
+        } else {
+            configuration::Form::V1
+        };
         let npm = match connection.interface_format.as_str() {
             "openai_completions" => "@ai-sdk/openai-compatible",
             "openai_responses" => "@ai-sdk/openai",
             "anthropic_messages" => "@ai-sdk/anthropic",
             _ => return Err("OpenCode 不支持所选接口格式".into()),
+        };
+        let package = match form {
+            configuration::Form::V1 => npm.to_owned(),
+            configuration::Form::V2 => format!("aisdk:{npm}"),
         };
         let provider = connection.provider_id.as_str();
         let model = connection.model.as_str();
@@ -465,49 +495,74 @@ impl CliAdapter for OpenCode {
             &["model"],
             json!(format!("{provider}/{model}")),
         );
-        set_json(&mut settings, &["provider", provider, "npm"], json!(npm));
         set_json(
             &mut settings,
-            &["provider", provider, "name"],
+            &[form.providers_key(), provider, form.package_key()],
+            json!(package),
+        );
+        set_json(
+            &mut settings,
+            &[form.providers_key(), provider, "name"],
             json!(provider),
         );
         set_json(
             &mut settings,
-            &["provider", provider, "options", "baseURL"],
+            &[
+                form.providers_key(),
+                provider,
+                form.provider_settings_key(),
+                "baseURL",
+            ],
             json!(connection.base_url),
         );
         set_json(
             &mut settings,
-            &["provider", provider, "models", model, "name"],
+            &[form.providers_key(), provider, "models", model, "name"],
             json!(model),
         );
         if let Some(env) = profile::auth_env_name(crate::domain::CliId::OpenCode, connection) {
             set_json(
                 &mut settings,
-                &["provider", provider, "options", "apiKey"],
+                &[
+                    form.providers_key(),
+                    provider,
+                    form.provider_settings_key(),
+                    "apiKey",
+                ],
                 json!(format!("{{env:{env}}}")),
             );
         }
         Ok(BTreeMap::from([("settings".into(), settings)]))
     }
-    fn connection_documents_for_existing(
+    fn connection_documents_for_existing_for_version(
         &self,
         connection: &Connection,
         scope: Scope,
         existing: &BTreeMap<String, Value>,
+        form: Option<&str>,
     ) -> Result<BTreeMap<String, Value>, String> {
-        let mut docs = self.connection_documents(connection, scope)?;
-        let draft = existing
-            .get("settings")
-            .and_then(|root| root.get("provider"))
-            .and_then(|root| root.get(&connection.provider_id))
-            .and_then(|entry| entry.get("models"))
-            .and_then(Value::as_object)
-            .cloned()
+        let target = if form == Some("v2") {
+            configuration::Form::V2
+        } else {
+            configuration::Form::V1
+        };
+        let mut docs = self.connection_documents_for_version(connection, scope, form)?;
+        // Existing models are read from either native form.
+        let settings_existing = existing.get("settings");
+        let draft = ["provider", "providers"]
+            .iter()
+            .find_map(|key| {
+                settings_existing
+                    .and_then(|root| root.get(*key))
+                    .and_then(|root| root.get(&connection.provider_id))
+                    .and_then(|entry| entry.get("models"))
+                    .and_then(Value::as_object)
+                    .cloned()
+            })
             .unwrap_or_default();
         let Some(models) = docs
             .get_mut("settings")
-            .and_then(|root| root.get_mut("provider"))
+            .and_then(|root| root.get_mut(target.providers_key()))
             .and_then(|root| root.get_mut(&connection.provider_id))
             .and_then(|entry| entry.get_mut("models"))
             .and_then(Value::as_object_mut)
@@ -524,7 +579,13 @@ impl CliAdapter for OpenCode {
         }
         for (id, model) in models.iter_mut() {
             if let Some(record) = connection.model_records.iter().find(|record| &record.id == id) {
-                assign_existing_fields(model, &record.fields);
+                // Records keep their source-form spellings; convert them to the
+                // target form so one entity keeps a single native shape.
+                let converted =
+                    configuration::model_in_form(&Value::Object(record.fields.clone()), target);
+                if let Some(fields) = converted.as_object() {
+                    assign_existing_fields(model, fields);
+                }
             }
         }
         Ok(docs)
@@ -542,15 +603,20 @@ impl CliAdapter for OpenCode {
         let Some(connection) = &profile.connection else {
             return Ok(());
         };
+        let form = profile
+            .editing
+            .as_ref()
+            .map(|state| configuration::form_of(state).unwrap_or(configuration::Form::V1))
+            .unwrap_or(configuration::Form::V1);
         let Some(disk_models) = original
-            .get("provider")
+            .get(form.providers_key())
             .and_then(|providers| providers.get(&connection.provider_id))
             .and_then(|provider| provider.get("models"))
             .and_then(Value::as_object)
         else {
             return Ok(());
         };
-        let draft = draft_models(profile, &connection.provider_id)?;
+        let draft = draft_models(profile, form, &connection.provider_id)?;
         let provider_token = pointer_token(&connection.provider_id);
         for (model_id, disk_model) in disk_models {
             let Some(disk_object) = disk_model.as_object() else {
@@ -600,25 +666,37 @@ impl CliAdapter for OpenCode {
         if scope == Scope::Project {
             return Err("OpenCode 项目共享配置不能写入明文密钥；请使用全局配置或原生登录".into());
         }
+        let form = profile
+            .editing
+            .as_ref()
+            .map(|state| configuration::form_of(state).unwrap_or(configuration::Form::V1))
+            .unwrap_or(configuration::Form::V1);
         secrets.put(
             "settings",
-            &["provider", &connection.provider_id, "options", "apiKey"],
+            &[
+                form.providers_key(),
+                &connection.provider_id,
+                form.provider_settings_key(),
+                "apiKey",
+            ],
             read_secret(id, credentials)?,
         );
         Ok(())
     }
     fn has_native_secret(&self, role: &str, root: &Value) -> bool {
         role == "settings"
-            && root
-                .get("provider")
-                .and_then(Value::as_object)
-                .is_some_and(|providers| {
-                    providers.values().any(|item| {
-                        item.get("options")
-                            .and_then(|options| options.get("apiKey"))
-                            .is_some()
+            && ["provider", "providers"].iter().any(|key| {
+                root.get(*key)
+                    .and_then(Value::as_object)
+                    .is_some_and(|providers| {
+                        providers.values().any(|item| {
+                            item.get("options")
+                                .or_else(|| item.get("settings"))
+                                .and_then(|options| options.get("apiKey"))
+                                .is_some()
+                        })
                     })
-                })
+            })
     }
     fn inspect_values(&self, settings: &Value, _: &Value, _: &Value) -> InspectionFields {
         let mut provider = None;
@@ -630,26 +708,33 @@ impl CliAdapter for OpenCode {
             }
         }
         if provider.is_none() {
-            provider = settings
-                .get("provider")
-                .and_then(Value::as_object)
-                .and_then(|items| items.keys().next())
-                .cloned();
+            provider = ["provider", "providers"]
+                .iter()
+                .find_map(|key| {
+                    settings
+                        .get(*key)
+                        .and_then(Value::as_object)
+                        .and_then(|items| items.keys().next().cloned())
+                });
         }
-        let entry = provider
-            .as_ref()
-            .and_then(|id| settings.get("provider").and_then(|value| value.get(id)));
+        let entry = provider.as_ref().and_then(|id| {
+            ["provider", "providers"].iter().find_map(|key| {
+                settings
+                    .get(*key)
+                    .and_then(|value| value.get(id))
+            })
+        });
         let base = entry
-            .and_then(|value| value.get("options"))
+            .and_then(|value| value.get("options").or_else(|| value.get("settings")))
             .and_then(|value| value.get("baseURL"))
             .and_then(Value::as_str)
             .map(str::to_owned);
         let wire = entry
-            .and_then(|value| value.get("npm"))
+            .and_then(|value| value.get("npm").or_else(|| value.get("package")))
             .and_then(Value::as_str)
-            .and_then(api_format);
+            .and_then(configuration::interface_from_package);
         let env = entry
-            .and_then(|value| value.get("options"))
+            .and_then(|value| value.get("options").or_else(|| value.get("settings")))
             .and_then(|value| value.get("apiKey"))
             .and_then(Value::as_str)
             .and_then(|value| value.strip_prefix("{env:"))
@@ -680,10 +765,15 @@ impl CliAdapter for OpenCode {
     ) -> Result<(), String> {
         let raw = files.get("settings").cloned().unwrap_or_default();
         let settings = crate::native::format::parse(FileKind::Jsonc, &raw)?;
-        if let Some(providers) = settings.get("provider").and_then(Value::as_object) {
+        // Literal keys are discovered in either native form and replaced in the
+        // entity's own form so the file keeps its shape.
+        for (root_key, settings_key) in [("provider", "options"), ("providers", "settings")] {
+            let Some(providers) = settings.get(root_key).and_then(Value::as_object) else {
+                continue;
+            };
             for (name, provider) in providers {
                 let Some(key) = provider
-                    .get("options")
+                    .get(settings_key)
                     .and_then(|value| value.get("apiKey"))
                     .and_then(Value::as_str)
                 else {
@@ -712,11 +802,14 @@ impl CliAdapter for OpenCode {
                 connection.auth_env_var = Some(env.clone());
                 let replaced = crate::native::format::set_path(
                     FileKind::Jsonc,
-                    &raw,
+                    files
+                        .get("settings")
+                        .map(String::as_str)
+                        .unwrap_or(raw.as_str()),
                     &[
-                        "provider".into(),
+                        root_key.to_owned(),
                         name.clone(),
-                        "options".into(),
+                        settings_key.to_owned(),
                         "apiKey".into(),
                     ],
                     Some(&json!(format!("{{env:{env}}}"))),
@@ -731,10 +824,13 @@ impl CliAdapter for OpenCode {
         if role != "settings" {
             return Ok(());
         }
-        if let Some(providers) = parsed.get("provider").and_then(Value::as_object) {
+        for (root_key, settings_key) in [("provider", "options"), ("providers", "settings")] {
+            let Some(providers) = parsed.get(root_key).and_then(Value::as_object) else {
+                continue;
+            };
             for (name, provider) in providers {
                 if let Some(key) = provider
-                    .get("options")
+                    .get(settings_key)
                     .and_then(|value| value.get("apiKey"))
                     .and_then(Value::as_str)
                 {

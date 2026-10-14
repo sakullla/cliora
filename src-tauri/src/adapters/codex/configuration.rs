@@ -364,7 +364,7 @@ mod tests {
             vec!["/model_providers/gateway~1a~0b/base_url"]
         );
         assert_eq!(
-            Codex.suppression_changes(&reset).unwrap()[0].path,
+            Codex.suppression_changes(&reset, &crate::adapters::configuration::EditingState::default()).unwrap()[0].path,
             "/model_providers/gateway~1a~0b/base_url"
         );
     }
@@ -1172,6 +1172,7 @@ impl ConfigurationAdapter for Codex {
     fn suppression_changes(
         &self,
         action: &ConfigurationAction,
+        _state: &crate::adapters::configuration::EditingState,
     ) -> Result<Vec<SuppressionChange>, String> {
         let native = if action.field.as_deref() == Some("base_url") {
             path(&json!({}), action)?

@@ -821,6 +821,7 @@ export default {
         limitOutput: '单次最大输出；不会替代上下文窗口。',
         reasoning: '模型的推理能力声明；具体推理变体在 variants 中配置。',
         options: '此模型的原生请求选项，已有未知选项会保留。',
+        variants: '按变体标识填写覆盖项；保存到 OpenCode 2 时写为原生数组形态。',
       },
     },
     kimi: {

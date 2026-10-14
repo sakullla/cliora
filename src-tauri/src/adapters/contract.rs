@@ -383,6 +383,28 @@ pub trait CliAdapter: Sync {
     ) -> Result<BTreeMap<String, Value>, String> {
         self.connection_documents(connection, scope)
     }
+    /// Form-aware siblings for adapters whose connection documents moved
+    /// between native forms. The token comes from the configuration adapter's
+    /// resolved native form; `None` keeps the legacy default.
+    fn connection_documents_for_version(
+        &self,
+        connection: &Connection,
+        scope: Scope,
+        form: Option<&str>,
+    ) -> Result<BTreeMap<String, Value>, String> {
+        let _ = form;
+        self.connection_documents(connection, scope)
+    }
+    fn connection_documents_for_existing_for_version(
+        &self,
+        connection: &Connection,
+        scope: Scope,
+        existing: &BTreeMap<String, Value>,
+        form: Option<&str>,
+    ) -> Result<BTreeMap<String, Value>, String> {
+        let _ = form;
+        self.connection_documents_for_existing(connection, scope, existing)
+    }
     /// Drop or rewrite fields the CLI rejects after documents are merged.
     fn normalize_applied_document(&self, _role: &str, _document: &mut Value) {}
     /// Top-level collections whose empty object entries are invalid native config.

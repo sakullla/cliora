@@ -50,6 +50,7 @@ fn begin(
             },
             None,
             Vec::new(),
+            None,
         )
         .unwrap()
 }
@@ -337,7 +338,7 @@ fn workspace_current_comparison_is_redacted_cas_bound_and_preserves_private_nati
         profile: None,
     };
     let draft = sessions
-        .begin(&registry, &db, request, None, files.clone())
+        .begin(&registry, &db, request, None, files.clone(), None)
         .unwrap();
     assert!(!serde_json::to_string(&draft)
         .unwrap()
@@ -721,6 +722,7 @@ fn workspace_save_only_account_switch_uses_frozen_applied_identity_and_current_p
                 },
                 Some(a.id.clone()),
                 fp.clone(),
+                None,
             )
             .unwrap();
         let raw = BTreeMap::from([(
@@ -984,6 +986,7 @@ fn workspace_current_key_replace_and_remove_are_explicit_without_adopting_a_prof
             },
             None,
             files.clone(),
+            None,
         )
         .unwrap();
     let d = api(&sessions, &registry, &db, d);
@@ -1300,6 +1303,7 @@ fn workspace_new_profile_defaults_to_api_key_when_tool_has_no_accounts() {
             },
             None,
             Vec::new(),
+            None,
         )
         .unwrap();
     assert!(
@@ -1344,6 +1348,7 @@ fn workspace_claude_catalog_and_common_execute_real_edit_save_reopen_apply_chain
                 },
                 None,
                 Vec::new(),
+                None,
             )
             .unwrap();
         let d = sessions
@@ -1432,6 +1437,7 @@ fn workspace_claude_catalog_and_common_execute_real_edit_save_reopen_apply_chain
             },
             None,
             Vec::new(),
+            None,
         )
         .unwrap();
     assert!(common
@@ -1474,7 +1480,7 @@ fn workspace_claude_catalog_and_common_execute_real_edit_save_reopen_apply_chain
     let reopened_common = sessions.begin(&registry, &db, ConfigurationBeginRequest {
         tool_id: "claude_code".into(), scope: Scope::Global, project_path: None,
         session_id: "claude-common-reopen".into(), subject: ConfigurationSubject::Common, profile: None,
-    }, None, Vec::new()).unwrap();
+    }, None, Vec::new(), None).unwrap();
     assert_eq!(reopened_common.view["commonFields"][0]["value"], "high");
     assert_eq!(reopened_common.profile.revision, saved_common.revision);
     let mut p = profile_from_files(
@@ -1565,6 +1571,7 @@ fn workspace_claude_catalog_and_common_execute_real_edit_save_reopen_apply_chain
                     },
                     None,
                     Vec::new(),
+                    None,
                 )
                 .unwrap();
             let d = sessions
@@ -1618,6 +1625,7 @@ fn workspace_generic_current_protects_parent_and_owns_explicit_native_key_target
             },
             None,
             files.clone(),
+            None,
         )
         .unwrap();
     assert!(!serde_json::to_string(&d).unwrap().contains("synthetic-key"));
@@ -1725,6 +1733,7 @@ fn workspace_generic_current_protects_parent_and_owns_explicit_native_key_target
             },
             None,
             files,
+            None,
         )
         .unwrap();
     assert!(!serde_json::to_string(&reopened)
@@ -2005,4 +2014,84 @@ fn workspace_request_cancel_without_transport_keeps_lease_blocks_old_guards_and_
             .unwrap(),
         "synthetic-guard-key"
     );
+}
+
+#[test]
+fn open_code_drafts_resolve_the_native_form_from_the_selected_installation() {
+    // The 1.x line keeps the v1 keys; the 2.x line writes v2 native keys from
+    // the same editor actions. Both forms come from the resolved installation.
+    for (version, form, providers_key, protocol_key, modality_key) in [
+        ("1.18.34", "v1", "provider", "npm", "modalities"),
+        ("2.0.29", "v2", "providers", "package", "capabilities"),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("db")).unwrap();
+        let store = Store::default();
+        let sessions = DraftSessions::default();
+        let registry = Registry::builtins().with_fixture_installation("open_code", version);
+        let request = ConfigurationBeginRequest {
+            tool_id: "open_code".into(),
+            scope: Scope::Global,
+            project_path: None,
+            session_id: format!("form-{form}"),
+            subject: ConfigurationSubject::Profile,
+            profile: Some(fixture()),
+        };
+        let mut draft = sessions
+            .begin_registered(&registry, &db, request, temp.path(), None)
+            .unwrap();
+        assert!(draft.issues.is_empty(), "{form}: {:?}", draft.issues);
+        assert_eq!(
+            draft.profile.editing.as_ref().unwrap().native_form.as_deref(),
+            Some(form)
+        );
+        draft = sessions
+            .edit(
+                &registry,
+                draft,
+                ConfigurationAction {
+                    version: 1,
+                    target: json!({"kind":"model","provider":"alpha","id":"fresh"}),
+                    operation: "create".into(),
+                    field: None,
+                    value: Some(json!({"name":"Fresh","limit":{"context":1000,"output":10},"modalities":{"input":["text"],"output":["text"]}})),
+                },
+            )
+            .unwrap();
+        let saved = crate::native::profile::save_registered_profile(
+            &db,
+            &registry,
+            draft.profile.clone(),
+            None,
+        )
+        .unwrap();
+        let files = native(temp.path());
+        super::super::apply::apply_registered_validated(
+            &registry,
+            &db,
+            &store,
+            &saved,
+            None,
+            &files,
+            "global",
+            Scope::Global,
+            false,
+        )
+        .unwrap();
+        let parsed = format::parse(
+            format::FileKind::Jsonc,
+            &std::fs::read_to_string(&files[0].path).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parsed[providers_key]["alpha"]["models"]["fresh"]["name"], "Fresh", "{form}");
+        assert!(parsed[providers_key]["alpha"][protocol_key].is_string(), "{form}");
+        assert_eq!(
+            parsed[providers_key]["alpha"]["models"]["fresh"][modality_key]["input"],
+            json!(["text"]),
+            "{form}"
+        );
+        if form == "v2" {
+            assert!(parsed.get("provider").is_none(), "{form}");
+        }
+    }
 }

@@ -561,7 +561,7 @@ impl crate::adapters::configuration::ConfigurationAdapter for Sixth {
     fn portable_field_kind(&self, path: &[String]) -> crate::adapters::configuration::PortableFieldKind {
         if path.last().is_some_and(|field| field == "maxTokens") { crate::adapters::configuration::PortableFieldKind::Parameter } else { Default::default() }
     }
-    fn suppression_changes(&self, action: &crate::adapters::configuration::ConfigurationAction) -> Result<Vec<crate::adapters::configuration::SuppressionChange>, String> {
+    fn suppression_changes(&self, action: &crate::adapters::configuration::ConfigurationAction, _state: &crate::adapters::configuration::EditingState) -> Result<Vec<crate::adapters::configuration::SuppressionChange>, String> {
         if action.operation != "reset" { return Ok(vec![]); }
         let id = action.target.as_str().ok_or("invalid target")?;
         let field = crate::adapters::pointer_token(action.field.as_deref().ok_or("missing field")?);
@@ -804,13 +804,13 @@ fn sixth_legacy_connection_model_records_normalize_once_and_new_projection_canno
     let mut profile = draft.profile;
     profile.connection = Some(Connection { provider_id: "one".into(), interface_format: "openai_responses".into(), base_url: "https://one.test/v1".into(), model: "ignored".into(), secret_ref: None, auth_env_var: None, model_records: vec![] });
     let normalized = profile.files.clone();
-    crate::native::configuration::normalize_legacy(&registry, &mut profile, Scope::Global).unwrap();
+    crate::native::configuration::normalize_legacy(&registry, &mut profile, Scope::Global, None).unwrap();
     assert_eq!(profile.files, normalized);
     let documents = crate::native::apply::desired_registered_documents(&registry, &profile, None, Scope::Global).unwrap();
     assert_eq!(documents["settings"]["model"], "new");
     let version_two = crate::adapters::configuration::EditingState { version: 2, ..Default::default() };
     profile.editing = Some(version_two);
-    assert!(crate::native::configuration::normalize_legacy(&registry, &mut profile, Scope::Global).is_err());
+    assert!(crate::native::configuration::normalize_legacy(&registry, &mut profile, Scope::Global, None).is_err());
 }
 
 #[test]

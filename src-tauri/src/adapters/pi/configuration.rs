@@ -891,6 +891,7 @@ impl ConfigurationAdapter for Pi {
     fn suppression_changes(
         &self,
         action: &ConfigurationAction,
+        _state: &crate::adapters::configuration::EditingState,
     ) -> Result<Vec<SuppressionChange>, String> {
         let (kind, provider, id) = target(action)?;
         let (role, path) = if kind == "settings" {
