@@ -74,6 +74,16 @@ pub trait AccountAdapter: Sync {
     fn observe(&self, _executable: &Path, _context: &NativeContext) -> Result<Observation, String> {
         Err(self.capability().reason.into())
     }
+    /// Status read for the identified install line. The shared service
+    /// resolves the version; the default ignores it.
+    fn observe_for_version(
+        &self,
+        executable: &Path,
+        context: &NativeContext,
+        _version: Option<&str>,
+    ) -> Result<Observation, String> {
+        self.observe(executable, context)
+    }
     /// Pending login stays pending until an account id or email is present.
     /// MiniMax's secret-free status file has neither, so it opts out.
     fn sign_in_requires_identity(&self) -> bool {
@@ -81,6 +91,17 @@ pub trait AccountAdapter: Sync {
     }
     fn login_args(&self, _method: &str) -> Result<Vec<String>, String> {
         Err(self.capability().reason.into())
+    }
+    /// Login arguments for the identified install line. The shared service
+    /// resolves the version; the default keeps the adapter's single-line
+    /// arguments.
+    fn login_args_for_version(
+        &self,
+        version: Option<&str>,
+        method: &str,
+    ) -> Result<Vec<String>, String> {
+        let _ = version;
+        self.login_args(method)
     }
     fn logout_args(&self) -> Vec<String> {
         vec![]
@@ -98,6 +119,17 @@ pub trait AccountAdapter: Sync {
     }
     fn terminal_logout(&self) -> bool {
         false
+    }
+    /// Logout for the identified install line. The shared service resolves
+    /// the version; the default ignores it.
+    fn logout_for_version(
+        &self,
+        executable: &Path,
+        context: &NativeContext,
+        version: Option<&str>,
+    ) -> Result<(), String> {
+        let _ = version;
+        self.logout(executable, context)
     }
     fn login_detail(&self) -> &'static str {
         "请在隔离终端完成原生登录。取消只停止接纳结果，终端仍由用户控制。"

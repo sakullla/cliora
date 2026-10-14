@@ -500,8 +500,13 @@ pub fn start_login(
 ) -> Result<AuthAccount, String> {
     let current = get(&db, id)?;
     expected(&current, version)?;
-    let args = native::login_args(&current.tool_id, method)?;
     let executable = native::executable(&db, home, &current.tool_id)?;
+    let install_version = native::installation_version(&current.tool_id, &executable);
+    let args = native::login_args_for_version(
+        &current.tool_id,
+        install_version.as_deref(),
+        method,
+    )?;
     let account = prepare_login(&db, base, id, version)?;
     let pending = account.pending_login.as_ref().ok_or("登录上下文缺失")?;
     let completion = pending.context.root.join(".cliora-auth-exit");
