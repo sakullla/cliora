@@ -125,7 +125,7 @@ async function searchStroke(page: Page) {
 
 async function expectSearchStroke(page: Page, theme: 'light' | 'dark') {
   const icon = await searchStroke(page);
-  expect(icon.token).toBe(theme === 'dark' ? '#98968e' : '#6e6a63');
+  expect(icon.token).toBe(theme === 'dark' ? '#e5e2de' : '#524c46');
   expect(icon.stroke).toBe(icon.token);
 }
 
