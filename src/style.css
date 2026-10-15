@@ -253,8 +253,7 @@ details[open] > :not(summary) { animation: reveal var(--medium) var(--ease); }
 
 .shell {
   width: 100%;
-  /* Fill the root. 100dvh follows WebView2's dynamic viewport, which oscillates on mouse move after a fullscreen snip and shakes the whole shell. */
-  height: 100%;
+  height: 100dvh;
   min-height: 0;
   display: grid;
   grid-template-columns: 212px minmax(0, 1fr);
