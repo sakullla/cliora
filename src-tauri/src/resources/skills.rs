@@ -1326,13 +1326,83 @@ pub fn delete_package(db: &Database, registry: &Registry, home: &Path, id: &str)
 #[derive(Clone, Debug, Serialize, serde::Deserialize)]
 struct SkillOverrideRecord { previous: Option<serde_json::Value>, disabled: serde_json::Value }
 fn switch_pointer(field: &[String]) -> String { format!("/{}",field.iter().map(|part| part.replace('~',"~0").replace('/',"~1")).collect::<Vec<_>>().join("/")) }
+/// Identified install version for adapters whose skill switch follows the
+/// native major version. The lookup uses the shared cached probe, so a read
+/// and a later write on the same operation resolve the same evidence.
+fn switch_version(
+    db: &Database,
+    registry: &Registry,
+    home: &Path,
+    adapter: &dyn crate::adapters::CliAdapter,
+    scope: Scope,
+    project_path: Option<&str>,
+) -> Result<Option<String>, String> {
+    if !adapter.skill_switch_requires_version() {
+        return Ok(None);
+    }
+    let tool = adapter.id();
+    let custom: Option<String> = db.with_connection(|conn| {
+        conn.query_row("SELECT path FROM installation_choices WHERE tool=?1", [tool], |row| row.get(0))
+            .optional().map_err(|_| "无法读取 CLI 路径".into())
+    })?;
+    let project = if scope == Scope::Project {
+        Some(projects::checked_directory(project_path.ok_or("请选择项目目录")?)?)
+    } else {
+        None
+    };
+    let probe = crate::native::adapter::probe_registered_cached(
+        registry,
+        tool,
+        custom.as_deref().map(Path::new),
+        home,
+        project.as_deref(),
+        scope,
+        false,
+    )?;
+    Ok(probe
+        .selected_path
+        .as_ref()
+        .and_then(|selected| probe.installations.iter().find(|item| &item.path == selected))
+        .and_then(|item| item.version.clone()))
+}
+
+/// Switch location in the native form of the identified install. A known
+/// major without a verified switch shape is an error, not a silent fallback
+/// to archiving the skill directory.
+fn switch_location(
+    db: &Database,
+    registry: &Registry,
+    home: &Path,
+    adapter: &dyn crate::adapters::CliAdapter,
+    scope: Scope,
+    project_path: Option<&str>,
+    name: &str,
+) -> Result<Option<crate::adapters::SkillSwitchLocation>, String> {
+    let version = switch_version(db, registry, home, adapter, scope, project_path)?;
+    let location = adapter.skill_switch_location_for_version(
+        scope,
+        home,
+        project_path.map(Path::new),
+        name,
+        version.as_deref(),
+    );
+    if location.is_none() && adapter.skill_switch_requires_version() {
+        if let Some(version) = version {
+            return Err(format!(
+                "{} 的 Skill 开关原生形态尚未验证（识别版本 {version}）；未执行写入",
+                adapter.name()
+            ));
+        }
+    }
+    Ok(location)
+}
+
 pub fn enabled(db: &Database, registry: &Registry, home: &Path, package_id: &str, tool: &str, scope: Scope, project_path: Option<&str>) -> Result<bool,String> {
     let _context = crate::accounts::selection::enter_bound(db,home,tool,scope,project_path.map(Path::new))?;
     let (package,_)=package(db,package_id)?; let (path,_)=target(registry,home,tool,scope,project_path,&package.name)?;
     if !path.exists() { return Ok(false); }
     let adapter=registry.get(tool).ok_or("未注册的 CLI")?;
-    let project=project_path.map(Path::new);
-    if let Some(location)=adapter.skill_switch_location(scope,home,project,&package.name) {
+    if let Some(location)=switch_location(db,registry,home,adapter,scope,project_path,&package.name)? {
         let text=crate::native::transaction::read_native(&location.path)?; let root=crate::native::format::parse(location.kind,&text)?;
         return Ok(adapter.skill_switch_enabled(root.pointer(&switch_pointer(&location.field)).unwrap_or(&serde_json::Value::Null),&path));
     }
@@ -1342,7 +1412,7 @@ pub fn set_enabled(db: &Database, credentials: &dyn crate::credentials::Credenti
     let _context = crate::accounts::selection::enter_bound(db,home,tool,scope,project_path.map(Path::new))?;
     let (package,_)=package(db,package_id)?; let (path,key)=target(registry,home,tool,scope,project_path,&package.name)?;
     let adapter=registry.get(tool).ok_or("未注册的 CLI")?;
-    if let Some(location)=adapter.skill_switch_location(scope,home,project_path.map(Path::new),&package.name) {
+    if let Some(location)=switch_location(db,registry,home,adapter,scope,project_path,&package.name)? {
         if !path.is_dir() { return Err("请先安装此 Skill".into()); }
         let baseline=crate::native::transaction::read_native(&location.path)?;
         let root=crate::native::format::parse(location.kind,&baseline)?;
@@ -1351,16 +1421,16 @@ pub fn set_enabled(db: &Database, credentials: &dyn crate::credentials::Credenti
         let old:Option<String>=db.with_connection(|conn| conn.query_row("SELECT value FROM app_settings WHERE key=?1",[&record_key],|row| row.get(0)).optional().map_err(|e| e.to_string()))?;
         let record:Option<SkillOverrideRecord>=old.as_deref().map(serde_json::from_str).transpose().map_err(|_| "Skills 开关记录损坏")?;
         let current_value=current.as_ref().unwrap_or(&serde_json::Value::Null);
-        let snapshot=adapter.skill_switch_snapshot(current_value,&path);
+        let snapshot=adapter.skill_switch_snapshot_at(&location,current_value,&path);
         if let Some(record)=&record {
             if snapshot.as_ref()!=Some(&record.disabled) {return Err("Skills 设置已在其他地方修改，请保留原文件并重新查看".into());}
             if !enabled { return Ok(()); }
         }
-        let desired=if enabled { if let Some(record)=&record { adapter.skill_switch_restore(current_value,record.previous.as_ref(),&path) } else {Some(adapter.skill_switch_value(current_value,true,&path))} }
-            else {Some(adapter.skill_switch_value(current.as_ref().unwrap_or(&serde_json::Value::Null),false,&path))};
+        let desired=if enabled { if let Some(record)=&record { adapter.skill_switch_restore(current_value,record.previous.as_ref(),&path) } else {Some(adapter.skill_switch_value_at(&location,current_value,true,&path))} }
+            else {Some(adapter.skill_switch_value_at(&location,current.as_ref().unwrap_or(&serde_json::Value::Null),false,&path))};
         let contents=crate::native::format::set_path(location.kind,&baseline,&location.field,desired.as_ref())?;
         if contents==baseline {return Ok(());}
-        let record_data=serde_json::to_string(&SkillOverrideRecord {previous:snapshot,disabled:adapter.skill_switch_snapshot(desired.as_ref().unwrap_or(&serde_json::Value::Null),&path).unwrap_or(serde_json::Value::Null)}).map_err(|e| e.to_string())?;
+        let record_data=serde_json::to_string(&SkillOverrideRecord {previous:snapshot,disabled:adapter.skill_switch_snapshot_at(&location,desired.as_ref().unwrap_or(&serde_json::Value::Null),&path).unwrap_or(serde_json::Value::Null)}).map_err(|e| e.to_string())?;
         crate::native::transaction::apply_text(db,credentials,&[crate::native::transaction::TextPatch{path:location.path,baseline,contents,sensitive:true}],|tx| {
             if enabled {tx.execute("DELETE FROM app_settings WHERE key=?1",[&record_key])} else {tx.execute("INSERT INTO app_settings(key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![record_key,record_data])}.map(|_|()).map_err(|e| e.to_string())
         })?;
