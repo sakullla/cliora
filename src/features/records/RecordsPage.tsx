@@ -82,6 +82,8 @@ function rangeDates(key: RangeKey, customFrom: string, customTo: string, today =
   return { from: '', to: '' };
 }
 const dayLabel = (iso: string) => { const [year, month, day] = iso.split('-').map(Number); return new Date(year, (month || 1) - 1, day || 1).toLocaleDateString(dateLocale(), { year: 'numeric', month: 'long', day: 'numeric' }); };
+/** A query without user-facing filters; its result count is the "total" shown next to filtered hits. */
+const unfilteredQuery = (current: HistoryFilter) => !current.search && !current.favoriteOnly && !current.toolId && !current.model && !current.projectId && current.fromMs === null && current.toMs === null;
 function rangeCaption(from: string, to: string) {
   if (!from && !to) return '';
   if (from && to && from === to) return dayLabel(from);
@@ -107,6 +109,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
   const [listError, setListError] = useState(false);
   const [favoriteBusy, setFavoriteBusy] = useState(false);
   const [sessions, setSessions] = useState<HistorySession[]>([]);
+  const [unfilteredTotal, setUnfilteredTotal] = useState(0);
   const sessionTotal = useRef(0); sessionTotal.current = sessions.length;
   const sentinelObserver = useRef<IntersectionObserver | null>(null);
   const observeSentinel = useCallback((node: HTMLDivElement | null) => {
@@ -178,6 +181,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
     const key = JSON.stringify(current); setFilterLoading(true); setListError(false);
     try {
       const items = await native.listHistorySessions(current);
+      if (unfilteredQuery(current)) setUnfilteredTotal(items.length);
       if (sequence !== request.current || key !== JSON.stringify(filterRef.current)) return false;
       loadedFilter.current = key;
       setSessions(items); toasts.setError(null);
@@ -428,7 +432,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
       {activeFilters.map((item) => <button type="button" key={item.key} className={styles.filterChip} title={t('records.page.chipTitle')} onClick={item.clear}><span>{item.label}</span><Icon name="close" size={11} strokeWidth={2.4} /></button>)}
       {activeFilters.length > 1 && <button type="button" className="text-button" onClick={clearAllFilters}>{t('records.page.clearAll')}</button>}
     </div>}
-        <div className={styles.listToolbar}><span>{filterLoading ? t('records.page.updating') : activeFilters.length ? t('records.page.filtered') : t('records.page.allSessions')}</span><select aria-label={t('records.page.sortAria')} value={sort} onChange={(event) => setSort(event.target.value)}><option value="recent">{t('records.page.sortRecent')}</option><option value="oldest">{t('records.page.sortOldest')}</option><option value="messages">{t('records.page.sortMessages')}</option></select></div>
+        <div className={styles.listToolbar}><span>{filterLoading ? t('records.page.updating') : activeFilters.length ? t('records.page.countFiltered', { filtered: sessions.length, total: unfilteredTotal }) : t('records.page.allSessions')}</span><select aria-label={t('records.page.sortAria')} value={sort} onChange={(event) => setSort(event.target.value)}><option value="recent">{t('records.page.sortRecent')}</option><option value="oldest">{t('records.page.sortOldest')}</option><option value="messages">{t('records.page.sortMessages')}</option></select></div>
       <div className={styles.list} aria-label={t('records.page.listAria')} aria-busy={filterLoading || undefined}>{sessions.length ? <>{visibleGroups.flatMap(({ group, items, total }, groupIndex) => [
         <div key={`group-${groupIndex}-${group}`} className={styles.group} role="presentation" aria-hidden="true">{sort === 'recent' ? groupLabel(group) : sort === 'messages' ? t('records.page.groupByMessages') : t('records.page.groupByTime')}<span>{total}</span></div>,
         ...items.map((item) => <button type="button" key={item.id} data-session-id={item.id} aria-current={selectedId === item.id ? 'true' : undefined} className={selectedId === item.id ? styles.selected : ''} onClick={() => selectSession(item.id)} onKeyDown={(event) => { if (event.key === 'ArrowDown') { event.preventDefault(); moveSession(item, 1); } else if (event.key === 'ArrowUp') { event.preventDefault(); moveSession(item, -1); } else if (event.key === 'Home') { event.preventDefault(); focusSession(orderedSessions[0]); } else if (event.key === 'End') { event.preventDefault(); focusSession(orderedSessions[orderedSessions.length - 1]); } }}>

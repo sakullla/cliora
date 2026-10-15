@@ -141,14 +141,19 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
     if (!nativeAvailable || !active) return;
     let live = true;
     setListLoading(true);
-    void native.listLibraryItems(kind, null, search).then((result) => { if (live) { setItems(result); setListLoading(false); } })
-      .catch((value) => { if (live) { setListLoading(false); showError(formatFailure(value, t('library.page.listFailed'), t('library.page.listNext'))); } });
-    return () => { live = false; };
+    // Search keystrokes debounce like Records (180ms) so fast typing merges into one
+    // native query; clearing the field skips the delay and restores the full list at once.
+    const timer = window.setTimeout(() => {
+      void native.listLibraryItems(kind, null, search).then((result) => { if (live) { setItems(result); setListLoading(false); } })
+        .catch((value) => { if (live) { setListLoading(false); showError(formatFailure(value, t('library.page.listFailed'), t('library.page.listNext'))); } });
+    }, search ? 180 : 0);
+    return () => { live = false; window.clearTimeout(timer); };
   }, [active, kind, search]);
 
   const categories = useMemo(() => Array.from(new Set(items.flatMap((item) => tagsOf(item.category)))).sort(), [items]);
   const shown = items.filter((item) => (projectFilter === '*' || (projectFilter === 'global' ? !item.projectId : item.projectId === projectFilter))
     && (categoryFilter === '*' || tagsOf(item.category).includes(categoryFilter)));
+  const listTotal = counts[kind] ?? items.length;
 
   async function canReplace() { return !dirty || confirmCurrent(t('library.page.confirmDiscard')); }
   async function choose(item: LibraryItem) {
@@ -328,6 +333,7 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
       ]} searchLabel={t('library.page.searchTags')} onChange={setCategoryFilter} />
     </div>
     <div className={styles.layout}>
+      {(!listLoading || items.length > 0) && <div><span className="count-chip">{t('library.page.countFiltered', { filtered: shown.length, total: listTotal })}</span></div>}
       <div className={styles.list} aria-label={t('library.page.listAria', { kind: kindName(kind) })}>
         {listLoading && !items.length ? <SkeletonRows count={3} /> : shown.length ? shown.map((item) => <article className={styles.card} key={item.id}>
           {(tagsOf(item.category).length > 0 || item.projectId || item.updatedAt) && <small className={styles.cardMeta}>
