@@ -117,11 +117,11 @@ impl CliAdapter for Devin {
         }
     }
     fn native_binary_directories(&self, home: &Path) -> Vec<PathBuf> {
-        let mut dirs = vec![home.join(".local/bin")];
         if cfg!(windows) {
-            dirs.push(home.join("AppData/Local/devin/cli/bin"));
+            vec![home.join("AppData/Local/devin/cli/bin")]
+        } else {
+            vec![home.join(".local/bin")]
         }
-        dirs
     }
     fn recognizes_native_install_path(&self, path: &Path) -> bool {
         let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
