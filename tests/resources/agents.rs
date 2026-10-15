@@ -1169,3 +1169,71 @@ fn opencode_agent_config_writes_refused_until_install_version_resolves() {
     assert_eq!(parsed["agents"]["planner"]["disabled"], true);
     assert!(parsed["agent"].is_null());
 }
+
+#[test]
+fn opencode_version_resolved_writes_stay_in_the_entrys_own_container() {
+    // The install line decides the field form, but a write must follow the
+    // container the entry actually lives in: editing a v1-shaped entry on a
+    // 2.x install (or the reverse) is refused instead of duplicating it into
+    // the other synonym container, and delete removes the targeted entry
+    // from its own container instead of reporting a silent no-op.
+    for (version, shape, source, native) in [
+        (
+            Some("2.0.29"),
+            r#"{"agent":{"reviewer":{"description":"v1 line","prompt":"x","disable":false}}}"#,
+            "agent",
+            "agents",
+        ),
+        (
+            Some("1.18.34"),
+            r#"{"agents":{"reviewer":{"description":"v2 line","system":"y","disabled":true}}}"#,
+            "agents",
+            "agent",
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let db = Database::open(&home.join("db.sqlite")).unwrap();
+        let store = MemoryStore::default();
+        let target = target("open_code", home);
+        let path = home.join("opencode.json");
+        write(&path, shape);
+        let snapshot = snapshot_inner(home, &target, &[], version).unwrap();
+        assert_eq!(snapshot.entries.len(), 1, "{version:?}");
+        assert!(!snapshot.entries[0].read_only, "{version:?}");
+        let entry = &snapshot.entries[0];
+        let before = fs::read_to_string(&path).unwrap();
+        for (action, content) in [
+            ("save", r#"{"description":"edited","prompt":"y"}"#),
+            ("enable", ""),
+            ("disable", ""),
+        ] {
+            let error = operate_inner(
+                &db,
+                &store,
+                home,
+                &request(home, &target, action, Some(entry), content, version),
+                &[],
+                version,
+            )
+            .unwrap_err();
+            assert!(error.contains(source) && error.contains(native), "{action}: {error}");
+            // No synonym duplication: the file stays byte-identical and
+            // single-form after every refused edit.
+            assert_eq!(fs::read_to_string(&path).unwrap(), before, "{action}");
+        }
+        let deleted = operate_inner(
+            &db,
+            &store,
+            home,
+            &request(home, &target, "delete", Some(entry), "", version),
+            &[],
+            version,
+        )
+        .unwrap();
+        assert!(deleted.snapshot.entries.is_empty(), "{version:?}");
+        let parsed: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(parsed[source]["reviewer"].is_null(), "{version:?}");
+        assert!(parsed.get(native).is_none(), "{version:?}");
+    }
+}
