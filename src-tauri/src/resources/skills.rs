@@ -1368,7 +1368,9 @@ fn switch_version(
 
 /// Switch location in the native form of the identified install. A known
 /// major without a verified switch shape is an error, not a silent fallback
-/// to archiving the skill directory.
+/// to archiving the skill directory. An unverified version returns None when
+/// the settings file carries no explicit v1/v2 form signal; the write path
+/// refuses that case (reads stay view-available).
 fn switch_location(
     db: &Database,
     registry: &Registry,
@@ -1412,7 +1414,16 @@ pub fn set_enabled(db: &Database, credentials: &dyn crate::credentials::Credenti
     let _context = crate::accounts::selection::enter_bound(db,home,tool,scope,project_path.map(Path::new))?;
     let (package,_)=package(db,package_id)?; let (path,key)=target(registry,home,tool,scope,project_path,&package.name)?;
     let adapter=registry.get(tool).ok_or("未注册的 CLI")?;
-    if let Some(location)=switch_location(db,registry,home,adapter,scope,project_path,&package.name)? {
+    let located=switch_location(db,registry,home,adapter,scope,project_path,&package.name)?;
+    if located.is_none() && adapter.skill_switch_requires_version() {
+        // Unverified version and no explicit v1/v2 form signal in the settings
+        // file: refuse the write rather than guessing a major (R1).
+        return Err(format!(
+            "{} 的版本未能核验，且设置文件没有可识别的 Skills 开关原生形态；未执行写入",
+            adapter.name()
+        ));
+    }
+    if let Some(location)=located {
         if !path.is_dir() { return Err("请先安装此 Skill".into()); }
         let baseline=crate::native::transaction::read_native(&location.path)?;
         let root=crate::native::format::parse(location.kind,&baseline)?;

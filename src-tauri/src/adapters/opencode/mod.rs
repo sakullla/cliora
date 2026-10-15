@@ -318,21 +318,24 @@ impl CliAdapter for OpenCode {
             // top-level ordered `permissions` array.
             Some(2) => vec!["permissions".into()],
             Some(_) => return None,
-            // No identified install: follow the file's own native form. A v2
-            // rule array wins; anything else keeps the historical v1 pointer
-            // (a corrupt file still fails at the shared parse before a write).
-            None => {
-                let v2 = std::fs::read_to_string(Path::new(&file.path))
-                    .ok()
-                    .and_then(|text| crate::native::format::parse(kind, &text).ok())
-                    .and_then(|root| root.get("permissions").and_then(Value::as_array).cloned())
-                    .is_some();
-                if v2 {
-                    vec!["permissions".into()]
-                } else {
-                    vec!["permission".into(), "skill".into(), name.into()]
-                }
-            }
+            // No verified install version: only the file's own explicit
+            // native-form evidence authorizes a write. A v2 `permissions`
+            // array or an existing v1 `permission.skill` subtree selects that
+            // form; with no signal there is no location, so the shared write
+            // path refuses instead of guessing the historical v1 pointer
+            // (R1, same unverified-version boundary as the MCP location).
+            None => std::fs::read_to_string(Path::new(&file.path))
+                .ok()
+                .and_then(|text| crate::native::format::parse(kind, &text).ok())
+                .and_then(|root| {
+                    if root.get("permissions").is_some_and(Value::is_array) {
+                        Some(vec!["permissions".into()])
+                    } else {
+                        root.pointer("/permission/skill")
+                            .filter(|value| !value.is_null())
+                            .map(|_| vec!["permission".into(), "skill".into(), name.into()])
+                    }
+                })?,
         };
         Some(super::SkillSwitchLocation {
             path: file.path.into(),

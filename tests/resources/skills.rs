@@ -183,12 +183,18 @@ fn opencode_skill_switch_without_a_probed_version_follows_the_file_form() {
     let home=temp.path().join("home");
     let config=home.join(".config/opencode/opencode.json");
     fs::create_dir_all(config.parent().unwrap()).unwrap();
-    // Without an identified install the location follows the file's own
-    // native form: the historical v1 pointer, or the v2 rule array once the
-    // file carries one. An unverified newer major is refused, not guessed.
+    // Without a verified version the location follows the file's own explicit
+    // native form only: an existing v1 permission.skill subtree, or the v2
+    // rule array. No form signal means no location, so the shared write path
+    // refuses instead of guessing the v1 pointer. An unverified newer major
+    // is refused, not guessed.
     fs::write(&config,"{\"permission\":{\"skill\":{\"alpha\":\"deny\"}}}").unwrap();
     let located=adapter.skill_switch_location_for_version(Scope::Global,&home,None,"alpha",None).unwrap();
     assert_eq!(located.field,vec!["permission".to_owned(),"skill".to_owned(),"alpha".to_owned()]);
+    fs::write(&config,"{\"theme\":\"dark\"}").unwrap();
+    assert!(adapter.skill_switch_location_for_version(Scope::Global,&home,None,"alpha",None).is_none());
+    fs::write(&config,"{\"permissions\":{\"not\":\"an array\"}}").unwrap();
+    assert!(adapter.skill_switch_location_for_version(Scope::Global,&home,None,"alpha",None).is_none());
     fs::write(&config,"{\"permissions\":[]}").unwrap();
     let located=adapter.skill_switch_location_for_version(Scope::Global,&home,None,"alpha",None).unwrap();
     assert_eq!(located.field,vec!["permissions".to_owned()]);
@@ -197,6 +203,68 @@ fn opencode_skill_switch_without_a_probed_version_follows_the_file_form() {
     assert_eq!(v1.field,vec!["permission".to_owned(),"skill".to_owned(),"alpha".to_owned()]);
     let v2=adapter.skill_switch_location_for_version(Scope::Global,&home,None,"alpha",Some("v2.0.29")).unwrap();
     assert_eq!(v2.field,vec!["permissions".to_owned()]);
+}
+
+#[test]
+fn opencode_skill_switch_unverified_version_writes_only_with_explicit_form_evidence() {
+    use crate::credentials::CredentialStore;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    #[derive(Default)] struct Store(Mutex<HashMap<String,String>>);
+    impl CredentialStore for Store {
+        fn put(&self,key:&str,value:&str)->Result<(),String>{self.0.lock().unwrap().insert(key.into(),value.into());Ok(())}
+        fn get(&self,key:&str)->Result<String,String>{self.0.lock().unwrap().get(&key.to_string()).cloned().ok_or("missing".into())}
+        fn delete(&self,key:&str)->Result<(),String>{self.0.lock().unwrap().remove(key);Ok(())}
+    }
+    let temp=tempfile::tempdir().unwrap();
+    let db=Database::open(&temp.path().join("app.db")).unwrap();
+    let store=Store::default();
+    // Install present but the version probe yielded nothing: writes may only
+    // follow explicit native-form evidence in the settings file (R1).
+    let registry=Registry::builtins().with_fixture_unverified_installation("open_code");
+    let home=temp.path().join("home");
+    let source=temp.path().join("alpha"); fs::create_dir_all(&source).unwrap();
+    fs::write(source.join("SKILL.md"),"---\nname: alpha\ndescription: Test\n---\n").unwrap();
+    let package=import_local(&db,source.to_str().unwrap(),None,None).unwrap();
+    let result=install(&db,&registry,&home,&package.id,"open_code",Scope::Global,None);
+    assert_eq!(result.status,"installed","{}",result.detail);
+    let config=home.join(".config/opencode/opencode.json");
+    fs::create_dir_all(config.parent().unwrap()).unwrap();
+
+    // (a) No form signal: the write is refused with an unverified reason and
+    // the file stays byte-identical; the read path stays available.
+    let original="{\"theme\":\"dark\",\"unknownTop\":{\"keep\":true}}\n";
+    fs::write(&config,original).unwrap();
+    let message=set_enabled(&db,&store,&registry,&home,&package.id,"open_code",Scope::Global,None,false).unwrap_err();
+    assert!(message.contains("未能核验"),"refusal reason: {message}");
+    assert_eq!(fs::read_to_string(&config).unwrap(),original);
+    assert!(enabled(&db,&registry,&home,&package.id,"open_code",Scope::Global,None).unwrap());
+
+    // (b) Explicit v1 evidence (permission.skill subtree): the v1 pointer
+    // write proceeds and preserves the unrelated sibling entry.
+    fs::write(&config,serde_json::to_string(&serde_json::json!({"permission":{"skill":{"beta":"allow"}},"theme":"dark"})).unwrap()).unwrap();
+    set_enabled(&db,&store,&registry,&home,&package.id,"open_code",Scope::Global,None,false).unwrap();
+    let doc: serde_json::Value=serde_json::from_str(&fs::read_to_string(&config).unwrap()).unwrap();
+    assert_eq!(doc.pointer("/permission/skill/alpha"),Some(&serde_json::json!("deny")));
+    assert_eq!(doc.pointer("/permission/skill/beta"),Some(&serde_json::json!("allow")));
+    assert!(!enabled(&db,&registry,&home,&package.id,"open_code",Scope::Global,None).unwrap());
+    set_enabled(&db,&store,&registry,&home,&package.id,"open_code",Scope::Global,None,true).unwrap();
+    let doc: serde_json::Value=serde_json::from_str(&fs::read_to_string(&config).unwrap()).unwrap();
+    assert!(doc.pointer("/permission/skill/alpha").is_none());
+    assert!(enabled(&db,&registry,&home,&package.id,"open_code",Scope::Global,None).unwrap());
+
+    // (c) Explicit v2 evidence (permissions array): the v2 rule write
+    // proceeds and keeps the other rules.
+    let deny_beta=serde_json::json!({"action":"skill","resource":"beta","effect":"deny"});
+    fs::write(&config,serde_json::to_string(&serde_json::json!({"permissions":[deny_beta.clone()]})).unwrap()).unwrap();
+    set_enabled(&db,&store,&registry,&home,&package.id,"open_code",Scope::Global,None,false).unwrap();
+    let doc: serde_json::Value=serde_json::from_str(&fs::read_to_string(&config).unwrap()).unwrap();
+    assert_eq!(doc.get("permissions").and_then(|v|v.as_array()).unwrap(),&vec![deny_beta.clone(),serde_json::json!({"action":"skill","resource":"alpha","effect":"deny"})]);
+    assert!(!enabled(&db,&registry,&home,&package.id,"open_code",Scope::Global,None).unwrap());
+    set_enabled(&db,&store,&registry,&home,&package.id,"open_code",Scope::Global,None,true).unwrap();
+    let doc: serde_json::Value=serde_json::from_str(&fs::read_to_string(&config).unwrap()).unwrap();
+    assert_eq!(doc.get("permissions").and_then(|v|v.as_array()).unwrap(),&vec![deny_beta]);
+    assert!(enabled(&db,&registry,&home,&package.id,"open_code",Scope::Global,None).unwrap());
 }
 
 #[test]
