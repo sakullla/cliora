@@ -76,15 +76,16 @@ test('a success notice can be dismissed', async ({ page }) => {
   await expect(notice).toHaveCount(0);
 });
 
-test('MCP and Skill tabs share one heading and a single add action', async ({ page }) => {
+test('MCP and Skill tabs share one heading and one add action in the head and empty state', async ({ page }) => {
   await mockWorkspace(page, 1);
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'MCP 服务器' })).toBeVisible();
   await expect(page.getByText('这个 CLI 还没有生效的 MCP')).toBeVisible();
-  await expect(page.getByRole('button', { name: '添加 MCP', exact: true })).toHaveCount(1);
+  // The empty state embeds an entry with the same action as the head button.
+  await expect(page.getByRole('button', { name: '添加 MCP', exact: true })).toHaveCount(2);
   await page.getByRole('tab', { name: 'Skill', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Skill', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '添加 Skill', exact: true })).toHaveCount(1);
+  await expect(page.getByRole('button', { name: '添加 Skill', exact: true })).toHaveCount(2);
 });
 
 test('configuration dialog names the profile, marks the preview tab and reports draft state', async ({ page }) => {

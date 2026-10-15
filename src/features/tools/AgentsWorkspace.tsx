@@ -10,6 +10,8 @@ import styles from './ManagementPanel.module.css';
 import editorStyles from './AgentsWorkspace.module.css';
 import { StatusBanner } from '../../components/StatusBanner';
 import { SearchField } from '../../components/SearchField';
+import { SkeletonRows } from '../../components/Skeleton';
+import { EmptyState } from '../../components/EmptyState';
 
 function message(error: unknown) { return error && typeof error === 'object' && 'message' in error ? String(error.message) : String(error); }
 export function AgentsWorkspace({ toolId, scope, projectPath, contextId, onDirtyChange }: { toolId: string; scope: Scope; projectPath: string; contextId: string | null; onDirtyChange: (value: boolean) => void }) {
@@ -69,7 +71,7 @@ export function AgentsWorkspace({ toolId, scope, projectPath, contextId, onDirty
     <div className={styles.header}><div><h2>{t('tools.agents.title')}</h2><p>{t('tools.agents.description')}</p></div><div className={styles.actions}><button disabled={busy} onClick={() => void refresh()}>{t('tools.agents.rescan')}</button><button disabled={busy || !snapshot?.capability.supported} onClick={() => importInput.current?.click()}>{t('tools.agents.import')}</button><button className={styles.primary} disabled={busy || !snapshot?.capability.supported} onClick={() => void edit(null)}>{t('tools.agents.create')}</button>
       <input ref={importInput} hidden aria-label={t('tools.agents.importAria')} type="file" accept={snapshot?.capability.format === 'toml' ? '.toml' : '.md'} disabled={busy || !snapshot?.capability.supported} onChange={event => { void importFile(event.target.files?.[0]); event.target.value = ''; }} /></div></div>
     <div className={styles.context}><span>{scope === 'global' ? t('tools.apply.global') : projectPath}</span><span>{accountLabel(contextId)}</span></div>
-    {busy && <p role="status">{t('tools.agents.busy')}</p>}{error && <StatusBanner tone="error" onDismiss={() => setError('')}>{error}</StatusBanner>}
+    {busy && (snapshot ? <p role="status">{t('tools.agents.busy')}</p> : <div role="status" aria-label={t('tools.agents.loading')}><SkeletonRows count={3} /></div>)}{error && <StatusBanner tone="error" onDismiss={() => setError('')}>{error}</StatusBanner>}
     {last && <div role="status"><p>{last.detail}</p><details><summary>{t('tools.agents.lastFiles')}</summary>{last.changedPaths.map(path => <p key={path}>{path}</p>)}</details><button disabled={busy || dirty} onClick={() => void operate('restore')}>{t('tools.agents.restoreLast')}</button></div>}
     {editing ? <div className={editorStyles.editor}>
       <h3>{selected?.readOnly ? t('tools.agents.viewReadonly') : selected ? t('tools.agents.edit') : t('tools.agents.createTitle')}</h3>
@@ -82,7 +84,7 @@ export function AgentsWorkspace({ toolId, scope, projectPath, contextId, onDirty
       <div className={styles.actions}><button disabled={busy} onClick={() => void edit(entry)}>{entry.readOnly ? t('tools.agents.view') : t('tools.agents.editButton')}</button><button disabled={busy || entry.readOnly} title={entry.readOnly ? t('tools.agents.managedTitle') : undefined} onClick={() => void operate(entry.enabled ? 'disable' : 'enable', entry)}>{entry.enabled ? t('tools.plugins.action.disable') : t('tools.plugins.action.enable')}</button><button className={styles.danger} disabled={busy || entry.readOnly} title={entry.readOnly ? t('tools.agents.managedTitle') : undefined} onClick={() => void operate('delete', entry)}>{t('tools.agents.delete')}</button></div>
       <details><summary>{t('tools.agents.detail')}</summary><p>{entry.description}</p>{entry.path && <p>{entry.path}</p>}{entry.detail && <p>{entry.detail}</p>}</details>
     </li>)}</ul>}{entries.length > 0 && filtered.length === 0 && <p className={styles.empty}>{t('tools.agents.noMatch')}<button onClick={() => { setSearch(''); setFilter('all'); }}>{t('tools.plugins.clearFilter')}</button></p>}{entries.length > 0 && <p className={styles.listNote}>{t('tools.agents.listNote')}</p>}</>}
-    {snapshot?.capability.supported && !snapshot.entries.length && !editing && <p className={styles.empty}>{t('tools.agents.empty')}</p>}
+    {snapshot?.capability.supported && !snapshot.entries.length && !editing && <EmptyState icon="sparkle" title={t('tools.agents.emptyTitle')} detail={t('tools.agents.empty')} action={<button className="button primary" disabled={busy} onClick={() => void edit(null)}>{t('tools.agents.create')}</button>} />}
     {snapshot && <details className={styles.compatibility}><summary>{t('tools.agents.compatSummary')}</summary><p>{t('tools.plugins.compatVersion', { version: snapshot.capability.version, detail: snapshot.capability.detail })}</p><p>{snapshot.detail}</p></details>}
   </section>;
 }
