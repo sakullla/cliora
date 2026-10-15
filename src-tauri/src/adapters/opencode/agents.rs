@@ -254,6 +254,21 @@ impl AgentAdapter for OpenCode {
         version: Option<&str>,
     ) -> Result<String, String> {
         let (container, switch) = native_shape(version)?;
+        // Writes must land in the container the entry actually lives in
+        // (entry.id carries #agent/ or #agents/). Deriving it from the
+        // install line alone would append a synonym copy under the other
+        // container (R5) or report a delete that touched nothing.
+        let source = entry
+            .id
+            .rsplit_once('#')
+            .and_then(|(_, tail)| tail.split('/').next())
+            .filter(|segment| *segment == "agent" || *segment == "agents")
+            .ok_or_else(|| "无法确定此定义所在的原生 agent 容器".to_owned())?;
+        if source != container && request.action != "delete" {
+            return Err(format!(
+                "此定义位于 {source} 容器，与已安装 OpenCode 的原生形态 {container} 不一致；为避免 agent/agents 同义并存未执行写入，请在原生配置统一为 {container} 后再编辑（删除仍按 {source} 执行）"
+            ));
+        }
         let target = &request.target;
         let path = PathBuf::from(&entry.path);
         let old = read(&path)?;
@@ -284,10 +299,14 @@ impl AgentAdapter for OpenCode {
             }
             _ => return Err("未知 agent 操作".into()),
         };
+        // Delete targets the entry's own container so it really removes what
+        // the user selected; edits were already refused on a container
+        // mismatch, so here source is either the install container or the
+        // entry's own container for a delete.
         let output = format::set_path(
             kind,
             &old,
-            &[container.into(), entry.name.clone()],
+            &[source.into(), entry.name.clone()],
             value.as_ref(),
         )?;
         Ok(output)
