@@ -13,6 +13,7 @@ import { StatusBanner } from '../../components/StatusBanner';
 import { useFeedback } from '../../lib/toast';
 import { applyParsedServer, blankMcpDraft, editableRowsOf, hasMcpIssues, keptMcpArgs, mcpDraftIssues, mcpDraftOf, mcpSummary, recordOfRows, type KeyValueRow, type McpParsedServer } from '../../lib/mcp';
 import { McpFormFields } from '../../components/mcp/McpFormFields';
+import { SkeletonRows } from '../../components/Skeleton';
 import i18n from '../../i18n';
 import styles from './McpWorkspace.module.css';
 
@@ -31,6 +32,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
   const [headerRows, setHeaderRows] = useState<KeyValueRow[]>(editableRowsOf({}));
   const [savedFingerprint, setSavedFingerprint] = useState(JSON.stringify([blankMcpDraft(), editableRowsOf({}), editableRowsOf({}), true]));
   const [nativeEntries, setNativeEntries] = useState<NativeMcpEntry[]>([]);
+  const [listLoading, setListLoading] = useState(true);
   const [enabled, setEnabled] = useState(true);
   const [nativeOrigin, setNativeOrigin] = useState<NativeMcpEntry | null>(null);
   const [currentConflict, setCurrentConflict] = useState<{ id: string; items: McpTargetResult[] } | null>(null);
@@ -74,11 +76,13 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
     void native.listMcpDefinitions().then(setDefinitions).catch((value) => setError(errorText(value)));
   }, []);
   useEffect(() => {
-    if (!toolId || (scope === 'project' && !project)) { setNativeEntries([]); setCapabilityBlocked(''); return; }
+    if (!toolId || (scope === 'project' && !project)) { setNativeEntries([]); setCapabilityBlocked(''); setListLoading(false); return; }
     let live = true;
     setCapabilityBlocked('');
+    setListLoading(true);
     void native.listNativeMcp(target).then((value) => { if (live) { setNativeEntries(value); setCapabilityBlocked(''); } })
-      .catch((value) => { if (live) { setNativeEntries([]); setCapabilityBlocked(errorText(value)); } });
+      .catch((value) => { if (live) { setNativeEntries([]); setCapabilityBlocked(errorText(value)); } })
+      .finally(() => { if (live) setListLoading(false); });
     return () => { live = false; };
   }, [target, toolId, scope, project]);
 
@@ -201,12 +205,13 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
 
   return <section className={styles.section} aria-label={t('tools.mcp.title')}>
     {head(true)}
-    {empty ? <div className={styles.empty}>
+    {empty ? (listLoading ? <div role="status" aria-label={t('tools.mcp.loading')}><SkeletonRows count={3} /></div> : <div className={styles.empty}>
       <span className={styles.emptyIcon}><Icon name="connections" size={22} strokeWidth={1.5} /></span>
       <strong>{t('tools.mcp.emptyTitle')}</strong>
       <p>{t('tools.mcp.emptyDetail')}</p>
       {scope === 'project' && !project && <p className={styles.muted}>{t('tools.mcp.pickProjectFirst')}</p>}
-    </div> : <div className={styles.listCard}>
+      <button type="button" className={styles.primary} disabled={busy || (scope === 'project' && !project)} onClick={() => void startNew()}><Icon name="plus" size={14} strokeWidth={2.2} />{t('tools.mcp.add')}</button>
+    </div>) : <div className={styles.listCard}>
       <div className={styles.listHead}>
         <strong>{needle ? t('tools.mcp.countFiltered', { filtered: shown.length, total: nativeEntries.length }) : t('tools.mcp.activeCount', { count: nativeEntries.length })}</strong>
         {nativeEntries.length >= SEARCH_THRESHOLD && <SearchField className={styles.search} type="search" label={t('tools.mcp.searchLabel')} placeholder={t('tools.mcp.searchPlaceholder')} value={search} onChange={setSearch} />}

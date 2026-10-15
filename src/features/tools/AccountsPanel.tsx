@@ -4,6 +4,7 @@ import { native, nativeAvailable } from '../../lib/native';
 import { uiAdapterFor } from '../../adapters';
 import { confirmAction } from '../../lib/confirm';
 import { SkeletonRows } from '../../components/Skeleton';
+import { EmptyState } from '../../components/EmptyState';
 import type { AccountCapability, AccountImpact, AccountImpactContextKind, AccountImpactScope, AuthAccount, NativeLoginSnapshot } from '../../types/accounts';
 import styles from './ManagementPanel.module.css';
 import accountStyles from './AccountsPanel.module.css';
@@ -176,9 +177,11 @@ export function AccountsPanel({ toolId, state, onOpenProfile, onOpenUsage }: { t
     <div className={styles.header}><div><h2>{t('tools.accounts.title')}</h2><p>{metadata?.description ?? t('tools.accounts.defaultDescription')}</p></div>{state.capability?.managedLogin && <button className={styles.primary} onClick={() => setCreating(value => !value)}>{creating ? t('tools.accounts.collapseAdd') : t('tools.accounts.add')}</button>}</div>
     {!nativeAvailable && <p role="alert">{t('tools.accounts.nativeOnly')}</p>}
     <section className={accountStyles.nativeLogin} aria-label={t('tools.accounts.nativeTitle')}><div className={styles.header}><div><h3>{t('tools.accounts.nativeTitle')}</h3><p>{metadata?.nativeDescription ?? t('tools.accounts.nativeDefaultDescription')}</p></div><button className={accountStyles.nativeCheck} disabled={nativeLoading || !nativeAvailable} onClick={() => void discover()}>{nativeLoading ? t('tools.accounts.nativeChecking') : t('tools.accounts.nativeCheck')}</button></div>
-      {nativeLoading && !nativeLogins && <p role="status">{t('tools.accounts.nativeLoading')}</p>}
+      {nativeLoading && !nativeLogins && <div role="status" aria-label={t('tools.accounts.nativeLoading')}><SkeletonRows count={2} /></div>}
       {nativeError && <p role="alert">{nativeError}</p>}
-      {nativeLogins && !nativeLogins.logins.length && <p>{t('tools.accounts.nativeEmpty')}</p>}
+      {nativeLogins && !nativeLogins.logins.length && (!state.loading && !state.accounts.length
+        ? <EmptyState icon="monitor" title={t('tools.accounts.nativeEmptyTitle')} detail={t('tools.accounts.nativeEmpty')} action={<button className="button primary" disabled={nativeLoading || !nativeAvailable} onClick={() => void discover()}>{t('tools.accounts.rediscover')}</button>} />
+        : <p>{t('tools.accounts.nativeEmpty')}</p>)}
       {nativeLogins?.logins.map(login => <div className={accountStyles.nativeRow} key={`${login.provider}:${login.authKind}`}><div className={accountStyles.nativeIdentity}><strong>{login.identity?.email ?? login.identity?.subject ?? login.provider}</strong><span>{login.identity ? `${login.provider} · ` : ''}{login.authKind === 'oauth' ? 'OAuth' : 'API Key'}{login.identity?.plan && ` · ${login.identity.plan}`}{!login.identity && login.authKind === 'oauth' && login.state === 'signed_in' ? t('tools.accounts.identityMissing') : ''}</span><p>{login.managedAccountId ? t('tools.accounts.managed', { label: state.accounts.find(account => account.id === login.managedAccountId)?.label ?? t('tools.accounts.existingAccount') }) : login.state === 'signed_in' ? t('tools.accounts.unmanagedNote') : login.detail}</p></div><span className={styles.badge} data-state={login.state}>{login.state === 'signed_in' ? login.authKind === 'api_key' ? t('tools.accounts.badgeConfigured') : t('tools.accounts.badgeSignedIn') : login.state === 'signed_out' ? t('tools.accounts.badgeSignedOut') : accountStateLabel(login.state)}</span>{login.state !== 'signed_out' && <details><summary>{t('tools.accounts.detail')}</summary><p>{login.detail}</p></details>}</div>)}
     </section>
     {creating && <div className={`${styles.create} ${accountStyles.addForm}`}><label>{t('tools.accounts.accountName')}<input value={label} onChange={event => setLabel(event.target.value)} placeholder={t('tools.accounts.namePlaceholder')} /></label>

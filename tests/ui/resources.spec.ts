@@ -418,7 +418,7 @@ test('local ZIP import is available without a URL, selects a complete Skill, and
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
   await page.getByRole('tab', { name: 'Skill', exact: true }).click();
-  await page.getByRole('button', { name: '添加 Skill', exact: true }).click();
+  await page.getByRole('button', { name: '添加 Skill', exact: true }).first().click();
   const sync = page.getByRole('checkbox', { name: '快速同步' });
   await expect(sync).toBeVisible();
   const box = await sync.boundingBox();
@@ -468,7 +468,7 @@ test('saving an MCP closes the dialog and leaves the success on the page', async
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
-  await page.getByRole('button', { name: '添加 MCP', exact: true }).click();
+  await page.getByRole('button', { name: '添加 MCP', exact: true }).first().click();
   await page.getByRole('textbox', { name: '名称' }).fill('filesystem');
   await page.getByRole('textbox', { name: '命令' }).fill('npx');
   await page.getByRole('dialog').getByRole('button', { name: '添加', exact: true }).click();
@@ -482,7 +482,7 @@ test('an MCP write conflict stays in the dialog', async ({ page }) => {
   await page.evaluate(() => { (window as typeof window & { __resourceMcpConflict: boolean }).__resourceMcpConflict = true; });
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
-  await page.getByRole('button', { name: '添加 MCP', exact: true }).click();
+  await page.getByRole('button', { name: '添加 MCP', exact: true }).first().click();
   await page.getByRole('textbox', { name: '名称' }).fill('filesystem');
   await page.getByRole('textbox', { name: '命令' }).fill('npx');
   await page.getByRole('dialog').getByRole('button', { name: '添加', exact: true }).click();
@@ -798,7 +798,7 @@ test('MCP empty rows show an example that cannot be mistaken for a typed value',
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '资料库' }).click();
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
-  await page.getByRole('button', { name: '新建 MCP' }).click();
+  await page.getByRole('button', { name: '新建 MCP', exact: true }).click();
   const dialog = page.getByRole('dialog');
   const args = dialog.getByRole('group', { name: '参数，每行一项' });
   const first = args.getByRole('textbox', { name: '参数，每行一项 第 1 行' });
@@ -814,4 +814,103 @@ test('MCP empty rows show an example that cannot be mistaken for a typed value',
   expect(await style(second)).toBe('dashed');
   const env = dialog.getByRole('group', { name: '环境变量' });
   await expect(env.getByRole('textbox', { name: '环境变量 第 1 行键名' })).toHaveAttribute('placeholder', '变量名，例如 API_TOKEN');
+});
+
+test('MCP workspace shows skeleton rows on first load and embeds the add entry in the empty state', async ({ page }) => {
+  await mockResources(page);
+  await page.addInitScript(() => {
+    const win = window as any;
+    const invoke = win.__TAURI_INTERNALS__.invoke;
+    win.__mcpListHolders = [];
+    win.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command === 'list_native_mcp') return new Promise(resolve => { win.__mcpListHolders.push(() => resolve([])); });
+      return invoke(command, args);
+    };
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  const skeleton = page.locator('[role="status"] .skeleton-page');
+  await expect(skeleton).toBeVisible();
+  await expect(skeleton).toHaveAttribute('aria-busy', 'true');
+  await page.evaluate(() => (window as any).__mcpListHolders.forEach((release: () => void) => release()));
+  const add = page.getByRole('button', { name: '添加 MCP', exact: true });
+  await expect(add).toHaveCount(2);
+  await add.last().click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await expect(page.getByRole('dialog').getByRole('heading', { name: '添加 MCP' })).toBeVisible();
+});
+
+test('MCP search with no results keeps the empty-state add entry hidden', async ({ page }) => {
+  await mockResources(page);
+  await page.addInitScript(() => {
+    const win = window as any;
+    const invoke = win.__TAURI_INTERNALS__.invoke;
+    const entries = Array.from({ length: 6 }, (_, index) => ({ name: `native-${index}`, transport: 'stdio', command: 'npx', args: [], url: '', env: {}, headers: {}, enabled: true, protectedValues: false }));
+    win.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => command === 'list_native_mcp' ? entries : invoke(command, args);
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('tab', { name: 'MCP', exact: true }).click();
+  await page.getByLabel('搜索当前 CLI 的 MCP').fill('no-present');
+  await expect(page.getByText('没有匹配「no-present」的 MCP。')).toBeVisible();
+  await expect(page.getByRole('button', { name: '清除搜索' })).toBeVisible();
+  await expect(page.getByText('这个 CLI 还没有生效的 MCP')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '添加 MCP', exact: true })).toHaveCount(1);
+});
+
+test('Skill workspace shows skeleton rows on first load and embeds the add entry in the empty state', async ({ page }) => {
+  await mockResources(page);
+  await page.addInitScript(() => {
+    const win = window as any;
+    const invoke = win.__TAURI_INTERNALS__.invoke;
+    win.__skillScanHolders = [];
+    win.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command === 'scan_native_skills') return new Promise(resolve => { win.__skillScanHolders.push(() => resolve([])); });
+      return invoke(command, args);
+    };
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('tab', { name: 'Skill', exact: true }).click();
+  const skeleton = page.locator('[role="status"] .skeleton-page');
+  await expect(skeleton).toBeVisible();
+  await expect(skeleton).toHaveAttribute('aria-busy', 'true');
+  await page.evaluate(() => (window as any).__skillScanHolders.forEach((release: () => void) => release()));
+  const add = page.getByRole('button', { name: '添加 Skill', exact: true });
+  await expect(add).toHaveCount(2);
+  await add.last().click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await expect(page.getByRole('dialog').getByRole('heading', { name: '添加 Skill' })).toBeVisible();
+});
+
+test('accounts workspace shows skeleton rows on first read and a rediscover action in the empty state', async ({ page }) => {
+  await mockResources(page);
+  await page.addInitScript(() => {
+    const win = window as any;
+    const invoke = win.__TAURI_INTERNALS__.invoke;
+    win.__nativeLoginHolders = [];
+    win.__accountCommands = [] as string[];
+    win.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command === 'discover_native_logins' || command === 'list_accounts' || command === 'account_capabilities') {
+        win.__accountCommands.push(command);
+        if (command === 'discover_native_logins') return new Promise(resolve => { win.__nativeLoginHolders.push(() => resolve({ toolId: args.toolId, checkedAt: 1, logins: [] })); });
+        return [];
+      }
+      return invoke(command, args);
+    };
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('tab', { name: '账号', exact: true }).click();
+  const skeleton = page.locator('section[aria-label="CLI 原生登录"] [role="status"] .skeleton-page');
+  await expect(skeleton).toBeVisible();
+  await expect(skeleton).toHaveAttribute('aria-busy', 'true');
+  await page.evaluate(() => (window as any).__nativeLoginHolders.forEach((release: () => void) => release()));
+  const emptyState = page.locator('.empty-state');
+  await expect(emptyState).toBeVisible();
+  await expect(emptyState.getByRole('button')).toHaveCount(1);
+  await emptyState.getByRole('button', { name: '重新发现登录' }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__accountCommands.filter((command: string) => command === 'discover_native_logins').length)).toBe(2);
+  await page.evaluate(() => (window as any).__nativeLoginHolders.forEach((release: () => void) => release()));
 });

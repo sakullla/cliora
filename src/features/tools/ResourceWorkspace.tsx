@@ -10,6 +10,7 @@ import { GuideDialog } from '../../components/GuideDialog';
 import { saveShortcutHint } from '../../lib/shortcut';
 import { Icon } from '../../components/Icon';
 import { useFeedback } from '../../lib/toast';
+import { SkeletonRows } from '../../components/Skeleton';
 import i18n from '../../i18n';
 import styles from './ResourceWorkspace.module.css';
 
@@ -21,6 +22,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
   const { t } = useTranslation();
   const [packages, setPackages] = useState<SkillPackage[]>([]);
   const [nativeEntries, setNativeEntries] = useState<NativeSkillEntry[]>([]);
+  const [listLoading, setListLoading] = useState(true);
   const [recoveryIssues, setRecoveryIssues] = useState<SkillRecoveryIssue[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [installations, setInstallations] = useState<SkillInstallation[]>([]);
@@ -68,10 +70,12 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
     return () => { live = false; };
   }, [toolId, scope, project]);
   useEffect(() => {
-    if (!toolId || (scope === 'project' && !project)) { setNativeEntries([]); return; }
+    if (!toolId || (scope === 'project' && !project)) { setNativeEntries([]); setListLoading(false); return; }
     let live = true;
+    setListLoading(true);
     void native.scanNativeSkills(toolId, scope, project).then((entries) => { if (live) setNativeEntries(entries); })
-      .catch((value) => { if (live) setError(errorText(value)); });
+      .catch((value) => { if (live) setError(errorText(value)); })
+      .finally(() => { if (live) setListLoading(false); });
     return () => { live = false; };
   }, [toolId, scope, project]);
   const installed = installations.find((item) => item.toolId === toolId && item.scope === scope && item.projectPath === project && (item.contextId ?? null) === (scope === 'global' ? contextId ?? null : null));
@@ -279,13 +283,17 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
     : installed?.state === 'missing' ? { label: t('tools.skills.stateMissing'), tone: 'warn' }
     : { label: t('tools.skills.stateNotInstalled'), tone: undefined };
 
-  const head = <div className={styles.workspaceHead}><div><h2>Skill</h2><p>{t('tools.skills.description')}</p></div><button type="button" className={styles.primary} disabled={busy || (scope === 'project' && !project)} onClick={() => { setAdding(true); setSyncLibrary(false); setExternal(null); setGuide(true); }}><Icon name="plus" size={14} strokeWidth={2.2} />{t('tools.skills.add')}</button></div>;
+  // The head button and the empty-state entry share one handler so both open the same add flow.
+  function openAdding() { setAdding(true); setSyncLibrary(false); setExternal(null); setGuide(true); }
+  const head = <div className={styles.workspaceHead}><div><h2>Skill</h2><p>{t('tools.skills.description')}</p></div><button type="button" className={styles.primary} disabled={busy || (scope === 'project' && !project)} onClick={openAdding}><Icon name="plus" size={14} strokeWidth={2.2} />{t('tools.skills.add')}</button></div>;
 
   if (empty) {
     return <section className={styles.workspaceSection} aria-label="Skill">
       {head}
       {recovery}
-      <div className={styles.emptyState}><Icon name="sparkle" size={26} strokeWidth={1.4} /><strong>{t('tools.skills.emptyTitle')}</strong><p>{t('tools.skills.emptyDetail')}</p>{scope === 'project' && !project && <p className={styles.muted}>{t('tools.mcp.pickProjectFirst')}</p>}</div>
+      {listLoading
+        ? <div role="status" aria-label={t('tools.skills.listLoading')}><SkeletonRows count={3} /></div>
+        : <div className={styles.emptyState}><Icon name="sparkle" size={26} strokeWidth={1.4} /><strong>{t('tools.skills.emptyTitle')}</strong><p>{t('tools.skills.emptyDetail')}</p>{scope === 'project' && !project && <p className={styles.muted}>{t('tools.mcp.pickProjectFirst')}</p>}<button type="button" className={styles.primary} disabled={busy || (scope === 'project' && !project)} onClick={openAdding}><Icon name="plus" size={14} strokeWidth={2.2} />{t('tools.skills.add')}</button></div>}
     </section>;
   }
 
