@@ -1029,7 +1029,9 @@ impl CliAdapter for OpenCode {
         true
     }
     fn history_resume_version_supported(&self, version: &str) -> bool {
-        version.starts_with("1.")
+        // Both verified lines resume with the same `--session <id>` argument
+        // (2.x keeps it on the TUI and `run`, verified on 2.0.29).
+        matches!(switch_major(Some(version)), Some(1 | 2))
     }
     fn major_upgrade(&self, source: &str, version: Option<&str>) -> Option<MajorUpgradeAction> {
         // Only a recognized install channel may run the official self-upgrade;

@@ -1020,6 +1020,12 @@ fn exports_are_separate_read_only_files_and_resume_arguments_are_native() {
             vec!["--session", "session_123"],
             Some("--auto"),
         ),
+        (
+            "open_code",
+            "2.0.29",
+            vec!["--session", "session_123"],
+            Some("--auto"),
+        ),
     ];
     for (tool, version, ordinary, yolo) in cases {
         assert_eq!(
@@ -1056,10 +1062,148 @@ fn exports_are_separate_read_only_files_and_resume_arguments_are_native() {
             .is_err()),
         }
     }
-    assert!(!all
-        .get("open_code")
-        .unwrap()
-        .history_resume_version_supported("2.0.0"));
+    let open_code = all.get("open_code").unwrap();
+    assert!(open_code.history_resume_version_supported("1.18.33"));
+    assert!(open_code.history_resume_version_supported("2.0.0"));
+    assert!(open_code.history_resume_version_supported("2.0.29"));
+    assert!(!open_code.history_resume_version_supported("3.0.0"));
+    assert!(!open_code.history_resume_version_supported(""));
+}
+
+#[test]
+fn opencode_v2_storage_lists_parses_usage_and_variant_model() {
+    // Column and row shapes verified against a real @opencode/cli 2.0.29
+    // database (session_v2 + session_message, model with `variant`, tokens
+    // with input excluding cache and output excluding reasoning).
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join(".local/share/opencode");
+    fs::create_dir_all(&root).unwrap();
+    let db = rusqlite::Connection::open(root.join("opencode.db")).unwrap();
+    db.execute_batch(
+        "CREATE TABLE session_v2 (id TEXT PRIMARY KEY, directory TEXT, title TEXT, version TEXT, model TEXT, time_created INTEGER, time_updated INTEGER);
+        CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER, data TEXT, time_created INTEGER, time_updated INTEGER);
+        INSERT INTO session_v2 VALUES ('ses_v2_fixture','C:/verify/project','T8 verify session','2.0.29','{\"id\":\"my-model\",\"providerID\":\"mock\",\"variant\":\"reasoning\"}',1792026275706,1792026341382);
+        INSERT INTO session_message VALUES ('msg_v2_u1','ses_v2_fixture','user',5,'{\"time\":{\"created\":1792026275826},\"text\":\"say hi\",\"files\":[]}',1792026275826,1792026275826);
+        INSERT INTO session_message VALUES ('msg_v2_a1','ses_v2_fixture','assistant',6,'{\"time\":{\"created\":1792026275849},\"model\":{\"id\":\"my-model\",\"providerID\":\"mock\",\"variant\":\"reasoning\"},\"content\":[{\"type\":\"reasoning\",\"text\":\"thinking\"},{\"type\":\"text\",\"text\":\"Hello from mock model.\"}],\"finish\":\"stop\",\"tokens\":{\"input\":32,\"output\":12,\"reasoning\":5,\"cache\":{\"read\":10,\"write\":0}}}',1792026275849,1792026275887);
+        INSERT INTO session_message VALUES ('msg_v2_i1','ses_v2_fixture','idle',13,'{\"time\":{\"created\":1792026275890},\"outcome\":\"succeeded\"}',1792026275890,1792026275890);
+        INSERT INTO session_message VALUES ('msg_v2_bad','ses_v2_fixture','assistant',14,'{not json}',1792026275900,1792026275900);",
+    )
+    .unwrap();
+    drop(db);
+    let sources = opencode::sources(temp.path()).unwrap();
+    assert_eq!(sources.len(), 1);
+    assert_eq!(sources[0].native_id.as_deref(), Some("ses_v2_fixture"));
+    assert_eq!(sources[0].fingerprint, "1792026341382");
+    let session = opencode::parse(&sources[0]).unwrap();
+    assert_eq!(session.title, "T8 verify session");
+    assert_eq!(session.cwd.as_deref(), Some("C:/verify/project"));
+    assert_eq!(session.started_at, Some(1792026275706));
+    assert_eq!(session.updated_at, Some(1792026341382));
+    assert_eq!(
+        session.model.as_deref(),
+        Some("my-model#reasoning"),
+        "the #variant reference is displayed as stored"
+    );
+    assert_eq!(session.messages.len(), 2);
+    assert_eq!(session.messages[0].role, "user");
+    assert_eq!(session.messages[0].text, "say hi");
+    assert_eq!(session.messages[0].timestamp, Some(1792026275826));
+    assert_eq!(session.messages[1].role, "assistant");
+    assert_eq!(session.messages[1].text, "Hello from mock model.");
+    assert_eq!(session.messages[1].timestamp, Some(1792026275849));
+    assert_eq!(session.usage.len(), 1);
+    assert_eq!(
+        session.usage[0].model.as_deref(),
+        Some("my-model#reasoning")
+    );
+    assert_eq!(session.usage[0].input, Some(32));
+    assert_eq!(
+        session.usage[0].output,
+        Some(17),
+        "output keeps the 1.x accounting: generated output includes reasoning"
+    );
+    assert_eq!(session.usage[0].cache_read, Some(10));
+    assert_eq!(session.usage[0].cache_write, Some(0));
+    assert!(!session.usage[0].input_includes_cache);
+    assert_eq!(session.usage[0].request_count, Some(1));
+    assert!(session.partial, "one unparsable message marks the session partial without failing it");
+}
+
+#[test]
+fn opencode_unknown_storage_reports_unverified_and_single_session_failure_is_isolated() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join(".local/share/opencode");
+    fs::create_dir_all(&root).unwrap();
+    let db = rusqlite::Connection::open(root.join("opencode.db")).unwrap();
+    db.execute_batch("CREATE TABLE kv (key TEXT, value TEXT);")
+        .unwrap();
+    drop(db);
+    let error = opencode::sources(temp.path()).unwrap_err();
+    assert!(error.contains("版本尚未验证"), "unexpected error: {error}");
+
+    // An unverified v2 record version fails its own session only.
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join(".local/share/opencode");
+    fs::create_dir_all(&root).unwrap();
+    let db = rusqlite::Connection::open(root.join("opencode.db")).unwrap();
+    db.execute_batch(
+        "CREATE TABLE session_v2 (id TEXT PRIMARY KEY, directory TEXT, title TEXT, version TEXT, model TEXT, time_created INTEGER, time_updated INTEGER);
+        CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER, data TEXT, time_created INTEGER, time_updated INTEGER);
+        INSERT INTO session_v2 VALUES ('ses_v2_unknown','C:/verify/project','Future session','3.1.0',NULL,1792026275706,1792026341382);
+        INSERT INTO session_v2 VALUES ('ses_v2_known','C:/verify/project','Known session','2.0.29',NULL,1792026275707,1792026341383);",
+    )
+    .unwrap();
+    drop(db);
+    let sources = opencode::sources(temp.path()).unwrap();
+    assert_eq!(sources.len(), 2);
+    let mut results = Vec::new();
+    for source in &sources {
+        results.push((source.native_id.clone(), opencode::parse(source).is_ok()));
+    }
+    assert!(results.contains(&(Some("ses_v2_unknown".into()), false)));
+    assert!(results.contains(&(Some("ses_v2_known".into()), true)));
+    let unknown = sources
+        .iter()
+        .find(|source| source.native_id.as_deref() == Some("ses_v2_unknown"))
+        .unwrap();
+    assert!(opencode::parse(unknown)
+        .unwrap_err()
+        .contains("版本尚未验证"));
+}
+
+#[test]
+fn opencode_migrated_database_lists_both_generations() {
+    // During an in-place 1.x → 2.x migration window both index tables can hold
+    // rows; each row parses through its own generation branch.
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join(".local/share/opencode");
+    fs::create_dir_all(&root).unwrap();
+    let db = rusqlite::Connection::open(root.join("opencode.db")).unwrap();
+    db.execute_batch(
+        "CREATE TABLE session (id TEXT, title TEXT, directory TEXT, time_created INTEGER, time_updated INTEGER, version TEXT, model TEXT);
+        CREATE TABLE message (id TEXT, session_id TEXT, data TEXT, time_created INTEGER);
+        CREATE TABLE part (id TEXT, message_id TEXT, session_id TEXT, data TEXT, time_created INTEGER);
+        CREATE TABLE session_v2 (id TEXT PRIMARY KEY, directory TEXT, title TEXT, version TEXT, model TEXT, time_created INTEGER, time_updated INTEGER);
+        CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER, data TEXT, time_created INTEGER, time_updated INTEGER);
+        INSERT INTO session VALUES ('ses_v1_left','Old session','/old/project',1790668800000,1790668860000,'1.18.33',NULL);
+        INSERT INTO session_v2 VALUES ('ses_v2_new','C:/new/project','New session','2.0.29',NULL,1792026275706,1792026341382);
+        INSERT INTO session_message VALUES ('msg_mixed','ses_v2_new','user',5,'{\"time\":{\"created\":1792026275826},\"text\":\"v2 hello\"}',1792026275826,1792026275826);",
+    )
+    .unwrap();
+    drop(db);
+    let sources = opencode::sources(temp.path()).unwrap();
+    assert_eq!(sources.len(), 2);
+    for source in &sources {
+        let session = opencode::parse(source).unwrap();
+        match source.native_id.as_deref() {
+            Some("ses_v1_left") => assert_eq!(session.title, "Old session"),
+            Some("ses_v2_new") => {
+                assert_eq!(session.title, "New session");
+                assert_eq!(session.messages[0].text, "v2 hello");
+            }
+            other => panic!("unexpected session {other:?}"),
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -1448,3 +1592,4 @@ fn grok_equal_snapshots_keep_known_model_calls_and_dates_in_either_order() {
     assert_eq!(parsed.usage.iter().filter_map(|event| event.request_count).sum::<u64>(), 13);
     assert!(parsed.usage.iter().all(|event| event.timestamp == Some(FIXTURE_DAY+DAY)));
 }
+
