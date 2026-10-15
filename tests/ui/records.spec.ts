@@ -112,6 +112,7 @@ test('records keep search, show native resume command and only launch on request
   const navigation = page.getByRole('navigation', { name: '页面' });
   await navigation.getByRole('button', { name: '使用记录' }).click();
   await expect(page.getByRole('button', { name: /Review change/ })).toBeVisible();
+  await expect(page.getByText('全部会话')).toBeVisible();
   const listLayout = await page.evaluate(() => {
     const buttons = [...document.querySelectorAll('[aria-label="会话列表"] > button')];
     const boxes = buttons.map((button) => button.getBoundingClientRect());
@@ -207,6 +208,7 @@ test('records keep search, show native resume command and only launch on request
   await navigation.getByRole('button', { name: '快速开始' }).click();
   await navigation.getByRole('button', { name: '使用记录' }).click();
   await expect(page.getByRole('textbox', { name: '搜索会话' })).toHaveValue('Review');
+  await expect(page.getByText('命中 1 / 共 18')).toBeVisible();
   await page.getByRole('tab', { name: '用量' }).click();
   const summary = page.getByRole('region', { name: '用量概览' });
   await expect(summary).toContainText('1.2M');
@@ -423,6 +425,7 @@ test('Grok details preserve exact token buckets and show inferred clocks and unk
   await page.getByRole('button', { name: /没有用量的会话/ }).click();
   await expect(usage).toHaveCount(0);
   await page.getByRole('textbox', { name: '搜索会话' }).fill('Token');
+  await expect(page.getByText('命中 1 / 共 2')).toBeVisible();
   await page.locator('summary').filter({ hasText: /^筛选/ }).click();
   await page.getByRole('checkbox', { name: '只看收藏' }).check();
   await page.locator('summary').filter({ hasText: /^筛选/ }).click();

@@ -64,6 +64,7 @@ export default {
     allTags: 'All tags',
     searchTags: 'Search tags',
     listAria: '{{kind}} list',
+    countFiltered: '{{filtered}} / {{total}}',
     noTags: 'No tags',
     originalProject: 'Original project',
     emptyBody: 'Body is empty',

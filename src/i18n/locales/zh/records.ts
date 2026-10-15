@@ -181,7 +181,7 @@ export default {
     chipTitle: '点击移除该筛选',
     clearAll: '清除全部筛选',
     updating: '正在更新…',
-    filtered: '筛选结果',
+    countFiltered: '命中 {{filtered}} / 共 {{total}}',
     allSessions: '全部会话',
     sortAria: '会话排序',
     sortRecent: '最近活跃',

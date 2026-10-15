@@ -64,6 +64,7 @@ export default {
     allTags: '所有标签',
     searchTags: '搜索标签',
     listAria: '{{kind}}列表',
+    countFiltered: '命中 {{filtered}} / 共 {{total}}',
     noTags: '无标签',
     originalProject: '原项目',
     emptyBody: '正文为空',

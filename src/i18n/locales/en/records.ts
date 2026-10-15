@@ -181,7 +181,7 @@ export default {
     chipTitle: 'Click to remove this filter',
     clearAll: 'Clear all filters',
     updating: 'Updating…',
-    filtered: 'Filtered results',
+    countFiltered: '{{filtered}} / {{total}} sessions',
     allSessions: 'All sessions',
     sortAria: 'Session sort',
     sortRecent: 'Recently active',
