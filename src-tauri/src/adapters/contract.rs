@@ -518,6 +518,18 @@ pub trait CliAdapter: Sync {
         ""
     }
     fn launch_args(&self, session: Option<&str>, mode: LaunchMode) -> Result<Vec<String>, String>;
+    /// Version-specific launch arguments. The default ignores the version and
+    /// keeps `launch_args`. Adapters override this when a verified major needs
+    /// a different flag.
+    fn launch_args_for_version(
+        &self,
+        version: &str,
+        session: Option<&str>,
+        mode: LaunchMode,
+    ) -> Result<Vec<String>, String> {
+        let _ = version;
+        self.launch_args(session, mode)
+    }
     /// Resume the latest session in the working directory. This is not a
     /// session id and must not be combined with `launch_args`'s session flag.
     /// The default has no verified flag.

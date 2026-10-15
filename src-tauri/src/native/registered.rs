@@ -123,7 +123,7 @@ pub fn plan_launch(
     if session.is_some_and(|value| value.is_empty() || value.contains(['\r', '\n', '\0'])) {
         return Err("会话 ID 无效".into());
     }
-    adapter.launch_args(session, mode)
+    adapter.launch_args_for_version(version, session, mode)
 }
 
 pub fn registered_file(

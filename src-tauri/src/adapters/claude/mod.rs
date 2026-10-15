@@ -277,6 +277,12 @@ impl CliAdapter for Claude {
         }
         Ok(docs)
     }
+    fn normalize_applied_document(&self, role: &str, document: &mut Value) {
+        if !matches!(role, "settings" | "local_settings") {
+            return;
+        }
+        sanitize_model_picker(document);
+    }
     fn preserve_native_fields(
         &self,
         role: &str,
@@ -686,6 +692,53 @@ fn upsert_catalog_row(
     changed
 }
 
+/// Claude Code ignores `modelPicker` unless it is `{ options: [{ model, label?, description?, behavesAs? }] }`.
+/// A missing `options` array is a startup warning. Rows only keep the fields that schema accepts.
+fn sanitize_model_picker(document: &mut Value) {
+    let Some(root) = document.as_object_mut() else {
+        return;
+    };
+    let Some(picker) = root.get("modelPicker").cloned() else {
+        return;
+    };
+    let Some(options) = picker.get("options").and_then(Value::as_array) else {
+        root.remove("modelPicker");
+        return;
+    };
+    let rows: Vec<Value> = options.iter().filter_map(canonical_picker_row).collect();
+    if rows.is_empty() {
+        root.remove("modelPicker");
+        return;
+    }
+    let mut clean = serde_json::Map::new();
+    clean.insert("options".into(), Value::Array(rows));
+    if let Some(flag) = picker.get("replaceBuiltInOptions").and_then(Value::as_bool) {
+        clean.insert("replaceBuiltInOptions".into(), json!(flag));
+    }
+    root.insert("modelPicker".into(), Value::Object(clean));
+}
+
+fn canonical_picker_row(row: &Value) -> Option<Value> {
+    let model = row
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let mut clean = serde_json::Map::new();
+    clean.insert("model".into(), json!(model));
+    for key in ["label", "description", "behavesAs"] {
+        if let Some(value) = row
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            clean.insert(key.into(), json!(value));
+        }
+    }
+    Some(Value::Object(clean))
+}
+
 fn catalog_options(connection: &Connection, settings: &Value) -> Option<Vec<Value>> {
     let mut options = settings
         .get("modelPicker")
@@ -852,5 +905,30 @@ mod tests {
         assert_eq!(merged[1]["label"], "已有");
         assert_eq!(merged[1]["behavesAs"], "claude-sonnet-4-6");
         assert_eq!(merged[2]["model"], "new-gateway");
+    }
+
+    #[test]
+    fn model_picker_without_options_is_removed_before_write() {
+        let mut missing = json!({"model": "glm-5.3", "modelPicker": {"replaceBuiltInOptions": true}});
+        Claude.normalize_applied_document("settings", &mut missing);
+        assert!(missing.get("modelPicker").is_none());
+        assert_eq!(missing["model"], "glm-5.3");
+
+        let mut present = json!({
+            "modelPicker": {
+                "options": [
+                    {"model": " glm-5.3 ", "behavesAs": "claude-sonnet-4-6", "custom": true, "label": " 网关 "}
+                ],
+                "replaceBuiltInOptions": false,
+                "extra": 1
+            }
+        });
+        Claude.normalize_applied_document("local_settings", &mut present);
+        assert_eq!(present["modelPicker"]["options"][0]["model"], "glm-5.3");
+        assert_eq!(present["modelPicker"]["options"][0]["behavesAs"], "claude-sonnet-4-6");
+        assert_eq!(present["modelPicker"]["options"][0]["label"], "网关");
+        assert!(present["modelPicker"]["options"][0].get("custom").is_none());
+        assert_eq!(present["modelPicker"]["replaceBuiltInOptions"], false);
+        assert!(present["modelPicker"].get("extra").is_none());
     }
 }

@@ -71,13 +71,208 @@ fn shell(script: &str, home: &Path) -> Command {
 }
 
 
-fn append(log: &mut String, bytes: &[u8]) {
-    log.push_str(&String::from_utf8_lossy(bytes));
-    if log.len() > LOG_BYTES {
-        let mut start = log.len() - LOG_BYTES;
-        while !log.is_char_boundary(start) { start += 1; }
-        log.drain(..start);
+enum ConsoleAction {
+    Ignore,
+    Back(usize),
+    Column(usize),
+    EraseLine(usize),
+    EraseDisplay(usize),
+}
+
+fn line_start(chars: &[char], cursor: usize) -> usize {
+    let cursor = cursor.min(chars.len());
+    chars[..cursor]
+        .iter()
+        .rposition(|ch| *ch == '\n')
+        .map(|index| index + 1)
+        .unwrap_or(0)
+}
+
+fn line_end(chars: &[char], cursor: usize) -> usize {
+    let cursor = cursor.min(chars.len());
+    chars[cursor..]
+        .iter()
+        .position(|ch| *ch == '\n')
+        .map(|offset| cursor + offset)
+        .unwrap_or(chars.len())
+}
+
+fn put_char(chars: &mut Vec<char>, cursor: &mut usize, ch: char) {
+    if *cursor > chars.len() {
+        *cursor = chars.len();
     }
+    if *cursor == chars.len() || chars[*cursor] == '\n' {
+        chars.insert(*cursor, ch);
+    } else {
+        chars[*cursor] = ch;
+    }
+    *cursor += 1;
+}
+
+fn escape_action(chars: &[char]) -> Option<(usize, ConsoleAction)> {
+    if chars.first() != Some(&'\u{1b}') {
+        return None;
+    }
+    let second = *chars.get(1)?;
+    match second {
+        '[' => {
+            let mut len = 2;
+            while len < chars.len() {
+                let ch = chars[len];
+                len += 1;
+                if ('\u{40}'..='\u{7e}').contains(&ch) {
+                    return Some((len, csi_action(&chars[2..len])));
+                }
+            }
+            None
+        }
+        ']' => {
+            let mut len = 2;
+            while len < chars.len() {
+                if chars[len] == '\u{7}' {
+                    return Some((len + 1, ConsoleAction::Ignore));
+                }
+                if chars[len] == '\u{1b}' && chars.get(len + 1) == Some(&'\\') {
+                    return Some((len + 2, ConsoleAction::Ignore));
+                }
+                len += 1;
+            }
+            None
+        }
+        _ => Some((2, ConsoleAction::Ignore)),
+    }
+}
+
+fn csi_action(body: &[char]) -> ConsoleAction {
+    let Some((&command, params)) = body.split_last() else {
+        return ConsoleAction::Ignore;
+    };
+    let text: String = params.iter().filter(|ch| ch.is_ascii_digit()).collect();
+    let number = |default: usize| text.parse::<usize>().unwrap_or(default);
+    match command {
+        'D' => ConsoleAction::Back(number(1).max(1)),
+        'G' => ConsoleAction::Column(number(1).max(1)),
+        'K' => ConsoleAction::EraseLine(number(0)),
+        'J' => ConsoleAction::EraseDisplay(number(0)),
+        _ => ConsoleAction::Ignore,
+    }
+}
+
+fn apply_action(chars: &mut Vec<char>, cursor: &mut usize, action: ConsoleAction) {
+    if *cursor > chars.len() {
+        *cursor = chars.len();
+    }
+    match action {
+        ConsoleAction::Ignore => {}
+        ConsoleAction::Back(count) => {
+            let start = line_start(chars, *cursor);
+            *cursor = cursor.saturating_sub(count).max(start);
+        }
+        ConsoleAction::Column(column) => {
+            let start = line_start(chars, *cursor);
+            let end = line_end(chars, start);
+            *cursor = (start + column.saturating_sub(1)).min(end);
+        }
+        ConsoleAction::EraseLine(mode) => {
+            let start = line_start(chars, *cursor);
+            let end = line_end(chars, *cursor);
+            match mode {
+                1 => {
+                    chars.drain(start..*cursor);
+                    *cursor = start;
+                }
+                2 => {
+                    chars.drain(start..end);
+                    *cursor = start;
+                }
+                _ => {
+                    chars.drain(*cursor..end);
+                }
+            }
+        }
+        ConsoleAction::EraseDisplay(2) => {
+            chars.clear();
+            *cursor = 0;
+        }
+        ConsoleAction::EraseDisplay(1) => {
+            chars.drain(0..*cursor);
+            *cursor = 0;
+        }
+        ConsoleAction::EraseDisplay(_) => {
+            chars.drain(*cursor..);
+        }
+    }
+}
+
+fn trim_log(log: &mut String, cursor: &mut usize) {
+    if log.len() <= LOG_BYTES {
+        return;
+    }
+    let mut start = log.len() - LOG_BYTES;
+    while !log.is_char_boundary(start) {
+        start += 1;
+    }
+    let removed = log[..start].chars().count();
+    log.drain(..start);
+    *cursor = cursor.saturating_sub(removed);
+}
+
+/// Installers rewrite one line with ANSI color and cursor controls. The log
+/// view is plain text, so those sequences are applied instead of shown.
+fn push_console(log: &mut String, cursor: &mut usize, pending: &mut String, bytes: &[u8]) {
+    pending.push_str(&String::from_utf8_lossy(bytes));
+    let input = std::mem::take(pending);
+    let mut chars: Vec<char> = log.chars().collect();
+    if *cursor > chars.len() {
+        *cursor = chars.len();
+    }
+    let stream: Vec<char> = input.chars().collect();
+    let mut index = 0;
+    while index < stream.len() {
+        if stream[index] == '\u{1b}' {
+            match escape_action(&stream[index..]) {
+                Some((len, action)) => {
+                    apply_action(&mut chars, cursor, action);
+                    index += len;
+                }
+                None => {
+                    *pending = stream[index..].iter().collect();
+                    break;
+                }
+            }
+            continue;
+        }
+        let ch = stream[index];
+        index += 1;
+        match ch {
+            '\n' => put_char(&mut chars, cursor, '\n'),
+            '\r' => {
+                if index < stream.len() && stream[index] == '\n' {
+                    index += 1;
+                    *cursor = line_end(&chars, *cursor);
+                    put_char(&mut chars, cursor, '\n');
+                } else {
+                    *cursor = line_start(&chars, *cursor);
+                }
+            }
+            '\u{8}' => {
+                let start = line_start(&chars, *cursor);
+                if *cursor > start {
+                    *cursor -= 1;
+                }
+            }
+            other if other.is_control() && other != '\t' => {}
+            other => put_char(&mut chars, cursor, other),
+        }
+    }
+    *log = chars.into_iter().collect();
+    trim_log(log, cursor);
+}
+
+fn append(log: &mut String, bytes: &[u8]) {
+    let mut cursor = log.chars().count();
+    let mut pending = String::new();
+    push_console(log, &mut cursor, &mut pending, bytes);
 }
 
 fn run(mut command: Command, cancelled: &AtomicBool, timeout: Duration, progress: &dyn Fn(&str)) -> Result<String, String> {
@@ -102,6 +297,8 @@ fn run(mut command: Command, cancelled: &AtomicBool, timeout: Duration, progress
     let start = Instant::now();
     let mut notified = Instant::now();
     let mut log = String::new();
+    let mut cursor = 0usize;
+    let mut pending = String::new();
     loop {
         if cancelled.load(Ordering::Relaxed) || start.elapsed() >= timeout {
             crate::background_process::terminate(&mut child);
@@ -109,7 +306,7 @@ fn run(mut command: Command, cancelled: &AtomicBool, timeout: Duration, progress
             return Err(if cancelled.load(Ordering::Relaxed) { "安装已取消；可能已有部分变更，请重新检查后重试" } else { "安装超时并已停止；请检查网络或文件占用后重试" }.into());
         }
         for _ in 0..32 {
-            match receiver.try_recv() { Ok(bytes) => append(&mut log, &bytes), Err(_) => break }
+            match receiver.try_recv() { Ok(bytes) => push_console(&mut log, &mut cursor, &mut pending, &bytes), Err(_) => break }
         }
         if notified.elapsed() >= Duration::from_millis(150) {
             progress(&log); notified = Instant::now();
@@ -119,7 +316,7 @@ fn run(mut command: Command, cancelled: &AtomicBool, timeout: Duration, progress
                 let deadline = Instant::now() + Duration::from_secs(2);
                 loop {
                     match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-                        Ok(bytes) => append(&mut log, &bytes),
+                        Ok(bytes) => push_console(&mut log, &mut cursor, &mut pending, &bytes),
                         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
                         Err(_) => { crate::background_process::terminate(&mut child); progress(&log); return Err("安装输出未结束，请检查残留进程后重试".into()); }
                     }
@@ -185,6 +382,19 @@ mod tests {
         let started = Instant::now();
         assert!(run(shell(script, temp.path()), &AtomicBool::new(false), Duration::from_millis(150), &|_| {}).unwrap_err().contains("超时"));
         assert!(started.elapsed() < Duration::from_secs(20));
+    }
+    #[test]
+    fn install_log_applies_ansi_redraws_instead_of_showing_them() {
+        let sample = "\u{1b}[0m\u{1b}[34m•\u{1b}[39m Using method: npm\n\u{1b}[35m•\u{1b}[39m Installing OpenCode 2\u{1b}[999D\u{1b}[J\u{1b}[35m•\u{1b}[39m Installing OpenCode\n";
+        let mut log = String::new();
+        append(&mut log, sample.as_bytes());
+        assert!(!log.contains('\u{1b}'));
+        assert!(log.contains("Using method: npm"));
+        assert!(log.contains("• Installing OpenCode\n"));
+        assert!(!log.contains("Installing OpenCode 2"));
+        let mut overwritten = String::new();
+        append(&mut overwritten, "hello\rbye\u{1b}[K\n".as_bytes());
+        assert_eq!(overwritten, "bye\n");
     }
 
     #[test]

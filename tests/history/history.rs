@@ -1023,7 +1023,7 @@ fn exports_are_separate_read_only_files_and_resume_arguments_are_native() {
         (
             "open_code",
             "2.0.29",
-            vec!["--session", "session_123"],
+            vec!["--standalone", "--session", "session_123"],
             Some("--auto"),
         ),
     ];
