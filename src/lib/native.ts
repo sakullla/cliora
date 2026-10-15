@@ -10,6 +10,7 @@ import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, 
 import type { LibraryDraft, LibraryItem, LibraryKind } from '../types/library';
 import type { McpDefinition, McpDraft, McpPlacement, McpTargetRequest, McpTargetResult, NativeMcpEntry, NativeRuleFile, RuleTarget, RulePreview, RuleApplyResult, RulePlacement, RuleClientSelection, RuleSyncResult, SkillPackage, SkillImportPreview, SkillInstallation, SkillTargetResult, NativeSkillDocument, NativeSkillEntry, SkillTargetPreview, SkillRecoveryIssue } from '../types/resources';
 import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, ScanStatus, UsageReport } from '../types/history';
+import { markOnboardingLaunched } from './onboarding';
 import type { ConflictPreview, PortableApplyTarget, PortableImportReport, PortableItem, PortablePreview, PortableProjectLink, SyncStatus, WebdavSetup } from '../types/portable';
 import type { QueryConfig, UsageCache, UsagePreset, UsageSample, DeleteQueryResult, DraftTestReport, SaveQueryResult, UsageError, UsageQuery, UsageQueryDraft } from '../types/usage';
 import i18n from '../i18n';
@@ -142,7 +143,13 @@ export const native = {
   listHistoryPrices: () => command<HistoryPrice[]>('list_history_prices'),
   saveHistoryPrice: (price: HistoryPrice) => command<HistoryPrice>('save_history_price', { price }),
   copyHistoryResumeCommand: (id: string, mode: LaunchRequest['mode']) => command<string>('copy_history_resume_command', { id, mode }),
-  resumeHistorySession: (id: string, mode: LaunchRequest['mode']) => command<LaunchResult>('resume_history_session', { id, mode }),
+  // Both launch commands record the first-run launch fact here, at their definition site,
+  // so destructured aliases stay tracked as well; failures never mark the fact.
+  resumeHistorySession: async (id: string, mode: LaunchRequest['mode']) => {
+    const result = await command<LaunchResult>('resume_history_session', { id, mode });
+    markOnboardingLaunched();
+    return result;
+  },
   exportHistorySession: (id: string, format: 'markdown' | 'json', destination: string) => command<string>('export_history_session', { id, format, destination }),
   listMcpDefinitions: () => command<McpDefinition[]>('list_mcp_definitions'),
   listMcpPlacements: () => command<McpPlacement[]>('list_mcp_placements'),
@@ -191,7 +198,11 @@ export const native = {
   setPreferredTerminal: (terminal: TerminalId) => command<LaunchSettings>('set_preferred_terminal', { terminal }),
   setCustomTerminal: (program: string, args: string[]) => command<LaunchSettings>('set_custom_terminal', { program, args }),
   setDefaultLaunchMode: (target: 'cli' | 'project', mode: LaunchMode) => command<LaunchSettings>('set_default_launch_mode', { target, mode }),
-  launchCli: (request: LaunchRequest) => command<LaunchResult>('launch_cli', { request }),
+  launchCli: async (request: LaunchRequest) => {
+    const result = await command<LaunchResult>('launch_cli', { request });
+    markOnboardingLaunched();
+    return result;
+  },
   cliLatestVersion: (toolId: string, version?: string) => command<string>('cli_latest_version', { toolId, version: version || null }),
   cancelCliMaintenance: (toolId: string) => command<void>('cancel_cli_maintenance', { toolId }),
   maintainRegisteredCli: (toolId: string, action: 'install' | 'upgrade' | 'install_native' | 'uninstall_npm' | 'upgrade_major', source?: string, version?: string) => command<MaintenanceResult>('maintain_registered_cli', { toolId, action, source: source ?? null, version: version || null }),

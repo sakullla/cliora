@@ -54,6 +54,7 @@ export default {
     launchedDesktop: '{{name}} was asked to launch the desktop app.',
     launchedCli: '{{name}} request sent to the external terminal.',
     launchFailed: '{{name}} failed to launch. Launch again or edit the configuration.',
+    terminalTooLongDetail: 'The launch command exceeds the terminal length limit. Choose PowerShell or Windows Terminal under Settings → Terminal, then try again.',
     applied: '{{name}} written to the native file; the next launch reads it.',
     compareFailed: '{{name}} could not compare the current file. {{reason}}',
     notSwitched: '{{name}} not switched: {{detail}}',

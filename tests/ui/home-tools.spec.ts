@@ -57,6 +57,8 @@ async function installHome(page: Page, detect = false) {
         if (command === 'plugin:dialog|open') return new Promise((resolve) => dialogs.push(resolve));
         if (command === 'launch_cli') {
           (window as unknown as { __launchRequests: unknown[] }).__launchRequests.push(args.request);
+          const forcedLaunch = (window as unknown as { __launchError?: unknown }).__launchError;
+          if (forcedLaunch) { (window as unknown as { __launchError?: unknown }).__launchError = undefined; throw forcedLaunch; }
           if (failLaunch) { failLaunch = false; throw { message: '终端不存在' }; }
           return { mode: 'normal', status: 'terminal_requested' };
         }
@@ -298,6 +300,36 @@ test('a home switch that differs from the file opens the comparison', async ({ p
   await expect(tools.getByRole('radio', { name: '工作' })).toHaveAttribute('aria-checked', 'true');
   const compared = await page.evaluate(() => (window as unknown as { __comparedCalls: unknown[] }).__comparedCalls);
   expect(compared).toHaveLength(1);
+});
+
+test('an English launch failure with the stable code shows a localized recovery hint', async ({ page }) => {
+  await page.addInitScript(() => { localStorage.setItem('cliora:language', 'en'); });
+  await installHome(page);
+  await page.goto('/');
+  await page.evaluate(() => {
+    // Only the code routes this; the raw message stays Chinese exactly as the backend sends it.
+    (window as unknown as { __launchError?: unknown }).__launchError = { code: 'terminal_command_too_long', message: '启动命令超过 CMD 长度限制，请在设置中选择 PowerShell 或 Windows Terminal' };
+  });
+  const tools = page.getByLabel('Managed tools');
+  await tools.getByRole('button', { name: 'Launch', exact: true }).click();
+  await page.evaluate(() => (window as unknown as { __resolveDialog: (value: string | null) => void }).__resolveDialog('C:/work'));
+  const alert = tools.getByRole('alert');
+  await expect(alert).toContainText('failed to launch');
+  await expect(alert).toContainText('exceeds the terminal length limit');
+  await expect(alert).toContainText('Settings → Terminal');
+  await expect(alert).not.toContainText('CMD');
+});
+
+test('the onboarding config entry routes to setup while no CLI is managed yet', async ({ page }) => {
+  await installFreshState(page);
+  await page.goto('/');
+  const card = page.getByRole('region', { name: '首次使用引导' });
+  await expect(card).toBeVisible();
+  // Without a managed CLI there is no configuration target; the entry guides to step 1
+  // instead of landing on the empty tools page.
+  await card.getByRole('button', { name: '去创建', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '设置', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '工具与连接', level: 1 })).toHaveCount(0);
 });
 
 test('an English takeover error opens the comparison by error code alone', async ({ page }) => {

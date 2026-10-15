@@ -471,6 +471,7 @@ export default {
     emptyDetail: 'Added Skills are installed only into this CLI. With quick sync enabled, they can be distributed from the library.',
     listEmpty: 'No active Skills on this CLI yet.',
     listLoading: 'Loading Skills…',
+    scanFailed: 'Failed to load the Skill list: {{detail}}',
     currentTitle: 'Current Skill',
     addHint: 'Installs into the current CLI. Quick sync also adds it to the library.',
     currentHint: 'This only changes the Skill already active on the current CLI.',

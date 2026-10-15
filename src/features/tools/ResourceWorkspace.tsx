@@ -69,12 +69,14 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
       .catch((value) => { if (live) setError(errorText(value)); });
     return () => { live = false; };
   }, [toolId, scope, project]);
+  const [scanError, setScanError] = useState('');
   useEffect(() => {
     if (!toolId || (scope === 'project' && !project)) { setNativeEntries([]); setListLoading(false); return; }
     let live = true;
     setListLoading(true);
+    setScanError('');
     void native.scanNativeSkills(toolId, scope, project).then((entries) => { if (live) setNativeEntries(entries); })
-      .catch((value) => { if (live) setError(errorText(value)); })
+      .catch((value) => { if (live) { setError(errorText(value)); setScanError(errorText(value)); } })
       .finally(() => { if (live) setListLoading(false); });
     return () => { live = false; };
   }, [toolId, scope, project]);
@@ -293,7 +295,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
       {recovery}
       {listLoading
         ? <div role="status" aria-label={t('tools.skills.listLoading')}><SkeletonRows count={3} /></div>
-        : <div className={styles.emptyState}><Icon name="sparkle" size={26} strokeWidth={1.4} /><strong>{t('tools.skills.emptyTitle')}</strong><p>{t('tools.skills.emptyDetail')}</p>{scope === 'project' && !project && <p className={styles.muted}>{t('tools.mcp.pickProjectFirst')}</p>}<button type="button" className={styles.primary} disabled={busy || (scope === 'project' && !project)} onClick={openAdding}><Icon name="plus" size={14} strokeWidth={2.2} />{t('tools.skills.add')}</button></div>}
+        : <div className={styles.emptyState}><Icon name="sparkle" size={26} strokeWidth={1.4} /><strong>{t('tools.skills.emptyTitle')}</strong><p>{t('tools.skills.emptyDetail')}</p>{scanError && <p className={styles.error} role="status">{t('tools.skills.scanFailed', { detail: scanError })}</p>}{scope === 'project' && !project && <p className={styles.muted}>{t('tools.mcp.pickProjectFirst')}</p>}<button type="button" className={styles.primary} disabled={busy || (scope === 'project' && !project)} onClick={openAdding}><Icon name="plus" size={14} strokeWidth={2.2} />{t('tools.skills.add')}</button></div>}
     </section>;
   }
 

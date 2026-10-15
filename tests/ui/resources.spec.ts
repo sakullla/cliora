@@ -884,6 +884,24 @@ test('Skill workspace shows skeleton rows on first load and embeds the add entry
   await expect(page.getByRole('dialog').getByRole('heading', { name: '添加 Skill' })).toBeVisible();
 });
 
+test('Skill workspace shows the scan failure inline when the empty state is caused by an error', async ({ page }) => {
+  await mockResources(page);
+  await page.addInitScript(() => {
+    const win = window as any;
+    const invoke = win.__TAURI_INTERNALS__.invoke;
+    win.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command === 'scan_native_skills') throw { code: 'native_error', message: '读取 Skill 目录失败' };
+      return invoke(command, args);
+    };
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('tab', { name: 'Skill', exact: true }).click();
+  await expect(page.getByText('这个 CLI 还没有生效的 Skill')).toBeVisible();
+  await expect(page.getByText('Skill 列表加载失败：读取 Skill 目录失败')).toBeVisible();
+  await expect(page.getByRole('button', { name: '添加 Skill', exact: true })).toHaveCount(2);
+});
+
 test('accounts workspace shows skeleton rows on first read and a rediscover action in the empty state', async ({ page }) => {
   await mockResources(page);
   await page.addInitScript(() => {

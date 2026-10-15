@@ -235,6 +235,31 @@ test('records keep search, show native resume command and only launch on request
   await expect(priceDialog.getByLabel('价格模型')).toHaveValue('');
 });
 
+test('records count never shows more hits than the total when a filtered batch outgrows a stale total', async ({ page }) => {
+  await page.addInitScript(() => {
+    const base = (index: number) => ({ id: `record-${index}`, toolId: 'codex', nativeId: null, title: `Session ${index}`, cwd: null, model: null, projectId: null, startedAt: 1790668800000, updatedAt: 1790668800000, favorite: false, partial: false, stale: false, messageCount: 1, usageCount: 0 });
+    Object.assign(window, {
+      isTauri: true,
+      __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', yoloAvailable: false, interfaceFormats: [], history: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
+        if (command === 'list_projects' || command === 'list_history_prices' || command === 'refresh_history') return [];
+        // The unfiltered load saw two sessions; the search happens after the index grew to three.
+        if (command === 'list_history_sessions') return args.filter.search ? [base(1), base(2), base(3)] : [base(1), base(2)];
+        if (command === 'get_usage_report') return { tools: [], models: [], rows: [], comparisons: [], trend: null, untimedRecords: 0, totals: { sessions: 0, messages: 0, requests: 0, requestCount: null, inputTokens: null, cacheReadTokens: null, cacheWriteTokens: null, outputTokens: null, costUsd: null } };
+        if (command === 'get_history_scan_progress') return { running: false, toolId: '', completedSources: 0, totalSources: 0 };
+        if (command === 'get_tray_status') return { available: false, error: null };
+        if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+        return null;
+      } },
+    });
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
+  await page.getByRole('textbox', { name: '搜索会话' }).fill('Session');
+  await expect(page.getByText('命中 3 / 共 3')).toBeVisible();
+});
+
 test('usage dashboard splits tokens, follows rows into filters and opens heavy sessions', async ({ page }) => {
   await page.addInitScript((report) => {
     const records = [
