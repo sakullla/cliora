@@ -235,4 +235,9 @@ export default {
     hint: 'Export an encrypted bundle, or sync via WebDAV',
     action: 'Migration & sync →',
   },
+  onboarding: {
+    label: 'View the first-run guide',
+    hint: 'Reopen the three-step getting-started list on Quick start',
+    action: 'View again →',
+  },
 };

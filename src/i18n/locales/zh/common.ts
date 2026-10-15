@@ -247,5 +247,6 @@ export default {
     loadFailedTitle: '暂时无法读取本机资料',
     loadFailedDetail: '原数据仍保留。请按上方提示处理后重试。',
     loadFailedRetry: '重试读取',
+    skipToContent: '跳到主内容',
   },
 };

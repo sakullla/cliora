@@ -74,6 +74,19 @@ async function installDesktop(page: Page, projects: unknown[] = []) {
 test('five full pages are navigable and browser mode never implies native data', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByRole('status')).toContainText('浏览器预览');
+  // The skip link is the first Tab stop: invisible for mouse users, visible under keyboard
+  // focus, and Enter hands focus to the main region.
+  const skip = page.getByRole('link', { name: '跳到主内容' });
+  await expect(skip).toHaveCSS('opacity', '0');
+  await page.keyboard.press('Tab');
+  await expect(skip).toBeFocused();
+  await expect(skip).toBeVisible();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#main')).toBeFocused();
+  await expect(page.locator('#main')).toHaveAttribute('tabindex', '-1');
+  // Beyond the new first stop, the shell focus order is unchanged.
+  await page.reload();
+  await page.keyboard.press('Tab');
   await page.keyboard.press('Tab');
   await expect(page.getByRole('button', { name: '折叠侧栏', exact: true })).toBeFocused();
   await page.keyboard.press('Tab');

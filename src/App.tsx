@@ -16,6 +16,7 @@ import { ToolIcon, ToolIconsContext } from './components/ToolIcon';
 import { GeneralSettings } from './features/settings/GeneralSettings';
 import { ManagedTools } from './features/home/ManagedTools';
 import { ProjectLauncher } from './features/home/ProjectLauncher';
+import { OnboardingCard, ONBOARDING_LAUNCHED_EVENT, completeOnboarding, readOnboardingComplete, readOnboardingLaunched, reopenOnboarding } from './features/home/OnboardingCard';
 const LibraryPage = lazy(() => import('./features/library/LibraryPage').then((module) => ({ default: module.LibraryPage })));
 const RecordsPage = lazy(() => import('./features/records/RecordsPage').then((module) => ({ default: module.RecordsPage })));
 const MigrationSettings = lazy(() => import('./features/settings/MigrationSettings').then((module) => ({ default: module.MigrationSettings })));
@@ -70,6 +71,13 @@ export default function App() {
     setSidebarCollapsed(next);
     try { localStorage.setItem('cliora:sidebar-collapsed', String(next)); } catch { /* Layout remains usable without storage. */ }
   }
+  // First-run checklist (R5): visibility is decided once per launch from the truly-empty
+  // state; step completion then follows live data until the card is closed or finished.
+  const [onboardingComplete, setOnboardingComplete] = useState(readOnboardingComplete);
+  const [onboardingVisible, setOnboardingVisible] = useState(false);
+  const [onboardingHasConfig, setOnboardingHasConfig] = useState(false);
+  const [onboardingLaunched, setOnboardingLaunched] = useState(readOnboardingLaunched);
+  const onboardingEvaluated = useRef(false);
   const [visited, setVisited] = useState<Set<string>>(() => new Set(['home']));
   const [tool, setTool] = useState<string>('');
   const [toolOpenSequence, setToolOpenSequence] = useState(0);
@@ -305,6 +313,85 @@ export default function App() {
     catch (value) { setError(value as ApiError); }
   }
 
+  // Decide checklist visibility once per launch: only a fully fresh state (no managed
+  // tool, no named profile, no project, no completion marker) counts as a first run.
+  useEffect(() => {
+    if (!nativeAvailable || !loaded || onboardingComplete || onboardingEvaluated.current) return;
+    onboardingEvaluated.current = true;
+    let active = true;
+    void (async () => {
+      if (managed.length > 0) return;
+      try {
+        const projects = await native.listProjects();
+        if (!active || !Array.isArray(projects) || projects.length > 0) return;
+        const items = await native.listPortableItems();
+        if (!active || !Array.isArray(items)) return;
+        if (!items.some((item) => item.kind === 'profile')) setOnboardingVisible(true);
+      } catch { /* Keep the checklist hidden when the fresh state cannot be confirmed. */ }
+    })();
+    return () => { active = false; };
+  }, [loaded, onboardingComplete, managed.length]);
+
+  // While the checklist is open, re-reading the named-profile list on every return to
+  // Home keeps step 2 in sync with profiles created on the tools page.
+  useEffect(() => {
+    if (!nativeAvailable || !onboardingVisible || page !== 'home') return;
+    let active = true;
+    void native.listPortableItems()
+      .then((items) => { if (active && Array.isArray(items)) setOnboardingHasConfig(items.some((item) => item.kind === 'profile')); })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [onboardingVisible, page]);
+
+  // launchCli / resumeHistorySession successes are reported by the OnboardingCard module.
+  useEffect(() => {
+    const markLaunched = () => setOnboardingLaunched(true);
+    window.addEventListener(ONBOARDING_LAUNCHED_EVENT, markLaunched);
+    return () => window.removeEventListener(ONBOARDING_LAUNCHED_EVENT, markLaunched);
+  }, []);
+
+  // All three steps done: record completion and retire the card for this session as well.
+  useEffect(() => {
+    if (!onboardingVisible) return;
+    if (managed.length > 0 && onboardingHasConfig && onboardingLaunched) {
+      completeOnboarding();
+      setOnboardingComplete(true);
+      setOnboardingVisible(false);
+    }
+  }, [onboardingVisible, managed.length, onboardingHasConfig, onboardingLaunched]);
+
+  function closeOnboarding() {
+    completeOnboarding();
+    setOnboardingComplete(true);
+    setOnboardingVisible(false);
+  }
+
+  function reopenOnboardingGuide() {
+    reopenOnboarding();
+    setOnboardingComplete(false);
+    setOnboardingVisible(true);
+    void go('home');
+  }
+
+  // Checklist step entries: the managed-CLI checkboxes, profile creation, and the launch area.
+  function openOnboardingToolSetup() {
+    setSettingsTab('general');
+    void go('settings');
+  }
+
+  function openOnboardingConfigCreate() {
+    if (selectedTool) {
+      setTool(selectedTool);
+      setToolIntent({ create: true });
+      setToolOpenSequence((value) => value + 1);
+    }
+    void go('connections');
+  }
+
+  function revealOnboardingLaunchArea() {
+    document.querySelector<HTMLElement>('.home-launcher')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }
+
   const libraryKindLabel = (kind: LibraryKind) => t(kind === 'prompt' ? 'library.page.prompt' : 'library.page.ruleShort');
   const commands: CommandItem[] = [
     ...pages.map((item, index) => ({ id: `page-${item.id}`, group: t('common.palette.groupPages'), label: t(`common.nav.${item.id}`), hint: `${modLabel}+${index + 1}`, keywords: item.id, icon: item.glyph, run: () => { void go(item.id); } })),
@@ -344,6 +431,7 @@ export default function App() {
   }
 
   return <ToolIconsContext value={bootstrap.preferences.tool_icons ?? {}}><div className="titlebar-drag" data-tauri-drag-region /><div className="shell" data-sidebar-collapsed={sidebarCollapsed}>
+    <a className="skip-link" href="#main" onClick={(event) => { event.preventDefault(); const main = document.getElementById('main'); main?.focus(); main?.scrollTo({ top: 0 }); }}>{t('common.shell.skipToContent')}</a>
     <aside className="sidebar" aria-label={t('common.nav.mainLabel')}>
       <div className="brand"><img className="brandmark" src={brandIcon} alt="" /><span className="brand-name"><strong>{t('common.shell.brand')}</strong><small>CLIORA</small></span><button type="button" className="sidebar-toggle" aria-label={sidebarCollapsed ? t('common.shell.sidebarExpand') : t('common.shell.sidebarCollapse')} title={sidebarCollapsed ? t('common.shell.sidebarExpand') : t('common.shell.sidebarCollapse')} aria-expanded={!sidebarCollapsed} aria-controls="main-navigation" onClick={toggleSidebar}><Icon name={sidebarCollapsed ? 'sidebarOpen' : 'sidebarClose'} size={17} /></button></div>
       <nav className="nav" id="main-navigation" aria-label={t('common.nav.label')}>
@@ -356,11 +444,20 @@ export default function App() {
         <div className="sidebar-status" title={nativeAvailable ? t('common.shell.statusLocalTitle') : t('common.shell.statusPreviewTitle')}><span className="status-dot" data-tone={nativeAvailable ? undefined : 'preview'} /><span className="status-text" data-short={nativeAvailable ? t('common.shell.statusLocalShort') : t('common.shell.statusPreviewShort')}>{nativeAvailable ? t('common.shell.statusLocal') : t('common.shell.statusPreview')}</span></div>
       </div>
     </aside>
-    <main className={`content${page === 'records' ? ' content-locked' : ''}`} id="main"><div className="content-inner">
+    <main className={`content${page === 'records' ? ' content-locked' : ''}`} id="main" tabIndex={-1}><div className="content-inner">
       {!nativeAvailable && <div className="environment-banner" role="status"><span className="banner-icon"><Icon name="info" size={16} /></span><span>{t('common.shell.previewBanner')}</span></div>}
       {error && <div className="error-banner" role="alert"><span className="banner-icon"><Icon name="alert" size={16} /></span><div className="error-copy"><strong>{error.message}</strong><span>{error.action}</span>{error.data_directory && <code>{error.data_directory}</code>}</div>{loaded && <button type="button" onClick={() => setError(null)} aria-label={t('common.dismissError')}><Icon name="close" size={14} /></button>}</div>}
       <PageHeader title={title[0]} subtitle={title[1]} compact={page === 'records'} />
       {loading ? <PageSkeleton /> : !loaded ? <EmptyState icon="alert" title={t('common.shell.loadFailedTitle')} detail={t('common.shell.loadFailedDetail')} action={<button className="button primary" type="button" onClick={loadBootstrap}>{t('common.shell.loadFailedRetry')}</button>} /> : <>
+        {page === 'home' && onboardingVisible && <OnboardingCard
+          doneTools={managed.length > 0}
+          doneConfig={onboardingHasConfig}
+          doneLaunch={onboardingLaunched}
+          onManageTools={openOnboardingToolSetup}
+          onCreateConfig={openOnboardingConfigCreate}
+          onGoLaunch={revealOnboardingLaunchArea}
+          onClose={closeOnboarding}
+        />}
         {page === 'home' && <div className="home-band">
           <section className="home-tools">
             <div className="section-heading"><h2>{t('home.managed.title')}<span className="count-chip" aria-hidden="true">{visible.length}</span></h2><button className="text-button" type="button" onClick={() => go('settings')}>{t('home.managed.adjust')} <span aria-hidden="true">→</span></button></div>
@@ -387,6 +484,7 @@ export default function App() {
           onIconError={(message) => setError({ code: 'icon_error', message, action: t('settings.icons.repick') })}
           onOpenMigration={() => setSettingsTab('migration')}
           onOpenShortcutHelp={() => setHelpOpen(true)}
+          onReopenOnboarding={reopenOnboardingGuide}
         />}
         <div hidden={page !== 'settings' || settingsTab !== 'migration'}>{hasVisited('settings:migration') && <Suspense fallback={<PageSkeleton />}><MigrationSettings active={page === 'settings' && settingsTab === 'migration'} onImported={() => void refreshAfterImport()} /></Suspense>}</div>
       </>}

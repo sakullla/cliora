@@ -235,4 +235,9 @@ export default {
     hint: '导出加密配置包，或通过 WebDAV 同步',
     action: '迁移与同步 →',
   },
+  onboarding: {
+    label: '重新查看上手引导',
+    hint: '回看快速开始页的首次使用三步清单',
+    action: '重新查看 →',
+  },
 };
