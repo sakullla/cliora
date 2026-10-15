@@ -170,7 +170,8 @@ export function LibraryPage({ managedTools = [], active = true, spotlight = null
   const categories = useMemo(() => Array.from(new Set(items.flatMap((item) => tagsOf(item.category)))).sort(), [items]);
   const shown = items.filter((item) => (projectFilter === '*' || (projectFilter === 'global' ? !item.projectId : item.projectId === projectFilter))
     && (categoryFilter === '*' || tagsOf(item.category).includes(categoryFilter)));
-  const listTotal = counts[kind] ?? items.length;
+  // The unfiltered count loads separately; clamp it so a fresh filtered batch never shows x > y.
+  const listTotal = Math.max(counts[kind] ?? items.length, shown.length);
 
   async function canReplace() { return !dirty || confirmCurrent(t('library.page.confirmDiscard')); }
   async function choose(item: LibraryItem) {

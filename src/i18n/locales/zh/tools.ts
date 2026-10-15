@@ -471,6 +471,7 @@ export default {
     emptyDetail: '添加后只装进当前这个 CLI。勾选快速同步后，可以在资料库里分发。',
     listEmpty: '这个 CLI 上还没有生效的 Skill。',
     listLoading: '正在读取 Skill 列表…',
+    scanFailed: 'Skill 列表加载失败：{{detail}}',
     currentTitle: '当前 Skill',
     addHint: '装进当前这个 CLI。快速同步会同时放进资料库。',
     currentHint: '这里只改当前这个 CLI 上已经生效的 Skill。',
@@ -537,7 +538,7 @@ export default {
     neverExpires: '永不过期',
     noLimit: '不设上限',
     subject: {
-      account: '账户',
+      account: '账号',
       plan: '套餐',
       key: 'Key',
       extra: '额外资源',

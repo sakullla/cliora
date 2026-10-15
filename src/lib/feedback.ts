@@ -41,6 +41,15 @@ function finish(text: string): string {
   return ended(text) ? text : `${text}${terminator()}`;
 }
 
+/**
+ * Launch failures carry the stable backend code `terminal_command_too_long` whose message
+ * stays Chinese; display points route it to localized text instead of matching the message.
+ */
+export function launchFailureDetail(error: unknown): string | null {
+  if (!error || typeof error !== 'object' || (error as { code?: unknown }).code !== 'terminal_command_too_long') return null;
+  return i18n.t('home.tools.terminalTooLongDetail');
+}
+
 export function formatFailure(error: unknown, objectText: string, nextText: string): string {
   const fallback = `${objectText}${separator()}${nextText}`;
   if (typeof error === 'string') {

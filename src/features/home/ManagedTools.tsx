@@ -15,6 +15,7 @@ import { GuideDialog } from '../../components/GuideDialog';
 import { Icon } from '../../components/Icon';
 import { ToolIcon } from '../../components/ToolIcon';
 import { displayPath } from '../../lib/paths';
+import { launchFailureDetail } from '../../lib/feedback';
 import i18n from '../../i18n';
 import styles from './ManagedTools.module.css';
 
@@ -31,6 +32,8 @@ const launchDirectories = new Map<string, string>();
 let lastLaunchDirectory = '';
 
 function message(value: unknown): string {
+  const routed = launchFailureDetail(value);
+  if (routed) return routed;
   return value && typeof value === 'object' && 'message' in value ? String(value.message) : i18n.t('home.tools.operationFailed');
 }
 

@@ -54,6 +54,7 @@ export default {
     launchedDesktop: '{{name}} 已请求启动桌面应用。',
     launchedCli: '{{name}} 已向外部终端发出请求。',
     launchFailed: '{{name}} 启动失败。可再次启动或编辑配置。',
+    terminalTooLongDetail: '启动命令超过终端长度限制；请在设置的终端中选择 PowerShell 或 Windows Terminal 后重试。',
     applied: '{{name}} 已写入原生文件，下次启动读取。',
     compareFailed: '{{name}} 未能比较当前文件。{{reason}}',
     notSwitched: '{{name}} 未切换：{{detail}}',

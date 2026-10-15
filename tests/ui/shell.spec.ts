@@ -86,6 +86,8 @@ test('five full pages are navigable and browser mode never implies native data',
   await expect(page.locator('#main')).toHaveAttribute('tabindex', '-1');
   // Beyond the new first stop, the shell focus order is unchanged.
   await page.reload();
+  // Wait for the app to mount again before tabbing: keys pressed mid-mount reset focus.
+  await expect(page.getByRole('status')).toContainText('浏览器预览');
   await page.keyboard.press('Tab');
   await page.keyboard.press('Tab');
   await expect(page.getByRole('button', { name: '折叠侧栏', exact: true })).toBeFocused();

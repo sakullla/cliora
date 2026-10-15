@@ -16,13 +16,15 @@ import { ToolIcon, ToolIconsContext } from './components/ToolIcon';
 import { GeneralSettings } from './features/settings/GeneralSettings';
 import { ManagedTools } from './features/home/ManagedTools';
 import { ProjectLauncher } from './features/home/ProjectLauncher';
-import { OnboardingCard, ONBOARDING_LAUNCHED_EVENT, completeOnboarding, readOnboardingComplete, readOnboardingLaunched, reopenOnboarding } from './features/home/OnboardingCard';
+import { OnboardingCard } from './features/home/OnboardingCard';
+import { ONBOARDING_LAUNCHED_EVENT, completeOnboarding, readOnboardingComplete, readOnboardingLaunched, reopenOnboarding } from './lib/onboarding';
 const LibraryPage = lazy(() => import('./features/library/LibraryPage').then((module) => ({ default: module.LibraryPage })));
 const RecordsPage = lazy(() => import('./features/records/RecordsPage').then((module) => ({ default: module.RecordsPage })));
 const MigrationSettings = lazy(() => import('./features/settings/MigrationSettings').then((module) => ({ default: module.MigrationSettings })));
 const ToolWorkspacePage = lazy(() => import('./features/tools/ToolWorkspace').then((module) => ({ default: module.ToolWorkspacePage })));
 import type { WorkspaceOpenIntent } from './features/tools/ToolWorkspace';
 import { native, nativeAvailable } from './lib/native';
+import { launchFailureDetail } from './lib/feedback';
 import { confirmAction } from './lib/confirm';
 import { isEditableTarget, modAria, modLabel, withMod } from './lib/shortcut';
 import { navigateChoices } from './lib/choiceNavigation';
@@ -310,7 +312,10 @@ export default function App() {
   // Same command and confirmation flow as the Records list, with Records' default mode.
   async function resumePaletteSession(id: string) {
     try { await native.resumeHistorySession(id, 'normal'); }
-    catch (value) { setError(value as ApiError); }
+    catch (value) {
+      const detail = launchFailureDetail(value);
+      setError(detail ? { code: 'terminal_command_too_long', message: detail, action: '', data_directory: null } : value as ApiError);
+    }
   }
 
   // Decide checklist visibility once per launch: only a fully fresh state (no managed
@@ -380,11 +385,12 @@ export default function App() {
   }
 
   function openOnboardingConfigCreate() {
-    if (selectedTool) {
-      setTool(selectedTool);
-      setToolIntent({ create: true });
-      setToolOpenSequence((value) => value + 1);
-    }
+    // Without a managed CLI there is no configuration target yet; guide to step 1 instead
+    // of landing on the empty tools page.
+    if (!selectedTool) { openOnboardingToolSetup(); return; }
+    setTool(selectedTool);
+    setToolIntent({ create: true });
+    setToolOpenSequence((value) => value + 1);
     void go('connections');
   }
 
