@@ -34,6 +34,12 @@ function message(value: unknown): string {
   return value && typeof value === 'object' && 'message' in value ? String(value.message) : i18n.t('home.tools.operationFailed');
 }
 
+function errorCode(value: unknown): string {
+  return value && typeof value === 'object' && typeof (value as { code?: unknown }).code === 'string'
+    ? (value as { code: string }).code
+    : '';
+}
+
 function lineNotice(tone: Notice['tone'], text: string, detail = ''): Notice {
   const extra = detail && detail !== i18n.t('home.tools.operationFailed') ? detail.replace(/\s+/g, ' ').trim() : '';
   const full = extra ? `${text} ${extra}` : text;
@@ -252,7 +258,9 @@ export function ManagedTools({ tools, onOpenTool }: { tools: AdapterDescriptor[]
     } catch (error) {
       const detail = message(error);
       const profile = previous.workspace?.profiles.find((item) => item.id === profileId);
-      if (profile && (detail.includes('请确认接管') || detail.includes('外部修改'))) {
+      // Takeover errors are recognized by their stable code first; the text checks stay
+      // as the fallback for payloads without a code.
+      if (profile && (errorCode(error) === 'native_takeover_required' || detail.includes('请确认接管') || detail.includes('外部修改'))) {
         try {
           const comparison = await native.compareRegisteredApplication(profileId, 'global', '');
           setConflict({ toolId, toolName, profileName: profile.name, comparison });
