@@ -247,5 +247,6 @@ export default {
     loadFailedTitle: 'Could not read local data',
     loadFailedDetail: 'Your data is intact. Follow the guidance above and try again.',
     loadFailedRetry: 'Retry',
+    skipToContent: 'Skip to main content',
   },
 };

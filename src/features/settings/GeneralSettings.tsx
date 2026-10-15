@@ -164,7 +164,7 @@ function LanguageChoice({ value, disabled }: { value: AppLanguage; disabled: boo
   }}>{t(`common.language.${id}`)}</button>)}</div>;
 }
 
-export function GeneralSettings({ tools, managed, preservedUnknown, icons, busy, theme, onThemeChange, onManagedChange, onIconChange, onIconError, onOpenMigration, onOpenShortcutHelp }: {
+export function GeneralSettings({ tools, managed, preservedUnknown, icons, busy, theme, onThemeChange, onManagedChange, onIconChange, onIconError, onOpenMigration, onOpenShortcutHelp, onReopenOnboarding }: {
   tools: ToolItem[];
   managed: string[];
   preservedUnknown: { id: string; profileCount: number }[];
@@ -177,6 +177,7 @@ export function GeneralSettings({ tools, managed, preservedUnknown, icons, busy,
   onIconError: (message: string) => void;
   onOpenMigration: () => void;
   onOpenShortcutHelp: () => void;
+  onReopenOnboarding: () => void;
 }) {
   const { t, i18n } = useTranslation();
   const toasts = useToasts();
@@ -220,6 +221,7 @@ export function GeneralSettings({ tools, managed, preservedUnknown, icons, busy,
     <section className="settings-group">
       <div className="setting-row"><span><strong>{t('settings.shortcuts.label')}</strong><small>{t('settings.shortcuts.hint')}</small></span><button className="button" type="button" aria-label={t('settings.shortcuts.label')} onClick={onOpenShortcutHelp}>{t('settings.shortcuts.action')}</button></div>
       <div className="setting-row"><span><strong>{t('settings.migrationEntry.label')}</strong><small>{t('settings.migrationEntry.hint')}</small></span><button className="button" type="button" onClick={onOpenMigration}>{t('settings.migrationEntry.action')}</button></div>
+      <div className="setting-row"><span><strong>{t('settings.onboarding.label')}</strong><small>{t('settings.onboarding.hint')}</small></span><button className="button" type="button" onClick={onReopenOnboarding}>{t('settings.onboarding.action')}</button></div>
     </section>
     <ToastStack status={toasts.notice} alert={toasts.error} onDismiss={toasts.dismiss} />
   </>;

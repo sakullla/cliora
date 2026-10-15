@@ -723,3 +723,105 @@ test('desktop tools launch directly and an uninstalled editor keeps official gui
   expect(cursorRequests.length).toBeGreaterThanOrEqual(2);
   for (const item of cursorRequests) expect(item.directory).toBeNull();
 });
+
+/** Native mock in the fully fresh state; a localStorage seed keeps variants across reloads. */
+async function installFreshState(page: Page) {
+  await page.addInitScript(() => {
+    const seed = JSON.parse(localStorage.getItem('__fresh-seed') ?? '{}') as {
+      managed?: string[];
+      profiles?: Array<{ id: string; name: string }>;
+      projects?: Array<Record<string, unknown>>;
+    };
+    const state = { managed: seed.managed ?? [], profiles: seed.profiles ?? [], projects: seed.projects ?? [] };
+    const catalog = () => ({
+      registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], yoloAvailable: true }],
+      managedIds: [...state.managed],
+      preservedUnknown: [],
+    });
+    Object.assign(window, {
+      isTauri: true,
+      __fresh: state,
+      __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: [...state.managed], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }] };
+        if (command === 'list_cli_adapters') return catalog();
+        if (command === 'set_registered_managed_tools') { state.managed = [...(args.managedIds ?? [])]; return catalog(); }
+        if (command === 'list_projects') return [...state.projects];
+        if (command === 'list_portable_items') return state.profiles.map((profile) => ({ key: `profile:${profile.id}`, kind: 'profile', toolId: 'codex', label: profile.name, status: 'available', pendingFields: [] }));
+        if (command === 'get_launch_settings') return { selected: 'auto', terminals: [{ id: 'auto', label: '系统默认', available: true }], cliMode: 'normal', projectMode: 'normal' };
+        if (command === 'get_tray_status') return { available: false, error: null };
+        if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+        if (command === 'get_registered_tool_workspace') return {
+          probe: { selectedPath: 'C:/codex.cmd', installations: [{ path: 'C:/codex.cmd', version: '1.0.0', status: 'available' }], nativeFiles: [], nativeWrites: { state: 'supported', reason: '' }, interfaceFormats: [], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '' },
+          profiles: state.profiles.map((profile) => ({ id: profile.id, tool: 'codex', name: profile.name, version: 1, inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection: { model: 'gpt-5' } })),
+          binding: null, snapshots: [], recoveryNeeded: [], common: null, customPath: null,
+        };
+        if (command === 'launch_cli') return { mode: 'normal', status: 'terminal_requested' };
+        if (command === 'plugin:dialog|open') return 'C:/work';
+        return null;
+      } },
+    });
+  });
+}
+
+test('the fresh onboarding checklist checks its steps and retires once complete', async ({ page }) => {
+  await installFreshState(page);
+  await page.goto('/');
+  const card = page.getByRole('region', { name: '首次使用引导' });
+  await expect(card).toBeVisible();
+  await expect(card.getByRole('listitem')).toHaveCount(3);
+  await expect(card.locator('li[data-done]')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '启动', exact: true })).toHaveCount(0);
+
+  // Step 1: the entry reaches the managed-CLI checkboxes; checking one marks the step.
+  await card.getByRole('button', { name: '去勾选', exact: true }).click();
+  await page.getByRole('checkbox', { name: 'Codex' }).check();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始' }).click();
+  await expect(card.locator('li[data-done]')).toHaveCount(1);
+
+  // Step 2: the entry opens the tools page; a saved profile marks the step after returning home.
+  await card.getByRole('button', { name: '去创建', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '工具与连接', level: 1 })).toBeVisible();
+  await page.evaluate(() => { (window as unknown as { __fresh: { profiles: Array<{ id: string; name: string }> } }).__fresh.profiles = [{ id: 'daily', name: '日常' }]; });
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始' }).click();
+  await expect(card.locator('li[data-done]')).toHaveCount(2);
+
+  // Step 3: one launch through the app finishes the guide and records both markers.
+  await page.getByLabel('管理中的工具').getByRole('button', { name: '启动', exact: true }).click();
+  await expect(card).toHaveCount(0);
+  expect(await page.evaluate(() => localStorage.getItem('cliora:onboarding-complete'))).toBe('true');
+  expect(await page.evaluate(() => localStorage.getItem('cliora:onboarding-launched'))).toBe('true');
+});
+
+test('closing the onboarding checklist keeps it away and settings reopens it', async ({ page }) => {
+  await installFreshState(page);
+  await page.goto('/');
+  const card = page.getByRole('region', { name: '首次使用引导' });
+  await expect(card).toBeVisible();
+  await card.getByRole('button', { name: '关闭引导' }).click();
+  await expect(card).toHaveCount(0);
+  expect(await page.evaluate(() => localStorage.getItem('cliora:onboarding-complete'))).toBe('true');
+  await page.reload();
+  await expect(card).toHaveCount(0);
+  await expect(page.getByText('尚未管理工具')).toBeVisible();
+
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置' }).click();
+  await page.getByRole('button', { name: '重新查看 →' }).click();
+  await expect(page.getByRole('heading', { name: '快速开始', level: 1 })).toBeVisible();
+  await expect(card).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem('cliora:onboarding-complete'))).toBeNull();
+});
+
+test('any existing tool, profile, or project keeps the onboarding checklist hidden', async ({ page }) => {
+  await installFreshState(page);
+  await page.goto('/');
+  const card = page.getByRole('region', { name: '首次使用引导' });
+  await expect(card).toBeVisible();
+  const seedVariant = async (value: Record<string, unknown>) => {
+    await page.evaluate((data) => localStorage.setItem('__fresh-seed', JSON.stringify(data)), value);
+    await page.reload();
+    await expect(card).toHaveCount(0);
+  };
+  await seedVariant({ managed: ['codex'] });
+  await seedVariant({ profiles: [{ id: 'daily', name: '日常' }] });
+  await seedVariant({ projects: [{ id: 'demo', name: 'Demo', path: 'C:/demo', available: true, preferredTool: null, lastOpened: 1, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {} }] });
+});
