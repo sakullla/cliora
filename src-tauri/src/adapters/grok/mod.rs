@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use super::{
     file, project_root, CliAdapter, InspectionFields, LaunchMode, McpLocation,
-    NativeCredentialRefs, PendingSecrets,
+    NativeCredentialRefs, PendingSecrets, SkillObservation,
 };
 use crate::credentials::CredentialStore;
 use crate::native::adapter::{NativeFile, Scope};
@@ -147,6 +147,26 @@ impl CliAdapter for Grok {
             Scope::Global => home.join(".grok/skills"),
             Scope::Project => project?.join(".grok/skills"),
         })
+    }
+    fn skill_observations(
+        &self,
+        scope: Scope,
+        home: &Path,
+        _project: Option<&Path>,
+    ) -> Vec<SkillObservation> {
+        if scope != Scope::Global {
+            return Vec::new();
+        }
+        // Same install bundle as `bundled/agents`: `<grok home>/bundled/skills/<name>/SKILL.md`.
+        let root = crate::accounts::selection::config_root("grok", || {
+            env::var_os("GROK_HOME")
+                .map(Into::into)
+                .unwrap_or_else(|| home.join(".grok"))
+        });
+        vec![SkillObservation {
+            root: root.join("bundled").join("skills"),
+            detail: "Grok 捆绑 Skill，只读",
+        }]
     }
     fn rule_path(
         &self,
@@ -463,5 +483,20 @@ mod tests {
         let parsed = crate::native::format::parse(FileKind::Toml, text).unwrap();
         let documents = BTreeMap::from([("settings".into(), parsed)]);
         Grok.validate_documents(Scope::Project, &documents).unwrap();
+    }
+
+    #[test]
+    fn bundled_skills_are_a_read_only_observation() {
+        let home = Path::new("/home/example");
+        let observed = Grok.skill_observations(Scope::Global, home, None);
+        let expected = env::var_os("GROK_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".grok"))
+            .join("bundled")
+            .join("skills");
+        assert_eq!(observed.len(), 1);
+        assert_eq!(observed[0].root, expected);
+        assert!(observed[0].detail.contains("只读"));
+        assert!(Grok.skill_observations(Scope::Project, home, Some(Path::new("/work"))).is_empty());
     }
 }

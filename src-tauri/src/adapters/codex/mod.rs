@@ -8,11 +8,11 @@ pub(crate) mod usage;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::env;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::{
     file, project_root, CliAdapter, InspectionFields, LaunchMode, McpLocation,
-    NativeCredentialRefs, PendingSecrets,
+    NativeCredentialRefs, PendingSecrets, SkillObservation,
 };
 use crate::credentials::CredentialStore;
 use crate::native::adapter::{NativeFile, Scope};
@@ -251,6 +251,38 @@ impl CliAdapter for Codex {
                 .unwrap_or_else(|| home.join(".agents/skills")),
             Scope::Project => project?.join(".agents/skills"),
         })
+    }
+    fn skill_observations(
+        &self,
+        scope: Scope,
+        home: &Path,
+        project: Option<&Path>,
+    ) -> Vec<SkillObservation> {
+        // Codex ships bundled skills under `$CODEX_HOME/skills/.system/<name>/SKILL.md`
+        // (marker `.codex-system-skills.marker`). The shared scan skips names
+        // that start with '.', so this root is listed on its own and stays read-only.
+        // Without a bound account the writable root is `~/.agents/skills`, which
+        // does not contain that bundle.
+        let mut roots = Vec::new();
+        if let Some(root) = self.skill_root(scope, home, project) {
+            roots.push(root.join(".system"));
+        }
+        if scope == Scope::Global {
+            let codex_home = env::var_os("CODEX_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| home.join(".codex"));
+            let bundled = codex_home.join("skills").join(".system");
+            if !roots.iter().any(|path| path == &bundled) {
+                roots.push(bundled);
+            }
+        }
+        roots
+            .into_iter()
+            .map(|root| SkillObservation {
+                root,
+                detail: "Codex 捆绑 Skill，只读",
+            })
+            .collect()
     }
     fn rule_path(
         &self,
@@ -536,5 +568,30 @@ impl CliAdapter for Codex {
             "native" => self.native_install_command(),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bundled_system_skills_are_listed_read_only() {
+        let home = Path::new("/home/example");
+        let project = Path::new("/work/demo");
+        let global = Codex.skill_observations(Scope::Global, home, None);
+        let bundled = env::var_os("CODEX_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".codex"))
+            .join("skills")
+            .join(".system");
+        let agents = home.join(".agents/skills/.system");
+        assert!(global.iter().any(|item| item.root == agents && item.detail.contains("只读")));
+        assert!(global.iter().any(|item| item.root == bundled));
+        assert_eq!(global.len(), if agents == bundled { 1 } else { 2 });
+        let project_rows = Codex.skill_observations(Scope::Project, home, Some(project));
+        assert_eq!(project_rows.len(), 1);
+        assert_eq!(project_rows[0].root, project.join(".agents/skills/.system"));
+        assert!(Codex.skill_observations(Scope::Project, home, None).is_empty());
     }
 }

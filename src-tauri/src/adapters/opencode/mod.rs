@@ -999,6 +999,22 @@ impl CliAdapter for OpenCode {
         }
         Ok(args)
     }
+    fn launch_args_for_version(
+        &self,
+        version: &str,
+        session: Option<&str>,
+        mode: LaunchMode,
+    ) -> Result<Vec<String>, String> {
+        let mut args = self.launch_args(session, mode)?;
+        // OpenCode 2.0.29 starts a managed background service before the TUI.
+        // `service.ensure` exits when that port is already taken, including by
+        // a leftover server from another install. `--standalone` is the
+        // verified flag for a private server that does not use that port.
+        if switch_major(Some(version)) == Some(2) {
+            args.insert(0, "--standalone".into());
+        }
+        Ok(args)
+    }
     fn history_sources(
         &self,
         home: &std::path::Path,
@@ -1092,5 +1108,17 @@ mod tests {
         assert_eq!(OpenCode.npm_entry_for_version(None), None);
         assert!(OpenCode.recognizes_native_install_path(Path::new("/home/example/.opencode/bin/opencode")));
         assert!(!OpenCode.recognizes_native_install_path(Path::new("/home/example/.local/bin/opencode")));
+    }
+
+    #[test]
+    fn opencode_v2_launch_uses_a_private_server() {
+        let v2 = OpenCode
+            .launch_args_for_version("2.0.29", Some("ses_1"), LaunchMode::Yolo)
+            .unwrap();
+        assert_eq!(v2, vec!["--standalone", "--session", "ses_1", "--auto"]);
+        let v1 = OpenCode
+            .launch_args_for_version("1.19.0", None, LaunchMode::Normal)
+            .unwrap();
+        assert!(v1.is_empty());
     }
 }
