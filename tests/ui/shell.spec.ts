@@ -504,7 +504,7 @@ test('command palette scrolls a filtered project into view', async ({ page }) =>
   await page.keyboard.press('Enter');
   await expect(page.locator('dialog')).toHaveCount(0);
   await expect(search).toHaveValue('');
-  await expect.poll(async () => target.evaluate((element) => {
+  await expect.poll(() => target.evaluate((element) => {
     const main = document.querySelector('main');
     if (!main) return false;
     const item = element.getBoundingClientRect();
@@ -516,4 +516,102 @@ test('command palette scrolls a filtered project into view', async ({ page }) =>
   await search.fill('项目0');
   await expect(target).toHaveCount(0);
   await expect(page.locator('[data-project-id="p0"]')).toHaveCount(1);
+});
+
+/** Native mock with indexed sessions and library items; records every IPC call. */
+async function installPaletteData(page: Page) {
+  await page.addInitScript(() => {
+    const commands: string[] = [];
+    const resumes: unknown[] = [];
+    // Indexed DB snapshot: s1 is the most recent, s7 the oldest, s5 has no title.
+    const sessions = Array.from({ length: 7 }, (_, index) => ({
+      id: `s${index + 1}`, toolId: 'codex', nativeId: null, title: index === 4 ? '' : `面板会话${index + 1}`,
+      cwd: null, model: null, projectId: null, startedAt: null, updatedAt: 8 - index, favorite: false,
+      partial: false, stale: false, messageCount: index + 1, usageCount: 0,
+    }));
+    const entry = (kind: string, index: number) => ({
+      id: `${kind}-${index}`, kind, title: kind === 'rule' ? `面板规则${index}` : `面板提示词${index}`,
+      body: `内容 ${index}`, category: '', projectId: null, version: 1, updatedAt: index,
+    });
+    const prompts = [1, 2, 3].map((index) => entry('prompt', index));
+    const rules = [1, 2].map((index) => entry('rule', index));
+    Object.assign(window, {
+      isTauri: true,
+      __commands: commands,
+      __resumes: resumes,
+      __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, any> = {}) => {
+        commands.push(command);
+        if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['codex'], theme: 'system' }, tools: [{ id: 'codex', name: 'Codex' }] };
+        if (command === 'list_cli_adapters') return { registered: [{ id: 'codex', name: 'Codex', interfaceFormats: [], resume: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } }], managedIds: ['codex'], preservedUnknown: [] };
+        if (command === 'list_projects') return [];
+        if (command === 'list_history_sessions') return sessions;
+        if (command === 'list_library_items') return args.kind === 'rule' ? rules : prompts;
+        if (command === 'resume_history_session') { resumes.push(args); return { mode: args.mode, status: 'terminal_requested' }; }
+        if (command === 'list_mcp_definitions' || command === 'list_skill_packages' || command === 'list_skill_recovery_issues' || command === 'list_native_mcp' || command === 'list_history_prices' || command === 'list_portable_items') return [];
+        if (command === 'get_launch_settings') return { selected: 'auto', terminals: [] };
+        if (command === 'get_tray_status') return { available: false, error: null };
+        if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return () => {};
+        return null;
+      } },
+    });
+  });
+}
+
+test('command palette lists indexed sessions and library entries without scanning', async ({ page }) => {
+  await installPaletteData(page);
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: '快速开始', level: 1 })).toBeVisible();
+  await page.keyboard.press('Control+K');
+  const dialog = page.getByRole('dialog', { name: '快速前往' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator('.command-group', { hasText: '最近会话' })).toBeVisible();
+  await expect(dialog.locator('.command-group', { hasText: '资料库' })).toBeVisible();
+  // Both groups are capped at five entries; the sixth and seventh sessions stay out.
+  await expect(dialog.getByRole('option', { name: /面板会话/ })).toHaveCount(4);
+  await expect(dialog.getByRole('option', { name: /未命名会话/ })).toHaveCount(1);
+  await expect(dialog.getByRole('option', { name: '面板会话6' })).toHaveCount(0);
+  await expect(dialog.getByRole('option', { name: /面板提示词|面板规则/ })).toHaveCount(5);
+  // The palette reads the indexed snapshot only: opening it never triggers a scan.
+  const opened = await page.evaluate(() => (window as typeof window & { __commands: string[] }).__commands);
+  expect(opened).toContain('list_history_sessions');
+  expect(opened).toContain('list_library_items');
+  expect(opened).not.toContain('refresh_history');
+  // Choosing a session reuses the Records resume command and its default mode.
+  await dialog.getByRole('option', { name: '面板会话1' }).click();
+  await expect(page.locator('dialog')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => (window as typeof window & { __resumes: unknown[] }).__resumes)).toEqual([{ id: 's1', mode: 'normal' }]);
+  expect(await page.evaluate(() => (window as typeof window & { __commands: string[] }).__commands)).not.toContain('refresh_history');
+});
+
+test('command palette hides the session and library groups when data is empty', async ({ page }) => {
+  await installDesktop(page);
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: '快速开始', level: 1 })).toBeVisible();
+  await page.keyboard.press('Control+K');
+  const dialog = page.getByRole('dialog', { name: '快速前往' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator('.command-group', { hasText: '页面' })).toBeVisible();
+  await expect(dialog.locator('.command-group', { hasText: '最近会话' })).toHaveCount(0);
+  await expect(dialog.locator('.command-group', { hasText: '资料库' })).toHaveCount(0);
+  await expect(dialog.getByRole('option', { name: /未命名会话/ })).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(page.locator('dialog')).toHaveCount(0);
+});
+
+test('command palette library entry jumps to the library page and opens the item', async ({ page }) => {
+  await installPaletteData(page);
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: '快速开始', level: 1 })).toBeVisible();
+  await page.keyboard.press('Control+K');
+  const dialog = page.getByRole('dialog', { name: '快速前往' });
+  await dialog.getByRole('combobox', { name: '搜索页面、工具或项目' }).fill('面板规则2');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('dialog')).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: '资料库', level: 1 })).toBeVisible();
+  // The spotlight lands on the rule tab even though the library opens on prompts.
+  await expect(page.getByRole('tab', { name: /^长期规则/ })).toHaveAttribute('aria-selected', 'true');
+  const editor = page.getByRole('dialog', { name: '修改规则' });
+  await expect(editor).toBeVisible();
+  await expect(editor.getByLabel('标题')).toHaveValue('面板规则2');
+  await expect(editor.getByRole('button', { name: '复制全文' })).toBeVisible();
 });

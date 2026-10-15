@@ -75,7 +75,10 @@ function edit(item: LibraryItem): LibraryDraft {
 
 type LibrarySection = LibraryKind | 'mcp' | 'skill';
 
-export function LibraryPage({ managedTools = [], active = true }: { managedTools?: AdapterDescriptor[]; active?: boolean }) {
+/** Locate request emitted by the command palette; consumed once per token. */
+export type LibrarySpotlight = { kind: LibraryKind; id: string; token: number };
+
+export function LibraryPage({ managedTools = [], active = true, spotlight = null }: { managedTools?: AdapterDescriptor[]; active?: boolean; spotlight?: LibrarySpotlight | null }) {
   const { t } = useTranslation();
   const kindName = (value: LibraryKind) => t(value === 'prompt' ? 'library.page.prompt' : 'library.page.ruleShort');
   const [section, setSection] = useState<LibrarySection>('prompt');
@@ -149,6 +152,20 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
     }, search ? 180 : 0);
     return () => { live = false; window.clearTimeout(timer); };
   }, [active, kind, search]);
+  // Spotlight from the command palette: settle the section and filters first, then
+  // open the entry's edit dialog (its view/copy surface) once the list shows it.
+  // Waiting is event-driven: the reveal simply fires when a matching item arrives.
+  const revealedSpotlight = useRef<number | null>(null);
+  useEffect(() => {
+    if (!active || !spotlight || revealedSpotlight.current === spotlight.token) return;
+    if (section !== spotlight.kind) { void openSection(spotlight.kind); return; }
+    if (search || projectFilter !== '*' || categoryFilter !== '*') { setSearch(''); setProjectFilter('*'); setCategoryFilter('*'); return; }
+    const item = items.find((entry) => entry.id === spotlight.id);
+    if (!item) return;
+    revealedSpotlight.current = spotlight.token;
+    document.querySelector<HTMLElement>(`[data-library-id="${CSS.escape(spotlight.id)}"]`)?.scrollIntoView({ block: 'center' });
+    void choose(item);
+  }, [spotlight?.id, spotlight?.kind, spotlight?.token, active, section, search, projectFilter, categoryFilter, items]);
 
   const categories = useMemo(() => Array.from(new Set(items.flatMap((item) => tagsOf(item.category)))).sort(), [items]);
   const shown = items.filter((item) => (projectFilter === '*' || (projectFilter === 'global' ? !item.projectId : item.projectId === projectFilter))
@@ -335,7 +352,7 @@ export function LibraryPage({ managedTools = [], active = true }: { managedTools
     <div className={styles.layout}>
       {(!listLoading || items.length > 0) && <div><span className="count-chip">{t('library.page.countFiltered', { filtered: shown.length, total: listTotal })}</span></div>}
       <div className={styles.list} aria-label={t('library.page.listAria', { kind: kindName(kind) })}>
-        {listLoading && !items.length ? <SkeletonRows count={3} /> : shown.length ? shown.map((item) => <article className={styles.card} key={item.id}>
+        {listLoading && !items.length ? <SkeletonRows count={3} /> : shown.length ? shown.map((item) => <article className={styles.card} key={item.id} data-library-id={item.id}>
           {(tagsOf(item.category).length > 0 || item.projectId || item.updatedAt) && <small className={styles.cardMeta}>
             {tagsOf(item.category).map((tag) => <em className={styles.tagChip} key={tag}>{tag}</em>)}
             {item.projectId && <span className={styles.cardProject}>{projects.find((project) => project.id === item.projectId)?.name ?? t('library.page.originalProject')}</span>}
