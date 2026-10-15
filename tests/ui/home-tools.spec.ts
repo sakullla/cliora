@@ -62,8 +62,8 @@ async function installHome(page: Page, detect = false) {
         }
         if (command === 'apply_registered_native_profile') {
           (window as unknown as { __applyCalls: unknown[] }).__applyCalls.push(args);
-          const forced = (window as unknown as { __applyError?: string }).__applyError;
-          if (forced) throw { message: forced };
+          const forced = (window as unknown as { __applyError?: string | { code?: string; message: string } }).__applyError;
+          if (forced) throw typeof forced === 'string' ? { message: forced } : forced;
           const profileId = args.profileId;
           const finish = () => { applied.codex = profileId; return { applications: [] }; };
           if (holdApply) {
@@ -295,6 +295,37 @@ test('a home switch that differs from the file opens the comparison', async ({ p
   await dialog.getByRole('button', { name: '使用本次内容' }).click();
   await expect(dialog).toHaveCount(0);
   await expect(tools.getByRole('status')).toHaveText('Codex 已写入原生文件，下次启动读取。');
+  await expect(tools.getByRole('radio', { name: '工作' })).toHaveAttribute('aria-checked', 'true');
+  const compared = await page.evaluate(() => (window as unknown as { __comparedCalls: unknown[] }).__comparedCalls);
+  expect(compared).toHaveLength(1);
+});
+
+test('an English takeover error opens the comparison by error code alone', async ({ page }) => {
+  await page.addInitScript(() => { localStorage.setItem('cliora:language', 'en'); });
+  await installHome(page);
+  await page.setViewportSize({ width: 1360, height: 768 });
+  await page.goto('/');
+  await page.evaluate(() => {
+    const state = window as unknown as { __applyError?: { code?: string; message: string }; __compareResult: unknown; __comparedCalls: unknown[] };
+    // Neither legacy marker string appears in the message, so only the code can route this.
+    state.__applyError = { code: 'native_takeover_required', message: 'Native settings differ from this profile' };
+    state.__compareResult = {
+      profile: { id: 'work', tool: 'codex', name: '工作', version: 1, inheritCommon: false, files: {}, suppressed: {}, nativeCredentials: {}, connection: { model: 'gpt-5-codex' } },
+      common: null,
+      files: [{ role: 'settings', format: 'toml', current: 'model = "old"', proposed: { model: 'new' }, proposedText: 'model = "new"\n' }],
+    };
+    state.__comparedCalls = [];
+  });
+  const tools = page.getByLabel('Managed tools');
+  await tools.getByRole('radio', { name: '工作' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Compare the current file with this profile' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('list', { name: 'What changed' })).toContainText('model');
+  await expect(tools.getByRole('alert')).toHaveCount(0);
+  await expect(tools.getByRole('radio', { name: '日常' })).toHaveAttribute('aria-checked', 'true');
+  await dialog.getByRole('button', { name: 'Use incoming content' }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(tools.getByRole('status')).toHaveText('Codex written to the native file; the next launch reads it.');
   await expect(tools.getByRole('radio', { name: '工作' })).toHaveAttribute('aria-checked', 'true');
   const compared = await page.evaluate(() => (window as unknown as { __comparedCalls: unknown[] }).__comparedCalls);
   expect(compared).toHaveLength(1);

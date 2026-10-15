@@ -13,11 +13,21 @@ function matchedPreset(current: LaunchSettings | null) {
   return (current.presets ?? []).find((preset) => preset.program === current.custom?.program && preset.args.join('\n') === args) ?? null;
 }
 
+function errorCode(error: unknown): string {
+  return error && typeof error === 'object' && typeof (error as { code?: unknown }).code === 'string'
+    ? (error as { code: string }).code
+    : '';
+}
+
 function message(error: unknown): string {
   const detail = error && typeof error === 'object' && 'message' in error && String(error.message).trim()
     ? String(error.message).trim().replace(/[。！？\s]+$/, '')
     : i18n.t('settings.terminal.unavailable');
-  return detail.includes('重新选择终端') ? detail : i18n.t('settings.terminal.repickSuffix', { detail });
+  // The CMD-length error carries its own recovery advice, so the generic repick hint
+  // must not be appended. Recognize it by code first; the text check stays as the
+  // fallback for payloads without a code.
+  const selfRecovering = errorCode(error) === 'terminal_command_too_long' || detail.includes('重新选择终端');
+  return selfRecovering ? detail : i18n.t('settings.terminal.repickSuffix', { detail });
 }
 
 function loadFailure(error: unknown): string {

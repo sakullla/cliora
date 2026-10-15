@@ -518,11 +518,27 @@ async fn blocking<T: Send + 'static>(
 
 pub(crate) fn native_error(message: String) -> ApiError {
     ApiError {
-        code: "native_error",
+        code: native_error_code(&message),
         message,
         action: "检查工具版本、原生文件和作用范围后重试；原配置不会自动清空。",
         data_directory: None,
     }
+}
+
+/// Stable codes for the fixed native error literals the UI recognizes; every other
+/// message keeps the generic `native_error` code with unchanged message/action text.
+fn native_error_code(message: &str) -> &'static str {
+    // native/apply.rs builds "原生文件已有不同的字段值：{role}{pointer}；请确认接管"
+    // with a variable role/pointer segment, so the fixed template prefix and suffix
+    // are the contract for recognizing that construction site.
+    if message.starts_with("原生文件已有不同的字段值：") && message.ends_with("；请确认接管") {
+        return "native_takeover_required";
+    }
+    // launch.rs rejects oversized CMD launch lines with this exact literal.
+    if message == "启动命令超过 CMD 长度限制，请在设置中选择 PowerShell 或 Windows Terminal" {
+        return "terminal_command_too_long";
+    }
+    "native_error"
 }
 
 static HISTORY_REFRESH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -2928,6 +2944,33 @@ mod tests {
             .contains(&transaction::fingerprint(source.as_bytes())));
         // The separate explicit native-editor path can still read the full file.
         assert_eq!(transaction::read_native(&path).unwrap(), source);
+    }
+
+    #[test]
+    fn native_error_assigns_stable_codes_only_to_the_two_recognized_literals() {
+        const ACTION: &str = "检查工具版本、原生文件和作用范围后重试；原配置不会自动清空。";
+        // apply.rs fills a variable role/pointer between the fixed template parts.
+        let takeover = native_error("原生文件已有不同的字段值：settings$.model；请确认接管".into());
+        assert_eq!(takeover.code, "native_takeover_required");
+        assert_eq!(takeover.message, "原生文件已有不同的字段值：settings$.model；请确认接管");
+        assert_eq!(takeover.action, ACTION);
+        assert_eq!(takeover.data_directory, None);
+        // launch.rs rejects oversized CMD launch lines with the exact literal.
+        let too_long = native_error("启动命令超过 CMD 长度限制，请在设置中选择 PowerShell 或 Windows Terminal".into());
+        assert_eq!(too_long.code, "terminal_command_too_long");
+        assert_eq!(too_long.message, "启动命令超过 CMD 长度限制，请在设置中选择 PowerShell 或 Windows Terminal");
+        assert_eq!(too_long.action, ACTION);
+        // Near misses and unrelated messages keep the generic code and action.
+        for message in [
+            "原生文件已有不同的字段值：settings$.model；请确认接管 ",
+            "原生文件已有不同的字段值：settings$.model，请确认接管",
+            "上次管理的字段已被外部修改：settings$.model",
+            "扫描已在后台进行",
+        ] {
+            let error = native_error(message.into());
+            assert_eq!(error.code, "native_error", "{message}");
+            assert_eq!(error.action, ACTION, "{message}");
+        }
     }
 
     #[test]
