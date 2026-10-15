@@ -586,6 +586,25 @@ pub trait CliAdapter: Sync {
     ) -> Option<SkillSwitchLocation> {
         None
     }
+    /// Whether the skill switch location follows the identified native major
+    /// version. Version-tracked adapters receive the probed install version,
+    /// resolved through the shared cached probe so a read and a later write
+    /// agree on the same evidence.
+    fn skill_switch_requires_version(&self) -> bool {
+        false
+    }
+    /// Version-aware switch location. The default keeps the static location.
+    fn skill_switch_location_for_version(
+        &self,
+        scope: Scope,
+        home: &Path,
+        project: Option<&Path>,
+        name: &str,
+        version: Option<&str>,
+    ) -> Option<SkillSwitchLocation> {
+        let _ = version;
+        self.skill_switch_location(scope, home, project, name)
+    }
     fn skill_switch_value(&self, _current: &Value, _enabled: bool, _skill_path: &Path) -> Value {
         Value::Null
     }
@@ -594,6 +613,26 @@ pub trait CliAdapter: Sync {
     }
     fn skill_switch_snapshot(&self, current: &Value, _skill_path: &Path) -> Option<Value> {
         (!current.is_null()).then(|| current.clone())
+    }
+    /// Value-level switch operations may depend on the located native form
+    /// (a scalar entry or an ordered rule array). The defaults keep the
+    /// value-only behavior of the legacy methods.
+    fn skill_switch_value_at(
+        &self,
+        _location: &SkillSwitchLocation,
+        current: &Value,
+        enabled: bool,
+        skill_path: &Path,
+    ) -> Value {
+        self.skill_switch_value(current, enabled, skill_path)
+    }
+    fn skill_switch_snapshot_at(
+        &self,
+        _location: &SkillSwitchLocation,
+        current: &Value,
+        skill_path: &Path,
+    ) -> Option<Value> {
+        self.skill_switch_snapshot(current, skill_path)
     }
     fn skill_switch_restore(
         &self,

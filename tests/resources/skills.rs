@@ -48,7 +48,7 @@ fn skill_switches_restore_each_native_policy_and_complete_archived_package() {
     }
     let temp=tempfile::tempdir().unwrap();
     let db=Database::open(&temp.path().join("app.db")).unwrap();
-    let store=Store::default(); let registry=Registry::builtins(); let home=temp.path().join("home");
+    let store=Store::default(); let registry=Registry::builtins().with_fixture_installation("open_code","1.18.33"); let home=temp.path().join("home");
     let mut packages=Vec::new();
     for name in ["alpha","beta"] {
         let source=temp.path().join(name); fs::create_dir_all(source.join("references")).unwrap();
@@ -88,6 +88,115 @@ fn skill_switches_restore_each_native_policy_and_complete_archived_package() {
         assert!(enabled(&db,&registry,&home,&package.id,tool,Scope::Global,None).unwrap());
         assert_eq!(fs::read_to_string(path.join("references/原始.txt")).unwrap(),"原始完整资源");
     }
+}
+
+#[test]
+fn opencode_v2_skill_switch_writes_one_permissions_rule_and_keeps_other_rules() {
+    use crate::credentials::CredentialStore;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    #[derive(Default)] struct Store(Mutex<HashMap<String,String>>);
+    impl CredentialStore for Store {
+        fn put(&self,key:&str,value:&str)->Result<(),String>{self.0.lock().unwrap().insert(key.into(),value.into());Ok(())}
+        fn get(&self,key:&str)->Result<String,String>{self.0.lock().unwrap().get(key).cloned().ok_or("missing".into())}
+        fn delete(&self,key:&str)->Result<(),String>{self.0.lock().unwrap().remove(key).map(|_|()).ok_or("missing".into())}
+    }
+    let temp=tempfile::tempdir().unwrap();
+    let db=Database::open(&temp.path().join("app.db")).unwrap();
+    let store=Store::default();
+    // The skill switch follows the identified install line, so the probe must
+    // resolve a 2.x installation instead of sniffing the host PATH.
+    let registry=Registry::builtins().with_fixture_installation("open_code","2.1.0");
+    let home=temp.path().join("home");
+    let mut packages=Vec::new();
+    for name in ["alpha","beta"] {
+        let source=temp.path().join(name); fs::create_dir_all(source.join("references")).unwrap();
+        fs::write(source.join("SKILL.md"),format!("---\nname: {name}\ndescription: Test\n---\n")).unwrap();
+        let package=import_local(&db,source.to_str().unwrap(),None,None).unwrap();
+        let result=install(&db,&registry,&home,&package.id,"open_code",Scope::Global,None);
+        assert_eq!(result.status,"installed","{}",result.detail);
+        packages.push(package);
+    }
+    let config=home.join(".config/opencode/opencode.json");
+    fs::create_dir_all(config.parent().unwrap()).unwrap();
+    let deny_beta=serde_json::json!({"action":"skill","resource":"beta","effect":"deny"});
+    let ask_bash=serde_json::json!({"action":"bash","resource":"git push","effect":"ask"});
+    fs::write(&config,serde_json::to_string(&serde_json::json!({
+        "permissions":[deny_beta.clone(),ask_bash.clone()],
+        "unknownTop":{"keep":true}
+    })).unwrap()).unwrap();
+    let read=| | serde_json::from_str::<serde_json::Value>(&fs::read_to_string(&config).unwrap()).unwrap();
+    let rules=| doc:&serde_json::Value | doc.get("permissions").and_then(|v|v.as_array()).cloned().unwrap_or_default();
+    let alpha_rules=| doc:&serde_json::Value | rules(doc).into_iter().filter(|rule| rule.get("resource").and_then(|v|v.as_str())==Some("alpha")).collect::<Vec<_>>();
+
+    // Disable appends one deny rule after the untouched existing rules.
+    set_enabled(&db,&store,&registry,&home,&packages[0].id,"open_code",Scope::Global,None,false).unwrap();
+    let doc=read();
+    assert_eq!(rules(&doc),vec![deny_beta.clone(),ask_bash.clone(),serde_json::json!({"action":"skill","resource":"alpha","effect":"deny"})]);
+    assert_eq!(doc.get("unknownTop"),Some(&serde_json::json!({"keep":true})));
+    assert!(!enabled(&db,&registry,&home,&packages[0].id,"open_code",Scope::Global,None).unwrap());
+    assert!(!enabled(&db,&registry,&home,&packages[1].id,"open_code",Scope::Global,None).unwrap());
+
+    // Repeated disable is a no-op without duplicate rules.
+    set_enabled(&db,&store,&registry,&home,&packages[0].id,"open_code",Scope::Global,None,false).unwrap();
+    assert_eq!(alpha_rules(&read()).len(),1);
+
+    // Enable restores the pre-switch state: no alpha rule, other rules intact.
+    set_enabled(&db,&store,&registry,&home,&packages[0].id,"open_code",Scope::Global,None,true).unwrap();
+    let doc=read();
+    assert!(alpha_rules(&doc).is_empty());
+    assert_eq!(rules(&doc),vec![deny_beta.clone(),ask_bash.clone()]);
+    assert_eq!(doc.get("unknownTop"),Some(&serde_json::json!({"keep":true})));
+    assert!(enabled(&db,&registry,&home,&packages[0].id,"open_code",Scope::Global,None).unwrap());
+
+    // A manually written deny is replaced by an explicit allow when the user
+    // enables without a Cliora record (last match wins, so the fresh rule is
+    // appended after removal and never duplicated).
+    let doc=read();
+    let mut manual=rules(&doc);
+    manual.push(serde_json::json!({"action":"skill","resource":"alpha","effect":"deny"}));
+    fs::write(&config,serde_json::to_string(&serde_json::json!({"permissions":manual,"unknownTop":{"keep":true}})).unwrap()).unwrap();
+    assert!(!enabled(&db,&registry,&home,&packages[0].id,"open_code",Scope::Global,None).unwrap());
+    set_enabled(&db,&store,&registry,&home,&packages[0].id,"open_code",Scope::Global,None,true).unwrap();
+    let doc=read();
+    assert_eq!(rules(&doc),vec![deny_beta.clone(),ask_bash.clone(),serde_json::json!({"action":"skill","resource":"alpha","effect":"allow"})]);
+    assert!(enabled(&db,&registry,&home,&packages[0].id,"open_code",Scope::Global,None).unwrap());
+
+    // Repeated disable/enable cycles keep exactly one rule for the skill and
+    // restore the pre-switch rule (here the explicit allow) without touching
+    // the other rules.
+    for expected_enabled in [false,true,false,true] {
+        set_enabled(&db,&store,&registry,&home,&packages[0].id,"open_code",Scope::Global,None,expected_enabled).unwrap();
+        assert_eq!(enabled(&db,&registry,&home,&packages[0].id,"open_code",Scope::Global,None).unwrap(),expected_enabled);
+        assert!(alpha_rules(&read()).len()<=1);
+    }
+    let doc=read();
+    assert_eq!(rules(&doc),vec![deny_beta,ask_bash,serde_json::json!({"action":"skill","resource":"alpha","effect":"allow"})]);
+    assert_eq!(doc.get("unknownTop"),Some(&serde_json::json!({"keep":true})));
+}
+
+#[test]
+fn opencode_skill_switch_without_a_probed_version_follows_the_file_form() {
+    let temp=tempfile::tempdir().unwrap();
+    let registry=Registry::builtins();
+    let adapter=registry.get("open_code").unwrap();
+    let home=temp.path().join("home");
+    let config=home.join(".config/opencode/opencode.json");
+    fs::create_dir_all(config.parent().unwrap()).unwrap();
+    // Without an identified install the location follows the file's own
+    // native form: the historical v1 pointer, or the v2 rule array once the
+    // file carries one. An unverified newer major is refused, not guessed.
+    fs::write(&config,"{\"permission\":{\"skill\":{\"alpha\":\"deny\"}}}").unwrap();
+    let located=adapter.skill_switch_location_for_version(Scope::Global,&home,None,"alpha",None).unwrap();
+    assert_eq!(located.field,vec!["permission".to_owned(),"skill".to_owned(),"alpha".to_owned()]);
+    fs::write(&config,"{\"permissions\":[]}").unwrap();
+    let located=adapter.skill_switch_location_for_version(Scope::Global,&home,None,"alpha",None).unwrap();
+    assert_eq!(located.field,vec!["permissions".to_owned()]);
+    assert!(adapter.skill_switch_location_for_version(Scope::Global,&home,None,"alpha",Some("3.0.0")).is_none());
+    let v1=adapter.skill_switch_location_for_version(Scope::Global,&home,None,"alpha",Some("1.30.0")).unwrap();
+    assert_eq!(v1.field,vec!["permission".to_owned(),"skill".to_owned(),"alpha".to_owned()]);
+    let v2=adapter.skill_switch_location_for_version(Scope::Global,&home,None,"alpha",Some("v2.0.29")).unwrap();
+    assert_eq!(v2.field,vec!["permissions".to_owned()]);
 }
 
 #[test]

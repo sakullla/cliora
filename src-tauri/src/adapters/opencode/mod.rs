@@ -59,6 +59,54 @@ fn unescape_pointer(segment: &str) -> String {
     segment.replace("~1", "/").replace("~0", "~")
 }
 
+/// Major version of a probed install for the version-tracked skill switch.
+fn switch_major(version: Option<&str>) -> Option<u32> {
+    version?
+        .trim()
+        .trim_start_matches('v')
+        .split('.')
+        .next()?
+        .parse()
+        .ok()
+}
+
+/// A rule of the v2 `permissions` array addressing one skill. Verified on a
+/// native 2.0.29 load: rules are `{action, resource, effect}` objects.
+fn skill_rule_matches(rule: &Value, name: &str) -> bool {
+    rule.get("action").and_then(Value::as_str) == Some("skill")
+        && rule.get("resource").and_then(Value::as_str) == Some(name)
+}
+
+/// The v2 switch replaces the skill's own rules with one appended rule: the
+/// array is ordered and the last match wins, so an in-place edit could be
+/// overridden by a later broader rule. Other rules keep their content and
+/// relative order.
+fn permissions_with_rule(rules: &[Value], name: &str, effect: &str) -> Vec<Value> {
+    let mut kept: Vec<Value> = rules
+        .iter()
+        .filter(|rule| !skill_rule_matches(rule, name))
+        .cloned()
+        .collect();
+    kept.push(json!({ "action": "skill", "resource": name, "effect": effect }));
+    kept
+}
+
+/// The located v2 rule array (empty when the key is still absent); `None`
+/// means the location is not the v2 permissions form.
+fn switch_rule_array(
+    location: &super::SkillSwitchLocation,
+    current: &Value,
+    skill_path: &Path,
+) -> Option<Vec<Value>> {
+    if location.field.first().is_some_and(|key| key == "permissions")
+        && skill_path.file_name().is_some()
+    {
+        Some(current.as_array().cloned().unwrap_or_default())
+    } else {
+        None
+    }
+}
+
 fn insert_path(root: &mut Value, path: &[String], value: Value) {
     if path.is_empty() || !root.is_object() {
         return;
@@ -248,29 +296,115 @@ impl CliAdapter for OpenCode {
             &[]
         }
     }
-    fn skill_switch_location(
+    fn skill_switch_requires_version(&self) -> bool {
+        true
+    }
+    fn skill_switch_location_for_version(
         &self,
         scope: Scope,
         home: &Path,
         project: Option<&Path>,
         name: &str,
+        version: Option<&str>,
     ) -> Option<super::SkillSwitchLocation> {
         let file = self
             .native_files(scope, home, project, true)
             .into_iter()
             .find(|file| file.role == "settings")?;
         let kind = FileKind::for_name(&file.path).ok()?;
+        let field = match switch_major(version) {
+            Some(1) => vec!["permission".into(), "skill".into(), name.into()],
+            // Verified on a native 2.0.29 load: skill switches are rules in the
+            // top-level ordered `permissions` array.
+            Some(2) => vec!["permissions".into()],
+            Some(_) => return None,
+            // No identified install: follow the file's own native form. A v2
+            // rule array wins; anything else keeps the historical v1 pointer
+            // (a corrupt file still fails at the shared parse before a write).
+            None => {
+                let v2 = std::fs::read_to_string(Path::new(&file.path))
+                    .ok()
+                    .and_then(|text| crate::native::format::parse(kind, &text).ok())
+                    .and_then(|root| root.get("permissions").and_then(Value::as_array).cloned())
+                    .is_some();
+                if v2 {
+                    vec!["permissions".into()]
+                } else {
+                    vec!["permission".into(), "skill".into(), name.into()]
+                }
+            }
+        };
         Some(super::SkillSwitchLocation {
             path: file.path.into(),
             kind,
-            field: vec!["permission".into(), "skill".into(), name.into()],
+            field,
         })
+    }
+    fn skill_switch_value_at(
+        &self,
+        location: &super::SkillSwitchLocation,
+        current: &Value,
+        enabled: bool,
+        skill_path: &Path,
+    ) -> Value {
+        if let Some(rules) = switch_rule_array(location, current, skill_path) {
+            let name = skill_path.file_name().and_then(|v| v.to_str()).unwrap_or("");
+            let effect = if enabled { "allow" } else { "deny" };
+            return Value::Array(permissions_with_rule(&rules, name, effect));
+        }
+        json!(if enabled { "allow" } else { "deny" })
     }
     fn skill_switch_value(&self, _: &Value, enabled: bool, _: &Path) -> Value {
         json!(if enabled { "allow" } else { "deny" })
     }
-    fn skill_switch_enabled(&self, current: &Value, _: &Path) -> bool {
+    fn skill_switch_enabled(&self, current: &Value, skill_path: &Path) -> bool {
+        if let Some(rules) = current.as_array() {
+            let name = skill_path.file_name().and_then(|v| v.to_str());
+            return rules
+                .iter()
+                .rfind(|rule| name.is_some_and(|name| skill_rule_matches(rule, name)))
+                .and_then(|rule| rule.get("effect"))
+                .and_then(Value::as_str)
+                != Some("deny");
+        }
         current.as_str() != Some("deny")
+    }
+    fn skill_switch_snapshot_at(
+        &self,
+        location: &super::SkillSwitchLocation,
+        current: &Value,
+        skill_path: &Path,
+    ) -> Option<Value> {
+        if let Some(rules) = switch_rule_array(location, current, skill_path) {
+            let name = skill_path.file_name().and_then(|v| v.to_str()).unwrap_or("");
+            let matched = rules
+                .iter()
+                .filter(|rule| skill_rule_matches(rule, name))
+                .cloned()
+                .collect();
+            return Some(Value::Array(matched));
+        }
+        (!current.is_null()).then(|| current.clone())
+    }
+    fn skill_switch_restore(
+        &self,
+        current: &Value,
+        previous: Option<&Value>,
+        skill_path: &Path,
+    ) -> Option<Value> {
+        if let Some(rules) = current.as_array() {
+            let name = skill_path.file_name().and_then(|v| v.to_str()).unwrap_or("");
+            let mut kept: Vec<Value> = rules
+                .iter()
+                .filter(|rule| !skill_rule_matches(rule, name))
+                .cloned()
+                .collect();
+            if let Some(previous) = previous.and_then(Value::as_array) {
+                kept.extend(previous.iter().cloned());
+            }
+            return Some(Value::Array(kept));
+        }
+        previous.cloned()
     }
     fn mcp_location(
         &self,
