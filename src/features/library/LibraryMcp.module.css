@@ -169,7 +169,7 @@
 .targetList li[data-state='removing'] label { border-style: dashed; border-color: var(--warning-line); }
 .targetList li[data-state='blocked'] small { color: var(--danger); white-space: normal; }
 
-.choice { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 12.5px; font-weight: 520; cursor: pointer; }
+.choice { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 14px; font-weight: 520; cursor: pointer; }
 .summary { margin: 0; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font-size: 14px; font-weight: 400; line-height: 1.55; }
 .summary[data-quiet] { padding: 0; background: none; color: var(--text-3); }
 .notes { display: grid; gap: 4px; }
@@ -179,10 +179,10 @@
 .conflict { grid-area: conflict; display: grid; gap: 12px; min-width: 0; padding: 14px; border: 1px solid var(--warning-line); border-radius: var(--radius-lg); background: var(--warning-soft); }
 .conflictHead { display: flex; align-items: flex-start; gap: 8px; color: var(--warning); }
 .conflictHead > svg { flex: none; margin-top: 2px; }
-.conflictHead p { margin: 0; color: var(--text-2); font-size: 12.5px; line-height: 1.55; }
+.conflictHead p { margin: 0; color: var(--text-2); font-size: 14px; font-weight: 400; line-height: 1.55; }
 .conflictHead strong { margin-right: 4px; color: var(--text); }
 .conflictItem { display: grid; gap: 8px; min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
-.conflictItem > p { margin: 0; color: var(--text-2); font-size: 12px; line-height: 1.5; }
+.conflictItem > p { margin: 0; color: var(--text-2); font-size: 14px; font-weight: 400; line-height: 1.5; }
 .conflictTarget { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; min-width: 0; }
 .conflictTarget strong { font-size: 13px; }
 .conflictTarget code { min-width: 0; overflow: hidden; color: var(--text-3); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }

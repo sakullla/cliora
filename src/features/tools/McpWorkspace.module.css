@@ -2,9 +2,9 @@
 .head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 12px 14px; }
 .head > div { display: grid; gap: 5px; flex: 1 1 280px; min-width: 0; }
 .head h2 { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: -.01em; }
-.head p { margin: 0; color: var(--text-2); font-size: 12.5px; line-height: 1.6; }
+.head p { margin: 0; color: var(--text-2); font-size: 14px; font-weight: 400; line-height: 1.6; }
 .head > button { flex: none; margin-top: 2px; }
-.muted { margin: 0; color: var(--text-2); font-size: 12.5px; line-height: 1.6; }
+.muted { margin: 0; color: var(--text-2); font-size: 14px; font-weight: 400; line-height: 1.6; }
 
 .primary, .primary:hover:not(:disabled) { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
 .primary:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }
@@ -14,7 +14,7 @@
 .empty { display: grid; justify-items: center; gap: 6px; padding: 36px 20px; border: 1px dashed var(--line-strong); border-radius: var(--radius-lg); background: color-mix(in srgb, var(--surface) 55%, transparent); color: var(--text-3); text-align: center; }
 .emptyIcon { display: grid; place-items: center; width: 44px; height: 44px; margin-bottom: 4px; border-radius: 14px; background: var(--accent-soft); color: var(--accent); }
 .empty > strong { color: var(--text); font-size: 13.5px; font-weight: 620; }
-.empty > p { max-width: 440px; margin: 0; color: var(--text-2); font-size: 12.5px; line-height: 1.6; }
+.empty > p { max-width: 440px; margin: 0; color: var(--text-2); font-size: 14px; font-weight: 400; line-height: 1.6; }
 
 /* ---------- Active list ------------------------------------------ */
 
@@ -66,7 +66,7 @@
 /* ---------- Dialog ------------------------------------------------- */
 
 .panel { display: grid; align-content: start; gap: 16px; min-width: 0; }
-.linkedNote { display: flex; align-items: flex-start; gap: 8px; margin: 0; padding: 9px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); color: var(--text-2); font-size: 12px; line-height: 1.55; }
+.linkedNote { display: flex; align-items: flex-start; gap: 8px; margin: 0; padding: 9px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); color: var(--text-2); font-size: 14px; font-weight: 400; line-height: 1.55; }
 .linkedNote > svg { flex: none; margin-top: 2px; color: var(--accent); }
 .options { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; padding-top: 14px; border-top: 1px solid var(--line); }
 .option { display: grid; gap: 3px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
@@ -75,8 +75,8 @@
 .option label input { flex: none; }
 .option small { padding-left: 23px; color: var(--text); font-size: 14px; font-weight: 400; line-height: 1.5; }
 
-.conflict { display: grid; gap: 10px; padding: 12px 14px; border: 1px solid var(--warning-line); border-radius: var(--radius); background: var(--warning-soft); font-size: 12.5px; }
-.conflict > strong { display: flex; align-items: center; gap: 6px; color: var(--text); font-size: 13px; }
+.conflict { display: grid; gap: 10px; padding: 12px 14px; border: 1px solid var(--warning-line); border-radius: var(--radius); background: var(--warning-soft); font-size: 14px; font-weight: 400; }
+.conflict > strong { display: flex; align-items: center; gap: 6px; color: var(--text); font-size: 14px; font-weight: 640; }
 .conflict > strong > svg { color: var(--warning); }
 .diff { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
