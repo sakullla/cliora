@@ -77,7 +77,7 @@
 .list label:has(input:not([type=checkbox])) > button { min-height: var(--control-h); }
 
 .panel [role="alert"] { padding: 12px; border: 1px solid var(--danger-line); border-radius: var(--radius); background: var(--danger-soft); color: var(--danger); }
-.panel [role="status"] { padding: 11px 13px; border-radius: var(--radius); background: var(--accent-soft); }
+.panel [role="status"]:not(:has(:global(.skeleton-page))) { padding: 11px 13px; border-radius: var(--radius); background: var(--accent-soft); }
 .panel :global(.status-banner) > [role] { padding: 0; border: 0; border-radius: 0; background: none; color: inherit; font-size: inherit; }
 .empty { padding: 30px 20px; text-align: center; border: 1px dashed var(--line); border-radius: var(--radius-lg); color: var(--text-2); font-size: 12.5px; }
 

@@ -3,12 +3,19 @@ import { useTranslation } from 'react-i18next';
 import { native, nativeAvailable } from '../../lib/native';
 import { uiAdapterFor } from '../../adapters';
 import { confirmAction } from '../../lib/confirm';
-import { SkeletonRows } from '../../components/Skeleton';
 import { EmptyState } from '../../components/EmptyState';
 import type { AccountCapability, AccountImpact, AccountImpactContextKind, AccountImpactScope, AuthAccount, NativeLoginSnapshot } from '../../types/accounts';
 import styles from './ManagementPanel.module.css';
 import accountStyles from './AccountsPanel.module.css';
 import i18n from '../../i18n';
+
+function NativeLoginSkeleton() {
+  return <div className="skeleton-page" aria-busy="true">{[0, 1].map((index) => <div className={accountStyles.nativeSkeleton} key={index}><span className="skeleton-block" /><span className="skeleton-block" /><span className="skeleton-block" /></div>)}</div>;
+}
+
+function AccountListSkeleton() {
+  return <div className={`${accountStyles.accountListLoading} skeleton-page`} aria-busy="true">{[0, 1].map((index) => <div className={accountStyles.accountSkeleton} key={index}><span className="skeleton-block" /><span className="skeleton-block" /><span className="skeleton-block" /></div>)}</div>;
+}
 
 export function accountStateLabel(state: string): string {
   return i18n.t(`tools.accounts.state.${state}`, { defaultValue: state });
@@ -177,7 +184,7 @@ export function AccountsPanel({ toolId, state, onOpenProfile, onOpenUsage }: { t
     <div className={styles.header}><div><h2>{t('tools.accounts.title')}</h2><p>{metadata?.description ?? t('tools.accounts.defaultDescription')}</p></div>{state.capability?.managedLogin && <button className={styles.primary} onClick={() => setCreating(value => !value)}>{creating ? t('tools.accounts.collapseAdd') : t('tools.accounts.add')}</button>}</div>
     {!nativeAvailable && <p role="alert">{t('tools.accounts.nativeOnly')}</p>}
     <section className={accountStyles.nativeLogin} aria-label={t('tools.accounts.nativeTitle')}><div className={styles.header}><div><h3>{t('tools.accounts.nativeTitle')}</h3><p>{metadata?.nativeDescription ?? t('tools.accounts.nativeDefaultDescription')}</p></div><button className={accountStyles.nativeCheck} disabled={nativeLoading || !nativeAvailable} onClick={() => void discover()}>{nativeLoading ? t('tools.accounts.nativeChecking') : t('tools.accounts.nativeCheck')}</button></div>
-      {nativeLoading && !nativeLogins && <div role="status" aria-label={t('tools.accounts.nativeLoading')}><SkeletonRows count={2} /></div>}
+      {nativeLoading && !nativeLogins && <div className={accountStyles.nativeLoading} role="status" aria-label={t('tools.accounts.nativeLoading')}><NativeLoginSkeleton /></div>}
       {nativeError && <p role="alert">{nativeError}</p>}
       {nativeLogins && !nativeLogins.logins.length && (!state.loading && !state.accounts.length
         ? <EmptyState icon="monitor" title={t('tools.accounts.nativeEmptyTitle')} detail={t('tools.accounts.nativeEmpty')} action={<button className="button primary" disabled={nativeLoading || !nativeAvailable} onClick={() => void discover()}>{t('tools.accounts.rediscover')}</button>} />
@@ -192,7 +199,7 @@ export function AccountsPanel({ toolId, state, onOpenProfile, onOpenUsage }: { t
     </div>}
     {(error || state.error) && <p role="alert">{error || state.error}</p>}{message && <p role="status">{message}</p>}
     <div className={styles.sectionTitle}><h3>{t('tools.accounts.managedTitle')}</h3><span>{t('tools.accounts.count', { count: state.accounts.length })}</span></div>
-    {state.loading ? <SkeletonRows count={2} /> : state.accounts.length === 0 && <p className={styles.empty}>{state.capability?.managedLogin ? t('tools.accounts.emptyManaged') : t('tools.accounts.emptyReadonly')}</p>}
+    {state.loading ? <AccountListSkeleton /> : state.accounts.length === 0 && <p className={styles.empty}>{state.capability?.managedLogin ? t('tools.accounts.emptyManaged') : t('tools.accounts.emptyReadonly')}</p>}
     <ul className={styles.list}>{state.accounts.map(account => <li key={account.id}>
       <div><strong>{account.label}</strong><span data-state={account.state}>{accountStateLabel(account.state)}</span></div>
       <p>{account.identity?.email ?? account.identity?.subject ?? t('tools.accounts.noIdentity')}{account.identity?.plan ? ` · ${account.identity.plan}` : ''}</p>
