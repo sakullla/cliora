@@ -859,6 +859,30 @@ test('MCP search with no results keeps the empty-state add entry hidden', async 
   await expect(page.getByRole('button', { name: '添加 MCP', exact: true })).toHaveCount(1);
 });
 
+for (const state of ['external', 'read_only'] as const) {
+  test(`Skill document-only inventory stays readable with a null digest (${state})`, async ({ page }) => {
+    await mockResources(page);
+    await page.goto('/');
+    await page.evaluate((state) => {
+      const win = window as any;
+      win.__resourceNativeSkills.push({ name: 'document-only', path: '/tmp/skills/document-only', digest: null, state, detail: 'Native document', packageId: null });
+      const original = win.__TAURI_INTERNALS__.invoke;
+      win.__TAURI_INTERNALS__.invoke = async (command: string, args: Record<string, any> = {}) => {
+        if (command === 'read_native_skill') return { name: 'document-only', path: args.directory, content: '# Native skill document' };
+        return original(command, args);
+      };
+    }, state);
+    await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+    await page.getByRole('tab', { name: 'Skill', exact: true }).click();
+    const entry = page.getByRole('button', { name: /document-only/ });
+    await expect(entry).toContainText(state === 'external' ? '本机目录' : '只读');
+    await entry.click();
+    const editor = page.getByRole('textbox', { name: 'SKILL.md', exact: true });
+    await expect(editor).toContainText('# Native skill document');
+    await expect(editor).toHaveAttribute('contenteditable', state === 'external' ? 'true' : 'false');
+  });
+}
+
 test('Skill workspace shows skeleton rows on first load and embeds the add entry in the empty state', async ({ page }) => {
   await mockResources(page);
   await page.addInitScript(() => {

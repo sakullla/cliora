@@ -49,3 +49,25 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib performance_configuration_
 - `0.4.18` 前端构建与 Clippy 全目标检查通过；构建保留原有大 chunk 提示，Clippy 保留仓库现有告警。
 - 回归覆盖数据库/WAL 更新、checkpoint、缓存复用、失败恢复、取消、配置列表不解码正文、受保护文件与目录，以及 JSON/JSONC/TOML/YAML 模型身份一致性。
 - 全程没有 UI 布局修改；合成基准不构成真实桌面或跨平台验收。
+
+## 2026-10-16：0.4.26 Skill 列表读取
+
+基线为 `f5aad23`。原生 Skill 列表对每个目录递归读取附件、Base64 编码并计算完整包摘要，包括只读捆绑目录。现在未托管目录与只读观察目录仅读取 `SKILL.md`；托管安装仍完整校验附件。导入预览、覆盖、删除与恢复的完整包检查保持不变。列表的 `digest: null` 可以表示只读文档扫描，前端通过 `state` 判定可读性。资料库包元数据由每次解析两遍改为一次。
+
+同一台 Windows 机器、Cargo test debug 构建、本机 Grok 23 个 Skill，前后各连续扫描三次。计时只包含后端 `scan_native`，不含编译、数据库初始化、IPC 或页面渲染。测试使用临时数据库，未读取用户数据库或执行用户恢复日志，未修改本机 Skill。未清空操作系统文件缓存，不代表冷启动或完整桌面加载耗时。
+
+| 扫描 | 优化前（ms） | 优化后（ms） |
+| --- | ---: | ---: |
+| 1 | 1477.46 | 13.72 |
+| 2 | 2037.52 | 10.63 |
+| 3 | 966.86 | 9.76 |
+
+复现命令（显式指定待只读扫描的 home 和注册 CLI ID）：
+
+```powershell
+$env:CLIORA_SKILL_BENCH_HOME = $env:USERPROFILE
+$env:CLIORA_SKILL_BENCH_TOOL = 'grok'
+cargo test --manifest-path src-tauri/Cargo.toml --lib native_skill_scan_timing -- --ignored --nocapture
+```
+
+验证：15 项 Rust Skill 测试通过；资源、Agents、插件的 54 项 Playwright 测试及新增的 2 项空摘要文档测试通过；`npm run build` 通过。新增回归覆盖大附件不拖入列表扫描、导入仍拒绝超限包、托管附件变化仍阻止删除，以及空摘要条目的编辑和只读状态。MCP 已直接读取配置，Agents 已跳过插件包摘要，插件页已有目录预览与范围缓存，本次未修改这些实现。未进行桌面窗口端到端或 macOS/Linux 验收。

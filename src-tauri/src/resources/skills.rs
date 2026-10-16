@@ -64,6 +64,7 @@ pub struct SkillTargetResult {
 pub struct NativeSkillEntry {
     pub name: String,
     pub path: String,
+    /// Only managed installations need a full package digest during listing.
     pub digest: Option<String>,
     pub state: &'static str,
     pub detail: String,
@@ -210,9 +211,13 @@ fn manifest_info(
     };
     let text = String::from_utf8(STANDARD.decode(encoded).map_err(|_| "SKILL.md 编码错误")?)
         .map_err(|_| "SKILL.md 应为 UTF-8")?;
+    Ok(manifest_text_info(&text))
+}
+
+fn manifest_text_info(text: &str) -> (String, Option<String>) {
     let mut lines = text.lines();
     if lines.next().map(str::trim) != Some("---") {
-        return Ok((String::new(), None));
+        return (String::new(), None);
     }
     let mut description = String::new();
     let mut compatibility = None;
@@ -231,7 +236,29 @@ fn manifest_info(
             }
         }
     }
-    Ok((description, compatibility))
+    (description, compatibility)
+}
+
+// Listing a native directory is not importing a distributable package. Read
+// only its document; attachments are validated by preview/import and mutations.
+fn native_description(path: &Path) -> Result<String, String> {
+    let file = path.join("SKILL.md");
+    let meta = match fs::symlink_metadata(&file) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(String::new()),
+        Err(error) => return Err(error.to_string()),
+    };
+    if meta.file_type().is_symlink() || !meta.is_file() {
+        return Err("SKILL.md 应为普通文件".into());
+    }
+    let mut bytes = Vec::new();
+    fs::File::open(file).map_err(|error| error.to_string())?
+        .take(MAX_BYTES as u64 + 1).read_to_end(&mut bytes).map_err(|error| error.to_string())?;
+    if bytes.len() > MAX_BYTES {
+        return Err("SKILL.md 超过 12 MiB".into());
+    }
+    let text = std::str::from_utf8(&bytes).map_err(|_| "SKILL.md 应为 UTF-8")?;
+    Ok(manifest_text_info(text).0)
 }
 
 struct SkillFile {
@@ -1011,10 +1038,11 @@ pub fn list(db: &Database) -> Result<Vec<SkillPackage>, String> {
             .map_err(|error| error.to_string())?;
         let rows = statement.query_map([], |row| {
             let json: String = row.get(5)?;
-            let file_count = serde_json::from_str::<BTreeMap<String, String>>(&json).map_or(0, |files| files.len());
+            let files = serde_json::from_str::<BTreeMap<String, String>>(&json).ok();
+            let file_count = files.as_ref().map_or(0, BTreeMap::len);
             let name: String = row.get(1)?;
-            let compatibility = serde_json::from_str::<BTreeMap<String, String>>(&json).ok()
-                .and_then(|files| manifest_info(&files, &name).ok()).and_then(|(_, compatibility)| compatibility);
+            let compatibility = files.as_ref().and_then(|files| manifest_info(files, &name).ok())
+                .and_then(|(_, compatibility)| compatibility);
             Ok(SkillPackage { id: row.get(0)?, name, description: row.get(2)?, compatibility, source: row.get(3)?, digest: row.get(4)?, file_count, updated_at: row.get::<_, i64>(6)?.max(0) as u64, in_library: row.get::<_, i64>(7)? != 0 })
         }).map_err(|error| error.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?;
         Ok(rows)
@@ -1165,19 +1193,7 @@ fn scan_skill_children(
         if require_manifest && !has_skill_manifest(&path) {
             continue;
         }
-        let inspected = snapshot(&path);
-        let (checksum, mut detail) = match inspected {
-            Ok((_, description, _, _, checksum)) => (Some(checksum), description),
-            Err(error) => (None, error),
-        };
         let read_only = read_only_detail.is_some();
-        if let Some(note) = read_only_detail {
-            detail = if detail.is_empty() {
-                note.to_owned()
-            } else {
-                format!("{note} · {detail}")
-            };
-        }
         let package_id: Option<String> = if read_only {
             None
         } else {
@@ -1196,11 +1212,21 @@ fn scan_skill_children(
         } else {
             None
         };
+        let inspected = if managed.is_some() {
+            snapshot(&path).map(|(_, description, _, _, checksum)| (Some(checksum), description))
+        } else {
+            native_description(&path).map(|description| (None, description))
+        };
+        let readable = inspected.is_ok();
+        let (checksum, mut detail) = inspected.unwrap_or_else(|error| (None, error));
+        if let Some(note) = read_only_detail {
+            detail = if detail.is_empty() { note.to_owned() } else { format!("{note} · {detail}") };
+        }
         let state = if read_only {
             "read_only"
-        } else if checksum.is_none() {
+        } else if !readable {
             "unreadable"
-        } else if managed.as_deref() == checksum.as_deref() {
+        } else if managed.is_some() && managed.as_deref() == checksum.as_deref() {
             "managed"
         } else {
             "external"

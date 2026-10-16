@@ -1,6 +1,75 @@
 use super::*;
 
 #[test]
+fn native_inventory_reads_documents_without_packaging_attachments() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let registry = Registry::builtins();
+    let home = temp.path().join("home");
+    let path = home.join(".claude/skills/large-skill");
+    fs::create_dir_all(&path).unwrap();
+    fs::write(path.join("SKILL.md"), "---\ndescription: Local document\n---\n").unwrap();
+    // Sparse attachment exceeds the import budget. A listing must not read it
+    // or classify the perfectly readable document as an unreadable package.
+    fs::File::create(path.join("attachment.bin")).unwrap().set_len(MAX_BYTES as u64 + 1).unwrap();
+    let entries = scan_native(&db, &registry, &home, "claude_code", Scope::Global, None).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].state, "external");
+    assert_eq!(entries[0].detail, "Local document");
+    assert!(entries[0].digest.is_none());
+    assert!(preview_local(&db, path.to_str().unwrap()).is_err(), "imports still validate the complete package");
+
+    let mut observed = Vec::new();
+    scan_skill_children(&db, "claude_code", "global", path.parent().unwrap(), Some("Bundled"), false, &mut observed).unwrap();
+    assert_eq!(observed[0].state, "read_only");
+    assert_eq!(observed[0].detail, "Bundled · Local document");
+    assert!(observed[0].digest.is_none());
+
+    fs::write(path.join("SKILL.md"), [0xff, 0xfe]).unwrap();
+    let entries = scan_native(&db, &registry, &home, "claude_code", Scope::Global, None).unwrap();
+    assert_eq!(entries[0].state, "unreadable");
+    assert!(entries[0].detail.contains("UTF-8"));
+}
+
+#[test]
+fn native_inventory_still_detects_managed_attachment_changes() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let registry = Registry::builtins();
+    let source = temp.path().join("managed-skill");
+    fs::create_dir_all(&source).unwrap();
+    fs::write(source.join("SKILL.md"), "# Skill\n").unwrap();
+    fs::write(source.join("attachment.txt"), "original").unwrap();
+    let package = import_local(&db, source.to_str().unwrap(), None, None).unwrap();
+    let home = temp.path().join("home");
+    assert_eq!(install(&db, &registry, &home, &package.id, "claude_code", Scope::Global, None).status, "installed");
+    let entries = scan_native(&db, &registry, &home, "claude_code", Scope::Global, None).unwrap();
+    assert_eq!(entries[0].state, "managed");
+    assert_eq!(entries[0].digest.as_deref(), Some(package.digest.as_str()));
+    fs::write(Path::new(&entries[0].path).join("attachment.txt"), "modified").unwrap();
+    let changed = scan_native(&db, &registry, &home, "claude_code", Scope::Global, None).unwrap();
+    assert_eq!(changed[0].state, "external");
+    assert_ne!(changed[0].digest, entries[0].digest);
+    assert_eq!(remove(&db, &registry, &home, &package.id, "claude_code", Scope::Global, None).status, "failed");
+}
+
+#[test]
+#[ignore = "read-only timing against an explicitly selected native home"]
+fn native_skill_scan_timing() {
+    let home = PathBuf::from(std::env::var_os("CLIORA_SKILL_BENCH_HOME").expect("set CLIORA_SKILL_BENCH_HOME"));
+    let tool = std::env::var("CLIORA_SKILL_BENCH_TOOL").expect("set CLIORA_SKILL_BENCH_TOOL");
+    let temp = tempfile::tempdir().unwrap();
+    // Never use the user's database or its recovery journal for this measurement.
+    let db = Database::open(&temp.path().join("bench.db")).unwrap();
+    let registry = Registry::builtins();
+    for run in 1..=3 {
+        let start = std::time::Instant::now();
+        let entries = scan_native(&db, &registry, &home, &tool, Scope::Global, None).unwrap();
+        eprintln!("native skill scan run={run} entries={} elapsed_ms={:.2}", entries.len(), start.elapsed().as_secs_f64() * 1000.0);
+    }
+}
+
+#[test]
 fn a_linked_skill_directory_is_read_from_its_target() {
     let temp = tempfile::tempdir().unwrap();
     let real = temp.path().join("source").join("linkup-automation");
