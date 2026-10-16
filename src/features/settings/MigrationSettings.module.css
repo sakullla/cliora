@@ -12,8 +12,8 @@ label.item, .item:has(input) { cursor: pointer; }
 .action { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; padding: 16px 20px; border-top: 1px solid var(--line); background: transparent; }
 .action label { display: grid; flex: 1; gap: 6px; min-width: 220px; color: var(--text); font-size: 14px; font-weight: 560; }
 .action input { width: 100%; font-weight: 400; }
-.listBar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 20px; color: var(--text-2); font-size: 12px; line-height: 1.55; }
-.listBar strong { margin-right: 8px; color: var(--text); font-size: 13px; font-weight: 620; }
+.listBar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 20px; color: var(--text-2); font-size: 14px; line-height: 1.55; }
+.listBar strong { margin-right: 8px; color: var(--text); font-size: 14px; font-weight: 620; }
 .listBar > button { flex: none; }
 .secret { display: flex; gap: 6px; min-width: 0; }
 .secret input { flex: 1; min-width: 0; }
@@ -46,12 +46,12 @@ label.item, .item:has(input) { cursor: pointer; }
 .conflicts > p { margin: 4px 0 12px; color: var(--text); font-size: 14px; font-weight: 400; }
 .conflict { margin: 8px 0; padding: 12px 14px; border: 1px solid var(--warning-line); border-radius: var(--radius); background: var(--warning-soft); }
 .conflict strong { display: block; font-size: 13px; }
-.conflict small { display: block; margin-top: 2px; color: var(--text-2); font-size: 11.5px; }
+.conflict small { display: block; margin-top: 2px; color: var(--text-2); font-size: 14px; }
 .conflict > :global(.button) { margin-top: 10px; }
 .conflictActions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .version { margin-top: 10px; padding: 10px 0 0; border-top: 1px solid var(--warning-line); }
-.version strong { color: var(--text-2); font-size: 11.5px; }
-.version p { max-height: 112px; margin: 6px 0; overflow: auto; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.version strong { color: var(--text-2); font-size: 14px; }
+.version p { max-height: 112px; margin: 6px 0; overflow: auto; font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .version :global(.button) { margin-top: 2px; }
 
 /* Import preview */
@@ -59,13 +59,13 @@ label.item, .item:has(input) { cursor: pointer; }
 .previewItem { border-bottom: 1px solid var(--line); }
 .previewItem:last-child { border-bottom: 0; }
 .previewItem .item { border: 0; }
-.previewDetails { padding: 0 20px 12px 47px; color: var(--text-2); font-size: 12px; }
+.previewDetails { padding: 0 20px 12px 47px; color: var(--text-2); font-size: 14px; }
 .previewDetails > summary { width: fit-content; }
 .compare { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 8px; }
 .compare > div { display: grid; gap: 4px; min-width: 0; }
-.compare strong { color: var(--text-2); font-size: 11.5px; }
-.compare pre { max-height: 210px; margin: 0; padding: 10px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text); font-size: 11.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
-.targetChoice { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 0 20px 12px 47px; color: var(--text-2); font-size: 12px; }
+.compare strong { color: var(--text-2); font-size: 14px; }
+.compare pre { max-height: 210px; margin: 0; padding: 10px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text); font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.targetChoice { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 0 20px 12px 47px; color: var(--text-2); font-size: 14px; }
 .targetChoice select { max-width: 100%; }
 
 @media (max-width: 620px) {

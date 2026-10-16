@@ -40,7 +40,7 @@
 .status[data-tone='warn']::before { background: var(--warning); }
 .status[data-tone='error'] { color: var(--danger) !important; }
 .status[data-tone='error']::before { background: var(--danger); }
-.footer > button.status { flex: 0 1 auto; min-width: 0; min-height: 26px; padding: 0 8px; overflow: hidden; border: 0; background: transparent; box-shadow: none; font-size: 12px; font-weight: 560; text-overflow: ellipsis; white-space: nowrap; }
+.footer > button.status { flex: 0 1 auto; min-width: 0; min-height: 26px; padding: 0 8px; overflow: hidden; border: 0; background: transparent; box-shadow: none; font-size: 14px; font-weight: 560; text-overflow: ellipsis; white-space: nowrap; }
 .footer > button.status:hover:not(:disabled) { background: var(--warning-soft); }
 .footer > button.status + .actions { margin-left: auto; }
 .connection, .directory { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
@@ -110,12 +110,12 @@
 .directory li > label { display: flex !important; align-items: center; gap: 8px; min-height: 30px; padding: 0 8px; border-radius: var(--radius-xs); font-family: var(--font-mono); font-size: 14px !important; font-weight: 400; cursor: pointer; overflow-wrap: anywhere; }
 .directory li > label:hover { background: var(--surface-2); }
 .directory li > label:has(input:checked) { background: var(--accent-soft); }
-.directoryMiss { padding: 8px; color: var(--text-3); font-size: 12px; }
+.directoryMiss { padding: 8px; color: var(--text-3); font-size: 14px; }
 .directoryFoot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
 .directoryFoot > span { color: var(--text-2); font-size: 12px; font-variant-numeric: tabular-nums; }
 .errors { border: 1px solid var(--danger-line); padding: 10px; border-radius: var(--radius); color: var(--danger) !important; background: var(--danger-soft); }
 .footer { flex: none; display: flex; align-items: center; gap: 10px; border-top: 1px solid var(--line); padding: 12px 0 4px; position: relative; background: var(--surface); flex-wrap: nowrap; }
-.footer > span { flex: 1 1 auto; min-width: 0; font-size: 12px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.footer > span { flex: 1 1 auto; min-width: 0; font-size: 14px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .footer .actions { flex: none; display: flex; align-items: center; gap: 10px; min-width: 0; }
 .footer .actions button { white-space: nowrap; }
 .footer details[open] { position: absolute; bottom: var(--config-footer-h); right: 0; z-index: 3; padding: 12px; border: 1px solid var(--line); background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow-sm); }

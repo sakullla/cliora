@@ -29,7 +29,7 @@
 .triggerCopy { display: grid; min-width: 0; max-width: 100%; line-height: 1.2; }
 .triggerCopy > span,
 .triggerCopy > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.triggerCopy > small { color: var(--text-2); font-size: 11px; font-weight: 450; }
+.triggerCopy > small { color: var(--text-2); font-size: 14px; font-weight: 450; }
 
 .trigger[data-variant="accent"] {
   min-height: var(--control-h-sm);
@@ -84,9 +84,9 @@
 .optionCopy > strong,
 .optionCopy > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .optionCopy > strong { font-weight: 600; }
-.optionCopy > small { color: var(--text-3); font-size: 11.5px; font-weight: 450; }
+.optionCopy > small { color: var(--text-3); font-size: 14px; font-weight: 450; }
 .optionMarks { display: inline-flex; align-items: center; gap: 6px; }
-.optionMarks > em { color: var(--warning); font-size: 11px; font-style: normal; font-weight: 560; }
+.optionMarks > em { color: var(--warning); font-size: 14px; font-style: normal; font-weight: 560; }
 .optionMarks svg { flex: none; color: var(--accent); }
 .list > button:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
 .list > button[data-active="true"] { background: var(--surface-3); box-shadow: inset 2px 0 0 var(--accent); }
@@ -94,7 +94,7 @@
 .list > button[aria-selected="true"]:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
 .list > button[aria-selected="true"] small { color: var(--text-2); }
 .list > button:disabled { opacity: .5; }
-.list > p { margin: 0; padding: 8px; color: var(--text-3); font-size: 12px; }
+.list > p { margin: 0; padding: 8px; color: var(--text-3); font-size: 14px; }
 
 .folderPick {
   display: flex;
