@@ -11,9 +11,9 @@
 .find input { flex: 1; width: 0; min-width: 0; min-height: 30px; padding: 4px 6px; border: 0; background: transparent; box-shadow: none; font-size: 14px; font-weight: 400; color: var(--text); }
 .find input:focus:not(:focus-visible),
 .find input:focus-visible { outline: none; box-shadow: none; }
-.find > span { flex: none; font-size: 11px; font-variant-numeric: tabular-nums; }
+.find > span { flex: none; font-size: 14px; font-weight: 400; font-variant-numeric: tabular-nums; }
 .find button { flex: none; min-height: 24px; width: 24px; padding: 0; border: 0; background: none; box-shadow: none; }
-.findHint { flex-basis: 100%; color: var(--text-3); font-size: 11px; }
+.findHint { flex-basis: 100%; color: var(--text-3); font-size: 14px; font-weight: 400; }
 .messages { max-width: 900px; margin: 0 auto; padding: 0 24px 32px; }
 .dayDivider { display: flex; align-items: center; gap: 14px; margin: 22px 0 8px; color: var(--text-3); font-size: 11px; }
 .dayDivider::before, .dayDivider::after { content: ''; flex: 1; height: 1px; background: var(--line); }
@@ -63,7 +63,7 @@
 .tableScroll th { background: var(--surface-2); font-weight: 600; }
 .empty { display: grid; justify-items: center; gap: 12px; padding: 40px 12px; color: var(--text-3); text-align: center; }
 .empty h3 { font-size: 14px; color: var(--text-2); }
-.empty p { font-size: 12px; }
+.empty p { font-size: 14px; font-weight: 400; }
 @media (max-width: 1100px) {
   .readerToolbar { padding: 8px 16px; }
   .messages { padding: 0 16px 24px; }
@@ -71,7 +71,7 @@
   .avatar { width: 26px; height: 26px; }
 }
 
-.readingOptions { position: relative; color: var(--text-2); font-size: 11.5px; }
+.readingOptions { position: relative; color: var(--text-2); font-size: 14px; font-weight: 400; }
 .readingOptions summary { padding: 6px 8px; cursor: pointer; }
 .readingOptions > div { position: absolute; top: calc(100% + 6px); right: 0; display: grid; gap: 2px; width: 156px; padding: 6px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-md); }
 .readingOptions label { display: flex; align-items: center; gap: 10px; min-height: 34px; padding: 0 8px; border-radius: var(--radius-xs); cursor: pointer; }

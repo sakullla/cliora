@@ -269,8 +269,8 @@ div > .feedback { margin-bottom: 12px; }
 .profileFilter input { flex: 1; width: 100%; min-width: 0; }
 .profileFilter > span { flex: none; color: var(--text-3); font-size: 12px; font-variant-numeric: tabular-nums; }
 .profileScroll { max-height: 406px; overflow: auto; }
-.profileEmpty { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 0; padding: 16px 18px; border-top: 1px solid var(--line); color: var(--text-2); font-size: 12.5px; line-height: 1.6; }
-.profileEmpty > strong { flex-basis: 100%; color: var(--text); font-size: 13px; font-weight: 620; }
+.profileEmpty { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 0; padding: 16px 18px; border-top: 1px solid var(--line); color: var(--text-2); font-size: 14px; font-weight: 400; line-height: 1.6; }
+.profileEmpty > strong { flex-basis: 100%; color: var(--text); font-size: 14px; font-weight: 620; }
 .profileEmpty > span { flex: 1 1 260px; min-width: 0; }
 .profileEmpty > button { flex: none; }
 .profileMain { min-width: 0; }

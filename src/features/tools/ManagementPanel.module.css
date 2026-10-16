@@ -79,7 +79,7 @@
 .panel [role="alert"] { padding: 12px; border: 1px solid var(--danger-line); border-radius: var(--radius); background: var(--danger-soft); color: var(--danger); }
 .panel [role="status"]:not(:has(:global(.skeleton-page))) { padding: 11px 13px; border-radius: var(--radius); background: var(--accent-soft); }
 .panel :global(.status-banner) > [role] { padding: 0; border: 0; border-radius: 0; background: none; color: inherit; font-size: inherit; }
-.empty { padding: 30px 20px; text-align: center; border: 1px dashed var(--line); border-radius: var(--radius-lg); color: var(--text-2); font-size: 12.5px; }
+.empty { padding: 30px 20px; text-align: center; border: 1px dashed var(--line); border-radius: var(--radius-lg); color: var(--text-2); font-size: 14px; font-weight: 400; }
 
 /* ---------- Resource card list (agents / plugins) ---------- */
 .resourceList {
@@ -145,7 +145,7 @@
 .listToolbar input:focus, .listToolbar input:focus-visible { outline: none; box-shadow: none; }
 .listToolbar select { flex: 0 1 140px; }
 .listToolbar > span { color: var(--text-3); font-size: 12px; white-space: nowrap; margin-left: auto; }
-.listNote { color: var(--text-2); font-size: 12px; }
+.listNote { color: var(--text-2); font-size: 14px; font-weight: 400; }
 
 .installBox { display: grid; gap: 11px; padding: 16px 18px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-xs); }
 .installBox .create { padding: 0; border: 0; background: transparent; }
