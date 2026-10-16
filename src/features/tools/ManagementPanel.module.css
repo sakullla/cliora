@@ -24,12 +24,12 @@
 .badge[data-state="pending"] { border-color: var(--warning-line); background: var(--warning-soft); color: var(--warning); }
 .badge[data-state="expired"], .badge[data-state="error"] { border-color: var(--danger-line); background: var(--danger-soft); color: var(--danger); }
 
-.panel p { color: var(--text-2); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.panel p { color: var(--text-2); font-size: 14px; font-weight: 400; line-height: 1.6; overflow-wrap: anywhere; }
 
 /* ---------- Panel header ---------- */
 .header { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 14px; }
 .header > div:first-child { display: grid; gap: 5px; flex: 1 1 280px; }
-.header > div:first-child p { font-size: 12.5px; }
+.header > div:first-child p { font-size: 14px; font-weight: 400; }
 .header > .actions { display: flex; flex: 0 1 auto; padding-top: 2px; }
 
 .context { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; color: var(--text-2); font-size: 12px; }
@@ -47,7 +47,7 @@
 .danger { color: var(--danger) !important; }
 .destructive { color: var(--danger); }
 
-.trust { display: flex; gap: 9px; align-items: flex-start; font-size: 12.5px; line-height: 1.6; }
+.trust { display: flex; gap: 9px; align-items: flex-start; font-size: 14px; font-weight: 400; line-height: 1.6; }
 .trust input { flex: none; margin-top: 4px; }
 
 .compatibility { border: 1px solid var(--line); border-radius: var(--radius); padding: 11px 14px; font-size: 12px; color: var(--text-2); }
