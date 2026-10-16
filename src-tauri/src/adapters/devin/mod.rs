@@ -457,6 +457,9 @@ mod tests {
         assert!(install.contains(if cfg!(windows) { "install.ps1" } else { "install.sh" }));
         assert_eq!(Devin.upgrade_command("native"), Devin.native_install_command());
         assert!(Devin.upgrade_command("unknown").is_none());
+        // Forward slashes exercise the directory rule on every host; backslashes are Windows separators.
+        assert!(Devin.recognizes_native_install_path(Path::new("C:/Users/me/AppData/Local/devin/cli/bin/devin.exe")));
+        #[cfg(windows)]
         assert!(Devin.recognizes_native_install_path(Path::new(r"C:\Users\me\AppData\Local\devin\cli\bin\devin.exe")));
         assert!(Devin.recognizes_native_install_path(Path::new("/home/example/.local/bin/devin")));
         assert!(!Devin.recognizes_native_install_path(Path::new("/home/example/.local/bin/other")));

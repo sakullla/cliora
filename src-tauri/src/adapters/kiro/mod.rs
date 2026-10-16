@@ -446,8 +446,13 @@ mod tests {
         assert!(install.contains(if cfg!(windows) { "install.ps1" } else { "cli.kiro.dev/install" }));
         assert_eq!(Kiro.upgrade_command("native"), Kiro.native_install_command());
         assert!(Kiro.upgrade_command("unknown").is_none());
+        // Forward slashes exercise the directory rule on every host; backslashes are Windows separators.
+        assert!(Kiro.recognizes_native_install_path(Path::new("C:/Program Files/Kiro-Cli/kiro-cli.exe")));
+        #[cfg(windows)]
         assert!(Kiro.recognizes_native_install_path(Path::new(r"C:\Program Files\Kiro-Cli\kiro-cli.exe")));
         assert!(Kiro.recognizes_native_install_path(Path::new("/home/example/.local/bin/kiro-cli")));
+        assert!(!Kiro.recognizes_native_install_path(Path::new("C:/npm/kiro-cli.cmd")));
+        #[cfg(windows)]
         assert!(!Kiro.recognizes_native_install_path(Path::new(r"C:\npm\kiro-cli.cmd")));
         // An existing ~/.kiro wins over the Windows fallback candidates.
         let temp = tempfile::tempdir().unwrap();

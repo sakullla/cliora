@@ -446,7 +446,12 @@ mod tests {
     fn bare_version_output_identifies_only_codebuddy_binaries() {
         assert!(CodeBuddy.version_identity("codebuddy", "2.161.1\n"));
         assert!(!CodeBuddy.version_identity("renamed", "2.161.1"));
+        // Forward slashes exercise the directory rule on every host; backslashes are Windows separators.
+        assert!(CodeBuddy.recognizes_native_install_path(Path::new("C:/Users/me/AppData/Local/codebuddy/bin/codebuddy.exe")));
+        assert!(!CodeBuddy.recognizes_native_install_path(Path::new("C:/Users/me/AppData/Roaming/npm/codebuddy.cmd")));
+        #[cfg(windows)]
         assert!(CodeBuddy.recognizes_native_install_path(Path::new(r"C:\Users\me\AppData\Local\codebuddy\bin\codebuddy.exe")));
+        #[cfg(windows)]
         assert!(!CodeBuddy.recognizes_native_install_path(Path::new(r"C:\Users\me\AppData\Roaming\npm\codebuddy.cmd")));
         assert_eq!(CodeBuddy.upgrade_command("native").as_deref(), Some("codebuddy update"));
         assert!(CodeBuddy.npm_install_command().unwrap().contains("@tencent-ai/codebuddy-code@latest"));
