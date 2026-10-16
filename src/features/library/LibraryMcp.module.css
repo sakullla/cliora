@@ -27,7 +27,7 @@
 .card:nth-child(2) { animation-delay: 30ms; }
 .card:nth-child(3) { animation-delay: 60ms; }
 .card:nth-child(n+4) { animation-delay: 90ms; }
-.card:hover { border-color: var(--line-strong); box-shadow: var(--shadow-md); }
+.card:hover { border-color: var(--line-strong); background: var(--surface-3); box-shadow: var(--shadow-md); }
 .card:has(.cardTitle:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .cardHead { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 10px; min-width: 0; }
@@ -51,7 +51,8 @@
 }
 /* The whole card opens the editor; inner controls sit above this layer. */
 .cardTitle::after { content: ''; position: absolute; inset: 0; border-radius: inherit; }
-.cardTitle:hover, .cardTitle:focus { color: var(--text) !important; text-decoration: underline; text-underline-offset: 3px; }
+.cardTitle:hover { color: var(--text) !important; text-decoration: underline; text-underline-offset: 3px; }
+.cardTitle:focus { color: var(--text) !important; }
 .cardTitle:focus-visible { outline: none; }
 .cardMeta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; min-width: 0; color: var(--text-3); font-size: 11px; }
 .badge {
@@ -104,8 +105,7 @@
 .emptyActions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 10px; }
 .emptyActions button { display: inline-flex; align-items: center; gap: 6px; min-height: var(--control-h); padding: 0 16px; }
 
-.error { margin: 0; padding: 10px 12px; border: 1px solid; border-radius: var(--radius); font-size: 12.5px; line-height: 1.55; animation: reveal var(--medium) var(--ease); }
-.error { border-color: var(--danger-line); background: var(--danger-soft); color: var(--danger); }
+.error { margin: 0; padding: 10px 12px; border: 1px solid var(--danger-line); border-radius: var(--radius); background: var(--danger-soft); color: var(--danger); font-size: 14px; font-weight: 400; line-height: 1.55; animation: reveal var(--medium) var(--ease); }
 .dirty { display: inline-flex; align-items: center; gap: 6px; color: var(--text-3); font-size: 12px; }
 .dirty::before { content: ''; width: 6px; height: 6px; border-radius: 99px; background: var(--warning); }
 
@@ -135,8 +135,8 @@
   background: var(--surface-2);
 }
 .panelHead { display: grid; gap: 4px; }
-.panelHead h3 { margin: 0; color: var(--text); font-size: 13px; font-weight: 650; }
-.panelHead p { margin: 0; color: var(--text-3); font-size: 12px; line-height: 1.5; }
+.panelHead h3 { margin: 0; color: var(--text); font-size: 14px; font-weight: 650; }
+.panelHead p { margin: 0; color: var(--text); font-size: 14px; font-weight: 400; line-height: 1.5; }
 .scopePick { width: 100%; min-width: 0; }
 
 .targetList { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
@@ -153,14 +153,15 @@
   cursor: pointer;
   transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
 }
-.targetList label:hover:not(:has(input:disabled)) { border-color: var(--text-3); }
-.targetList label:has(input:checked) { border-color: var(--accent-line); background: var(--accent-soft); }
-.targetList label:has(input:focus-visible) { box-shadow: 0 0 0 3px var(--accent-ring); }
+.targetList label:hover:not(:has(input:disabled)):not(:has(input:checked)) { border-color: var(--text-3); background: var(--surface-3); }
+.targetList label:has(input:checked) { border-color: var(--accent-line); background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
+.targetList label:has(input:checked):hover { border-color: var(--accent); background: var(--surface-3); }
+.targetList label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
 .targetList label:has(input:disabled) { cursor: not-allowed; opacity: .7; }
 .targetList input { width: 15px; height: 15px; margin: 0; }
 .targetList input:focus-visible { outline: none; }
 .targetText { display: grid; gap: 1px; min-width: 0; }
-.targetName { overflow: hidden; color: var(--text); font-size: 13px; font-weight: 560; text-overflow: ellipsis; white-space: nowrap; }
+.targetName { overflow: hidden; color: var(--text); font-size: 14px; font-weight: 560; text-overflow: ellipsis; white-space: nowrap; }
 .targetText small { overflow: hidden; color: var(--text-3); font-size: 11px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
 .targetList li[data-state='placed'] small { color: var(--accent); }
 .targetList li[data-state='adding'] small { color: var(--accent); font-weight: 600; }
@@ -169,10 +170,10 @@
 .targetList li[data-state='blocked'] small { color: var(--danger); white-space: normal; }
 
 .choice { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 12.5px; font-weight: 520; cursor: pointer; }
-.summary { margin: 0; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--surface); color: var(--text-2); font-size: 12px; line-height: 1.55; }
+.summary { margin: 0; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font-size: 14px; font-weight: 400; line-height: 1.55; }
 .summary[data-quiet] { padding: 0; background: none; color: var(--text-3); }
 .notes { display: grid; gap: 4px; }
-.notes p { margin: 0; color: var(--text-2); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.notes p { margin: 0; color: var(--text); font-size: 14px; font-weight: 400; line-height: 1.5; overflow-wrap: anywhere; }
 .notes[data-tone='warning'] p { color: var(--warning); }
 
 .conflict { grid-area: conflict; display: grid; gap: 12px; min-width: 0; padding: 14px; border: 1px solid var(--warning-line); border-radius: var(--radius-lg); background: var(--warning-soft); }

@@ -39,7 +39,7 @@
 .filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .sessionLibrary > .filters { display: grid; grid-template-columns: minmax(0, 1fr) auto; padding: 16px 16px 12px; border-bottom: 1px solid var(--line); }
 .sessionLibrary > .filters > .search { grid-column: 1 / -1; }
-.filters label, .projectLink, .filterSelect { display: grid; gap: 5px; min-width: 160px; color: var(--text-2); font-size: 12px; font-weight: 560; }
+.filters label, .projectLink, .filterSelect { display: grid; gap: 5px; min-width: 160px; color: var(--text); font-size: 14px; font-weight: 560; }
 .filters input:not([type=checkbox]), .filters select, .projectLink select { width: 100%; min-height: var(--control-h-sm); color: var(--text); font-weight: 400; }
 .filters .search { flex: 1 1 100%; min-width: 0; }
 .filters .filterSelect { flex: 1; min-width: 0; }
@@ -82,9 +82,9 @@
 .coverage span { display: block; margin-top: 2px; padding-left: 17px; }
 
 /* Messages */
-.error, .notice, .caveat { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0; padding: 10px 12px; border: 1px solid; border-radius: var(--radius); font-size: 12.5px; line-height: 1.55; }
+.error, .notice, .caveat { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0; padding: 10px 12px; border: 1px solid; border-radius: var(--radius); font-size: 14px; font-weight: 400; line-height: 1.55; }
 .error { border-color: var(--danger-line); background: var(--danger-soft); color: var(--danger); animation: reveal var(--medium) var(--ease); }
-.notice { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); animation: reveal var(--medium) var(--ease); }
+.notice { border-color: var(--accent-line); border-left-width: 2px; border-left-color: var(--accent); background: var(--accent-soft); color: var(--text); animation: reveal var(--medium) var(--ease); }
 .caveat { border-color: var(--line); background: var(--surface-2); color: var(--text-2); }
 .caveat button { min-height: 26px; }
 .progress { position: relative; flex: 1 1 120px; max-width: 280px; height: 4px; overflow: hidden; border-radius: 99px; background: var(--line); }
@@ -96,7 +96,7 @@
 .columns { display: grid; flex: 1; grid-template-columns: clamp(280px, 30%, 360px) minmax(0, 1fr); gap: 0; min-height: 0; align-items: stretch; overflow: hidden; }
 .sessionLibrary { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid var(--line); background: var(--surface-2); }
 .listToolbar { display: flex; flex: none; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 16px 2px; color: var(--text-3); font-size: 11px; }
-.listToolbar select { width: auto; min-height: 26px; padding: 0 24px 0 6px; border-color: transparent; background-color: transparent; box-shadow: none; font-size: 11px; }
+.listToolbar select { width: auto; min-height: var(--control-h-sm); padding: 0 24px 0 6px; border-color: transparent; background-color: transparent; box-shadow: none; font-size: 14px; font-weight: 400; color: var(--text); }
 .list, .detail { min-width: 0; min-height: 0; }
 .list { display: grid; flex: 1; align-content: start; grid-auto-rows: max-content; gap: 5px; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 8px; }
 .group {
@@ -143,7 +143,7 @@
 .list > button:hover strong,
 .list > button.selected strong,
 .list > button.selected:hover strong { color: var(--text); }
-.list button strong { display: block; max-height: 2.8em; overflow: hidden; font-size: 13px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
+.list button strong { display: block; max-height: 2.8em; overflow: hidden; font-size: 14px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; color: var(--text); }
 .list button small { color: var(--text-2); font-size: 11.5px; overflow-wrap: anywhere; }
 .list button small + small { color: var(--text-3); font-family: var(--font-mono); font-size: 11px; }
 .sessionMeta .flag { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 99px; background: var(--warning-soft); color: var(--warning); font-family: var(--font-mono); font-size: 10px; font-style: normal; font-weight: 600; line-height: 16px; vertical-align: 1px; white-space: nowrap; }
@@ -183,7 +183,7 @@
 .resumeBar .actions, .resume select { flex: none; }
 .resumeBar .actions { gap: 6px; }
 .resumeBar .actions button { min-height: var(--control-h-sm); padding: 0 12px; font-size: 12px; }
-.resume select { width: auto; min-width: 96px; min-height: var(--control-h-sm); padding-top: 0; padding-bottom: 0; font-size: 12px; }
+.resume select { width: auto; min-width: 96px; min-height: var(--control-h-sm); padding-top: 0; padding-bottom: 0; font-size: 14px; font-weight: 400; color: var(--text); }
 .resumeBar pre, .resume pre { flex: 1 1 100%; order: 5; min-width: 0; max-height: 4.8em; margin: 0; padding: 6px 8px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-xs); background: var(--surface-2); color: var(--text-2); font-size: 12px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .moreActions { color: var(--text-3); font-size: 11.5px; }

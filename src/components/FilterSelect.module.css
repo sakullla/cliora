@@ -15,12 +15,14 @@
   background-position: right 10px center;
   box-shadow: none;
   color: var(--text);
-  font-size: 13px;
-  font-weight: 450;
+  font-size: 14px;
+  font-weight: 400;
   text-align: left;
 }
-.trigger:hover:not(:disabled) { border-color: var(--text-3); background-color: var(--surface-2); }
-.trigger[data-open="true"] { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
+.trigger:hover:not(:disabled) { border-color: var(--text-3); background-color: var(--surface-3); }
+.trigger[data-open="true"] { border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: 2px; }
+.trigger:focus:not(:focus-visible),
+.trigger:focus-visible { border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: 2px; }
 .trigger[data-empty="true"] .triggerCopy > span { color: var(--text-2); }
 .trigger:disabled { opacity: .5; }
 .triggerIcon { display: grid; place-items: center; flex: none; margin-right: 7px; }
@@ -35,12 +37,12 @@
   border-color: var(--accent-line);
   background-color: var(--accent-soft);
   color: var(--text);
-  font-size: 12.5px;
+  font-size: 14px;
   font-weight: 640;
 }
-.trigger[data-variant="accent"]:hover:not(:disabled) { border-color: var(--accent); background-color: var(--accent-soft); color: var(--text); }
-.trigger[data-variant="accent"][data-empty="true"],
-.trigger[data-variant="accent"][data-empty="true"]:hover:not(:disabled) { border-color: var(--line-strong); background-color: var(--surface); color: var(--text-2); font-weight: 560; }
+.trigger[data-variant="accent"]:hover:not(:disabled) { border-color: var(--accent); background-color: var(--surface); color: var(--text); }
+.trigger[data-variant="accent"][data-empty="true"] { border-color: var(--line-strong); background-color: var(--surface); color: var(--text-2); font-weight: 560; }
+.trigger[data-variant="accent"][data-empty="true"]:hover:not(:disabled) { border-color: var(--text-3); background-color: var(--surface-3); color: var(--text); }
 .trigger[data-variant="accent"] .triggerCopy > small { color: var(--text-2); font-weight: 450; opacity: .85; }
 
 .panel {
@@ -72,8 +74,8 @@
   background: transparent;
   box-shadow: none;
   color: var(--text);
-  font-size: 12.5px;
-  font-weight: 500;
+  font-size: 14px;
+  font-weight: 400;
   text-align: left;
 }
 .optionIcon { display: grid; place-items: center; flex: none; }
@@ -86,11 +88,11 @@
 .optionMarks { display: inline-flex; align-items: center; gap: 6px; }
 .optionMarks > em { color: var(--warning); font-size: 11px; font-style: normal; font-weight: 560; }
 .optionMarks svg { flex: none; color: var(--accent); }
-.list > button:hover:not(:disabled),
-.list > button[data-active="true"] { background: var(--surface-3); }
-.list > button[aria-selected="true"],
-.list > button[aria-selected="true"]:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent); }
-.list > button[aria-selected="true"] small { color: var(--accent); }
+.list > button:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
+.list > button[data-active="true"] { background: var(--surface-3); box-shadow: inset 2px 0 0 var(--accent); }
+.list > button[aria-selected="true"] { background: var(--selection); color: var(--text); font-weight: 650; box-shadow: inset 2px 0 0 var(--accent); }
+.list > button[aria-selected="true"]:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
+.list > button[aria-selected="true"] small { color: var(--text-2); }
 .list > button:disabled { opacity: .5; }
 .list > p { margin: 0; padding: 8px; color: var(--text-3); font-size: 12px; }
 
@@ -112,6 +114,6 @@
   font-weight: 560;
   text-align: left;
 }
-.folderPick:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
+.folderPick:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
 .folderPick > svg { flex: none; color: var(--text-3); }
 .folderPick:hover:not(:disabled) > svg { color: var(--accent); }

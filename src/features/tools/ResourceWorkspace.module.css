@@ -4,12 +4,12 @@
 .workspaceHead { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 12px 14px; }
 .workspaceHead > div { display: grid; gap: 5px; flex: 1 1 280px; min-width: 0; }
 .workspaceHead h2 { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: -.01em; }
-.workspaceHead p { margin: 0; color: var(--text-2); font-size: 12.5px; line-height: 1.6; }
+.workspaceHead p { margin: 0; color: var(--text); font-size: 14px; font-weight: 400; line-height: 1.6; }
 .workspaceHead > button { flex: none; margin-top: 2px; }
 .emptyState { display: grid; justify-items: center; gap: 6px; padding: 36px 20px; border: 1px dashed var(--line-strong); border-radius: var(--radius-lg); background: color-mix(in srgb, var(--surface) 55%, transparent); color: var(--text-3); text-align: center; }
 .emptyState > svg { margin-bottom: 4px; }
 .emptyState > strong { color: var(--text); font-size: 13.5px; font-weight: 620; }
-.emptyState > p { max-width: 440px; margin: 0; color: var(--text-2); font-size: 12.5px; line-height: 1.6; }
+.emptyState > p { max-width: 440px; margin: 0; color: var(--text); font-size: 14px; font-weight: 400; line-height: 1.6; }
 
 /* ---------- List layout ------------------------------------------- */
 
@@ -53,7 +53,7 @@
 .list > button:nth-of-type(3) { animation-delay: 60ms; }
 .list > button:nth-of-type(4) { animation-delay: 90ms; }
 .list > button:nth-of-type(5) { animation-delay: 120ms; }
-.list > button:hover:not(:disabled) { background: var(--surface-2); }
+.list > button:hover:not(:disabled):not(.active) { background: var(--surface-3); }
 .list > button::after {
   content: '';
   position: absolute;
@@ -75,7 +75,8 @@
 .state[data-warn] { border-color: var(--warning-line); background: var(--warning-soft); color: var(--warning); }
 .muted > .state { margin-right: 8px; vertical-align: 1px; }
 .list small.mono { font-family: var(--font-mono); font-size: 11px; }
-.list > .active, .list > .active:hover:not(:disabled) { background: var(--accent-soft); }
+.list > .active { background: var(--selection); box-shadow: inset 2px 0 0 var(--accent); }
+.list > .active:hover:not(:disabled) { background: var(--surface-3); }
 .list > .active strong { color: var(--text); }
 .list small { max-width: 100%; overflow: hidden; color: var(--text-2); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
 .list > p { padding: 6px 10px 8px; color: var(--text-3); font-size: 12px; line-height: 1.55; }
@@ -90,12 +91,12 @@
 .heading small { color: var(--text-3); font-size: 11px; font-weight: 600; letter-spacing: .4px; }
 .heading h2 { margin: 2px 0 0; font-size: 16px; font-weight: 650; overflow-wrap: anywhere; }
 .heading strong { font-size: 13px; }
-.heading p { margin: 4px 0 0; color: var(--text-2); font-size: 12.5px; line-height: 1.55; }
+.heading p { margin: 4px 0 0; color: var(--text); font-size: 14px; font-weight: 400; line-height: 1.55; }
 
-.panel label { display: grid; gap: 6px; min-width: 0; color: var(--text-2); font-size: 12px; font-weight: 560; }
-.panel label > input:not([type=checkbox]):not([type=radio]), .panel label > textarea, .panel label > select { width: 100%; color: var(--text); font-weight: 400; }
-.panel textarea { font-family: var(--font-mono); font-size: 12px; }
-.fieldHint { display: block; margin-top: -3px; color: var(--text-3); font-size: 11.5px; font-weight: 400; line-height: 1.5; }
+.panel label { display: grid; gap: 6px; min-width: 0; color: var(--text); font-size: 14px; font-weight: 560; }
+.panel label > input:not([type=checkbox]):not([type=radio]), .panel label > textarea, .panel label > select { width: 100%; color: var(--text); font-size: 14px; font-weight: 400; }
+.panel textarea { font-family: var(--font-mono); font-size: 14px; font-weight: 400; }
+.fieldHint { display: block; margin-top: 0; color: var(--text); font-size: 14px; font-weight: 400; line-height: 1.5; }
 .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
 
 .inline, .panel .inline, .targetGrid label {
@@ -103,7 +104,7 @@
   align-items: center;
   gap: 8px !important;
   color: var(--text) !important;
-  font-size: 12.5px !important;
+  font-size: 14px !important;
   font-weight: 500 !important;
   cursor: pointer;
 }
@@ -122,19 +123,20 @@
 .sources button:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); }
 .sources button strong { font-size: 13px; font-weight: 640; }
 .sources button span { color: var(--text-3); font-size: 12px; font-weight: 450; }
-.urlField { display: grid; gap: 6px; color: var(--text-2); font-size: 12px; font-weight: 560; }
+.urlField { display: grid; gap: 6px; color: var(--text); font-size: 14px; font-weight: 560; }
 .urlRow { display: flex; gap: 8px; align-items: center; }
 .urlRow input { flex: 1; min-width: 0; }
 .urlRow button { min-height: var(--control-h); }
-.typeField { display: grid; gap: 6px; color: var(--text-2); font-size: 12px; font-weight: 560; }
+.typeField { display: grid; gap: 6px; color: var(--text); font-size: 14px; font-weight: 560; }
 .typeSwitch { display: flex; width: fit-content; gap: 2px; padding: 3px; border-radius: var(--radius); background: var(--surface-3); }
 .typeSwitch button { min-height: 28px; padding: 0 18px; border: 0; border-radius: var(--radius-sm); background: transparent; box-shadow: none; color: var(--text-2); font-weight: 560; }
-.typeSwitch button[aria-pressed="true"] { background: var(--surface); color: var(--text); box-shadow: var(--shadow-xs); }
-.typeSwitch button:hover:not(:disabled) { background: var(--surface); color: var(--text); }
+.typeSwitch button:hover:not(:disabled):not([aria-pressed="true"]) { background: var(--bg); color: var(--text); }
+.typeSwitch button[aria-pressed="true"] { background: var(--surface); color: var(--text); box-shadow: var(--shadow-xs); font-weight: 640; }
+.typeSwitch button[aria-pressed="true"]:hover { background: var(--surface-3); color: var(--text); box-shadow: var(--shadow-xs); }
 .textAction { border: 0; background: transparent; box-shadow: none; color: var(--text-2); }
 .textAction:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
 .destination { display: flex; flex-wrap: wrap; gap: 8px; }
-.destination label { display: flex !important; flex: 0 0 auto; align-items: center; gap: 8px !important; width: auto; min-width: max-content; min-height: 36px; margin: 0; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); color: var(--text) !important; font-size: 12.5px !important; font-weight: 560 !important; white-space: nowrap; cursor: pointer; }
+.destination label { display: flex !important; flex: 0 0 auto; align-items: center; gap: 8px !important; width: auto; min-width: max-content; min-height: 36px; margin: 0; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); color: var(--text) !important; font-size: 14px !important; font-weight: 560 !important; white-space: nowrap; cursor: pointer; }
 .destination label > input { width: auto; flex: none; }
 .destination label:has(input:checked) { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent) !important; }
 
@@ -160,9 +162,9 @@ details.distribution:not([open]) { display: block; }
 .fileDiff strong { color: var(--text-2); font-size: 11.5px; }
 .fileDiff pre { max-height: 240px; margin: 0; padding: 10px; overflow: auto; border-radius: var(--radius-sm); background: var(--surface-2); font-size: 11.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
 
-.error, .notice { margin: 0; padding: 10px 12px; border: 1px solid; border-radius: var(--radius); font-size: 12.5px; line-height: 1.55; animation: reveal var(--medium) var(--ease); }
+.error, .notice { margin: 0; padding: 10px 12px; border: 1px solid; border-radius: var(--radius); font-size: 14px; font-weight: 400; line-height: 1.55; animation: reveal var(--medium) var(--ease); }
 .error { border-color: var(--danger-line); background: var(--danger-soft); color: var(--danger); }
-.notice { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
+.notice { border-color: var(--accent-line); border-left-width: 2px; border-left-color: var(--accent); background: var(--accent-soft); color: var(--text); }
 div.error { display: grid; gap: 8px; margin-bottom: 12px; }
 div.error > button { justify-self: start; }
 

@@ -134,8 +134,8 @@
   overflow-wrap: anywhere;
 }
 .cardTitle::after { content: ''; position: absolute; inset: 0; border-radius: inherit; }
-.cardTitle:hover,
-.cardTitle:focus { color: var(--text) !important; text-decoration: underline; text-underline-offset: 3px; }
+.cardTitle:hover { color: var(--text) !important; text-decoration: underline; text-underline-offset: 3px; }
+.cardTitle:focus { color: var(--text) !important; }
 .cardTitle:focus-visible { outline: none; }
 .card:has(.cardTitle:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
 .card p {
@@ -181,30 +181,33 @@
 .bodyHead { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 .charCount { color: var(--text-3); font-size: 11px; font-weight: 450; }
 .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
-.fields label, .tags, .body { display: grid; gap: 6px; min-width: 0; color: var(--text-2); font-size: 12px; font-weight: 560; }
-.fields input, .fields select, .fields textarea { width: 100%; color: var(--text); font-weight: 400; }
-.fields textarea, .body textarea { width: 100%; font-family: var(--font-mono); font-size: 12px; }
-.typeField { display: grid; gap: 6px; color: var(--text-2); font-size: 12px; font-weight: 560; }
+.fields label, .tags, .body { display: grid; gap: 6px; min-width: 0; color: var(--text); font-size: 14px; font-weight: 560; }
+.fields input, .fields select, .fields textarea { width: 100%; color: var(--text); font-size: 14px; font-weight: 400; }
+.fields textarea, .body textarea { width: 100%; font-family: var(--font-mono); font-size: 14px; font-weight: 400; }
+.typeField { display: grid; gap: 6px; color: var(--text); font-size: 14px; font-weight: 560; }
 .typeSwitch { display: flex; width: fit-content; gap: 2px; padding: 3px; border-radius: var(--radius); background: var(--surface-3); }
 .typeSwitch button { min-height: 28px; padding: 0 18px; border: 0; border-radius: var(--radius-sm); background: transparent; box-shadow: none; color: var(--text-2); font-weight: 560; }
-.typeSwitch button[aria-pressed="true"], .typeSwitch button[aria-pressed="true"]:hover { background: var(--surface); color: var(--text); box-shadow: var(--shadow-xs); }
+.typeSwitch button:hover:not(:disabled):not([aria-pressed="true"]) { background: var(--bg); color: var(--text); }
+.typeSwitch button[aria-pressed="true"] { background: var(--surface); color: var(--text); box-shadow: var(--shadow-xs); font-weight: 640; }
+.typeSwitch button[aria-pressed="true"]:hover { background: var(--surface-3); color: var(--text); box-shadow: var(--shadow-xs); }
 .span { grid-column: 1 / -1; }
 .choice { display: flex !important; align-items: center; gap: 8px !important; color: var(--text) !important; font-weight: 500 !important; cursor: pointer; }
 .targets { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 192px), 1fr)); gap: 8px; }
-.targets label { display: flex !important; align-items: center; gap: 8px !important; min-width: 0; min-height: 40px; margin: 0; padding: 4px 10px 4px 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--text) !important; font-size: 13px !important; font-weight: 540 !important; cursor: pointer; transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease); }
+.targets label { display: flex !important; align-items: center; gap: 8px !important; min-width: 0; min-height: 40px; margin: 0; padding: 4px 10px 4px 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--text) !important; font-size: 14px !important; font-weight: 540 !important; cursor: pointer; transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease); }
 .targetName { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .targets label input { width: 15px; height: 15px; margin: 0 0 0 auto; flex: none; }
 .targets label input:focus-visible { outline: none; }
-.targets label:hover:not(:has(input:disabled)) { border-color: var(--text-3); }
-.targets label:has(input:checked) { border-color: var(--accent-line); background: var(--accent-soft); color: var(--text) !important; }
-.targets label:has(input:focus-visible) { box-shadow: 0 0 0 3px var(--accent-ring); }
+.targets label:hover:not(:has(input:disabled)):not(:has(input:checked)) { border-color: var(--text-3); background: var(--surface-3); }
+.targets label:has(input:checked) { border-color: var(--accent-line); background: var(--accent-soft); color: var(--text) !important; box-shadow: inset 2px 0 0 var(--accent); }
+.targets label:has(input:checked):hover { border-color: var(--accent); background: var(--surface-3); }
+.targets label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
 .targets label:has(input:disabled) { cursor: not-allowed; opacity: .7; }
 .skillAdd { display: grid; gap: 20px; }
 .skillAdd > .skillSection + .skillSection { padding-top: 16px; border-top: 1px solid var(--line); }
 .skillSection { display: grid; gap: 8px; }
 .skillSection h3 { margin: 0; font-size: 13px; font-weight: 650; }
-.skillSection > p, .skillSection p { margin: 0; color: var(--text-2); font-size: 12.5px; line-height: 1.5; }
-.skillSection > label { display: grid; gap: 6px; color: var(--text-2); font-size: 12px; font-weight: 560; }
+.skillSection > p, .skillSection p { margin: 0; color: var(--text); font-size: 14px; font-weight: 400; line-height: 1.5; }
+.skillSection > label { display: grid; gap: 6px; color: var(--text); font-size: 14px; font-weight: 560; }
 .sources { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .sources button { display: grid; justify-items: center; gap: 3px; min-height: 68px; padding: 12px 14px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); box-shadow: none; text-align: center; transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease); }
 .sources button > svg { color: var(--text-3); transition: color var(--fast) var(--ease); }
@@ -256,7 +259,9 @@
   background: var(--surface);
   transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
 }
-.tagList:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
+.tagList:focus-within { border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: 2px; }
+.tagList input:focus:not(:focus-visible),
+.tagList input:focus-visible { outline: none; }
 .tagList button { min-height: 24px; padding: 0 8px; border-color: var(--accent-line); border-radius: 99px; background: var(--accent-soft); box-shadow: none; color: var(--accent); font-size: 12px; }
 .tagList button:hover:not(:disabled) { border-color: var(--danger-line); background: var(--danger-soft); color: var(--danger); }
 .tagList input { flex: 1; min-width: 120px; min-height: 26px; padding: 0 4px; border: 0; background: transparent; box-shadow: none !important; }
@@ -264,9 +269,9 @@
 .tagSuggestions button { min-height: 24px; padding: 0 9px; border-style: dashed; border-radius: 99px; box-shadow: none; color: var(--text-2); font-size: 12px; font-weight: 500; }
 .tagSuggestions button:hover:not(:disabled) { border-style: solid; color: var(--accent); }
 
-.error, .notice { padding: 10px 12px; border: 1px solid; border-radius: var(--radius); font-size: 12.5px; line-height: 1.55; animation: reveal var(--medium) var(--ease); }
+.error, .notice { padding: 10px 12px; border: 1px solid; border-radius: var(--radius); font-size: 14px; font-weight: 400; line-height: 1.55; animation: reveal var(--medium) var(--ease); }
 .error { border-color: var(--danger-line); background: var(--danger-soft); color: var(--danger); }
-.notice { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
+.notice { border-color: var(--accent-line); border-left-width: 2px; border-left-color: var(--accent); background: var(--accent-soft); color: var(--text); }
 
 @container (max-width: 560px) {
   .filters { grid-template-columns: 1fr 1fr; }

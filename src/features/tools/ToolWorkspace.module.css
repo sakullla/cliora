@@ -74,9 +74,15 @@
   white-space: nowrap;
   transition: background-color var(--fast) var(--ease), color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
 }
-.toolSwitcher button:hover { color: var(--text); background: color-mix(in srgb, var(--surface) 60%, transparent); }
-.toolSwitcher .selected, .toolSwitcher .selected:hover {
+.toolSwitcher button:hover:not(.selected) { color: var(--text); background: var(--bg); }
+.toolSwitcher .selected {
   background: var(--surface);
+  color: var(--text);
+  font-weight: 640;
+  box-shadow: var(--shadow-sm);
+}
+.toolSwitcher .selected:hover {
+  background: var(--surface-3);
   color: var(--text);
   font-weight: 640;
   box-shadow: var(--shadow-sm);
@@ -104,34 +110,35 @@
   transition: color var(--fast) var(--ease);
 }
 .views button::after { content: ''; position: absolute; left: 12px; right: 12px; bottom: -1px; height: 2px; border-radius: 2px; background: var(--accent); transform: scaleX(0); transition: transform var(--medium) var(--ease); }
-.views button:hover { color: var(--text); }
+.views button:hover { color: var(--text); background: var(--surface-3); }
 .views .selected { color: var(--text); font-weight: 640; }
 .views .selected::after { transform: scaleX(1); }
 
 .scopeBar { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; margin-bottom: 10px; min-width: 0; }
-.scopeBar label { display: flex; align-items: center; gap: 8px; color: var(--text-2); font-size: 12.5px; white-space: nowrap; }
-.scopeBar select { min-height: var(--control-h-sm); font-size: 12.5px; }
+.scopeBar label { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 14px; font-weight: 400; white-space: nowrap; }
+.scopeBar select { min-height: var(--control-h-sm); font-size: 14px; font-weight: 400; }
 .scopeBar > select { width: 200px; max-width: 100%; }
 .scopeBar .projectSelect { width: 200px; max-width: 100%; }
-.scopeBar .projectSelect > button { min-height: var(--control-h-sm); font-size: 12.5px; }
+.scopeBar .projectSelect > button { min-height: var(--control-h-sm); font-size: 14px; font-weight: 400; }
 
 /* ---------- Status messages ---------- */
 .feedback { display: grid; gap: 8px; min-width: 0; }
 div > .feedback { margin-bottom: 12px; }
-.hint { color: var(--text-2); font-size: 12.5px; line-height: 1.6; }
-.hint code { font-size: 11.5px; }
+.hint { color: var(--text); font-size: 14px; font-weight: 400; line-height: 1.6; }
+.hint code { font-size: 1em; }
 .error, .notice {
   display: block;
   margin: 0 0 12px;
   padding: 10px 14px;
   border: 1px solid;
   border-radius: var(--radius);
-  font-size: 12.5px;
+  font-size: 14px;
+  font-weight: 400;
   line-height: 1.55;
   animation: reveal var(--medium) var(--ease);
 }
 .error { border-color: var(--danger-line); background: var(--danger-soft); color: var(--danger); }
-.notice { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
+.notice { border-color: var(--accent-line); border-left-width: 2px; border-left-color: var(--accent); background: var(--accent-soft); color: var(--text); }
 .error > button { margin-left: 10px; }
 .writeUnavailable { display: grid; gap: 10px; justify-items: start; }
 .writeUnavailable p { margin: 0; }
@@ -392,7 +399,7 @@ div > .feedback { margin-bottom: 12px; }
 }
 .sectionLabel::after { content: ''; flex: 1; height: 1px; background: var(--line); }
 .form > .sectionLabel:not(:first-child) { margin-top: 6px; }
-.form label, .connectionAdvanced label, .formGrid label { display: grid; gap: 7px; min-width: 0; color: var(--text-2); font-size: 12px; font-weight: 560; }
+.form label, .connectionAdvanced label, .formGrid label { display: grid; gap: 7px; min-width: 0; color: var(--text); font-size: 14px; font-weight: 560; }
 .form label > input:not([type=checkbox]), .form label > select, .connectionAdvanced label > input:not([type=checkbox]), .connectionAdvanced label > select, .formGrid input, .formGrid select { width: 100%; min-width: 0; color: var(--text); font-weight: 400; }
 .form label > small { color: var(--warning); font-weight: 400; }
 .formGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 13px; }
@@ -404,17 +411,18 @@ div > .feedback { margin-bottom: 12px; }
 .modelPicker > button { min-height: var(--control-h); }
 .modelRecords { display: grid; gap: 10px; }
 .modelRecord { margin: 0; padding: 8px 12px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); display: grid; gap: 8px; min-width: 0; }
-.modelRecord legend { padding: 0 4px; color: var(--text); font-size: 12.5px; font-weight: 600; }
+.modelRecord legend { padding: 0 4px; color: var(--text); font-size: 14px; font-weight: 600; }
 .modelFields { display: grid; gap: 8px; min-width: 0; }
 
-.check { display: flex !important; align-items: center; gap: 8px !important; color: var(--text) !important; font-size: 12.5px !important; font-weight: 500 !important; cursor: pointer; }
+.check { display: flex !important; align-items: center; gap: 8px !important; color: var(--text) !important; font-size: 14px !important; font-weight: 500 !important; cursor: pointer; }
 
 /* ---------- Native file editor ---------- */
 .nativeEditor { display: grid; gap: 10px; min-width: 0; }
 .fileTabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; border-radius: var(--radius); background: var(--surface-3); width: fit-content; max-width: 100%; }
-.fileTabs button { min-height: 28px; padding: 0 11px; border: 0; border-radius: 6px; background: transparent; box-shadow: none; color: var(--text-2); font-family: var(--font-mono); font-size: 11.5px; font-weight: 500; }
-.fileTabs button:hover:not(:disabled) { background: transparent; color: var(--text); }
-.fileTabs .selected, .fileTabs .selected:hover:not(:disabled) { background: var(--surface); color: var(--text); box-shadow: var(--shadow-xs); }
+.fileTabs button { min-height: 28px; padding: 0 11px; border: 0; border-radius: 6px; background: transparent; box-shadow: none; color: var(--text-2); font-family: var(--font-mono); font-size: 14px; font-weight: 400; }
+.fileTabs button:hover:not(:disabled):not(.selected) { background: var(--bg); color: var(--text); }
+.fileTabs .selected { background: var(--surface); color: var(--text); box-shadow: var(--shadow-xs); font-weight: 640; }
+.fileTabs .selected:hover:not(:disabled) { background: var(--surface-3); color: var(--text); box-shadow: var(--shadow-xs); }
 .pathLabel { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; min-width: 0; padding: 8px 10px 8px 13px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); color: var(--text-2); font-size: 11.5px; }
 .pathLabel strong { flex: none; color: var(--text); font-family: var(--font-mono); font-size: 12px; font-weight: 600; white-space: nowrap; }
 .pathLabel > span { padding: 1px 7px; border-radius: 4px; background: var(--surface-3); font-size: 10.5px; font-weight: 600; letter-spacing: .4px; }

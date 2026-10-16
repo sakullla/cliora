@@ -20,7 +20,7 @@
 }
 .quick > summary { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 14px; font-size: 13px; font-weight: 600; transition: background-color var(--fast) var(--ease); }
 .quick > summary small { min-width: 0; margin-left: auto; overflow: hidden; color: var(--text-3); font-size: 11.5px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
-.quick > summary:hover { background: var(--surface-2); }
+.quick > summary:hover { background: var(--surface-3); }
 .quick[open] > summary { border-bottom: 1px solid var(--line); }
 .quickContent { display: grid; gap: 10px; min-width: 0; padding: 14px; }
 .quickContent > div:first-child { display: grid; gap: 2px; }
@@ -59,9 +59,9 @@
 .project:nth-child(3) { animation-delay: 60ms; }
 .project:nth-child(4) { animation-delay: 90ms; }
 .project:nth-child(5) { animation-delay: 120ms; }
-.project:hover { border-color: var(--line-strong); box-shadow: var(--shadow-md); }
+.project:hover { border-color: var(--line-strong); background: var(--surface-3); box-shadow: var(--shadow-md); }
 .project:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.repair, .spotlight { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
+.repair, .spotlight { border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .identity { display: grid; gap: 4px; min-width: 0; }
 .projectTitle { display: flex; align-items: center; gap: 9px; min-width: 0; }
@@ -93,14 +93,14 @@
 .emptyProjects span { max-width: 360px; color: var(--text-2); font-size: 12.5px; line-height: 1.6; }
 .emptyProjects button { margin-top: 10px; }
 
-.hint { color: var(--warning); font-size: 12px; line-height: 1.55; }
-.note { color: var(--text-2); font-size: 12.5px; }
+.hint { color: var(--text); font-size: 14px; font-weight: 400; line-height: 1.55; box-shadow: inset 2px 0 0 var(--warning); padding-left: 8px; }
+.note { color: var(--text); font-size: 14px; font-weight: 400; }
 
 .extra { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 12px; border-top: 1px solid var(--line); }
 .extra[data-tone="pending"] { padding: 8px 10px; border-top: 0; border-radius: var(--radius-sm); background: var(--accent-soft); }
-.extra[data-tone="pending"] > span { color: var(--accent); }
-.extra > span { flex: 1 1 180px; color: var(--text-2); font-size: 12px; line-height: 1.5; }
-.extra label { display: grid; flex: 1 1 100%; gap: 6px; min-width: 0; color: var(--text-2); font-size: 12px; font-weight: 560; }
+.extra[data-tone="pending"] > span { color: var(--text); box-shadow: inset 2px 0 0 var(--accent); padding-left: 8px; }
+.extra > span { flex: 1 1 180px; color: var(--text); font-size: 14px; font-weight: 400; line-height: 1.5; }
+.extra label { display: grid; flex: 1 1 100%; gap: 6px; min-width: 0; color: var(--text); font-size: 14px; font-weight: 560; }
 .extra input { width: 100%; min-width: 0; flex: 1 1 200px; }
 
 /* Inside the edit dialog */
@@ -110,9 +110,9 @@
 .projectPath small { flex: 1; min-width: 0; color: var(--text-2); font-family: var(--font-mono); font-size: 11.5px; overflow-wrap: anywhere; }
 
 /* Feedback */
-.error, .feedback { padding: 10px 12px; border: 1px solid; border-radius: var(--radius); font-size: 12.5px; line-height: 1.55; animation: reveal var(--medium) var(--ease); }
+.error, .feedback { padding: 10px 12px; border: 1px solid; border-radius: var(--radius); font-size: 14px; font-weight: 400; line-height: 1.55; animation: reveal var(--medium) var(--ease); }
 .error { border-color: var(--danger-line); background: var(--danger-soft); color: var(--danger); }
-.feedback { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
+.feedback { border-color: var(--accent-line); border-left-width: 2px; border-left-color: var(--accent); background: var(--accent-soft); color: var(--text); }
 
 @container (max-width: 420px) {
   .quick > summary small { display: none; }

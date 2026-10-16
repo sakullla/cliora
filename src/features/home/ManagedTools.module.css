@@ -102,7 +102,8 @@
 /* Five identical solid buttons compete with each other. Launch stays tinted at rest and fills in
    for the row under the pointer or keyboard focus, so the active row reads as the next action. */
 .rowActions .launch { min-width: 68px; border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); box-shadow: none; }
-.row:hover .rowActions .launch:not(:disabled), .row:focus-within .rowActions .launch:not(:disabled) { border-color: var(--accent); background: var(--accent); color: var(--on-accent); box-shadow: var(--shadow-xs); }
+.row:hover .rowActions .launch:not(:disabled) { border-color: var(--accent); background: var(--accent); color: var(--on-accent); box-shadow: var(--shadow-xs); }
+.row:focus-within .rowActions .launch:not(:disabled) { outline: 2px solid var(--accent); outline-offset: 2px; }
 .rowActions .launch:hover:not(:disabled), .row .rowActions .launch:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); color: var(--on-accent); }
 .rowActions .configure, .rowActions .configure:hover:not(:disabled) { border-color: transparent; background: transparent; box-shadow: none; color: var(--text-2); }
 .rowActions .configure:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
@@ -117,13 +118,14 @@
   border-radius: 99px;
   background: var(--surface-2);
   color: var(--text-2);
-  font-size: 12px;
+  font-size: 14px;
+  font-weight: 400;
   line-height: 1.4;
   white-space: nowrap;
   text-overflow: ellipsis;
   animation: reveal var(--medium) var(--ease);
 }
-.note[data-tone="ok"] { background: var(--accent-soft); color: var(--accent); }
+.note[data-tone="ok"] { background: var(--accent-soft); color: var(--text); box-shadow: inset 2px 0 0 var(--accent); }
 .note[data-tone="error"] { background: var(--danger-soft); color: var(--danger); }
 .note[data-tone="pending"] { background: var(--info-soft); color: var(--info); }
 
