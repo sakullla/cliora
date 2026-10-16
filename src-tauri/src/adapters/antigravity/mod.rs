@@ -511,6 +511,9 @@ mod tests {
         assert!(install.contains(if cfg!(windows) { "install.ps1" } else { "install.sh" }));
         assert_eq!(Antigravity.upgrade_command("native").as_deref(), Some("agy update"));
         assert!(Antigravity.upgrade_command("unknown").is_none());
+        // Forward slashes exercise the directory rule on every host; backslashes are Windows separators.
+        assert!(Antigravity.recognizes_native_install_path(Path::new("C:/Users/me/AppData/Local/agy/bin/agy.exe")));
+        #[cfg(windows)]
         assert!(Antigravity.recognizes_native_install_path(Path::new(r"C:\Users\me\AppData\Local\agy\bin\agy.exe")));
         assert!(Antigravity.recognizes_native_install_path(Path::new("/home/example/.local/bin/agy")));
         assert!(!Antigravity.recognizes_native_install_path(Path::new("/home/example/.local/bin/other")));
