@@ -129,7 +129,7 @@
 .note[data-tone="error"] { background: var(--danger-soft); color: var(--danger); }
 .note[data-tone="pending"] { background: var(--info-soft); color: var(--info); }
 
-.empty { padding: 28px 16px; color: var(--text-2); font-size: 12.5px; text-align: center; }
+.empty { padding: 28px 16px; color: var(--text-2); font-size: 14px; font-weight: 400; text-align: center; }
 
 @keyframes pulse { 50% { opacity: .3; } }
 

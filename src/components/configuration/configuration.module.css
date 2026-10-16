@@ -59,8 +59,8 @@
 .stepIndex { flex: none; display: inline-grid; place-items: center; width: 20px; height: 20px; margin-top: 1px; border-radius: 50%; background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent-line); color: var(--accent); font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .stepHeading { flex: 1; display: grid; gap: 2px; min-width: 0; }
 .stepHeading > .sectionTitle { line-height: 22px; }
-.stepMeta { min-width: 0; overflow: hidden; color: var(--text-3); font-size: 12px; line-height: 1.5; text-overflow: ellipsis; white-space: nowrap; }
-.stepMeta code { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-2); }
+.stepMeta { min-width: 0; overflow: hidden; color: var(--text-3); font-size: 14px; font-weight: 400; line-height: 1.5; text-overflow: ellipsis; white-space: nowrap; }
+.stepMeta code { font-family: var(--font-mono); font-size: 14px; font-weight: 400; color: var(--text-2); }
 .stepActions { flex: none; display: inline-flex; align-items: center; gap: 6px; max-width: 55%; }
 .controls .stepActions select { width: auto; max-width: 220px; min-height: 28px; padding: 3px 28px 3px 10px; font-size: 14px; }
 .step > p, .providerCard > p { margin: 0; }
@@ -78,8 +78,8 @@
 /* Model list inside the model step. */
 .modelList { display: grid; gap: 8px; min-width: 0; }
 .modelEmpty { display: grid; justify-items: center; gap: 4px; padding: 18px 16px; border: 1px dashed var(--line-strong); border-radius: var(--radius); background: var(--surface-2); text-align: center; }
-.modelEmpty > strong { font-size: 13px; font-weight: 600; color: var(--text); }
-.modelEmpty > span { max-width: 420px; color: var(--text-3); font-size: 12px; line-height: 1.6; }
+.modelEmpty > strong { font-size: 14px; font-weight: 600; color: var(--text); }
+.modelEmpty > span { max-width: 420px; color: var(--text-3); font-size: 14px; font-weight: 400; line-height: 1.6; }
 .controls .addModel { justify-content: center; width: 100%; min-height: 36px; border: 1px dashed var(--line-strong); border-radius: var(--radius); background: transparent; box-shadow: none; color: var(--text-2); font-size: 12.5px; font-weight: 560; }
 .controls .addModel:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
 .controls .catalogButton { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 0 10px; font-size: 12px; white-space: nowrap; }

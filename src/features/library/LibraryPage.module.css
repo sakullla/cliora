@@ -167,7 +167,7 @@
 .cardLaunch:hover:not(:disabled) { border-color: var(--accent); }
 .send { margin-left: auto; }
 
-.empty { grid-column: 1 / -1; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 40px 16px; border: 1px dashed var(--line-strong); border-radius: var(--radius-lg); color: var(--text-2); font-size: 13px; text-align: center; }
+.empty { grid-column: 1 / -1; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 40px 16px; border: 1px dashed var(--line-strong); border-radius: var(--radius-lg); color: var(--text-2); font-size: 14px; font-weight: 400; text-align: center; }
 .empty > svg { margin-bottom: 2px; color: var(--text-3); }
 .empty > strong { color: var(--text); font-size: 15px; font-weight: 650; }
 .empty > button { margin-top: 10px; min-height: var(--control-h); padding: 0 16px; }
@@ -175,7 +175,7 @@
 .editor { display: grid; gap: 14px; }
 .actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
 .actions > span { margin-right: auto; color: var(--text-3); font-size: 12px; }
-.saveState { display: inline-flex; align-items: center; gap: 6px; color: var(--text-3); font-size: 12px; }
+.saveState { display: inline-flex; align-items: center; gap: 6px; color: var(--text-3); font-size: 14px; font-weight: 400; }
 .saveState::before { content: ''; width: 6px; height: 6px; border-radius: 99px; background: var(--accent); }
 .saveState[data-dirty]::before { background: var(--warning); }
 .bodyHead { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
@@ -213,8 +213,8 @@
 .sources button > svg { color: var(--text-3); transition: color var(--fast) var(--ease); }
 .sources button:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); }
 .sources button:hover:not(:disabled) > svg { color: var(--accent); }
-.sources button strong { font-size: 13px; font-weight: 640; }
-.sources button span { color: var(--text-3); font-size: 12px; font-weight: 450; }
+.sources button strong { font-size: 14px; font-weight: 640; }
+.sources button span { color: var(--text-3); font-size: 14px; font-weight: 450; }
 .urlRow { display: flex; gap: 8px; align-items: center; }
 .urlRow input { flex: 1; min-width: 0; }
 .urlRow button { min-height: var(--control-h); }

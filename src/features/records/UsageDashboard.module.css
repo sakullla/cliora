@@ -145,7 +145,7 @@ button.rankMain:hover:not(:disabled), .sessions button:hover:not(:disabled) { ba
 @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 .empty { display: grid; justify-items: center; gap: 6px; padding: 44px 24px; border: 1px dashed var(--line-strong); border-radius: var(--radius-lg); color: var(--text-2); text-align: center; }
 .empty h3 { margin: 0; color: var(--text); font-size: 14.5px; font-weight: 650; }
-.empty p { max-width: 380px; margin: 0; font-size: 12.5px; line-height: 1.65; }
+.empty p { max-width: 380px; margin: 0; font-size: 14px; font-weight: 400; line-height: 1.65; }
 .empty > div { display: flex; gap: 8px; margin-top: 8px; }
 
 .notes { padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--radius); color: var(--text); font-size: 14px; font-weight: 400; line-height: 1.65; }
