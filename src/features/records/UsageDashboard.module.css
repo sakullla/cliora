@@ -4,14 +4,14 @@
 /* Header */
 .overviewHead { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 2px 0 0; }
 .overviewHead h2 { font-size: 15px; font-weight: 650; letter-spacing: -.1px; }
-.overviewHead p { margin-top: 2px; color: var(--text-3); font-size: 12px; }
+.overviewHead p { margin-top: 2px; color: var(--text); font-size: 14px; font-weight: 400; }
 .overviewHead > button,
 .overviewHead > button:hover:not(:disabled) { flex: none; border-color: transparent; background: transparent; box-shadow: none; color: var(--text-2); font-size: 12px; }
 .overviewHead > button:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
 .header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); }
 .headerFilters { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
 .headerFilters > * { width: 138px; }
-.subhead { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; margin-top: -4px; color: var(--text-2); font-size: 12px; }
+.subhead { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; margin-top: 0; color: var(--text); font-size: 14px; font-weight: 400; }
 .subhead p { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: 0; }
 .activeChips { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .chip { display: inline-flex; align-items: center; gap: 5px; max-width: 220px; min-height: 22px; padding: 0 5px 0 8px; border: 1px solid var(--accent-line); border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 11px; font-weight: 560; box-shadow: none; }
@@ -70,8 +70,8 @@ button.metricNote:hover:not(:disabled) { background: none; color: var(--warning)
 /* Cards */
 .card { display: grid; align-content: start; gap: 14px; min-width: 0; padding: 20px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-xs); }
 .analysisGrid { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 16px; }
-.cardHint { margin: 0; color: var(--text-3); font-size: 11.5px; font-weight: 400; }
-.cardHead + .cardHint { margin-top: -8px; }
+.cardHint { margin: 0; color: var(--text); font-size: 14px; font-weight: 400; }
+.cardHead + .cardHint { margin-top: 0; }
 .cardHead { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; }
 .cardHead h3 { display: flex; align-items: baseline; gap: 8px; margin: 0; font-size: 13.5px; font-weight: 650; }
 .cardHead h3 small { color: var(--text-3); font-size: 11.5px; font-weight: 500; }
@@ -148,7 +148,7 @@ button.rankMain:hover:not(:disabled), .sessions button:hover:not(:disabled) { ba
 .empty p { max-width: 380px; margin: 0; font-size: 12.5px; line-height: 1.65; }
 .empty > div { display: flex; gap: 8px; margin-top: 8px; }
 
-.notes { padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--radius); color: var(--text-2); font-size: 12px; line-height: 1.65; }
+.notes { padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--radius); color: var(--text); font-size: 14px; font-weight: 400; line-height: 1.65; }
 .notes > summary { width: fit-content; color: var(--text-2); cursor: pointer; }
 .notes ul { display: grid; gap: 3px; max-width: 76ch; margin: 8px 0 0; padding-left: 18px; }
 .notes b { color: var(--text); font-weight: 600; }
@@ -157,10 +157,10 @@ button.rankMain:hover:not(:disabled), .sessions button:hover:not(:disabled) { ba
 .chips > button { min-height: 0; font-weight: 400; box-shadow: none; }
 
 .priceForm { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; }
-.priceForm label { display: grid; gap: 5px; min-width: 0; color: var(--text-2); font-size: 12px; font-weight: 560; }
+.priceForm label { display: grid; gap: 5px; min-width: 0; color: var(--text); font-size: 14px; font-weight: 560; }
 .priceForm input { width: 100%; min-height: var(--control-h-sm); color: var(--text); font-weight: 400; }
 .priceForm > :global(.dialog-footer) { grid-column: 1 / -1; }
-.error { grid-column: 1 / -1; margin: 0; padding: 8px 12px; border: 1px solid var(--danger-line); border-radius: var(--radius); background: var(--danger-soft); color: var(--danger); font-size: 12.5px; }
+.error { grid-column: 1 / -1; margin: 0; padding: 8px 12px; border: 1px solid var(--danger-line); border-radius: var(--radius); background: var(--danger-soft); color: var(--danger); font-size: 14px; font-weight: 400; }
 .primaryButton, .primaryButton:hover:not(:disabled) { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
 .primaryButton:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }
 
