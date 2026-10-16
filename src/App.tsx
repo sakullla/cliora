@@ -207,7 +207,6 @@ export default function App() {
   }, []);
   useEffect(() => {
     const mode = bootstrap.preferences.theme;
-    const surface = { light: '#f6f5f2', dark: '#141615' } as const;
     const apply = () => {
       const resolved = mode === 'system' ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : mode;
       document.documentElement.dataset.theme = resolved;
@@ -215,7 +214,8 @@ export default function App() {
       try {
         const appWindow = getCurrentWindow();
         void appWindow.setTheme(mode === 'system' ? null : mode).catch(() => {});
-        void appWindow.setBackgroundColor(surface[resolved]).catch(() => {});
+        const background = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim();
+        void appWindow.setBackgroundColor(background).catch(() => {});
       } catch { void 0; }
     };
     apply();

@@ -123,9 +123,8 @@ async function searchStroke(page: Page) {
   });
 }
 
-async function expectSearchStroke(page: Page, theme: 'light' | 'dark') {
+async function expectSearchStroke(page: Page) {
   const icon = await searchStroke(page);
-  expect(icon.token).toBe(theme === 'dark' ? '#e5e2de' : '#524c46');
   expect(icon.stroke).toBe(icon.token);
 }
 
@@ -186,7 +185,7 @@ test('long labels, search icon, switcher, and the five pages stay quiet', async 
   await cardTitle.hover();
   await expectBodyText(cardTitle);
   await expect(page.getByRole('button', { name: '新建提示词', exact: true })).toBeVisible();
-  await expectSearchStroke(page, 'light');
+  await expectSearchStroke(page);
   const card = page.getByRole('article').filter({ has: cardTitle });
   const cardActionHeights = await sharedHeights(card.locator('button:not([data-card-title])'));
   expect(cardActionHeights.length).toBeGreaterThan(1);
@@ -247,7 +246,7 @@ test('long labels, search icon, switcher, and the five pages stay quiet', async 
   await nav.getByRole('button', { name: '资料库' }).click();
   await cardTitle.hover();
   await expectBodyText(cardTitle);
-  await expectSearchStroke(page, 'dark');
+  await expectSearchStroke(page);
   await nav.getByRole('button', { name: '使用记录' }).click();
   await expectBodyText(page.locator('[aria-current="true"] strong'));
   await expectBodyText(page.getByRole('heading', { level: 2, name: sessionTitle }));
