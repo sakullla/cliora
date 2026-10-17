@@ -18,7 +18,7 @@
 .controls p, .message { color: var(--text-2); font-size: 14px; line-height: 1.6; margin: 6px 0; overflow-wrap: anywhere; }
 .controls.group, .controls .group { border: 1px solid var(--line); border-radius: var(--radius-sm); }
 .controls details { min-width: 0; }
-.controls details summary { cursor: pointer; font-size: 12px; padding: 6px 0; }
+.controls details summary { cursor: pointer; font-size: 14px; padding: 6px 0; }
 
 /* Field chrome: label row with an inline info toggle, a lightweight restore
    action, and an on-demand info panel (ADR-2). */
@@ -84,7 +84,7 @@
 .controls .addModel:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
 .controls .catalogButton { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 0 10px; font-size: 12px; white-space: nowrap; }
 .createForm { display: grid; gap: 12px; min-width: 0; margin: 0; padding: 14px; border: 1px solid var(--accent-line); border-radius: var(--radius); background: var(--surface); }
-.createForm > legend { padding: 0 6px; font-size: 13px; font-weight: 640; color: var(--text); }
+.createForm > legend { padding: 0 6px; font-size: 14px; font-weight: 640; color: var(--text); }
 .createActions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding-top: 4px; }
 
 /* Model list rows shared by multi-model editors: quiet text row with a chevron
