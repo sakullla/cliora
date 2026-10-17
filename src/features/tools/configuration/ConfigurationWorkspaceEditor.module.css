@@ -61,9 +61,9 @@
 .sources { display: grid; gap: 12px; }
 .diagnostics { display: block; padding: 0 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
 .diagnostics[open] { display: grid; gap: 10px; padding-bottom: 12px; }
-.diagnostics > summary { cursor: pointer; min-height: 30px; font-size: 13px; font-weight: 600; color: var(--text); }
+.diagnostics > summary { cursor: pointer; min-height: 30px; font-size: 14px; font-weight: 600; color: var(--text); }
 .diagnostics[open] > summary { border-bottom: 1px solid var(--line); }
-.diagnostics details > summary { font-size: 12px; color: var(--text-2); }
+.diagnostics details > summary { font-size: 14px; font-weight: 400; color: var(--text-2); }
 .diagnostics details[open] > summary { margin-bottom: 8px; }
 .diagnostics [role='status'] { display: grid; gap: 4px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); }
 .sourcePicker { display: grid; gap: 8px; }
@@ -105,14 +105,14 @@
 .inlineDisclosure[open] { display: grid; gap: 8px; }
 .directory { scroll-margin: 16px; }
 .directoryHead { display: flex; align-items: center; gap: 4px; min-width: 0; }
-.directoryHead > strong { min-width: 0; overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.directoryHead > strong { min-width: 0; overflow: hidden; font-size: 14px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
 .directory ul { display: grid; gap: 2px; margin: 0; padding: 4px; list-style: none; max-height: 260px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); }
 .directory li > label { display: flex !important; align-items: center; gap: 8px; min-height: 30px; padding: 0 8px; border-radius: var(--radius-xs); font-family: var(--font-mono); font-size: 14px !important; font-weight: 400; cursor: pointer; overflow-wrap: anywhere; }
 .directory li > label:hover { background: var(--surface-2); }
 .directory li > label:has(input:checked) { background: var(--accent-soft); }
 .directoryMiss { padding: 8px; color: var(--text-3); font-size: 14px; }
 .directoryFoot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
-.directoryFoot > span { color: var(--text-2); font-size: 12px; font-variant-numeric: tabular-nums; }
+.directoryFoot > span { color: var(--text-2); font-size: 14px; font-weight: 400; font-variant-numeric: tabular-nums; }
 .errors { border: 1px solid var(--danger-line); padding: 10px; border-radius: var(--radius); color: var(--danger) !important; background: var(--danger-soft); }
 .footer { flex: none; display: flex; align-items: center; gap: 10px; border-top: 1px solid var(--line); padding: 12px 0 4px; position: relative; background: var(--surface); flex-wrap: nowrap; }
 .footer > span { flex: 1 1 auto; min-width: 0; font-size: 14px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -127,6 +127,6 @@
 
 .influence { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
 .influenceHead { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.influenceHead > strong { display: inline-flex; align-items: center; font-size: 13px; }
-.influence ul { display: grid; gap: 4px; margin: 0; padding-left: 18px; color: var(--text-2); font-size: 12.5px; }
+.influenceHead > strong { display: inline-flex; align-items: center; font-size: 14px; }
+.influence ul { display: grid; gap: 4px; margin: 0; padding-left: 18px; color: var(--text-2); font-size: 14px; }
 .influence > p { margin: 0 !important; }

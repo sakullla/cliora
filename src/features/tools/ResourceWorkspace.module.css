@@ -8,7 +8,7 @@
 .workspaceHead > button { flex: none; margin-top: 2px; }
 .emptyState { display: grid; justify-items: center; gap: 6px; padding: 36px 20px; border: 1px dashed var(--line-strong); border-radius: var(--radius-lg); background: color-mix(in srgb, var(--surface) 55%, transparent); color: var(--text-3); text-align: center; }
 .emptyState > svg { margin-bottom: 4px; }
-.emptyState > strong { color: var(--text); font-size: 13.5px; font-weight: 620; }
+.emptyState > strong { color: var(--text); font-size: 14px; font-weight: 620; }
 .emptyState > p { max-width: 440px; margin: 0; color: var(--text); font-size: 14px; font-weight: 400; line-height: 1.6; }
 
 /* ---------- List layout ------------------------------------------- */
@@ -69,17 +69,17 @@
   transition: opacity var(--fast) var(--ease), transform var(--fast) var(--ease);
 }
 .list > button:hover:not(:disabled)::after { opacity: 1; transform: translateX(2px); }
-.list > button strong { display: flex; align-items: center; gap: 8px; max-width: 100%; font-size: 13px; font-weight: 600; }
+.list > button strong { display: flex; align-items: center; gap: 8px; max-width: 100%; font-size: 14px; font-weight: 600; }
 .state { flex: none; padding: 0 7px; border: 1px solid var(--line); border-radius: 99px; background: var(--surface-2); color: var(--text-2); font-size: 10.5px; font-weight: 560; line-height: 17px; }
 .state[data-on] { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
 .state[data-warn] { border-color: var(--warning-line); background: var(--warning-soft); color: var(--warning); }
 .muted > .state { margin-right: 8px; vertical-align: 1px; }
-.list small.mono { font-family: var(--font-mono); font-size: 11px; }
+.list small.mono { font-family: var(--font-mono); font-size: 14px; font-weight: 400; }
 .list > .active { background: var(--selection); box-shadow: inset 2px 0 0 var(--accent); }
 .list > .active:hover:not(:disabled) { background: var(--surface-3); }
 .list > .active strong { color: var(--text); }
 .list small { max-width: 100%; overflow: hidden; color: var(--text-2); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
-.list > p { padding: 6px 10px 8px; color: var(--text-3); font-size: 12px; line-height: 1.55; }
+.list > p { padding: 6px 10px 8px; color: var(--text-3); font-size: 14px; font-weight: 400; line-height: 1.55; }
 .list > .actions { padding: 2px 4px 6px; }
 .list > .actions button { width: 100%; }
 
