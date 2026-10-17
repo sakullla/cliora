@@ -110,7 +110,7 @@
   padding: 12px 10px 8px;
   background: var(--surface-2);
   color: var(--text-3);
-  font-size: 11px;
+  font-size: 14px;
   font-weight: 620;
   letter-spacing: .3px;
 }
@@ -150,7 +150,7 @@
 .sessionMeta .flag[data-tone="muted"] { background: var(--surface-3); color: var(--text-2); }
 .favoriteMark { margin-right: 5px; color: var(--warning); }
 .rowTop { display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; color: var(--text-2); font-size: 14px; font-weight: 400; }
-.rowTop > time { margin-left: auto; color: var(--text-3); font-size: 10px; font-variant-numeric: tabular-nums; }
+.rowTop > time { margin-left: auto; color: var(--text-3); font-size: 14px; font-weight: 400; font-variant-numeric: tabular-nums; }
 .rowTitle { width: 100%; margin: 3px 0; }
 .rowContext { display: flex; align-items: center; gap: 5px; width: 100%; min-width: 0; color: var(--text-3); font-size: 14px; font-weight: 400; }
 .rowContext > span:first-of-type { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
