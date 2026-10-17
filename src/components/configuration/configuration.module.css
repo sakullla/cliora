@@ -37,7 +37,7 @@
    header row. Summary text is unchanged so existing anchors keep working. */
 .disclosureCard { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); padding: 0 12px; }
 .disclosureCard[open] { padding-bottom: 12px; }
-.disclosureCard > summary { cursor: pointer; padding: 10px 0; font-size: 13px; font-weight: 600; }
+.disclosureCard > summary { cursor: pointer; padding: 10px 0; font-size: 14px; font-weight: 600; }
 .disclosureCard[open] > summary { border-bottom: 1px solid var(--line); margin-bottom: 10px; }
 .entityPrimary { display: flex; gap: 8px; flex-wrap: wrap; grid-column: 1 / -1; }
 .entityMore { min-width: 0; grid-column: 1 / -1; }

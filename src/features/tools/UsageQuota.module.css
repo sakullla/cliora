@@ -23,8 +23,9 @@
 .query { min-width: 0; display: grid; gap: 6px; }
 .query + .query { border-top: 1px solid var(--line); padding-top: 8px; }
 .queryTitle { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; min-width: 0; }
-.queryTitle > span { font-weight: 620; overflow-wrap: anywhere; font-size: 12.5px; }
-.queryTitle .stale { color: var(--warning); }
+.queryTitle > span { font-weight: 620; overflow-wrap: anywhere; font-size: 14px; }
+.queryTitle small { font-size: 14px; font-weight: 400; }
+.queryTitle .stale { color: var(--text); }
 .summaryMetrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); gap: 8px 24px; }
 .summaryMetric { display: grid; gap: 4px; align-content: start; min-width: 0; }
 .metricMeta { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -51,7 +52,7 @@
 .burnDown figcaption small { color: var(--text-3); }
 .query:has(> .quotaDetails[open]) > .summaryMetrics { display: none; }
 .quotaDetails { font-size: 12px; color: var(--text-2); }
-.quotaDetails > summary { cursor: pointer; width: fit-content; padding: 1px 0; color: var(--text-3); font-size: 11.5px; }
+.quotaDetails > summary { cursor: pointer; width: fit-content; padding: 1px 0; color: var(--text-3); font-size: 14px; font-weight: 400; }
 .quotaDetails > summary:hover { color: var(--accent); }
 .quotaDetails[open] > summary { margin-bottom: 8px; }
 .quotaDetails > .metrics { color: var(--text); padding: 2px 0 0; border: 0; border-radius: 0; background: transparent; }
