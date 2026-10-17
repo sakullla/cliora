@@ -273,6 +273,29 @@ async function captureSessionReading(page,capture,width){
  await calendar.getByRole('button',{name:/^\d{4}-\d{2}-\d{2}$/}).nth(11).click();
  await capture('session-dates');
 }
+// Today is hourly, and the fixture has no calls before 09:00, so this region is not rendered.
+// 近 7 天 is daily and shows 「消耗最多的会话」. A miss is recorded and does not abort later pages.
+async function captureUsageDetails(page,capture,theme,width){
+ try{
+  await page.getByRole('radio',{name:'近 7 天',exact:true}).click();
+  const sessions=page.getByRole('region',{name:'消耗最多的会话'});
+  await sessions.waitFor();
+  await sessions.scrollIntoViewIfNeeded();
+  await capture('usage-details');
+  await page.getByRole('radio',{name:'自定义',exact:true}).click();
+  await page.getByRole('dialog',{name:'自定义时间范围'}).waitFor();
+  await capture('usage-dates');
+ }catch(error){
+  failures.push({type:'scenario',theme,width,name:'usage-details',message:error.message});
+  console.error(error.message);
+ }finally{
+  const dialog=page.getByRole('dialog',{name:'自定义时间范围'});
+  if(await dialog.isVisible().catch(()=>false)){
+   await page.keyboard.press('Escape');
+   await dialog.waitFor({state:'hidden'}).catch(()=>{});
+  }
+ }
+}
 async function captureConnectionScreens(page,capture,width){
  const previous=page.viewportSize();
  await page.setViewportSize({width,height:Math.max(1100,previous?.height??1000)});
@@ -335,7 +358,7 @@ for(const width of widths)for(const theme of themes){
   if(process.argv.includes('--sessions')){await captureSessionReading(page,capture,width);await page.close();continue;}
   await page.getByRole('tab',{name:'用量',exact:true}).click();await page.getByRole('radio',{name:'近 7 天',exact:true}).click();
   await page.getByRole('region',{name:'用量概览'}).waitFor();await capture('usage');
-  await page.getByRole('region',{name:'消耗最多的会话'}).scrollIntoViewIfNeeded();await capture('usage-details');await page.getByRole('radio',{name:'自定义',exact:true}).click();await capture('usage-dates');
+  await captureUsageDetails(page,capture,theme,width);
   await page.close();continue;
  }
  if(process.argv.includes('--connections')){
@@ -392,7 +415,7 @@ for(const width of widths)for(const theme of themes){
  await page.keyboard.press('Escape');
  await page.getByRole('dialog',{name:'自定义时间范围'}).waitFor({state:'hidden'});
  await page.getByRole('tab',{name:'用量',exact:true}).click();await capture('usage');
- await page.getByRole('region',{name:'消耗最多的会话'}).scrollIntoViewIfNeeded();await capture('usage-details');await page.getByRole('radio',{name:'自定义',exact:true}).click();await capture('usage-dates');
+ await captureUsageDetails(page,capture,theme,width);
  await nav.getByRole('button',{name:'设置',exact:true}).click();await capture('settings');
  await page.getByRole('tab',{name:'迁移与同步'}).click();await capture('migration');
  await page.getByRole('button',{name:'导出加密配置包',exact:true}).click();await capture('migration-export');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
