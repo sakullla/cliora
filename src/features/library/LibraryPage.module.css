@@ -145,7 +145,8 @@
   margin: 2px 0 12px;
   overflow: hidden;
   color: var(--text-2);
-  font-size: 12.5px;
+  font-size: 14px;
+  font-weight: 400;
   line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;

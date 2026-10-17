@@ -30,11 +30,11 @@
 .primary > small, .metric > small { display: flex; align-items: center; gap: 7px; }
 .primary > small { color: var(--accent); }
 .currency { margin-left: auto; font-size: 10px; letter-spacing: .5px; }
-.primary small, .metric small { color: var(--text-2); font-size: 12px; font-weight: 560; }
+.primary small, .metric small { color: var(--text-2); font-size: 14px; font-weight: 560; }
 .primary > strong, .metric > strong { font-size: 32px; font-weight: 680; line-height: 1.1; letter-spacing: -1px; font-variant-numeric: tabular-nums; }
 .primary > strong { color: var(--accent); }
 .metric strong[data-unpriced] { color: var(--text-3); font-size: 17px; font-weight: 600; }
-.metricNote { color: var(--text-3); font-size: 11.5px; line-height: 1.5; }
+.metricNote { color: var(--text-3); font-size: 14px; font-weight: 400; line-height: 1.5; }
 button.metricNote { justify-self: start; min-height: 0; padding: 0; border: 0; background: none; box-shadow: none; color: var(--text); font-size: 14px; font-weight: 560; text-decoration: underline dotted; text-underline-offset: 3px; }
 button.metricNote:hover:not(:disabled) { background: none; color: var(--text); text-decoration-style: solid; }
 .delta { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 3px 6px; color: var(--text-2); font-size: 12px; font-weight: 620; font-variant-numeric: tabular-nums; }
@@ -73,8 +73,8 @@ button.metricNote:hover:not(:disabled) { background: none; color: var(--text); t
 .cardHint { margin: 0; color: var(--text); font-size: 14px; font-weight: 400; }
 .cardHead + .cardHint { margin-top: 0; }
 .cardHead { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; }
-.cardHead h3 { display: flex; align-items: baseline; gap: 8px; margin: 0; font-size: 13.5px; font-weight: 650; }
-.cardHead h3 small { color: var(--text-3); font-size: 11.5px; font-weight: 500; }
+.cardHead h3 { display: flex; align-items: baseline; gap: 8px; margin: 0; font-size: 14px; font-weight: 650; }
+.cardHead h3 small { color: var(--text-3); font-size: 14px; font-weight: 500; }
 .cardHead > :last-child:not(h3) { margin-left: auto; }
 .trendStats { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0; color: var(--text-3); font-size: 11.5px; font-variant-numeric: tabular-nums; }
 .trendStats b { color: var(--text-2); font-weight: 600; }
@@ -122,8 +122,8 @@ button.rankMain:hover:not(:disabled), .sessions button:hover:not(:disabled) { ba
 .sessions button { width: 100%; grid-template-columns: 22px minmax(0, 1fr) auto; }
 .rankIcon { display: grid; place-items: center; color: var(--text-3); }
 .rankName { display: grid; gap: 1px; min-width: 0; }
-.rankName strong { overflow: hidden; font-size: 12.5px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.rankName small { overflow: hidden; color: var(--text-3); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.rankName strong { overflow: hidden; font-size: 14px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.rankName small { overflow: hidden; color: var(--text-3); font-size: 14px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
 .rankBar { height: 6px; overflow: hidden; border-radius: 99px; background: var(--surface-3); }
 .rankBar i { display: block; height: 100%; border-radius: inherit; background: var(--chart-input); transition: width 320ms var(--ease); }
 .rank li[data-active] .rankBar i { background: var(--accent); }

@@ -164,8 +164,8 @@
 .targetText { display: grid; gap: 1px; min-width: 0; }
 .targetName { overflow: hidden; color: var(--text); font-size: 14px; font-weight: 560; text-overflow: ellipsis; white-space: nowrap; }
 .targetText small { overflow: hidden; color: var(--text-3); font-size: 14px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
-.targetList li[data-state='placed'] small { color: var(--accent); }
-.targetList li[data-state='adding'] small { color: var(--accent); font-weight: 600; }
+.targetList li[data-state='placed'] small { color: var(--text); }
+.targetList li[data-state='adding'] small { color: var(--text); font-weight: 600; }
 .targetList li[data-state='removing'] small { color: var(--text); font-weight: 600; }
 .targetList li[data-state='removing'] label { border-style: dashed; border-color: var(--warning-line); }
 .targetList li[data-state='blocked'] small { color: var(--danger); white-space: normal; }

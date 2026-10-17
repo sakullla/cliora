@@ -31,6 +31,7 @@
 .controls .restore:hover:not(:disabled) { background: none; border: 0; color: var(--accent-hover); text-decoration: underline; text-underline-offset: 2px; }
 .infoPanel { display: grid; gap: 4px; min-width: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); }
 .infoPanel small { color: var(--text-2); font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+.infoPanel small code { font-size: 14px; font-weight: 400; }
 .unavailable { display: block; margin-top: 2px; color: var(--text-3); font-size: 14px; line-height: 1.5; }
 
 /* Bordered disclosure section: turns bare <details> groups into cards with a
