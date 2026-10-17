@@ -15,17 +15,17 @@
 .find button { flex: none; min-height: 24px; width: 24px; padding: 0; border: 0; background: none; box-shadow: none; }
 .findHint { flex-basis: 100%; color: var(--text-3); font-size: 14px; font-weight: 400; }
 .messages { max-width: 900px; margin: 0 auto; padding: 0 24px 32px; }
-.dayDivider { display: flex; align-items: center; gap: 14px; margin: 22px 0 8px; color: var(--text-3); font-size: 11px; }
+.dayDivider { display: flex; align-items: center; gap: 14px; margin: 22px 0 8px; color: var(--text-3); font-size: 14px; font-weight: 400; }
 .dayDivider::before, .dayDivider::after { content: ''; flex: 1; height: 1px; background: var(--line); }
 .message { display: flex; align-items: flex-start; gap: 12px; padding: 16px 0; scroll-margin: 145px 0 24px; }
 .avatar { display: grid; flex: none; place-items: center; width: 30px; height: 30px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-2); color: var(--text-2); font-size: 11px; font-weight: 650; }
 .message[data-role="user"] .avatar { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
 .messageContent { flex: 1; min-width: 0; }
 .messageHead { display: flex; align-items: center; gap: 8px; min-height: 30px; margin-bottom: 7px; }
-.messageHead strong { font-size: 12px; font-weight: 650; }
+.messageHead strong { font-size: 14px; font-weight: 650; }
 .messageHead > span, .messageHead time { color: var(--text-3); font-size: 10.5px; font-variant-numeric: tabular-nums; }
-.messageHead time { margin-left: auto; }
-.messageHead button { min-height: 26px; padding: 0 6px; border: 0; background: transparent; color: var(--text-3); font-size: 11px; box-shadow: none; }
+.messageHead time { margin-left: auto; font-size: 14px; font-weight: 400; }
+.messageHead button { min-height: 26px; padding: 0 6px; border: 0; background: transparent; color: var(--text-3); font-size: 14px; font-weight: 400; box-shadow: none; }
 .prose { min-width: 0; color: var(--text); font-size: 13px; line-height: 1.85; overflow-wrap: anywhere; }
 .message[data-role="user"] .prose { padding: 12px 16px; border: 0; border-radius: 10px; background: var(--surface-2); }
 .message[data-current-match] .prose { outline: 2px solid var(--accent); outline-offset: 5px; border-radius: 6px; }
@@ -48,7 +48,7 @@
 .prose blockquote > p:last-child { margin: 0; }
 .prose hr { margin: 18px 0; border: 0; border-top: 1px solid var(--line); }
 .clamped { max-height: 360px; overflow: hidden; mask-image: linear-gradient(#000 80%, transparent); }
-.expand { margin-top: 8px; min-height: 26px; padding: 0 9px; border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); box-shadow: none; font-size: 11.5px; }
+.expand { margin-top: 8px; min-height: 26px; padding: 0 9px; border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); box-shadow: none; font-size: 14px; font-weight: 400; }
 .codeBlock { margin: 12px 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
 .codeHead { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 5px 10px; border-bottom: 1px solid var(--line); color: var(--text-3); font-family: var(--font-mono); font-size: 11px; }
 .codeCopy { min-height: 24px; padding: 0 6px; border: 0; background: none; box-shadow: none; color: var(--text-2); font-family: inherit; font-size: 11px; }
@@ -77,7 +77,7 @@
 .readingOptions label { display: flex; align-items: center; gap: 10px; min-height: 34px; padding: 0 8px; border-radius: var(--radius-xs); cursor: pointer; }
 .readingOptions label:hover { background: var(--surface-2); }
 .message[data-context] { padding: 8px 0; }
-.contextToggle { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 36px; padding: 8px 12px; border: 0; background: var(--surface-2); box-shadow: none; color: var(--text-3); font-size: 11.5px; }
+.contextToggle { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 36px; padding: 8px 12px; border: 0; background: var(--surface-2); box-shadow: none; color: var(--text-3); font-size: 14px; font-weight: 400; }
 .contextToggle > span:last-child { margin-left: auto; }
 @media (hover: hover) {
   .messageHead > button { opacity: 0; }
