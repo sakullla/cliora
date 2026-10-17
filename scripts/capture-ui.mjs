@@ -192,12 +192,24 @@ async function captureSkillViews(page,capture){
  await capture('skill-editor-managed');
  await closeSkill();
 }
+// RecordsPage reads tool.history.state. workflowFixtures replaces these tools without history.
+function annotateCaptureHistoryTools(){
+ const invoke=window.__TAURI_INTERNALS__.invoke;
+ const withHistory=tool=>tool&&typeof tool==='object'?{...tool,history:tool.history&&typeof tool.history==='object'?tool.history:{state:'available',reason:''}}:tool;
+ window.__TAURI_INTERNALS__.invoke=async(command,args={})=>{
+  const result=await invoke(command,args);
+  if(command==='get_bootstrap'&&result&&Array.isArray(result.tools))return {...result,tools:result.tools.map(withHistory)};
+  if(command==='list_cli_adapters'&&result&&Array.isArray(result.registered))return {...result,registered:result.registered.map(withHistory)};
+  return result;
+ };
+}
 async function captureHistoryFeatures(){
  for(const width of widths)for(const theme of themes){
   const page=await browser.newPage({viewport:{width,height:1100}});
   page.on('pageerror',error=>failures.push({type:'pageerror',theme,width,message:error.message}));
   await page.addInitScript(mock,theme);
   await page.addInitScript(workflowFixtures);
+  await page.addInitScript(annotateCaptureHistoryTools);
   await page.goto(process.env.CLIORA_PREVIEW_URL ?? 'http://127.0.0.1:14736');
   await page.getByText('正在读取本机设置').waitFor({state:'hidden'});
   const nav=page.getByRole('navigation',{name:'页面'});
