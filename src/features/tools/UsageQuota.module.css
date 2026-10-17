@@ -74,9 +74,12 @@
 .check input { width: auto; }
 .editor small, .quota small { color: var(--text-2); white-space: normal !important; }
 .editor small { font-size: 14px; font-weight: 400; }
+.editor p { font-size: 14px; font-weight: 400; }
+section.quota > small,
+.quota .query > small { font-size: 14px; font-weight: 400; }
 .editor pre { overflow: auto; max-height: 260px; white-space: pre-wrap; }
 .editor > details { border: 1px solid var(--line); border-radius: var(--radius); padding: 11px 14px; }
-.editor > details > summary { cursor: pointer; color: var(--text-2); }
+.editor > details > summary { cursor: pointer; color: var(--text-2); font-size: 14px; font-weight: 400; }
 .editorActions { position: sticky; bottom: -1px; padding: 13px 0; background: var(--surface); border-top: 1px solid var(--line); z-index: 2; }
 .primary, .primary:hover:not(:disabled) { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
 .primary:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }

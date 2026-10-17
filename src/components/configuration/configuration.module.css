@@ -46,7 +46,7 @@
 .entityPanel > button { flex: none; }
 .controls .entityPanel > .danger { margin-left: auto; }
 .connectionTitle { font-size: .86em; color: var(--text-2); }
-.sectionTitle { font-size: 13px; font-weight: 640; color: var(--text); }
+.sectionTitle { font-size: 14px; font-weight: 640; color: var(--text); }
 .fields { display: grid; gap: .57em; min-width: 0; }
 .buttons { display: flex; gap: 8px; flex-wrap: wrap; }
 
@@ -71,7 +71,7 @@
 @media (max-width: 640px) { .fieldGrid { grid-template-columns: 1fr; } }
 /* Unapplied provider edits: an explicit apply bar instead of always-on buttons. */
 .pendingBar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 8px 10px 8px 12px; border: 1px solid var(--warning-line); border-radius: var(--radius); background: var(--warning-soft); }
-.pendingBar > span { flex: 1 1 180px; min-width: 0; color: var(--warning); font-size: 14px; font-weight: 560; }
+.pendingBar > span { flex: 1 1 180px; min-width: 0; color: var(--text); font-size: 14px; font-weight: 560; }
 .pendingBar > .buttons { flex: none; }
 .connectionSummary { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
 .chip { display: inline-flex; align-items: center; max-width: 100%; min-height: 22px; padding: 0 8px; overflow: hidden; border-radius: 99px; background: var(--surface-3); color: var(--text-2); font-family: var(--font-mono); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
