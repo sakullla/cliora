@@ -14,8 +14,8 @@
 .edges > span { color: var(--text-3); }
 .edges button { display: grid; justify-items: start; gap: 5px; min-width: 0; padding: 10px 12px; background: var(--surface-2); box-shadow: none; }
 .edges button span { color: var(--text-3); font-size: 14px; font-weight: 400; }
-.edges button strong { font-size: 14px; font-variant-numeric: tabular-nums; }
-.edges button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.edges button strong { color: var(--text); font-size: 14px; font-weight: 400; font-variant-numeric: tabular-nums; }
+.edges button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
 .month { display: flex; align-items: center; justify-content: space-between; }
 .month strong { font-size: 14px; }
 .month button { width: 32px; min-height: 32px; padding: 0; border: 0; background: transparent; box-shadow: none; font-size: 22px; }
