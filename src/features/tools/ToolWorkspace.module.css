@@ -318,7 +318,7 @@ div > .feedback { margin-bottom: 12px; }
 .profileMeta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; min-width: 0; max-width: 100%; color: var(--text-2); font-size: 14px; font-weight: 400; }
 .profileMeta > span { min-width: 0; overflow-wrap: anywhere; }
 .profileFact { overflow: hidden; color: var(--text-2); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; max-width: 240px; }
-.profileMeta > .profileModel { max-width: min(320px, 100%); overflow: hidden; padding: 1px 7px; border-radius: var(--radius-xs); background: var(--surface-3); color: var(--text); font-family: var(--font-mono); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
+.profileMeta > .profileModel { max-width: min(320px, 100%); overflow: hidden; padding: 1px 7px; border-radius: var(--radius-xs); background: var(--surface-3); color: var(--text); font-family: var(--font-mono); font-size: 14px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
 .profileRow > section:not([data-empty="true"]) {
   margin-top: 8px;
   padding: 10px 0 2px;
