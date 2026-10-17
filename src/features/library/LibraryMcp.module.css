@@ -174,7 +174,7 @@
 .summary[data-quiet] { padding: 0; background: none; color: var(--text-3); }
 .notes { display: grid; gap: 4px; }
 .notes p { margin: 0; color: var(--text); font-size: 14px; font-weight: 400; line-height: 1.5; overflow-wrap: anywhere; }
-.notes[data-tone='warning'] p { color: var(--warning); }
+.notes[data-tone='warning'] p { color: var(--text); }
 
 .conflict { grid-area: conflict; display: grid; gap: 12px; min-width: 0; padding: 14px; border: 1px solid var(--warning-line); border-radius: var(--radius-lg); background: var(--warning-soft); }
 .conflictHead { display: flex; align-items: flex-start; gap: 8px; color: var(--warning); }
