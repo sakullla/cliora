@@ -51,7 +51,7 @@
 .trust input { flex: none; margin-top: 4px; }
 
 .compatibility { border: 1px solid var(--line); border-radius: var(--radius); padding: 11px 14px; font-size: 12px; color: var(--text-2); }
-.compatibility summary { cursor: pointer; }
+.compatibility summary { cursor: pointer; font-size: 14px; font-weight: 400; }
 .compatibility p { margin-top: 8px; }
 
 /* ---------- Card list (accounts) ---------- */

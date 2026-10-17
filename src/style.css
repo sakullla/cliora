@@ -682,7 +682,7 @@ label.setting-row:hover { background: var(--surface-3); }
 .native-rule-path strong { flex: none; font-family: var(--font-mono); font-size: 14px; font-weight: 600; }
 .native-rule-path small { flex: 1; min-width: 0; overflow: hidden; color: var(--text-3); font-family: var(--font-mono); font-size: 14px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
 .native-rule-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
-.native-rule-actions > span { color: var(--warning); font-size: 14px; font-weight: 560; }
+.native-rule-actions > span { color: var(--text); font-size: 14px; font-weight: 560; }
 .native-rule-actions .button { min-width: 96px; min-height: var(--control-h); }
 .native-rule-message { padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); color: var(--text-2); font-size: 14px; }
 .native-rule-message[data-tone="error"] { border-color: var(--danger-line); background: var(--danger-soft); color: var(--danger); }
