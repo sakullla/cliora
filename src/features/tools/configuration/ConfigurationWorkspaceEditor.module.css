@@ -68,7 +68,7 @@
 .diagnostics [role='status'] { display: grid; gap: 4px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); }
 .sourcePicker { display: grid; gap: 8px; }
 .sourceChoices { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; }
-.sourcePicker [role='radio'] { display: flex; align-items: flex-start; gap: 9px; min-height: 64px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: none; color: var(--text); font-size: 13px; font-weight: 500; line-height: 1.4; text-align: left; white-space: normal; cursor: pointer; }
+.sourcePicker [role='radio'] { display: flex; align-items: flex-start; gap: 9px; min-height: 64px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: none; color: var(--text); font-size: 14px; font-weight: 500; line-height: 1.4; text-align: left; white-space: normal; cursor: pointer; }
 .sourcePicker [role='radio']:hover:not(:disabled):not([aria-checked='true']) { border-color: var(--line-strong); background: var(--surface-3); }
 .sourcePicker [role='radio'][aria-checked='true']:hover:not(:disabled) { background: var(--surface-3); }
 .sourcePicker [role='radio'][aria-checked='true'] { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); color: var(--text); }
