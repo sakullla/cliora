@@ -181,13 +181,13 @@ div > .feedback { margin-bottom: 12px; }
 .release div[data-state="current"] { border-color: var(--accent-line); background: var(--accent-soft); }
 .release div[data-state="current"] strong { color: var(--accent); }
 .pathControl > .installRow { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; column-gap: 10px; align-items: center; min-height: 30px; margin: 8px 16px; }
-.installRow strong { color: var(--text); font-weight: 620; }
+.installRow strong { color: var(--text); font-size: 14px; font-weight: 620; }
 .installRow em { color: var(--accent); font-style: normal; font-weight: 560; }
-.installRow span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.installRow span { min-width: 0; overflow: hidden; font-size: 14px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
 .pathControl > .installNote { margin: 4px 16px 0; font-size: 14px; font-weight: 400; }
 .pathControl > .installFail { margin: 4px 16px 0; color: var(--text); font-size: 14px; font-weight: 400; }
 .pathControl > .installActions { gap: 8px; margin-top: 14px; }
-.pathCustom > summary { min-height: 30px; padding: 0; color: var(--text-2); }
+.pathCustom > summary { min-height: 30px; padding: 0; color: var(--text-2); font-size: 14px; font-weight: 400; }
 .pathCustom > summary::before { margin-right: 6px; }
 .pathCustom > div { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
 .pathCustom > div input { flex: 1 1 220px; min-width: 0; }
