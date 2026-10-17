@@ -315,12 +315,8 @@ html[data-native="macos"] .content-inner { padding-top: 16px; }
   display: block;
   width: 32px;
   height: 32px;
-  border-radius: 9px;
-  object-fit: cover;
-  box-shadow: 0 1px 2px rgb(29 36 32 / 12%);
+  object-fit: contain;
 }
-/* The paper-coloured tile glares on the dark sidebar; dim it to sit with the surfaces. */
-:root[data-theme="dark"] .brandmark { filter: brightness(.86); box-shadow: 0 0 0 1px rgb(255 255 255 / 6%); }
 .brand strong { display: block; font-size: 16px; letter-spacing: .01em; line-height: 1.15; font-weight: 680; }
 .brand small { display: block; color: var(--text-3); font-size: 9px; font-weight: 650; letter-spacing: .22em; margin-top: 2px; }
 
