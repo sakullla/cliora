@@ -86,7 +86,7 @@
 .optionCopy > strong { font-weight: 600; }
 .optionCopy > small { color: var(--text-3); font-size: 14px; font-weight: 450; }
 .optionMarks { display: inline-flex; align-items: center; gap: 6px; }
-.optionMarks > em { color: var(--warning); font-size: 14px; font-style: normal; font-weight: 560; }
+.optionMarks > em { color: var(--text); font-size: 14px; font-style: normal; font-weight: 560; }
 .optionMarks svg { flex: none; color: var(--accent); }
 .list > button:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
 .list > button[data-active="true"] { background: var(--surface-3); box-shadow: inset 2px 0 0 var(--accent); }

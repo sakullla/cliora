@@ -17,7 +17,7 @@
 .quota .refresh { padding: 0 9px; font-size: 12px; }
 .quota .iconButton:hover:not(:disabled), .quota .refresh:hover:not(:disabled) { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
 .quota[data-empty="true"]:empty { display: none; }
-.linked { color: var(--accent) !important; }
+.linked { color: var(--text); font-size: 14px; font-weight: 400; }
 .heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
 .actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .query { min-width: 0; display: grid; gap: 6px; }
@@ -31,7 +31,7 @@
 .metricMeta { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .metricMeta > span + span::before { content: '·'; margin-right: 6px; color: var(--text-3); }
 .summaryMetric > div { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 4px 8px; }
-.summaryMetric > div > span { color: var(--text-2); }
+.summaryMetric > div > span { color: var(--text-2); font-size: 14px; font-weight: 400; }
 .summaryMetric > div > strong { font-size: 13.5px; font-variant-numeric: tabular-nums; font-weight: 640; letter-spacing: -.01em; }
 .summaryMetric progress {
   appearance: none;
@@ -44,12 +44,12 @@
 .summaryMetric progress::-webkit-progress-value { background: linear-gradient(90deg, var(--accent) 0%, color-mix(in srgb, var(--accent) 70%, var(--accent-hover)) 100%); border-radius: 99px; transition: width var(--medium) var(--ease); }
 .summaryMetric[data-warning="true"] > div > strong { color: var(--warning); }
 .summaryMetric[data-warning="true"] progress::-webkit-progress-value { background: linear-gradient(90deg, var(--warning) 0%, color-mix(in srgb, var(--warning) 75%, var(--danger)) 100%); }
-.summaryMetric small { overflow-wrap: anywhere; line-height: 1.5; color: var(--text-3); }
+.summaryMetric small { overflow-wrap: anywhere; line-height: 1.5; color: var(--text-3); font-size: 14px; font-weight: 400; }
 .burnDown { display: grid; gap: 3px; margin: 0; }
 .burnDown svg { display: block; width: 100%; height: 34px; color: var(--accent); }
 .burnDown svg polyline { fill: none; stroke: currentColor; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
 .burnDown svg circle { fill: currentColor; stroke: none; }
-.burnDown figcaption small { color: var(--text-3); }
+.burnDown figcaption small { color: var(--text-3); font-size: 14px; font-weight: 400; }
 .query:has(> .quotaDetails[open]) > .summaryMetrics { display: none; }
 .quotaDetails { font-size: 12px; color: var(--text-2); }
 .quotaDetails > summary { cursor: pointer; width: fit-content; padding: 1px 0; color: var(--text-3); font-size: 14px; font-weight: 400; }
@@ -57,16 +57,18 @@
 .quotaDetails[open] > summary { margin-bottom: 8px; }
 .quotaDetails > .metrics { color: var(--text); padding: 2px 0 0; border: 0; border-radius: 0; background: transparent; }
 .metadata { display: grid; gap: 5px; padding-top: 11px; overflow-wrap: anywhere; }
+.metadata small { font-size: 14px; font-weight: 400; }
 .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(215px, 100%), 1fr)); gap: 14px 24px; }
 .metric { display: grid; align-content: start; gap: 5px; min-width: 0; padding: 0; border: 0; border-radius: 0; background: transparent; }
-.metric .heading strong { font-size: 12px; font-weight: 620; }
+.metric .heading strong { font-size: 14px; font-weight: 620; }
 .metric .heading span { font-variant-numeric: tabular-nums; font-weight: 620; }
 .metric progress { width: 100%; height: 6px; accent-color: var(--accent); appearance: none; border-radius: 99px; background: var(--surface-3); }
 .metric progress::-webkit-progress-bar { background: var(--surface-3); border-radius: 99px; }
 .metric progress::-webkit-progress-value { background: var(--accent); border-radius: 99px; }
 .metric[data-warning="true"] .heading span { color: var(--warning); }
 .metric[data-warning="true"] progress::-webkit-progress-value { background: var(--warning); }
-.values { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.values { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 14px; font-weight: 400; }
+.metric > small { font-size: 14px; font-weight: 400; }
 .error { color: var(--danger, #c33); font-size: 14px; font-weight: 400; white-space: pre-wrap; margin: 4px 0; }
 .editor { display: grid; gap: 13px; border: 0; padding: 0; min-width: 0; }
 .editor label { display: grid; gap: 6px; font-size: 14px; font-weight: 400; }

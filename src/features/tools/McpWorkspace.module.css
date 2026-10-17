@@ -13,7 +13,7 @@
 
 .empty { display: grid; justify-items: center; gap: 6px; padding: 36px 20px; border: 1px dashed var(--line-strong); border-radius: var(--radius-lg); background: color-mix(in srgb, var(--surface) 55%, transparent); color: var(--text-3); text-align: center; }
 .emptyIcon { display: grid; place-items: center; width: 44px; height: 44px; margin-bottom: 4px; border-radius: 14px; background: var(--accent-soft); color: var(--accent); }
-.empty > strong { color: var(--text); font-size: 13.5px; font-weight: 620; }
+.empty > strong { color: var(--text); font-size: 14px; font-weight: 620; }
 .empty > p { max-width: 440px; margin: 0; color: var(--text-2); font-size: 14px; font-weight: 400; line-height: 1.6; }
 
 /* ---------- Active list ------------------------------------------ */
@@ -51,7 +51,7 @@
 .entryIcon[data-transport='http'] { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
 .entryBody { display: grid; gap: 3px; min-width: 0; }
 .entryTitle { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; min-width: 0; }
-.entryTitle strong { min-width: 0; overflow: hidden; font-size: 13px; font-weight: 620; text-overflow: ellipsis; white-space: nowrap; }
+.entryTitle strong { min-width: 0; overflow: hidden; font-size: 14px; font-weight: 620; text-overflow: ellipsis; white-space: nowrap; }
 .state { flex: none; padding: 0 7px; border: 1px solid var(--line); border-radius: 99px; background: var(--surface-2); color: var(--text-2); font-size: 10.5px; font-weight: 560; line-height: 17px; }
 .state[data-on] { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
 .chip { flex: none; padding: 0 7px; border: 1px dashed var(--line-strong); border-radius: 99px; color: var(--text-2); font-size: 10.5px; font-weight: 560; line-height: 17px; }
