@@ -66,13 +66,14 @@
 .metric[data-warning="true"] .heading span { color: var(--warning); }
 .metric[data-warning="true"] progress::-webkit-progress-value { background: var(--warning); }
 .values { display: flex; flex-wrap: wrap; gap: 4px 12px; }
-.error { color: var(--danger, #c33); white-space: pre-wrap; margin: 4px 0; }
+.error { color: var(--danger, #c33); font-size: 14px; font-weight: 400; white-space: pre-wrap; margin: 4px 0; }
 .editor { display: grid; gap: 13px; border: 0; padding: 0; min-width: 0; }
-.editor label { display: grid; gap: 6px; font-size: 13px; }
+.editor label { display: grid; gap: 6px; font-size: 14px; font-weight: 400; }
 .editor input, .editor select, .editor textarea { width: 100%; box-sizing: border-box; }
 .editor .check { display: flex; align-items: center; gap: 8px; }
 .check input { width: auto; }
 .editor small, .quota small { color: var(--text-2); white-space: normal !important; }
+.editor small { font-size: 14px; font-weight: 400; }
 .editor pre { overflow: auto; max-height: 260px; white-space: pre-wrap; }
 .editor > details { border: 1px solid var(--line); border-radius: var(--radius); padding: 11px 14px; }
 .editor > details > summary { cursor: pointer; color: var(--text-2); }
