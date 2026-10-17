@@ -32,7 +32,7 @@
 }
 .tabs button[aria-selected="true"] .tabCount { background: var(--accent-soft); color: var(--accent); }
 
-.primary, .primary:hover:not(:disabled) { border-color: var(--accent) !important; background: var(--accent) !important; color: var(--on-accent) !important; }
+.primary, .primary:hover:not(:disabled) { border-radius: var(--radius-sm) !important; border-color: var(--accent) !important; background: var(--accent) !important; color: var(--on-accent) !important; }
 .primary:hover:not(:disabled) { border-color: var(--accent-hover) !important; background: var(--accent-hover) !important; }
 
 /* Filters stay on one row until the page is too narrow for three controls */

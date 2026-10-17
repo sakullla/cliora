@@ -259,6 +259,70 @@ const ids=['scenario','theme','width','query'];const controls=ids.map(id=>docume
  fs.writeFileSync(`${out}/${manifestName}`,JSON.stringify({capturedAt:new Date().toISOString(),synthetic:true,invocation:['node','scripts/capture-ui.mjs',...process.argv.slice(2)].join(' '),previewUrl:process.env.CLIORA_PREVIEW_URL??'http://127.0.0.1:14736',mode:captureMode,matrix:{themes,widths},selectedScenarios:workflowsOnly||fullCapture?selectedScenarios:[],missing,success:failures.length===0&&missing.length===0,imageCount:captures.length,captures:captures.map(({path,...item})=>item),failures},null,2)+'\n');
 }
 
+// Default full capture includes the screens that used to require --sessions, --connections, or --mcp.
+// Session detail stays width <= 760, matching the narrow reader.
+async function captureSessionReading(page,capture,width){
+ await page.getByLabel('会话正文').locator('article').nth(1).scrollIntoViewIfNeeded();
+ await capture('session-reading');
+ if(width<=760)await page.getByRole('button',{name:'← 返回会话列表'}).click();
+ await page.locator('summary').filter({hasText:/^筛选/}).click();
+ await capture('session-filters');
+ await page.getByRole('button',{name:'自定义',exact:true}).click();
+ const calendar=page.getByRole('dialog',{name:'自定义时间范围'});
+ await calendar.getByRole('button',{name:/^\d{4}-\d{2}-\d{2}$/}).nth(4).click();
+ await calendar.getByRole('button',{name:/^\d{4}-\d{2}-\d{2}$/}).nth(11).click();
+ await capture('session-dates');
+}
+async function captureConnectionScreens(page,capture,width){
+ const previous=page.viewportSize();
+ await page.setViewportSize({width,height:Math.max(1100,previous?.height??1000)});
+ const region=page.getByRole('region',{name:'工具与连接'});
+ const profiles=region.getByLabel('配置列表');
+ for(const name of ['Codex','Claude Code','Grok','Pi','OpenCode']){
+  await region.getByRole('tablist',{name:'CLI'}).getByRole('tab',{name,exact:true}).click();
+  await region.getByRole('tab',{name:'配置',exact:true}).click();
+  await profiles.waitFor();
+  const slug=name.toLowerCase().replace(/\s+/g,'-');
+  await capture(`conn-${slug}`);
+  const edits=profiles.getByRole('button',{name:'修改',exact:true});
+  const count=await edits.count();
+  if(!count)continue;
+  await edits.nth(Math.min(2,count-1)).click();
+  const dialog=page.getByRole('dialog');
+  await dialog.waitFor();
+  await capture(`conn-${slug}-config`);
+  const more=dialog.getByText('更多选项',{exact:true});
+  if(await more.count()){
+   await more.click();
+   const advanced=dialog.getByText('高级连接选项',{exact:true});
+   if(await advanced.count())await advanced.click();
+   await dialog.locator('summary').filter({hasText:'更多选项'}).scrollIntoViewIfNeeded();
+   await capture(`conn-${slug}-more`);
+  }
+  await page.keyboard.press('Escape');
+  await dialog.waitFor({state:'hidden'});
+ }
+ if(previous)await page.setViewportSize(previous);
+}
+async function captureMcpScreens(page,capture){
+ const region=page.getByRole('region',{name:'工具与连接'});
+ await page.getByRole('navigation',{name:'页面'}).getByRole('button',{name:'工具与连接'}).click();
+ await region.getByRole('tablist',{name:'CLI'}).waitFor();
+ await region.getByRole('tablist',{name:'CLI'}).getByRole('tab',{name:'Codex',exact:true}).click();
+ await page.getByRole('tab',{name:'MCP',exact:true}).click();
+ const tool=page.getByRole('region',{name:'MCP 服务器'});
+ await tool.getByRole('button',{name:/filesystem/}).first().waitFor();
+ await capture('mcp-tool');
+ await tool.getByRole('button',{name:/filesystem/}).first().click();await page.getByRole('dialog').waitFor();await capture('mcp-tool-edit');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
+ await tool.getByRole('button',{name:'添加 MCP',exact:true}).first().click();await page.getByRole('dialog').waitFor();await capture('mcp-tool-new');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
+ await page.getByRole('navigation',{name:'页面'}).getByRole('button',{name:'资料库'}).click();
+ await page.getByRole('tab',{name:/^MCP/}).click();await page.getByLabel('MCP 列表').getByRole('button',{name:'filesystem',exact:true}).waitFor();await capture('mcp-library');
+ await page.getByLabel('MCP 列表').getByRole('button',{name:'filesystem',exact:true}).click();await page.getByRole('dialog').waitFor();await capture('mcp-library-edit');
+ await page.getByRole('dialog').evaluate(el=>{const body=el.querySelector('.guide-dialog-body')??el;body.scrollTop=body.scrollHeight;});await capture('mcp-library-edit-targets');
+ await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
+ await page.getByRole('button',{name:'新建 MCP',exact:true}).first().click();await page.getByRole('dialog').waitFor();await capture('mcp-library-new');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
+}
+
 if(!workflowsOnly){
 for(const width of widths)for(const theme of themes){
  const page=await browser.newPage({viewport:{width,height:1000}});page.on('pageerror',e=>failures.push(e.message));await page.addInitScript(mock,theme);await installCaptureConfigurationProtocol(page);await page.goto(process.env.CLIORA_PREVIEW_URL ?? 'http://127.0.0.1:14736');await page.getByText('正在读取本机设置').waitFor({state:'hidden'});await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);
@@ -268,61 +332,20 @@ for(const width of widths)for(const theme of themes){
   await nav.getByRole('button',{name:'使用记录'}).click();
   await page.getByLabel('会话列表').getByRole('button').first().waitFor();if(width>760)await page.getByRole('button',{name:'复制代码',exact:true}).waitFor();await capture('sessions');
   if(width<=760){await page.getByLabel('会话列表').getByRole('button').first().click();await page.getByRole('button',{name:'复制代码',exact:true}).waitFor();await capture('session-detail');}
-  if(process.argv.includes('--sessions')){await page.getByLabel('会话正文').locator('article').nth(1).scrollIntoViewIfNeeded();await capture('session-reading');if(width<=760)await page.getByRole('button',{name:'← 返回会话列表'}).click();await page.locator('summary').filter({hasText:/^筛选/}).click();await capture('session-filters');await page.getByRole('button',{name:'自定义',exact:true}).click();const calendar=page.getByRole('dialog',{name:'自定义时间范围'});await calendar.getByRole('button',{name:/^\d{4}-\d{2}-\d{2}$/}).nth(4).click();await calendar.getByRole('button',{name:/^\d{4}-\d{2}-\d{2}$/}).nth(11).click();await capture('session-dates');await page.close();continue;}
+  if(process.argv.includes('--sessions')){await captureSessionReading(page,capture,width);await page.close();continue;}
   await page.getByRole('tab',{name:'用量',exact:true}).click();await page.getByRole('radio',{name:'近 7 天',exact:true}).click();
   await page.getByRole('region',{name:'用量概览'}).waitFor();await capture('usage');
   await page.getByRole('region',{name:'消耗最多的会话'}).scrollIntoViewIfNeeded();await capture('usage-details');await page.getByRole('radio',{name:'自定义',exact:true}).click();await capture('usage-dates');
   await page.close();continue;
  }
  if(process.argv.includes('--connections')){
-  await page.setViewportSize({width,height:Math.max(1100,page.viewportSize()?.height??1000)});
   await nav.getByRole('button',{name:'工具与连接'}).click();
-  const region=page.getByRole('region',{name:'工具与连接'});
-  const profiles=region.getByLabel('配置列表');
-  await profiles.waitFor();
-  for(const name of ['Codex','Claude Code','Grok','Pi','OpenCode']){
-   await region.getByRole('tablist',{name:'CLI'}).getByRole('tab',{name,exact:true}).click();
-   await profiles.waitFor();
-   const slug=name.toLowerCase().replace(/\s+/g,'-');
-   await capture(`conn-${slug}`);
-   const edits=profiles.getByRole('button',{name:'修改',exact:true});
-   const count=await edits.count();
-   if(!count) continue;
-   await edits.nth(Math.min(2,count-1)).click();
-   const dialog=page.getByRole('dialog');
-   await dialog.waitFor();
-   await capture(`conn-${slug}-config`);
-   const more=dialog.getByText('更多选项',{exact:true});
-   if(await more.count()){
-    await more.click();
-    const advanced=dialog.getByText('高级连接选项',{exact:true});
-    if(await advanced.count()) await advanced.click();
-    await dialog.locator('summary').filter({hasText:'更多选项'}).scrollIntoViewIfNeeded();
-    await capture(`conn-${slug}-more`);
-   }
-   await page.keyboard.press('Escape');
-   await dialog.waitFor({state:'hidden'});
-  }
+  await captureConnectionScreens(page,capture,width);
   await page.close(); continue;
  }
  if(process.argv.includes('--mcp')){
   await page.setViewportSize({width,height:Math.max(1000,page.viewportSize()?.height??1000)});
-  await nav.getByRole('button',{name:'工具与连接'}).click();
-  const region=page.getByRole('region',{name:'工具与连接'});
-  await region.getByLabel('配置列表').waitFor();
-  await region.getByRole('tablist',{name:'CLI'}).getByRole('tab',{name:'Codex',exact:true}).click();
-  await page.getByRole('tab',{name:'MCP',exact:true}).click();
-  const tool=page.getByRole('region',{name:'MCP 服务器'});
-  await tool.getByRole('button',{name:/filesystem/}).first().waitFor();
-  await capture('mcp-tool');
-  await tool.getByRole('button',{name:/filesystem/}).first().click();await page.getByRole('dialog').waitFor();await capture('mcp-tool-edit');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
-  await tool.getByRole('button',{name:'添加 MCP',exact:true}).first().click();await page.getByRole('dialog').waitFor();await capture('mcp-tool-new');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
-  await nav.getByRole('button',{name:'资料库'}).click();
-  await page.getByRole('tab',{name:/^MCP/}).click();await page.getByLabel('MCP 列表').getByRole('button',{name:'filesystem',exact:true}).waitFor();await capture('mcp-library');
-  await page.getByLabel('MCP 列表').getByRole('button',{name:'filesystem',exact:true}).click();await page.getByRole('dialog').waitFor();await capture('mcp-library-edit');
-  await page.getByRole('dialog').evaluate(el=>{const body=el.querySelector('.guide-dialog-body')??el;body.scrollTop=body.scrollHeight;});await capture('mcp-library-edit-targets');
-  await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
-  await page.getByRole('button',{name:'新建 MCP',exact:true}).first().click();await page.getByRole('dialog').waitFor();await capture('mcp-library-new');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
+  await captureMcpScreens(page,capture);
   await page.close(); continue;
  }
  if(process.argv.includes('--skills')){
@@ -355,15 +378,21 @@ for(const width of widths)for(const theme of themes){
  await page.getByRole('tab',{name:'Codex',exact:true}).click();
  await page.getByRole('tab',{name:'MCP',exact:true}).click();await page.getByRole('button',{name:/filesystem/}).first().waitFor();await capture('mcp');
  await captureSkillViews(page,capture);
+ await captureConnectionScreens(page,capture,width);
  await nav.getByRole('button',{name:'资料库'}).click();await page.getByRole('button',{name:'代码审查',exact:true}).waitFor();await capture('library');
  await page.getByRole('tab',{name:/^长期规则/}).click();await page.getByRole('button',{name:'项目协作约定',exact:true}).waitFor();await capture('library-rules');
  await page.getByRole('tab',{name:'MCP',exact:true}).click();await page.getByLabel('MCP 列表').getByRole('button',{name:'filesystem',exact:true}).waitFor();await capture('library-mcp');
  await page.getByRole('button',{name:'新建 MCP',exact:true}).click();await page.getByRole('dialog').waitFor();await capture('library-mcp-editor');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
  await page.getByRole('tab',{name:'Skill',exact:true}).click();await page.getByLabel('Skill 列表').getByRole('button',{name:'code-review',exact:true}).waitFor();await capture('library-skills');
  await page.getByRole('button',{name:'添加 Skill',exact:true}).click();await page.getByRole('dialog').waitFor();await capture('library-skill-add');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
+ await captureMcpScreens(page,capture);
  await nav.getByRole('button',{name:'使用记录'}).click();await page.getByLabel('会话列表').getByRole('button').first().waitFor();if(width>760)await page.getByRole('button',{name:'在外部终端继续'}).waitFor();if(width>760)await page.getByRole('button',{name:'复制代码',exact:true}).waitFor();await capture('sessions');
  if(width<=760){await page.getByLabel('会话列表').getByRole('button').first().click();await page.getByRole('button',{name:'在外部终端继续'}).waitFor();await page.getByRole('button',{name:'复制代码',exact:true}).waitFor();await capture('session-detail');}
+ await captureSessionReading(page,capture,width);
+ await page.keyboard.press('Escape');
+ await page.getByRole('dialog',{name:'自定义时间范围'}).waitFor({state:'hidden'});
  await page.getByRole('tab',{name:'用量',exact:true}).click();await capture('usage');
+ await page.getByRole('region',{name:'消耗最多的会话'}).scrollIntoViewIfNeeded();await capture('usage-details');await page.getByRole('radio',{name:'自定义',exact:true}).click();await capture('usage-dates');
  await nav.getByRole('button',{name:'设置',exact:true}).click();await capture('settings');
  await page.getByRole('tab',{name:'迁移与同步'}).click();await capture('migration');
  await page.getByRole('button',{name:'导出加密配置包',exact:true}).click();await capture('migration-export');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});

@@ -5,7 +5,7 @@
 .searchBox > input { width: 100%; }
 .list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr)); gap: 10px; align-content: start; }
 
-.primary, .primary:hover:not(:disabled) { border-color: var(--accent) !important; background: var(--accent) !important; color: var(--on-accent) !important; }
+.primary, .primary:hover:not(:disabled) { border-radius: var(--radius-sm) !important; border-color: var(--accent) !important; background: var(--accent) !important; color: var(--on-accent) !important; }
 .primary:hover:not(:disabled) { border-color: var(--accent-hover) !important; background: var(--accent-hover) !important; }
 .dangerQuiet, .dangerQuiet:hover:not(:disabled) { display: inline-flex; align-items: center; gap: 6px; border-color: transparent; background: transparent; box-shadow: none; color: var(--danger); }
 .dangerQuiet:hover:not(:disabled) { background: var(--danger-soft); }

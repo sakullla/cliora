@@ -7,7 +7,7 @@
 }
 
 /* Buttons: primary by default, `.secondary` / `.iconAction` / selects for the quieter ones */
-.workspace button:not(.secondary):not(.iconAction):not([data-select-trigger]):not(:global(.guide-dialog-close)):not(:global(.search-clear)) { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
+.workspace button:not(.secondary):not(.iconAction):not([data-select-trigger]):not(:global(.guide-dialog-close)):not(:global(.search-clear)) { border-radius: var(--radius-sm); border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
 .workspace button:not(.secondary):not(.iconAction):not([data-select-trigger]):not(:global(.guide-dialog-close)):not(:global(.search-clear)):hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }
 
 /* Quick launch */
