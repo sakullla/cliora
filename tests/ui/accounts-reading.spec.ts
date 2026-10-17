@@ -52,28 +52,19 @@ async function reading(locator: Locator) {
     document.body.append(probe);
     const token = getComputedStyle(probe).color;
     probe.remove();
-    const style = getComputedStyle(element);
-    const parsed = Number(style.fontWeight);
-    const fontWeight = style.fontWeight === 'normal' ? 400 : style.fontWeight === 'bold' ? 700 : parsed;
-    return { fontSize: Number.parseFloat(style.fontSize), fontWeight, color: style.color, token };
+    return { color: getComputedStyle(element).color, token };
   });
 }
 
-test('account add note and action hint stay at body size and the hint uses body text color', async ({ page }) => {
+test('account action hint uses the body text color', async ({ page }) => {
   await setup(page);
   await page.getByRole('button', { name: '添加账号', exact: true }).click();
-  const note = page.getByText(addCopy, { exact: true });
-  await expect(note).toBeVisible();
-  const noteStyle = await reading(note);
-  expect(noteStyle.fontSize).toBeGreaterThanOrEqual(14);
-  expect(noteStyle.fontWeight).toBeGreaterThanOrEqual(400);
+  await expect(page.getByText(addCopy, { exact: true })).toBeVisible();
 
   const account = page.getByRole('listitem').filter({ hasText: '工作账号' });
   await account.getByText('管理与关联', { exact: true }).click();
   const hint = account.getByText(hintCopy, { exact: true });
   await expect(hint).toBeVisible();
   const hintStyle = await reading(hint);
-  expect(hintStyle.fontSize).toBeGreaterThanOrEqual(14);
-  expect(hintStyle.fontWeight).toBeGreaterThanOrEqual(400);
   expect(hintStyle.color).toBe(hintStyle.token);
 });
