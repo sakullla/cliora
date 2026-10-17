@@ -600,7 +600,7 @@ label.setting-row:hover { background: var(--surface-3); }
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 540;
   cursor: pointer;
   transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
@@ -633,11 +633,12 @@ label.setting-row:hover { background: var(--surface-3); }
 .managed-more button svg { transition: transform var(--fast) var(--ease); }
 .managed-more button[aria-expanded="true"] svg { transform: rotate(180deg); }
 
-.icon-settings { border-top: 1px solid var(--line); padding: 12px 20px; color: var(--text-2); font-size: 12.5px; }
+.icon-settings { border-top: 1px solid var(--line); padding: 12px 20px; color: var(--text-2); font-size: 14px; }
 .icon-settings > summary { font-weight: 560; }
-.icon-settings > p { margin: 10px 0; font-size: 12px; }
+.icon-settings > p { margin: 10px 0; font-size: 14px; font-weight: 400; }
 .icon-setting-row { display: flex; align-items: center; gap: 12px; border-top: 1px solid var(--line); padding: 10px 0; }
-.icon-setting-row > .tool-identity { flex: 1; color: var(--text); }
+.icon-setting-row > .tool-identity { flex: 1; color: var(--text); font-size: 14px; font-weight: 400; }
+.icon-settings .tool-identity strong { font-size: 14px; }
 .icon-file { position: relative; overflow: hidden; }
 .icon-file input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; }
 .icon-file:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
