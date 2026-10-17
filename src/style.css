@@ -928,7 +928,8 @@ button[data-copied="true"], button[data-copied="true"]:hover:not(:disabled) { bo
   box-shadow: var(--shadow-lg);
   backdrop-filter: blur(10px);
   color: var(--text);
-  font-size: 13px;
+  font-size: 14px;
+  font-weight: 400;
   line-height: 1.5;
   animation: toast-in 220ms var(--ease);
 }
@@ -962,6 +963,7 @@ button[data-copied="true"], button[data-copied="true"]:hover:not(:disabled) { bo
 .toast > .toast-close {
   flex: none;
   width: 20px;
+  font-size: 13px;
   min-height: 20px;
   margin: 0 0 0 2px;
   padding: 0;
