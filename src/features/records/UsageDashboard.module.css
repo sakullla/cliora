@@ -35,8 +35,8 @@
 .primary > strong { color: var(--accent); }
 .metric strong[data-unpriced] { color: var(--text-3); font-size: 17px; font-weight: 600; }
 .metricNote { color: var(--text-3); font-size: 11.5px; line-height: 1.5; }
-button.metricNote { justify-self: start; min-height: 0; padding: 0; border: 0; background: none; box-shadow: none; color: var(--warning); font-size: 11.5px; font-weight: 560; text-decoration: underline dotted; text-underline-offset: 3px; }
-button.metricNote:hover:not(:disabled) { background: none; color: var(--warning); text-decoration-style: solid; }
+button.metricNote { justify-self: start; min-height: 0; padding: 0; border: 0; background: none; box-shadow: none; color: var(--text); font-size: 14px; font-weight: 560; text-decoration: underline dotted; text-underline-offset: 3px; }
+button.metricNote:hover:not(:disabled) { background: none; color: var(--text); text-decoration-style: solid; }
 .delta { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 3px 6px; color: var(--text-2); font-size: 12px; font-weight: 620; font-variant-numeric: tabular-nums; }
 .delta small { color: var(--text-3); font-size: 11.5px; font-weight: 400; }
 .delta[data-direction="up"] { color: var(--warning); }

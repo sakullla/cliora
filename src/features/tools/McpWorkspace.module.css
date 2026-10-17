@@ -57,6 +57,7 @@
 .chip { flex: none; padding: 0 7px; border: 1px dashed var(--line-strong); border-radius: 99px; color: var(--text-2); font-size: 10.5px; font-weight: 560; line-height: 17px; }
 .summary { display: flex; align-items: baseline; gap: 8px; min-width: 0; color: var(--text-2); font-size: 11.5px; }
 .command { min-width: 0; overflow: hidden; font-family: var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.summary .command { font-size: 14px; font-weight: 400; }
 .transport { flex: none; color: var(--text-3); font-size: 10.5px; font-weight: 640; letter-spacing: .3px; text-transform: uppercase; }
 .chevron { display: grid; color: var(--text-3); opacity: .55; transition: opacity var(--fast) var(--ease), transform var(--fast) var(--ease); }
 .entry:hover .chevron { opacity: 1; transform: translateX(2px); }

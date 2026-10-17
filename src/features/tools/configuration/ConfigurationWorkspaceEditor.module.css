@@ -36,7 +36,7 @@
 .status { display: inline-flex; align-items: center; gap: 7px; }
 .status::before { content: ''; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--line-strong); }
 .status[data-tone='ok']::before { background: var(--success); }
-.status[data-tone='warn'] { color: var(--warning) !important; }
+.status[data-tone='warn'] { color: var(--text) !important; }
 .status[data-tone='warn']::before { background: var(--warning); }
 .status[data-tone='error'] { color: var(--danger) !important; }
 .status[data-tone='error']::before { background: var(--danger); }

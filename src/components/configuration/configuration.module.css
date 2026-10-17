@@ -93,8 +93,8 @@
 .modelRowButton { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 7px 12px; text-align: left; justify-content: flex-start; border: 0; border-radius: var(--radius); background: transparent; box-shadow: none; }
 .modelRowButton:hover:not(:disabled) { background: var(--surface-2); border-color: transparent; }
 .modelRowText { display: grid; gap: 1px; flex: 1; min-width: 0; }
-.modelRowName { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
-.modelRowSub { font-size: 11.5px; color: var(--text-3); overflow-wrap: anywhere; }
+.modelRowName { font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.modelRowSub { font-size: 14px; font-weight: 400; color: var(--text-3); overflow-wrap: anywhere; }
 .modelBadge { flex: none; padding: 0 .57em; border-radius: var(--radius-xs); font-size: .78em; line-height: 1.6; color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent-line); }
 .modelRowChevron { flex: none; color: var(--text-3); transition: transform var(--fast) var(--ease); }
 .modelRowButton[aria-expanded='true'] .modelRowChevron { transform: rotate(90deg); }
