@@ -211,7 +211,7 @@ div > .feedback { margin-bottom: 12px; }
   background: transparent;
   border-bottom: 1px solid var(--line);
 }
-.listHeading > strong { display: inline-flex; align-items: center; font-size: 13.5px; font-weight: 650; letter-spacing: .1px; }
+.listHeading > strong { display: inline-flex; align-items: center; font-size: 14px; font-weight: 650; letter-spacing: .1px; }
 .listActions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
 .listActions > button,
 .profileActions > button { min-height: var(--control-h-sm); }
@@ -245,7 +245,7 @@ div > .feedback { margin-bottom: 12px; }
   padding-top: 14px;
   border-top: 1px solid var(--line);
 }
-.groupLabel > strong { color: var(--text-2); font-size: 11.5px; font-weight: 650; letter-spacing: .06em; }
+.groupLabel > strong { color: var(--text-2); font-size: 14px; font-weight: 650; letter-spacing: .06em; }
 .groupLabel > span { min-width: 18px; padding: 0 6px; border-radius: 99px; background: var(--surface-3); color: var(--text-2); font-size: 11px; font-variant-numeric: tabular-nums; text-align: center; }
 .groupLabel > small { overflow: hidden; color: var(--text-3); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
 .groupLabel + .profileRow,
@@ -525,4 +525,4 @@ div > .feedback { margin-bottom: 12px; }
   .historyList button { width: auto; }
 }
 
-.maintenanceLog { max-height: 360px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 16px; font-size: 12px; background: var(--surface-2); border-radius: 8px; }
+.maintenanceLog { max-height: 360px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 16px; font-size: 14px; font-weight: 400; background: var(--surface-2); border-radius: 8px; }
