@@ -84,6 +84,6 @@ section.quota > small,
 .editor > details { border: 1px solid var(--line); border-radius: var(--radius); padding: 11px 14px; }
 .editor > details > summary { cursor: pointer; color: var(--text-2); font-size: 14px; font-weight: 400; }
 .editorActions { position: sticky; bottom: -1px; padding: 13px 0; background: var(--surface); border-top: 1px solid var(--line); z-index: 2; }
-.primary, .primary:hover:not(:disabled) { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
+.primary, .primary:hover:not(:disabled) { border-radius: var(--radius-sm); border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
 .primary:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }
 .credential, .target { display: grid; gap: 8px; padding: 12px; margin: 8px 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }

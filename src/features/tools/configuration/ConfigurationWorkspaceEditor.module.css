@@ -13,8 +13,8 @@
 .name { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 12px; padding: 4px 0 2px; }
 .name > label { display: inline-flex !important; align-items: center; gap: 2px; color: var(--text); font-size: 14px !important; font-weight: 560; white-space: nowrap; }
 .required { color: var(--danger); font-weight: 600; }
-.scroll .name > input { min-height: 38px; padding: 8px 12px; border-radius: var(--radius); font-size: 14px; font-weight: 600; }
-.scroll .name[data-empty] > input { border-color: var(--warning-line); background: var(--warning-soft); }
+.scroll .name > input { min-height: 38px; padding: 8px 12px; border-radius: var(--radius-sm); background: var(--surface); font-size: 14px; font-weight: 600; }
+.scroll .name[data-empty] > input { border-color: var(--warning-line); background: var(--surface); }
 .scroll .name > input:focus { border-color: var(--accent); background: var(--surface); outline: 2px solid var(--accent); outline-offset: 2px; }
 .fileTabs { display: flex; flex-wrap: wrap; gap: 4px; width: fit-content; max-width: 100%; padding: 3px; border-radius: var(--radius); background: var(--surface-3); }
 .fileTabs button { min-height: 26px; padding: 0 11px; border: 0; background: transparent; box-shadow: none; color: var(--text-2); font-family: var(--font-mono); font-size: 14px; font-weight: 400; }
@@ -122,7 +122,7 @@
 .footer .actions button { white-space: nowrap; }
 .footer details[open] { position: absolute; bottom: var(--config-footer-h); right: 0; z-index: 3; padding: 12px; border: 1px solid var(--line); background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow-sm); }
 .footer details[open] button { display: block; margin-top: 8px; }
-.primary, .primary:hover:not(:disabled) { border-color: var(--accent) !important; background: var(--accent) !important; color: var(--on-accent) !important; }
+.primary, .primary:hover:not(:disabled) { border-radius: var(--radius-sm) !important; border-color: var(--accent) !important; background: var(--accent) !important; color: var(--on-accent) !important; }
 .primary:hover:not(:disabled) { border-color: var(--accent-hover) !important; background: var(--accent-hover) !important; }
 @media (max-width: 760px) { .tabs { gap: 0; } .tabs button { padding: 0 8px; } .footer { gap: 5px; } .footer button { padding: 8px; } }
 @media (max-width: 640px) { .sourceChoices { grid-template-columns: 1fr; } .sourcePicker [role='radio'] { min-height: 0; } .name { grid-template-columns: 1fr; gap: 6px; } .chain button { padding-right: 4px; } .accountBody { grid-template-columns: 1fr; } }

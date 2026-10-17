@@ -42,7 +42,7 @@
 .create > button { min-height: var(--control-h); }
 
 .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.primary, .primary:hover:not(:disabled) { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
+.primary, .primary:hover:not(:disabled) { border-radius: var(--radius-sm); border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
 .primary:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }
 .danger { color: var(--danger) !important; }
 .destructive { color: var(--danger); }
