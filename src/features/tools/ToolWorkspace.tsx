@@ -15,6 +15,7 @@ import type { UsageQuery } from '../../types/usage';
 import { AccountsPanel, useAccounts } from './AccountsPanel';
 import { ProfileQuota, QuotaEditor, useUsageQuota } from './UsageQuota';
 import { InstallPanel } from './InstallPanel';
+import { MaintenanceDialog, type MaintenanceAction, type MaintenanceState } from './MaintenanceDialog';
 import { ConfigurationWorkspaceEditor } from './configuration/ConfigurationWorkspaceEditor';
 import { SkillsWorkspace } from './ResourceWorkspace';
 import { McpWorkspace } from './McpWorkspace';
@@ -137,12 +138,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     setNotice: (text: string) => { if (text) toasts.showNotice(text); else toasts.dismiss('status'); },
   }));
   const [busy, setBusy] = useState(false);
-  const [maintenance, setMaintenance] = useState<{ tool: string; name: string; running: boolean; action: 'install' | 'upgrade' | 'install_native' | 'uninstall_npm' | 'upgrade_major'; source?: string; lineVersion?: string; cancelling?: boolean; output: string; error: string; version?: string | null } | null>(null);
-  const maintenanceLogRef = useRef<HTMLPreElement>(null);
-  useLayoutEffect(() => {
-    const node = maintenanceLogRef.current;
-    if (node) node.scrollTop = node.scrollHeight;
-  }, [maintenance?.output]);
+  const [maintenance, setMaintenance] = useState<MaintenanceState | null>(null);
   const [applying, setApplying] = useState<string | null>(null);
   const [resource, setResource] = useState<ResourceView>(repair?.resourceView ?? readStoredContexts()[tool]?.resource ?? 'config');
   const [frame, setFrame] = useState<EditFrame | null>(null);
@@ -343,21 +339,22 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     setMaintenance({ ...maintenance, cancelling: true });
     void native.cancelCliMaintenance(maintenance.tool).catch(failure => setMaintenance(previous => previous ? { ...previous, cancelling: false, error: errorText(failure) } : previous));
   }
-  async function maintain(action: 'install' | 'upgrade' | 'install_native' | 'uninstall_npm' | 'upgrade_major', source?: string, retry = false, lineVersion?: string) {
+  async function maintain(action: MaintenanceAction, source?: string, retry = false, lineVersion?: string, target?: string) {
     if (busy) return;
     if (!retry && (!await mayLeave() || !await confirmAction(action === 'upgrade_major' ? t('tools.workspace.maintainMajorConfirm') : t('tools.workspace.maintainConfirm'), () => alive.current, { title: action === 'uninstall_npm' ? t('tools.workspace.maintainUninstallTitle') : action === 'install' || action === 'install_native' ? t('tools.workspace.maintainInstallTitle') : action === 'upgrade_major' ? t('tools.workspace.maintainMajorTitle') : t('tools.workspace.maintainUpgradeTitle'), confirmLabel: action === 'uninstall_npm' ? t('tools.plugins.action.uninstall') : action === 'install' || action === 'install_native' ? t('tools.plugins.action.install') : action === 'upgrade_major' ? t('tools.workspace.maintainMajorAction') : t('tools.plugins.action.update') }))) return;
     const startedContext = currentContext.current;
     setBusy(true);
-    setMaintenance({ tool: toolId, name: descriptor.name, running: true, action, source, lineVersion, output: '', error: '' });
+    const installed = workspace?.probe.installations.find(item => item.status === 'available' && item.path === workspace.probe.selectedPath) ?? workspace?.probe.installations.find(item => item.status === 'available');
+    setMaintenance({ tool: toolId, name: descriptor.name, running: true, action, source, lineVersion, target, from: action.startsWith('install') ? null : installed?.version?.trim() || null, output: '', error: '', startedAt: Date.now() });
     let stop: (() => void) | undefined;
     try {
       stop = await listen<MaintenanceProgress>('cliora:maintenance-progress', event => {
         if (alive.current && event.payload.toolId === toolId) setMaintenance(previous => previous ? { ...previous, output: event.payload.output } : previous);
       }).catch(() => undefined);
       const result = await native.maintainRegisteredCli(toolId, action, source, lineVersion);
-      if (alive.current) setMaintenance(previous => previous ? { ...previous, running: false, output: result.output, version: result.version } : previous);
+      if (alive.current) setMaintenance(previous => previous ? { ...previous, running: false, cancelling: false, output: result.output, version: result.version, finishedAt: Date.now() } : previous);
     } catch (failure) {
-      if (alive.current) setMaintenance(previous => previous ? { ...previous, running: false, error: errorText(failure) } : previous);
+      if (alive.current) setMaintenance(previous => previous ? { ...previous, running: false, cancelling: false, error: errorText(failure), finishedAt: Date.now() } : previous);
     } finally {
       stop?.();
       if (alive.current) {
@@ -406,7 +403,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     <div className={styles.taskBar}><div className={styles.views} role="tablist" aria-label={t('tools.workspace.tasksAria')} onKeyDown={navigateChoices}>{resourceViews.filter((id) => supported[id]).map((id) => { const label = t(`tools.workspace.view.${id}`); const shortcutIndex = resourceViews.findIndex((view) => view === id) + 1; return <button role="tab" key={id} aria-selected={resource === id} aria-keyshortcuts={`Alt+${shortcutIndex}`} tabIndex={resource === id ? 0 : -1} title={t('tools.workspace.viewTitle', { label, index: shortcutIndex })} className={resource === id ? styles.selected : ''} onClick={() => void switchResource(id)}>{label}</button>; })}</div><div className={styles.scopeBar}><FilterSelect className={styles.projectSelect} label={t('tools.workspace.scopeLabel')} value={scope === 'global' ? '__global__' : projectPath} forceSearch searchLabel={t('home.launcher.searchLabel')} options={[{ value: '__global__', label: t('tools.workspace.scopeGlobal') }, ...projects.map(project => ({ value: project.path ?? project.id, label: project.name, detail: project.path ? shortPath(project.path) : undefined, disabled: !project.available || !project.path })), ...(projectPath && !projects.some(project => project.path === projectPath) ? [{ value: projectPath, label: projectPath.split(/[\\/]/).at(-1) ?? projectPath }] : [])]} onChange={value => void switchScope(value === '__global__' ? 'global' : 'project', value === '__global__' ? '' : value)} onPickFolder={() => void pickProject()} pickFolderLabel={t('common.filterSelect.pickFolder')} /></div></div>
     </div>
     <div hidden={resource !== 'config'}>
-      {workspace && <InstallPanel toolName={descriptor.name} probe={workspace.probe} customPath={customPath} busy={busy} loading={loading} onCustomPath={setCustomPath} onSavePath={() => void savePath()} onMaintain={(action, source, lineVersion) => void maintain(action, source, false, lineVersion)} onUsePath={path => void usePath(path)} />}
+      {workspace && <InstallPanel toolName={descriptor.name} probe={workspace.probe} customPath={customPath} busy={busy} loading={loading} onCustomPath={setCustomPath} onSavePath={() => void savePath()} onMaintain={(action, source, lineVersion, target) => void maintain(action, source, false, lineVersion, target)} onUsePath={path => void usePath(path)} />}
       {workspace?.nativeContextError && <div className={styles.feedback}><StatusBanner tone="error">{workspace.nativeContextError}</StatusBanner></div>}
       {workspace?.recoveryNeeded.length ? <div className={styles.feedback}><StatusBanner tone="error" action={<button type="button" onClick={() => { void native.recoverNativeTransactions().then(() => reload(toolId, scope, projectPath, true)).catch(failure => setError(errorText(failure))); }}>{t('tools.workspace.retryRecovery')}</button>}>{t('tools.workspace.recoveryNeeded', { count: workspace.recoveryNeeded.length })}</StatusBanner></div> : null}
       {!workspace ? (loading && nativeAvailable
@@ -430,29 +427,6 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     {resourcesReady && resource === 'skills' && supported.skills && <SkillsWorkspace key={`${context}:${resourceEpoch}:${resourceContext?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={resourceContext?.effectiveContextId ?? null} onDirtyChange={skillsDirty} />}
     {resourcesReady && resource === 'agents' && supported.agents && <AgentsWorkspace key={`${context}:${resourceEpoch}:${resourceContext?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={resourceContext?.effectiveContextId ?? null} onDirtyChange={agentsDirty} />}
     {resourcesReady && resource === 'plugins' && supported.plugins && <PluginsWorkspace key={`${context}:${resourceEpoch}:${resourceContext?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={resourceContext?.effectiveContextId ?? null} />}
-    <GuideDialog open={!!maintenance} title={t('tools.workspace.maintenanceTitle', { name: maintenance?.name })} onClose={() => { if (maintenance?.running) cancelMaintenance(); else setMaintenance(null); }}>
-      {maintenance && <div className={styles.maintenancePanel}>
-        <div className={styles.maintenanceStatusCard} data-state={maintenance.running ? 'running' : maintenance.error ? 'error' : 'done'}>
-          <span className={styles.maintenanceStatusIcon} aria-hidden="true">
-            {maintenance.running ? <span className={styles.maintenanceSpinner} /> : <Icon name={maintenance.error ? 'alert' : 'check'} size={18} />}
-          </span>
-          <div className={styles.maintenanceStatusBody}>
-            <p role="status" className={styles.maintenanceStatusText}>{maintenance.running ? t('tools.workspace.maintenanceRunning') : maintenance.error || t('tools.workspace.maintenanceDone', { version: maintenance.version ?? '' })}</p>
-            {maintenance.running && maintenance.error && <p role="alert" className={styles.maintenanceInlineError}>{maintenance.error}</p>}
-          </div>
-          {maintenance.running && <span className={styles.maintenanceBar} aria-hidden="true" />}
-        </div>
-        <div className={styles.maintenanceTerminal}>
-          <div className={styles.maintenanceTerminalHead}>
-            <span className={styles.maintenanceTerminalDots} aria-hidden="true"><i /><i /><i /></span>
-            <span className={styles.maintenanceTerminalTitle}>{t('tools.workspace.maintenanceLog')}</span>
-          </div>
-          <pre ref={maintenanceLogRef} className={styles.maintenanceLog} aria-label={t('tools.workspace.maintenanceLog')}>{maintenance.output || t('tools.workspace.maintenanceWaiting')}</pre>
-        </div>
-        <div className="dialog-footer">{maintenance.running
-          ? <button type="button" disabled={maintenance.cancelling} onClick={cancelMaintenance}>{t(maintenance.cancelling ? 'tools.workspace.maintenanceCancelling' : 'tools.workspace.maintenanceCancel')}</button>
-          : <>{maintenance.error && maintenance.tool === toolId && <button type="button" className={styles.primary} disabled={busy} onClick={() => void maintain(maintenance.action, maintenance.source, true, maintenance.lineVersion)}>{t('tools.workspace.maintenanceRetry')}</button>}<button type="button" className={!maintenance.error ? styles.primary : undefined} onClick={() => setMaintenance(null)}>{t('tools.workspace.maintenanceClose')}</button></>}</div>
-      </div>}
-    </GuideDialog>
+    <MaintenanceDialog state={maintenance} busy={busy} canRetry={maintenance?.tool === toolId} onCancel={cancelMaintenance} onRetry={() => { if (maintenance) void maintain(maintenance.action, maintenance.source, true, maintenance.lineVersion, maintenance.target); }} onClose={() => setMaintenance(null)} onMinimize={() => setMaintenance(previous => previous ? { ...previous, minimized: true } : previous)} onRestore={() => setMaintenance(previous => previous ? { ...previous, minimized: false } : previous)} />
   </ToastScope></section>;
 }

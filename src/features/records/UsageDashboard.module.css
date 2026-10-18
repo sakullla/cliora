@@ -161,7 +161,7 @@ button.rankMain:hover:not(:disabled), .sessions button:hover:not(:disabled) { ba
 .priceForm input { width: 100%; min-height: var(--control-h-sm); color: var(--text); font-weight: var(--fw-regular); }
 .priceForm > :global(.dialog-footer) { grid-column: 1 / -1; }
 .error { grid-column: 1 / -1; margin: 0; padding: 8px 12px; border: 1px solid var(--danger-line); border-radius: var(--radius); background: var(--danger-soft); color: var(--danger); font-size: var(--fs-body); font-weight: var(--fw-regular); }
-.primaryButton, .primaryButton:hover:not(:disabled) { border-radius: var(--radius-sm); border-color: color-mix(in srgb, var(--accent) 86%, black); background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 82%, var(--accent-bright)) 0%, var(--accent) 100%); color: var(--on-accent); box-shadow: var(--shadow-accent), var(--inner-highlight); }
+.primaryButton, .primaryButton:hover:not(:disabled) { border-radius: var(--radius-sm); border-color: color-mix(in srgb, var(--accent) 86%, black); background: var(--accent); color: var(--on-accent); box-shadow: var(--shadow-accent), var(--inner-highlight); }
 .primaryButton:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); transform: translateY(-1px); }
 
 @container (max-width: 820px) {

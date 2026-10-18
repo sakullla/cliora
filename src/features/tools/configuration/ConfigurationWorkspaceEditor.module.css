@@ -121,8 +121,8 @@
 .footer .actions button { white-space: nowrap; }
 .footer details[open] { position: absolute; bottom: var(--config-footer-h); right: 0; z-index: 3; padding: 12px; border: 1px solid var(--line); background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow-sm); }
 .footer details[open] button { display: block; margin-top: 8px; }
-.primary, .primary:hover:not(:disabled) { border-radius: var(--radius-sm) !important; border-color: color-mix(in srgb, var(--accent) 86%, black) !important; background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 82%, var(--accent-bright)) 0%, var(--accent) 100%) !important; color: var(--on-accent) !important; box-shadow: var(--shadow-accent), var(--inner-highlight) !important; }
-.primary:hover:not(:disabled) { border-color: var(--accent-hover) !important; background: var(--accent-hover) !important; transform: translateY(-1px); }
+.primary, .primary:hover:not(:disabled) { border-radius: var(--radius-sm) !important; border-color: color-mix(in srgb, var(--accent) 86%, black) !important; background: var(--accent) !important; color: var(--on-accent) !important; box-shadow: var(--shadow-accent), var(--inner-highlight) !important; }
+.primary:hover:not(:disabled) { border-color: var(--accent-hover) !important; background: var(--accent-hover) !important; }
 @media (max-width: 760px) { .tabs { gap: 0; } .tabs button { padding: 0 8px; } .footer { gap: 5px; } .footer button { padding: 8px; } }
 @media (max-width: 640px) { .sourceChoices { grid-template-columns: 1fr; } .sourcePicker [role='radio'] { min-height: 0; } .name { grid-template-columns: 1fr; gap: 6px; } .chain button { padding-right: 4px; } .accountBody { grid-template-columns: 1fr; } }
 

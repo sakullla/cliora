@@ -14,7 +14,7 @@ const copy = {
     nameLabel: 'MCP 服务器名称',
     nameAria: '名称',
     nameError: '名称只可用字母、数字、- 和 _，最多 80 个字符。',
-    hint: 'CLI 会运行这条命令，通过标准输入输出通信。适合 npx、uvx 或本机程序。',
+    hint: '运行 npx、uvx 或本机程序',
     argRow: '参数，每行一项 第 1 行',
   },
   en: {
@@ -27,7 +27,7 @@ const copy = {
     nameLabel: 'MCP server name',
     nameAria: 'Name',
     nameError: 'Names may use letters, digits, - and _ only, up to 80 characters.',
-    hint: 'The CLI runs this command and talks to it over standard input/output. Suits npx, uvx, or local programs.',
+    hint: 'Runs npx, uvx or a local program',
     argRow: 'Arguments, one per line row 1',
   },
 } as const;
@@ -223,7 +223,7 @@ async function readLayout(page: Page, language: 'zh' | 'en') {
     const labelRange = document.createRange();
     labelRange.setStart(labelNode, start);
     labelRange.setEnd(labelNode, start + text.nameLabel.length);
-    const hint = [...dialog.querySelectorAll('p')].find((node) => node.textContent?.trim() === text.hint);
+    const hint = [...dialog.querySelectorAll('p, small')].find((node) => node.textContent?.trim() === text.hint);
     if (!hint) return { error: 'transport hint missing' };
     const hintMarginTop = Number.parseFloat(getComputedStyle(hint).marginTop);
     const hintRange = document.createRange();

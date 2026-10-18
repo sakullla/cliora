@@ -78,23 +78,24 @@ export function McpFormFields({ draft, onChange, envRows, onEnvRowsChange, heade
       {pasteError && <p className={styles.fieldError} role="alert">{pasteError}</p>}
       <div className={styles.pasteActions}><button type="button" onClick={() => { setPasteOpen(false); setPasteError(''); }}>{t('library.resources.back')}</button><button type="button" className={styles.primary} disabled={!pasteText.trim()} onClick={applyPaste}>{t('library.resources.pasteImportApply')}</button></div>
     </div>}
-    <div className={styles.identity}>
-      <label className={styles.field}>{t('tools.mcp.name')}
-        <input aria-label={t('tools.mcp.nameAria')} aria-invalid={!!nameIssue || undefined} aria-describedby={nameIssue ? `${id}-name` : undefined} value={draft.name} disabled={disabled} spellCheck={false} autoComplete="off" onChange={(event) => onChange({ ...draft, name: event.target.value })} onPaste={pasteIntoName} placeholder={t('tools.mcp.namePlaceholder')} />
-        {nameIssue && <small id={`${id}-name`} className={styles.fieldError}>{t(`tools.mcp.issue.${nameIssue}`)}</small>}
-      </label>
-      <div className={styles.typeField}><span>{t('tools.mcp.type')}</span>
-        <div className={styles.typeSwitch} role="radiogroup" aria-label={t('tools.mcp.transport')}>{transports.map((item) => <button key={item.value} type="button" aria-pressed={draft.transport === item.value} disabled={disabled} onClick={() => onChange({ ...draft, transport: item.value })}><Icon name={item.icon} size={14} />{item.label}</button>)}</div>
-      </div>
+    <label className={styles.field}>{t('tools.mcp.name')}
+      <input aria-label={t('tools.mcp.nameAria')} aria-invalid={!!nameIssue || undefined} aria-describedby={nameIssue ? `${id}-name` : undefined} value={draft.name} disabled={disabled} spellCheck={false} autoComplete="off" onChange={(event) => onChange({ ...draft, name: event.target.value })} onPaste={pasteIntoName} placeholder={t('tools.mcp.namePlaceholder')} />
+      {nameIssue && <small id={`${id}-name`} className={styles.fieldError}>{t(`tools.mcp.issue.${nameIssue}`)}</small>}
+    </label>
+    <div className={styles.typeField}><span>{t('tools.mcp.type')}</span>
+      <div className={styles.typeSwitch} role="radiogroup" aria-label={t('tools.mcp.transport')}>{transports.map((item) => <button key={item.value} type="button" aria-pressed={draft.transport === item.value} aria-label={item.label} aria-describedby={`${id}-${item.value}`} disabled={disabled} onClick={() => onChange({ ...draft, transport: item.value })}>
+        <span className={styles.typeIcon}><Icon name={item.icon} size={16} /></span>
+        <span className={styles.typeText}><strong>{t(`tools.mcp.transportCard.${item.value}.title`)}<code>{item.label}</code></strong><small id={`${id}-${item.value}`}>{t(`tools.mcp.transportCard.${item.value}.detail`)}</small></span>
+        <span className={styles.typeCheck} aria-hidden="true"><Icon name="check" size={12} strokeWidth={3} /></span>
+      </button>)}</div>
     </div>
-    <p className={styles.transportHint}>{draft.transport === 'stdio' ? t('tools.mcp.stdioHint') : t('tools.mcp.httpHint')}</p>
     {draft.transport === 'stdio' ? <>
       <label className={styles.field}>{t('tools.mcp.command')}
         <input className={styles.mono} aria-label={t('tools.mcp.command')} aria-invalid={!!commandIssue || undefined} aria-describedby={commandIssue ? `${id}-command` : undefined} value={draft.command} disabled={disabled} spellCheck={false} autoComplete="off" onChange={(event) => onChange({ ...draft, command: event.target.value })} placeholder={t('tools.mcp.commandPlaceholder')} />
         {commandIssue && <small id={`${id}-command`} className={styles.fieldError}>{t(`tools.mcp.issue.${commandIssue}`)}</small>}
       </label>
       <KeyValueRows single label={t('tools.mcp.args')} rows={draft.args.length ? draft.args.map((value) => ({ key: '', value })) : [{ key: '', value: '' }]} disabled={disabled} onChange={(rows) => onChange({ ...draft, args: rows.map((row) => row.value) })} valuePlaceholder={t('tools.mcp.argPlaceholder')} />
-      {preview && <div className={styles.preview}><span>{t('tools.mcp.commandPreview')}</span><code>{preview}</code></div>}
+      {preview && <div className={styles.preview}><span>{t('tools.mcp.commandPreview')}</span><code><i aria-hidden="true">$</i>{preview}</code></div>}
       <KeyValueRows maskSensitive label={t('tools.mcp.env')} rows={envRows} disabled={disabled} onChange={onEnvRowsChange} keyPlaceholder={t('tools.mcp.envKeyPlaceholder')} valuePlaceholder={t('tools.mcp.envValuePlaceholder')} />
     </> : <>
       <label className={styles.field}>URL

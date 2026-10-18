@@ -32,8 +32,8 @@
 }
 .tabs button[aria-selected="true"] .tabCount { background: var(--accent-soft); color: var(--accent); }
 
-.primary, .primary:hover:not(:disabled) { border-radius: var(--radius-sm) !important; border-color: color-mix(in srgb, var(--accent) 86%, black) !important; background-color: var(--accent) !important; background-image: linear-gradient(180deg, color-mix(in srgb, var(--accent) 82%, var(--accent-bright)) 0%, var(--accent) 100%) !important; color: var(--on-accent) !important; box-shadow: var(--shadow-accent), var(--inner-highlight); }
-.primary:hover:not(:disabled) { border-color: var(--accent-hover) !important; background-color: var(--accent-hover) !important; background-image: none !important; transform: translateY(-1px); }
+.primary, .primary:hover:not(:disabled) { border-radius: var(--radius-sm) !important; border-color: color-mix(in srgb, var(--accent) 86%, black) !important; background-color: var(--accent) !important; background-image: var(--accent) !important; color: var(--on-accent) !important; box-shadow: var(--shadow-accent), var(--inner-highlight); }
+.primary:hover:not(:disabled) { border-color: var(--accent-hover) !important; background-color: var(--accent-hover) !important; background-image: none !important; }
 
 /* Filters stay on one row until the page is too narrow for three controls */
 .filters { display: grid; grid-template-columns: minmax(0, 1fr) minmax(132px, 190px) minmax(132px, 190px); align-items: center; gap: 8px; padding: 8px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: color-mix(in srgb, var(--surface) 76%, var(--surface-2)); box-shadow: var(--shadow-xs); }

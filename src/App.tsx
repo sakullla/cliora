@@ -5,6 +5,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Icon } from './components/Icon';
 import type { IconName } from './components/Icon';
 import brandIcon from '../src-tauri/icons/128x128@2x.png';
+import { useUpdateOffer } from './lib/appUpdate';
 import { ConfirmationHost } from './components/ConfirmationHost';
 import { EmptyState } from './components/EmptyState';
 import { PageSkeleton } from './components/Skeleton';
@@ -224,6 +225,7 @@ export default function App() {
     return () => media.removeEventListener('change', apply);
   }, [bootstrap.preferences.theme]);
 
+  const updateOffer = useUpdateOffer();
   const goRef = useRef<(next: Page) => void>(() => {});
   useEffect(() => {
     let pendingSearch = 0;
@@ -379,6 +381,11 @@ export default function App() {
   }
 
   // Checklist step entries: the managed-CLI checkboxes, profile creation, and the launch area.
+  function openAppUpdate() {
+    setSettingsTab('general');
+    void go('settings').then(() => requestAnimationFrame(() => document.getElementById('app-update')?.scrollIntoView({ block: 'center', behavior: 'smooth' })));
+  }
+
   function openOnboardingToolSetup() {
     setSettingsTab('general');
     void go('settings');
@@ -447,6 +454,7 @@ export default function App() {
         </button></Fragment>; })}
       </nav>
       <div className="sidebar-foot">
+        {updateOffer && <button type="button" className="sidebar-update" title={t('common.shell.updateTitle', { version: updateOffer.version })} aria-label={t('common.shell.updateTitle', { version: updateOffer.version })} onClick={openAppUpdate}><span className="sidebar-update-glyph" aria-hidden="true"><Icon name="download" size={14} /></span><span className="sidebar-update-text">{t('common.shell.updateAvailable', { version: updateOffer.version })}</span><span className="sidebar-update-action" aria-hidden="true">{t('common.shell.updateAction')}</span></button>}
         <button type="button" className="sidebar-command" aria-label={t('common.shell.commandTitle', { shortcut: `${modLabel}+K` })} title={t('common.shell.commandTitle', { shortcut: `${modLabel}+K` })} onClick={() => setPaletteOpen(true)}><Icon name="search" size={15} /><span>{t('common.palette.title')}</span><kbd>{modLabel}+K</kbd></button>
         <div className="theme-switch" role="group" aria-label={t('common.theme.switch')}>{themes.map((item) => { const label = t(`common.theme.${item.id}`); return <button key={item.id} type="button" aria-label={label} title={label} aria-pressed={bootstrap.preferences.theme === item.id} disabled={busy} onClick={() => { if (bootstrap.preferences.theme !== item.id) void updateTheme(item.id); }}><Icon name={item.glyph} size={14} /></button>; })}</div>
         <div className="sidebar-status" title={nativeAvailable ? t('common.shell.statusLocalTitle') : t('common.shell.statusPreviewTitle')}><span className="status-dot" data-tone={nativeAvailable ? undefined : 'preview'} /><span className="status-text" data-short={nativeAvailable ? t('common.shell.statusLocalShort') : t('common.shell.statusPreviewShort')}>{nativeAvailable ? t('common.shell.statusLocal') : t('common.shell.statusPreview')}</span></div>
