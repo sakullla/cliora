@@ -1356,3 +1356,130 @@ fn unchanged_digest_applies_a_restored_binding_ahead_of_a_pending_release() {
         .unwrap();
     assert_eq!(deleted_after, 0);
 }
+
+#[test]
+fn unchanged_digest_delete_does_not_keep_a_finished_write_blocker() {
+    struct Guard;
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            super::super::set_restore_roots_for_test(None);
+        }
+    }
+    let _guard = Guard;
+    let server = Server::new();
+    let temp = tempfile::tempdir().unwrap();
+    let source = database(&temp.path().join("source"));
+    let fresh = database(&temp.path().join("fresh"));
+    let credentials = MemoryCredentials::default();
+    let registry = Registry::builtins().with_fixture_installation("codex", "0.160.0");
+    put_library(&source, "kept-body");
+    let project = temp.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    let scope = crate::native::apply::scope_key(crate::native::adapter::Scope::Project, Some(&project)).unwrap();
+    let key = format!("binding:{}", super::super::binding_id("codex", &scope));
+    let profile = crate::native::profile::RegisteredProfile {
+        editing: None,
+        authentication: crate::native::profile::ProfileAuthentication::Native,
+        revision: String::new(),
+        id: "profile-write".into(),
+        tool: "codex".into(),
+        name: "Synced".into(),
+        version: 1,
+        inherit_common: false,
+        files: BTreeMap::from([("settings".into(), "model = \"gpt-6\"\n".into())]),
+        suppressed: BTreeMap::new(),
+        connection: None,
+        native_credentials: BTreeMap::new(),
+    };
+    source
+        .with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO native_profiles (id,tool,version,data) VALUES ('profile-write','codex',1,?1)",
+                [serde_json::to_string(&profile).unwrap()],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO applied_bindings (scope_key,tool,profile_id,profile_version,managed) VALUES (?1,'codex','profile-write',-1,'{}')",
+                [&scope],
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+    configure(&source, &credentials, setup(&server)).unwrap();
+    run(&source, &credentials, &registry, false).unwrap();
+    let home = temp.path().join("home");
+    std::fs::create_dir(&home).unwrap();
+    super::super::set_restore_roots_for_test(Some((home, temp.path().to_path_buf())));
+    let canonical = scope.strip_prefix("project:").unwrap();
+    let config = std::path::Path::new(canonical).join(".codex").join("config.toml");
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    std::fs::write(&config, "model = \"old\"\nkeep = \"yes\"\n").unwrap();
+    let mut blocked = std::fs::metadata(&config).unwrap().permissions();
+    blocked.set_readonly(true);
+    std::fs::set_permissions(&config, blocked).unwrap();
+    configure(&fresh, &credentials, setup(&server)).unwrap();
+    let received = run(&fresh, &credentials, &registry, false).unwrap();
+    let failed = received
+        .blockers
+        .iter()
+        .find(|item| item.key == key)
+        .unwrap_or_else(|| panic!("{:?}", received.blockers));
+    assert!(failed.action == "retry" || failed.action == "install", "{failed:?}");
+    let before = super::super::collect_snapshot(&fresh, &credentials, &registry).unwrap();
+    let before_digest = before.entities.iter().find(|entity| entity.key() == key).unwrap().digest().unwrap();
+    let saved: String = fresh
+        .with_connection(|conn| {
+            conn.query_row(
+                "SELECT local_digest FROM sync_entity_state WHERE entity_key=?1",
+                [&key],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert_eq!(saved, before_digest);
+    let managed = r#"{"settings":{"/model":"old"}}"#;
+    fresh
+        .with_connection(|conn| {
+            conn.execute("UPDATE applied_bindings SET managed=?1 WHERE tool='codex'", [managed])
+                .unwrap();
+            Ok(())
+        })
+        .unwrap();
+    let mut open = std::fs::metadata(&config).unwrap().permissions();
+    open.set_readonly(false);
+    std::fs::set_permissions(&config, open).unwrap();
+    source
+        .with_connection(|conn| {
+            conn.execute("DELETE FROM applied_bindings WHERE tool='codex'", [])
+                .unwrap();
+            Ok(())
+        })
+        .unwrap();
+    run(&source, &credentials, &registry, false).unwrap();
+    let deleted = run(&fresh, &credentials, &registry, false).unwrap();
+    assert!(deleted.blockers.iter().all(|item| item.key != key), "{:?}", deleted.blockers);
+    assert!(
+        super::super::load_pending_releases(&fresh).unwrap().iter().all(|item| item.key != key),
+        "{:?}",
+        super::super::load_pending_releases(&fresh).unwrap()
+    );
+    let released = std::fs::read_to_string(&config).unwrap();
+    assert!(!released.contains("old"), "{released}");
+    assert!(released.contains("keep"), "{released}");
+    let bindings: i64 = fresh
+        .with_connection(|conn| {
+            conn.query_row("SELECT count(*) FROM applied_bindings WHERE tool='codex'", [], |row| row.get(0))
+                .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert_eq!(bindings, 0);
+    assert_eq!(body(&fresh).as_deref(), Some("kept-body"));
+    super::super::retry_native_blocker(&fresh, &credentials, &registry, &key).unwrap();
+    let again = run(&fresh, &credentials, &registry, false).unwrap();
+    assert!(again.blockers.iter().all(|item| item.key != key), "{:?}", again.blockers);
+    assert_eq!(body(&fresh).as_deref(), Some("kept-body"));
+    let profile_kept = crate::native::profile::get_registered_profile(&fresh, "profile-write");
+    assert!(profile_kept.is_ok(), "{profile_kept:?}");
+}
