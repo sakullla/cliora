@@ -889,19 +889,19 @@ fn bundle_restore_keeps_conflict_local_and_applies_other_items() {
     assert!(!saved.contains("Remote"));
     let name: String = db.with_connection(|conn| conn.query_row("SELECT name FROM projects WHERE id='project-new'", [], |row| row.get(0)).map_err(|error| error.to_string())).unwrap();
     assert_eq!(name, "Added");
-    let raw: String = db.with_connection(|conn| conn.query_row("SELECT value FROM app_settings WHERE key='sync_conflicts'", [], |row| row.get(0)).map_err(|error| error.to_string())).unwrap();
+    let raw: String = db.with_connection(|conn| conn.query_row("SELECT value FROM app_settings WHERE key='bundle_conflicts'", [], |row| row.get(0)).map_err(|error| error.to_string())).unwrap();
     assert!(!raw.contains("sk-local-plain"), "{raw}");
-    let records: Vec<sync::SyncConflict> = serde_json::from_str(&raw).unwrap();
+    let records: Vec<sync::BundleHold> = serde_json::from_str(&raw).unwrap();
     let conflict = records.iter().find(|item| item.key == "profile:profile-1").unwrap();
     assert!(conflict.local_present);
-    assert_eq!(conflict.versions.len(), 1);
-    let PortablePayload::Profile(held) = &conflict.versions[0].entity.as_ref().unwrap().payload else { panic!("held profile") };
+    assert!(conflict.version_id.starts_with("bundle:"));
+    let PortablePayload::Profile(held) = &conflict.entity.payload else { panic!("held profile") };
     assert_eq!(held.profile.name, "Remote");
     assert!(held.connection_secret.is_none());
     let id = held.profile.connection.as_ref().unwrap().secret_ref.as_deref().unwrap();
     assert_eq!(credentials.get(id).unwrap(), "sk-local-plain");
     let visible = sync::status(&db).unwrap();
-    assert!(visible.conflicts.iter().any(|item| item.key == "profile:profile-1" && item.versions.iter().all(|version| version.entity.is_none())));
+    assert!(visible.conflicts.iter().any(|item| item.key == "profile:profile-1" && item.versions.iter().all(|version| version.entity.is_none() && version.id == conflict.version_id)));
 }
 
 #[test]
@@ -980,16 +980,50 @@ fn schema3_language_round_trips_and_older_packages_do_not_clear_it() {
     assert_eq!(saved.language.as_deref(), Some("zh"));
 }
 
+fn insert_account(db: &Database, account: &crate::accounts::AuthAccount) {
+    db.with_connection(|conn| {
+        conn.execute(
+            "INSERT INTO auth_accounts (id,tool,version,data) VALUES (?1,?2,1,?3) ON CONFLICT(id) DO UPDATE SET data=excluded.data",
+            rusqlite::params![account.id, account.tool_id, serde_json::to_string(account).unwrap()],
+        )
+        .unwrap();
+        Ok(())
+    })
+    .unwrap();
+}
+
+fn sample_account(id: &str, context: crate::accounts::NativeContext) -> crate::accounts::AuthAccount {
+    crate::accounts::AuthAccount {
+        id: id.into(),
+        tool_id: "codex".into(),
+        provider: "test".into(),
+        label: format!("Work {id}"),
+        version: 1,
+        state: crate::accounts::AccountState::SignedIn,
+        identity: None,
+        context: Some(context),
+        retired_contexts: Vec::new(),
+        pending_login: None,
+        checked_at: None,
+        detail: None,
+    }
+}
+
 #[test]
-fn unreadable_auth_file_fails_the_account_export() {
+fn unreadable_auth_file_blocks_only_that_account() {
     let temp = tempfile::tempdir().unwrap();
     let db = database(temp.path());
     let credentials = MemoryCredentials::default();
     let registry = Registry::builtins();
+    db.with_connection(|conn| {
+        conn.execute("INSERT INTO projects (id,name,path,preferred_tool,last_opened) VALUES ('kept','Kept',NULL,NULL,0)", []).unwrap();
+        Ok(())
+    })
+    .unwrap();
     let root = temp.path().join("auth");
     fs::create_dir_all(&root).unwrap();
     fs::write(root.join("history.txt"), "session-body").unwrap();
-    let mut context = crate::accounts::NativeContext {
+    let context = crate::accounts::NativeContext {
         id: "ctx".into(),
         tool_id: "codex".into(),
         root: root.clone(),
@@ -1001,43 +1035,223 @@ fn unreadable_auth_file_fails_the_account_export() {
         remove_environment: Vec::new(),
         cli_args: Vec::new(),
     };
-    let account = crate::accounts::AuthAccount {
-        id: "acct".into(),
-        tool_id: "codex".into(),
-        provider: "test".into(),
-        label: "Work".into(),
-        version: 1,
-        state: crate::accounts::AccountState::SignedIn,
-        identity: None,
-        context: Some(context.clone()),
-        retired_contexts: Vec::new(),
-        pending_login: None,
-        checked_at: None,
-        detail: None,
-    };
-    db.with_connection(|conn| {
-        conn.execute("INSERT INTO auth_accounts (id,tool,version,data) VALUES ('acct','codex',1,?1)", [serde_json::to_string(&account).unwrap()]).unwrap();
-        Ok(())
-    }).unwrap();
-    let destination = temp.path().join("blocked.cliora");
-    let error = export_bundle(&db, &credentials, &registry, "correct-password", None, &destination).unwrap_err();
-    assert!(error.contains("无法读取"), "{error}");
-    assert!(!destination.exists());
-    context.auth_files = vec![PathBuf::from("bad:name")];
-    let mut renamed = account.clone();
-    renamed.context = Some(context.clone());
-    db.with_connection(|conn| {
-        conn.execute("UPDATE auth_accounts SET data=?1 WHERE id='acct'", [serde_json::to_string(&renamed).unwrap()]).unwrap();
-        Ok(())
-    }).unwrap();
-    assert!(collect_snapshot(&db, &credentials, &registry).unwrap_err().contains("文件名无效"));
+    let account = sample_account("acct", context.clone());
+    insert_account(&db, &account);
+    let destination = temp.path().join("partial.cliora");
+    let exported = export_bundle(&db, &credentials, &registry, "correct-password", None, &destination).unwrap();
+    assert!(exported >= 1);
+    let snapshot = unlock_bundle(&destination, "correct-password").unwrap();
+    let rendered = serde_json::to_string(&snapshot).unwrap();
+    assert!(rendered.contains("Kept"), "{rendered}");
+    assert!(!rendered.contains("account:acct") && !rendered.contains("\"acct\""), "{rendered}");
+    let blockers = load_blockers(&db).unwrap();
+    assert!(blockers.iter().any(|item| item.key == "account:acct" && item.detail.contains("无法读取")), "{blockers:?}");
+    let row_still_there: bool = db.with_connection(|conn| {
+        conn.query_row("SELECT EXISTS(SELECT 1 FROM auth_accounts WHERE id='acct')", [], |row| row.get(0))
+            .map_err(|error| error.to_string())
+    })
+    .unwrap();
+    assert!(row_still_there);
+
+    let mut invalid = context.clone();
+    invalid.auth_files = vec![PathBuf::from("bad:name")];
+    insert_account(&db, &sample_account("acct", invalid));
+    let named = collect_snapshot(&db, &credentials, &registry).unwrap();
+    assert!(named.entities.iter().any(|entity| entity.key() == "project:kept"));
+    assert!(named.entities.iter().all(|entity| entity.key() != "account:acct"));
+    assert!(load_blockers(&db).unwrap().iter().any(|item| item.detail.contains("文件名无效")));
+
     let huge = root.join("huge.bin");
     fs::File::create(&huge).unwrap().set_len(4 * 1024 * 1024 + 1).unwrap();
-    context.auth_files = vec![huge];
-    renamed.context = Some(context);
+    let mut oversized = context;
+    oversized.auth_files = vec![huge];
+    insert_account(&db, &sample_account("acct", oversized));
+    let limited = collect_snapshot(&db, &credentials, &registry).unwrap();
+    assert!(limited.entities.iter().any(|entity| entity.key() == "project:kept"));
+    assert!(limited.entities.iter().all(|entity| entity.key() != "account:acct"));
+    assert!(load_blockers(&db).unwrap().iter().any(|item| item.key == "account:acct" && item.detail.contains("4MiB")));
+
+    let incoming = PortableSnapshot {
+        schema_version: 3,
+        entities: vec![PortableEntity {
+            id: "project-new".into(),
+            payload: PortablePayload::Project(PortableProject {
+                id: "project-new".into(),
+                name: "Added".into(),
+                path: None,
+                model_overrides: BTreeMap::new(),
+            }),
+        }],
+    };
+    let draft = preview_import(&db, &credentials, &registry, incoming).unwrap();
+    restore_preview(&db, &credentials, &registry, &draft).unwrap();
+    let name: String = db.with_connection(|conn| {
+        conn.query_row("SELECT name FROM projects WHERE id='project-new'", [], |row| row.get(0))
+            .map_err(|error| error.to_string())
+    })
+    .unwrap();
+    assert_eq!(name, "Added");
+    assert!(collect_snapshot(&db, &credentials, &registry).unwrap().entities.iter().any(|entity| entity.key() == "project:project-new"));
+}
+
+#[test]
+fn bundle_conflict_can_be_chosen_without_webdav() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(temp.path());
+    let credentials = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    credentials.put("local-secret", "sk-local-plain").unwrap();
+    let mut profile = bare_profile("profile-1", "codex", "Local", BTreeMap::new());
+    profile.connection = Some(crate::native::profile::Connection {
+        provider_id: "openai".into(),
+        interface_format: "openai_responses".into(),
+        base_url: "https://api.example.test/v1".into(),
+        model: "gpt-6".into(),
+        secret_ref: Some("local-secret".into()),
+        auth_env_var: None,
+        model_records: Vec::new(),
+    });
+    profile.native_credentials.insert("auth".into(), BTreeMap::from([("access_token".into(), "local-secret".into())]));
     db.with_connection(|conn| {
-        conn.execute("UPDATE auth_accounts SET data=?1 WHERE id='acct'", [serde_json::to_string(&renamed).unwrap()]).unwrap();
+        conn.execute(
+            "INSERT INTO native_profiles (id,tool,version,data) VALUES (?1,?2,1,?3)",
+            rusqlite::params![profile.id, profile.tool, serde_json::to_string(&profile).unwrap()],
+        )
+        .unwrap();
         Ok(())
-    }).unwrap();
-    assert!(collect_snapshot(&db, &credentials, &registry).unwrap_err().contains("4MiB"));
+    })
+    .unwrap();
+    let mut snapshot = collect_snapshot(&db, &credentials, &registry).unwrap();
+    let entity = snapshot.entities.iter_mut().find(|entity| entity.key() == "profile:profile-1").unwrap();
+    let PortablePayload::Profile(value) = &mut entity.payload else { panic!("profile") };
+    value.profile.name = "Remote".into();
+    value.connection_secret = Some("sk-remote-plain".into());
+    value.native_secrets.get_mut("auth").unwrap().insert("access_token".into(), "native-remote-plain".into());
+    let draft = preview_import(&db, &credentials, &registry, snapshot).unwrap();
+    assert!(draft.items.iter().any(|item| item.key == "profile:profile-1" && item.status == "conflict"));
+    restore_preview(&db, &credentials, &registry, &draft).unwrap();
+    let before: String = db.with_connection(|conn| {
+        conn.query_row("SELECT data FROM native_profiles WHERE id='profile-1'", [], |row| row.get(0))
+            .map_err(|error| error.to_string())
+    })
+    .unwrap();
+    assert!(before.contains("Local") && !before.contains("Remote"), "{before}");
+    let visible = sync::status(&db).unwrap();
+    let version_id = visible
+        .conflicts
+        .iter()
+        .find(|item| item.key == "profile:profile-1")
+        .unwrap()
+        .versions[0]
+        .id
+        .clone();
+    assert!(version_id.starts_with("bundle:"));
+    let preview = sync::preview_conflict(&db, &credentials, &registry, "profile:profile-1").unwrap();
+    assert!(preview.versions.iter().any(|version| version.id == version_id && version.summary.contains("Remote")));
+    assert!(sync::resolve(&db, &credentials, &registry, "profile:profile-1", Some(&version_id)).is_ok());
+    let saved = collect_snapshot(&db, &credentials, &registry).unwrap();
+    let PortablePayload::Profile(applied) = &saved.entities.iter().find(|entity| entity.key() == "profile:profile-1").unwrap().payload else { panic!("profile") };
+    assert_eq!(applied.profile.name, "Remote");
+    assert_eq!(applied.connection_secret.as_deref(), Some("sk-remote-plain"));
+    assert_eq!(applied.native_secrets.get("auth").and_then(|values| values.get("access_token")).map(String::as_str), Some("native-remote-plain"));
+    assert!(sync::status(&db).unwrap().conflicts.iter().all(|item| item.key != "profile:profile-1"));
+    let stored: Option<String> = db.with_connection(|conn| {
+        conn.query_row("SELECT value FROM app_settings WHERE key='bundle_conflicts'", [], |row| row.get(0))
+            .optional()
+            .map_err(|error| error.to_string())
+    })
+    .unwrap();
+    let stored = stored.unwrap_or_else(|| "[]".into());
+    assert!(stored == "[]" || !stored.contains("profile:profile-1"), "{stored}");
+}
+
+#[test]
+fn auth_write_failure_drops_the_path_and_keeps_other_items() {
+    let _roots = RestoreRootsGuard;
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(temp.path());
+    let credentials = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    let profile = bare_profile("profile-1", "codex", "Local", BTreeMap::new());
+    db.with_connection(|conn| {
+        conn.execute(
+            "INSERT INTO native_profiles (id,tool,version,data) VALUES (?1,?2,1,?3)",
+            rusqlite::params![profile.id, profile.tool, serde_json::to_string(&profile).unwrap()],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO projects (id,name,path,preferred_tool,last_opened) VALUES ('old','Old',NULL,NULL,0)", []).unwrap();
+        Ok(())
+    })
+    .unwrap();
+    let mut snapshot = collect_snapshot(&db, &credentials, &registry).unwrap();
+    let entity = snapshot.entities.iter_mut().find(|entity| entity.key() == "profile:profile-1").unwrap();
+    let PortablePayload::Profile(value) = &mut entity.payload else { panic!("profile") };
+    value.profile.name = "Remote".into();
+    let home = temp.path().join("home");
+    let base = temp.path().join("base");
+    fs::create_dir_all(&home).unwrap();
+    let blocked_root = base.join("accounts").join("ctx-write");
+    fs::create_dir_all(&blocked_root).unwrap();
+    fs::create_dir(blocked_root.join("auth.json")).unwrap();
+    set_restore_roots_for_test(Some((home, base.clone())));
+    snapshot.entities.push(PortableEntity {
+        id: "project-new".into(),
+        payload: PortablePayload::Project(PortableProject {
+            id: "project-new".into(),
+            name: "Added".into(),
+            path: None,
+            model_overrides: BTreeMap::new(),
+        }),
+    });
+    snapshot.entities.push(PortableEntity {
+        id: "acct-write".into(),
+        payload: PortablePayload::Account(PortableAccount {
+            account: sample_account(
+                "acct-write",
+                crate::accounts::NativeContext {
+                    id: "ctx-write".into(),
+                    tool_id: "codex".into(),
+                    root: PathBuf::from("/source"),
+                    config_root: PathBuf::from("/source"),
+                    auth_files: vec![PathBuf::from("auth.json")],
+                    history_roots: Vec::new(),
+                    resource_root: PathBuf::from("/source"),
+                    environment: BTreeMap::new(),
+                    remove_environment: Vec::new(),
+                    cli_args: Vec::new(),
+                },
+            ),
+            auth_files: vec![PortableAuthFile {
+                context_id: "ctx-write".into(),
+                name: "auth.json".into(),
+                contents: STANDARD.encode("login-bytes"),
+            }],
+        }),
+    });
+    let draft = preview_import(&db, &credentials, &registry, snapshot).unwrap();
+    assert!(draft.items.iter().any(|item| item.key == "profile:profile-1" && item.status == "conflict"));
+    let imported = restore_preview(&db, &credentials, &registry, &draft).unwrap();
+    assert!(imported >= 2, "{imported}");
+    let project: String = db.with_connection(|conn| {
+        conn.query_row("SELECT name FROM projects WHERE id='project-new'", [], |row| row.get(0))
+            .map_err(|error| error.to_string())
+    })
+    .unwrap();
+    assert_eq!(project, "Added");
+    let saved: String = db.with_connection(|conn| {
+        conn.query_row("SELECT data FROM native_profiles WHERE id='profile-1'", [], |row| row.get(0))
+            .map_err(|error| error.to_string())
+    })
+    .unwrap();
+    assert!(saved.contains("Local") && !saved.contains("Remote"), "{saved}");
+    let account_json: String = db.with_connection(|conn| {
+        conn.query_row("SELECT data FROM auth_accounts WHERE id='acct-write'", [], |row| row.get(0))
+            .map_err(|error| error.to_string())
+    })
+    .unwrap();
+    assert!(!account_json.contains("auth.json"), "{account_json}");
+    let blockers = load_blockers(&db).unwrap();
+    assert!(blockers.iter().any(|item| item.key == "account:acct-write" && item.detail.contains("无法写入")), "{blockers:?}");
+    assert!(collect_snapshot(&db, &credentials, &registry).is_ok());
+    assert!(sync::status(&db).unwrap().conflicts.iter().any(|item| item.key == "profile:profile-1"));
 }

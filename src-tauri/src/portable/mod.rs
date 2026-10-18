@@ -417,19 +417,42 @@ fn read_rows<T>(
     result
 }
 
+struct Collected {
+    snapshot: PortableSnapshot,
+    blocked_accounts: Vec<RestoreBlocker>,
+    readable_account_keys: Vec<String>,
+}
+
+enum AccountRead {
+    Ready(crate::accounts::AuthAccount, Vec<PortableAuthFile>),
+    Blocked(RestoreBlocker),
+}
+
 pub fn collect_snapshot(
     db: &Database,
     store: &dyn CredentialStore,
     registry: &Registry,
 ) -> Result<PortableSnapshot, String> {
-    db.with_connection(|conn| collect_snapshot_on(conn, store, registry))
+    Ok(collect_reported(db, store, registry)?.0)
+}
+
+/// Snapshot plus accounts whose auth files could not be read. Those accounts are omitted
+/// so a signed-in row is not exported without its login material.
+fn collect_reported(
+    db: &Database,
+    store: &dyn CredentialStore,
+    registry: &Registry,
+) -> Result<(PortableSnapshot, Vec<RestoreBlocker>), String> {
+    let collected = db.with_connection(|conn| collect_snapshot_on(conn, store, registry))?;
+    persist_auth_read_blockers(db, &collected)?;
+    Ok((collected.snapshot, collected.blocked_accounts))
 }
 
 fn collect_snapshot_on(
     conn: &Connection,
     store: &dyn CredentialStore,
     registry: &Registry,
-) -> Result<PortableSnapshot, String> {
+) -> Result<Collected, String> {
     let (preferences, profiles, commons, projects, models, library, mcp, skills) = {
         let preferences: Option<String> = conn
             .query_row(
@@ -496,6 +519,8 @@ fn collect_snapshot_on(
         ))
     }?;
     let mut entities = Vec::new();
+    let mut blocked_accounts = Vec::new();
+    let mut readable_account_keys = Vec::new();
     // Defaults are a view fallback, not a persisted portable entity or a CAS baseline.
     if let Some(preferences) = preferences {
     let preferences: Value = serde_json::from_str(&preferences).map_err(|_| "管理偏好格式错误")?;
@@ -685,11 +710,17 @@ fn collect_snapshot_on(
     let accounts = read_rows(conn, "SELECT data FROM auth_accounts ORDER BY id", |row| row.get::<_, String>(0))?;
     for text in accounts {
         let account: crate::accounts::AuthAccount = serde_json::from_str(&text).map_err(|_| "账号格式错误")?;
-        let (account, auth_files) = portable_account(account)?;
-        entities.push(PortableEntity {
-            id: account.id.clone(),
-            payload: PortablePayload::Account(PortableAccount { account, auth_files }),
-        });
+        // A bad auth file blocks only this account. The rest of the snapshot stays usable.
+        match portable_account(account) {
+            AccountRead::Ready(account, auth_files) => {
+                readable_account_keys.push(format!("account:{}", account.id));
+                entities.push(PortableEntity {
+                    id: account.id.clone(),
+                    payload: PortablePayload::Account(PortableAccount { account, auth_files }),
+                });
+            }
+            AccountRead::Blocked(blocker) => blocked_accounts.push(blocker),
+        }
     }
     let bindings = read_rows(
         conn,
@@ -706,9 +737,13 @@ fn collect_snapshot_on(
     if entities.len() > MAX_ENTITIES {
         return Err("可迁移资料超过 10000 项".into());
     }
-    Ok(PortableSnapshot {
-        schema_version: SNAPSHOT_VERSION,
-        entities,
+    Ok(Collected {
+        snapshot: PortableSnapshot {
+            schema_version: SNAPSHOT_VERSION,
+            entities,
+        },
+        blocked_accounts,
+        readable_account_keys,
     })
 }
 
@@ -923,7 +958,7 @@ pub fn apply_import(
     draft: &ImportDraft,
     selected: &BTreeSet<String>,
 ) -> Result<usize, String> {
-    apply_import_selecting(db, store, registry, draft, selected, &BTreeSet::new())
+    apply_import_selecting(db, store, registry, draft, selected, &BTreeSet::new(), false)
 }
 
 /// `selected` is written. `unchanged` must still match the preview baseline but is not written.
@@ -934,6 +969,7 @@ fn apply_import_selecting(
     draft: &ImportDraft,
     selected: &BTreeSet<String>,
     unchanged: &BTreeSet<String>,
+    remember_conflicts: bool,
 ) -> Result<usize, String> {
     if selected.iter().chain(unchanged.iter()).any(|key| !draft.baseline.contains_key(key)) {
         return Err("导入选择含未知资料".into());
@@ -1001,6 +1037,7 @@ fn apply_import_selecting(
     let result = db.with_connection(|conn| {
         let tx = conn.transaction().map_err(|error| error.to_string())?;
         let current: BTreeMap<_, _> = collect_snapshot_on(&tx, store, registry)?
+            .snapshot
             .entities
             .into_iter()
             .map(|entity| (entity.key(), entity))
@@ -1090,13 +1127,25 @@ fn apply_import_selecting(
                 }
             }
         }
-        tx.commit().map_err(|error| error.to_string())
+        let retired_secrets = if remember_conflicts {
+            retain_bundle_conflicts(&tx, store, draft, &current, selected, unchanged, &mut created_secrets)?
+        } else {
+            Vec::new()
+        };
+        tx.commit().map_err(|error| error.to_string())?;
+        Ok(retired_secrets)
     });
-    if let Err(error) = result {
-        for id in created_secrets {
-            let _ = store.delete(&id);
+    let retired_secrets = match result {
+        Ok(retired) => retired,
+        Err(error) => {
+            for id in created_secrets {
+                let _ = store.delete(&id);
+            }
+            return Err(error);
         }
-        return Err(error);
+    };
+    for id in retired_secrets {
+        let _ = store.delete(&id);
     }
     if let Some((home, base)) = roots {
         for entity in &prepared {
@@ -1142,79 +1191,83 @@ pub fn restore_preview(
             _ => return Err("导入资料状态无效".into()),
         }
     }
-    let imported = apply_import_selecting(db, store, registry, draft, &selected, &unchanged)?;
-    remember_bundle_conflicts(db, store, registry, draft, &selected, &unchanged)?;
-    Ok(imported)
+    apply_import_selecting(db, store, registry, draft, &selected, &unchanged, true)
 }
 
-fn remember_bundle_conflicts(
-    db: &Database,
+/// Record conflict bodies in the same transaction as the import. WebDAV `run` replaces
+/// `sync_conflicts`, so the selectable source stays in `bundle_conflicts`.
+fn retain_bundle_conflicts(
+    conn: &Connection,
     store: &dyn CredentialStore,
-    registry: &Registry,
     draft: &ImportDraft,
+    current: &BTreeMap<String, PortableEntity>,
     applied: &BTreeSet<String>,
     conflicts: &BTreeSet<String>,
-) -> Result<(), String> {
-    let local: BTreeMap<_, _> = collect_snapshot(db, store, registry)?
-        .entities
-        .into_iter()
-        .map(|entity| (entity.key(), entity))
-        .collect();
-    let mut created: Vec<String> = Vec::new();
-    let mut held = Vec::new();
+    created: &mut Vec<String>,
+) -> Result<Vec<String>, String> {
+    let existing = sync::read_bundle_holds_on(conn)?;
+    if existing.is_empty() && conflicts.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut retired = Vec::new();
+    let mut holds = Vec::new();
+    for hold in existing {
+        if applied.contains(&hold.key) || conflicts.contains(&hold.key) {
+            retired.extend(hold.secret_ids.iter().cloned());
+            continue;
+        }
+        holds.push(hold);
+    }
     for key in conflicts {
         let incoming = draft.snapshot.entities.iter().find(|entity| entity.key() == *key).ok_or("冲突资料缺失")?;
         let digest = incoming.digest()?;
-        if local.get(key).map(PortableEntity::digest).transpose()?.as_ref() != draft.baseline.get(key).and_then(|value| value.as_ref()) {
-            for id in created { let _ = store.delete(&id); }
-            return Err("本机资料已变化，请重新预览导入".into());
-        }
-        let (entity, secret_ids) = hold_conflict_entity(store, incoming)?;
-        created.extend(secret_ids);
-        held.push(sync::SyncConflict {
+        let (entity, secret_ids) = seal_conflict_entity(store, incoming)?;
+        created.extend(secret_ids.iter().cloned());
+        let local = current.get(key);
+        holds.push(sync::BundleHold {
             key: key.clone(),
-            label: local.get(key).map(PortableEntity::label).unwrap_or_else(|| incoming.label()),
-            local_present: local.contains_key(key),
-            local_digest: local.get(key).map(PortableEntity::digest).transpose()?.unwrap_or_default(),
-            remote_versions: 1,
-            remote_deleted: false,
-            versions: vec![sync::SyncConflictVersion {
-                id: format!("bundle:{digest}"),
-                digest,
-                deleted: false,
-                entity: Some(entity),
-            }],
+            label: local.map(PortableEntity::label).unwrap_or_else(|| incoming.label()),
+            local_present: local.is_some(),
+            local_digest: local.map(PortableEntity::digest).transpose()?.unwrap_or_default(),
+            version_id: format!("bundle:{digest}"),
+            digest,
+            entity,
+            secret_ids,
         });
     }
-    if let Err(error) = sync::replace_conflicts(db, applied, conflicts, held) {
-        for id in created { let _ = store.delete(&id); }
-        return Err(error);
-    }
-    Ok(())
+    sync::write_bundle_holds_on(conn, &holds)?;
+    Ok(retired)
 }
 
-/// Keep API keys in the credential store. The held entity keeps references, not raw key text.
-fn hold_conflict_entity(store: &dyn CredentialStore, incoming: &PortableEntity) -> Result<(PortableEntity, Vec<String>), String> {
+fn abort_sealed(store: &dyn CredentialStore, created: &[String], error: String) -> Result<(PortableEntity, Vec<String>), String> {
+    for id in created {
+        let _ = store.delete(id);
+    }
+    Err(error)
+}
+
+/// Move connection and native secrets into the credential store. The stored entity is not
+/// itself a snapshot; `rehydrate_conflict_entity` restores the original text before apply.
+pub(crate) fn seal_conflict_entity(store: &dyn CredentialStore, incoming: &PortableEntity) -> Result<(PortableEntity, Vec<String>), String> {
     let mut entity = incoming.clone();
-    let mut created: Vec<String> = Vec::new();
+    let mut created = Vec::new();
     if let PortablePayload::Profile(portable) = &mut entity.payload {
         if let Some(secret) = portable.connection_secret.take() {
             let id = credential_id();
             if let Err(error) = store.put(&id, &secret) {
-                for old in created { let _ = store.delete(&old); }
-                return Err(error);
+                return abort_sealed(store, &created, error);
             }
             created.push(id.clone());
-            if let Some(connection) = portable.profile.connection.as_mut() {
-                connection.secret_ref = Some(id);
-            }
+            let Some(connection) = portable.profile.connection.as_mut() else {
+                return abort_sealed(store, &created, "连接密钥缺少连接资料".into());
+            };
+            connection.secret_ref = Some(id);
         }
         for (role, values) in std::mem::take(&mut portable.native_secrets) {
             for (name, secret) in values {
                 let id = credential_id();
                 if let Err(error) = store.put(&id, &secret) {
-                    for old in created { let _ = store.delete(&old); }
-                    return Err(error);
+                    return abort_sealed(store, &created, error);
                 }
                 created.push(id.clone());
                 portable.profile.native_credentials.entry(role.clone()).or_default().insert(name, id);
@@ -1222,6 +1275,28 @@ fn hold_conflict_entity(store: &dyn CredentialStore, incoming: &PortableEntity) 
         }
     }
     Ok((entity, created))
+}
+
+pub(crate) fn rehydrate_conflict_entity(store: &dyn CredentialStore, sealed: &PortableEntity) -> Result<PortableEntity, String> {
+    let mut entity = sealed.clone();
+    if let PortablePayload::Profile(portable) = &mut entity.payload {
+        if let Some(connection) = portable.profile.connection.as_mut() {
+            if let Some(id) = connection.secret_ref.take() {
+                portable.connection_secret = Some(store.get(&id)?);
+            }
+        }
+        let credentials = std::mem::take(&mut portable.profile.native_credentials);
+        for (role, names) in credentials {
+            let mut values = BTreeMap::new();
+            for (name, id) in names {
+                values.insert(name, store.get(&id)?);
+            }
+            if !values.is_empty() {
+                portable.native_secrets.insert(role, values);
+            }
+        }
+    }
+    Ok(entity)
 }
 
 /// Observe committed portable rows without reading secrets. Metadata-only syncs emit nothing;
@@ -1305,7 +1380,46 @@ fn normalize_account_digest(account: &mut crate::accounts::AuthAccount) {
     }
 }
 
-fn portable_account(mut account: crate::accounts::AuthAccount) -> Result<(crate::accounts::AuthAccount, Vec<PortableAuthFile>), String> {
+fn auth_read_blocker(account: &crate::accounts::AuthAccount, detail: String) -> RestoreBlocker {
+    RestoreBlocker {
+        key: format!("account:{}", account.id),
+        label: account.label.clone(),
+        action: "relogin".into(),
+        detail,
+    }
+}
+
+fn is_auth_read_blocker(item: &RestoreBlocker) -> bool {
+    item.detail.contains("不能当作已导出")
+}
+
+fn persist_auth_read_blockers(db: &Database, collected: &Collected) -> Result<(), String> {
+    let readable = &collected.readable_account_keys;
+    let blocked = &collected.blocked_accounts;
+    let mut current = load_blockers(db)?;
+    let stale = current.iter().any(|item| {
+        is_auth_read_blocker(item)
+            && (readable.iter().any(|key| key == &item.key) || blocked.iter().any(|issue| issue.key == item.key))
+    });
+    if blocked.is_empty() && !stale {
+        return Ok(());
+    }
+    current.retain(|item| {
+        !is_auth_read_blocker(item)
+            || (!readable.iter().any(|key| key == &item.key) && !blocked.iter().any(|issue| issue.key == item.key))
+    });
+    current.extend(blocked.iter().cloned());
+    db.with_connection(|conn| {
+        conn.execute(
+            "INSERT INTO app_settings (key,value) VALUES ('sync_blockers',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            [serde_json::to_string(&current).map_err(|error| error.to_string())?],
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+    })
+}
+
+fn portable_account(mut account: crate::accounts::AuthAccount) -> AccountRead {
     account.pending_login = None;
     let mut auth_files = Vec::new();
     let label = account.label.clone();
@@ -1313,23 +1427,29 @@ fn portable_account(mut account: crate::accounts::AuthAccount) -> Result<(crate:
     for context in contexts {
         for path in &context.auth_files {
             let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-                return Err(format!("账号 {label} 的认证文件名无效，不能当作已导出"));
+                return AccountRead::Blocked(auth_read_blocker(&account, format!("账号 {label} 的认证文件名无效，不能当作已导出")));
             };
             if !valid_auth_name(name) {
-                return Err(format!("账号 {label} 的认证文件名无效，不能当作已导出"));
+                return AccountRead::Blocked(auth_read_blocker(&account, format!("账号 {label} 的认证文件名无效，不能当作已导出")));
             }
-            let metadata = fs::metadata(path).map_err(|_| format!("账号 {label} 的认证文件无法读取，不能当作已导出"))?;
+            let metadata = match fs::metadata(path) {
+                Ok(metadata) => metadata,
+                Err(_) => return AccountRead::Blocked(auth_read_blocker(&account, format!("账号 {label} 的认证文件无法读取，不能当作已导出"))),
+            };
             if metadata.len() > 4 * 1024 * 1024 {
-                return Err(format!("账号 {label} 的认证文件超过 4MiB，不能当作已导出"));
+                return AccountRead::Blocked(auth_read_blocker(&account, format!("账号 {label} 的认证文件超过 4MiB，不能当作已导出")));
             }
-            let bytes = fs::read(path).map_err(|_| format!("账号 {label} 的认证文件无法读取，不能当作已导出"))?;
+            let bytes = match fs::read(path) {
+                Ok(bytes) => bytes,
+                Err(_) => return AccountRead::Blocked(auth_read_blocker(&account, format!("账号 {label} 的认证文件无法读取，不能当作已导出"))),
+            };
             auth_files.push(PortableAuthFile { context_id: context.id.clone(), name: name.to_owned(), contents: STANDARD.encode(bytes) });
         }
     }
     auth_files.sort_by(|left, right| (&left.context_id, &left.name).cmp(&(&right.context_id, &right.name)));
     auth_files.dedup_by(|left, right| left.context_id == right.context_id && left.name == right.name);
     normalize_account_digest(&mut account);
-    Ok((account, auth_files))
+    AccountRead::Ready(account, auth_files)
 }
 
 fn account_without_context(account: &crate::accounts::AuthAccount) -> crate::accounts::AuthAccount {
@@ -1375,7 +1495,7 @@ fn place_account(
     let mut placed = Vec::new();
     for source in sources {
         let root = base.join("accounts").join(&source.id);
-        let local = match crate::accounts::context::context_at_registered(registry, root, &account.tool_id, source.id.clone()) {
+        let mut local = match crate::accounts::context::context_at_registered(registry, root, &account.tool_id, source.id.clone()) {
             Ok(local) => local,
             Err(error) => {
                 issues.push(RestoreBlocker {
@@ -1387,26 +1507,42 @@ fn place_account(
                 continue;
             }
         };
+        let mut rejected = Vec::new();
         for path in &local.auth_files {
-            let Some(name) = path.file_name().and_then(|name| name.to_str()) else { continue };
-            let Some(file) = portable.auth_files.iter().find(|file| file.context_id == source.id && file.name == name) else { continue };
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                rejected.push(path.clone());
+                continue;
+            };
+            let Some(file) = portable.auth_files.iter().find(|file| file.context_id == source.id && file.name == name) else {
+                if !path.is_file() {
+                    rejected.push(path.clone());
+                }
+                continue;
+            };
             match STANDARD.decode(&file.contents) {
                 Ok(bytes) => {
                     if let Some(parent) = path.parent() {
                         if fs::create_dir_all(parent).is_err() {
                             issues.push(RestoreBlocker { key: format!("account:{}", account.id), label: account.label.clone(), action: "relogin".into(), detail: format!("无法创建认证目录 {}", parent.display()) });
+                            rejected.push(path.clone());
                             continue;
                         }
                     }
                     if let Err(error) = fs::write(path, &bytes) {
                         issues.push(RestoreBlocker { key: format!("account:{}", account.id), label: account.label.clone(), action: "relogin".into(), detail: format!("无法写入认证文件：{error}") });
+                        rejected.push(path.clone());
                     } else {
                         written.push(path.clone());
                     }
                 }
-                Err(_) => issues.push(RestoreBlocker { key: format!("account:{}", account.id), label: account.label.clone(), action: "relogin".into(), detail: format!("认证文件 {name} 损坏") }),
+                Err(_) => {
+                    issues.push(RestoreBlocker { key: format!("account:{}", account.id), label: account.label.clone(), action: "relogin".into(), detail: format!("认证文件 {name} 损坏") });
+                    rejected.push(path.clone());
+                }
             }
         }
+        // A failed path must not stay on the account, or the next collect blocks on a missing file.
+        local.auth_files.retain(|path| !rejected.iter().any(|item| item == path));
         placed.push(local);
     }
     account.context = primary_id.as_ref().and_then(|id| placed.iter().find(|context| &context.id == id).cloned());
