@@ -1,4 +1,4 @@
-.form { display: grid; gap: 13px; min-width: 0; container-type: inline-size; }
+.form { display: grid; gap: 16px; min-width: 0; container-type: inline-size; }
 .formHead { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 30px; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
 .formHead h3 { flex: none; margin: 0; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-semibold); }
 
@@ -12,61 +12,53 @@
 .mono { font-family: var(--font-mono); font-size: var(--fs-body); font-weight: var(--fw-regular); }
 .fieldError { margin: 0; color: var(--danger); font-size: var(--fs-body); font-weight: var(--fw-medium); line-height: 1.45; }
 
-/* Name and transport share one row until the form gets narrow. */
-.identity { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 12px; }
-.typeField { display: grid; gap: 6px; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-medium); }
-.typeSwitch { display: flex; width: fit-content; gap: 2px; padding: 3px; border-radius: var(--radius); background: var(--surface-3); }
+/* Transport: two descriptive cards; the chosen one carries a check badge. */
+.typeField { display: grid; gap: 8px; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-medium); }
+.typeSwitch { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .typeSwitch button {
-  display: inline-flex;
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
-  gap: 6px;
-  min-height: 28px;
-  padding: 0 14px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  box-shadow: none;
-  color: var(--text-2);
-  font-weight: var(--fw-medium);
-}
-.typeSwitch button > svg { color: var(--text-3); }
-.typeSwitch button:hover:not(:disabled):not([aria-pressed='true']) { background: var(--bg); color: var(--text); }
-.typeSwitch button[aria-pressed='true'] { background: var(--surface); color: var(--text); box-shadow: var(--shadow-xs); font-weight: var(--fw-semibold); }
-.typeSwitch button[aria-pressed='true']:hover { background: var(--surface-3); color: var(--text); box-shadow: var(--shadow-xs); }
-.typeSwitch button[aria-pressed='true'] > svg { color: var(--accent); }
-.transportHint {
-  margin: 0;
-  padding: 6px 10px;
-  border-left: 2px solid var(--accent);
-  border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
-  background: var(--surface-2);
-  color: var(--text);
-  font-size: var(--fs-body);
-  font-weight: var(--fw-regular);
-  line-height: 1.45;
-}
-
-.preview {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  min-width: 0;
-  margin-top: 0;
-  padding: 8px 12px;
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
+  justify-content: stretch;
+  gap: 12px;
+  min-height: 64px;
+  padding: 10px 34px 10px 12px;
   border: 1px solid var(--line);
-}
-.preview > span {
-  flex: none;
-  padding: 1px 6px;
-  border-radius: var(--radius-xs);
-  background: var(--surface-3);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: none;
   color: var(--text);
-  font-size: var(--fs-caption);
-  font-weight: var(--fw-semibold);
+  font-weight: var(--fw-regular);
+  text-align: left;
+  white-space: normal;
+  transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
 }
-.preview > code { min-width: 0; padding: 0; border: 0; background: none; color: var(--text); font-family: var(--font-mono); font-size: var(--fs-body); font-weight: var(--fw-regular); line-height: 1.55; overflow-wrap: anywhere; white-space: pre-wrap; }
+.typeSwitch button:hover:not(:disabled):not([aria-pressed='true']) { border-color: var(--line-strong); background: var(--surface-2); box-shadow: none; }
+.typeSwitch button[aria-pressed='true'], .typeSwitch button[aria-pressed='true']:hover:not(:disabled) { border-color: var(--accent); background: color-mix(in srgb, var(--accent-soft) 70%, var(--surface)); box-shadow: inset 0 0 0 1px var(--accent); }
+.typeIcon { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; background: var(--surface-3); color: var(--text-2); transition: background-color var(--fast) var(--ease), color var(--fast) var(--ease); }
+.typeSwitch button[aria-pressed='true'] .typeIcon { background: var(--accent); color: var(--on-accent); }
+.typeText { display: grid; gap: 2px; min-width: 0; }
+.typeText strong { display: flex; align-items: center; gap: 7px; font-size: var(--fs-body); font-weight: var(--fw-semibold); }
+.typeText code { padding: 0 6px; border-radius: var(--radius-xs); background: var(--surface-3); color: var(--text-2); font-size: var(--fs-micro); font-weight: var(--fw-semibold); line-height: 17px; }
+.typeSwitch button[aria-pressed='true'] .typeText code { background: var(--surface); color: var(--accent); }
+.typeText small { color: var(--text-3); font-size: var(--fs-caption); line-height: 1.45; }
+.typeCheck { position: absolute; top: 9px; right: 9px; display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--accent); color: var(--on-accent); opacity: 0; transform: scale(.6); transition: opacity var(--fast) var(--ease), transform var(--medium) var(--ease); }
+.typeSwitch button[aria-pressed='true'] .typeCheck { opacity: 1; transform: none; }
+
+/* What the CLI will actually execute, shown as one terminal line. */
+.preview {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 14px 12px;
+  border: 1px solid #24302a;
+  border-radius: var(--radius);
+  background: #0f1512;
+}
+.preview > span { color: #8fa196; font-size: var(--fs-micro); font-weight: var(--fw-semibold); letter-spacing: .08em; }
+.preview > code { min-width: 0; padding: 0; border: 0; background: none; color: #d7e3da; font-family: var(--font-mono); font-size: var(--fs-control); font-weight: var(--fw-regular); line-height: 1.6; overflow-wrap: anywhere; white-space: pre-wrap; }
+.preview > code > i { margin-right: 8px; color: #7be3a7; font-style: normal; user-select: none; }
 
 .pasteToggle {
   display: inline-flex;
@@ -88,15 +80,12 @@
 .pasteBox > p { margin: 0; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-regular); line-height: 1.5; }
 .pasteBox textarea { width: 100%; font-family: var(--font-mono); font-size: var(--fs-body); font-weight: var(--fw-regular); }
 .pasteActions { display: flex; justify-content: flex-end; gap: 8px; }
-.primary, .primary:hover:not(:disabled) { border-radius: var(--radius-sm); border-color: color-mix(in srgb, var(--accent) 86%, black); background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 82%, var(--accent-bright)) 0%, var(--accent) 100%); color: var(--on-accent); box-shadow: var(--shadow-accent), var(--inner-highlight); }
-.primary:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); transform: translateY(-1px); }
+.primary, .primary:hover:not(:disabled) { border-radius: var(--radius-sm); border-color: color-mix(in srgb, var(--accent) 86%, black); background: var(--accent); color: var(--on-accent); box-shadow: var(--shadow-accent), var(--inner-highlight); }
+.primary:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }
 /* Sits in the header row beside the paste button, so it never pushes fields down. */
 .pasteNotice { display: inline-flex; flex: 1; justify-content: flex-end; align-items: center; gap: 5px; min-width: 0; overflow: hidden; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-regular); white-space: nowrap; text-overflow: ellipsis; animation: fade-in var(--medium) var(--ease); }
 .pasteNotice svg { flex: none; color: var(--accent); }
 
-@container (max-width: 460px) {
-  .identity { grid-template-columns: minmax(0, 1fr); }
-}
-@media (max-width: 560px) {
-  .identity { grid-template-columns: minmax(0, 1fr); }
+@container (max-width: 420px) {
+  .typeSwitch { grid-template-columns: minmax(0, 1fr); }
 }

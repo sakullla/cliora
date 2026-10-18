@@ -1,0 +1,198 @@
+/* ---------- CLI install / update progress ---------------------------------
+   A compact status sheet: who (tool icon), what (headline + status), where
+   it goes (version flow), how long, and the raw log one click away. */
+
+.panel {
+  --phase: var(--accent);
+  --phase-soft: var(--accent-soft);
+  --phase-line: var(--accent-line);
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+.panel[data-phase='error'] { --phase: var(--danger); --phase-soft: var(--danger-soft); --phase-line: var(--danger-line); }
+
+/* Narrow sheet: the dialog only needs room for one message and a log. */
+:global(.guide-dialog):has(.panel) { width: min(600px, calc(100vw - 40px)); }
+
+.hero { display: flex; align-items: center; gap: 16px; min-width: 0; padding: 4px 0 2px; }
+.heroIcon { position: relative; flex: none; display: grid; place-items: center; }
+.heroIcon > :global(.tool-logo) { border-radius: 14px; box-shadow: var(--shadow-sm); }
+.heroBadge {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--surface);
+  border-radius: 50%;
+  background: var(--phase);
+  color: var(--on-accent);
+  box-shadow: var(--shadow-xs);
+  animation: pop 260ms var(--ease);
+}
+.panel[data-phase='running'] .heroBadge, .pill[data-phase='running'] .heroBadge { background: var(--surface); color: var(--accent); }
+.panel[data-phase='error'] .heroBadge, .pill[data-phase='error'] .heroBadge { background: var(--danger); color: var(--surface); }
+.pill[data-phase='done'] .heroBadge { background: var(--accent); }
+.spinner { width: 12px; height: 12px; border: 2px solid var(--accent-line); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
+
+.heroText { display: grid; gap: 3px; min-width: 0; }
+.heroText h3 { margin: 0; color: var(--text); font-family: var(--font-display); font-size: 18px; font-weight: var(--fw-semibold); letter-spacing: -.01em; line-height: 1.3; overflow-wrap: anywhere; }
+.status { margin: 0; color: var(--text-2); font-size: var(--fs-body); line-height: 1.5; overflow-wrap: anywhere; }
+.panel[data-phase='error'] .status { color: var(--danger); }
+
+.facts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; min-width: 0; }
+.flow { display: inline-flex; align-items: center; gap: 8px; min-width: 0; color: var(--text-3); }
+.version {
+  min-width: 0;
+  max-width: 220px;
+  overflow: hidden;
+  padding: 3px 10px;
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  font-variant-numeric: tabular-nums;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.version[data-role='to'] { border-color: var(--phase-line); background: var(--phase-soft); color: var(--phase); font-weight: var(--fw-semibold); }
+.panel[data-phase='running'] .version[data-role='to'] { border-style: dashed; }
+.panel[data-phase='error'] .version[data-role='to'] { border-style: dashed; border-color: var(--line-strong); background: transparent; color: var(--text-3); font-weight: var(--fw-regular); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--text-3) 60%, transparent); }
+.elapsed { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; color: var(--text-3); font-size: var(--fs-caption); font-variant-numeric: tabular-nums; }
+
+/* Progress track: indeterminate sweep while running, full bar once settled. */
+.track { position: relative; height: 4px; overflow: hidden; border-radius: 99px; background: var(--surface-3); }
+.track > span { position: absolute; inset: 0; border-radius: inherit; background: var(--phase); transform-origin: left center; transition: transform 420ms var(--ease); }
+.panel[data-phase='running'] .track > span { right: auto; width: 38%; background: linear-gradient(90deg, transparent, var(--accent) 35%, var(--accent-bright) 65%, transparent); animation: sweep 1.25s var(--ease) infinite; }
+.panel[data-phase='done'] .track > span { animation: fill 520ms var(--ease); }
+
+.inlineError { margin: -6px 0 0; color: var(--danger); font-size: var(--fs-caption); }
+
+/* ---------- Log: always a dark terminal so output reads the same in both themes. */
+.terminal {
+  --term-bg: #0f1512;
+  --term-head: #151d18;
+  --term-line: #24302a;
+  --term-text: #d7e3da;
+  --term-dim: #8fa196;
+  display: grid;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--term-line);
+  border-radius: var(--radius-lg);
+  background: var(--term-bg);
+  box-shadow: var(--shadow-sm);
+}
+.terminalHead { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 40px; padding: 0 6px 0 4px; background: var(--term-head); }
+.terminal[data-open] .terminalHead { border-bottom: 1px solid var(--term-line); }
+.terminalToggle, .terminalToggle:hover:not(:disabled) {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--term-text);
+}
+.terminalToggle:hover:not(:disabled) { background: rgb(255 255 255 / 6%); }
+.terminalToggle > svg { color: var(--term-dim); transition: transform var(--medium) var(--ease); }
+.terminalToggle[aria-expanded='true'] > svg { transform: rotate(90deg); }
+.terminalTitle { font-size: var(--fs-control); font-weight: var(--fw-semibold); }
+.terminalCount { padding: 0 7px; border-radius: 99px; background: rgb(255 255 255 / 8%); color: var(--term-dim); font-size: var(--fs-micro); font-weight: var(--fw-semibold); line-height: 17px; font-variant-numeric: tabular-nums; }
+.ticker { flex: 1; min-width: 0; overflow: hidden; padding: 0; background: none; color: var(--term-dim); font-family: var(--font-mono); font-size: var(--fs-caption); text-overflow: ellipsis; white-space: nowrap; animation: fade-in var(--medium) var(--ease); }
+.copy, .copy:hover:not(:disabled) {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  min-height: 30px;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--term-dim);
+}
+.copy:hover:not(:disabled) { background: rgb(255 255 255 / 8%); color: var(--term-text); }
+.copy[data-copied], .copy[data-copied]:hover:not(:disabled) { border: 0; background: rgb(123 227 167 / 14%); color: #7be3a7; }
+.log {
+  margin: 0;
+  max-height: 260px;
+  min-height: 96px;
+  overflow: auto;
+  padding: 12px 16px 14px;
+  background: var(--term-bg);
+  color: var(--term-text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  scrollbar-color: #3a4a40 transparent;
+  animation: reveal var(--medium) var(--ease);
+}
+.log::selection, .log *::selection { background: #2f5a3d; color: #fff; }
+
+.primary, .primary:hover:not(:disabled) { min-width: 88px; border-color: color-mix(in srgb, var(--accent) 86%, black); background: var(--accent); color: var(--on-accent); box-shadow: var(--shadow-accent), var(--inner-highlight); }
+.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+.quietDanger, .quietDanger:hover:not(:disabled) { border-color: transparent; background: transparent; box-shadow: none; color: var(--danger); }
+.quietDanger:hover:not(:disabled) { background: var(--danger-soft); }
+
+/* ---------- Floating activity pill (dialog minimized) ---------- */
+.pill {
+  position: fixed;
+  z-index: 70;
+  left: 50%;
+  bottom: 22px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: max-content;
+  max-width: min(560px, calc(100vw - 32px));
+  padding: 8px 8px 8px 10px;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(18px) saturate(1.1);
+  transform: translateX(-50%);
+  animation: pill-in 260ms var(--ease);
+}
+.pill[data-phase='done'] { border-color: var(--accent-line); }
+.pill[data-phase='error'] { border-color: var(--danger-line); }
+.pillIcon { position: relative; flex: none; display: grid; }
+.pillIcon .heroBadge { right: -6px; bottom: -6px; width: 18px; height: 18px; }
+.pillIcon .spinner { width: 10px; height: 10px; }
+.pillText { display: grid; min-width: 0; line-height: 1.3; }
+.pillText strong { overflow: hidden; color: var(--text); font-size: var(--fs-control); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
+.pillText small { max-width: 320px; overflow: hidden; color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-micro); text-overflow: ellipsis; white-space: nowrap; }
+.pill[data-phase='error'] .pillText small { color: var(--danger); font-family: var(--font-sans); }
+.pillTime { flex: none; color: var(--text-3); font-size: var(--fs-caption); font-variant-numeric: tabular-nums; }
+.pillOpen, .pillOpen:hover:not(:disabled) { flex: none; min-height: 30px; padding: 0 12px; border-color: var(--line); border-radius: 12px; box-shadow: none; }
+.pillOpen:hover:not(:disabled) { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
+.pillClose, .pillClose:hover:not(:disabled) { flex: none; display: grid; place-items: center; width: 30px; min-height: 30px; padding: 0; border: 0; border-radius: 10px; background: transparent; box-shadow: none; color: var(--text-3); }
+.pillClose:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
+.pillTrack { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: linear-gradient(90deg, transparent, var(--accent), transparent) 0 0 / 40% 100% no-repeat; animation: pill-sweep 1.4s linear infinite; }
+
+@keyframes sweep { from { transform: translateX(-100%); } to { transform: translateX(265%); } }
+@keyframes fill { from { transform: scaleX(.35); } to { transform: scaleX(1); } }
+@keyframes pop { from { transform: scale(.4); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes pill-in { from { opacity: 0; transform: translate(-50%, 12px) scale(.97); } to { opacity: 1; transform: translateX(-50%); } }
+@keyframes pill-sweep { from { background-position: -40% 0; } to { background-position: 140% 0; } }
+
+@media (max-width: 640px) {
+  .elapsed { margin-left: 0; }
+  .pillText small { max-width: 160px; }
+}

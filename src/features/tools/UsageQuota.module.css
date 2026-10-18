@@ -84,6 +84,6 @@ section.quota > small,
 .editor > details { border: 1px solid var(--line); border-radius: var(--radius); padding: 11px 14px; }
 .editor > details > summary { cursor: pointer; color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-regular); }
 .editorActions { position: sticky; bottom: -1px; padding: 13px 0; background: var(--surface); border-top: 1px solid var(--line); z-index: 2; }
-.primary, .primary:hover:not(:disabled) { border-radius: var(--radius-sm); border-color: color-mix(in srgb, var(--accent) 86%, black); background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 82%, var(--accent-bright)) 0%, var(--accent) 100%); color: var(--on-accent); box-shadow: var(--shadow-accent), var(--inner-highlight); }
-.primary:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); transform: translateY(-1px); }
+.primary, .primary:hover:not(:disabled) { border-radius: var(--radius-sm); border-color: color-mix(in srgb, var(--accent) 86%, black); background: var(--accent); color: var(--on-accent); box-shadow: var(--shadow-accent), var(--inner-highlight); }
+.primary:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }
 .credential, .target { display: grid; gap: 8px; padding: 12px; margin: 8px 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }

@@ -6,8 +6,11 @@ export default {
   },
   update: {
     title: '更新',
-    description: '检查新版本，确认后下载、校验并安装。',
+    description: '检查新版本；确认后下载、校验签名并安装。',
     current: '当前版本',
+    currentShort: 'v{{version}}',
+    checkedAt: '{{time}} 检查',
+    notesTitle: '{{version}} 更新内容',
     checking: '检查中…',
     check: '检查更新',
     latest: '已是最新版本。',

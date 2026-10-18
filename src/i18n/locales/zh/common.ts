@@ -250,5 +250,8 @@ export default {
     loadFailedRetry: '重试读取',
     skipToContent: '跳到主内容',
     commandTitle: '快速前往（{{shortcut}}）',
+    updateAvailable: '新版本 {{version}}',
+    updateAction: '更新',
+    updateTitle: '栖点 {{version}} 已发布，点击查看更新内容',
   },
 };

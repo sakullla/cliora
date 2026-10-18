@@ -10,7 +10,7 @@
 .picker summary { cursor: pointer; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .create label { display: grid; gap: 6px; font-size: var(--fs-body); }
-.primary, .primary:hover:not(:disabled) { border-radius: var(--radius-sm); border-color: color-mix(in srgb, var(--accent) 86%, black); background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 82%, var(--accent-bright)) 0%, var(--accent) 100%); color: var(--on-accent); box-shadow: var(--shadow-accent), var(--inner-highlight); }
-.primary:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); transform: translateY(-1px); }
+.primary, .primary:hover:not(:disabled) { border-radius: var(--radius-sm); border-color: color-mix(in srgb, var(--accent) 86%, black); background: var(--accent); color: var(--on-accent); box-shadow: var(--shadow-accent), var(--inner-highlight); }
+.primary:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }
 .picker [role="alert"] { color: var(--danger); background: var(--danger-soft); padding: 10px; border-radius: var(--radius); }
 .picker [role="status"] { background: var(--accent-soft); padding: 10px; border-radius: var(--radius); }

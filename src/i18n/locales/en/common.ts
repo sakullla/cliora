@@ -250,5 +250,8 @@ export default {
     loadFailedRetry: 'Retry',
     skipToContent: 'Skip to main content',
     commandTitle: 'Quick go ({{shortcut}})',
+    updateAvailable: 'Version {{version}}',
+    updateAction: 'Update',
+    updateTitle: 'Cliora {{version}} is available. Click to see what’s new',
   },
 };

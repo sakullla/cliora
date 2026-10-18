@@ -215,6 +215,7 @@ export default {
     projectUnlinked: 'Project not linked',
     projectPlaceholder: 'Choose a project…',
     enableAfterWrite: 'Enable after writing',
+    enableAfterWriteHint: 'When off, the entry is written but stays disabled',
     placedTitle: 'Written. Unchecking and saving removes it from this CLI.',
     unplacedTitle: 'Written to this CLI on save',
     otherAccountSuffix: ' (editable after switching)',

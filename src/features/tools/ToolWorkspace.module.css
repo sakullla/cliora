@@ -13,8 +13,8 @@
 }
 
 /* ---------- Shared button variants ---------- */
-.primary, .primary:hover:not(:disabled) { border-radius: var(--radius-sm); border-color: color-mix(in srgb, var(--accent) 86%, black); background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 82%, var(--accent-bright)) 0%, var(--accent) 100%); color: var(--on-accent); box-shadow: var(--shadow-accent), var(--inner-highlight); }
-.primary:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); transform: translateY(-1px); }
+.primary, .primary:hover:not(:disabled) { border-radius: var(--radius-sm); border-color: color-mix(in srgb, var(--accent) 86%, black); background: var(--accent); color: var(--on-accent); box-shadow: var(--shadow-accent), var(--inner-highlight); }
+.primary:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }
 .secondary { background: var(--surface); }
 
 /* ---------- Tool switcher: segmented cards ---------- */
@@ -641,88 +641,4 @@ div > .feedback { margin-bottom: 12px; }
   .historyList { display: flex; max-height: 76px; }
   .historyList li { flex: none; }
   .historyList button { width: auto; }
-}
-
-.maintenancePanel { display: grid; gap: 14px; min-width: 0; }
-.maintenanceStatusCard {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 14px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface-2);
-  overflow: hidden;
-}
-.maintenanceStatusCard[data-state="done"] { border-color: var(--accent-line); background: var(--accent-soft); }
-.maintenanceStatusCard[data-state="error"] { border-color: var(--danger-line); background: var(--danger-soft); }
-.maintenanceStatusIcon {
-  display: grid;
-  place-items: center;
-  flex: none;
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  background: var(--surface);
-  color: var(--accent);
-  box-shadow: var(--shadow-xs);
-}
-.maintenanceStatusCard[data-state="error"] .maintenanceStatusIcon { color: var(--danger); }
-.maintenanceSpinner {
-  width: 16px;
-  height: 16px;
-  border: 2px solid var(--accent-line);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: maintenance-spin .85s linear infinite;
-}
-.maintenanceStatusBody { display: grid; gap: 2px; min-width: 0; flex: 1; }
-.maintenanceStatusText { margin: 0; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-semibold); line-height: 1.45; }
-.maintenanceStatusCard[data-state="error"] .maintenanceStatusText { color: var(--danger); }
-.maintenanceInlineError { margin: 0; color: var(--danger); font-size: var(--fs-caption); }
-.maintenanceBar {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 2px;
-  background: linear-gradient(90deg, transparent, var(--accent), transparent) 0 0 / 200% 100%;
-  animation: shimmer 1.2s linear infinite;
-}
-.maintenanceTerminal {
-  display: grid;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface-2);
-  overflow: hidden;
-}
-.maintenanceTerminalHead {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 32px;
-  padding: 0 12px;
-  border-bottom: 1px solid var(--line);
-  background: var(--surface-3);
-}
-.maintenanceTerminalDots { display: inline-flex; gap: 5px; }
-.maintenanceTerminalDots > i { width: 8px; height: 8px; border-radius: 50%; background: var(--line-strong); opacity: .55; }
-.maintenanceTerminalTitle { color: var(--text-2); font-size: var(--fs-caption); font-weight: var(--fw-semibold); letter-spacing: .2px; }
-.maintenanceLog {
-  margin: 0;
-  max-height: 320px;
-  min-height: 120px;
-  overflow: auto;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  padding: 14px 16px;
-  font-size: var(--fs-body);
-  font-weight: var(--fw-regular);
-  line-height: 1.55;
-  background: var(--surface-2);
-  color: var(--text);
-}
-@keyframes maintenance-spin {
-  to { transform: rotate(360deg); }
 }

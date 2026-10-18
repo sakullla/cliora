@@ -79,7 +79,7 @@ export function InstallPanel({ toolName, probe, customPath, busy, loading, onCus
   loading: boolean;
   onCustomPath: (value: string) => void;
   onSavePath: () => void;
-  onMaintain: (action: 'install' | 'upgrade' | 'install_native' | 'uninstall_npm' | 'upgrade_major', source?: string, version?: string) => void;
+  onMaintain: (action: 'install' | 'upgrade' | 'install_native' | 'uninstall_npm' | 'upgrade_major', source?: string, version?: string, target?: string) => void;
   onUsePath: (path: string) => void;
 }) {
   const { t } = useTranslation();
@@ -120,6 +120,7 @@ export function InstallPanel({ toolName, probe, customPath, busy, loading, onCus
       : latest.state === 'loading'
         ? t('tools.install.checkingLatest', { current: currentVersion || t('tools.install.unknownVersion') })
         : t(latest.state === 'unsupported' ? 'tools.install.latestUnsupported' : 'tools.install.latestUnknown', { current: currentVersion || t('tools.install.unknownVersion') });
+  const target = latest.state === 'ready' ? latest.version : undefined;
   const canUpdate = Boolean(selected && probe.upgradeCommand && (behind || latest.state === 'unknown' || latest.state === 'unsupported'));
   return <details className={styles.pathControl} data-update={behind || undefined} data-missing={!selected || undefined} open={startOpen || undefined}>
     <summary>
@@ -167,12 +168,12 @@ export function InstallPanel({ toolName, probe, customPath, busy, loading, onCus
       <div className={styles.installFooter}>
         <div className={styles.installActions}>
           {!selected && multiple && <>
-            <button type="button" className={preferNative ? styles.primary : undefined} disabled={busy} onClick={() => onMaintain('install_native', 'native')}>{t('tools.install.installNative')}</button>
-            <button type="button" className={!preferNative ? styles.primary : undefined} disabled={busy} onClick={() => onMaintain('install', 'npm_shim')}>{t('tools.install.installNpm')}</button>
+            <button type="button" className={preferNative ? styles.primary : undefined} disabled={busy} onClick={() => onMaintain('install_native', 'native', undefined, target)}>{t('tools.install.installNative')}</button>
+            <button type="button" className={!preferNative ? styles.primary : undefined} disabled={busy} onClick={() => onMaintain('install', 'npm_shim', undefined, target)}>{t('tools.install.installNpm')}</button>
           </>}
-          {selected && multiple && !hasNative && <button type="button" disabled={busy} onClick={() => onMaintain('install_native', 'native')}>{t('tools.install.installNative')}</button>}
-          {!selected && !multiple && probe.installCommand && <button type="button" className={styles.primary} disabled={busy} onClick={() => onMaintain('install')}>{t('tools.install.install')}</button>}
-          {canUpdate && <button type="button" className={styles.primary} disabled={busy || loading} onClick={() => onMaintain('upgrade', selected!.source, selected!.version ?? undefined)}>{updateLabel}</button>}
+          {selected && multiple && !hasNative && <button type="button" disabled={busy} onClick={() => onMaintain('install_native', 'native', undefined, target)}>{t('tools.install.installNative')}</button>}
+          {!selected && !multiple && probe.installCommand && <button type="button" className={styles.primary} disabled={busy} onClick={() => onMaintain('install', undefined, undefined, target)}>{t('tools.install.install')}</button>}
+          {canUpdate && <button type="button" className={styles.primary} disabled={busy || loading} onClick={() => onMaintain('upgrade', selected!.source, selected!.version ?? undefined, target)}>{updateLabel}</button>}
           {selected && probe.majorUpgrade?.command && <button type="button" disabled={busy || loading} onClick={() => onMaintain('upgrade_major', selected.source, selected.version ?? undefined)}>{probe.majorUpgrade.label}</button>}
           {probe.installUrl && <ExternalLink href={probe.installUrl}>{t('tools.install.officialGuide')}</ExternalLink>}
         </div>

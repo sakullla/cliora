@@ -354,6 +354,8 @@ test('MCP removal notice expires after four seconds', async ({ page }) => {
   expect(await page.evaluate(() => (window as typeof window & { __resourceWrites: Array<Record<string, unknown>> }).__resourceWrites)).toEqual([expect.objectContaining({ command: 'remove_native_mcp' })]);
   const status = page.getByRole('status').filter({ hasText: '已从 Codex 移除。' });
   await expect(status).toBeVisible();
+  // A hovered toast pauses by design; the save button can sit where the toast appears.
+  await page.mouse.move(0, 0);
   await page.clock.fastForward(4100);
   await expect(status).toHaveCount(0);
 });

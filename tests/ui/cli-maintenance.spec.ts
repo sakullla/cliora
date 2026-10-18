@@ -54,7 +54,20 @@ test('version lookup retries and background installation can cancel then retry',
   await page.getByRole('dialog').getByRole('button', { name: '更新', exact: true }).click();
   const progress = page.getByRole('dialog', { name: 'Devin 安装与更新' });
   await expect(progress.getByText('正在后台安装，请稍候…')).toBeVisible();
+  await expect(progress.getByRole('heading', { name: '正在更新 Devin' })).toBeVisible();
+  await expect(progress.getByLabel('版本从 3000.11.2 到 3000.11.3')).toBeVisible();
   await expect(progress.getByLabel('安装日志')).toContainText('Running postinstall');
+  // The log stays folded behind its latest line until asked for.
+  await expect(progress.getByLabel('安装日志')).toBeHidden();
+  await progress.getByRole('button', { name: /安装日志/ }).click();
+  await expect(progress.getByLabel('安装日志')).toBeVisible();
+  // Escape hides the sheet into a floating pill; the installation keeps running.
+  await page.keyboard.press('Escape');
+  await expect(progress).toHaveCount(0);
+  const pill = page.getByRole('status', { name: '正在更新 Devin' });
+  await expect(pill).toBeVisible();
+  await pill.getByRole('button', { name: '查看' }).click();
+  await expect(progress.getByText('正在后台安装，请稍候…')).toBeVisible();
   for (const width of [1360, 640]) {
     await page.setViewportSize({ width, height: 900 });
     await page.screenshot({ path: testInfo.outputPath(`maintenance-${width}.png`), fullPage: true });
@@ -63,7 +76,7 @@ test('version lookup retries and background installation can cancel then retry',
   await progress.getByRole('button', { name: '取消安装' }).click();
   await expect(progress.getByText('安装已取消')).toBeVisible();
   await progress.getByRole('button', { name: '重试', exact: true }).click();
-  await expect(progress.getByText('操作完成 3000.11.3')).toBeVisible();
+  await expect(progress.getByText('当前版本 3000.11.3')).toBeVisible();
   await expect(progress.getByLabel('安装日志')).toContainText('completed upgrade');
   expect(page.context().pages()).toHaveLength(1);
 });
@@ -95,7 +108,7 @@ test('major upgrade runs the explicit adapter-declared action', async ({ page })
   await expect(progress.getByText('正在后台安装，请稍候…')).toBeVisible();
   await progress.getByRole('button', { name: '取消安装' }).click();
   await progress.getByRole('button', { name: '重试', exact: true }).click();
-  await expect(progress.getByText('操作完成 3000.11.3')).toBeVisible();
+  await expect(progress.getByText('当前版本 3000.11.3')).toBeVisible();
   await expect(progress.getByLabel('安装日志')).toContainText('completed upgrade_major');
 });
 

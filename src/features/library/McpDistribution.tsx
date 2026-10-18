@@ -286,7 +286,7 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
     <section className={styles.targetPanel} aria-labelledby={`${panelId}-title`}>
       <div className={styles.panelHead}>
         <div className={styles.panelTitleRow}>
-          <h3 id={`${panelId}-title`}>{t('library.distribute.title')}<span className={styles.targetCount} aria-hidden="true">{selected.length}/{tools.length}</span></h3>
+          <h3 id={`${panelId}-title`}><Icon name="connections" size={16} />{t('library.distribute.title')}<span className={styles.targetCount} aria-hidden="true">{selected.length}/{tools.length}</span></h3>
           {readyToolIds.length > 1 && <button type="button" className={styles.quickSelectBtn} onClick={() => choose(allReadySelected ? [] : readyToolIds)}>{t(allReadySelected ? 'settings.migration.deselectAll' : 'settings.migration.selectAll')}</button>}
         </div>
         <p>{t('library.distribute.description')}</p>
@@ -299,13 +299,16 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
       <ul className={styles.targetList} aria-label={t('library.distribute.targetsAria', { scope: scopeName })}>{rows.map((row) => <li key={row.tool.id} data-state={row.state}>
         <label title={row.state === 'placed' ? t('library.distribute.placedTitle') : row.state === 'idle' ? t('library.distribute.unplacedTitle') : undefined}>
           <ToolIcon toolId={row.tool.id} size={22} />
-          <span className={styles.targetText}><span className={styles.targetName}>{row.tool.name}</span><small id={`${panelId}-${row.tool.id}`}>{row.status}</small></span>
+          <span className={styles.targetName}>{row.tool.name}</span>
+          <small className={styles.targetState} id={`${panelId}-${row.tool.id}`} title={row.status}>{row.status}</small>
           <input type="checkbox" aria-label={row.tool.name} aria-describedby={`${panelId}-${row.tool.id}`} disabled={row.state === 'loading' || row.state === 'blocked'} checked={row.checked} onChange={(event) => choose(event.target.checked ? [...selected, row.tool.id] : selected.filter((item) => item !== row.tool.id))} />
         </label>
       </li>)}</ul>
-      <label className={styles.choice}><input type="checkbox" checked={enabled} onChange={(event) => { setEnabled(event.target.checked); setPreview(null); setResults(null); onConflictChange(false); }} />{t('library.distribute.enableAfterWrite')}</label>
-      {summary.length === 0 && !selected.length && !mine.length && <p className={styles.summary} data-quiet>{t('library.distribute.summaryNone')}</p>}
-      {summary.length > 0 && <p className={styles.summary}>{summary.join('；')}</p>}
+      <div className={styles.panelFoot}>
+        <label className={styles.choice}><span><strong>{t('library.distribute.enableAfterWrite')}</strong><small>{t('library.distribute.enableAfterWriteHint')}</small></span><input type="checkbox" role="switch" checked={enabled} onChange={(event) => { setEnabled(event.target.checked); setPreview(null); setResults(null); onConflictChange(false); }} /></label>
+        {summary.length === 0 && !selected.length && !mine.length && <p className={styles.summary} data-quiet>{t('library.distribute.summaryNone')}</p>}
+        {summary.length > 0 && <p className={styles.summary}>{summary.join('；')}</p>}
+      </div>
       {otherAccounts.length > 0 && <div className={styles.notes}>
         <p>{t('library.distribute.otherAccountHint')}</p>
         {otherAccounts.map((item) => <p key={JSON.stringify([item.toolId, item.scope, item.projectPath, item.contextId])}>{toolName(item.toolId)} · {scopeLabel(item.scope, item.projectPath, projects)} · {contextLabel(item.contextId)}{t('library.distribute.otherAccountSuffix')}</p>)}

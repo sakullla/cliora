@@ -6,7 +6,7 @@
   container-type: inline-size;
 }
 /* Buttons: primary by default, `.secondary` / `.iconAction` / selects for the quieter ones */
-.workspace button:not(.secondary):not(.iconAction):not([data-select-trigger]):not(:global(.guide-dialog-close)):not(:global(.search-clear)) { border-radius: var(--radius-sm); border-color: color-mix(in srgb, var(--accent) 86%, black); background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 82%, var(--accent-bright)) 0%, var(--accent) 100%); color: var(--on-accent); box-shadow: var(--shadow-accent), var(--inner-highlight); }
+.workspace button:not(.secondary):not(.iconAction):not([data-select-trigger]):not(:global(.guide-dialog-close)):not(:global(.search-clear)) { border-radius: var(--radius-sm); border-color: color-mix(in srgb, var(--accent) 86%, black); background: var(--accent); color: var(--on-accent); box-shadow: var(--shadow-accent), var(--inner-highlight); }
 .workspace button:not(.secondary):not(.iconAction):not([data-select-trigger]):not(:global(.guide-dialog-close)):not(:global(.search-clear)):hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); transform: translateY(-1px); }
 
 /* Quick launch */

@@ -7,12 +7,48 @@
   .languageChoice { width: 100%; max-width: none; flex-basis: 100%; }
 }
 
-.updateProgress { width: 160px; height: 6px; border-radius: 999px; background: var(--surface-3); overflow: hidden; flex: none; }
-.updateProgress > div { height: 100%; border-radius: inherit; background: var(--accent); transition: width var(--fast) var(--ease); }
+/* ---------- App update card ---------- */
+.update { display: flex; align-items: center; gap: 16px; min-width: 0; padding: 18px 22px; }
+.updateMark { position: relative; flex: none; display: grid; place-items: center; width: 52px; height: 52px; border: 1px solid var(--line); border-radius: 15px; background: linear-gradient(160deg, var(--surface) 0%, var(--surface-2) 100%); box-shadow: var(--shadow-sm); }
+.updateMark > img { width: 34px; height: 34px; object-fit: contain; }
+.updateBadge { position: absolute; right: -5px; bottom: -5px; display: grid; place-items: center; width: 20px; height: 20px; border: 2px solid var(--surface); border-radius: 50%; background: var(--accent); color: var(--on-accent); animation: reveal var(--medium) var(--ease); }
+.update[data-tone='error'] .updateBadge { background: var(--danger); color: var(--surface); }
+.update[data-tone='new'] .updateMark { border-color: var(--accent-line); }
+.updateText { display: grid; gap: 3px; flex: 1; min-width: 0; }
+.updateText h2 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: var(--fs-title); font-weight: var(--fw-semibold); }
+.updateVersion { padding: 0 8px; border: 1px solid var(--line); border-radius: 99px; background: var(--surface-2); color: var(--text-2); font-family: var(--font-mono); font-size: var(--fs-caption); font-weight: var(--fw-medium); line-height: 20px; }
+.updateText small { color: var(--text-2); font-size: var(--fs-body); line-height: 1.5; overflow-wrap: anywhere; }
+.update[data-tone='new'] .updateText small:first-of-type { color: var(--accent); font-weight: var(--fw-semibold); }
+.updateText .updateMeta { color: var(--text-3); font-size: var(--fs-caption); }
+.updateActions { flex: none; display: flex; gap: 8px; }
+.updateActions :global(.button) { min-height: var(--control-h); padding: 0 16px; }
+.updateError { color: var(--danger) !important; }
+
+.updateProgressRow { display: grid; gap: 8px; padding: 0 22px 18px 90px; }
+.updateProgressRow small { display: flex; justify-content: space-between; gap: 12px; color: var(--text-3); font-size: var(--fs-caption); font-variant-numeric: tabular-nums; }
+.updateProgressRow small strong { color: var(--accent); font-weight: var(--fw-semibold); }
+.updateProgress { width: 100%; height: 6px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
+.updateProgress > div { height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--accent), var(--accent-bright)); transition: width var(--medium) var(--ease); }
 .updateProgress > div.indeterminate { width: 40%; animation: update-indeterminate 1.2s var(--ease) infinite; }
-.updateError { color: var(--danger); }
+
+.releaseNotes { display: grid; gap: 10px; margin: 0 22px 20px 90px; padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface-2); }
+.releaseNotesHead { display: flex; align-items: center; gap: 7px; color: var(--accent); }
+.releaseNotesHead strong { color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-semibold); }
+.releaseNotesBody { max-height: 260px; overflow: auto; color: var(--text-2); font-size: var(--fs-body); line-height: 1.65; }
+.releaseNotesBody :where(h1, h2, h3) { margin: 10px 0 4px; font-size: var(--fs-body); }
+.releaseNotesBody :where(ul, ol) { margin: 4px 0; padding-left: 20px; }
+.releaseNotesBody p { margin: 4px 0; }
+.releaseNotesBody > p:only-child { white-space: pre-wrap; }
+.releaseNotesEmpty { margin: 0; color: var(--text-3); font-size: var(--fs-caption); line-height: 1.5; }
 
 @keyframes update-indeterminate {
   0% { margin-left: -40%; }
   100% { margin-left: 100%; }
+}
+
+@media (max-width: 760px) {
+  .update { flex-wrap: wrap; padding: 16px; }
+  .updateActions { width: 100%; }
+  .updateProgressRow { padding: 0 16px 16px; }
+  .releaseNotes { margin: 0 16px 16px; }
 }

@@ -1,7 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getVersion } from '@tauri-apps/api/app';
-import { listen } from '@tauri-apps/api/event';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { check, type Update } from '@tauri-apps/plugin-updater';
 import { Icon } from '../../components/Icon';
@@ -12,6 +11,8 @@ import { ToolIconSettings } from './ToolIconSettings';
 import { TerminalSettings } from './TerminalSettings';
 import { nativeAvailable } from '../../lib/native';
 import { useToasts } from '../../lib/toast';
+import { setUpdateOffer, useUpdateOffer, type UpdateOffer } from '../../lib/appUpdate';
+import brandIcon from '../../../src-tauri/icons/128x128@2x.png';
 import { setLanguage, supportedLanguages, type AppLanguage } from '../../i18n';
 import type { Theme } from '../../types/domain';
 import styles from './GeneralSettings.module.css';
@@ -30,39 +31,31 @@ function orderedManagedTools(tools: ToolItem[], managed: string[]) {
 const themeGlyphs: Record<Theme, IconName> = { system: 'monitor', light: 'sun', dark: 'moon' };
 const themeOrder: Theme[] = ['system', 'light', 'dark'];
 
-type UpdateOffer = { version: string; notes: string | null };
-
-// ADR-4：Rust 端启动延迟自动检查的结果事件。模块级订阅（App 静态引入本模块）保证
-// 任意页面都能收到，设置页挂载时读取最新结果；未收到即无待提示更新。
-let autoCheckOffer: UpdateOffer | null = null;
-if (nativeAvailable) {
-  // 浏览器模式夹具只提供 invoke，transformCallback 缺失时 listen 会拒绝；真实运行时不受影响。
-  void listen<UpdateOffer>('cliora:update-available', (event) => { autoCheckOffer = event.payload; }).catch(() => {});
-}
-
 function formatMb(bytes: number): string {
   return (bytes / 1048576).toFixed(1);
 }
+
+const ReleaseNotes = lazy(() => import('../records/MessageMarkdown'));
 
 type UpdateStage = 'idle' | 'checking' | 'latest' | 'available' | 'downloading' | 'installed' | 'failed';
 
 function UpdateSettings({ busy }: { busy: boolean }) {
   const { t } = useTranslation();
+  const shared = useUpdateOffer();
   const [version, setVersion] = useState('');
-  const [stage, setStage] = useState<UpdateStage>(autoCheckOffer ? 'available' : 'idle');
-  const [offer, setOffer] = useState<(UpdateOffer & { update: Update | null }) | null>(autoCheckOffer ? { ...autoCheckOffer, update: null } : null);
+  const [stage, setStage] = useState<UpdateStage>(shared ? 'available' : 'idle');
+  const [offer, setOffer] = useState<(UpdateOffer & { update: Update | null }) | null>(shared ? { ...shared, update: null } : null);
   const [progress, setProgress] = useState<{ downloaded: number; total: number | null }>({ downloaded: 0, total: null });
   const [failure, setFailure] = useState('');
+  const [checkedAt, setCheckedAt] = useState<Date | null>(null);
   const installing = useRef(false);
 
   useEffect(() => { void getVersion().then((value) => setVersion(typeof value === 'string' ? value : ''), () => setVersion('')); }, []);
   useEffect(() => {
-    const unlisten = listen<UpdateOffer>('cliora:update-available', (event) => {
-      setOffer((current) => current?.update ? current : { ...event.payload, update: null });
-      setStage((current) => current === 'idle' || current === 'latest' || current === 'failed' ? 'available' : current);
-    });
-    return () => { void unlisten.then((off) => off()); };
-  }, []);
+    if (!shared) return;
+    setOffer((current) => current?.update ? current : { ...shared, update: null });
+    setStage((current) => current === 'idle' || current === 'latest' || current === 'failed' ? 'available' : current);
+  }, [shared]);
 
   async function handleCheck() {
     if (installing.current) return;
@@ -70,11 +63,14 @@ function UpdateSettings({ busy }: { busy: boolean }) {
     setStage('checking');
     try {
       const update = await check();
+      setCheckedAt(new Date());
       if (update) {
         setOffer({ version: update.version, notes: update.body ?? null, update });
+        setUpdateOffer({ version: update.version, notes: update.body ?? null });
         setStage('available');
       } else {
         setOffer(null);
+        setUpdateOffer(null);
         setStage('latest');
       }
     } catch (error) {
@@ -95,6 +91,7 @@ function UpdateSettings({ busy }: { busy: boolean }) {
         update = await check();
         if (!update) {
           setOffer(null);
+          setUpdateOffer(null);
           setStage('latest');
           return;
         }
@@ -122,14 +119,40 @@ function UpdateSettings({ busy }: { busy: boolean }) {
     }
   }
 
-  return <section className="settings-group">
-    <div className="setting-intro"><h2>{t('settings.update.title')}</h2><p>{t('settings.update.description')}</p></div>
-    <div className="setting-row"><span><strong>{t('settings.update.current')}</strong><small>{version || '—'}</small></span><button className="button" type="button" disabled={busy || stage === 'checking' || stage === 'downloading'} onClick={handleCheck}>{stage === 'checking' ? t('settings.update.checking') : t('settings.update.check')}</button></div>
-    {stage === 'latest' && <div className="setting-row"><span><small>{t('settings.update.latest')}</small></span></div>}
-    {stage === 'available' && offer && <div className="setting-row"><span><strong>{t('settings.update.available', { version: offer.version })}</strong><small>{offer.notes || t('settings.update.confirmHint')}</small></span><button className="button" type="button" disabled={busy} onClick={handleInstall}>{t('settings.update.install')}</button></div>}
-    {stage === 'downloading' && <div className="setting-row"><span><strong>{t('settings.update.downloading')}</strong><small>{progress.total ? t('settings.update.progress', { downloaded: formatMb(progress.downloaded), total: formatMb(progress.total) }) : t('settings.update.progressUnknown', { downloaded: formatMb(progress.downloaded) })}</small></span><div className={styles.updateProgress}><div className={progress.total ? '' : styles.indeterminate} style={progress.total ? { width: `${Math.min(100, Math.round((progress.downloaded / progress.total) * 100))}%` } : undefined} /></div></div>}
-    {stage === 'installed' && <div className="setting-row"><span><small>{t('settings.update.installed')}</small></span></div>}
-    {stage === 'failed' && <div className="setting-row"><span><small className={styles.updateError}>{t('settings.update.failed')}{failure}</small></span></div>}
+  const percent = progress.total ? Math.min(100, Math.round((progress.downloaded / progress.total) * 100)) : null;
+  const tone = stage === 'available' || stage === 'downloading' ? 'new' : stage === 'failed' ? 'error' : stage === 'latest' || stage === 'installed' ? 'ok' : undefined;
+  const statusText = stage === 'checking' ? t('settings.update.checking')
+    : stage === 'latest' ? t('settings.update.latest')
+    : stage === 'available' && offer ? t('settings.update.available', { version: offer.version })
+    : stage === 'downloading' ? t('settings.update.downloading')
+    : stage === 'installed' ? t('settings.update.installed')
+    : stage === 'failed' ? `${t('settings.update.failed')}${failure}`
+    : t('settings.update.description');
+  return <section className="settings-group" id="app-update">
+    <div className={styles.update} data-tone={tone}>
+      <span className={styles.updateMark}><img src={brandIcon} alt="" />{tone && <span className={styles.updateBadge} aria-hidden="true"><Icon name={tone === 'new' ? 'download' : tone === 'error' ? 'alert' : 'check'} size={11} strokeWidth={2.8} /></span>}</span>
+      <span className={styles.updateText}>
+        <h2>{t('settings.update.title')}{version && <span className={styles.updateVersion} title={t('settings.update.current')}>{t('settings.update.currentShort', { version })}</span>}</h2>
+        <small role={stage === 'failed' ? 'alert' : 'status'} className={stage === 'failed' ? styles.updateError : undefined}>{statusText}</small>
+        {checkedAt && stage === 'latest' && <small className={styles.updateMeta}>{t('settings.update.checkedAt', { time: checkedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) })}</small>}
+      </span>
+      <span className={styles.updateActions}>
+        {stage === 'available' && offer
+          ? <button className="button primary" type="button" disabled={busy} onClick={handleInstall}><Icon name="download" size={14} />{t('settings.update.install')}</button>
+          : <button className="button" type="button" disabled={busy || stage === 'checking' || stage === 'downloading' || stage === 'installed'} onClick={handleCheck}>{stage === 'checking' ? <span className="spinner" aria-hidden="true" /> : <Icon name="refresh" size={14} />}{stage === 'checking' ? t('settings.update.checking') : t('settings.update.check')}</button>}
+      </span>
+    </div>
+    {stage === 'downloading' && <div className={styles.updateProgressRow}>
+      <div className={styles.updateProgress} role="progressbar" aria-label={t('settings.update.downloading')} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent ?? undefined}><div className={percent === null ? styles.indeterminate : ''} style={percent === null ? undefined : { width: `${percent}%` }} /></div>
+      <small>{progress.total ? t('settings.update.progress', { downloaded: formatMb(progress.downloaded), total: formatMb(progress.total) }) : t('settings.update.progressUnknown', { downloaded: formatMb(progress.downloaded) })}{percent !== null && <strong>{percent}%</strong>}</small>
+    </div>}
+    {(stage === 'available' || stage === 'downloading') && offer && <div className={styles.releaseNotes}>
+      <div className={styles.releaseNotesHead}><Icon name="sparkle" size={14} /><strong>{t('settings.update.notesTitle', { version: offer.version })}</strong></div>
+      {offer.notes?.trim()
+        ? <div className={styles.releaseNotesBody}><Suspense fallback={<p>{offer.notes}</p>}><ReleaseNotes text={offer.notes} /></Suspense></div>
+        : <p className={styles.releaseNotesEmpty}>{t('settings.update.confirmHint')}</p>}
+      {offer.notes?.trim() && <p className={styles.releaseNotesEmpty}>{t('settings.update.confirmHint')}</p>}
+    </div>}
   </section>;
 }
 
