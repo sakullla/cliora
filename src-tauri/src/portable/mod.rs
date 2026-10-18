@@ -1651,8 +1651,12 @@ fn apply_active_bindings(
                 .map(|_| ())
         });
         if let Err(error) = result {
-            let action = if error.contains("目录") { "relink" } else if error.contains("未发现") || error.contains("未注册") || error.contains("不能探测") { "install" } else { "retry" };
-            issues.push(RestoreBlocker { key: binding_key, label, action: action.into(), detail: error });
+            issues.push(RestoreBlocker {
+                key: binding_key,
+                label,
+                action: native_failure_action(&error).into(),
+                detail: error,
+            });
         }
     }
     issues
@@ -1725,6 +1729,303 @@ pub(crate) fn release_native_binding(
     Ok(())
 }
 
+const PENDING_RELEASES: &str = "sync_pending_releases";
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct PendingRelease {
+    key: String,
+    tool: String,
+    scope_key: String,
+    managed: String,
+}
+
+fn load_pending_releases(db: &Database) -> Result<Vec<PendingRelease>, String> {
+    db.with_connection(|conn| {
+        let value: Option<String> = conn
+            .query_row(
+                "SELECT value FROM app_settings WHERE key=?1",
+                [PENDING_RELEASES],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?;
+        value
+            .map(|text| serde_json::from_str(&text).map_err(|_| "待释放的活动配置记录损坏".to_string()))
+            .transpose()
+            .map(|items| items.unwrap_or_default())
+    })
+}
+
+fn store_pending_releases(db: &Database, items: &[PendingRelease]) -> Result<(), String> {
+    db.with_connection(|conn| {
+        conn.execute(
+            "INSERT INTO app_settings (key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            params![PENDING_RELEASES, serde_json::to_string(items).map_err(|error| error.to_string())?],
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+    })
+}
+
+fn remember_pending_release(
+    db: &Database,
+    key: &str,
+    tool: &str,
+    scope_key: &str,
+    managed: &str,
+) -> Result<(), String> {
+    let mut items = load_pending_releases(db)?;
+    items.retain(|item| !(item.key == key && item.tool == tool && item.scope_key == scope_key));
+    items.push(PendingRelease {
+        key: key.into(),
+        tool: tool.into(),
+        scope_key: scope_key.into(),
+        managed: managed.into(),
+    });
+    store_pending_releases(db, &items)
+}
+
+fn forget_pending_release(db: &Database, key: &str, tool: &str, scope_key: &str) -> Result<(), String> {
+    let mut items = load_pending_releases(db)?;
+    let before = items.len();
+    items.retain(|item| !(item.key == key && item.tool == tool && item.scope_key == scope_key));
+    if items.len() == before {
+        return Ok(());
+    }
+    store_pending_releases(db, &items)
+}
+
+fn clear_blocker(db: &Database, key: &str) -> Result<(), String> {
+    let mut current = load_blockers(db)?;
+    let before = current.len();
+    current.retain(|item| item.key != key);
+    if current.len() == before {
+        return Ok(());
+    }
+    write_blockers(db, &current)
+}
+
+fn find_binding(db: &Database, key: &str) -> Result<Option<(String, String, String)>, String> {
+    let rows = db.with_connection(|conn| {
+        read_rows(
+            conn,
+            "SELECT scope_key,tool,profile_id FROM applied_bindings WHERE scope_key='global' OR scope_key LIKE 'project:%'",
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
+        )
+    })?;
+    Ok(rows.into_iter().find(|(scope, tool, _)| format!("binding:{}", binding_id(tool, scope)) == key))
+}
+
+fn try_apply_binding(
+    db: &Database,
+    store: &dyn CredentialStore,
+    registry: &Registry,
+    home: &Path,
+    scope_key: &str,
+    tool: &str,
+    profile_id: &str,
+) -> Result<(), String> {
+    let (scope, project) = if scope_key == "global" {
+        (crate::native::adapter::Scope::Global, None)
+    } else if let Some(path) = scope_key.strip_prefix("project:") {
+        let path = PathBuf::from(path);
+        if path.is_dir() {
+            (crate::native::adapter::Scope::Project, Some(path))
+        } else {
+            return Err(format!("目录不存在：{}", path.display()));
+        }
+    } else {
+        return Err("不支持的活动范围".into());
+    };
+    let custom = tool_choice(db, tool);
+    crate::native::apply::apply_registered_profile(
+        registry,
+        db,
+        store,
+        tool,
+        profile_id,
+        scope,
+        home,
+        project.as_deref(),
+        custom.as_deref(),
+        true,
+    )
+    .map(|_| ())
+}
+
+fn replace_blocker(db: &Database, key: &str, label: &str, action: &str, detail: &str) {
+    record_blocker(
+        db,
+        RestoreBlocker {
+            key: key.into(),
+            label: label.into(),
+            action: action.into(),
+            detail: detail.into(),
+        },
+    );
+}
+
+/// Release failed after the database row was already deleted. Remember enough to try again
+/// without another sync, and without asking for a WebDAV connection.
+pub(crate) fn note_failed_release(
+    db: &Database,
+    registry: &Registry,
+    entity_key: &str,
+    tool: &str,
+    scope_key: &str,
+    managed: &str,
+) -> Result<(), String> {
+    if let Err(error) = release_native_binding(db, registry, tool, scope_key, managed) {
+        if let Err(remember) = remember_pending_release(db, entity_key, tool, scope_key, managed) {
+            let detail = format!("{error}；未能记下待释放的活动配置：{remember}");
+            replace_blocker(db, entity_key, &format!("{tool} 活动配置"), "retry", &detail);
+            return Err(detail);
+        }
+        replace_blocker(
+            db,
+            entity_key,
+            &format!("{tool} 活动配置"),
+            native_failure_action(&error),
+            &error,
+        );
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn retry_pending_releases(db: &Database, registry: &Registry, blocker: &RestoreBlocker) -> Result<(), String> {
+    let pending: Vec<PendingRelease> = load_pending_releases(db)?
+        .into_iter()
+        .filter(|item| item.key == blocker.key)
+        .collect();
+    if pending.is_empty() {
+        return Err(blocker.detail.clone());
+    }
+    let mut failure = None;
+    for item in pending {
+        match release_native_binding(db, registry, &item.tool, &item.scope_key, &item.managed) {
+            Ok(()) => forget_pending_release(db, &item.key, &item.tool, &item.scope_key)?,
+            Err(error) => {
+                replace_blocker(
+                    db,
+                    &blocker.key,
+                    &format!("{} 活动配置", item.tool),
+                    native_failure_action(&error),
+                    &error,
+                );
+                failure = Some(error);
+            }
+        }
+    }
+    if load_pending_releases(db)?.iter().any(|item| item.key == blocker.key) {
+        return Err(failure.unwrap_or_else(|| blocker.detail.clone()));
+    }
+    clear_blocker(db, &blocker.key)
+}
+
+fn retry_saved_binding(
+    db: &Database,
+    store: &dyn CredentialStore,
+    registry: &Registry,
+    blocker: &RestoreBlocker,
+) -> Result<(), String> {
+    let Some((scope_key, tool, profile_id)) = find_binding(db, &blocker.key)? else {
+        return Err(blocker.detail.clone());
+    };
+    let Some((home, _)) = restore_roots(db) else {
+        return Err("无法定位用户目录".into());
+    };
+    match try_apply_binding(db, store, registry, &home, &scope_key, &tool, &profile_id) {
+        Ok(()) => clear_blocker(db, &blocker.key),
+        Err(error) => {
+            replace_blocker(db, &blocker.key, &format!("{tool} 活动配置"), native_failure_action(&error), &error);
+            Err(error)
+        }
+    }
+}
+
+fn recheck_login(db: &Database, blocker: &RestoreBlocker) -> Result<(), String> {
+    let id = blocker.key.strip_prefix("account:").unwrap_or(blocker.key.as_str());
+    let account = crate::accounts::get(db, id)?;
+    if account.pending_login.is_some() || account.state != crate::accounts::AccountState::SignedIn {
+        return Err(blocker.detail.clone());
+    }
+    let Some(context) = account.context.as_ref() else {
+        return Err(blocker.detail.clone());
+    };
+    let Some((home, _)) = restore_roots(db) else {
+        return Err("无法定位用户目录".into());
+    };
+    let Some(executable) = login_executable(db, &account.tool_id, &home) else {
+        return Err(blocker.detail.clone());
+    };
+    if !executable.is_file() {
+        return Err(blocker.detail.clone());
+    }
+    match crate::accounts::native::observe(&executable, context) {
+        Ok(observation) if observation.state == crate::accounts::AccountState::SignedIn => clear_blocker(db, &blocker.key),
+        Ok(observation) => {
+            let detail = observation
+                .detail
+                .unwrap_or_else(|| "登录被拒绝，材料已保留，需要重新登录".into());
+            replace_blocker(db, &blocker.key, &blocker.label, "relogin", &detail);
+            Err(detail)
+        }
+        Err(error) => {
+            let detail = format!("登录未被接受，材料已保留：{error}");
+            replace_blocker(db, &blocker.key, &blocker.label, "relogin", &detail);
+            Err(detail)
+        }
+    }
+}
+
+/// Run the native apply or release that a blocker still owes. WebDAV is not required:
+/// the saved entity is already current, and only the CLI file is unfinished.
+pub(crate) fn retry_native_blocker(
+    db: &Database,
+    store: &dyn CredentialStore,
+    registry: &Registry,
+    key: &str,
+) -> Result<(), String> {
+    let blockers = load_blockers(db)?;
+    let Some(blocker) = blockers.into_iter().find(|item| item.key == key) else {
+        return Ok(());
+    };
+    if selected_directory(&blocker.detail).is_some() {
+        return Err(blocker.detail);
+    }
+    if load_pending_releases(db)?.iter().any(|item| item.key == key) {
+        return retry_pending_releases(db, registry, &blocker);
+    }
+    if blocker.action == "relogin" {
+        return recheck_login(db, &blocker);
+    }
+    if find_binding(db, key)?.is_some() {
+        return retry_saved_binding(db, store, registry, &blocker);
+    }
+    Err(blocker.detail)
+}
+
+/// A sync whose entity digest is unchanged still has to finish native writes and releases.
+pub(crate) fn finish_pending_native(
+    db: &Database,
+    store: &dyn CredentialStore,
+    registry: &Registry,
+) -> Result<(), String> {
+    let keys: Vec<String> = load_blockers(db)?
+        .into_iter()
+        .filter(|item| {
+            selected_directory(&item.detail).is_none()
+                && matches!(item.action.as_str(), "retry" | "install")
+        })
+        .map(|item| item.key)
+        .collect();
+    for key in keys {
+        let _ = retry_native_blocker(db, store, registry, &key);
+    }
+    Ok(())
+}
+
 fn pointer_path(pointer: &str) -> Vec<String> {
     pointer.split('/').skip(1).map(|segment| segment.replace("~1", "/").replace("~0", "~")).filter(|segment| !segment.is_empty()).collect()
 }
@@ -1744,6 +2045,14 @@ const SELECTED_DIRECTORY_MARK: &str = "\n写入已选目录：";
 fn selected_directory(detail: &str) -> Option<&str> {
     let path = detail.split_once(SELECTED_DIRECTORY_MARK)?.1.trim();
     if path.is_empty() { None } else { Some(path) }
+}
+
+fn native_failure_action(error: &str) -> &'static str {
+    if error.contains("目录") {
+        "relink"
+    } else {
+        apply_error_action(error)
+    }
 }
 
 fn apply_error_action(error: &str) -> &'static str {

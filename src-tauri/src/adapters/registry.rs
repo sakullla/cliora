@@ -68,6 +68,17 @@ impl Registry {
         self
     }
 
+    /// A registered CLI that probe cannot see. Tests use it instead of the developer PATH.
+    #[cfg(test)]
+    pub(crate) fn with_fixture_not_installed(mut self, id: &str) -> Self {
+        assert!(
+            self.get(id).is_some(),
+            "fixture must reference a registered adapter"
+        );
+        self.fixture_installations.insert(id.into(), Vec::new());
+        self
+    }
+
     /// A selected installation whose version probe yielded nothing: models an
     /// install that is present but unverified for write-boundary tests.
     #[cfg(test)]

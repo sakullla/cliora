@@ -210,6 +210,7 @@ pub fn run() {
             commands::get_webdav_status,
             commands::configure_webdav,
             commands::set_webdav_enabled,
+            commands::retry_restore_blocker,
             commands::sync_webdav_now,
             commands::resolve_webdav_conflict,
             commands::preview_webdav_conflict,
