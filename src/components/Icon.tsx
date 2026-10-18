@@ -40,6 +40,24 @@ const paths: Record<IconName, string> = {
   pencil: 'M4.5 19.5h3.8L19 8.8a2.2 2.2 0 0 0-3.1-3.1L5.2 16.4 4.5 19.5ZM14.5 7l2.5 2.5',
   clipboard: 'M9 3.5h6v3H9zM9 5H6.5A1.5 1.5 0 0 0 5 6.5v13A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5v-13A1.5 1.5 0 0 0 17.5 5H15M8.5 11.5h7M8.5 15.5h5',
 };
-export function Icon({ name, size = 18, strokeWidth = 1.7 }: { name: IconName; size?: number; strokeWidth?: number }) {
-  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name]} /></svg>;
+/*
+ * Icon sizes follow the type scale in style.css:
+ *   12      tiny chip / clear buttons (11-12px text)
+ *   14      buttons, tabs, chips (12-13px text)
+ *   16      body, banners, dialogs, toolbars (14-15px text)
+ *   18      navigation and headings (14-16px text)
+ *   20, 24  empty-state and feature glyphs
+ * The stroke thickens as the glyph shrinks so every size renders a ~1.2-1.3px line,
+ * matching the stem weight of Segoe UI / YaHei at those sizes.
+ */
+function opticalStroke(size: number) {
+  if (size <= 12) return 2.2;
+  if (size <= 14) return 2;
+  if (size <= 16) return 1.85;
+  if (size <= 18) return 1.75;
+  if (size <= 20) return 1.6;
+  return 1.5;
+}
+export function Icon({ name, size = 18, strokeWidth }: { name: IconName; size?: number; strokeWidth?: number }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth ?? opticalStroke(size)} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name]} /></svg>;
 }

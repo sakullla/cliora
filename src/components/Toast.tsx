@@ -81,7 +81,7 @@ function ToastItem({ toast, leaving, onDismiss }: { toast: Toast; leaving: boole
       onBlur={resume}
       onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); dismissRef.current(); } }}
     >
-      <span className="toast-icon" aria-hidden="true"><Icon name={toneIcon[toast.tone]} size={12} strokeWidth={2.6} /></span>
+      <span className="toast-icon" aria-hidden="true"><Icon name={toneIcon[toast.tone]} size={12} /></span>
       <span className="toast-text">{toast.text}</span>
       {toast.count > 1 && <span className="toast-count" data-count={toast.count} aria-hidden="true" />}
       <button
@@ -89,7 +89,7 @@ function ToastItem({ toast, leaving, onDismiss }: { toast: Toast; leaving: boole
         className="toast-close"
         aria-label={toast.tone === 'alert' ? t('common.dismissError') : t('common.dismiss')}
         onClick={() => dismissRef.current()}
-      ><Icon name="close" size={12} strokeWidth={2.2} /></button>
+      ><Icon name="close" size={12} /></button>
       {duration !== null && <span key={toast.id} className="toast-progress" style={{ animationDuration: `${duration}ms` }} aria-hidden="true" />}
     </div>
   );

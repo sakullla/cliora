@@ -69,8 +69,8 @@ export function McpFormFields({ draft, onChange, envRows, onEnvRowsChange, heade
   return <div className={styles.form}>
     {(onImport || title) && <div className={styles.formHead}>
       {title ? <h3>{title}</h3> : <span />}
-      {pasteNotice && <span className={styles.pasteNotice} role="status"><Icon name="check" size={13} strokeWidth={2.2} />{pasteNotice}</span>}
-      {onImport && <button type="button" className={styles.pasteToggle} aria-expanded={pasteOpen} disabled={disabled} onClick={() => { setPasteOpen((value) => !value); setPasteError(''); setPasteNotice(''); }}><Icon name="clipboard" size={13} />{t('library.resources.pasteImport')}</button>}
+      {pasteNotice && <span className={styles.pasteNotice} role="status"><Icon name="check" size={14} />{pasteNotice}</span>}
+      {onImport && <button type="button" className={styles.pasteToggle} aria-expanded={pasteOpen} disabled={disabled} onClick={() => { setPasteOpen((value) => !value); setPasteError(''); setPasteNotice(''); }}><Icon name="clipboard" size={14} />{t('library.resources.pasteImport')}</button>}
     </div>}
     {onImport && pasteOpen && <div className={styles.pasteBox}>
       <p>{t('library.resources.pasteImportHint')}</p>

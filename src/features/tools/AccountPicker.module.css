@@ -2,14 +2,14 @@
 .picker header, .picker li > div:first-child { display: flex; justify-content: space-between; align-items: start; gap: 12px; flex-wrap: wrap; }
 .picker h3, .picker p { margin: 0; }
 .picker li span, .picker details { color: var(--text-2); line-height: 1.6; overflow-wrap: anywhere; }
-.picker li span { font-size: 14px; font-weight: 400; }
-.picker details { font-size: 14px; }
-.picker p { font-size: 14px; color: var(--text-2); line-height: 1.6; overflow-wrap: anywhere; }
+.picker li span { font-size: var(--fs-body); font-weight: var(--fw-regular); }
+.picker details { font-size: var(--fs-body); }
+.picker p { font-size: var(--fs-body); color: var(--text-2); line-height: 1.6; overflow-wrap: anywhere; }
 .picker ul { display: grid; gap: 10px; padding: 0; margin: 0; list-style: none; }
 .picker li, .create { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
 .picker summary { cursor: pointer; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.create label { display: grid; gap: 6px; font-size: 14px; }
+.create label { display: grid; gap: 6px; font-size: var(--fs-body); }
 .primary, .primary:hover:not(:disabled) { border-radius: var(--radius-sm); border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
 .primary:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }
 .picker [role="alert"] { color: var(--danger); background: var(--danger-soft); padding: 10px; border-radius: var(--radius); }

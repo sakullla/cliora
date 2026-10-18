@@ -333,7 +333,7 @@ export function LibraryPage({ managedTools = [], active = true, spotlight = null
         <button type="button" role="tab" aria-selected={section === 'mcp'} tabIndex={section === 'mcp' ? 0 : -1} onClick={() => void openSection('mcp')}>MCP{counts.mcp != null && <span className={styles.tabCount} aria-hidden="true">{counts.mcp}</span>}</button>
         <button type="button" role="tab" aria-selected={section === 'skill'} tabIndex={section === 'skill' ? 0 : -1} onClick={() => void openSection('skill')}>Skill{counts.skill != null && <span className={styles.tabCount} aria-hidden="true">{counts.skill}</span>}</button>
       </div>
-      <button type="button" className={styles.primary} onClick={() => { if (section === 'prompt' || section === 'rule') start(kind); else setCreateSignal((value) => value + 1); }}><Icon name="plus" size={14} strokeWidth={2.2} />{section === 'mcp' ? t('library.resources.newMcp') : section === 'skill' ? t('tools.skills.add') : t('library.page.new', { kind: kindName(kind) })}</button>
+      <button type="button" className={styles.primary} onClick={() => { if (section === 'prompt' || section === 'rule') start(kind); else setCreateSignal((value) => value + 1); }}><Icon name="plus" size={14} />{section === 'mcp' ? t('library.resources.newMcp') : section === 'skill' ? t('tools.skills.add') : t('library.page.new', { kind: kindName(kind) })}</button>
     </div>
     {section === 'mcp' && <LibraryMcp active={active} tools={managedTools} projects={projects} createSignal={createSignal} onCountChange={(count) => setCounts((prev) => prev.mcp === count ? prev : { ...prev, mcp: count })} />}
     {section === 'skill' && <LibraryResources active={active} tools={managedTools} projects={projects} createSignal={createSignal} onCountChange={(count) => setCounts((prev) => prev.skill === count ? prev : { ...prev, skill: count })} />}
@@ -357,7 +357,7 @@ export function LibraryPage({ managedTools = [], active = true, spotlight = null
           {(tagsOf(item.category).length > 0 || item.projectId || item.updatedAt) && <small className={styles.cardMeta}>
             {tagsOf(item.category).map((tag) => <em className={styles.tagChip} key={tag}>{tag}</em>)}
             {item.projectId && <span className={styles.cardProject}>{projects.find((project) => project.id === item.projectId)?.name ?? t('library.page.originalProject')}</span>}
-            {!!item.updatedAt && <span className={styles.cardTime} title={fullTime(item.updatedAt)}><Icon name="clock" size={11} />{shortTime(item.updatedAt)}</span>}
+            {!!item.updatedAt && <span className={styles.cardTime} title={fullTime(item.updatedAt)}><Icon name="clock" size={12} />{shortTime(item.updatedAt)}</span>}
           </small>}
           <button className={styles.cardTitle} type="button" data-card-title onClick={() => choose(item)} onKeyDown={(event) => {
             if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
@@ -374,12 +374,12 @@ export function LibraryPage({ managedTools = [], active = true, spotlight = null
               return { pressed: true, state: 'drifted', status: t('library.page.markDrifted') };
             }} /> : <span />}
             <div className={styles.cardActions}>{copiedId === item.id && toasts.notice?.text === copiedText()
-              ? <button type="button" className={styles.quiet} aria-label={t('library.page.copy')} data-copied="true" onClick={() => void copy(item.body, 'page', item.id)}><Icon name="check" size={13} strokeWidth={2.2} />{t('home.launcher.copied')}</button>
+              ? <button type="button" className={styles.quiet} aria-label={t('library.page.copy')} data-copied="true" onClick={() => void copy(item.body, 'page', item.id)}><Icon name="check" size={14} />{t('home.launcher.copied')}</button>
               : <button type="button" className={styles.quiet} onClick={() => void copy(item.body, 'page', item.id)} disabled={!item.body}>{t('library.page.copy')}</button>}{kind === 'prompt' && <button type="button" className={styles.cardLaunch} onClick={() => openLaunch(item)} disabled={!item.body}>{t('library.page.launch')}</button>}<button type="button" className={styles.quiet} onClick={() => choose(item)}>{t('tools.workspace.edit')}</button></div>
           </div>
         </article>) : !items.length && !search.trim()
-          ? <div className={styles.empty}><Icon name="library" size={28} strokeWidth={1.3} /><strong>{t('library.page.emptyTitle', { kind: kindName(kind) })}</strong>{kind === 'prompt' ? t('library.page.emptyPrompt') : t('library.page.emptyRule')}<button type="button" onClick={() => start(kind)}><Icon name="plus" size={14} strokeWidth={2.2} />{t('library.page.emptyCreate', { kind: kindName(kind) })}</button></div>
-          : <div className={styles.empty}><Icon name="search" size={28} strokeWidth={1.3} />{t('library.page.noResults', { kind: kindName(kind) })}</div>}
+          ? <div className={styles.empty}><Icon name="library" size={24} /><strong>{t('library.page.emptyTitle', { kind: kindName(kind) })}</strong>{kind === 'prompt' ? t('library.page.emptyPrompt') : t('library.page.emptyRule')}<button type="button" onClick={() => start(kind)}><Icon name="plus" size={14} />{t('library.page.emptyCreate', { kind: kindName(kind) })}</button></div>
+          : <div className={styles.empty}><Icon name="search" size={24} />{t('library.page.noResults', { kind: kindName(kind) })}</div>}
       </div>
     </div>
     <GuideDialog open={!!draft} title={draft?.id ? t('library.page.editTitle', { kind: kindName(kind) }) : t('library.page.newTitle', { kind: kindName(kind) })} hint={kind === 'rule' ? t('library.page.ruleHint') : t('library.page.promptHint')} onClose={() => { void (async () => { if (await canReplace()) { setDraft(null); setSavedText(''); clearDialogResult(); } })(); }}>

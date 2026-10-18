@@ -237,8 +237,8 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
           </div>
         </article>;
       }) : needle
-        ? <div className={styles.empty}><Icon name="search" size={28} strokeWidth={1.3} />{t('library.resources.noSkillMatch', { query: search.trim() })}</div>
-        : <div className={styles.empty}><Icon name="sparkle" size={28} strokeWidth={1.3} /><strong>{t('library.resources.emptySkillTitle')}</strong>{t('library.resources.emptySkillDetail')}<button type="button" disabled={busy} onClick={() => { setDialogError(''); setSkillOpen(true); }}><Icon name="plus" size={14} strokeWidth={2.2} />{t('tools.skills.add')}</button></div>}
+        ? <div className={styles.empty}><Icon name="search" size={24} />{t('library.resources.noSkillMatch', { query: search.trim() })}</div>
+        : <div className={styles.empty}><Icon name="sparkle" size={24} /><strong>{t('library.resources.emptySkillTitle')}</strong>{t('library.resources.emptySkillDetail')}<button type="button" disabled={busy} onClick={() => { setDialogError(''); setSkillOpen(true); }}><Icon name="plus" size={14} />{t('tools.skills.add')}</button></div>}
     </div>
     <GuideDialog open={skillOpen} title={t('tools.skills.add')} hint={t('library.resources.addSkillHint')} onClose={closeSkill}>
       <div className={styles.skillAdd}>
@@ -251,8 +251,8 @@ export function LibraryResources({ active, tools, projects, createSignal = 0, on
           <section className={styles.skillSection}>
             <h3>{t('library.resources.importFrom')}</h3>
             <div className={styles.sources}>
-              <button type="button" aria-label={t('tools.skills.pickFolder')} disabled={busy} onClick={() => void addFolder()}><Icon name="folder" size={17} /><strong>{t('tools.skills.pickFolder')}</strong><span>{t('tools.skills.pickFolderHint')}</span></button>
-              <button type="button" aria-label={t('tools.skills.importZip')} disabled={busy} onClick={() => void addZip()}><Icon name="archive" size={17} /><strong>{t('tools.skills.importZip')}</strong><span>{t('tools.skills.importZipHint')}</span></button>
+              <button type="button" aria-label={t('tools.skills.pickFolder')} disabled={busy} onClick={() => void addFolder()}><Icon name="folder" size={18} /><strong>{t('tools.skills.pickFolder')}</strong><span>{t('tools.skills.pickFolderHint')}</span></button>
+              <button type="button" aria-label={t('tools.skills.importZip')} disabled={busy} onClick={() => void addZip()}><Icon name="archive" size={18} /><strong>{t('tools.skills.importZip')}</strong><span>{t('tools.skills.importZipHint')}</span></button>
             </div>
             <label>{t('tools.skills.zipUrl')}<span className={styles.urlRow}><input aria-label={t('tools.skills.zipUrlAria')} value={skillUrl} onChange={(event) => setSkillUrl(event.target.value)} placeholder="https://example.com/skill.zip" /><button type="button" disabled={busy || !skillUrl.trim()} onClick={() => void addArchive(skillUrl.trim(), false)}>{t('tools.skills.importUrl')}</button></span></label>
           </section>

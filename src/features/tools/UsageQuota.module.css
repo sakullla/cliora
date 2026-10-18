@@ -1,4 +1,4 @@
-.quota { width: 100%; min-width: 0; display: grid; gap: 8px; font-size: 12px; }
+.quota { width: 100%; min-width: 0; display: grid; gap: 8px; font-size: var(--fs-caption); }
 .quota > .heading { justify-content: flex-end; }
 .quota > .heading > span { margin-right: auto; color: var(--text-2); }
 .quota .iconButton, .quota .refresh {
@@ -14,25 +14,25 @@
   box-shadow: none;
   color: var(--text-2);
 }
-.quota .refresh { padding: 0 9px; font-size: 12px; }
+.quota .refresh { padding: 0 9px; font-size: var(--fs-caption); }
 .quota .iconButton:hover:not(:disabled), .quota .refresh:hover:not(:disabled) { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
 .quota[data-empty="true"]:empty { display: none; }
-.linked { color: var(--text); font-size: 14px; font-weight: 400; }
+.linked { color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-regular); }
 .heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
 .actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .query { min-width: 0; display: grid; gap: 6px; }
 .query + .query { border-top: 1px solid var(--line); padding-top: 8px; }
 .queryTitle { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; min-width: 0; }
-.queryTitle > span { font-weight: 620; overflow-wrap: anywhere; font-size: 14px; }
-.queryTitle small { font-size: 14px; font-weight: 400; }
+.queryTitle > span { font-weight: var(--fw-semibold); overflow-wrap: anywhere; font-size: var(--fs-body); }
+.queryTitle small { font-size: var(--fs-body); font-weight: var(--fw-regular); }
 .queryTitle .stale { color: var(--text); }
 .summaryMetrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); gap: 8px 24px; }
 .summaryMetric { display: grid; gap: 4px; align-content: start; min-width: 0; }
 .metricMeta { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .metricMeta > span + span::before { content: '·'; margin-right: 6px; color: var(--text-3); }
 .summaryMetric > div { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 4px 8px; }
-.summaryMetric > div > span { color: var(--text-2); font-size: 14px; font-weight: 400; }
-.summaryMetric > div > strong { font-size: 13.5px; font-variant-numeric: tabular-nums; font-weight: 640; letter-spacing: -.01em; }
+.summaryMetric > div > span { color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-regular); }
+.summaryMetric > div > strong { font-size: var(--fs-control); font-variant-numeric: tabular-nums; font-weight: var(--fw-semibold); letter-spacing: -.01em; }
 .summaryMetric progress {
   appearance: none;
   width: 100%; height: 6px;
@@ -44,45 +44,45 @@
 .summaryMetric progress::-webkit-progress-value { background: linear-gradient(90deg, var(--accent) 0%, color-mix(in srgb, var(--accent) 70%, var(--accent-hover)) 100%); border-radius: 99px; transition: width var(--medium) var(--ease); }
 .summaryMetric[data-warning="true"] > div > strong { color: var(--warning); }
 .summaryMetric[data-warning="true"] progress::-webkit-progress-value { background: linear-gradient(90deg, var(--warning) 0%, color-mix(in srgb, var(--warning) 75%, var(--danger)) 100%); }
-.summaryMetric small { overflow-wrap: anywhere; line-height: 1.5; color: var(--text-3); font-size: 14px; font-weight: 400; }
+.summaryMetric small { overflow-wrap: anywhere; line-height: 1.5; color: var(--text-3); font-size: var(--fs-body); font-weight: var(--fw-regular); }
 .burnDown { display: grid; gap: 3px; margin: 0; }
 .burnDown svg { display: block; width: 100%; height: 34px; color: var(--accent); }
 .burnDown svg polyline { fill: none; stroke: currentColor; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
 .burnDown svg circle { fill: currentColor; stroke: none; }
-.burnDown figcaption small { color: var(--text-3); font-size: 14px; font-weight: 400; }
+.burnDown figcaption small { color: var(--text-3); font-size: var(--fs-body); font-weight: var(--fw-regular); }
 .query:has(> .quotaDetails[open]) > .summaryMetrics { display: none; }
-.quotaDetails { font-size: 12px; color: var(--text-2); }
-.quotaDetails > summary { cursor: pointer; width: fit-content; padding: 1px 0; color: var(--text-3); font-size: 14px; font-weight: 400; }
+.quotaDetails { font-size: var(--fs-caption); color: var(--text-2); }
+.quotaDetails > summary { cursor: pointer; width: fit-content; padding: 1px 0; color: var(--text-3); font-size: var(--fs-body); font-weight: var(--fw-regular); }
 .quotaDetails > summary:hover { color: var(--accent); }
 .quotaDetails[open] > summary { margin-bottom: 8px; }
 .quotaDetails > .metrics { color: var(--text); padding: 2px 0 0; border: 0; border-radius: 0; background: transparent; }
 .metadata { display: grid; gap: 5px; padding-top: 11px; overflow-wrap: anywhere; }
-.metadata small { font-size: 14px; font-weight: 400; }
+.metadata small { font-size: var(--fs-body); font-weight: var(--fw-regular); }
 .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(215px, 100%), 1fr)); gap: 14px 24px; }
 .metric { display: grid; align-content: start; gap: 5px; min-width: 0; padding: 0; border: 0; border-radius: 0; background: transparent; }
-.metric .heading strong { font-size: 14px; font-weight: 620; }
-.metric .heading span { font-variant-numeric: tabular-nums; font-weight: 620; }
+.metric .heading strong { font-size: var(--fs-body); font-weight: var(--fw-semibold); }
+.metric .heading span { font-variant-numeric: tabular-nums; font-weight: var(--fw-semibold); }
 .metric progress { width: 100%; height: 6px; accent-color: var(--accent); appearance: none; border-radius: 99px; background: var(--surface-3); }
 .metric progress::-webkit-progress-bar { background: var(--surface-3); border-radius: 99px; }
 .metric progress::-webkit-progress-value { background: var(--accent); border-radius: 99px; }
 .metric[data-warning="true"] .heading span { color: var(--warning); }
 .metric[data-warning="true"] progress::-webkit-progress-value { background: var(--warning); }
-.values { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 14px; font-weight: 400; }
-.metric > small { font-size: 14px; font-weight: 400; }
-.error { color: var(--danger, #c33); font-size: 14px; font-weight: 400; white-space: pre-wrap; margin: 4px 0; }
+.values { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: var(--fs-body); font-weight: var(--fw-regular); }
+.metric > small { font-size: var(--fs-body); font-weight: var(--fw-regular); }
+.error { color: var(--danger, #c33); font-size: var(--fs-body); font-weight: var(--fw-regular); white-space: pre-wrap; margin: 4px 0; }
 .editor { display: grid; gap: 13px; border: 0; padding: 0; min-width: 0; }
-.editor label { display: grid; gap: 6px; font-size: 14px; font-weight: 400; }
+.editor label { display: grid; gap: 6px; font-size: var(--fs-body); font-weight: var(--fw-regular); }
 .editor input, .editor select, .editor textarea { width: 100%; box-sizing: border-box; }
 .editor .check { display: flex; align-items: center; gap: 8px; }
 .check input { width: auto; }
 .editor small, .quota small { color: var(--text-2); white-space: normal !important; }
-.editor small { font-size: 14px; font-weight: 400; }
-.editor p { font-size: 14px; font-weight: 400; }
+.editor small { font-size: var(--fs-body); font-weight: var(--fw-regular); }
+.editor p { font-size: var(--fs-body); font-weight: var(--fw-regular); }
 section.quota > small,
-.quota .query > small { font-size: 14px; font-weight: 400; }
+.quota .query > small { font-size: var(--fs-body); font-weight: var(--fw-regular); }
 .editor pre { overflow: auto; max-height: 260px; white-space: pre-wrap; }
 .editor > details { border: 1px solid var(--line); border-radius: var(--radius); padding: 11px 14px; }
-.editor > details > summary { cursor: pointer; color: var(--text-2); font-size: 14px; font-weight: 400; }
+.editor > details > summary { cursor: pointer; color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-regular); }
 .editorActions { position: sticky; bottom: -1px; padding: 13px 0; background: var(--surface); border-top: 1px solid var(--line); z-index: 2; }
 .primary, .primary:hover:not(:disabled) { border-radius: var(--radius-sm); border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
 .primary:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }

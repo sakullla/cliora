@@ -42,8 +42,8 @@
   background: none !important;
   box-shadow: none !important;
   color: var(--text) !important;
-  font-size: 14.5px !important;
-  font-weight: 650 !important;
+  font-size: var(--fs-title) !important;
+  font-weight: var(--fw-semibold) !important;
   line-height: 1.35;
   text-align: left;
   white-space: normal !important;
@@ -54,7 +54,7 @@
 .cardTitle:hover { color: var(--text) !important; text-decoration: underline; text-underline-offset: 3px; }
 .cardTitle:focus { color: var(--text) !important; }
 .cardTitle:focus-visible { outline: none; }
-.cardMeta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; min-width: 0; color: var(--text-3); font-size: 11px; }
+.cardMeta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; min-width: 0; color: var(--text-3); font-size: var(--fs-caption); }
 .badge {
   flex: none;
   padding: 0 7px;
@@ -63,13 +63,13 @@
   background: var(--surface-2);
   color: var(--text-2);
   font-family: var(--font-mono);
-  font-size: 10.5px;
-  font-weight: 560;
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-medium);
   line-height: 17px;
 }
 .badge[data-accent] { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
-.metaChip { flex: none; padding: 0 7px; border-radius: 99px; background: var(--surface-3); color: var(--text-2); font-size: 10.5px; font-weight: 560; line-height: 17px; }
-.placedNote { color: var(--text-3); font-size: 14px; font-weight: 520; }
+.metaChip { flex: none; padding: 0 7px; border-radius: 99px; background: var(--surface-3); color: var(--text-2); font-size: var(--fs-micro); font-weight: var(--fw-medium); line-height: 17px; }
+.placedNote { color: var(--text-3); font-size: var(--fs-body); font-weight: var(--fw-medium); }
 .placedNote::before { content: '·'; margin-right: 6px; }
 .placedNote[data-empty] { color: var(--text); }
 
@@ -87,8 +87,8 @@
   background: var(--surface-2);
   color: var(--text-2);
   font-family: var(--font-mono);
-  font-size: 14px;
-  font-weight: 400;
+  font-size: var(--fs-body);
+  font-weight: var(--fw-regular);
   line-height: 1.55;
   overflow-wrap: anywhere;
   -webkit-line-clamp: 2;
@@ -96,18 +96,18 @@
 }
 
 .cardBar { position: relative; z-index: 1; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 10px; margin: auto -14px 0; padding: 8px 12px; border-top: 1px solid var(--line); }
-.editButton, .editButton:hover:not(:disabled) { display: inline-flex; align-items: center; gap: 5px; min-height: var(--control-h-sm); margin-left: auto; padding: 0 10px; border-color: transparent; background: transparent; box-shadow: none; color: var(--text-2); font-size: 12px; }
+.editButton, .editButton:hover:not(:disabled) { display: inline-flex; align-items: center; gap: 5px; min-height: var(--control-h-sm); margin-left: auto; padding: 0 10px; border-color: transparent; background: transparent; box-shadow: none; color: var(--text-2); font-size: var(--fs-caption); }
 .editButton:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
 
-.empty { grid-column: 1 / -1; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 40px 16px; border: 1px dashed var(--line-strong); border-radius: var(--radius-lg); color: var(--text-2); font-size: 14px; font-weight: 400; text-align: center; }
+.empty { grid-column: 1 / -1; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 40px 16px; border: 1px dashed var(--line-strong); border-radius: var(--radius-lg); color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-regular); text-align: center; }
 .empty > svg { margin-bottom: 2px; color: var(--text-3); }
 .emptyIcon { display: grid; place-items: center; width: 44px; height: 44px; margin-bottom: 4px; border-radius: 14px; background: var(--accent-soft); color: var(--accent); }
-.empty > strong { color: var(--text); font-size: 15px; font-weight: 650; }
+.empty > strong { color: var(--text); font-size: var(--fs-title); font-weight: var(--fw-semibold); }
 .emptyActions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 10px; }
 .emptyActions button { display: inline-flex; align-items: center; gap: 6px; min-height: var(--control-h); padding: 0 16px; }
 
-.error { margin: 0; padding: 10px 12px; border: 1px solid var(--danger-line); border-radius: var(--radius); background: var(--danger-soft); color: var(--danger); font-size: 14px; font-weight: 400; line-height: 1.55; animation: reveal var(--medium) var(--ease); }
-.dirty { display: inline-flex; align-items: center; gap: 6px; color: var(--text-3); font-size: 14px; font-weight: 400; }
+.error { margin: 0; padding: 10px 12px; border: 1px solid var(--danger-line); border-radius: var(--radius); background: var(--danger-soft); color: var(--danger); font-size: var(--fs-body); font-weight: var(--fw-regular); line-height: 1.55; animation: reveal var(--medium) var(--ease); }
+.dirty { display: inline-flex; align-items: center; gap: 6px; color: var(--text-3); font-size: var(--fs-body); font-weight: var(--fw-regular); }
 .dirty::before { content: ''; width: 6px; height: 6px; border-radius: 99px; background: var(--warning); }
 
 /* ---------- Editor dialog: form | targets, conflict below ---------- */
@@ -136,8 +136,8 @@
   background: var(--surface-2);
 }
 .panelHead { display: grid; gap: 4px; }
-.panelHead h3 { margin: 0; color: var(--text); font-size: 14px; font-weight: 650; }
-.panelHead p { margin: 0; color: var(--text); font-size: 14px; font-weight: 400; line-height: 1.5; }
+.panelHead h3 { margin: 0; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-semibold); }
+.panelHead p { margin: 0; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-regular); line-height: 1.5; }
 .scopePick { width: 100%; min-width: 0; }
 
 .targetList { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
@@ -162,32 +162,32 @@
 .targetList input { width: 15px; height: 15px; margin: 0; }
 .targetList input:focus-visible { outline: none; }
 .targetText { display: grid; gap: 1px; min-width: 0; }
-.targetName { overflow: hidden; color: var(--text); font-size: 14px; font-weight: 560; text-overflow: ellipsis; white-space: nowrap; }
-.targetText small { overflow: hidden; color: var(--text-3); font-size: 14px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+.targetName { overflow: hidden; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-medium); text-overflow: ellipsis; white-space: nowrap; }
+.targetText small { overflow: hidden; color: var(--text-3); font-size: var(--fs-body); line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
 .targetList li[data-state='placed'] small { color: var(--text); }
-.targetList li[data-state='adding'] small { color: var(--text); font-weight: 600; }
-.targetList li[data-state='removing'] small { color: var(--text); font-weight: 600; }
+.targetList li[data-state='adding'] small { color: var(--text); font-weight: var(--fw-semibold); }
+.targetList li[data-state='removing'] small { color: var(--text); font-weight: var(--fw-semibold); }
 .targetList li[data-state='removing'] label { border-style: dashed; border-color: var(--warning-line); }
 .targetList li[data-state='blocked'] small { color: var(--danger); white-space: normal; }
 
-.choice { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 14px; font-weight: 520; cursor: pointer; }
-.summary { margin: 0; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font-size: 14px; font-weight: 400; line-height: 1.55; }
+.choice { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-medium); cursor: pointer; }
+.summary { margin: 0; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-regular); line-height: 1.55; }
 .summary[data-quiet] { padding: 0; background: none; color: var(--text-3); }
 .notes { display: grid; gap: 4px; }
-.notes p { margin: 0; color: var(--text); font-size: 14px; font-weight: 400; line-height: 1.5; overflow-wrap: anywhere; }
+.notes p { margin: 0; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-regular); line-height: 1.5; overflow-wrap: anywhere; }
 .notes[data-tone='warning'] p { color: var(--text); }
 
 .conflict { grid-area: conflict; display: grid; gap: 12px; min-width: 0; padding: 14px; border: 1px solid var(--warning-line); border-radius: var(--radius-lg); background: var(--warning-soft); }
 .conflictHead { display: flex; align-items: flex-start; gap: 8px; color: var(--warning); }
 .conflictHead > svg { flex: none; margin-top: 2px; }
-.conflictHead p { margin: 0; color: var(--text-2); font-size: 14px; font-weight: 400; line-height: 1.55; }
+.conflictHead p { margin: 0; color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-regular); line-height: 1.55; }
 .conflictHead strong { margin-right: 4px; color: var(--text); }
 .conflictItem { display: grid; gap: 8px; min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
-.conflictItem > p { margin: 0; color: var(--text-2); font-size: 14px; font-weight: 400; line-height: 1.5; }
+.conflictItem > p { margin: 0; color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-regular); line-height: 1.5; }
 .conflictTarget { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; min-width: 0; }
-.conflictTarget strong { font-size: 14px; }
-.conflictTarget code { min-width: 0; overflow: hidden; color: var(--text-3); font-size: 14px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
-.conflictState { padding: 0 7px; border-radius: 99px; background: var(--surface-3); color: var(--text-2); font-size: 10.5px; font-weight: 600; line-height: 17px; }
+.conflictTarget strong { font-size: var(--fs-body); }
+.conflictTarget code { min-width: 0; overflow: hidden; color: var(--text-3); font-size: var(--fs-body); font-weight: var(--fw-regular); text-overflow: ellipsis; white-space: nowrap; }
+.conflictState { padding: 0 7px; border-radius: 99px; background: var(--surface-3); color: var(--text-2); font-size: var(--fs-micro); font-weight: var(--fw-semibold); line-height: 17px; }
 .conflictState[data-state='conflict'] { background: var(--warning-soft); color: var(--warning); }
 .diff { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; min-width: 0; }
 

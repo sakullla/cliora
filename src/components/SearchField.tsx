@@ -21,6 +21,6 @@ export function SearchField({ label, value, onChange, placeholder, title, pageSe
   }
   return <span className={className ? `search-field ${className}` : 'search-field'}>
     <input type={type} aria-label={label} data-page-search={pageSearch ? '' : undefined} title={title} value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} onKeyDown={onKeyDown} />
-    {value && <button type="button" className="search-clear" aria-label={t('common.search.clear')} onClick={() => onChange('')}><Icon name="close" size={12} strokeWidth={2.2} /></button>}
+    {value && <button type="button" className="search-clear" aria-label={t('common.search.clear')} onClick={() => onChange('')}><Icon name="close" size={12} /></button>}
   </span>;
 }

@@ -2,4 +2,4 @@
 .editor [hidden] { display: none !important; }
 .row { display: flex; gap: 8px; align-items: center; min-width: 0; }
 .row input { flex: 1; min-width: 0; }
-.note { margin: 0; color: var(--text-2); font-size: 14px; font-weight: 400; line-height: 1.5; }
+.note { margin: 0; color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-regular); line-height: 1.5; }

@@ -32,9 +32,9 @@
 
 .name { display: flex; align-items: center; gap: 11px; min-width: 0; }
 .name > span:last-child { display: grid; gap: 2px; min-width: 0; }
-.name strong { overflow: hidden; font-size: 14px; font-weight: 640; text-overflow: ellipsis; white-space: nowrap; }
+.name strong { overflow: hidden; font-size: var(--fs-body); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
 
-.status { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); font-size: 14px; font-weight: 400; line-height: 1.2; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.status { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-regular); line-height: 1.2; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .status::before { content: ''; width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--text-3); }
 .status[data-state="ok"]::before { background: var(--success); }
 .status[data-state="warn"]::before { background: var(--warning); }
@@ -43,7 +43,7 @@
 .status[data-state="loading"]::before { animation: pulse 1.2s ease-in-out infinite; }
 
 .switch { min-width: 0; }
-.switch > small { color: var(--text-2); font-size: 12px; }
+.switch > small { color: var(--text-2); font-size: var(--fs-caption); }
 .loadingBar {
   display: block;
   width: min(180px, 100%);
@@ -82,15 +82,15 @@
   border-radius: 99px;
   background: transparent;
   color: var(--text-3);
-  font-size: 14px;
-  font-weight: 520;
+  font-size: var(--fs-body);
+  font-weight: var(--fw-medium);
   text-overflow: ellipsis;
   white-space: nowrap;
   transition: background-color var(--fast) var(--ease), border-color var(--fast) var(--ease), color var(--fast) var(--ease);
 }
 .switch > div[role="radiogroup"] > button:hover:not(:disabled) { border-color: var(--line-strong); background: var(--surface); color: var(--text); }
-.switch > div[role="radiogroup"] > button.activeConfig, .switch > div[role="radiogroup"] > button.activeConfig:hover:not(:disabled) { border-color: var(--accent-line); background: var(--accent-soft); color: var(--text); font-weight: 640; }
-.modelHint { margin-left: 6px; color: inherit; font-style: normal; font-size: 14px; font-weight: 520; opacity: .8; }
+.switch > div[role="radiogroup"] > button.activeConfig, .switch > div[role="radiogroup"] > button.activeConfig:hover:not(:disabled) { border-color: var(--accent-line); background: var(--accent-soft); color: var(--text); font-weight: var(--fw-semibold); }
+.modelHint { margin-left: 6px; color: inherit; font-style: normal; font-size: var(--fs-body); font-weight: var(--fw-medium); opacity: .8; }
 .activeConfig::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--accent); vertical-align: 1px; }
 
 .addConfig { border-style: dashed; color: var(--text-2); }
@@ -118,8 +118,8 @@
   border-radius: 99px;
   background: var(--surface-2);
   color: var(--text-2);
-  font-size: 14px;
-  font-weight: 400;
+  font-size: var(--fs-body);
+  font-weight: var(--fw-regular);
   line-height: 1.4;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -129,7 +129,7 @@
 .note[data-tone="error"] { background: var(--danger-soft); color: var(--danger); }
 .note[data-tone="pending"] { background: var(--info-soft); color: var(--info); }
 
-.empty { padding: 28px 16px; color: var(--text-2); font-size: 14px; font-weight: 400; text-align: center; }
+.empty { padding: 28px 16px; color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-regular); text-align: center; }
 
 @keyframes pulse { 50% { opacity: .3; } }
 

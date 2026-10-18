@@ -325,11 +325,11 @@ export function UsageDashboard({ search, favoriteOnly, onClearSearch, onClearFav
     </div>
     <div className={styles.subhead}>
       <p>{rangeCaption(report, range, now)}{(toolId || model || projectId || search.trim() || favoriteOnly) && <span className={styles.activeChips} aria-label={t('records.page.activeAria')}>
-        {search.trim() && <button type="button" className={styles.chip} title={t('records.page.chipTitle')} onClick={onClearSearch}><span>{t('records.page.chipSearch', { query: search.trim() })}</span><Icon name="close" size={10} strokeWidth={2.4} /></button>}
-        {favoriteOnly && <button type="button" className={styles.chip} title={t('records.page.chipTitle')} onClick={onClearFavoriteOnly}><span>{t('records.page.favoriteOnly')}</span><Icon name="close" size={10} strokeWidth={2.4} /></button>}
-        {toolId && <button type="button" className={styles.chip} title={t('records.page.chipTitle')} onClick={() => setToolId('')}><span>{t('records.page.chipTool', { name: toolName(toolId) })}</span><Icon name="close" size={10} strokeWidth={2.4} /></button>}
-        {model && <button type="button" className={styles.chip} title={t('records.page.chipTitle')} onClick={() => setModel('')}><span>{t('records.page.chipModel', { name: model })}</span><Icon name="close" size={10} strokeWidth={2.4} /></button>}
-        {projectId && <button type="button" className={styles.chip} title={t('records.page.chipTitle')} onClick={() => setProjectId('')}><span>{t('records.page.chipProject', { name: projectId === '__unknown__' ? t('records.page.noProject') : projects.find((item) => item.id === projectId)?.name ?? projectId })}</span><Icon name="close" size={10} strokeWidth={2.4} /></button>}
+        {search.trim() && <button type="button" className={styles.chip} title={t('records.page.chipTitle')} onClick={onClearSearch}><span>{t('records.page.chipSearch', { query: search.trim() })}</span><Icon name="close" size={12} /></button>}
+        {favoriteOnly && <button type="button" className={styles.chip} title={t('records.page.chipTitle')} onClick={onClearFavoriteOnly}><span>{t('records.page.favoriteOnly')}</span><Icon name="close" size={12} /></button>}
+        {toolId && <button type="button" className={styles.chip} title={t('records.page.chipTitle')} onClick={() => setToolId('')}><span>{t('records.page.chipTool', { name: toolName(toolId) })}</span><Icon name="close" size={12} /></button>}
+        {model && <button type="button" className={styles.chip} title={t('records.page.chipTitle')} onClick={() => setModel('')}><span>{t('records.page.chipModel', { name: model })}</span><Icon name="close" size={12} /></button>}
+        {projectId && <button type="button" className={styles.chip} title={t('records.page.chipTitle')} onClick={() => setProjectId('')}><span>{t('records.page.chipProject', { name: projectId === '__unknown__' ? t('records.page.noProject') : projects.find((item) => item.id === projectId)?.name ?? projectId })}</span><Icon name="close" size={12} /></button>}
         <button type="button" className="text-button" onClick={() => { setToolId(''); setModel(''); setProjectId(''); onClearSearch(); onClearFavoriteOnly(); }}>{t('tools.plugins.clearFilter')}</button>
       </span>}</p>
       <p className={styles.freshness}>
@@ -346,24 +346,24 @@ export function UsageDashboard({ search, favoriteOnly, onClearSearch, onClearFav
     </div> : totals && <>
       <section className={styles.summary} aria-label={t('records.usage.summaryAria')}>
         <div className={styles.primary}>
-          <small><Icon name="sparkle" size={15} />{t('records.usage.totalTokens')}</small>
+          <small><Icon name="sparkle" size={16} />{t('records.usage.totalTokens')}</small>
           <strong title={`${totals.total.toLocaleString()} token`}>{formatTokens(totals.total)}</strong>
           <Delta current={totals.total} previous={previous?.totals.total} label={compare} title={compareTitle} />
         </div>
         <div className={styles.metric}>
-          <small><Icon name="archive" size={15} />{t('records.usage.estCost')} <span className={styles.currency}>{report.currency}</span></small>
+          <small><Icon name="archive" size={16} />{t('records.usage.estCost')} <span className={styles.currency}>{report.currency}</span></small>
           <strong title={exactMoney(totals.cost, report.currency)} data-unpriced={totals.cost === null || undefined}>{formatMoney(totals.cost, report.currency)}</strong>
           {totals.unpricedTokens > 0
             ? <button type="button" className={styles.metricNote} onClick={() => openPrice()}>{t('records.usage.unpricedNote', { percent: formatPercent(1 - pricedShare) })}</button>
             : <Delta current={totals.cost} previous={previous?.totals.cost ?? (previous ? 0 : undefined)} label={compare} title={compareTitle} />}
         </div>
         <div className={styles.metric}>
-          <small><Icon name="connections" size={15} />{totals.unknownRequestRecords ? t('records.usage.knownCalls') : t('records.usage.calls')}</small>
+          <small><Icon name="connections" size={16} />{totals.unknownRequestRecords ? t('records.usage.knownCalls') : t('records.usage.calls')}</small>
           <strong>{totals.requests.toLocaleString()}</strong>
           <span className={styles.metricNote}>{t('records.usage.sessionsNote', { sessions: totals.sessions, detail: totals.unknownRequestRecords ? t('records.usage.unknownCounts', { count: totals.unknownRequestRecords.toLocaleString() }) : totals.requests ? t('records.usage.perRequest', { amount: formatTokens(totals.total / totals.requests) }) : t('records.usage.noRequests') })}</span>
         </div>
         <div className={styles.metric}>
-          <small><Icon name="leaf" size={15} />{t('records.usage.cacheHit')}</small>
+          <small><Icon name="leaf" size={16} />{t('records.usage.cacheHit')}</small>
           <strong title={t('records.usage.cacheHitTitle')}>{formatPercent(cacheHitRate(totals))}</strong>
           <span className={styles.metricNote}>{t('records.usage.ioNote', { input: formatTokens(totals.input), output: formatTokens(totals.output) })}</span>
         </div>

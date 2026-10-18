@@ -15,8 +15,8 @@
   background-position: right 10px center;
   box-shadow: none;
   color: var(--text);
-  font-size: 14px;
-  font-weight: 400;
+  font-size: var(--fs-body);
+  font-weight: var(--fw-regular);
   text-align: left;
 }
 .trigger:hover:not(:disabled) { border-color: var(--text-3); background-color: var(--surface-3); }
@@ -28,7 +28,7 @@
 .triggerCopy { display: grid; min-width: 0; max-width: 100%; line-height: 1.2; }
 .triggerCopy > span,
 .triggerCopy > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.triggerCopy > small { color: var(--text-2); font-size: 14px; font-weight: 450; }
+.triggerCopy > small { color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-regular); }
 
 .trigger[data-variant="accent"] {
   min-height: var(--control-h-sm);
@@ -36,13 +36,13 @@
   border-color: var(--accent-line);
   background-color: var(--accent-soft);
   color: var(--text);
-  font-size: 14px;
-  font-weight: 640;
+  font-size: var(--fs-body);
+  font-weight: var(--fw-semibold);
 }
 .trigger[data-variant="accent"]:hover:not(:disabled) { border-color: var(--accent); background-color: var(--surface); color: var(--text); }
-.trigger[data-variant="accent"][data-empty="true"] { border-color: var(--line-strong); background-color: var(--surface); color: var(--text-2); font-weight: 560; }
+.trigger[data-variant="accent"][data-empty="true"] { border-color: var(--line-strong); background-color: var(--surface); color: var(--text-2); font-weight: var(--fw-medium); }
 .trigger[data-variant="accent"][data-empty="true"]:hover:not(:disabled) { border-color: var(--text-3); background-color: var(--surface-3); color: var(--text); }
-.trigger[data-variant="accent"] .triggerCopy > small { color: var(--text-2); font-weight: 450; opacity: .85; }
+.trigger[data-variant="accent"] .triggerCopy > small { color: var(--text-2); font-weight: var(--fw-regular); opacity: .85; }
 
 .panel {
   position: fixed;
@@ -73,8 +73,8 @@
   background: transparent;
   box-shadow: none;
   color: var(--text);
-  font-size: 14px;
-  font-weight: 400;
+  font-size: var(--fs-body);
+  font-weight: var(--fw-regular);
   text-align: left;
 }
 .optionIcon { display: grid; place-items: center; flex: none; }
@@ -82,18 +82,18 @@
 .optionMarks { display: inline-flex; flex: none; align-items: center; gap: 6px; }
 .optionCopy > strong,
 .optionCopy > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.optionCopy > strong { font-weight: 600; }
-.optionCopy > small { color: var(--text-3); font-size: 14px; font-weight: 450; }
+.optionCopy > strong { font-weight: var(--fw-semibold); }
+.optionCopy > small { color: var(--text-3); font-size: var(--fs-body); font-weight: var(--fw-regular); }
 .optionMarks { display: inline-flex; align-items: center; gap: 6px; }
-.optionMarks > em { color: var(--text); font-size: 14px; font-style: normal; font-weight: 560; }
+.optionMarks > em { color: var(--text); font-size: var(--fs-body); font-style: normal; font-weight: var(--fw-medium); }
 .optionMarks svg { flex: none; color: var(--accent); }
 .list > button:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
 .list > button[data-active="true"] { background: var(--surface-3); box-shadow: inset 2px 0 0 var(--accent); }
-.list > button[aria-selected="true"] { background: var(--selection); color: var(--text); font-weight: 650; box-shadow: inset 2px 0 0 var(--accent); }
+.list > button[aria-selected="true"] { background: var(--selection); color: var(--text); font-weight: var(--fw-semibold); box-shadow: inset 2px 0 0 var(--accent); }
 .list > button[aria-selected="true"]:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
 .list > button[aria-selected="true"] small { color: var(--text-2); }
 .list > button:disabled { opacity: .5; }
-.list > p { margin: 0; padding: 8px; color: var(--text-3); font-size: 14px; }
+.list > p { margin: 0; padding: 8px; color: var(--text-3); font-size: var(--fs-body); }
 
 .folderPick {
   display: flex;
@@ -109,8 +109,8 @@
   background: transparent;
   box-shadow: none;
   color: var(--text-2);
-  font-size: 12.5px;
-  font-weight: 560;
+  font-size: var(--fs-control);
+  font-weight: var(--fw-medium);
   text-align: left;
 }
 .folderPick:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }

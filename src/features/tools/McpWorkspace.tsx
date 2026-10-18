@@ -197,7 +197,7 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
     finally { if (mounted.current) setBusy(false); }
   }
 
-  const head = (canAdd: boolean) => <div className={styles.head}><div><h2>{t('tools.mcp.title')}</h2><p>{t('tools.mcp.description')}</p></div>{canAdd && <button type="button" className={styles.primary} disabled={busy || (scope === 'project' && !project)} onClick={() => void startNew()}><Icon name="plus" size={14} strokeWidth={2.2} />{t('tools.mcp.add')}</button>}</div>;
+  const head = (canAdd: boolean) => <div className={styles.head}><div><h2>{t('tools.mcp.title')}</h2><p>{t('tools.mcp.description')}</p></div>{canAdd && <button type="button" className={styles.primary} disabled={busy || (scope === 'project' && !project)} onClick={() => void startNew()}><Icon name="plus" size={14} />{t('tools.mcp.add')}</button>}</div>;
 
   if (capabilityBlocked) {
     return <section className={styles.section} aria-label={t('tools.mcp.title')}>{head(false)}<StatusBanner tone="error">{capabilityBlocked}</StatusBanner><p className={styles.muted}>{t('tools.mcp.blocked')}</p></section>;
@@ -206,11 +206,11 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
   return <section className={styles.section} aria-label={t('tools.mcp.title')}>
     {head(true)}
     {empty ? (listLoading ? <div role="status" aria-label={t('tools.mcp.loading')}><SkeletonRows count={3} /></div> : <div className={styles.empty}>
-      <span className={styles.emptyIcon}><Icon name="connections" size={22} strokeWidth={1.5} /></span>
+      <span className={styles.emptyIcon}><Icon name="connections" size={24} /></span>
       <strong>{t('tools.mcp.emptyTitle')}</strong>
       <p>{t('tools.mcp.emptyDetail')}</p>
       {scope === 'project' && !project && <p className={styles.muted}>{t('tools.mcp.pickProjectFirst')}</p>}
-      <button type="button" className={styles.primary} disabled={busy || (scope === 'project' && !project)} onClick={() => void startNew()}><Icon name="plus" size={14} strokeWidth={2.2} />{t('tools.mcp.add')}</button>
+      <button type="button" className={styles.primary} disabled={busy || (scope === 'project' && !project)} onClick={() => void startNew()}><Icon name="plus" size={14} />{t('tools.mcp.add')}</button>
     </div>) : <div className={styles.listCard}>
       <div className={styles.listHead}>
         <strong>{needle ? t('tools.mcp.countFiltered', { filtered: shown.length, total: nativeEntries.length }) : t('tools.mcp.activeCount', { count: nativeEntries.length })}</strong>

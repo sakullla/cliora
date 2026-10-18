@@ -1,5 +1,5 @@
 .addForm { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: end; gap: 12px 16px; background: var(--surface); box-shadow: var(--shadow-xs); }
-.addForm > p { grid-column: 1 / -1; margin: 0; color: var(--text-3); font-size: 14px; font-weight: 400; line-height: 1.55; }
+.addForm > p { grid-column: 1 / -1; margin: 0; color: var(--text-3); font-size: var(--fs-body); font-weight: var(--fw-regular); line-height: 1.55; }
 .addForm > button:first-of-type { grid-column: 2; grid-row: 3; justify-self: end; }
 .addForm > button:last-of-type:not(:first-of-type) { grid-column: 1; grid-row: 3; justify-self: start; }
 @media (max-width: 760px) {
@@ -45,20 +45,20 @@
 .accountSkeleton > :global(.skeleton-block):nth-child(2) { grid-area: badge; width: 68px; height: 22px; border-radius: 99px; }
 .accountSkeleton > :global(.skeleton-block):nth-child(3) { grid-area: meta; width: min(220px, 58%); height: 10px; }
 .nativeIdentity { display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
-.nativeIdentity > span { color: var(--text-2); font-size: 14px; font-weight: 400; }
-.nativeRow > details { grid-column: 1 / -1; font-size: 14px; font-weight: 400; color: var(--text-2); }
+.nativeIdentity > span { color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-regular); }
+.nativeRow > details { grid-column: 1 / -1; font-size: var(--fs-body); font-weight: var(--fw-regular); color: var(--text-2); }
 .nativeRow summary { cursor: pointer; }
 .management { display: grid; gap: 12px; }
 .management summary { cursor: pointer; width: fit-content; }
 .management[open] { padding-top: 8px; border-top: 1px solid var(--line); }
 .management > .impact { margin: 12px 0; }
 .accountActions { display: grid; gap: 10px; }
-.moreActions { font-size: 14px; font-weight: 400; color: var(--text-2); }
+.moreActions { font-size: var(--fs-body); font-weight: var(--fw-regular); color: var(--text-2); }
 .moreActions summary { cursor: pointer; width: fit-content; }
 .actionHint,
-.accountActions > .actionHint { margin: 0; font-size: 14px; font-weight: 400; color: var(--text); }
+.accountActions > .actionHint { margin: 0; font-size: var(--fs-body); font-weight: var(--fw-regular); color: var(--text); }
 .impact { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
 .impact ul { display: grid; gap: 8px; list-style: none; padding: 0; margin: 0; }
 .impact li { display: grid; gap: 6px; }
 .impactHeader { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
-.contextSummary { font-size: 14px; font-weight: 400; color: var(--text-2); }
+.contextSummary { font-size: var(--fs-body); font-weight: var(--fw-regular); color: var(--text-2); }
