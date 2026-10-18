@@ -739,20 +739,6 @@ label.setting-row:hover { background: var(--surface-2); }
 .icon-file input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; }
 .icon-file:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-.migration-card {
-  margin-bottom: 20px;
-  padding: 18px 22px 20px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-xl);
-  background: var(--surface);
-  box-shadow: var(--shadow-sm);
-}
-.migration-card h2 { font-size: var(--fs-body); font-weight: var(--fw-semibold); letter-spacing: -.1px; }
-.migration-card p { max-width: 68ch; margin: 3px 0 16px; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-regular); line-height: 1.6; }
-.migration-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.migration-actions .button { min-height: var(--control-h); padding: 0 16px; }
-.migration-card small { display: block; margin-top: 12px; color: var(--text-3); font-size: var(--fs-body); line-height: 1.5; }
-
 .setting-row-top { align-items: flex-start; }
 .custom-terminal-fields { display: grid; gap: 8px; min-width: 280px; }
 .custom-terminal-actions { display: flex; gap: 8px; justify-content: flex-end; }
@@ -872,8 +858,7 @@ label.setting-row:hover { background: var(--surface-2); }
 .guide-dialog-back:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
 .guide-dialog-back + div { min-width: 0; }
 .guide-dialog:has(.shortcut-help) { width: min(520px, calc(100vw - 40px)); }
-.guide-dialog:has(.sync-activity) { width: min(560px, calc(100vw - 40px)); }
-.sync-activity { display: grid; gap: 14px; }
+.guide-dialog:has(.sync-dialog) { width: min(580px, calc(100vw - 40px)); }
 .shortcut-help { display: grid; gap: 20px; }
 .shortcut-help h3 { margin-bottom: 6px; font-size: var(--fs-body); font-weight: var(--fw-semibold); color: var(--text-2); letter-spacing: .3px; }
 .shortcut-help dl { display: grid; margin: 0; }

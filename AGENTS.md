@@ -55,6 +55,8 @@ node scripts/capture-ui.mjs --skills --theme light --size 1360
 
 The Skill fixture treats the directory name as the skill. `crud-page` has a mismatched frontmatter name and an empty description. `lark-apps` is markdown without frontmatter. Both stay on the list as 本机目录 and open an editor. `code-review` is a managed package and opens the same editor with 启用 Skill. 放进资料库 is only on an external directory. The editor capture types into SKILL.md and expects 保存 to become enabled. A name or description mismatch is not 暂不可读取.
 
+`scripts/capture-sync.mjs` captures only 迁移与同步: WebDAV unconnected, healthy, needs-attention, failing and paused states, the connect/export/import dialogs, an open conflict, and the sync progress and result dialogs. It takes the same `--theme`/`--size` options and writes to `docs/verification/ui-sync` unless `CLIORA_CAPTURE_OUT` is set.
+
 Each run checks horizontal overflow and page errors, then writes `index.html`, `README.md`, and `capture-ui[-mode]-manifest.json`. A narrow run replaces the gallery in the output directory, so set `CLIORA_CAPTURE_OUT` when the existing full gallery should stay.
 
 ## Commit & Pull Request Guidelines
