@@ -1488,3 +1488,193 @@ fn choosing_a_missing_directory_clears_its_relink_blocker_and_applies_the_saved_
     let reloaded = load_blockers(&db).unwrap();
     assert!(reloaded.iter().all(|item| item.detail != format!("目录不存在：{missing}")));
 }
+
+#[test]
+fn occupied_directory_write_failure_keeps_source_binding_and_relink_blocker() {
+    let _roots = RestoreRootsGuard;
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(temp.path());
+    let credentials = MemoryCredentials::default();
+    let missing = "C:/missing/restore-project";
+    let profile = bare_profile(
+        "pi-profile",
+        "pi",
+        "Pi",
+        BTreeMap::from([("settings".into(), r#"{"defaultProvider":"restore-marker"}"#.into())]),
+    );
+    let occupied_profile = bare_profile("occupied-profile", "pi", "Occupied", BTreeMap::new());
+    let old_scope = format!("project:{missing}");
+    let source_key = format!("binding:{}", binding_id("pi", &old_scope));
+    let managed = r#"{"settings":{"/defaultProvider":"occupied-marker"}}"#;
+    db.with_connection(|conn| {
+        conn.execute(
+            "INSERT INTO native_profiles (id,tool,version,data) VALUES (?1,?2,1,?3)",
+            rusqlite::params![profile.id, profile.tool, serde_json::to_string(&profile).unwrap()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO native_profiles (id,tool,version,data) VALUES (?1,?2,1,?3)",
+            rusqlite::params![occupied_profile.id, occupied_profile.tool, serde_json::to_string(&occupied_profile).unwrap()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO projects (id,name,path,preferred_tool,last_opened) VALUES ('missing','Missing',?1,NULL,0)",
+            [missing],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO applied_bindings (scope_key,tool,profile_id,profile_version,managed) VALUES (?1,'pi',?2,-1,'{}')",
+            rusqlite::params![old_scope, profile.id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO applied_bindings (scope_key,tool,profile_id,profile_version,managed) VALUES ('global','codex','other',1,'{}')",
+            [],
+        )
+        .unwrap();
+        Ok(())
+    })
+    .unwrap();
+    record_blocker(
+        &db,
+        RestoreBlocker {
+            key: source_key.clone(),
+            label: "pi 活动配置".into(),
+            action: "relink".into(),
+            detail: format!("目录不存在：{missing}"),
+        },
+    );
+    record_blocker(
+        &db,
+        RestoreBlocker {
+            key: "binding:install".into(),
+            label: "其它 CLI".into(),
+            action: "install".into(),
+            detail: "未发现可执行文件".into(),
+        },
+    );
+    record_blocker(
+        &db,
+        RestoreBlocker {
+            key: "binding:other-path".into(),
+            label: "其它目录".into(),
+            action: "relink".into(),
+            detail: "目录不存在：C:/other-missing".into(),
+        },
+    );
+    let before = collect_snapshot(&db, &credentials, &Registry::builtins()).unwrap();
+    let source_entity = before.entities.iter().find(|entity| entity.key() == source_key).unwrap();
+    let before_digest = source_entity.digest().unwrap();
+    db.with_connection(|conn| {
+        conn.execute(
+            "INSERT INTO sync_entity_state (entity_key,local_digest,heads_json,deleted) VALUES (?1,?2,'[\"head-1\"]',0)",
+            rusqlite::params![source_key, before_digest],
+        )
+        .map_err(|error| error.to_string())
+    })
+    .unwrap();
+    let moved = temp.path().join("chosen");
+    fs::create_dir(&moved).unwrap();
+    let home = temp.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    set_restore_roots_for_test(Some((home, temp.path().to_path_buf())));
+    let registry = Registry::builtins().with_fixture_installation("pi", "1.0.0");
+    let linked = crate::projects::relink(&db, "missing", moved.to_str().unwrap()).unwrap();
+    let new_path = linked.path.as_deref().unwrap();
+    let occupied_scope = crate::native::apply::scope_key(crate::native::adapter::Scope::Project, Some(Path::new(new_path))).unwrap();
+    let occupied_dir = occupied_scope.strip_prefix("project:").unwrap();
+    fs::create_dir_all(Path::new(occupied_dir).join(".pi")).unwrap();
+    fs::write(
+        Path::new(occupied_dir).join(".pi").join("settings.json"),
+        r#"{"defaultProvider":"external-marker"}"#,
+    )
+    .unwrap();
+    db.with_connection(|conn| {
+        conn.execute(
+            "INSERT INTO applied_bindings (scope_key,tool,profile_id,profile_version,managed) VALUES (?1,'pi','occupied-profile',4,?2)",
+            rusqlite::params![occupied_scope, managed],
+        )
+        .map_err(|error| error.to_string())
+    })
+    .unwrap();
+    let error = apply_relinked_directory(&db, &credentials, &registry, missing, new_path).unwrap_err();
+    assert!(error.contains("外部修改"), "{error}");
+    let project_path: String = db
+        .with_connection(|conn| {
+            conn.query_row("SELECT path FROM projects WHERE id='missing'", [], |row| row.get(0))
+                .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert_eq!(project_path, missing);
+    let source: (String, i64, String) = db
+        .with_connection(|conn| {
+            conn.query_row(
+                "SELECT profile_id, profile_version, managed FROM applied_bindings WHERE scope_key=?1 AND tool='pi'",
+                [&old_scope],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert_eq!(source.0, profile.id);
+    assert_eq!(source.1, -1);
+    assert_eq!(source.2, "{}");
+    let occupied: (String, i64, String) = db
+        .with_connection(|conn| {
+            conn.query_row(
+                "SELECT profile_id, profile_version, managed FROM applied_bindings WHERE scope_key=?1 AND tool='pi'",
+                [&occupied_scope],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert_eq!(occupied.0, "occupied-profile");
+    assert_eq!(occupied.1, 4);
+    assert_eq!(occupied.2, managed);
+    let global: String = db
+        .with_connection(|conn| {
+            conn.query_row("SELECT scope_key FROM applied_bindings WHERE tool='codex'", [], |row| row.get(0))
+                .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert_eq!(global, "global");
+    let blockers = load_blockers(&db).unwrap();
+    assert!(
+        blockers.iter().any(|item| item.key == source_key && item.action == "relink" && item.detail == format!("目录不存在：{missing}")),
+        "{blockers:?}"
+    );
+    assert!(blockers.iter().all(|item| item.action != "retry"), "{blockers:?}");
+    assert!(blockers.iter().any(|item| item.key == "binding:install" && item.action == "install"), "{blockers:?}");
+    assert!(blockers.iter().any(|item| item.key == "binding:other-path" && item.action == "relink"), "{blockers:?}");
+    let saved: String = db
+        .with_connection(|conn| {
+            conn.query_row("SELECT data FROM native_profiles WHERE id=?1", [&profile.id], |row| row.get(0))
+                .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert!(saved.contains("restore-marker"), "{saved}");
+    let native = fs::read_to_string(Path::new(occupied_dir).join(".pi").join("settings.json")).unwrap();
+    assert!(native.contains("external-marker") && !native.contains("restore-marker"), "{native}");
+    // A known sync row whose binding disappeared would be uploaded as a local deletion.
+    let snapshot = collect_snapshot(&db, &credentials, &registry).unwrap();
+    let entity = snapshot.entities.iter().find(|entity| entity.key() == source_key).unwrap();
+    let PortablePayload::Binding(binding) = &entity.payload else { panic!("binding") };
+    assert_eq!(binding.scope_key, old_scope);
+    assert_eq!(binding.profile_id, profile.id);
+    assert_eq!(entity.digest().unwrap(), before_digest);
+    let deleted: i64 = db
+        .with_connection(|conn| {
+            conn.query_row("SELECT deleted FROM sync_entity_state WHERE entity_key=?1", [&source_key], |row| row.get(0))
+                .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert_eq!(deleted, 0);
+    let deleted_rows: i64 = db
+        .with_connection(|conn| {
+            conn.query_row("SELECT count(*) FROM sync_entity_state WHERE deleted!=0", [], |row| row.get(0))
+                .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert_eq!(deleted_rows, 0);
+}

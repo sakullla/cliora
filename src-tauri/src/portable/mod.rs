@@ -1758,7 +1758,9 @@ fn retarget_binding(db: &Database, tool: &str, old_scope: &str, new_scope: &str)
 }
 
 /// A restored project binding stays on the missing directory until that project is linked.
-/// Move the binding to the chosen directory, write it, and drop only that relink blocker.
+/// Write the chosen directory first. Drop or retarget the source binding only after that
+/// apply commits. A failed write leaves the source binding and its relink blocker, so the
+/// next sync does not upload a local deletion.
 pub(crate) fn apply_relinked_directory(
     db: &Database,
     store: &dyn CredentialStore,
@@ -1789,14 +1791,10 @@ pub(crate) fn apply_relinked_directory(
         .into_iter()
         .filter(|(scope, _, _)| scope.strip_prefix("project:").is_some_and(|path| directory_key(path) == previous))
         .collect();
-    let mut old_keys = Vec::new();
-    for (scope, tool, _) in &matched {
-        old_keys.push(format!("binding:{}", binding_id(tool, scope)));
-        retarget_binding(db, tool, scope, &new_scope)?;
-    }
-    let mut issues = Vec::new();
+    let mut released_keys = Vec::new();
+    let mut failures = Vec::new();
     let home = restore_roots(db).map(|(home, _)| home);
-    for (_scope, tool, profile_id) in &matched {
+    for (scope, tool, profile_id) in &matched {
         let failure = match home.as_deref() {
             None => Some("无法定位用户目录".to_string()),
             Some(home) => {
@@ -1816,28 +1814,22 @@ pub(crate) fn apply_relinked_directory(
                 .err()
             }
         };
+        // Keep the restored row until the native write commits. Deleting it first is a
+        // syncable deletion even when this function still returns success.
         if let Some(error) = failure {
-            let action = if error.contains("目录") {
-                "relink"
-            } else if error.contains("未发现") || error.contains("未注册") || error.contains("不能探测") {
-                "install"
-            } else {
-                "retry"
-            };
-            issues.push(RestoreBlocker {
-                key: format!("binding:{}", binding_id(tool, &new_scope)),
-                label: format!("{tool} 活动配置"),
-                action: action.into(),
-                detail: error,
-            });
+            failures.push(error);
+            continue;
         }
+        retarget_binding(db, tool, scope, &new_scope)?;
+        released_keys.push(format!("binding:{}", binding_id(tool, scope)));
     }
+    let all_written = released_keys.len() == matched.len();
     let mut current = load_blockers(db)?;
     current.retain(|item| {
-        if issues.iter().any(|issue| issue.key == item.key) || old_keys.iter().any(|key| key == &item.key) {
+        if released_keys.iter().any(|key| key == &item.key) {
             return false;
         }
-        if item.action == "relink" {
+        if all_written && item.action == "relink" {
             if let Some(path) = item.detail.split_once("目录不存在：").map(|(_, path)| path.trim()) {
                 if !path.is_empty() && directory_key(path) == previous {
                     return false;
@@ -1846,7 +1838,6 @@ pub(crate) fn apply_relinked_directory(
         }
         true
     });
-    current.extend(issues);
     db.with_connection(|conn| {
         conn.execute(
             "INSERT INTO app_settings (key,value) VALUES ('sync_blockers',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -1854,7 +1845,36 @@ pub(crate) fn apply_relinked_directory(
         )
         .map(|_| ())
         .map_err(|error| error.to_string())
-    })
+    })?;
+    if !matched.is_empty() && released_keys.is_empty() {
+        // relink_project already stored the new directory. Put that project back so the
+        // missing-directory action can be chosen again.
+        let chosen = directory_key(new_path);
+        db.with_connection(|conn| {
+            let mut statement = conn
+                .prepare("SELECT id, path FROM projects WHERE path IS NOT NULL")
+                .map_err(|error| error.to_string())?;
+            let mut rows = statement.query([]).map_err(|error| error.to_string())?;
+            let mut ids = Vec::new();
+            while let Some(row) = rows.next().map_err(|error| error.to_string())? {
+                let id: String = row.get(0).map_err(|error| error.to_string())?;
+                let path: String = row.get(1).map_err(|error| error.to_string())?;
+                if directory_key(&path) == chosen {
+                    ids.push(id);
+                }
+            }
+            drop(rows);
+            for id in ids {
+                conn.execute("UPDATE projects SET path=?1 WHERE id=?2", params![previous_path, id])
+                    .map_err(|error| error.to_string())?;
+            }
+            Ok(())
+        })?;
+        if let Some(error) = failures.into_iter().next() {
+            return Err(error);
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn record_blocker(db: &Database, blocker: RestoreBlocker) {
