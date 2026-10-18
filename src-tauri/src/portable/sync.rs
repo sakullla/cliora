@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use reqwest::blocking::{Client, Response};
 use reqwest::header::{ETAG, IF_MATCH, IF_NONE_MATCH};
 use reqwest::{Method, StatusCode, Url};
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -481,23 +481,64 @@ pub(crate) fn read_conflicts(db: &Database) -> Result<Vec<SyncConflict>, String>
     })
 }
 
-pub(crate) fn replace_conflicts(
-    db: &Database,
-    applied: &BTreeSet<String>,
-    replaced: &BTreeSet<String>,
-    added: Vec<SyncConflict>,
-) -> Result<(), String> {
-    let mut conflicts = read_conflicts(db)?;
-    conflicts.retain(|item| !applied.contains(&item.key) && !replaced.contains(&item.key));
-    conflicts.extend(added);
-    db.with_connection(|conn| {
-        conn.execute(
-            "INSERT INTO app_settings (key,value) VALUES ('sync_conflicts',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            [serde_json::to_string(&conflicts).map_err(|error| error.to_string())?],
+/// Source versions from a configuration bundle. `run` replaces `sync_conflicts` and must not own these.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BundleHold {
+    pub key: String,
+    pub label: String,
+    pub local_present: bool,
+    pub local_digest: String,
+    pub version_id: String,
+    pub digest: String,
+    pub entity: PortableEntity,
+    pub secret_ids: Vec<String>,
+}
+
+pub(crate) fn read_bundle_holds(db: &Database) -> Result<Vec<BundleHold>, String> {
+    db.with_connection(|conn| read_bundle_holds_on(conn))
+}
+
+pub(crate) fn read_bundle_holds_on(conn: &Connection) -> Result<Vec<BundleHold>, String> {
+    let value: Option<String> = conn
+        .query_row(
+            "SELECT value FROM app_settings WHERE key='bundle_conflicts'",
+            [],
+            |row| row.get(0),
         )
-        .map(|_| ())
-        .map_err(|error| error.to_string())
-    })
+        .optional()
+        .map_err(|error| error.to_string())?;
+    value
+        .map(|text| serde_json::from_str(&text).map_err(|_| "配置包冲突记录损坏".to_string()))
+        .transpose()
+        .map(|value| value.unwrap_or_default())
+}
+
+pub(crate) fn write_bundle_holds_on(conn: &Connection, holds: &[BundleHold]) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO app_settings (key,value) VALUES ('bundle_conflicts',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        [serde_json::to_string(holds).map_err(|error| error.to_string())?],
+    )
+    .map(|_| ())
+    .map_err(|error| error.to_string())
+}
+
+pub(crate) fn discard_bundle_holds(db: &Database, store: &dyn CredentialStore, entity_key: &str) -> Result<(), String> {
+    let holds = read_bundle_holds(db)?;
+    if !holds.iter().any(|hold| hold.key == entity_key) {
+        return Ok(());
+    }
+    let mut kept = Vec::new();
+    for hold in holds {
+        if hold.key == entity_key {
+            for id in &hold.secret_ids {
+                store.delete(id)?;
+            }
+        } else {
+            kept.push(hold);
+        }
+    }
+    db.with_connection(|conn| write_bundle_holds_on(conn, &kept))
 }
 
 pub fn status(db: &Database) -> Result<SyncStatus, String> {
@@ -522,6 +563,30 @@ pub fn status(db: &Database) -> Result<SyncStatus, String> {
     for conflict in &mut conflicts {
         for version in &mut conflict.versions {
             version.entity = None;
+        }
+    }
+    for hold in read_bundle_holds(db)? {
+        let version = SyncConflictVersion {
+            id: hold.version_id,
+            digest: hold.digest,
+            deleted: false,
+            entity: None,
+        };
+        if let Some(existing) = conflicts.iter_mut().find(|item| item.key == hold.key) {
+            if !existing.versions.iter().any(|item| item.id == version.id) {
+                existing.versions.push(version);
+                existing.remote_versions = existing.versions.len();
+            }
+        } else {
+            conflicts.push(SyncConflict {
+                key: hold.key,
+                label: hold.label,
+                local_present: hold.local_present,
+                local_digest: hold.local_digest,
+                remote_versions: 1,
+                remote_deleted: false,
+                versions: vec![version],
+            });
         }
     }
     Ok(SyncStatus {
@@ -913,6 +978,7 @@ fn delete_local(
     let releases = db.with_connection(|conn| {
         let tx = conn.transaction().map_err(|error| error.to_string())?;
         let current = super::collect_snapshot_on(&tx, store, registry)?
+            .snapshot
             .entities
             .into_iter()
             .find(|entity| entity.key() == entity_key);
@@ -1179,7 +1245,8 @@ fn run_once(
         return Err("远端同步空间已更换，本机资料未改动".into());
     }
     let pending_tokens = outbox_tokens(db)?;
-    let snapshot = collect_snapshot(db, store, registry)?;
+    let (snapshot, blocked_accounts) = super::collect_reported(db, store, registry)?;
+    let skipped_accounts: BTreeSet<String> = blocked_accounts.into_iter().map(|item| item.key).collect();
     let seen = seen_versions(db)?;
     let mut verified = BTreeMap::new();
     for (entity_key, heads) in &manifest.heads {
@@ -1205,6 +1272,9 @@ fn run_once(
     let mut changed_manifest = false;
     let mut processed_keys = BTreeSet::new();
     for entity_key in all_keys {
+        if skipped_accounts.contains(&entity_key) {
+            continue;
+        }
         processed_keys.insert(entity_key.clone());
         let current = local.get(&entity_key);
         let current_digest = current
@@ -1440,7 +1510,10 @@ pub fn run(
             } else {
                 previous_success
             };
-            result.last_error = status(db)?.last_error;
+            let refreshed = status(db)?;
+            result.conflicts = refreshed.conflicts;
+            result.blockers = refreshed.blockers;
+            result.last_error = refreshed.last_error;
             result.retry_after = Some(0);
             Ok(result)
         }
@@ -1472,6 +1545,14 @@ pub fn resolve(
     let _guard = SYNC_LOCK
         .try_lock()
         .map_err(|_| "同步正在进行，请稍后处理冲突".to_string())?;
+    let holds: Vec<BundleHold> = read_bundle_holds(db)?
+        .into_iter()
+        .filter(|item| item.key == entity_key)
+        .collect();
+    let chosen_bundle = chosen_version_id.is_some_and(|id| id.starts_with("bundle:"));
+    if chosen_bundle || (read_config(db)?.is_none() && !holds.is_empty()) {
+        return resolve_held_bundle(db, store, registry, entity_key, chosen_version_id, &holds);
+    }
     let config = read_config(db)?.ok_or("请先配置 WebDAV".to_string())?;
     let dav = Dav::new(
         endpoint(&config.endpoint)?,
@@ -1492,8 +1573,7 @@ pub fn resolve(
         .get(entity_key)
         .cloned()
         .ok_or("远端冲突已变化，请重新同步")?;
-    let previewed = status(db)?
-        .conflicts
+    let previewed = read_conflicts(db)?
         .into_iter()
         .find(|item| item.key == entity_key)
         .ok_or("冲突预览已失效，请重新同步")?;
@@ -1590,6 +1670,51 @@ pub fn resolve(
             [serde_json::to_string(&conflicts).map_err(|error| error.to_string())?]).map_err(|error| error.to_string())?;
         Ok(())
     })?;
+    discard_bundle_holds(db, store, entity_key)?;
+    status(db)
+}
+
+fn resolve_held_bundle(
+    db: &Database,
+    store: &dyn CredentialStore,
+    registry: &Registry,
+    entity_key: &str,
+    chosen_version_id: Option<&str>,
+    holds: &[BundleHold],
+) -> Result<SyncStatus, String> {
+    if holds.is_empty() {
+        return Err("冲突预览已失效，请重新同步".into());
+    }
+    let local = collect_snapshot(db, store, registry)?
+        .entities
+        .into_iter()
+        .find(|item| item.key() == entity_key);
+    let digest = local
+        .as_ref()
+        .map(PortableEntity::digest)
+        .transpose()?
+        .unwrap_or_default();
+    if holds.iter().any(|hold| hold.local_digest != digest) {
+        return Err("本机资料已变化，请重新同步后处理冲突".into());
+    }
+    if let Some(id) = chosen_version_id {
+        let hold = holds
+            .iter()
+            .find(|hold| hold.version_id == id)
+            .ok_or("远端版本已变化，请重新同步")?;
+        let entity = super::rehydrate_conflict_entity(store, &hold.entity)?;
+        if entity.key() != entity_key || entity.digest()? != hold.digest {
+            return Err("冲突版本已损坏".into());
+        }
+        let snapshot = PortableSnapshot {
+            schema_version: super::SNAPSHOT_VERSION,
+            entities: vec![entity],
+        };
+        super::validate_snapshot(&snapshot)?;
+        let draft = preview_import(db, store, registry, snapshot)?;
+        apply_import(db, store, registry, &draft, &BTreeSet::from([entity_key.to_owned()]))?;
+    }
+    discard_bundle_holds(db, store, entity_key)?;
     status(db)
 }
 
@@ -1654,49 +1779,74 @@ pub fn preview_conflict(
     registry: &Registry,
     entity_key: &str,
 ) -> Result<ConflictPreview, String> {
-    let config = read_config(db)?.ok_or("请先配置 WebDAV".to_string())?;
-    let recorded = status(db)?
-        .conflicts
+    let holds: Vec<_> = read_bundle_holds(db)?
         .into_iter()
-        .find(|item| item.key == entity_key)
-        .ok_or("冲突预览已失效，请重新同步")?;
-    let dav = Dav::new(
-        endpoint(&config.endpoint)?,
-        &config.username,
-        &store.get(&config.auth_secret_id)?,
-    )?;
-    let password = store.get(&config.space_secret_id)?;
-    let (space_id, key) = read_space(&dav, &password)?.ok_or("远端同步空间缺失")?;
-    if space_id != config.space_id {
-        return Err("远端同步空间已更换".into());
-    }
-    let (manifest, _) = read_manifest(&dav, &space_id, &key)?.ok_or("远端同步清单缺失")?;
-    let heads = manifest.heads.get(entity_key).ok_or("远端冲突已变化")?;
-    let recorded_ids: BTreeSet<_> = recorded.versions.iter().map(|item| &item.id).collect();
-    if heads.iter().map(|item| &item.id).collect::<BTreeSet<_>>() != recorded_ids {
-        return Err("远端冲突已变化，请重新同步".into());
+        .filter(|item| item.key == entity_key)
+        .collect();
+    let recorded = read_conflicts(db)?.into_iter().find(|item| item.key == entity_key);
+    let config = read_config(db)?;
+    if config.is_none() && holds.is_empty() {
+        return Err("请先配置 WebDAV".into());
     }
     let local = collect_snapshot(db, store, registry)?
         .entities
         .into_iter()
         .find(|item| item.key() == entity_key);
-    if local
+    let local_digest = local
         .as_ref()
         .map(PortableEntity::digest)
         .transpose()?
-        .unwrap_or_default()
-        != recorded.local_digest
-    {
-        return Err("本机资料已变化，请重新同步".into());
-    }
+        .unwrap_or_default();
     let mut versions = Vec::new();
-    for head in heads {
-        let value = read_version(&dav, &key, &space_id, entity_key, head)?;
-        versions.push(ConflictVersionPreview {
-            id: head.id.clone(),
-            summary: summary(value.as_ref()),
-            deleted: head.deleted,
-        });
+    if !holds.is_empty() {
+        if holds.iter().any(|hold| hold.local_digest != local_digest) {
+            return Err("本机资料已变化，请重新同步".into());
+        }
+        for hold in &holds {
+            let entity = super::rehydrate_conflict_entity(store, &hold.entity)?;
+            if entity.digest()? != hold.digest {
+                return Err("冲突版本已损坏".into());
+            }
+            versions.push(ConflictVersionPreview {
+                id: hold.version_id.clone(),
+                summary: summary(Some(&entity)),
+                deleted: false,
+            });
+        }
+    }
+    if let Some(config) = config {
+        if let Some(recorded) = recorded {
+            if recorded.local_digest != local_digest {
+                return Err("本机资料已变化，请重新同步".into());
+            }
+            let dav = Dav::new(
+                endpoint(&config.endpoint)?,
+                &config.username,
+                &store.get(&config.auth_secret_id)?,
+            )?;
+            let password = store.get(&config.space_secret_id)?;
+            let (space_id, key) = read_space(&dav, &password)?.ok_or("远端同步空间缺失")?;
+            if space_id != config.space_id {
+                return Err("远端同步空间已更换".into());
+            }
+            let (manifest, _) = read_manifest(&dav, &space_id, &key)?.ok_or("远端同步清单缺失")?;
+            let heads = manifest.heads.get(entity_key).ok_or("远端冲突已变化")?;
+            let recorded_ids: BTreeSet<_> = recorded.versions.iter().map(|item| &item.id).collect();
+            if heads.iter().map(|item| &item.id).collect::<BTreeSet<_>>() != recorded_ids {
+                return Err("远端冲突已变化，请重新同步".into());
+            }
+            for head in heads {
+                let value = read_version(&dav, &key, &space_id, entity_key, head)?;
+                versions.push(ConflictVersionPreview {
+                    id: head.id.clone(),
+                    summary: summary(value.as_ref()),
+                    deleted: head.deleted,
+                });
+            }
+        }
+    }
+    if versions.is_empty() {
+        return Err("冲突预览已失效，请重新同步".into());
     }
     Ok(ConflictPreview {
         key: entity_key.into(),
