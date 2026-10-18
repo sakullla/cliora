@@ -82,6 +82,12 @@ function expectEvenGrid(metrics: Awaited<ReturnType<typeof chipMetrics>>, dialog
   expect(Math.max(...metrics.map((item) => item.right))).toBeLessThanOrEqual(dialogRight + 1);
 }
 
+// dialog-in scales the dialog, so a geometry read on the first enabled frame is short of the resting size.
+async function restedDialog(dialog: Locator) {
+  await expect.poll(() => dialog.evaluate((node) => getComputedStyle(node).transform)).toBe('none');
+  return dialog.boundingBox();
+}
+
 test('tiled CLI targets share one grid in the skill and MCP dialogs', async ({ page }) => {
   await mockLibrary(page);
   await page.goto('/');
@@ -92,7 +98,7 @@ test('tiled CLI targets share one grid in the skill and MCP dialogs', async ({ p
   await expect(dialog.getByRole('checkbox', { name: 'DeepSeek Harness', exact: true })).toBeEnabled();
   await dialog.getByRole('checkbox', { name: 'Codex', exact: true }).check();
   await dialog.getByRole('checkbox', { name: 'Kiro', exact: true }).check();
-  const skillBox = await dialog.boundingBox();
+  const skillBox = await restedDialog(dialog);
   const skill = await chipMetrics(dialog);
   expectEvenGrid(skill, skillBox!.x + skillBox!.width);
   expect(new Set(skill.map((item) => item.x)).size).toBe(3);
@@ -103,7 +109,7 @@ test('tiled CLI targets share one grid in the skill and MCP dialogs', async ({ p
   expect(checked.color).toBe(idle.color);
 
   await page.setViewportSize({ width: 720, height: 800 });
-  const narrowBox = await dialog.boundingBox();
+  const narrowBox = await restedDialog(dialog);
   const narrow = await chipMetrics(dialog);
   expectEvenGrid(narrow, narrowBox!.x + narrowBox!.width);
   expect(new Set(narrow.map((item) => item.x)).size).toBeGreaterThanOrEqual(2);
@@ -114,7 +120,7 @@ test('tiled CLI targets share one grid in the skill and MCP dialogs', async ({ p
   await page.getByRole('button', { name: '修改' }).click();
   await expect(dialog.getByRole('checkbox', { name: 'Codex', exact: true })).toBeEnabled();
   await expect(dialog.getByRole('checkbox', { name: 'Claude Code', exact: true })).toBeDisabled();
-  const installBox = await dialog.boundingBox();
+  const installBox = await restedDialog(dialog);
   const install = await chipMetrics(dialog);
   expectEvenGrid(install, installBox!.x + installBox!.width);
   expect(install.find((item) => item.name === 'Claude Code')!.opacity).toBe('0.7');
@@ -131,12 +137,12 @@ test('tiled CLI targets share one grid in the skill and MCP dialogs', async ({ p
   await expect(dialog.getByRole('checkbox', { name: 'OpenCode', exact: true })).toHaveAccessibleDescription('保存时写入');
   await expect(dialog.getByRole('checkbox', { name: 'Grok', exact: true })).toHaveAccessibleDescription('未写入');
   await expect(dialog.getByRole('checkbox', { name: 'Claude Code', exact: true })).toHaveAccessibleDescription('账号绑定不可读');
+  const mcpBox = await restedDialog(dialog);
   const rows = await targets.getByRole('listitem').evaluateAll((nodes) => nodes.map((node) => {
     const label = node.querySelector('label') as HTMLElement;
     const box = label.getBoundingClientRect();
     return { width: Math.round(box.width), right: box.right, opacity: getComputedStyle(label).opacity, clipped: label.scrollWidth > label.clientWidth + 1 };
   }));
-  const mcpBox = await dialog.boundingBox();
   expect(new Set(rows.map((item) => item.width)).size).toBe(1);
   expect(Math.max(...rows.map((item) => item.right))).toBeLessThanOrEqual(mcpBox!.x + mcpBox!.width + 1);
   expect(rows.every((item) => !item.clipped)).toBe(true);
