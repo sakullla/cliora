@@ -18,6 +18,23 @@ function missingDirectoryPath(detail: string) {
   return index < 0 ? '' : detail.slice(index + mark.length).trim();
 }
 
+const selectedDirectoryMark = '写入已选目录：';
+
+function selectedDirectory(detail: string) {
+  const index = detail.indexOf(selectedDirectoryMark);
+  return index < 0 ? '' : detail.slice(index + selectedDirectoryMark.length).trim();
+}
+
+function blockerDetail(detail: string) {
+  const index = detail.indexOf(`\n${selectedDirectoryMark}`);
+  return index < 0 ? detail : detail.slice(0, index);
+}
+
+function sameDirectory(left: string, right: string) {
+  const normalize = (value: string) => value.trim().replace(/\\/g, '/').replace(/\/+$/, '');
+  return normalize(left) === normalize(right);
+}
+
 export function WebdavSettings({ active, editing, onEdit, revision = 0 }: { active: boolean; editing: boolean; onEdit: (editing: boolean) => void; revision?: number }) {
   const { t, i18n } = useTranslation();
   const [status, setStatus] = useState<SyncStatus | null>(null);
@@ -136,7 +153,31 @@ export function WebdavSettings({ active, editing, onEdit, revision = 0 }: { acti
     finally { setBusy(false); }
   }
 
+  async function writeChosenDirectory(blocker: RestoreBlocker) {
+    if (busy) return;
+    const path = selectedDirectory(blocker.detail);
+    const project = projects.find((item) => item.path && sameDirectory(item.path, path));
+    if (!project?.path) {
+      setError(t('settings.webdav.writeFailed'));
+      return;
+    }
+    setBusy(true); setError(''); setMessage('');
+    try {
+      const updated = await native.relinkProject(project.id, project.path);
+      setProjects((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setStatus(await native.getWebdavStatus());
+      setMessage(t('settings.webdav.directoryWritten', { label: blocker.label }));
+    } catch (reason) {
+      setError((reason as { message?: string }).message ?? t('settings.webdav.writeFailed'));
+      void native.getWebdavStatus().then((next) => { if (mounted.current) setStatus(next); }).catch(() => {});
+    } finally { setBusy(false); }
+  }
+
   async function runBlocker(blocker: RestoreBlocker) {
+    if (selectedDirectory(blocker.detail)) {
+      await writeChosenDirectory(blocker);
+      return;
+    }
     if (blocker.action === 'relink') {
       const path = missingDirectoryPath(blocker.detail);
       const project = projects.find((item) => item.path === path);
@@ -200,8 +241,8 @@ export function WebdavSettings({ active, editing, onEdit, revision = 0 }: { acti
     {itemIssues && <div className={styles.conflicts}><h3>{t('settings.webdav.actionsTitle')}</h3><p>{t('settings.webdav.actionsHint')}</p>
       {missingProjects.map((project) => <div className={styles.conflict} key={project.id}><strong>{project.name}</strong><small>{project.path ? t('settings.webdav.missingDirectory', { path: project.path }) : t('settings.webdav.missingDirectoryUnknown')}</small>
         <button className="button" type="button" disabled={busy} onClick={() => void chooseDirectory(project)}>{t('settings.webdav.chooseDirectory')}</button></div>)}
-      {blockers.map((blocker) => <div className={styles.conflict} key={blocker.key}><strong>{blocker.label}</strong><small>{blocker.detail}</small>
-        <button className="button" type="button" disabled={busy} onClick={() => void runBlocker(blocker)}>{blocker.action === 'install' ? t('settings.webdav.installCli') : blocker.action === 'relogin' ? t('settings.webdav.relogin') : blocker.action === 'relink' ? t('settings.webdav.chooseDirectory') : t('settings.webdav.retry')}</button></div>)}
+      {blockers.map((blocker) => <div className={styles.conflict} key={blocker.key}><strong>{blocker.label}</strong><small>{blockerDetail(blocker.detail)}</small>
+        <button className="button" type="button" disabled={busy} onClick={() => void runBlocker(blocker)}>{selectedDirectory(blocker.detail) ? t('settings.webdav.writeChosenDirectory') : blocker.action === 'install' ? t('settings.webdav.installCli') : blocker.action === 'relogin' ? t('settings.webdav.relogin') : blocker.action === 'relink' ? t('settings.webdav.chooseDirectory') : t('settings.webdav.retry')}</button></div>)}
       {!!conflicts.length && <h3>{t('settings.webdav.conflictsTitle')}</h3>}
       {conflicts.map((conflict) => <div className={styles.conflict} key={conflict.key}><strong>{conflict.label}</strong><small>{t('settings.webdav.conflictsHint')} {t('settings.webdav.remoteVersions', { count: conflict.remoteVersions })}</small>
         {!previews[conflict.key] ? <button className="button" type="button" disabled={busy} onClick={() => void previewConflict(conflict.key)}>{t('settings.webdav.chooseConflict')}</button> : <>

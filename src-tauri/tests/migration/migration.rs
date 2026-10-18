@@ -1678,3 +1678,211 @@ fn occupied_directory_write_failure_keeps_source_binding_and_relink_blocker() {
         .unwrap();
     assert_eq!(deleted_rows, 0);
 }
+
+#[test]
+fn partial_directory_write_keeps_committed_cli_and_retries_the_failed_binding() {
+    let _roots = RestoreRootsGuard;
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(temp.path());
+    let credentials = MemoryCredentials::default();
+    let missing = "C:/missing/restore-project";
+    let pi = bare_profile(
+        "pi-profile",
+        "pi",
+        "Pi",
+        BTreeMap::from([("settings".into(), r#"{"defaultProvider":"restore-marker"}"#.into())]),
+    );
+    let codex = bare_profile(
+        "codex-profile",
+        "codex",
+        "Codex",
+        BTreeMap::from([("settings".into(), "model = \"gpt-6\"\n".into())]),
+    );
+    let old_scope = format!("project:{missing}");
+    let pi_key = format!("binding:{}", binding_id("pi", &old_scope));
+    let codex_key = format!("binding:{}", binding_id("codex", &old_scope));
+    db.with_connection(|conn| {
+        for profile in [&pi, &codex] {
+            conn.execute(
+                "INSERT INTO native_profiles (id,tool,version,data) VALUES (?1,?2,1,?3)",
+                rusqlite::params![profile.id, profile.tool, serde_json::to_string(profile).unwrap()],
+            )
+            .unwrap();
+        }
+        conn.execute(
+            "INSERT INTO projects (id,name,path,preferred_tool,last_opened) VALUES ('missing','Missing',?1,NULL,0)",
+            [missing],
+        )
+        .unwrap();
+        for (tool, profile_id) in [("pi", pi.id.as_str()), ("codex", codex.id.as_str())] {
+            conn.execute(
+                "INSERT INTO applied_bindings (scope_key,tool,profile_id,profile_version,managed) VALUES (?1,?2,?3,-1,'{}')",
+                rusqlite::params![old_scope, tool, profile_id],
+            )
+            .unwrap();
+        }
+        Ok(())
+    })
+    .unwrap();
+    record_blocker(
+        &db,
+        RestoreBlocker {
+            key: pi_key.clone(),
+            label: "pi 活动配置".into(),
+            action: "relink".into(),
+            detail: format!("目录不存在：{missing}"),
+        },
+    );
+    record_blocker(
+        &db,
+        RestoreBlocker {
+            key: codex_key.clone(),
+            label: "codex 活动配置".into(),
+            action: "relink".into(),
+            detail: format!("目录不存在：{missing}"),
+        },
+    );
+    record_blocker(
+        &db,
+        RestoreBlocker {
+            key: "binding:install".into(),
+            label: "其它 CLI".into(),
+            action: "install".into(),
+            detail: "未发现可执行文件".into(),
+        },
+    );
+    record_blocker(
+        &db,
+        RestoreBlocker {
+            key: "binding:other-path".into(),
+            label: "其它目录".into(),
+            action: "relink".into(),
+            detail: "目录不存在：C:/other-missing".into(),
+        },
+    );
+    let before = collect_snapshot(&db, &credentials, &Registry::builtins()).unwrap();
+    let source_entity = before.entities.iter().find(|entity| entity.key() == codex_key).unwrap();
+    let before_digest = source_entity.digest().unwrap();
+    db.with_connection(|conn| {
+        conn.execute(
+            "INSERT INTO sync_entity_state (entity_key,local_digest,heads_json,deleted) VALUES (?1,?2,'[\"head-1\"]',0)",
+            rusqlite::params![codex_key, before_digest],
+        )
+        .map_err(|error| error.to_string())
+    })
+    .unwrap();
+    let moved = temp.path().join("chosen");
+    fs::create_dir(&moved).unwrap();
+    let home = temp.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    set_restore_roots_for_test(Some((home, temp.path().to_path_buf())));
+    let registry = Registry::builtins()
+        .with_fixture_installation("pi", "1.0.0")
+        .with_fixture_installation("codex", "0.160.0");
+    let linked = crate::projects::relink(&db, "missing", moved.to_str().unwrap()).unwrap();
+    let new_path = linked.path.as_deref().unwrap().to_string();
+    let chosen_scope = crate::native::apply::scope_key(crate::native::adapter::Scope::Project, Some(Path::new(&new_path))).unwrap();
+    let chosen_dir = chosen_scope.strip_prefix("project:").unwrap();
+    fs::write(Path::new(chosen_dir).join(".codex"), "not-a-directory").unwrap();
+    apply_relinked_directory(&db, &credentials, &registry, missing, &new_path).unwrap();
+    let project_path: String = db
+        .with_connection(|conn| {
+            conn.query_row("SELECT path FROM projects WHERE id='missing'", [], |row| row.get(0))
+                .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert_eq!(project_path, new_path);
+    let pi_scope: String = db
+        .with_connection(|conn| {
+            conn.query_row("SELECT scope_key FROM applied_bindings WHERE tool='pi'", [], |row| row.get(0))
+                .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert_eq!(pi_scope, chosen_scope);
+    let pi_written = fs::read_to_string(Path::new(chosen_dir).join(".pi").join("settings.json")).unwrap();
+    assert!(pi_written.contains("restore-marker"), "{pi_written}");
+    let codex_scope: String = db
+        .with_connection(|conn| {
+            conn.query_row("SELECT scope_key FROM applied_bindings WHERE tool='codex'", [], |row| row.get(0))
+                .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert_eq!(codex_scope, old_scope);
+    let codex_rows: i64 = db
+        .with_connection(|conn| {
+            conn.query_row(
+                "SELECT count(*) FROM applied_bindings WHERE scope_key=?1 AND tool='codex'",
+                [&chosen_scope],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert_eq!(codex_rows, 0);
+    let blockers = load_blockers(&db).unwrap();
+    assert!(
+        blockers.iter().all(|item| item.action != "relink" || !item.detail.contains(missing)),
+        "{blockers:?}"
+    );
+    let failed = blockers.iter().find(|item| item.key == codex_key).unwrap_or_else(|| panic!("{blockers:?}"));
+    assert_ne!(failed.action, "relink");
+    assert!(failed.action == "retry" || failed.action == "install", "{failed:?}");
+    let target = failed.detail.split_once("写入已选目录：").unwrap_or_else(|| panic!("{}", failed.detail)).1.trim();
+    assert_eq!(target, new_path);
+    assert!(!failed.detail.contains(&format!("目录不存在：{missing}")), "{}", failed.detail);
+    assert!(blockers.iter().any(|item| item.key == "binding:install" && item.action == "install"), "{blockers:?}");
+    assert!(
+        blockers.iter().any(|item| item.key == "binding:other-path" && item.action == "relink"),
+        "{blockers:?}"
+    );
+    let snapshot = collect_snapshot(&db, &credentials, &registry).unwrap();
+    let entity = snapshot.entities.iter().find(|entity| entity.key() == codex_key).unwrap();
+    let PortablePayload::Binding(binding) = &entity.payload else { panic!("binding") };
+    assert_eq!(binding.scope_key, old_scope);
+    assert_eq!(binding.profile_id, codex.id);
+    assert_eq!(entity.digest().unwrap(), before_digest);
+    let deleted: i64 = db
+        .with_connection(|conn| {
+            conn.query_row("SELECT deleted FROM sync_entity_state WHERE entity_key=?1", [&codex_key], |row| row.get(0))
+                .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert_eq!(deleted, 0);
+    fs::remove_file(Path::new(chosen_dir).join(".codex")).unwrap();
+    apply_relinked_directory(&db, &credentials, &registry, &new_path, target).unwrap();
+    let retried: String = db
+        .with_connection(|conn| {
+            conn.query_row("SELECT scope_key FROM applied_bindings WHERE tool='codex'", [], |row| row.get(0))
+                .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert_eq!(retried, chosen_scope);
+    let written = fs::read_to_string(Path::new(chosen_dir).join(".codex").join("config.toml")).unwrap();
+    assert!(written.contains("gpt-6"), "{written}");
+    let pi_still: String = db
+        .with_connection(|conn| {
+            conn.query_row("SELECT scope_key FROM applied_bindings WHERE tool='pi'", [], |row| row.get(0))
+                .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert_eq!(pi_still, chosen_scope);
+    let kept_path: String = db
+        .with_connection(|conn| {
+            conn.query_row("SELECT path FROM projects WHERE id='missing'", [], |row| row.get(0))
+                .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert_eq!(kept_path, new_path);
+    let after = load_blockers(&db).unwrap();
+    assert!(after.iter().all(|item| item.key != codex_key), "{after:?}");
+    assert!(after.iter().all(|item| item.action != "relink" || !item.detail.contains(missing)), "{after:?}");
+    assert!(after.iter().any(|item| item.key == "binding:install" && item.action == "install"), "{after:?}");
+    assert!(after.iter().any(|item| item.key == "binding:other-path" && item.action == "relink"), "{after:?}");
+    let deleted_after: i64 = db
+        .with_connection(|conn| {
+            conn.query_row("SELECT count(*) FROM sync_entity_state WHERE deleted!=0", [], |row| row.get(0))
+                .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert_eq!(deleted_after, 0);
+}

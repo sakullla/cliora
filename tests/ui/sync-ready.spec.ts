@@ -125,12 +125,19 @@ async function install(page: Page, seed: SyncSeed = {}) {
           control.projects = projects.map((item) => item.id === args.projectId ? updated : item);
           const normalize = (value: string) => value.replace(/\\/g, '/').replace(/\/+$/, '');
           control.blockers = (control.blockers as { action?: string; detail?: string }[]).filter((blocker) => {
-            if (blocker.action !== 'relink' || !previous) return true;
-            const mark = '目录不存在：';
             const detail = blocker.detail ?? '';
-            const index = detail.indexOf(mark);
-            if (index < 0) return true;
-            return normalize(detail.slice(index + mark.length).trim()) !== normalize(previous);
+            if (blocker.action === 'relink' && previous) {
+              const mark = '目录不存在：';
+              const index = detail.indexOf(mark);
+              if (index >= 0 && normalize(detail.slice(index + mark.length).trim()) === normalize(previous)) return false;
+            }
+            const writeMark = '写入已选目录：';
+            const writeAt = detail.indexOf(writeMark);
+            if (writeAt >= 0) {
+              const target = normalize(detail.slice(writeAt + writeMark.length).trim());
+              if (target && (target === normalize(args.projectPath ?? '') || (previous && target === normalize(previous)))) return false;
+            }
+            return true;
           });
           window.sessionStorage.setItem('cliora-sync-ready-memory', JSON.stringify({ projects: control.projects, blockers: control.blockers }));
           return updated;
@@ -377,4 +384,29 @@ test('a chosen directory stays chosen after status is loaded again', async ({ pa
   await expect(again.getByText('其余内容可用', { exact: true })).toBeVisible();
   await expect(again.getByText('稍后应用')).toHaveCount(0);
   await expect(again.getByText('重新绑定')).toHaveCount(0);
+});
+
+test('a partial directory write retries into the chosen directory instead of a stale relink', async ({ page }) => {
+  await install(page, {
+    configured: true,
+    projects: [project('p-chosen', '已选项目', 'C:/chosen', true)],
+    blockers: [
+      { key: 'binding:failed', label: 'Codex 活动配置', action: 'retry', detail: '上次管理的字段已被外部修改：settings/model\n写入已选目录：C:/chosen' },
+      { key: 'binding:other', label: '其它目录', action: 'relink', detail: '目录不存在：D:/other' },
+    ],
+  });
+  await openMigration(page);
+  const webdav = page.getByRole('region', { name: 'WebDAV 同步' });
+  await expect(webdav.getByText('其余内容可用', { exact: true })).toBeVisible();
+  await expect(webdav.getByText('上次管理的字段已被外部修改：settings/model')).toBeVisible();
+  await expect(webdav.getByText('目录不存在：C:/missing')).toHaveCount(0);
+  await expect(webdav.getByRole('button', { name: '写入已选目录', exact: true })).toHaveCount(1);
+  await expect(webdav.getByRole('button', { name: '选择目录', exact: true })).toHaveCount(1);
+  await webdav.getByRole('button', { name: '写入已选目录', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __syncReady: { lastRelink: { projectId: string; projectPath: string } | null; openCalls: number } }).__syncReady.lastRelink)).toEqual({ projectId: 'p-chosen', projectPath: 'C:/chosen' });
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __syncReady: { openCalls: number } }).__syncReady.openCalls)).toBe(0);
+  await expect(webdav.getByRole('button', { name: '写入已选目录', exact: true })).toHaveCount(0);
+  await expect(webdav.getByText('已把「Codex 活动配置」写入选定目录。其它资料保持可用。')).toBeVisible();
+  await expect(webdav.getByRole('button', { name: '选择目录', exact: true })).toHaveCount(1);
+  await expect(webdav.getByText('其余内容可用', { exact: true })).toBeVisible();
 });
