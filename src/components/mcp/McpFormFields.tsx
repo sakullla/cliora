@@ -74,7 +74,7 @@ export function McpFormFields({ draft, onChange, envRows, onEnvRowsChange, heade
     </div>}
     {onImport && pasteOpen && <div className={styles.pasteBox}>
       <p>{t('library.resources.pasteImportHint')}</p>
-      <textarea aria-label={t('library.resources.pasteImportAria')} rows={5} value={pasteText} spellCheck={false} onChange={(event) => setPasteText(event.target.value)} placeholder={'{"mcpServers":{"name":{"command":"npx","args":["-y","pkg"]}}}'} />
+      <textarea aria-label={t('library.resources.pasteImportAria')} rows={4} value={pasteText} spellCheck={false} onChange={(event) => setPasteText(event.target.value)} placeholder={'{"mcpServers":{"name":{"command":"npx","args":["-y","pkg"]}}}'} />
       {pasteError && <p className={styles.fieldError} role="alert">{pasteError}</p>}
       <div className={styles.pasteActions}><button type="button" onClick={() => { setPasteOpen(false); setPasteError(''); }}>{t('library.resources.back')}</button><button type="button" className={styles.primary} disabled={!pasteText.trim()} onClick={applyPaste}>{t('library.resources.pasteImportApply')}</button></div>
     </div>}

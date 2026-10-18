@@ -2,10 +2,10 @@
 .rowsHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 26px; }
 .rowsLabel { display: inline-flex; align-items: center; gap: 6px; }
 .count {
-  padding: 0 6px;
+  padding: 0 7px;
   border-radius: 99px;
-  background: var(--surface-3);
-  color: var(--text-3);
+  background: var(--accent-soft);
+  color: var(--accent);
   font-size: var(--fs-micro);
   font-weight: var(--fw-semibold);
   line-height: 16px;
@@ -13,18 +13,19 @@
 .rows { display: grid; gap: 6px; }
 .row {
   display: grid;
-  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr) auto;
+  grid-template-columns: minmax(0, 5fr) auto minmax(0, 7fr) auto;
   gap: 6px;
   align-items: center;
 }
 .row[data-single='true'] { grid-template-columns: minmax(0, 1fr) auto; }
+.kvSep { color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-caption); font-weight: var(--fw-semibold); user-select: none; }
 .row input { width: 100%; min-height: var(--control-h-sm); font-family: var(--font-mono); font-size: var(--fs-body); font-weight: var(--fw-regular); color: var(--text); }
 .row input[aria-invalid='true'] { border-color: var(--danger); }
 /* Empty cells read as "to fill": dashed, flat, with an example in light
    italic sans text, so an example never looks like a value already typed. */
 .row input:placeholder-shown:not(:focus) { border-style: dashed; background: transparent; box-shadow: none; }
 .row input::placeholder { color: color-mix(in srgb, var(--text-3) 72%, transparent); font-family: var(--font-sans); font-style: italic; font-size: var(--fs-caption); letter-spacing: 0; }
-.row[data-blank] .rowOps { opacity: .55; }
+.row[data-blank] .rowOps { opacity: .45; transition: opacity var(--fast) var(--ease); }
 .row[data-blank]:hover .rowOps, .row[data-blank]:focus-within .rowOps { opacity: 1; }
 /* Keeps role=textbox (unlike type=password) while hiding a literal secret. */
 .row input[data-masked] { -webkit-text-security: disc; letter-spacing: .08em; }
@@ -74,12 +75,12 @@
   padding: 0 10px;
   border: 1px dashed var(--line-strong);
   border-radius: var(--radius-sm);
-  background: transparent;
+  background: var(--surface-2);
   box-shadow: none;
   color: var(--text-2);
   font-size: var(--fs-caption);
   font-weight: var(--fw-medium);
 }
-.add:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.add:hover:not(:disabled) { border-style: solid; border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
 .duplicate { margin: 0; color: var(--danger); font-size: var(--fs-body); font-weight: var(--fw-medium); }
 .hint { margin: 0; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-regular); line-height: 1.5; }

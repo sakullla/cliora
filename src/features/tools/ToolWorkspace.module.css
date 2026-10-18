@@ -147,51 +147,165 @@ div > .feedback { margin-bottom: 12px; }
 
 /* ---------- Install / detection bar ---------- */
 .pathControl {
-  margin: 0 0 16px;
+  margin: 0 0 14px;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background: var(--surface);
   box-shadow: var(--shadow-xs);
   font-size: var(--fs-control);
   color: var(--text-2);
+  overflow: hidden;
+  transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
 }
-.pathControl > summary { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; min-height: 48px; padding: 10px 16px; border-radius: var(--radius-lg); transition: background-color var(--fast) var(--ease); }
-.pathControl:not([open]) { margin-bottom: 8px; border-color: transparent; background: transparent; box-shadow: none; }
-.pathControl:not([open]) > summary { min-height: 32px; padding: 0 2px 2px; }
+.pathControl[data-update="true"] { border-color: var(--warning-line); }
+.pathControl > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  min-height: 46px;
+  padding: 8px 16px;
+  background: var(--surface);
+  transition: background-color var(--fast) var(--ease);
+}
 .pathControl > summary:hover { background: var(--surface-2); }
-.pathControl > summary::before { order: 10; margin: 0; }
-.pathControl[open] > summary { border-bottom: 1px solid var(--line); border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
+.pathControl > summary::before { order: 10; margin: 0 0 0 2px; }
+.pathControl[open] > summary { border-bottom: 1px solid var(--line); background: var(--surface-2); }
 .pathControl > summary strong { color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-semibold); }
-.pathControl > summary > span:not(.statusDot):not(.diagnosticLabel) { min-width: 0; overflow: hidden; color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-regular); text-overflow: ellipsis; white-space: nowrap; flex: 1 1 120px; }
-.statusDot { width: 9px; height: 9px; flex: none; border-radius: 50%; background: var(--warning); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 18%, transparent); }
+.installSourceBadge {
+  flex: none;
+  padding: 1px 7px;
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-medium);
+  line-height: 17px;
+}
+.installSummaryText {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: var(--fs-body);
+  font-weight: var(--fw-regular);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1 1 140px;
+}
+.installSummaryText[data-state="behind"] { color: var(--warning); font-weight: var(--fw-medium); }
+.statusDot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--warning); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 18%, transparent); }
 .statusDot[data-ok="true"] { background: var(--success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 18%, transparent); }
-.diagnosticLabel { margin-left: auto; color: var(--accent); font-weight: var(--fw-medium); }
-.pathControl > :not(summary) { margin: 12px 16px; }
-.pathControl > :last-child { margin-bottom: 16px; }
-.pathControl > div { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.pathControl > div input { flex: 1 1 260px; min-width: 0; }
-.pathControl code { min-width: 0; padding: 5px 8px; overflow-wrap: anywhere; }
-.pathControl p { line-height: 1.6; overflow-wrap: anywhere; }
-.pathControl > .release { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 6px 16px 0; }
-.release div { display: grid; gap: 3px; min-width: 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
-.release span { color: var(--text-3); font-size: var(--fs-body); font-weight: var(--fw-medium); letter-spacing: .2px; }
-.release strong { color: var(--text); font-size: var(--fs-heading); font-weight: var(--fw-semibold); }
-.release small { min-width: 0; overflow: hidden; color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-regular); text-overflow: ellipsis; white-space: nowrap; }
-.release div[data-state="behind"] { border-color: var(--warning-line); background: var(--warning-soft); }
-.release div[data-state="current"] { border-color: var(--accent-line); background: var(--accent-soft); }
-.release div[data-state="current"] strong { color: var(--accent); }
-.pathControl > .installRow { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; column-gap: 10px; align-items: center; min-height: 30px; margin: 8px 16px; }
-.installRow strong { color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-semibold); }
-.installRow em { color: var(--accent); font-style: normal; font-weight: var(--fw-medium); }
-.installRow span { min-width: 0; overflow: hidden; font-size: var(--fs-body); font-weight: var(--fw-regular); text-overflow: ellipsis; white-space: nowrap; }
-.pathControl > .installNote { margin: 4px 16px 0; font-size: var(--fs-body); font-weight: var(--fw-regular); }
-.pathControl > .installFail { margin: 4px 16px 0; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-regular); }
-.pathControl > .installActions { gap: 8px; margin-top: 14px; }
-.pathCustom > summary { min-height: 30px; padding: 0; color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-regular); }
+.statusDot[data-update="true"] { background: var(--warning); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 22%, transparent); }
+.diagnosticLabel {
+  margin-left: auto;
+  padding: 2px 9px;
+  border-radius: 99px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-semibold);
+  line-height: 18px;
+}
+
+.installBody { display: grid; gap: 12px; padding: 14px 16px 16px; min-width: 0; }
+.installBody p { margin: 0; line-height: 1.55; overflow-wrap: anywhere; }
+.release { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.releaseCard {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.releaseHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 22px; min-width: 0; }
+.releaseHead > span:first-child { color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-semibold); letter-spacing: .2px; }
+.releaseChannel {
+  padding: 0 7px;
+  border-radius: 99px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--text-2);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-medium);
+  line-height: 17px;
+  max-width: 65%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.releaseVersion { color: var(--text); font-size: var(--fs-heading); font-weight: var(--fw-bold); font-variant-numeric: tabular-nums; line-height: 1.3; }
+.releasePath { min-width: 0; overflow: hidden; color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-caption); font-weight: var(--fw-regular); text-overflow: ellipsis; white-space: nowrap; }
+.releaseCard small:not(.releasePath) { min-width: 0; overflow: hidden; color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-regular); text-overflow: ellipsis; white-space: nowrap; }
+.releaseCard[data-state="behind"] { border-color: var(--warning-line); background: var(--warning-soft); }
+.releaseCard[data-state="behind"] .releaseVersion { color: var(--warning); }
+.releaseCard[data-state="current"] { border-color: var(--accent-line); background: var(--accent-soft); }
+.releaseCard[data-state="current"] .releaseVersion { color: var(--accent); }
+.retryVersionBtn { min-height: 24px; padding: 0 8px; font-size: var(--fs-caption); }
+
+.installMissingBanner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px dashed var(--warning-line);
+  border-radius: var(--radius);
+  background: var(--warning-soft);
+  color: var(--text);
+  font-size: var(--fs-body);
+}
+.installMissingBanner > svg { flex: none; color: var(--warning); }
+
+.installAlternates { display: grid; gap: 6px; }
+.installRow {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  column-gap: 10px;
+  align-items: center;
+  min-height: 36px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.installRow strong { padding: 1px 7px; border-radius: 99px; background: var(--surface); border: 1px solid var(--line); color: var(--text); font-size: var(--fs-caption); font-weight: var(--fw-semibold); }
+.installRow span { min-width: 0; overflow: hidden; color: var(--text-2); font-family: var(--font-mono); font-size: var(--fs-caption); font-weight: var(--fw-regular); text-overflow: ellipsis; white-space: nowrap; }
+
+.installDiagnostics { display: grid; gap: 6px; }
+.installNote, .installFail {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 11px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: var(--fs-body);
+  font-weight: var(--fw-regular);
+}
+.installNote > svg { flex: none; margin-top: 3px; color: var(--accent); }
+.installFail { border: 1px solid var(--danger-line); background: var(--danger-soft); color: var(--text); }
+.installFail > svg { flex: none; margin-top: 3px; color: var(--danger); }
+
+.installFooter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  padding-top: 4px;
+}
+.installActions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.pathCustom { flex: 1 1 240px; min-width: 0; }
+.pathCustom > summary { display: inline-flex; align-items: center; min-height: 28px; padding: 0 4px; color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-medium); }
 .pathCustom > summary::before { margin-right: 6px; }
-.pathCustom > div { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
-.pathCustom > div input { flex: 1 1 220px; min-width: 0; }
-.pathCustom > div button { min-height: var(--control-h); }
+.pathCustomRow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.pathCustomRow input { flex: 1 1 220px; min-width: 0; font-family: var(--font-mono); }
+.pathCustomRow button { min-height: var(--control-h); }
 
 /* ---------- Profile list ---------- */
 .profileList {
@@ -507,8 +621,8 @@ div > .feedback { margin-bottom: 12px; }
   .scopeBar { justify-content: flex-start; }
   .views { flex: none; }
   .views button { white-space: normal; text-align: left; line-height: 1.3; }
-  .pathControl > summary > span:not(.statusDot):not(.diagnosticLabel) { flex-basis: 100%; order: 5; }
-  .pathControl > .release { grid-template-columns: 1fr; }
+  .installSummaryText { flex-basis: 100%; order: 5; }
+  .release { grid-template-columns: 1fr; }
   .pathControl > summary::before { order: 3; }
   .modelPicker { flex-wrap: wrap; }
   .modelPicker label { min-width: 180px; }
@@ -525,4 +639,86 @@ div > .feedback { margin-bottom: 12px; }
   .historyList button { width: auto; }
 }
 
-.maintenanceLog { max-height: 360px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 16px; font-size: var(--fs-body); font-weight: var(--fw-regular); background: var(--surface-2); border-radius: 8px; }
+.maintenancePanel { display: grid; gap: 14px; min-width: 0; }
+.maintenanceStatusCard {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.maintenanceStatusCard[data-state="done"] { border-color: var(--accent-line); background: var(--accent-soft); }
+.maintenanceStatusCard[data-state="error"] { border-color: var(--danger-line); background: var(--danger-soft); }
+.maintenanceStatusIcon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--accent);
+  box-shadow: var(--shadow-xs);
+}
+.maintenanceStatusCard[data-state="error"] .maintenanceStatusIcon { color: var(--danger); }
+.maintenanceSpinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--accent-line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: maintenance-spin .85s linear infinite;
+}
+.maintenanceStatusBody { display: grid; gap: 2px; min-width: 0; flex: 1; }
+.maintenanceStatusText { margin: 0; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-semibold); line-height: 1.45; }
+.maintenanceStatusCard[data-state="error"] .maintenanceStatusText { color: var(--danger); }
+.maintenanceInlineError { margin: 0; color: var(--danger); font-size: var(--fs-caption); }
+.maintenanceBar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent) 0 0 / 200% 100%;
+  animation: shimmer 1.2s linear infinite;
+}
+.maintenanceTerminal {
+  display: grid;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.maintenanceTerminalHead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-3);
+}
+.maintenanceTerminalDots { display: inline-flex; gap: 5px; }
+.maintenanceTerminalDots > i { width: 8px; height: 8px; border-radius: 50%; background: var(--line-strong); opacity: .55; }
+.maintenanceTerminalTitle { color: var(--text-2); font-size: var(--fs-caption); font-weight: var(--fw-semibold); letter-spacing: .2px; }
+.maintenanceLog {
+  margin: 0;
+  max-height: 320px;
+  min-height: 120px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 14px 16px;
+  font-size: var(--fs-body);
+  font-weight: var(--fw-regular);
+  line-height: 1.55;
+  background: var(--surface-2);
+  color: var(--text);
+}
+@keyframes maintenance-spin {
+  to { transform: rotate(360deg); }
+}

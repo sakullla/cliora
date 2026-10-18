@@ -55,10 +55,11 @@
 .state { flex: none; padding: 0 7px; border: 1px solid var(--line); border-radius: 99px; background: var(--surface-2); color: var(--text-2); font-size: var(--fs-micro); font-weight: var(--fw-medium); line-height: 17px; }
 .state[data-on] { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
 .chip { flex: none; padding: 0 7px; border: 1px dashed var(--line-strong); border-radius: 99px; color: var(--text-2); font-size: var(--fs-micro); font-weight: var(--fw-medium); line-height: 17px; }
+.metaChip { flex: none; padding: 0 7px; border-radius: 99px; background: var(--surface-3); color: var(--text-2); font-size: var(--fs-micro); font-weight: var(--fw-medium); line-height: 17px; }
 .summary { display: flex; align-items: baseline; gap: 8px; min-width: 0; color: var(--text-2); font-size: var(--fs-caption); }
 .command { min-width: 0; overflow: hidden; font-family: var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
 .summary .command { font-size: var(--fs-body); font-weight: var(--fw-regular); }
-.transport { flex: none; color: var(--text-3); font-size: var(--fs-micro); font-weight: var(--fw-semibold); letter-spacing: .3px; text-transform: uppercase; }
+.transport { flex: none; padding: 0 5px; border-radius: var(--radius-xs); background: var(--surface-3); color: var(--text-2); font-family: var(--font-mono); font-size: var(--fs-micro); font-weight: var(--fw-semibold); line-height: 16px; }
 .chevron { display: grid; color: var(--text-3); opacity: .55; transition: opacity var(--fast) var(--ease), transform var(--fast) var(--ease); }
 .entry:hover .chevron { opacity: 1; transform: translateX(2px); }
 .listEmpty { margin: 0; padding: 6px 10px 10px; color: var(--text-3); font-size: var(--fs-body); font-weight: var(--fw-regular); line-height: 1.55; }

@@ -219,6 +219,8 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
       {shown.length > 0 && <ul className={styles.entries}>{shown.map((item) => {
         const library = libraryFor(item.name);
         const summary = mcpSummary(item);
+        const envCount = Object.keys(item.env ?? {}).filter((k) => k.trim()).length;
+        const headerCount = Object.keys(item.headers ?? {}).filter((k) => k.trim()).length;
         return <li key={`native-${item.name}`}>
           <button type="button" className={styles.entry} title={t('tools.mcp.clickEdit')} onClick={() => void importNative(item)}>
             <span className={styles.entryIcon} data-transport={item.transport}><Icon name={item.transport === 'http' ? 'globe' : 'terminal'} size={16} /></span>
@@ -227,6 +229,8 @@ export function McpWorkspace({ toolId, scope, projectPath, contextId, onDirtyCha
                 <strong>{item.name}</strong>
                 <span className={styles.state} data-on={item.enabled || undefined}>{item.enabled ? t('tools.plugins.enabled') : t('tools.quota.disabled')}</span>
                 {library && <span className={styles.chip} title={t('tools.mcp.inLibraryTitle')}>{t('tools.mcp.inLibrary')}</span>}
+                {envCount > 0 && <span className={styles.metaChip}>{t('library.resources.envCount', { count: envCount })}</span>}
+                {headerCount > 0 && <span className={styles.metaChip}>{t('library.resources.headerCount', { count: headerCount })}</span>}
               </span>
               <small className={styles.summary}><span className={styles.transport}>{item.transport === 'http' ? 'HTTP' : 'stdio'}</span><span className={styles.command}>{summary || '—'}</span></small>
             </span>

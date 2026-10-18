@@ -1,7 +1,6 @@
-.form { display: grid; gap: 14px; min-width: 0; container-type: inline-size; }
-.formHead { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 28px; }
-.formHead h3 { flex: none; }
-.formHead h3 { margin: 0; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-semibold); }
+.form { display: grid; gap: 13px; min-width: 0; container-type: inline-size; }
+.formHead { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 30px; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+.formHead h3 { flex: none; margin: 0; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-semibold); }
 
 .field { display: grid; gap: 6px; min-width: 0; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-medium); }
 .field input { width: 100%; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-regular); }
@@ -35,7 +34,17 @@
 .typeSwitch button[aria-pressed='true'] { background: var(--surface); color: var(--text); box-shadow: var(--shadow-xs); font-weight: var(--fw-semibold); }
 .typeSwitch button[aria-pressed='true']:hover { background: var(--surface-3); color: var(--text); box-shadow: var(--shadow-xs); }
 .typeSwitch button[aria-pressed='true'] > svg { color: var(--accent); }
-.transportHint { margin: 0; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-regular); line-height: 1.5; }
+.transportHint {
+  margin: 0;
+  padding: 6px 10px;
+  border-left: 2px solid var(--accent);
+  border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: var(--fs-body);
+  font-weight: var(--fw-regular);
+  line-height: 1.45;
+}
 
 .preview {
   display: flex;
@@ -43,33 +52,43 @@
   gap: 10px;
   min-width: 0;
   margin-top: 0;
-  padding: 8px 10px;
+  padding: 8px 12px;
   border-radius: var(--radius-sm);
   background: var(--surface-2);
   border: 1px solid var(--line);
 }
-.preview > span { flex: none; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-semibold); }
+.preview > span {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
+  background: var(--surface-3);
+  color: var(--text);
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-semibold);
+}
 .preview > code { min-width: 0; padding: 0; border: 0; background: none; color: var(--text); font-family: var(--font-mono); font-size: var(--fs-body); font-weight: var(--fw-regular); line-height: 1.55; overflow-wrap: anywhere; white-space: pre-wrap; }
 
 .pasteToggle {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-height: var(--control-h-sm);
-  padding: 0 11px;
-  border-style: dashed;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
   box-shadow: none;
   color: var(--text-2);
   font-size: var(--fs-caption);
   font-weight: var(--fw-medium);
 }
-.pasteToggle:hover:not(:disabled) { border-style: solid; background: var(--surface-3); color: var(--text); }
-.pasteToggle[aria-expanded='true'] { border-style: solid; border-color: var(--accent-line); color: var(--text); box-shadow: inset 2px 0 0 var(--accent); }
-.pasteBox { display: grid; gap: 8px; padding: 12px; border: 1px dashed var(--line-strong); border-radius: var(--radius); background: var(--surface-2); }
+.pasteToggle:hover:not(:disabled) { border-style: solid; border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.pasteToggle[aria-expanded='true'] { border-style: solid; border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); box-shadow: inset 2px 0 0 var(--accent); }
+.pasteBox { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--accent-line); border-radius: var(--radius); background: var(--surface-2); animation: reveal var(--medium) var(--ease); }
 .pasteBox > p { margin: 0; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-regular); line-height: 1.5; }
 .pasteBox textarea { width: 100%; font-family: var(--font-mono); font-size: var(--fs-body); font-weight: var(--fw-regular); }
 .pasteActions { display: flex; justify-content: flex-end; gap: 8px; }
-.primary, .primary:hover:not(:disabled) { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
+.primary, .primary:hover:not(:disabled) { border-radius: var(--radius-sm); border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
 .primary:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }
 /* Sits in the header row beside the paste button, so it never pushes fields down. */
 .pasteNotice { display: inline-flex; flex: 1; justify-content: flex-end; align-items: center; gap: 5px; min-width: 0; overflow: hidden; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-regular); white-space: nowrap; text-overflow: ellipsis; animation: fade-in var(--medium) var(--ease); }

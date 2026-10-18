@@ -117,20 +117,29 @@ async function startLibraryMcp(page: Page) {
   await page.getByRole('textbox', { name: '命令' }).fill('npx');
 }
 
-test('MCP argument and environment fields edit with row controls and keep literal values', async ({ page }) => {
+test('MCP argument and environment fields edit with row controls, support Enter key row navigation, and keep literal values', async ({ page }) => {
   await mockResources(page);
   await page.goto('/');
   await startLibraryMcp(page);
   const dialog = page.getByRole('dialog');
   const args = dialog.getByRole('group', { name: '参数，每行一项' });
-  await args.getByRole('textbox', { name: '参数，每行一项 第 1 行' }).fill('chrome-devtools-mcp@latest');
-  await args.getByRole('button', { name: '添加一行' }).click();
-  await args.getByRole('textbox', { name: '参数，每行一项 第 2 行' }).fill('--stdio');
+  const firstArg = args.getByRole('textbox', { name: '参数，每行一项 第 1 行' });
+  await firstArg.fill('chrome-devtools-mcp@latest');
+  await firstArg.press('Enter');
+  const secondArg = args.getByRole('textbox', { name: '参数，每行一项 第 2 行' });
+  await expect(secondArg).toBeFocused();
+  await secondArg.fill('--stdio');
   const env = dialog.getByRole('group', { name: '环境变量' });
-  await env.getByRole('textbox', { name: '环境变量 第 1 行键名' }).fill('MYSQL_PORT');
-  await env.getByRole('textbox', { name: '环境变量 第 1 行值' }).fill('3216');
-  await env.getByRole('button', { name: '添加一行' }).click();
-  await env.getByRole('textbox', { name: '环境变量 第 2 行键名' }).fill('MYSQL_PASSWORD');
+  const firstEnvKey = env.getByRole('textbox', { name: '环境变量 第 1 行键名' });
+  await firstEnvKey.fill('MYSQL_PORT');
+  await firstEnvKey.press('Enter');
+  const firstEnvVal = env.getByRole('textbox', { name: '环境变量 第 1 行值' });
+  await expect(firstEnvVal).toBeFocused();
+  await firstEnvVal.fill('3216');
+  await firstEnvVal.press('Enter');
+  const secondEnvKey = env.getByRole('textbox', { name: '环境变量 第 2 行键名' });
+  await expect(secondEnvKey).toBeFocused();
+  await secondEnvKey.fill('MYSQL_PASSWORD');
   await env.getByRole('textbox', { name: '环境变量 第 2 行值' }).fill('local-secret');
   await dialog.getByRole('button', { name: 'HTTP', exact: true }).click();
   await dialog.getByRole('textbox', { name: '网址' }).fill('https://example.com/mcp');
