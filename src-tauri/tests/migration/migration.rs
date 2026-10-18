@@ -1095,6 +1095,134 @@ fn unreadable_auth_file_blocks_only_that_account() {
 }
 
 #[test]
+fn unreadable_auth_account_is_held_instead_of_replaced() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(temp.path());
+    let credentials = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    let root = temp.path().join("auth");
+    fs::create_dir_all(&root).unwrap();
+    let missing = root.join("missing.json");
+    let mut local = sample_account(
+        "acct",
+        crate::accounts::NativeContext {
+            id: "ctx".into(),
+            tool_id: "codex".into(),
+            root: root.clone(),
+            config_root: root.clone(),
+            auth_files: vec![missing.clone()],
+            history_roots: Vec::new(),
+            resource_root: root,
+            environment: BTreeMap::new(),
+            remove_environment: Vec::new(),
+            cli_args: Vec::new(),
+        },
+    );
+    local.label = "Local Label".into();
+    local.identity = Some(crate::accounts::AccountIdentity {
+        subject: "local-subject".into(),
+        email: None,
+        plan: None,
+        source: "native".into(),
+    });
+    insert_account(&db, &local);
+    let mut remote = local.clone();
+    remote.label = "Remote Label".into();
+    remote.identity = Some(crate::accounts::AccountIdentity {
+        subject: "remote-subject".into(),
+        email: None,
+        plan: None,
+        source: "bundle".into(),
+    });
+    if let Some(context) = remote.context.as_mut() {
+        context.auth_files = vec![PathBuf::from("auth.json")];
+    }
+    let snapshot = PortableSnapshot {
+        schema_version: 3,
+        entities: vec![
+            PortableEntity {
+                id: "acct".into(),
+                payload: PortablePayload::Account(PortableAccount {
+                    account: remote,
+                    auth_files: vec![PortableAuthFile {
+                        context_id: "ctx".into(),
+                        name: "auth.json".into(),
+                        contents: STANDARD.encode("remote-login"),
+                    }],
+                }),
+            },
+            PortableEntity {
+                id: "acct-new".into(),
+                payload: PortablePayload::Account(PortableAccount {
+                    account: sample_account(
+                        "acct-new",
+                        crate::accounts::NativeContext {
+                            id: "ctx-new".into(),
+                            tool_id: "codex".into(),
+                            root: PathBuf::from("/source"),
+                            config_root: PathBuf::from("/source"),
+                            auth_files: vec![PathBuf::from("fresh.json")],
+                            history_roots: Vec::new(),
+                            resource_root: PathBuf::from("/source"),
+                            environment: BTreeMap::new(),
+                            remove_environment: Vec::new(),
+                            cli_args: Vec::new(),
+                        },
+                    ),
+                    auth_files: vec![PortableAuthFile {
+                        context_id: "ctx-new".into(),
+                        name: "fresh.json".into(),
+                        contents: STANDARD.encode("fresh-login"),
+                    }],
+                }),
+            },
+            PortableEntity {
+                id: "project-new".into(),
+                payload: PortablePayload::Project(PortableProject {
+                    id: "project-new".into(),
+                    name: "Added".into(),
+                    path: None,
+                    model_overrides: BTreeMap::new(),
+                }),
+            },
+        ],
+    };
+    let draft = preview_import(&db, &credentials, &registry, snapshot).unwrap();
+    assert_eq!(draft.items.iter().find(|item| item.key == "account:acct").unwrap().status, "conflict");
+    assert_eq!(draft.items.iter().find(|item| item.key == "account:acct-new").unwrap().status, "new");
+    assert_eq!(draft.items.iter().find(|item| item.key == "project:project-new").unwrap().status, "new");
+    restore_preview(&db, &credentials, &registry, &draft).unwrap();
+    let saved: String = db.with_connection(|conn| {
+        conn.query_row("SELECT data FROM auth_accounts WHERE id='acct'", [], |row| row.get(0))
+            .map_err(|error| error.to_string())
+    }).unwrap();
+    assert!(saved.contains("Local Label") && saved.contains("local-subject") && saved.contains("missing.json"), "{saved}");
+    assert!(!saved.contains("Remote Label") && !saved.contains("remote-subject"), "{saved}");
+    let fresh: String = db.with_connection(|conn| {
+        conn.query_row("SELECT data FROM auth_accounts WHERE id='acct-new'", [], |row| row.get(0))
+            .map_err(|error| error.to_string())
+    }).unwrap();
+    assert!(fresh.contains("Work acct-new"), "{fresh}");
+    let project: String = db.with_connection(|conn| {
+        conn.query_row("SELECT name FROM projects WHERE id='project-new'", [], |row| row.get(0))
+            .map_err(|error| error.to_string())
+    }).unwrap();
+    assert_eq!(project, "Added");
+    let raw: String = db.with_connection(|conn| {
+        conn.query_row("SELECT value FROM app_settings WHERE key='bundle_conflicts'", [], |row| row.get(0))
+            .map_err(|error| error.to_string())
+    }).unwrap();
+    let holds: Vec<sync::BundleHold> = serde_json::from_str(&raw).unwrap();
+    let hold = holds.iter().find(|item| item.key == "account:acct").unwrap();
+    let PortablePayload::Account(held) = &hold.entity.payload else { panic!("held account") };
+    assert_eq!(held.account.label, "Remote Label");
+    assert!(held.auth_files.iter().any(|file| file.name == "auth.json"));
+    assert!(holds.iter().all(|item| item.key != "account:acct-new"));
+    let blockers = load_blockers(&db).unwrap();
+    assert!(blockers.iter().any(|item| item.key == "account:acct" && item.detail.contains("无法读取") && item.detail.contains("不能当作已导出")), "{blockers:?}");
+}
+
+#[test]
 fn bundle_conflict_can_be_chosen_without_webdav() {
     let temp = tempfile::tempdir().unwrap();
     let db = database(temp.path());

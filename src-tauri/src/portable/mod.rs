@@ -860,16 +860,28 @@ pub fn preview_import(
         .into_iter()
         .map(|entity| (entity.key(), entity))
         .collect();
+    // A row can exist while its auth file is unreadable. It is omitted from the snapshot, but it is not new.
+    let stored_account_ids: BTreeSet<String> = db
+        .with_connection(|conn| read_rows(conn, "SELECT id FROM auth_accounts", |row| row.get(0)))?
+        .into_iter()
+        .collect();
     let mut baseline = BTreeMap::new();
     let mut items = Vec::new();
     for entity in &snapshot.entities {
         let key = entity.key();
         let current = local.get(&key).map(PortableEntity::digest).transpose()?;
         let incoming = entity.digest()?;
-        let status = match &current {
-            None => "new",
-            Some(digest) if digest == &incoming => "same",
-            Some(_) => "conflict",
+        let blocked_local_account = current.is_none()
+            && matches!(entity.payload, PortablePayload::Account(_))
+            && stored_account_ids.contains(&entity.id);
+        let status = if blocked_local_account {
+            "conflict"
+        } else {
+            match &current {
+                None => "new",
+                Some(digest) if digest == &incoming => "same",
+                Some(_) => "conflict",
+            }
         };
         baseline.insert(key.clone(), current);
         items.push(ImportItem {
