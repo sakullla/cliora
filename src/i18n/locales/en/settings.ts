@@ -133,6 +133,7 @@ export default {
     relinkFailed: 'The directory was not linked',
     installCli: 'Install CLI',
     installHint: 'Install {{label}}, then retry. {{detail}}',
+    nativeReady: '“{{label}}” now matches the synced result on this device. Other data stays ready.',
     relogin: 'Sign in again',
     reloginStarted: 'Sign-in started. The saved login material is still on this device.',
     reloginFailed: 'Could not start sign-in',

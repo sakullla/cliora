@@ -350,6 +350,16 @@ pub fn set_webdav_enabled(app: AppHandle, enabled: bool) -> Result<portable::syn
 }
 
 #[tauri::command]
+pub async fn retry_restore_blocker(app: AppHandle, key: String) -> Result<portable::sync::SyncStatus, ApiError> {
+    let db = app.state::<AppState>().database(&app)?;
+    blocking(move || {
+        portable::retry_native_blocker(&db, &SystemCredentialStore, &adapters::Registry::builtins(), &key)
+            .map_err(native_error)?;
+        portable::sync::status(&db).map_err(native_error)
+    }).await
+}
+
+#[tauri::command]
 pub async fn sync_webdav_now(app: AppHandle) -> Result<portable::sync::SyncStatus, ApiError> {
     let db = app.state::<AppState>().database(&app)?;
     blocking(move || portable::with_change_notification(&db, || notify_portable_changed(&app), ||

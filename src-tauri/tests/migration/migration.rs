@@ -1886,3 +1886,256 @@ fn partial_directory_write_keeps_committed_cli_and_retries_the_failed_binding() 
         .unwrap();
     assert_eq!(deleted_after, 0);
 }
+
+fn sync_config_count(db: &Database) -> i64 {
+    db.with_connection(|conn| {
+        conn.query_row("SELECT count(*) FROM sync_config", [], |row| row.get(0))
+            .map_err(|error| error.to_string())
+    })
+    .unwrap()
+}
+
+fn insert_codex_binding(db: &Database, scope: &str) -> String {
+    let profile = bare_profile(
+        "codex-profile",
+        "codex",
+        "Codex",
+        BTreeMap::from([("settings".into(), "model = \"gpt-6\"\n".into())]),
+    );
+    db.with_connection(|conn| {
+        conn.execute(
+            "INSERT INTO native_profiles (id,tool,version,data) VALUES (?1,'codex',1,?2)",
+            rusqlite::params![profile.id, serde_json::to_string(&profile).unwrap()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO applied_bindings (scope_key,tool,profile_id,profile_version,managed) VALUES (?1,'codex',?2,-1,'{}')",
+            rusqlite::params![scope, profile.id],
+        )
+        .unwrap();
+        Ok(())
+    })
+    .unwrap();
+    format!("binding:{}", binding_id("codex", scope))
+}
+
+fn project_scope(path: &Path) -> String {
+    crate::native::apply::scope_key(crate::native::adapter::Scope::Project, Some(path)).unwrap()
+}
+
+#[test]
+fn retry_rewrites_a_failed_active_binding_without_webdav() {
+    let _roots = RestoreRootsGuard;
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(temp.path());
+    let credentials = MemoryCredentials::default();
+    let project = temp.path().join("project");
+    fs::create_dir(&project).unwrap();
+    let scope = project_scope(&project);
+    let key = insert_codex_binding(&db, &scope);
+    let home = temp.path().join("home");
+    fs::create_dir(&home).unwrap();
+    set_restore_roots_for_test(Some((home, temp.path().to_path_buf())));
+    let canonical = scope.strip_prefix("project:").unwrap();
+    let config = Path::new(canonical).join(".codex").join("config.toml");
+    fs::create_dir_all(config.parent().unwrap()).unwrap();
+    fs::write(&config, "model = \"old\"\n").unwrap();
+    let mut blocked = fs::metadata(&config).unwrap().permissions();
+    blocked.set_readonly(true);
+    fs::set_permissions(&config, blocked).unwrap();
+    record_blocker(
+        &db,
+        RestoreBlocker {
+            key: key.clone(),
+            label: "codex 活动配置".into(),
+            action: "retry".into(),
+            detail: "上次写入失败".into(),
+        },
+    );
+    let registry = Registry::builtins().with_fixture_installation("codex", "0.160.0");
+    let failed = retry_native_blocker(&db, &credentials, &registry, &key).unwrap_err();
+    assert!(!failed.contains("请先配置 WebDAV"), "{failed}");
+    assert_eq!(sync_config_count(&db), 0);
+    let blocker = load_blockers(&db).unwrap().into_iter().find(|item| item.key == key).expect("blocker");
+    assert!(blocker.action == "retry" || blocker.action == "install", "{blocker:?}");
+    assert!(!blocker.detail.contains("写入已选目录"), "{}", blocker.detail);
+    assert_ne!(blocker.detail, "上次写入失败");
+    let mut open = fs::metadata(&config).unwrap().permissions();
+    open.set_readonly(false);
+    fs::set_permissions(&config, open).unwrap();
+    retry_native_blocker(&db, &credentials, &registry, &key).unwrap();
+    let written = fs::read_to_string(&config).unwrap();
+    assert!(written.contains("gpt-6"), "{written}");
+    assert!(load_blockers(&db).unwrap().iter().all(|item| item.key != key));
+    assert_eq!(sync_config_count(&db), 0);
+}
+
+#[test]
+fn retry_releases_a_failed_native_binding_without_webdav() {
+    let _roots = RestoreRootsGuard;
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(temp.path());
+    let credentials = MemoryCredentials::default();
+    let project = temp.path().join("project");
+    fs::create_dir(&project).unwrap();
+    let scope = project_scope(&project);
+    let key = insert_codex_binding(&db, &scope);
+    let home = temp.path().join("home");
+    fs::create_dir(&home).unwrap();
+    set_restore_roots_for_test(Some((home, temp.path().to_path_buf())));
+    let registry = Registry::builtins().with_fixture_installation("codex", "0.160.0");
+    record_blocker(
+        &db,
+        RestoreBlocker {
+            key: key.clone(),
+            label: "codex 活动配置".into(),
+            action: "retry".into(),
+            detail: "准备写入".into(),
+        },
+    );
+    retry_native_blocker(&db, &credentials, &registry, &key).unwrap();
+    let managed: String = db
+        .with_connection(|conn| {
+            conn.query_row("SELECT managed FROM applied_bindings WHERE tool='codex'", [], |row| row.get(0))
+                .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert!(managed.contains("model"), "{managed}");
+    db.with_connection(|conn| {
+        conn.execute("DELETE FROM applied_bindings WHERE tool='codex'", []).unwrap();
+        Ok(())
+    })
+    .unwrap();
+    let canonical = scope.strip_prefix("project:").unwrap();
+    let config = Path::new(canonical).join(".codex").join("config.toml");
+    fs::write(&config, ":::not toml").unwrap();
+    let error = note_failed_release(&db, &registry, &key, "codex", &scope, &managed).unwrap_err();
+    assert!(!error.contains("请先配置 WebDAV"), "{error}");
+    let blocker = load_blockers(&db).unwrap().into_iter().find(|item| item.key == key).expect("blocker");
+    assert_eq!(blocker.action, "retry", "{blocker:?}");
+    assert!(!blocker.detail.contains("写入已选目录"), "{}", blocker.detail);
+    fs::write(&config, "model = \"gpt-6\"\nkeep = \"yes\"\n").unwrap();
+    retry_native_blocker(&db, &credentials, &registry, &key).unwrap();
+    let released = fs::read_to_string(&config).unwrap();
+    assert!(!released.contains("gpt-6"), "{released}");
+    assert!(released.contains("keep"), "{released}");
+    assert!(load_blockers(&db).unwrap().iter().all(|item| item.key != key));
+    assert_eq!(sync_config_count(&db), 0);
+}
+
+#[test]
+fn install_retry_rewrites_and_clears_the_blocker_once_the_cli_is_present() {
+    let _roots = RestoreRootsGuard;
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(temp.path());
+    let credentials = MemoryCredentials::default();
+    let project = temp.path().join("project");
+    fs::create_dir(&project).unwrap();
+    let scope = project_scope(&project);
+    let key = insert_codex_binding(&db, &scope);
+    let home = temp.path().join("home");
+    fs::create_dir(&home).unwrap();
+    set_restore_roots_for_test(Some((home, temp.path().to_path_buf())));
+    record_blocker(
+        &db,
+        RestoreBlocker {
+            key: key.clone(),
+            label: "codex 活动配置".into(),
+            action: "install".into(),
+            detail: "未发现可执行文件".into(),
+        },
+    );
+    let missing = Registry::builtins().with_fixture_not_installed("codex");
+    let error = retry_native_blocker(&db, &credentials, &missing, &key).unwrap_err();
+    assert!(!error.contains("请先配置 WebDAV"), "{error}");
+    assert!(
+        error.contains("未发现") || error.contains("未注册") || error.contains("不能探测"),
+        "{error}"
+    );
+    let blocker = load_blockers(&db).unwrap().into_iter().find(|item| item.key == key).expect("blocker");
+    assert_eq!(blocker.action, "install", "{blocker:?}");
+    let ready = Registry::builtins().with_fixture_installation("codex", "0.160.0");
+    retry_native_blocker(&db, &credentials, &ready, &key).unwrap();
+    let canonical = scope.strip_prefix("project:").unwrap();
+    let written = fs::read_to_string(Path::new(canonical).join(".codex").join("config.toml")).unwrap();
+    assert!(written.contains("gpt-6"), "{written}");
+    assert!(load_blockers(&db).unwrap().iter().all(|item| item.key != key));
+}
+
+#[test]
+fn relogin_recheck_clears_the_blocker_only_after_sign_in_is_accepted() {
+    let _roots = RestoreRootsGuard;
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(temp.path());
+    let credentials = MemoryCredentials::default();
+    let root = temp.path().join("account");
+    let state = root.join("auth").join("prod").join("cn").join("mcode-public").join("auth-state.json");
+    fs::create_dir_all(state.parent().unwrap()).unwrap();
+    let authenticated = r#"{"schemaVersion":2,"status":"authenticated","storeKind":"file","clientId":"mcode-public","scopes":["agent.default"],"audience":"agent-backend","buildEnv":"prod","region":"cn","generation":1}"#;
+    fs::write(&state, authenticated).unwrap();
+    let executable = temp.path().join("mcode.exe");
+    fs::write(&executable, "").unwrap();
+    let home = temp.path().join("home");
+    fs::create_dir(&home).unwrap();
+    set_restore_roots_for_test(Some((home, temp.path().to_path_buf())));
+    let context = crate::accounts::NativeContext {
+        id: "ctx-m".into(),
+        tool_id: "minimax_code".into(),
+        root: root.clone(),
+        config_root: root.clone(),
+        auth_files: vec![state.clone()],
+        history_roots: Vec::new(),
+        resource_root: root.clone(),
+        environment: BTreeMap::from([
+            ("MINIMAX_DATA_DIR".into(), root.to_string_lossy().into_owned()),
+            ("MAVIS_DATA_DIR".into(), root.to_string_lossy().into_owned()),
+        ]),
+        remove_environment: Vec::new(),
+        cli_args: Vec::new(),
+    };
+    let account = crate::accounts::AuthAccount {
+        id: "acct-m".into(),
+        tool_id: "minimax_code".into(),
+        provider: "minimax".into(),
+        label: "MiniMax".into(),
+        version: 2,
+        state: crate::accounts::AccountState::SignedIn,
+        identity: None,
+        context: Some(context),
+        retired_contexts: Vec::new(),
+        pending_login: None,
+        checked_at: None,
+        detail: None,
+    };
+    db.with_connection(|conn| {
+        conn.execute(
+            "INSERT INTO auth_accounts (id,tool,version,data) VALUES ('acct-m','minimax_code',1,?1)",
+            [serde_json::to_string(&account).unwrap()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO installation_choices (tool,path) VALUES ('minimax_code',?1)",
+            [executable.to_str().unwrap()],
+        )
+        .unwrap();
+        Ok(())
+    })
+    .unwrap();
+    record_blocker(
+        &db,
+        RestoreBlocker {
+            key: "account:acct-m".into(),
+            label: "MiniMax".into(),
+            action: "relogin".into(),
+            detail: "登录被拒绝，材料已保留".into(),
+        },
+    );
+    fs::write(&state, authenticated.replace("authenticated", "expired")).unwrap();
+    let registry = Registry::builtins();
+    let rejected = retry_native_blocker(&db, &credentials, &registry, "account:acct-m").unwrap_err();
+    assert!(!rejected.contains("请先配置 WebDAV"), "{rejected}");
+    assert!(load_blockers(&db).unwrap().iter().any(|item| item.key == "account:acct-m" && item.action == "relogin"));
+    fs::write(&state, authenticated).unwrap();
+    retry_native_blocker(&db, &credentials, &registry, "account:acct-m").unwrap();
+    assert!(load_blockers(&db).unwrap().iter().all(|item| item.key != "account:acct-m"));
+}

@@ -1042,15 +1042,16 @@ fn delete_local(
         Ok(releases)
     })?;
     for release in releases {
-        if let Err(error) = super::release_native_binding(db, registry, &release.tool, &release.scope_key, &release.managed) {
-            let action = if error.contains("目录") { "relink" } else if error.contains("未发现") || error.contains("未注册") { "install" } else { "retry" };
-            super::record_blocker(db, super::RestoreBlocker {
-                key: entity_key.into(),
-                label: format!("{} 活动配置", release.tool),
-                action: action.into(),
-                detail: error,
-            });
-        }
+        // The row is already gone. A failed CLI update has to be retried on its own,
+        // including when WebDAV is not configured and the entity digest will not change.
+        let _ = super::note_failed_release(
+            db,
+            registry,
+            entity_key,
+            &release.tool,
+            &release.scope_key,
+            &release.managed,
+        );
     }
     Ok(())
 }
@@ -1469,6 +1470,9 @@ fn run_once(
     }
     clear_outbox(db, &processed_keys, &pending_tokens)?;
     status.pending_changes = self::status(db)?.pending_changes;
+    // Matching digests skip the entity body. They must not skip a CLI write or release
+    // that failed after the saved entity was already current.
+    super::finish_pending_native(db, store, registry).ok();
     status.blockers = super::load_blockers(db).unwrap_or_default();
     Ok(status)
 }

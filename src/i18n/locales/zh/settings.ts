@@ -133,6 +133,7 @@ export default {
     relinkFailed: '目录没有关联',
     installCli: '安装 CLI',
     installHint: '请安装 {{label}} 后重试。{{detail}}',
+    nativeReady: '「{{label}}」已按同步结果写回本机。其它资料保持可用。',
     relogin: '重新登录',
     reloginStarted: '已开始重新登录。登录材料仍在本机。',
     reloginFailed: '无法开始重新登录',

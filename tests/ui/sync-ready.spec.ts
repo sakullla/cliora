@@ -43,6 +43,10 @@ async function install(page: Page, seed: SyncSeed = {}) {
       lastConfigure: null as { encryptionPassword?: string; previousEncryptionPassword?: string; authPassword?: string; endpoint?: string; username?: string } | null,
       lastRelink: null as { projectId?: string; projectPath?: string } | null,
       lastLogin: null as { id?: string; expectedVersion?: number; method?: string } | null,
+      lastRetry: null as string | null,
+      syncCalls: 0,
+      installReady: false,
+      loginReady: false,
       ...initial,
     };
     const remembered = (() => {
@@ -87,9 +91,19 @@ async function install(page: Page, seed: SyncSeed = {}) {
           return status();
         }
         if (command === 'sync_webdav_now') {
+          control.syncCalls += 1;
           control.lastError = null;
           control.pending = 0;
           return { ...status(), uploaded: 1, downloaded: 0, lastSuccess: 1700000000 };
+        }
+        if (command === 'retry_restore_blocker') {
+          control.lastRetry = args.key;
+          const blockers = control.blockers as { key?: string; action?: string; detail?: string }[];
+          const blocker = blockers.find((item) => item.key === args.key);
+          if (blocker?.action === 'install' && !control.installReady) throw { message: blocker.detail || '未发现可执行文件' };
+          if (blocker?.action === 'relogin' && !control.loginReady) throw { message: blocker.detail || '登录被拒绝，材料已保留' };
+          control.blockers = blockers.filter((item) => item.key !== args.key);
+          return status();
         }
         if (command === 'export_portable_bundle') {
           control.lastExport = args;
@@ -409,4 +423,43 @@ test('a partial directory write retries into the chosen directory instead of a s
   await expect(webdav.getByText('已把「Codex 活动配置」写入选定目录。其它资料保持可用。')).toBeVisible();
   await expect(webdav.getByRole('button', { name: '选择目录', exact: true })).toHaveCount(1);
   await expect(webdav.getByText('其余内容可用', { exact: true })).toBeVisible();
+});
+
+test('a failed CLI write or release retries locally, and install or sign-in clears the blocker', async ({ page }) => {
+  await install(page, {
+    configured: true,
+    blockers: [
+      { key: 'binding:write', label: 'Codex 活动配置', action: 'retry', detail: '上次写入失败' },
+      { key: 'binding:release', label: 'Pi 活动配置', action: 'retry', detail: '上次释放失败' },
+      { key: 'binding:install', label: 'Codex 活动配置', action: 'install', detail: '未发现可执行文件' },
+      { key: 'account:a1', label: '工作账号', action: 'relogin', detail: '登录被拒绝，材料已保留' },
+    ],
+    accounts: [{ id: 'a1', toolId: 'codex', version: 4, state: 'signed_in', pendingLogin: null }],
+  });
+  await openMigration(page);
+  const webdav = page.getByRole('region', { name: 'WebDAV 同步' });
+  const retryButtons = webdav.getByRole('button', { name: '重试', exact: true });
+  await retryButtons.nth(0).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __syncReady: { lastRetry: string | null; syncCalls: number } }).__syncReady.lastRetry)).toBe('binding:write');
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __syncReady: { syncCalls: number } }).__syncReady.syncCalls)).toBe(0);
+  await expect(webdav.getByText('「Codex 活动配置」已按同步结果写回本机。其它资料保持可用。')).toBeVisible();
+  await retryButtons.nth(0).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __syncReady: { lastRetry: string | null } }).__syncReady.lastRetry)).toBe('binding:release');
+  await expect(webdav.getByText('「Pi 活动配置」已按同步结果写回本机。其它资料保持可用。')).toBeVisible();
+
+  await webdav.getByRole('button', { name: '安装 CLI', exact: true }).click();
+  await expect(webdav.getByText('请安装 Codex 活动配置 后重试。未发现可执行文件')).toBeVisible();
+  await page.evaluate(() => { (window as unknown as { __syncReady: { installReady: boolean } }).__syncReady.installReady = true; });
+  await webdav.getByRole('button', { name: '安装 CLI', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __syncReady: { lastRetry: string | null } }).__syncReady.lastRetry)).toBe('binding:install');
+  await expect(webdav.getByRole('button', { name: '安装 CLI', exact: true })).toHaveCount(0);
+
+  await page.evaluate(() => { (window as unknown as { __syncReady: { loginReady: boolean } }).__syncReady.loginReady = true; });
+  await webdav.getByRole('button', { name: '重新登录', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __syncReady: { lastRetry: string | null; lastLogin: unknown } }).__syncReady.lastRetry)).toBe('account:a1');
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __syncReady: { lastLogin: unknown } }).__syncReady.lastLogin)).toBeNull();
+  await expect(webdav.getByRole('button', { name: '重新登录', exact: true })).toHaveCount(0);
+  await expect(webdav.getByRole('button', { name: '重试', exact: true })).toHaveCount(0);
+  await expect(webdav.getByText('当前可用', { exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __syncReady: { syncCalls: number } }).__syncReady.syncCalls)).toBe(0);
 });

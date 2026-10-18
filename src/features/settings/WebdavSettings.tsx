@@ -134,6 +134,50 @@ export function WebdavSettings({ active, editing, onEdit, revision = 0 }: { acti
     finally { setBusy(false); }
   }
 
+  function blockerCleared(next: SyncStatus | null | undefined, key: string) {
+    return !!next && Array.isArray(next.blockers) && !next.blockers.some((item) => item.key === key);
+  }
+
+  async function refreshStatus() {
+    try {
+      const next = await native.getWebdavStatus();
+      if (mounted.current) setStatus(next);
+    } catch { /* The action error stays visible when status cannot be refreshed. */ }
+  }
+
+  async function retryNative(blocker: RestoreBlocker) {
+    if (busy) return;
+    setBusy(true); setError(''); setMessage('');
+    try {
+      const next = await native.retryRestoreBlocker(blocker.key);
+      if (blockerCleared(next, blocker.key)) {
+        setStatus(next);
+        setMessage(t('settings.webdav.nativeReady', { label: blocker.label }));
+        return;
+      }
+      if (next) setStatus(next);
+      const detail = blockerDetail(next?.blockers?.find((item) => item.key === blocker.key)?.detail || blocker.detail);
+      if (blocker.action === 'install') setMessage(t('settings.webdav.installHint', { label: blocker.label, detail }));
+      else setError(detail || t('settings.webdav.writeFailed'));
+    } catch (reason) {
+      const detail = blockerDetail((reason as { message?: string }).message || blocker.detail);
+      await refreshStatus();
+      if (blocker.action === 'install') setMessage(t('settings.webdav.installHint', { label: blocker.label, detail }));
+      else setError(detail || t('settings.webdav.writeFailed'));
+    } finally { setBusy(false); }
+  }
+
+  async function acceptLogin(blocker: RestoreBlocker) {
+    const next = await native.retryRestoreBlocker(blocker.key);
+    if (blockerCleared(next, blocker.key)) {
+      setStatus(next);
+      setMessage(t('settings.webdav.nativeReady', { label: blocker.label }));
+      return true;
+    }
+    if (next) setStatus(next);
+    return false;
+  }
+
   async function relogin(blocker: RestoreBlocker) {
     if (busy) return;
     const id = blocker.key.startsWith('account:') ? blocker.key.slice('account:'.length) : '';
@@ -143,14 +187,24 @@ export function WebdavSettings({ active, editing, onEdit, revision = 0 }: { acti
       const account = accounts.find((item) => item.id === id);
       const capabilities = await native.accountCapabilities();
       const method = capabilities.find((item) => item.toolId === account?.toolId)?.methods[0];
+      if (account?.state === 'signed_in' && !account.pendingLogin) {
+        try {
+          if (await acceptLogin(blocker)) return;
+        } catch { /* The saved sign-in was not accepted. Start the login again. */ }
+      }
       if (!account || !method) {
         setError(blocker.detail || t('settings.webdav.reloginFailed'));
         return;
       }
-      await native.startAccountLogin(account.id, account.version, method);
+      const started = await native.startAccountLogin(account.id, account.version, method);
+      if (started.state === 'signed_in' && !started.pendingLogin) {
+        if (await acceptLogin(blocker)) return;
+      }
       setMessage(t('settings.webdav.reloginStarted'));
-    } catch (reason) { setError((reason as { message?: string }).message ?? t('settings.webdav.reloginFailed')); }
-    finally { setBusy(false); }
+    } catch (reason) {
+      setError((reason as { message?: string }).message ?? t('settings.webdav.reloginFailed'));
+      await refreshStatus();
+    } finally { setBusy(false); }
   }
 
   async function writeChosenDirectory(blocker: RestoreBlocker) {
@@ -185,8 +239,8 @@ export function WebdavSettings({ active, editing, onEdit, revision = 0 }: { acti
       setError(blocker.detail);
       return;
     }
-    if (blocker.action === 'install') {
-      setMessage(t('settings.webdav.installHint', { label: blocker.label, detail: blocker.detail }));
+    if (blocker.action === 'install' || blocker.action === 'retry') {
+      await retryNative(blocker);
       return;
     }
     if (blocker.action === 'relogin') {

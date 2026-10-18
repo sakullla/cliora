@@ -132,6 +132,7 @@ export const native = {
   configureWebdav: (setup: WebdavSetup) => command<SyncStatus>('configure_webdav', { setup }),
   setWebdavEnabled: (enabled: boolean) => command<SyncStatus>('set_webdav_enabled', { enabled }),
   syncWebdavNow: () => command<SyncStatus>('sync_webdav_now'),
+  retryRestoreBlocker: (key: string) => command<SyncStatus>('retry_restore_blocker', { key }),
   resolveWebdavConflict: (key: string, chosenVersionId: string | null) => command<SyncStatus>('resolve_webdav_conflict', { key, chosenVersionId }),
   previewWebdavConflict: (key: string) => command<ConflictPreview>('preview_webdav_conflict', { key }),
   cancelHistoryRefresh: () => command<void>('cancel_history_refresh'),
