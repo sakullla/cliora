@@ -1324,7 +1324,7 @@ mod tests {
     }
 
     #[test]
-    fn portable_export_omits_login_token_and_api_key_plaintext() {
+    fn portable_export_carries_secrets_outside_the_config_text() {
         let dir = tempfile::tempdir().unwrap();
         let db = crate::database::Database::open(&dir.path().join("cliora.db")).unwrap();
         let store = MemoryStore::default();
@@ -1377,8 +1377,6 @@ mod tests {
         )
         .unwrap();
         let rendered = serde_json::to_string(&snapshot).unwrap();
-        assert!(!rendered.contains("sk-export-connection"));
-        assert!(!rendered.contains("sk-export-native"));
         assert!(!rendered.contains("sk-official-example"));
         let crate::portable::PortablePayload::Profile(portable) = &snapshot
             .entities
@@ -1389,11 +1387,24 @@ mod tests {
         else {
             unreachable!();
         };
-        assert!(portable.connection_secret.is_none());
-        assert!(portable
-            .pending_fields
-            .iter()
-            .any(|field| field.contains("重新绑定")));
-        assert!(portable.native_secrets.is_empty());
+        assert_eq!(portable.connection_secret.as_deref(), Some("sk-export-connection"));
+        assert_eq!(
+            portable
+                .native_secrets
+                .get("config")
+                .and_then(|values| values.get("MCODE_CUSTOM_DEMO_API_KEY"))
+                .map(String::as_str),
+            Some("sk-export-native")
+        );
+        assert!(portable.profile.connection.as_ref().unwrap().secret_ref.is_none());
+        assert!(portable.profile.native_credentials.is_empty());
+        assert!(portable.profile.files.values().all(|text| {
+            !text.contains("sk-export-connection") && !text.contains("sk-export-native")
+        }));
+        assert!(!matches!(
+            portable.profile.authentication,
+            ProfileAuthentication::RebindRequired
+        ));
+        assert!(!portable.pending_fields.iter().any(|field| field.contains("重新绑定")));
     }
 }
