@@ -1,15 +1,30 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { open } from '@tauri-apps/plugin-dialog';
 import { native, nativeAvailable } from '../../lib/native';
 import { confirmAction } from '../../lib/confirm';
 import { GuideDialog } from '../../components/GuideDialog';
-import type { ConflictPreview, SyncStatus, WebdavSetup } from '../../types/portable';
+import type { ConflictPreview, RestoreBlocker, SyncStatus, WebdavSetup } from '../../types/portable';
+import type { Project } from '../../types/launch';
 import styles from './MigrationSettings.module.css';
 
-export function WebdavSettings({ active, editing, onEdit }: { active: boolean; editing: boolean; onEdit: (editing: boolean) => void }) {
+const emptySetup = (endpoint = '', enabled = true): WebdavSetup => ({
+  endpoint, username: '', authPassword: '', encryptionPassword: '', previousEncryptionPassword: '', enabled,
+});
+
+function missingDirectoryPath(detail: string) {
+  const mark = '目录不存在：';
+  const index = detail.indexOf(mark);
+  return index < 0 ? '' : detail.slice(index + mark.length).trim();
+}
+
+export function WebdavSettings({ active, editing, onEdit, revision = 0 }: { active: boolean; editing: boolean; onEdit: (editing: boolean) => void; revision?: number }) {
   const { t, i18n } = useTranslation();
   const [status, setStatus] = useState<SyncStatus | null>(null);
-  const [setup, setSetup] = useState<WebdavSetup>({ endpoint: '', username: '', authPassword: '', encryptionPassword: '', previousEncryptionPassword: '', enabled: true });
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [projectsLoaded, setProjectsLoaded] = useState(false);
+  const [clearedPaths, setClearedPaths] = useState<string[]>([]);
+  const [setup, setSetup] = useState<WebdavSetup>(emptySetup());
   const [busy, setBusy] = useState(false);
   const [previews, setPreviews] = useState<Record<string, ConflictPreview>>({});
   const [error, setError] = useState('');
@@ -24,18 +39,24 @@ export function WebdavSettings({ active, editing, onEdit }: { active: boolean; e
     void native.getWebdavStatus().then((next) => {
       if (!alive) return;
       setStatus(next);
-      if (next.endpoint) setSetup((old) => ({ ...old, endpoint: next.endpoint ?? '', enabled: next.enabled }));
+      if (next.endpoint) setSetup((old) => ({ ...old, endpoint: next.endpoint ?? '', enabled: next.enabled, encryptionPassword: '', previousEncryptionPassword: '' }));
     }).catch((reason: { message?: string }) => { if (alive) setError(reason.message ?? t('settings.webdav.statusFailed')); });
+    void native.listProjects().then((next) => {
+      if (!alive) return;
+      setProjects(next);
+      setProjectsLoaded(true);
+    }).catch(() => { if (alive) setProjectsLoaded(true); });
     return () => { alive = false; };
-  }, [active]);
+  }, [active, revision]);
 
   async function configure() {
     if (busy) return;
     setBusy(true); setError(''); setMessage('');
     try {
-      const next = await native.configureWebdav(setup);
+      // An empty encryption password tells the engine to use the connection password.
+      const next = await native.configureWebdav({ ...setup, encryptionPassword: '', previousEncryptionPassword: '' });
       setStatus(next); onEdit(false);
-      setSetup({ endpoint: next.endpoint ?? '', username: '', authPassword: '', encryptionPassword: '', previousEncryptionPassword: '', enabled: next.enabled });
+      setSetup(emptySetup(next.endpoint ?? '', next.enabled));
       setMessage(t('settings.webdav.configured'));
       if (next.enabled) setStatus(await native.syncWebdavNow());
     } catch (reason) { setError((reason as { message?: string }).message ?? t('settings.webdav.configureFailed')); }
@@ -83,30 +104,110 @@ export function WebdavSettings({ active, editing, onEdit }: { active: boolean; e
     finally { setBusy(false); }
   }
 
-  return <section className="settings-group">
+  async function chooseDirectory(project: Project) {
+    if (busy) return;
+    const picked = await open({ title: t('settings.webdav.chooseDirectoryTitle'), directory: true, multiple: false });
+    if (typeof picked !== 'string') return;
+    setBusy(true); setError('');
+    try {
+      const updated = await native.relinkProject(project.id, picked);
+      setProjects((current) => current.map((item) => item.id === updated.id ? updated : item));
+      if (project.path) setClearedPaths((current) => current.includes(project.path as string) ? current : [...current, project.path as string]);
+      setStatus(await native.getWebdavStatus());
+      setMessage(t('settings.webdav.directoryLinked', { name: updated.name }));
+    } catch (reason) { setError((reason as { message?: string }).message ?? t('settings.webdav.relinkFailed')); }
+    finally { setBusy(false); }
+  }
+
+  async function relogin(blocker: RestoreBlocker) {
+    if (busy) return;
+    const id = blocker.key.startsWith('account:') ? blocker.key.slice('account:'.length) : '';
+    setBusy(true); setError(''); setMessage('');
+    try {
+      const accounts = await native.listAccounts();
+      const account = accounts.find((item) => item.id === id);
+      const capabilities = await native.accountCapabilities();
+      const method = capabilities.find((item) => item.toolId === account?.toolId)?.methods[0];
+      if (!account || !method) {
+        setError(blocker.detail || t('settings.webdav.reloginFailed'));
+        return;
+      }
+      await native.startAccountLogin(account.id, account.version, method);
+      setMessage(t('settings.webdav.reloginStarted'));
+    } catch (reason) { setError((reason as { message?: string }).message ?? t('settings.webdav.reloginFailed')); }
+    finally { setBusy(false); }
+  }
+
+  async function runBlocker(blocker: RestoreBlocker) {
+    if (blocker.action === 'relink') {
+      const path = missingDirectoryPath(blocker.detail);
+      const project = projects.find((item) => item.path === path);
+      if (project) { await chooseDirectory(project); return; }
+      setError(blocker.detail);
+      return;
+    }
+    if (blocker.action === 'install') {
+      setMessage(t('settings.webdav.installHint', { label: blocker.label, detail: blocker.detail }));
+      return;
+    }
+    if (blocker.action === 'relogin') {
+      await relogin(blocker);
+      return;
+    }
+    await syncNow();
+  }
+
+  const missingProjects = projects.filter((project) => !project.available);
+  const blockers = (status?.blockers ?? []).filter((blocker) => {
+    if (blocker.action !== 'relink') return true;
+    const path = missingDirectoryPath(blocker.detail);
+    if (!projectsLoaded || !path) return true;
+    if (clearedPaths.includes(path)) return false;
+    if (missingProjects.some((project) => project.path === path)) return false;
+    if (projects.some((project) => project.path === path && project.available)) return false;
+    return true;
+  });
+  const conflicts = status?.conflicts ?? [];
+  const itemIssues = missingProjects.length > 0 || blockers.length > 0 || conflicts.length > 0;
+  const passwordShort = setup.authPassword.length < 12;
+  const when = status?.lastSuccess ? new Date(status.lastSuccess * 1000).toLocaleString(i18n.language === 'en' ? 'en-US' : 'zh-CN') : '';
+
+  return <section className="settings-group" aria-label={t('settings.webdav.title')}>
     <div className="setting-intro"><h2>{t('settings.webdav.title')}</h2><p>{t('settings.webdav.description')}</p></div>
     {error && <div className={styles.inlineError} role="alert">{error}</div>}
     {message && <div className={styles.inlineMessage} role="status">{message}</div>}
     {status?.configured ? <>
-      <div className="setting-row"><span><strong>{status.endpoint}</strong><small>{status.lastSuccess ? t('settings.webdav.lastSuccess', { time: new Date(status.lastSuccess * 1000).toLocaleString(i18n.language === 'en' ? 'en-US' : 'zh-CN') }) : t('settings.webdav.neverSynced')}{status.pendingChanges ? t('settings.webdav.pendingSuffix', { count: status.pendingChanges }) : ''}{status.lastError ? t('settings.webdav.lastFailedSuffix', { error: status.lastError }) : ''}</small></span>
+      <div className="setting-row"><span><strong>{status.enabled ? t('settings.webdav.syncOn') : t('settings.webdav.syncOff')}</strong><small>{status.lastSuccess ? t('settings.webdav.lastSuccess', { time: when }) : t('settings.webdav.neverSynced')}</small></span>
         <button className="button" type="button" disabled={busy} onClick={() => void toggleEnabled()}>{status.enabled ? t('settings.webdav.pause') : t('settings.webdav.enable')}</button></div>
-      <div className={styles.action}><button className="button primary" type="button" disabled={busy} onClick={() => void syncNow()}>{busy ? t('settings.webdav.syncing') : t('settings.webdav.syncNow')}</button>
+      <div className="setting-row"><span><strong>{itemIssues ? t('settings.webdav.partialReady') : t('settings.webdav.readyNow')}</strong>{!!status.pendingChanges && <small>{t('settings.webdav.pendingUpload', { count: status.pendingChanges })}</small>}</span></div>
+      {status.lastError ? <div className={styles.action}><span className={styles.hint}>{t('settings.webdav.connectionFailed', { error: status.lastError })}</span>
+        <button className="button" type="button" disabled={busy} onClick={() => void syncNow()}>{t('settings.webdav.retry')}</button>
         <button className="button" type="button" disabled={busy} onClick={() => onEdit(true)}>{t('settings.webdav.editConnection')}</button></div>
-    </> : <div className="setting-row"><span><strong>{t('settings.webdav.notConnected')}</strong><small>{t('settings.webdav.notConnectedHint')}</small></span><button className="button" type="button" onClick={() => onEdit(true)}>{t('settings.webdav.configure')}</button></div>}
+        : <div className={styles.action}><button className="button primary" type="button" disabled={busy} onClick={() => void syncNow()}>{busy ? t('settings.webdav.syncing') : t('settings.webdav.syncNow')}</button>
+          <button className="button" type="button" disabled={busy} onClick={() => onEdit(true)}>{t('settings.webdav.editConnection')}</button></div>}
+    </> : <>
+      <div className="setting-row"><span><strong>{t('settings.webdav.notConnected')}</strong><small>{t('settings.webdav.notConnectedHint')}</small></span><button className="button" type="button" onClick={() => onEdit(true)}>{t('settings.webdav.configure')}</button></div>
+      {itemIssues && <div className="setting-row"><span><strong>{t('settings.webdav.partialReady')}</strong></span></div>}
+    </>}
     <GuideDialog open={editing} title={status?.configured ? t('settings.webdav.editTitle') : t('settings.webdav.configure')} hint={t('settings.webdav.dialogHint')} onClose={() => onEdit(false)}>
     <div className={styles.webdavForm}>
       <label>{t('settings.webdav.endpoint')}<input type="url" value={setup.endpoint} placeholder="https://dav.example.com/cliora/" onChange={(event) => setSetup({ ...setup, endpoint: event.target.value })} /></label>
       <label>{t('settings.webdav.username')}<input value={setup.username} autoComplete="username" onChange={(event) => setSetup({ ...setup, username: event.target.value })} /></label>
-      <label>{t('settings.webdav.password')}<input type="password" value={setup.authPassword} autoComplete="new-password" placeholder={t('settings.webdav.passwordPlaceholder')} onChange={(event) => setSetup({ ...setup, authPassword: event.target.value })} /></label>
-      <details className={styles.advanced}><summary>{t('settings.webdav.advancedSummary')}</summary><label>{t('settings.webdav.encryptionLabel')}<input type="password" value={setup.encryptionPassword} autoComplete="new-password" placeholder={t('settings.webdav.encryptionPlaceholder')} onChange={(event) => setSetup({ ...setup, encryptionPassword: event.target.value })} /></label><label>{t('settings.webdav.previousLabel')}<input type="password" value={setup.previousEncryptionPassword} autoComplete="off" placeholder={t('settings.webdav.previousPlaceholder')} onChange={(event) => setSetup({ ...setup, previousEncryptionPassword: event.target.value })} /></label></details>
+      <label>{t('settings.webdav.password')}<input type="password" value={setup.authPassword} autoComplete="new-password" placeholder={t('settings.webdav.passwordPlaceholder')} onChange={(event) => setSetup({ ...setup, authPassword: event.target.value, encryptionPassword: '', previousEncryptionPassword: '' })} /></label>
+      <small>{passwordShort ? t('settings.webdav.passwordMore', { count: Math.max(0, 12 - setup.authPassword.length) }) : t('settings.webdav.passwordOk')}</small>
       <small>{t('settings.webdav.securityNote')}</small>
-      <div className={styles.action}><button type="button" className="button primary" disabled={!nativeAvailable || busy || !setup.endpoint || !setup.username || !setup.authPassword || (setup.authPassword.length < 12 && setup.encryptionPassword.length < 12)} onClick={() => void configure()}>{t('settings.webdav.save')}</button>
+      <div className={styles.action}><button type="button" className="button primary" disabled={!nativeAvailable || busy || !setup.endpoint || !setup.username || passwordShort} onClick={() => void configure()}>{t('settings.webdav.save')}</button>
         <button type="button" className="button" disabled={busy} onClick={() => onEdit(false)}>{t('common.dialog.cancel')}</button></div>
     </div>
     </GuideDialog>
-    {!!status?.conflicts.length && <div className={styles.conflicts}><h3>{t('settings.webdav.conflictsTitle')}</h3><p>{t('settings.webdav.conflictsHint')}</p>
-      {status.conflicts.map((conflict) => <div className={styles.conflict} key={conflict.key}><strong>{conflict.label}</strong><small>{conflict.key} · {t('settings.webdav.remoteVersions', { count: conflict.remoteVersions })}</small>
-        {!previews[conflict.key] ? <button className="button" type="button" disabled={busy} onClick={() => void previewConflict(conflict.key)}>{t('settings.webdav.preview')}</button> : <>
+    {itemIssues && <div className={styles.conflicts}><h3>{t('settings.webdav.actionsTitle')}</h3><p>{t('settings.webdav.actionsHint')}</p>
+      {missingProjects.map((project) => <div className={styles.conflict} key={project.id}><strong>{project.name}</strong><small>{project.path ? t('settings.webdav.missingDirectory', { path: project.path }) : t('settings.webdav.missingDirectoryUnknown')}</small>
+        <button className="button" type="button" disabled={busy} onClick={() => void chooseDirectory(project)}>{t('settings.webdav.chooseDirectory')}</button></div>)}
+      {blockers.map((blocker) => <div className={styles.conflict} key={blocker.key}><strong>{blocker.label}</strong><small>{blocker.detail}</small>
+        <button className="button" type="button" disabled={busy} onClick={() => void runBlocker(blocker)}>{blocker.action === 'install' ? t('settings.webdav.installCli') : blocker.action === 'relogin' ? t('settings.webdav.relogin') : blocker.action === 'relink' ? t('settings.webdav.chooseDirectory') : t('settings.webdav.retry')}</button></div>)}
+      {!!conflicts.length && <h3>{t('settings.webdav.conflictsTitle')}</h3>}
+      {conflicts.map((conflict) => <div className={styles.conflict} key={conflict.key}><strong>{conflict.label}</strong><small>{t('settings.webdav.conflictsHint')} {t('settings.webdav.remoteVersions', { count: conflict.remoteVersions })}</small>
+        {!previews[conflict.key] ? <button className="button" type="button" disabled={busy} onClick={() => void previewConflict(conflict.key)}>{t('settings.webdav.chooseConflict')}</button> : <>
           <div className={styles.version}><strong>{t('settings.webdav.local')}</strong><p>{previews[conflict.key].localSummary}</p><button className="button" type="button" disabled={busy} onClick={() => void resolve(conflict.key, null, false)}>{t('settings.webdav.keepLocal')}</button></div>
           {previews[conflict.key].versions.map((version) => <div className={styles.version} key={version.id}><strong>{t('settings.webdav.remoteVersion', { id: version.id.slice(0, 8) })}</strong><p>{version.summary}</p>
             <button className="button" type="button" disabled={busy} onClick={() => void resolve(conflict.key, version.id, version.deleted)}>{version.deleted ? t('settings.webdav.acceptDelete') : t('settings.webdav.useRemote')}</button></div>)}

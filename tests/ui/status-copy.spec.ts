@@ -53,6 +53,7 @@ async function install(page: Page, seed: Record<string, boolean> = {}) {
         }
         if (command === 'list_portable_items') {
           if (control.portableFails) throw { message: '迁移列表读取失败', action: '可先离开再回到迁移与同步重新读取。' };
+          if (control.withPortableItem) return [{ key: 'profile:1', kind: 'profile', label: '默认配置', status: 'available', pendingFields: [] }];
           return [];
         }
         if (command === 'get_webdav_status') return { configured: false, enabled: false, endpoint: null, lastSuccess: null, lastError: null, retryAfter: null, uploaded: 0, downloaded: 0, pendingChanges: 0, conflicts: [] };
@@ -421,7 +422,7 @@ test('an empty library offers to create the first item', async ({ page }) => {
 });
 
 test('export password can be revealed and explains what is still missing', async ({ page }) => {
-  await install(page);
+  await install(page, { withPortableItem: true });
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '设置' }).click();
   await page.getByRole('tab', { name: '迁移与同步' }).click();
@@ -432,6 +433,11 @@ test('export password can be revealed and explains what is still missing', async
   await dialog.getByRole('button', { name: '显示口令' }).click();
   await expect(password).toHaveAttribute('type', 'text');
   await expect(dialog.getByRole('button', { name: '隐藏口令' })).toHaveAttribute('aria-pressed', 'true');
-  await expect(dialog.getByText('至少勾选一项资料。')).toBeVisible();
+  await expect(dialog.getByRole('checkbox')).toHaveCount(0);
+  await expect(dialog.getByText('至少勾选一项资料。')).toHaveCount(0);
+  await expect(dialog.getByText('口令还需 12 位')).toBeVisible();
+  await expect(dialog.getByRole('button', { name: '导出配置包' })).toBeDisabled();
+  await password.fill('12345678901');
+  await expect(dialog.getByText('口令还需 1 位')).toBeVisible();
   await expect(dialog.getByRole('button', { name: '导出配置包' })).toBeDisabled();
 });
