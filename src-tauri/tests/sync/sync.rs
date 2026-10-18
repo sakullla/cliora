@@ -267,6 +267,10 @@ fn fresh_device_receives_non_default_preferences_and_common_changes_without_sync
         conn.execute("INSERT INTO applied_bindings (scope_key,tool,profile_id,profile_version,managed) VALUES ('global','codex',?1,1,'{}')", [&named.id]).unwrap();
         Ok(())
     }).unwrap();
+    // Active bindings are portable. Publish this one before checking that a later
+    // profile_version invalidation does not upload another manifest revision.
+    run(&b, &credentials, &registry, false).unwrap();
+    run(&a, &credentials, &registry, false).unwrap();
     let mut updated = common.clone();
     updated.files.insert("settings".into(), "model_reasoning_effort = \"high\"".into());
     profile::save_registered_common(&a, &registry, updated, Some(common.version)).unwrap();
@@ -779,4 +783,106 @@ fn model_token_limits_and_editing_values_survive_webdav_semantic_scrubbing() {
     assert_eq!(incoming.editing.as_ref().unwrap().intents[0].value.as_ref().unwrap()["maxTokens"],32);
     let transported=serde_json::to_string(&incoming).unwrap();
     assert!(!transported.contains("must-not-sync"));assert!(!transported.contains("/device/only"));
+}
+
+#[test]
+fn empty_remote_uploads_and_connection_failure_keeps_local_data() {
+    let server = Server::new();
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(temp.path());
+    let store = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    put_library(&db, "local-only");
+    configure(&db, &store, setup(&server)).unwrap();
+    let status = run(&db, &store, &registry, false).unwrap();
+    assert!(status.uploaded >= 1);
+    assert_eq!(body(&db).as_deref(), Some("local-only"));
+    server.state.lock().unwrap().fail_auth = true;
+    assert!(run(&db, &store, &registry, false).is_err());
+    assert_eq!(body(&db).as_deref(), Some("local-only"));
+}
+
+#[test]
+fn remote_delete_of_unchanged_items_applies_and_a_later_local_edit_waits() {
+    let server = Server::new();
+    let temp = tempfile::tempdir().unwrap();
+    let a = database(&temp.path().join("a"));
+    let b = database(&temp.path().join("b"));
+    let store = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    let dir = temp.path().join("project-disk");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::write(dir.join("keep.txt"), "disk-stays").unwrap();
+    let profile = crate::native::profile::RegisteredProfile {
+        editing: None,
+        authentication: crate::native::profile::ProfileAuthentication::Native,
+        revision: String::new(),
+        id: "profile-del".into(),
+        tool: "codex".into(),
+        name: "Original".into(),
+        version: 1,
+        inherit_common: false,
+        files: BTreeMap::new(),
+        suppressed: BTreeMap::new(),
+        connection: None,
+        native_credentials: BTreeMap::new(),
+    };
+    a.with_connection(|conn| {
+        conn.execute("INSERT INTO native_profiles (id,tool,version,data) VALUES ('profile-del','codex',1,?1)", [serde_json::to_string(&profile).unwrap()]).unwrap();
+        conn.execute("INSERT INTO applied_bindings (scope_key,tool,profile_id,profile_version,managed) VALUES ('global','codex','profile-del',1,'{}')", []).unwrap();
+        conn.execute("INSERT INTO projects (id,name,path,preferred_tool,last_opened) VALUES ('project-disk','Disk',?1,NULL,0)", [dir.to_str().unwrap()]).unwrap();
+        Ok(())
+    }).unwrap();
+    put_library(&a, "stable");
+    configure(&a, &store, setup(&server)).unwrap();
+    run(&a, &store, &registry, false).unwrap();
+    configure(&b, &store, setup(&server)).unwrap();
+    run(&b, &store, &registry, false).unwrap();
+    assert!(crate::native::profile::get_registered_profile(&b, "profile-del").is_ok());
+    a.with_connection(|conn| {
+        conn.execute("DELETE FROM applied_bindings WHERE profile_id='profile-del'", []).unwrap();
+        conn.execute("DELETE FROM native_profiles WHERE id='profile-del'", []).unwrap();
+        Ok(())
+    }).unwrap();
+    run(&a, &store, &registry, false).unwrap();
+    let received = run(&b, &store, &registry, false).unwrap();
+    assert!(received.conflicts.is_empty());
+    assert!(crate::native::profile::get_registered_profile(&b, "profile-del").is_err());
+    let bindings: i64 = b.with_connection(|conn| conn.query_row("SELECT count(*) FROM applied_bindings", [], |row| row.get(0)).map_err(|error| error.to_string())).unwrap();
+    assert_eq!(bindings, 0);
+    assert_eq!(body(&b).as_deref(), Some("stable"));
+    assert_eq!(std::fs::read_to_string(dir.join("keep.txt")).unwrap(), "disk-stays");
+    a.with_connection(|conn| {
+        conn.execute("DELETE FROM projects WHERE id='project-disk'", []).unwrap();
+        Ok(())
+    }).unwrap();
+    run(&a, &store, &registry, false).unwrap();
+    assert!(run(&b, &store, &registry, false).unwrap().conflicts.is_empty());
+    let projects: i64 = b.with_connection(|conn| conn.query_row("SELECT count(*) FROM projects WHERE id='project-disk'", [], |row| row.get(0)).map_err(|error| error.to_string())).unwrap();
+    assert_eq!(projects, 0);
+    assert_eq!(std::fs::read_to_string(dir.join("keep.txt")).unwrap(), "disk-stays");
+    let mut edited = profile.clone();
+    edited.id = "profile-edit".into();
+    edited.name = "Synced".into();
+    a.with_connection(|conn| {
+        conn.execute("INSERT INTO native_profiles (id,tool,version,data) VALUES ('profile-edit','codex',1,?1)", [serde_json::to_string(&edited).unwrap()]).unwrap();
+        Ok(())
+    }).unwrap();
+    run(&a, &store, &registry, false).unwrap();
+    run(&b, &store, &registry, false).unwrap();
+    edited.name = "local-edit".into();
+    b.with_connection(|conn| {
+        conn.execute("UPDATE native_profiles SET data=?1 WHERE id='profile-edit'", [serde_json::to_string(&edited).unwrap()]).unwrap();
+        Ok(())
+    }).unwrap();
+    a.with_connection(|conn| {
+        conn.execute("DELETE FROM native_profiles WHERE id='profile-edit'", []).unwrap();
+        conn.execute("DELETE FROM library_items WHERE id='library-1'", []).unwrap();
+        Ok(())
+    }).unwrap();
+    run(&a, &store, &registry, false).unwrap();
+    let conflicts = run(&b, &store, &registry, false).unwrap().conflicts;
+    assert!(conflicts.iter().any(|item| item.key == "profile:profile-edit" && item.remote_deleted));
+    assert_eq!(crate::native::profile::get_registered_profile(&b, "profile-edit").unwrap().name, "local-edit");
+    assert!(body(&b).is_none());
 }

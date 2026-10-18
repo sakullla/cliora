@@ -3,7 +3,7 @@ pub mod sync;
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -20,7 +20,7 @@ use crate::native::format::{self, FileKind};
 use crate::native::profile::{RegisteredCommon, RegisteredProfile};
 use crate::resources::mcp::McpDefinition;
 
-const SNAPSHOT_VERSION: u32 = 2;
+pub(crate) const SNAPSHOT_VERSION: u32 = 3;
 const MAX_ENTITIES: usize = 10_000;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -46,7 +46,48 @@ pub struct PortableProfile {
 pub struct PortableProject {
     pub id: String,
     pub name: String,
+    /// Absent on schema 1 and 2. Schema 3 keeps the source path text even when
+    /// that directory is not on this machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
     pub model_overrides: BTreeMap<String, String>,
+}
+
+/// Auth file bytes copied from `NativeContext.auth_files`. Paths are not a
+/// catalog of CLI ids; the receiver asks the account adapter for local paths.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PortableAuthFile {
+    pub context_id: String,
+    pub name: String,
+    pub contents: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PortableAccount {
+    pub account: crate::accounts::AuthAccount,
+    pub auth_files: Vec<PortableAuthFile>,
+}
+
+/// Which saved profile is active. Local apply bookkeeping stays out of the digest.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PortableBinding {
+    pub scope_key: String,
+    pub tool: String,
+    pub profile_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreBlocker {
+    pub key: String,
+    pub label: String,
+    pub action: String,
+    pub detail: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -77,6 +118,8 @@ pub enum PortablePayload {
     Library(LibraryItem),
     Mcp(PortableMcp),
     Skill(PortableSkill),
+    Account(PortableAccount),
+    Binding(PortableBinding),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -96,6 +139,8 @@ impl PortableEntity {
             PortablePayload::Library(_) => "library",
             PortablePayload::Mcp(_) => "mcp",
             PortablePayload::Skill(_) => "skill",
+            PortablePayload::Account(_) => "account",
+            PortablePayload::Binding(_) => "binding",
         }
     }
     pub fn key(&self) -> String {
@@ -111,6 +156,7 @@ impl PortableEntity {
             PortablePayload::Common(value) => value.revision.clear(),
             PortablePayload::Mcp(value) => value.pending_fields.clear(),
             PortablePayload::Skill(value) => value.pending_fields.clear(),
+            PortablePayload::Account(value) => normalize_account_digest(&mut value.account),
             _ => {}
         }
         let bytes = serde_json::to_vec(&normalized).map_err(|_| "无法核对迁移资料".to_string())?;
@@ -125,14 +171,21 @@ impl PortableEntity {
             PortablePayload::Library(value) => value.title.clone(),
             PortablePayload::Mcp(value) => value.definition.name.clone(),
             PortablePayload::Skill(value) => value.name.clone(),
+            PortablePayload::Account(value) => value.account.label.clone(),
+            PortablePayload::Binding(value) => format!("{} 活动配置", value.tool),
         }
     }
     pub fn pending_fields(&self) -> Vec<String> {
         match &self.payload {
             PortablePayload::Profile(value) => value.pending_fields.clone(),
-            PortablePayload::Project(_) => vec!["项目本机目录".into()],
+            PortablePayload::Project(value) if !value.path.as_deref().is_some_and(|path| Path::new(path).is_dir()) => {
+                vec!["项目本机目录".into()]
+            }
             PortablePayload::Mcp(value) => value.pending_fields.clone(),
             PortablePayload::Skill(value) => value.pending_fields.clone(),
+            PortablePayload::Account(value) if value.account.context.is_none() && value.account.state == crate::accounts::AccountState::SignedIn => {
+                vec!["登录材料需要在本机重新登录".into()]
+            }
             _ => Vec::new(),
         }
     }
@@ -393,8 +446,8 @@ fn collect_snapshot_on(
             "SELECT data FROM common_configs ORDER BY tool",
             |row| row.get::<_, String>(0),
         )?;
-        let projects = read_rows(conn, "SELECT id,name FROM projects ORDER BY id", |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        let projects = read_rows(conn, "SELECT id,name,path FROM projects ORDER BY id", |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?))
         })?;
         let models = read_rows(
             conn,
@@ -499,10 +552,15 @@ fn collect_snapshot_on(
             if export_connection_secret {
                 id.map(|id| store.get(&id)).transpose()?
             } else {
-                if id.is_some() {
+                if id.is_some()
+                    && !matches!(
+                        profile.authentication,
+                        crate::native::profile::ProfileAuthentication::OAuth { .. }
+                    )
+                {
                     profile.authentication =
                         crate::native::profile::ProfileAuthentication::RebindRequired;
-                    pending_fields.push("OAuth 账号需要在此设备重新绑定".into());
+                    pending_fields.push("连接密钥需要在此设备重新绑定".into());
                 }
                 None
             }
@@ -510,25 +568,20 @@ fn collect_snapshot_on(
             None
         };
         let mut native_secrets = BTreeMap::new();
-        if matches!(profile.authentication, crate::native::profile::ProfileAuthentication::OAuth { .. }) { profile.authentication=crate::native::profile::ProfileAuthentication::RebindRequired; pending_fields.push("OAuth 账号需要在此设备重新绑定".into()); }
         for (role, credentials) in std::mem::take(&mut profile.native_credentials) {
-            if role == "auth" || role == "local_auth" {
-                pending_fields.push(format!("{role} 本机登录凭据"));
-                continue;
-            }
             let mut values = BTreeMap::new();
             for (name, id) in credentials {
-                if name.to_ascii_lowercase().contains("oauth")
-                    || name.to_ascii_lowercase().contains("session")
-                {
-                    pending_fields.push(format!("{role}.{name} 本机登录凭据"));
-                } else if !export_connection_secret {
-                    pending_fields.push(format!("{role}.{name} 需要在此设备重新绑定"));
-                } else {
+                let login_material = role == "auth"
+                    || role == "local_auth"
+                    || name.to_ascii_lowercase().contains("oauth")
+                    || name.to_ascii_lowercase().contains("session");
+                if login_material || export_connection_secret {
                     values.insert(name, store.get(&id)?);
+                } else {
+                    pending_fields.push(format!("{role}.{name} 需要在此设备重新绑定"));
                 }
             }
-            if export_connection_secret || !values.is_empty() {
+            if !values.is_empty() {
                 native_secrets.insert(role, values);
             }
         }
@@ -561,12 +614,13 @@ fn collect_snapshot_on(
             .or_default()
             .insert(tool, model);
     }
-    for (id, name) in projects {
+    for (id, name, path) in projects {
         entities.push(PortableEntity {
             id: id.clone(),
             payload: PortablePayload::Project(PortableProject {
                 id: id.clone(),
                 name,
+                path,
                 model_overrides: project_models.remove(&id).unwrap_or_default(),
             }),
         });
@@ -644,6 +698,27 @@ fn collect_snapshot_on(
             }),
         });
     }
+    let accounts = read_rows(conn, "SELECT data FROM auth_accounts ORDER BY id", |row| row.get::<_, String>(0))?;
+    for text in accounts {
+        let account: crate::accounts::AuthAccount = serde_json::from_str(&text).map_err(|_| "账号格式错误")?;
+        let (account, auth_files) = portable_account(account);
+        entities.push(PortableEntity {
+            id: account.id.clone(),
+            payload: PortablePayload::Account(PortableAccount { account, auth_files }),
+        });
+    }
+    let bindings = read_rows(
+        conn,
+        "SELECT scope_key,tool,profile_id,context_id FROM applied_bindings WHERE scope_key='global' OR scope_key LIKE 'project:%' ORDER BY tool, scope_key",
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, Option<String>>(3)?)),
+    )?;
+    for (scope_key, tool, profile_id, context_id) in bindings {
+        let id = binding_id(&tool, &scope_key);
+        entities.push(PortableEntity {
+            id,
+            payload: PortablePayload::Binding(PortableBinding { scope_key, tool, profile_id, context_id }),
+        });
+    }
     if entities.len() > MAX_ENTITIES {
         return Err("可迁移资料超过 10000 项".into());
     }
@@ -654,7 +729,7 @@ fn collect_snapshot_on(
 }
 
 pub fn validate_snapshot(snapshot: &PortableSnapshot) -> Result<(), String> {
-    if !matches!(snapshot.schema_version, 1 | SNAPSHOT_VERSION) || snapshot.entities.len() > MAX_ENTITIES {
+    if !matches!(snapshot.schema_version, 1 | 2 | SNAPSHOT_VERSION) || snapshot.entities.len() > MAX_ENTITIES {
         return Err("配置包资料版本或数量不受支持".into());
     }
     let mut keys = HashSet::new();
@@ -682,8 +757,7 @@ pub fn validate_snapshot(snapshot: &PortableSnapshot) -> Result<(), String> {
                         .connection
                         .as_ref()
                         .is_none_or(|c| c.secret_ref.is_none())
-                    && value.profile.native_credentials.is_empty()
-                    && !matches!(value.profile.authentication, crate::native::profile::ProfileAuthentication::OAuth { .. }) => {}
+                    && value.profile.native_credentials.is_empty() => {}
             PortablePayload::Common(value) if value.tool == entity.id => {}
             PortablePayload::Project(value) if value.id == entity.id && value.name.len() <= 200 => {
             }
@@ -693,6 +767,17 @@ pub fn validate_snapshot(snapshot: &PortableSnapshot) -> Result<(), String> {
             PortablePayload::Skill(value) if value.id == entity.id => {
                 valid_skill_files(&value.files)?;
             }
+            PortablePayload::Account(value)
+                if snapshot.schema_version >= 3
+                    && value.account.id == entity.id
+                    && value.account.pending_login.is_none()
+                    && value.account.context.iter().chain(&value.account.retired_contexts).all(|ctx| ctx.history_roots.is_empty())
+                    && value.auth_files.iter().all(|file| valid_auth_name(&file.name) && STANDARD.decode(&file.contents).is_ok()) => {}
+            PortablePayload::Binding(value)
+                if snapshot.schema_version >= 3
+                    && entity.id == binding_id(&value.tool, &value.scope_key)
+                    && !value.profile_id.is_empty()
+                    && (value.scope_key == "global" || value.scope_key.starts_with("project:")) => {}
             _ => return Err("配置包包含无效资料".into()),
         }
     }
@@ -817,6 +902,11 @@ fn preview_content(entity: &PortableEntity) -> Result<String, String> {
             }
         }
     }
+    if let PortablePayload::Account(account) = &mut safe.payload {
+        for file in &mut account.auth_files {
+            file.contents = "<已设置，内容隐藏>".into();
+        }
+    }
     if let PortablePayload::Skill(skill) = &mut safe.payload {
         for encoded in skill.files.values_mut() {
             let bytes = STANDARD
@@ -854,6 +944,9 @@ pub fn apply_import(
     let mut imported = 0;
     let mut created_secrets: Vec<String> = Vec::new();
     let mut prepared = Vec::new();
+    let mut account_rows: BTreeMap<String, String> = BTreeMap::new();
+    let mut issues = Vec::new();
+    let roots = restore_roots(db);
     for entity in &draft.snapshot.entities {
         if !selected.contains(&entity.key())
             || draft.baseline.get(&entity.key()) == Some(&Some(entity.digest()?))
@@ -901,8 +994,13 @@ pub fn apply_import(
                 }
             }
         }
+        if let PortablePayload::Account(portable) = &entity.payload {
+            let stored = account_without_context(&portable.account);
+            account_rows.insert(entity.id.clone(), serde_json::to_string(&stored).map_err(|error| error.to_string())?);
+        }
         prepared.push(entity);
     }
+    let touched: BTreeSet<String> = prepared.iter().map(PortableEntity::key).collect();
     let result = db.with_connection(|conn| {
         let tx = conn.transaction().map_err(|error| error.to_string())?;
         let current: BTreeMap<_, _> = collect_snapshot_on(&tx, store, registry)?
@@ -923,8 +1021,13 @@ pub fn apply_import(
                     tx.execute("INSERT INTO app_settings (key,value) VALUES ('preferences',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[json]).map_err(|error| error.to_string())?;
                 }
                 PortablePayload::Project(value) => {
-                    tx.execute("INSERT INTO projects (id,name,path,preferred_tool,last_opened) VALUES (?1,?2,NULL,NULL,0) ON CONFLICT(id) DO UPDATE SET name=excluded.name",
-                        params![value.id,value.name]).map_err(|error| error.to_string())?;
+                    if draft.snapshot.schema_version >= 3 {
+                        tx.execute("INSERT INTO projects (id,name,path,preferred_tool,last_opened) VALUES (?1,?2,?3,NULL,0) ON CONFLICT(id) DO UPDATE SET name=excluded.name, path=excluded.path",
+                            params![value.id, value.name, value.path]).map_err(|error| error.to_string())?;
+                    } else {
+                        tx.execute("INSERT INTO projects (id,name,path,preferred_tool,last_opened) VALUES (?1,?2,NULL,NULL,0) ON CONFLICT(id) DO UPDATE SET name=excluded.name",
+                            params![value.id,value.name]).map_err(|error| error.to_string())?;
+                    }
                     tx.execute("DELETE FROM project_tool_models WHERE project_id=?1",[&value.id]).map_err(|error| error.to_string())?;
                     for (tool,model) in &value.model_overrides {
                         tx.execute("INSERT INTO project_tool_models (project_id,tool,model) VALUES (?1,?2,?3)",params![value.id,tool,model]).map_err(|error| error.to_string())?;
@@ -965,6 +1068,18 @@ pub fn apply_import(
                         ON CONFLICT(id) DO UPDATE SET name=excluded.name,description=excluded.description,source=excluded.source,digest=excluded.digest,files_json=excluded.files_json,updated_at=excluded.updated_at",
                         params![value.id,value.name,value.description,value.digest,serde_json::to_string(&value.files).map_err(|error| error.to_string())?]).map_err(|error| error.to_string())?;
                 }
+                PortablePayload::Account(value) => {
+                    let json = account_rows.get(&entity.id).cloned().ok_or("账号资料未准备好")?;
+                    tx.execute("INSERT INTO auth_accounts (id,tool,version,data) VALUES (?1,?2,1,?3) ON CONFLICT(id) DO UPDATE SET tool=excluded.tool, version=auth_accounts.version+1, data=excluded.data",
+                        params![value.account.id, value.account.tool_id, json]).map_err(|error| error.to_string())?;
+                    remember_outbox(&tx, &entity.key())?;
+                }
+                PortablePayload::Binding(value) => {
+                    tx.execute("INSERT INTO applied_bindings (scope_key,tool,profile_id,profile_version,managed,context_id) VALUES (?1,?2,?3,-1,'{}',?4)
+                        ON CONFLICT(scope_key, tool) DO UPDATE SET profile_id=excluded.profile_id, profile_version=-1, managed='{}', context_id=excluded.context_id",
+                        params![value.scope_key, value.tool, value.profile_id, value.context_id]).map_err(|error| error.to_string())?;
+                    remember_outbox(&tx, &entity.key())?;
+                }
             }
         }
         tx.commit().map_err(|error| error.to_string())
@@ -973,6 +1088,30 @@ pub fn apply_import(
         for id in created_secrets {
             let _ = store.delete(&id);
         }
+        return Err(error);
+    }
+    if let Some((home, base)) = roots {
+        for entity in &prepared {
+            let PortablePayload::Account(portable) = &entity.payload else { continue };
+            let (stored, _, account_issues) = place_account(db, portable, registry, &base);
+            issues.extend(account_issues);
+            let key = format!("account:{}", stored.id);
+            let label = stored.label.clone();
+            match serde_json::to_string(&stored) {
+                Ok(saved) => {
+                    if let Err(error) = db.with_connection(|conn| {
+                        conn.execute("UPDATE auth_accounts SET version=version+1, data=?1 WHERE id=?2", params![saved, stored.id])
+                            .map(|_| ()).map_err(|error| error.to_string())
+                    }) {
+                        issues.push(RestoreBlocker { key, label, action: "retry".into(), detail: error });
+                    }
+                }
+                Err(error) => issues.push(RestoreBlocker { key, label, action: "retry".into(), detail: error.to_string() }),
+            }
+        }
+        issues.extend(apply_active_bindings(db, store, registry, &home, &touched));
+    }
+    if let Err(error) = store_blockers(db, &touched, &issues) {
         return Err(error);
     }
     imported += prepared.len();
@@ -994,6 +1133,8 @@ pub fn with_change_notification<T, E>(db: &Database, notify: impl FnOnce(), acti
                 "SELECT json_array(id,kind,title,body,category,project_id,version,updated_at) FROM library_items ORDER BY id",
                 "SELECT data_json FROM mcp_definitions ORDER BY id",
                 "SELECT json_array(id,name,description,digest,files_json) FROM skill_packages ORDER BY id",
+                "SELECT data FROM auth_accounts ORDER BY id",
+                "SELECT json_array(scope_key,tool,profile_id,context_id) FROM applied_bindings WHERE scope_key='global' OR scope_key LIKE 'project:%' ORDER BY tool, scope_key",
             ] {
                 digest.update(sql.as_bytes());
                 for row in read_rows(conn, sql, |row| row.get::<_, String>(0))? {
@@ -1011,6 +1152,349 @@ pub fn with_change_notification<T, E>(db: &Database, notify: impl FnOnce(), acti
         notify();
     }
     result
+}
+
+fn remember_outbox(conn: &Connection, key: &str) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO sync_outbox (id,entity_key,object_json,created_at) VALUES (?1,?1,hex(randomblob(16)),strftime('%s','now')) ON CONFLICT(id) DO UPDATE SET object_json=excluded.object_json, created_at=excluded.created_at",
+        [key],
+    )
+    .map(|_| ())
+    .map_err(|error| error.to_string())
+}
+
+pub(crate) fn binding_id(tool: &str, scope_key: &str) -> String {
+    let raw = format!("{tool}\u{1f}{scope_key}");
+    if raw.len() <= 200 {
+        raw
+    } else {
+        format!("{:x}", Sha256::digest(raw.as_bytes()))
+    }
+}
+
+fn valid_auth_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.contains(':')
+        && Path::new(name).components().all(|part| matches!(part, Component::Normal(_)))
+}
+
+fn normalize_account_digest(account: &mut crate::accounts::AuthAccount) {
+    account.pending_login = None;
+    account.version = 0;
+    account.checked_at = None;
+    let contexts = account.context.iter_mut().chain(account.retired_contexts.iter_mut());
+    for context in contexts {
+        context.history_roots.clear();
+        context.root.clear();
+        context.config_root.clear();
+        context.resource_root.clear();
+        context.environment.clear();
+        context.cli_args.clear();
+        context.remove_environment.clear();
+        context.auth_files = context.auth_files.iter().filter_map(|path| path.file_name().map(PathBuf::from)).collect();
+        context.auth_files.sort();
+        context.auth_files.dedup();
+    }
+}
+
+fn portable_account(mut account: crate::accounts::AuthAccount) -> (crate::accounts::AuthAccount, Vec<PortableAuthFile>) {
+    account.pending_login = None;
+    let mut auth_files = Vec::new();
+    let contexts = account.context.iter_mut().chain(account.retired_contexts.iter_mut());
+    for context in contexts {
+        for path in &context.auth_files {
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else { continue };
+            if !valid_auth_name(name) { continue; }
+            let Ok(bytes) = fs::read(path) else { continue };
+            if bytes.len() > 4 * 1024 * 1024 { continue; }
+            auth_files.push(PortableAuthFile { context_id: context.id.clone(), name: name.to_owned(), contents: STANDARD.encode(bytes) });
+        }
+    }
+    auth_files.sort_by(|left, right| (&left.context_id, &left.name).cmp(&(&right.context_id, &right.name)));
+    auth_files.dedup_by(|left, right| left.context_id == right.context_id && left.name == right.name);
+    normalize_account_digest(&mut account);
+    (account, auth_files)
+}
+
+fn account_without_context(account: &crate::accounts::AuthAccount) -> crate::accounts::AuthAccount {
+    let mut account = account.clone();
+    account.pending_login = None;
+    account.context = None;
+    account.retired_contexts.clear();
+    account.version = 1;
+    account
+}
+
+fn login_executable(db: &Database, registry: &Registry, tool: &str) -> Option<PathBuf> {
+    if let Some(path) = tool_choice(db, tool) {
+        return Some(path);
+    }
+    #[cfg(not(test))]
+    {
+        return installed_tool(registry, tool);
+    }
+    #[cfg(test)]
+    {
+        let _ = registry;
+        None
+    }
+}
+
+fn place_account(
+    db: &Database,
+    portable: &PortableAccount,
+    registry: &Registry,
+    base: &Path,
+) -> (crate::accounts::AuthAccount, Vec<PathBuf>, Vec<RestoreBlocker>) {
+    let mut account = portable.account.clone();
+    account.pending_login = None;
+    account.version = 1;
+    let mut written = Vec::new();
+    let mut issues = Vec::new();
+    let sources: Vec<_> = account.context.iter().cloned().chain(account.retired_contexts.iter().cloned()).collect();
+    let retired_ids: BTreeSet<_> = account.retired_contexts.iter().map(|context| context.id.clone()).collect();
+    let primary_id = account.context.as_ref().map(|context| context.id.clone());
+    let mut placed = Vec::new();
+    for source in sources {
+        let root = base.join("accounts").join(&source.id);
+        let local = match crate::accounts::context::context_at_registered(registry, root, &account.tool_id, source.id.clone()) {
+            Ok(local) => local,
+            Err(error) => {
+                issues.push(RestoreBlocker {
+                    key: format!("account:{}", account.id),
+                    label: account.label.clone(),
+                    action: "relogin".into(),
+                    detail: error,
+                });
+                continue;
+            }
+        };
+        for path in &local.auth_files {
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else { continue };
+            let Some(file) = portable.auth_files.iter().find(|file| file.context_id == source.id && file.name == name) else { continue };
+            match STANDARD.decode(&file.contents) {
+                Ok(bytes) => {
+                    if let Some(parent) = path.parent() {
+                        if fs::create_dir_all(parent).is_err() {
+                            issues.push(RestoreBlocker { key: format!("account:{}", account.id), label: account.label.clone(), action: "relogin".into(), detail: format!("无法创建认证目录 {}", parent.display()) });
+                            continue;
+                        }
+                    }
+                    if let Err(error) = fs::write(path, &bytes) {
+                        issues.push(RestoreBlocker { key: format!("account:{}", account.id), label: account.label.clone(), action: "relogin".into(), detail: format!("无法写入认证文件：{error}") });
+                    } else {
+                        written.push(path.clone());
+                    }
+                }
+                Err(_) => issues.push(RestoreBlocker { key: format!("account:{}", account.id), label: account.label.clone(), action: "relogin".into(), detail: format!("认证文件 {name} 损坏") }),
+            }
+        }
+        placed.push(local);
+    }
+    account.context = primary_id.as_ref().and_then(|id| placed.iter().find(|context| &context.id == id).cloned());
+    account.retired_contexts = placed.into_iter().filter(|context| retired_ids.contains(&context.id)).collect();
+    if account.state == crate::accounts::AccountState::SignedIn {
+        if let Some(context) = &account.context {
+            if let Some(executable) = login_executable(db, registry, &account.tool_id) {
+                if executable.is_file() {
+                    match crate::accounts::native::observe(&executable, context) {
+                        Ok(observation) if observation.state == crate::accounts::AccountState::SignedIn => {}
+                        Ok(observation) => issues.push(RestoreBlocker {
+                            key: format!("account:{}", account.id),
+                            label: account.label.clone(),
+                            action: "relogin".into(),
+                            detail: observation.detail.unwrap_or_else(|| "登录被拒绝，材料已保留，需要重新登录".into()),
+                        }),
+                        Err(error) => issues.push(RestoreBlocker {
+                            key: format!("account:{}", account.id),
+                            label: account.label.clone(),
+                            action: "relogin".into(),
+                            detail: format!("登录未被接受，材料已保留：{error}"),
+                        }),
+                    }
+                }
+            }
+        }
+    }
+    (account, written, issues)
+}
+
+#[cfg(not(test))]
+fn installed_tool(registry: &Registry, tool: &str) -> Option<PathBuf> {
+    let probe = crate::native::adapter::probe_registered(registry, tool, None, Path::new("."), None, crate::native::adapter::Scope::Global).ok()?;
+    probe.selected_path.map(PathBuf::from)
+}
+
+fn tool_choice(db: &Database, tool: &str) -> Option<PathBuf> {
+    db.with_connection(|conn| {
+        conn.query_row("SELECT path FROM installation_choices WHERE tool=?1", [tool], |row| row.get::<_, String>(0))
+            .optional()
+            .map_err(|error| error.to_string())
+    }).ok().flatten().map(PathBuf::from)
+}
+
+fn apply_active_bindings(
+    db: &Database,
+    store: &dyn CredentialStore,
+    registry: &Registry,
+    home: &Path,
+    touched: &BTreeSet<String>,
+) -> Vec<RestoreBlocker> {
+    let relevant = touched.iter().any(|key| {
+        key.starts_with("profile:") || key.starts_with("binding:") || key.starts_with("common:") || key.starts_with("project:") || key.starts_with("account:")
+    });
+    if !relevant {
+        return Vec::new();
+    }
+    let (project_paths, account_tools) = db.with_connection(|conn| {
+        let projects = read_rows(conn, "SELECT id,path FROM projects WHERE path IS NOT NULL", |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
+        let accounts = read_rows(conn, "SELECT id,tool FROM auth_accounts", |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
+        Ok::<_, String>((projects, accounts))
+    }).unwrap_or_default();
+    let project_paths: BTreeSet<String> = project_paths.into_iter()
+        .filter(|(id, _)| touched.contains(&format!("project:{id}")))
+        .map(|(_, path)| path)
+        .collect();
+    let account_tools: BTreeSet<String> = account_tools.into_iter()
+        .filter(|(id, _)| touched.contains(&format!("account:{id}")))
+        .map(|(_, tool)| tool)
+        .collect();
+    let rows = db.with_connection(|conn| {
+        read_rows(conn, "SELECT scope_key,tool,profile_id FROM applied_bindings WHERE scope_key='global' OR scope_key LIKE 'project:%' ORDER BY tool, scope_key",
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)))
+    }).unwrap_or_default();
+    let mut issues = Vec::new();
+    for (scope_key, tool, profile_id) in rows {
+        let binding_key = format!("binding:{}", binding_id(&tool, &scope_key));
+        let profile_key = format!("profile:{profile_id}");
+        let common_key = format!("common:{tool}");
+        let selected = touched.contains(&binding_key)
+            || touched.contains(&profile_key)
+            || touched.contains(&common_key)
+            || scope_key.strip_prefix("project:").is_some_and(|path| project_paths.contains(path))
+            || account_tools.contains(&tool);
+        if !selected {
+            continue;
+        }
+        let label = format!("{tool} 活动配置");
+        let scope = if scope_key == "global" {
+            Ok((crate::native::adapter::Scope::Global, None))
+        } else if let Some(path) = scope_key.strip_prefix("project:") {
+            let path = PathBuf::from(path);
+            if path.is_dir() { Ok((crate::native::adapter::Scope::Project, Some(path))) } else { Err(format!("目录不存在：{}", path.display())) }
+        } else {
+            Err("不支持的活动范围".into())
+        };
+        let result = scope.and_then(|(scope, project)| {
+            let custom = tool_choice(db, &tool);
+            crate::native::apply::apply_registered_profile(registry, db, store, &tool, &profile_id, scope, home, project.as_deref(), custom.as_deref(), true)
+                .map(|_| ())
+        });
+        if let Err(error) = result {
+            let action = if error.contains("目录") { "relink" } else if error.contains("未发现") || error.contains("未注册") || error.contains("不能探测") { "install" } else { "retry" };
+            issues.push(RestoreBlocker { key: binding_key, label, action: action.into(), detail: error });
+        }
+    }
+    issues
+}
+
+pub(crate) fn load_blockers(db: &Database) -> Result<Vec<RestoreBlocker>, String> {
+    db.with_connection(|conn| {
+        let value: Option<String> = conn.query_row("SELECT value FROM app_settings WHERE key='sync_blockers'", [], |row| row.get(0))
+            .optional().map_err(|error| error.to_string())?;
+        value.map(|text| serde_json::from_str(&text).map_err(|_| "同步阻塞记录损坏".to_string())).transpose().map(|items| items.unwrap_or_default())
+    })
+}
+
+fn store_blockers(db: &Database, touched: &BTreeSet<String>, issues: &[RestoreBlocker]) -> Result<(), String> {
+    let mut current = load_blockers(db)?;
+    current.retain(|item| !touched.contains(&item.key) && !issues.iter().any(|issue| issue.key == item.key));
+    current.extend(issues.iter().cloned());
+    db.with_connection(|conn| {
+        conn.execute("INSERT INTO app_settings (key,value) VALUES ('sync_blockers',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            [serde_json::to_string(&current).map_err(|error| error.to_string())?]).map(|_| ()).map_err(|error| error.to_string())
+    })
+}
+
+/// Remove one active binding from the native file after the database row is gone.
+/// Failure is reported and does not restore the deleted row.
+pub(crate) fn release_native_binding(
+    db: &Database,
+    registry: &Registry,
+    tool: &str,
+    scope_key: &str,
+    managed_json: &str,
+) -> Result<(), String> {
+    let Some((home, _)) = restore_roots(db) else { return Ok(()) };
+    let (scope, project) = if scope_key == "global" {
+        (crate::native::adapter::Scope::Global, None)
+    } else if let Some(path) = scope_key.strip_prefix("project:") {
+        let path = PathBuf::from(path);
+        if !path.is_dir() {
+            return Err(format!("目录不存在：{}", path.display()));
+        }
+        (crate::native::adapter::Scope::Project, Some(path))
+    } else {
+        return Ok(());
+    };
+    let probe = crate::native::adapter::probe_registered(registry, tool, tool_choice(db, tool).as_deref(), &home, project.as_deref(), scope)?;
+    if probe.native_writes.state != "supported" {
+        return Err(probe.native_writes.reason.into());
+    }
+    let managed: BTreeMap<String, BTreeMap<String, serde_json::Value>> = serde_json::from_str(managed_json).unwrap_or_default();
+    for file in &probe.native_files {
+        let Some(fields) = managed.get(file.role) else { continue };
+        if !file.writable || !Path::new(&file.path).is_file() { continue; }
+        let kind = match file.format { "toml" => FileKind::Toml, "yaml" => FileKind::Yaml, "jsonc" => FileKind::Jsonc, _ => FileKind::Json };
+        let mut text = fs::read_to_string(&file.path).map_err(|error| error.to_string())?;
+        for pointer in fields.keys() {
+            let path = pointer_path(pointer);
+            if path.is_empty() { continue; }
+            text = format::set_path(kind, &text, &path, None)?;
+        }
+        fs::write(&file.path, text).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn pointer_path(pointer: &str) -> Vec<String> {
+    pointer.split('/').skip(1).map(|segment| segment.replace("~1", "/").replace("~0", "~")).filter(|segment| !segment.is_empty()).collect()
+}
+
+pub(crate) fn record_blocker(db: &Database, blocker: RestoreBlocker) {
+    let mut current = load_blockers(db).unwrap_or_default();
+    current.retain(|item| item.key != blocker.key);
+    current.push(blocker);
+    let _ = db.with_connection(|conn| {
+        conn.execute("INSERT INTO app_settings (key,value) VALUES ('sync_blockers',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            [serde_json::to_string(&current).unwrap_or_else(|_| "[]".into())]).map(|_| ()).map_err(|error| error.to_string())
+    });
+}
+
+#[cfg(test)]
+thread_local! {
+    static RESTORE_ROOTS: std::cell::RefCell<Option<(PathBuf, PathBuf)>> = const { std::cell::RefCell::new(None) };
+}
+
+fn restore_roots(db: &Database) -> Option<(PathBuf, PathBuf)> {
+    #[cfg(test)]
+    {
+        let _ = db;
+        return RESTORE_ROOTS.with(|cell| cell.borrow().clone());
+    }
+    #[cfg(not(test))]
+    {
+        let home = dirs::home_dir()?;
+        let base = db.with_connection(|conn| Ok(conn.path().and_then(|path| Path::new(path).parent().map(Path::to_path_buf)))).ok().flatten()?;
+        Some((home, base))
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn set_restore_roots_for_test(roots: Option<(PathBuf, PathBuf)>) {
+    RESTORE_ROOTS.with(|cell| *cell.borrow_mut() = roots);
 }
 
 #[cfg(test)]
