@@ -287,7 +287,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
 
   // The head button and the empty-state entry share one handler so both open the same add flow.
   function openAdding() { setAdding(true); setSyncLibrary(false); setExternal(null); setGuide(true); }
-  const head = <div className={styles.workspaceHead}><div><h2>Skill</h2><p>{t('tools.skills.description')}</p></div><button type="button" className={styles.primary} disabled={busy || (scope === 'project' && !project)} onClick={openAdding}><Icon name="plus" size={14} strokeWidth={2.2} />{t('tools.skills.add')}</button></div>;
+  const head = <div className={styles.workspaceHead}><div><h2>Skill</h2><p>{t('tools.skills.description')}</p></div><button type="button" className={styles.primary} disabled={busy || (scope === 'project' && !project)} onClick={openAdding}><Icon name="plus" size={14} />{t('tools.skills.add')}</button></div>;
 
   if (empty) {
     return <section className={styles.workspaceSection} aria-label="Skill">
@@ -295,7 +295,7 @@ export function SkillsWorkspace({ toolId, scope, projectPath, contextId, onDirty
       {recovery}
       {listLoading
         ? <div role="status" aria-label={t('tools.skills.listLoading')}><SkeletonRows count={3} /></div>
-        : <div className={styles.emptyState}><Icon name="sparkle" size={26} strokeWidth={1.4} /><strong>{t('tools.skills.emptyTitle')}</strong><p>{t('tools.skills.emptyDetail')}</p>{scanError && <p className={styles.error} role="status">{t('tools.skills.scanFailed', { detail: scanError })}</p>}{scope === 'project' && !project && <p className={styles.muted}>{t('tools.mcp.pickProjectFirst')}</p>}<button type="button" className={styles.primary} disabled={busy || (scope === 'project' && !project)} onClick={openAdding}><Icon name="plus" size={14} strokeWidth={2.2} />{t('tools.skills.add')}</button></div>}
+        : <div className={styles.emptyState}><Icon name="sparkle" size={24} /><strong>{t('tools.skills.emptyTitle')}</strong><p>{t('tools.skills.emptyDetail')}</p>{scanError && <p className={styles.error} role="status">{t('tools.skills.scanFailed', { detail: scanError })}</p>}{scope === 'project' && !project && <p className={styles.muted}>{t('tools.mcp.pickProjectFirst')}</p>}<button type="button" className={styles.primary} disabled={busy || (scope === 'project' && !project)} onClick={openAdding}><Icon name="plus" size={14} />{t('tools.skills.add')}</button></div>}
     </section>;
   }
 

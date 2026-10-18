@@ -144,7 +144,7 @@ function ThemeChoice({ value, disabled, onChange }: { value: Theme; disabled: bo
   return <div className="theme-choice" role="radiogroup" aria-label={t('settings.theme.label')}>{themeOrder.map((id, index) => <button key={id} ref={(element) => { refs.current[index] = element; }} type="button" role="radio" aria-checked={value === id} tabIndex={value === id ? 0 : -1} disabled={disabled} onClick={() => onChange(id)} onKeyDown={(event) => {
     if (event.key === 'ArrowRight' || event.key === 'ArrowDown') { event.preventDefault(); move(index, 1); }
     if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') { event.preventDefault(); move(index, -1); }
-  }}><Icon name={themeGlyphs[id]} size={15} />{t(`settings.theme.${id}`)}</button>)}</div>;
+  }}><Icon name={themeGlyphs[id]} size={16} />{t(`settings.theme.${id}`)}</button>)}</div>;
 }
 
 function LanguageChoice({ value, disabled }: { value: AppLanguage; disabled: boolean }) {

@@ -221,8 +221,8 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
               </span>
             </div>
             <div className={styles.iconActions}>
-              <button type="button" aria-label={t('library.resources.duplicate')} title={t('library.resources.duplicate')} disabled={busy} onClick={() => void duplicateMcp(item)}><Icon name="copy" size={15} /></button>
-              <button type="button" className={styles.danger} aria-label={t('tools.agents.delete')} title={t('tools.agents.delete')} disabled={busy} onClick={() => void remove(item)}><Icon name="trash" size={15} /></button>
+              <button type="button" aria-label={t('library.resources.duplicate')} title={t('library.resources.duplicate')} disabled={busy} onClick={() => void duplicateMcp(item)}><Icon name="copy" size={16} /></button>
+              <button type="button" className={styles.danger} aria-label={t('tools.agents.delete')} title={t('tools.agents.delete')} disabled={busy} onClick={() => void remove(item)}><Icon name="trash" size={16} /></button>
             </div>
           </div>
           <code className={styles.command} title={summary}>{summary || (item.transport === 'http' ? t('library.resources.noUrl') : t('library.resources.noCommand'))}</code>
@@ -232,17 +232,17 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
               if (!place.enabled) return { pressed: true, state: 'unavailable', status: t('library.resources.markDisabled') };
               return { pressed: true, state: 'current', status: t('library.page.markCurrent') };
             }} />
-            <button type="button" className={styles.editButton} onClick={() => editMcp(item)}><Icon name="pencil" size={13} />{t('library.resources.edit')}</button>
+            <button type="button" className={styles.editButton} onClick={() => editMcp(item)}><Icon name="pencil" size={14} />{t('library.resources.edit')}</button>
           </div>
         </article>;
       }) : needle
-        ? <div className={styles.empty}><Icon name="search" size={28} strokeWidth={1.3} />{t('library.resources.noMcpMatch', { query: search.trim() })}</div>
+        ? <div className={styles.empty}><Icon name="search" size={24} />{t('library.resources.noMcpMatch', { query: search.trim() })}</div>
         : loaded ? <div className={styles.empty}>
-          <span className={styles.emptyIcon}><Icon name="connections" size={22} strokeWidth={1.5} /></span>
+          <span className={styles.emptyIcon}><Icon name="connections" size={24} /></span>
           <strong>{t('library.resources.emptyMcpTitle')}</strong>
           {t('library.resources.emptyMcpDetail')}
           <div className={styles.emptyActions}>
-            <button type="button" className={styles.primary} onClick={() => editMcp()}><Icon name="plus" size={14} strokeWidth={2.2} />{t('library.resources.emptyMcpCreate')}</button>
+            <button type="button" className={styles.primary} onClick={() => editMcp()}><Icon name="plus" size={14} />{t('library.resources.emptyMcpCreate')}</button>
             <button type="button" onClick={() => editMcp(undefined, true)}><Icon name="clipboard" size={14} />{t('library.resources.pasteCreate')}</button>
           </div>
         </div> : null}

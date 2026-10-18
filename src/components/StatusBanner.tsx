@@ -18,9 +18,9 @@ export function StatusBanner({ tone, children, onDismiss, autoDismissMs, action 
     return () => window.clearTimeout(timer);
   }, [message, autoDismissMs]);
   return <div className="status-banner" data-tone={tone}>
-    <span className="banner-icon"><Icon name={tone === 'success' ? 'check' : tone === 'warning' ? 'info' : 'alert'} size={15} strokeWidth={2} /></span>
+    <span className="banner-icon"><Icon name={tone === 'success' ? 'check' : tone === 'warning' ? 'info' : 'alert'} size={16} /></span>
     <p role={tone === 'error' ? 'alert' : 'status'}>{children}</p>
     {action}
-    {onDismiss && <button type="button" className="status-banner-close" aria-label={t('common.dismiss')} onClick={onDismiss}><Icon name="close" size={13} strokeWidth={2} /></button>}
+    {onDismiss && <button type="button" className="status-banner-close" aria-label={t('common.dismiss')} onClick={onDismiss}><Icon name="close" size={14} /></button>}
   </div>;
 }

@@ -16,7 +16,7 @@ function CopyText({ value, label, children }: { value: string; label: string; ch
   }, [result]);
   return <button type="button" title={label} aria-label={result || label} className={children ? styles.link : styles.codeCopy}
     onClick={() => void writeClipboard(value).then((ok) => setResult(ok ? t('home.launcher.copied') : t('records.markdown.failed')))}>
-    {children ?? <><Icon name={result === t('home.launcher.copied') ? 'check' : 'copy'} size={13} />{result || t('records.markdown.copyCode')}</>}
+    {children ?? <><Icon name={result === t('home.launcher.copied') ? 'check' : 'copy'} size={14} />{result || t('records.markdown.copyCode')}</>}
     {children && result && <span role="status">{t('records.markdown.result', { result })}</span>}
   </button>;
 }
@@ -26,7 +26,7 @@ export default function MessageMarkdown({ text }: { text: string }) {
   return <Markdown remarkPlugins={[remarkGfm]} skipHtml components={{
     // Historical messages are read locally; remote images never load implicitly.
     img: ({ alt }) => <span className={styles.imageNote}>{t('records.markdown.image', { alt: alt || t('records.markdown.noAlt') })}</span>,
-    a: ({ href, children }) => href ? <CopyText value={href} label={t('records.markdown.link', { href })}>{children} <Icon name="copy" size={11} /></CopyText> : <span>{children}</span>,
+    a: ({ href, children }) => href ? <CopyText value={href} label={t('records.markdown.link', { href })}>{children} <Icon name="copy" size={12} /></CopyText> : <span>{children}</span>,
     pre: ({ children, node }) => {
       const code = node?.children.find((item) => item.type === 'element' && item.tagName === 'code');
       const value = code?.type === 'element' ? code.children.filter((item) => item.type === 'text').map((item) => item.value).join('') : '';

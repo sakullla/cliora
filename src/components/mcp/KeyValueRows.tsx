@@ -86,7 +86,7 @@ export function KeyValueRows({ label, rows, onChange, single = false, maskSensit
   return <div className={styles.rowsField} role="group" aria-label={label}>
     <div className={styles.rowsHead}>
       <span className={styles.rowsLabel}>{label}{filled > 0 && <span className={styles.count} aria-hidden="true">{filled}</span>}</span>
-      <button type="button" className={styles.add} disabled={disabled} onClick={addRow}><Icon name="plus" size={12} strokeWidth={2.2} />{t('tools.mcp.rowAdd')}</button>
+      <button type="button" className={styles.add} disabled={disabled} onClick={addRow}><Icon name="plus" size={12} />{t('tools.mcp.rowAdd')}</button>
     </div>
     <div className={styles.rows} ref={list}>
       {rows.map((row, index) => {
@@ -96,12 +96,12 @@ export function KeyValueRows({ label, rows, onChange, single = false, maskSensit
           {!single && <input aria-label={t('tools.mcp.rowKey', { label, index: index + 1 })} aria-invalid={duplicates.includes(row.key.trim()) && !!row.key.trim() || undefined} value={row.key} placeholder={keyPlaceholder} disabled={disabled} spellCheck={false} autoComplete="off" onChange={(event) => update(index, { ...row, key: event.target.value })} onPaste={(event) => paste(index, event)} />}
           <span className={styles.value} data-secret={secret(row) || undefined}>
             <input aria-label={single ? t('tools.mcp.rowSingle', { label, index: index + 1 }) : t('tools.mcp.rowValue', { label, index: index + 1 })} data-masked={hidden || undefined} value={row.value} placeholder={valuePlaceholder} disabled={disabled} spellCheck={false} autoComplete="off" onChange={(event) => update(index, { ...row, value: event.target.value })} onPaste={(event) => paste(index, event)} />
-            {secret(row) && <button type="button" className={styles.reveal} aria-label={hidden ? t('tools.mcp.rowReveal', { index: index + 1 }) : t('tools.mcp.rowHide', { index: index + 1 })} title={hidden ? t('tools.mcp.rowReveal', { index: index + 1 }) : t('tools.mcp.rowHide', { index: index + 1 })} aria-pressed={!hidden} onClick={() => toggleReveal(index)}><Icon name={hidden ? 'eye' : 'eyeOff'} size={13} /></button>}
+            {secret(row) && <button type="button" className={styles.reveal} aria-label={hidden ? t('tools.mcp.rowReveal', { index: index + 1 }) : t('tools.mcp.rowHide', { index: index + 1 })} title={hidden ? t('tools.mcp.rowReveal', { index: index + 1 }) : t('tools.mcp.rowHide', { index: index + 1 })} aria-pressed={!hidden} onClick={() => toggleReveal(index)}><Icon name={hidden ? 'eye' : 'eyeOff'} size={14} /></button>}
           </span>
           <span className={styles.rowOps}>
-            <button type="button" aria-label={t('tools.mcp.rowUp', { index: index + 1 })} title={t('tools.mcp.rowUp', { index: index + 1 })} disabled={disabled || index === 0} onClick={() => move(index, -1)}><span className={styles.up}><Icon name="arrowDown" size={13} /></span></button>
-            <button type="button" aria-label={t('tools.mcp.rowDown', { index: index + 1 })} title={t('tools.mcp.rowDown', { index: index + 1 })} disabled={disabled || index === rows.length - 1} onClick={() => move(index, 1)}><Icon name="arrowDown" size={13} /></button>
-            <button type="button" className={styles.remove} aria-label={t('tools.mcp.rowRemove', { index: index + 1 })} title={t('tools.mcp.rowRemove', { index: index + 1 })} disabled={disabled} onClick={() => removeRow(index)}><Icon name="close" size={13} /></button>
+            <button type="button" aria-label={t('tools.mcp.rowUp', { index: index + 1 })} title={t('tools.mcp.rowUp', { index: index + 1 })} disabled={disabled || index === 0} onClick={() => move(index, -1)}><span className={styles.up}><Icon name="arrowDown" size={14} /></span></button>
+            <button type="button" aria-label={t('tools.mcp.rowDown', { index: index + 1 })} title={t('tools.mcp.rowDown', { index: index + 1 })} disabled={disabled || index === rows.length - 1} onClick={() => move(index, 1)}><Icon name="arrowDown" size={14} /></button>
+            <button type="button" className={styles.remove} aria-label={t('tools.mcp.rowRemove', { index: index + 1 })} title={t('tools.mcp.rowRemove', { index: index + 1 })} disabled={disabled} onClick={() => removeRow(index)}><Icon name="close" size={14} /></button>
           </span>
         </div>;
       })}

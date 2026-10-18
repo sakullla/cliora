@@ -25,11 +25,11 @@ export function OnboardingCard({ doneTools, doneConfig, doneLaunch, onManageTool
         <h2>{t('home.onboarding.title')}</h2>
         <p>{t('home.onboarding.hint')}</p>
       </div>
-      <button type="button" className="text-button" onClick={onClose}><Icon name="close" size={13} strokeWidth={2} />{t('home.onboarding.close')}</button>
+      <button type="button" className="text-button" onClick={onClose}><Icon name="close" size={14} />{t('home.onboarding.close')}</button>
     </div>
     <ol className="onboarding-steps">
       {steps.map((step, index) => <li key={step.id} data-done={step.done || undefined}>
-        <span className="onboarding-check" aria-hidden="true">{step.done ? <Icon name="check" size={13} strokeWidth={2.4} /> : index + 1}</span>
+        <span className="onboarding-check" aria-hidden="true">{step.done ? <Icon name="check" size={14} /> : index + 1}</span>
         <span className="onboarding-copy"><strong>{step.label}</strong><small>{step.detail}</small></span>
         <span className="sr-only">{step.done ? t('home.onboarding.done') : t('home.onboarding.pending')}</span>
         <button type="button" className="text-button" onClick={step.run}>{step.action} <span aria-hidden="true">→</span></button>

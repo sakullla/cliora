@@ -312,7 +312,7 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
       {error && <p className={styles.error} role="alert">{error}</p>}
     </section>
     {preview && <div className={styles.conflict} role="group" aria-label={t('tools.mcp.conflictLabel')}>
-      <div className={styles.conflictHead}><Icon name="alert" size={15} /><p><strong>{t('library.distribute.conflictTitle')}</strong>{t('library.distribute.conflictHint')}</p></div>
+      <div className={styles.conflictHead}><Icon name="alert" size={16} /><p><strong>{t('library.distribute.conflictTitle')}</strong>{t('library.distribute.conflictHint')}</p></div>
       {preview.map((item) => <div className={styles.conflictItem} key={JSON.stringify([item.toolId, item.scope, item.projectPath, item.contextId])}>
         <div className={styles.conflictTarget}>
           <ToolIcon toolId={item.toolId} size={18} />

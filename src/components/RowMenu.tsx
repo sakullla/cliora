@@ -58,7 +58,7 @@ export function RowMenu({ label, children }: { label: string; children: ReactNod
     return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', key); };
   }, [open]);
   return <div className={styles.rowMenu} ref={ref}>
-    <button ref={trigger} type="button" className={styles.rowMenuButton} aria-label={label} title={t('tools.workspace.moreActions')} aria-expanded={open} aria-haspopup="menu" onClick={() => setOpen(value => !value)} onKeyDown={event => { if (event.key === 'ArrowDown' && !open) { event.preventDefault(); setOpen(true); } }}><svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true" fill="currentColor"><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" /></svg></button>
+    <button ref={trigger} type="button" className={styles.rowMenuButton} aria-label={label} title={t('tools.workspace.moreActions')} aria-expanded={open} aria-haspopup="menu" onClick={() => setOpen(value => !value)} onKeyDown={event => { if (event.key === 'ArrowDown' && !open) { event.preventDefault(); setOpen(true); } }}><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" fill="currentColor"><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" /></svg></button>
     {open && createPortal(<div ref={panel} className={styles.rowMenuList} role="menu" aria-label={label} style={box ? { top: box.top, left: box.left } : { top: 0, left: -10000 }} onKeyDown={keyNavigate} onClick={() => dismiss(true)}>{children}</div>, document.body)}
   </div>;
 }

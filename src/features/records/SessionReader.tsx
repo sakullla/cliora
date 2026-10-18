@@ -133,14 +133,14 @@ export function SessionReader({ detail, toolName }: { detail: HistoryDetail; too
         <label><input type="checkbox" checked={onlyQuestions} onChange={(event) => setOnlyQuestions(event.target.checked)} />{t('records.reader.onlyQuestions')}</label>
         <label><input type="checkbox" checked={raw} onChange={(event) => setRaw(event.target.checked)} />{t('records.reader.showRaw')}</label>
         </div></details>
-        <button type="button" title={t('records.reader.latestTitle')} onClick={jumpLatest}><Icon name="arrowDown" size={13} />{t('records.reader.latest')}</button>
+        <button type="button" title={t('records.reader.latestTitle')} onClick={jumpLatest}><Icon name="arrowDown" size={14} />{t('records.reader.latest')}</button>
       </div>
       {findOpen && <div className={styles.find}>
         <Icon name="search" size={14} /><input autoFocus aria-label={t('records.reader.findAria')} placeholder={t('records.reader.findPlaceholder')} value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => {
           if (event.key === 'Enter') { event.preventDefault(); jump(selected + (event.shiftKey ? -1 : 1)); }
           if (event.key === 'Escape') { event.stopPropagation(); setQuery(''); setFindOpen(false); findButton.current?.focus(); }
         }} />
-        {search && <><span role="status">{matches.length ? t('records.reader.matchCount', { current: selected + 1, total: matches.length }) : t('records.reader.noMatch')}</span><button type="button" disabled={!matches.length} aria-label={t('records.reader.prevMatch')} onClick={() => jump(selected - 1)}>↑</button><button type="button" disabled={!matches.length} aria-label={t('records.reader.nextMatch')} onClick={() => jump(selected + 1)}>↓</button><button type="button" aria-label={t('records.reader.clearFind')} onClick={() => setQuery('')}><Icon name="close" size={13} /></button></>}
+        {search && <><span role="status">{matches.length ? t('records.reader.matchCount', { current: selected + 1, total: matches.length }) : t('records.reader.noMatch')}</span><button type="button" disabled={!matches.length} aria-label={t('records.reader.prevMatch')} onClick={() => jump(selected - 1)}>↑</button><button type="button" disabled={!matches.length} aria-label={t('records.reader.nextMatch')} onClick={() => jump(selected + 1)}>↓</button><button type="button" aria-label={t('records.reader.clearFind')} onClick={() => setQuery('')}><Icon name="close" size={14} /></button></>}
       </div>}
       {search && <small className={styles.findHint}>{t('records.reader.findHint')}</small>}
     </div>
