@@ -252,20 +252,79 @@ test('unlock restores immediately and a bad passphrase or cancel writes nothing'
     state.corrupt = true;
     state.cancelOpen = false;
   });
+  // A retry keeps the chosen file and does not ask for it again.
+  await expect(again.getByRole('button', { name: /incoming\.cliora/ })).toBeVisible();
+  const opensBeforeRetry = await page.evaluate(() => (window as unknown as { __syncReady: { openCalls: number } }).__syncReady.openCalls);
   await again.getByRole('button', { name: '解锁并恢复' }).click();
   await expect(again.getByRole('alert')).toContainText('配置包资料结构损坏');
   await expect.poll(() => page.evaluate(() => (window as unknown as { __syncReady: { applyCalls: number } }).__syncReady.applyCalls)).toBe(1);
+  expect(await page.evaluate(() => (window as unknown as { __syncReady: { openCalls: number } }).__syncReady.openCalls)).toBe(opensBeforeRetry);
 
+  // A reopened dialog starts without a file; cancelling the picker reads nothing.
+  await again.getByRole('button', { name: '取消' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
   await page.evaluate(() => {
-    const state = (window as unknown as { __syncReady: { corrupt: boolean; cancelOpen: boolean; previewCalls: number } }).__syncReady;
+    const state = (window as unknown as { __syncReady: { corrupt: boolean; cancelOpen: boolean } }).__syncReady;
     state.corrupt = false;
     state.cancelOpen = true;
   });
-  const previews = await page.evaluate(() => (window as unknown as { __syncReady: { previewCalls: number } }).__syncReady.previewCalls);
-  await again.getByRole('button', { name: '解锁并恢复' }).click();
-  await expect.poll(() => page.evaluate(() => (window as unknown as { __syncReady: { previewCalls: number; applyCalls: number; openCalls: number } }).__syncReady.openCalls)).toBeGreaterThan(0);
-  await expect.poll(() => page.evaluate(() => (window as unknown as { __syncReady: { previewCalls: number } }).__syncReady.previewCalls)).toBe(previews);
-  await expect.poll(() => page.evaluate(() => (window as unknown as { __syncReady: { applyCalls: number } }).__syncReady.applyCalls)).toBe(1);
+  const before = await page.evaluate(() => {
+    const state = (window as unknown as { __syncReady: { previewCalls: number; openCalls: number } }).__syncReady;
+    return { previewCalls: state.previewCalls, openCalls: state.openCalls };
+  });
+  await page.getByRole('button', { name: '从配置包恢复' }).click();
+  const fresh = page.getByRole('dialog');
+  await expect(fresh.getByRole('button', { name: /选择配置包文件/ })).toBeVisible();
+  await fresh.getByLabel('配置包口令').fill('123456789012');
+  await fresh.getByRole('button', { name: '解锁并恢复' }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __syncReady: { openCalls: number } }).__syncReady.openCalls)).toBe(before.openCalls + 1);
+  await expect(fresh.getByRole('button', { name: '解锁并恢复' })).toBeEnabled();
+  expect(await page.evaluate(() => (window as unknown as { __syncReady: { previewCalls: number } }).__syncReady.previewCalls)).toBe(before.previewCalls);
+  expect(await page.evaluate(() => (window as unknown as { __syncReady: { applyCalls: number } }).__syncReady.applyCalls)).toBe(1);
+  await expect(fresh.getByRole('alert')).toHaveCount(0);
+});
+
+test('a bundle file can be chosen first and is shown before unlocking', async ({ page }) => {
+  await install(page, { previewItems: [portableItem('library:1', '提示', 'new')] });
+  await openMigration(page);
+  await page.getByRole('button', { name: '从配置包恢复' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('button', { name: '解锁并恢复' })).toBeDisabled();
+  await dialog.getByRole('button', { name: /选择配置包文件/ }).click();
+  await expect(dialog.getByRole('button', { name: /incoming\.cliora/ })).toBeVisible();
+  await dialog.getByLabel('配置包口令').fill('123456789012');
+  await dialog.getByLabel('配置包口令').press('Enter');
+  await expect(page.getByText('已恢复 1 项。其它资料可以使用。')).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __syncReady: { openCalls: number; applyCalls: number } }).__syncReady)).toMatchObject({ openCalls: 1, applyCalls: 1 });
+});
+
+test('the bundle card lists what can be taken by kind', async ({ page }) => {
+  await install(page, { items: [portableItem('profile:1', '默认配置'), portableItem('profile:2', '评审'), { ...portableItem('library:1', '提示'), kind: 'library' }] });
+  await openMigration(page);
+  const card = page.getByRole('region', { name: '加密配置包' });
+  await expect(card.getByText('可迁移 3 项')).toBeVisible();
+  await expect(card.getByRole('listitem').filter({ hasText: '命名配置' })).toContainText('2');
+  await expect(card.getByRole('listitem').filter({ hasText: '资料' })).toContainText('1');
+});
+
+test('auto sync is a switch and a connection error replaces the on state', async ({ page }) => {
+  await install(page, { configured: true, enabled: true });
+  await openMigration(page);
+  const webdav = page.getByRole('region', { name: 'WebDAV 同步' });
+  const toggle = webdav.getByRole('switch', { name: /自动同步/ });
+  await expect(toggle).toHaveAttribute('aria-checked', 'true');
+  await page.evaluate(() => { (window as unknown as { __syncReady: { enabled: boolean } }).__syncReady.enabled = false; });
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-checked', 'false');
+  await expect(webdav.getByText('同步已暂停')).toBeVisible();
+  await expect(webdav.getByRole('button', { name: '立即同步', exact: true })).toBeEnabled();
+
+  await page.evaluate(() => { (window as unknown as { __syncReady: { lastError: string | null } }).__syncReady.lastError = 'WebDAV 无法连接：offline'; });
+  await page.getByRole('tab', { name: '常规' }).click();
+  await page.getByRole('tab', { name: '迁移与同步' }).click();
+  await expect(webdav.getByText('连接异常', { exact: true })).toBeVisible();
+  await expect(webdav.getByRole('button', { name: '立即同步', exact: true })).toHaveCount(0);
+  await expect(webdav.getByRole('button', { name: '修改连接', exact: true })).toHaveCount(1);
 });
 
 test('an unconnected WebDAV dialog collects only the connection', async ({ page }) => {

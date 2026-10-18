@@ -431,7 +431,7 @@ for(const width of widths)for(const theme of themes){
  await nav.getByRole('button',{name:'设置',exact:true}).click();await capture('settings');
  await page.getByRole('tab',{name:'迁移与同步'}).click();await capture('migration');
  await page.getByRole('button',{name:'导出加密配置包',exact:true}).click();await capture('migration-export');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
- await page.getByRole('button',{name:'从配置包恢复',exact:true}).click();await page.getByPlaceholder('输入导出时的口令').fill('correct-password');await page.getByRole('button',{name:'选择配置包并预览'}).click();await capture('migration-import');
+ await page.getByRole('button',{name:'从配置包恢复',exact:true}).click();await page.getByRole('dialog').getByRole('button',{name:/选择配置包文件/}).click();await page.getByRole('dialog').getByRole('button',{name:/backup\.cliora/}).waitFor();await page.getByPlaceholder('输入导出时的口令').fill('correct-password');await capture('migration-import');await page.keyboard.press('Escape');await page.getByRole('dialog').waitFor({state:'hidden'});
  await page.close();
 }
 }
