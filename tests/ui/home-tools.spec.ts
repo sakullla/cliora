@@ -460,6 +460,20 @@ test('many profiles stay in one searchable menu', async ({ page }) => {
   const list = page.getByRole('listbox', { name: '切换Codex的配置' });
   await expect(list.getByRole('option')).toHaveCount(20);
   expect((await list.boundingBox())!.height).toBeLessThan(360);
+  const before = await list.evaluate((node) => node.scrollTop);
+  const visibleIndex = await list.evaluate((node) => {
+    const box = node.getBoundingClientRect();
+    const options = [...node.querySelectorAll<HTMLElement>('[role="option"]')];
+    return options.findLastIndex((option) => {
+      const rect = option.getBoundingClientRect();
+      return rect.top >= box.top + 2 && rect.bottom <= box.bottom - 2;
+    });
+  });
+  expect(visibleIndex).toBeGreaterThan(2);
+  await list.getByRole('option').nth(visibleIndex).hover();
+  await expect.poll(() => list.evaluate((node) => node.scrollTop)).toBe(before);
+  for (let step = 0; step < 6; step += 1) await page.keyboard.press('ArrowDown');
+  await expect.poll(() => list.evaluate((node) => node.scrollTop)).toBeGreaterThan(before);
   await page.getByLabel('搜索配置').fill('配置 12');
   await expect(list.getByRole('option')).toHaveCount(1);
   await list.getByRole('option', { name: '配置 12' }).click();

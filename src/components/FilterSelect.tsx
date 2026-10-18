@@ -38,6 +38,7 @@ export function FilterSelect({ label, value, options, placeholder, disabled = fa
   const [box, setBox] = useState<{ top?: number; bottom?: number; left: number; width: number; maxHeight: number } | null>(null);
   const anchor = useRef<HTMLDivElement>(null);
   const panel = useRef<HTMLDivElement>(null);
+  const revealIndex = useRef<number | null>(null);
   const [portalTarget, setPortalTarget] = useState<HTMLElement>(document.body);
   useLayoutEffect(() => { setPortalTarget(anchor.current?.closest('dialog') ?? document.body); }, []);
   const listId = useId();
@@ -65,11 +66,16 @@ export function FilterSelect({ label, value, options, placeholder, disabled = fa
   }, [open]);
 
   useEffect(() => { if (disabled) setOpen(false); }, [disabled]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open) return;
-    setActive(Math.max(0, matches.findIndex((item) => item.value === value)));
+    const index = Math.max(0, matches.findIndex((item) => item.value === value));
+    revealIndex.current = index;
+    setActive(index);
   }, [open]);
-  useEffect(() => { setActive(0); }, [query]);
+  useEffect(() => {
+    revealIndex.current = 0;
+    setActive(0);
+  }, [query]);
   useEffect(() => {
     if (!open) return;
     const close = (event: MouseEvent) => {
@@ -85,16 +91,17 @@ export function FilterSelect({ label, value, options, placeholder, disabled = fa
     if (!open || showSearch) return;
     panel.current?.focus();
   }, [open, showSearch, box]);
-  useEffect(() => {
-    if (!open || !panel.current) return;
-    const node = panel.current.querySelector<HTMLElement>('[data-active="true"]');
+  useLayoutEffect(() => {
+    if (!open || revealIndex.current == null || !panel.current) return;
+    const node = panel.current.querySelector<HTMLElement>(`[data-option-index="${revealIndex.current}"]`);
     const list = node?.parentElement;
     if (!node || !list) return;
-    const top = node.offsetTop;
-    const bottom = top + node.offsetHeight;
-    if (top < list.scrollTop) list.scrollTop = top;
-    else if (bottom > list.scrollTop + list.clientHeight) list.scrollTop = bottom - list.clientHeight;
-  }, [open, active, query]);
+    revealIndex.current = null;
+    const listRect = list.getBoundingClientRect();
+    const nodeRect = node.getBoundingClientRect();
+    if (nodeRect.top < listRect.top - 1) list.scrollTop -= listRect.top - nodeRect.top;
+    else if (nodeRect.bottom > listRect.bottom + 1) list.scrollTop += nodeRect.bottom - listRect.bottom;
+  }, [open, active, query, box]);
 
   function choose(option: FilterSelectOption) {
     if (option.disabled) return;
@@ -105,8 +112,8 @@ export function FilterSelect({ label, value, options, placeholder, disabled = fa
   }
 
   function onPanelKey(event: KeyboardEvent<HTMLElement>) {
-    if (event.key === 'ArrowDown') { event.preventDefault(); setActive((index) => Math.min(index + 1, Math.max(matches.length - 1, 0))); return; }
-    if (event.key === 'ArrowUp') { event.preventDefault(); setActive((index) => Math.max(index - 1, 0)); return; }
+    if (event.key === 'ArrowDown') { event.preventDefault(); setActive((index) => { const next = Math.min(index + 1, Math.max(matches.length - 1, 0)); revealIndex.current = next; return next; }); return; }
+    if (event.key === 'ArrowUp') { event.preventDefault(); setActive((index) => { const next = Math.max(index - 1, 0); revealIndex.current = next; return next; }); return; }
     if (event.key === 'Enter' && matches[active]) { event.preventDefault(); choose(matches[active]); return; }
     if (event.key === 'Escape') { event.preventDefault(); setOpen(false); setQuery(''); triggerRef?.current?.focus(); }
   }
@@ -124,7 +131,7 @@ export function FilterSelect({ label, value, options, placeholder, disabled = fa
     {open && box && createPortal(<div ref={panel} className={styles.panel} style={{ top: box.top, bottom: box.bottom, left: box.left, width: box.width }} tabIndex={-1} onKeyDown={onPanelKey}>
       {showSearch && <input aria-label={searchLabel ?? t('common.filterSelect.search', { label: stripLabelVerb(label) })} placeholder={searchPlaceholder ?? t('common.filterSelect.searchPlaceholder')} value={query} autoFocus onChange={(event) => setQuery(event.target.value)} />}
       <div className={styles.list} id={listId} role="listbox" aria-label={label} style={{ maxHeight: Math.max(140, box.maxHeight - (showSearch ? 52 : 8) - (onPickFolder ? 40 : 0)) }}>
-        {matches.length ? matches.map((option, index) => <button key={option.value || '__all'} type="button" role="option" aria-selected={option.value === value} aria-disabled={option.disabled || undefined} data-active={index === active || undefined} disabled={option.disabled} onMouseEnter={() => setActive(index)} onClick={() => choose(option)}>
+        {matches.length ? matches.map((option, index) => <button key={option.value || '__all'} type="button" role="option" aria-selected={option.value === value} aria-disabled={option.disabled || undefined} data-option-index={index} data-active={index === active || undefined} disabled={option.disabled} onMouseEnter={() => setActive(index)} onClick={() => choose(option)}>
           {option.icon && <span className={styles.optionIcon}>{option.icon}</span>}<span className={styles.optionCopy}><strong>{option.label}</strong>{option.detail && <small>{option.detail}</small>}</span>
           <span className={styles.optionMarks}>{option.note && <em>{option.note}</em>}{option.value === value && <Icon name="check" size={14} />}</span>
         </button>) : <p>{emptyText ?? t('common.filterSelect.empty')}</p>}

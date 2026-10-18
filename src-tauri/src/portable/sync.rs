@@ -111,6 +111,41 @@ pub struct ConflictPreview {
     pub versions: Vec<ConflictVersionPreview>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncTransfer {
+    pub direction: String,
+    pub key: String,
+    pub label: String,
+    pub kind: String,
+    pub deleted: bool,
+}
+
+/// The last finished sync, kept so the panel can explain it after the window closes.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncReceipt {
+    pub at: i64,
+    pub compared: usize,
+    pub uploaded: usize,
+    pub downloaded: usize,
+    pub transfers: Vec<SyncTransfer>,
+}
+
+/// Live progress for the sync window. `direction` is set only when an item actually moves.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncProgress {
+    pub phase: String,
+    pub detail: String,
+    pub done: usize,
+    pub total: usize,
+    pub key: String,
+    pub direction: String,
+    pub kind: String,
+    pub deleted: bool,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncStatus {
@@ -126,6 +161,14 @@ pub struct SyncStatus {
     pub conflicts: Vec<SyncConflict>,
     #[serde(default)]
     pub blockers: Vec<super::RestoreBlocker>,
+    /// Items moved by this run. Empty on a later status read; use `receipt` there.
+    #[serde(default)]
+    pub transfers: Vec<SyncTransfer>,
+    /// How many items this run compared. Zero on a later status read.
+    #[serde(default)]
+    pub compared: usize,
+    #[serde(default)]
+    pub receipt: Option<SyncReceipt>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -541,7 +584,56 @@ pub(crate) fn discard_bundle_holds(db: &Database, store: &dyn CredentialStore, e
     db.with_connection(|conn| write_bundle_holds_on(conn, &kept))
 }
 
+fn remember_present(conn: &Connection, tracked: &mut BTreeSet<String>, prefix: &str, sql: &str) -> Result<(), String> {
+    for id in super::read_rows(conn, sql, |row| row.get::<_, String>(0))? {
+        tracked.insert(format!("{prefix}:{id}"));
+    }
+    Ok(())
+}
+
+/// Drop outbox rows whose item is gone locally and was never synced.
+/// A deleted item that still has sync state stays, so its deletion can upload.
+fn forget_untracked_outbox(db: &Database) -> Result<(), String> {
+    db.with_connection(|conn| {
+        let mut tracked = BTreeSet::new();
+        remember_present(conn, &mut tracked, "profile", "SELECT id FROM native_profiles")?;
+        remember_present(conn, &mut tracked, "common", "SELECT tool FROM common_configs")?;
+        remember_present(conn, &mut tracked, "project", "SELECT id FROM projects")?;
+        remember_present(conn, &mut tracked, "library", "SELECT id FROM library_items")?;
+        remember_present(conn, &mut tracked, "mcp", "SELECT id FROM mcp_definitions")?;
+        remember_present(conn, &mut tracked, "skill", "SELECT id FROM skill_packages")?;
+        remember_present(conn, &mut tracked, "account", "SELECT id FROM auth_accounts")?;
+        let preferences: Option<String> = conn
+            .query_row("SELECT value FROM app_settings WHERE key='preferences'", [], |row| row.get(0))
+            .optional()
+            .map_err(|error| error.to_string())?;
+        if preferences.is_some() {
+            tracked.insert("preferences:managed".into());
+        }
+        for (tool, scope) in super::read_rows(
+            conn,
+            "SELECT tool,scope_key FROM applied_bindings WHERE scope_key='global' OR scope_key LIKE 'project:%'",
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )? {
+            tracked.insert(format!("binding:{}", super::binding_id(&tool, &scope)));
+        }
+        for key in super::read_rows(conn, "SELECT entity_key FROM sync_entity_state", |row| row.get::<_, String>(0))? {
+            tracked.insert(key);
+        }
+        let ids = super::read_rows(conn, "SELECT id FROM sync_outbox", |row| row.get::<_, String>(0))?;
+        let tx = conn.transaction().map_err(|error| error.to_string())?;
+        for id in ids {
+            if !tracked.contains(&id) {
+                tx.execute("DELETE FROM sync_outbox WHERE id=?1", [id])
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+        tx.commit().map_err(|error| error.to_string())
+    })
+}
+
 pub fn status(db: &Database) -> Result<SyncStatus, String> {
+    forget_untracked_outbox(db)?;
     let config = read_config(db)?;
     let pending_rotation: Option<String> = db.with_connection(|conn| {
         conn.query_row(
@@ -604,7 +696,104 @@ pub fn status(db: &Database) -> Result<SyncStatus, String> {
         pending_changes,
         conflicts,
         blockers: super::load_blockers(db).unwrap_or_default(),
+        transfers: Vec::new(),
+        compared: 0,
+        receipt: read_receipt(db),
     })
+}
+
+fn read_receipt(db: &Database) -> Option<SyncReceipt> {
+    let raw: Option<String> = db
+        .with_connection(|conn| {
+            conn.query_row(
+                "SELECT value FROM app_settings WHERE key='sync_last_receipt'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())
+        })
+        .ok()
+        .flatten();
+    raw.and_then(|text| serde_json::from_str(&text).ok())
+}
+
+fn describe_transfer(entity: Option<&super::PortableEntity>, key: &str) -> (String, String, bool) {
+    if let Some(entity) = entity {
+        return (entity.label(), entity.kind().to_string(), false);
+    }
+    let kind = key.split(':').next().unwrap_or("item").to_string();
+    (String::new(), kind, true)
+}
+
+fn report_progress(
+    progress: &dyn Fn(&SyncProgress),
+    phase: &str,
+    detail: &str,
+    done: usize,
+    total: usize,
+) {
+    progress(&SyncProgress {
+        phase: phase.to_string(),
+        detail: detail.to_string(),
+        done,
+        total,
+        key: String::new(),
+        direction: String::new(),
+        kind: String::new(),
+        deleted: false,
+    });
+}
+
+fn record_transfer(
+    transfers: &mut Vec<SyncTransfer>,
+    progress: &dyn Fn(&SyncProgress),
+    direction: &str,
+    key: &str,
+    described: (String, String, bool),
+    done: usize,
+    total: usize,
+) {
+    let (label, kind, deleted) = described;
+    transfers.push(SyncTransfer {
+        direction: direction.to_string(),
+        key: key.to_string(),
+        label: label.clone(),
+        kind: kind.clone(),
+        deleted,
+    });
+    progress(&SyncProgress {
+        phase: "transfer".to_string(),
+        detail: if label.is_empty() { kind.clone() } else { label },
+        done,
+        total,
+        key: key.to_string(),
+        direction: direction.to_string(),
+        kind,
+        deleted,
+    });
+}
+
+fn take_remote(
+    db: &Database,
+    store: &dyn CredentialStore,
+    registry: &Registry,
+    dav: &Dav,
+    key: &[u8; 32],
+    space_id: &str,
+    entity_key: &str,
+    head: &Version,
+    expected_digest: &str,
+    verified: &BTreeMap<(String, String), Option<PortableEntity>>,
+) -> Result<(String, String, bool), String> {
+    let entity = if let Some(cached) = verified.get(&(entity_key.to_string(), head.id.clone())) {
+        cached.clone()
+    } else {
+        read_version(dav, key, space_id, entity_key, head)?
+    };
+    let described = describe_transfer(entity.as_ref(), entity_key);
+    apply_entity(db, store, registry, entity_key, entity, expected_digest)?;
+    Ok(described)
 }
 
 pub fn configure(
@@ -1228,7 +1417,9 @@ fn run_once(
     store: &dyn CredentialStore,
     registry: &Registry,
     config: &SyncConfig,
+    progress: &dyn Fn(&SyncProgress),
 ) -> Result<SyncStatus, String> {
+    report_progress(progress, "connect", "", 0, 0);
     let dav = Dav::new(
         endpoint(&config.endpoint)?,
         &config.username,
@@ -1240,6 +1431,7 @@ fn run_once(
     if space_id != config.space_id {
         return Err("远端同步空间已更换，本机资料未改动".into());
     }
+    report_progress(progress, "read", "", 0, 0);
     let (mut manifest, etag) = read_manifest(&dav, &space_id, &key)?
         .ok_or("远端同步清单缺失，请检查地址；本机资料未改动")?;
     if manifest.space_id != config.space_id {
@@ -1272,12 +1464,24 @@ fn run_once(
     let mut pending_states = Vec::new();
     let mut changed_manifest = false;
     let mut processed_keys = BTreeSet::new();
+    let mut transfers = Vec::new();
+    let compared = all_keys.len().saturating_sub(skipped_accounts.len());
+    let mut seen_count = 0usize;
+    report_progress(progress, "compare", "", 0, compared);
     for entity_key in all_keys {
         if skipped_accounts.contains(&entity_key) {
             continue;
         }
+        seen_count += 1;
         processed_keys.insert(entity_key.clone());
         let current = local.get(&entity_key);
+        report_progress(
+            progress,
+            "compare",
+            current.map(PortableEntity::label).unwrap_or_default().as_str(),
+            seen_count,
+            compared,
+        );
         let current_digest = current
             .map(PortableEntity::digest)
             .transpose()?
@@ -1312,26 +1516,20 @@ fn run_once(
             })
         });
         if !local_changed && remote.len() == 1 && remote_changed && safe_remote_lineage {
-            let inbound = verified
-                .get(&(entity_key.clone(), remote[0].id.clone()))
-                .cloned();
-            let outcome = if let Some(entity) = inbound {
-                apply_entity(db, store, registry, &entity_key, entity, &current_digest)
-            } else {
-                apply_remote(
-                    db,
-                    store,
-                    registry,
-                    &dav,
-                    &key,
-                    &manifest.space_id,
-                    &entity_key,
-                    &remote[0],
-                    &current_digest,
-                )
-            };
+            let outcome = take_remote(
+                db,
+                store,
+                registry,
+                &dav,
+                &key,
+                &manifest.space_id,
+                &entity_key,
+                &remote[0],
+                &current_digest,
+                &verified,
+            );
             match outcome {
-                Ok(()) => {
+                Ok(described) => {
                     save_state(
                         db,
                         &entity_key,
@@ -1339,6 +1537,15 @@ fn run_once(
                         &[remote[0].id.clone()],
                         remote[0].deleted,
                     )?;
+                    record_transfer(
+                        &mut transfers,
+                        progress,
+                        "download",
+                        &entity_key,
+                        described,
+                        seen_count,
+                        compared,
+                    );
                     status.downloaded += 1;
                     continue;
                 }
@@ -1350,31 +1557,26 @@ fn run_once(
             }
         }
         if known.is_none() && current.is_none() && remote.len() == 1 {
-            let incoming = if let Some(entity) = verified
-                .get(&(entity_key.clone(), remote[0].id.clone()))
-                .cloned()
-            {
-                apply_entity(db, store, registry, &entity_key, entity, &current_digest)
-            } else {
-                apply_remote(
-                    db,
-                    store,
-                    registry,
-                    &dav,
-                    &key,
-                    &manifest.space_id,
-                    &entity_key,
-                    &remote[0],
-                    &current_digest,
-                )
-            };
-            if let Err(error) = incoming {
-                if error.starts_with("本机资料已变化") {
+            let incoming = take_remote(
+                db,
+                store,
+                registry,
+                &dav,
+                &key,
+                &manifest.space_id,
+                &entity_key,
+                &remote[0],
+                &current_digest,
+                &verified,
+            );
+            let described = match incoming {
+                Ok(described) => described,
+                Err(error) if error.starts_with("本机资料已变化") => {
                     record_local_race(db, store, registry, &mut status, &entity_key, &remote[0])?;
                     continue;
                 }
-                return Err(error);
-            }
+                Err(error) => return Err(error),
+            };
             save_state(
                 db,
                 &entity_key,
@@ -1382,6 +1584,15 @@ fn run_once(
                 &[remote[0].id.clone()],
                 remote[0].deleted,
             )?;
+            record_transfer(
+                &mut transfers,
+                progress,
+                "download",
+                &entity_key,
+                described,
+                seen_count,
+                compared,
+            );
             status.downloaded += 1;
             continue;
         }
@@ -1425,6 +1636,15 @@ fn run_once(
                 current.is_none(),
             ));
             changed_manifest = true;
+            record_transfer(
+                &mut transfers,
+                progress,
+                "upload",
+                &entity_key,
+                describe_transfer(current, &entity_key),
+                seen_count,
+                compared,
+            );
             status.uploaded += 1;
         }
         let heads = manifest.heads.get(&entity_key).cloned().unwrap_or_default();
@@ -1453,6 +1673,7 @@ fn run_once(
             });
         }
     }
+    report_progress(progress, "save", "", compared, compared);
     if changed_manifest && !save_manifest(&dav, &manifest, &key, Some(&etag))? {
         return Err("远端在同步期间被其他设备更新，请稍后重试；本机资料未覆盖".into());
     }
@@ -1472,8 +1693,12 @@ fn run_once(
     status.pending_changes = self::status(db)?.pending_changes;
     // Matching digests skip the entity body. They must not skip a CLI write or release
     // that failed after the saved entity was already current.
+    report_progress(progress, "apply", "", compared, compared);
     super::finish_pending_native(db, store, registry).ok();
     status.blockers = super::load_blockers(db).unwrap_or_default();
+    status.transfers = transfers;
+    status.compared = compared;
+    report_progress(progress, "done", "", compared, compared);
     Ok(status)
 }
 
@@ -1482,6 +1707,16 @@ pub fn run(
     store: &dyn CredentialStore,
     registry: &Registry,
     background: bool,
+) -> Result<SyncStatus, String> {
+    run_with_progress(db, store, registry, background, &|_| {})
+}
+
+pub fn run_with_progress(
+    db: &Database,
+    store: &dyn CredentialStore,
+    registry: &Registry,
+    background: bool,
+    progress: &dyn Fn(&SyncProgress),
 ) -> Result<SyncStatus, String> {
     #[cfg(test)]
     let fixture_lock = fixture_sync_lock(db)?;
@@ -1495,22 +1730,34 @@ pub fn run(
     if background && (!config.enabled || config.retry_after > now()) {
         return status(db);
     }
-    match run_once(db, store, registry, &config) {
+    match run_once(db, store, registry, &config, progress) {
         Ok(mut result) => {
+            let finished_at = now();
+            let receipt = SyncReceipt {
+                at: finished_at,
+                compared: result.compared,
+                uploaded: result.uploaded,
+                downloaded: result.downloaded,
+                transfers: result.transfers.clone(),
+            };
+            let receipt_json = serde_json::to_string(&receipt).map_err(|error| error.to_string())?;
             let complete = result.conflicts.is_empty();
             let previous_success = config.last_success;
             db.with_connection(|conn| {
                 let tx = conn.transaction().map_err(|error| error.to_string())?;
                 tx.execute("UPDATE sync_config SET last_success=CASE WHEN ?1 THEN ?2 ELSE last_success END,last_error=NULL,retry_after=0,failure_count=0 WHERE id=1",
-                    params![complete,now()])
+                    params![complete, finished_at])
                     .map_err(|error| error.to_string())?;
                 tx.execute("INSERT INTO app_settings (key,value) VALUES ('sync_conflicts',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                     [serde_json::to_string(&result.conflicts).map_err(|error| error.to_string())?])
                     .map_err(|error| error.to_string())?;
+                tx.execute("INSERT INTO app_settings (key,value) VALUES ('sync_last_receipt',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    [receipt_json])
+                    .map_err(|error| error.to_string())?;
                 tx.commit().map_err(|error| error.to_string())
             })?;
             result.last_success = if complete {
-                Some(now())
+                Some(finished_at)
             } else {
                 previous_success
             };
@@ -1519,6 +1766,7 @@ pub fn run(
             result.blockers = refreshed.blockers;
             result.last_error = refreshed.last_error;
             result.retry_after = Some(0);
+            result.receipt = refreshed.receipt;
             Ok(result)
         }
         Err(error) => {

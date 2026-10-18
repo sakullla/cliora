@@ -45,6 +45,33 @@ export interface SyncConflict {
   versions: { id: string; digest: string; deleted: boolean }[];
 }
 
+export interface SyncTransfer {
+  direction: string;
+  key: string;
+  label: string;
+  kind: string;
+  deleted: boolean;
+}
+
+export interface SyncReceipt {
+  at: number;
+  compared: number;
+  uploaded: number;
+  downloaded: number;
+  transfers: SyncTransfer[];
+}
+
+export interface SyncProgress {
+  phase: string;
+  detail: string;
+  done: number;
+  total: number;
+  key: string;
+  direction: string;
+  kind: string;
+  deleted: boolean;
+}
+
 export interface SyncStatus {
   configured: boolean;
   enabled: boolean;
@@ -57,6 +84,9 @@ export interface SyncStatus {
   pendingChanges: number;
   conflicts: SyncConflict[];
   blockers?: RestoreBlocker[];
+  transfers?: SyncTransfer[];
+  compared?: number;
+  receipt?: SyncReceipt | null;
 }
 
 export interface ConflictPreview {

@@ -1095,6 +1095,68 @@ fn unreadable_auth_file_blocks_only_that_account() {
 }
 
 #[test]
+fn missing_auth_candidate_exports_the_login_file_that_exists() {
+    let _roots = RestoreRootsGuard;
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(temp.path());
+    let credentials = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    let root = temp.path().join("minimax-home");
+    let present = root.join("auth").join("prod").join("cn").join("mcode-public").join("auth-state.json");
+    let missing = root.join("auth").join("dev").join("cn").join("mcode-public").join("auth-state.json");
+    fs::create_dir_all(present.parent().unwrap()).unwrap();
+    fs::write(&present, "login-material-kept").unwrap();
+    let account = sample_account(
+        "acct-m",
+        crate::accounts::NativeContext {
+            id: "ctx-m".into(),
+            tool_id: "minimax_code".into(),
+            root: root.clone(),
+            config_root: root.clone(),
+            auth_files: vec![missing.clone(), present.clone()],
+            history_roots: Vec::new(),
+            resource_root: root,
+            environment: BTreeMap::new(),
+            remove_environment: Vec::new(),
+            cli_args: Vec::new(),
+        },
+    );
+    let mut account = account;
+    account.tool_id = "minimax_code".into();
+    account.label = "MiniMax".into();
+    insert_account(&db, &account);
+    let snapshot = collect_snapshot(&db, &credentials, &registry).unwrap();
+    let PortablePayload::Account(exported) = &snapshot.entities.iter().find(|entity| entity.key() == "account:acct-m").unwrap().payload else {
+        panic!("account");
+    };
+    assert_eq!(exported.auth_files.len(), 1);
+    assert_eq!(exported.auth_files[0].name, "auth-state.json");
+    assert_eq!(exported.auth_files[0].relative, "auth/prod/cn/mcode-public/auth-state.json");
+    assert!(load_blockers(&db).unwrap().iter().all(|item| item.key != "account:acct-m"));
+    record_blocker(&db, RestoreBlocker {
+        key: "account:acct-m".into(),
+        label: "MiniMax".into(),
+        action: "relogin".into(),
+        detail: "账号 MiniMax 的认证文件无法读取，不能当作已导出".into(),
+    });
+    retry_native_blocker(&db, &credentials, &registry, "account:acct-m").unwrap();
+    assert!(load_blockers(&db).unwrap().iter().all(|item| item.key != "account:acct-m"));
+
+    let fresh = database(&temp.path().join("restored"));
+    let home = temp.path().join("home");
+    let base = temp.path().join("base");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&base).unwrap();
+    set_restore_roots_for_test(Some((home, base.clone())));
+    let draft = preview_import(&fresh, &credentials, &registry, snapshot).unwrap();
+    let keys: BTreeSet<_> = draft.baseline.keys().cloned().collect();
+    apply_import(&fresh, &credentials, &registry, &draft, &keys).unwrap();
+    let restored = base.join("accounts").join("ctx-m").join("auth").join("prod").join("cn").join("mcode-public").join("auth-state.json");
+    assert_eq!(fs::read_to_string(&restored).unwrap(), "login-material-kept");
+    assert!(!base.join("accounts").join("ctx-m").join("auth").join("dev").exists());
+}
+
+#[test]
 fn unreadable_auth_account_is_held_instead_of_replaced() {
     let temp = tempfile::tempdir().unwrap();
     let db = database(temp.path());
@@ -1147,6 +1209,7 @@ fn unreadable_auth_account_is_held_instead_of_replaced() {
                     auth_files: vec![PortableAuthFile {
                         context_id: "ctx".into(),
                         name: "auth.json".into(),
+                        relative: String::new(),
                         contents: STANDARD.encode("remote-login"),
                     }],
                 }),
@@ -1172,6 +1235,7 @@ fn unreadable_auth_account_is_held_instead_of_replaced() {
                     auth_files: vec![PortableAuthFile {
                         context_id: "ctx-new".into(),
                         name: "fresh.json".into(),
+                        relative: String::new(),
                         contents: STANDARD.encode("fresh-login"),
                     }],
                 }),
@@ -1352,6 +1416,7 @@ fn auth_write_failure_drops_the_path_and_keeps_other_items() {
             auth_files: vec![PortableAuthFile {
                 context_id: "ctx-write".into(),
                 name: "auth.json".into(),
+                relative: String::new(),
                 contents: STANDARD.encode("login-bytes"),
             }],
         }),

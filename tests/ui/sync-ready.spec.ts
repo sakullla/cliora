@@ -45,6 +45,8 @@ async function install(page: Page, seed: SyncSeed = {}) {
       lastLogin: null as { id?: string; expectedVersion?: number; method?: string } | null,
       lastRetry: null as string | null,
       syncCalls: 0,
+      syncResult: null as { uploaded?: number; downloaded?: number; compared?: number; transfers?: unknown[]; receipt?: unknown } | null,
+      storedReceipt: null as unknown,
       installReady: false,
       loginReady: false,
       ...initial,
@@ -70,6 +72,9 @@ async function install(page: Page, seed: SyncSeed = {}) {
       pendingChanges: control.pending,
       conflicts: control.conflicts,
       blockers: control.blockers,
+      transfers: [],
+      compared: 0,
+      receipt: control.storedReceipt,
     });
     Object.assign(window, {
       isTauri: true,
@@ -94,7 +99,15 @@ async function install(page: Page, seed: SyncSeed = {}) {
           control.syncCalls += 1;
           control.lastError = null;
           control.pending = 0;
-          return { ...status(), uploaded: 1, downloaded: 0, lastSuccess: 1700000000 };
+          const produced = control.syncResult;
+          const uploaded = produced?.uploaded ?? 1;
+          const downloaded = produced?.downloaded ?? 0;
+          const compared = produced?.compared ?? 0;
+          const transfers = produced?.transfers ?? [];
+          const receipt = produced?.receipt ?? { at: 1700000000, compared, uploaded, downloaded, transfers };
+          control.storedReceipt = receipt;
+          control.lastSuccess = 1700000000;
+          return { ...status(), uploaded, downloaded, compared, transfers, receipt, lastSuccess: 1700000000, pendingChanges: 0 };
         }
         if (command === 'retry_restore_blocker') {
           control.lastRetry = args.key;
@@ -337,6 +350,20 @@ test('pending uploads stay usable and a connection failure can be retried', asyn
   await expect(webdav.getByRole('button', { name: '修改连接', exact: true })).toBeVisible();
 });
 
+test('pending uploads stay visible beside a real blocker without replacing readiness', async ({ page }) => {
+  await install(page, {
+    configured: true,
+    pending: 13,
+    blockers: [{ key: 'account:m', label: 'MiniMax', action: 'relogin', detail: '账号 MiniMax 的认证文件无法读取，不能当作已导出' }],
+  });
+  await openMigration(page);
+  const webdav = page.getByRole('region', { name: 'WebDAV 同步' });
+  await expect(webdav.getByText('其余内容可用', { exact: true })).toBeVisible();
+  await expect(webdav.getByText('尚未上传 13 项。已应用的内容仍可使用。')).toBeVisible();
+  await expect(webdav.getByText('当前可用', { exact: true })).toHaveCount(0);
+  await expect(webdav.getByRole('button', { name: '重新登录', exact: true })).toBeVisible();
+});
+
 test('one missing directory, install, sign-in, or conflict leaves everything else usable', async ({ page }) => {
   await install(page, {
     configured: true,
@@ -462,4 +489,67 @@ test('a failed CLI write or release retries locally, and install or sign-in clea
   await expect(webdav.getByRole('button', { name: '重试', exact: true })).toHaveCount(0);
   await expect(webdav.getByText('当前可用', { exact: true })).toBeVisible();
   await expect.poll(() => page.evaluate(() => (window as unknown as { __syncReady: { syncCalls: number } }).__syncReady.syncCalls)).toBe(0);
+});
+
+test('a sync says what matched or moved instead of a zero count', async ({ page }) => {
+  await install(page, { configured: true, enabled: true, lastSuccess: 1700000000 });
+  await openMigration(page);
+  const webdav = page.getByRole('region', { name: 'WebDAV 同步' });
+  await expect(webdav.getByText('上次同步没有留下明细', { exact: true })).toBeVisible();
+  await expect(webdav.getByText('上传 0 项、接收 0 项')).toHaveCount(0);
+  const aligned = {
+    uploaded: 0,
+    downloaded: 0,
+    compared: 12,
+    transfers: [] as unknown[],
+    receipt: { at: 1700000000, compared: 12, uploaded: 0, downloaded: 0, transfers: [] as unknown[] },
+  };
+  const moved = {
+    uploaded: 1,
+    downloaded: 1,
+    compared: 12,
+    transfers: [
+      { direction: 'download', key: 'library:1', label: 'Example', kind: 'library', deleted: false },
+      { direction: 'upload', key: 'account:1', label: '工作账号', kind: 'account', deleted: false },
+    ],
+    receipt: {
+      at: 1700000100,
+      compared: 12,
+      uploaded: 1,
+      downloaded: 1,
+      transfers: [
+        { direction: 'download', key: 'library:1', label: 'Example', kind: 'library', deleted: false },
+        { direction: 'upload', key: 'account:1', label: '工作账号', kind: 'account', deleted: false },
+      ],
+    },
+  };
+  await page.evaluate((next) => {
+    (window as unknown as { __syncReady: { syncResult: unknown } }).__syncReady.syncResult = next;
+  }, aligned);
+  await webdav.getByRole('button', { name: '立即同步', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByText('已经和云端一致', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('比对了 12 项。没有需要上传或接收的内容。', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('当前可用', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('上传 0 项、接收 0 项')).toHaveCount(0);
+  await dialog.getByRole('button', { name: '知道了' }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(webdav.getByText('已经和云端一致', { exact: true })).toBeVisible();
+  await expect(webdav.getByText('比对了 12 项。没有需要上传或接收的内容。', { exact: true })).toBeVisible();
+  await expect(webdav.getByText('当前可用', { exact: true })).toBeVisible();
+
+  await page.evaluate((next) => {
+    (window as unknown as { __syncReady: { syncResult: unknown } }).__syncReady.syncResult = next;
+  }, moved);
+  await webdav.getByRole('button', { name: '立即同步', exact: true }).click();
+  await expect(dialog.getByText('Example', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('工作账号', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('资料库', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('登录', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('已经和云端一致', { exact: true })).toHaveCount(0);
+  await dialog.getByRole('button', { name: '知道了' }).click();
+  await expect(webdav.getByText('Example', { exact: true })).toBeVisible();
+  await webdav.getByRole('button', { name: '查看明细' }).click();
+  await expect(page.getByRole('dialog').getByText('已接收', { exact: true })).toBeVisible();
+  await expect(page.getByRole('dialog').getByText('已上传', { exact: true })).toBeVisible();
 });

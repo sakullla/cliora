@@ -314,6 +314,42 @@ fn sync_only_acknowledges_the_change_it_observed() {
 }
 
 #[test]
+fn deleted_item_that_was_never_synced_is_not_left_pending() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(temp.path());
+    put_library(&db, "still-here");
+    db.with_connection(|conn| {
+        conn.execute(
+            "INSERT INTO sync_outbox (id,entity_key,object_json,created_at) VALUES ('library:gone','library:gone','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sync_entity_state (entity_key,local_digest,heads_json,deleted) VALUES ('project:removed','abc','[]',1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sync_outbox (id,entity_key,object_json,created_at) VALUES ('project:removed','project:removed','bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',1)",
+            [],
+        )
+        .unwrap();
+        Ok(())
+    })
+    .unwrap();
+    let pending = status(&db).unwrap();
+    assert_eq!(pending.pending_changes, 2);
+    let ids: Vec<String> = db
+        .with_connection(|conn| {
+            let mut statement = conn.prepare("SELECT id FROM sync_outbox ORDER BY id").unwrap();
+            let rows = statement.query_map([], |row| row.get(0)).unwrap();
+            Ok(rows.collect::<Result<Vec<_>, _>>().unwrap())
+        })
+        .unwrap();
+    assert_eq!(ids, vec!["library:library-1".to_owned(), "project:removed".to_owned()]);
+}
+
+#[test]
 fn offline_device_receives_multiple_consecutive_remote_versions() {
     let server = Server::new();
     let temp = tempfile::tempdir().unwrap();
@@ -530,10 +566,19 @@ fn two_devices_merge_independent_changes_preserve_conflicts_and_fail_closed() {
     put_library(&a, "original");
     assert_eq!(status(&a).unwrap().pending_changes, 1);
     configure(&a, &store, setup(&server)).unwrap();
-    assert!(run(&a, &store, &registry, false).unwrap().uploaded >= 1);
-    assert_eq!(status(&a).unwrap().pending_changes, 0);
+    let uploaded = run(&a, &store, &registry, false).unwrap();
+    assert!(uploaded.uploaded >= 1);
+    assert!(uploaded.transfers.iter().any(|item| item.direction == "upload" && item.label == "Example"));
+    let stored = status(&a).unwrap();
+    assert_eq!(stored.pending_changes, 0);
+    assert!(stored.receipt.as_ref().is_some_and(|receipt| {
+        receipt.uploaded >= 1
+            && receipt.transfers.iter().any(|item| item.direction == "upload" && item.label == "Example")
+    }));
     configure(&b, &store, setup(&server)).unwrap();
-    assert!(run(&b, &store, &registry, false).unwrap().downloaded >= 1);
+    let downloaded = run(&b, &store, &registry, false).unwrap();
+    assert!(downloaded.downloaded >= 1);
+    assert!(downloaded.transfers.iter().any(|item| item.direction == "download" && item.label == "Example"));
     assert_eq!(body(&b).as_deref(), Some("original"));
     b.with_connection(|conn| { conn.execute("INSERT INTO projects (id,name,path,preferred_tool,last_opened) VALUES ('project-2','Second',NULL,NULL,0)",[]).unwrap(); Ok(()) }).unwrap();
     run(&b, &store, &registry, false).unwrap();
