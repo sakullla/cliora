@@ -333,6 +333,7 @@ pub fn cancel_portable_preview(state: State<'_, AppState>) -> Result<(), ApiErro
 #[tauri::command]
 pub fn get_webdav_status(app: AppHandle) -> Result<portable::sync::SyncStatus, ApiError> {
     let db = app.state::<AppState>().database(&app)?;
+    portable::refresh_auth_read_blockers(&db).map_err(native_error)?;
     portable::sync::status(&db).map_err(native_error)
 }
 
@@ -362,8 +363,15 @@ pub async fn retry_restore_blocker(app: AppHandle, key: String) -> Result<portab
 #[tauri::command]
 pub async fn sync_webdav_now(app: AppHandle) -> Result<portable::sync::SyncStatus, ApiError> {
     let db = app.state::<AppState>().database(&app)?;
-    blocking(move || portable::with_change_notification(&db, || notify_portable_changed(&app), ||
-        portable::sync::run(&db, &SystemCredentialStore, &adapters::Registry::builtins(), false).map_err(native_error))).await
+    blocking(move || portable::with_change_notification(&db, || notify_portable_changed(&app), || {
+        portable::sync::run_with_progress(
+            &db,
+            &SystemCredentialStore,
+            &adapters::Registry::builtins(),
+            false,
+            &|progress| { let _ = app.emit("cliora:sync-progress", progress.clone()); },
+        ).map_err(native_error)
+    })).await
 }
 
 #[tauri::command]

@@ -58,11 +58,16 @@ pub struct PortableProject {
 
 /// Auth file bytes copied from `NativeContext.auth_files`. Paths are not a
 /// catalog of CLI ids; the receiver asks the account adapter for local paths.
+/// `relative` keeps the file's place under that account root when several
+/// adapter paths share one file name.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PortableAuthFile {
     pub context_id: String,
     pub name: String,
+    /// Empty for a package that only knows the file name.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub relative: String,
     pub contents: String,
 }
 
@@ -159,7 +164,13 @@ impl PortableEntity {
             PortablePayload::Common(value) => value.revision.clear(),
             PortablePayload::Mcp(value) => value.pending_fields.clear(),
             PortablePayload::Skill(value) => value.pending_fields.clear(),
-            PortablePayload::Account(value) => normalize_account_digest(&mut value.account),
+            PortablePayload::Account(value) => {
+                normalize_account_digest(&mut value.account);
+                // The directory is restored with the file, but it is not a second version of the login.
+                for file in &mut value.auth_files {
+                    file.relative.clear();
+                }
+            }
             _ => {}
         }
         let bytes = serde_json::to_vec(&normalized).map_err(|_| "无法核对迁移资料".to_string())?;
@@ -1431,21 +1442,62 @@ fn persist_auth_read_blockers(db: &Database, collected: &Collected) -> Result<()
     })
 }
 
+fn auth_relative(root: &Path, path: &Path) -> String {
+    let Ok(relative) = path.strip_prefix(root) else {
+        return String::new();
+    };
+    if relative.as_os_str().is_empty()
+        || relative.components().any(|part| !matches!(part, Component::Normal(_)))
+    {
+        return String::new();
+    }
+    let text = relative
+        .components()
+        .filter_map(|part| match part {
+            Component::Normal(value) => value.to_str(),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/");
+    if text.is_empty() || text.len() > 240 {
+        String::new()
+    } else {
+        text
+    }
+}
+
+fn safe_auth_relative(relative: &str) -> Option<PathBuf> {
+    if relative.is_empty() || relative.len() > 240 || relative.contains('\\') {
+        return None;
+    }
+    let path = Path::new(relative);
+    if path.is_absolute() || path.components().any(|part| !matches!(part, Component::Normal(_))) {
+        return None;
+    }
+    Some(path.to_path_buf())
+}
+
 fn portable_account(mut account: crate::accounts::AuthAccount) -> AccountRead {
     account.pending_login = None;
     let mut auth_files = Vec::new();
+    let mut listed = false;
     let label = account.label.clone();
     let contexts = account.context.iter_mut().chain(account.retired_contexts.iter_mut());
     for context in contexts {
         for path in &context.auth_files {
+            listed = true;
             let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
                 return AccountRead::Blocked(auth_read_blocker(&account, format!("账号 {label} 的认证文件名无效，不能当作已导出")));
             };
             if !valid_auth_name(name) {
                 return AccountRead::Blocked(auth_read_blocker(&account, format!("账号 {label} 的认证文件名无效，不能当作已导出")));
             }
+            // Adapter auth lists include candidates that are not this login.
+            // A missing candidate is not login material. A present file that
+            // cannot be read still blocks only this account.
             let metadata = match fs::metadata(path) {
                 Ok(metadata) => metadata,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(_) => return AccountRead::Blocked(auth_read_blocker(&account, format!("账号 {label} 的认证文件无法读取，不能当作已导出"))),
             };
             if metadata.len() > 4 * 1024 * 1024 {
@@ -1453,15 +1505,52 @@ fn portable_account(mut account: crate::accounts::AuthAccount) -> AccountRead {
             }
             let bytes = match fs::read(path) {
                 Ok(bytes) => bytes,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(_) => return AccountRead::Blocked(auth_read_blocker(&account, format!("账号 {label} 的认证文件无法读取，不能当作已导出"))),
             };
-            auth_files.push(PortableAuthFile { context_id: context.id.clone(), name: name.to_owned(), contents: STANDARD.encode(bytes) });
+            auth_files.push(PortableAuthFile {
+                context_id: context.id.clone(),
+                name: name.to_owned(),
+                relative: auth_relative(&context.root, path),
+                contents: STANDARD.encode(bytes),
+            });
         }
     }
-    auth_files.sort_by(|left, right| (&left.context_id, &left.name).cmp(&(&right.context_id, &right.name)));
-    auth_files.dedup_by(|left, right| left.context_id == right.context_id && left.name == right.name);
+    if account.state == crate::accounts::AccountState::SignedIn && auth_files.is_empty() && listed {
+        return AccountRead::Blocked(auth_read_blocker(&account, format!("账号 {label} 的认证文件无法读取，不能当作已导出")));
+    }
+    auth_files.sort_by(|left, right| {
+        (&left.context_id, &left.name, &left.relative).cmp(&(&right.context_id, &right.name, &right.relative))
+    });
+    auth_files.dedup_by(|left, right| {
+        left.context_id == right.context_id && left.name == right.name && left.relative == right.relative
+    });
     normalize_account_digest(&mut account);
     AccountRead::Ready(account, auth_files)
+}
+
+/// Re-read login files and drop a stale "cannot export" blocker once a file can be read.
+pub fn refresh_auth_read_blockers(db: &Database) -> Result<(), String> {
+    let texts = db.with_connection(|conn| {
+        read_rows(conn, "SELECT data FROM auth_accounts ORDER BY id", |row| row.get::<_, String>(0))
+    })?;
+    let mut blocked = Vec::new();
+    let mut readable = Vec::new();
+    for text in texts {
+        let account: crate::accounts::AuthAccount = serde_json::from_str(&text).map_err(|_| "账号格式错误".to_string())?;
+        match portable_account(account) {
+            AccountRead::Ready(account, _) => readable.push(format!("account:{}", account.id)),
+            AccountRead::Blocked(blocker) => blocked.push(blocker),
+        }
+    }
+    persist_auth_read_blockers(
+        db,
+        &Collected {
+            snapshot: PortableSnapshot { schema_version: SNAPSHOT_VERSION, entities: Vec::new() },
+            blocked_accounts: blocked,
+            readable_account_keys: readable,
+        },
+    )
 }
 
 fn account_without_context(account: &crate::accounts::AuthAccount) -> crate::accounts::AuthAccount {
@@ -1520,36 +1609,88 @@ fn place_account(
             }
         };
         let mut rejected = Vec::new();
-        for path in &local.auth_files {
-            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-                rejected.push(path.clone());
+        let mut placed_paths = Vec::new();
+        for file in portable.auth_files.iter().filter(|file| file.context_id == source.id && !file.relative.is_empty()) {
+            let Some(relative) = safe_auth_relative(&file.relative) else {
+                issues.push(RestoreBlocker { key: format!("account:{}", account.id), label: account.label.clone(), action: "relogin".into(), detail: format!("认证文件 {} 的位置无效", file.name) });
                 continue;
             };
-            let Some(file) = portable.auth_files.iter().find(|file| file.context_id == source.id && file.name == name) else {
-                if !path.is_file() {
-                    rejected.push(path.clone());
-                }
-                continue;
-            };
+            let path = local.root.join(relative);
             match STANDARD.decode(&file.contents) {
                 Ok(bytes) => {
                     if let Some(parent) = path.parent() {
                         if fs::create_dir_all(parent).is_err() {
                             issues.push(RestoreBlocker { key: format!("account:{}", account.id), label: account.label.clone(), action: "relogin".into(), detail: format!("无法创建认证目录 {}", parent.display()) });
-                            rejected.push(path.clone());
                             continue;
                         }
                     }
-                    if let Err(error) = fs::write(path, &bytes) {
+                    if let Err(error) = fs::write(&path, &bytes) {
                         issues.push(RestoreBlocker { key: format!("account:{}", account.id), label: account.label.clone(), action: "relogin".into(), detail: format!("无法写入认证文件：{error}") });
-                        rejected.push(path.clone());
                     } else {
-                        written.push(path.clone());
+                        if !local.auth_files.iter().any(|item| item == &path) {
+                            local.auth_files.push(path.clone());
+                        }
+                        placed_paths.push(path.clone());
+                        written.push(path);
                     }
                 }
-                Err(_) => {
-                    issues.push(RestoreBlocker { key: format!("account:{}", account.id), label: account.label.clone(), action: "relogin".into(), detail: format!("认证文件 {name} 损坏") });
+                Err(_) => issues.push(RestoreBlocker { key: format!("account:{}", account.id), label: account.label.clone(), action: "relogin".into(), detail: format!("认证文件 {} 损坏", file.name) }),
+            }
+        }
+        let mut claimed_names = BTreeSet::new();
+        for path in &placed_paths {
+            if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
+                claimed_names.insert(name.to_owned());
+            }
+        }
+        let candidates = local.auth_files.clone();
+        for prefer_existing in [true, false] {
+            for path in &candidates {
+                if placed_paths.iter().any(|item| item == path) {
+                    continue;
+                }
+                let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
                     rejected.push(path.clone());
+                    continue;
+                };
+                if claimed_names.contains(name) {
+                    if !path.is_file() {
+                        rejected.push(path.clone());
+                    }
+                    continue;
+                }
+                if prefer_existing != path.is_file() {
+                    continue;
+                }
+                // A name without its own directory is written once. Other adapter
+                // paths that only share the file name stay untouched.
+                let Some(file) = portable.auth_files.iter().find(|file| file.context_id == source.id && file.name == name && file.relative.is_empty()) else {
+                    if !prefer_existing && !path.is_file() {
+                        rejected.push(path.clone());
+                    }
+                    continue;
+                };
+                match STANDARD.decode(&file.contents) {
+                    Ok(bytes) => {
+                        if let Some(parent) = path.parent() {
+                            if fs::create_dir_all(parent).is_err() {
+                                issues.push(RestoreBlocker { key: format!("account:{}", account.id), label: account.label.clone(), action: "relogin".into(), detail: format!("无法创建认证目录 {}", parent.display()) });
+                                rejected.push(path.clone());
+                                continue;
+                            }
+                        }
+                        if let Err(error) = fs::write(path, &bytes) {
+                            issues.push(RestoreBlocker { key: format!("account:{}", account.id), label: account.label.clone(), action: "relogin".into(), detail: format!("无法写入认证文件：{error}") });
+                            rejected.push(path.clone());
+                        } else {
+                            claimed_names.insert(name.to_owned());
+                            written.push(path.clone());
+                        }
+                    }
+                    Err(_) => {
+                        issues.push(RestoreBlocker { key: format!("account:{}", account.id), label: account.label.clone(), action: "relogin".into(), detail: format!("认证文件 {name} 损坏") });
+                        rejected.push(path.clone());
+                    }
                 }
             }
         }
@@ -1969,6 +2110,18 @@ fn retry_saved_binding(
     }
 }
 
+fn recheck_auth_files(db: &Database, blocker: &RestoreBlocker) -> Result<(), String> {
+    let id = blocker.key.strip_prefix("account:").unwrap_or(blocker.key.as_str());
+    let account = crate::accounts::get(db, id)?;
+    match portable_account(account) {
+        AccountRead::Ready(_, _) => clear_blocker(db, &blocker.key),
+        AccountRead::Blocked(next) => {
+            replace_blocker(db, &next.key, &next.label, &next.action, &next.detail);
+            Err(next.detail)
+        }
+    }
+}
+
 fn recheck_login(db: &Database, blocker: &RestoreBlocker) -> Result<(), String> {
     let id = blocker.key.strip_prefix("account:").unwrap_or(blocker.key.as_str());
     let account = crate::accounts::get(db, id)?;
@@ -2030,6 +2183,9 @@ pub(crate) fn retry_native_blocker(
         return retry_pending_releases(db, registry, &blocker);
     }
     if blocker.action == "relogin" {
+        if is_auth_read_blocker(&blocker) {
+            return recheck_auth_files(db, &blocker);
+        }
         return recheck_login(db, &blocker);
     }
     Err(blocker.detail)

@@ -84,13 +84,15 @@ test('five full pages are navigable and browser mode never implies native data',
   await page.keyboard.press('Enter');
   await expect(page.locator('#main')).toBeFocused();
   await expect(page.locator('#main')).toHaveAttribute('tabindex', '-1');
-  // Beyond the new first stop, the shell focus order is unchanged.
+  // After the skip link, focus lands on the collapse control, then quick jump, then the page list.
   await page.reload();
   // Wait for the app to mount again before tabbing: keys pressed mid-mount reset focus.
   await expect(page.getByRole('status')).toContainText('浏览器预览');
   await page.keyboard.press('Tab');
   await page.keyboard.press('Tab');
   await expect(page.getByRole('button', { name: '折叠侧栏', exact: true })).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(page.getByRole('button', { name: /快速前往/ })).toBeFocused();
   await page.keyboard.press('Tab');
   await expect(page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '快速开始' })).toBeFocused();
   await expect(page.locator('.brandmark')).toBeVisible();
@@ -455,6 +457,38 @@ test('sidebar collapse preserves navigation and records use the wide viewport', 
   await expect.poll(async () => (await sidebar.boundingBox())?.width ?? 0).toBeGreaterThan(180);
   await page.setViewportSize({ width: 640, height: 760 });
   await expectNoHorizontalScroll(page);
+});
+
+test('quick jump sits above the page list and leaves the sidebar footer to theme and status', async ({ page }) => {
+  await page.setViewportSize({ width: 1360, height: 768 });
+  await page.goto('/');
+  const jump = page.getByRole('button', { name: /快速前往/ });
+  const nav = page.getByRole('navigation', { name: '页面' });
+  const foot = page.locator('.sidebar-foot');
+  await expect(jump).toBeVisible();
+  await expect(foot).not.toContainText('快速前往');
+  const jumpBox = await jump.boundingBox();
+  const navBox = await nav.boundingBox();
+  expect(jumpBox).not.toBeNull();
+  expect(navBox).not.toBeNull();
+  expect(jumpBox!.y + jumpBox!.height).toBeLessThanOrEqual(navBox!.y + 1);
+  await jump.click();
+  const dialog = page.getByRole('dialog', { name: '快速前往' });
+  await expect(dialog).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+
+  await page.getByRole('button', { name: '折叠侧栏', exact: true }).click();
+  await expect(jump).toBeVisible();
+  const collapsed = await jump.boundingBox();
+  expect(collapsed).not.toBeNull();
+  expect(collapsed!.width).toBeLessThanOrEqual(48);
+  expect(collapsed!.height).toBeLessThanOrEqual(48);
+
+  await page.setViewportSize({ width: 640, height: 760 });
+  await expect(jump).toBeHidden();
+  await page.keyboard.press('Control+K');
+  await expect(page.getByRole('dialog', { name: '快速前往' })).toBeVisible();
 });
 
 test('command palette jumps between pages and the sidebar shortcut collapses navigation', async ({ page }) => {
