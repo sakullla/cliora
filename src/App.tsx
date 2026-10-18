@@ -24,6 +24,7 @@ const RecordsPage = lazy(() => import('./features/records/RecordsPage').then((mo
 const MigrationSettings = lazy(() => import('./features/settings/MigrationSettings').then((module) => ({ default: module.MigrationSettings })));
 const ToolWorkspacePage = lazy(() => import('./features/tools/ToolWorkspace').then((module) => ({ default: module.ToolWorkspacePage })));
 import type { WorkspaceOpenIntent } from './features/tools/ToolWorkspace';
+import { applyStoredLanguage, readStoredLanguage } from './i18n';
 import { native, nativeAvailable } from './lib/native';
 import { launchFailureDetail } from './lib/feedback';
 import { confirmAction } from './lib/confirm';
@@ -224,6 +225,21 @@ export default function App() {
     media.addEventListener('change', apply);
     return () => media.removeEventListener('change', apply);
   }, [bootstrap.preferences.theme]);
+  useEffect(() => {
+    const saved = bootstrap.preferences.language;
+    if (saved === 'zh' || saved === 'en') {
+      applyStoredLanguage(saved);
+      return;
+    }
+    if (!nativeAvailable) return;
+    const local = readStoredLanguage();
+    if (!local) return;
+    let cancelled = false;
+    void native.setLanguage(local).then((next) => {
+      if (!cancelled) setBootstrap(next);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [bootstrap.preferences.language]);
 
   const updateOffer = useUpdateOffer();
   const goRef = useRef<(next: Page) => void>(() => {});

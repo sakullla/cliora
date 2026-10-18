@@ -303,12 +303,11 @@ pub async fn apply_portable_bundle(app: AppHandle, preview_id: String, selected:
     };
     let retry = draft.clone();
     let _ = (selected, project_links, apply_targets);
-    let selected: std::collections::BTreeSet<String> = draft.baseline.keys().cloned().collect();
     let apply_app = app.clone();
     let result = blocking(move || {
         portable::with_change_notification(&db, || notify_portable_changed(&apply_app), || {
-        let imported = portable::apply_import(&db, &SystemCredentialStore, &adapters::Registry::builtins(),
-            &draft, &selected).map_err(native_error)?;
+        let imported = portable::restore_preview(&db, &SystemCredentialStore, &adapters::Registry::builtins(),
+            &draft).map_err(native_error)?;
         let targets = portable::load_blockers(&db).unwrap_or_default().into_iter().map(|blocker| ImportTargetResult {
             label: blocker.label,
             status: "blocked",
@@ -2755,6 +2754,23 @@ pub fn set_theme(
     state.with_database(&app, |database| {
         database
             .update_preferences(|preferences| preferences.theme = theme)
+            .map(Bootstrap::new)
+            .map_err(storage_error)
+    })
+}
+
+#[tauri::command]
+pub fn set_language(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    language: String,
+) -> Result<Bootstrap, ApiError> {
+    if !matches!(language.as_str(), "zh" | "en") {
+        return Err(storage_error("界面语言只支持中文或英文".into()));
+    }
+    state.with_database(&app, |database| {
+        database
+            .update_preferences(|preferences| preferences.language = Some(language))
             .map(Bootstrap::new)
             .map_err(storage_error)
     })

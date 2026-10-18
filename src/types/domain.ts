@@ -7,6 +7,7 @@ export type Preferences = {
   managed_tools: CliId[];
   theme: Theme;
   tool_icons?: Record<string, string>;
+  language?: 'zh' | 'en';
 };
 
 export type ToolSummary = {

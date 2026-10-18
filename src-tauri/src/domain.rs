@@ -61,6 +61,8 @@ pub struct Preferences {
     pub managed_tools: Vec<CliId>,
     pub theme: Theme,
     pub tool_icons: BTreeMap<String, String>,
+    /// Interface language mirrored to `cliora:language`. Absent until chosen.
+    pub language: Option<String>,
     /// Future/absent adapters remain in the saved setting without entering
     /// the current five-tool UI or being silently dropped by another update.
     unknown_managed_tools: Vec<String>,
@@ -73,6 +75,8 @@ struct PreferencesWire {
     theme: Theme,
     #[serde(default)]
     tool_icons: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    language: Option<String>,
 }
 
 impl From<PreferencesWire> for Preferences {
@@ -93,6 +97,7 @@ impl From<PreferencesWire> for Preferences {
             managed_tools,
             theme: wire.theme,
             tool_icons: wire.tool_icons,
+            language: wire.language.filter(|value| matches!(value.as_str(), "zh" | "en")),
             unknown_managed_tools,
         }
     }
@@ -111,6 +116,7 @@ impl From<Preferences> for PreferencesWire {
             managed_tools,
             theme: preferences.theme,
             tool_icons: preferences.tool_icons,
+            language: preferences.language,
         }
     }
 }
@@ -122,6 +128,7 @@ impl Default for Preferences {
             managed_tools: CliId::ALL.to_vec(),
             theme: Theme::System,
             tool_icons: BTreeMap::new(),
+            language: None,
             unknown_managed_tools: Vec::new(),
         }
     }
