@@ -177,6 +177,7 @@ fn portable_snapshot_rejects_duplicate_entities() {
         payload: PortablePayload::Preferences(PortablePreferences { tool_icons: Default::default(),
             managed_tools: vec!["codex".into()],
             theme: "system".into(),
+            language: None,
         }),
     };
     assert!(validate_snapshot(&PortableSnapshot {
@@ -418,7 +419,7 @@ fn absent_preferences_are_new_and_actual_edits_after_preview_are_protected() {
     assert!(collect_snapshot(&db, &credentials, &registry).unwrap().entities.is_empty());
     let incoming = PortableSnapshot { schema_version: 1, entities: vec![PortableEntity {
         id: "managed".into(), payload: PortablePayload::Preferences(PortablePreferences { tool_icons: Default::default(),
-            managed_tools: vec!["pi".into()], theme: "dark".into(),
+            managed_tools: vec!["pi".into()], theme: "dark".into(), language: None,
         }),
     }] };
     let draft = preview_import(&db, &credentials, &registry, incoming.clone()).unwrap();
@@ -589,6 +590,7 @@ fn tool_icons_roundtrip_encryption_and_participate_in_import_cas_without_device_
     // Older packages omit icon fields; an empty map preserves their canonical digest.
     let old: PortablePreferences = serde_json::from_str(r#"{"managedTools":["codex"],"theme":"light"}"#).unwrap();
     assert!(old.tool_icons.is_empty());
+    assert!(old.language.is_none());
     assert!(!serde_json::to_string(&old).unwrap().contains("toolIcons"));
 }
 
@@ -740,7 +742,7 @@ fn schema3_snapshot_restores_login_material_paths_and_reports_each_cli_failure()
     let rendered = serde_json::to_string(&snapshot).unwrap();
     assert!(!rendered.contains("session-body-must-stay"));
     assert!(!rendered.contains("pending-should-not-travel"));
-    assert!(!rendered.contains("sk-minimax-plain"));
+    assert!(rendered.contains("sk-minimax-plain"));
     assert!(rendered.contains("oauth-token-value"));
     assert!(rendered.contains("session-token-value"));
     let PortablePayload::Account(exported_account) = &snapshot.entities.iter().find(|entity| entity.key() == "account:acct-1").unwrap().payload else { panic!("account") };
@@ -749,8 +751,8 @@ fn schema3_snapshot_restores_login_material_paths_and_reports_each_cli_failure()
     assert!(exported_account.auth_files.iter().any(|file| file.name == "auth.json" && !file.contents.is_empty()));
     let minimax_entity = snapshot.entities.iter().find(|entity| entity.key() == "profile:minimax-profile").unwrap();
     let PortablePayload::Profile(minimax_payload) = &minimax_entity.payload else { panic!("minimax profile") };
-    assert!(matches!(minimax_payload.profile.authentication, crate::native::profile::ProfileAuthentication::RebindRequired));
-    assert!(minimax_payload.connection_secret.is_none());
+    assert!(!matches!(minimax_payload.profile.authentication, crate::native::profile::ProfileAuthentication::RebindRequired));
+    assert_eq!(minimax_payload.connection_secret.as_deref(), Some("sk-minimax-plain"));
     let fresh = database(&temp.path().join("new"));
     let received = MemoryCredentials::default();
     let home = temp.path().join("home");
@@ -842,4 +844,200 @@ fn schema_two_project_import_omits_path_and_short_password_writes_nothing() {
     let destination = temp.path().join("short.cliora");
     assert!(export_bundle(&db, &credentials, &registry, "too-short", None, &destination).unwrap_err().contains("12"));
     assert!(!destination.exists());
+}
+
+#[test]
+fn bundle_restore_keeps_conflict_local_and_applies_other_items() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(&temp.path().join("local"));
+    let credentials = MemoryCredentials::default();
+    credentials.put("local-secret", "sk-local-plain").unwrap();
+    let registry = Registry::builtins();
+    let mut profile = bare_profile("profile-1", "codex", "Local", BTreeMap::new());
+    profile.connection = Some(crate::native::profile::Connection {
+        provider_id: "openai".into(),
+        interface_format: "openai_responses".into(),
+        base_url: "https://api.example.test/v1".into(),
+        model: "gpt-6".into(),
+        secret_ref: Some("local-secret".into()),
+        auth_env_var: None,
+        model_records: Vec::new(),
+    });
+    db.with_connection(|conn| {
+        conn.execute("INSERT INTO native_profiles (id,tool,version,data) VALUES (?1,?2,1,?3)", rusqlite::params![profile.id, profile.tool, serde_json::to_string(&profile).unwrap()]).unwrap();
+        Ok(())
+    }).unwrap();
+    let mut snapshot = collect_snapshot(&db, &credentials, &registry).unwrap();
+    let entity = snapshot.entities.iter_mut().find(|entity| entity.key() == "profile:profile-1").unwrap();
+    let PortablePayload::Profile(value) = &mut entity.payload else { panic!("profile") };
+    value.profile.name = "Remote".into();
+    snapshot.entities.push(PortableEntity {
+        id: "project-new".into(),
+        payload: PortablePayload::Project(PortableProject {
+            id: "project-new".into(),
+            name: "Added".into(),
+            path: None,
+            model_overrides: BTreeMap::new(),
+        }),
+    });
+    let draft = preview_import(&db, &credentials, &registry, snapshot).unwrap();
+    assert!(draft.items.iter().any(|item| item.key == "profile:profile-1" && item.status == "conflict"));
+    assert!(draft.items.iter().any(|item| item.key == "project:project-new" && item.status == "new"));
+    restore_preview(&db, &credentials, &registry, &draft).unwrap();
+    let saved: String = db.with_connection(|conn| conn.query_row("SELECT data FROM native_profiles WHERE id='profile-1'", [], |row| row.get(0)).map_err(|error| error.to_string())).unwrap();
+    assert!(saved.contains("Local"), "{saved}");
+    assert!(!saved.contains("Remote"));
+    let name: String = db.with_connection(|conn| conn.query_row("SELECT name FROM projects WHERE id='project-new'", [], |row| row.get(0)).map_err(|error| error.to_string())).unwrap();
+    assert_eq!(name, "Added");
+    let raw: String = db.with_connection(|conn| conn.query_row("SELECT value FROM app_settings WHERE key='sync_conflicts'", [], |row| row.get(0)).map_err(|error| error.to_string())).unwrap();
+    assert!(!raw.contains("sk-local-plain"), "{raw}");
+    let records: Vec<sync::SyncConflict> = serde_json::from_str(&raw).unwrap();
+    let conflict = records.iter().find(|item| item.key == "profile:profile-1").unwrap();
+    assert!(conflict.local_present);
+    assert_eq!(conflict.versions.len(), 1);
+    let PortablePayload::Profile(held) = &conflict.versions[0].entity.as_ref().unwrap().payload else { panic!("held profile") };
+    assert_eq!(held.profile.name, "Remote");
+    assert!(held.connection_secret.is_none());
+    let id = held.profile.connection.as_ref().unwrap().secret_ref.as_deref().unwrap();
+    assert_eq!(credentials.get(id).unwrap(), "sk-local-plain");
+    let visible = sync::status(&db).unwrap();
+    assert!(visible.conflicts.iter().any(|item| item.key == "profile:profile-1" && item.versions.iter().all(|version| version.entity.is_none())));
+}
+
+#[test]
+fn binding_update_keeps_existing_managed_until_apply_rewrites_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(temp.path());
+    let credentials = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    let managed = r#"{"settings":{"/keep":true}}"#;
+    db.with_connection(|conn| {
+        conn.execute("INSERT INTO applied_bindings (scope_key,tool,profile_id,profile_version,managed) VALUES ('global','codex','profile-old',4,?1)", [managed]).unwrap();
+        Ok(())
+    }).unwrap();
+    let snapshot = PortableSnapshot {
+        schema_version: 3,
+        entities: vec![PortableEntity {
+            id: binding_id("codex", "global"),
+            payload: PortablePayload::Binding(PortableBinding {
+                scope_key: "global".into(),
+                tool: "codex".into(),
+                profile_id: "profile-new".into(),
+                context_id: None,
+            }),
+        }],
+    };
+    let draft = preview_import(&db, &credentials, &registry, snapshot).unwrap();
+    let key = format!("binding:{}", binding_id("codex", "global"));
+    assert_eq!(draft.items.iter().find(|item| item.key == key).unwrap().status, "conflict");
+    apply_import(&db, &credentials, &registry, &draft, &BTreeSet::from([key])).unwrap();
+    let (saved, version, profile_id): (String, i64, String) = db.with_connection(|conn| {
+        conn.query_row("SELECT managed, profile_version, profile_id FROM applied_bindings WHERE tool='codex' AND scope_key='global'", [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).map_err(|error| error.to_string())
+    }).unwrap();
+    assert!(saved.contains("/keep"), "{saved}");
+    assert_eq!(version, -1);
+    assert_eq!(profile_id, "profile-new");
+}
+
+#[test]
+fn schema3_language_round_trips_and_older_packages_do_not_clear_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = database(&temp.path().join("source"));
+    source.update_preferences(|preferences| preferences.language = Some("en".into())).unwrap();
+    let credentials = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    let bundle = temp.path().join("language.cliora");
+    export_bundle(&source, &credentials, &registry, "correct-password", None, &bundle).unwrap();
+    let snapshot = unlock_bundle(&bundle, "correct-password").unwrap();
+    let PortablePayload::Preferences(preferences) = &snapshot.entities.iter().find(|entity| entity.key() == "preferences:managed").unwrap().payload else { panic!("preferences") };
+    assert_eq!(preferences.language.as_deref(), Some("en"));
+    let fresh = database(&temp.path().join("fresh"));
+    let draft = preview_import(&fresh, &credentials, &registry, snapshot.clone()).unwrap();
+    restore_preview(&fresh, &credentials, &registry, &draft).unwrap();
+    assert_eq!(fresh.preferences().unwrap().language.as_deref(), Some("en"));
+    let local = database(&temp.path().join("local"));
+    local.update_preferences(|preferences| preferences.language = Some("zh".into())).unwrap();
+    let conflict = preview_import(&local, &credentials, &registry, snapshot).unwrap();
+    assert!(conflict.items.iter().any(|item| item.key == "preferences:managed" && item.status == "conflict"));
+    restore_preview(&local, &credentials, &registry, &conflict).unwrap();
+    assert_eq!(local.preferences().unwrap().language.as_deref(), Some("zh"));
+    let older = PortableSnapshot {
+        schema_version: 2,
+        entities: vec![PortableEntity {
+            id: "managed".into(),
+            payload: PortablePayload::Preferences(PortablePreferences {
+                managed_tools: vec!["pi".into()],
+                theme: "dark".into(),
+                tool_icons: BTreeMap::new(),
+                language: None,
+            }),
+        }],
+    };
+    let draft = preview_import(&local, &credentials, &registry, older).unwrap();
+    apply_import(&local, &credentials, &registry, &draft, &draft.baseline.keys().cloned().collect()).unwrap();
+    let saved = local.preferences().unwrap();
+    assert_eq!(saved.theme, crate::domain::Theme::Dark);
+    assert_eq!(saved.language.as_deref(), Some("zh"));
+}
+
+#[test]
+fn unreadable_auth_file_fails_the_account_export() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(temp.path());
+    let credentials = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    let root = temp.path().join("auth");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("history.txt"), "session-body").unwrap();
+    let mut context = crate::accounts::NativeContext {
+        id: "ctx".into(),
+        tool_id: "codex".into(),
+        root: root.clone(),
+        config_root: root.clone(),
+        auth_files: vec![root.join("missing.json")],
+        history_roots: vec![root.clone()],
+        resource_root: root.clone(),
+        environment: BTreeMap::new(),
+        remove_environment: Vec::new(),
+        cli_args: Vec::new(),
+    };
+    let account = crate::accounts::AuthAccount {
+        id: "acct".into(),
+        tool_id: "codex".into(),
+        provider: "test".into(),
+        label: "Work".into(),
+        version: 1,
+        state: crate::accounts::AccountState::SignedIn,
+        identity: None,
+        context: Some(context.clone()),
+        retired_contexts: Vec::new(),
+        pending_login: None,
+        checked_at: None,
+        detail: None,
+    };
+    db.with_connection(|conn| {
+        conn.execute("INSERT INTO auth_accounts (id,tool,version,data) VALUES ('acct','codex',1,?1)", [serde_json::to_string(&account).unwrap()]).unwrap();
+        Ok(())
+    }).unwrap();
+    let destination = temp.path().join("blocked.cliora");
+    let error = export_bundle(&db, &credentials, &registry, "correct-password", None, &destination).unwrap_err();
+    assert!(error.contains("无法读取"), "{error}");
+    assert!(!destination.exists());
+    context.auth_files = vec![PathBuf::from("bad:name")];
+    let mut renamed = account.clone();
+    renamed.context = Some(context.clone());
+    db.with_connection(|conn| {
+        conn.execute("UPDATE auth_accounts SET data=?1 WHERE id='acct'", [serde_json::to_string(&renamed).unwrap()]).unwrap();
+        Ok(())
+    }).unwrap();
+    assert!(collect_snapshot(&db, &credentials, &registry).unwrap_err().contains("文件名无效"));
+    let huge = root.join("huge.bin");
+    fs::File::create(&huge).unwrap().set_len(4 * 1024 * 1024 + 1).unwrap();
+    context.auth_files = vec![huge];
+    renamed.context = Some(context);
+    db.with_connection(|conn| {
+        conn.execute("UPDATE auth_accounts SET data=?1 WHERE id='acct'", [serde_json::to_string(&renamed).unwrap()]).unwrap();
+        Ok(())
+    }).unwrap();
+    assert!(collect_snapshot(&db, &credentials, &registry).unwrap_err().contains("4MiB"));
 }

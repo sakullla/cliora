@@ -18,7 +18,7 @@ export type AppLanguage = (typeof supportedLanguages)[number];
 
 export const LANGUAGE_STORAGE_KEY = 'cliora:language';
 
-function readStoredLanguage(): AppLanguage | null {
+export function readStoredLanguage(): AppLanguage | null {
   try {
     const stored = localStorage.getItem(LANGUAGE_STORAGE_KEY);
     return stored === 'zh' || stored === 'en' ? stored : null;
@@ -34,9 +34,21 @@ export function detectLanguage(): AppLanguage {
   return system.toLowerCase().startsWith('zh') ? 'zh' : 'en';
 }
 
-export function setLanguage(language: AppLanguage): void {
+type LanguagePersist = (language: AppLanguage) => void;
+let languagePersist: LanguagePersist | null = null;
+
+export function bindLanguagePersist(listener: LanguagePersist): void {
+  languagePersist = listener;
+}
+
+export function applyStoredLanguage(language: AppLanguage): void {
   try { localStorage.setItem(LANGUAGE_STORAGE_KEY, language); } catch { /* Session-only fallback keeps the switch usable. */ }
-  void i18n.changeLanguage(language);
+  if (i18n.language !== language) void i18n.changeLanguage(language);
+}
+
+export function setLanguage(language: AppLanguage): void {
+  applyStoredLanguage(language);
+  languagePersist?.(language);
 }
 
 void i18n.use(initReactI18next).init({

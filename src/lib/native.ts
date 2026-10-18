@@ -13,7 +13,7 @@ import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, ScanSt
 import { markOnboardingLaunched } from './onboarding';
 import type { ConflictPreview, PortableApplyTarget, PortableImportReport, PortableItem, PortablePreview, PortableProjectLink, SyncStatus, WebdavSetup } from '../types/portable';
 import type { QueryConfig, UsageCache, UsagePreset, UsageSample, DeleteQueryResult, DraftTestReport, SaveQueryResult, UsageError, UsageQuery, UsageQueryDraft } from '../types/usage';
-import i18n from '../i18n';
+import i18n, { bindLanguagePersist } from '../i18n';
 
 export const nativeAvailable = isTauri();
 
@@ -232,6 +232,7 @@ export const native = {
   setManagedTools: (managedTools: CliId[]) => command<Bootstrap>('set_managed_tools', { managedTools }),
   setToolIcon: (toolId: string, dataUrl: string | null) => command<Bootstrap>('set_tool_icon', { toolId, dataUrl }),
   setTheme: (theme: Theme) => command<Bootstrap>('set_theme', { theme }),
+  setLanguage: (language: 'zh' | 'en') => command<Bootstrap>('set_language', { language }),
   getToolWorkspace: (tool: CliId, scope: Scope, projectPath?: string) => command<ToolWorkspace>('get_tool_workspace', { tool, scope, projectPath: projectPath || null }),
   setCustomCliPath: (tool: CliId, path: string | null) => command<void>('set_custom_cli_path', { tool, path }),
   saveNativeProfile: (profile: NativeProfile, expectedVersion: number | null) => command<NativeProfile>('save_native_profile', { profile, expectedVersion }),
@@ -288,3 +289,8 @@ export const compareConfigurationCurrent = (draft: ConfigurationDraft) => comman
 export const rebaseConfigurationCurrent = (draft: ConfigurationDraft, comparisonId: string, files: Record<string, string>) => command<ConfigurationDraft>('rebase_configuration_current', { draft, comparisonId, files });
 export const previewConfigurationBackup = (draft: ConfigurationDraft, role: string, transactionId: string) => command<import('../types/configuration').ConfigurationBackupPreview>('preview_configuration_backup', { draft, role, transactionId });
 export const restoreConfigurationBackup = (draft: ConfigurationDraft, role: string, transactionId: string) => command<import('../types/configuration').ConfigurationSaveResult>('restore_configuration_backup', { draft, role, transactionId });
+
+bindLanguagePersist((language) => {
+  if (!nativeAvailable) return;
+  void command<Bootstrap>('set_language', { language }).catch(() => {});
+});

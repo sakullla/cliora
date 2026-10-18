@@ -30,6 +30,9 @@ pub struct PortablePreferences {
     pub theme: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tool_icons: BTreeMap<String, String>,
+    /// Schema 3. Older packages omit it and must not wipe a saved language.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -513,6 +516,11 @@ fn collect_snapshot_on(
                 .and_then(Value::as_str)
                 .unwrap_or("system")
                 .into(),
+            language: preferences
+                .get("language")
+                .and_then(Value::as_str)
+                .filter(|value| matches!(*value, "zh" | "en"))
+                .map(str::to_owned),
         }),
     });
     }
@@ -544,26 +552,10 @@ fn collect_snapshot_on(
                 }
             });
         }
-        let export_connection_secret = registry
-            .get(&profile.tool)
-            .is_none_or(|adapter| adapter.exports_connection_secret());
+        // Connection API keys travel with the profile. An adapter flag must not drop them.
         let connection_secret = if let Some(connection) = profile.connection.as_mut() {
             let id = connection.secret_ref.take();
-            if export_connection_secret {
-                id.map(|id| store.get(&id)).transpose()?
-            } else {
-                if id.is_some()
-                    && !matches!(
-                        profile.authentication,
-                        crate::native::profile::ProfileAuthentication::OAuth { .. }
-                    )
-                {
-                    profile.authentication =
-                        crate::native::profile::ProfileAuthentication::RebindRequired;
-                    pending_fields.push("连接密钥需要在此设备重新绑定".into());
-                }
-                None
-            }
+            id.map(|id| store.get(&id)).transpose()?
         } else {
             None
         };
@@ -571,15 +563,7 @@ fn collect_snapshot_on(
         for (role, credentials) in std::mem::take(&mut profile.native_credentials) {
             let mut values = BTreeMap::new();
             for (name, id) in credentials {
-                let login_material = role == "auth"
-                    || role == "local_auth"
-                    || name.to_ascii_lowercase().contains("oauth")
-                    || name.to_ascii_lowercase().contains("session");
-                if login_material || export_connection_secret {
-                    values.insert(name, store.get(&id)?);
-                } else {
-                    pending_fields.push(format!("{role}.{name} 需要在此设备重新绑定"));
-                }
+                values.insert(name, store.get(&id)?);
             }
             if !values.is_empty() {
                 native_secrets.insert(role, values);
@@ -701,7 +685,7 @@ fn collect_snapshot_on(
     let accounts = read_rows(conn, "SELECT data FROM auth_accounts ORDER BY id", |row| row.get::<_, String>(0))?;
     for text in accounts {
         let account: crate::accounts::AuthAccount = serde_json::from_str(&text).map_err(|_| "账号格式错误")?;
-        let (account, auth_files) = portable_account(account);
+        let (account, auth_files) = portable_account(account)?;
         entities.push(PortableEntity {
             id: account.id.clone(),
             payload: PortablePayload::Account(PortableAccount { account, auth_files }),
@@ -749,6 +733,7 @@ pub fn validate_snapshot(snapshot: &PortableSnapshot) -> Result<(), String> {
             PortablePayload::Preferences(value)
                 if entity.id == "managed"
                     && matches!(value.theme.as_str(), "system" | "light" | "dark")
+                    && value.language.as_deref().is_none_or(|language| matches!(language, "zh" | "en"))
                     && crate::domain::valid_tool_icons(&value.tool_icons) => {}
             PortablePayload::Profile(value)
                 if value.profile.id == entity.id
@@ -938,7 +923,19 @@ pub fn apply_import(
     draft: &ImportDraft,
     selected: &BTreeSet<String>,
 ) -> Result<usize, String> {
-    if selected.iter().any(|key| !draft.baseline.contains_key(key)) {
+    apply_import_selecting(db, store, registry, draft, selected, &BTreeSet::new())
+}
+
+/// `selected` is written. `unchanged` must still match the preview baseline but is not written.
+fn apply_import_selecting(
+    db: &Database,
+    store: &dyn CredentialStore,
+    registry: &Registry,
+    draft: &ImportDraft,
+    selected: &BTreeSet<String>,
+    unchanged: &BTreeSet<String>,
+) -> Result<usize, String> {
+    if selected.iter().chain(unchanged.iter()).any(|key| !draft.baseline.contains_key(key)) {
         return Err("导入选择含未知资料".into());
     }
     let mut imported = 0;
@@ -1008,7 +1005,7 @@ pub fn apply_import(
             .into_iter()
             .map(|entity| (entity.key(), entity))
             .collect();
-        for key in selected {
+        for key in selected.iter().chain(unchanged.iter()) {
             let digest = current.get(key).map(PortableEntity::digest).transpose()?;
             if draft.baseline.get(key) != Some(&digest) {
                 return Err("本机资料已变化，请重新预览导入".into());
@@ -1017,8 +1014,17 @@ pub fn apply_import(
         for entity in &prepared {
             match &entity.payload {
                 PortablePayload::Preferences(value) => {
-                    let json = serde_json::json!({"schema_version":1,"managed_tools":value.managed_tools,"theme":value.theme,"tool_icons":value.tool_icons}).to_string();
-                    tx.execute("INSERT INTO app_settings (key,value) VALUES ('preferences',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[json]).map_err(|error| error.to_string())?;
+                    let preserved = current.get("preferences:managed").and_then(|entity| match &entity.payload {
+                        PortablePayload::Preferences(existing) => existing.language.clone(),
+                        _ => None,
+                    });
+                    let language = value.language.clone().filter(|language| matches!(language.as_str(), "zh" | "en"))
+                        .or(preserved.filter(|language| matches!(language.as_str(), "zh" | "en")));
+                    let mut body = serde_json::json!({"schema_version":1,"managed_tools":value.managed_tools,"theme":value.theme,"tool_icons":value.tool_icons});
+                    if let Some(language) = language {
+                        body["language"] = serde_json::Value::String(language);
+                    }
+                    tx.execute("INSERT INTO app_settings (key,value) VALUES ('preferences',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[body.to_string()]).map_err(|error| error.to_string())?;
                 }
                 PortablePayload::Project(value) => {
                     if draft.snapshot.schema_version >= 3 {
@@ -1075,8 +1081,10 @@ pub fn apply_import(
                     remember_outbox(&tx, &entity.key())?;
                 }
                 PortablePayload::Binding(value) => {
+                    // Keep the previous managed map so apply can remove owned fields. A successful
+                    // apply writes the new map; a failed apply must still be able to release it.
                     tx.execute("INSERT INTO applied_bindings (scope_key,tool,profile_id,profile_version,managed,context_id) VALUES (?1,?2,?3,-1,'{}',?4)
-                        ON CONFLICT(scope_key, tool) DO UPDATE SET profile_id=excluded.profile_id, profile_version=-1, managed='{}', context_id=excluded.context_id",
+                        ON CONFLICT(scope_key, tool) DO UPDATE SET profile_id=excluded.profile_id, profile_version=-1, context_id=excluded.context_id",
                         params![value.scope_key, value.tool, value.profile_id, value.context_id]).map_err(|error| error.to_string())?;
                     remember_outbox(&tx, &entity.key())?;
                 }
@@ -1093,7 +1101,7 @@ pub fn apply_import(
     if let Some((home, base)) = roots {
         for entity in &prepared {
             let PortablePayload::Account(portable) = &entity.payload else { continue };
-            let (stored, _, account_issues) = place_account(db, portable, registry, &base);
+            let (stored, _, account_issues) = place_account(db, portable, registry, &home, &base);
             issues.extend(account_issues);
             let key = format!("account:{}", stored.id);
             let label = stored.label.clone();
@@ -1116,6 +1124,104 @@ pub fn apply_import(
     }
     imported += prepared.len();
     Ok(imported)
+}
+
+/// Apply only new and identical items. A differing item keeps the local row and both versions.
+pub fn restore_preview(
+    db: &Database,
+    store: &dyn CredentialStore,
+    registry: &Registry,
+    draft: &ImportDraft,
+) -> Result<usize, String> {
+    let mut selected = BTreeSet::new();
+    let mut unchanged = BTreeSet::new();
+    for item in &draft.items {
+        match item.status {
+            "new" | "same" => { selected.insert(item.key.clone()); }
+            "conflict" => { unchanged.insert(item.key.clone()); }
+            _ => return Err("导入资料状态无效".into()),
+        }
+    }
+    let imported = apply_import_selecting(db, store, registry, draft, &selected, &unchanged)?;
+    remember_bundle_conflicts(db, store, registry, draft, &selected, &unchanged)?;
+    Ok(imported)
+}
+
+fn remember_bundle_conflicts(
+    db: &Database,
+    store: &dyn CredentialStore,
+    registry: &Registry,
+    draft: &ImportDraft,
+    applied: &BTreeSet<String>,
+    conflicts: &BTreeSet<String>,
+) -> Result<(), String> {
+    let local: BTreeMap<_, _> = collect_snapshot(db, store, registry)?
+        .entities
+        .into_iter()
+        .map(|entity| (entity.key(), entity))
+        .collect();
+    let mut created: Vec<String> = Vec::new();
+    let mut held = Vec::new();
+    for key in conflicts {
+        let incoming = draft.snapshot.entities.iter().find(|entity| entity.key() == *key).ok_or("冲突资料缺失")?;
+        let digest = incoming.digest()?;
+        if local.get(key).map(PortableEntity::digest).transpose()?.as_ref() != draft.baseline.get(key).and_then(|value| value.as_ref()) {
+            for id in created { let _ = store.delete(&id); }
+            return Err("本机资料已变化，请重新预览导入".into());
+        }
+        let (entity, secret_ids) = hold_conflict_entity(store, incoming)?;
+        created.extend(secret_ids);
+        held.push(sync::SyncConflict {
+            key: key.clone(),
+            label: local.get(key).map(PortableEntity::label).unwrap_or_else(|| incoming.label()),
+            local_present: local.contains_key(key),
+            local_digest: local.get(key).map(PortableEntity::digest).transpose()?.unwrap_or_default(),
+            remote_versions: 1,
+            remote_deleted: false,
+            versions: vec![sync::SyncConflictVersion {
+                id: format!("bundle:{digest}"),
+                digest,
+                deleted: false,
+                entity: Some(entity),
+            }],
+        });
+    }
+    if let Err(error) = sync::replace_conflicts(db, applied, conflicts, held) {
+        for id in created { let _ = store.delete(&id); }
+        return Err(error);
+    }
+    Ok(())
+}
+
+/// Keep API keys in the credential store. The held entity keeps references, not raw key text.
+fn hold_conflict_entity(store: &dyn CredentialStore, incoming: &PortableEntity) -> Result<(PortableEntity, Vec<String>), String> {
+    let mut entity = incoming.clone();
+    let mut created: Vec<String> = Vec::new();
+    if let PortablePayload::Profile(portable) = &mut entity.payload {
+        if let Some(secret) = portable.connection_secret.take() {
+            let id = credential_id();
+            if let Err(error) = store.put(&id, &secret) {
+                for old in created { let _ = store.delete(&old); }
+                return Err(error);
+            }
+            created.push(id.clone());
+            if let Some(connection) = portable.profile.connection.as_mut() {
+                connection.secret_ref = Some(id);
+            }
+        }
+        for (role, values) in std::mem::take(&mut portable.native_secrets) {
+            for (name, secret) in values {
+                let id = credential_id();
+                if let Err(error) = store.put(&id, &secret) {
+                    for old in created { let _ = store.delete(&old); }
+                    return Err(error);
+                }
+                created.push(id.clone());
+                portable.profile.native_credentials.entry(role.clone()).or_default().insert(name, id);
+            }
+        }
+    }
+    Ok((entity, created))
 }
 
 /// Observe committed portable rows without reading secrets. Metadata-only syncs emit nothing;
@@ -1199,23 +1305,31 @@ fn normalize_account_digest(account: &mut crate::accounts::AuthAccount) {
     }
 }
 
-fn portable_account(mut account: crate::accounts::AuthAccount) -> (crate::accounts::AuthAccount, Vec<PortableAuthFile>) {
+fn portable_account(mut account: crate::accounts::AuthAccount) -> Result<(crate::accounts::AuthAccount, Vec<PortableAuthFile>), String> {
     account.pending_login = None;
     let mut auth_files = Vec::new();
+    let label = account.label.clone();
     let contexts = account.context.iter_mut().chain(account.retired_contexts.iter_mut());
     for context in contexts {
         for path in &context.auth_files {
-            let Some(name) = path.file_name().and_then(|name| name.to_str()) else { continue };
-            if !valid_auth_name(name) { continue; }
-            let Ok(bytes) = fs::read(path) else { continue };
-            if bytes.len() > 4 * 1024 * 1024 { continue; }
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                return Err(format!("账号 {label} 的认证文件名无效，不能当作已导出"));
+            };
+            if !valid_auth_name(name) {
+                return Err(format!("账号 {label} 的认证文件名无效，不能当作已导出"));
+            }
+            let metadata = fs::metadata(path).map_err(|_| format!("账号 {label} 的认证文件无法读取，不能当作已导出"))?;
+            if metadata.len() > 4 * 1024 * 1024 {
+                return Err(format!("账号 {label} 的认证文件超过 4MiB，不能当作已导出"));
+            }
+            let bytes = fs::read(path).map_err(|_| format!("账号 {label} 的认证文件无法读取，不能当作已导出"))?;
             auth_files.push(PortableAuthFile { context_id: context.id.clone(), name: name.to_owned(), contents: STANDARD.encode(bytes) });
         }
     }
     auth_files.sort_by(|left, right| (&left.context_id, &left.name).cmp(&(&right.context_id, &right.name)));
     auth_files.dedup_by(|left, right| left.context_id == right.context_id && left.name == right.name);
     normalize_account_digest(&mut account);
-    (account, auth_files)
+    Ok((account, auth_files))
 }
 
 fn account_without_context(account: &crate::accounts::AuthAccount) -> crate::accounts::AuthAccount {
@@ -1227,18 +1341,19 @@ fn account_without_context(account: &crate::accounts::AuthAccount) -> crate::acc
     account
 }
 
-fn login_executable(db: &Database, registry: &Registry, tool: &str) -> Option<PathBuf> {
+fn login_executable(db: &Database, tool: &str, home: &Path) -> Option<PathBuf> {
     if let Some(path) = tool_choice(db, tool) {
         return Some(path);
     }
-    #[cfg(not(test))]
-    {
-        return installed_tool(registry, tool);
-    }
+    // Unit tests must not probe the developer PATH. Production uses the account executable check.
     #[cfg(test)]
     {
-        let _ = registry;
+        let _ = (db, home);
         None
+    }
+    #[cfg(not(test))]
+    {
+        crate::accounts::native::executable(db, home, tool).ok()
     }
 }
 
@@ -1246,6 +1361,7 @@ fn place_account(
     db: &Database,
     portable: &PortableAccount,
     registry: &Registry,
+    home: &Path,
     base: &Path,
 ) -> (crate::accounts::AuthAccount, Vec<PathBuf>, Vec<RestoreBlocker>) {
     let mut account = portable.account.clone();
@@ -1297,7 +1413,7 @@ fn place_account(
     account.retired_contexts = placed.into_iter().filter(|context| retired_ids.contains(&context.id)).collect();
     if account.state == crate::accounts::AccountState::SignedIn {
         if let Some(context) = &account.context {
-            if let Some(executable) = login_executable(db, registry, &account.tool_id) {
+            if let Some(executable) = login_executable(db, &account.tool_id, home) {
                 if executable.is_file() {
                     match crate::accounts::native::observe(&executable, context) {
                         Ok(observation) if observation.state == crate::accounts::AccountState::SignedIn => {}
@@ -1319,12 +1435,6 @@ fn place_account(
         }
     }
     (account, written, issues)
-}
-
-#[cfg(not(test))]
-fn installed_tool(registry: &Registry, tool: &str) -> Option<PathBuf> {
-    let probe = crate::native::adapter::probe_registered(registry, tool, None, Path::new("."), None, crate::native::adapter::Scope::Global).ok()?;
-    probe.selected_path.map(PathBuf::from)
 }
 
 fn tool_choice(db: &Database, tool: &str) -> Option<PathBuf> {

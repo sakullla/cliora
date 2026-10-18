@@ -346,9 +346,8 @@ pub trait CliAdapter: Sync {
     fn connection_secret_via_launch_env(&self) -> bool {
         false
     }
-    /// Portable profiles copy `connection.secret_ref` into `connection_secret`.
-    /// Adapters that must rebind on the next device, the same way OAuth does,
-    /// return false so the snapshot keeps the rebind note and not the key.
+    /// Retained adapter flag. Schema 3 snapshots still copy connection API keys;
+    /// a false result must not drop the key or force a rebind.
     fn exports_connection_secret(&self) -> bool {
         true
     }

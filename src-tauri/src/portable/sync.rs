@@ -90,6 +90,9 @@ pub struct SyncConflictVersion {
     pub id: String,
     pub digest: String,
     pub deleted: bool,
+    /// Incoming bundle body. Omitted from status responses so secrets stay out of IPC.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entity: Option<PortableEntity>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -461,6 +464,42 @@ fn read_config(db: &Database) -> Result<Option<SyncConfig>, String> {
         })).optional().map_err(|error| error.to_string()))
 }
 
+pub(crate) fn read_conflicts(db: &Database) -> Result<Vec<SyncConflict>, String> {
+    db.with_connection(|conn| {
+        let value: Option<String> = conn
+            .query_row(
+                "SELECT value FROM app_settings WHERE key='sync_conflicts'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?;
+        value
+            .map(|text| serde_json::from_str(&text).map_err(|_| "同步冲突记录损坏".to_string()))
+            .transpose()
+            .map(|value| value.unwrap_or_default())
+    })
+}
+
+pub(crate) fn replace_conflicts(
+    db: &Database,
+    applied: &BTreeSet<String>,
+    replaced: &BTreeSet<String>,
+    added: Vec<SyncConflict>,
+) -> Result<(), String> {
+    let mut conflicts = read_conflicts(db)?;
+    conflicts.retain(|item| !applied.contains(&item.key) && !replaced.contains(&item.key));
+    conflicts.extend(added);
+    db.with_connection(|conn| {
+        conn.execute(
+            "INSERT INTO app_settings (key,value) VALUES ('sync_conflicts',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            [serde_json::to_string(&conflicts).map_err(|error| error.to_string())?],
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+    })
+}
+
 pub fn status(db: &Database) -> Result<SyncStatus, String> {
     let config = read_config(db)?;
     let pending_rotation: Option<String> = db.with_connection(|conn| {
@@ -479,20 +518,12 @@ pub fn status(db: &Database) -> Result<SyncStatus, String> {
         .map(|count| count.max(0) as usize)
         .map_err(|error| error.to_string())
     })?;
-    let conflicts: Vec<SyncConflict> = db.with_connection(|conn| {
-        let value: Option<String> = conn
-            .query_row(
-                "SELECT value FROM app_settings WHERE key='sync_conflicts'",
-                [],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|error| error.to_string())?;
-        value
-            .map(|text| serde_json::from_str(&text).map_err(|_| "同步冲突记录损坏".to_string()))
-            .transpose()
-            .map(|value| value.unwrap_or_default())
-    })?;
+    let mut conflicts = read_conflicts(db)?;
+    for conflict in &mut conflicts {
+        for version in &mut conflict.versions {
+            version.entity = None;
+        }
+    }
     Ok(SyncStatus {
         configured: config.is_some(),
         enabled: config.as_ref().is_some_and(|item| item.enabled),
@@ -1050,6 +1081,7 @@ fn record_local_race(
             id: head.id.clone(),
             digest: head.digest.clone(),
             deleted: head.deleted,
+            entity: None,
         }],
     });
     Ok(())
@@ -1344,6 +1376,7 @@ fn run_once(
                         id: head.id.clone(),
                         digest: head.digest.clone(),
                         deleted: head.deleted,
+                        entity: None,
                     })
                     .collect(),
             });
