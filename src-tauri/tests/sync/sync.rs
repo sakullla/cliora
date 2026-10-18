@@ -1199,3 +1199,160 @@ fn unchanged_digest_still_finishes_a_pending_native_write() {
     let after_digest = after.entities.iter().find(|entity| entity.key() == key).unwrap().digest().unwrap();
     assert_eq!(after_digest, before_digest);
 }
+
+#[test]
+fn unchanged_digest_applies_a_restored_binding_ahead_of_a_pending_release() {
+    struct Guard;
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            super::super::set_restore_roots_for_test(None);
+        }
+    }
+    let _guard = Guard;
+    let server = Server::new();
+    let temp = tempfile::tempdir().unwrap();
+    let source = database(&temp.path().join("source"));
+    let fresh = database(&temp.path().join("fresh"));
+    let credentials = MemoryCredentials::default();
+    let registry = Registry::builtins().with_fixture_installation("codex", "0.160.0");
+    put_library(&source, "kept-body");
+    let project = temp.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    let scope = crate::native::apply::scope_key(crate::native::adapter::Scope::Project, Some(&project)).unwrap();
+    let key = format!("binding:{}", super::super::binding_id("codex", &scope));
+    let profile = crate::native::profile::RegisteredProfile {
+        editing: None,
+        authentication: crate::native::profile::ProfileAuthentication::Native,
+        revision: String::new(),
+        id: "profile-write".into(),
+        tool: "codex".into(),
+        name: "Synced".into(),
+        version: 1,
+        inherit_common: false,
+        files: BTreeMap::from([("settings".into(), "model = \"gpt-6\"\n".into())]),
+        suppressed: BTreeMap::new(),
+        connection: None,
+        native_credentials: BTreeMap::new(),
+    };
+    source
+        .with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO native_profiles (id,tool,version,data) VALUES ('profile-write','codex',1,?1)",
+                [serde_json::to_string(&profile).unwrap()],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO applied_bindings (scope_key,tool,profile_id,profile_version,managed) VALUES (?1,'codex','profile-write',-1,'{}')",
+                [&scope],
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+    configure(&source, &credentials, setup(&server)).unwrap();
+    run(&source, &credentials, &registry, false).unwrap();
+    let home = temp.path().join("home");
+    std::fs::create_dir(&home).unwrap();
+    super::super::set_restore_roots_for_test(Some((home, temp.path().to_path_buf())));
+    configure(&fresh, &credentials, setup(&server)).unwrap();
+    let received = run(&fresh, &credentials, &registry, false).unwrap();
+    assert!(received.blockers.iter().all(|item| item.key != key), "{:?}", received.blockers);
+    let canonical = scope.strip_prefix("project:").unwrap();
+    let config = std::path::Path::new(canonical).join(".codex").join("config.toml");
+    std::fs::write(&config, ":::not toml").unwrap();
+    fresh
+        .with_connection(|conn| {
+            conn.execute("DELETE FROM applied_bindings WHERE tool='codex'", [])
+                .unwrap();
+            Ok(())
+        })
+        .unwrap();
+    let release_managed = r#"{"settings":{"/model":"gpt-6","/sandbox_mode":"workspace-write"}}"#;
+    let error = super::super::note_failed_release(&fresh, &registry, &key, "codex", &scope, release_managed).unwrap_err();
+    assert!(!error.contains("请先配置 WebDAV"), "{error}");
+    fresh
+        .with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO applied_bindings (scope_key,tool,profile_id,profile_version,managed) VALUES (?1,'codex','profile-write',-1,?2)",
+                rusqlite::params![scope, r#"{"settings":{"/model":"gpt-6"}}"#],
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+    std::fs::write(
+        &config,
+        "model = \"external\"\nsandbox_mode = \"workspace-write\"\nkeep = \"yes\"\n",
+    )
+    .unwrap();
+    let before = super::super::collect_snapshot(&fresh, &credentials, &registry).unwrap();
+    let before_digest = before.entities.iter().find(|entity| entity.key() == key).unwrap().digest().unwrap();
+    let saved: String = fresh
+        .with_connection(|conn| {
+            conn.query_row(
+                "SELECT local_digest FROM sync_entity_state WHERE entity_key=?1",
+                [&key],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert_eq!(saved, before_digest);
+    let failed = run(&fresh, &credentials, &registry, false).unwrap();
+    let blocker = failed
+        .blockers
+        .iter()
+        .find(|item| item.key == key)
+        .unwrap_or_else(|| panic!("{:?}", failed.blockers));
+    assert_eq!(blocker.action, "retry", "{blocker:?}");
+    assert!(
+        blocker.detail.contains("外部修改") || blocker.detail.contains("上次管理的字段"),
+        "{blocker:?}"
+    );
+    let during = std::fs::read_to_string(&config).unwrap();
+    assert!(during.contains("external"), "{during}");
+    assert!(during.contains("sandbox_mode"), "{during}");
+    assert!(during.contains("keep"), "{during}");
+    assert!(
+        super::super::load_pending_releases(&fresh).unwrap().iter().any(|item| item.key == key),
+        "a failed write must keep the old release"
+    );
+    assert_eq!(body(&fresh).as_deref(), Some("kept-body"));
+    let deleted_during: i64 = fresh
+        .with_connection(|conn| {
+            conn.query_row("SELECT count(*) FROM sync_entity_state WHERE deleted!=0", [], |row| row.get(0))
+                .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert_eq!(deleted_during, 0);
+    fresh
+        .with_connection(|conn| {
+            conn.execute("UPDATE applied_bindings SET managed='{}' WHERE tool='codex'", [])
+                .unwrap();
+            Ok(())
+        })
+        .unwrap();
+    let again = run(&fresh, &credentials, &registry, false).unwrap();
+    assert!(again.blockers.iter().all(|item| item.key != key), "{:?}", again.blockers);
+    let written = std::fs::read_to_string(&config).unwrap();
+    assert!(written.contains("gpt-6"), "{written}");
+    assert!(written.contains("sandbox_mode"), "{written}");
+    assert!(written.contains("keep"), "{written}");
+    assert!(!written.contains("external"), "{written}");
+    assert!(
+        super::super::load_pending_releases(&fresh).unwrap().iter().all(|item| item.key != key),
+        "{:?}",
+        super::super::load_pending_releases(&fresh).unwrap()
+    );
+    assert_eq!(body(&fresh).as_deref(), Some("kept-body"));
+    let after = super::super::collect_snapshot(&fresh, &credentials, &registry).unwrap();
+    let after_digest = after.entities.iter().find(|entity| entity.key() == key).unwrap().digest().unwrap();
+    assert_eq!(after_digest, before_digest);
+    let deleted_after: i64 = fresh
+        .with_connection(|conn| {
+            conn.query_row("SELECT count(*) FROM sync_entity_state WHERE deleted!=0", [], |row| row.get(0))
+                .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert_eq!(deleted_after, 0);
+}

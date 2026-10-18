@@ -1795,6 +1795,16 @@ fn forget_pending_release(db: &Database, key: &str, tool: &str, scope_key: &str)
     store_pending_releases(db, &items)
 }
 
+fn forget_pending_releases_for_key(db: &Database, key: &str) -> Result<(), String> {
+    let mut items = load_pending_releases(db)?;
+    let before = items.len();
+    items.retain(|item| item.key != key);
+    if items.len() == before {
+        return Ok(());
+    }
+    store_pending_releases(db, &items)
+}
+
 fn clear_blocker(db: &Database, key: &str) -> Result<(), String> {
     let mut current = load_blockers(db)?;
     let before = current.len();
@@ -1936,7 +1946,12 @@ fn retry_saved_binding(
         return Err("无法定位用户目录".into());
     };
     match try_apply_binding(db, store, registry, &home, &scope_key, &tool, &profile_id) {
-        Ok(()) => clear_blocker(db, &blocker.key),
+        Ok(()) => {
+            // The restored write owns these fields now. Keeping the old release
+            // would let a later retry delete them and clear a new blocker.
+            forget_pending_releases_for_key(db, &blocker.key)?;
+            clear_blocker(db, &blocker.key)
+        }
         Err(error) => {
             replace_blocker(db, &blocker.key, &format!("{tool} 活动配置"), native_failure_action(&error), &error);
             Err(error)
@@ -1994,14 +2009,18 @@ pub(crate) fn retry_native_blocker(
     if selected_directory(&blocker.detail).is_some() {
         return Err(blocker.detail);
     }
+    // A failed release keeps the old managed fields under this same binding key.
+    // Once the row is back, that release must not outrank the restored config:
+    // removing the old fields is not this item finishing, and it must not clear
+    // a later write failure.
+    if find_binding(db, key)?.is_some() {
+        return retry_saved_binding(db, store, registry, &blocker);
+    }
     if load_pending_releases(db)?.iter().any(|item| item.key == key) {
         return retry_pending_releases(db, registry, &blocker);
     }
     if blocker.action == "relogin" {
         return recheck_login(db, &blocker);
-    }
-    if find_binding(db, key)?.is_some() {
-        return retry_saved_binding(db, store, registry, &blocker);
     }
     Err(blocker.detail)
 }
