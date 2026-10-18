@@ -1,4 +1,5 @@
 import { ExternalLink } from '../../components/ExternalLink';
+import { Icon } from '../../components/Icon';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { native } from '../../lib/native';
@@ -85,6 +86,7 @@ export function InstallPanel({ toolName, probe, customPath, busy, loading, onCus
   const available = probe.installations.filter(item => item.status === 'available');
   const failed = probe.installations.filter(item => item.status !== 'available');
   const selected = available.find(item => item.path === probe.selectedPath) ?? available[0];
+  const alternates = available.filter(item => item.path !== selected?.path);
   const hasNpm = available.some(item => item.source === 'npm_shim');
   const hasNative = available.some(item => isNative(item.source));
   const multiple = Boolean(probe.nativeInstallCommand && probe.npmInstallCommand);
@@ -118,41 +120,71 @@ export function InstallPanel({ toolName, probe, customPath, busy, loading, onCus
       : latest.state === 'loading'
         ? t('tools.install.checkingLatest', { current: currentVersion || t('tools.install.unknownVersion') })
         : t(latest.state === 'unsupported' ? 'tools.install.latestUnsupported' : 'tools.install.latestUnknown', { current: currentVersion || t('tools.install.unknownVersion') });
-  return <details className={styles.pathControl} open={startOpen || undefined}>
-    <summary><span className={styles.statusDot} data-ok={probe.nativeWrites.state === 'supported'} /><strong>{toolName}</strong><span>{selected || probe.nativeWrites.state === 'supported' ? summary : probe.nativeWrites.reason}</span><span className={styles.diagnosticLabel}>{t('tools.install.label')}</span></summary>
-    {selected && <div className={styles.release}>
-      <div>
-        <span>{t('tools.install.currentVersion')}</span>
-        <strong>{currentVersion || t('tools.install.unknown')}</strong>
-        <small title={selected.path}>{sourceLabel(selected.source)} · {fileName(selected.path)}</small>
+  const canUpdate = Boolean(selected && probe.upgradeCommand && (behind || latest.state === 'unknown' || latest.state === 'unsupported'));
+  return <details className={styles.pathControl} data-update={behind || undefined} data-missing={!selected || undefined} open={startOpen || undefined}>
+    <summary>
+      <span className={styles.statusDot} data-ok={probe.nativeWrites.state === 'supported'} data-update={behind || undefined} />
+      <strong>{toolName}</strong>
+      {selected && <span className={styles.installSourceBadge}>{sourceLabel(selected.source)}</span>}
+      <span className={styles.installSummaryText} data-state={behind ? 'behind' : current ? 'current' : undefined}>{selected || probe.nativeWrites.state === 'supported' ? summary : probe.nativeWrites.reason}</span>
+      <span className={styles.diagnosticLabel}>{t('tools.install.label')}</span>
+    </summary>
+    <div className={styles.installBody}>
+      {selected ? <div className={styles.release}>
+        <div className={styles.releaseCard}>
+          <div className={styles.releaseHead}>
+            <span>{t('tools.install.currentVersion')}</span>
+            <span className={styles.releaseChannel}>{sourceLabel(selected.source)} · {fileName(selected.path)}</span>
+          </div>
+          <strong className={styles.releaseVersion}>{currentVersion || t('tools.install.unknown')}</strong>
+          <small className={styles.releasePath} title={selected.path}>{selected.path}</small>
+        </div>
+        <div className={styles.releaseCard} data-state={behind ? 'behind' : current ? 'current' : undefined}>
+          <div className={styles.releaseHead}>
+            <span>{t('tools.install.latestVersion')}</span>
+            {latest.state === 'unknown' && <button type="button" className={styles.retryVersionBtn} onClick={() => setRetry(value => value + 1)}><Icon name="refresh" size={12} />{t('tools.install.retryVersion')}</button>}
+          </div>
+          <strong className={styles.releaseVersion}>{latest.state === 'ready' ? latest.version : latest.state === 'loading' ? '…' : t(latest.state === 'unsupported' ? 'tools.install.officialVersion' : 'tools.install.notFound')}</strong>
+          <small title={latestNote}>{latestNote}</small>
+        </div>
+      </div> : <div className={styles.installMissingBanner}>
+        <Icon name="info" size={16} />
+        <span>{probe.nativeWrites.reason || t('tools.install.notInstalled')}</span>
+      </div>}
+      {alternates.length > 0 && <div className={styles.installAlternates}>
+        {alternates.map(item => <div className={styles.installRow} key={item.path}>
+          <strong>{sourceLabel(item.source)}</strong>
+          <span title={item.path}>{item.version ?? t('tools.install.unknownVersion')} · {fileName(item.path)}</span>
+          <button type="button" disabled={busy} title={t('tools.install.useTitle')} onClick={() => onUsePath(item.path)}>{t('tools.install.use')}</button>
+        </div>)}
+      </div>}
+      {(failed.length > 0 || (hasNpm && hasNative) || problems.length > 0 || Boolean(selected && !probe.majorUpgrade?.command && probe.majorUpgrade?.guidance)) && <div className={styles.installDiagnostics}>
+        {failed.map(item => <p className={styles.installFail} key={item.path} title={item.detail ?? item.path}><Icon name="alert" size={14} /><span>{t('tools.install.runFailed', { file: fileName(item.path) })}</span></p>)}
+        {hasNpm && hasNative && <p className={styles.installNote}><Icon name="info" size={14} /><span>{t('tools.install.duplicatesNote')}</span></p>}
+        {problems.map(item => <p className={styles.installNote} key={item.name}><Icon name="alert" size={14} /><span>{item.name} {item.status === 'outdated' ? t('tools.install.outdated') : t('tools.install.missing')}{item.helpUrl && <ExternalLink href={item.helpUrl}>{t('tools.install.installLink')}</ExternalLink>}</span></p>)}
+        {selected && !probe.majorUpgrade?.command && probe.majorUpgrade?.guidance && <p className={styles.installNote}><Icon name="info" size={14} /><span>{probe.majorUpgrade.guidance}</span></p>}
+      </div>}
+      <div className={styles.installFooter}>
+        <div className={styles.installActions}>
+          {!selected && multiple && <>
+            <button type="button" className={preferNative ? styles.primary : undefined} disabled={busy} onClick={() => onMaintain('install_native', 'native')}>{t('tools.install.installNative')}</button>
+            <button type="button" className={!preferNative ? styles.primary : undefined} disabled={busy} onClick={() => onMaintain('install', 'npm_shim')}>{t('tools.install.installNpm')}</button>
+          </>}
+          {selected && multiple && !hasNative && <button type="button" disabled={busy} onClick={() => onMaintain('install_native', 'native')}>{t('tools.install.installNative')}</button>}
+          {!selected && !multiple && probe.installCommand && <button type="button" className={styles.primary} disabled={busy} onClick={() => onMaintain('install')}>{t('tools.install.install')}</button>}
+          {canUpdate && <button type="button" className={styles.primary} disabled={busy || loading} onClick={() => onMaintain('upgrade', selected!.source, selected!.version ?? undefined)}>{updateLabel}</button>}
+          {selected && probe.majorUpgrade?.command && <button type="button" disabled={busy || loading} onClick={() => onMaintain('upgrade_major', selected.source, selected.version ?? undefined)}>{probe.majorUpgrade.label}</button>}
+          {probe.installUrl && <ExternalLink href={probe.installUrl}>{t('tools.install.officialGuide')}</ExternalLink>}
+        </div>
+        <details className={styles.pathCustom} open={Boolean(customPath.trim()) || undefined}>
+          <summary>{t('tools.install.customPath')}</summary>
+          <div className={styles.pathCustomRow}>
+            <input aria-label={t('tools.install.pathAria')} value={customPath} onChange={event => onCustomPath(event.target.value)} placeholder={t('tools.install.pathPlaceholder')} />
+            <button type="button" disabled={busy} onClick={onSavePath}>{t('tools.install.saveAndRecheck')}</button>
+          </div>
+        </details>
       </div>
-      <div data-state={behind ? 'behind' : current ? 'current' : undefined}>
-        <span>{t('tools.install.latestVersion')}</span>
-        <strong>{latest.state === 'ready' ? latest.version : latest.state === 'loading' ? '…' : t(latest.state === 'unsupported' ? 'tools.install.officialVersion' : 'tools.install.notFound')}</strong>
-        <small title={latestNote}>{latestNote}</small>
-        {latest.state === 'unknown' && <button type="button" onClick={() => setRetry(value => value + 1)}>{t('tools.install.retryVersion')}</button>}
-      </div>
-    </div>}
-    {available.filter(item => item.path !== selected?.path).map(item => <div className={styles.installRow} key={item.path}>
-      <strong>{sourceLabel(item.source)}</strong>
-      <span title={item.path}>{item.version ?? t('tools.install.unknownVersion')} · {fileName(item.path)}</span>
-      <button type="button" disabled={busy} title={t('tools.install.useTitle')} onClick={() => onUsePath(item.path)}>{t('tools.install.use')}</button>
-    </div>)}
-    {failed.map(item => <p className={styles.installFail} key={item.path} title={item.detail ?? item.path}>{t('tools.install.runFailed', { file: fileName(item.path) })}</p>)}
-    {hasNpm && hasNative && <p className={styles.installNote}>{t('tools.install.duplicatesNote')}</p>}
-    {problems.map(item => <p className={styles.installNote} key={item.name}>{item.name} {item.status === 'outdated' ? t('tools.install.outdated') : t('tools.install.missing')}{item.helpUrl && <ExternalLink href={item.helpUrl}>{t('tools.install.installLink')}</ExternalLink>}</p>)}
-    {selected && !probe.majorUpgrade?.command && probe.majorUpgrade?.guidance && <p className={styles.installNote}>{probe.majorUpgrade.guidance}</p>}
-    <div className={styles.installActions}>
-      {!selected && multiple && <>
-        <button type="button" className={preferNative ? styles.primary : undefined} disabled={busy} onClick={() => onMaintain('install_native', 'native')}>{t('tools.install.installNative')}</button>
-        <button type="button" className={!preferNative ? styles.primary : undefined} disabled={busy} onClick={() => onMaintain('install', 'npm_shim')}>{t('tools.install.installNpm')}</button>
-      </>}
-      {selected && multiple && !hasNative && <button type="button" disabled={busy} onClick={() => onMaintain('install_native', 'native')}>{t('tools.install.installNative')}</button>}
-      {!selected && !multiple && probe.installCommand && <button type="button" className={styles.primary} disabled={busy} onClick={() => onMaintain('install')}>{t('tools.install.install')}</button>}
-      {selected && probe.upgradeCommand && (behind || latest.state === 'unknown' || latest.state === 'unsupported') && <button type="button" className={styles.primary} disabled={busy || loading} onClick={() => onMaintain('upgrade', selected.source, selected.version ?? undefined)}>{updateLabel}</button>}
-      {selected && probe.majorUpgrade?.command && <button type="button" disabled={busy || loading} onClick={() => onMaintain('upgrade_major', selected.source, selected.version ?? undefined)}>{probe.majorUpgrade.label}</button>}
-      {probe.installUrl && <ExternalLink href={probe.installUrl}>{t('tools.install.officialGuide')}</ExternalLink>}
     </div>
-    <details className={styles.pathCustom}><summary>{t('tools.install.customPath')}</summary><div><input aria-label={t('tools.install.pathAria')} value={customPath} onChange={event => onCustomPath(event.target.value)} placeholder={t('tools.install.pathPlaceholder')} /><button type="button" disabled={busy} onClick={onSavePath}>{t('tools.install.saveAndRecheck')}</button></div></details>
   </details>;
 }
+

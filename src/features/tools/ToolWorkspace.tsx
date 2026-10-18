@@ -138,6 +138,11 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   }));
   const [busy, setBusy] = useState(false);
   const [maintenance, setMaintenance] = useState<{ tool: string; name: string; running: boolean; action: 'install' | 'upgrade' | 'install_native' | 'uninstall_npm' | 'upgrade_major'; source?: string; lineVersion?: string; cancelling?: boolean; output: string; error: string; version?: string | null } | null>(null);
+  const maintenanceLogRef = useRef<HTMLPreElement>(null);
+  useLayoutEffect(() => {
+    const node = maintenanceLogRef.current;
+    if (node) node.scrollTop = node.scrollHeight;
+  }, [maintenance?.output]);
   const [applying, setApplying] = useState<string | null>(null);
   const [resource, setResource] = useState<ResourceView>(repair?.resourceView ?? readStoredContexts()[tool]?.resource ?? 'config');
   const [frame, setFrame] = useState<EditFrame | null>(null);
@@ -426,14 +431,28 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     {resourcesReady && resource === 'agents' && supported.agents && <AgentsWorkspace key={`${context}:${resourceEpoch}:${resourceContext?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={resourceContext?.effectiveContextId ?? null} onDirtyChange={agentsDirty} />}
     {resourcesReady && resource === 'plugins' && supported.plugins && <PluginsWorkspace key={`${context}:${resourceEpoch}:${resourceContext?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={resourceContext?.effectiveContextId ?? null} />}
     <GuideDialog open={!!maintenance} title={t('tools.workspace.maintenanceTitle', { name: maintenance?.name })} onClose={() => { if (maintenance?.running) cancelMaintenance(); else setMaintenance(null); }}>
-      {maintenance && <>
-        <p role="status">{maintenance.running ? t('tools.workspace.maintenanceRunning') : maintenance.error || t('tools.workspace.maintenanceDone', { version: maintenance.version ?? '' })}</p>
-        {maintenance.running && maintenance.error && <p role="alert">{maintenance.error}</p>}
-        <pre className={styles.maintenanceLog} aria-label={t('tools.workspace.maintenanceLog')}>{maintenance.output || t('tools.workspace.maintenanceWaiting')}</pre>
+      {maintenance && <div className={styles.maintenancePanel}>
+        <div className={styles.maintenanceStatusCard} data-state={maintenance.running ? 'running' : maintenance.error ? 'error' : 'done'}>
+          <span className={styles.maintenanceStatusIcon} aria-hidden="true">
+            {maintenance.running ? <span className={styles.maintenanceSpinner} /> : <Icon name={maintenance.error ? 'alert' : 'check'} size={18} />}
+          </span>
+          <div className={styles.maintenanceStatusBody}>
+            <p role="status" className={styles.maintenanceStatusText}>{maintenance.running ? t('tools.workspace.maintenanceRunning') : maintenance.error || t('tools.workspace.maintenanceDone', { version: maintenance.version ?? '' })}</p>
+            {maintenance.running && maintenance.error && <p role="alert" className={styles.maintenanceInlineError}>{maintenance.error}</p>}
+          </div>
+          {maintenance.running && <span className={styles.maintenanceBar} aria-hidden="true" />}
+        </div>
+        <div className={styles.maintenanceTerminal}>
+          <div className={styles.maintenanceTerminalHead}>
+            <span className={styles.maintenanceTerminalDots} aria-hidden="true"><i /><i /><i /></span>
+            <span className={styles.maintenanceTerminalTitle}>{t('tools.workspace.maintenanceLog')}</span>
+          </div>
+          <pre ref={maintenanceLogRef} className={styles.maintenanceLog} aria-label={t('tools.workspace.maintenanceLog')}>{maintenance.output || t('tools.workspace.maintenanceWaiting')}</pre>
+        </div>
         <div className="dialog-footer">{maintenance.running
-          ? <button disabled={maintenance.cancelling} onClick={cancelMaintenance}>{t(maintenance.cancelling ? 'tools.workspace.maintenanceCancelling' : 'tools.workspace.maintenanceCancel')}</button>
-          : <>{maintenance.error && maintenance.tool === toolId && <button disabled={busy} onClick={() => void maintain(maintenance.action, maintenance.source, true, maintenance.lineVersion)}>{t('tools.workspace.maintenanceRetry')}</button>}<button onClick={() => setMaintenance(null)}>{t('tools.workspace.maintenanceClose')}</button></>}</div>
-      </>}
+          ? <button type="button" disabled={maintenance.cancelling} onClick={cancelMaintenance}>{t(maintenance.cancelling ? 'tools.workspace.maintenanceCancelling' : 'tools.workspace.maintenanceCancel')}</button>
+          : <>{maintenance.error && maintenance.tool === toolId && <button type="button" className={styles.primary} disabled={busy} onClick={() => void maintain(maintenance.action, maintenance.source, true, maintenance.lineVersion)}>{t('tools.workspace.maintenanceRetry')}</button>}<button type="button" className={!maintenance.error ? styles.primary : undefined} onClick={() => setMaintenance(null)}>{t('tools.workspace.maintenanceClose')}</button></>}</div>
+      </div>}
     </GuideDialog>
   </ToastScope></section>;
 }

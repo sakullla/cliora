@@ -22,8 +22,8 @@ function failure(error: unknown) {
   return error && typeof error === 'object' && 'message' in error ? String(error.message) : i18n.t('tools.workspace.operationFailed');
 }
 
-function filledCount(record: Record<string, string> | null | undefined) {
-  return Object.keys(record ?? {}).filter((key) => key.trim()).length;
+function filledKeys(record: Record<string, string> | null | undefined) {
+  return Object.keys(record ?? {}).map((key) => key.trim()).filter(Boolean);
 }
 
 type EditorState = { draft: McpDraft; envRows: KeyValueRow[]; headerRows: KeyValueRow[] };
@@ -205,10 +205,13 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
     <div className={styles.list} aria-label={t('library.resources.mcpListAria')}>
       {shown.length ? shown.map((item) => {
         const places = placements.filter((entry) => entry.definitionId === item.id);
-        const envCount = filledCount(item.env);
-        const headerCount = filledCount(item.headers);
+        const envKeys = filledKeys(item.env);
+        const headerKeys = filledKeys(item.headers);
+        const envCount = envKeys.length;
+        const headerCount = headerKeys.length;
+        const previewKeys = [...envKeys, ...headerKeys].slice(0, 3);
         const summary = mcpSummary(item);
-        return <article className={styles.card} key={item.id}>
+        return <article className={styles.card} data-placed={places.length > 0 || undefined} key={item.id}>
           <div className={styles.cardHead}>
             <span className={styles.cardIcon} data-transport={item.transport} aria-hidden="true"><Icon name={item.transport === 'http' ? 'globe' : 'terminal'} size={16} /></span>
             <div className={styles.cardHeading}>
@@ -217,7 +220,7 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
                 <span className={styles.badge} data-accent={item.transport === 'http' || undefined}>{item.transport === 'http' ? 'HTTP' : 'stdio'}</span>
                 {envCount > 0 && <span className={styles.metaChip}>{t('library.resources.envCount', { count: envCount })}</span>}
                 {headerCount > 0 && <span className={styles.metaChip}>{t('library.resources.headerCount', { count: headerCount })}</span>}
-                <span className={styles.placedNote} data-empty={!places.length || undefined}>{places.length ? t('library.resources.placedCount', { count: places.length }) : t('library.resources.notPlaced')}</span>
+                <span className={styles.placedNote} data-placed={places.length > 0 || undefined} data-empty={!places.length || undefined}>{places.length ? t('library.resources.placedCount', { count: places.length }) : t('library.resources.notPlaced')}</span>
               </span>
             </div>
             <div className={styles.iconActions}>
@@ -225,7 +228,13 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
               <button type="button" className={styles.danger} aria-label={t('tools.agents.delete')} title={t('tools.agents.delete')} disabled={busy} onClick={() => void remove(item)}><Icon name="trash" size={16} /></button>
             </div>
           </div>
-          <code className={styles.command} title={summary}>{summary || (item.transport === 'http' ? t('library.resources.noUrl') : t('library.resources.noCommand'))}</code>
+          <div className={styles.commandBlock}>
+            <code className={styles.command} title={summary}>{summary || (item.transport === 'http' ? t('library.resources.noUrl') : t('library.resources.noCommand'))}</code>
+            {previewKeys.length > 0 && <div className={styles.keyPills} aria-hidden="true">
+              {previewKeys.map((key) => <span className={styles.keyPill} key={key}>{key}</span>)}
+              {envCount + headerCount > previewKeys.length && <span className={styles.keyPillMore}>+{envCount + headerCount - previewKeys.length}</span>}
+            </div>}
+          </div>
           <div className={styles.cardBar}>
             <ScopeMarks contextLabel={contextLabel} accountContexts label={t('library.page.cliMarks', { title: item.name })} tools={tools} places={places} projects={projects} busy={busy} onToggle={(toolId, scope, projectPath, contextId) => void toggleMcp(item, toolId, scope, projectPath, contextId)} mark={(place) => {
               if (!place) return { pressed: false, state: 'off', status: t('library.page.markOff') };

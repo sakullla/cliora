@@ -274,6 +274,8 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
   const adding = rows.filter((row) => row.state === 'adding').map((row) => row.tool.name);
   const removing = rows.filter((row) => row.state === 'removing').map((row) => row.tool.name);
   const outside = outsidePlacements().length;
+  const readyToolIds = rows.filter((row) => row.state !== 'loading' && row.state !== 'blocked').map((row) => row.tool.id);
+  const allReadySelected = readyToolIds.length > 0 && readyToolIds.every((id) => selected.includes(id));
   const summary = [
     adding.length ? t('library.distribute.summaryAdd', { names: adding.join('、') }) : '',
     removing.length ? t('library.distribute.summaryRemove', { names: removing.join('、') }) : '',
@@ -283,7 +285,10 @@ export const McpDistribution = forwardRef<McpDistributeHandle, {
   return <div className={styles.distributeContents}>
     <section className={styles.targetPanel} aria-labelledby={`${panelId}-title`}>
       <div className={styles.panelHead}>
-        <h3 id={`${panelId}-title`}>{t('library.distribute.title')}</h3>
+        <div className={styles.panelTitleRow}>
+          <h3 id={`${panelId}-title`}>{t('library.distribute.title')}<span className={styles.targetCount} aria-hidden="true">{selected.length}/{tools.length}</span></h3>
+          {readyToolIds.length > 1 && <button type="button" className={styles.quickSelectBtn} onClick={() => choose(allReadySelected ? [] : readyToolIds)}>{t(allReadySelected ? 'settings.migration.deselectAll' : 'settings.migration.selectAll')}</button>}
+        </div>
         <p>{t('library.distribute.description')}</p>
       </div>
       <FilterSelect className={styles.scopePick} label={t('library.distribute.scopeLabel')} triggerDetail={false} value={scope === 'global' ? '__global__' : projectPath ?? ''} options={[

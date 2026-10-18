@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ClipboardEvent } from 'react';
+import { useEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { duplicateKeys, isSensitiveKey, isValueReference, parseKeyValueLines, type KeyValueRow } from '../../lib/mcp';
 import { Icon } from '../Icon';
@@ -58,6 +58,24 @@ export function KeyValueRows({ label, rows, onChange, single = false, maskSensit
     focusRow.current = rows.length;
     onChange([...rows, { key: '', value: '' }]);
   }
+  function handleKeyDown(index: number, cell: 'key' | 'value', event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key !== 'Enter' || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+    const row = rows[index];
+    if (!row) return;
+    if (!single && cell === 'key' && row.key.trim()) {
+      event.preventDefault();
+      list.current?.querySelectorAll<HTMLElement>(':scope > [data-row]')[index]?.querySelectorAll<HTMLInputElement>('input')[1]?.focus();
+      return;
+    }
+    if ((single ? row.value : row.key).trim()) {
+      event.preventDefault();
+      if (index + 1 < rows.length) {
+        list.current?.querySelectorAll<HTMLElement>(':scope > [data-row]')[index + 1]?.querySelector<HTMLInputElement>('input')?.focus();
+      } else {
+        addRow();
+      }
+    }
+  }
   function toggleReveal(index: number) {
     setRevealed((current) => {
       const next = new Set(current);
@@ -93,9 +111,12 @@ export function KeyValueRows({ label, rows, onChange, single = false, maskSensit
         const hidden = secret(row) && !revealed.has(index);
         const blank = !row.key.trim() && !row.value.trim();
         return <div className={styles.row} data-row data-single={single || undefined} data-blank={blank || undefined} key={index}>
-          {!single && <input aria-label={t('tools.mcp.rowKey', { label, index: index + 1 })} aria-invalid={duplicates.includes(row.key.trim()) && !!row.key.trim() || undefined} value={row.key} placeholder={keyPlaceholder} disabled={disabled} spellCheck={false} autoComplete="off" onChange={(event) => update(index, { ...row, key: event.target.value })} onPaste={(event) => paste(index, event)} />}
+          {!single && <>
+            <input aria-label={t('tools.mcp.rowKey', { label, index: index + 1 })} aria-invalid={duplicates.includes(row.key.trim()) && !!row.key.trim() || undefined} value={row.key} placeholder={keyPlaceholder} disabled={disabled} spellCheck={false} autoComplete="off" onChange={(event) => update(index, { ...row, key: event.target.value })} onKeyDown={(event) => handleKeyDown(index, 'key', event)} onPaste={(event) => paste(index, event)} />
+            <span className={styles.kvSep} aria-hidden="true">=</span>
+          </>}
           <span className={styles.value} data-secret={secret(row) || undefined}>
-            <input aria-label={single ? t('tools.mcp.rowSingle', { label, index: index + 1 }) : t('tools.mcp.rowValue', { label, index: index + 1 })} data-masked={hidden || undefined} value={row.value} placeholder={valuePlaceholder} disabled={disabled} spellCheck={false} autoComplete="off" onChange={(event) => update(index, { ...row, value: event.target.value })} onPaste={(event) => paste(index, event)} />
+            <input aria-label={single ? t('tools.mcp.rowSingle', { label, index: index + 1 }) : t('tools.mcp.rowValue', { label, index: index + 1 })} data-masked={hidden || undefined} value={row.value} placeholder={valuePlaceholder} disabled={disabled} spellCheck={false} autoComplete="off" onChange={(event) => update(index, { ...row, value: event.target.value })} onKeyDown={(event) => handleKeyDown(index, 'value', event)} onPaste={(event) => paste(index, event)} />
             {secret(row) && <button type="button" className={styles.reveal} aria-label={hidden ? t('tools.mcp.rowReveal', { index: index + 1 }) : t('tools.mcp.rowHide', { index: index + 1 })} title={hidden ? t('tools.mcp.rowReveal', { index: index + 1 }) : t('tools.mcp.rowHide', { index: index + 1 })} aria-pressed={!hidden} onClick={() => toggleReveal(index)}><Icon name={hidden ? 'eye' : 'eyeOff'} size={14} /></button>}
           </span>
           <span className={styles.rowOps}>
