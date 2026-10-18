@@ -88,24 +88,40 @@ pub fn sources_controlled(
     let (v1, v2) = storage_tables(&db)?;
     // Both generations may coexist while a 1.x database is being migrated;
     // each index row stays its own source and the parse branch is chosen per id.
-    let limit = if v1 && v2 { MAX_SOURCES as i64 / 2 + 1 } else { MAX_SOURCES as i64 + 1 };
+    // Each table can contain the same complete catalog during migration.
+    // Apply the source limit after merging, never truncate each half silently.
+    let limit = MAX_SOURCES as i64 + 1;
     let mut indexed = Vec::new();
-    if v1 {
-        indexed.extend(index_rows(&db, "session", limit)?);
-    }
+    // Migrated rows coexist in both tables with the same native ID. The v2
+    // transcript wins, even if its original 1.x version/timestamp is retained.
     if v2 {
-        indexed.extend(index_rows(&db, "session_v2", limit)?);
+        indexed.extend(index_rows(&db, "session_v2", limit)?.into_iter().map(|(id, time)| (id, time, "v2")));
     }
-    let mut result = Vec::new();
-    for (id, updated) in indexed {
+    if v1 {
+        indexed.extend(index_rows(&db, "session", limit)?.into_iter().map(|(id, time)| (id, time, "v1")));
+    }
+    let mut result: Vec<HistorySource> = Vec::new();
+    let mut seen = std::collections::HashMap::new();
+    for (id, updated, generation) in indexed {
         check_cancelled(cancelled)?;
         if !valid_native_id(&id) {
             continue;
         }
+        let fingerprint = updated.filter(|time| *time > 0)
+            .map(|time| format!("opencode-session-v3|{generation}|{time}"))
+            .unwrap_or_else(|| "0".into());
+        if let Some(&index) = seen.get(&id) {
+            let source: &mut HistorySource = &mut result[index];
+            source.fingerprint = if source.fingerprint == "0" || fingerprint == "0" {
+                "0".into()
+            } else { format!("{}|{fingerprint}", source.fingerprint) };
+            continue;
+        }
+        seen.insert(id.clone(), result.len());
         result.push(HistorySource { native_title: None,
             path: path.clone(),
             native_id: Some(id),
-            fingerprint: updated.unwrap_or(0).to_string(),
+            fingerprint,
             fingerprint_error: None,
         });
     }
@@ -225,13 +241,46 @@ pub fn parse_controlled(
             .optional()
             .map_err(|error| format!("OpenCode 会话格式未知：{error}"))?;
         if let Some(row) = stored {
-            return parse_v2(&db, source, id, row, cancelled);
+            let mut session = parse_v2(&db, source, id, row, cancelled)?;
+            if v1 { append_unmigrated_usage(&db, id, &mut session, cancelled)?; }
+            return Ok(session);
         }
     }
     if v1 {
         return parse_v1(&db, source, id, cancelled);
     }
     Err("OpenCode 会话不存在或格式未知".into())
+}
+
+// Native migration can omit a billed legacy message while retaining its
+// counters in session_v2. Preserve only IDs absent from the new transcript;
+// converted messages continue to use the authoritative v2 usage exactly once.
+fn append_unmigrated_usage(db: &Connection, id: &str, session: &mut ParsedSession, cancelled: &dyn Fn() -> bool) -> Result<(), String> {
+    let mut statement = db.prepare(
+        "SELECT m.id, m.data, m.time_created FROM message m
+         WHERE m.session_id = ?1 AND NOT EXISTS (SELECT 1 FROM session_message v WHERE v.id = m.id)"
+    ).map_err(|error| error.to_string())?;
+    let rows = statement.query_map([id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<i64>>(2)?)))
+        .map_err(|error| error.to_string())?;
+    for row in rows {
+        check_cancelled(cancelled)?;
+        let (id, data, time) = row.map_err(|error| error.to_string())?;
+        let Ok(message) = serde_json::from_str::<Value>(&data) else { session.partial = true; continue; };
+        if let Some(event) = legacy_usage(id, &message, time) { session.usage.push(event); }
+    }
+    Ok(())
+}
+
+fn legacy_usage(id: String, message: &Value, time: Option<i64>) -> Option<UsageEvent> {
+    if message.get("role").and_then(Value::as_str) != Some("assistant") { return None; }
+    let tokens = message.get("tokens")?;
+    let cache = tokens.get("cache").unwrap_or(&Value::Null);
+    Some(UsageEvent {
+        request_count: Some(1), id, model: message_model(message), timestamp: time,
+        input: token(tokens, "input"),
+        output: usage::generated(token(tokens, "output"), token(tokens, "reasoning")),
+        cache_read: token(cache, "read"), cache_write: token(cache, "write"), input_includes_cache: false,
+    })
 }
 
 fn parse_v2(
@@ -244,7 +293,7 @@ fn parse_v2(
     let SessionRow { title, cwd, started, updated, version, model } = row;
     if !version
         .as_deref()
-        .is_some_and(|value| value.starts_with("2."))
+        .is_some_and(|value| semver::Version::parse(value).is_ok_and(|v| matches!(v.major, 1 | 2)))
     {
         return Err("OpenCode 会话格式版本尚未验证".into());
     }
@@ -259,7 +308,7 @@ fn parse_v2(
     // `user`/`assistant`/`idle`/... (verified on a real 2.0.29 database);
     // non-conversation rows are skipped without failing the session.
     let mut statement = db
-        .prepare("SELECT id, type, data, time_created FROM session_message WHERE session_id = ?1 ORDER BY seq, id LIMIT 4001")
+        .prepare("SELECT id, type, data, time_created FROM session_message WHERE session_id = ?1 ORDER BY seq, id")
         .map_err(|error| format!("OpenCode 会话格式未知：{error}"))?;
     let rows = statement
         .query_map([id], |row| {
@@ -271,12 +320,8 @@ fn parse_v2(
             ))
         })
         .map_err(|error| error.to_string())?;
-    for (index, row) in rows.enumerate() {
+    for row in rows {
         check_cancelled(cancelled)?;
-        if index >= 4000 {
-            session.partial = true;
-            break;
-        }
         let (message_id, kind, data, time) = row.map_err(|error| error.to_string())?;
         let Ok(message) = serde_json::from_str::<Value>(&data) else {
             session.partial = true;
@@ -391,21 +436,10 @@ fn parse_v1(
             if model.is_some() {
                 session.model = model.clone();
             }
-            if let Some(tokens) = message.get("tokens") {
+            if let Some(event) = legacy_usage(message_id, &message, time) {
                 // `step-finish` parts repeat this same object; the message is the call.
                 // Stored input already excludes cache. Reasoning is generated and is not inside output.
-                let cache = tokens.get("cache").unwrap_or(&Value::Null);
-                session.usage.push(UsageEvent {
-                    request_count: Some(1),
-                    id: message_id,
-                    model,
-                    timestamp: time,
-                    input: token(tokens, "input"),
-                    output: usage::generated(token(tokens, "output"), token(tokens, "reasoning")),
-                    cache_read: token(cache, "read"),
-                    cache_write: token(cache, "write"),
-                    input_includes_cache: false,
-                });
+                session.usage.push(event);
             }
         }
     }

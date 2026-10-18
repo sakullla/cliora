@@ -43,7 +43,7 @@ use crate::history::{
     HistorySource, ParsedSession, UsageEvent, MAX_SOURCES,
 };
 
-const PARSER_VERSION: &str = "minimax-code-session-v1";
+const PARSER_VERSION: &str = "minimax-code-session-v2";
 const LAYOUT: &str = "v2-final-dated-session";
 const LOCAL_SOURCE: &str = "local-runtime";
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
@@ -250,7 +250,7 @@ fn consume_row(session: &mut ParsedSession, index: usize, row: &Value) {
         .and_then(Value::as_str)
         .filter(|id| valid_native_id(id))
         .map(str::to_owned)
-        .unwrap_or_else(|| format!("line-{index}"));
+        .unwrap_or_else(|| format!("{}:line-{index}", session.native_id.as_deref().unwrap_or("unknown")));
     let time = message.get("timestamp").and_then(timestamp);
     let text = if role == "user" {
         user_text(session, message)
@@ -574,6 +574,21 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn missing_message_ids_do_not_collide_between_sessions() {
+        let mut ids = Vec::new();
+        for native_id in ["session-a", "session-b"] {
+            let mut session = ParsedSession::new();
+            session.native_id = Some(native_id.into());
+            let mut row: Value = serde_json::from_str(&assistant_line(Some(json!({"input":100,"output":20,"cacheRead":10,"cacheWrite":0})))).unwrap();
+            row.as_object_mut().unwrap().remove("message_id");
+            consume_row(&mut session, 1, &row);
+            assert_eq!(session.usage.len(), 1);
+            ids.push(session.usage[0].id.clone());
+        }
+        assert_ne!(ids[0], ids[1]);
+    }
+
+    #[test]
     #[ignore = "synthetic performance measurement; writes only temporary fixtures"]
     fn performance_minimax_history() {
         let temp = tempfile::tempdir().unwrap();
@@ -811,7 +826,7 @@ mod tests {
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].native_id.as_deref(), Some(SESSION));
         assert_eq!(listed[0].native_title.as_deref(), Some("清单标题"));
-        assert!(listed[0].fingerprint.starts_with("minimax-code-session-v1|"));
+        assert!(listed[0].fingerprint.starts_with("minimax-code-session-v2|"));
         let parsed = parse(&listed[0]).unwrap();
 
         assert_eq!(fs::read(&messages_path).unwrap(), before_messages);

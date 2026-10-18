@@ -57,7 +57,7 @@ fn shell(script: &str, home: &Path) -> Command {
         // npm.ps1 so a user's execution policy cannot silently block npm.
         let script = if let Some(args) = script.strip_prefix("npm ") { format!("npm.cmd {args}") } else { script.to_owned() };
         command.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"])
-            .arg(format!("$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; & {{ {script} }}; if ($null -ne $LASTEXITCODE) {{ exit $LASTEXITCODE }}"));
+            .arg(format!("[Console]::OutputEncoding = $OutputEncoding = [System.Text.UTF8Encoding]::new($false); $ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; & {{ {script} }}; if ($null -ne $LASTEXITCODE) {{ exit $LASTEXITCODE }}"));
         command
     };
     #[cfg(not(windows))]
@@ -275,6 +275,31 @@ fn append(log: &mut String, bytes: &[u8]) {
     push_console(log, &mut cursor, &mut pending, bytes);
 }
 
+// Decode each pipe separately before merging stdout/stderr. Reads can split a
+// UTF-8 character; only an invalid sequence or an incomplete EOF is replaced.
+fn decode_output(pending: &mut Vec<u8>, bytes: &[u8], eof: bool) -> String {
+    pending.extend_from_slice(bytes);
+    let mut output = String::new();
+    let mut offset = 0;
+    while offset < pending.len() {
+        match std::str::from_utf8(&pending[offset..]) {
+            Ok(text) => { output.push_str(text); offset = pending.len(); }
+            Err(error) => {
+                let valid = offset + error.valid_up_to();
+                output.push_str(std::str::from_utf8(&pending[offset..valid]).unwrap());
+                offset = valid;
+                match error.error_len() {
+                    Some(len) => { output.push('\u{fffd}'); offset += len; }
+                    None if eof => { output.push('\u{fffd}'); offset = pending.len(); }
+                    None => break,
+                }
+            }
+        }
+    }
+    pending.drain(..offset);
+    output
+}
+
 fn run(mut command: Command, cancelled: &AtomicBool, timeout: Duration, progress: &dyn Fn(&str)) -> Result<String, String> {
     command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(unix)] { use std::os::unix::process::CommandExt; command.process_group(0); }
@@ -285,10 +310,18 @@ fn run(mut command: Command, cancelled: &AtomicBool, timeout: Duration, progress
         let sender = sender.clone();
         std::thread::spawn(move || {
             let mut buffer = [0; 4096];
+            let mut pending = Vec::new();
             loop {
                 match stream.read(&mut buffer) {
-                    Ok(0) | Err(_) => break,
-                    Ok(count) => if sender.send(buffer[..count].to_vec()).is_err() { break; },
+                    Ok(0) | Err(_) => {
+                        let tail = decode_output(&mut pending, &[], true);
+                        if !tail.is_empty() { let _ = sender.send(tail.into_bytes()); }
+                        break;
+                    }
+                    Ok(count) => {
+                        let text = decode_output(&mut pending, &buffer[..count], false);
+                        if !text.is_empty() && sender.send(text.into_bytes()).is_err() { break; }
+                    }
                 }
             }
         });
@@ -363,6 +396,34 @@ pub fn maintain(registry: &Registry, tool: &str, action: &str, source: &str, ver
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn utf8_output_survives_every_pipe_chunk_boundary() {
+        let text = "安装失败（403）\r\n重试 🛠";
+        for split in 0..=text.len() {
+            let mut pending = Vec::new();
+            let mut decoded = decode_output(&mut pending, &text.as_bytes()[..split], false);
+            decoded.push_str(&decode_output(&mut pending, &text.as_bytes()[split..], true));
+            assert_eq!(decoded, text);
+            assert!(pending.is_empty());
+        }
+        let mut pending = Vec::new();
+        assert_eq!(decode_output(&mut pending, &[0xff, 0xe4], false), "\u{fffd}");
+        assert_eq!(decode_output(&mut pending, &[], true), "\u{fffd}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn powershell_install_errors_preserve_chinese_text() {
+        let temp = tempfile::tempdir().unwrap();
+        let output = std::sync::Mutex::new(String::new());
+        let result = run(shell("throw '安装失败，访问被拒绝（403）'", temp.path()),
+            &AtomicBool::new(false), Duration::from_secs(10), &|log| *output.lock().unwrap() = log.to_owned());
+        assert!(result.is_err());
+        let output = output.into_inner().unwrap();
+        assert!(output.contains("安装失败，访问被拒绝（403）"), "{output}");
+        assert!(!output.contains('\u{fffd}'), "{output}");
+    }
+
     #[test]
     fn background_runner_drains_both_streams_and_preserves_failure() {
         let temp = tempfile::tempdir().unwrap();

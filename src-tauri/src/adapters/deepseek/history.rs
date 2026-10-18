@@ -56,7 +56,12 @@ pub fn sources_controlled(
     let root = crate::accounts::selection::history_root("deepseek", || super::dsh_home(home));
     // The sessions tree nests by workspace and session id, so discovery sniffs
     // the zstd magic instead of trusting a fixed depth or exact file name.
-    discover_jsonl_controlled(&root.join("sessions"), session_file, cancelled)
+    let mut sources = discover_jsonl_controlled(&root.join("sessions"), session_file, cancelled)?;
+    // Rebuild old indexes whose turn/step IDs collided across sessions.
+    for source in &mut sources {
+        source.fingerprint = format!("deepseek-session-v2|{}", source.fingerprint);
+    }
+    Ok(sources)
 }
 
 pub fn parse(source: &HistorySource) -> Result<ParsedSession, String> {
@@ -163,11 +168,12 @@ pub fn parse_controlled(
         return Err("dsh 会话日志缺少 session 头行，不是已验证的会话格式；原文件未更改".into());
     }
     session.partial |= partial;
+    let scope = session.native_id.clone().unwrap_or_else(|| source.key());
     session.usage = events
         .into_iter()
         .map(|(id, event)| UsageEvent {
             request_count: Some(1),
-            id,
+            id: format!("deepseek:{scope}:{id}"),
             model: event.model,
             timestamp: event.timestamp,
             input: Some(event.counts.input),
@@ -263,7 +269,10 @@ fn fold_usage(
         key,
         RequestUsage {
             counts,
-            model: session.model.clone(),
+            model: data.pointer("/message/source/model")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .or_else(|| session.model.clone()),
             timestamp: time,
         },
     );
@@ -342,6 +351,19 @@ mod tests {
     }
 
     #[test]
+    fn usage_uses_each_responses_model() {
+        let mut session = ParsedSession::new();
+        session.model = Some("first-model".into());
+        let mut events = BTreeMap::new();
+        fold_usage(&serde_json::json!({
+            "turn": 1, "step": 2,
+            "message": {"source": {"model": "second-model"}},
+            "usage": {"inputTokens": 10, "outputTokens": 2}
+        }), 1, Some(10), &mut session, &mut events);
+        assert_eq!(events["1:2"].model.as_deref(), Some("second-model"));
+    }
+
+    #[test]
     fn committed_fixture_matches_the_encoder() {
         let fixture = fs::read(fixture_source("dsh-0.2.1-v4.session.jsonl.zstd").path).unwrap();
         assert_eq!(fixture, encode_session(SAMPLE_JSONL));
@@ -380,11 +402,11 @@ mod tests {
         assert_eq!(parsed.messages[3].text, "可以，我先读取日志目录。");
         assert!(!parsed.partial);
         assert_eq!(parsed.usage.len(), 2);
-        assert_eq!(parsed.usage[0].id, "1:1");
+        assert_eq!(parsed.usage[0].id, "deepseek:session-00000000-0000-4000-8000-000000000001:1:1");
         assert_eq!(parsed.usage[0].model.as_deref(), Some("deepseek-flash"));
         assert_eq!(parsed.usage[0].input, Some(120));
         assert_eq!(parsed.usage[0].output, Some(35));
-        assert_eq!(parsed.usage[1].id, "2:1");
+        assert_eq!(parsed.usage[1].id, "deepseek:session-00000000-0000-4000-8000-000000000001:2:1");
         assert_eq!(parsed.usage[1].input, Some(210));
         assert_eq!(parsed.usage[1].output, Some(48));
         assert_eq!(parsed.usage[1].cache_read, Some(64));
@@ -453,11 +475,12 @@ mod tests {
         // Right extension but not a zstd stream: rejected by the magic sniff.
         fs::write(home.path().join(".dsh").join("plain.jsonl.zstd"), "{\"type\":\"session\"}\n").unwrap();
         let sources = sources(home.path()).unwrap();
+        assert!(sources[0].fingerprint.starts_with("deepseek-session-v2|"));
         let names: Vec<_> = sources
             .iter()
             .map(|source| source.path.file_name().unwrap().to_string_lossy().into_owned())
             .collect();
         assert_eq!(names, ["session.v4.jsonl.zstd"]);
-        assert!(sources.iter().all(|source| source.fingerprint.starts_with("m3:")));
+        assert!(sources.iter().all(|source| source.fingerprint.starts_with("deepseek-session-v2|m3:")));
     }
 }

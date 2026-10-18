@@ -452,45 +452,61 @@ fn load_calls(conn: &Connection, filter: &HistoryFilter, from: Option<i64>, to: 
     let mut seen = HashSet::<u64>::new();
     let mut sources = std::collections::BTreeSet::new();
     let mut model_index = HashMap::<(usize, Option<String>), usize>::new();
+    let mut last_model: Option<usize> = None;
     let mut rates: Vec<Option<PricedModel>> = Vec::new();
     let mut tool_index = HashMap::<String, usize>::new();
     let count = |value: Option<i64>| value.unwrap_or(0).max(0) as u64;
     while let Some(row) = rows.next().map_err(|error| error.to_string())? {
-        let session_id: String = row.get(0).map_err(|error| error.to_string())?;
-        let event_id: String = row.get(1).map_err(|error| error.to_string())?;
-        let tool_name: String = row.get(2).map_err(|error| error.to_string())?;
+        // Borrow labels from SQLite's row; allocate only when interning a new
+        // session/tool/model, rather than four strings for every usage event.
+        let text = |column| row.get_ref(column).map_err(|error| error.to_string())?
+            .as_str().map_err(|error| error.to_string());
+        let session_id = text(0)?;
+        let event_id = text(1)?;
+        let tool_name = text(2)?;
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        (tool_name.as_str(), event_id.as_str()).hash(&mut hasher);
+        (tool_name, event_id).hash(&mut hasher);
         if !seen.insert(hasher.finish()) {
             loaded.duplicates += 1;
             continue;
         }
-        let tool = *tool_index.entry(tool_name.clone()).or_insert_with(|| {
+        let tool = if let Some(index) = tool_index.get(tool_name) { *index } else {
             let index = loaded.tools.len();
-            loaded.tools.push(tool_name);
+            loaded.tools.push(tool_name.to_owned());
+            tool_index.insert(tool_name.to_owned(), index);
             index
-        });
-        let session = match session_index.get(&session_id) {
+        };
+        let session = match session_index.get(session_id) {
             Some(index) => *index,
             None => {
-                loaded.sessions.push(known_sessions.remove(&session_id).ok_or("用量所属会话不存在")?);
-                session_index.insert(session_id, loaded.sessions.len() - 1);
+                loaded.sessions.push(known_sessions.remove(session_id).ok_or("用量所属会话不存在")?);
+                session_index.insert(session_id.to_owned(), loaded.sessions.len() - 1);
                 loaded.sessions.len() - 1
             }
         };
-        let model: Option<String> = row.get(3).map_err(|error| error.to_string())?;
-        let key = (tool, model);
-        let model = match model_index.get(&key) {
-            Some(index) => *index,
-            None => {
-                let rate = key.1.as_deref().and_then(|model| book.resolve(&loaded.tools[tool], model));
-                if let Some(price) = &rate { sources.insert(price.label.clone()); }
-                let index = loaded.models.len();
-                rates.push(rate);
-                loaded.models.push(key.clone());
-                model_index.insert(key, index);
-                index
-            }
+        let model = match row.get_ref(3).map_err(|error| error.to_string())? {
+            rusqlite::types::ValueRef::Null => None,
+            value => Some(value.as_str().map_err(|error| error.to_string())?),
+        };
+        let model = if let Some(index) = last_model
+            .filter(|&index| loaded.models[index].0 == tool && loaded.models[index].1.as_deref() == model) {
+            index
+        } else {
+            let key = (tool, model.map(str::to_owned));
+            let index = match model_index.get(&key) {
+                Some(index) => *index,
+                None => {
+                    let rate = key.1.as_deref().and_then(|model| book.resolve(&loaded.tools[tool], model));
+                    if let Some(price) = &rate { sources.insert(price.label.clone()); }
+                    let index = loaded.models.len();
+                    rates.push(rate);
+                    loaded.models.push(key.clone());
+                    model_index.insert(key, index);
+                    index
+                }
+            };
+            last_model = Some(index);
+            index
         };
         let input = count(row.get(5).map_err(|error| error.to_string())?);
         let output = count(row.get(6).map_err(|error| error.to_string())?);

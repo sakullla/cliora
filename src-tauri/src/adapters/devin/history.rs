@@ -141,11 +141,10 @@ pub fn sources_controlled(
         if !valid_native_id(stem) {
             continue;
         }
-        // v3 adds the sessions.db working directory so an index built when cwd
-        // was unknown re-parses and can resume in that directory.
+        // v4 scopes step IDs to the session; v3 added the working directory.
         let directory = directories.get(stem).map(String::as_str).unwrap_or("");
         let fingerprint = crate::history::source_fingerprint_controlled(&path, cancelled)
-            .map(|value| format!("devin-transcript-v3|{value}|{directory}"));
+            .map(|value| format!("devin-transcript-v4|{value}|{directory}"));
         let source = match &fingerprint {
             Ok(_) => HistorySource {
                 native_title: None,
@@ -188,7 +187,12 @@ fn add_usage(session: &mut ParsedSession, id: &str, time: Option<i64>, step: &Va
         .get("prompt_tokens")
         .and_then(Value::as_u64)
         .zip(metrics.get("completion_tokens").and_then(Value::as_u64))
-        .zip(metrics.get("cached_tokens").and_then(Value::as_u64));
+        // ATIF omits zero-valued cached_tokens on uncached calls. Native
+        // final_metrics totals confirm these calls still bill prompt/output.
+        .zip(match metrics.get("cached_tokens") {
+            None => Some(0),
+            Some(value) => value.as_u64(),
+        });
     let Some(((prompt, completion), cached)) = fields else {
         session.partial = true;
         return;
@@ -313,6 +317,10 @@ pub fn parse_controlled(
         }
     }
     check_cancelled(cancelled)?;
+    let scope = session.native_id.clone().unwrap_or_else(|| source.key());
+    for event in &mut session.usage {
+        event.id = format!("devin:{scope}:{}", event.id);
+    }
     if let Some(id) = session.native_id.as_deref() {
         if let Some(database) = sessions_database(&source.path) {
             if let Some(directory) = working_directories(&database).get(id) {
@@ -326,6 +334,19 @@ pub fn parse_controlled(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uncached_steps_may_omit_the_zero_cache_counter() {
+        let mut session = ParsedSession::new();
+        add_usage(&mut session, "1", None, &serde_json::json!({
+            "metrics": {"prompt_tokens": 15177, "completion_tokens": 135}
+        }));
+        assert!(!session.partial);
+        assert_eq!(session.usage.len(), 1);
+        assert_eq!(session.usage[0].input, Some(15177));
+        assert_eq!(session.usage[0].output, Some(135));
+        assert_eq!(session.usage[0].cache_read, Some(0));
+    }
 
     const TRANSCRIPT_FIXTURE: &str =
         include_str!("../../../../tests/fixtures/history/devin-3000-transcript.json");
@@ -357,7 +378,7 @@ mod tests {
             .iter()
             .find(|source| source.native_id.as_deref() == Some("serene-example"))
             .unwrap();
-        assert!(example.fingerprint.starts_with("devin-transcript-v3|"));
+        assert!(example.fingerprint.starts_with("devin-transcript-v4|"));
         assert!(example.fingerprint.contains('m'), "指纹含元数据摘要");
         assert!(example.path.ends_with("cli/transcripts/serene-example.json"));
         // The non-transcript candidate fails parsing instead of being guessed.
@@ -412,7 +433,7 @@ mod tests {
             .iter()
             .find(|source| source.native_id.as_deref() == Some("serene-example"))
             .unwrap();
-        assert!(example.fingerprint.starts_with("devin-transcript-v3|"));
+        assert!(example.fingerprint.starts_with("devin-transcript-v4|"));
         assert!(example.fingerprint.ends_with("|C:\\work\\demo"));
         let session = parse(example).unwrap();
         assert_eq!(session.cwd.as_deref(), Some(r"C:\work\demo"));
@@ -453,7 +474,7 @@ mod tests {
         let session = parse(&sources[0]).unwrap();
         assert_eq!(session.usage.len(), 2, "每个带 metrics 的 agent step 一个事件");
         let first = &session.usage[0];
-        assert_eq!(first.id, "step-4");
+        assert_eq!(first.id, "devin:serene-example:step-4");
         assert_eq!(first.request_count, Some(1));
         assert_eq!(first.model.as_deref(), Some("example-swe-high"));
         assert_eq!(first.timestamp, Some(1_791_364_544_521));

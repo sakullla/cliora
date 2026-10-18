@@ -59,7 +59,7 @@ pub fn sources_controlled(
             source.fingerprint = String::new();
             source.fingerprint_error = Some(message);
         } else {
-            source.fingerprint = format!("codebuddy-session-v3|{}", parts.join("|"));
+            source.fingerprint = format!("codebuddy-session-v4|{}", parts.join("|"));
         }
     }
     Ok(sources)
@@ -210,7 +210,7 @@ pub fn parse_controlled(
             .get("id")
             .and_then(Value::as_str)
             .map(str::to_owned)
-            .unwrap_or_else(|| format!("line-{line}"));
+            .unwrap_or_else(|| format!("{}:line-{line}", source.key()));
         let row_model = provider
             .and_then(|data| data.get("model"))
             .and_then(Value::as_str)
@@ -309,7 +309,7 @@ pub fn parse_controlled(
                 .get("id")
                 .and_then(Value::as_str)
                 .map(str::to_owned)
-                .unwrap_or_else(|| format!("line-{line}"));
+                .unwrap_or_else(|| format!("{}:line-{line}", wire_source.key()));
             record_usage(
                 &mut session,
                 &mut records,
@@ -360,7 +360,7 @@ mod tests {
         fs::write(projects.join("scratch.txt"), "{}\n").unwrap();
         let sources = sources(home.path()).unwrap();
         assert_eq!(sources.len(), 1);
-        assert!(sources[0].fingerprint.starts_with("codebuddy-session-v3|"));
+        assert!(sources[0].fingerprint.starts_with("codebuddy-session-v4|"));
         assert!(sources[0]
             .path
             .file_name()
@@ -529,7 +529,7 @@ mod tests {
         .unwrap();
         let sources = sources(temp.path()).unwrap();
         assert_eq!(sources.len(), 1);
-        assert!(sources[0].fingerprint.starts_with("codebuddy-session-v3|"));
+        assert!(sources[0].fingerprint.starts_with("codebuddy-session-v4|"));
         let parsed = parse(&sources[0]).unwrap();
         assert_eq!(
             parsed.native_id.as_deref(),

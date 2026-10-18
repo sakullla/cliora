@@ -5,7 +5,9 @@ import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, normalize } from 'node:path';
 import { pathToFileURL } from 'node:url';
 const [piRoot, fixtureRoot, declarationsFile, rootsFile] = process.argv.slice(2);
-assert.ok(['0.99.2', '1.0.0', '1.0.2', '1.0.4', '1.1.0', '1.2.0'].includes(JSON.parse(readFileSync(join(piRoot, 'package.json'))).version), 'native acceptance must use a tested published reference');
+const metadata = JSON.parse(readFileSync(join(piRoot, 'package.json')));
+assert.equal(metadata.name, '@earendil-works/pi-coding-agent', 'native acceptance must exercise the Pi package');
+assert.equal(typeof metadata.version, 'string', 'record the tested release without restricting compatible updates');
 const { DefaultPackageManager } = await import(pathToFileURL(join(piRoot, 'dist/core/package-manager.js')).href);
 const packageRoot = join(fixtureRoot, 'package');
 mkdirSync(join(packageRoot, 'extensions'), { recursive: true });
@@ -24,4 +26,4 @@ assert.equal(enabled(broken), true, 'old empty delta reproduced unintended globa
 assert.equal(enabled(disabled), false, 'Rust disabled replacement prevents global load');
 assert.equal(enabled(original), false, 'restored declaration retains original semantics');
 for (const { source, scope, expected } of JSON.parse(readFileSync(rootsFile))) assert.equal(manager.getInstalledPath(source, scope), normalize(expected), source);
-process.stdout.write('Pi native delta/replacement and installed path regressions passed\n');
+process.stdout.write(`Pi ${metadata.version} native delta/replacement and installed path regressions passed\n`);

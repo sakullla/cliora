@@ -354,7 +354,7 @@ impl CliAdapter for Devin {
     fn install_guidance(&self) -> (&'static str, &'static str) {
         (
             "https://devin.ai",
-            "Windows：irm https://static.devin.ai/cli/install.ps1 | iex，安装到 %LOCALAPPDATA%\\devin\\cli\\bin。macOS/Linux 使用 https://cli.devin.ai/install.sh，命令放在 ~/.local/bin。已安装后重新执行同一安装命令。登录由 devin auth login 原生完成，Cliora 不接管凭据。",
+            "Windows：irm https://cli.devin.ai/install.ps1 | iex，安装到 %LOCALAPPDATA%\\devin\\cli\\bin。macOS/Linux 使用 https://cli.devin.ai/install.sh，命令放在 ~/.local/bin。已安装后重新执行同一安装命令。登录由 devin auth login 原生完成，Cliora 不接管凭据。",
         )
     }
     fn install_command(&self) -> Option<String> {
@@ -363,7 +363,7 @@ impl CliAdapter for Devin {
     fn native_install_command(&self) -> Option<String> {
         Some(
             if cfg!(windows) {
-                "irm https://static.devin.ai/cli/install.ps1 | iex"
+                "irm https://cli.devin.ai/install.ps1 | iex"
             } else {
                 "curl -fsSL https://cli.devin.ai/install.sh | bash"
             }
@@ -454,6 +454,7 @@ mod tests {
         assert!(!Devin.history_resume_version_supported("2999.9.9"));
         assert!(!Devin.node_required_when_missing());
         let install = Devin.install_command().unwrap();
+        assert!(install.contains("https://cli.devin.ai/install."));
         assert!(install.contains(if cfg!(windows) { "install.ps1" } else { "install.sh" }));
         assert_eq!(Devin.upgrade_command("native"), Devin.native_install_command());
         assert!(Devin.upgrade_command("unknown").is_none());

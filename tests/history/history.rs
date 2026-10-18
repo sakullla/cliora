@@ -5,6 +5,7 @@ use crate::adapters::{LaunchMode, CODEX, GROK};
 fn fixtures() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/history")
 }
+
 fn file(name: &str) -> HistorySource {
     HistorySource { native_title: None,
         path: fixtures().join(name),
@@ -656,6 +657,78 @@ const DAY: i64 = 86_400_000;
 const FIXTURE_DAY: i64 = 1790668800000;
 
 #[test]
+fn missing_native_request_ids_are_scoped_to_the_source() {
+    use crate::adapters::{codebuddy::history as buddy, command_code::history as command};
+    for (tool, name) in [("codebuddy", "codebuddy-2.161.1-session.jsonl"), ("command_code", "command-code-1.73-session.jsonl")] {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("index.db")).unwrap();
+        let text = fs::read_to_string(fixtures().join(name)).unwrap().lines().map(|line| {
+            let mut row: serde_json::Value = serde_json::from_str(line).unwrap();
+            row.as_object_mut().unwrap().remove("id");
+            row.to_string()
+        }).collect::<Vec<_>>().join("\n") + "\n";
+        let mut expected = 0;
+        for name in ["one.jsonl", "two.jsonl"] {
+            let source = HistorySource { path: temp.path().join(name), ..file("unused") };
+            fs::write(&source.path, &text).unwrap();
+            let parsed = if tool == "codebuddy" { buddy::parse(&source) } else { command::parse(&source) }.unwrap();
+            assert!(!parsed.usage.is_empty());
+            expected += parsed.usage.len() as u64;
+            db.with_connection(|conn| store_session(conn, tool, &source, &parsed, &HashMap::new())).unwrap();
+        }
+        let report = usage_report(&db, &HistoryFilter::default()).unwrap();
+        assert_eq!(report.totals.requests, expected, "{tool}");
+        assert_eq!(report.duplicate_requests, 0, "{tool}");
+    }
+}
+
+#[test]
+fn session_local_usage_ids_survive_multi_session_reports_and_copies() {
+    use crate::adapters::{deepseek::history as dsh, devin::history as devin};
+    for tool in ["deepseek", "devin"] {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("index.db")).unwrap();
+        let (fixture, native_id) = if tool == "deepseek" {
+            let bytes = fs::read(fixtures().join("dsh-0.2.1-v4.session.jsonl.zstd")).unwrap();
+            (String::from_utf8(zstd::stream::decode_all(&bytes[..]).unwrap()).unwrap(),
+                "session-00000000-0000-4000-8000-000000000001")
+        } else {
+            (fs::read_to_string(fixtures().join("devin-3000-transcript.json")).unwrap(), "serene-example")
+        };
+        let mut expected = [0u64; 4];
+        let mut requests = 0;
+        for (name, session_id) in [("first", native_id), ("second", "independent-session"), ("copy", native_id)] {
+            let text = fixture.replace(native_id, session_id);
+            let path = temp.path().join(name);
+            fs::write(&path, if tool == "deepseek" {
+                zstd::stream::encode_all(text.as_bytes(), 1).unwrap()
+            } else { text.into_bytes() }).unwrap();
+            let source = HistorySource { path, ..file("unused") };
+            let parsed = if tool == "deepseek" { dsh::parse(&source) } else { devin::parse(&source) }.unwrap();
+            if name != "copy" {
+                for event in &parsed.usage {
+                    let read = event.cache_read.unwrap_or(0);
+                    let write = event.cache_write.unwrap_or(0);
+                    expected[0] += event.input.unwrap_or(0).saturating_sub(if event.input_includes_cache { read + write } else { 0 });
+                    expected[1] += event.output.unwrap_or(0);
+                    expected[2] += read;
+                    expected[3] += write;
+                    requests += 1;
+                }
+            }
+            db.with_connection(|conn| store_session(conn, tool, &source, &parsed, &HashMap::new())).unwrap();
+        }
+        let report = usage_report(&db, &HistoryFilter::default()).unwrap();
+        assert_eq!(report.totals.requests, requests, "{tool}");
+        assert_eq!(report.duplicate_requests, requests / 2, "only the copied session is duplicate: {tool}");
+        assert_eq!([report.totals.input, report.totals.output, report.totals.cache_read, report.totals.cache_write], expected, "{tool}");
+        assert_eq!(report.totals.total, expected.iter().sum::<u64>());
+        assert_eq!(report.top_sessions.iter().map(|s| s.totals.total).sum::<u64>(), report.totals.total);
+        assert_eq!(report.by_model.iter().map(|s| s.totals.total).sum::<u64>(), report.totals.total);
+    }
+}
+
+#[test]
 fn report_counts_disjoint_tokens_groups_models_and_filters() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
@@ -1093,7 +1166,7 @@ fn opencode_v2_storage_lists_parses_usage_and_variant_model() {
     let sources = opencode::sources(temp.path()).unwrap();
     assert_eq!(sources.len(), 1);
     assert_eq!(sources[0].native_id.as_deref(), Some("ses_v2_fixture"));
-    assert_eq!(sources[0].fingerprint, "1792026341382");
+    assert_eq!(sources[0].fingerprint, "opencode-session-v3|v2|1792026341382");
     let session = opencode::parse(&sources[0]).unwrap();
     assert_eq!(session.title, "T8 verify session");
     assert_eq!(session.cwd.as_deref(), Some("C:/verify/project"));
@@ -1204,6 +1277,60 @@ fn opencode_migrated_database_lists_both_generations() {
             other => panic!("unexpected session {other:?}"),
         }
     }
+}
+
+#[test]
+fn opencode_migrated_v1_rows_are_deduplicated_and_long_usage_is_complete() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join(".local/share/opencode");
+    fs::create_dir_all(&root).unwrap();
+    let mut native_db = rusqlite::Connection::open(root.join("opencode.db")).unwrap();
+    native_db.execute_batch(
+        "CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT, directory TEXT, time_created INTEGER, time_updated INTEGER, version TEXT, model TEXT);
+         CREATE TABLE session_v2 (id TEXT PRIMARY KEY, title TEXT, directory TEXT, time_created INTEGER, time_updated INTEGER, version TEXT, model TEXT);
+         CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER, data TEXT, time_created INTEGER);
+         CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, data TEXT, time_created INTEGER);
+         INSERT INTO session VALUES ('migrated', 'old', '/project', 1000, 2000, '1.18.33', NULL);"
+    ).unwrap();
+    let old = opencode::sources(temp.path()).unwrap();
+    native_db.execute_batch("INSERT INTO session_v2 SELECT * FROM session").unwrap();
+    let transaction = native_db.transaction().unwrap();
+    for index in 0..4002 {
+        transaction.execute("INSERT INTO session_message VALUES (?1, 'migrated', 'assistant', ?2, ?3, 2000)",
+            params![format!("msg-{index}"), index, r#"{"model":{"id":"example"},"tokens":{"input":10,"output":2,"reasoning":1,"cache":{"read":4,"write":0}},"content":[{"type":"text","text":"ok"}]}"#]).unwrap();
+    }
+    transaction.commit().unwrap();
+    for id in ["msg-0", "legacy-only"] {
+        native_db.execute("INSERT INTO message VALUES (?1, 'migrated', ?2, 1500)", params![id,
+            r#"{"role":"assistant","modelID":"example","tokens":{"input":11,"output":2,"reasoning":1,"cache":{"read":4,"write":1}}}"#]).unwrap();
+    }
+    let sources = opencode::sources(temp.path()).unwrap();
+    assert_eq!(sources.len(), 1);
+    assert_ne!(sources[0].fingerprint, old[0].fingerprint, "migration must invalidate an unchanged timestamp");
+    let parsed = opencode::parse(&sources[0]).unwrap();
+    assert_eq!(parsed.usage.len(), 4003, "keep every billed call including unmigrated usage, without duplicating converted messages");
+    assert_eq!(parsed.usage.iter().filter(|event| event.id == "msg-0").count(), 1);
+    let db = Database::open(&temp.path().join("index.db")).unwrap();
+    db.with_connection(|conn| {
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        store_session(&tx, "open_code", &sources[0], &parsed, &HashMap::new())?;
+        tx.commit().map_err(|e| e.to_string())
+    }).unwrap();
+    let report = usage_report(&db, &HistoryFilter::default()).unwrap();
+    assert_eq!(report.totals.total, 4002 * 17 + 19);
+    assert_eq!(report.totals.requests, 4003);
+    native_db.execute("UPDATE session SET time_updated=3000 WHERE id='migrated'", []).unwrap();
+    assert_ne!(opencode::sources(temp.path()).unwrap()[0].fingerprint, sources[0].fingerprint,
+        "legacy usage changes must invalidate the merged source");
+    native_db.execute_batch(
+        "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<2502)
+         INSERT INTO session SELECT 'copied-'||x, 'old', '/project', 1000, 2000, '1.18.33', NULL FROM n;
+         INSERT INTO session_v2 SELECT * FROM session WHERE id <> 'migrated';"
+    ).unwrap();
+    assert_eq!(opencode::sources(temp.path()).unwrap().len(), 2503, "overlapping migration catalogs must not be truncated to half the limit");
+    native_db.execute("UPDATE session_v2 SET time_updated=NULL WHERE id='migrated'", []).unwrap();
+    let unknown_stamp = opencode::sources(temp.path()).unwrap().into_iter().find(|s| s.native_id.as_deref()==Some("migrated")).unwrap();
+    assert_eq!(unknown_stamp.fingerprint, "0", "unknown revisions must always be reread");
 }
 
 #[cfg(windows)]
