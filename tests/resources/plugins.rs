@@ -380,7 +380,7 @@ fn native_pi_delta_replacement_and_installed_path_semantics() {
             })
         });
     let Some(pi) = pi.filter(|path| path.join("dist/core/package-manager.js").is_file()) else {
-        eprintln!("Pi native regression not accepted: set CLIORA_PI_PACKAGE_ROOT to a tested Pi reference (0.99.2/1.0.x/1.1.0)");
+        eprintln!("Pi native regression not accepted: set CLIORA_PI_PACKAGE_ROOT to an installed Pi package; its native behavior is checked directly");
         return;
     };
     let dir = tempfile::tempdir().unwrap();

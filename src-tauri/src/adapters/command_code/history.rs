@@ -91,7 +91,7 @@ pub fn sources_controlled(
             source.fingerprint = String::new();
             source.fingerprint_error = Some(message);
         } else {
-            source.fingerprint = format!("command-code-session-v1|{}", parts.join("|"));
+            source.fingerprint = format!("command-code-session-v2|{}", parts.join("|"));
         }
         if let Some(stem) = source.path.file_stem().and_then(|stem| stem.to_str()) {
             if valid_native_id(stem) {
@@ -163,7 +163,7 @@ pub fn parse_controlled(
                     .get("id")
                     .and_then(Value::as_str)
                     .map(str::to_owned)
-                    .unwrap_or_else(|| format!("line-{line}"));
+                    .unwrap_or_else(|| format!("{}:line-{line}", source.key()));
                 // Per-call usage: only assistant rows carry it (verified on
                 // the sampled sessions), one billed API call per row.
                 let counts = row.get("usage").and_then(usage_counts);
@@ -372,7 +372,7 @@ mod tests {
         std::fs::write(projects.join("mcp.json"), "{}").unwrap();
         let sources = sources(temp.path()).unwrap();
         assert_eq!(sources.len(), 1, "{sources:?}");
-        assert!(sources[0].fingerprint.starts_with("command-code-session-v1|"));
+        assert!(sources[0].fingerprint.starts_with("command-code-session-v2|"));
         assert_eq!(
             sources[0].native_id.as_deref(),
             Some("11111111-2222-4333-8444-555555555555")

@@ -92,6 +92,9 @@ pub struct UsageEvent {
     /// Native calls represented by this record; None means aggregate/legacy unknown.
     #[serde(default)]
     pub request_count: Option<u64>,
+    /// Unique across this tool's sources: reports deduplicate by (tool, id).
+    /// Adapters must scope session-local counters/line numbers to their native
+    /// session or source, while preserving globally unique response IDs.
     pub id: String,
     pub model: Option<String>,
     pub timestamp: Option<i64>,
@@ -548,13 +551,13 @@ fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() || haystack.len() < needle.len() {
         return None;
     }
-    haystack.windows(needle.len()).position(|window| window == needle)
+    memchr::memmem::find(haystack, needle)
 }
 
 /// The string that follows the first occurrence of `marker` (for example `"type":"`).
 pub(crate) fn raw_string_after<'a>(raw: &'a [u8], marker: &[u8]) -> Option<&'a [u8]> {
     let start = find_bytes(raw, marker)? + marker.len();
-    let length = raw[start..].iter().position(|byte| *byte == b'"')?;
+    let length = memchr::memchr(b'"', &raw[start..])?;
     Some(&raw[start..start + length])
 }
 
