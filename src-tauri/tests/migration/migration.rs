@@ -1383,3 +1383,108 @@ fn auth_write_failure_drops_the_path_and_keeps_other_items() {
     assert!(collect_snapshot(&db, &credentials, &registry).is_ok());
     assert!(sync::status(&db).unwrap().conflicts.iter().any(|item| item.key == "profile:profile-1"));
 }
+
+#[test]
+fn choosing_a_missing_directory_clears_its_relink_blocker_and_applies_the_saved_binding() {
+    let _roots = RestoreRootsGuard;
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(temp.path());
+    let credentials = MemoryCredentials::default();
+    let missing = "C:/missing/restore-project";
+    let profile = bare_profile(
+        "pi-profile",
+        "pi",
+        "Pi",
+        BTreeMap::from([("settings".into(), r#"{"defaultProvider":"restore-marker"}"#.into())]),
+    );
+    let old_scope = format!("project:{missing}");
+    db.with_connection(|conn| {
+        conn.execute(
+            "INSERT INTO native_profiles (id,tool,version,data) VALUES (?1,?2,1,?3)",
+            rusqlite::params![profile.id, profile.tool, serde_json::to_string(&profile).unwrap()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO projects (id,name,path,preferred_tool,last_opened) VALUES ('missing','Missing',?1,NULL,0)",
+            [missing],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO applied_bindings (scope_key,tool,profile_id,profile_version,managed) VALUES (?1,'pi',?2,-1,'{}')",
+            rusqlite::params![old_scope, profile.id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO applied_bindings (scope_key,tool,profile_id,profile_version,managed) VALUES ('global','codex','other',1,'{}')",
+            [],
+        )
+        .unwrap();
+        Ok(())
+    })
+    .unwrap();
+    record_blocker(
+        &db,
+        RestoreBlocker {
+            key: format!("binding:{}", binding_id("pi", &old_scope)),
+            label: "pi 活动配置".into(),
+            action: "relink".into(),
+            detail: format!("目录不存在：{missing}"),
+        },
+    );
+    record_blocker(
+        &db,
+        RestoreBlocker {
+            key: "binding:install".into(),
+            label: "其它 CLI".into(),
+            action: "install".into(),
+            detail: "未发现可执行文件".into(),
+        },
+    );
+    record_blocker(
+        &db,
+        RestoreBlocker {
+            key: "binding:other-path".into(),
+            label: "其它目录".into(),
+            action: "relink".into(),
+            detail: "目录不存在：C:/other-missing".into(),
+        },
+    );
+    let moved = temp.path().join("chosen");
+    fs::create_dir(&moved).unwrap();
+    let home = temp.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    set_restore_roots_for_test(Some((home, temp.path().to_path_buf())));
+    let registry = Registry::builtins().with_fixture_installation("pi", "1.0.0");
+    let linked = crate::projects::relink(&db, "missing", moved.to_str().unwrap()).unwrap();
+    apply_relinked_directory(&db, &credentials, &registry, missing, linked.path.as_deref().unwrap()).unwrap();
+    let blockers = load_blockers(&db).unwrap();
+    assert!(
+        blockers.iter().all(|item| item.detail != format!("目录不存在：{missing}")),
+        "{blockers:?}"
+    );
+    assert!(blockers.iter().any(|item| item.key == "binding:install" && item.action == "install"), "{blockers:?}");
+    assert!(
+        blockers.iter().any(|item| item.key == "binding:other-path" && item.action == "relink"),
+        "{blockers:?}"
+    );
+    let again = sync::status(&db).unwrap();
+    assert!(again.blockers.iter().all(|item| item.detail != format!("目录不存在：{missing}")), "{:?}", again.blockers);
+    let scope: String = db
+        .with_connection(|conn| {
+            conn.query_row("SELECT scope_key FROM applied_bindings WHERE tool='pi'", [], |row| row.get(0))
+                .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert_eq!(scope, format!("project:{}", linked.path.as_deref().unwrap()));
+    let global: String = db
+        .with_connection(|conn| {
+            conn.query_row("SELECT scope_key FROM applied_bindings WHERE tool='codex'", [], |row| row.get(0))
+                .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert_eq!(global, "global");
+    let written = fs::read_to_string(moved.join(".pi").join("settings.json")).unwrap();
+    assert!(written.contains("restore-marker"), "{written}");
+    let reloaded = load_blockers(&db).unwrap();
+    assert!(reloaded.iter().all(|item| item.detail != format!("目录不存在：{missing}")));
+}

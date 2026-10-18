@@ -45,6 +45,12 @@ async function install(page: Page, seed: SyncSeed = {}) {
       lastLogin: null as { id?: string; expectedVersion?: number; method?: string } | null,
       ...initial,
     };
+    const remembered = (() => {
+      try { return JSON.parse(window.sessionStorage.getItem('cliora-sync-ready-memory') || 'null') as { projects?: unknown[]; blockers?: unknown[] } | null; }
+      catch { return null; }
+    })();
+    if (remembered?.projects) control.projects = remembered.projects;
+    if (remembered?.blockers) control.blockers = remembered.blockers;
     const theme = 'light';
     const bootstrap = () => ({ preferences: { schema_version: 1, managed_tools: ['codex'], theme, tool_icons: {} }, tools: [{ id: 'codex', name: 'Codex', installation: 'not_checked', configuration: 'not_checked' }] });
     const codex = { id: 'codex', name: 'Codex', interfaceFormats: [], projectModelOverride: false, yoloAvailable: true, nativeConfig: { state: 'available', reason: '' }, launch: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' }, history: { state: 'available', reason: '' } };
@@ -114,8 +120,19 @@ async function install(page: Page, seed: SyncSeed = {}) {
           control.lastRelink = args;
           const projects = control.projects as { id: string; path?: string; available?: boolean }[];
           const current = projects.find((item) => item.id === args.projectId);
+          const previous = current?.path ?? '';
           const updated = { ...(current ?? { id: args.projectId, name: '项目' }), path: args.projectPath, available: true };
           control.projects = projects.map((item) => item.id === args.projectId ? updated : item);
+          const normalize = (value: string) => value.replace(/\\/g, '/').replace(/\/+$/, '');
+          control.blockers = (control.blockers as { action?: string; detail?: string }[]).filter((blocker) => {
+            if (blocker.action !== 'relink' || !previous) return true;
+            const mark = '目录不存在：';
+            const detail = blocker.detail ?? '';
+            const index = detail.indexOf(mark);
+            if (index < 0) return true;
+            return normalize(detail.slice(index + mark.length).trim()) !== normalize(previous);
+          });
+          window.sessionStorage.setItem('cliora-sync-ready-memory', JSON.stringify({ projects: control.projects, blockers: control.blockers }));
           return updated;
         }
         if (command === 'list_accounts') return control.accounts;
@@ -335,4 +352,29 @@ test('one missing directory, install, sign-in, or conflict leaves everything els
   await expect.poll(() => page.evaluate(() => (window as unknown as { __syncReady: { lastRelink: { projectId: string; projectPath: string } | null } }).__syncReady.lastRelink)).toEqual({ projectId: 'p-missing', projectPath: 'C:/work' });
   await expect(webdav.getByRole('button', { name: '选择目录', exact: true })).toHaveCount(0);
   await expect(webdav.getByText('其余内容可用', { exact: true })).toBeVisible();
+});
+
+test('a chosen directory stays chosen after status is loaded again', async ({ page }) => {
+  await install(page, {
+    configured: true,
+    projects: [project('p-missing', '缺目录项目', 'D:/missing', false), project('p-ok', '可用项目', 'C:/ok', true)],
+    blockers: [
+      { key: 'binding:missing', label: 'Codex 活动配置', action: 'relink', detail: '目录不存在：D:/missing' },
+      { key: 'binding:codex', label: 'Codex 活动配置', action: 'install', detail: '未发现可执行文件' },
+    ],
+  });
+  await openMigration(page);
+  const webdav = page.getByRole('region', { name: 'WebDAV 同步' });
+  await expect(webdav.getByRole('button', { name: '选择目录', exact: true })).toHaveCount(1);
+  await webdav.getByRole('button', { name: '选择目录', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __syncReady: { blockers: { action: string }[] } }).__syncReady.blockers.map((item) => item.action))).toEqual(['install']);
+  await page.reload();
+  await openMigration(page);
+  const again = page.getByRole('region', { name: 'WebDAV 同步' });
+  await expect(again.getByRole('button', { name: '选择目录', exact: true })).toHaveCount(0);
+  await expect(again.getByText('目录不存在：D:/missing')).toHaveCount(0);
+  await expect(again.getByRole('button', { name: '安装 CLI', exact: true })).toBeVisible();
+  await expect(again.getByText('其余内容可用', { exact: true })).toBeVisible();
+  await expect(again.getByText('稍后应用')).toHaveCount(0);
+  await expect(again.getByText('重新绑定')).toHaveCount(0);
 });
