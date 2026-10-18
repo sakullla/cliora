@@ -717,7 +717,7 @@ fn sixth_configuration_port_round_trips_logical_edits_and_rejects_invalid_drafts
     assert!(disk.get("temperature").is_none());
     assert_eq!(disk["unknown"]["preserved"], true);
     let snapshot = crate::portable::collect_snapshot(&db, &credentials, &registry).unwrap();
-    assert_eq!(snapshot.schema_version, 2);
+    assert_eq!(snapshot.schema_version, 3);
     let restored: crate::portable::PortableSnapshot = serde_json::from_str(&serde_json::to_string(&snapshot).unwrap()).unwrap();
     let portable = restored.entities.iter().find_map(|entity| if let crate::portable::PortablePayload::Profile(value) = &entity.payload { Some(value) } else { None }).unwrap();
     assert_eq!(portable.profile.editing, saved.editing);

@@ -228,18 +228,54 @@ fn project_conflicting_auth_is_rejected_and_scopes_keep_native_project_paths() {
     assert_eq!(selection::key("project:shared"), "project:shared");
 }
 #[test]
-fn portable_account_binding_requires_rebinding_and_contains_no_machine_context() {
+fn portable_account_binding_keeps_oauth_without_machine_paths() {
     let temp = tempfile::tempdir().unwrap();
     let db = Database::open(&temp.path().join("app.db")).unwrap();
     let a = account(&db, temp.path(), "a");
     profile(&db, &a);
+    let context = a.context.as_ref().unwrap();
+    std::fs::write(context.root.join("auth.json"), r#"{"token":"kept-login"}"#).unwrap();
     let snapshot =
         crate::portable::collect_snapshot(&db, &Secrets::default(), &Registry::builtins()).unwrap();
     let text = serde_json::to_string(&snapshot).unwrap();
-    assert!(text.contains("rebind_required"));
-    assert!(!text.contains(&a.id));
-    assert!(!text.contains("context-a"));
-    assert!(!text.contains("auth.json"));
+    let marker = temp.path().file_name().unwrap().to_string_lossy().into_owned();
+    assert!(!text.contains("rebind_required"), "{text}");
+    assert!(!text.contains(&marker), "{text}");
+    assert!(!text.contains("kept-login"), "{text}");
+    assert!(text.contains(&a.id));
+    let account_entity = snapshot
+        .entities
+        .iter()
+        .find(|entity| entity.key() == format!("account:{}", a.id))
+        .unwrap();
+    let crate::portable::PortablePayload::Account(exported) = &account_entity.payload else {
+        panic!("account");
+    };
+    let exported_context = exported.account.context.as_ref().unwrap();
+    assert!(exported_context.root.as_os_str().is_empty());
+    assert!(exported_context.config_root.as_os_str().is_empty());
+    assert!(exported_context.resource_root.as_os_str().is_empty());
+    assert!(exported_context.history_roots.is_empty());
+    assert!(exported_context.environment.is_empty());
+    assert_eq!(exported.auth_files.len(), 1);
+    assert_eq!(exported.auth_files[0].name, "auth.json");
+    use base64::Engine;
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(&exported.auth_files[0].contents)
+        .unwrap();
+    assert_eq!(decoded, br#"{"token":"kept-login"}"#);
+    let profile_entity = snapshot
+        .entities
+        .iter()
+        .find(|entity| matches!(entity.payload, crate::portable::PortablePayload::Profile(_)))
+        .unwrap();
+    let crate::portable::PortablePayload::Profile(portable) = &profile_entity.payload else {
+        unreachable!();
+    };
+    assert!(matches!(
+        &portable.profile.authentication,
+        ProfileAuthentication::OAuth { account_id } if account_id == &a.id
+    ));
 }
 #[test]
 fn spawn_rejects_logout_or_reauthentication_since_plan_before_terminal_side_effect() {

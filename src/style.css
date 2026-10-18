@@ -222,6 +222,10 @@ kbd { display: inline-block; min-width: 19px; padding: 0 5px; border: 1px solid 
   gap: 6px;
   min-height: var(--control-h-sm);
   padding: 0 13px;
+  /* Linux Chromium keeps the GTK button face on :hover unless appearance is off,
+     so author hover backgrounds never replace the resting color. */
+  appearance: none;
+  -webkit-appearance: none;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm);
   background: var(--surface);

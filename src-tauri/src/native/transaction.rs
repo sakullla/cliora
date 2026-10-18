@@ -602,6 +602,12 @@ fn write_replacement(
     id: &str,
     sensitive: bool,
 ) -> Result<(), String> {
+    // `rename` replaces a read-only destination on Linux when the directory is
+    // writable. Refuse that here so a locked native file stays a failed write
+    // on every platform, and the caller can keep the retry blocker.
+    if fs::metadata(path).is_ok_and(|metadata| metadata.is_file() && metadata.permissions().readonly()) {
+        return Err(format!("无法替换原生文件 {}：文件只读", path.display()));
+    }
     let parent = path.parent().ok_or("原生文件缺少父目录")?;
     fs::create_dir_all(parent)
         .map_err(|_| format!("无法创建原生配置目录：{}", parent.display()))?;
