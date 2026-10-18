@@ -2071,7 +2071,24 @@ pub async fn relink_project(
     let notify = app.clone();
     let project = blocking(move || {
         app.state::<AppState>().with_database(&app, |db| {
-            projects::relink(db, &project_id, &project_path).map_err(native_error)
+            portable::with_change_notification(db, || notify_portable_changed(&app), || {
+                let previous = projects::get(db, &project_id).map_err(native_error)?;
+                let project = projects::relink(db, &project_id, &project_path).map_err(native_error)?;
+                if let (Some(old), Some(new_path)) = (
+                    previous.path.as_deref().filter(|path| !path.is_empty()),
+                    project.path.as_deref(),
+                ) {
+                    portable::apply_relinked_directory(
+                        db,
+                        &SystemCredentialStore,
+                        &adapters::Registry::builtins(),
+                        old,
+                        new_path,
+                    )
+                    .map_err(native_error)?;
+                }
+                Ok(project)
+            })
         })
     })
     .await?;

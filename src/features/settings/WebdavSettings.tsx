@@ -23,7 +23,6 @@ export function WebdavSettings({ active, editing, onEdit, revision = 0 }: { acti
   const [status, setStatus] = useState<SyncStatus | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectsLoaded, setProjectsLoaded] = useState(false);
-  const [clearedPaths, setClearedPaths] = useState<string[]>([]);
   const [setup, setSetup] = useState<WebdavSetup>(emptySetup());
   const [busy, setBusy] = useState(false);
   const [previews, setPreviews] = useState<Record<string, ConflictPreview>>({});
@@ -112,7 +111,6 @@ export function WebdavSettings({ active, editing, onEdit, revision = 0 }: { acti
     try {
       const updated = await native.relinkProject(project.id, picked);
       setProjects((current) => current.map((item) => item.id === updated.id ? updated : item));
-      if (project.path) setClearedPaths((current) => current.includes(project.path as string) ? current : [...current, project.path as string]);
       setStatus(await native.getWebdavStatus());
       setMessage(t('settings.webdav.directoryLinked', { name: updated.name }));
     } catch (reason) { setError((reason as { message?: string }).message ?? t('settings.webdav.relinkFailed')); }
@@ -162,7 +160,6 @@ export function WebdavSettings({ active, editing, onEdit, revision = 0 }: { acti
     if (blocker.action !== 'relink') return true;
     const path = missingDirectoryPath(blocker.detail);
     if (!projectsLoaded || !path) return true;
-    if (clearedPaths.includes(path)) return false;
     if (missingProjects.some((project) => project.path === path)) return false;
     if (projects.some((project) => project.path === path && project.available)) return false;
     return true;

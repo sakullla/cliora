@@ -1721,6 +1721,142 @@ fn pointer_path(pointer: &str) -> Vec<String> {
     pointer.split('/').skip(1).map(|segment| segment.replace("~1", "/").replace("~0", "~")).filter(|segment| !segment.is_empty()).collect()
 }
 
+fn directory_key(path: &str) -> String {
+    let mut text = path.trim().replace('\\', "/");
+    while text.len() > 1 && text.ends_with('/') {
+        text.pop();
+    }
+    #[cfg(windows)]
+    text.make_ascii_lowercase();
+    text
+}
+
+fn retarget_binding(db: &Database, tool: &str, old_scope: &str, new_scope: &str) -> Result<(), String> {
+    if old_scope == new_scope {
+        return Ok(());
+    }
+    db.with_connection(|conn| {
+        let tx = conn.transaction().map_err(|error| error.to_string())?;
+        let occupied: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM applied_bindings WHERE scope_key=?1 AND tool=?2)",
+                params![new_scope, tool],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        if occupied {
+            tx.execute("DELETE FROM applied_bindings WHERE scope_key=?1 AND tool=?2", params![old_scope, tool])
+        } else {
+            tx.execute(
+                "UPDATE applied_bindings SET scope_key=?1 WHERE scope_key=?2 AND tool=?3",
+                params![new_scope, old_scope, tool],
+            )
+        }
+        .map_err(|error| error.to_string())?;
+        tx.commit().map_err(|error| error.to_string())
+    })
+}
+
+/// A restored project binding stays on the missing directory until that project is linked.
+/// Move the binding to the chosen directory, write it, and drop only that relink blocker.
+pub(crate) fn apply_relinked_directory(
+    db: &Database,
+    store: &dyn CredentialStore,
+    registry: &Registry,
+    previous_path: &str,
+    new_path: &str,
+) -> Result<(), String> {
+    if previous_path.trim().is_empty() {
+        return Ok(());
+    }
+    let previous = directory_key(previous_path);
+    let new_scope = crate::native::apply::scope_key(
+        crate::native::adapter::Scope::Project,
+        Some(Path::new(new_path)),
+    )?;
+    let rows = db.with_connection(|conn| {
+        let mut statement = conn
+            .prepare("SELECT scope_key, tool, profile_id FROM applied_bindings WHERE scope_key LIKE 'project:%' ORDER BY tool, scope_key")
+            .map_err(|error| error.to_string())?;
+        let collected = statement
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)))
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        Ok(collected)
+    })?;
+    let matched: Vec<_> = rows
+        .into_iter()
+        .filter(|(scope, _, _)| scope.strip_prefix("project:").is_some_and(|path| directory_key(path) == previous))
+        .collect();
+    let mut old_keys = Vec::new();
+    for (scope, tool, _) in &matched {
+        old_keys.push(format!("binding:{}", binding_id(tool, scope)));
+        retarget_binding(db, tool, scope, &new_scope)?;
+    }
+    let mut issues = Vec::new();
+    let home = restore_roots(db).map(|(home, _)| home);
+    for (_scope, tool, profile_id) in &matched {
+        let failure = match home.as_deref() {
+            None => Some("无法定位用户目录".to_string()),
+            Some(home) => {
+                let custom = tool_choice(db, tool);
+                crate::native::apply::apply_registered_profile(
+                    registry,
+                    db,
+                    store,
+                    tool,
+                    profile_id,
+                    crate::native::adapter::Scope::Project,
+                    home,
+                    Some(Path::new(new_path)),
+                    custom.as_deref(),
+                    true,
+                )
+                .err()
+            }
+        };
+        if let Some(error) = failure {
+            let action = if error.contains("目录") {
+                "relink"
+            } else if error.contains("未发现") || error.contains("未注册") || error.contains("不能探测") {
+                "install"
+            } else {
+                "retry"
+            };
+            issues.push(RestoreBlocker {
+                key: format!("binding:{}", binding_id(tool, &new_scope)),
+                label: format!("{tool} 活动配置"),
+                action: action.into(),
+                detail: error,
+            });
+        }
+    }
+    let mut current = load_blockers(db)?;
+    current.retain(|item| {
+        if issues.iter().any(|issue| issue.key == item.key) || old_keys.iter().any(|key| key == &item.key) {
+            return false;
+        }
+        if item.action == "relink" {
+            if let Some(path) = item.detail.split_once("目录不存在：").map(|(_, path)| path.trim()) {
+                if !path.is_empty() && directory_key(path) == previous {
+                    return false;
+                }
+            }
+        }
+        true
+    });
+    current.extend(issues);
+    db.with_connection(|conn| {
+        conn.execute(
+            "INSERT INTO app_settings (key,value) VALUES ('sync_blockers',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            [serde_json::to_string(&current).map_err(|error| error.to_string())?],
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+    })
+}
+
 pub(crate) fn record_blocker(db: &Database, blocker: RestoreBlocker) {
     let mut current = load_blockers(db).unwrap_or_default();
     current.retain(|item| item.key != blocker.key);
