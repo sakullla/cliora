@@ -88,8 +88,8 @@
 .pasteBox > p { margin: 0; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-regular); line-height: 1.5; }
 .pasteBox textarea { width: 100%; font-family: var(--font-mono); font-size: var(--fs-body); font-weight: var(--fw-regular); }
 .pasteActions { display: flex; justify-content: flex-end; gap: 8px; }
-.primary, .primary:hover:not(:disabled) { border-radius: var(--radius-sm); border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
-.primary:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }
+.primary, .primary:hover:not(:disabled) { border-radius: var(--radius-sm); border-color: color-mix(in srgb, var(--accent) 86%, black); background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 82%, var(--accent-bright)) 0%, var(--accent) 100%); color: var(--on-accent); box-shadow: var(--shadow-accent), var(--inner-highlight); }
+.primary:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); transform: translateY(-1px); }
 /* Sits in the header row beside the paste button, so it never pushes fields down. */
 .pasteNotice { display: inline-flex; flex: 1; justify-content: flex-end; align-items: center; gap: 5px; min-width: 0; overflow: hidden; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-regular); white-space: nowrap; text-overflow: ellipsis; animation: fade-in var(--medium) var(--ease); }
 .pasteNotice svg { flex: none; color: var(--accent); }

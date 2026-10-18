@@ -42,8 +42,8 @@
 .create > button { min-height: var(--control-h); }
 
 .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.primary, .primary:hover:not(:disabled) { border-radius: var(--radius-sm); border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
-.primary:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }
+.primary, .primary:hover:not(:disabled) { border-radius: var(--radius-sm); border-color: color-mix(in srgb, var(--accent) 86%, black); background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 82%, var(--accent-bright)) 0%, var(--accent) 100%); color: var(--on-accent); box-shadow: var(--shadow-accent), var(--inner-highlight); }
+.primary:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); transform: translateY(-1px); }
 .danger { color: var(--danger) !important; }
 .destructive { color: var(--danger); }
 

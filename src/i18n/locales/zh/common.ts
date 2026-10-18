@@ -211,6 +211,7 @@ export default {
     settings: '设置',
     label: '页面',
     mainLabel: '主导航',
+    workspace: '工作区',
     itemTitle: '{{label}}（{{shortcut}}）',
   },
   theme: {
@@ -248,5 +249,6 @@ export default {
     loadFailedDetail: '原数据仍保留。请按上方提示处理后重试。',
     loadFailedRetry: '重试读取',
     skipToContent: '跳到主内容',
+    commandTitle: '快速前往（{{shortcut}}）',
   },
 };

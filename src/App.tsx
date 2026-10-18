@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Fragment, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -440,12 +440,14 @@ export default function App() {
     <a className="skip-link" href="#main" onClick={(event) => { event.preventDefault(); const main = document.getElementById('main'); main?.focus(); main?.scrollTo({ top: 0 }); }}>{t('common.shell.skipToContent')}</a>
     <aside className="sidebar" aria-label={t('common.nav.mainLabel')}>
       <div className="brand"><img className="brandmark" src={brandIcon} alt="" /><span className="brand-name"><strong>{t('common.shell.brand')}</strong><small>CLIORA</small></span><button type="button" className="sidebar-toggle" aria-label={sidebarCollapsed ? t('common.shell.sidebarExpand') : t('common.shell.sidebarCollapse')} title={sidebarCollapsed ? t('common.shell.sidebarExpand') : t('common.shell.sidebarCollapse')} aria-expanded={!sidebarCollapsed} aria-controls="main-navigation" onClick={toggleSidebar}><Icon name={sidebarCollapsed ? 'sidebarOpen' : 'sidebarClose'} size={18} /></button></div>
+      <div className="nav-label" aria-hidden="true">{t('common.nav.workspace')}</div>
       <nav className="nav" id="main-navigation" aria-label={t('common.nav.label')}>
-        {pages.map((item, index) => { const label = t(`common.nav.${item.id}`); return <button key={item.id} type="button" className={page === item.id ? 'active' : ''} aria-label={label} aria-current={page === item.id ? 'page' : undefined} aria-keyshortcuts={`${modAria}+${index + 1}`} title={t('common.nav.itemTitle', { label, shortcut: `${modLabel}+${index + 1}` })} onClick={() => go(item.id)}>
+        {pages.map((item, index) => { const label = t(`common.nav.${item.id}`); return <Fragment key={item.id}>{item.id === 'settings' && <span className="nav-divider" aria-hidden="true" />}<button type="button" className={page === item.id ? 'active' : ''} aria-label={label} aria-current={page === item.id ? 'page' : undefined} aria-keyshortcuts={`${modAria}+${index + 1}`} title={t('common.nav.itemTitle', { label, shortcut: `${modLabel}+${index + 1}` })} onClick={() => go(item.id)}>
           <span className="nav-glyph" aria-hidden="true"><Icon name={item.glyph} /></span><span className="nav-text">{label}</span>
-        </button>; })}
+        </button></Fragment>; })}
       </nav>
       <div className="sidebar-foot">
+        <button type="button" className="sidebar-command" aria-label={t('common.shell.commandTitle', { shortcut: `${modLabel}+K` })} title={t('common.shell.commandTitle', { shortcut: `${modLabel}+K` })} onClick={() => setPaletteOpen(true)}><Icon name="search" size={15} /><span>{t('common.palette.title')}</span><kbd>{modLabel}+K</kbd></button>
         <div className="theme-switch" role="group" aria-label={t('common.theme.switch')}>{themes.map((item) => { const label = t(`common.theme.${item.id}`); return <button key={item.id} type="button" aria-label={label} title={label} aria-pressed={bootstrap.preferences.theme === item.id} disabled={busy} onClick={() => { if (bootstrap.preferences.theme !== item.id) void updateTheme(item.id); }}><Icon name={item.glyph} size={14} /></button>; })}</div>
         <div className="sidebar-status" title={nativeAvailable ? t('common.shell.statusLocalTitle') : t('common.shell.statusPreviewTitle')}><span className="status-dot" data-tone={nativeAvailable ? undefined : 'preview'} /><span className="status-text" data-short={nativeAvailable ? t('common.shell.statusLocalShort') : t('common.shell.statusPreviewShort')}>{nativeAvailable ? t('common.shell.statusLocal') : t('common.shell.statusPreview')}</span></div>
       </div>

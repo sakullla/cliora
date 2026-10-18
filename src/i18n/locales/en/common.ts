@@ -211,6 +211,7 @@ export default {
     settings: 'Settings',
     label: 'Pages',
     mainLabel: 'Main navigation',
+    workspace: 'Workspace',
     itemTitle: '{{label}} ({{shortcut}})',
   },
   theme: {
@@ -248,5 +249,6 @@ export default {
     loadFailedDetail: 'Your data is intact. Follow the guidance above and try again.',
     loadFailedRetry: 'Retry',
     skipToContent: 'Skip to main content',
+    commandTitle: 'Quick go ({{shortcut}})',
   },
 };
