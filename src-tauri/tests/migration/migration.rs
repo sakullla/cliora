@@ -2002,6 +2002,21 @@ fn retry_releases_a_failed_native_binding_without_webdav() {
         .unwrap();
     assert!(managed.contains("model"), "{managed}");
     db.with_connection(|conn| {
+        conn.execute(
+            "INSERT INTO applied_bindings (scope_key,tool,profile_id,profile_version,managed) VALUES ('global','pi','pi-profile',1,'{}')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO library_items (id,kind,title,body,category,project_id,version,updated_at) VALUES ('library-1','prompt','Example','kept-body','',NULL,1,1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sync_entity_state (entity_key,local_digest,heads_json,deleted) VALUES ('library:library-1','digest','[]',0)",
+            [],
+        )
+        .unwrap();
         conn.execute("DELETE FROM applied_bindings WHERE tool='codex'", []).unwrap();
         Ok(())
     })
@@ -2021,6 +2036,174 @@ fn retry_releases_a_failed_native_binding_without_webdav() {
     assert!(released.contains("keep"), "{released}");
     assert!(load_blockers(&db).unwrap().iter().all(|item| item.key != key));
     assert_eq!(sync_config_count(&db), 0);
+    let kept_body: String = db
+        .with_connection(|conn| {
+            conn.query_row("SELECT body FROM library_items WHERE id='library-1'", [], |row| row.get(0))
+                .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert_eq!(kept_body, "kept-body");
+    let pi_rows: i64 = db
+        .with_connection(|conn| {
+            conn.query_row("SELECT count(*) FROM applied_bindings WHERE tool='pi'", [], |row| row.get(0))
+                .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert_eq!(pi_rows, 1);
+    let codex_rows: i64 = db
+        .with_connection(|conn| {
+            conn.query_row("SELECT count(*) FROM applied_bindings WHERE tool='codex'", [], |row| row.get(0))
+                .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert_eq!(codex_rows, 0);
+    let deleted: i64 = db
+        .with_connection(|conn| {
+            conn.query_row("SELECT count(*) FROM sync_entity_state WHERE deleted!=0", [], |row| row.get(0))
+                .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert_eq!(deleted, 0);
+}
+
+#[test]
+fn restored_binding_is_applied_ahead_of_a_pending_release() {
+    let _roots = RestoreRootsGuard;
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(temp.path());
+    let credentials = MemoryCredentials::default();
+    let project = temp.path().join("project");
+    fs::create_dir(&project).unwrap();
+    let scope = project_scope(&project);
+    let key = insert_codex_binding(&db, &scope);
+    let home = temp.path().join("home");
+    fs::create_dir(&home).unwrap();
+    set_restore_roots_for_test(Some((home, temp.path().to_path_buf())));
+    let registry = Registry::builtins().with_fixture_installation("codex", "0.160.0");
+    let canonical = scope.strip_prefix("project:").unwrap();
+    let config = Path::new(canonical).join(".codex").join("config.toml");
+    fs::create_dir_all(config.parent().unwrap()).unwrap();
+    fs::write(&config, ":::not toml").unwrap();
+    db.with_connection(|conn| {
+        conn.execute("DELETE FROM applied_bindings WHERE tool='codex'", []).unwrap();
+        Ok(())
+    })
+    .unwrap();
+    let release_managed = r#"{"settings":{"/model":"gpt-6","/sandbox_mode":"workspace-write"}}"#;
+    let error = note_failed_release(&db, &registry, &key, "codex", &scope, release_managed).unwrap_err();
+    assert!(!error.contains("请先配置 WebDAV"), "{error}");
+    assert!(
+        load_pending_releases(&db).unwrap().iter().any(|item| item.key == key && item.managed.contains("sandbox_mode")),
+        "{:?}",
+        load_pending_releases(&db).unwrap()
+    );
+    db.with_connection(|conn| {
+        conn.execute(
+            "INSERT INTO applied_bindings (scope_key,tool,profile_id,profile_version,managed) VALUES (?1,'codex','codex-profile',-1,?2)",
+            rusqlite::params![scope, r#"{"settings":{"/model":"gpt-6"}}"#],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO applied_bindings (scope_key,tool,profile_id,profile_version,managed) VALUES ('global','pi','pi-profile',1,'{}')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO library_items (id,kind,title,body,category,project_id,version,updated_at) VALUES ('library-1','prompt','Example','kept-body','',NULL,1,1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sync_entity_state (entity_key,local_digest,heads_json,deleted) VALUES ('library:library-1','digest','[]',0)",
+            [],
+        )
+        .unwrap();
+        Ok(())
+    })
+    .unwrap();
+    fs::write(
+        &config,
+        "model = \"external\"\nsandbox_mode = \"workspace-write\"\nkeep = \"yes\"\n",
+    )
+    .unwrap();
+    record_blocker(
+        &db,
+        RestoreBlocker {
+            key: key.clone(),
+            label: "codex 活动配置".into(),
+            action: "install".into(),
+            detail: "未发现可执行文件".into(),
+        },
+    );
+    let failed = retry_native_blocker(&db, &credentials, &registry, &key).unwrap_err();
+    assert!(failed.contains("外部修改") || failed.contains("上次管理的字段"), "{failed}");
+    finish_pending_native(&db, &credentials, &registry).unwrap();
+    let during = fs::read_to_string(&config).unwrap();
+    assert!(during.contains("external"), "{during}");
+    assert!(during.contains("sandbox_mode"), "{during}");
+    assert!(during.contains("keep"), "{during}");
+    let blocker = load_blockers(&db).unwrap().into_iter().find(|item| item.key == key).expect("write blocker");
+    assert_eq!(blocker.action, "retry", "{blocker:?}");
+    assert!(blocker.detail.contains("外部修改") || blocker.detail.contains("上次管理的字段"), "{blocker:?}");
+    assert!(
+        load_pending_releases(&db).unwrap().iter().any(|item| item.key == key),
+        "a failed write must keep the old release"
+    );
+    assert_unchanged_neighbors(&db);
+    db.with_connection(|conn| {
+        conn.execute(
+            "UPDATE applied_bindings SET managed='{}' WHERE tool='codex'",
+            [],
+        )
+        .unwrap();
+        Ok(())
+    })
+    .unwrap();
+    retry_native_blocker(&db, &credentials, &registry, &key).unwrap();
+    let written = fs::read_to_string(&config).unwrap();
+    assert!(written.contains("gpt-6"), "{written}");
+    assert!(written.contains("sandbox_mode"), "{written}");
+    assert!(written.contains("keep"), "{written}");
+    assert!(!written.contains("external"), "{written}");
+    assert!(load_blockers(&db).unwrap().iter().all(|item| item.key != key));
+    assert!(
+        load_pending_releases(&db).unwrap().iter().all(|item| item.key != key),
+        "{:?}",
+        load_pending_releases(&db).unwrap()
+    );
+    assert_unchanged_neighbors(&db);
+    assert_eq!(sync_config_count(&db), 0);
+}
+
+fn assert_unchanged_neighbors(db: &Database) {
+    let kept_body: String = db
+        .with_connection(|conn| {
+            conn.query_row("SELECT body FROM library_items WHERE id='library-1'", [], |row| row.get(0))
+                .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert_eq!(kept_body, "kept-body");
+    let pi_rows: i64 = db
+        .with_connection(|conn| {
+            conn.query_row("SELECT count(*) FROM applied_bindings WHERE tool='pi'", [], |row| row.get(0))
+                .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert_eq!(pi_rows, 1);
+    let codex_rows: i64 = db
+        .with_connection(|conn| {
+            conn.query_row("SELECT count(*) FROM applied_bindings WHERE tool='codex'", [], |row| row.get(0))
+                .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert_eq!(codex_rows, 1);
+    let deleted: i64 = db
+        .with_connection(|conn| {
+            conn.query_row("SELECT count(*) FROM sync_entity_state WHERE deleted!=0", [], |row| row.get(0))
+                .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert_eq!(deleted, 0);
 }
 
 #[test]
