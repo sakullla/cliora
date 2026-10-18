@@ -2207,6 +2207,224 @@ fn assert_unchanged_neighbors(db: &Database) {
 }
 
 #[test]
+fn successful_release_clears_a_stale_write_blocker_when_nothing_is_pending() {
+    let _roots = RestoreRootsGuard;
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(temp.path());
+    let credentials = MemoryCredentials::default();
+    let project = temp.path().join("project");
+    fs::create_dir(&project).unwrap();
+    let scope = project_scope(&project);
+    let key = insert_codex_binding(&db, &scope);
+    let home = temp.path().join("home");
+    fs::create_dir(&home).unwrap();
+    set_restore_roots_for_test(Some((home, temp.path().to_path_buf())));
+    let registry = Registry::builtins().with_fixture_installation("codex", "0.160.0");
+    let canonical = scope.strip_prefix("project:").unwrap();
+    let config = Path::new(canonical).join(".codex").join("config.toml");
+    fs::create_dir_all(config.parent().unwrap()).unwrap();
+    fs::write(&config, "model = \"gpt-6\"\nkeep = \"yes\"\n").unwrap();
+    let managed = r#"{"settings":{"/model":"gpt-6"}}"#;
+    db.with_connection(|conn| {
+        conn.execute("UPDATE applied_bindings SET managed=?1 WHERE tool='codex'", [managed]).unwrap();
+        conn.execute(
+            "INSERT INTO applied_bindings (scope_key,tool,profile_id,profile_version,managed) VALUES ('global','pi','pi-profile',1,'{}')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO library_items (id,kind,title,body,category,project_id,version,updated_at) VALUES ('library-1','prompt','Example','kept-body','',NULL,1,1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sync_entity_state (entity_key,local_digest,heads_json,deleted) VALUES ('library:library-1','digest','[]',0)",
+            [],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM applied_bindings WHERE tool='codex'", []).unwrap();
+        Ok(())
+    })
+    .unwrap();
+    record_blocker(
+        &db,
+        RestoreBlocker {
+            key: key.clone(),
+            label: "codex 活动配置".into(),
+            action: "retry".into(),
+            detail: "上次写入失败".into(),
+        },
+    );
+    note_failed_release(&db, &registry, &key, "codex", &scope, managed).unwrap();
+    let released = fs::read_to_string(&config).unwrap();
+    assert!(!released.contains("gpt-6"), "{released}");
+    assert!(released.contains("keep"), "{released}");
+    assert!(load_blockers(&db).unwrap().iter().all(|item| item.key != key), "{:?}", load_blockers(&db).unwrap());
+    assert!(load_pending_releases(&db).unwrap().iter().all(|item| item.key != key));
+    retry_native_blocker(&db, &credentials, &registry, &key).unwrap();
+    finish_pending_native(&db, &credentials, &registry).unwrap();
+    assert!(load_blockers(&db).unwrap().iter().all(|item| item.key != key));
+    let kept_body: String = db
+        .with_connection(|conn| {
+            conn.query_row("SELECT body FROM library_items WHERE id='library-1'", [], |row| row.get(0))
+                .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert_eq!(kept_body, "kept-body");
+    let pi_rows: i64 = db
+        .with_connection(|conn| {
+            conn.query_row("SELECT count(*) FROM applied_bindings WHERE tool='pi'", [], |row| row.get(0))
+                .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert_eq!(pi_rows, 1);
+    let codex_rows: i64 = db
+        .with_connection(|conn| {
+            conn.query_row("SELECT count(*) FROM applied_bindings WHERE tool='codex'", [], |row| row.get(0))
+                .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert_eq!(codex_rows, 0);
+    assert_eq!(sync_config_count(&db), 0);
+}
+
+#[test]
+fn release_keeps_the_blocker_until_every_pending_release_for_the_key_is_done() {
+    let _roots = RestoreRootsGuard;
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(temp.path());
+    let project_a = temp.path().join("project-a");
+    let project_b = temp.path().join("project-b");
+    fs::create_dir(&project_a).unwrap();
+    fs::create_dir(&project_b).unwrap();
+    let scope_a = project_scope(&project_a);
+    let scope_b = project_scope(&project_b);
+    let home = temp.path().join("home");
+    fs::create_dir(&home).unwrap();
+    set_restore_roots_for_test(Some((home, temp.path().to_path_buf())));
+    let registry = Registry::builtins().with_fixture_installation("codex", "0.160.0");
+    let key = "binding:shared-release";
+    let config_a = Path::new(scope_a.strip_prefix("project:").unwrap()).join(".codex").join("config.toml");
+    let config_b = Path::new(scope_b.strip_prefix("project:").unwrap()).join(".codex").join("config.toml");
+    fs::create_dir_all(config_a.parent().unwrap()).unwrap();
+    fs::create_dir_all(config_b.parent().unwrap()).unwrap();
+    fs::write(&config_a, ":::not toml").unwrap();
+    fs::write(&config_b, "model = \"gpt-6\"\nkeep = \"yes\"\n").unwrap();
+    record_blocker(
+        &db,
+        RestoreBlocker {
+            key: key.into(),
+            label: "codex 活动配置".into(),
+            action: "retry".into(),
+            detail: "上次写入失败".into(),
+        },
+    );
+    let managed = r#"{"settings":{"/model":"gpt-6"}}"#;
+    let error = note_failed_release(&db, &registry, key, "codex", &scope_a, managed).unwrap_err();
+    assert!(!error.contains("请先配置 WebDAV"), "{error}");
+    note_failed_release(&db, &registry, key, "codex", &scope_b, managed).unwrap();
+    let during = fs::read_to_string(&config_b).unwrap();
+    assert!(!during.contains("gpt-6"), "{during}");
+    assert!(during.contains("keep"), "{during}");
+    assert!(
+        load_pending_releases(&db).unwrap().iter().any(|item| item.key == key && item.scope_key == scope_a),
+        "{:?}",
+        load_pending_releases(&db).unwrap()
+    );
+    let blocker = load_blockers(&db).unwrap().into_iter().find(|item| item.key == key).expect("pending release");
+    assert_eq!(blocker.action, "retry", "{blocker:?}");
+    fs::write(&config_a, "model = \"gpt-6\"\nkeep = \"yes\"\n").unwrap();
+    note_failed_release(&db, &registry, key, "codex", &scope_a, managed).unwrap();
+    let released = fs::read_to_string(&config_a).unwrap();
+    assert!(!released.contains("gpt-6"), "{released}");
+    assert!(released.contains("keep"), "{released}");
+    assert!(load_blockers(&db).unwrap().iter().all(|item| item.key != key), "{:?}", load_blockers(&db).unwrap());
+    assert!(load_pending_releases(&db).unwrap().is_empty(), "{:?}", load_pending_releases(&db).unwrap());
+}
+
+#[test]
+fn restored_binding_write_failure_is_not_cleared_by_release() {
+    let _roots = RestoreRootsGuard;
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(temp.path());
+    let credentials = MemoryCredentials::default();
+    let project = temp.path().join("project");
+    fs::create_dir(&project).unwrap();
+    let scope = project_scope(&project);
+    let key = insert_codex_binding(&db, &scope);
+    let home = temp.path().join("home");
+    fs::create_dir(&home).unwrap();
+    set_restore_roots_for_test(Some((home, temp.path().to_path_buf())));
+    let registry = Registry::builtins().with_fixture_installation("codex", "0.160.0");
+    let canonical = scope.strip_prefix("project:").unwrap();
+    let config = Path::new(canonical).join(".codex").join("config.toml");
+    fs::create_dir_all(config.parent().unwrap()).unwrap();
+    fs::write(&config, ":::not toml").unwrap();
+    db.with_connection(|conn| {
+        conn.execute("DELETE FROM applied_bindings WHERE tool='codex'", []).unwrap();
+        Ok(())
+    })
+    .unwrap();
+    let release_managed = r#"{"settings":{"/model":"gpt-6","/sandbox_mode":"workspace-write"}}"#;
+    note_failed_release(&db, &registry, &key, "codex", &scope, release_managed).unwrap_err();
+    db.with_connection(|conn| {
+        conn.execute(
+            "INSERT INTO applied_bindings (scope_key,tool,profile_id,profile_version,managed) VALUES (?1,'codex','codex-profile',-1,?2)",
+            rusqlite::params![scope, r#"{"settings":{"/model":"gpt-6"}}"#],
+        )
+        .unwrap();
+        Ok(())
+    })
+    .unwrap();
+    fs::write(
+        &config,
+        "model = \"external\"\nsandbox_mode = \"workspace-write\"\nkeep = \"yes\"\n",
+    )
+    .unwrap();
+    record_blocker(
+        &db,
+        RestoreBlocker {
+            key: key.clone(),
+            label: "codex 活动配置".into(),
+            action: "retry".into(),
+            detail: "上次写入失败".into(),
+        },
+    );
+    note_failed_release(&db, &registry, &key, "codex", &scope, release_managed).unwrap();
+    let during = fs::read_to_string(&config).unwrap();
+    assert!(during.contains("external"), "{during}");
+    assert!(during.contains("sandbox_mode"), "{during}");
+    assert!(during.contains("keep"), "{during}");
+    let blocker = load_blockers(&db).unwrap().into_iter().find(|item| item.key == key).expect("write blocker");
+    assert_eq!(blocker.detail, "上次写入失败", "{blocker:?}");
+    assert!(
+        load_pending_releases(&db).unwrap().iter().any(|item| item.key == key && item.managed.contains("sandbox_mode")),
+        "{:?}",
+        load_pending_releases(&db).unwrap()
+    );
+    let failed = retry_native_blocker(&db, &credentials, &registry, &key).unwrap_err();
+    assert!(failed.contains("外部修改") || failed.contains("上次管理的字段"), "{failed}");
+    assert!(!failed.contains("请先配置 WebDAV"), "{failed}");
+    let after = load_blockers(&db).unwrap().into_iter().find(|item| item.key == key).expect("still blocked");
+    assert_eq!(after.action, "retry", "{after:?}");
+    assert_ne!(after.detail, "");
+    let still = fs::read_to_string(&config).unwrap();
+    assert!(still.contains("sandbox_mode"), "{still}");
+    assert!(still.contains("external"), "{still}");
+    assert!(
+        load_pending_releases(&db).unwrap().iter().any(|item| item.key == key),
+        "a failed write must keep the old release"
+    );
+    let codex_rows: i64 = db
+        .with_connection(|conn| {
+            conn.query_row("SELECT count(*) FROM applied_bindings WHERE tool='codex'", [], |row| row.get(0))
+                .map_err(|error| error.to_string())
+        })
+        .unwrap();
+    assert_eq!(codex_rows, 1);
+}
+
+#[test]
 fn install_retry_rewrites_and_clears_the_blocker_once_the_cli_is_present() {
     let _roots = RestoreRootsGuard;
     let temp = tempfile::tempdir().unwrap();

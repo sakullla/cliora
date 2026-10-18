@@ -1875,8 +1875,11 @@ fn replace_blocker(db: &Database, key: &str, label: &str, action: &str, detail: 
     );
 }
 
-/// Release failed after the database row was already deleted. Remember enough to try again
-/// without another sync, and without asking for a WebDAV connection.
+/// Release one deleted binding's native fields without WebDAV.
+/// Failure is remembered for a later retry. Success forgets that pending release.
+/// Once the key has no pending release, its blocker is cleared — including a write
+/// failure recorded before the row was deleted. A restored row is not released and
+/// not cleared; the write still has to land first.
 pub(crate) fn note_failed_release(
     db: &Database,
     registry: &Registry,
@@ -1885,6 +1888,9 @@ pub(crate) fn note_failed_release(
     scope_key: &str,
     managed: &str,
 ) -> Result<(), String> {
+    if find_binding(db, entity_key)?.is_some() {
+        return Ok(());
+    }
     if let Err(error) = release_native_binding(db, registry, tool, scope_key, managed) {
         if let Err(remember) = remember_pending_release(db, entity_key, tool, scope_key, managed) {
             let detail = format!("{error}；未能记下待释放的活动配置：{remember}");
@@ -1900,7 +1906,11 @@ pub(crate) fn note_failed_release(
         );
         return Err(error);
     }
-    Ok(())
+    forget_pending_release(db, entity_key, tool, scope_key)?;
+    if load_pending_releases(db)?.iter().any(|item| item.key == entity_key) {
+        return Ok(());
+    }
+    clear_blocker(db, entity_key)
 }
 
 fn retry_pending_releases(db: &Database, registry: &Registry, blocker: &RestoreBlocker) -> Result<(), String> {
