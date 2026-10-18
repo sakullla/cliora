@@ -965,6 +965,90 @@ fn bundle_conflict_survives_webdav_run_and_can_still_be_applied() {
 }
 
 #[test]
+fn configured_webdav_can_keep_local_bundle_hold_without_sync_conflicts() {
+    let server = Server::new();
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(temp.path());
+    let credentials = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    credentials.put("keep-secret", "sk-keep-plain").unwrap();
+    credentials.put("take-secret", "sk-take-plain").unwrap();
+    let insert = |id: &str, name: &str, secret: &str| {
+        let profile = crate::native::profile::RegisteredProfile {
+            editing: None,
+            authentication: crate::native::profile::ProfileAuthentication::Native,
+            revision: String::new(),
+            id: id.into(),
+            tool: "codex".into(),
+            name: name.into(),
+            version: 1,
+            inherit_common: false,
+            files: BTreeMap::new(),
+            suppressed: BTreeMap::new(),
+            connection: Some(crate::native::profile::Connection {
+                provider_id: "openai".into(),
+                interface_format: "openai_responses".into(),
+                base_url: "https://api.example.test/v1".into(),
+                model: "gpt-6".into(),
+                secret_ref: Some(secret.into()),
+                auth_env_var: None,
+                model_records: Vec::new(),
+            }),
+            native_credentials: BTreeMap::new(),
+        };
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO native_profiles (id,tool,version,data) VALUES (?1,'codex',1,?2)",
+                rusqlite::params![id, serde_json::to_string(&profile).unwrap()],
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+    };
+    insert("profile-keep", "Local Keep", "keep-secret");
+    insert("profile-take", "Local Take", "take-secret");
+    let mut snapshot = collect_snapshot(&db, &credentials, &registry).unwrap();
+    for entity in &mut snapshot.entities {
+        let PortablePayload::Profile(value) = &mut entity.payload else { continue };
+        value.profile.name = if entity.id == "profile-keep" { "Remote Keep" } else { "Remote Take" }.into();
+    }
+    let draft = preview_import(&db, &credentials, &registry, snapshot).unwrap();
+    assert!(draft.items.iter().any(|item| item.key == "profile:profile-keep" && item.status == "conflict"));
+    assert!(draft.items.iter().any(|item| item.key == "profile:profile-take" && item.status == "conflict"));
+    super::super::restore_preview(&db, &credentials, &registry, &draft).unwrap();
+    configure(&db, &credentials, setup(&server)).unwrap();
+    let synced = run(&db, &credentials, &registry, false).unwrap();
+    assert!(synced.conflicts.iter().any(|item| item.key == "profile:profile-keep"));
+    let recorded = read_conflicts(&db).unwrap();
+    assert!(recorded.iter().all(|item| item.key != "profile:profile-keep" && item.key != "profile:profile-take"));
+    let kept = resolve(&db, &credentials, &registry, "profile:profile-keep", None);
+    assert!(kept.as_ref().map(|status| status.conflicts.iter().all(|item| item.key != "profile:profile-keep")).unwrap_or(false), "{kept:?}");
+    let keep_row: String = db.with_connection(|conn| {
+        conn.query_row("SELECT data FROM native_profiles WHERE id='profile-keep'", [], |row| row.get(0))
+            .map_err(|error| error.to_string())
+    }).unwrap();
+    assert!(keep_row.contains("Local Keep") && !keep_row.contains("Remote Keep"), "{keep_row}");
+    let holds: Vec<BundleHold> = read_bundle_holds(&db).unwrap();
+    assert!(holds.iter().all(|item| item.key != "profile:profile-keep"));
+    assert!(holds.iter().any(|item| item.key == "profile:profile-take"));
+    let version_id = holds.iter().find(|item| item.key == "profile:profile-take").unwrap().version_id.clone();
+    assert!(version_id.starts_with("bundle:"));
+    resolve(&db, &credentials, &registry, "profile:profile-take", Some(&version_id)).unwrap();
+    let saved = collect_snapshot(&db, &credentials, &registry).unwrap();
+    let PortablePayload::Profile(applied) = &saved.entities.iter().find(|entity| entity.key() == "profile:profile-take").unwrap().payload else {
+        panic!("profile")
+    };
+    assert_eq!(applied.profile.name, "Remote Take");
+    let keep_after: String = db.with_connection(|conn| {
+        conn.query_row("SELECT data FROM native_profiles WHERE id='profile-keep'", [], |row| row.get(0))
+            .map_err(|error| error.to_string())
+    }).unwrap();
+    assert!(keep_after.contains("Local Keep"), "{keep_after}");
+    assert!(read_bundle_holds(&db).unwrap().iter().all(|item| item.key != "profile:profile-take"));
+}
+
+#[test]
 fn unreadable_auth_file_does_not_block_webdav_sync() {
     let server = Server::new();
     let temp = tempfile::tempdir().unwrap();

@@ -1550,7 +1550,9 @@ pub fn resolve(
         .filter(|item| item.key == entity_key)
         .collect();
     let chosen_bundle = chosen_version_id.is_some_and(|id| id.starts_with("bundle:"));
-    if chosen_bundle || (read_config(db)?.is_none() && !holds.is_empty()) {
+    // None keeps the local row. It is not a WebDAV version id, and bundle holds are not in sync_conflicts.
+    let keep_held_local = chosen_version_id.is_none() && !holds.is_empty();
+    if chosen_bundle || keep_held_local || (read_config(db)?.is_none() && !holds.is_empty()) {
         return resolve_held_bundle(db, store, registry, entity_key, chosen_version_id, &holds);
     }
     let config = read_config(db)?.ok_or("请先配置 WebDAV".to_string())?;
