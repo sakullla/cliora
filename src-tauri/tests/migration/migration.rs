@@ -132,13 +132,13 @@ fn encrypted_bundle_restores_on_fresh_device_without_identity_or_paths_and_is_id
                     |row| row.get(0),
                 )
                 .unwrap();
-            assert_eq!(path, None);
+            assert_eq!(path.as_deref(), Some("C:/old/device/work"));
             let bindings: i64 = conn
                 .query_row("SELECT count(*) FROM applied_bindings", [], |row| {
                     row.get(0)
                 })
                 .unwrap();
-            assert_eq!(bindings, 0);
+            assert_eq!(bindings, 1);
             Ok(())
         })
         .unwrap();
@@ -590,4 +590,256 @@ fn tool_icons_roundtrip_encryption_and_participate_in_import_cas_without_device_
     let old: PortablePreferences = serde_json::from_str(r#"{"managedTools":["codex"],"theme":"light"}"#).unwrap();
     assert!(old.tool_icons.is_empty());
     assert!(!serde_json::to_string(&old).unwrap().contains("toolIcons"));
+}
+
+fn bare_profile(id: &str, tool: &str, name: &str, files: BTreeMap<String, String>) -> RegisteredProfile {
+    RegisteredProfile {
+        editing: None,
+        authentication: crate::native::profile::ProfileAuthentication::Native,
+        revision: String::new(),
+        id: id.into(),
+        tool: tool.into(),
+        name: name.into(),
+        version: 1,
+        inherit_common: false,
+        files,
+        suppressed: BTreeMap::new(),
+        connection: None,
+        native_credentials: BTreeMap::new(),
+    }
+}
+
+struct RestoreRootsGuard;
+impl Drop for RestoreRootsGuard {
+    fn drop(&mut self) {
+        set_restore_roots_for_test(None);
+    }
+}
+
+#[test]
+fn schema3_snapshot_restores_login_material_paths_and_reports_each_cli_failure() {
+    let _roots = RestoreRootsGuard;
+    let temp = tempfile::tempdir().unwrap();
+    let source = database(&temp.path().join("old"));
+    let credentials = MemoryCredentials::default();
+    credentials.put("auth-secret", "oauth-token-value").unwrap();
+    credentials.put("session-secret", "session-token-value").unwrap();
+    credentials.put("minimax-secret", "sk-minimax-plain").unwrap();
+    let auth_dir = temp.path().join("source-auth");
+    fs::create_dir_all(&auth_dir).unwrap();
+    fs::write(auth_dir.join("auth.json"), r#"{"token":"auth-file-token"}"#).unwrap();
+    let sessions = temp.path().join("sessions");
+    fs::create_dir_all(&sessions).unwrap();
+    fs::write(sessions.join("note.txt"), "session-body-must-stay").unwrap();
+    let kept = temp.path().join("kept-project");
+    fs::create_dir_all(&kept).unwrap();
+    let pi_project = temp.path().join("pi-project");
+    fs::create_dir_all(&pi_project).unwrap();
+    let codex_project = temp.path().join("codex-project");
+    fs::create_dir_all(&codex_project).unwrap();
+    fs::write(codex_project.join(".codex"), "not-a-directory").unwrap();
+    let executable = temp.path().join("mcode.exe");
+    fs::write(&executable, "").unwrap();
+    let context = crate::accounts::NativeContext {
+        id: "ctx-1".into(),
+        tool_id: "codex".into(),
+        root: auth_dir.clone(),
+        config_root: auth_dir.clone(),
+        auth_files: vec![auth_dir.join("auth.json")],
+        history_roots: vec![sessions],
+        resource_root: auth_dir,
+        environment: BTreeMap::new(),
+        remove_environment: Vec::new(),
+        cli_args: Vec::new(),
+    };
+    let account = crate::accounts::AuthAccount {
+        id: "acct-1".into(),
+        tool_id: "codex".into(),
+        provider: "chatgpt".into(),
+        label: "Work account".into(),
+        version: 4,
+        state: crate::accounts::AccountState::SignedIn,
+        identity: Some(crate::accounts::AccountIdentity {
+            subject: "user-1".into(),
+            email: None,
+            plan: None,
+            source: "test".into(),
+        }),
+        context: Some(context.clone()),
+        retired_contexts: Vec::new(),
+        pending_login: Some(crate::accounts::PendingLogin {
+            id: "pending-should-not-travel".into(),
+            expires_at: 9,
+            context: context.clone(),
+            previous_state: crate::accounts::AccountState::SignedOut,
+            external_terminal: false,
+            operation: "login".into(),
+        }),
+        checked_at: Some(9),
+        detail: None,
+    };
+    let mut minimax_context = context.clone();
+    minimax_context.id = "ctx-m".into();
+    minimax_context.tool_id = "minimax_code".into();
+    minimax_context.auth_files = vec![temp.path().join("auth-state.json")];
+    fs::write(&minimax_context.auth_files[0], "login-material-kept").unwrap();
+    let minimax_account = crate::accounts::AuthAccount {
+        id: "acct-m".into(),
+        tool_id: "minimax_code".into(),
+        provider: "minimax".into(),
+        label: "MiniMax".into(),
+        version: 2,
+        state: crate::accounts::AccountState::SignedIn,
+        identity: None,
+        context: Some(minimax_context),
+        retired_contexts: Vec::new(),
+        pending_login: None,
+        checked_at: None,
+        detail: None,
+    };
+    let mut oauth = bare_profile("oauth-profile", "codex", "OAuth", BTreeMap::new());
+    oauth.authentication = crate::native::profile::ProfileAuthentication::OAuth { account_id: "acct-1".into() };
+    let mut secret = bare_profile("secret-profile", "codex", "Secret", BTreeMap::new());
+    secret.native_credentials.insert("auth".into(), BTreeMap::from([("access_token".into(), "auth-secret".into())]));
+    secret.native_credentials.insert("config".into(), BTreeMap::from([("session_token".into(), "session-secret".into())]));
+    let mut minimax = bare_profile("minimax-profile", "minimax_code", "MiniMax", BTreeMap::new());
+    minimax.connection = Some(crate::native::profile::Connection {
+        provider_id: "minimax".into(),
+        interface_format: "anthropic_messages".into(),
+        base_url: "https://api.minimaxi.com/anthropic".into(),
+        model: "MiniMax-M2".into(),
+        secret_ref: Some("minimax-secret".into()),
+        auth_env_var: None,
+        model_records: Vec::new(),
+    });
+    let pi = bare_profile("pi-profile", "pi", "Pi", BTreeMap::from([("settings".into(), r#"{"defaultProvider":"restore-marker"}"#.into())]));
+    let codex = bare_profile("codex-profile", "codex", "Codex", BTreeMap::from([("settings".into(), "model = \"gpt-6\"\n".into())]));
+    let missing = bare_profile("missing-profile", "missing-cli", "Missing", BTreeMap::new());
+    let pi_scope = format!("project:{}", pi_project.display());
+    let codex_scope = format!("project:{}", codex_project.display());
+    source.with_connection(|conn| {
+        for profile in [&oauth, &secret, &minimax, &pi, &codex, &missing] {
+            conn.execute("INSERT INTO native_profiles (id,tool,version,data) VALUES (?1,?2,1,?3)", rusqlite::params![profile.id, profile.tool, serde_json::to_string(profile).unwrap()]).unwrap();
+        }
+        for (scope, tool, id) in [(pi_scope.as_str(), "pi", "pi-profile"), (codex_scope.as_str(), "codex", "codex-profile"), ("global", "missing-cli", "missing-profile")] {
+            conn.execute("INSERT INTO applied_bindings (scope_key,tool,profile_id,profile_version,managed) VALUES (?1,?2,?3,1,'{}')", rusqlite::params![scope, tool, id]).unwrap();
+        }
+        conn.execute("INSERT INTO projects (id,name,path,preferred_tool,last_opened) VALUES ('kept','Kept',?1,NULL,0)", [kept.to_str().unwrap()]).unwrap();
+        conn.execute("INSERT INTO projects (id,name,path,preferred_tool,last_opened) VALUES ('missing','Missing','C:/missing/restore-project',NULL,0)", []).unwrap();
+        for item in [&account, &minimax_account] {
+            conn.execute("INSERT INTO auth_accounts (id,tool,version,data) VALUES (?1,?2,1,?3)", rusqlite::params![item.id, item.tool_id, serde_json::to_string(item).unwrap()]).unwrap();
+        }
+        Ok(())
+    }).unwrap();
+    let registry = Registry::builtins().with_fixture_installation("pi", "1.0.0").with_fixture_installation("codex", "0.160.0");
+    let bundle = temp.path().join("full.cliora");
+    let exported = export_bundle(&source, &credentials, &registry, "correct-password", None, &bundle).unwrap();
+    assert!(exported >= 8);
+    let snapshot = unlock_bundle(&bundle, "correct-password").unwrap();
+    assert_eq!(snapshot.schema_version, 3);
+    let rendered = serde_json::to_string(&snapshot).unwrap();
+    assert!(!rendered.contains("session-body-must-stay"));
+    assert!(!rendered.contains("pending-should-not-travel"));
+    assert!(!rendered.contains("sk-minimax-plain"));
+    assert!(rendered.contains("oauth-token-value"));
+    assert!(rendered.contains("session-token-value"));
+    let PortablePayload::Account(exported_account) = &snapshot.entities.iter().find(|entity| entity.key() == "account:acct-1").unwrap().payload else { panic!("account") };
+    assert!(exported_account.account.pending_login.is_none());
+    assert!(exported_account.account.context.as_ref().unwrap().history_roots.is_empty());
+    assert!(exported_account.auth_files.iter().any(|file| file.name == "auth.json" && !file.contents.is_empty()));
+    let minimax_entity = snapshot.entities.iter().find(|entity| entity.key() == "profile:minimax-profile").unwrap();
+    let PortablePayload::Profile(minimax_payload) = &minimax_entity.payload else { panic!("minimax profile") };
+    assert!(matches!(minimax_payload.profile.authentication, crate::native::profile::ProfileAuthentication::RebindRequired));
+    assert!(minimax_payload.connection_secret.is_none());
+    let fresh = database(&temp.path().join("new"));
+    let received = MemoryCredentials::default();
+    let home = temp.path().join("home");
+    let base = temp.path().join("base");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&base).unwrap();
+    set_restore_roots_for_test(Some((home, base.clone())));
+    fresh.with_connection(|conn| {
+        conn.execute("INSERT INTO installation_choices (tool,path) VALUES ('minimax_code',?1)", [executable.to_str().unwrap()]).unwrap();
+        Ok(())
+    }).unwrap();
+    let draft = preview_import(&fresh, &received, &registry, snapshot).unwrap();
+    assert!(draft.items.iter().any(|item| item.key == "project:kept" && item.pending_fields.is_empty()));
+    assert!(draft.items.iter().any(|item| item.key == "project:missing" && item.pending_fields.contains(&"项目本机目录".into())));
+    let keys: BTreeSet<_> = draft.baseline.keys().cloned().collect();
+    assert_eq!(apply_import(&fresh, &received, &registry, &draft, &keys).unwrap(), keys.len());
+    let restored = collect_snapshot(&fresh, &received, &registry).unwrap();
+    let oauth_entity = restored.entities.iter().find(|entity| entity.key() == "profile:oauth-profile").unwrap();
+    let PortablePayload::Profile(oauth_payload) = &oauth_entity.payload else { panic!("oauth profile") };
+    assert!(matches!(&oauth_payload.profile.authentication, crate::native::profile::ProfileAuthentication::OAuth { account_id } if account_id == "acct-1"));
+    let secret_entity = restored.entities.iter().find(|entity| entity.key() == "profile:secret-profile").unwrap();
+    let PortablePayload::Profile(secret_payload) = &secret_entity.payload else { panic!("secret profile") };
+    assert_eq!(secret_payload.native_secrets.get("auth").and_then(|values| values.get("access_token")).map(String::as_str), Some("oauth-token-value"));
+    assert_eq!(secret_payload.native_secrets.get("config").and_then(|values| values.get("session_token")).map(String::as_str), Some("session-token-value"));
+    assert!(!matches!(secret_payload.profile.authentication, crate::native::profile::ProfileAuthentication::RebindRequired));
+    fresh.with_connection(|conn| {
+        let kept_path: String = conn.query_row("SELECT path FROM projects WHERE id='kept'", [], |row| row.get(0)).unwrap();
+        let missing_path: String = conn.query_row("SELECT path FROM projects WHERE id='missing'", [], |row| row.get(0)).unwrap();
+        assert_eq!(kept_path, kept.to_str().unwrap());
+        assert_eq!(missing_path, "C:/missing/restore-project");
+        Ok(())
+    }).unwrap();
+    let auth_file = base.join("accounts").join("ctx-1").join("auth.json");
+    assert_eq!(fs::read_to_string(&auth_file).unwrap(), r#"{"token":"auth-file-token"}"#);
+    assert!(fs::read_to_string(pi_project.join(".pi").join("settings.json")).unwrap().contains("restore-marker"));
+    assert_eq!(fs::read_to_string(codex_project.join(".codex")).unwrap(), "not-a-directory");
+    let blockers = load_blockers(&fresh).unwrap();
+    assert!(blockers.iter().any(|item| item.key.contains("missing-cli") && item.action == "install"), "{blockers:?}");
+    assert!(blockers.iter().any(|item| item.key.starts_with("binding:") && item.key.contains("codex")), "{blockers:?}");
+    assert!(blockers.iter().any(|item| item.key == "account:acct-m" && item.action == "relogin"), "{blockers:?}");
+    assert!(fs::read_to_string(base.join("accounts").join("ctx-m").join("auth").join("auth-state.json")).is_ok()
+        || walk_contains(&base.join("accounts").join("ctx-m"), "login-material-kept"));
+    let again = preview_import(&fresh, &received, &registry, unlock_bundle(&bundle, "correct-password").unwrap()).unwrap();
+    assert!(again.items.iter().all(|item| item.status == "same"), "{:?}", again.items.iter().filter(|item| item.status != "same").map(|item| item.key.clone()).collect::<Vec<_>>());
+}
+
+fn walk_contains(root: &Path, needle: &str) -> bool {
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(path) = pending.pop() {
+        let Ok(entries) = fs::read_dir(&path) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if fs::read_to_string(&path).ok().is_some_and(|text| text.contains(needle)) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+#[test]
+fn schema_two_project_import_omits_path_and_short_password_writes_nothing() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = database(temp.path());
+    let credentials = MemoryCredentials::default();
+    let registry = Registry::builtins();
+    let snapshot = PortableSnapshot {
+        schema_version: 2,
+        entities: vec![PortableEntity {
+            id: "project-old".into(),
+            payload: PortablePayload::Project(PortableProject {
+                id: "project-old".into(),
+                name: "Old".into(),
+                path: Some("C:/should-not-apply".into()),
+                model_overrides: BTreeMap::new(),
+            }),
+        }],
+    };
+    validate_snapshot(&snapshot).unwrap();
+    validate_snapshot(&PortableSnapshot { schema_version: 1, entities: snapshot.entities.clone() }).unwrap();
+    let draft = preview_import(&db, &credentials, &registry, snapshot).unwrap();
+    apply_import(&db, &credentials, &registry, &draft, &draft.baseline.keys().cloned().collect()).unwrap();
+    let path: Option<String> = db.with_connection(|conn| {
+        conn.query_row("SELECT path FROM projects WHERE id='project-old'", [], |row| row.get(0)).map_err(|error| error.to_string())
+    }).unwrap();
+    assert_eq!(path, None);
+    let destination = temp.path().join("short.cliora");
+    assert!(export_bundle(&db, &credentials, &registry, "too-short", None, &destination).unwrap_err().contains("12"));
+    assert!(!destination.exists());
 }

@@ -1,5 +1,6 @@
 //! WebDAV carries encrypted immutable entity versions and an encrypted, conditional manifest.
-//! Native CLI files, active bindings, OAuth state and history never enter this protocol.
+//! Login material and active bindings travel with the snapshot and are applied on receipt.
+//! Sessions, usage, history files, in-progress logins and this device's WebDAV secret do not.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
@@ -120,6 +121,8 @@ pub struct SyncStatus {
     pub downloaded: usize,
     pub pending_changes: usize,
     pub conflicts: Vec<SyncConflict>,
+    #[serde(default)]
+    pub blockers: Vec<super::RestoreBlocker>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -338,7 +341,7 @@ fn test_connection(dav: &Dav) -> Result<(), String> {
 }
 
 fn validate_manifest(manifest: &Manifest, space_id: &str) -> Result<(), String> {
-    if !matches!(manifest.schema_version, 1 | 2)
+    if !matches!(manifest.schema_version, 1 | 2 | 3)
         || manifest.space_id != space_id
         || manifest.heads.len() > 10_000
         || manifest.history.len() > 10_000
@@ -437,7 +440,7 @@ fn save_manifest(
     etag: Option<&str>,
 ) -> Result<bool, String> {
     let mut upgraded = manifest.clone();
-    upgraded.schema_version = 2;
+    upgraded.schema_version = 3;
     let manifest = &upgraded;
     validate_manifest(manifest, &manifest.space_id)?;
     let plain = serde_json::to_vec(manifest).map_err(|_| "无法整理同步清单".to_string())?;
@@ -504,6 +507,7 @@ pub fn status(db: &Database) -> Result<SyncStatus, String> {
         downloaded: 0,
         pending_changes,
         conflicts,
+        blockers: super::load_blockers(db).unwrap_or_default(),
     })
 }
 
@@ -613,7 +617,7 @@ pub fn configure(
                 return Err("远端同步清单缺失；请先恢复远端备份，本机资料未改动".into());
             }
             let manifest = Manifest {
-                schema_version: 2,
+                schema_version: 3,
                 space_id: space_id.clone(),
                 heads: BTreeMap::new(),
                 history: BTreeMap::new(),
@@ -824,7 +828,7 @@ fn read_version(
             return Err("远端版本内容摘要不匹配".into());
         }
         super::validate_snapshot(&PortableSnapshot {
-            schema_version: 2,
+            schema_version: super::SNAPSHOT_VERSION,
             entities: vec![entity.clone()],
         })?;
     }
@@ -853,6 +857,20 @@ fn write_version(
     Ok(())
 }
 
+struct NativeRelease {
+    tool: String,
+    scope_key: String,
+    managed: String,
+}
+
+fn active_binding_rows(tx: &rusqlite::Transaction<'_>) -> Result<Vec<(String, String, String, String)>, String> {
+    let mut statement = tx.prepare("SELECT tool,scope_key,profile_id,managed FROM applied_bindings WHERE scope_key='global' OR scope_key LIKE 'project:%'")
+        .map_err(|error| error.to_string())?;
+    let rows = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?)))
+        .map_err(|error| error.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())
+}
+
 fn delete_local(
     db: &Database,
     store: &dyn CredentialStore,
@@ -861,89 +879,83 @@ fn delete_local(
     expected_digest: &str,
 ) -> Result<(), String> {
     let (kind, id) = entity_key.split_once(':').ok_or("同步实体标识无效")?;
-    db.with_connection(|conn| {
+    let releases = db.with_connection(|conn| {
         let tx = conn.transaction().map_err(|error| error.to_string())?;
         let current = super::collect_snapshot_on(&tx, store, registry)?
             .entities
             .into_iter()
             .find(|entity| entity.key() == entity_key);
-        if current
-            .as_ref()
-            .map(PortableEntity::digest)
-            .transpose()?
-            .unwrap_or_default()
-            != expected_digest
-        {
+        if current.as_ref().map(PortableEntity::digest).transpose()?.unwrap_or_default() != expected_digest {
             return Err("本机资料已变化，请重新同步后处理冲突".into());
         }
+        let mut releases = Vec::new();
         match kind {
             "preferences" => {
-                tx.execute("DELETE FROM app_settings WHERE key='preferences'", [])
-                    .map_err(|error| error.to_string())?;
+                tx.execute("DELETE FROM app_settings WHERE key='preferences'", []).map_err(|error| error.to_string())?;
             }
             "profile" => {
-                let active: i64 = tx
-                    .query_row(
-                        "SELECT count(*) FROM applied_bindings WHERE profile_id=?1",
-                        [id],
-                        |row| row.get(0),
-                    )
-                    .map_err(|error| error.to_string())?;
-                if active > 0 {
-                    return Err("远端已删除活动配置，请先在工具页切换后处理冲突".into());
+                for (tool, scope_key, profile_id, managed) in active_binding_rows(&tx)? {
+                    if profile_id == id {
+                        releases.push(NativeRelease { tool, scope_key, managed });
+                    }
                 }
-                tx.execute("DELETE FROM native_profiles WHERE id=?1", [id])
-                    .map_err(|error| error.to_string())?;
+                tx.execute("DELETE FROM applied_bindings WHERE profile_id=?1", [id]).map_err(|error| error.to_string())?;
+                tx.execute("DELETE FROM native_profiles WHERE id=?1", [id]).map_err(|error| error.to_string())?;
             }
             "common" => {
-                tx.execute("DELETE FROM common_configs WHERE tool=?1", [id])
-                    .map_err(|error| error.to_string())?;
+                tx.execute("DELETE FROM common_configs WHERE tool=?1", [id]).map_err(|error| error.to_string())?;
                 crate::native::profile::invalidate_common_bindings(&tx, id)?;
             }
             "project" => {
-                let local_path: Option<String> = tx
-                    .query_row("SELECT path FROM projects WHERE id=?1", [id], |row| {
-                        row.get(0)
-                    })
-                    .optional()
-                    .map_err(|error| error.to_string())?
-                    .flatten();
-                let library_links: i64 = tx
-                    .query_row(
-                        "SELECT count(*) FROM library_items WHERE project_id=?1",
-                        [id],
-                        |row| row.get(0),
-                    )
-                    .map_err(|error| error.to_string())?;
-                if local_path.is_some() || library_links > 0 {
-                    return Err("项目仍关联本机目录或资料，请先解除关联后处理删除冲突".into());
+                tx.execute("UPDATE library_items SET project_id=NULL WHERE project_id=?1", [id]).map_err(|error| error.to_string())?;
+                tx.execute("DELETE FROM project_tool_models WHERE project_id=?1", [id]).map_err(|error| error.to_string())?;
+                tx.execute("DELETE FROM projects WHERE id=?1", [id]).map_err(|error| error.to_string())?;
+            }
+            "account" => {
+                tx.execute("DELETE FROM auth_accounts WHERE id=?1", [id]).map_err(|error| error.to_string())?;
+            }
+            "binding" => {
+                let mut matched = None;
+                for (tool, scope_key, _, managed) in active_binding_rows(&tx)? {
+                    if super::binding_id(&tool, &scope_key) == id {
+                        matched = Some(NativeRelease { tool, scope_key, managed });
+                        break;
+                    }
                 }
-                tx.execute(
-                    "UPDATE library_items SET project_id=NULL WHERE project_id=?1",
-                    [id],
-                )
-                .map_err(|error| error.to_string())?;
-                tx.execute("DELETE FROM project_tool_models WHERE project_id=?1", [id])
-                    .map_err(|error| error.to_string())?;
-                tx.execute("DELETE FROM projects WHERE id=?1", [id])
-                    .map_err(|error| error.to_string())?;
+                if let Some(release) = matched {
+                    tx.execute(
+                        "DELETE FROM applied_bindings WHERE tool=?1 AND (scope_key=?2 OR scope_key=?3)",
+                        params![release.tool, release.scope_key, format!("context:default:{}", release.scope_key)],
+                    ).map_err(|error| error.to_string())?;
+                    releases.push(release);
+                }
             }
             "library" => {
-                tx.execute("DELETE FROM library_items WHERE id=?1", [id])
-                    .map_err(|error| error.to_string())?;
+                tx.execute("DELETE FROM library_items WHERE id=?1", [id]).map_err(|error| error.to_string())?;
             }
             "mcp" => {
-                tx.execute("DELETE FROM mcp_definitions WHERE id=?1", [id])
-                    .map_err(|error| error.to_string())?;
+                tx.execute("DELETE FROM mcp_definitions WHERE id=?1", [id]).map_err(|error| error.to_string())?;
             }
             "skill" => {
-                tx.execute("DELETE FROM skill_packages WHERE id=?1", [id])
-                    .map_err(|error| error.to_string())?;
+                tx.execute("DELETE FROM skill_packages WHERE id=?1", [id]).map_err(|error| error.to_string())?;
             }
             _ => return Err("未知同步资料类型".into()),
         }
-        tx.commit().map_err(|error| error.to_string())
-    })
+        tx.commit().map_err(|error| error.to_string())?;
+        Ok(releases)
+    })?;
+    for release in releases {
+        if let Err(error) = super::release_native_binding(db, registry, &release.tool, &release.scope_key, &release.managed) {
+            let action = if error.contains("目录") { "relink" } else if error.contains("未发现") || error.contains("未注册") { "install" } else { "retry" };
+            super::record_blocker(db, super::RestoreBlocker {
+                key: entity_key.into(),
+                label: format!("{} 活动配置", release.tool),
+                action: action.into(),
+                detail: error,
+            });
+        }
+    }
+    Ok(())
 }
 
 fn apply_remote(
@@ -982,7 +994,7 @@ fn apply_entity(
                 store,
                 registry,
                 PortableSnapshot {
-                    schema_version: 2,
+                    schema_version: super::SNAPSHOT_VERSION,
                     entities: vec![entity],
                 },
             )?;
@@ -1227,9 +1239,6 @@ fn run_once(
                     status.downloaded += 1;
                     continue;
                 }
-                Err(error)
-                    if remote[0].deleted
-                        && (error.contains("活动配置") || error.contains("仍关联")) => {}
                 Err(error) if error.starts_with("本机资料已变化") => {
                     record_local_race(db, store, registry, &mut status, &entity_key, &remote[0])?;
                     continue;
@@ -1357,6 +1366,7 @@ fn run_once(
     }
     clear_outbox(db, &processed_keys, &pending_tokens)?;
     status.pending_changes = self::status(db)?.pending_changes;
+    status.blockers = super::load_blockers(db).unwrap_or_default();
     Ok(status)
 }
 
@@ -1477,47 +1487,7 @@ pub fn resolve(
             .iter()
             .find(|item| item.id == id)
             .ok_or("远端版本已变化，请重新同步")?;
-        let entity = read_version(&dav, &key, &config.space_id, entity_key, head)?;
-        if entity.is_none() && entity_key.starts_with("profile:") {
-            let profile_id = entity_key.trim_start_matches("profile:");
-            let active: i64 = db.with_connection(|conn| {
-                conn.query_row(
-                    "SELECT count(*) FROM applied_bindings WHERE profile_id=?1",
-                    [profile_id],
-                    |row| row.get(0),
-                )
-                .map_err(|error| error.to_string())
-            })?;
-            if active > 0 {
-                return Err("活动配置仍在使用，先切换后才能接受远端删除".into());
-            }
-        }
-        if entity.is_none() && entity_key.starts_with("project:") {
-            let project_id = entity_key.trim_start_matches("project:");
-            let (local_path, links): (Option<String>, i64) = db.with_connection(|conn| {
-                let local_path: Option<String> = conn
-                    .query_row(
-                        "SELECT path FROM projects WHERE id=?1",
-                        [project_id],
-                        |row| row.get(0),
-                    )
-                    .optional()
-                    .map_err(|error| error.to_string())?
-                    .flatten();
-                let links = conn
-                    .query_row(
-                        "SELECT count(*) FROM library_items WHERE project_id=?1",
-                        [project_id],
-                        |row| row.get(0),
-                    )
-                    .map_err(|error| error.to_string())?;
-                Ok((local_path, links))
-            })?;
-            if local_path.is_some() || links > 0 {
-                return Err("项目仍关联本机目录或资料，请先解除关联后处理删除冲突".into());
-            }
-        }
-        entity
+        read_version(&dav, &key, &config.space_id, entity_key, head)?
     } else {
         local.clone()
     };
@@ -1640,6 +1610,8 @@ fn summary(entity: Option<&PortableEntity>) -> String {
             value.description,
             value.files.len()
         ),
+        PortablePayload::Account(value) => format!("{} · {}", value.account.label, value.account.tool_id),
+        PortablePayload::Binding(value) => format!("{} · {}", value.tool, value.scope_key),
     }
 }
 
