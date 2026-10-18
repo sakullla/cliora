@@ -1,24 +1,23 @@
 /* Rows share the list's columns, so every action lands in the same column whatever its label width. */
 .list {
   display: grid;
-  grid-template-columns: minmax(150px, 190px) minmax(0, 1fr) repeat(3, auto);
+  grid-template-columns: minmax(160px, 200px) minmax(0, 1fr) repeat(3, auto);
   min-width: 0;
   overflow: hidden;
   container-type: inline-size;
   border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   background: var(--surface);
-  box-shadow: var(--shadow-xs);
+  box-shadow: var(--shadow-sm);
 }
-
 .row {
   display: grid;
   grid-column: 1 / -1;
   grid-template-columns: subgrid;
   align-items: center;
-  gap: 14px;
-  min-height: 64px;
-  padding: 10px 16px;
+  gap: 16px;
+  min-height: 72px;
+  padding: 12px 18px;
   border-top: 1px solid var(--line);
   transition: background-color var(--fast) var(--ease);
   animation: reveal var(--medium) var(--ease) both;
@@ -28,16 +27,16 @@
 .row:nth-child(4) { animation-delay: 90ms; }
 .row:nth-child(5) { animation-delay: 120ms; }
 .row:first-child { border-top: 0; }
-.row:hover { background: var(--surface-2); }
+.row:hover { background: linear-gradient(90deg, color-mix(in srgb, var(--accent-soft) 34%, transparent) 0%, var(--surface-2) 48%, var(--surface-2) 100%); }
 
-.name { display: flex; align-items: center; gap: 11px; min-width: 0; }
-.name > span:last-child { display: grid; gap: 2px; min-width: 0; }
-.name strong { overflow: hidden; font-size: var(--fs-body); font-weight: var(--fw-semibold); text-overflow: ellipsis; white-space: nowrap; }
+.name { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.name > span:last-child { display: grid; gap: 3px; min-width: 0; }
+.name strong { overflow: hidden; font-size: var(--fs-body); font-weight: var(--fw-semibold); letter-spacing: -.1px; text-overflow: ellipsis; white-space: nowrap; }
 
-.status { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-regular); line-height: 1.2; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.status { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); font-size: var(--fs-caption); font-weight: var(--fw-regular); line-height: 1.2; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .status::before { content: ''; width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--text-3); }
-.status[data-state="ok"]::before { background: var(--success); }
-.status[data-state="warn"]::before { background: var(--warning); }
+.status[data-state="ok"]::before { background: var(--success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 14%, transparent); }
+.status[data-state="warn"]::before { background: var(--warning); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 14%, transparent); }
 .status[data-state="error"] { color: var(--danger); }
 .status[data-state="error"]::before { background: var(--danger); }
 .status[data-state="loading"]::before { animation: pulse 1.2s ease-in-out infinite; }
@@ -75,25 +74,27 @@
 
 .switch > div[role="radiogroup"] > button {
   max-width: 100%;
-  min-height: 30px;
-  padding: 0 10px;
+  min-height: var(--control-h-sm);
+  padding: 0 11px;
   overflow: hidden;
-  border: 1px solid transparent;
+  border: 1px solid var(--line);
   border-radius: 99px;
-  background: transparent;
-  color: var(--text-3);
-  font-size: var(--fs-body);
+  background: color-mix(in srgb, var(--surface) 76%, transparent);
+  color: var(--text-2);
+  font-size: var(--fs-caption);
   font-weight: var(--fw-medium);
   text-overflow: ellipsis;
   white-space: nowrap;
+  box-shadow: none;
   transition: background-color var(--fast) var(--ease), border-color var(--fast) var(--ease), color var(--fast) var(--ease);
 }
-.switch > div[role="radiogroup"] > button:hover:not(:disabled) { border-color: var(--line-strong); background: var(--surface); color: var(--text); }
-.switch > div[role="radiogroup"] > button.activeConfig, .switch > div[role="radiogroup"] > button.activeConfig:hover:not(:disabled) { border-color: var(--accent-line); background: var(--accent-soft); color: var(--text); font-weight: var(--fw-semibold); }
-.modelHint { margin-left: 6px; color: inherit; font-style: normal; font-size: var(--fs-body); font-weight: var(--fw-medium); opacity: .8; }
-.activeConfig::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--accent); vertical-align: 1px; }
+.switch > div[role="radiogroup"] > button:hover:not(:disabled) { border-color: var(--accent-line); background: var(--surface); color: var(--text); }
+.switch > div[role="radiogroup"] > button.activeConfig, .switch > div[role="radiogroup"] > button.activeConfig:hover:not(:disabled) { border-color: var(--accent-line); background: var(--accent-soft); color: var(--text); font-weight: var(--fw-semibold); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 8%, transparent); }
+.modelHint { margin-left: 6px; color: var(--text-3); font-style: normal; font-size: var(--fs-micro); font-weight: var(--fw-medium); font-family: var(--font-mono); }
+.activeConfig::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--accent); vertical-align: 1px; box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 16%, transparent); }
 
-.addConfig { border-style: dashed; color: var(--text-2); }
+.addConfig { border-style: dashed; border-color: var(--line-strong); background: transparent; color: var(--text-2); }
+.addConfig:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
 
 .rowActions { display: grid; grid-column: 3 / -1; grid-template-columns: subgrid; align-items: center; justify-items: end; column-gap: 6px; }
 .rowActions > .launch, .rowActions > .recheck { grid-column: 1; justify-self: stretch; }
@@ -101,8 +102,8 @@
 .rowActions > button { min-height: var(--control-h-sm); }
 /* Five identical solid buttons compete with each other. Launch stays tinted at rest and fills in
    for the row under the pointer or keyboard focus, so the active row reads as the next action. */
-.rowActions .launch { min-width: 68px; border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); box-shadow: none; }
-.row:hover .rowActions .launch:not(:disabled) { border-color: var(--accent); background: var(--accent); color: var(--on-accent); box-shadow: var(--shadow-xs); }
+.rowActions .launch { min-width: 0; border-color: var(--accent-line); background: linear-gradient(180deg, color-mix(in srgb, var(--accent-soft) 82%, var(--surface)) 0%, var(--accent-soft) 100%); color: var(--accent); font-weight: var(--fw-semibold); box-shadow: none; }
+.row:hover .rowActions .launch:not(:disabled) { border-color: var(--accent); background: var(--accent); color: var(--on-accent); box-shadow: var(--shadow-accent); }
 .row:focus-within .rowActions .launch:not(:disabled) { outline: 2px solid var(--accent); outline-offset: 2px; }
 .rowActions .launch:hover:not(:disabled), .row .rowActions .launch:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); color: var(--on-accent); }
 .rowActions .configure, .rowActions .configure:hover:not(:disabled) { border-color: transparent; background: transparent; box-shadow: none; color: var(--text-2); }
@@ -114,11 +115,11 @@
   max-width: 100%;
   min-width: 0;
   overflow: hidden;
-  padding: 4px 10px;
+  padding: 5px 11px;
   border-radius: 99px;
   background: var(--surface-2);
   color: var(--text-2);
-  font-size: var(--fs-body);
+  font-size: var(--fs-caption);
   font-weight: var(--fw-regular);
   line-height: 1.4;
   white-space: nowrap;
@@ -129,13 +130,13 @@
 .note[data-tone="error"] { background: var(--danger-soft); color: var(--danger); }
 .note[data-tone="pending"] { background: var(--info-soft); color: var(--info); }
 
-.empty { padding: 28px 16px; color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-regular); text-align: center; }
+.empty { padding: 32px 18px; color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-regular); text-align: center; }
 
 @keyframes pulse { 50% { opacity: .3; } }
 
-@container (max-width: 560px) {
-  .row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 8px; padding: 12px; }
-  .switch { grid-column: 1 / -1; grid-row: 2; padding-left: 45px; }
+@container (max-width: 520px) {
+  .row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 10px; padding: 14px; }
+  .switch { grid-column: 1 / -1; grid-row: 2; padding-left: 46px; }
   .rowActions { display: flex; justify-content: flex-end; gap: 6px; grid-column: 2; grid-row: 1; align-self: center; }
   .note { grid-row: 3; }
 }

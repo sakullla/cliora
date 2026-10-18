@@ -19,12 +19,12 @@
   position: fixed;
   z-index: 70;
   display: grid;
-  min-width: 140px;
-  padding: 4px;
+  min-width: 152px;
+  padding: 5px;
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   background: var(--surface);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-lg);
   animation: reveal var(--fast) var(--ease);
 }
 .rowMenuList button {
@@ -41,5 +41,5 @@
   font-weight: var(--fw-medium);
   text-align: left;
 }
-.rowMenuList button:hover:not(:disabled) { background: var(--surface-2); }
+.rowMenuList button:hover:not(:disabled) { background: var(--surface-2); transform: none; }
 .rowMenuList button[data-danger="true"] { color: var(--danger); }

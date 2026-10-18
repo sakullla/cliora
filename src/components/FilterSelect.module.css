@@ -19,8 +19,8 @@
   font-weight: var(--fw-regular);
   text-align: left;
 }
-.trigger:hover:not(:disabled) { border-color: var(--text-3); background-color: var(--surface-3); }
-.trigger[data-open="true"] { border-color: var(--accent); }
+.trigger:hover:not(:disabled) { border-color: var(--text-3); background-color: var(--surface-2); }
+.trigger[data-open="true"] { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
 .trigger:focus-visible { border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: 2px; }
 .trigger[data-empty="true"] .triggerCopy > span { color: var(--text-2); }
 .trigger:disabled { opacity: .5; }
@@ -50,11 +50,11 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 6px;
+  padding: 7px;
   border: 1px solid var(--line-strong);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   background: var(--surface);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-lg);
   outline: none;
 }
 .panel > input { width: 100%; border-radius: var(--radius-sm); background-color: var(--surface); }
@@ -67,9 +67,9 @@
   gap: 8px;
   width: 100%;
   min-height: 40px;
-  padding: 5px 8px;
+  padding: 6px 9px;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius);
   background: transparent;
   box-shadow: none;
   color: var(--text);
@@ -87,9 +87,9 @@
 .optionMarks { display: inline-flex; align-items: center; gap: 6px; }
 .optionMarks > em { color: var(--text); font-size: var(--fs-body); font-style: normal; font-weight: var(--fw-medium); }
 .optionMarks svg { flex: none; color: var(--accent); }
-.list > button:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
+.list > button:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
 .list > button[data-active="true"] { background: var(--surface-3); box-shadow: inset 2px 0 0 var(--accent); }
-.list > button[aria-selected="true"] { background: var(--selection); color: var(--text); font-weight: var(--fw-semibold); box-shadow: inset 2px 0 0 var(--accent); }
+.list > button[aria-selected="true"] { background: linear-gradient(90deg, var(--accent-soft) 0%, color-mix(in srgb, var(--accent-soft) 44%, var(--surface)) 100%); color: var(--text); font-weight: var(--fw-semibold); box-shadow: inset 2px 0 0 var(--accent); }
 .list > button[aria-selected="true"]:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
 .list > button[aria-selected="true"] small { color: var(--text-2); }
 .list > button:disabled { opacity: .5; }
