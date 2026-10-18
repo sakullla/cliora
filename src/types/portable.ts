@@ -11,7 +11,14 @@ export interface PortableItem {
 
 export interface PortableApplyTarget { profileId: string; projectId: string | null }
 export interface PortableProjectLink { projectId: string; path: string }
-export interface PortableImportReport { imported: number; targets: { label: string; status: 'linked' | 'applied' | 'failed'; detail: string | null }[] }
+export interface PortableImportReport { imported: number; targets: { label: string; status: 'linked' | 'applied' | 'failed' | 'blocked'; detail: string | null }[] }
+
+export interface RestoreBlocker {
+  key: string;
+  label: string;
+  action: string;
+  detail: string;
+}
 
 export interface PortablePreview {
   previewId: string;
@@ -49,6 +56,7 @@ export interface SyncStatus {
   downloaded: number;
   pendingChanges: number;
   conflicts: SyncConflict[];
+  blockers?: RestoreBlocker[];
 }
 
 export interface ConflictPreview {

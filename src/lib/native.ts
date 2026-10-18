@@ -11,7 +11,7 @@ import type { LibraryDraft, LibraryItem, LibraryKind } from '../types/library';
 import type { McpDefinition, McpDraft, McpPlacement, McpTargetRequest, McpTargetResult, NativeMcpEntry, NativeRuleFile, RuleTarget, RulePreview, RuleApplyResult, RulePlacement, RuleClientSelection, RuleSyncResult, SkillPackage, SkillImportPreview, SkillInstallation, SkillTargetResult, NativeSkillDocument, NativeSkillEntry, SkillTargetPreview, SkillRecoveryIssue } from '../types/resources';
 import type { HistoryDetail, HistoryFilter, HistoryPrice, HistorySession, ScanStatus, UsageReport } from '../types/history';
 import { markOnboardingLaunched } from './onboarding';
-import type { ConflictPreview, PortableApplyTarget, PortableImportReport, PortableItem, PortablePreview, PortableProjectLink, SyncStatus, WebdavSetup } from '../types/portable';
+import type { ConflictPreview, PortableImportReport, PortableItem, PortablePreview, SyncStatus, WebdavSetup } from '../types/portable';
 import type { QueryConfig, UsageCache, UsagePreset, UsageSample, DeleteQueryResult, DraftTestReport, SaveQueryResult, UsageError, UsageQuery, UsageQueryDraft } from '../types/usage';
 import i18n, { bindLanguagePersist } from '../i18n';
 
@@ -122,9 +122,11 @@ export const native = {
   saveUsageQuery: (draft: UsageQueryDraft) => usageCommand<SaveQueryResult>('save_usage_query', { draft }),
   deleteUsageQuery: (id: string, expectedVersion: number) => usageCommand<DeleteQueryResult>('delete_usage_query', { id, expectedVersion }),
   listPortableItems: () => command<PortableItem[]>('list_portable_items'),
-  exportPortableBundle: (destination: string, password: string, selected: string[]) => command<number>('export_portable_bundle', { destination, password, selected }),
+  // The command still accepts `selected` but ignores it and exports every migratable item.
+  exportPortableBundle: (destination: string, password: string) => command<number>('export_portable_bundle', { destination, password, selected: [] }),
   previewPortableBundle: (source: string, password: string) => command<PortablePreview>('preview_portable_bundle', { source, password }),
-  applyPortableBundle: (previewId: string, selected: string[], projectLinks: PortableProjectLink[], applyTargets: PortableApplyTarget[]) => command<PortableImportReport>('apply_portable_bundle', { previewId, selected, projectLinks, applyTargets }),
+  // Restore keeps conflicts local and applies the rest. Selection, links, and targets are ignored.
+  applyPortableBundle: (previewId: string) => command<PortableImportReport>('apply_portable_bundle', { previewId, selected: [], projectLinks: [], applyTargets: [] }),
   cancelPortablePreview: () => command<void>('cancel_portable_preview'),
   getWebdavStatus: () => command<SyncStatus>('get_webdav_status'),
   configureWebdav: (setup: WebdavSetup) => command<SyncStatus>('configure_webdav', { setup }),
