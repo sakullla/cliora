@@ -37,6 +37,8 @@ struct MemoryCli {
     binds_account: bool,
     global: bool,
     project: bool,
+    /// Read-only store scan fixtures: (label, scope, directory name under home).
+    stores: &'static [(&'static str, Scope, &'static str)],
 }
 
 const WRITABLE: MemoryCli = MemoryCli {
@@ -46,6 +48,7 @@ const WRITABLE: MemoryCli = MemoryCli {
     binds_account: true,
     global: true,
     project: false,
+    stores: &[],
 };
 const OTHER: MemoryCli = MemoryCli {
     id: "fixture_memory_other",
@@ -54,6 +57,7 @@ const OTHER: MemoryCli = MemoryCli {
     binds_account: true,
     global: true,
     project: false,
+    stores: &[],
 };
 const READ_ONLY: MemoryCli = MemoryCli {
     id: "fixture_memory_readonly",
@@ -62,6 +66,7 @@ const READ_ONLY: MemoryCli = MemoryCli {
     binds_account: false,
     global: true,
     project: false,
+    stores: &[],
 };
 const SHARED: MemoryCli = MemoryCli {
     id: "fixture_memory_shared",
@@ -70,6 +75,7 @@ const SHARED: MemoryCli = MemoryCli {
     binds_account: false,
     global: true,
     project: false,
+    stores: &[],
 };
 const PROJECT: MemoryCli = MemoryCli {
     id: "fixture_memory_project",
@@ -78,6 +84,7 @@ const PROJECT: MemoryCli = MemoryCli {
     binds_account: false,
     global: false,
     project: true,
+    stores: &[],
 };
 const PROMPTS: MemoryCli = MemoryCli {
     id: "fixture_memory_prompts",
@@ -86,6 +93,7 @@ const PROMPTS: MemoryCli = MemoryCli {
     binds_account: false,
     global: true,
     project: false,
+    stores: &[],
 };
 
 impl MemoryCli {
@@ -133,6 +141,23 @@ impl crate::adapters::memory::MemoryAdapter for MemoryCli {
         project: Option<&Path>,
     ) -> Result<PathBuf, String> {
         Ok(self.base(scope, home, project).join(self.location))
+    }
+
+    fn existing_stores(&self, home: &Path) -> Vec<crate::adapters::memory::MemoryStoreRef> {
+        self.stores
+            .iter()
+            .filter_map(|(label, scope, name)| {
+                let directory = self.base(*scope, home, None).join(name);
+                crate::adapters::memory::store_present(&directory).then(|| {
+                    crate::adapters::memory::MemoryStoreRef {
+                        scope: *scope,
+                        project_path: None,
+                        label: (*label).to_owned(),
+                        directory,
+                    }
+                })
+            })
+            .collect()
     }
 }
 
@@ -402,6 +427,7 @@ fn memory_target(tool: &str, scope: Scope, project: Option<&Path>, context: Opti
         scope,
         project_path: project.map(|path| path.display().to_string()),
         context_id: context.map(str::to_owned),
+        store_directory: None,
     }
 }
 
@@ -1595,4 +1621,349 @@ fn junction_memory_directory_and_ancestor_are_not_followed() {
         &memory_target(PROMPTS.id, Scope::Global, None, None),
         &prompt_note,
     );
+}
+
+const SCAN_STORES: &[(&str, Scope, &str)] = &[
+    ("全局", Scope::Global, "scan-stores/global"),
+    ("proj-slug", Scope::Project, "scan-stores/proj"),
+    ("坏源", Scope::Global, "scan-stores/broken"),
+    ("缺失", Scope::Global, "scan-stores/missing"),
+];
+
+fn scan_cli() -> MemoryCli {
+    MemoryCli {
+        id: "fixture_memory_scan",
+        location: "cliora-memory-scan",
+        stores: SCAN_STORES,
+        project: true,
+        ..SHARED
+    }
+}
+
+#[test]
+fn existing_stores_scan_hits_empty_and_missing_directories() {
+    let harness = harness();
+    let cli: &'static MemoryCli = Box::leak(Box::new(scan_cli()));
+    let global = harness.home.join("scan-stores").join("global");
+    let project = harness.home.join("scan-stores").join("proj");
+    fs::create_dir_all(&global).unwrap();
+    fs::create_dir_all(&project).unwrap();
+    fs::write(project.join("note.md"), "project body").unwrap();
+    let registry = Registry::with_adapters(vec![cli as &dyn CliAdapter]).unwrap();
+    let adapter = registry.get(cli.id).unwrap();
+    let mut stores = adapter.memory().unwrap().existing_stores(&harness.home);
+    stores.sort_by(|left, right| left.label.cmp(&right.label));
+    // 命中与空目录都返回，缺失不返回也绝不创建。
+    assert_eq!(stores.len(), 2, "{stores:?}");
+    assert_eq!(stores[0].label, "proj-slug");
+    assert_eq!(stores[0].scope, Scope::Project);
+    assert_eq!(stores[0].directory, project);
+    assert_eq!(stores[0].project_path, None);
+    assert_eq!(stores[1].label, "全局");
+    assert_eq!(stores[1].scope, Scope::Global);
+    assert_eq!(stores[1].directory, global);
+    assert!(!harness.home.join("scan-stores").join("missing").exists());
+    // 无存储配置的夹具端口默认返回空（未接入为空）。
+    assert!(harness
+        .registry
+        .get(SHARED.id)
+        .unwrap()
+        .memory()
+        .unwrap()
+        .existing_stores(&harness.home)
+        .is_empty());
+}
+
+#[test]
+fn aggregated_listing_merges_stores_and_keeps_write_paths() {
+    let mut harness = harness();
+    let cli: &'static MemoryCli = Box::leak(Box::new(scan_cli()));
+    harness.registry = Registry::with_adapters(vec![cli as &dyn CliAdapter]).unwrap();
+    let global = harness.home.join("scan-stores").join("global");
+    let project = harness.home.join("scan-stores").join("proj");
+    let broken = harness.home.join("scan-stores").join("broken");
+    fs::create_dir_all(&global).unwrap();
+    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(&broken).unwrap();
+    fs::write(global.join("global-note.md"), "global body").unwrap();
+    fs::write(project.join("project-note.md"), "project body").unwrap();
+    // 该来源的总开关记录不可读取：单源失败，其余来源照常返回。
+    fs::create_dir_all(broken.join(".cliora-memory-switch")).unwrap();
+
+    let aggregate =
+        list_all_memories(&harness.db, &harness.registry, &harness.home, cli.id).unwrap();
+    assert_eq!(aggregate.tool_id, cli.id);
+    let mut labels: Vec<&str> = aggregate
+        .entries
+        .iter()
+        .map(|entry| entry.source_label.as_str())
+        .collect();
+    labels.sort_unstable();
+    assert_eq!(labels, ["proj-slug", "全局"]);
+    assert_eq!(
+        aggregate.failed_sources.len(),
+        1,
+        "{:?}",
+        aggregate.failed_sources
+    );
+    assert_eq!(aggregate.failed_sources[0].label, "坏源");
+    assert!(aggregate.failed_sources[0].reason.contains("总开关"));
+
+    let global_entry = aggregate
+        .entries
+        .iter()
+        .find(|entry| entry.source_label == "全局")
+        .unwrap();
+    assert_eq!(global_entry.id, "global-note");
+    assert!(global_entry.target.store_directory.is_some());
+    // 聚合条目携带的 target 走既有读写 IPC，仍落在所属存储内。
+    assert_eq!(
+        read_memory(
+            &harness.db,
+            &harness.registry,
+            &harness.home,
+            &global_entry.target,
+            "global-note",
+        )
+        .unwrap()
+        .text,
+        "global body"
+    );
+    let saved = save(
+        &harness,
+        global_entry.target.clone(),
+        "global-note",
+        "edited body",
+        "global body",
+        false,
+    )
+    .unwrap();
+    assert_eq!(Path::new(&saved.path), global.join("global-note.md"));
+    assert_eq!(
+        fs::read_to_string(global.join("global-note.md")).unwrap(),
+        "edited body"
+    );
+    // 未被适配器枚举的存储路径一律拒绝，写路径不因此改变。
+    let mut forged = global_entry.target.clone();
+    forged.store_directory = Some(harness.home.join("declared").display().to_string());
+    let refused = save(&harness, forged, "smuggle", "no", "", false).unwrap_err();
+    assert!(refused.contains("已不在磁盘上"), "{refused}");
+    assert!(!harness.home.join("declared").join("smuggle.md").exists());
+    // 不带存储目录的原有目标解析保持不变。
+    let plain = memory_target(cli.id, Scope::Global, None, None);
+    save(&harness, plain, "plain-note", "plain body", "", false).unwrap();
+    assert_eq!(
+        fs::read_to_string(harness.home.join("cliora-memory-scan").join("plain-note.md"))
+            .unwrap(),
+        "plain body"
+    );
+}
+
+#[test]
+fn aggregation_refuses_unverified_and_unregistered_tools() {
+    let harness = harness();
+    // 未核实：内置声明仍以未核实原因拒绝，端口扫描为空。
+    let builtins = Registry::builtins();
+    let mut unverified = 0;
+    for adapter in builtins.iter() {
+        let declaration = adapter.memory().unwrap().declaration();
+        if declaration.unverified_reason.trim().is_empty() {
+            continue;
+        }
+        unverified += 1;
+        assert!(adapter
+            .memory()
+            .unwrap()
+            .existing_stores(&harness.home)
+            .is_empty());
+        let error =
+            list_all_memories(&harness.db, &builtins, &harness.home, adapter.id()).unwrap_err();
+        assert!(error.contains("尚未核实"), "{}: {error}", adapter.id());
+    }
+    assert!(unverified > 0);
+    // 未注册：直接拒绝。
+    let unknown = list_all_memories(&harness.db, &builtins, &harness.home, "no_such_cli");
+    assert!(unknown.unwrap_err().contains("尚无注册适配器"));
+    // 绑定账号的声明没有枚举存储：聚合为空结果而非伪造路径。
+    let bound: &'static MemoryCli = Box::leak(Box::new(MemoryCli {
+        id: "fixture_memory_bound",
+        stores: &[("should-not-exist", Scope::Global, "bound-store")],
+        ..WRITABLE
+    }));
+    let registry = Registry::with_adapters(vec![bound as &dyn CliAdapter]).unwrap();
+    fs::create_dir_all(harness.home.join("bound-store")).unwrap();
+    let aggregate = list_all_memories(&harness.db, &registry, &harness.home, bound.id).unwrap();
+    assert!(aggregate.entries.is_empty());
+    assert!(aggregate.failed_sources.is_empty());
+    assert!(!harness.home.join("bound-store").join("_unbound").exists());
+}
+
+#[test]
+fn builtin_existing_stores_scan_the_verified_locations() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    let builtins = Registry::builtins();
+
+    // claude：projects/<slug>/memory 命中；用户级改址根单独列出；
+    // projects 根不可读时跳过该来源。
+    let claude_slug = "scan--project--alpha";
+    let claude_memory = home
+        .join(".claude")
+        .join("projects")
+        .join(claude_slug)
+        .join("memory");
+    fs::create_dir_all(&claude_memory).unwrap();
+    fs::write(claude_memory.join("topic.md"), "body").unwrap();
+    let stores = builtins
+        .get("claude_code")
+        .unwrap()
+        .memory()
+        .unwrap()
+        .existing_stores(&home);
+    assert_eq!(stores.len(), 1, "{stores:?}");
+    assert_eq!(stores[0].label, claude_slug);
+    assert_eq!(stores[0].scope, Scope::Project);
+    assert_eq!(stores[0].directory, claude_memory);
+    // 用户级改址根指向已存在的目录时单独列出（正向斜杠绝对路径是已
+    // 核实的可改址形式）。
+    let relocated = home.join("relocated-claude-memory");
+    fs::create_dir_all(&relocated).unwrap();
+    let relocation_value = relocated.display().to_string().replace('\\', "/");
+    fs::write(
+        home.join(".claude").join("settings.json"),
+        format!(r#"{{"autoMemoryDirectory": "{relocation_value}"}}"#),
+    )
+    .unwrap();
+    let stores = builtins
+        .get("claude_code")
+        .unwrap()
+        .memory()
+        .unwrap()
+        .existing_stores(&home);
+    assert!(
+        stores.iter().any(|store| store.label == "改址根"
+            && store.directory == relocated),
+        "{stores:?}"
+    );
+    // IO 错误跳过：projects 根变成普通文件后只剩改址根。
+    fs::remove_dir_all(home.join(".claude").join("projects")).unwrap();
+    fs::write(home.join(".claude").join("projects"), "not a dir").unwrap();
+    let stores = builtins
+        .get("claude_code")
+        .unwrap()
+        .memory()
+        .unwrap()
+        .existing_stores(&home);
+    assert_eq!(stores.len(), 1, "{stores:?}");
+    assert_eq!(stores[0].label, "改址根");
+    assert_eq!(stores[0].directory, relocated);
+
+    // codebuddy：全局 + projects 命中；legacy 仅在主目录缺失时回退列出。
+    let codebuddy_root = home.join(".codebuddy");
+    let global = codebuddy_root.join("memories").join("global");
+    fs::create_dir_all(&global).unwrap();
+    let slug = "c-scan-project-alpha";
+    let primary = codebuddy_root.join("projects").join(slug).join("memory");
+    let legacy = codebuddy_root.join("memories").join(slug);
+    fs::create_dir_all(&legacy).unwrap();
+    let stores = builtins
+        .get("codebuddy")
+        .unwrap()
+        .memory()
+        .unwrap()
+        .existing_stores(&home);
+    let labels: Vec<(&str, &Path)> = stores
+        .iter()
+        .map(|store| (store.label.as_str(), store.directory.as_path()))
+        .collect();
+    assert!(labels.contains(&("全局", global.as_path())), "{labels:?}");
+    assert!(labels.contains(&(slug, legacy.as_path())), "{labels:?}");
+    fs::create_dir_all(&primary).unwrap();
+    let stores = builtins
+        .get("codebuddy")
+        .unwrap()
+        .memory()
+        .unwrap()
+        .existing_stores(&home);
+    assert!(
+        stores.iter().any(|store| store.directory == primary),
+        "{stores:?}"
+    );
+    assert!(
+        stores.iter().all(|store| store.directory != legacy),
+        "{stores:?}"
+    );
+
+    // grok：全局 topics + workspace 命中，非 slug 目录跳过。
+    if std::env::var_os("GROK_HOME").is_none() {
+        let grok_root = home.join(".grok").join("memory-v2");
+        let grok_global = grok_root.join("global").join("topics");
+        let workspace = grok_root
+            .join("workspaces")
+            .join("alpha-490670fe")
+            .join("topics");
+        fs::create_dir_all(&grok_global).unwrap();
+        fs::create_dir_all(&workspace).unwrap();
+        fs::create_dir_all(grok_root.join("workspaces").join("not-a-hash")).unwrap();
+        let stores = builtins
+            .get("grok")
+            .unwrap()
+            .memory()
+            .unwrap()
+            .existing_stores(&home);
+        assert_eq!(stores.len(), 2, "{stores:?}");
+        assert!(stores
+            .iter()
+            .any(|store| store.label == "全局" && store.directory == grok_global));
+        assert!(stores
+            .iter()
+            .any(|store| store.label == "alpha-490670fe" && store.directory == workspace));
+    }
+
+    // mimo：全局 + projects/<id> 命中。
+    let mimo_memory = home
+        .join(".local")
+        .join("share")
+        .join("mimocode")
+        .join("memory");
+    let mimo_global = mimo_memory.join("global");
+    let mimo_project = mimo_memory
+        .join("projects")
+        .join("242f1d80-4457-460b-916f-799d3d3adb75");
+    fs::create_dir_all(&mimo_global).unwrap();
+    fs::create_dir_all(&mimo_project).unwrap();
+    let stores = builtins
+        .get("mimo_code")
+        .unwrap()
+        .memory()
+        .unwrap()
+        .existing_stores(&home);
+    assert_eq!(stores.len(), 2, "{stores:?}");
+    assert!(stores
+        .iter()
+        .any(|store| store.directory == mimo_global && store.scope == Scope::Global));
+    assert!(stores
+        .iter()
+        .any(|store| store.directory == mimo_project && store.scope == Scope::Project));
+
+    // codex：单一全局 workspace，缺失时不返回。
+    let codex_memories = home.join(".codex").join("memories");
+    let stores = builtins
+        .get("codex")
+        .unwrap()
+        .memory()
+        .unwrap()
+        .existing_stores(&home);
+    assert!(stores.is_empty(), "{stores:?}");
+    fs::create_dir_all(&codex_memories).unwrap();
+    let stores = builtins
+        .get("codex")
+        .unwrap()
+        .memory()
+        .unwrap()
+        .existing_stores(&home);
+    assert_eq!(stores.len(), 1, "{stores:?}");
+    assert_eq!(stores[0].directory, codex_memories);
+    assert_eq!(stores[0].scope, Scope::Global);
 }

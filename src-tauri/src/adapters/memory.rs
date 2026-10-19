@@ -119,6 +119,33 @@ pub struct MemoryLayoutEntry {
     pub path: PathBuf,
 }
 
+/// One memory store an adapter found already present on disk. This is
+/// read-only enumeration output: `directory` is adapter-owned, absolute,
+/// and only a directory the adapter itself re-enumerates for the same home
+/// is accepted back by the shared engine, so a caller can select a store
+/// but never invent a native path. Families whose on-disk identity (a
+/// project slug, hash suffix, or UUID) cannot be turned back into a
+/// project path carry `project_path: None`; the store directory pins the
+/// location instead.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryStoreRef {
+    pub scope: Scope,
+    pub project_path: Option<String>,
+    /// Display label for the store (全局 or the project identifier).
+    pub label: String,
+    /// Absolute path of the store directory, already present on disk.
+    pub directory: PathBuf,
+}
+
+/// True only when the path currently is a directory. Enumeration uses this
+/// instead of creating anything: a missing store is simply not reported.
+pub(crate) fn store_present(path: &Path) -> bool {
+    std::fs::metadata(path)
+        .map(|metadata| metadata.is_dir())
+        .unwrap_or(false)
+}
+
 /// Observed native master-switch state.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MemorySwitchState {
@@ -176,6 +203,14 @@ pub trait MemoryAdapter: Sync {
     /// records; a native layout owns the family's own semantics.
     fn layout(&self) -> Option<&dyn MemoryLayout> {
         None
+    }
+    /// Read-only enumeration of the memory stores this CLI already keeps on
+    /// disk for the home. The default is an empty list: adapters without a
+    /// verified on-disk family report no store. Implementations never create
+    /// a directory or file, and an unreadable source is skipped, not an
+    /// error.
+    fn existing_stores(&self, _home: &Path) -> Vec<MemoryStoreRef> {
+        Vec::new()
     }
 }
 
@@ -266,6 +301,27 @@ mod tests {
         assert!(!published.scope.project);
         assert_eq!(published.targets, vec![MemoryTargetDimension::Account]);
         assert!(!published.limitation.is_empty());
+    }
+
+    #[test]
+    fn existing_stores_defaults_to_an_empty_read_only_scan() {
+        struct NoStores;
+        impl MemoryAdapter for NoStores {
+            fn declaration(&self) -> MemoryDeclaration {
+                verified(READ)
+            }
+            fn directory(
+                &self,
+                _scope: Scope,
+                _home: &Path,
+                _project: Option<&Path>,
+            ) -> Result<PathBuf, String> {
+                Ok(PathBuf::from("/unused"))
+            }
+        }
+        let home = Path::new("/home");
+        assert!(NoStores.existing_stores(home).is_empty());
+        assert!(!home.join("anything").exists(), "端口绝不为枚举创建路径");
     }
 
     #[test]

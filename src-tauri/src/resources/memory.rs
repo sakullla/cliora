@@ -14,8 +14,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::accounts::selection;
 use crate::adapters::memory::{
-    MemoryDeclaration, MemoryFileChange, MemoryLayout, MemoryManagement, MemoryOperation,
-    MemoryTargetDimension,
+    MemoryAdapter, MemoryDeclaration, MemoryFileChange, MemoryLayout, MemoryManagement,
+    MemoryOperation, MemoryStoreRef, MemoryTargetDimension,
 };
 use crate::adapters::{CliAdapter, Registry};
 use crate::credentials::CredentialStore;
@@ -39,6 +39,12 @@ pub struct MemoryTarget {
     pub project_path: Option<String>,
     #[serde(default)]
     pub context_id: Option<String>,
+    /// The adapter-enumerated store directory this target points at. Only a
+    /// directory the adapter re-enumerates for the same home (with the same
+    /// scope and project path) is accepted; callers can select an enumerated
+    /// store, never invent a native path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub store_directory: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -128,6 +134,92 @@ pub fn list_memories(
     let prepared = prepare(db, registry, home, target)?;
     require(&prepared, MemoryOperation::List)?;
     finish_list(&prepared)
+}
+
+/// One aggregated entry: the shared list output plus the store it came from
+/// and the exact target that reaches it again for open, edit, and delete.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryStoreEntry {
+    pub id: String,
+    pub path: String,
+    pub enabled: bool,
+    pub fingerprint: String,
+    pub source_label: String,
+    pub target: MemoryTarget,
+    pub in_use: bool,
+    pub detail: String,
+}
+
+/// A store whose listing failed; the remaining stores are still returned.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryFailedSource {
+    pub label: String,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryAggregate {
+    pub tool_id: String,
+    pub entries: Vec<MemoryStoreEntry>,
+    pub failed_sources: Vec<MemoryFailedSource>,
+}
+
+/// Lists every store the CLI already keeps on disk, one protected shared
+/// list per store. A store that fails to list is reported in
+/// `failed_sources` and never blocks the others; a CLI without a verified
+/// memory declaration is refused before any read.
+pub fn list_all_memories(
+    db: &Database,
+    registry: &Registry,
+    home: &Path,
+    tool_id: &str,
+) -> Result<MemoryAggregate, String> {
+    if !home.is_absolute() {
+        return Err("用户目录必须是绝对路径".into());
+    }
+    let adapter = registry.get(tool_id).ok_or("此 CLI 尚无注册适配器")?;
+    let port = adapter
+        .memory()
+        .ok_or("此 CLI 没有已核实的记忆")?;
+    let declaration = port.declaration();
+    crate::adapters::memory::publish(&declaration).ok_or("此 CLI 的记忆尚未核实")?;
+    let mut entries = Vec::new();
+    let mut failed_sources = Vec::new();
+    for store in port.existing_stores(home) {
+        let target = MemoryTarget {
+            tool_id: tool_id.to_owned(),
+            scope: store.scope,
+            project_path: store.project_path.clone(),
+            context_id: None,
+            store_directory: Some(store.directory.display().to_string()),
+        };
+        match list_memories(db, registry, home, &target) {
+            Ok(list) => {
+                entries.extend(list.entries.into_iter().map(|entry| MemoryStoreEntry {
+                    id: entry.id,
+                    path: entry.path,
+                    enabled: entry.enabled,
+                    fingerprint: entry.fingerprint,
+                    source_label: store.label.clone(),
+                    target: target.clone(),
+                    in_use: list.in_use,
+                    detail: list.detail.clone(),
+                }));
+            }
+            Err(reason) => failed_sources.push(MemoryFailedSource {
+                label: store.label.clone(),
+                reason,
+            }),
+        }
+    }
+    Ok(MemoryAggregate {
+        tool_id: tool_id.to_owned(),
+        entries,
+        failed_sources,
+    })
 }
 
 pub fn read_memory(
@@ -403,15 +495,27 @@ fn prepare<'a>(
     let declaration = port.declaration();
     let management =
         crate::adapters::memory::publish(&declaration).ok_or("此 CLI 的记忆尚未核实")?;
-    let (scope, project) = checked_scope(&declaration, target)?;
+    let store = match requested_store(target) {
+        Some(_) => Some(matched_store(port, home, target)?),
+        None => None,
+    };
+    let (scope, project) = checked_scope(&declaration, target, store.as_ref())?;
     let (partition, guard) = partition(db, target, &declaration)?;
-    let mut directory = port
-        .directory(scope, home, project.as_deref())
-        .map_err(unavailable_directory)?;
-    match &partition {
-        Partition::Shared => {}
-        Partition::Bound(id) => directory.push(id),
-        Partition::Unbound => directory.push("_unbound"),
+    let mut directory = match &store {
+        Some(store) => store.directory.clone(),
+        None => port
+            .directory(scope, home, project.as_deref())
+            .map_err(unavailable_directory)?,
+    };
+    // An enumerated store directory is the exact native location the
+    // adapter reported, so the account partition suffix never applies to
+    // it; an adapter that keeps per-account stores enumerates each one.
+    if store.is_none() {
+        match &partition {
+            Partition::Shared => {}
+            Partition::Bound(id) => directory.push(id),
+            Partition::Unbound => directory.push("_unbound"),
+        }
     }
     if !directory.is_absolute()
         || directory
@@ -514,17 +618,61 @@ fn partition(
 fn checked_scope(
     declaration: &MemoryDeclaration,
     target: &MemoryTarget,
+    store: Option<&MemoryStoreRef>,
 ) -> Result<(Scope, Option<PathBuf>), String> {
     match target.scope {
         Scope::Global if declaration.scope.global => Ok((Scope::Global, None)),
         Scope::Project if declaration.scope.project => {
-            let project = projects::checked_directory(
-                target.project_path.as_deref().ok_or("请选择项目目录")?,
-            )?;
-            Ok((Scope::Project, Some(project)))
+            // An enumerated store already pins its native location, and the
+            // project behind an on-disk identity (slug, hash, UUID) is not
+            // recoverable for every family, so only a store that itself
+            // carries a project path resolves one.
+            let project = match store {
+                Some(store) => store
+                    .project_path
+                    .as_deref()
+                    .map(projects::checked_directory)
+                    .transpose()?,
+                None => Some(projects::checked_directory(
+                    target.project_path.as_deref().ok_or("请选择项目目录")?,
+                )?),
+            };
+            Ok((Scope::Project, project))
         }
         _ => Err("此 CLI 的记忆不覆盖当前范围".into()),
     }
+}
+
+fn requested_store(target: &MemoryTarget) -> Option<&str> {
+    target
+        .store_directory
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+/// Resolves a caller-supplied store directory back to a store the adapter
+/// enumerates for this home with the same scope and project path. Native
+/// path resolution stays adapter-owned: a directory the adapter did not
+/// enumerate is refused, and the generic absolute, parent-directory, and
+/// reparse checks still apply afterwards.
+fn matched_store(
+    port: &dyn MemoryAdapter,
+    home: &Path,
+    target: &MemoryTarget,
+) -> Result<MemoryStoreRef, String> {
+    let Some(requested) = requested_store(target) else {
+        return Err("记忆存储无效".into());
+    };
+    let requested_path = PathBuf::from(requested);
+    port.existing_stores(home)
+        .into_iter()
+        .find(|store| {
+            store.directory == requested_path
+                && store.scope == target.scope
+                && store.project_path == target.project_path
+        })
+        .ok_or_else(|| "该记忆存储已不在磁盘上，请刷新后重试".to_owned())
 }
 
 fn excluded_paths(

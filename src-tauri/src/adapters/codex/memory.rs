@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use super::Codex;
 use crate::adapters::memory::{
     MemoryAdapter, MemoryDeclaration, MemoryLayout, MemoryLayoutEntry, MemoryOperation,
-    MemoryScope, MemorySwitchState,
+    MemoryScope, MemoryStoreRef, MemorySwitchState,
 };
 use crate::native::adapter::Scope;
 use crate::native::format::{self, FileKind};
@@ -80,6 +80,21 @@ impl MemoryAdapter for Codex {
 
     fn layout(&self) -> Option<&dyn MemoryLayout> {
         Some(self)
+    }
+
+    /// Read-only: the single global workspace, reported only when present.
+    fn existing_stores(&self, home: &Path) -> Vec<MemoryStoreRef> {
+        let directory = codex_home(home).join("memories");
+        if crate::adapters::memory::store_present(&directory) {
+            vec![MemoryStoreRef {
+                scope: Scope::Global,
+                project_path: None,
+                label: "全局".to_owned(),
+                directory,
+            }]
+        } else {
+            Vec::new()
+        }
     }
 }
 
@@ -263,6 +278,7 @@ mod tests {
             scope: Scope::Global,
             project_path: None,
             context_id: None,
+            store_directory: None,
         };
         // The engine lists the real family with the native switch already on.
         let list = list_memories(&db, &registry, &home, &target).unwrap();

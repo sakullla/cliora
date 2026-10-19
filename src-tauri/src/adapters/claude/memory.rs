@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 use super::Claude;
 use crate::adapters::memory::{
     MemoryAdapter, MemoryDeclaration, MemoryFileChange, MemoryLayout, MemoryLayoutEntry,
-    MemoryOperation, MemoryScope, MemorySwitchState, MemoryTargetDimension,
+    MemoryOperation, MemoryScope, MemoryStoreRef, MemorySwitchState, MemoryTargetDimension,
 };
 use crate::native::adapter::Scope;
 use crate::native::format::{self, FileKind};
@@ -95,6 +95,50 @@ impl MemoryAdapter for Claude {
 
     fn layout(&self) -> Option<&dyn MemoryLayout> {
         Some(self)
+    }
+
+    /// Read-only: every `projects/<slug>/memory` on disk plus the relocated
+    /// root when the user-level `autoMemoryDirectory` points at a usable
+    /// value. Project-local relocations are per-project settings and are not
+    /// enumerable without a project, so only the user-level root is listed.
+    /// The slug is the only on-disk identity, so `project_path` stays `None`
+    /// and the slug doubles as the label.
+    fn existing_stores(&self, home: &Path) -> Vec<MemoryStoreRef> {
+        let mut stores = Vec::new();
+        let root = config_root(home);
+        if let Some(value) = directory_setting(&root.join("settings.json")) {
+            if let Some(relocated) = accepted_memory_directory(&value, home) {
+                if crate::adapters::memory::store_present(&relocated) {
+                    stores.push(MemoryStoreRef {
+                        scope: Scope::Project,
+                        project_path: None,
+                        label: "改址根".to_owned(),
+                        directory: relocated,
+                    });
+                }
+            }
+        }
+        if let Ok(read) = fs::read_dir(root.join("projects")) {
+            for entry in read.flatten() {
+                if !crate::adapters::memory::store_present(&entry.path()) {
+                    continue;
+                }
+                let Some(slug) = entry.file_name().to_str().map(str::to_owned) else {
+                    continue;
+                };
+                let directory = entry.path().join("memory");
+                if !crate::adapters::memory::store_present(&directory) {
+                    continue;
+                }
+                stores.push(MemoryStoreRef {
+                    scope: Scope::Project,
+                    project_path: None,
+                    label: slug,
+                    directory,
+                });
+            }
+        }
+        stores
     }
 }
 
@@ -834,6 +878,7 @@ mod tests {
             scope: Scope::Project,
             project_path: Some(project.display().to_string()),
             context_id: None,
+            store_directory: None,
         };
         let id = "cliora_engine_probe";
         let text = "Cliora engine-written probe marker EVID-31337. Topic body for the \
