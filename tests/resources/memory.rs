@@ -523,6 +523,54 @@ fn counts(db: &Database) -> (i64, i64, i64, i64) {
     )
 }
 
+fn apply_oauth_binding(db: &Database, tool: &str, context_id: &str) {
+    let account_id = format!("account-{context_id}");
+    let profile_id = format!("profile-{context_id}");
+    let profile = crate::native::profile::RegisteredProfile {
+        editing: None,
+        id: profile_id.clone(),
+        tool: tool.into(),
+        name: "applied".into(),
+        version: 1,
+        revision: String::new(),
+        inherit_common: false,
+        files: BTreeMap::new(),
+        suppressed: BTreeMap::new(),
+        connection: None,
+        authentication: crate::native::profile::ProfileAuthentication::OAuth {
+            account_id,
+        },
+        native_credentials: BTreeMap::new(),
+    };
+    let snapshot = crate::native::apply::AppliedProfileSnapshot {
+        source_profile: profile.clone(),
+        runtime_profile: profile,
+        model_summary: None,
+    };
+    let applied = serde_json::to_string(&snapshot).unwrap();
+    db.with_connection(|conn| {
+        conn.execute(
+            "INSERT INTO applied_bindings(scope_key,tool,profile_id,profile_version,managed,context_id,applied_profile) VALUES('global',?1,?2,1,'{}',?3,?4)",
+            rusqlite::params![tool, profile_id, context_id, applied],
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(())
+    })
+    .unwrap();
+}
+
+fn break_applied_binding(db: &Database, tool: &str) {
+    db.with_connection(|conn| {
+        conn.execute(
+            "UPDATE applied_bindings SET profile_id='broken-profile' WHERE scope_key='global' AND tool=?1",
+            [tool],
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(())
+    })
+    .unwrap();
+}
+
 fn insert_account(db: &Database, tool: &str, context_id: &str, home: &Path) {
     let context = NativeContext {
         id: context_id.into(),
@@ -715,6 +763,206 @@ fn create_reread_stays_on_that_account_and_cli() {
     assert_eq!(account_json(&harness.db, "account-acct-a"), before_account);
     assert!(!before_account.contains("alpha memory"));
     assert_eq!(counts(&harness.db), before_counts);
+}
+
+#[test]
+fn omitted_context_stays_unbound_when_oauth_binding_is_applied() {
+    let harness = harness();
+    insert_account(&harness.db, WRITABLE.id, "acct-applied", &harness.home);
+    apply_oauth_binding(&harness.db, WRITABLE.id, "acct-applied");
+    let resolved = crate::accounts::selection::bound(
+        &harness.db,
+        &harness.home,
+        WRITABLE.id,
+        Scope::Global,
+        None,
+        false,
+    )
+    .unwrap()
+    .expect("applied oauth binding");
+    assert_eq!(resolved.1.id, "acct-applied");
+
+    let explicit = memory_target(WRITABLE.id, Scope::Global, None, Some("acct-applied"));
+    let account = save(
+        &harness,
+        explicit.clone(),
+        "note",
+        "account memory",
+        "",
+        false,
+    )
+    .unwrap();
+    assert!(account.path.contains("acct-applied"));
+    assert!(!account.path.contains("_unbound"));
+    let account_note = PathBuf::from(&account.path);
+
+    let omitted = memory_target(WRITABLE.id, Scope::Global, None, None);
+    let blank = memory_target(WRITABLE.id, Scope::Global, None, Some(""));
+    assert!(
+        list_memories(&harness.db, &harness.registry, &harness.home, &omitted)
+            .unwrap()
+            .entries
+            .is_empty()
+    );
+    assert!(read_memory(
+        &harness.db,
+        &harness.registry,
+        &harness.home,
+        &omitted,
+        "note"
+    )
+    .is_err());
+
+    let unbound = save(
+        &harness,
+        omitted.clone(),
+        "note",
+        "unbound memory",
+        "",
+        false,
+    )
+    .unwrap();
+    assert!(unbound.path.contains("_unbound"));
+    assert!(!unbound.path.contains("acct-applied"));
+    assert_eq!(
+        read_memory(
+            &harness.db,
+            &harness.registry,
+            &harness.home,
+            &omitted,
+            "note"
+        )
+        .unwrap()
+        .text,
+        "unbound memory"
+    );
+    assert_eq!(
+        read_memory(
+            &harness.db,
+            &harness.registry,
+            &harness.home,
+            &blank,
+            "note"
+        )
+        .unwrap()
+        .text,
+        "unbound memory"
+    );
+    let listed = list_memories(&harness.db, &harness.registry, &harness.home, &omitted).unwrap();
+    assert_eq!(listed.entries.len(), 1);
+    assert!(listed.entries[0].path.contains("_unbound"));
+    assert!(!listed.entries[0].path.contains("acct-applied"));
+    assert_eq!(
+        read_memory(
+            &harness.db,
+            &harness.registry,
+            &harness.home,
+            &explicit,
+            "note"
+        )
+        .unwrap()
+        .text,
+        "account memory"
+    );
+    let listed_account =
+        list_memories(&harness.db, &harness.registry, &harness.home, &explicit).unwrap();
+    assert_eq!(listed_account.entries.len(), 1);
+    assert!(listed_account.entries[0].path.contains("acct-applied"));
+    assert_eq!(fs::read_to_string(&account_note).unwrap(), "account memory");
+
+    break_applied_binding(&harness.db, WRITABLE.id);
+    let broken = crate::accounts::selection::bound(
+        &harness.db,
+        &harness.home,
+        WRITABLE.id,
+        Scope::Global,
+        None,
+        false,
+    )
+    .unwrap_err();
+    assert!(broken.contains("不一致"), "{broken}");
+
+    let revised = save(
+        &harness,
+        omitted.clone(),
+        "note",
+        "unbound revised",
+        "unbound memory",
+        false,
+    )
+    .unwrap();
+    assert!(revised.path.contains("_unbound"));
+    assert_eq!(
+        read_memory(
+            &harness.db,
+            &harness.registry,
+            &harness.home,
+            &omitted,
+            "note"
+        )
+        .unwrap()
+        .text,
+        "unbound revised"
+    );
+    let switched = set_memory_enabled(
+        &harness.db,
+        &harness.store,
+        &harness.registry,
+        &harness.home,
+        &MemoryEnable {
+            target: omitted.clone(),
+            id: None,
+            enabled: false,
+        },
+    )
+    .unwrap();
+    assert!(!switched.in_use);
+    assert!(switched.entries.iter().all(|entry| entry.path.contains("_unbound")));
+    let enabled = set_memory_enabled(
+        &harness.db,
+        &harness.store,
+        &harness.registry,
+        &harness.home,
+        &MemoryEnable {
+            target: omitted.clone(),
+            id: Some("note".into()),
+            enabled: false,
+        },
+    )
+    .unwrap();
+    assert!(!enabled.entries[0].enabled);
+    delete_memory(
+        &harness.db,
+        &harness.store,
+        &harness.registry,
+        &harness.home,
+        &MemoryDelete {
+            target: omitted,
+            id: "note".into(),
+            baseline: "unbound revised".into(),
+        },
+    )
+    .unwrap();
+    assert!(!PathBuf::from(&revised.path).exists());
+    assert_eq!(fs::read_to_string(&account_note).unwrap(), "account memory");
+    assert_eq!(
+        read_memory(
+            &harness.db,
+            &harness.registry,
+            &harness.home,
+            &explicit,
+            "note"
+        )
+        .unwrap()
+        .text,
+        "account memory"
+    );
+    assert!(
+        list_memories(&harness.db, &harness.registry, &harness.home, &blank)
+            .unwrap()
+            .entries
+            .is_empty()
+    );
 }
 
 #[test]

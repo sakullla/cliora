@@ -355,7 +355,7 @@ fn prepare(
         crate::adapters::memory::publish(&declaration).ok_or("此 CLI 的记忆尚未核实")?;
     let location = relative_location(declaration.location)?;
     let (scope, project, scope_root) = scope_root(&declaration, home, target)?;
-    let (partition, guard) = partition(db, home, target, &declaration, scope, project.as_deref())?;
+    let (partition, guard) = partition(db, target, &declaration)?;
     let mut directory = scope_root.join(location);
     match &partition {
         Partition::Shared => {}
@@ -390,11 +390,8 @@ fn prepare(
 
 fn partition(
     db: &Database,
-    home: &Path,
     target: &MemoryTarget,
     declaration: &MemoryDeclaration,
-    scope: Scope,
-    project: Option<&Path>,
 ) -> Result<(Partition, Option<selection::ContextGuard>), String> {
     let participates = declaration.binds_account
         || declaration
@@ -408,22 +405,17 @@ fn partition(
         .as_deref()
         .map(str::trim)
         .filter(|id| !id.is_empty());
-    if let Some(id) = requested {
-        let context = selection::by_id(db, &target.tool_id, id)?;
-        if !valid_segment(&context.id) {
-            return Err("账号上下文标识无效".into());
-        }
-        let partition = Partition::Bound(context.id.clone());
-        let guard = selection::enter(Some(context));
-        return Ok((partition, Some(guard)));
-    }
-    let guard = selection::enter_bound(db, home, &target.tool_id, scope, project)?;
-    let current = selection::current(&target.tool_id);
-    let partition = match current {
-        Some(context) if valid_segment(&context.id) => Partition::Bound(context.id),
-        Some(_) => return Err("账号上下文标识无效".into()),
-        None => Partition::Unbound,
+    let Some(id) = requested else {
+        // An omitted account is the caller's unbound target. The applied
+        // config account is a separate choice and does not select this partition.
+        return Ok((Partition::Unbound, None));
     };
+    let context = selection::by_id(db, &target.tool_id, id)?;
+    if !valid_segment(&context.id) {
+        return Err("账号上下文标识无效".into());
+    }
+    let partition = Partition::Bound(context.id.clone());
+    let guard = selection::enter(Some(context));
     Ok((partition, Some(guard)))
 }
 
