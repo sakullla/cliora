@@ -1,4 +1,5 @@
 pub mod accounts;
+pub(crate) mod memory;
 pub(crate) mod agents;
 pub mod history;
 pub(crate) mod plugins;
@@ -36,6 +37,9 @@ impl CliAdapter for Grok {
         Some(self)
     }
     fn accounts(&self) -> Option<&dyn crate::adapters::accounts::AccountAdapter> {
+        Some(self)
+    }
+    fn memory(&self) -> Option<&dyn super::memory::MemoryAdapter> {
         Some(self)
     }
     fn id(&self) -> &'static str {

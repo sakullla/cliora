@@ -38,6 +38,7 @@
 //!   no accounts port is declared and no login state is adopted.
 
 pub mod history;
+pub(crate) mod memory;
 
 use std::collections::BTreeMap;
 use std::env;
@@ -109,6 +110,9 @@ pub(crate) fn data_root(home: &Path) -> PathBuf {
 }
 
 impl CliAdapter for Kiro {
+    fn memory(&self) -> Option<&dyn super::memory::MemoryAdapter> {
+        Some(self)
+    }
     fn id(&self) -> &'static str {
         "kiro"
     }

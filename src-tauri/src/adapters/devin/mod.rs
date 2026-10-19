@@ -49,6 +49,7 @@
 //!   separate directory contract and stay undelivered.
 
 pub(crate) mod history;
+pub(crate) mod memory;
 
 use std::path::{Path, PathBuf};
 
@@ -85,6 +86,9 @@ pub(crate) fn config_root(home: &Path) -> PathBuf {
 }
 
 impl CliAdapter for Devin {
+    fn memory(&self) -> Option<&dyn super::memory::MemoryAdapter> {
+        Some(self)
+    }
     fn id(&self) -> &'static str {
         "devin"
     }

@@ -44,6 +44,7 @@
 //!   non-interactive interface.
 
 pub mod history;
+pub(crate) mod memory;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -75,6 +76,9 @@ pub(crate) fn config_root(home: &Path) -> PathBuf {
 pub(crate) const CREDENTIAL_ENV_NAME: &str = "COMMAND_CODE_API_KEY";
 
 impl CliAdapter for CommandCode {
+    fn memory(&self) -> Option<&dyn super::memory::MemoryAdapter> {
+        Some(self)
+    }
     fn id(&self) -> &'static str {
         "command_code"
     }

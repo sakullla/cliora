@@ -5,6 +5,7 @@
 //! `0.6.8`. Cancelling the preference does not delete local MiniMax files.
 
 mod accounts;
+pub(crate) mod memory;
 mod agents;
 mod configuration;
 mod history;
@@ -91,6 +92,9 @@ pub(crate) fn existing_data_dir(home: &Path) -> Option<PathBuf> {
 }
 
 impl CliAdapter for MiniMaxCode {
+    fn memory(&self) -> Option<&dyn super::memory::MemoryAdapter> {
+        Some(self)
+    }
     fn id(&self) -> &'static str {
         "minimax_code"
     }
