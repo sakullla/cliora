@@ -2,6 +2,47 @@ import type { ConfigurationDescriptor, EditingState } from './configuration';
 import type { CliId } from './domain';
 
 export type Scope = 'global' | 'project';
+export type MemoryScopeSupport = { global: boolean; project: boolean };
+export type MemoryTargetDimension = 'project' | 'account';
+export type MemoryOperation = 'list' | 'open' | 'create' | 'edit' | 'delete' | 'master_switch' | 'item_enable';
+export type MemoryManagement = {
+  scope: MemoryScopeSupport;
+  targets: MemoryTargetDimension[];
+  operations: MemoryOperation[];
+  limitation?: string;
+};
+export type MemoryTarget = {
+  toolId: string;
+  scope: Scope;
+  projectPath: string | null;
+  contextId?: string | null;
+};
+export type MemoryEntry = { id: string; path: string; enabled: boolean; fingerprint: string };
+export type MemoryList = {
+  inUse: boolean;
+  detail: string;
+  operations: MemoryOperation[];
+  limitation: string;
+  entries: MemoryEntry[];
+};
+export type MemoryDocument = {
+  id: string;
+  path: string;
+  text: string;
+  fingerprint: string;
+  enabled: boolean;
+  inUse: boolean;
+  detail: string;
+};
+export type MemorySave = {
+  target: MemoryTarget;
+  id: string;
+  text: string;
+  baseline: string;
+  confirmExternal: boolean;
+};
+export type MemoryDelete = { target: MemoryTarget; id: string; baseline: string };
+export type MemoryEnable = { target: MemoryTarget; id?: string | null; enabled: boolean };
 export type AdapterFacet = { state: 'available' | 'planned' | 'supported' | 'unsupported'; reason: string };
 export type AdapterDescriptor = {
   id: string;
@@ -18,7 +59,7 @@ export type AdapterDescriptor = {
   resources: AdapterFacet;
   history: AdapterFacet;
   login?: { hint: string } | null;
-  management?: { accounts: boolean; mcp: boolean; skills: boolean; agents: boolean; plugins: boolean; projectPlugins: boolean; rules?: { global: boolean; project: boolean; globalReason?: string; projectReason?: string; catalog?: boolean } };
+  management?: { accounts: boolean; mcp: boolean; skills: boolean; agents: boolean; plugins: boolean; projectPlugins: boolean; rules?: { global: boolean; project: boolean; globalReason?: string; projectReason?: string; catalog?: boolean }; memory?: MemoryManagement };
 };
 export type AdapterCatalog = {
   registered: AdapterDescriptor[];

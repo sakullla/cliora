@@ -5,7 +5,7 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 import type { AccountCapability, AccountImpact, AccountReapplyRequest, AuthAccount, NativeLoginSnapshot } from '../types/accounts';
 import type { AgentSnapshot, AgentRequest, AgentResult, PluginTarget, PluginRequest, PluginSnapshot, PluginResult } from '../types/resources';
 import type { ApiError, Bootstrap, CliId, Theme } from '../types/domain';
-import type { AdapterCatalog, ApplyComparison, ApplyOutcome, CommonConfig, CommonSaveResult, Connection, ConnectionCheck, ModelDirectory, NativeImport, NativeInspection, NativePreview, NativeProfile, PreservedProfile, RegisteredCommon, RegisteredCommonSaveResult, RegisteredProfile, RegisteredToolWorkspace, Scope, ToolWorkspace } from '../types/native';
+import type { AdapterCatalog, ApplyComparison, ApplyOutcome, CommonConfig, CommonSaveResult, Connection, ConnectionCheck, MemoryDelete, MemoryDocument, MemoryEnable, MemoryList, MemorySave, MemoryTarget, ModelDirectory, NativeImport, NativeInspection, NativePreview, NativeProfile, PreservedProfile, RegisteredCommon, RegisteredCommonSaveResult, RegisteredProfile, RegisteredToolWorkspace, Scope, ToolWorkspace } from '../types/native';
 import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, TerminalId, TrayStatus } from '../types/launch';
 import type { LibraryDraft, LibraryItem, LibraryKind } from '../types/library';
 import type { McpDefinition, McpDraft, McpPlacement, McpTargetRequest, McpTargetResult, NativeMcpEntry, NativeRuleFile, RuleTarget, RulePreview, RuleApplyResult, RulePlacement, RuleClientSelection, RuleSyncResult, SkillPackage, SkillImportPreview, SkillInstallation, SkillTargetResult, NativeSkillDocument, NativeSkillEntry, SkillTargetPreview, SkillRecoveryIssue } from '../types/resources';
@@ -266,6 +266,11 @@ export const native = {
   readNativeFileForEdit: (tool: CliId, scope: Scope, projectPath: string, role: string) => command<string>('read_native_file_for_edit', { tool, scope, projectPath: projectPath || null, role }),
   setCodexReasoningEffort: (text: string, effort: string | null) => command<string>('set_codex_reasoning_effort', { text, effort }),
   previewNativeProfile: (profile: NativeProfile, scope: Scope) => command<NativePreview>('preview_native_profile', { profile, scope }),
+  listMemories: (target: MemoryTarget) => command<MemoryList>('list_memories', { target }),
+  readMemory: (target: MemoryTarget, id: string) => command<MemoryDocument>('read_memory', { target, id }),
+  saveMemory: (request: MemorySave) => command<MemoryDocument>('save_memory', { request }),
+  deleteMemory: (request: MemoryDelete) => command<void>('delete_memory', { request }),
+  setMemoryEnabled: (request: MemoryEnable) => command<MemoryList>('set_memory_enabled', { request }),
 };
 
 export const describeConfiguration = (toolId: string, scope: Scope) => command<ConfigurationDescriptor | null>('describe_configuration', { toolId, scope });
