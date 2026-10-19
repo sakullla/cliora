@@ -874,7 +874,7 @@ enum MemoryFixtureKind {
     GlobalReadOnly,
     SessionsOnly,
     Unverified,
-    MissingLocation,
+    UnresolvedDirectory,
     MissingScope,
     MissingOperation,
     ReasonBlocksEntry,
@@ -907,7 +907,6 @@ impl MemoryFixture {
         use crate::adapters::memory::{MemoryDeclaration, MemoryScope};
         match self.kind {
             MemoryFixtureKind::Project => MemoryDeclaration {
-                location: Some("fixture:project-memory"),
                 scope: MemoryScope { global: false, project: true },
                 targets: PROJECT_TARGETS,
                 operations: PROJECT_OPS,
@@ -916,7 +915,6 @@ impl MemoryFixture {
                 binds_account: false,
             },
             MemoryFixtureKind::GlobalReadOnly => MemoryDeclaration {
-                location: Some("fixture:global-memory"),
                 scope: MemoryScope { global: true, project: false },
                 targets: ACCOUNT_TARGETS,
                 operations: READ_OPS,
@@ -926,8 +924,7 @@ impl MemoryFixture {
             },
             MemoryFixtureKind::SessionsOnly => MemoryDeclaration::unverified("只有会话存储，不是记忆"),
             MemoryFixtureKind::Unverified => MemoryDeclaration::unverified("尚未核实独立记忆存储"),
-            MemoryFixtureKind::MissingLocation => MemoryDeclaration {
-                location: None,
+            MemoryFixtureKind::UnresolvedDirectory => MemoryDeclaration {
                 scope: MemoryScope { global: false, project: true },
                 targets: PROJECT_TARGETS,
                 operations: READ_OPS,
@@ -936,7 +933,6 @@ impl MemoryFixture {
                 binds_account: false,
             },
             MemoryFixtureKind::MissingScope => MemoryDeclaration {
-                location: Some("fixture:no-scope"),
                 scope: MemoryScope { global: false, project: false },
                 targets: &[],
                 operations: READ_OPS,
@@ -945,7 +941,6 @@ impl MemoryFixture {
                 binds_account: false,
             },
             MemoryFixtureKind::MissingOperation => MemoryDeclaration {
-                location: Some("fixture:no-operation"),
                 scope: MemoryScope { global: true, project: false },
                 targets: &[],
                 operations: &[],
@@ -954,7 +949,6 @@ impl MemoryFixture {
                 binds_account: false,
             },
             MemoryFixtureKind::ReasonBlocksEntry => MemoryDeclaration {
-                location: Some("fixture:unverified-complete"),
                 scope: MemoryScope { global: true, project: false },
                 targets: ACCOUNT_TARGETS,
                 operations: READ_OPS,
@@ -970,6 +964,22 @@ impl crate::adapters::memory::MemoryAdapter for MemoryFixture {
     fn declaration(&self) -> crate::adapters::memory::MemoryDeclaration {
         MemoryFixture::declaration(self)
     }
+
+    fn directory(
+        &self,
+        scope: crate::native::adapter::Scope,
+        home: &Path,
+        project: Option<&Path>,
+    ) -> Result<std::path::PathBuf, String> {
+        match self.kind {
+            MemoryFixtureKind::UnresolvedDirectory => Err("记忆目录当前不可用".into()),
+            _ => Ok(match scope {
+                crate::native::adapter::Scope::Project => project.unwrap_or(home),
+                crate::native::adapter::Scope::Global => home,
+            }
+            .join("fixture-memory")),
+        }
+    }
 }
 
 impl crate::adapters::CliAdapter for MemoryFixture {
@@ -979,7 +989,7 @@ impl crate::adapters::CliAdapter for MemoryFixture {
             MemoryFixtureKind::GlobalReadOnly => "fixture_global_memory",
             MemoryFixtureKind::SessionsOnly => "fixture_sessions_only",
             MemoryFixtureKind::Unverified => "fixture_unverified_memory",
-            MemoryFixtureKind::MissingLocation => "fixture_memory_no_location",
+            MemoryFixtureKind::UnresolvedDirectory => "fixture_memory_unresolved",
             MemoryFixtureKind::MissingScope => "fixture_memory_no_scope",
             MemoryFixtureKind::MissingOperation => "fixture_memory_no_operation",
             MemoryFixtureKind::ReasonBlocksEntry => "fixture_memory_reason_blocks",
@@ -1066,7 +1076,7 @@ fn memory_stays_absent_without_a_verified_declaration() {
     static GLOBAL: MemoryFixture = MemoryFixture { kind: MemoryFixtureKind::GlobalReadOnly };
     static SESSIONS: MemoryFixture = MemoryFixture { kind: MemoryFixtureKind::SessionsOnly };
     static UNVERIFIED: MemoryFixture = MemoryFixture { kind: MemoryFixtureKind::Unverified };
-    static NO_LOCATION: MemoryFixture = MemoryFixture { kind: MemoryFixtureKind::MissingLocation };
+    static UNRESOLVED: MemoryFixture = MemoryFixture { kind: MemoryFixtureKind::UnresolvedDirectory };
     static NO_SCOPE: MemoryFixture = MemoryFixture { kind: MemoryFixtureKind::MissingScope };
     static NO_OPERATION: MemoryFixture = MemoryFixture { kind: MemoryFixtureKind::MissingOperation };
     static REASON_BLOCKS: MemoryFixture = MemoryFixture { kind: MemoryFixtureKind::ReasonBlocksEntry };
@@ -1075,7 +1085,7 @@ fn memory_stays_absent_without_a_verified_declaration() {
         &GLOBAL,
         &SESSIONS,
         &UNVERIFIED,
-        &NO_LOCATION,
+        &UNRESOLVED,
         &NO_SCOPE,
         &NO_OPERATION,
         &REASON_BLOCKS,
@@ -1107,10 +1117,26 @@ fn memory_stays_absent_without_a_verified_declaration() {
     assert!(project.limitation.is_empty());
     let project_port = fixtures.get("fixture_project_memory").unwrap().memory().unwrap().declaration();
     let global_port = fixtures.get("fixture_global_memory").unwrap().memory().unwrap().declaration();
-    assert_eq!(project_port.location, Some("fixture:project-memory"));
-    assert_eq!(global_port.location, Some("fixture:global-memory"));
     assert!(!project_port.binds_account);
     assert!(global_port.binds_account);
+    let home = Path::new("fixture-home");
+    let project = Path::new("fixture-project");
+    let resolved = fixtures
+        .get("fixture_project_memory")
+        .unwrap()
+        .memory()
+        .unwrap()
+        .directory(crate::native::adapter::Scope::Project, home, Some(project))
+        .unwrap();
+    assert_eq!(resolved, project.join("fixture-memory"));
+    let global_resolved = fixtures
+        .get("fixture_global_memory")
+        .unwrap()
+        .memory()
+        .unwrap()
+        .directory(crate::native::adapter::Scope::Global, home, None)
+        .unwrap();
+    assert_eq!(global_resolved, home.join("fixture-memory"));
 
     let sessions = fixtures.get("fixture_sessions_only").unwrap();
     assert!(sessions.history_supported());
@@ -1121,14 +1147,28 @@ fn memory_stays_absent_without_a_verified_declaration() {
     let unverified = fixtures.get("fixture_unverified_memory").unwrap();
     let declaration = unverified.memory().unwrap().declaration();
     assert_eq!(declaration.unverified_reason, "尚未核实独立记忆存储");
-    assert!(declaration.location.is_none());
+    assert!(!declaration.scope.declared());
+    assert!(declaration.operations.is_empty());
     assert!(unverified.descriptor().management.memory.is_none());
     let json = serde_json::to_value(unverified.descriptor()).unwrap();
     assert!(json["management"].get("memory").is_none());
     assert!(!json.to_string().contains("尚未核实"));
 
+    // A complete declaration still publishes; an unresolvable directory is a
+    // per-target runtime outcome reported by directory(), not a hidden entry.
+    let unresolved = fixtures.get("fixture_memory_unresolved").unwrap();
+    assert!(unresolved.memory().is_some(), "夹具仍有记忆端口");
+    assert!(unresolved.descriptor().management.memory.is_some(), "完整声明仍发布记忆入口");
+    assert_eq!(
+        unresolved
+            .memory()
+            .unwrap()
+            .directory(crate::native::adapter::Scope::Project, home, Some(project))
+            .unwrap_err(),
+        "记忆目录当前不可用"
+    );
+
     for id in [
-        "fixture_memory_no_location",
         "fixture_memory_no_scope",
         "fixture_memory_no_operation",
         "fixture_memory_reason_blocks",

@@ -1,9 +1,10 @@
 //! Shared memory operations.
 //!
-//! The registry memory port owns the storage identity, scope, target
-//! dimensions, and verified operations. This service lists and writes plain
-//! text at that relative location. It does not match CLI ids, and the native
-//! transaction callback does not insert library, account, or portable rows.
+//! The registry memory port resolves the storage directory and declares the
+//! scope, target dimensions, and verified operations. This service lists and
+//! writes plain text in that resolved directory. It does not match CLI ids,
+//! and the native transaction callback does not insert library, account, or
+//! portable rows.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -346,6 +347,9 @@ fn prepare(
     home: &Path,
     target: &MemoryTarget,
 ) -> Result<Prepared, String> {
+    if !home.is_absolute() {
+        return Err("用户目录必须是绝对路径".into());
+    }
     let adapter = registry
         .get(&target.tool_id)
         .ok_or("此 CLI 尚无注册适配器")?;
@@ -353,10 +357,11 @@ fn prepare(
     let declaration = port.declaration();
     let management =
         crate::adapters::memory::publish(&declaration).ok_or("此 CLI 的记忆尚未核实")?;
-    let location = relative_location(declaration.location)?;
-    let (scope, project, scope_root) = scope_root(&declaration, home, target)?;
+    let (scope, project) = checked_scope(&declaration, target)?;
     let (partition, guard) = partition(db, target, &declaration)?;
-    let mut directory = scope_root.join(location);
+    let mut directory = port
+        .directory(scope, home, project.as_deref())
+        .map_err(unavailable_directory)?;
     match &partition {
         Partition::Shared => {}
         Partition::Bound(id) => directory.push(id),
@@ -386,6 +391,15 @@ fn prepare(
         management,
         _guard: guard,
     })
+}
+
+fn unavailable_directory(reason: String) -> String {
+    let trimmed = reason.trim();
+    if trimmed.is_empty() {
+        "此 CLI 的记忆目录不可用".to_owned()
+    } else {
+        trimmed.to_owned()
+    }
 }
 
 fn partition(
@@ -419,39 +433,20 @@ fn partition(
     Ok((partition, Some(guard)))
 }
 
-fn scope_root(
+fn checked_scope(
     declaration: &MemoryDeclaration,
-    home: &Path,
     target: &MemoryTarget,
-) -> Result<(Scope, Option<PathBuf>, PathBuf), String> {
-    if !home.is_absolute() {
-        return Err("用户目录必须是绝对路径".into());
-    }
+) -> Result<(Scope, Option<PathBuf>), String> {
     match target.scope {
-        Scope::Global if declaration.scope.global => Ok((Scope::Global, None, home.to_path_buf())),
+        Scope::Global if declaration.scope.global => Ok((Scope::Global, None)),
         Scope::Project if declaration.scope.project => {
             let project = projects::checked_directory(
                 target.project_path.as_deref().ok_or("请选择项目目录")?,
             )?;
-            Ok((Scope::Project, Some(project.clone()), project))
+            Ok((Scope::Project, Some(project)))
         }
         _ => Err("此 CLI 的记忆不覆盖当前范围".into()),
     }
-}
-
-fn relative_location(location: Option<&str>) -> Result<PathBuf, String> {
-    let text = location.unwrap_or("").trim();
-    let path = Path::new(text);
-    let usable = !text.is_empty()
-        && !path.is_absolute()
-        && !text.contains(':')
-        && path
-            .components()
-            .all(|component| matches!(component, Component::Normal(_)));
-    if !usable {
-        return Err("记忆位置不是可用的相对路径".into());
-    }
-    Ok(path.to_path_buf())
 }
 
 fn excluded_paths(

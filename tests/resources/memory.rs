@@ -98,7 +98,6 @@ impl MemoryCli {
 
     fn declared(&self) -> MemoryDeclaration {
         MemoryDeclaration {
-            location: Some(self.location),
             scope: MemoryScope {
                 global: self.global,
                 project: self.project,
@@ -125,6 +124,15 @@ impl MemoryCli {
 impl crate::adapters::memory::MemoryAdapter for MemoryCli {
     fn declaration(&self) -> MemoryDeclaration {
         self.declared()
+    }
+
+    fn directory(
+        &self,
+        scope: Scope,
+        home: &Path,
+        project: Option<&Path>,
+    ) -> Result<PathBuf, String> {
+        Ok(self.base(scope, home, project).join(self.location))
     }
 }
 
