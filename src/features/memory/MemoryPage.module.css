@@ -1,0 +1,30 @@
+.page { display: grid; gap: 16px; min-width: 0; }
+.toolbar { display: flex; flex-wrap: wrap; align-items: end; gap: 12px 16px; min-width: 0; }
+.field { display: grid; gap: 6px; min-width: 0; color: var(--text-2); font-size: var(--fs-caption); font-weight: var(--fw-medium); }
+.field select, .field input, .editor textarea { width: 100%; min-width: 0; }
+.field select { max-width: 360px; }
+.scopes { display: inline-flex; flex-wrap: wrap; gap: 3px; padding: 4px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: color-mix(in srgb, var(--surface-2) 82%, transparent); }
+.scopes button { padding: 6px 14px; border: 0; border-radius: var(--radius); background: none; color: var(--text-2); font-size: var(--fs-control); font-weight: var(--fw-medium); }
+.scopes button[aria-pressed="true"] { background: var(--surface); color: var(--text); font-weight: var(--fw-semibold); box-shadow: var(--shadow-xs), inset 0 0 0 1px var(--line); }
+.tabs { margin-bottom: 0; max-width: 100%; }
+.target { color: var(--text-2); font-size: var(--fs-body); overflow-wrap: anywhere; }
+.limitation, .prompt { color: var(--text); font-size: var(--fs-body); overflow-wrap: anywhere; }
+.list { display: grid; gap: 8px; min-width: 0; margin: 0; padding: 0; list-style: none; }
+.entry {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+.entry strong { min-width: 0; overflow-wrap: anywhere; }
+.path { flex: 1 1 160px; min-width: 0; overflow: hidden; color: var(--text-3); font-size: var(--fs-caption); text-overflow: ellipsis; white-space: nowrap; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+.editor, .create { display: grid; gap: 10px; min-width: 0; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: color-mix(in srgb, var(--surface) 88%, var(--surface-2)); }
+.editor textarea { min-height: 180px; }
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.switch { display: inline-flex; align-items: center; gap: 8px; color: var(--text); font-size: var(--fs-body); }
