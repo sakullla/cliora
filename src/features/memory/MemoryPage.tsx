@@ -393,11 +393,17 @@ export function MemoryPage({ active, tools, suggestedProjectPath }: { active: bo
 
   if (!descriptor || !memory) return null;
   const selectedProject = projects.find(project => project.path && project.path === choice?.projectPath);
-  const targetText = !choice || choice.scope === 'global'
+  const scopeText = !choice || choice.scope === 'global'
     ? t('common.memory.targetGlobal')
     : choice.projectPath
       ? t('common.memory.targetProject', { name: selectedProject?.name || choice.projectPath })
       : t('common.memory.projectPlaceholder');
+  const accountName = needsAccount && choice?.contextId
+    ? accounts.find(account => account.context?.id === choice.contextId)?.label.trim() ?? ''
+    : '';
+  const targetText = accountName
+    ? t('common.memory.targetWithAccount', { target: scopeText, account: accountName })
+    : scopeText;
   const missingProject = choice?.scope === 'project' && !choice.projectPath;
 
   return <section className={styles.page} aria-label={t('common.nav.memory')}>

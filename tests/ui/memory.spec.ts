@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 
-type MemoryCall = { command: string; args: { target?: { toolId?: string; scope?: string; projectPath?: string | null; contextId?: string | null }; request?: { target?: { toolId?: string; scope?: string; projectPath?: string | null }; id?: string; text?: string; baseline?: string; confirmExternal?: boolean }; id?: string } };
+type MemoryCall = { command: string; args: { target?: { toolId?: string; scope?: string; projectPath?: string | null; contextId?: string | null }; request?: { target?: { toolId?: string; scope?: string; projectPath?: string | null; contextId?: string | null }; id?: string; text?: string; baseline?: string; confirmExternal?: boolean }; id?: string } };
 
 const readOnlyLimitation = '只读存储，不能新建、编辑、删除或启停';
 
@@ -8,10 +8,11 @@ function memoryCalls(page: Page) {
   return page.evaluate(() => (window as unknown as { __memory: { calls: MemoryCall[] } }).__memory.calls);
 }
 
-async function install(page: Page, options: { catalog?: 'none' | 'session' | 'memory'; suggestion?: string | null; mode?: string } = {}) {
+async function install(page: Page, options: { catalog?: 'none' | 'session' | 'memory'; suggestion?: string | null; mode?: string; accounts?: boolean } = {}) {
   const catalog = options.catalog ?? 'memory';
   const suggestion = options.suggestion === undefined ? 'C:/A' : options.suggestion;
-  await page.addInitScript(({ catalog: kind, suggestion: suggested, mode }) => {
+  const accounts = options.accounts === true;
+  await page.addInitScript(({ catalog: kind, suggestion: suggested, mode, accounts: accountTarget }) => {
     const state = {
       mode,
       reads: 0,
@@ -38,7 +39,7 @@ async function install(page: Page, options: { catalog?: 'none' | 'session' | 'me
       : kind === 'session'
         ? [base('gamma', 'Gamma')]
         : [
-          base('alpha', 'Alpha', { scope: { global: true, project: true }, targets: ['project'], operations: full }),
+          base('alpha', 'Alpha', { scope: { global: true, project: true }, targets: accountTarget ? ['project', 'account'] : ['project'], operations: full }),
           base('beta', 'Beta', { scope: { global: true, project: false }, targets: [], operations: ['list', 'open'], limitation: '只读存储，不能新建、编辑、删除或启停' }),
           base('gamma', 'Gamma'),
         ];
@@ -49,7 +50,7 @@ async function install(page: Page, options: { catalog?: 'none' | 'session' | 'me
       { id: 'gone', name: '缺失', path: 'C:/Gone', available: false, preferredTool: null, lastOpened: 1, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {} },
     ];
     const workspace = () => ({
-      effectiveContextId: null,
+      effectiveContextId: accountTarget ? 'ctx-applied' : null,
       probe: { selectedPath: null, installations: [], nativeFiles: [], nativeWrites: { state: 'unknown', reason: '' }, interfaceFormats: [], installUrl: '', upgradeHint: '', dependencies: [], installCommand: null, upgradeCommand: null, providerPresets: [] },
       profiles: [], binding: null, snapshots: [], recoveryNeeded: [], common: null, customPath: null,
     });
@@ -73,6 +74,10 @@ async function install(page: Page, options: { catalog?: 'none' | 'session' | 'me
           if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ids, theme: 'system', tool_icons: {} }, tools: registered.map(item => ({ id: item.id, name: item.name })) };
           if (command === 'list_cli_adapters') return { registered, managedIds: ids, preservedUnknown: [] };
           if (command === 'list_projects') return projects;
+          if (command === 'list_accounts') return accountTarget ? [
+            { id: 'applied', toolId: 'alpha', label: '配置账号', context: { id: 'ctx-applied' } },
+            { id: 'work', toolId: 'alpha', label: '工作账号', context: { id: 'ctx-work' } },
+          ] : [];
           if (command === 'get_launch_settings') return { selected: 'auto', terminals: [{ id: 'auto', label: '系统默认', available: true }], cliMode: 'normal', projectMode: 'normal' };
           if (command === 'get_registered_tool_workspace' || command === 'get_registered_tool_context') return workspace();
           if (command === 'get_tray_status') return { available: false, error: null };
@@ -108,7 +113,7 @@ async function install(page: Page, options: { catalog?: 'none' | 'session' | 'me
         },
       },
     });
-  }, { catalog, suggestion, mode: options.mode ?? 'normal' });
+  }, { catalog, suggestion, mode: options.mode ?? 'normal', accounts });
 }
 
 async function openMemory(page: Page) {
@@ -345,4 +350,62 @@ test('a master switch that is off still lists and opens memory', async ({ page }
   await expect(page.getByRole('button', { name: '打开 a-note' })).toBeVisible();
   await page.getByRole('button', { name: '打开 a-note' }).click();
   await expect(page.getByRole('textbox', { name: '记忆正文' })).toHaveValue('from-a');
+});
+
+test('a selected account is named in the current target, and 不指定账号 stays off list and save', async ({ page }) => {
+  await install(page, { suggestion: 'C:/A', accounts: true });
+  await openMemory(page);
+  const stored = JSON.stringify({ alpha: { scope: 'project', projectPath: 'C:/A', resource: 'config' } });
+  await expect(page.getByRole('option', { name: '配置账号' })).toBeAttached();
+  await expect(page.getByRole('option', { name: '工作账号' })).toBeAttached();
+  await expect(page.getByRole('combobox', { name: '记忆账号' })).toHaveValue('');
+  await expect(page.getByText('当前记忆目标：项目 · 栖点 A', { exact: true })).toBeVisible();
+  const initialLists = (await memoryCalls(page)).filter(call => call.command === 'list_memories');
+  expect(initialLists.length).toBeGreaterThan(0);
+  expect(initialLists.every(call => !call.args.target || !('contextId' in call.args.target))).toBe(true);
+
+  await page.getByRole('combobox', { name: '记忆账号' }).selectOption({ label: '工作账号' });
+  await expect(page.getByText('当前记忆目标：项目 · 栖点 A · 工作账号', { exact: true })).toBeVisible();
+  await expect(page.getByText('当前记忆目标：项目 · 栖点 A', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: '全局', exact: true }).click();
+  await expect(page.getByText('当前记忆目标：全局 · 工作账号', { exact: true })).toBeVisible();
+  await expect.poll(async () => (await memoryCalls(page)).some(call => call.command === 'list_memories' && call.args.target?.scope === 'global' && call.args.target?.projectPath == null && call.args.target?.contextId === 'ctx-work')).toBe(true);
+  await page.getByRole('button', { name: '项目', exact: true }).click();
+  await expect(page.getByText('当前记忆目标：项目 · 栖点 A · 工作账号', { exact: true })).toBeVisible();
+  await expect(page.getByRole('combobox', { name: '记忆项目' })).toHaveValue('C:/A');
+  await expect.poll(async () => (await memoryCalls(page)).some(call => call.command === 'list_memories' && call.args.target?.scope === 'project' && call.args.target?.projectPath === 'C:/A' && call.args.target?.contextId === 'ctx-work')).toBe(true);
+
+  await expect(page.getByRole('button', { name: '打开 a-note' })).toBeVisible();
+  await page.getByRole('button', { name: '打开 a-note' }).click();
+  await expect(page.getByRole('textbox', { name: '记忆正文' })).toHaveValue('from-a');
+  await page.getByRole('textbox', { name: '记忆正文' }).fill('edited-bound');
+  await page.getByRole('button', { name: '保存记忆' }).click();
+  await expect.poll(async () => {
+    const calls = await memoryCalls(page);
+    const saveAt = calls.findIndex(call => call.command === 'save_memory' && call.args.request?.text === 'edited-bound' && call.args.request?.target?.contextId === 'ctx-work' && call.args.request?.target?.projectPath === 'C:/A');
+    return saveAt >= 0 && calls.slice(saveAt + 1).some(call => call.command === 'list_memories' && call.args.target?.contextId === 'ctx-work');
+  }).toBe(true);
+
+  const beforeClear = (await memoryCalls(page)).length;
+  await page.getByRole('combobox', { name: '记忆账号' }).selectOption({ label: '不指定账号' });
+  await expect(page.getByRole('combobox', { name: '记忆账号' })).toHaveValue('');
+  await expect(page.getByText('当前记忆目标：项目 · 栖点 A', { exact: true })).toBeVisible();
+  await expect(page.getByText(/当前记忆目标：.*(工作账号|配置账号)/)).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '打开 a-note' })).toBeVisible();
+
+  await page.getByRole('button', { name: '打开 a-note' }).click();
+  await page.getByRole('textbox', { name: '记忆正文' }).fill('edited-unbound');
+  await page.getByRole('button', { name: '保存记忆' }).click();
+  await expect.poll(async () => {
+    const calls = (await memoryCalls(page)).slice(beforeClear);
+    const saveAt = calls.findIndex(call => call.command === 'save_memory' && call.args.request?.text === 'edited-unbound');
+    return saveAt >= 0 && calls.slice(saveAt + 1).some(call => call.command === 'list_memories');
+  }).toBe(true);
+  const cleared = (await memoryCalls(page)).slice(beforeClear).filter(call => call.command === 'list_memories' || call.command === 'save_memory');
+  expect(cleared.length).toBeGreaterThan(0);
+  expect(cleared.every(call => {
+    const target = call.command === 'save_memory' ? call.args.request?.target : call.args.target;
+    return !!target && !('contextId' in target) && target.projectPath === 'C:/A';
+  })).toBe(true);
+  expect(await page.evaluate(() => localStorage.getItem('cliora:workspace-context'))).toBe(stored);
 });
