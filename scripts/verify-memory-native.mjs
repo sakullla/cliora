@@ -43,7 +43,8 @@ fn target(request:&Value)->MemoryTarget{MemoryTarget{
     tool_id:request["tool"].as_str().unwrap_or_default().to_owned(),
     scope:parse_scope(request["scope"].as_str().unwrap_or("project")),
     project_path:request["project"].as_str().map(str::to_owned),
-    context_id:None}}
+    context_id:None,
+    store_directory:None}}
 fn run()->Result<Value,String>{
     let args:Vec<String>=std::env::args().collect();
     let registry=Registry::builtins();
@@ -206,6 +207,23 @@ class Engine {
   }
 }
 
+// Model echoes and terminal captures may interleave zero-width/bidi control
+// characters and homoglyph substitutions; marker assertions must not fail on
+// invisible noise or Cyrillic/full-width lookalikes of Latin letters.
+const CONFUSABLES = {
+  'А': 'A', 'а': 'A', 'В': 'B', 'в': 'B', 'Е': 'E', 'е': 'E',
+  'К': 'K', 'к': 'K', 'М': 'M', 'м': 'M', 'Н': 'H', 'н': 'H',
+  'О': 'O', 'о': 'O', 'Р': 'P', 'р': 'P', 'С': 'C', 'с': 'C',
+  'Т': 'T', 'т': 'T', 'У': 'Y', 'у': 'Y', 'Х': 'X', 'х': 'X',
+  'І': 'I', 'і': 'I', 'Ａ': 'A', 'Ｄ': 'D', 'Ｅ': 'E', 'Ｌ': 'L',
+  'Ｉ': 'I', 'Ｏ': 'O', 'Ｒ': 'R', 'Ｖ': 'V', 'Ｙ': 'Y',
+};
+function visible(text) {
+  return text
+    .replace(/[​-‏‪-‮⁠-⁤⁦-⁩﻿­]/g, '')
+    .replace(/[АаВвЕеКкМмНнОоРрСсТтУуХхІіＡＤＥＩＬＯＲＶＹ]/g, ch => CONFUSABLES[ch] ?? ch);
+}
+
 function check(record, name, passed, detail) {
   record.checks.push({ name, passed: passed === true, detail });
   return passed === true;
@@ -238,7 +256,7 @@ async function probeClaude(engine, marker, temporary, context) {
     const stdin = path.join(temporary, `claude-prompt-${Math.random().toString(16).slice(2)}.txt`);
     await fs.writeFile(stdin, prompt);
     const result = await run(runner.command, runner.wrap(['-p']), { cwd: project, stdinPath: stdin, timeout: 240_000 });
-    const answer = result.stdout.trim();
+    const answer = visible(result.stdout.trim());
     // Liveness gate: a session killed by timeout (signal set, empty stdout)
     // must not satisfy the negative expectation vacuously.
     const live = result.exitCode === 0 && !result.signal && answer.length > 0;
@@ -297,7 +315,7 @@ async function probeCodex(engine, marker, temporary, context) {
     const stdin = path.join(temporary, `codex-prompt-${Math.random().toString(16).slice(2)}.txt`);
     await fs.writeFile(stdin, prompt);
     const result = await run(runner.command, runner.wrap(['exec', '--skip-git-repo-check', ...extraArgs]), { cwd: project, env, stdinPath: stdin, timeout: 360_000 });
-    return (result.stdout + result.stderr).trim();
+    return visible((result.stdout + result.stderr).trim());
   };
   try {
     const features = async () => {
