@@ -1,37 +1,41 @@
 import { expect, test, type Page } from '@playwright/test';
 
-type MemoryCall = { command: string; args: { target?: { toolId?: string; scope?: string; projectPath?: string | null; contextId?: string | null }; request?: { target?: { toolId?: string; scope?: string; projectPath?: string | null; contextId?: string | null }; id?: string; text?: string; baseline?: string; confirmExternal?: boolean }; id?: string } };
+type MemoryCall = { command: string; args: { toolId?: string; target?: { toolId?: string; scope?: string; projectPath?: string | null; contextId?: string | null; storeDirectory?: string }; request?: { target?: { toolId?: string; scope?: string; projectPath?: string | null; contextId?: string | null; storeDirectory?: string }; id?: string | null; text?: string; baseline?: string; confirmExternal?: boolean; enabled?: boolean }; id?: string } };
 
 const readOnlyLimitation = '只读存储，不能新建、编辑、删除或启停';
+
+const alphaGlobalStore = 'C:/home/.alpha/memory';
+const alphaAStore = 'C:/home/.alpha/projects/a';
+const alphaBStore = 'C:/home/.alpha/projects/b';
+const betaStore = 'C:/home/.beta/memory';
 
 function memoryCalls(page: Page) {
   return page.evaluate(() => (window as unknown as { __memory: { calls: MemoryCall[] } }).__memory.calls);
 }
 
-async function install(page: Page, options: { catalog?: 'none' | 'session' | 'memory'; suggestion?: string | null; mode?: string; accounts?: boolean } = {}) {
+async function install(page: Page, options: { catalog?: 'none' | 'session' | 'memory'; suggestion?: string | null; mode?: string } = {}) {
   const catalog = options.catalog ?? 'memory';
   const suggestion = options.suggestion === undefined ? 'C:/A' : options.suggestion;
-  const accounts = options.accounts === true;
-  await page.addInitScript(({ catalog: kind, suggestion: suggested, mode, accounts: accountTarget }) => {
+  const storePaths = { alphaGlobal: alphaGlobalStore, alphaA: alphaAStore, alphaB: alphaBStore, beta: betaStore };
+  await page.addInitScript(({ catalog: kind, suggestion: suggested, mode, stores }) => {
     const state = {
       mode,
       reads: 0,
       deleted: [] as string[],
-      texts: { 'a-note': 'from-a', 'b-note': 'from-b', 'beta-note': 'from-beta', 'global-note': 'from-global', 'custom-note': 'from-custom' } as Record<string, string>,
-      picked: null as string | null,
-      unavailable: null as string | null,
+      texts: { 'a-note': 'from-a', 'b-note': 'from-b', 'beta-note': 'from-beta', 'global-note': 'from-global' } as Record<string, string>,
       fingerprints: {} as Record<string, string>,
+      failSource: null as string | null,
       calls: [] as MemoryCall[],
     };
     (window as unknown as { __memory: typeof state }).__memory = state;
-    if (suggested) localStorage.setItem('cliora:workspace-context', JSON.stringify({ alpha: { scope: 'project', projectPath: suggested, resource: 'config' } }));
+    // The suggestion is the stored workspace context of the project-only CLI (delta).
+    if (suggested) localStorage.setItem('cliora:workspace-context', JSON.stringify({ delta: { scope: 'project', projectPath: suggested, resource: 'config' } }));
     else localStorage.removeItem('cliora:workspace-context');
     const full = ['list', 'open', 'create', 'edit', 'delete', 'master_switch', 'item_enable'];
-    const facet = (history: 'planned' | 'available') => ({ state: history, reason: history === 'available' ? '仅有会话日志' : '' });
     const base = (id: string, name: string, memory?: unknown) => ({
       id, name, interfaceFormats: [], projectModelOverride: false, yoloAvailable: false, launchForm: 'terminal',
       nativeConfig: { state: 'available', reason: '' }, launch: { state: 'planned', reason: '' }, resume: { state: 'planned', reason: '' },
-      resources: { state: 'planned', reason: '' }, history: facet(id === 'gamma' ? 'available' : 'planned'),
+      resources: { state: 'planned', reason: '' }, history: { state: 'planned', reason: '' },
       management: { accounts: false, mcp: false, skills: false, agents: false, plugins: false, projectPlugins: false, ...(memory ? { memory } : {}) },
     });
     const registered = kind === 'none'
@@ -39,32 +43,30 @@ async function install(page: Page, options: { catalog?: 'none' | 'session' | 'me
       : kind === 'session'
         ? [base('gamma', 'Gamma')]
         : [
-          base('alpha', 'Alpha', { scope: { global: true, project: true }, targets: accountTarget ? ['project', 'account'] : ['project'], operations: full }),
+          base('alpha', 'Alpha', { scope: { global: true, project: true }, targets: ['project'], operations: full }),
           base('beta', 'Beta', { scope: { global: true, project: false }, targets: [], operations: ['list', 'open'], limitation: '只读存储，不能新建、编辑、删除或启停' }),
           base('gamma', 'Gamma'),
+          base('delta', 'Delta', { scope: { global: false, project: true }, targets: ['project'], operations: full }),
         ];
     const ids = registered.map(item => item.id);
-    const projects = [
-      { id: 'a', name: '栖点 A', path: 'C:/A', available: true, preferredTool: 'alpha', lastOpened: 3, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {} },
-      { id: 'b', name: '栖点 B', path: 'C:/B', available: true, preferredTool: 'alpha', lastOpened: 2, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {} },
-      { id: 'gone', name: '缺失', path: 'C:/Gone', available: false, preferredTool: null, lastOpened: 1, modelOverrides: {}, selectedProfiles: {}, appliedProfiles: {}, reapplyProfiles: {} },
-    ];
     const workspace = () => ({
-      effectiveContextId: accountTarget ? 'ctx-applied' : null,
+      effectiveContextId: null,
       probe: { selectedPath: null, installations: [], nativeFiles: [], nativeWrites: { state: 'unknown', reason: '' }, interfaceFormats: [], installUrl: '', upgradeHint: '', dependencies: [], installCommand: null, upgradeCommand: null, providerPresets: [] },
       profiles: [], binding: null, snapshots: [], recoveryNeeded: [], common: null, customPath: null,
     });
-    const listFor = (target: { toolId?: string; scope?: string; projectPath?: string | null }) => {
-      if (target.toolId === 'beta') return { inUse: true, detail: '', operations: ['list', 'open'], limitation: '只读存储，不能新建、编辑、删除或启停', entries: [{ id: 'beta-note', path: 'beta.md', enabled: true, fingerprint: 'fp-beta' }] };
-      const entries = (target.scope === 'global'
-        ? [{ id: 'global-note', path: 'global.md', enabled: true, fingerprint: 'fp-global' }]
-        : target.projectPath === 'C:/B'
-          ? [{ id: 'b-note', path: 'b.md', enabled: true, fingerprint: 'fp-b' }]
-          : target.projectPath === 'C:/custom'
-            ? [{ id: 'custom-note', path: 'custom.md', enabled: true, fingerprint: 'fp-custom' }]
-            : [{ id: 'a-note', path: 'a.md', enabled: true, fingerprint: 'fp-a' }]).filter(entry => !state.deleted.includes(entry.id));
-      const inUse = state.mode !== 'master-off';
-      return { inUse, detail: inUse ? '' : '记忆当前未使用', operations: full, limitation: '', entries };
+    const entry = (id: string, store: string, sourceLabel: string, target: Record<string, unknown>) => ({
+      id, path: `${store}/${id}.md`, enabled: true, fingerprint: `fp-${id}`, sourceLabel, target, inUse: state.mode !== 'master-off', detail: state.mode === 'master-off' ? '记忆当前未使用' : '',
+    });
+    const aggregateFor = (toolId: string) => {
+      if (toolId === 'beta') return { toolId, failedSources: [], entries: [entry('beta-note', stores.beta, '全局', { toolId: 'beta', scope: 'global', projectPath: null, storeDirectory: stores.beta })] };
+      if (toolId !== 'alpha') return { toolId, failedSources: [], entries: [] };
+      const entries = [
+        entry('global-note', stores.alphaGlobal, '全局', { toolId: 'alpha', scope: 'global', projectPath: null, storeDirectory: stores.alphaGlobal }),
+        entry('a-note', stores.alphaA, '项目 · 栖点 A', { toolId: 'alpha', scope: 'project', projectPath: 'C:/A', storeDirectory: stores.alphaA }),
+        entry('b-note', stores.alphaB, '项目 · 栖点 B', { toolId: 'alpha', scope: 'project', projectPath: 'C:/B', storeDirectory: stores.alphaB }),
+      ].filter(item => !state.deleted.includes(item.id));
+      const failedSources = state.failSource ? [{ label: state.failSource, reason: '项目目录不存在或无法访问' }] : [];
+      return { toolId, entries, failedSources };
     };
     Object.assign(window, {
       isTauri: true,
@@ -73,18 +75,11 @@ async function install(page: Page, options: { catalog?: 'none' | 'session' | 'me
           state.calls.push({ command, args });
           if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ids, theme: 'system', tool_icons: {} }, tools: registered.map(item => ({ id: item.id, name: item.name })) };
           if (command === 'list_cli_adapters') return { registered, managedIds: ids, preservedUnknown: [] };
-          if (command === 'list_projects') return projects;
-          if (command === 'list_accounts') return accountTarget ? [
-            { id: 'applied', toolId: 'alpha', label: '配置账号', context: { id: 'ctx-applied' } },
-            { id: 'work', toolId: 'alpha', label: '工作账号', context: { id: 'ctx-work' } },
-          ] : [];
+          if (command === 'list_projects') return [];
           if (command === 'get_launch_settings') return { selected: 'auto', terminals: [{ id: 'auto', label: '系统默认', available: true }], cliMode: 'normal', projectMode: 'normal' };
           if (command === 'get_registered_tool_workspace' || command === 'get_registered_tool_context') return workspace();
           if (command === 'get_tray_status') return { available: false, error: null };
-          if (command === 'list_memories') {
-            if (state.unavailable && args.target?.projectPath === state.unavailable) throw new Error('项目目录不存在或无法访问，请重新关联目录');
-            return listFor(args.target ?? {});
-          }
+          if (command === 'list_all_memories') return aggregateFor(args.toolId ?? '');
           if (command === 'read_memory') {
             state.reads += 1;
             if (state.mode === 'read-fail') throw new Error('无法读取记忆，请重试');
@@ -106,116 +101,120 @@ async function install(page: Page, options: { catalog?: 'none' | 'session' | 'me
             if (args.request?.id) state.deleted.push(args.request.id);
             return null;
           }
-          if (command === 'set_memory_enabled') return listFor(args.request?.target ?? {});
-          if (command === 'plugin:dialog|open') return state.picked;
+          if (command === 'set_memory_enabled') return null;
           if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return () => {};
           return null;
         },
       },
     });
-  }, { catalog, suggestion, mode: options.mode ?? 'normal', accounts });
+  }, { catalog, suggestion, mode: options.mode ?? 'normal', stores: storePaths });
 }
 
-async function openMemory(page: Page) {
+async function openWorkspace(page: Page) {
   await page.goto('/');
   await expect(page.getByText('正在读取本机设置')).toBeHidden();
-  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记忆', exact: true }).click();
-  await expect(page.getByRole('heading', { level: 1, name: '记忆' })).toBeVisible();
-  await expect(page.getByRole('tab', { name: 'Alpha' })).toBeVisible();
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await expect(page.getByRole('heading', { name: '工具与连接' })).toBeVisible();
 }
 
-test('memory stays out of navigation when no managed CLI declares it', async ({ page }) => {
+async function openMemory(page: Page, tool = 'Alpha') {
+  await openWorkspace(page);
+  if (tool !== 'Alpha') await page.getByRole('tab', { name: tool, exact: true }).click();
+  await page.getByRole('tab', { name: '记忆', exact: true }).click();
+  await expect(page.getByRole('region', { name: '记忆' })).toBeVisible();
+}
+
+test('the memory tab stays out of the workspace and navigation when no CLI declares it', async ({ page }) => {
   await install(page, { catalog: 'none', suggestion: null });
-  await page.goto('/');
-  await expect(page.getByText('正在读取本机设置')).toBeHidden();
+  await openWorkspace(page);
+  await expect(page.getByRole('tab', { name: '记忆', exact: true })).toHaveCount(0);
   await expect(page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记忆', exact: true })).toHaveCount(0);
 });
 
-test('a session-only CLI does not get a memory entry', async ({ page }) => {
+test('a session-only CLI does not get a memory tab', async ({ page }) => {
   await install(page, { catalog: 'session', suggestion: null });
-  await page.goto('/');
-  await expect(page.getByText('正在读取本机设置')).toBeHidden();
-  await expect(page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '记忆', exact: true })).toHaveCount(0);
+  await openWorkspace(page);
+  await expect(page.getByRole('tab', { name: '记忆', exact: true })).toHaveCount(0);
 });
 
-test('each memory CLI keeps its own scope and target, and read-only storage hides writes', async ({ page }) => {
-  await install(page, { suggestion: 'C:/A' });
+test('the memory tab aggregates stores with source labels and no target selectors', async ({ page }) => {
+  await install(page);
   await openMemory(page);
-  await expect(page.getByRole('tab', { name: 'Gamma' })).toHaveCount(0);
-  await expect(page.getByRole('tab', { name: 'Beta' })).toBeVisible();
-  await expect(page.getByText('当前记忆目标：项目 · 栖点 A')).toBeVisible();
-  await expect(page.getByRole('button', { name: '全局', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '项目', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  const region = page.getByRole('region', { name: '记忆' });
+  await expect(page.getByRole('button', { name: '打开 global-note' })).toBeVisible();
+  await expect(page.getByText('来源：全局').first()).toBeVisible();
   await expect(page.getByRole('button', { name: '打开 a-note' })).toBeVisible();
-  await expect(page.getByRole('button', { name: '新建记忆' })).toBeVisible();
-  await expect(page.getByRole('checkbox', { name: '记忆总开关' })).toBeVisible();
+  await expect(page.getByText('来源：项目 · 栖点 A')).toBeVisible();
+  await expect(page.getByRole('button', { name: '打开 b-note' })).toBeVisible();
+  await expect(page.getByText('来源：项目 · 栖点 B')).toBeVisible();
+  // No scope switch, project dropdown, or account selector on this tab.
+  await expect(region.getByRole('combobox')).toHaveCount(0);
+  await expect(region.getByRole('button', { name: '全局', exact: true })).toHaveCount(0);
+  await expect(region.getByRole('button', { name: '项目', exact: true })).toHaveCount(0);
+  await expect(region.getByText(/账号/)).toHaveCount(0);
+  expect((await memoryCalls(page)).filter(call => call.command === 'list_all_memories').every(call => call.args.toolId === 'alpha')).toBe(true);
 
-  await page.getByRole('tab', { name: 'Beta' }).click();
-  await expect(page.getByText('当前记忆目标：全局')).toBeVisible();
-  await expect(page.getByRole('button', { name: '项目', exact: true })).toHaveCount(0);
+  // A CLI without a verified memory declaration never offers the tab.
+  await page.getByRole('tab', { name: 'Gamma', exact: true }).click();
+  await expect(page.getByRole('tab', { name: '记忆', exact: true })).toHaveCount(0);
+
+  // A read-only CLI lists and opens but hides every write control.
+  await page.getByRole('tab', { name: 'Beta', exact: true }).click();
+  await page.getByRole('tab', { name: '记忆', exact: true }).click();
   await expect(page.getByText(readOnlyLimitation)).toBeVisible();
   await expect(page.getByRole('button', { name: '新建记忆' })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: '保存记忆' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: /删除/ })).toHaveCount(0);
-  await expect(page.getByRole('checkbox', { name: '记忆总开关' })).toHaveCount(0);
-  await expect(page.getByRole('checkbox', { name: /启用/ })).toHaveCount(0);
+  await expect(page.getByRole('checkbox', { name: /记忆总开关|启用/ })).toHaveCount(0);
   await page.getByRole('button', { name: '打开 beta-note' }).click();
-  await expect(page.getByRole('textbox', { name: '记忆正文' })).toHaveAttribute('readonly', '');
-  await expect(page.getByRole('textbox', { name: '记忆正文' })).toHaveValue('from-beta');
+  const body = page.getByRole('textbox', { name: '记忆正文' });
+  await expect(body).toHaveAttribute('readonly', '');
+  await expect(body).toHaveValue('from-beta');
+  await expect(page.getByRole('button', { name: '保存记忆' })).toHaveCount(0);
+});
 
-  await page.getByRole('tab', { name: 'Alpha' }).click();
-  await expect(page.getByText('当前记忆目标：项目 · 栖点 A')).toBeVisible();
-  const beforeGone = (await memoryCalls(page)).filter(call => call.command === 'list_memories').length;
-  await page.getByRole('combobox', { name: '记忆项目' }).evaluate((element, value) => {
-    const select = element as HTMLSelectElement;
-    select.value = value;
-    select.dispatchEvent(new Event('change', { bubbles: true }));
-  }, 'C:/Gone');
-  await expect(page.getByText('目标目录不可用，请重新选择。已保留原来的记忆目标。')).toBeVisible();
-  await expect(page.getByRole('combobox', { name: '记忆项目' })).toHaveValue('C:/A');
+test('a failed source is noted inline and does not block the other stores', async ({ page }) => {
+  await install(page);
+  await openMemory(page);
+  await page.evaluate(() => { (window as unknown as { __memory: { failSource: string } }).__memory.failSource = '项目 · 缺失'; });
+  await page.getByRole('checkbox', { name: '全局 · 记忆总开关' }).click();
+  await expect(page.getByText('来源「项目 · 缺失」暂时无法读取：项目目录不存在或无法访问。其余来源不受影响。')).toBeVisible();
   await expect(page.getByRole('button', { name: '打开 a-note' })).toBeVisible();
-  await expect.poll(async () => (await memoryCalls(page)).filter(call => call.command === 'list_memories' && call.args.target?.projectPath === 'C:/Gone').length).toBe(0);
-  expect((await memoryCalls(page)).filter(call => call.command === 'list_memories').length).toBe(beforeGone);
-
-  await page.getByRole('combobox', { name: '记忆项目' }).selectOption('C:/B');
-  await expect(page.getByText('当前记忆目标：项目 · 栖点 B')).toBeVisible();
   await expect(page.getByRole('button', { name: '打开 b-note' })).toBeVisible();
-  await page.getByRole('button', { name: '打开 b-note' }).click();
-  await page.getByRole('textbox', { name: '记忆正文' }).fill('edited-b');
+  await expect(page.getByRole('button', { name: '打开 global-note' })).toBeVisible();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+});
+
+test('an empty aggregate explains the empty state', async ({ page }) => {
+  await install(page, { suggestion: null });
+  await openMemory(page, 'Delta');
+  await expect(page.getByText('本机还没有已落盘的记忆条目。对应 CLI 产生记忆后会出现在这里。')).toBeVisible();
+  await expect(page.getByRole('button', { name: /打开/ })).toHaveCount(0);
+});
+
+test('open, edit, and save carry the entry target and only affect that store', async ({ page }) => {
+  await install(page);
+  await openMemory(page);
+  await page.getByRole('button', { name: '打开 a-note' }).click();
+  const body = page.getByRole('textbox', { name: '记忆正文' });
+  await expect(body).toHaveValue('from-a');
+  await body.fill('edited-a');
   await page.getByRole('button', { name: '保存记忆' }).click();
   await expect.poll(async () => (await memoryCalls(page)).filter(call => call.command === 'save_memory').length).toBe(1);
   const saved = (await memoryCalls(page)).filter(call => call.command === 'save_memory');
-  expect(saved[0].args.request).toMatchObject({ id: 'b-note', text: 'edited-b', baseline: 'from-b', confirmExternal: false, target: { toolId: 'alpha', scope: 'project', projectPath: 'C:/B' } });
-  const listed = (await memoryCalls(page)).filter(call => call.command === 'list_memories');
-  const switched = listed.findIndex(call => call.args.target?.projectPath === 'C:/B');
-  expect(switched).toBeGreaterThanOrEqual(0);
-  expect(listed.slice(switched).every(call => call.args.target?.toolId === 'alpha' && call.args.target?.projectPath === 'C:/B')).toBe(true);
-  expect((await memoryCalls(page)).some(call => ['save_configuration_draft', 'begin_configuration_draft', 'update_configuration_draft', 'apply_registered_native_profile', 'apply_common_configuration', 'reapply_account_profile'].includes(call.command))).toBe(false);
-  expect(await page.evaluate(() => localStorage.getItem('cliora:workspace-context'))).toBe(JSON.stringify({ alpha: { scope: 'project', projectPath: 'C:/A', resource: 'config' } }));
-});
-
-test('project memory without a target asks for one, and global memory still works', async ({ page }) => {
-  await install(page, { suggestion: null });
-  await openMemory(page);
-  await expect(page.getByRole('button', { name: '打开 global-note' })).toBeVisible();
-  const before = (await memoryCalls(page)).filter(call => call.command === 'list_memories').length;
-  await page.getByRole('button', { name: '项目', exact: true }).click();
-  await expect(page.getByText('请选择项目。项目级记忆不会列出其他项目。')).toBeVisible();
-  await expect(page.getByRole('button', { name: /打开/ })).toHaveCount(0);
-  await expect(page.getByRole('combobox', { name: '记忆项目' }).locator('option')).toHaveText(['请选择项目', '栖点 A', '栖点 B', '缺失（目录不可用）']);
-  await expect.poll(async () => (await memoryCalls(page)).filter(call => call.command === 'list_memories').length).toBe(before);
-  await page.getByRole('combobox', { name: '记忆项目' }).selectOption('C:/B');
+  expect(saved[0].args.request).toMatchObject({ id: 'a-note', text: 'edited-a', baseline: 'from-a', confirmExternal: false, target: { toolId: 'alpha', scope: 'project', projectPath: 'C:/A', storeDirectory: alphaAStore } });
+  expect((await memoryCalls(page)).filter(call => call.command === 'save_memory').every(call => call.args.request?.target?.storeDirectory === alphaAStore)).toBe(true);
+  // The aggregate reload keeps the other stores listed and untouched.
   await expect(page.getByRole('button', { name: '打开 b-note' })).toBeVisible();
-  expect((await memoryCalls(page)).filter(call => call.command === 'list_memories' && call.args.target?.scope === 'project').every(call => call.args.target?.projectPath === 'C:/B')).toBe(true);
-  await page.getByRole('button', { name: '全局', exact: true }).click();
-  await expect(page.getByRole('button', { name: '打开 global-note' })).toBeVisible();
-  const globalLists = (await memoryCalls(page)).filter(call => call.command === 'list_memories' && call.args.target?.scope === 'global');
-  expect(globalLists.length).toBeGreaterThan(0);
-  expect(globalLists.every(call => call.args.target?.projectPath == null)).toBe(true);
+  await page.getByRole('button', { name: '打开 b-note' }).click();
+  await expect(page.getByRole('textbox', { name: '记忆正文' })).toHaveValue('from-b');
+  expect((await memoryCalls(page)).some(call => ['save_configuration_draft', 'begin_configuration_draft', 'update_configuration_draft', 'apply_registered_native_profile', 'apply_common_configuration', 'reapply_account_profile'].includes(call.command))).toBe(false);
+  const lists = (await memoryCalls(page)).filter(call => call.command === 'list_all_memories');
+  expect(lists.length).toBeGreaterThan(1);
+  expect(lists.every(call => call.args.toolId === 'alpha')).toBe(true);
 });
 
 test('delete asks for confirmation and cancel leaves the entry', async ({ page }) => {
-  await install(page, { suggestion: 'C:/A' });
+  await install(page);
   await openMemory(page);
   await expect(page.getByRole('button', { name: '打开 a-note' })).toBeVisible();
   await page.getByRole('button', { name: '删除 a-note' }).click();
@@ -228,11 +227,12 @@ test('delete asks for confirmation and cancel leaves the entry', async ({ page }
   await expect(page.getByRole('button', { name: '打开 a-note' })).toHaveCount(0);
   const deleted = (await memoryCalls(page)).filter(call => call.command === 'delete_memory');
   expect(deleted).toHaveLength(1);
-  expect(deleted[0].args.request).toMatchObject({ id: 'a-note', baseline: 'from-a', target: { toolId: 'alpha', scope: 'project', projectPath: 'C:/A' } });
+  expect(deleted[0].args.request).toMatchObject({ id: 'a-note', baseline: 'from-a', target: { toolId: 'alpha', scope: 'project', projectPath: 'C:/A', storeDirectory: alphaAStore } });
+  await expect(page.getByRole('button', { name: '打开 b-note' })).toBeVisible();
 });
 
 test('an external fingerprint or save error waits for confirmation before writing', async ({ page }) => {
-  await install(page, { suggestion: 'C:/A' });
+  await install(page);
   await openMemory(page);
   await page.getByRole('button', { name: '打开 a-note' }).click();
   await page.getByRole('textbox', { name: '记忆正文' }).fill('page-text');
@@ -246,7 +246,7 @@ test('an external fingerprint or save error waits for confirmation before writin
   await page.getByRole('button', { name: '保存记忆' }).click();
   await page.getByRole('button', { name: '确认写入' }).click();
   await expect.poll(async () => (await memoryCalls(page)).filter(call => call.command === 'save_memory').length).toBe(1);
-  expect((await memoryCalls(page)).find(call => call.command === 'save_memory')?.args.request).toMatchObject({ text: 'page-text', confirmExternal: true, target: { projectPath: 'C:/A' } });
+  expect((await memoryCalls(page)).find(call => call.command === 'save_memory')?.args.request).toMatchObject({ text: 'page-text', confirmExternal: true, target: { storeDirectory: alphaAStore } });
 
   await page.evaluate(() => { (window as unknown as { __memory: { mode: string } }).__memory.mode = 'external-error'; });
   await page.getByRole('textbox', { name: '记忆正文' }).fill('page-text-again');
@@ -261,7 +261,7 @@ test('an external fingerprint or save error waits for confirmation before writin
 });
 
 test('failed read, save, and delete show the error and a retry', async ({ page }) => {
-  await install(page, { suggestion: 'C:/A', mode: 'read-fail' });
+  await install(page, { mode: 'read-fail' });
   await openMemory(page);
   await page.getByRole('button', { name: '打开 a-note' }).click();
   await expect(page.getByRole('alert')).toContainText('无法读取记忆，请重试');
@@ -289,123 +289,59 @@ test('failed read, save, and delete show the error and a retry', async ({ page }
   await expect(page.getByRole('button', { name: '打开 a-note' })).toHaveCount(0);
 });
 
-test('a directory that is not a recorded project becomes the memory target only', async ({ page }) => {
-  await install(page, { suggestion: 'C:/A' });
+test('a master switch that is off still lists and opens, and switch writes carry the store target', async ({ page }) => {
+  await install(page, { mode: 'master-off' });
   await openMemory(page);
-  await expect(page.getByRole('button', { name: '打开 a-note' })).toBeVisible();
-  const stored = JSON.stringify({ alpha: { scope: 'project', projectPath: 'C:/A', resource: 'config' } });
-  await page.evaluate(() => { (window as unknown as { __memory: { picked: string } }).__memory.picked = 'C:/Gone'; });
-  await page.getByRole('button', { name: '选择目录' }).click();
-  await expect(page.getByText('目标目录不可用，请重新选择。已保留原来的记忆目标。')).toBeVisible();
-  await expect(page.getByRole('combobox', { name: '记忆项目' })).toHaveValue('C:/A');
-  await expect(page.getByRole('button', { name: '打开 a-note' })).toBeVisible();
-  expect((await memoryCalls(page)).some(call => call.command === 'list_memories' && call.args.target?.projectPath === 'C:/Gone')).toBe(false);
-
-  await page.evaluate(() => { (window as unknown as { __memory: { picked: string } }).__memory.picked = 'C:/custom'; });
-  await page.getByRole('button', { name: '选择目录' }).click();
-  await expect(page.getByText('当前记忆目标：项目 · C:/custom')).toBeVisible();
-  await expect(page.getByRole('combobox', { name: '记忆项目' })).toHaveValue('C:/custom');
-  await expect(page.getByRole('button', { name: '打开 custom-note' })).toBeVisible();
-  await page.getByRole('button', { name: '打开 custom-note' }).click();
-  await expect(page.getByRole('textbox', { name: '记忆正文' })).toHaveValue('from-custom');
-  await page.getByRole('textbox', { name: '记忆正文' }).fill('edited-custom');
-  await page.getByRole('button', { name: '保存记忆' }).click();
-  await expect.poll(async () => (await memoryCalls(page)).some(call => call.command === 'save_memory' && call.args.request?.target?.projectPath === 'C:/custom' && call.args.request?.text === 'edited-custom')).toBe(true);
-  const customReads = (await memoryCalls(page)).filter(call => call.command === 'read_memory' && call.args.target?.projectPath === 'C:/custom');
-  expect(customReads.length).toBeGreaterThan(0);
-  expect((await memoryCalls(page)).some(call => call.command === 'add_project' || call.command === 'relink_project' || call.command === 'save_configuration_draft' || call.command === 'apply_registered_native_profile')).toBe(false);
-  expect(await page.evaluate(() => localStorage.getItem('cliora:workspace-context'))).toBe(stored);
-  const lists = (await memoryCalls(page)).filter(call => call.command === 'list_memories' && call.args.target?.projectPath === 'C:/custom');
-  expect(lists.length).toBeGreaterThan(0);
-  expect(lists.every(call => call.args.target?.toolId === 'alpha' && call.args.target?.scope === 'project')).toBe(true);
-});
-
-test('an unavailable project stays selected after global memory has listed', async ({ page }) => {
-  await install(page, { suggestion: 'C:/A' });
-  await openMemory(page);
-  const stored = JSON.stringify({ alpha: { scope: 'project', projectPath: 'C:/A', resource: 'config' } });
-  await page.getByRole('combobox', { name: '记忆项目' }).selectOption('C:/B');
-  await expect(page.getByRole('button', { name: '打开 b-note' })).toBeVisible();
-  await page.getByRole('button', { name: '全局', exact: true }).click();
-  await expect(page.getByRole('button', { name: '打开 global-note' })).toBeVisible();
-  await page.evaluate(() => { (window as unknown as { __memory: { unavailable: string } }).__memory.unavailable = 'C:/B'; });
-  const mark = (await memoryCalls(page)).length;
-  await page.getByRole('button', { name: '项目', exact: true }).click();
-  await expect(page.getByText('目标目录不可用，请重新选择。已保留原来的记忆目标。')).toBeVisible();
-  await expect(page.getByRole('combobox', { name: '记忆项目' })).toHaveValue('C:/B');
-  await expect(page.getByText('当前记忆目标：项目 · 栖点 B')).toBeVisible();
-  await expect(page.getByRole('button', { name: '全局', exact: true })).toHaveAttribute('aria-pressed', 'false');
-  const later = (await memoryCalls(page)).slice(mark);
-  expect(later.some(call => call.command === 'list_memories' && call.args.target?.projectPath === 'C:/B')).toBe(true);
-  expect(later.some(call => call.command === 'list_memories' && (call.args.target?.scope === 'global' || call.args.target?.projectPath === 'C:/A'))).toBe(false);
-  expect(later.some(call => call.command === 'read_memory' || call.command === 'save_memory')).toBe(false);
-  expect(await page.evaluate(() => localStorage.getItem('cliora:workspace-context'))).toBe(stored);
-});
-
-test('a master switch that is off still lists and opens memory', async ({ page }) => {
-  await install(page, { suggestion: 'C:/A', mode: 'master-off' });
-  await openMemory(page);
-  await expect(page.getByText('记忆当前未使用')).toBeVisible();
-  await expect(page.getByRole('checkbox', { name: '记忆总开关' })).not.toBeChecked();
+  await expect(page.getByText('记忆当前未使用').first()).toBeVisible();
+  await expect(page.getByRole('checkbox', { name: '全局 · 记忆总开关' })).not.toBeChecked();
+  await expect(page.getByRole('checkbox', { name: '项目 · 栖点 A · 记忆总开关' })).not.toBeChecked();
   await expect(page.getByRole('button', { name: '打开 a-note' })).toBeVisible();
   await page.getByRole('button', { name: '打开 a-note' }).click();
   await expect(page.getByRole('textbox', { name: '记忆正文' })).toHaveValue('from-a');
+
+  await page.getByRole('checkbox', { name: '全局 · 记忆总开关' }).click();
+  await expect.poll(async () => (await memoryCalls(page)).filter(call => call.command === 'set_memory_enabled').length).toBe(1);
+  const master = (await memoryCalls(page)).filter(call => call.command === 'set_memory_enabled');
+  expect(master[0].args.request).toMatchObject({ id: null, enabled: true, target: { toolId: 'alpha', scope: 'global', projectPath: null, storeDirectory: alphaGlobalStore } });
+
+  await page.getByRole('checkbox', { name: '启用 b-note' }).click();
+  await expect.poll(async () => (await memoryCalls(page)).filter(call => call.command === 'set_memory_enabled' && call.args.request?.id === 'b-note').length).toBe(1);
+  const item = (await memoryCalls(page)).find(call => call.command === 'set_memory_enabled' && call.args.request?.id === 'b-note');
+  expect(item?.args.request).toMatchObject({ enabled: false, target: { scope: 'project', projectPath: 'C:/B', storeDirectory: alphaBStore } });
 });
 
-test('a selected account is named in the current target, and 不指定账号 stays off list and save', async ({ page }) => {
-  await install(page, { suggestion: 'C:/A', accounts: true });
+test('create states the write location: global root, configured project, or disabled', async ({ page }) => {
+  await install(page);
   await openMemory(page);
-  const stored = JSON.stringify({ alpha: { scope: 'project', projectPath: 'C:/A', resource: 'config' } });
-  await expect(page.getByRole('option', { name: '配置账号' })).toBeAttached();
-  await expect(page.getByRole('option', { name: '工作账号' })).toBeAttached();
-  await expect(page.getByRole('combobox', { name: '记忆账号' })).toHaveValue('');
-  await expect(page.getByText('当前记忆目标：项目 · 栖点 A', { exact: true })).toBeVisible();
-  const initialLists = (await memoryCalls(page)).filter(call => call.command === 'list_memories');
-  expect(initialLists.length).toBeGreaterThan(0);
-  expect(initialLists.every(call => !call.args.target || !('contextId' in call.args.target))).toBe(true);
-
-  await page.getByRole('combobox', { name: '记忆账号' }).selectOption({ label: '工作账号' });
-  await expect(page.getByText('当前记忆目标：项目 · 栖点 A · 工作账号', { exact: true })).toBeVisible();
-  await expect(page.getByText('当前记忆目标：项目 · 栖点 A', { exact: true })).toHaveCount(0);
-  await page.getByRole('button', { name: '全局', exact: true }).click();
-  await expect(page.getByText('当前记忆目标：全局 · 工作账号', { exact: true })).toBeVisible();
-  await expect.poll(async () => (await memoryCalls(page)).some(call => call.command === 'list_memories' && call.args.target?.scope === 'global' && call.args.target?.projectPath == null && call.args.target?.contextId === 'ctx-work')).toBe(true);
-  await page.getByRole('button', { name: '项目', exact: true }).click();
-  await expect(page.getByText('当前记忆目标：项目 · 栖点 A · 工作账号', { exact: true })).toBeVisible();
-  await expect(page.getByRole('combobox', { name: '记忆项目' })).toHaveValue('C:/A');
-  await expect.poll(async () => (await memoryCalls(page)).some(call => call.command === 'list_memories' && call.args.target?.scope === 'project' && call.args.target?.projectPath === 'C:/A' && call.args.target?.contextId === 'ctx-work')).toBe(true);
-
-  await expect(page.getByRole('button', { name: '打开 a-note' })).toBeVisible();
-  await page.getByRole('button', { name: '打开 a-note' }).click();
-  await expect(page.getByRole('textbox', { name: '记忆正文' })).toHaveValue('from-a');
-  await page.getByRole('textbox', { name: '记忆正文' }).fill('edited-bound');
+  await expect(page.getByText('写入位置：全局')).toBeVisible();
+  await page.getByRole('button', { name: '新建记忆' }).click();
+  await expect(page.getByText('写入位置：全局')).toBeVisible();
+  await page.getByRole('textbox', { name: '记忆标识' }).fill('created-note');
+  await page.getByRole('textbox', { name: '记忆正文' }).fill('created-body');
   await page.getByRole('button', { name: '保存记忆' }).click();
-  await expect.poll(async () => {
-    const calls = await memoryCalls(page);
-    const saveAt = calls.findIndex(call => call.command === 'save_memory' && call.args.request?.text === 'edited-bound' && call.args.request?.target?.contextId === 'ctx-work' && call.args.request?.target?.projectPath === 'C:/A');
-    return saveAt >= 0 && calls.slice(saveAt + 1).some(call => call.command === 'list_memories' && call.args.target?.contextId === 'ctx-work');
-  }).toBe(true);
+  await expect.poll(async () => (await memoryCalls(page)).some(call => call.command === 'save_memory' && call.args.request?.id === 'created-note')).toBe(true);
+  const saved = (await memoryCalls(page)).find(call => call.command === 'save_memory' && call.args.request?.id === 'created-note');
+  expect(saved?.args.request).toMatchObject({ baseline: '', confirmExternal: false, target: { toolId: 'alpha', scope: 'global', projectPath: null } });
+  expect(saved?.args.request?.target).not.toHaveProperty('storeDirectory');
 
-  const beforeClear = (await memoryCalls(page)).length;
-  await page.getByRole('combobox', { name: '记忆账号' }).selectOption({ label: '不指定账号' });
-  await expect(page.getByRole('combobox', { name: '记忆账号' })).toHaveValue('');
-  await expect(page.getByText('当前记忆目标：项目 · 栖点 A', { exact: true })).toBeVisible();
-  await expect(page.getByText(/当前记忆目标：.*(工作账号|配置账号)/)).toHaveCount(0);
-  await expect(page.getByRole('button', { name: '打开 a-note' })).toBeVisible();
-
-  await page.getByRole('button', { name: '打开 a-note' }).click();
-  await page.getByRole('textbox', { name: '记忆正文' }).fill('edited-unbound');
+  // A project-only CLI falls back to the stored configuration project.
+  await page.getByRole('tab', { name: 'Delta', exact: true }).click();
+  await page.getByRole('tab', { name: '记忆', exact: true }).click();
+  await expect(page.getByText('写入位置：项目 · C:/A')).toBeVisible();
+  await page.getByRole('button', { name: '新建记忆' }).click();
+  await page.getByRole('textbox', { name: '记忆标识' }).fill('delta-note');
+  await page.getByRole('textbox', { name: '记忆正文' }).fill('delta-body');
   await page.getByRole('button', { name: '保存记忆' }).click();
-  await expect.poll(async () => {
-    const calls = (await memoryCalls(page)).slice(beforeClear);
-    const saveAt = calls.findIndex(call => call.command === 'save_memory' && call.args.request?.text === 'edited-unbound');
-    return saveAt >= 0 && calls.slice(saveAt + 1).some(call => call.command === 'list_memories');
-  }).toBe(true);
-  const cleared = (await memoryCalls(page)).slice(beforeClear).filter(call => call.command === 'list_memories' || call.command === 'save_memory');
-  expect(cleared.length).toBeGreaterThan(0);
-  expect(cleared.every(call => {
-    const target = call.command === 'save_memory' ? call.args.request?.target : call.args.target;
-    return !!target && !('contextId' in target) && target.projectPath === 'C:/A';
-  })).toBe(true);
-  expect(await page.evaluate(() => localStorage.getItem('cliora:workspace-context'))).toBe(stored);
+  await expect.poll(async () => (await memoryCalls(page)).some(call => call.command === 'save_memory' && call.args.request?.id === 'delta-note')).toBe(true);
+  const deltaSaved = (await memoryCalls(page)).find(call => call.command === 'save_memory' && call.args.request?.id === 'delta-note');
+  expect(deltaSaved?.args.request).toMatchObject({ target: { toolId: 'delta', scope: 'project', projectPath: 'C:/A' } });
+  expect(deltaSaved?.args.request?.target).not.toHaveProperty('storeDirectory');
+});
+
+test('a project-only CLI without a configured project disables create and explains why', async ({ page }) => {
+  await install(page, { suggestion: null });
+  await openMemory(page, 'Delta');
+  await expect(page.getByRole('button', { name: '新建记忆' })).toBeDisabled();
+  await expect(page.getByText('暂无默认写入位置：既没有全局根，也没有当前配置项目，无法新建。')).toBeVisible();
+  expect((await memoryCalls(page)).some(call => call.command === 'save_memory')).toBe(false);
 });

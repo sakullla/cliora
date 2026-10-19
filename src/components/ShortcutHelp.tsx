@@ -16,7 +16,7 @@ export function ShortcutHelp({ open, onClose }: { open: boolean; onClose: () => 
       </dl></section>
       <section><h3>{t('common.shortcuts.editing')}</h3><dl>
         <div><dt><kbd>{modLabel}+S</kbd></dt><dd>{t('common.shortcuts.saveDialog')}</dd></div>
-        <div><dt><kbd>Alt+1…6</kbd></dt><dd>{t('common.shortcuts.switchView')}</dd></div>
+        <div><dt><kbd>Alt+1…7</kbd></dt><dd>{t('common.shortcuts.switchView')}</dd></div>
         <div><dt><kbd>{t('common.shortcuts.arrows')}</kbd></dt><dd>{t('common.shortcuts.moveOptions')}</dd></div>
       </dl></section>
     </div>

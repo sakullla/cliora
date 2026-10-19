@@ -18,6 +18,7 @@ import { InstallPanel } from './InstallPanel';
 import { MaintenanceDialog, type MaintenanceAction, type MaintenanceState } from './MaintenanceDialog';
 import { ConfigurationWorkspaceEditor } from './configuration/ConfigurationWorkspaceEditor';
 import { SkillsWorkspace } from './ResourceWorkspace';
+import { MemoryWorkspace } from '../memory/MemoryWorkspace';
 import { McpWorkspace } from './McpWorkspace';
 import { PluginsWorkspace } from './PluginsWorkspace';
 import { AgentsWorkspace } from './AgentsWorkspace';
@@ -39,11 +40,11 @@ import styles from './ToolWorkspace.module.css';
 const errorText = (value: unknown) => value && typeof value === 'object' && 'message' in value ? String(value.message) : i18n.t('tools.workspace.operationFailed');
 function host(address?: string) { try { return address ? new URL(address).host : ''; } catch { return i18n.t('tools.workspace.hostUnknown'); } }
 
-type ResourceView = 'config' | 'accounts' | 'mcp' | 'skills' | 'plugins' | 'agents';
+type ResourceView = 'config' | 'accounts' | 'mcp' | 'skills' | 'plugins' | 'agents' | 'memory';
 type EditFrame = { key: string; subject: ConfigurationSubject; profile: RegisteredProfile | null; title: string };
 export type WorkspaceOpenIntent = { resource?: ResourceView; create?: boolean };
 
-const resourceViews: ResourceView[] = ['config', 'accounts', 'mcp', 'skills', 'agents', 'plugins'];
+const resourceViews: ResourceView[] = ['config', 'accounts', 'mcp', 'skills', 'agents', 'plugins', 'memory'];
 const contextStoreKey = 'cliora:workspace-context';
 type StoredContext = { resource?: ResourceView; scope?: Scope; projectPath?: string };
 function readStoredContexts(): Record<string, StoredContext> {
@@ -169,11 +170,11 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   const appliedDiscard = useRef(0);
   const pendingCreate = useRef(false);
   const management = descriptor?.management;
-  const supported = { config: true, accounts: management?.accounts ?? true, mcp: management?.mcp ?? true, skills: management?.skills ?? true, agents: management?.agents ?? true, plugins: (management?.plugins ?? true) && (scope === 'global' || (management?.projectPlugins ?? true)) };
+  const supported = { config: true, accounts: management?.accounts ?? true, mcp: management?.mcp ?? true, skills: management?.skills ?? true, agents: management?.agents ?? true, plugins: (management?.plugins ?? true) && (scope === 'global' || (management?.projectPlugins ?? true)), memory: !!management?.memory };
   useEffect(() => { alive.current = true; return () => { alive.current = false; loadSequence.current++; }; }, []);
   useLayoutEffect(() => { onDirtyChange?.(allDirty); }, [allDirty, onDirtyChange]);
   useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
-  useEffect(() => { if (!supported[resource]) setResource('config'); if (resource !== 'accounts') setAccountUsageQuery(null); }, [resource, supported.accounts, supported.mcp, supported.skills, supported.agents, supported.plugins]);
+  useEffect(() => { if (!supported[resource]) setResource('config'); if (resource !== 'accounts') setAccountUsageQuery(null); }, [resource, supported.accounts, supported.mcp, supported.skills, supported.agents, supported.plugins, supported.memory]);
   const reload = useCallback(async (nextTool: string, nextScope: Scope, nextProject: string, fresh = false) => {
     if (!nativeAvailable || !nextTool || nextScope === 'project' && !nextProject) { setLoading(false); setWorkspace(null); return null; }
     const request = ++loadSequence.current; setLoading(true); setError('');
@@ -422,11 +423,12 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     </div>
     {resource === 'accounts' && supported.accounts && <AccountsPanel key={toolId} toolId={toolId} state={accounts} onOpenProfile={(id, target) => void openTarget(id, target)} onOpenUsage={id => void openAccountQuota(id)} />}
     {resource === 'accounts' && accountUsageQuery && <QuotaEditor key={accountUsageQuery.id} query={accountUsageQuery} profileId={accountUsageQuery.config.identity.profileId ?? ''} profileAccountId={queryAccount} toolId={toolId} presets={quota.presets} onClose={() => setAccountUsageQuery(null)} onSaved={() => { setAccountUsageQuery(null); void quota.reload(); }} />}
-    {!['config', 'accounts'].includes(resource) && !resourcesReady && <div role="status"><p>{resourceContext?.nativeContextError ?? (loading ? t('tools.workspace.contextLoading') : workspace?.nativeContextError ?? t('tools.workspace.contextFailed'))}</p>{!loading && <button onClick={() => void reload(toolId, scope, projectPath, true)}>{t('tools.workspace.contextRetry')}</button>}</div>}
+    {!['config', 'accounts', 'memory'].includes(resource) && !resourcesReady && <div role="status"><p>{resourceContext?.nativeContextError ?? (loading ? t('tools.workspace.contextLoading') : workspace?.nativeContextError ?? t('tools.workspace.contextFailed'))}</p>{!loading && <button onClick={() => void reload(toolId, scope, projectPath, true)}>{t('tools.workspace.contextRetry')}</button>}</div>}
     {resourcesReady && resource === 'mcp' && supported.mcp && <McpWorkspace key={`${context}:${resourceEpoch}:${resourceContext?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={resourceContext?.effectiveContextId ?? null} onDirtyChange={mcpDirty} />}
     {resourcesReady && resource === 'skills' && supported.skills && <SkillsWorkspace key={`${context}:${resourceEpoch}:${resourceContext?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={resourceContext?.effectiveContextId ?? null} onDirtyChange={skillsDirty} />}
     {resourcesReady && resource === 'agents' && supported.agents && <AgentsWorkspace key={`${context}:${resourceEpoch}:${resourceContext?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={resourceContext?.effectiveContextId ?? null} onDirtyChange={agentsDirty} />}
     {resourcesReady && resource === 'plugins' && supported.plugins && <PluginsWorkspace key={`${context}:${resourceEpoch}:${resourceContext?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={resourceContext?.effectiveContextId ?? null} />}
+    {resource === 'memory' && supported.memory && management?.memory && <MemoryWorkspace key={toolId} toolId={toolId} memory={management.memory} active={active} suggestedProjectPath={scope === 'project' && projectPath ? projectPath : readStoredContexts()[toolId]?.projectPath ?? null} />}
     <MaintenanceDialog state={maintenance} busy={busy} canRetry={maintenance?.tool === toolId} onCancel={cancelMaintenance} onRetry={() => { if (maintenance) void maintain(maintenance.action, maintenance.source, true, maintenance.lineVersion, maintenance.target); }} onClose={() => setMaintenance(null)} onMinimize={() => setMaintenance(previous => previous ? { ...previous, minimized: true } : previous)} onRestore={() => setMaintenance(previous => previous ? { ...previous, minimized: false } : previous)} />
   </ToastScope></section>;
 }

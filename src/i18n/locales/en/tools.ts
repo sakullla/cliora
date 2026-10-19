@@ -642,6 +642,7 @@ export default {
       skills: 'Skill',
       agents: 'Agents',
       plugins: 'Plugins',
+      memory: 'Memory',
     },
     discardMessage: 'The current draft is unsaved. Continuing discards these changes. Discard them?',
     scrollToolsBack: 'Show earlier tools',
