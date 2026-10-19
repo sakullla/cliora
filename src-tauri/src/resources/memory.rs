@@ -14,7 +14,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::accounts::selection;
 use crate::adapters::memory::{
-    MemoryDeclaration, MemoryManagement, MemoryOperation, MemoryTargetDimension,
+    MemoryDeclaration, MemoryFileChange, MemoryLayout, MemoryManagement, MemoryOperation,
+    MemoryTargetDimension,
 };
 use crate::adapters::{CliAdapter, Registry};
 use crate::credentials::CredentialStore;
@@ -104,10 +105,12 @@ enum Partition {
     Unbound,
 }
 
-struct Prepared {
+struct Prepared<'a> {
     directory: PathBuf,
+    home: PathBuf,
     excluded: Vec<PathBuf>,
     management: MemoryManagement,
+    layout: Option<&'a dyn MemoryLayout>,
     _guard: Option<selection::ContextGuard>,
 }
 
@@ -183,18 +186,23 @@ pub fn save_memory(
     } else {
         request.baseline.clone()
     };
-    transaction::apply_text(
-        db,
-        credentials,
-        &[TextPatch {
-            path: path.clone(),
-            baseline,
-            contents: request.text.clone(),
-            sensitive: false,
-        }],
-        commit_without_records,
-    )
-    .map_err(|error| format!("无法保存记忆，请重试：{error}"))?;
+    let mut changes = vec![FileMutation {
+        path: path.clone(),
+        baseline: if path.is_file() { Some(baseline) } else { None },
+        contents: Some(request.text.clone()),
+    }];
+    if let Some(layout) = prepared.layout {
+        if let Some(change) = index_change(
+            &prepared,
+            layout
+                .index_after_save(&prepared.directory, &request.id, &request.text)
+                .map_err(|error| format!("无法更新记忆索引，请重试：{error}"))?,
+        )? {
+            changes.push(change);
+        }
+    }
+    transaction::apply_files(db, credentials, &changes, commit_without_records)
+        .map_err(|error| format!("无法保存记忆，请重试：{error}"))?;
     let bytes = read_entry_bytes(&path)?;
     let text = String::from_utf8(bytes.clone())
         .map_err(|_| "无法读取记忆，请重试：正文不是 UTF-8".to_owned())?;
@@ -224,16 +232,30 @@ pub fn delete_memory(
         baseline: Some(current),
         contents: None,
     }];
-    let items_path = prepared.directory.join(ITEMS_FILE);
-    let items_current = transaction::read_native(&items_path)
-        .map_err(|error| format!("无法读取记忆启停记录，请重试：{error}"))?;
-    if let Some(contents) = removed_item(&items_current, &request.id)? {
-        reject_excluded(&items_path, &prepared.excluded)?;
-        changes.push(FileMutation {
-            path: items_path,
-            baseline: Some(items_current),
-            contents: Some(contents),
-        });
+    match prepared.layout {
+        Some(layout) => {
+            if let Some(change) = index_change(
+                &prepared,
+                layout
+                    .index_after_delete(&prepared.directory, &request.id)
+                    .map_err(|error| format!("无法更新记忆索引，请重试：{error}"))?,
+            )? {
+                changes.push(change);
+            }
+        }
+        None => {
+            let items_path = prepared.directory.join(ITEMS_FILE);
+            let items_current = transaction::read_native(&items_path)
+                .map_err(|error| format!("无法读取记忆启停记录，请重试：{error}"))?;
+            if let Some(contents) = removed_item(&items_current, &request.id)? {
+                reject_excluded(&items_path, &prepared.excluded)?;
+                changes.push(FileMutation {
+                    path: items_path,
+                    baseline: Some(items_current),
+                    contents: Some(contents),
+                });
+            }
+        }
     }
     transaction::apply_files(db, credentials, &changes, commit_without_records)
         .map(|_| ())
@@ -256,24 +278,43 @@ pub fn set_memory_enabled(
     {
         None => {
             require(&prepared, MemoryOperation::MasterSwitch)?;
-            let path = prepared.directory.join(SWITCH_FILE);
-            reject_excluded(&path, &prepared.excluded)?;
-            let current = transaction::read_native(&path)
-                .map_err(|error| format!("无法读取记忆总开关，请重试：{error}"))?;
-            let contents = if request.enabled { "on\n" } else { "off\n" };
-            if current != contents {
-                transaction::apply_text(
-                    db,
-                    credentials,
-                    &[TextPatch {
-                        path,
-                        baseline: current,
-                        contents: contents.to_owned(),
-                        sensitive: false,
-                    }],
-                    commit_without_records,
-                )
-                .map_err(|error| format!("无法保存记忆总开关，请重试：{error}"))?;
+            if let Some(layout) = prepared.layout {
+                // The verified native switch target is the CLI's own settings
+                // file, so the memory-path exclusion list deliberately does
+                // not apply; the shared transaction still keeps the baseline
+                // and reparse protections.
+                if let Some(change) = layout
+                    .switch_patch(&prepared.home, &prepared.directory, request.enabled)
+                    .map_err(|error| format!("无法保存记忆总开关，请重试：{error}"))?
+                {
+                    transaction::apply_files(
+                        db,
+                        credentials,
+                        &[file_change(change)],
+                        commit_without_records,
+                    )
+                    .map_err(|error| format!("无法保存记忆总开关，请重试：{error}"))?;
+                }
+            } else {
+                let path = prepared.directory.join(SWITCH_FILE);
+                reject_excluded(&path, &prepared.excluded)?;
+                let current = transaction::read_native(&path)
+                    .map_err(|error| format!("无法读取记忆总开关，请重试：{error}"))?;
+                let contents = if request.enabled { "on\n" } else { "off\n" };
+                if current != contents {
+                    transaction::apply_text(
+                        db,
+                        credentials,
+                        &[TextPatch {
+                            path,
+                            baseline: current,
+                            contents: contents.to_owned(),
+                            sensitive: false,
+                        }],
+                        commit_without_records,
+                    )
+                    .map_err(|error| format!("无法保存记忆总开关，请重试：{error}"))?;
+                }
             }
         }
         Some(id) => {
@@ -310,7 +351,7 @@ pub fn set_memory_enabled(
 }
 
 fn finish_list(prepared: &Prepared) -> Result<MemoryList, String> {
-    let (in_use, detail) = usage(&prepared.directory)?;
+    let (in_use, detail) = usage(prepared)?;
     let entries = list_entries(prepared)?;
     Ok(MemoryList {
         in_use,
@@ -328,8 +369,13 @@ fn document(
     text: String,
     bytes: &[u8],
 ) -> Result<MemoryDocument, String> {
-    let (in_use, detail) = usage(&prepared.directory)?;
-    let enabled = entry_enabled(&enabled_map(&prepared.directory)?, id);
+    let (in_use, detail) = usage(prepared)?;
+    let enabled = match prepared.layout {
+        // Native families have no engine enable record; every listed entry is
+        // in use and single-entry management is editing or deleting it.
+        Some(_) => true,
+        None => entry_enabled(&enabled_map(&prepared.directory)?, id),
+    };
     Ok(MemoryDocument {
         id: id.to_owned(),
         path: path.display().to_string(),
@@ -341,12 +387,12 @@ fn document(
     })
 }
 
-fn prepare(
+fn prepare<'a>(
     db: &Database,
-    registry: &Registry,
+    registry: &'a Registry,
     home: &Path,
     target: &MemoryTarget,
-) -> Result<Prepared, String> {
+) -> Result<Prepared<'a>, String> {
     if !home.is_absolute() {
         return Err("用户目录必须是绝对路径".into());
     }
@@ -387,10 +433,42 @@ fn prepare(
     )?;
     Ok(Prepared {
         directory,
+        home: home.to_path_buf(),
         excluded,
         management,
+        layout: port.layout(),
         _guard: guard,
     })
+}
+
+/// A layout index change, guarded like an entry: inside the resolved
+/// directory, absolute, no parent traversal, and never on an excluded path.
+fn index_change(
+    prepared: &Prepared,
+    change: Option<MemoryFileChange>,
+) -> Result<Option<FileMutation>, String> {
+    let Some(change) = change else {
+        return Ok(None);
+    };
+    if !change.path.is_absolute()
+        || !change
+            .path
+            .components()
+            .all(|component| !matches!(component, Component::ParentDir))
+        || !change.path.starts_with(&prepared.directory)
+    {
+        return Err("记忆索引路径无效".into());
+    }
+    reject_excluded(&change.path, &prepared.excluded)?;
+    Ok(Some(file_change(change)))
+}
+
+fn file_change(change: MemoryFileChange) -> FileMutation {
+    FileMutation {
+        path: change.path,
+        baseline: change.baseline,
+        contents: change.contents,
+    }
 }
 
 fn unavailable_directory(reason: String) -> String {
@@ -480,11 +558,19 @@ fn excluded_paths(
         paths.push(location.path);
     }
     if let Some(agents) = adapter.agents() {
-        paths.push(
-            agents
-                .root(scope, home, project)
-                .map_err(|error| format!("无法确认 Agent 定义路径，请重试：{error}"))?,
-        );
+        // Agent definitions live in the declared definition directories under
+        // the adapter root (plus the disabled marker directory). Excluding the
+        // whole root would swallow unrelated native state that shares the
+        // config root, such as a CLI's memory workspace.
+        let root = agents
+            .root(scope, home, project)
+            .map_err(|error| format!("无法确认 Agent 定义路径，请重试：{error}"))?;
+        if agents.scans_definition_directories() {
+            for directory in agents.definition_dirs() {
+                paths.push(root.join(directory));
+            }
+            paths.push(root.join(".cliora-disabled-agents"));
+        }
     }
     paths.extend(
         adapter
@@ -539,7 +625,23 @@ fn entry_path(prepared: &Prepared, id: &str) -> Result<PathBuf, String> {
     if !valid_segment(id) {
         return Err("记忆标识无效，请修改后重试".into());
     }
-    let path = prepared.directory.join(format!("{id}.md"));
+    let path = match prepared.layout {
+        Some(layout) => {
+            let path = layout
+                .entry_path(&prepared.directory, id)
+                .map_err(|error| format!("无法定位记忆文件，请重试：{error}"))?;
+            if !path.is_absolute()
+                || path
+                    .components()
+                    .any(|component| matches!(component, Component::ParentDir))
+                || !path.starts_with(&prepared.directory)
+            {
+                return Err("记忆路径无效".into());
+            }
+            path
+        }
+        None => prepared.directory.join(format!("{id}.md")),
+    };
     reject_excluded(&path, &prepared.excluded)?;
     Ok(path)
 }
@@ -586,6 +688,26 @@ fn overlaps(path: &Path, excluded: &Path) -> bool {
 }
 
 fn list_entries(prepared: &Prepared) -> Result<Vec<MemoryEntry>, String> {
+    if let Some(layout) = prepared.layout {
+        let mut entries = Vec::new();
+        for entry in layout
+            .entries(&prepared.directory)
+            .map_err(|error| format!("无法列出记忆，请重试：{error}"))?
+        {
+            if !valid_segment(&entry.id) || overlaps_path(&entry.path, &prepared.excluded) {
+                continue;
+            }
+            let bytes = read_entry_bytes(&entry.path)?;
+            entries.push(MemoryEntry {
+                id: entry.id,
+                path: entry.path.display().to_string(),
+                enabled: true,
+                fingerprint: transaction::fingerprint(&bytes),
+            });
+        }
+        entries.sort_by(|left, right| left.id.cmp(&right.id));
+        return Ok(entries);
+    }
     let map = enabled_map(&prepared.directory)?;
     let mut entries = Vec::new();
     let read = match fs::read_dir(&prepared.directory) {
@@ -648,8 +770,22 @@ fn is_symlink(path: &Path) -> Result<bool, String> {
     }
 }
 
-fn usage(directory: &Path) -> Result<(bool, String), String> {
-    let text = transaction::read_native(&directory.join(SWITCH_FILE))
+fn usage(prepared: &Prepared) -> Result<(bool, String), String> {
+    if let Some(layout) = prepared.layout {
+        let state = layout
+            .switch_state(&prepared.home, &prepared.directory)
+            .map_err(|error| format!("无法读取记忆总开关，请重试：{error}"))?;
+        if state.enabled {
+            return Ok((true, String::new()));
+        }
+        let detail = if state.detail.trim().is_empty() {
+            NOT_IN_USE.to_owned()
+        } else {
+            state.detail
+        };
+        return Ok((false, detail));
+    }
+    let text = transaction::read_native(&prepared.directory.join(SWITCH_FILE))
         .map_err(|error| format!("无法读取记忆总开关，请重试：{error}"))?;
     match text.trim() {
         "" | "on" | "1" => Ok((true, String::new())),

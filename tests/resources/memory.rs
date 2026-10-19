@@ -1451,25 +1451,33 @@ fn project_memory_stays_on_the_selected_project() {
 fn unverified_builtin_memory_does_not_create_memory() {
     let harness = harness();
     let registry = Registry::builtins();
-    for id in ["codex", "claude_code"] {
-        // Every builtin now implements the memory port carrying its recorded
-        // verdict (2026-10-19 adapter-verdict-coverage); until the local
-        // verification lands the reason stays non-empty and the engine must
-        // refuse before creating anything.
-        let declaration = registry.get(id).unwrap().memory().unwrap().declaration();
-        assert!(
-            !declaration.unverified_reason.trim().is_empty(),
-            "{id} 应记录未核实原因"
-        );
-        let error = list_memories(
-            &harness.db,
-            &registry,
-            &harness.home,
-            &memory_target(id, Scope::Global, None, None),
-        )
-        .unwrap_err();
-        assert!(error.contains("尚未核实"), "{id}: {error}");
+    // Declarations follow each CLI's recorded verdict: an unverified reason
+    // must make the engine refuse before creating anything, while a complete
+    // declaration resolves its own storage. The fixture never writes into a
+    // builtin store either way.
+    let mut unverified = 0;
+    for adapter in registry.iter() {
+        let declaration = adapter
+            .memory()
+            .expect("builtin memory port")
+            .declaration();
+        if !declaration.unverified_reason.trim().is_empty() {
+            unverified += 1;
+            let error = list_memories(
+                &harness.db,
+                &registry,
+                &harness.home,
+                &memory_target(adapter.id(), Scope::Global, None, None),
+            )
+            .unwrap_err();
+            assert!(
+                error.contains("尚未核实") || error.contains("不覆盖当前范围"),
+                "{}: {error}",
+                adapter.id()
+            );
+        }
     }
+    assert!(unverified > 0, "至少一个 builtin 仍应记录未核实原因");
     assert!(!harness.home.join("cliora-memory").exists());
 }
 

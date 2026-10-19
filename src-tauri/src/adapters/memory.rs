@@ -4,8 +4,10 @@
 //! least one operation. The adapter resolves the storage directory per
 //! target; the shared engine runs every list, read, save, delete, and switch
 //! on that directory and keeps its transaction, exclusion, and symlink
-//! protections. An unverified reason stays on the declaration and never
-//! becomes a management entry. Production CLIs do not implement this port.
+//! protections. A verified native family also owns its storage semantics
+//! through [`MemoryLayout`]; without one the engine manages the flat
+//! fixture family with engine-owned switch records. An unverified reason
+//! stays on the declaration and never becomes a management entry.
 
 use std::path::{Path, PathBuf};
 
@@ -97,6 +99,66 @@ pub struct MemoryManagement {
     pub limitation: &'static str,
 }
 
+/// One file change a native layout plans. The engine re-reads the target
+/// inside the shared transaction and rejects it when the file no longer
+/// matches the recorded baseline, so the layout only carries the disk state
+/// it derived its contents from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MemoryFileChange {
+    pub path: PathBuf,
+    /// `None` when the file must not exist yet.
+    pub baseline: Option<String>,
+    /// `None` removes the file.
+    pub contents: Option<String>,
+}
+
+/// A file a native storage family lists as one memory entry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MemoryLayoutEntry {
+    pub id: String,
+    pub path: PathBuf,
+}
+
+/// Observed native master-switch state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MemorySwitchState {
+    pub enabled: bool,
+    /// Usage detail when disabled; empty keeps the shared default text.
+    pub detail: String,
+}
+
+/// Adapter-owned storage semantics for a verified native family: entry
+/// mapping, native index upkeep, and the native master switch. The shared
+/// engine keeps its transaction, baseline, exclusion, and symlink protections
+/// on every path the layout returns and never writes engine-private records
+/// into a native store.
+pub trait MemoryLayout: Sync {
+    /// Entries currently present in the resolved directory. Index and other
+    /// non-entry files are not returned.
+    fn entries(&self, directory: &Path) -> Result<Vec<MemoryLayoutEntry>, String>;
+    /// Absolute path of one entry id inside the resolved directory.
+    fn entry_path(&self, directory: &Path, id: &str) -> Result<PathBuf, String>;
+    /// Index upkeep applied in the same transaction as an entry save.
+    fn index_after_save(
+        &self,
+        directory: &Path,
+        id: &str,
+        text: &str,
+    ) -> Result<Option<MemoryFileChange>, String>;
+    /// Index upkeep applied in the same transaction as an entry delete.
+    fn index_after_delete(&self, directory: &Path, id: &str)
+        -> Result<Option<MemoryFileChange>, String>;
+    /// Native master-switch state for usage display.
+    fn switch_state(&self, home: &Path, directory: &Path) -> Result<MemorySwitchState, String>;
+    /// Native master-switch write plan; `None` when the state already holds.
+    fn switch_patch(
+        &self,
+        home: &Path,
+        directory: &Path,
+        enabled: bool,
+    ) -> Result<Option<MemoryFileChange>, String>;
+}
+
 pub trait MemoryAdapter: Sync {
     fn declaration(&self) -> MemoryDeclaration;
     /// Resolves the storage directory for the target, or returns the reason
@@ -109,6 +171,12 @@ pub trait MemoryAdapter: Sync {
         home: &Path,
         project: Option<&Path>,
     ) -> Result<PathBuf, String>;
+    /// Verified native storage semantics. `None` (the default) keeps the
+    /// engine-managed flat family with engine-owned switch and enable
+    /// records; a native layout owns the family's own semantics.
+    fn layout(&self) -> Option<&dyn MemoryLayout> {
+        None
+    }
 }
 
 /// Publishes scope, target dimensions, and operations only for a complete
