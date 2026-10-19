@@ -49,19 +49,36 @@ test('configuration ports are registered capabilities and draft IPC never writes
   assert.match(apply, /transaction::/);
 });
 
-test('memory is an adapter capability that stays absent without a verified declaration', async () => {
+test('memory port resolves directories in adapters and publishes only complete declarations', async () => {
   const contract = await readFile('src-tauri/src/adapters/contract.rs', 'utf8');
   assert.match(contract, /pub memory: Option<super::memory::MemoryManagement>/);
   assert.match(contract, /fn memory\(&self\) -> Option<&dyn super::memory::MemoryAdapter> \{\r?\n\s*None\r?\n\s*\}/);
   assert.match(contract, /fn published_memory\(&self\)/);
   const memory = await readFile('src-tauri/src/adapters/memory.rs', 'utf8');
+  assert.match(memory, /fn directory\(/);
   assert.match(memory, /fn publish\(declaration: &MemoryDeclaration\) -> Option<MemoryManagement>/);
+  // Publication keeps requiring a complete declaration.
+  assert.match(memory, /unverified_reason\.trim\(\)\.is_empty\(\)/);
+  assert.match(memory, /scope\.declared\(\)/);
+  assert.match(memory, /operations\.is_empty\(\)/);
   assert.doesNotMatch(memory, /claude|codex|grok|opencode|qoder|deepseek|codebuddy|cursor|minimax|kiro|devin|cline|antigravity|mimo|kimi_code|command_code|zcode|\.claude|\.codex/i);
+  // The shared engine consumes the resolved directory and never dispatches on CLI ids.
+  const engine = (await readFile('src-tauri/src/resources/memory.rs', 'utf8')).split('#[cfg(test)]')[0];
+  assert.match(engine, /\.directory\(scope, home, project\.as_deref\(\)\)/);
+  assert.doesNotMatch(engine, /['"](?:codex|claude_code|grok|pi|open_code|glm|kimi|minimax|sub2api|newapi|zcode|qoder|kimi_code|deepseek|codebuddy)['"]/, 'memory engine must not dispatch on CLI ids');
+  // Adapter directories may own a memory module; wiring stays consistent.
   const entries = await readdir('src-tauri/src/adapters', { withFileTypes: true });
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const source = await readFile(`src-tauri/src/adapters/${entry.name}/mod.rs`, 'utf8');
-    assert.doesNotMatch(source, /fn memory\s*\(/, entry.name);
-    assert.doesNotMatch(source, /MemoryAdapter|MemoryDeclaration|MemoryManagement/, entry.name);
+    const wired = /fn memory\s*\(/.test(source);
+    const module = (await access(`src-tauri/src/adapters/${entry.name}/memory.rs`).then(() => true, () => false))
+      || (await access(`src-tauri/src/adapters/${entry.name}/memory/mod.rs`).then(() => true, () => false));
+    assert.equal(module, wired, `${entry.name}: memory wiring matches a memory module`);
+    if (wired) {
+      assert.match(source, /(?:pub\s+)?mod\s+memory\s*;/, `${entry.name}: wiring declares the memory module`);
+    } else {
+      assert.doesNotMatch(source, /MemoryAdapter|MemoryDeclaration|MemoryManagement/, entry.name);
+    }
   }
 });

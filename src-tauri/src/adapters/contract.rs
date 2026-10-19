@@ -66,8 +66,9 @@ pub struct ManagementCapabilities {
     pub plugins: bool,
     pub project_plugins: bool,
     pub rules: RuleSupport,
-    /// Published only when a memory port declares a location, a scope, and at least one operation.
-    /// A recorded unverified reason stays on the port and does not create an entry.
+    /// Published only when a memory port declares a scope and at least one
+    /// operation. The port resolves the storage directory per target; a
+    /// recorded unverified reason stays on the port and does not create an entry.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory: Option<super::memory::MemoryManagement>,
 }

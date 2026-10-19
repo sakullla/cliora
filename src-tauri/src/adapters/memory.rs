@@ -1,11 +1,17 @@
 //! Memory port. Absent unless an adapter declares verified storage.
 //!
-//! A descriptor entry exists only when that declaration has a location, a
-//! scope, and at least one operation. An unverified reason stays on the
-//! declaration and never becomes a management entry. Production CLIs do not
-//! declare native memory paths here.
+//! A descriptor entry exists only when the adapter declares a scope and at
+//! least one operation. The adapter resolves the storage directory per
+//! target; the shared engine runs every list, read, save, delete, and switch
+//! on that directory and keeps its transaction, exclusion, and symlink
+//! protections. An unverified reason stays on the declaration and never
+//! becomes a management entry. Production CLIs do not implement this port.
+
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
+
+use crate::native::adapter::Scope;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -53,8 +59,6 @@ impl MemoryOperation {
 /// Adapter-owned declaration. This is not a management entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MemoryDeclaration {
-    /// Verified storage identity owned by the adapter. Empty is not a location.
-    pub location: Option<&'static str>,
     pub scope: MemoryScope,
     pub targets: &'static [MemoryTargetDimension],
     pub operations: &'static [MemoryOperation],
@@ -69,7 +73,6 @@ pub struct MemoryDeclaration {
 impl MemoryDeclaration {
     pub const fn unverified(reason: &'static str) -> Self {
         Self {
-            location: None,
             scope: MemoryScope {
                 global: false,
                 project: false,
@@ -96,15 +99,25 @@ pub struct MemoryManagement {
 
 pub trait MemoryAdapter: Sync {
     fn declaration(&self) -> MemoryDeclaration;
+    /// Resolves the storage directory for the target, or returns the reason
+    /// storage is unavailable. The result must be absolute; the shared engine
+    /// rejects parent-directory components, excluded paths, and reparse
+    /// points before any read or write.
+    fn directory(
+        &self,
+        scope: Scope,
+        home: &Path,
+        project: Option<&Path>,
+    ) -> Result<PathBuf, String>;
 }
 
 /// Publishes scope, target dimensions, and operations only for a complete
-/// declaration. A non-empty unverified reason suppresses the entry.
+/// declaration: a declared scope and at least one operation with no
+/// unverified reason. Directory availability is resolved per operation by the
+/// adapter and is not part of this publication. A non-empty unverified reason
+/// suppresses the entry.
 pub(crate) fn publish(declaration: &MemoryDeclaration) -> Option<MemoryManagement> {
     if !declaration.unverified_reason.trim().is_empty() {
-        return None;
-    }
-    if declaration.location.is_none_or(|location| location.trim().is_empty()) {
         return None;
     }
     if !declaration.scope.declared() || declaration.operations.is_empty() {
@@ -134,7 +147,6 @@ mod tests {
 
     fn verified(operations: &'static [MemoryOperation]) -> MemoryDeclaration {
         MemoryDeclaration {
-            location: Some("fixture:memory"),
             scope: MemoryScope {
                 global: true,
                 project: false,
@@ -148,14 +160,8 @@ mod tests {
     }
 
     #[test]
-    fn publish_requires_location_scope_and_an_operation() {
+    fn publish_requires_a_declared_scope_and_an_operation() {
         assert!(publish(&verified(READ)).is_some());
-        let mut missing_location = verified(READ);
-        missing_location.location = None;
-        assert!(publish(&missing_location).is_none());
-        let mut blank_location = verified(READ);
-        blank_location.location = Some("  ");
-        assert!(publish(&blank_location).is_none());
         let mut missing_scope = verified(READ);
         missing_scope.scope = MemoryScope {
             global: false,
@@ -192,5 +198,42 @@ mod tests {
         assert!(!published.scope.project);
         assert_eq!(published.targets, vec![MemoryTargetDimension::Account]);
         assert!(!published.limitation.is_empty());
+    }
+
+    #[test]
+    fn directory_resolution_is_adapter_owned_per_target() {
+        struct Resolved;
+        impl MemoryAdapter for Resolved {
+            fn declaration(&self) -> MemoryDeclaration {
+                verified(READ)
+            }
+            fn directory(
+                &self,
+                scope: Scope,
+                home: &Path,
+                project: Option<&Path>,
+            ) -> Result<PathBuf, String> {
+                match (scope, project) {
+                    (Scope::Project, Some(project)) => Ok(project.join("memory")),
+                    (Scope::Global, _) => Ok(home.join("memory")),
+                    _ => Err("该项目没有记忆目录".into()),
+                }
+            }
+        }
+        let port = Resolved;
+        let home = Path::new("/home");
+        assert_eq!(
+            port.directory(Scope::Global, home, None).unwrap(),
+            home.join("memory")
+        );
+        let project = Path::new("/work/app");
+        assert_eq!(
+            port.directory(Scope::Project, home, Some(project)).unwrap(),
+            project.join("memory")
+        );
+        assert_eq!(
+            port.directory(Scope::Project, home, None).unwrap_err(),
+            "该项目没有记忆目录"
+        );
     }
 }
