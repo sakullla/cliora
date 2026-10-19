@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 use super::Grok;
 use crate::adapters::memory::{
     MemoryAdapter, MemoryDeclaration, MemoryFileChange, MemoryLayout, MemoryLayoutEntry,
-    MemoryOperation, MemoryScope, MemorySwitchState, MemoryTargetDimension,
+    MemoryOperation, MemoryScope, MemoryStoreRef, MemorySwitchState, MemoryTargetDimension,
 };
 use crate::native::adapter::Scope;
 use crate::native::format::{self, FileKind};
@@ -108,6 +108,48 @@ impl MemoryAdapter for Grok {
 
     fn layout(&self) -> Option<&dyn MemoryLayout> {
         Some(self)
+    }
+
+    /// Read-only: the global `topics` and every workspace-shaped
+    /// `workspaces/<name>-<hash>/topics`. The workspace slug (including its
+    /// hash suffix) is the label; the hash is not derivable from a project
+    /// identity, so `project_path` stays `None`.
+    fn existing_stores(&self, home: &Path) -> Vec<MemoryStoreRef> {
+        let root = grok_home(home).join("memory-v2");
+        let mut stores = Vec::new();
+        let global = root.join("global").join("topics");
+        if crate::adapters::memory::store_present(&global) {
+            stores.push(MemoryStoreRef {
+                scope: Scope::Global,
+                project_path: None,
+                label: "全局".to_owned(),
+                directory: global,
+            });
+        }
+        if let Ok(read) = fs::read_dir(root.join("workspaces")) {
+            for entry in read.flatten() {
+                if !crate::adapters::memory::store_present(&entry.path()) {
+                    continue;
+                }
+                let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                    continue;
+                };
+                if slug_prefix(&name).is_none() {
+                    continue;
+                }
+                let directory = entry.path().join("topics");
+                if !crate::adapters::memory::store_present(&directory) {
+                    continue;
+                }
+                stores.push(MemoryStoreRef {
+                    scope: Scope::Project,
+                    project_path: None,
+                    label: name,
+                    directory,
+                });
+            }
+        }
+        stores
     }
 }
 

@@ -5,7 +5,7 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 import type { AccountCapability, AccountImpact, AccountReapplyRequest, AuthAccount, NativeLoginSnapshot } from '../types/accounts';
 import type { AgentSnapshot, AgentRequest, AgentResult, PluginTarget, PluginRequest, PluginSnapshot, PluginResult } from '../types/resources';
 import type { ApiError, Bootstrap, CliId, Theme } from '../types/domain';
-import type { AdapterCatalog, ApplyComparison, ApplyOutcome, CommonConfig, CommonSaveResult, Connection, ConnectionCheck, MemoryDelete, MemoryDocument, MemoryEnable, MemoryList, MemorySave, MemoryTarget, ModelDirectory, NativeImport, NativeInspection, NativePreview, NativeProfile, PreservedProfile, RegisteredCommon, RegisteredCommonSaveResult, RegisteredProfile, RegisteredToolWorkspace, Scope, ToolWorkspace } from '../types/native';
+import type { AdapterCatalog, ApplyComparison, ApplyOutcome, CommonConfig, CommonSaveResult, Connection, ConnectionCheck, MemoryAggregate, MemoryDelete, MemoryDocument, MemoryEnable, MemoryList, MemorySave, MemoryTarget, ModelDirectory, NativeImport, NativeInspection, NativePreview, NativeProfile, PreservedProfile, RegisteredCommon, RegisteredCommonSaveResult, RegisteredProfile, RegisteredToolWorkspace, Scope, ToolWorkspace } from '../types/native';
 import type { LaunchMode, LaunchRequest, LaunchResult, LaunchSettings, Project, TerminalId, TrayStatus } from '../types/launch';
 import type { LibraryDraft, LibraryItem, LibraryKind } from '../types/library';
 import type { McpDefinition, McpDraft, McpPlacement, McpTargetRequest, McpTargetResult, NativeMcpEntry, NativeRuleFile, RuleTarget, RulePreview, RuleApplyResult, RulePlacement, RuleClientSelection, RuleSyncResult, SkillPackage, SkillImportPreview, SkillInstallation, SkillTargetResult, NativeSkillDocument, NativeSkillEntry, SkillTargetPreview, SkillRecoveryIssue } from '../types/resources';
@@ -267,6 +267,7 @@ export const native = {
   setCodexReasoningEffort: (text: string, effort: string | null) => command<string>('set_codex_reasoning_effort', { text, effort }),
   previewNativeProfile: (profile: NativeProfile, scope: Scope) => command<NativePreview>('preview_native_profile', { profile, scope }),
   listMemories: (target: MemoryTarget) => command<MemoryList>('list_memories', { target }),
+  listAllMemories: (toolId: string) => command<MemoryAggregate>('list_all_memories', { toolId }),
   readMemory: (target: MemoryTarget, id: string) => command<MemoryDocument>('read_memory', { target, id }),
   saveMemory: (request: MemorySave) => command<MemoryDocument>('save_memory', { request }),
   deleteMemory: (request: MemoryDelete) => command<void>('delete_memory', { request }),

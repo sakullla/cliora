@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use super::CodeBuddy;
 use crate::adapters::memory::{
     MemoryAdapter, MemoryDeclaration, MemoryFileChange, MemoryLayout, MemoryLayoutEntry,
-    MemoryOperation, MemoryScope, MemorySwitchState, MemoryTargetDimension,
+    MemoryOperation, MemoryScope, MemoryStoreRef, MemorySwitchState, MemoryTargetDimension,
 };
 use crate::native::adapter::Scope;
 use crate::native::format::{self, FileKind};
@@ -84,6 +84,64 @@ impl MemoryAdapter for CodeBuddy {
 
     fn layout(&self) -> Option<&dyn MemoryLayout> {
         Some(self)
+    }
+
+    /// Read-only: `memories/global`, every `projects/<slug>/memory`, and the
+    /// legacy `memories/<slug>` only while it is the location that would
+    /// resolve (the primary project directory does not exist), mirroring the
+    /// native fallback rule.
+    fn existing_stores(&self, home: &Path) -> Vec<MemoryStoreRef> {
+        let root = super::config_root(home);
+        let mut stores = Vec::new();
+        let global = root.join("memories").join("global");
+        if crate::adapters::memory::store_present(&global) {
+            stores.push(MemoryStoreRef {
+                scope: Scope::Global,
+                project_path: None,
+                label: "全局".to_owned(),
+                directory: global,
+            });
+        }
+        if let Ok(read) = fs::read_dir(root.join("projects")) {
+            for entry in read.flatten() {
+                if !crate::adapters::memory::store_present(&entry.path()) {
+                    continue;
+                }
+                let Some(slug) = entry.file_name().to_str().map(str::to_owned) else {
+                    continue;
+                };
+                let directory = entry.path().join("memory");
+                if !crate::adapters::memory::store_present(&directory) {
+                    continue;
+                }
+                stores.push(MemoryStoreRef {
+                    scope: Scope::Project,
+                    project_path: None,
+                    label: slug,
+                    directory,
+                });
+            }
+        }
+        if let Ok(read) = fs::read_dir(root.join("memories")) {
+            for entry in read.flatten() {
+                if !crate::adapters::memory::store_present(&entry.path()) {
+                    continue;
+                }
+                let Some(slug) = entry.file_name().to_str().map(str::to_owned) else {
+                    continue;
+                };
+                if slug == "global" || root.join("projects").join(&slug).join("memory").exists() {
+                    continue;
+                }
+                stores.push(MemoryStoreRef {
+                    scope: Scope::Project,
+                    project_path: None,
+                    label: slug,
+                    directory: entry.path(),
+                });
+            }
+        }
+        stores
     }
 }
 

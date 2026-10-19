@@ -36,7 +36,7 @@ use std::path::{Path, PathBuf};
 use super::MiMoCode;
 use crate::adapters::memory::{
     MemoryAdapter, MemoryDeclaration, MemoryFileChange, MemoryLayout, MemoryLayoutEntry,
-    MemoryOperation, MemoryScope, MemorySwitchState, MemoryTargetDimension,
+    MemoryOperation, MemoryScope, MemoryStoreRef, MemorySwitchState, MemoryTargetDimension,
 };
 use crate::native::adapter::Scope;
 
@@ -82,6 +82,40 @@ impl MemoryAdapter for MiMoCode {
 
     fn layout(&self) -> Option<&dyn MemoryLayout> {
         Some(self)
+    }
+
+    /// Read-only: `memory/global` and every `memory/projects/<id>`. The
+    /// native project id cannot be turned back into a project path, so
+    /// `project_path` stays `None` and the id doubles as the label.
+    fn existing_stores(&self, home: &Path) -> Vec<MemoryStoreRef> {
+        let root = super::data_root(home).join("memory");
+        let mut stores = Vec::new();
+        let global = root.join("global");
+        if crate::adapters::memory::store_present(&global) {
+            stores.push(MemoryStoreRef {
+                scope: Scope::Global,
+                project_path: None,
+                label: "全局".to_owned(),
+                directory: global,
+            });
+        }
+        if let Ok(read) = fs::read_dir(root.join("projects")) {
+            for entry in read.flatten() {
+                if !crate::adapters::memory::store_present(&entry.path()) {
+                    continue;
+                }
+                let Some(id) = entry.file_name().to_str().map(str::to_owned) else {
+                    continue;
+                };
+                stores.push(MemoryStoreRef {
+                    scope: Scope::Project,
+                    project_path: None,
+                    label: id,
+                    directory: entry.path(),
+                });
+            }
+        }
+        stores
     }
 }
 

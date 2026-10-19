@@ -16,6 +16,8 @@ export type MemoryTarget = {
   scope: Scope;
   projectPath: string | null;
   contextId?: string | null;
+  /** Adapter-enumerated store directory; only a store the backend re-enumerates is accepted. */
+  storeDirectory?: string | null;
 };
 export type MemoryEntry = { id: string; path: string; enabled: boolean; fingerprint: string };
 export type MemoryList = {
@@ -43,6 +45,22 @@ export type MemorySave = {
 };
 export type MemoryDelete = { target: MemoryTarget; id: string; baseline: string };
 export type MemoryEnable = { target: MemoryTarget; id?: string | null; enabled: boolean };
+export type MemoryFailedSource = { label: string; reason: string };
+export type MemoryStoreEntry = {
+  id: string;
+  path: string;
+  enabled: boolean;
+  fingerprint: string;
+  sourceLabel: string;
+  target: MemoryTarget;
+  inUse: boolean;
+  detail: string;
+};
+export type MemoryAggregate = {
+  toolId: string;
+  entries: MemoryStoreEntry[];
+  failedSources: MemoryFailedSource[];
+};
 export type AdapterFacet = { state: 'available' | 'planned' | 'supported' | 'unsupported'; reason: string };
 export type AdapterDescriptor = {
   id: string;

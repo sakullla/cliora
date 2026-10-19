@@ -250,6 +250,7 @@ pub fn run() {
             commands::list_rule_placements,
             commands::sync_rule_clients,
             commands::list_memories,
+            commands::list_all_memories,
             commands::read_memory,
             commands::save_memory,
             commands::delete_memory,

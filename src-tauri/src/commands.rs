@@ -919,6 +919,24 @@ pub async fn list_memories(
 }
 
 #[tauri::command]
+pub async fn list_all_memories(
+    app: AppHandle,
+    tool_id: String,
+) -> Result<resources::memory::MemoryAggregate, ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        resources::memory::list_all_memories(
+            &db,
+            &adapters::Registry::builtins(),
+            &home()?,
+            &tool_id,
+        )
+        .map_err(native_error)
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn read_memory(
     app: AppHandle,
     target: resources::memory::MemoryTarget,
