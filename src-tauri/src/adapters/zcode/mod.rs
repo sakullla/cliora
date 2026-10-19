@@ -15,6 +15,7 @@
 //! desktop contract and stay undelivered.
 
 pub(crate) mod agents;
+pub(crate) mod memory;
 pub mod history;
 mod install;
 pub(crate) mod plugins;
@@ -59,6 +60,9 @@ impl CliAdapter for ZCode {
         Some(self)
     }
     fn plugins(&self) -> Option<&dyn crate::adapters::plugins::PluginAdapter> {
+        Some(self)
+    }
+    fn memory(&self) -> Option<&dyn super::memory::MemoryAdapter> {
         Some(self)
     }
     fn id(&self) -> &'static str {

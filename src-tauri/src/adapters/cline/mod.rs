@@ -40,6 +40,7 @@
 //!   design.
 
 pub mod history;
+pub(crate) mod memory;
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -96,6 +97,9 @@ pub(crate) fn sessions_db(home: &Path) -> PathBuf {
 }
 
 impl CliAdapter for Cline {
+    fn memory(&self) -> Option<&dyn super::memory::MemoryAdapter> {
+        Some(self)
+    }
     fn id(&self) -> &'static str {
         "cline"
     }

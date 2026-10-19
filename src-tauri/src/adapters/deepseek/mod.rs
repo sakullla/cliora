@@ -12,6 +12,7 @@
 //! session resume, YOLO and product credential management remain unavailable.
 
 pub(crate) mod detect;
+pub(crate) mod memory;
 pub mod history;
 mod mcp;
 mod plugins;
@@ -54,6 +55,9 @@ impl CliAdapter for DeepSeek {
     }
     fn supports_skills(&self) -> bool {
         true
+    }
+    fn memory(&self) -> Option<&dyn super::memory::MemoryAdapter> {
+        Some(self)
     }
     fn id(&self) -> &'static str {
         "deepseek"

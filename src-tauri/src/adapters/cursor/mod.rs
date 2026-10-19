@@ -6,6 +6,7 @@
 //! Cancelling the preference does not delete local Cursor files.
 
 mod agents;
+pub(crate) mod memory;
 mod history;
 mod install;
 mod plugins;
@@ -32,6 +33,9 @@ pub struct Cursor;
 const CONNECTION_DENIED: &str = "Cursor 不提供供应商、请求地址、登录或模型连接";
 
 impl CliAdapter for Cursor {
+    fn memory(&self) -> Option<&dyn super::memory::MemoryAdapter> {
+        Some(self)
+    }
     fn id(&self) -> &'static str {
         "cursor"
     }

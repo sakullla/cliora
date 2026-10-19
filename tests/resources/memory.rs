@@ -1448,10 +1448,19 @@ fn project_memory_stays_on_the_selected_project() {
 }
 
 #[test]
-fn missing_port_does_not_create_memory() {
+fn unverified_builtin_memory_does_not_create_memory() {
     let harness = harness();
     let registry = Registry::builtins();
     for id in ["codex", "claude_code"] {
+        // Every builtin now implements the memory port carrying its recorded
+        // verdict (2026-10-19 adapter-verdict-coverage); until the local
+        // verification lands the reason stays non-empty and the engine must
+        // refuse before creating anything.
+        let declaration = registry.get(id).unwrap().memory().unwrap().declaration();
+        assert!(
+            !declaration.unverified_reason.trim().is_empty(),
+            "{id} 应记录未核实原因"
+        );
         let error = list_memories(
             &harness.db,
             &registry,
@@ -1459,7 +1468,7 @@ fn missing_port_does_not_create_memory() {
             &memory_target(id, Scope::Global, None, None),
         )
         .unwrap_err();
-        assert!(error.contains("没有已核实的记忆"), "{id}: {error}");
+        assert!(error.contains("尚未核实"), "{id}: {error}");
     }
     assert!(!harness.home.join("cliora-memory").exists());
 }

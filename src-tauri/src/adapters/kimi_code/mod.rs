@@ -11,6 +11,7 @@
 //! docs/sakullla-workflow/2026-10-03-new-cli-adapters-default-off for sources.
 
 pub(crate) mod configuration;
+pub(crate) mod memory;
 pub(crate) mod agents;
 pub mod history;
 mod mcp_command;
@@ -86,6 +87,9 @@ impl CliAdapter for KimiCode {
         Some(self)
     }
     fn plugins(&self) -> Option<&dyn crate::adapters::plugins::PluginAdapter> {
+        Some(self)
+    }
+    fn memory(&self) -> Option<&dyn super::memory::MemoryAdapter> {
         Some(self)
     }
     fn id(&self) -> &'static str {

@@ -4,6 +4,7 @@
 //! services. Native account credentials and transcript parsing stay unavailable.
 
 pub(crate) mod agents;
+pub(crate) mod memory;
 pub(crate) mod plugins;
 
 use std::collections::BTreeMap;
@@ -79,6 +80,9 @@ impl CliAdapter for QoderAdapter {
         Some(self)
     }
     fn plugins(&self) -> Option<&dyn PluginAdapter> {
+        Some(self)
+    }
+    fn memory(&self) -> Option<&dyn super::memory::MemoryAdapter> {
         Some(self)
     }
     fn id(&self) -> &'static str {

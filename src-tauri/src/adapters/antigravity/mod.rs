@@ -40,6 +40,7 @@
 //!   ports stay absent by design.
 
 pub(crate) mod history;
+pub(crate) mod memory;
 pub(crate) mod protobuf;
 
 use std::path::{Path, PathBuf};
@@ -69,6 +70,9 @@ pub(crate) fn data_root(home: &Path) -> PathBuf {
 pub struct Antigravity;
 
 impl CliAdapter for Antigravity {
+    fn memory(&self) -> Option<&dyn super::memory::MemoryAdapter> {
+        Some(self)
+    }
     fn id(&self) -> &'static str {
         "antigravity"
     }

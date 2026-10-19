@@ -1057,19 +1057,65 @@ impl crate::adapters::CliAdapter for MemoryFixture {
 }
 
 #[test]
-fn memory_stays_absent_without_a_verified_declaration() {
+fn builtin_memory_declarations_follow_the_three_state_publication_contract() {
     use crate::adapters::memory::{MemoryOperation, MemoryScope, MemoryTargetDimension};
 
     let registry = Registry::builtins();
     for id in PRODUCTION_IDS {
         assert!(registry.get(id).is_some(), "{id} 应已注册");
     }
+    // Every builtin implements the memory port and carries a recorded verdict
+    // (2026-10-19 adapter-verdict-coverage). A complete declaration must
+    // publish an entry whose scope, targets, and operations match the
+    // declaration; a non-empty unverified reason must keep the verdict off
+    // the descriptor and out of its serialized form.
     for adapter in registry.iter() {
-        assert!(adapter.memory().is_none(), "{} 未核实，不应实现记忆端口", adapter.id());
+        let port = adapter
+            .memory()
+            .unwrap_or_else(|| panic!("{} 应实现记忆端口并带结论声明", adapter.id()));
+        let declaration = port.declaration();
         let descriptor = adapter.descriptor();
-        assert!(descriptor.management.memory.is_none(), "{} 不应出现记忆入口", adapter.id());
-        let json = serde_json::to_value(&descriptor).unwrap();
-        assert!(json["management"].get("memory").is_none(), "{} 的描述符不应序列化记忆入口", adapter.id());
+        if declaration.unverified_reason.trim().is_empty() {
+            assert!(
+                declaration.scope.declared(),
+                "{} 完整声明必须声明记忆范围",
+                adapter.id()
+            );
+            assert!(
+                !declaration.operations.is_empty(),
+                "{} 完整声明必须声明操作集",
+                adapter.id()
+            );
+            let published = descriptor
+                .management
+                .memory
+                .unwrap_or_else(|| panic!("{} 完整声明应发布记忆入口", adapter.id()));
+            assert_eq!(published.scope, declaration.scope, "{}", adapter.id());
+            assert_eq!(
+                published.targets,
+                declaration.targets.to_vec(),
+                "{}",
+                adapter.id()
+            );
+            assert_eq!(
+                published.operations,
+                declaration.operations.to_vec(),
+                "{}",
+                adapter.id()
+            );
+        } else {
+            assert!(
+                descriptor.management.memory.is_none(),
+                "{} 原因非空不应发布记忆入口",
+                adapter.id()
+            );
+            let json = serde_json::to_value(&descriptor).unwrap();
+            assert!(
+                json["management"].get("memory").is_none(),
+                "{} 的描述符不应序列化记忆入口",
+                adapter.id()
+            );
+        }
     }
 
     static PROJECT: MemoryFixture = MemoryFixture { kind: MemoryFixtureKind::Project };
