@@ -625,19 +625,18 @@ fn checked_scope(
         Scope::Project if declaration.scope.project => {
             // An enumerated store already pins its native location, and the
             // project behind an on-disk identity (slug, hash, UUID) is not
-            // recoverable for every family, so only a store that itself
-            // carries a project path resolves one.
-            let project = match store {
-                Some(store) => store
-                    .project_path
-                    .as_deref()
-                    .map(projects::checked_directory)
-                    .transpose()?,
-                None => Some(projects::checked_directory(
-                    target.project_path.as_deref().ok_or("请选择项目目录")?,
-                )?),
-            };
-            Ok((Scope::Project, project))
+            // recoverable for every family. The store directory is therefore
+            // authoritative on its own: the project behind it is neither
+            // re-validated nor resolved, because entries cannot leave the
+            // store directory and a project-domain exclusion never guards
+            // anything inside it. Only a store-less target needs the caller's
+            // project, validated as before.
+            if store.is_some() {
+                return Ok((Scope::Project, None));
+            }
+            let project =
+                projects::checked_directory(target.project_path.as_deref().ok_or("请选择项目目录")?)?;
+            Ok((Scope::Project, Some(project)))
         }
         _ => Err("此 CLI 的记忆不覆盖当前范围".into()),
     }
@@ -710,14 +709,30 @@ fn excluded_paths(
         // the adapter root (plus the disabled marker directory). Excluding the
         // whole root would swallow unrelated native state that shares the
         // config root, such as a CLI's memory workspace.
-        let root = agents
-            .root(scope, home, project)
-            .map_err(|error| format!("无法确认 Agent 定义路径，请重试：{error}"))?;
-        if agents.scans_definition_directories() {
-            for directory in agents.definition_dirs() {
-                paths.push(root.join(directory));
+        let resolved = agents.root(scope, home, project);
+        let root = match resolved {
+            Ok(root) => Some(root),
+            Err(error) => {
+                if scope == Scope::Project && project.is_none() {
+                    // Only an enumerated store target reaches the project
+                    // scope without a project: its writes are confined to the
+                    // adapter-reported store directory, which a project-domain
+                    // agent definition never guards, so an adapter that needs
+                    // the project to name that root is skipped instead of
+                    // failing the whole store.
+                    None
+                } else {
+                    return Err(format!("无法确认 Agent 定义路径，请重试：{error}"));
+                }
             }
-            paths.push(root.join(".cliora-disabled-agents"));
+        };
+        if let Some(root) = root {
+            if agents.scans_definition_directories() {
+                for directory in agents.definition_dirs() {
+                    paths.push(root.join(directory));
+                }
+                paths.push(root.join(".cliora-disabled-agents"));
+            }
         }
     }
     paths.extend(
