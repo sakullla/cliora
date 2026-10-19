@@ -23,7 +23,6 @@ const LibraryPage = lazy(() => import('./features/library/LibraryPage').then((mo
 const RecordsPage = lazy(() => import('./features/records/RecordsPage').then((module) => ({ default: module.RecordsPage })));
 const MigrationSettings = lazy(() => import('./features/settings/MigrationSettings').then((module) => ({ default: module.MigrationSettings })));
 const ToolWorkspacePage = lazy(() => import('./features/tools/ToolWorkspace').then((module) => ({ default: module.ToolWorkspacePage })));
-const MemoryPage = lazy(() => import('./features/memory/MemoryPage').then((module) => ({ default: module.MemoryPage })));
 import type { WorkspaceOpenIntent } from './features/tools/ToolWorkspace';
 import { applyStoredLanguage, readStoredLanguage } from './i18n';
 import { native, nativeAvailable } from './lib/native';
@@ -38,7 +37,7 @@ import type { Project, TrayRepairTarget } from './types/launch';
 import type { LibraryItem, LibraryKind } from './types/library';
 import type { AdapterCatalog } from './types/native';
 
-type Page = 'home' | 'connections' | 'library' | 'memory' | 'records' | 'settings';
+type Page = 'home' | 'connections' | 'library' | 'records' | 'settings';
 type SettingsTab = 'general' | 'migration';
 /** Cross-page locate requests; `target` keeps one spotlight pipeline for every destination. */
 type Spotlight =
@@ -52,20 +51,6 @@ const pages: { id: Page; glyph: IconName }[] = [
   { id: 'records', glyph: 'records' },
   { id: 'settings', glyph: 'settings' },
 ];
-
-/** Read the configuration project as an initial memory suggestion. Memory must not write this key. */
-function readConfigurationProject(toolId: string | undefined): string | null {
-  if (!toolId) return null;
-  try {
-    const parsed = JSON.parse(localStorage.getItem('cliora:workspace-context') ?? '{}') as Record<string, { scope?: unknown; projectPath?: unknown }>;
-    const entry = parsed[toolId];
-    if (!entry || entry.scope !== 'project' || typeof entry.projectPath !== 'string') return null;
-    const path = entry.projectPath.trim();
-    return path || null;
-  } catch {
-    return null;
-  }
-}
 
 const themes: { id: Theme; glyph: IconName }[] = [
   { id: 'system', glyph: 'monitor' },
@@ -320,15 +305,8 @@ export default function App() {
   const managed: string[] = nativeAvailable ? catalog?.managedIds ?? [] : bootstrap.preferences.managed_tools;
   const visible = (nativeAvailable ? catalog?.registered ?? [] : bootstrap.tools).filter((item) => managed.includes(item.id));
   const visibleDescriptors = (catalog?.registered ?? []).filter((item) => managed.includes(item.id));
-  const memoryVisible = visibleDescriptors.some((item) => item.management?.memory);
-  const navPages = memoryVisible
-    ? [...pages.slice(0, 3), { id: 'memory' as const, glyph: 'clipboard' as const }, ...pages.slice(3)]
-    : pages;
   const selectedTool = visible.some((item) => item.id === tool) ? tool : visible[0]?.id;
   const selectedToolName = visible.find((item) => item.id === selectedTool)?.name ?? selectedTool;
-  useEffect(() => {
-    if (loaded && page === 'memory' && !memoryVisible) setPage('home');
-  }, [loaded, page, memoryVisible]);
   const title: [string, string] = [t(`common.pages.${page}.title`), t(`common.pages.${page}.subtitle`)];
 
   async function go(next: Page) {
@@ -445,7 +423,7 @@ export default function App() {
 
   const libraryKindLabel = (kind: LibraryKind) => t(kind === 'prompt' ? 'library.page.prompt' : 'library.page.ruleShort');
   const commands: CommandItem[] = [
-    ...navPages.map((item) => {
+    ...pages.map((item) => {
       const shortcut = pages.findIndex((pageItem) => pageItem.id === item.id);
       return { id: `page-${item.id}`, group: t('common.palette.groupPages'), label: t(`common.nav.${item.id}`), hint: shortcut >= 0 ? `${modLabel}+${shortcut + 1}` : undefined, keywords: item.id, icon: item.glyph, run: () => { void go(item.id); } };
     }),
@@ -491,7 +469,7 @@ export default function App() {
       <button type="button" className="sidebar-command" aria-label={t('common.shell.commandTitle', { shortcut: `${modLabel}+K` })} title={t('common.shell.commandTitle', { shortcut: `${modLabel}+K` })} onClick={() => setPaletteOpen(true)}><Icon name="search" size={15} /><span>{t('common.palette.title')}</span><kbd>{modLabel}+K</kbd></button>
       <div className="nav-label" aria-hidden="true">{t('common.nav.workspace')}</div>
       <nav className="nav" id="main-navigation" aria-label={t('common.nav.label')}>
-        {navPages.map((item) => { const label = t(`common.nav.${item.id}`); const shortcut = pages.findIndex((pageItem) => pageItem.id === item.id); const shortcutLabel = shortcut >= 0 ? `${modLabel}+${shortcut + 1}` : ''; return <Fragment key={item.id}>{item.id === 'settings' && <span className="nav-divider" aria-hidden="true" />}<button type="button" className={page === item.id ? 'active' : ''} aria-label={label} aria-current={page === item.id ? 'page' : undefined} aria-keyshortcuts={shortcut >= 0 ? `${modAria}+${shortcut + 1}` : undefined} title={shortcutLabel ? t('common.nav.itemTitle', { label, shortcut: shortcutLabel }) : label} onClick={() => go(item.id)}>
+        {pages.map((item) => { const label = t(`common.nav.${item.id}`); const shortcut = pages.findIndex((pageItem) => pageItem.id === item.id); const shortcutLabel = shortcut >= 0 ? `${modLabel}+${shortcut + 1}` : ''; return <Fragment key={item.id}>{item.id === 'settings' && <span className="nav-divider" aria-hidden="true" />}<button type="button" className={page === item.id ? 'active' : ''} aria-label={label} aria-current={page === item.id ? 'page' : undefined} aria-keyshortcuts={shortcut >= 0 ? `${modAria}+${shortcut + 1}` : undefined} title={shortcutLabel ? t('common.nav.itemTitle', { label, shortcut: shortcutLabel }) : label} onClick={() => go(item.id)}>
           <span className="nav-glyph" aria-hidden="true"><Icon name={item.glyph} /></span><span className="nav-text">{label}</span>
         </button></Fragment>; })}
       </nav>
@@ -526,7 +504,6 @@ export default function App() {
           {selectedTool ? nativeAvailable ? <Suspense fallback={<PageSkeleton />}><ToolWorkspacePage managedTools={visibleDescriptors} initialTool={selectedTool} openSequence={toolOpenSequence} openIntent={toolIntent} active={page === 'connections'} repair={trayRepair?.page === 'connections' ? trayRepair : null} onDirtyChange={onWorkspaceDirtyChange} discardSignal={workspaceDiscard} /></Suspense> : <><div className="tool-tabs" role="tablist" aria-label={t('tools.preview.tabsLabel')} onKeyDown={navigateChoices}>{visible.map((item) => <button key={item.id} type="button" role="tab" aria-selected={selectedTool === item.id} tabIndex={selectedTool === item.id ? 0 : -1} className={selectedTool === item.id ? 'active' : ''} onClick={() => setTool(item.id)}>{item.name}</button>)}</div><EmptyState title={t('tools.preview.configTitle', { name: selectedToolName })} detail={t('tools.preview.emptyDetail')} /></> : <EmptyState title={t('tools.empty.title')} detail={t('tools.empty.detail')} action={<button className="button primary" type="button" onClick={() => go('settings')}>{t('common.goSettings')}</button>} />}
         </div>}
         <div hidden={page !== 'library'}>{hasVisited('library') && <Suspense fallback={<PageSkeleton />}><LibraryPage managedTools={visibleDescriptors} active={page === 'library'} spotlight={page === 'library' && spotlight?.target === 'library' ? spotlight : null} /></Suspense>}</div>
-        <div hidden={page !== 'memory'}>{memoryVisible && hasVisited('memory') && <Suspense fallback={<PageSkeleton />}><MemoryPage active={page === 'memory'} tools={visibleDescriptors.filter((item) => item.management?.memory)} suggestedProjectPath={readConfigurationProject(selectedTool)} /></Suspense>}</div>
         <div className="records-shell" hidden={page !== 'records'}>{hasVisited('records') && <Suspense fallback={<PageSkeleton />}><RecordsPage active={page === 'records'} tools={visibleDescriptors} onOpenProjects={() => go('home')} /></Suspense>}</div>
         {page === 'settings' && <Tabs label={t('settings.tabs.label')} items={[['general', t('settings.tabs.general')], ['migration', t('settings.tabs.migration')]]} value={settingsTab} onChange={setSettingsTab} />}
         {page === 'settings' && settingsTab === 'general' && <GeneralSettings
