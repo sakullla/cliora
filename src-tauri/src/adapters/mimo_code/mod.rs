@@ -634,6 +634,7 @@ impl CliAdapter for MiMoCode {
                 plugins: true,
                 project_plugins: true,
                 rules: RuleSupport::bare(false, false),
+                memory: self.published_memory(),
             },
         }
     }

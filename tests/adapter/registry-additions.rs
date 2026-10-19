@@ -846,3 +846,299 @@ fn cursor_and_minimax_code_stay_separate_from_the_minimax_quota_provider() {
         }
     }
 }
+
+const PRODUCTION_IDS: [&str; 18] = [
+    "codex",
+    "claude_code",
+    "grok",
+    "pi",
+    "open_code",
+    "zcode",
+    "qoder_cn",
+    "kimi_code",
+    "deepseek",
+    "codebuddy",
+    "mimo_code",
+    "cline",
+    "devin",
+    "command_code",
+    "antigravity",
+    "kiro",
+    "cursor",
+    "minimax_code",
+];
+
+#[derive(Clone, Copy)]
+enum MemoryFixtureKind {
+    Project,
+    GlobalReadOnly,
+    SessionsOnly,
+    Unverified,
+    MissingLocation,
+    MissingScope,
+    MissingOperation,
+    ReasonBlocksEntry,
+}
+
+struct MemoryFixture {
+    kind: MemoryFixtureKind,
+}
+
+const PROJECT_OPS: &[crate::adapters::memory::MemoryOperation] = &[
+    crate::adapters::memory::MemoryOperation::List,
+    crate::adapters::memory::MemoryOperation::Open,
+    crate::adapters::memory::MemoryOperation::Create,
+    crate::adapters::memory::MemoryOperation::Edit,
+    crate::adapters::memory::MemoryOperation::Delete,
+    crate::adapters::memory::MemoryOperation::MasterSwitch,
+    crate::adapters::memory::MemoryOperation::ItemEnable,
+];
+const READ_OPS: &[crate::adapters::memory::MemoryOperation] = &[
+    crate::adapters::memory::MemoryOperation::List,
+    crate::adapters::memory::MemoryOperation::Open,
+];
+const PROJECT_TARGETS: &[crate::adapters::memory::MemoryTargetDimension] =
+    &[crate::adapters::memory::MemoryTargetDimension::Project];
+const ACCOUNT_TARGETS: &[crate::adapters::memory::MemoryTargetDimension] =
+    &[crate::adapters::memory::MemoryTargetDimension::Account];
+
+impl MemoryFixture {
+    fn declaration(&self) -> crate::adapters::memory::MemoryDeclaration {
+        use crate::adapters::memory::{MemoryDeclaration, MemoryScope};
+        match self.kind {
+            MemoryFixtureKind::Project => MemoryDeclaration {
+                location: Some("fixture:project-memory"),
+                scope: MemoryScope { global: false, project: true },
+                targets: PROJECT_TARGETS,
+                operations: PROJECT_OPS,
+                unverified_reason: "",
+                limitation: "",
+                binds_account: false,
+            },
+            MemoryFixtureKind::GlobalReadOnly => MemoryDeclaration {
+                location: Some("fixture:global-memory"),
+                scope: MemoryScope { global: true, project: false },
+                targets: ACCOUNT_TARGETS,
+                operations: READ_OPS,
+                unverified_reason: "",
+                limitation: "只读存储，不能新建、编辑、删除或启停",
+                binds_account: true,
+            },
+            MemoryFixtureKind::SessionsOnly => MemoryDeclaration::unverified("只有会话存储，不是记忆"),
+            MemoryFixtureKind::Unverified => MemoryDeclaration::unverified("尚未核实独立记忆存储"),
+            MemoryFixtureKind::MissingLocation => MemoryDeclaration {
+                location: None,
+                scope: MemoryScope { global: false, project: true },
+                targets: PROJECT_TARGETS,
+                operations: READ_OPS,
+                unverified_reason: "",
+                limitation: "",
+                binds_account: false,
+            },
+            MemoryFixtureKind::MissingScope => MemoryDeclaration {
+                location: Some("fixture:no-scope"),
+                scope: MemoryScope { global: false, project: false },
+                targets: &[],
+                operations: READ_OPS,
+                unverified_reason: "",
+                limitation: "",
+                binds_account: false,
+            },
+            MemoryFixtureKind::MissingOperation => MemoryDeclaration {
+                location: Some("fixture:no-operation"),
+                scope: MemoryScope { global: true, project: false },
+                targets: &[],
+                operations: &[],
+                unverified_reason: "",
+                limitation: "",
+                binds_account: false,
+            },
+            MemoryFixtureKind::ReasonBlocksEntry => MemoryDeclaration {
+                location: Some("fixture:unverified-complete"),
+                scope: MemoryScope { global: true, project: false },
+                targets: ACCOUNT_TARGETS,
+                operations: READ_OPS,
+                unverified_reason: "位置尚未核实",
+                limitation: "",
+                binds_account: true,
+            },
+        }
+    }
+}
+
+impl crate::adapters::memory::MemoryAdapter for MemoryFixture {
+    fn declaration(&self) -> crate::adapters::memory::MemoryDeclaration {
+        MemoryFixture::declaration(self)
+    }
+}
+
+impl crate::adapters::CliAdapter for MemoryFixture {
+    fn id(&self) -> &'static str {
+        match self.kind {
+            MemoryFixtureKind::Project => "fixture_project_memory",
+            MemoryFixtureKind::GlobalReadOnly => "fixture_global_memory",
+            MemoryFixtureKind::SessionsOnly => "fixture_sessions_only",
+            MemoryFixtureKind::Unverified => "fixture_unverified_memory",
+            MemoryFixtureKind::MissingLocation => "fixture_memory_no_location",
+            MemoryFixtureKind::MissingScope => "fixture_memory_no_scope",
+            MemoryFixtureKind::MissingOperation => "fixture_memory_no_operation",
+            MemoryFixtureKind::ReasonBlocksEntry => "fixture_memory_reason_blocks",
+        }
+    }
+    fn name(&self) -> &'static str { self.id() }
+    fn command(&self) -> &'static str { "fixture-memory" }
+    fn npm_package(&self) -> &'static str { "" }
+    fn version_identity(&self, _basename: &str, _output: &str) -> bool { false }
+    fn native_files(
+        &self,
+        _scope: crate::native::adapter::Scope,
+        _home: &Path,
+        _project: Option<&Path>,
+        _known: bool,
+    ) -> Vec<crate::native::adapter::NativeFile> {
+        Vec::new()
+    }
+    fn interface_formats(&self) -> &'static [&'static str] { &[] }
+    fn file_kind(&self, _role: &str) -> Result<crate::native::format::FileKind, String> {
+        Err("夹具不提供原生文件".into())
+    }
+    fn connection_documents(
+        &self,
+        _connection: &crate::native::profile::Connection,
+        _scope: crate::native::adapter::Scope,
+    ) -> Result<std::collections::BTreeMap<String, serde_json::Value>, String> {
+        Ok(std::collections::BTreeMap::new())
+    }
+    fn write_connection_secret(
+        &self,
+        _profile: &crate::native::profile::RegisteredProfile,
+        _scope: crate::native::adapter::Scope,
+        _credentials: &dyn crate::credentials::CredentialStore,
+        _secrets: &mut crate::native::apply::NativeSecrets,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    fn has_native_secret(&self, _role: &str, _root: &serde_json::Value) -> bool { false }
+    fn inspect_values(
+        &self,
+        _settings: &serde_json::Value,
+        _local_settings: &serde_json::Value,
+        _models: &serde_json::Value,
+    ) -> crate::adapters::InspectionFields {
+        crate::adapters::InspectionFields::default()
+    }
+    fn launch_args(
+        &self,
+        _session: Option<&str>,
+        _mode: crate::adapters::LaunchMode,
+    ) -> Result<Vec<String>, String> {
+        Ok(Vec::new())
+    }
+    fn install_guidance(&self) -> (&'static str, &'static str) { ("", "") }
+    fn history_supported(&self) -> bool {
+        matches!(self.kind, MemoryFixtureKind::SessionsOnly)
+    }
+    fn memory(&self) -> Option<&dyn crate::adapters::memory::MemoryAdapter> {
+        match self.kind {
+            MemoryFixtureKind::SessionsOnly => None,
+            _ => Some(self),
+        }
+    }
+}
+
+#[test]
+fn memory_stays_absent_without_a_verified_declaration() {
+    use crate::adapters::memory::{MemoryOperation, MemoryScope, MemoryTargetDimension};
+
+    let registry = Registry::builtins();
+    for id in PRODUCTION_IDS {
+        assert!(registry.get(id).is_some(), "{id} 应已注册");
+    }
+    for adapter in registry.iter() {
+        assert!(adapter.memory().is_none(), "{} 未核实，不应实现记忆端口", adapter.id());
+        let descriptor = adapter.descriptor();
+        assert!(descriptor.management.memory.is_none(), "{} 不应出现记忆入口", adapter.id());
+        let json = serde_json::to_value(&descriptor).unwrap();
+        assert!(json["management"].get("memory").is_none(), "{} 的描述符不应序列化记忆入口", adapter.id());
+    }
+
+    static PROJECT: MemoryFixture = MemoryFixture { kind: MemoryFixtureKind::Project };
+    static GLOBAL: MemoryFixture = MemoryFixture { kind: MemoryFixtureKind::GlobalReadOnly };
+    static SESSIONS: MemoryFixture = MemoryFixture { kind: MemoryFixtureKind::SessionsOnly };
+    static UNVERIFIED: MemoryFixture = MemoryFixture { kind: MemoryFixtureKind::Unverified };
+    static NO_LOCATION: MemoryFixture = MemoryFixture { kind: MemoryFixtureKind::MissingLocation };
+    static NO_SCOPE: MemoryFixture = MemoryFixture { kind: MemoryFixtureKind::MissingScope };
+    static NO_OPERATION: MemoryFixture = MemoryFixture { kind: MemoryFixtureKind::MissingOperation };
+    static REASON_BLOCKS: MemoryFixture = MemoryFixture { kind: MemoryFixtureKind::ReasonBlocksEntry };
+    let fixtures = Registry::with_adapters(vec![
+        &PROJECT,
+        &GLOBAL,
+        &SESSIONS,
+        &UNVERIFIED,
+        &NO_LOCATION,
+        &NO_SCOPE,
+        &NO_OPERATION,
+        &REASON_BLOCKS,
+    ])
+    .unwrap();
+
+    let project = fixtures.get("fixture_project_memory").unwrap().descriptor().management.memory.unwrap();
+    let global = fixtures.get("fixture_global_memory").unwrap().descriptor().management.memory.unwrap();
+    assert_eq!(project.scope, MemoryScope { global: false, project: true });
+    assert_eq!(global.scope, MemoryScope { global: true, project: false });
+    assert_eq!(project.targets, vec![MemoryTargetDimension::Project]);
+    assert_eq!(global.targets, vec![MemoryTargetDimension::Account]);
+    assert_eq!(project.operations, PROJECT_OPS);
+    assert_eq!(global.operations, vec![MemoryOperation::List, MemoryOperation::Open]);
+    assert_ne!(project.scope, global.scope);
+    assert_ne!(project.targets, global.targets);
+    assert_ne!(project.operations, global.operations);
+    for operation in [
+        MemoryOperation::Create,
+        MemoryOperation::Edit,
+        MemoryOperation::Delete,
+        MemoryOperation::MasterSwitch,
+        MemoryOperation::ItemEnable,
+    ] {
+        assert!(project.operations.contains(&operation), "可写夹具应声明 {operation:?}");
+        assert!(!global.operations.contains(&operation), "只读夹具不应声明 {operation:?}");
+    }
+    assert!(global.limitation.contains("只读"));
+    assert!(project.limitation.is_empty());
+    let project_port = fixtures.get("fixture_project_memory").unwrap().memory().unwrap().declaration();
+    let global_port = fixtures.get("fixture_global_memory").unwrap().memory().unwrap().declaration();
+    assert_eq!(project_port.location, Some("fixture:project-memory"));
+    assert_eq!(global_port.location, Some("fixture:global-memory"));
+    assert!(!project_port.binds_account);
+    assert!(global_port.binds_account);
+
+    let sessions = fixtures.get("fixture_sessions_only").unwrap();
+    assert!(sessions.history_supported());
+    assert_eq!(sessions.descriptor().history.state, "available");
+    assert!(sessions.memory().is_none());
+    assert!(sessions.descriptor().management.memory.is_none());
+
+    let unverified = fixtures.get("fixture_unverified_memory").unwrap();
+    let declaration = unverified.memory().unwrap().declaration();
+    assert_eq!(declaration.unverified_reason, "尚未核实独立记忆存储");
+    assert!(declaration.location.is_none());
+    assert!(unverified.descriptor().management.memory.is_none());
+    let json = serde_json::to_value(unverified.descriptor()).unwrap();
+    assert!(json["management"].get("memory").is_none());
+    assert!(!json.to_string().contains("尚未核实"));
+
+    for id in [
+        "fixture_memory_no_location",
+        "fixture_memory_no_scope",
+        "fixture_memory_no_operation",
+        "fixture_memory_reason_blocks",
+    ] {
+        let adapter = fixtures.get(id).unwrap();
+        assert!(adapter.memory().is_some(), "{id} 仍有记忆端口");
+        assert!(adapter.descriptor().management.memory.is_none(), "{id} 不应出现记忆入口");
+    }
+    assert_eq!(
+        fixtures.get("fixture_memory_reason_blocks").unwrap().memory().unwrap().declaration().unverified_reason,
+        "位置尚未核实"
+    );
+}

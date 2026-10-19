@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, access } from 'node:fs/promises';
+import { readFile, access, readdir } from 'node:fs/promises';
 
 const sources = [
   'src-tauri/src/accounts/context.rs', 'src-tauri/src/accounts/native.rs',
@@ -47,4 +47,21 @@ test('configuration ports are registered capabilities and draft IPC never writes
   const apply = await readFile('src-tauri/src/native/apply.rs', 'utf8');
   assert.match(apply, /managed_fields/);
   assert.match(apply, /transaction::/);
+});
+
+test('memory is an adapter capability that stays absent without a verified declaration', async () => {
+  const contract = await readFile('src-tauri/src/adapters/contract.rs', 'utf8');
+  assert.match(contract, /pub memory: Option<super::memory::MemoryManagement>/);
+  assert.match(contract, /fn memory\(&self\) -> Option<&dyn super::memory::MemoryAdapter> \{\r?\n\s*None\r?\n\s*\}/);
+  assert.match(contract, /fn published_memory\(&self\)/);
+  const memory = await readFile('src-tauri/src/adapters/memory.rs', 'utf8');
+  assert.match(memory, /fn publish\(declaration: &MemoryDeclaration\) -> Option<MemoryManagement>/);
+  assert.doesNotMatch(memory, /claude|codex|grok|opencode|qoder|deepseek|codebuddy|cursor|minimax|kiro|devin|cline|antigravity|mimo|kimi_code|command_code|zcode|\.claude|\.codex/i);
+  const entries = await readdir('src-tauri/src/adapters', { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const source = await readFile(`src-tauri/src/adapters/${entry.name}/mod.rs`, 'utf8');
+    assert.doesNotMatch(source, /fn memory\s*\(/, entry.name);
+    assert.doesNotMatch(source, /MemoryAdapter|MemoryDeclaration|MemoryManagement/, entry.name);
+  }
 });
