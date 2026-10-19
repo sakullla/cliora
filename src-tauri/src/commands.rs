@@ -906,6 +906,96 @@ pub async fn apply_rule_targets(
 }
 
 #[tauri::command]
+pub async fn list_memories(
+    app: AppHandle,
+    target: resources::memory::MemoryTarget,
+) -> Result<resources::memory::MemoryList, ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        resources::memory::list_memories(&db, &adapters::Registry::builtins(), &home()?, &target)
+            .map_err(native_error)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn read_memory(
+    app: AppHandle,
+    target: resources::memory::MemoryTarget,
+    id: String,
+) -> Result<resources::memory::MemoryDocument, ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        resources::memory::read_memory(
+            &db,
+            &adapters::Registry::builtins(),
+            &home()?,
+            &target,
+            &id,
+        )
+        .map_err(native_error)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn save_memory(
+    app: AppHandle,
+    request: resources::memory::MemorySave,
+) -> Result<resources::memory::MemoryDocument, ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        resources::memory::save_memory(
+            &db,
+            &SystemCredentialStore,
+            &adapters::Registry::builtins(),
+            &home()?,
+            &request,
+        )
+        .map_err(native_error)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn delete_memory(
+    app: AppHandle,
+    request: resources::memory::MemoryDelete,
+) -> Result<(), ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        resources::memory::delete_memory(
+            &db,
+            &SystemCredentialStore,
+            &adapters::Registry::builtins(),
+            &home()?,
+            &request,
+        )
+        .map_err(native_error)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn set_memory_enabled(
+    app: AppHandle,
+    request: resources::memory::MemoryEnable,
+) -> Result<resources::memory::MemoryList, ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        resources::memory::set_memory_enabled(
+            &db,
+            &SystemCredentialStore,
+            &adapters::Registry::builtins(),
+            &home()?,
+            &request,
+        )
+        .map_err(native_error)
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn set_skill_in_library(app: AppHandle, id: String, in_library: bool) -> Result<(), ApiError> {
     blocking(move || app.state::<AppState>().with_database(&app, |db| resources::skills::set_in_library(db, &id, in_library).map_err(native_error))).await
 }
