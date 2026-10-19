@@ -18,6 +18,7 @@
   background: var(--surface);
 }
 .entry strong { min-width: 0; overflow-wrap: anywhere; }
+.preview { flex: 1 1 200px; min-width: 0; color: var(--text-2); font-size: var(--fs-caption); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .source { flex: 0 1 auto; min-width: 0; padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--text-2); font-size: var(--fs-caption); overflow-wrap: anywhere; }
 .path { flex: 1 1 160px; min-width: 0; overflow: hidden; color: var(--text-3); font-size: var(--fs-caption); text-overflow: ellipsis; white-space: nowrap; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }

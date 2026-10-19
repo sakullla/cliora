@@ -17,6 +17,13 @@ function isExternalChange(error: unknown): boolean {
   return message.includes('外部修改');
 }
 
+/** First non-empty line of the entry body, flattened and clipped for the list row. */
+function summarize(text: string): string {
+  const line = text.split(/\r?\n/).map(part => part.trim()).find(part => part.length > 0) ?? '';
+  const flat = line.replace(/\s+/g, ' ');
+  return flat.length > 60 ? `${flat.slice(0, 59)}…` : flat;
+}
+
 /** One store behind the aggregate: the first entry of each store carries its switch state. */
 function storeKey(target: MemoryTarget): string {
   return JSON.stringify([target.scope, target.projectPath ?? null, target.contextId ?? null, target.storeDirectory ?? null]);
@@ -26,6 +33,7 @@ export function MemoryWorkspace({ toolId, memory, active, suggestedProjectPath }
   const { t } = useTranslation();
   const mounted = useRef(true);
   const [aggregate, setAggregate] = useState<MemoryAggregate | null>(null);
+  const [previews, setPreviews] = useState<Record<string, string>>({});
   const [listFailure, setListFailure] = useState<Failure | null>(null);
   const [opened, setOpened] = useState<OpenEntry | null>(null);
   const [draft, setDraft] = useState('');
@@ -52,21 +60,38 @@ export function MemoryWorkspace({ toolId, memory, active, suggestedProjectPath }
 
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
+  const previewEpoch = useRef(0);
+  // Body summaries are read per entry over the existing read IPC. Failures are
+  // silent: a store whose preview cannot be read still lists its entries.
+  const loadPreviews = useCallback(async (value: MemoryAggregate) => {
+    const epoch = ++previewEpoch.current;
+    const results = await Promise.allSettled(value.entries.map(async entry => {
+      const document = await native.readMemory(entry.target, entry.id);
+      return [`${storeKey(entry.target)}:${entry.id}`, summarize(document.text)] as const;
+    }));
+    if (!mounted.current || epoch !== previewEpoch.current) return;
+    setPreviews(Object.fromEntries(results.flatMap(result => result.status === 'fulfilled' ? [result.value] : [])));
+  }, []);
+
   const reload = useCallback(async () => {
     try {
       const value = await native.listAllMemories(toolId);
       if (!mounted.current) return;
       setAggregate(value);
+      setPreviews({});
       setListFailure(null);
+      void loadPreviews(value);
     } catch (error) {
       if (!mounted.current) return;
       setAggregate(null);
+      setPreviews({});
       setListFailure({ message: formatFailure(error, t('common.memory.listFailed'), t('common.memory.retryNext')), retry: () => reload() });
     }
-  }, [toolId, t]);
+  }, [toolId, t, loadPreviews]);
 
   useEffect(() => {
     setOpened(null);
+    setPreviews({});
     setDraft('');
     setCreating(false);
     setNewId('');
@@ -245,8 +270,9 @@ export function MemoryWorkspace({ toolId, memory, active, suggestedProjectPath }
     {aggregate && aggregate.failedSources.map(source => <p key={source.label} className={styles.sourceFailure} role="status">{t('common.memory.sourceFailed', { label: source.label, reason: source.reason })}</p>)}
     {aggregate && <ul className={styles.list}>
       {aggregate.entries.length === 0 && aggregate.failedSources.length === 0 && <li className={styles.prompt}>{t('common.memory.emptyAll')}</li>}
-      {aggregate.entries.map(entry => <li key={`${storeKey(entry.target)}:${entry.id}`} className={styles.entry}>
+      {aggregate.entries.map(entry => { const key = `${storeKey(entry.target)}:${entry.id}`; return <li key={key} className={styles.entry}>
         <strong>{entry.id}</strong>
+        {previews[key] && <span className={styles.preview}>{previews[key]}</span>}
         <span className={styles.source}>{t('common.memory.sourceLabel', { source: entry.sourceLabel })}</span>
         <span className={styles.path} title={entry.path}>{entry.path}</span>
         <span className={styles.actions}>
@@ -254,7 +280,7 @@ export function MemoryWorkspace({ toolId, memory, active, suggestedProjectPath }
           {can('open') && <button type="button" className="button" disabled={busy} onClick={() => void openEntry(entry)}>{t('common.memory.open', { id: entry.id })}</button>}
           {can('delete') && <button type="button" className="button destructive" disabled={busy} onClick={() => void confirmRemove(entry)}>{t('common.memory.delete', { id: entry.id })}</button>}
         </span>
-      </li>)}
+      </li>; })}
     </ul>}
     {can('create') && !creating && <div className={styles.row}>
       <button type="button" className="button primary" disabled={busy || !createTarget} onClick={() => { setCreating(true); setOpened(null); setDraft(''); }}>{t('common.memory.create')}</button>
