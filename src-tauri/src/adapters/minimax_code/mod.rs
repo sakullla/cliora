@@ -475,6 +475,7 @@ impl CliAdapter for MiniMaxCode {
                     .is_some_and(|adapter| !adapter.capability().actions.is_empty()),
                 project_plugins: self.plugins().is_some_and(|adapter| adapter.capability().project),
                 rules: self.rule_support(),
+                memory: self.published_memory(),
             },
             login: self.login_args().map(|_| super::LoginCapability {
                 hint: self.login_hint(),

@@ -342,6 +342,7 @@ impl CliAdapter for Cursor {
                     .is_some_and(|adapter| !adapter.capability().actions.is_empty()),
                 project_plugins: false,
                 rules: self.rule_support(),
+                memory: self.published_memory(),
             },
             configuration: None,
         }

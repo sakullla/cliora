@@ -15,6 +15,7 @@ pub(crate) mod devin;
 pub(crate) mod grok;
 pub(crate) mod kimi_code;
 pub(crate) mod kiro;
+pub mod memory;
 pub(crate) mod mimo_code;
 pub(crate) mod minimax_code;
 pub mod model_directory;

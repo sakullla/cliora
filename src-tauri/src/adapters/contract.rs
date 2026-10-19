@@ -66,6 +66,10 @@ pub struct ManagementCapabilities {
     pub plugins: bool,
     pub project_plugins: bool,
     pub rules: RuleSupport,
+    /// Published only when a memory port declares a location, a scope, and at least one operation.
+    /// A recorded unverified reason stays on the port and does not create an entry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory: Option<super::memory::MemoryManagement>,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -250,6 +254,9 @@ pub trait CliAdapter: Sync {
         None
     }
     fn accounts(&self) -> Option<&dyn super::accounts::AccountAdapter> {
+        None
+    }
+    fn memory(&self) -> Option<&dyn super::memory::MemoryAdapter> {
         None
     }
     fn id(&self) -> &'static str;
@@ -763,6 +770,9 @@ pub trait CliAdapter: Sync {
         support.catalog = self.uses_rule_catalog(Scope::Global) || self.uses_rule_catalog(Scope::Project);
         support
     }
+    fn published_memory(&self) -> Option<super::memory::MemoryManagement> {
+        self.memory().and_then(|port| super::memory::publish(&port.declaration()))
+    }
     fn install_guidance(&self) -> (&'static str, &'static str);
     fn node_required_when_missing(&self) -> bool {
         true
@@ -861,6 +871,7 @@ pub trait CliAdapter: Sync {
                 plugins: self.plugins().is_some_and(|adapter| !adapter.capability().actions.is_empty()),
                 project_plugins: self.plugins().is_some_and(|adapter| adapter.capability().project),
                 rules: self.rule_support(),
+                memory: self.published_memory(),
             },
             login: self.login_args().map(|_| LoginCapability {
                 hint: self.login_hint(),

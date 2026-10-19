@@ -347,6 +347,7 @@ impl CliAdapter for ZCode {
                 plugins: true,
                 project_plugins: false,
                 rules: self.rule_support(),
+                memory: self.published_memory(),
             },
         }
     }
