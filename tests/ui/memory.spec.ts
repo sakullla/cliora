@@ -18,6 +18,7 @@ async function install(page: Page, options: { catalog?: 'none' | 'session' | 'me
       deleted: [] as string[],
       texts: { 'a-note': 'from-a', 'b-note': 'from-b', 'beta-note': 'from-beta', 'global-note': 'from-global', 'custom-note': 'from-custom' } as Record<string, string>,
       picked: null as string | null,
+      unavailable: null as string | null,
       fingerprints: {} as Record<string, string>,
       calls: [] as MemoryCall[],
     };
@@ -75,7 +76,10 @@ async function install(page: Page, options: { catalog?: 'none' | 'session' | 'me
           if (command === 'get_launch_settings') return { selected: 'auto', terminals: [{ id: 'auto', label: '系统默认', available: true }], cliMode: 'normal', projectMode: 'normal' };
           if (command === 'get_registered_tool_workspace' || command === 'get_registered_tool_context') return workspace();
           if (command === 'get_tray_status') return { available: false, error: null };
-          if (command === 'list_memories') return listFor(args.target ?? {});
+          if (command === 'list_memories') {
+            if (state.unavailable && args.target?.projectPath === state.unavailable) throw new Error('项目目录不存在或无法访问，请重新关联目录');
+            return listFor(args.target ?? {});
+          }
           if (command === 'read_memory') {
             state.reads += 1;
             if (state.mode === 'read-fail') throw new Error('无法读取记忆，请重试');
@@ -309,6 +313,28 @@ test('a directory that is not a recorded project becomes the memory target only'
   const lists = (await memoryCalls(page)).filter(call => call.command === 'list_memories' && call.args.target?.projectPath === 'C:/custom');
   expect(lists.length).toBeGreaterThan(0);
   expect(lists.every(call => call.args.target?.toolId === 'alpha' && call.args.target?.scope === 'project')).toBe(true);
+});
+
+test('an unavailable project stays selected after global memory has listed', async ({ page }) => {
+  await install(page, { suggestion: 'C:/A' });
+  await openMemory(page);
+  const stored = JSON.stringify({ alpha: { scope: 'project', projectPath: 'C:/A', resource: 'config' } });
+  await page.getByRole('combobox', { name: '记忆项目' }).selectOption('C:/B');
+  await expect(page.getByRole('button', { name: '打开 b-note' })).toBeVisible();
+  await page.getByRole('button', { name: '全局', exact: true }).click();
+  await expect(page.getByRole('button', { name: '打开 global-note' })).toBeVisible();
+  await page.evaluate(() => { (window as unknown as { __memory: { unavailable: string } }).__memory.unavailable = 'C:/B'; });
+  const mark = (await memoryCalls(page)).length;
+  await page.getByRole('button', { name: '项目', exact: true }).click();
+  await expect(page.getByText('目标目录不可用，请重新选择。已保留原来的记忆目标。')).toBeVisible();
+  await expect(page.getByRole('combobox', { name: '记忆项目' })).toHaveValue('C:/B');
+  await expect(page.getByText('当前记忆目标：项目 · 栖点 B')).toBeVisible();
+  await expect(page.getByRole('button', { name: '全局', exact: true })).toHaveAttribute('aria-pressed', 'false');
+  const later = (await memoryCalls(page)).slice(mark);
+  expect(later.some(call => call.command === 'list_memories' && call.args.target?.projectPath === 'C:/B')).toBe(true);
+  expect(later.some(call => call.command === 'list_memories' && (call.args.target?.scope === 'global' || call.args.target?.projectPath === 'C:/A'))).toBe(false);
+  expect(later.some(call => call.command === 'read_memory' || call.command === 'save_memory')).toBe(false);
+  expect(await page.evaluate(() => localStorage.getItem('cliora:workspace-context'))).toBe(stored);
 });
 
 test('a master switch that is off still lists and opens memory', async ({ page }) => {
