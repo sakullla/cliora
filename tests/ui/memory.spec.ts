@@ -147,6 +147,10 @@ test('the memory tab aggregates stores with source labels and no target selector
   await expect(page.getByText('来源：项目 · 栖点 A')).toBeVisible();
   await expect(page.getByRole('button', { name: '打开 b-note' })).toBeVisible();
   await expect(page.getByText('来源：项目 · 栖点 B')).toBeVisible();
+  // Each row also carries a body summary read over the existing entry IPC.
+  await expect(page.getByText('from-global')).toBeVisible();
+  await expect(page.getByText('from-a')).toBeVisible();
+  await expect(page.getByText('from-b')).toBeVisible();
   // No scope switch, project dropdown, or account selector on this tab.
   await expect(region.getByRole('combobox')).toHaveCount(0);
   await expect(region.getByRole('button', { name: '全局', exact: true })).toHaveCount(0);
@@ -162,6 +166,7 @@ test('the memory tab aggregates stores with source labels and no target selector
   await page.getByRole('tab', { name: 'Beta', exact: true }).click();
   await page.getByRole('tab', { name: '记忆', exact: true }).click();
   await expect(page.getByText(readOnlyLimitation)).toBeVisible();
+  await expect(page.getByText('from-beta')).toBeVisible();
   await expect(page.getByRole('button', { name: '新建记忆' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: /删除/ })).toHaveCount(0);
   await expect(page.getByRole('checkbox', { name: /记忆总开关|启用/ })).toHaveCount(0);
@@ -263,6 +268,9 @@ test('an external fingerprint or save error waits for confirmation before writin
 test('failed read, save, and delete show the error and a retry', async ({ page }) => {
   await install(page, { mode: 'read-fail' });
   await openMemory(page);
+  // Silent previews: per-entry body reads fail without surfacing an error.
+  await expect(page.getByRole('button', { name: '打开 a-note' })).toBeVisible();
+  await expect(page.getByRole('alert')).toHaveCount(0);
   await page.getByRole('button', { name: '打开 a-note' }).click();
   await expect(page.getByRole('alert')).toContainText('无法读取记忆，请重试');
   await page.evaluate(() => { (window as unknown as { __memory: { mode: string } }).__memory.mode = 'normal'; });
