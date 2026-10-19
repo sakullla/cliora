@@ -120,7 +120,11 @@ async function requireSuccess(command, args, options) {
 }
 
 async function fingerprint() {
-  const listing = await requireSuccess('git', ['ls-files', '-co', '--exclude-standard', '-z', '--', 'src-tauri/src/adapters', 'src-tauri/src/resources/memory.rs', 'scripts/verify-memory-native.mjs']);
+  // Cover every in-repo input of cliora_lib (sources + manifest + lockfile),
+  // not just the memory surfaces: any change during the replay must trip
+  // sourceStable.
+  const listing = await requireSuccess('git', ['ls-files', '-co', '--exclude-standard', '-z', '--',
+    'src-tauri/src', 'src-tauri/Cargo.toml', 'src-tauri/Cargo.lock', 'scripts/verify-memory-native.mjs']);
   const entries = [...new Set(listing.stdout.split('\0').filter(Boolean))].sort();
   const files = [];
   for (const ref of entries) files.push({ ref, sha256: sha256(await fs.readFile(path.join(repository, ref))) });
@@ -235,7 +239,11 @@ async function probeClaude(engine, marker, temporary, context) {
     await fs.writeFile(stdin, prompt);
     const result = await run(runner.command, runner.wrap(['-p']), { cwd: project, stdinPath: stdin, timeout: 240_000 });
     const answer = result.stdout.trim();
-    return { answer, passed: expected === 'marker' ? answer.includes(marker) : !answer.includes(marker) };
+    // Liveness gate: a session killed by timeout (signal set, empty stdout)
+    // must not satisfy the negative expectation vacuously.
+    const live = result.exitCode === 0 && !result.signal && answer.length > 0;
+    return { answer, passed: live && (expected === 'marker' ? answer.includes(marker) : !answer.includes(marker)),
+      detail: `exit=${result.exitCode}${result.signal ? ` signal=${result.signal}` : ''} answer=${answer.slice(0, 120)}` };
   };
   try {
     const saved = await engine.op({ ...target, op: 'save', id, baseline: '', confirmExternal: true,
@@ -246,11 +254,11 @@ async function probeClaude(engine, marker, temporary, context) {
     const memoryDir = path.dirname(saved.path);
     check(record, 'no .cliora-* file in native storage', noClioraFiles(memoryDir));
     const first = await session('marker');
-    check(record, 'native session reads the engine-written marker', first.passed, first.answer.slice(0, 200));
+    check(record, 'native session reads the engine-written marker', first.passed, first.detail);
     const disabled = await engine.op({ ...target, op: 'enable', enabled: false });
     check(record, 'engine master switch off', disabled.inUse === false);
     const second = await session('none');
-    check(record, 'switch off changes the native session behavior', second.passed, second.answer.slice(0, 200));
+    check(record, 'switch off changes the native session behavior', second.passed, second.detail);
     await engine.op({ ...target, op: 'enable', enabled: true });
     const document = await engine.op({ ...target, op: 'read', id });
     await engine.op({ ...target, op: 'delete', id, baseline: document.text });
@@ -374,8 +382,8 @@ async function probeCodebuddy(engine, marker, temporary, context) {
     await engine.op({ ...target, op: 'enable', enabled: false });
     const off = await session();
     const offBody = off.bodies.find(body => body.includes('## MEMORY.md') || body.includes(marker));
-    check(record, 'engine switch off removes memory loading from the next session', !offBody,
-      off.bodies.length ? `${off.bodies.length} captured request(s), memory references ${off.bodies.some(body => body.includes(marker)) ? 'still present' : 'absent'}` : 'no captured request');
+    check(record, 'engine switch off removes memory loading from the next session', off.bodies.length > 0 && !offBody,
+      off.bodies.length ? `${off.bodies.length} captured request(s), memory references ${off.bodies.some(body => body.includes(marker)) ? 'still present' : 'absent'}` : 'no captured request — negative outcome not established');
     await engine.op({ ...target, op: 'enable', enabled: true });
     const document = await engine.op({ ...target, op: 'read', id });
     await engine.op({ ...target, op: 'delete', id, baseline: document.text });
@@ -410,14 +418,22 @@ async function probeMimo(engine, marker, temporary, context) {
   const lines = original.text.split('\n');
   lines.splice(Math.min(2, lines.length), 0, markerLine);
   const probeText = lines.join('\n');
+  // The prompt carries only the search key ("Cliora delivery replay"); the
+  // sentinel sentence and the marker hash exist solely in the engine-written
+  // memory line, so a tool-call echo of the prompt cannot satisfy the check.
+  const sentinel = 'the seaside gate opens at dusk';
+  const prompt = 'Search your memory for the topic "Cliora delivery replay" with your memory tool. '
+    + 'If the memory tool reports no results, follow its guidance and search the memory directory files. '
+    + 'Report each hit as file:line and quote the full matched line verbatim. If nothing is found anywhere, answer NONE.';
+  check(record, 'probe prompt embeds neither the sentinel nor the marker', !prompt.includes(sentinel) && !prompt.includes(marker),
+    'sentinel/marker live only in the engine-written memory line');
   try {
     await engine.op({ ...target, op: 'save', id: 'MEMORY', baseline: original.text, text: probeText });
-    const result = await run(runner.command, runner.wrap([
-      'run',
-      `Use your memory search tool to find the evidence marker ${marker}. Report whether the memory tool returned any hit, and what it returned.`,
-      '--dir', project, '--yolo']), { cwd: project, timeout: 360_000 });
-    const output = result.stdout + result.stderr;
-    check(record, 'native session reads the engine-written marker verbatim', output.includes(marker), output.trim().slice(-500));
+    const result = await run(runner.command, runner.wrap(['run', prompt, '--dir', project, '--yolo']), { cwd: project, timeout: 360_000 });
+    const plain = (result.stdout + result.stderr).replace(/\x1b\[[0-9;]*m/g, '');
+    const hitReport = /\d+\s+match|MEMORY[\w.-]*\.md:\d+/.test(plain);
+    check(record, 'native session reports a search hit quoting the engine-written line',
+      plain.includes(sentinel) && hitReport, plain.trim().slice(-500));
   } finally {
     const current = await engine.op({ ...target, op: 'read', id: 'MEMORY' });
     await engine.op({ ...target, op: 'save', id: 'MEMORY', baseline: current.text, text: original.text });
@@ -442,7 +458,15 @@ async function probeGrok(engine, marker, temporary, context) {
   const text = `# Cliora delivery probe\n\n${marker} — delivery replay topic.\n`;
   try {
     const listBefore = await engine.op({ ...target, op: 'list' });
-    check(record, 'engine list reports the switch-off detail (default off)', listBefore.inUse === false && listBefore.detail.length > 0, listBefore.detail.slice(0, 120));
+    if (listBefore.inUse === false) {
+      check(record, 'engine list reports the switch-off detail (default off)', listBefore.detail.length > 0, listBefore.detail.slice(0, 120));
+    } else if (listBefore.inUse === true) {
+      // Grok memory already enabled on this machine: the default-off path is
+      // not exercised, and the session below uses GROK_MEMORY=1 regardless.
+      check(record, 'engine list reflects the pre-existing switch-on state', true, 'grok memory already enabled on this machine; default-off detail not exercised');
+    } else {
+      check(record, 'engine list reports a usable switch state', false, `inUse=${listBefore.inUse}`);
+    }
     await engine.op({ ...target, op: 'save', id, baseline: '', confirmExternal: true, text });
     const list = await engine.op({ ...target, op: 'list' });
     check(record, 'engine save lands in the global topics directory', list.entries.some(entry => entry.id === id)
@@ -538,6 +562,11 @@ export async function verifyMemoryNative({ only, report: reportPath, summary: su
   for (const cli of ['claude', 'codex', 'codebuddy', 'mimo', 'grok']) runners[cli] = commandRunner(await resolveExecutable(cli));
   const marker = `CLIORA-DELIVERY-${createHash('sha256').update(`${Date.now()}${Math.random()}`).digest('hex').slice(0, 8).toUpperCase()}`;
   const published = catalog.filter(entry => entry.published).map(entry => entry.tool);
+  if (only) {
+    const unknown = only.filter(tool => !published.includes(tool));
+    if (unknown.length) throw new Error(`--only 引用了未发布记忆入口的 CLI：${unknown.join(', ')}（可用：${published.join(', ') || '无'}）`);
+  }
+  if (!published.length) throw new Error('生产注册表没有任何已发布记忆入口的 CLI，无重放对象');
   const selected = only ? published.filter(tool => only.includes(tool)) : published;
   const replays = [];
   for (const tool of selected) {
