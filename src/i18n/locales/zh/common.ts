@@ -272,6 +272,7 @@ export default {
     targetLine: '当前记忆目标：{{target}}',
     targetGlobal: '全局',
     targetProject: '项目 · {{name}}',
+    targetWithAccount: '{{target}} · {{account}}',
     reselect: '目标目录不可用，请重新选择。已保留原来的记忆目标。',
     unavailableOption: '{{name}}（目录不可用）',
     master: '记忆总开关',

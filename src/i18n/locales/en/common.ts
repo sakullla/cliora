@@ -272,6 +272,7 @@ export default {
     targetLine: 'Current memory target: {{target}}',
     targetGlobal: 'Global',
     targetProject: 'Project · {{name}}',
+    targetWithAccount: '{{target}} · {{account}}',
     reselect: 'That folder is unavailable. Choose again. The previous memory target is unchanged.',
     unavailableOption: '{{name}} (folder unavailable)',
     master: 'Memory master switch',
