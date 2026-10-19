@@ -68,7 +68,8 @@ export function MemoryPage({ active, tools, suggestedProjectPath }: { active: bo
   const [failure, setFailure] = useState<Failure | null>(null);
   const [reselect, setReselect] = useState(false);
   const [busy, setBusy] = useState(false);
-  const lastGood = useRef<Choice | null>(null);
+  const listedTargets = useRef<Set<string>>(new Set());
+  const previousByToolScope = useRef<Record<string, Choice>>({});
   const preserveReselect = useRef(false);
 
   const descriptor = tools.find(item => item.id === toolId) ?? tools[0];
@@ -98,22 +99,38 @@ export function MemoryPage({ active, tools, suggestedProjectPath }: { active: bo
   }, [t]);
 
   const loadList = useCallback(async (current: MemoryTarget) => {
+    const identity = JSON.stringify({
+      toolId: current.toolId,
+      scope: current.scope,
+      projectPath: current.scope === 'project' ? current.projectPath : null,
+      contextId: current.contextId ?? null,
+    });
+    const choiceOf = (value: MemoryTarget): Choice => ({
+      scope: value.scope,
+      projectPath: value.scope === 'project' ? value.projectPath : null,
+      contextId: value.contextId ?? null,
+      explicit: true,
+    });
     try {
       const value = await native.listMemories(current);
       if (mounted.current && targetKeyRef.current === JSON.stringify(current)) {
-        lastGood.current = { scope: current.scope, projectPath: current.projectPath, contextId: current.contextId ?? null, explicit: true };
+        listedTargets.current.add(identity);
+        previousByToolScope.current[`${current.toolId}:${current.scope}`] = choiceOf(current);
         setList(value);
         setFailure(null);
       }
     } catch (error) {
       if (!mounted.current || targetKeyRef.current !== JSON.stringify(current)) return;
-      const good = lastGood.current;
-      const sameGood = !!good && good.scope === current.scope && good.projectPath === current.projectPath && (good.contextId ?? null) === (current.contextId ?? null);
-      if (isUnavailableTarget(error) && good && !sameGood) {
-        preserveReselect.current = true;
-        setChoices(existing => ({ ...existing, [current.toolId]: good }));
-        setReselect(true);
-        return;
+      if (isUnavailableTarget(error) && !listedTargets.current.has(identity)) {
+        const previous = previousByToolScope.current[`${current.toolId}:${current.scope}`];
+        const failed = choiceOf(current);
+        const samePrevious = !!previous && previous.scope === failed.scope && previous.projectPath === failed.projectPath && previous.contextId === failed.contextId;
+        if (previous && !samePrevious) {
+          preserveReselect.current = true;
+          setChoices(existing => ({ ...existing, [current.toolId]: previous }));
+          setReselect(true);
+          return;
+        }
       }
       if (isUnavailableTarget(error)) setReselect(true);
       setFailure({ message: formatFailure(error, t('common.memory.listFailed'), t('common.memory.retryNext')), retry: () => loadList(current) });
