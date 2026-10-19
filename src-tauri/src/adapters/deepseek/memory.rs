@@ -1,7 +1,8 @@
-//! DeepSeek memory verdict (initial, 2026-10-19): no native memory evidence
-//! has been found for DeepSeek. The declaration records the unverified reason
-//! and publishes no management entry until local/official verification
-//! decides.
+//! DeepSeek Harness memory verdict (final, 2026-10-19): no independent
+//! native memory store. Local verification against the installed `dsh`
+//! (`~/.dsh`): rules (`AGENTS.md`), profiles, sessions, and caches only —
+//! `storages/session_projcache` is session state and `llm-deepseek` is a file
+//! cache, not a memory entry family.
 use std::path::{Path, PathBuf};
 
 use super::DeepSeek;
@@ -10,7 +11,9 @@ use crate::native::adapter::Scope;
 
 impl MemoryAdapter for DeepSeek {
     fn declaration(&self) -> MemoryDeclaration {
-        MemoryDeclaration::unverified("尚未核实 DeepSeek 是否存在独立原生记忆存储")
+        MemoryDeclaration::unverified(
+            "DeepSeek Harness 无独立记忆存储：本机 ~/.dsh 仅有规则、会话与缓存，无记忆文件族",
+        )
     }
 
     fn directory(
@@ -19,6 +22,6 @@ impl MemoryAdapter for DeepSeek {
         _home: &Path,
         _project: Option<&Path>,
     ) -> Result<PathBuf, String> {
-        Err("DeepSeek 的记忆存储尚未核实，目录不可解析".into())
+        Err("DeepSeek Harness 没有独立原生记忆存储".into())
     }
 }
