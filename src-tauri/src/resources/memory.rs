@@ -369,6 +369,9 @@ fn prepare(
     {
         return Err("记忆路径无效".into());
     }
+    // Same unresolved ancestor walk as apply_files. Do not follow a symlink or
+    // Windows junction before the exclusion check or a directory listing.
+    reject_reparse_ancestors(&directory)?;
     let excluded = excluded_paths(
         adapter,
         home,
@@ -569,6 +572,26 @@ fn reject_excluded(path: &Path, excluded: &[PathBuf]) -> Result<(), String> {
     } else {
         Ok(())
     }
+}
+
+fn reject_reparse_ancestors(path: &Path) -> Result<(), String> {
+    for ancestor in path.ancestors() {
+        if let Ok(metadata) = fs::symlink_metadata(ancestor) {
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::MetadataExt;
+                if metadata.file_attributes() & 0x400 != 0 {
+                    return Err("不修改重解析点中的文件".into());
+                }
+            }
+            if metadata.file_type().is_symlink()
+                && !crate::path_policy::is_platform_directory_alias(ancestor)
+            {
+                return Err("不修改符号链接中的文件".into());
+            }
+        }
+    }
+    Ok(())
 }
 
 fn overlaps(path: &Path, excluded: &Path) -> bool {

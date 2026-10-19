@@ -1207,3 +1207,119 @@ fn missing_port_does_not_create_memory() {
     }
     assert!(!harness.home.join("cliora-memory").exists());
 }
+
+fn link_directory(target: &Path, link: &Path) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // raw_arg keeps the quotes cmd.exe expects. Command::arg would wrap the
+        // whole mklink line and make cmd strip the path quotes.
+        let output = std::process::Command::new("cmd")
+            .raw_arg(format!(
+                "/C mklink /J \"{}\" \"{}\"",
+                link.display(),
+                target.display()
+            ))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "mklink /J failed: {} {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    #[cfg(not(windows))]
+    std::os::unix::fs::symlink(target, link).unwrap();
+}
+
+struct Unlink<'a>(&'a Path);
+
+impl Drop for Unlink<'_> {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir(self.0);
+    }
+}
+
+fn assert_reparse_rejected(error: &str) {
+    assert!(
+        error.contains("重解析点") || error.contains("符号链接"),
+        "{error}"
+    );
+}
+
+fn reject_linked_memory(harness: &Harness, link_target: &MemoryTarget, real_note: &Path) {
+    assert_reparse_rejected(
+        &list_memories(&harness.db, &harness.registry, &harness.home, link_target).unwrap_err(),
+    );
+    assert_reparse_rejected(
+        &read_memory(
+            &harness.db,
+            &harness.registry,
+            &harness.home,
+            link_target,
+            "note",
+        )
+        .unwrap_err(),
+    );
+    assert_reparse_rejected(
+        &save(harness, link_target.clone(), "note", "rewritten", "", false).unwrap_err(),
+    );
+    assert_reparse_rejected(
+        &set_memory_enabled(
+            &harness.db,
+            &harness.store,
+            &harness.registry,
+            &harness.home,
+            &MemoryEnable {
+                target: link_target.clone(),
+                id: None,
+                enabled: false,
+            },
+        )
+        .unwrap_err(),
+    );
+    assert_eq!(fs::read_to_string(real_note).unwrap(), "original memory");
+    assert!(!real_note.parent().unwrap().join(".cliora-memory-switch").exists());
+}
+
+#[test]
+fn junction_memory_directory_and_ancestor_are_not_followed() {
+    let harness = harness();
+    let real = harness.temp.path().join("real-memory");
+    fs::create_dir_all(&real).unwrap();
+    let note = real.join("note.md");
+    fs::write(&note, "original memory").unwrap();
+    let link = harness.home.join(SHARED.location);
+    link_directory(&real, &link);
+    let _unlink = Unlink(&link);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        let metadata = fs::symlink_metadata(&link).unwrap();
+        assert_ne!(
+            metadata.file_attributes() & 0x400,
+            0,
+            "directory junction must keep FILE_ATTRIBUTE_REPARSE_POINT"
+        );
+    }
+    reject_linked_memory(
+        &harness,
+        &memory_target(SHARED.id, Scope::Global, None, None),
+        &note,
+    );
+
+    let real_declared = harness.temp.path().join("real-declared");
+    let prompts = real_declared.join("prompts");
+    fs::create_dir_all(&prompts).unwrap();
+    let prompt_note = prompts.join("note.md");
+    fs::write(&prompt_note, "original memory").unwrap();
+    let declared_link = harness.home.join("declared");
+    link_directory(&real_declared, &declared_link);
+    let _unlink_declared = Unlink(&declared_link);
+    reject_linked_memory(
+        &harness,
+        &memory_target(PROMPTS.id, Scope::Global, None, None),
+        &prompt_note,
+    );
+}
