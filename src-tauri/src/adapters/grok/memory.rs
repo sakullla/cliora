@@ -17,10 +17,12 @@
 //! repository Grok never opened reports no directory.
 //!
 //! Switch: native config.toml `[memory] enabled` (experimental, default
-//! off); `[memory_v2] enabled` wins when both are set, which the read side
-//! honors. There is no per-topic native enable, so item enable is not
-//! declared. Per-run overrides (`--no-memory`, `GROK_MEMORY`) belong to the
-//! launched process and are not part of this switch.
+//! off); `[memory_v2] enabled` wins when both are set, so both the read and
+//! the write side target whichever table currently governs (writes only
+//! create `[memory_v2]` when the config already carries that table). There
+//! is no per-topic native enable, so item enable is not declared. Per-run
+//! overrides (`--no-memory`, `GROK_MEMORY`) belong to the launched process
+//! and are not part of this switch.
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -53,11 +55,14 @@ fn config_path(home: &Path) -> PathBuf {
     grok_home(home).join("config.toml")
 }
 
-/// `enabled` under `[memory_v2]` when set, else under `[memory]`; absent or
-/// non-boolean keeps memory off (the documented default).
-fn memory_enabled(text: &str) -> Result<Option<bool>, String> {
+/// The effective switch value plus the table that governs it: `enabled`
+/// under `[memory_v2]` when that table carries a boolean, else under
+/// `[memory]`; absent or non-boolean keeps memory off (the documented
+/// default). Writes must target the same governing table, otherwise grok's
+/// precedence would ignore them.
+fn memory_enabled(text: &str) -> Result<(Option<bool>, &'static str), String> {
     if text.trim().is_empty() {
-        return Ok(None);
+        return Ok((None, "memory"));
     }
     let parsed = format::parse(FileKind::Toml, text)
         .map_err(|_| "无法读取记忆总开关，请重试".to_owned())?;
@@ -67,7 +72,10 @@ fn memory_enabled(text: &str) -> Result<Option<bool>, String> {
             .and_then(|memory| memory.get("enabled"))
             .and_then(|value| value.as_bool())
     };
-    Ok(flag("memory_v2").or_else(|| flag("memory")))
+    match flag("memory_v2") {
+        Some(value) => Ok((Some(value), "memory_v2")),
+        None => Ok((flag("memory"), "memory")),
+    }
 }
 
 impl MemoryAdapter for Grok {
@@ -80,7 +88,7 @@ impl MemoryAdapter for Grok {
             targets: TARGETS,
             operations: OPERATIONS,
             unverified_reason: "",
-            limitation: "Grok 无单条记忆启停；总开关映射 config.toml 的 [memory] enabled（实验特性，默认关闭），单条管理即编辑或删除主题文件",
+            limitation: "Grok 无单条记忆启停；总开关映射 config.toml 的 [memory] enabled（实验特性，默认关闭；[memory_v2] enabled 并存时读写均以该键为准），单条管理即编辑或删除主题文件",
             binds_account: false,
         }
     }
@@ -162,19 +170,22 @@ impl MemoryLayout for Grok {
 
     fn switch_state(&self, home: &Path, _directory: &Path) -> Result<MemorySwitchState, String> {
         let path = config_path(home);
-        let enabled = if path.exists() {
+        let mut governed = "memory";
+        let mut flag = None;
+        if path.exists() {
             let text = transaction::read_native(&path)
                 .map_err(|error| format!("无法读取记忆总开关，请重试：{error}"))?;
-            memory_enabled(&text)?.unwrap_or(false)
-        } else {
-            false
-        };
+            let read = memory_enabled(&text)?;
+            flag = Some(read.0);
+            governed = read.1;
+        }
+        let enabled = flag.flatten().unwrap_or(false);
         Ok(MemorySwitchState {
             enabled,
             detail: if enabled {
                 String::new()
             } else {
-                "Grok 记忆默认关闭，在 config.toml [memory] enabled 开启".to_owned()
+                format!("Grok 记忆未开启，在 config.toml [{governed}] enabled 开启")
             },
         })
     }
@@ -195,10 +206,13 @@ impl MemoryLayout for Grok {
             None
         };
         let text = current.as_deref().unwrap_or("");
+        let governed = memory_enabled(text)
+            .map_err(|_| "无法保存记忆总开关，请重试".to_owned())?
+            .1;
         let updated = format::set_path(
             FileKind::Toml,
             text,
-            &["memory".to_owned(), "enabled".to_owned()],
+            &[governed.to_owned(), "enabled".to_owned()],
             Some(&serde_json::Value::Bool(enabled)),
         )
         .map_err(|_| "无法保存记忆总开关，请重试".to_owned())?;
@@ -397,7 +411,33 @@ mod tests {
         .unwrap();
         let state = Grok.switch_state(home.path(), Path::new("/unused")).unwrap();
         assert!(!state.enabled);
-        assert!(state.detail.contains("[memory] enabled"));
+        assert!(
+            state.detail.contains("[memory_v2] enabled"),
+            "{}",
+            state.detail
+        );
+
+        std::fs::write(
+            home.path().join(".grok/config.toml"),
+            "[memory]\nenabled = false\n[memory_v2]\nenabled = true\n",
+        )
+        .unwrap();
+        let state = Grok.switch_state(home.path(), Path::new("/unused")).unwrap();
+        assert!(state.enabled);
+        assert!(state.detail.is_empty());
+
+        std::fs::write(
+            home.path().join(".grok/config.toml"),
+            "[memory]\nenabled = false\n",
+        )
+        .unwrap();
+        let state = Grok.switch_state(home.path(), Path::new("/unused")).unwrap();
+        assert!(!state.enabled);
+        assert!(
+            state.detail.contains("[memory] enabled"),
+            "{}",
+            state.detail
+        );
 
         std::fs::remove_file(home.path().join(".grok/config.toml")).unwrap();
         let state = Grok.switch_state(home.path(), Path::new("/unused")).unwrap();
@@ -421,6 +461,7 @@ mod tests {
         assert_eq!(change.baseline.as_deref(), Some("[models]\ndefault = \"grok-4\"\n"));
         let updated = change.contents.unwrap();
         let parsed = format::parse(FileKind::Toml, &updated).unwrap();
+        assert!(parsed.get("memory_v2").is_none());
         assert_eq!(
             parsed.get("memory").unwrap().get("enabled"),
             Some(&serde_json::Value::Bool(true))
@@ -433,6 +474,65 @@ mod tests {
         std::fs::write(&config, &updated).unwrap();
         assert!(Grok
             .switch_patch(home.path(), Path::new("/unused"), true)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn switch_patch_writes_the_memory_v2_key_when_that_table_governs() {
+        if std::env::var_os("GROK_HOME").is_some() {
+            return;
+        }
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".grok")).unwrap();
+        let config = home.path().join(".grok/config.toml");
+        // memory_v2=false governs: enabling must flip the governing key and
+        // not report a no-op just because [memory] is already true.
+        std::fs::write(&config, "[memory]\nenabled = true\n[memory_v2]\nenabled = false\n")
+            .unwrap();
+        let change = Grok
+            .switch_patch(home.path(), Path::new("/unused"), true)
+            .unwrap()
+            .expect("memory_v2 关闭时打开总开关应改写生效键");
+        let updated = change.contents.unwrap();
+        let parsed = format::parse(FileKind::Toml, &updated).unwrap();
+        assert_eq!(
+            parsed.get("memory_v2").unwrap().get("enabled"),
+            Some(&serde_json::Value::Bool(true))
+        );
+        assert_eq!(
+            parsed.get("memory").unwrap().get("enabled"),
+            Some(&serde_json::Value::Bool(true))
+        );
+        std::fs::write(&config, &updated).unwrap();
+        assert!(Grok.switch_state(home.path(), Path::new("/unused")).unwrap().enabled);
+
+        // memory_v2=true governs: disabling must flip the governing key, and
+        // the stale [memory] flag must not resurrect memory.
+        std::fs::write(&config, "[memory]\nenabled = true\n[memory_v2]\nenabled = true\n")
+            .unwrap();
+        let change = Grok
+            .switch_patch(home.path(), Path::new("/unused"), false)
+            .unwrap()
+            .expect("memory_v2 开启时关闭总开关应改写生效键");
+        let updated = change.contents.unwrap();
+        let parsed = format::parse(FileKind::Toml, &updated).unwrap();
+        assert_eq!(
+            parsed.get("memory_v2").unwrap().get("enabled"),
+            Some(&serde_json::Value::Bool(false))
+        );
+        assert_eq!(
+            parsed.get("memory").unwrap().get("enabled"),
+            Some(&serde_json::Value::Bool(true))
+        );
+        std::fs::write(&config, &updated).unwrap();
+        let state = Grok.switch_state(home.path(), Path::new("/unused")).unwrap();
+        assert!(!state.enabled);
+        assert!(state.detail.contains("[memory_v2] enabled"));
+
+        std::fs::write(&config, &updated).unwrap();
+        assert!(Grok
+            .switch_patch(home.path(), Path::new("/unused"), false)
             .unwrap()
             .is_none());
     }
