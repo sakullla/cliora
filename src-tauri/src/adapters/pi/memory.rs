@@ -1,6 +1,7 @@
-//! Pi memory verdict (initial, 2026-10-19): no native memory evidence has
-//! been found for Pi. The declaration records the unverified reason and
-//! publishes no management entry until local/official verification decides.
+//! Pi memory verdict (final, 2026-10-19): no independent native memory store.
+//! Local verification on Pi 1.3.0 (`~/.pi/agent`): sessions, skills, MCP,
+//! models and settings only, and the command surface exposes no memory
+//! feature. Session transcripts are history, not a memory entry family.
 use std::path::{Path, PathBuf};
 
 use super::Pi;
@@ -9,7 +10,9 @@ use crate::native::adapter::Scope;
 
 impl MemoryAdapter for Pi {
     fn declaration(&self) -> MemoryDeclaration {
-        MemoryDeclaration::unverified("尚未核实 Pi 是否存在独立原生记忆存储")
+        MemoryDeclaration::unverified(
+            "Pi 无独立记忆存储：本机 1.3.0 的 ~/.pi/agent 仅有会话、技能、MCP 与配置，命令面无记忆功能",
+        )
     }
 
     fn directory(
@@ -18,6 +21,6 @@ impl MemoryAdapter for Pi {
         _home: &Path,
         _project: Option<&Path>,
     ) -> Result<PathBuf, String> {
-        Err("Pi 的记忆存储尚未核实，目录不可解析".into())
+        Err("Pi 没有独立原生记忆存储".into())
     }
 }
