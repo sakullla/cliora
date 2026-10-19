@@ -1967,3 +1967,135 @@ fn builtin_existing_stores_scan_the_verified_locations() {
     assert_eq!(stores[0].directory, codex_memories);
     assert_eq!(stores[0].scope, Scope::Global);
 }
+
+/// Engine-level regression for the on-disk identities whose project cannot be
+/// recovered (claude slug, grok workspace hash, mimo uuid): the aggregated
+/// listing must not fail on the project-scoped exclusion walk, and the entry
+/// target must drive the shared read, edit, and delete paths inside the
+/// adapter-enumerated store directory.
+#[test]
+fn slug_hash_and_uuid_stores_drive_the_shared_engine_without_a_project() {
+    if std::env::var_os("GROK_HOME").is_some() {
+        // grok store resolution is env-sensitive; the local GROK_HOME would
+        // redirect the workspace scan outside this temp home.
+        return;
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    let db = Database::open(&temp.path().join("stores.db")).unwrap();
+    let registry = Registry::builtins();
+    let credentials = Store(Mutex::new(HashMap::new()));
+
+    // claude：projects/<slug>/memory，slug 不可逆推项目。
+    let claude_slug = "C--Users-12976-project-cliora";
+    let claude_store = home
+        .join(".claude")
+        .join("projects")
+        .join(claude_slug)
+        .join("memory");
+    fs::create_dir_all(&claude_store).unwrap();
+    fs::write(claude_store.join("MEMORY.md"), "# Memory Index\n").unwrap();
+    fs::write(claude_store.join("claude-note.md"), "claude body").unwrap();
+    let claude_index = claude_store.join("MEMORY.md");
+
+    // grok：workspaces/<name>-<hash>/topics，hash 不可逆推项目。
+    let grok_slug = "cliora-490670fe";
+    let grok_store = home
+        .join(".grok")
+        .join("memory-v2")
+        .join("workspaces")
+        .join(grok_slug)
+        .join("topics");
+    fs::create_dir_all(&grok_store).unwrap();
+    fs::write(grok_store.join("grok-note.md"), "grok body").unwrap();
+
+    // mimo：memory/projects/<uuid>，uuid 不可逆推项目。
+    let mimo_id = "242f1d80-4457-460b-916f-799d3d3adb75";
+    let mimo_store = home
+        .join(".local")
+        .join("share")
+        .join("mimocode")
+        .join("memory")
+        .join("projects")
+        .join(mimo_id);
+    fs::create_dir_all(&mimo_store).unwrap();
+    fs::write(mimo_store.join("mimo-note.md"), "mimo body").unwrap();
+
+    for (tool, label, id, body, store) in [
+        ("claude_code", claude_slug, "claude-note", "claude body", &claude_store),
+        ("grok", grok_slug, "grok-note", "grok body", &grok_store),
+        ("mimo_code", mimo_id, "mimo-note", "mimo body", &mimo_store),
+    ] {
+        let aggregate = list_all_memories(&db, &registry, &home, tool).unwrap();
+        assert!(
+            aggregate.failed_sources.is_empty(),
+            "{tool}: {:?}",
+            aggregate.failed_sources
+        );
+        let entry = aggregate
+            .entries
+            .iter()
+            .find(|entry| entry.id == id)
+            .unwrap_or_else(|| panic!("{tool} 缺少 {id}: {:?}", aggregate.entries));
+        assert_eq!(entry.source_label, label);
+        assert_eq!(entry.target.project_path, None);
+        assert!(entry.target.store_directory.is_some());
+        assert!(Path::new(&entry.path).starts_with(store), "{}", entry.path);
+        // 条目携带的 target 走既有读路径。
+        assert_eq!(
+            read_memory(&db, &registry, &home, &entry.target, id)
+                .unwrap()
+                .text,
+            body
+        );
+        // 编辑仍落在所属存储内。
+        let edited = format!("{body} edited");
+        let saved = save_memory(
+            &db,
+            &credentials,
+            &registry,
+            &home,
+            &MemorySave {
+                target: entry.target.clone(),
+                id: id.into(),
+                text: edited.clone(),
+                baseline: body.into(),
+                confirm_external: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(Path::new(&saved.path), store.join(format!("{id}.md")));
+        assert_eq!(fs::read_to_string(&saved.path).unwrap(), edited);
+        // 删除也只作用于该存储。
+        delete_memory(
+            &db,
+            &credentials,
+            &registry,
+            &home,
+            &MemoryDelete {
+                target: entry.target.clone(),
+                id: id.into(),
+                baseline: edited,
+            },
+        )
+        .unwrap();
+        assert!(!store.join(format!("{id}.md")).exists());
+    }
+
+    // claude 的原生索引随保存与删除维护，且不产生任何 .cliora-* 文件。
+    let index_text = fs::read_to_string(&claude_index).unwrap();
+    assert!(!index_text.contains("claude-note"), "{index_text}");
+    assert!(index_text.contains("# Memory Index"));
+    let mut stray = Vec::new();
+    for entry in fs::read_dir(&home).unwrap().flatten() {
+        if entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".cliora-")
+        {
+            stray.push(entry.path());
+        }
+    }
+    assert!(stray.is_empty(), "{stray:?}");
+}
