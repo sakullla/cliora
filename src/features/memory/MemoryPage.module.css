@@ -3,6 +3,8 @@
 .field { display: grid; gap: 6px; min-width: 0; color: var(--text-2); font-size: var(--fs-caption); font-weight: var(--fw-medium); }
 .field select, .field input, .editor textarea { width: 100%; min-width: 0; }
 .field select { max-width: 360px; }
+.projectPick { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; min-width: 0; }
+.projectPick .field { flex: 1 1 220px; }
 .scopes { display: inline-flex; flex-wrap: wrap; gap: 3px; padding: 4px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: color-mix(in srgb, var(--surface-2) 82%, transparent); }
 .scopes button { padding: 6px 14px; border: 0; border-radius: var(--radius); background: none; color: var(--text-2); font-size: var(--fs-control); font-weight: var(--fw-medium); }
 .scopes button[aria-pressed="true"] { background: var(--surface); color: var(--text); font-weight: var(--fw-semibold); box-shadow: var(--shadow-xs), inset 0 0 0 1px var(--line); }

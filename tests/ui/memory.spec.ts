@@ -16,7 +16,8 @@ async function install(page: Page, options: { catalog?: 'none' | 'session' | 'me
       mode,
       reads: 0,
       deleted: [] as string[],
-      texts: { 'a-note': 'from-a', 'b-note': 'from-b', 'beta-note': 'from-beta', 'global-note': 'from-global' } as Record<string, string>,
+      texts: { 'a-note': 'from-a', 'b-note': 'from-b', 'beta-note': 'from-beta', 'global-note': 'from-global', 'custom-note': 'from-custom' } as Record<string, string>,
+      picked: null as string | null,
       fingerprints: {} as Record<string, string>,
       calls: [] as MemoryCall[],
     };
@@ -57,7 +58,9 @@ async function install(page: Page, options: { catalog?: 'none' | 'session' | 'me
         ? [{ id: 'global-note', path: 'global.md', enabled: true, fingerprint: 'fp-global' }]
         : target.projectPath === 'C:/B'
           ? [{ id: 'b-note', path: 'b.md', enabled: true, fingerprint: 'fp-b' }]
-          : [{ id: 'a-note', path: 'a.md', enabled: true, fingerprint: 'fp-a' }]).filter(entry => !state.deleted.includes(entry.id));
+          : target.projectPath === 'C:/custom'
+            ? [{ id: 'custom-note', path: 'custom.md', enabled: true, fingerprint: 'fp-custom' }]
+            : [{ id: 'a-note', path: 'a.md', enabled: true, fingerprint: 'fp-a' }]).filter(entry => !state.deleted.includes(entry.id));
       const inUse = state.mode !== 'master-off';
       return { inUse, detail: inUse ? '' : '记忆当前未使用', operations: full, limitation: '', entries };
     };
@@ -95,6 +98,7 @@ async function install(page: Page, options: { catalog?: 'none' | 'session' | 'me
             return null;
           }
           if (command === 'set_memory_enabled') return listFor(args.request?.target ?? {});
+          if (command === 'plugin:dialog|open') return state.picked;
           if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return () => {};
           return null;
         },
@@ -274,6 +278,37 @@ test('failed read, save, and delete show the error and a retry', async ({ page }
   await page.evaluate(() => { (window as unknown as { __memory: { mode: string } }).__memory.mode = 'normal'; });
   await page.getByRole('button', { name: '重试' }).click();
   await expect(page.getByRole('button', { name: '打开 a-note' })).toHaveCount(0);
+});
+
+test('a directory that is not a recorded project becomes the memory target only', async ({ page }) => {
+  await install(page, { suggestion: 'C:/A' });
+  await openMemory(page);
+  await expect(page.getByRole('button', { name: '打开 a-note' })).toBeVisible();
+  const stored = JSON.stringify({ alpha: { scope: 'project', projectPath: 'C:/A', resource: 'config' } });
+  await page.evaluate(() => { (window as unknown as { __memory: { picked: string } }).__memory.picked = 'C:/Gone'; });
+  await page.getByRole('button', { name: '选择目录' }).click();
+  await expect(page.getByText('目标目录不可用，请重新选择。已保留原来的记忆目标。')).toBeVisible();
+  await expect(page.getByRole('combobox', { name: '记忆项目' })).toHaveValue('C:/A');
+  await expect(page.getByRole('button', { name: '打开 a-note' })).toBeVisible();
+  expect((await memoryCalls(page)).some(call => call.command === 'list_memories' && call.args.target?.projectPath === 'C:/Gone')).toBe(false);
+
+  await page.evaluate(() => { (window as unknown as { __memory: { picked: string } }).__memory.picked = 'C:/custom'; });
+  await page.getByRole('button', { name: '选择目录' }).click();
+  await expect(page.getByText('当前记忆目标：项目 · C:/custom')).toBeVisible();
+  await expect(page.getByRole('combobox', { name: '记忆项目' })).toHaveValue('C:/custom');
+  await expect(page.getByRole('button', { name: '打开 custom-note' })).toBeVisible();
+  await page.getByRole('button', { name: '打开 custom-note' }).click();
+  await expect(page.getByRole('textbox', { name: '记忆正文' })).toHaveValue('from-custom');
+  await page.getByRole('textbox', { name: '记忆正文' }).fill('edited-custom');
+  await page.getByRole('button', { name: '保存记忆' }).click();
+  await expect.poll(async () => (await memoryCalls(page)).some(call => call.command === 'save_memory' && call.args.request?.target?.projectPath === 'C:/custom' && call.args.request?.text === 'edited-custom')).toBe(true);
+  const customReads = (await memoryCalls(page)).filter(call => call.command === 'read_memory' && call.args.target?.projectPath === 'C:/custom');
+  expect(customReads.length).toBeGreaterThan(0);
+  expect((await memoryCalls(page)).some(call => call.command === 'add_project' || call.command === 'relink_project' || call.command === 'save_configuration_draft' || call.command === 'apply_registered_native_profile')).toBe(false);
+  expect(await page.evaluate(() => localStorage.getItem('cliora:workspace-context'))).toBe(stored);
+  const lists = (await memoryCalls(page)).filter(call => call.command === 'list_memories' && call.args.target?.projectPath === 'C:/custom');
+  expect(lists.length).toBeGreaterThan(0);
+  expect(lists.every(call => call.args.target?.toolId === 'alpha' && call.args.target?.scope === 'project')).toBe(true);
 });
 
 test('a master switch that is off still lists and opens memory', async ({ page }) => {

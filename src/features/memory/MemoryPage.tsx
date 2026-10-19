@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { open } from '@tauri-apps/plugin-dialog';
 import { StatusBanner } from '../../components/StatusBanner';
 import { native, nativeAvailable } from '../../lib/native';
 import { confirmAction } from '../../lib/confirm';
@@ -67,6 +68,8 @@ export function MemoryPage({ active, tools, suggestedProjectPath }: { active: bo
   const [failure, setFailure] = useState<Failure | null>(null);
   const [reselect, setReselect] = useState(false);
   const [busy, setBusy] = useState(false);
+  const lastGood = useRef<Choice | null>(null);
+  const preserveReselect = useRef(false);
 
   const descriptor = tools.find(item => item.id === toolId) ?? tools[0];
   const memory = descriptor?.management?.memory ?? null;
@@ -98,11 +101,20 @@ export function MemoryPage({ active, tools, suggestedProjectPath }: { active: bo
     try {
       const value = await native.listMemories(current);
       if (mounted.current && targetKeyRef.current === JSON.stringify(current)) {
+        lastGood.current = { scope: current.scope, projectPath: current.projectPath, contextId: current.contextId ?? null, explicit: true };
         setList(value);
         setFailure(null);
       }
     } catch (error) {
       if (!mounted.current || targetKeyRef.current !== JSON.stringify(current)) return;
+      const good = lastGood.current;
+      const sameGood = !!good && good.scope === current.scope && good.projectPath === current.projectPath && (good.contextId ?? null) === (current.contextId ?? null);
+      if (isUnavailableTarget(error) && good && !sameGood) {
+        preserveReselect.current = true;
+        setChoices(existing => ({ ...existing, [current.toolId]: good }));
+        setReselect(true);
+        return;
+      }
       if (isUnavailableTarget(error)) setReselect(true);
       setFailure({ message: formatFailure(error, t('common.memory.listFailed'), t('common.memory.retryNext')), retry: () => loadList(current) });
     }
@@ -144,7 +156,10 @@ export function MemoryPage({ active, tools, suggestedProjectPath }: { active: bo
     setDraft('');
     setCreating(false);
     setFailure(null);
-    setReselect(false);
+    if (preserveReselect.current) {
+      preserveReselect.current = false;
+      setReselect(true);
+    } else setReselect(false);
   }, [targetKey]);
   useEffect(() => {
     if (!active) return;
@@ -171,16 +186,29 @@ export function MemoryPage({ active, tools, suggestedProjectPath }: { active: bo
       setChoices(current => ({ ...current, [descriptor.id]: { ...choice, scope: 'project', projectPath: null, explicit: true } }));
       return;
     }
-    const project = projects.find(item => item.path === path);
-    if (!project?.path || !project.available) {
+    const recorded = projects.find(item => item.path === path);
+    if (recorded && !recorded.available) {
       setReselect(true);
       return;
     }
     setReselect(false);
     setChoices(current => ({
       ...current,
-      [descriptor.id]: { scope: 'project', projectPath: project.path, contextId: choice.contextId, explicit: true },
+      [descriptor.id]: { scope: 'project', projectPath: path, contextId: choice.contextId, explicit: true },
     }));
+  }
+
+  async function pickDirectory() {
+    const tool = descriptor;
+    const currentChoice = choice;
+    if (!tool || !currentChoice || !memory?.scope.project) return;
+    try {
+      const picked = await open({ directory: true, multiple: false, title: t('common.memory.pickDirectoryTitle') });
+      if (!mounted.current || typeof picked !== 'string' || !picked.trim()) return;
+      chooseProject(picked.trim());
+    } catch (error) {
+      if (mounted.current) report(error, t('common.memory.pickFailed'), () => pickDirectory());
+    }
   }
 
   function chooseAccount(contextId: string) {
@@ -367,12 +395,16 @@ export function MemoryPage({ active, tools, suggestedProjectPath }: { active: bo
             {memory.scope.project && <button type="button" aria-pressed={choice.scope === 'project'} onClick={() => chooseScope('project')}>{t('common.memory.project')}</button>}
           </div>
         </div>
-        {choice.scope === 'project' && <label className={styles.field}>{t('common.memory.projectLabel')}
-          <select value={choice.projectPath ?? ''} onChange={event => chooseProject(event.target.value)}>
-            <option value="">{t('common.memory.projectPlaceholder')}</option>
-            {projects.filter(project => project.path).map(project => <option key={project.id} value={project.path ?? ''}>{project.available ? project.name : t('common.memory.unavailableOption', { name: project.name })}</option>)}
-          </select>
-        </label>}
+        {choice.scope === 'project' && <div className={styles.projectPick}>
+          <label className={styles.field}>{t('common.memory.projectLabel')}
+            <select value={choice.projectPath ?? ''} onChange={event => chooseProject(event.target.value)}>
+              <option value="">{t('common.memory.projectPlaceholder')}</option>
+              {projects.filter(project => project.path).map(project => <option key={project.id} value={project.path ?? ''}>{project.available ? project.name : t('common.memory.unavailableOption', { name: project.name })}</option>)}
+              {choice.projectPath && !projects.some(project => project.path === choice.projectPath) && <option value={choice.projectPath}>{choice.projectPath}</option>}
+            </select>
+          </label>
+          <button type="button" className="button" disabled={busy} onClick={() => void pickDirectory()}>{t('common.memory.pickDirectory')}</button>
+        </div>}
         {needsAccount && <label className={styles.field}>{t('common.memory.accountLabel')}
           <select value={choice.contextId ?? ''} onChange={event => chooseAccount(event.target.value)}>
             <option value="">{t('common.memory.accountUnspecified')}</option>
