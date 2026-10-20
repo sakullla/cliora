@@ -178,6 +178,9 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   useEffect(() => { if (!supported[resource]) setResource('config'); if (resource !== 'accounts') setAccountUsageQuery(null); }, [resource, supported.accounts, supported.mcp, supported.skills, supported.agents, supported.plugins, supported.memory]);
   const reload = useCallback(async (nextTool: string, nextScope: Scope, nextProject: string, fresh = false) => {
     if (nextScope === 'project' && !nextProject) {
+      // A previous CLI read may still be in flight. Retire it before publishing
+      // the choose-project prompt, or its completion overwrites this context.
+      ++loadSequence.current;
       setLoading(false);
       setWorkspace(null);
       setScopedContext({ key: JSON.stringify([nextTool, nextScope, nextProject]), value: { effectiveContextId: null, nativeContextError: null } });
