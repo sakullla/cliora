@@ -190,6 +190,11 @@ class Engine {
     this.temporary = temporary;
   }
 
+  async resolve(tool, scope, isolatedHome, project, env) {
+    const args = ['resolve', tool, scope, isolatedHome, ...(project ? [project] : [])];
+    return JSON.parse((await requireSuccess(this.binary, args, { env })).stdout);
+  }
+
   async request(request, env) {
     const file = path.join(this.temporary, `request-${Date.now()}-${Math.random().toString(16).slice(2)}.json`);
     await fs.mkdir(path.dirname(request.database), { recursive: true });
@@ -510,30 +515,76 @@ async function probeGrok(engine, marker, temporary, context) {
 
 // Qoder is validated against an isolated home only. This proves the product's
 // index/config contract, not a live paid session consuming that memory.
-async function probeQoder(engine, marker, temporary) {
+export function qoderIsolatedEnvironment(configRoot, inherited = process.env) {
+  const env = { ...inherited };
+  const overrides = new Set(['QODERCN_CONFIG_DIR', 'QODERCN_CONFIG_DIR_NAME', 'QODERCN_CLI_HOME', 'GEMINI_CLI_HOME', 'CONFIG_DIR_NAME', 'CLI_HOME']);
+  for (const key of Object.keys(env)) if (overrides.has(key.toUpperCase())) delete env[key];
+  // Explicitly pin the adapter's highest-precedence root, not just HOME.
+  env.QODERCN_CONFIG_DIR = configRoot;
+  return env;
+}
+
+export async function assertProbePath(temporary, target) {
+  const root = await fs.realpath(temporary);
+  const resolved = path.resolve(target);
+  const relative = path.relative(root, resolved);
+  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error(`Probe target is outside the temporary directory: ${target}`);
+  }
+  for (let current = resolved; current !== root; current = path.dirname(current)) {
+    try {
+      if ((await fs.lstat(current)).isSymbolicLink()) throw new Error(`Probe target contains a link: ${current}`);
+    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
+  return resolved;
+}
+
+export async function probeQoder(engine, marker, temporary, context = {}) {
   const record = { tool: 'qoder_cn', marker, scope: 'global/project', checks: [] };
-  const isolated = path.join(temporary, 'qoder-home');
-  const project = path.join(temporary, 'qoder-project');
-  await fs.mkdir(project, { recursive: true });
-  const env = { ...process.env };
-  for (const key of ['QODERCN_CONFIG_DIR', 'CONFIG_DIR_NAME', 'CLI_HOME', 'GEMINI_CLI_HOME']) delete env[key];
-  const base = { tool: 'qoder_cn', home: isolated };
-  const empty = await engine.op({ ...base, op: 'aggregate' }, env);
-  check(record, 'two unknown native-default scope switches without creating a store', empty.stores.length === 0 && empty.switchGroups.length === 2 && empty.switchGroups.every(group => group.enabled === null));
+  const root = await fs.realpath(temporary);
+  const isolated = path.join(root, 'qoder-home');
+  const project = path.join(root, 'qoder-project');
+  const configRoot = path.join(isolated, '.qoder-cn');
+  const database = path.join(root, 'engine', 'qoder_cn', 'engine.sqlite');
+  const settings = path.join(configRoot, 'settings.json');
+  const env = qoderIsolatedEnvironment(configRoot, context.env ?? process.env);
+  // Validate even mkdir and database destinations before the first write.
+  for (const target of [isolated, project, configRoot, database, `${database}.creds.json`, settings]) await assertProbePath(root, target);
+  const base = { tool: 'qoder_cn', home: isolated, database };
+  const directories = {};
   for (const scope of ['global', 'project']) {
-    const target = { ...base, scope, project: scope === 'project' ? project : undefined, id: 'cliora-native-fixture' };
-    const saved = await engine.op({ ...target, op: 'save', text: `---\nname: Native fixture\ntype: reference\n---\n${marker}` }, env);
+    const resolved = await engine.resolve('qoder_cn', scope, isolated, scope === 'project' ? project : undefined, env);
+    directories[scope] = await assertProbePath(root, resolved.directory);
+    const relative = path.relative(configRoot, directories[scope]);
+    if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error('Native memory resolution escaped the isolated config root');
+  }
+  await fs.mkdir(project, { recursive: true });
+  const op = async request => {
+    // Repeat boundaries before each operation; native transactions additionally
+    // reject reparse races and enforce baselines on all actual write targets.
+    for (const target of [isolated, project, configRoot, database, `${database}.creds.json`, settings, ...Object.values(directories), ...Object.values(directories).map(directory => path.join(directory, 'MEMORY.md'))]) await assertProbePath(root, target);
+    if (request.scope) await assertProbePath(root, path.join(directories[request.scope], `${request.id}.md`));
+    return engine.op({ ...base, ...request }, env);
+  };
+  const empty = await op({ op: 'aggregate' });
+  if (!check(record, 'two unknown native-default scope switches without creating a store', empty.stores.length === 0 && empty.switchGroups.length === 2 && empty.switchGroups.every(group => group.enabled === null))) {
+    throw new Error('Isolated Qoder root is not empty/default; refusing memory mutations');
+  }
+  for (const scope of ['global', 'project']) {
+    const target = { scope, project: scope === 'project' ? project : undefined, id: 'cliora-native-fixture' };
+    const saved = await op({ ...target, op: 'save', text: `---\nname: Native fixture\ntype: reference\n---\n${marker}` });
+    await assertProbePath(root, saved.path);
     const index = path.join(path.dirname(saved.path), 'MEMORY.md');
     check(record, `${scope}: topic and native index persisted`, (await fs.readFile(index, 'utf8')).includes('](cliora-native-fixture.md)'));
-    const read = await engine.op({ ...target, op: 'read' }, env);
+    const read = await op({ ...target, op: 'read' });
     check(record, `${scope}: shared read returns written bytes`, read.text === saved.text);
-    await engine.op({ ...target, op: 'delete', baseline: read.text }, env);
+    await op({ ...target, op: 'delete', baseline: read.text });
     check(record, `${scope}: delete removes index reference and topic`, !(await fs.readFile(index, 'utf8')).includes('](cliora-native-fixture.md)') && !fssync.existsSync(saved.path));
     check(record, `${scope}: no private item enable records`, noClioraFiles(path.dirname(saved.path)));
   }
-  await engine.op({ ...base, op: 'group', group: 'autoMemoryEnabled', enabled: false }, env);
-  await engine.op({ ...base, op: 'group', group: 'autoMemoryUserScopeEnabled', enabled: true }, env);
-  const result = await engine.op({ ...base, op: 'aggregate' }, env);
+  await op({ op: 'group', group: 'autoMemoryEnabled', enabled: false });
+  await op({ op: 'group', group: 'autoMemoryUserScopeEnabled', enabled: true });
+  const result = await op({ op: 'aggregate' });
   check(record, 'project and user native switches remain independent', result.switchGroups.find(group => group.scope === 'project')?.enabled === false && result.switchGroups.find(group => group.scope === 'global')?.enabled === true);
   record.result = record.checks.every(item => item.passed) ? 'unverified' : 'failed';
   record.reason = '隔离原生格式 CRUD/索引/开关通过；未启动付费推理或改写真实用户配置，原生交互消费效果未验证';

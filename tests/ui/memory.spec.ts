@@ -690,3 +690,83 @@ test('refreshing the open body bypasses held background batches', async ({ page 
   await expect.poll(async () => (await batchState(page)).active).toBe(0);
   await expect(reader(page)).toContainText('changed-7');
 });
+
+
+for (const conflict of ['preflight', 'write'] as const) test(`cancelling ${conflict} conflict preserves pending background bodies`, async ({ page }) => {
+  await installBatchProbe(page, 100);
+  await page.addInitScript(() => { (window as unknown as { __batch: BatchProbe }).__batch.hold = true; });
+  await openMemory(page);
+  await expect.poll(async () => (await batchState(page)).active).toBe(2);
+  await entryButton(page, 'entry-0').click();
+  await page.getByRole('button', { name: '编辑', exact: true }).click();
+  await editor(page).fill('draft must survive cancellation');
+  if (conflict === 'preflight') {
+    await page.evaluate(() => { const p = (window as unknown as { __batch: BatchProbe }).__batch; p.changed = 1; p.revision = 1; });
+  } else {
+    await page.evaluate(() => {
+      const api = (window as unknown as { __TAURI_INTERNALS__: { invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__;
+      const original = api.invoke;
+      api.invoke = async (command, args) => { if (command === 'save_memory') throw new Error('记忆已被外部修改'); return original(command, args); };
+    });
+  }
+  await page.getByRole('button', { name: '保存记忆' }).click();
+  await expect(page.getByRole('heading', { name: '记忆已被外部修改' })).toBeVisible();
+  await page.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(editor(page)).toContainText('draft must survive cancellation');
+  await page.evaluate(() => { const p = (window as unknown as { __batch: BatchProbe }).__batch; p.hold = false; p.releases.splice(0).forEach(release => release()); });
+  await expect(entryButton(page, 'entry-99')).toContainText('Memo 99');
+  await page.getByRole('searchbox', { name: '搜索记忆' }).fill('Body entry-99');
+  await expect(page.getByText('1 / 100 条')).toBeVisible();
+  expect(await page.evaluate(() => Object.keys((window as unknown as { __batch: BatchProbe }).__batch.saved))).toHaveLength(0);
+});
+
+test('a list fingerprint failure remains an individual readable retry row', async ({ page }) => {
+  await installBatchProbe(page, 3);
+  await page.addInitScript(() => {
+    const state = (window as unknown as { __batch: BatchProbe }).__batch;
+    state.failId = 'entry-1';
+    const api = (window as unknown as { __TAURI_INTERNALS__: { invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__;
+    const original = api.invoke;
+    api.invoke = async (command, args) => {
+      const value = await original(command, args);
+      if (command === 'list_all_memories') {
+        const result = value as { entries: { id: string; fingerprint: string; readError?: string }[] };
+        result.entries = result.entries.map(entry => entry.id === state.failId ? { ...entry, fingerprint: '', readError: 'sharing violation' } : entry);
+      }
+      return value;
+    };
+  });
+  await openMemory(page);
+  await expect(entryButton(page, 'entry-0')).toContainText('Memo 0');
+  await expect(entryButton(page, 'entry-1')).toContainText('正文暂不可读，点击重试');
+  await expect(entryButton(page, 'entry-2')).toContainText('Memo 2');
+  await page.evaluate(() => { (window as unknown as { __batch: BatchProbe }).__batch.failId = null; });
+  await entryButton(page, 'entry-1').click();
+  await expect(reader(page)).toContainText('Body entry-1');
+  await expect(entryButton(page, 'entry-1')).not.toContainText('正文暂不可读');
+  await page.getByRole('button', { name: '刷新记忆' }).click();
+  await expect(page.getByRole('status').filter({ hasText: '搜索结果可能不完整' })).toHaveCount(0);
+});
+
+test('native filename capability permits Unicode and internal dots without changing simple families', async ({ page }) => {
+  await install(page);
+  await page.addInitScript(() => {
+    const api = (window as unknown as { __TAURI_INTERNALS__: { invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__;
+    const original = api.invoke;
+    api.invoke = async (command, args) => {
+      const value = await original(command, args);
+      return command === 'list_all_memories' ? { ...(value as Record<string, unknown>), nativeFileNames: true } : value;
+    };
+  });
+  await openMemory(page);
+  await page.getByRole('button', { name: '新建记忆' }).click();
+  await page.getByRole('textbox', { name: '文件名' }).fill('用户.preferences');
+  await editor(page).fill('native name body');
+  await page.getByRole('button', { name: '保存记忆' }).click();
+  await expect.poll(async () => (await memoryCalls(page)).some(call => call.command === 'save_memory' && call.args.request?.id === '用户.preferences')).toBe(true);
+  await page.getByRole('button', { name: '新建记忆' }).click();
+  for (const unsafe of ['../outside', 'C:stream', 'CON.notes', 'COM¹', '.hidden', 'trailing.']) {
+    await page.getByRole('textbox', { name: '文件名' }).fill(unsafe);
+    await expect(page.getByRole('button', { name: '保存记忆' })).toBeDisabled();
+  }
+});

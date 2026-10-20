@@ -2456,3 +2456,169 @@ fn qoder_memory_group_switch_rejects_junction_without_changing_settings() {
     #[cfg(unix)]
     fs::remove_file(h.home.join(".qoder-cn")).unwrap();
 }
+
+#[cfg(windows)]
+#[test]
+fn memory_list_keeps_healthy_entries_when_one_file_is_exclusively_locked() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let h = harness();
+    let registry = Registry::builtins();
+    let target = memory_target("qoder_cn", Scope::Global, None, None);
+    let directory = h.home.join(".qoder-cn/memory");
+    fs::create_dir_all(&directory).unwrap();
+    fs::write(directory.join("a.md"), "healthy body").unwrap();
+    fs::write(directory.join("b.md"), "locked body").unwrap();
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .share_mode(0)
+        .open(directory.join("b.md"))
+        .unwrap();
+    let list = list_memories(&h.db, &registry, &h.home, &target).unwrap();
+    assert_eq!(list.entries.len(), 2);
+    assert!(list
+        .entries
+        .iter()
+        .find(|entry| entry.id == "a")
+        .unwrap()
+        .read_error
+        .is_none());
+    let failed = list.entries.iter().find(|entry| entry.id == "b").unwrap();
+    assert!(failed.read_error.is_some() && failed.fingerprint.is_empty());
+    let aggregate = list_all_memories(&h.db, &registry, &h.home, "qoder_cn").unwrap();
+    assert!(aggregate.failed_sources.is_empty());
+    assert_eq!(aggregate.entries.len(), 2);
+    let requests: Vec<_> = aggregate
+        .entries
+        .iter()
+        .map(|entry| MemoryReadRequest {
+            target: entry.target.clone(),
+            id: entry.id.clone(),
+        })
+        .collect();
+    let read = read_memories(&h.db, &registry, &h.home, &requests).unwrap();
+    assert_eq!(read[0].document.as_ref().unwrap().text, "healthy body");
+    assert!(read[1].document.is_none() && read[1].error.is_some());
+    drop(lock);
+    let recovered = list_all_memories(&h.db, &registry, &h.home, "qoder_cn").unwrap();
+    assert!(recovered
+        .entries
+        .iter()
+        .all(|entry| entry.read_error.is_none() && !entry.fingerprint.is_empty()));
+    assert_eq!(
+        read_memories(&h.db, &registry, &h.home, &requests).unwrap()[1]
+            .document
+            .as_ref()
+            .unwrap()
+            .text,
+        "locked body"
+    );
+}
+
+#[test]
+fn qoder_native_topic_names_support_unicode_and_dots_without_weakening_path_guards() {
+    let h = harness();
+    let registry = Registry::builtins();
+    let target = memory_target("qoder_cn", Scope::Global, None, None);
+    let directory = h.home.join(".qoder-cn/memory");
+    fs::create_dir_all(&directory).unwrap();
+    for id in ["normal", "user.preferences", "用户偏好"] {
+        fs::write(directory.join(format!("{id}.md")), "native body").unwrap();
+    }
+    let aggregate = list_all_memories(&h.db, &registry, &h.home, "qoder_cn").unwrap();
+    assert!(aggregate.native_file_names);
+    assert_eq!(aggregate.entries.len(), 3);
+    for entry in aggregate.entries {
+        let document = read_memory(&h.db, &registry, &h.home, &entry.target, &entry.id).unwrap();
+        assert_eq!(document.text, "native body");
+        let saved = save_memory(
+            &h.db,
+            &h.store,
+            &registry,
+            &h.home,
+            &MemorySave {
+                target: entry.target.clone(),
+                id: entry.id.clone(),
+                text: "edited native body".into(),
+                baseline: document.text,
+                confirm_external: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(&saved.path).unwrap(),
+            "edited native body"
+        );
+        assert!(fs::read_to_string(directory.join("MEMORY.md"))
+            .unwrap()
+            .contains(&format!("]({}.md)", entry.id)));
+        delete_memory(
+            &h.db,
+            &h.store,
+            &registry,
+            &h.home,
+            &MemoryDelete {
+                target: entry.target,
+                id: entry.id.clone(),
+                baseline: saved.text,
+            },
+        )
+        .unwrap();
+        assert!(!fs::read_to_string(directory.join("MEMORY.md"))
+            .unwrap()
+            .contains(&format!("]({}.md)", entry.id)));
+    }
+    for id in ["new.preferences", "新增偏好"] {
+        save_memory(
+            &h.db,
+            &h.store,
+            &registry,
+            &h.home,
+            &MemorySave {
+                target: target.clone(),
+                id: id.into(),
+                text: "new native body".into(),
+                baseline: String::new(),
+                confirm_external: false,
+            },
+        )
+        .unwrap();
+    }
+    for id in [
+        "../outside",
+        r"..\outside",
+        "/absolute",
+        "C:stream",
+        "CON",
+        "con.notes",
+        "LPT1",
+        "COM¹",
+        ".hidden",
+        "trailing.",
+        "trailing ",
+        "MEMORY",
+        "memory",
+    ] {
+        assert!(
+            save_memory(
+                &h.db,
+                &h.store,
+                &registry,
+                &h.home,
+                &MemorySave {
+                    target: target.clone(),
+                    id: id.into(),
+                    text: "must not write".into(),
+                    baseline: String::new(),
+                    confirm_external: false
+                }
+            )
+            .is_err(),
+            "accepted unsafe id {id}"
+        );
+    }
+    // Other adapters retain their declared legacy identifiers.
+    let shared = memory_target(SHARED.id, Scope::Global, None, None);
+    assert!(save(&h, shared.clone(), "user.preferences", "no", "", false).is_err());
+    assert!(save(&h, shared, "用户偏好", "no", "", false).is_err());
+}

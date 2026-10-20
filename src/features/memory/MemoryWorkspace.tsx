@@ -152,11 +152,11 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
     for (const entry of value.entries) {
       const key = `${storeKey(entry.target)}:${entry.id}`;
       const cached = docsRef.current[key];
-      if (cached?.fingerprint === entry.fingerprint) next[key] = cached;
+      if (!entry.readError && cached?.fingerprint === entry.fingerprint) next[key] = cached;
       else pending.push(entry);
     }
     publishDocs(next);
-    setDocErrors({});
+    setDocErrors(Object.fromEntries(value.entries.filter(entry => entry.readError).map(entry => [`${storeKey(entry.target)}:${entry.id}`, entry.readError!])));
     // Refresh the open document through the unrestricted single read. It must
     // not wait behind slow batches or retain stale text after a batch size limit.
     const focusedIndex = dirtyRef.current ? -1 : pending.findIndex(entry => `${storeKey(entry.target)}:${entry.id}` === openedRef.current?.key);
@@ -169,6 +169,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
         const document = await native.readMemory(focused.target, focused.id);
         if (!mounted.current || epoch !== loadEpoch.current || (docRevision.current[key] ?? 0) !== revision) return;
         publishDocs({ ...docsRef.current, [key]: documentCache(focused.id, document.text, document.fingerprint) });
+        setDocErrors(previous => { const next = { ...previous }; delete next[key]; return next; });
       } catch (error) {
         if (!mounted.current || epoch !== loadEpoch.current || (docRevision.current[key] ?? 0) !== revision) return;
         publishDocs({ ...docsRef.current, [key]: null });
@@ -184,15 +185,17 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
         if (!mounted.current || epoch !== loadEpoch.current) return;
         const updated = { ...docsRef.current };
         const errors: Record<string, string> = {};
+        const recovered: string[] = [];
         batch.forEach((entry, index) => {
           const key = `${storeKey(entry.target)}:${entry.id}`;
           if ((docRevision.current[key] ?? 0) !== revisions[index]) return;
           const document = results?.[index]?.document;
           if (!document) errors[key] = results?.[index]?.error || t('common.memory.readFailed');
+          else recovered.push(key);
           updated[key] = document ? documentCache(entry.id, document.text, document.fingerprint) : null;
         });
         publishDocs(updated);
-        setDocErrors(previous => ({ ...previous, ...errors }));
+        setDocErrors(previous => { const next = { ...previous, ...errors }; for (const key of recovered) delete next[key]; return next; });
       }
     };
     await Promise.all([refreshFocused(), worker(), worker()]);
@@ -401,7 +404,6 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
     if (!opened) return;
     const target = opened;
     const text = draft;
-    ++loadEpoch.current; ++readEpoch.current;
     setReading(false);
     setBusy(true);
     try {
@@ -417,6 +419,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
           setBusy(true);
         }
       }
+      ++loadEpoch.current; ++readEpoch.current;
       const saved = await native.saveMemory({ target: target.target, id: target.id, text, baseline: target.text, confirmExternal: writeExternal });
       if (!mounted.current) return;
       setOpened({ ...target, id: saved.id, text: saved.text, fingerprint: saved.fingerprint });
@@ -431,7 +434,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
       if (!confirmExternal && isExternalChange(error)) {
         setBusy(false);
         const accepted = await confirmAction(t('common.memory.externalMessage'), () => mounted.current, { title: t('common.memory.externalTitle'), confirmLabel: t('common.memory.externalConfirm') });
-        if (!accepted) return;
+        if (!accepted) { await reload(); return; }
         await saveOpened(true);
         return;
       }
@@ -456,14 +459,17 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
     setCompose(null);
   }
 
-  const idValid = (id: string) => /^[A-Za-z0-9_-]{1,80}$/.test(id) && id !== '_unbound';
+  const idValid = (id: string) => aggregate?.nativeFileNames
+    ? id.length > 0 && id.length <= 240 && !/^[.]|[. ]$|[\u0000-\u001f\u007f-\u009f/\\:<>"|?*]/.test(id) && !/^(CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|(?:COM|LPT)[1-9¹²³])(?:[. ]|$)/i.test(id)
+    : /^[A-Za-z0-9_-]{1,80}$/.test(id) && id !== '_unbound';
+  const idInvalid = t(aggregate?.nativeFileNames ? 'common.memory.nativeIdInvalid' : 'common.memory.idInvalid');
 
   async function createMemory(confirmExternal = false) {
     if (!compose) return;
     const destination = destinations.find(item => item.value === compose.destination);
     const id = compose.id.trim();
     if (!destination) return;
-    if (!idValid(id)) { setFailure({ message: t('common.memory.idInvalid'), retry: null }); return; }
+    if (!idValid(id)) { setFailure({ message: idInvalid, retry: null }); return; }
     if (!confirmExternal && rows.some(row => row.entry.id === id && storeKey(row.entry.target) === storeKey(destination.target))) { setFailure({ message: t('common.memory.idTaken', { id }), retry: null }); return; }
     const text = compose.text;
     ++loadEpoch.current; ++readEpoch.current;
@@ -493,7 +499,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
       if (!confirmExternal && isExternalChange(error)) {
         setBusy(false);
         const accepted = await confirmAction(t('common.memory.externalMessage'), () => mounted.current, { title: t('common.memory.externalTitle'), confirmLabel: t('common.memory.externalConfirm') });
-        if (!accepted) return;
+        if (!accepted) { await reload(); return; }
         await createMemory(true);
         return;
       }
@@ -640,7 +646,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
   const showDetail = !!current || !!compose;
   const sourceOptions = [{ value: 'all', label: t('common.memory.sourceAll'), note: String(total) }, ...listedStores.map(store => ({ value: store.key, label: store.name, detail: store.path || undefined, note: String(store.entryCount) }))];
   const composeDestination = compose ? destinations.find(item => item.value === compose.destination) ?? null : null;
-  const composeIdError = compose && compose.id.trim() && !idValid(compose.id.trim()) ? t('common.memory.idInvalid') : '';
+  const composeIdError = compose && compose.id.trim() && !idValid(compose.id.trim()) ? idInvalid : '';
 
   const master = can('master_switch') && shared && switchGroups.length === 0 ? masterStore : null;
   const anyOff = stores.some(store => !store.inUse);
@@ -720,6 +726,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
                     const summary = row.parsed ? (row.parsed.description || row.parsed.excerpt) : '';
                     return <button key={row.key} type="button" tabIndex={selected === row.key || (!selected && row === ordered[0]) ? 0 : -1} data-key={row.key} disabled={busy} aria-current={selected === row.key || undefined} className={styles.item} data-disabled={!row.entry.enabled || undefined} onClick={() => void select(row)}>
                       <span className={styles.itemTitle}><strong title={title}>{title}</strong>{row.parsed?.type && <span className={styles.typeBadge} data-type={row.parsed.type}>{typeLabel(row.parsed.type)}</span>}{!row.entry.enabled && <span className={styles.typeBadge} data-type="off">{t('common.memory.disabledBadge')}</span>}</span>
+                      {docErrors[row.key] && <span className={styles.itemSummary} title={docErrors[row.key]}>{t('common.memory.entryReadFailed')}</span>}
                       {summary ? <span className={styles.itemSummary}>{summary}</span> : row.pending && <span className={styles.itemSummaryPending} aria-hidden="true" />}
                       <span className={styles.itemMeta}><span className={styles.mono}>{fileName(row.entry.path)}</span>{row.modified && <time dateTime={row.parsed?.modified ?? undefined} title={row.modified.absolute}>{row.modified.text}</time>}</span>
                     </button>;
@@ -746,7 +753,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
               <label className={styles.field}>
                 <span className={styles.fieldLabel}>{t('common.memory.idLabel')}</span>
                 <span className={styles.idInput} data-invalid={!!composeIdError || undefined}><input aria-label={t('common.memory.idLabel')} aria-invalid={!!composeIdError} value={compose.id} placeholder={t('common.memory.idPlaceholder')} spellCheck={false} autoFocus onChange={event => { const value = event.target.value; setCompose(previous => previous ? { ...previous, id: value } : previous); }} /><span aria-hidden="true">.md</span></span>
-                <small className={styles.fieldHint} data-tone={composeIdError ? 'error' : undefined}>{composeIdError || t('common.memory.idHint')}</small>
+                <small className={styles.fieldHint} data-tone={composeIdError ? 'error' : undefined}>{composeIdError || t(aggregate?.nativeFileNames ? 'common.memory.nativeIdHint' : 'common.memory.idHint')}</small>
               </label>
             </div>
             <div className={styles.editorArea}>
