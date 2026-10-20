@@ -9,7 +9,7 @@ impl PluginAdapter for QoderAdapter {
     fn discovery_only(&self) -> bool { self.plugin_ledger.is_some() }
     fn discover(&self, home: &std::path::Path, target: &PluginTarget, _path: &std::path::Path) -> Result<Vec<crate::resources::plugins::PluginEntry>, String> {
         let ledger = self.plugin_ledger.ok_or("此 CLI 使用原生插件查询命令")?;
-        let root = self.config_root(home);
+        let root = self.config_root(home)?;
         let text = crate::native::transaction::read_native(&root.join(ledger))?;
         if text.trim().is_empty() {
             let legacy = crate::native::transaction::read_native(&root.join("plugins/installed_plugins.json"))?;
@@ -27,7 +27,7 @@ impl PluginAdapter for QoderAdapter {
         let mut configs = vec![root.join("settings.json")];
         if target.scope == Scope::Project {
             let project = std::path::Path::new(target.project_path.as_deref().ok_or("请选择项目")?);
-            configs.extend([project.join(self.directory).join("settings.json"), project.join(self.directory).join("settings.local.json")]);
+            configs.extend([self.project_config_root(project)?.join("settings.json"), self.project_config_root(project)?.join("settings.local.json")]);
         }
         for path in configs {
             let text = crate::native::transaction::read_native(&path)?;

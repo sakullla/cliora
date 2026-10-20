@@ -1,6 +1,50 @@
 import { expect, test, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
+import { setupConfigurationWorkspace } from './configuration-workspace-fixture';
+
+test('Qoder settings edit and restore native values without a provider or credential chain', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'qoder_cn');
+  await page.getByRole('button', { name: '正在使用的文件', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('button', { name: '常用设置', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(dialog.getByRole('button', { name: '连接与模型', exact: true })).toHaveCount(0);
+  await expect(dialog.getByLabel('API 密钥', { exact: true })).toHaveCount(0);
+  await expect(dialog.getByRole('list', { name: '连接顺序' })).toHaveCount(0);
+  await expect(dialog.getByLabel('推理强度', { exact: true })).toHaveValue('future-effort');
+  await expect(dialog.getByText('跟随原生默认，当前生效状态未知。')).toHaveCount(2);
+  await dialog.getByLabel('模型', { exact: true }).fill('my-model');
+  await dialog.getByLabel('默认权限模式', { exact: true }).selectOption('accept_edits');
+  await dialog.getByLabel('界面语言', { exact: true }).selectOption('en');
+  await dialog.getByLabel('项目自动记忆', { exact: true }).selectOption('启用');
+  await dialog.getByLabel('用户自动记忆', { exact: true }).selectOption('停用');
+  await dialog.getByLabel('项目自动记忆', { exact: true }).selectOption('');
+  await expect(dialog.getByText('跟随原生默认，当前生效状态未知。')).toHaveCount(1);
+  await dialog.getByRole('button', { name: '合并与来源', exact: true }).click();
+  await expect(dialog.getByRole('textbox', { name: '合并配置预览' })).toContainText('my-model');
+  await dialog.getByRole('button', { name: '保存到当前文件', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  const settings = await page.evaluate(() => JSON.parse((window as any).configurationProtocol.disk.settings));
+  expect(settings.model).toEqual({ name: 'my-model', reasoningEffort: 'future-effort' });
+  expect(settings.autoMemoryEnabled).toBeUndefined();
+  expect(settings.autoMemoryUserScopeEnabled).toBe(false);
+  expect(settings.general.defaultPermissionMode).toBe('accept_edits');
+  expect(settings.ui.language).toBe('en');
+  expect(settings.customUserField).toEqual({ keep: true });
+  await page.getByRole('button', { name: '正在使用的文件', exact: true }).click();
+  await expect(page.getByRole('dialog').getByLabel('模型', { exact: true })).toHaveValue('my-model');
+});
+
+test('Qoder common memory defaults remain unknown until explicitly set', async ({ page }) => {
+  await setupConfigurationWorkspace(page, 'qoder_cn');
+  await page.getByRole('button', { name: '通用配置', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByLabel('用户自动记忆', { exact: true })).toHaveValue('');
+  await dialog.getByLabel('用户自动记忆', { exact: true }).selectOption('启用');
+  await expect(dialog.getByLabel('用户自动记忆', { exact: true })).toHaveValue('启用');
+  await dialog.getByLabel('用户自动记忆', { exact: true }).selectOption('');
+  await expect(dialog.getByLabel('用户自动记忆', { exact: true })).toHaveValue('');
+});
 
 const component = ts.transpileModule(readFileSync('src/components/configuration/ConfigurationField.tsx', 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022 },

@@ -1,0 +1,45 @@
+{
+  "evidence": {
+    "package": "@qodercn-ai/qoderclicn",
+    "version": "1.1.74",
+    "source": "installed bundle schema (synthetic values, no credentials)",
+    "userDirectory": ".qoder-cn",
+    "projectDirectory": ".qoder"
+  },
+  "settings": {
+    "model": {
+      "name": "fixture-model",
+      "reasoningEffort": "high",
+      "contextWindow": 12345
+    },
+    "general": {
+      "defaultPermissionMode": "default",
+      "fixtureExtra": true
+    },
+    "ui": {
+      "language": "zh-CN"
+    },
+    "autoMemoryEnabled": false,
+    "autoMemoryUserScopeEnabled": true,
+    "customUserField": {
+      "keep": [
+        "unchanged"
+      ]
+    },
+    "mcpServers": {
+      "fixture": {
+        "command": "fixture-mcp",
+        "disabled": true
+      }
+    },
+    "enabledPlugins": {
+      "fixture@market": true
+    }
+  },
+  "localSettings": {
+    "model": {
+      "name": "local-fixture-model"
+    },
+    "customLocalField": "keep"
+  }
+}
