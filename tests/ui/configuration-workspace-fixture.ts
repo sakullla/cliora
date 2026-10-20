@@ -9,7 +9,14 @@ export async function installConfigurationProtocol(page: Page) {
     (window as any).configurationProtocol = state;
     const clone = (value: any) => structuredClone(value);
     const field = (id: string, label = id, kind = 'string', required = false, advanced = false) => ({ id, label, kind, required, advanced, choices: [], minimum: kind === 'integer' ? 1 : null, defaultSource: '原生默认', unavailableReason: null });
+    const qoderFields = () => [field('model.name', '模型'), { ...field('model.reasoningEffort', '推理强度'), choices: ['disabled','off','none','low','medium','high','xhigh','max'] }, { ...field('general.defaultPermissionMode', '默认权限模式'), choices: ['default','accept_edits','auto','bypass_permissions','dont_ask'] }, { ...field('ui.language', '界面语言'), choices: ['auto','zh-CN','en'] }, field('autoMemoryEnabled','项目自动记忆','boolean'), field('autoMemoryUserScopeEnabled','用户自动记忆','boolean')];
+    function qoderView(files: Record<string, string>, common: boolean) {
+      const root = JSON.parse(files.settings ?? '{}');
+      const values = Object.fromEntries(qoderFields().map(field => [field.id, field.id.split('.').reduce((value, key) => value?.[key], root) ?? null]));
+      return common ? { commonFields: qoderFields().map(field => ({ id: field.id, value: values[field.id], target: 'settings' })) } : { values, targets: Object.fromEntries(qoderFields().map(field => [field.id, 'settings'])) };
+    }
     function describe(tool: string, common: boolean) {
+      if (tool === 'qoder_cn') return { version: 1, operations: ['set','reset'], fields: qoderFields() };
       if (common) return { version: 1, operations: ['set', 'reset'], fields: [tool === 'claude_code' ? field('effortLevel', '默认推理 effort') : field('commonSetting', '通用参数', 'integer')] };
       return { version: 1, operations: ['set', 'reset', 'create', 'copy', 'rename', 'delete', 'default', 'configure_provider', 'select_provider', 'unify'], fields:
         tool === 'codex' ? [field('model', '当前模型'), field('model_provider', '供应商 ID'), field('base_url', 'Responses 地址'), field('model_reasoning_effort', '推理强度（Codex 原生）'), field('model_context_window', '上下文窗口（Token）', 'integer'), field('model_reasoning_summary', '推理摘要'), field('model_verbosity', '回答详细程度')]
@@ -31,7 +38,18 @@ export async function installConfigurationProtocol(page: Page) {
         const document = JSON.parse(text as string);
         if (document.model || ['ANTHROPIC_MODEL','ANTHROPIC_DEFAULT_SONNET_MODEL','ANTHROPIC_DEFAULT_OPUS_MODEL','ANTHROPIC_DEFAULT_FABLE_MODEL','ANTHROPIC_DEFAULT_HAIKU_MODEL','CLAUDE_CODE_SUBAGENT_MODEL'].some(field => document.env?.[field])) value.issues.push({ code: 'common_scope', target: role, field: null, message: '通用配置不允许模型引用' });
       }
-      if (write && value.profile.tool === 'claude_code') {
+      if (value.profile.tool === 'qoder_cn') {
+        if (write) {
+          const document = JSON.parse(value.profile.files.settings ?? '{}');
+          const values = value.subject === 'common' ? Object.fromEntries(value.view.commonFields.map((field: any) => [field.id, field.value])) : value.view.values;
+          for (const field of qoderFields()) setPath(document, field.id, values[field.id]);
+          value.profile.files.settings = JSON.stringify(document);
+        }
+        for (const field of value.descriptor.fields) {
+          const valueNow = qoderView(value.profile.files, false).values?.[field.id];
+          field.origin = valueNow == null ? 'unset' : 'explicit';
+        }
+      } else if (write && value.profile.tool === 'claude_code') {
         const role = value.subject === 'common' || value.view.editTarget !== 'local_configuration' ? 'settings' : 'local_settings';
         const document = JSON.parse(value.profile.files[role] ?? '{}');
         if (value.subject === 'common') document.effortLevel = value.view.commonFields[0].value;
@@ -47,15 +65,27 @@ export async function installConfigurationProtocol(page: Page) {
       if (command === 'begin_configuration_draft') {
         const request = args.request; const workspace = await previous('get_registered_tool_workspace', { toolId: request.toolId, scope: request.scope, projectPath: request.projectPath });
         const profile = clone(request.profile ?? { id: '', tool: request.toolId, name: '', version: 0, files: {}, nativeCredentials: {}, suppressed: {}, inheritCommon: false, connection: null });
+        if (request.toolId === 'qoder_cn') {
+          profile.authentication = { kind: 'native' }; profile.connection = null;
+          if (!Object.keys(profile.files).length) profile.files = { settings: '{"model":{"name":"fixture-model","reasoningEffort":"future-effort"},"customUserField":{"keep":true}}' };
+        }
         profile.editing = { version: 1, selectedProvider: 'gateway', intents: [] };
         const view = initialView(request.toolId, request.subject === 'common');
         const credential = profile.authentication?.kind === 'oauth' ? { source: 'account', accountId: profile.authentication.accountId } : profile.authentication?.kind === 'api_key' ? { source: 'api_key', secretRef: profile.connection?.secretRef ?? null } : { source: 'native' };
-        const draftConnection = request.subject === 'current' && state.nativeCredentialTarget ? null : { providerId: 'gateway', baseUrl: 'https://gateway.example.test/v1', interfaceFormat: 'openai_completions', model: 'one', secretRef: credential.secretRef ?? null, authEnvVar: null };
-        const descriptor = ['pi','open_code','kimi_code','codex','claude_code'].includes(request.toolId) ? describe(request.toolId, request.subject === 'common') : undefined;
+        const draftConnection = request.toolId === 'qoder_cn' ? null : request.subject === 'current' && state.nativeCredentialTarget ? null : { providerId: 'gateway', baseUrl: 'https://gateway.example.test/v1', interfaceFormat: 'openai_completions', model: 'one', secretRef: credential.secretRef ?? null, authEnvVar: null };
+        const descriptor = ['pi','open_code','kimi_code','codex','claude_code','qoder_cn'].includes(request.toolId) ? describe(request.toolId, request.subject === 'common') : undefined;
         if (descriptor && request.subject !== 'common') for (const field of descriptor.fields) { const origin = state.fieldOrigins[`${request.toolId}:${field.id}`]; if (origin) field.origin = origin; }
         const value = { sessionId: request.sessionId, revision: 0, requestGeneration: 0, subject: request.subject, scope: request.scope, projectPath: request.projectPath, contextId: workspace.effectiveContextId ?? null, profile, baselineFiles: clone(state.disk), common: workspace.common, view, issues: [], descriptor, sourceCapabilities: [{ source: 'native', available: true, reason: null }, { source: 'account', available: request.subject === 'profile', reason: null }, { source: 'api_key', available: request.subject === 'current' ? (state.currentApiWritable ?? (workspace.effectiveContextId == null && workspace.probe.connectionPolicy?.apiKey.state === 'writable')) : workspace.probe.connectionPolicy?.apiKey.state === 'writable', reason: '当前范围不接受新密钥' }], credential, credentialStatus: credential.secretRef ? 'stored' : 'none', nativeCredentialTarget: request.subject === 'current' ? state.nativeCredentialTarget ?? undefined : undefined, draftConnection, catalogSupport: { available: !!draftConnection, multiple: ['pi','open_code','kimi_code'].includes(request.toolId), reason: null } };
         if (request.subject === 'common') profile.files = clone(state.commonFiles ?? workspace.common?.files ?? {});
         profile.files = Object.keys(profile.files).length ? profile.files : { settings: JSON.stringify(view) }; if (request.subject === 'current') { if (!Object.keys(state.disk).length) state.disk = clone(profile.files); profile.files = clone(state.disk); } value.baselineFiles = clone(profile.files);
+        if (request.toolId === 'qoder_cn') {
+          if (request.subject === 'current' && Object.keys(state.disk).length) profile.files = clone(state.disk);
+          else profile.files = { settings: '{"model":{"name":"fixture-model","reasoningEffort":"future-effort"},"customUserField":{"keep":true}}' };
+          value.view = qoderView(profile.files, request.subject === 'common'); value.baselineFiles = clone(profile.files);
+          if (request.subject === 'current') state.disk = clone(profile.files);
+          value.sourceCapabilities = [{ source: 'native', available: true, reason: null }, { source: 'account', available: false, reason: '原生登录' }, { source: 'api_key', available: false, reason: '原生登录' }];
+          for (const field of value.descriptor!.fields) field.origin = qoderView(profile.files, false).values?.[field.id] == null ? 'unset' : 'explicit';
+        }
         if (state.omitSourceCapabilities) delete (value as any).sourceCapabilities;
         if (credential.secretRef) state.references[credential.secretRef] = draftConnection ? JSON.stringify([draftConnection.providerId,draftConnection.interfaceFormat,draftConnection.baseUrl]) : state.nativeCredentialTarget.identity;
         state.sessions[value.sessionId] = clone(value); return clone(value);
@@ -64,16 +94,16 @@ export async function installConfigurationProtocol(page: Page) {
       if (command === 'cancel_configuration_draft') { state.cancelled.push(args.sessionId); for (const [key, lease] of Object.entries(state.leases)) if (lease.sessionId === args.sessionId && !lease.adopted) delete state.leases[key]; return null; }
       if (['edit_configuration_draft','update_configuration_draft','select_configuration_credential','set_configuration_draft_secret','add_configuration_models','replace_configuration_text','remove_configuration_draft_secret'].includes(command)) {
         const value = active(args); value.revision++;
-        if (command === 'update_configuration_draft') { value.profile.name = args.profile.name; value.profile.inheritCommon = args.profile.inheritCommon; if (!['pi','open_code','kimi_code','codex','claude_code'].includes(value.profile.tool) && args.profile.connection) { value.draftConnection = clone(args.profile.connection); value.profile.connection = value.credential.source === 'api_key' ? clone(args.profile.connection) : null; } }
+        if (command === 'update_configuration_draft') { value.profile.name = args.profile.name; value.profile.inheritCommon = args.profile.inheritCommon; if (!['pi','open_code','kimi_code','codex','claude_code','qoder_cn'].includes(value.profile.tool) && args.profile.connection) { value.draftConnection = clone(args.profile.connection); value.profile.connection = value.credential.source === 'api_key' ? clone(args.profile.connection) : null; } }
         if (command === 'select_configuration_credential') { if (args.credential.secretRef && state.references[args.credential.secretRef] !== (value.draftConnection ? JSON.stringify([value.draftConnection.providerId,value.draftConnection.interfaceFormat,value.draftConnection.baseUrl]) : value.nativeCredentialTarget.identity)) throw { message: '密钥引用不属于当前连接' }; value.credentialStatus = args.credential.secretRef ? state.leases[args.credential.secretRef] ? 'draft' : 'stored' : 'none'; if (value.draftConnection) value.draftConnection.secretRef = args.credential.secretRef ?? null; value.credential = clone(args.credential); value.profile.authentication = args.credential.source === 'account' ? { kind: 'oauth', accountId: args.credential.accountId } : { kind: args.credential.source === 'api_key' ? 'api_key' : 'native' }; value.profile.connection = args.credential.source === 'api_key' && value.draftConnection ? { ...value.draftConnection, secretRef: args.credential.secretRef } : null; }
         if (command === 'remove_configuration_draft_secret') { value.credential = { source: 'api_key', secretRef: null, remove: true }; value.credentialStatus = 'removed'; if (value.draftConnection) value.draftConnection.secretRef = null; value.profile.connection = value.draftConnection ? { ...value.draftConnection, secretRef: null } : null; }
         if (command === 'set_configuration_draft_secret') { const ref = `lease-${++state.sequence}`; state.leases[ref] = { sessionId: value.sessionId, adopted: false }; state.references[ref] = (value.draftConnection ? JSON.stringify([value.draftConnection.providerId,value.draftConnection.interfaceFormat,value.draftConnection.baseUrl]) : value.nativeCredentialTarget.identity); value.credential = { source: 'api_key', secretRef: ref }; value.credentialStatus = 'draft'; if (value.draftConnection) value.draftConnection.secretRef = ref; value.profile.connection = clone(value.draftConnection); }
-        if (command === 'replace_configuration_text') { value.profile.files = args.files; try { const document = JSON.parse(args.files.settings ?? '{}'); value.view = value.profile.tool === 'claude_code' && value.subject === 'common' ? { commonFields: [{ id: 'effortLevel', value: document.effortLevel ?? null, target: 'configuration' }] } : document; } catch { value.issues = [{ target: null, field: null, code: 'invalid_document', message: '原文语法无效，请修正 JSON' }]; state.sessions[value.sessionId] = clone(value); return value; } }
+        if (command === 'replace_configuration_text') { value.profile.files = args.files; try { const document = JSON.parse(args.files.settings ?? '{}'); value.view = value.profile.tool === 'qoder_cn' ? qoderView(args.files, value.subject === 'common') : value.profile.tool === 'claude_code' && value.subject === 'common' ? { commonFields: [{ id: 'effortLevel', value: document.effortLevel ?? null, target: 'configuration' }] } : document; } catch { value.issues = [{ target: null, field: null, code: 'invalid_document', message: '原文语法无效，请修正 JSON' }]; state.sessions[value.sessionId] = clone(value); return value; } }
         if (command === 'add_configuration_models' && !value.catalogSupport.multiple) { if (value.profile.tool === 'claude_code') { value.view.values['default.model'] = args.ids[0]; value.profile.editing.intents.push({version: 1, operation: 'set', target: value.view.editTarget, field: 'default.model', value: args.ids[0]}); } value.draftConnection.model = args.ids[0]; if (value.profile.connection) value.profile.connection.model = args.ids[0]; }
         if (command === 'add_configuration_models' && value.catalogSupport.multiple) for (const id of args.ids) if (!value.view.models.some((model: any) => model.id === id)) value.view.models.push({ id, kind: 'model', fields: value.profile.tool === 'kimi_code' ? { model: id, provider: value.view.providerId } : {} });
         if (command === 'edit_configuration_draft') {
           const action = args.action; value.profile.editing.intents.push(clone(action));
-          if (value.subject === 'common') value.view.commonFields[0].value = action.operation === 'reset' ? null : action.value;
+          if (value.subject === 'common') value.view.commonFields.find((field: any) => field.id === action.field).value = action.operation === 'reset' ? null : action.value;
           else if (value.view.values) {
             if (action.operation === 'reset') delete value.view.values[action.field]; else value.view.values[action.field] = action.value;
             if (value.profile.tool === 'codex' && value.draftConnection) {
@@ -126,6 +156,7 @@ export async function installConfigurationProtocol(page: Page) {
 
 export async function installConfigurationWorkspace(page: Page, toolId = 'kimi_code', apiWritable = true, appliedOld = false, toolIds = [toolId], providerUnsupported = false, apiKeyUnsupported = false) {
   await page.addInitScript(({ toolId, apiWritable, appliedOld, toolIds, providerUnsupported, apiKeyUnsupported }) => {
+    if (toolId === 'qoder_cn') { providerUnsupported = true; apiKeyUnsupported = true; }
     const account = (id: string, owner = toolId) => ({ id, label: `${id}账号`, toolId: owner, version: 1, state: 'signed_in', identity: { subject: id, email: `${id}@example.test`, source: 'fixture' }, context: { id: `ctx-${id}` }, retiredContexts: [], pendingLogin: null, detail: null });
     const fixture = { profiles: [{ id: 'existing', tool: toolId, name: '工作配置', version: 3, revision: 'revision-3', files: {}, suppressed: {}, nativeCredentials: {}, inheritCommon: true, authentication: { kind: 'api_key' }, connection: { providerId: 'gateway', interfaceFormat: 'openai_completions', baseUrl: 'https://gateway.example.test/v1', model: 'one', secretRef: 'saved-original', authEnvVar: null } }], binding: { scopeKey: 'global', tool: toolId, profileId: 'existing', profileVersion: appliedOld ? 2 : 3, contextId: null, managed: {}, commonVersion: 1, commonRevision: 'common-1', appliedProfileAvailable: true, appliedSummary: appliedOld ? { authentication: { kind: 'native' }, providerId: 'old-provider', baseUrl: 'https://old.example.test', model: 'old-model', contextId: null, profileVersion: 2, profileRevision: 'old-revision' } : { authentication: { kind: 'api_key' }, providerId: 'gateway', baseUrl: 'https://gateway.example.test/v1', model: 'one', contextId: null, profileVersion: 3, profileRevision: 'revision-3' } }, accounts: [account('a'), account('b'), ...toolIds.filter(id => id !== toolId).map(id => account(`${id}-a`, id))], modelSummaries: {} as Record<string, any>, effectiveContextId: null as string | null, nativeContextError: null as string | null, delayAccountCheck: false, releaseAccountCheck: null as (() => void) | null, calls: [] as any[] };
     Object.assign(window, { workspaceFixture: fixture, isTauri: true, __TAURI_INTERNALS__: { invoke: async (command: string, args: any) => {

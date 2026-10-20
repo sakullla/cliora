@@ -4,6 +4,7 @@
 //! services. Native account credentials and transcript parsing stay unavailable.
 
 pub(crate) mod agents;
+pub(crate) mod configuration;
 pub(crate) mod memory;
 pub(crate) mod plugins;
 
@@ -12,6 +13,7 @@ use std::env;
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
+use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 
 use super::{
     file, project_root, CliAdapter, Facet, InspectionFields, LaunchMode, McpLocation,
@@ -31,7 +33,6 @@ pub struct QoderAdapter {
     pub command: &'static str,
     pub directory: &'static str,
     pub plugin_ledger: Option<&'static str>,
-    pub config_env: Option<&'static str>,
     pub binary_directory: &'static str,
     pub yolo_flag: &'static str,
     pub npm: &'static str,
@@ -42,7 +43,7 @@ pub struct QoderAdapter {
 }
 pub static QODER_CN: QoderAdapter = QoderAdapter {
     id: "qoder_cn", name: "Qoder CN", command: "qoderclicn",
-    directory: ".qoder-cn", config_env: None, plugin_ledger: Some("plugins/installed_plugins_v2.json"),
+    directory: ".qoder-cn", plugin_ledger: Some("plugins/installed_plugins_v2.json"),
     binary_directory: "bin/qoderclicn", yolo_flag: "--dangerously-skip-permissions",
     npm: "@qodercn-ai/qoderclicn", install_url: "https://docs.qoder.cn/cli/installation",
     install_hint: "官方推荐原生安装，尤其在 Windows 上启动更快；npm 方式供已有安装兼容使用。",
@@ -64,12 +65,49 @@ const BUILTIN_AGENTS: &[super::agents::BuiltinAgent] = &[
 use self::QODER_CN as Qoder;
 
 impl QoderAdapter {
-    pub(crate) fn config_root(&self, home: &Path) -> PathBuf {
-        self.config_env.and_then(env::var_os).map(PathBuf::from).unwrap_or_else(|| home.join(self.directory))
+    pub(crate) fn config_root(&self, home: &Path) -> Result<PathBuf, String> {
+        let directory = config_directory_name(env::var("QODERCN_CONFIG_DIR_NAME").ok().as_deref(), self.directory)?;
+        let override_root = env::var_os("QODERCN_CONFIG_DIR").filter(|value| !value.is_empty());
+        let cli_home = env::var_os("QODERCN_CLI_HOME").or_else(|| env::var_os("GEMINI_CLI_HOME")).filter(|value| !value.is_empty());
+        resolve_config_root(home, &directory, override_root.as_deref().map(Path::new), cli_home.as_deref().map(Path::new))
+    }
+    pub(crate) fn project_config_root(&self, project: &Path) -> Result<PathBuf, String> {
+        Ok(project.join(config_directory_name(env::var("QODERCN_CONFIG_DIR_NAME").ok().as_deref(), ".qoder")?))
     }
 }
 
+fn config_directory_name(raw: Option<&str>, default: &str) -> Result<String, String> {
+    let Some(raw) = raw.filter(|value| !value.is_empty()) else { return Ok(default.into()); };
+    let name: String = raw.nfc().collect();
+    let reserved = [".git", ".svn", ".hg", ".vscode", ".idea", ".husky", ".github", "node_modules", "bower_components"];
+    let lower = name.to_lowercase();
+    let device = lower.split('.').next().unwrap_or_default();
+    let device_reserved = matches!(device, "con" | "prn" | "aux" | "nul")
+        || device.strip_prefix("com").or_else(|| device.strip_prefix("lpt")).is_some_and(|suffix| suffix.len() == 1 && matches!(suffix.as_bytes()[0], b'1'..=b'9'));
+    if name.chars().count() > 64 || name.starts_with(' ') || name.ends_with([' ', '.'])
+        || matches!(name.as_str(), "." | "..") || reserved.contains(&lower.as_str()) || device_reserved
+        || !name.chars().all(|ch| ch.is_alphanumeric() || is_combining_mark(ch) || matches!(ch, '.' | '_' | ' ' | '-')) {
+        return Err("QODERCN_CONFIG_DIR_NAME 不是有效的原生配置目录名（须为 1–64 字符的非保留单目录名）".into());
+    }
+    Ok(name)
+}
+fn resolve_config_root(home: &Path, directory: &str, explicit: Option<&Path>, cli_home: Option<&Path>) -> Result<PathBuf, String> {
+    let root = explicit.map(Path::to_owned).unwrap_or_else(|| cli_home.unwrap_or(home).join(directory));
+    let root = std::path::absolute(root).map_err(|error| format!("无法解析 Qoder CN 配置目录：{error}"))?;
+    let mut normalized = PathBuf::new();
+    for part in root.components() {
+        if matches!(part, std::path::Component::ParentDir) { normalized.pop(); } else { normalized.push(part); }
+    }
+    Ok(PathBuf::from(normalized.to_string_lossy().nfc().collect::<String>()))
+}
+
 impl CliAdapter for QoderAdapter {
+    fn configuration(&self) -> Option<&dyn super::configuration::ConfigurationAdapter> { Some(self) }
+    fn validate_role_scope(&self, role: &str, scope: Scope) -> Result<(), String> {
+        config_directory_name(env::var("QODERCN_CONFIG_DIR_NAME").ok().as_deref(), self.directory)?;
+        if role == "local_settings" && scope != Scope::Project { return Err("settings.local.json 仅适用于项目".into()); }
+        self.file_kind(role).map(|_| ())
+    }
     fn supports_mcp(&self) -> bool {
         true
     }
@@ -141,19 +179,23 @@ impl CliAdapter for QoderAdapter {
         let Some(root) = project_root(scope, project) else {
             return vec![];
         };
+        let root = match root {
+            Some(root) => match self.project_config_root(root) { Ok(root) => Some(root), Err(_) => return vec![] },
+            None => None,
+        };
         match root {
             Some(root) => vec![
                 file(
                     "settings",
-                    root.join(self.directory).join("settings.json"),
+                    root.join("settings.json"),
                     FileKind::Json,
                     known,
-                    Some("Qoder 项目配置参与 MCP、插件与本地覆盖；模型与账号在用户配置中设置"),
+                    Some("Qoder 项目 settings.json；settings.local.json 中的同名字段优先，账号仍由原生登录管理"),
                     false,
                 ),
                 file(
                     "local_settings",
-                    root.join(self.directory).join("settings.local.json"),
+                    root.join("settings.local.json"),
                     FileKind::Json,
                     known,
                     None,
@@ -162,7 +204,7 @@ impl CliAdapter for QoderAdapter {
             ],
             None => vec![file(
                 "settings",
-                self.config_root(home).join("settings.json"),
+                match self.config_root(home) { Ok(root) => root.join("settings.json"), Err(_) => return vec![] },
                 FileKind::Json,
                 known,
                 None,
@@ -199,8 +241,8 @@ impl CliAdapter for QoderAdapter {
         // deliberately not driven so every change keeps the shared transaction
         // backup/CAS boundary.
         let path = match scope {
-            Scope::Global => self.config_root(home).join("settings.json"),
-            Scope::Project => project?.join(self.directory).join("settings.json"),
+            Scope::Global => self.config_root(home).ok()?.join("settings.json"),
+            Scope::Project => self.project_config_root(project?).ok()?.join("settings.json"),
         };
         Some(McpLocation {
             path,
@@ -214,7 +256,7 @@ impl CliAdapter for QoderAdapter {
     }
     fn rule_path(&self, scope: Scope, home: &Path, project: Option<&Path>) -> Option<PathBuf> {
         Some(match scope {
-            Scope::Global => self.config_root(home).join("AGENTS.md"),
+            Scope::Global => self.config_root(home).ok()?.join("AGENTS.md"),
             Scope::Project => project?.join("AGENTS.md"),
         })
     }
@@ -248,8 +290,8 @@ impl CliAdapter for QoderAdapter {
         project: Option<&Path>,
     ) -> Option<PathBuf> {
         Some(match scope {
-            Scope::Global => self.config_root(home).join("skills"),
-            Scope::Project => project?.join(self.directory).join("skills"),
+            Scope::Global => self.config_root(home).ok()?.join("skills"),
+            Scope::Project => self.project_config_root(project?).ok()?.join("skills"),
         })
     }
     fn connection_policy(&self, _scope: Scope) -> crate::native::adapter::ConnectionPolicy {
@@ -272,11 +314,17 @@ impl CliAdapter for QoderAdapter {
     }
     fn write_connection_secret(
         &self,
-        _profile: &RegisteredProfile,
+        profile: &RegisteredProfile,
         _scope: Scope,
         _credentials: &dyn CredentialStore,
         _secrets: &mut NativeSecrets,
     ) -> Result<(), String> {
+        if profile.connection.is_none() && profile.native_credentials.is_empty()
+            && matches!(profile.authentication, crate::native::profile::ProfileAuthentication::Native) {
+            // Settings-only application still traverses the shared secret plan.
+            // There is no native credential mutation for a Qoder settings draft.
+            return Ok(());
+        }
         Err("Qoder CN 凭据由产品登录态管理，Cliora 不读取或复制账号令牌".into())
     }
     fn has_native_secret(&self, _role: &str, _root: &Value) -> bool {
@@ -284,11 +332,12 @@ impl CliAdapter for QoderAdapter {
     }
     fn inspect_values(
         &self,
-        _settings: &Value,
-        _local_settings: &Value,
+        settings: &Value,
+        local_settings: &Value,
         _models: &Value,
     ) -> InspectionFields {
-        InspectionFields::default()
+        let value = |pointer: &str| local_settings.pointer(pointer).or_else(|| settings.pointer(pointer)).and_then(Value::as_str).map(str::to_owned);
+        InspectionFields { model: value("/model/name"), reasoning_effort: value("/model/reasoningEffort"), ..InspectionFields::default() }
     }
     fn launch_args(&self, session: Option<&str>, mode: LaunchMode) -> Result<Vec<String>, String> {
         // The working directory is provided by the shared terminal session
@@ -388,6 +437,25 @@ mod tests {
     const SETTINGS_FIXTURE: &str =
         include_str!("../../../../tests/fixtures/native/qoder-1.1.63.json");
 
+    #[test]
+    fn native_directory_overrides_match_cn_precedence_and_reject_invalid_names() {
+        assert_eq!(config_directory_name(None, ".qoder-cn").unwrap(), ".qoder-cn");
+        assert_eq!(config_directory_name(Some(""), ".qoder").unwrap(), ".qoder");
+        assert_eq!(config_directory_name(Some(".qoder-e\u{301}"), ".qoder").unwrap(), ".qoder-é");
+        for invalid in ["../elsewhere", "C:\\escape", ".git", "NODE_MODULES", "nul", "com1.test", "trailing.", " leading", ".", ".."] {
+            assert!(config_directory_name(Some(invalid), ".qoder").is_err(), "{invalid}");
+        }
+        assert!(config_directory_name(Some(&"a".repeat(65)), ".qoder").is_err());
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let alternate = temp.path().join("alternate");
+        let explicit = temp.path().join("explicit");
+        assert_eq!(resolve_config_root(&home, ".custom", Some(&explicit), Some(&alternate)).unwrap(), explicit);
+        assert_eq!(resolve_config_root(&home, ".custom", None, Some(&alternate)).unwrap(), alternate.join(".custom"));
+        assert_eq!(resolve_config_root(&home, ".qoder-cn", None, None).unwrap(), home.join(".qoder-cn"));
+        assert_eq!(Qoder.project_config_root(&home).unwrap(), home.join(".qoder"));
+    }
+
     fn stdio_definition() -> McpDefinition {
         McpDefinition {
             id: "definition-1".into(),
@@ -466,11 +534,11 @@ mod tests {
             true,
         );
         assert_eq!(project.len(), 2);
-        assert!(project[0].path.replace('\\', "/").ends_with(".qoder-cn/settings.json"));
+        assert!(project[0].path.replace('\\', "/").ends_with(".qoder/settings.json"));
         assert!(project[1]
             .path
             .replace('\\', "/")
-            .ends_with(".qoder-cn/settings.local.json"));
+            .ends_with(".qoder/settings.local.json"));
     }
 
     #[test]
@@ -549,13 +617,13 @@ mod tests {
         let home = Path::new("/home");
         assert_eq!(
             Qoder.skill_root(Scope::Global, home, None).unwrap(),
-            Qoder.config_root(home).join("skills")
+            Qoder.config_root(home).unwrap().join("skills")
         );
         assert_eq!(
             Qoder
                 .skill_root(Scope::Project, home, Some(Path::new("/proj")))
                 .unwrap(),
-            Path::new("/proj/.qoder-cn/skills")
+            Path::new("/proj/.qoder/skills")
         );
         // No independent native skill switch file is documented; disable goes
         // through the shared archive fallback.
@@ -583,11 +651,11 @@ mod tests {
         let home = Path::new("/home");
         assert_eq!(
             agent_port::root("qoder_cn", Scope::Global, home, None).unwrap(),
-            Qoder.config_root(home)
+            Qoder.config_root(home).unwrap()
         );
         assert_eq!(
             agent_port::root("qoder_cn", Scope::Project, home, Some(Path::new("/proj"))).unwrap(),
-            Path::new("/proj/.qoder-cn")
+            Path::new("/proj/.qoder")
         );
     }
 }

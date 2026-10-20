@@ -29,9 +29,9 @@ type Props = {
 };
 const messageOf = (value: unknown) => value && typeof value === 'object' && 'message' in value ? String(value.message) : i18n.t('tools.workspace.operationFailed');
 type ConfigView = 'models' | 'settings' | 'raw' | 'preview';
-function configViews(subject: 'profile' | 'current' | 'common', hasEditor: boolean, fieldCount: number, fileCount: number): ConfigView[] {
+function configViews(subject: 'profile' | 'current' | 'common', hasEditor: boolean, fieldCount: number, fileCount: number, connectionChainAbsent: boolean): ConfigView[] {
   const views: ConfigView[] = [];
-  if (subject !== 'common') views.push('models');
+  if (subject !== 'common' && !connectionChainAbsent) views.push('models');
   if (subject === 'common' ? fieldCount > 0 : hasEditor) views.push('settings');
   if (fileCount > 0) {
     views.push('raw');
@@ -52,10 +52,9 @@ export function ConfigurationWorkspaceEditor(props: Props) {
   const Editor = adapter.configuration?.Editor;
   const addressUnsupported = workspace.probe.connectionPolicy?.providerAddress.state === 'unsupported';
   const apiKeyUnsupported = workspace.probe.connectionPolicy?.apiKey.state === 'unsupported';
-  // No configuration port and neither address nor API key can be written:
-  // the provider, sign-in, and model chain is not this tool's contract.
-  const connectionChainAbsent = !Editor && addressUnsupported && apiKeyUnsupported;
-  const connectionConfigurable = !!Editor || !addressUnsupported;
+  // A settings editor does not grant provider or credential capabilities.
+  const connectionChainAbsent = addressUnsupported && apiKeyUnsupported;
+  const connectionConfigurable = !addressUnsupported;
   const [draft, setDraft] = useState<ConfigurationDraft | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -137,11 +136,11 @@ export function ConfigurationWorkspaceEditor(props: Props) {
     return () => { alive.current = false; opening.current++; sequence.current++; session.current?.close(); session.current = null; void cancelConfigurationDraft(id).catch(() => {}); latest.current.onDirtyChange(false); };
   }, []);
   useEffect(() => {
-    if (subject !== 'profile') return;
+    if (subject !== 'profile' || connectionChainAbsent) return;
     let live = true;
     void native.discoverNativeLogins(toolId).then(value => { if (live) setNativeLogins(value); }).catch(failure => { if (live) setNativeError(messageOf(failure)); });
     return () => { live = false; };
-  }, [subject, toolId]);
+  }, [subject, toolId, connectionChainAbsent]);
 
   const dirty = !!draft && (draft.revision !== baselineRevision.current || JSON.stringify(draft.profile) !== baseline.current) || !!secretInput || !valid || pending;
   useLayoutEffect(() => { props.onDirtyChange(dirty); }, [dirty]);
@@ -380,7 +379,7 @@ export function ConfigurationWorkspaceEditor(props: Props) {
 
   const fieldCount = draft?.descriptor?.fields.length ?? 0;
   const fileCount = draft ? new Set([...workspace.probe.nativeFiles.filter(file => !file.sensitive).map(file => file.role), ...Object.keys(draft.profile.files)]).size : 0;
-  const views = configViews(subject, Boolean(Editor), fieldCount, fileCount);
+  const views = configViews(subject, Boolean(Editor), fieldCount, fileCount, connectionChainAbsent && !!Editor);
   const activeView = views.includes(view) ? view : views[0] ?? view;
   useEffect(() => {
     const previous = credentialSource.current;

@@ -16,8 +16,8 @@ impl AgentAdapter for QoderAdapter {
     }
     fn root(&self, scope: Scope, home: &Path, project: Option<&Path>) -> Result<PathBuf, String> {
         if scope == Scope::Project {
-            return Ok(project.ok_or("请选择项目")?.join(self.directory));
+            return self.project_config_root(project.ok_or("请选择项目")?);
         }
-        Ok(self.config_root(home))
+        self.config_root(home)
     }
 }
