@@ -302,13 +302,128 @@ fn index_line(id: &str, text: &str) -> String {
         .map(|name| humanize(&name))
         .unwrap_or_else(|| humanize(id));
     let single = |value: &str| value.replace(['\r', '\n'], " ").trim().to_owned();
-    let title = single(&title);
-    let description = single(&description.unwrap_or_default());
+    let title = markdown_text(&single(&title));
+    let description = markdown_text(&single(&description.unwrap_or_default()));
+    let destination = markdown_destination(&format!("{id}.md"));
     if description.is_empty() {
-        format!("- [{title}]({id}.md)")
+        format!("- [{title}]({destination})")
     } else {
-        format!("- [{title}]({id}.md) — {description}")
+        format!("- [{title}]({destination}) — {description}")
     }
+}
+
+fn markdown_text(value: &str) -> String {
+    value
+        .chars()
+        .flat_map(|ch| {
+            ch.is_ascii_punctuation()
+                .then_some('\\')
+                .into_iter()
+                .chain(std::iter::once(ch))
+        })
+        .collect()
+}
+
+fn markdown_destination(value: &str) -> String {
+    // Unicode is valid in a Markdown destination. Encode ASCII URL syntax,
+    // whitespace and Markdown delimiters, including literal percent signs.
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii() && !ch.is_ascii_alphanumeric() && !matches!(ch, '-' | '_' | '.' | '~')
+            {
+                format!("%{:02X}", ch as u8)
+            } else {
+                ch.to_string()
+            }
+        })
+        .collect()
+}
+
+/// Read the leading native list link, not an incidental link in its title or
+/// description. Accept native raw Unicode/balanced parentheses, angle targets,
+/// backslash escapes and older raw spaces; newly written targets are encoded.
+fn index_destination(line: &str) -> Option<String> {
+    let link = line
+        .trim()
+        .strip_prefix("- [")
+        .or_else(|| line.trim().strip_prefix("* ["))?;
+    let mut chars = link.char_indices();
+    let mut depth = 0;
+    let start = loop {
+        let (offset, ch) = chars.next()?;
+        match ch {
+            '\\' => {
+                chars.next()?;
+            }
+            '[' => depth += 1,
+            ']' if depth > 0 => depth -= 1,
+            ']' => break offset + 1,
+            _ => {}
+        }
+    };
+    let destination = link.get(start..)?.strip_prefix('(')?;
+    let angle = destination.starts_with('<');
+    let destination = if angle {
+        &destination[1..]
+    } else {
+        destination
+    };
+    let mut chars = destination.char_indices();
+    let mut depth = 0;
+    let mut raw = String::new();
+    let end = loop {
+        let (offset, ch) = chars.next()?;
+        match ch {
+            '\\' => {
+                let (_, escaped) = chars.next()?;
+                if !escaped.is_ascii_punctuation() {
+                    raw.push('\\');
+                }
+                raw.push(escaped);
+            }
+            '>' if angle => break offset + 1,
+            '(' if !angle => {
+                depth += 1;
+                raw.push(ch);
+            }
+            ')' if !angle && depth > 0 => {
+                depth -= 1;
+                raw.push(ch);
+            }
+            ')' if !angle => break offset + 1,
+            _ => raw.push(ch),
+        }
+    };
+    let tail = &destination[end..];
+    let tail = if angle { tail.strip_prefix(')')? } else { tail };
+    // A premature close caused by an unescaped title/destination must never
+    // identify a different entry. Leave unrecognized lines untouched.
+    if !tail.is_empty()
+        && ![" — ", " - ", " – "]
+            .iter()
+            .any(|prefix| tail.starts_with(prefix))
+    {
+        return None;
+    }
+    let bytes = raw.as_bytes();
+    let mut decoded = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            if let (Some(a), Some(b)) = (
+                (bytes[index + 1] as char).to_digit(16),
+                (bytes[index + 2] as char).to_digit(16),
+            ) {
+                decoded.push((a * 16 + b) as u8);
+                index += 3;
+                continue;
+            }
+        }
+        decoded.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8(decoded).ok()
 }
 
 fn humanize(value: &str) -> String {
@@ -355,18 +470,27 @@ fn frontmatter(text: &str) -> (Option<String>, Option<String>) {
 /// appends the new line when no line exists yet. Unknown lines and ordering
 /// are preserved; the native index is never rebuilt from scratch.
 fn replace_index_line(current: &str, id: &str, next: Option<&str>) -> Result<String, String> {
-    let target = format!("]({id}.md)");
+    let target = format!("{id}.md");
     let ends_with_newline = current.ends_with('\n');
     let body = current.strip_suffix('\n').unwrap_or(current);
-    let mut lines: Vec<String> = body.split('\n').map(str::to_owned).collect();
-    let position = lines.iter().position(|line| line.contains(&target));
-    match (position, next) {
-        (Some(index), Some(line)) => lines[index] = line.to_owned(),
-        (Some(index), None) => {
-            lines.remove(index);
+    let mut lines = Vec::new();
+    let mut matched = false;
+    for line in body.split('\n') {
+        if index_destination(line).as_deref() == Some(target.as_str()) {
+            if !matched {
+                if let Some(next) = next {
+                    lines.push(next.to_owned());
+                }
+            }
+            matched = true;
+        } else {
+            lines.push(line.to_owned());
         }
-        (None, Some(line)) => lines.push(line.to_owned()),
-        (None, None) => {}
+    }
+    if !matched {
+        if let Some(next) = next {
+            lines.push(next.to_owned());
+        }
     }
     let mut updated = lines.join("\n");
     if (ends_with_newline || next.is_some()) && !updated.is_empty() {
@@ -378,6 +502,41 @@ fn replace_index_line(current: &str, id: &str, next: Option<&str>) -> Result<Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn memory_index_encodes_targets_and_matches_complete_native_links() {
+        assert_eq!(
+            index_line("note](victim.md)", ""),
+            r"- [Note\]\(victim\.md\)](note%5D%28victim.md%29.md)"
+        );
+        assert_eq!(
+            index_line(
+                "user preferences",
+                "---\nname: [title](victim.md) & <tag>\n---"
+            ),
+            r"- [\[title\]\(victim\.md\) \& \<tag\>](user%20preferences.md)"
+        );
+        for (line, target) in [
+            ("- [旧标题](用户偏好.md) — 描述", "用户偏好.md"),
+            ("- [Title](user preferences.md)", "user preferences.md"),
+            ("- [Title](note(a).md)", "note(a).md"),
+            ("- [Title](<note).md>)", "note).md"),
+            (r"- [Title](note\).md)", "note).md"),
+            (r"- [\[bracket\]](topic%5b1%5d.md)", "topic[1].md"),
+            ("- [Title](%E7%94%A8%E6%88%B7.md)", "用户.md"),
+            ("- [Title](literal%2520.md)", "literal%20.md"),
+        ] {
+            assert_eq!(index_destination(line).as_deref(), Some(target));
+        }
+        let malformed = "- [Note](victim.md)](note](victim.md).md)\n";
+        let neighbor = "- [Neighbor](neighbor.md) — see [victim](victim.md)\n";
+        let current =
+            format!("{malformed}{neighbor}- [Victim](victim.md)\n- [Duplicate](victim.md)\n");
+        assert_eq!(
+            replace_index_line(&current, "victim", None).unwrap(),
+            format!("{malformed}{neighbor}")
+        );
+    }
+
     #[test]
     fn native_project_slug_matches_utf16_and_long_path_vectors() {
         assert_eq!(project_slug(r"C:\Users\项目😀"), "C--Users-----");
