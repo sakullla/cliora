@@ -1246,6 +1246,11 @@ fn plugin_skill_directories(
         if plugin.state == "not_installed" {
             continue;
         }
+        // Project discovery for some CLIs, including CodeBuddy, also returns
+        // user-scoped installations. Those skills stay on the global list.
+        if scope == Scope::Project && plugin.scope == "user" {
+            continue;
+        }
         let Some(root) = plugin.root.as_deref() else {
             continue;
         };
