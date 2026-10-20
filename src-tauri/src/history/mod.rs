@@ -88,7 +88,27 @@ pub enum HistoryMessageKind {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct NativeUsage {
+    pub unit: String,
+    pub value: f64,
+    pub original_value: Option<f64>,
+    pub billable: Option<bool>,
+}
+
+impl NativeUsage {
+    pub fn valid(&self) -> bool {
+        !self.unit.trim().is_empty() && self.unit.len() <= 64
+            && self.value.is_finite() && self.value >= 0.0
+            && self.original_value.is_none_or(|value| value.is_finite() && value >= 0.0)
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UsageEvent {
+    /// Native units are independent from tokens and monetary estimates.
+    #[serde(default)]
+    pub native_usage: Option<NativeUsage>,
     /// Native calls represented by this record; None means aggregate/legacy unknown.
     #[serde(default)]
     pub request_count: Option<u64>,
@@ -319,6 +339,27 @@ fn performance_refresh_readonly_local() {
 
 pub fn check_cancelled(cancelled: &dyn Fn() -> bool) -> Result<(), String> {
     if cancelled() { Err("扫描已取消，原索引已保留".into()) } else { Ok(()) }
+}
+
+/// Native history paths are read-only; do not cross a link/junction into a
+/// different tree. Missing leaves are allowed for discovery of empty stores.
+pub(crate) fn check_source_path(path: &Path) -> Result<(), String> {
+    for ancestor in path.ancestors() {
+        match fs::symlink_metadata(ancestor) {
+            Ok(metadata) => {
+                #[cfg(windows)]
+                let reparse = { use std::os::windows::fs::MetadataExt; metadata.file_attributes() & 0x400 != 0 };
+                #[cfg(not(windows))]
+                let reparse = false;
+                if (metadata.file_type().is_symlink() || reparse) && !crate::path_policy::is_platform_directory_alias(ancestor) {
+                    return Err("会话路径包含链接，已跳过".into());
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Ok(())
 }
 
 pub fn source_fingerprint_controlled(path: &Path, cancelled: &dyn Fn() -> bool) -> Result<String, String> {
@@ -708,11 +749,14 @@ fn store_encoded_session(
         .map_err(|error| error.to_string())?;
     let mut insert = conn
         .prepare_cached(
-            "INSERT OR REPLACE INTO history_usage (session_id,event_id,tool,model,timestamp,input,output,cache_read,cache_write,input_includes_cache,request_count)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            "INSERT OR REPLACE INTO history_usage (session_id,event_id,tool,model,timestamp,input,output,cache_read,cache_write,input_includes_cache,request_count,native_usage_json)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
         )
         .map_err(|error| error.to_string())?;
     for event in &parsed.usage {
+        if event.native_usage.as_ref().is_some_and(|usage| !usage.valid()) {
+            return Err("原生单位用量无效".into());
+        }
         let model = model_label(event.model.clone());
         if !billable_usage_model(model.as_deref()) {
             continue;
@@ -729,7 +773,8 @@ fn store_encoded_session(
                 event.cache_read.map(|value| value as i64),
                 event.cache_write.map(|value| value as i64),
                 event.input_includes_cache as i64,
-                event.request_count.map(|value| value.min(i64::MAX as u64) as i64)
+                event.request_count.map(|value| value.min(i64::MAX as u64) as i64),
+                event.native_usage.as_ref().map(serde_json::to_string).transpose().map_err(|error| error.to_string())?
             ])
             .map_err(|error| error.to_string())?;
     }
@@ -1377,6 +1422,17 @@ pub fn export(db: &Database, id: &str, format: &str, destination: &Path) -> Resu
         );
         if detail.session.partial || detail.session.stale {
             text.push_str("> 本地记录不完整或最近读取失败，以下内容仅为已索引部分。\n\n");
+        }
+        if detail.totals.usage_records > 0 {
+            let token_note = if detail.totals.unknown_token_records == detail.totals.usage_records { "未知".into() }
+                else { format!("{}（另有 {} 条记录 token 未知）", detail.totals.total, detail.totals.unknown_token_records) };
+            text.push_str(&format!("## 用量\n\nToken：{token_note}\n\n"));
+            for usage in &detail.totals.native_usage {
+                let status = match usage.billable { Some(true) => "原生标记可计费", Some(false) => "原生标记未计费", None => "计费状态未知" };
+                text.push_str(&format!("- {}：{}；原始值：{}；{}；原始值未知记录：{}\n", usage.unit, usage.value,
+                    usage.original_value.map(|value| value.to_string()).unwrap_or_else(|| "未知".into()), status, usage.unknown_original_records));
+            }
+            if !detail.totals.native_usage.is_empty() { text.push_str("\n原生单位用量不表示余额或金额。\n\n"); }
         }
         for message in detail.messages {
             text.push_str(&format!("## {}\n\n{}\n\n", message.role, message.text));

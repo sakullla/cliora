@@ -230,7 +230,7 @@ pub fn parse_controlled(
                 if !usage::active(counts) || !records.insert(id.clone()) {
                     return;
                 }
-                session.usage.push(UsageEvent {
+                session.usage.push(UsageEvent { native_usage: None,
                     request_count: Some(1),
                     id,
                     model: model.clone(),
@@ -280,7 +280,7 @@ pub fn parse_controlled(
                 if !usage::active(delta) {
                     return;
                 }
-                session.usage.push(UsageEvent {
+                session.usage.push(UsageEvent { native_usage: None,
                     request_count: last.filter(|counts| usage::active(*counts)).map(|_| 1),
                     id: format!("{}:token-{line}", source.key()),
                     model: model.clone(),

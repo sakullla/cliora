@@ -182,7 +182,7 @@ pub fn parse_controlled(
     }
     session.usage = events
         .into_iter()
-        .map(|(id, event)| UsageEvent {
+        .map(|(id, event)| UsageEvent { native_usage: None,
             request_count: Some(1),
             id,
             model: event.model,

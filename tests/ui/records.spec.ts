@@ -1,3 +1,4 @@
+import { qoderHistoryFixtures } from '../../scripts/capture-workflow-fixtures.mjs';
 import { expect, test } from '@playwright/test';
 
 type Totals = { requests: number; usageRecords: number; unknownRequestRecords: number; sessions: number; input: number; cacheRead: number; cacheWrite: number; output: number; total: number; cost: number | null; unpricedTokens: number };
@@ -513,4 +514,41 @@ test('all-time trend averages include only dated elapsed buckets for tokens and 
   await page.getByRole('tablist', { name: '趋势指标' }).getByRole('tab', { name: '费用', exact: true }).click();
   await expect(trend.getByText(/平均每小时/)).toHaveText(/平均每小时\s*\$2.00$/);
   await expect(overview).toContainText('$100.00');
+});
+
+
+test('native credits retain billing groups and unknown tokens across detail, report and filters', async ({ page }) => {
+  await page.addInitScript(qoderHistoryFixtures);
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
+  await page.getByRole('button', { name: /Qoder CN · 原生 Credits 与会话/ }).click();
+  const detail = page.getByRole('tabpanel', { name: /^会话/ });
+  const native = detail.getByRole('region', { name: '原生单位用量' });
+  await expect(native).toContainText('12.345 Credits');
+  await expect(native).toContainText('原始值：24.69');
+  await expect(native).toContainText('原生标记：未计费');
+  await expect(native).toContainText('原生标记：可计费');
+  await expect(native).toContainText('计费状态未知');
+  await expect(native).toContainText('5 条记录没有已知 token');
+  await page.getByText('会话选项', { exact: true }).click();
+  await page.getByText('查看恢复命令', { exact: true }).click();
+  await expect(page.getByLabel('原生恢复命令')).toContainText('qoderclicn -r 11111111-2222-4333-8444-555555555555');
+  await expect.poll(() => page.evaluate(() => (window as any).__qoderHistoryCalls.filter((call: any) => call.command === 'resume_history_session').length)).toBe(0);
+  await page.getByRole('tab', { name: '用量', exact: true }).click();
+  const usage = page.getByRole('tabpanel', { name: '用量', exact: true });
+  const summary = usage.getByRole('region', { name: '用量概览' });
+  await expect(summary).not.toContainText('暂无调用次数');
+  await expect(summary).toContainText('未知');
+  await expect(summary).not.toContainText('$0');
+  await expect(summary).not.toContainText('每次约');
+  await expect(usage.getByRole('tab', { name: 'Credits', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(usage.getByRole('tab', { name: 'Token', exact: true })).toHaveCount(0);
+  await expect(usage.getByRole('list', { name: '按模型用量明细' })).toContainText('13.22 Credits');
+  await expect(usage.getByRole('region', { name: '消耗最多的会话' })).toContainText('13.22 Credits');
+  await page.getByLabel('用量工具').click();
+  await page.getByRole('option', { name: 'Qoder CN', exact: true }).click();
+  await page.getByLabel('用量模型').click();
+  await page.getByRole('option', { name: 'qfmodel', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__qoderHistoryCalls.filter((call: any) => call.command === 'get_usage_report').at(-1).args.filter)).toMatchObject({ toolId: 'qoder_cn', model: 'qfmodel' });
+  await expect(usage.getByRole('region', { name: '原生单位用量' })).toContainText('12.345 Credits');
 });

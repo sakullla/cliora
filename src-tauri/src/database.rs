@@ -23,7 +23,7 @@ impl Database {
     pub fn open(path: &Path) -> Result<Self, OpenError> {
         let mut connection = Connection::open(path)?;
         let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > 22 {
+        if version > 23 {
             return Err(OpenError::UnsupportedVersion(version));
         }
         connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
@@ -456,6 +456,18 @@ impl Database {
             tx.execute_batch("PRAGMA user_version = 22;")?;
             tx.commit()?;
         }
+        if version < 23 {
+            let tx = connection.transaction()?;
+            // Additive migration: old token-only records retain NULL native usage.
+            let columns = { let mut statement = tx.prepare("PRAGMA table_info(history_usage)")?;
+                let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+                rows.collect::<Result<Vec<_>, _>>()? };
+            if !columns.iter().any(|column| column == "native_usage_json") {
+                tx.execute_batch("ALTER TABLE history_usage ADD COLUMN native_usage_json TEXT;")?;
+            }
+            tx.execute_batch("PRAGMA user_version = 23;")?;
+            tx.commit()?;
+        }
         Ok(Self {
             connection: Mutex::new(connection),
             read_path: (path != Path::new(":memory:") && !path.as_os_str().is_empty()).then(|| path.to_owned()),
@@ -688,7 +700,7 @@ mod tests {
             let version: u32 = conn
                 .query_row("PRAGMA user_version", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;
-            assert_eq!(version, 22);
+            assert_eq!(version, 23);
             let count: i64 = conn
                 .query_row("SELECT COUNT(*) FROM native_profiles", [], |row| row.get(0))
                 .map_err(|e| e.to_string())?;

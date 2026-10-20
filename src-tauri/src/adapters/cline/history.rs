@@ -274,7 +274,7 @@ fn read_messages(
             continue;
         }
         // metrics.cost has no shared-pipeline channel; see the module docs.
-        session.usage.push(UsageEvent {
+        session.usage.push(UsageEvent { native_usage: None,
             request_count: Some(1),
             id: message_id(&id, stem, index, message.get("id").and_then(Value::as_str)),
             model: message
@@ -432,7 +432,7 @@ pub fn parse_controlled(
                 usage::field(aggregate, "cacheWriteTokens"),
             ) {
                 if usage::active(counts) {
-                    session.usage.push(UsageEvent {
+                    session.usage.push(UsageEvent { native_usage: None,
                         request_count: None,
                         id: format!("cline-aggregate-{id}"),
                         model: session.model.clone(),

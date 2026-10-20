@@ -214,7 +214,7 @@ fn add_usage(session: &mut ParsedSession, id: &str, time: Option<i64>, step: &Va
         session.partial = true;
         return;
     }
-    session.usage.push(UsageEvent {
+    session.usage.push(UsageEvent { native_usage: None,
         request_count: Some(1),
         id: format!("step-{id}"),
         model: step

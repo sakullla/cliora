@@ -147,7 +147,7 @@ fn record_usage(
         return;
     };
     if records.insert(event.clone()) {
-        session.usage.push(UsageEvent {
+        session.usage.push(UsageEvent { native_usage: None,
             request_count: Some(1),
             id: event,
             model,

@@ -638,7 +638,7 @@ fn same_length_and_restored_mtime_still_refreshes_changed_content() {
 /// `counts` is (input, output, cache read, cache write).
 fn event(id: &str, model: Option<&str>, timestamp: i64, counts: (u64, u64, Option<u64>, Option<u64>), includes_cache: bool) -> UsageEvent {
     let (input, output, read, write) = counts;
-    UsageEvent { request_count: Some(1), id: id.into(), model: model.map(str::to_owned), timestamp: Some(timestamp), input: Some(input), output: Some(output), cache_read: read, cache_write: write, input_includes_cache: includes_cache }
+    UsageEvent { native_usage: None, request_count: Some(1), id: id.into(), model: model.map(str::to_owned), timestamp: Some(timestamp), input: Some(input), output: Some(output), cache_read: read, cache_write: write, input_includes_cache: includes_cache }
 }
 
 /// Stores a synthetic session through the same path a scan uses.
@@ -655,6 +655,114 @@ fn store_events(db: &Database, tool: &str, key: &str, model: Option<&str>, usage
 
 const DAY: i64 = 86_400_000;
 const FIXTURE_DAY: i64 = 1790668800000;
+
+#[test]
+fn native_units_roundtrip_filter_group_deduplicate_and_export_without_token_prices() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("native.db")).unwrap();
+    // An unregistered implementation label exercises the shared contract without
+    // adding any tool-specific dispatch or model pricing exceptions.
+    let unit_event = |id: &str, at, value, original, billable| UsageEvent {
+        native_usage: Some(NativeUsage { unit: "work_units".into(), value, original_value: original, billable }),
+        id: id.into(), model: Some("synthetic-priced-model".into()), timestamp: Some(at), request_count: Some(1),
+        input: None, output: None, cache_read: None, cache_write: None, input_includes_cache: false,
+    };
+    let first = unit_event("request-a", FIXTURE_DAY, 1.25, Some(2.5), Some(false));
+    let id = store_events(&db, "future_native_units", "native-session", Some("synthetic-priced-model"), vec![first.clone(),
+        unit_event("request-b", FIXTURE_DAY + DAY, 0.75, Some(1.5), Some(true)),
+        unit_event("request-c", FIXTURE_DAY + DAY, 0.5, None, None)]);
+    store_events(&db, "future_native_units", "copied-session", None, vec![first]);
+    let extension = Box::leak(Box::new(crate::adapters::qoder_cn::QoderAdapter { id: "future_native_units", ..crate::adapters::qoder_cn::QODER_CN }));
+    let registry = Registry::with_adapters(vec![extension]).unwrap();
+    save_price(&db, &registry, HistoryPrice { tool_id: "future_native_units".into(), model: "synthetic-priced-model".into(), currency: "USD".into(),
+        input_per_million: 1.0, output_per_million: 1.0, cache_read_per_million: 1.0, cache_write_per_million: 1.0, source: "manual".into(), updated_at: 0 }).unwrap();
+    let report = usage_report(&db, &HistoryFilter::default()).unwrap();
+    assert_eq!(report.totals.requests, 3);
+    assert_eq!(report.duplicate_requests, 1);
+    assert_eq!(report.totals.unknown_token_records, 3);
+    assert_eq!(report.totals.cost, None, "known model prices must not fabricate zero cost from unknown tokens");
+    assert_eq!(report.totals.native_usage.len(), 3);
+    assert_eq!(report.totals.native_usage.iter().map(|usage| usage.value).sum::<f64>(), 2.5);
+    assert_eq!(report.by_model[0].totals.native_usage, report.totals.native_usage);
+    assert_eq!(report.by_tool[0].totals.native_usage, report.totals.native_usage);
+    assert_eq!(report.by_project[0].totals.native_usage, report.totals.native_usage);
+    let filtered = usage_report(&db, &HistoryFilter { tool_id: Some("future_native_units".into()), model: Some("synthetic-priced-model".into()), from_ms: Some(FIXTURE_DAY + DAY), to_ms: Some(FIXTURE_DAY + 2 * DAY), ..Default::default() }).unwrap();
+    assert_eq!(filtered.totals.requests, 2);
+    assert_eq!(filtered.totals.native_usage.iter().map(|usage| usage.value).sum::<f64>(), 1.25);
+    assert_eq!(filtered.timeline.iter().map(|bucket| bucket.totals.native_usage.iter().map(|usage| usage.value).sum::<f64>()).sum::<f64>(), 1.25);
+    let detail = detail(&db, &id).unwrap();
+    assert_eq!(detail.usage[0].native_usage.as_ref().unwrap().billable, Some(false));
+    assert_eq!(detail.totals.native_usage, report.totals.native_usage);
+    let json_path = temp.path().join("export.json");
+    export(&db, &id, "json", &json_path).unwrap();
+    let json: Value = serde_json::from_str(&fs::read_to_string(json_path).unwrap()).unwrap();
+    assert_eq!(json["usage"][0]["nativeUsage"]["originalValue"], 2.5);
+    assert_eq!(json["totals"]["unknownTokenRecords"], 3);
+    let md_path = temp.path().join("export.md");
+    export(&db, &id, "markdown", &md_path).unwrap();
+    let md = fs::read_to_string(md_path).unwrap();
+    assert!(md.contains("Token：未知"));
+    assert!(md.contains("work_units：1.25；原始值：2.5；原生标记未计费"));
+}
+
+#[test]
+fn database_v22_native_usage_migration_preserves_legacy_tokens_and_json() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("legacy.db");
+    let db = Database::open(&path).unwrap();
+    let id = store_events(&db, "codex", "legacy", Some("gpt-5"), vec![event("legacy-request", Some("gpt-5"), FIXTURE_DAY, (10, 2, None, None), false)]);
+    db.with_connection(|conn| {
+        conn.execute_batch("ALTER TABLE history_usage DROP COLUMN native_usage_json; PRAGMA user_version = 22;").map_err(|error| error.to_string())?;
+        // Old payloads have no optional nativeUsage field.
+        conn.execute("UPDATE history_sessions SET usage_json = json_remove(usage_json, '$[0].nativeUsage')", []).map_err(|error| error.to_string())?;
+        Ok(())
+    }).unwrap();
+    drop(db);
+    let db = Database::open(&path).unwrap();
+    let report = usage_report(&db, &HistoryFilter::default()).unwrap();
+    assert_eq!(report.totals.total, 12);
+    assert_eq!(report.totals.unknown_token_records, 0);
+    assert!(report.totals.native_usage.is_empty());
+    assert!(detail(&db, &id).unwrap().usage[0].native_usage.is_none());
+}
+
+#[test]
+fn qoder_registered_scan_resumes_original_project_and_retains_failed_parent() {
+    use crate::adapters::qoder_cn::QODER_CN;
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("workspace");
+    fs::create_dir_all(&project).unwrap();
+    let logs = temp.path().join(".qoder-cn/projects/synthetic");
+    let native = "11111111-2222-4333-8444-555555555555";
+    fs::create_dir_all(logs.join(format!("{native}/subagents"))).unwrap();
+    let path = logs.join(format!("{native}.jsonl"));
+    let fixture = fs::read_to_string(fixtures().join("qoder-cn-1.1.74-session.jsonl")).unwrap();
+    let text = fixture.lines().map(|line| {
+        let mut row: Value = serde_json::from_str(line).unwrap();
+        if row.get("cwd").is_some() { row["cwd"] = project.to_string_lossy().as_ref().into(); }
+        row.to_string()
+    }).collect::<Vec<_>>().join("\n");
+    fs::write(&path, text).unwrap();
+    let db = Database::open(&temp.path().join("index.db")).unwrap();
+    let registry = Registry::with_adapters(vec![&QODER_CN]).unwrap().with_fixture_installation("qoder_cn", "1.2.0");
+    let scan = refresh_controlled(&db, &registry, temp.path(), &["qoder_cn".into()], &|| false).unwrap();
+    assert_eq!(scan[0].failed_count, 0);
+    let sessions = list(&db, &HistoryFilter::default()).unwrap();
+    assert_eq!(sessions.len(), 1);
+    let command = copy_resume_command(&db, &registry, temp.path(), &sessions[0].id, LaunchMode::Normal).unwrap();
+    assert!(command.contains(&format!("'-r' '{native}'")), "{command}");
+    assert!(command.contains(&project.to_string_lossy().to_string()));
+    fs::copy(fixtures().join("qoder-cn-1.1.74-subagent.jsonl"), logs.join(format!("{native}/subagents/agent-new.jsonl"))).unwrap();
+    refresh_controlled(&db, &registry, temp.path(), &["qoder_cn".into()], &|| false).unwrap();
+    assert_eq!(detail(&db, &sessions[0].id).unwrap().totals.requests, 3);
+    fs::write(&path, "{\"future_schema\":true}\n").unwrap();
+    let failed = refresh_controlled(&db, &registry, temp.path(), &["qoder_cn".into()], &|| false).unwrap();
+    assert_eq!(failed[0].failed_count, 1, "valid subagent usage must not mask an incompatible parent schema");
+    let preserved = detail(&db, &sessions[0].id).unwrap();
+    assert!(preserved.session.stale);
+    assert_eq!(preserved.messages.len(), 2);
+    assert_eq!(preserved.totals.requests, 3);
+}
 
 #[test]
 fn missing_native_request_ids_are_scoped_to_the_source() {

@@ -271,7 +271,7 @@ pub fn parse_controlled(
                     if session.model.is_none() {
                         session.model.clone_from(&event.model);
                     }
-                    session.usage.push(UsageEvent {
+                    session.usage.push(UsageEvent { native_usage: None,
                         request_count: Some(1),
                         id: response_id,
                         model: event.model,

@@ -295,7 +295,7 @@ fn add_usage(session: &mut ParsedSession, id: &str, time: Option<i64>, message: 
     if session.model.is_none() {
         session.model.clone_from(&model);
     }
-    session.usage.push(UsageEvent {
+    session.usage.push(UsageEvent { native_usage: None,
         request_count: Some(1),
         id: id.to_owned(),
         model,

@@ -2,10 +2,11 @@
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { chromium, expect } from '@playwright/test';
-import { workflowFixtures } from './capture-workflow-fixtures.mjs';
+import { workflowFixtures, qoderHistoryFixtures } from './capture-workflow-fixtures.mjs';
 import { captureConfiguration, configurationScenarios, installCaptureConfigurationProtocol } from './capture-configuration.mjs';
+const qoderHistoryScenarioNames=['qoder-history-detail','qoder-history-credits','qoder-history-groups'];
 const historyScenarioNames=['grok-precise-detail','grok-inferred-time','grok-no-usage','grok-statistics','grok-statistics-details'];
-const scenarioNames=[...configurationScenarios.map(item=>item.name),...historyScenarioNames];
+const scenarioNames=[...configurationScenarios.map(item=>item.name),...historyScenarioNames,...qoderHistoryScenarioNames];
 const option=(flag,fallback)=>{const index=process.argv.indexOf(flag);if(index<0)return fallback;const value=process.argv[index+1];if(!value||value.startsWith('--'))throw new Error('Missing value for '+flag);return value;};
 const themeOption=option('--theme','all');
 if(!['all','light','dark'].includes(themeOption))throw new Error('Invalid --theme; use all, light or dark');
@@ -255,6 +256,30 @@ async function captureHistoryFeatures(){
  }
 }
 
+async function captureQoderHistoryFeatures(){
+ for(const width of widths)for(const theme of themes){
+  const page=await browser.newPage({viewport:{width,height:1100}});
+  page.on('pageerror',error=>failures.push({type:'pageerror',theme,width,message:error.message}));
+  await page.addInitScript(mock,theme);
+  await page.addInitScript(qoderHistoryFixtures);
+  async function capture(name,state){if(selectedScenarios.includes(name))await captureImage(page,name,theme,width,{category:'records',title:name,state});}
+  try {
+   await page.goto(previewUrl);
+   await page.getByRole('navigation',{name:'页面'}).getByRole('button',{name:'使用记录'}).click();
+   await page.getByRole('button',{name:/Qoder CN · 原生 Credits 与会话/}).click();
+   await expect(page.getByRole('region',{name:'原生单位用量'})).toContainText('12.345 Credits');
+   await capture('qoder-history-detail','native transcript and original/billable credits');
+   await page.getByRole('tab',{name:'用量',exact:true}).click();
+   await expect(page.getByRole('region',{name:'用量概览'})).toContainText('未知');
+   await expect(page.getByRole('tab',{name:'Credits',exact:true})).toHaveAttribute('aria-selected','true');
+   await capture('qoder-history-credits','credits trend with unknown tokens and no invented monetary cost');
+   await page.getByRole('region',{name:'消耗最多的会话'}).scrollIntoViewIfNeeded();
+   await capture('qoder-history-groups','model tool project and session groups retain native units');
+  } catch(error){failures.push({type:'scenario',theme,width,message:error.message});console.error(error.message);}
+  finally{await page.close();}
+ }
+}
+
 function writeGallery(){
  const escape=value=>String(value).replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
  const label=item=>item.title??item.name;
@@ -438,5 +463,6 @@ for(const width of widths)for(const theme of themes){
 if(workflowsOnly||fullCapture){
  await captureConfiguration({browser,themes,widths,selected:selectedScenarios,url:process.env.CLIORA_PREVIEW_URL??'http://127.0.0.1:14736',capture:captureImage,failures});
  if(selectedScenarios.some(name=>historyScenarioNames.includes(name)))await captureHistoryFeatures();
+ if(selectedScenarios.some(name=>qoderHistoryScenarioNames.includes(name)))await captureQoderHistoryFeatures();
 }
 await browser.close();writeGallery();console.log(JSON.stringify({imageCount:captures.length,failures},null,2));if(failures.length)process.exitCode=1;
