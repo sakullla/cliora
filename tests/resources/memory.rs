@@ -2622,3 +2622,146 @@ fn qoder_native_topic_names_support_unicode_and_dots_without_weakening_path_guar
     assert!(save(&h, shared.clone(), "user.preferences", "no", "", false).is_err());
     assert!(save(&h, shared, "用户偏好", "no", "", false).is_err());
 }
+
+#[test]
+fn qoder_memory_special_names_keep_native_index_identity_through_transactions() {
+    let h = harness();
+    let registry = Registry::builtins();
+    let project = h.temp.path().join("index-project");
+    fs::create_dir_all(&project).unwrap();
+    let cases = [
+        (
+            "user preferences",
+            "user%20preferences.md",
+            "user preferences.md",
+        ),
+        ("note)", "note%29.md", "<note).md>"),
+        ("note(a)", "note%28a%29.md", "note(a).md"),
+        ("topic[1]", "topic%5B1%5D.md", "topic[1].md"),
+        ("用户偏好", "用户偏好.md", "用户偏好.md"),
+        ("literal%20", "literal%2520.md", "literal%2520.md"),
+        (
+            "note](victim.md)",
+            "note%5D%28victim.md%29.md",
+            "note%5D%28victim.md%29.md",
+        ),
+        ("victim", "victim.md", "victim.md"),
+    ];
+    for target in [
+        memory_target("qoder_cn", Scope::Global, None, None),
+        memory_target("qoder_cn", Scope::Project, Some(&project), None),
+    ] {
+        let directory = registry
+            .get("qoder_cn")
+            .unwrap()
+            .memory()
+            .unwrap()
+            .directory(
+                target.scope,
+                &h.home,
+                target.project_path.as_deref().map(Path::new),
+            )
+            .unwrap();
+        fs::create_dir_all(&directory).unwrap();
+        let index = directory.join("MEMORY.md");
+        // Existing native index forms and an unrelated description containing
+        // the victim's link must survive edits and deletes of other entries.
+        let neighbor = "- [Unrelated](unrelated.md) — see [Victim](victim.md)\n";
+        let mut original = format!("# Memory Index\n\n{neighbor}");
+        for (id, destination, legacy) in cases {
+            save_memory(
+                &h.db,
+                &h.store,
+                &registry,
+                &h.home,
+                &MemorySave {
+                    target: target.clone(),
+                    id: id.into(),
+                    text: "old body".into(),
+                    baseline: String::new(),
+                    confirm_external: false,
+                },
+            )
+            .unwrap();
+            let created = fs::read_to_string(&index).unwrap();
+            assert!(created.contains(&format!("]({destination})")));
+            if id == "note](victim.md)" {
+                assert!(created.contains(r"- [Note\]\(victim\.md\)](note%5D%28victim.md%29.md)"));
+            }
+            original.push_str(&format!("- [Native title]({legacy}) — keep until edited\n"));
+        }
+        fs::write(&index, original).unwrap();
+        let body = "---\nname: [Title](victim.md)\ndescription: [See](victim.md)\n---\nedited";
+        for (id, destination, _) in cases {
+            save_memory(
+                &h.db,
+                &h.store,
+                &registry,
+                &h.home,
+                &MemorySave {
+                    target: target.clone(),
+                    id: id.into(),
+                    text: body.into(),
+                    baseline: "old body".into(),
+                    confirm_external: false,
+                },
+            )
+            .unwrap();
+            let current = fs::read_to_string(&index).unwrap();
+            let expected =
+                format!(r"- [\[Title\]\(victim\.md\)]({destination}) — \[See\]\(victim\.md\)");
+            assert_eq!(
+                current.lines().filter(|line| *line == expected).count(),
+                1,
+                "{id}: {current}"
+            );
+            assert_eq!(
+                current
+                    .lines()
+                    .filter(|line| line.starts_with("- ["))
+                    .count(),
+                cases.len() + 1
+            );
+            assert!(current.contains(neighbor));
+            assert_eq!(
+                read_memory(&h.db, &registry, &h.home, &target, id)
+                    .unwrap()
+                    .text,
+                body
+            );
+        }
+        // Delete victim first: its name also occurs in another filename, every
+        // escaped title/description, and an unrelated native description.
+        for (id, destination, _) in cases.into_iter().rev() {
+            let before = fs::read_to_string(&index).unwrap();
+            let own_line =
+                format!(r"- [\[Title\]\(victim\.md\)]({destination}) — \[See\]\(victim\.md\)");
+            let expected = before.replace(&format!("{own_line}\n"), "");
+            delete_memory(
+                &h.db,
+                &h.store,
+                &registry,
+                &h.home,
+                &MemoryDelete {
+                    target: target.clone(),
+                    id: id.into(),
+                    baseline: body.into(),
+                },
+            )
+            .unwrap();
+            assert!(!directory.join(format!("{id}.md")).exists());
+            assert_eq!(
+                fs::read_to_string(&index).unwrap(),
+                expected,
+                "deleted {id}"
+            );
+            if id == "victim" {
+                assert!(directory.join("note](victim.md).md").exists());
+            }
+        }
+        assert_eq!(
+            fs::read_to_string(&index).unwrap(),
+            format!("# Memory Index\n\n{neighbor}")
+        );
+    }
+}
