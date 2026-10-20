@@ -43,7 +43,7 @@ export type SkillTargetResult = { toolId: string; scope: Scope; projectPath: str
 export type SkillRecoveryIssue = { contextId?: string | null; operationId: string; toolId: string; scope: Scope; projectPath: string | null; targetPath: string; backupPath: string; detail: string };
 // digest is null for document-only inventory (unmanaged/read-only directories),
 // as well as failed package reads. Use state to determine readability.
-export type NativeSkillEntry = { name: string; path: string; digest: string | null; state: 'managed' | 'external' | 'unreadable' | 'read_only'; detail: string; packageId: string | null };
+export type NativeSkillEntry = { name: string; path: string; digest: string | null; state: 'managed' | 'external' | 'unreadable' | 'read_only'; detail: string; packageId: string | null; source?: 'writable' | 'read_only' | 'plugin'; pluginName?: string | null; pluginEnabled?: boolean | null };
 export type NativeSkillDocument = { name: string; path: string; content: string };
 export type SkillTargetPreview = { path: string; status: 'ready' | 'conflict'; detail: string; previewToken: string | null; existingDigest: string | null; packageDigest: string; changes: SkillFileChange[] };
 

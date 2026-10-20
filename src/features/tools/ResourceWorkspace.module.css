@@ -75,6 +75,7 @@
 .state[data-warn] { border-color: var(--warning-line); background: var(--warning-soft); color: var(--warning); }
 .muted > .state { margin-right: 8px; vertical-align: 1px; }
 .list small.mono { font-family: var(--font-mono); font-size: var(--fs-body); font-weight: var(--fw-regular); }
+.list small.pluginName { color: var(--text-2); font-size: var(--fs-caption); font-weight: var(--fw-medium); }
 .list > .active { background: var(--selection); box-shadow: inset 2px 0 0 var(--accent); }
 .list > .active:hover:not(:disabled) { background: var(--surface-3); }
 .list > .active strong { color: var(--text); }
