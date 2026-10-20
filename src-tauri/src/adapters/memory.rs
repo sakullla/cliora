@@ -184,6 +184,13 @@ pub trait MemoryLayout: Sync {
         directory: &Path,
         enabled: bool,
     ) -> Result<Option<MemoryFileChange>, String>;
+    /// True when one native switch governs every store of this CLI (the
+    /// directory argument is ignored), so the management surface shows a
+    /// single switch instead of one per store. The default keeps per-store
+    /// switches.
+    fn switch_shared(&self) -> bool {
+        false
+    }
 }
 
 pub trait MemoryAdapter: Sync {

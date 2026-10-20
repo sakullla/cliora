@@ -417,6 +417,8 @@ export default {
       urlInvalid: '地址需要以 http:// 或 https:// 开头。',
     },
     commandPreview: '实际运行',
+    copyCommand: '复制命令',
+    commandCopied: '已复制',
     rowReveal: '显示第 {{index}} 行的值',
     rowHide: '隐藏第 {{index}} 行的值',
     maskedHint: '密钥类的值默认遮住显示，保存时按原文写入。',

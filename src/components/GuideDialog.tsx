@@ -11,12 +11,18 @@ export function GuideDialog({ open, title, hint, wide, suspended = false, onClos
   useLayoutEffect(() => {
     const element = dialog.current;
     if (!element || !open || suspended) { if (element?.open) element.close(); return; }
-    if (!element.open) { returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; element.showModal(); }
+    if (!element.open) {
+      returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      element.showModal();
+      // showModal focuses the first control, which is the close button; parking focus
+      // on the sheet keeps a ring off that button until the keyboard actually moves.
+      if (document.activeElement instanceof HTMLElement && document.activeElement.classList.contains('guide-dialog-close')) element.focus({ preventScroll: true });
+    }
     return () => { if (element.open) element.close(); const target = returnFocus.current; if (target?.isConnected) requestAnimationFrame(() => target.focus()); };
   }, [open, suspended]);
 
   if (!open) return null;
-  return <dialog ref={dialog} className={wide ? 'guide-dialog guide-dialog-wide' : 'guide-dialog'} aria-labelledby="guide-dialog-title" onCancel={(event) => { event.preventDefault(); onClose(); }} onKeyDown={(event) => {
+  return <dialog ref={dialog} tabIndex={-1} className={wide ? 'guide-dialog guide-dialog-wide' : 'guide-dialog'} aria-labelledby="guide-dialog-title" onCancel={(event) => { event.preventDefault(); onClose(); }} onKeyDown={(event) => {
     if (!withMod(event) || event.key.toLowerCase() !== 's') return;
     event.preventDefault();
     if (!event.repeat) dialog.current?.querySelector<HTMLButtonElement>('[data-dialog-save]:not(:disabled)')?.click();

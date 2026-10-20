@@ -230,6 +230,11 @@ impl MemoryLayout for CodeBuddy {
         }))
     }
 
+    /// One user-level setting governs every store of this CLI.
+    fn switch_shared(&self) -> bool {
+        true
+    }
+
     fn switch_state(&self, home: &Path, _directory: &Path) -> Result<MemorySwitchState, String> {
         if let Some(value) = std::env::var_os(SWITCH_ENV) {
             let value = value.to_string_lossy().trim().to_ascii_lowercase();

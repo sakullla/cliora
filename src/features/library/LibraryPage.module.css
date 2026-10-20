@@ -262,9 +262,9 @@
   background: var(--surface);
   transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
 }
-.tagList:focus-within { border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: 2px; }
+.tagList:focus-within { border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: -1px; box-shadow: 0 0 0 4px var(--accent-ring); }
 .tagList input:focus:not(:focus-visible),
-.tagList input:focus-visible { outline: none; }
+.tagList input:focus, .tagList input:focus-visible { outline: none; box-shadow: none; }
 .tagList button { min-height: 24px; padding: 0 8px; border-color: var(--accent-line); border-radius: 99px; background: var(--accent-soft); box-shadow: none; color: var(--accent); font-size: var(--fs-caption); }
 .tagList button:hover:not(:disabled) { border-color: var(--danger-line); background: var(--danger-soft); color: var(--danger); }
 .tagList input { flex: 1; min-width: 120px; min-height: 26px; padding: 0 4px; border: 0; background: transparent; box-shadow: none !important; }

@@ -101,8 +101,9 @@ impl MemoryAdapter for Claude {
     /// root when the user-level `autoMemoryDirectory` points at a usable
     /// value. Project-local relocations are per-project settings and are not
     /// enumerable without a project, so only the user-level root is listed.
-    /// The slug is the only on-disk identity, so `project_path` stays `None`
-    /// and the slug doubles as the label.
+    /// The slug is the only on-disk identity, so `project_path` stays `None`;
+    /// the label is the project directory a session transcript beside the
+    /// store recorded when its slug matches, else the slug itself.
     fn existing_stores(&self, home: &Path) -> Vec<MemoryStoreRef> {
         let mut stores = Vec::new();
         let root = config_root(home);
@@ -130,10 +131,11 @@ impl MemoryAdapter for Claude {
                 if !crate::adapters::memory::store_present(&directory) {
                     continue;
                 }
+                let label = recorded_project(&entry.path(), &slug).unwrap_or(slug);
                 stores.push(MemoryStoreRef {
                     scope: Scope::Project,
                     project_path: None,
-                    label: slug,
+                    label,
                     directory,
                 });
             }
@@ -230,6 +232,11 @@ impl MemoryLayout for Claude {
         }))
     }
 
+    /// One user-level setting governs every store of this CLI.
+    fn switch_shared(&self) -> bool {
+        true
+    }
+
     fn switch_state(&self, home: &Path, _directory: &Path) -> Result<MemorySwitchState, String> {
         let path = config_root(home).join("settings.json");
         let text = transaction::read_native(&path)
@@ -282,6 +289,57 @@ impl MemoryLayout for Claude {
             contents: Some(updated),
         }))
     }
+}
+
+/// Session transcripts (`<slug>/*.jsonl`) record the native `cwd` the slug
+/// was derived from. Only the first lines of the newest few transcripts are
+/// read, and a `cwd` is accepted only when it re-derives the same slug, so a
+/// moved or foreign transcript never relabels a store. Display only.
+fn recorded_project(project_directory: &Path, slug: &str) -> Option<String> {
+    use std::io::{BufRead, BufReader, Read};
+    let mut transcripts: Vec<(std::time::SystemTime, PathBuf)> = fs::read_dir(project_directory)
+        .ok()?
+        .flatten()
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "jsonl")
+        })
+        .filter_map(|entry| {
+            let metadata = entry.metadata().ok()?;
+            metadata.is_file().then(|| {
+                (
+                    metadata.modified().unwrap_or(std::time::UNIX_EPOCH),
+                    entry.path(),
+                )
+            })
+        })
+        .collect();
+    transcripts.sort_by_key(|transcript| std::cmp::Reverse(transcript.0));
+    for (_, path) in transcripts.into_iter().take(3) {
+        let Ok(file) = fs::File::open(&path) else {
+            continue;
+        };
+        for line in BufReader::new(file.take(512 * 1024)).lines().take(40) {
+            let Ok(line) = line else {
+                break;
+            };
+            if !line.contains("\"cwd\"") {
+                continue;
+            }
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+                continue;
+            };
+            let Some(cwd) = value.get("cwd").and_then(serde_json::Value::as_str) else {
+                continue;
+            };
+            if !cwd.trim().is_empty() && sanitize_slug(cwd) == slug {
+                return Some(cwd.to_owned());
+            }
+        }
+    }
+    None
 }
 
 /// First defined `autoMemoryDirectory` wins (local, checked-in, user). An
@@ -548,6 +606,30 @@ mod tests {
                 slug
             );
         }
+    }
+
+    #[test]
+    fn store_label_uses_a_transcript_cwd_only_when_it_rederives_the_slug() {
+        let temp = tempfile::tempdir().unwrap();
+        let slug = "C--Users-example-project-cliora";
+        let directory = temp.path().join(slug);
+        fs::create_dir_all(directory.join("memory")).unwrap();
+        assert_eq!(recorded_project(&directory, slug), None);
+        fs::write(
+            directory.join("a.jsonl"),
+            "{\"type\":\"summary\"}\n{\"cwd\":\"C:\\\\Users\\\\example\\\\other\"}\n",
+        )
+        .unwrap();
+        assert_eq!(recorded_project(&directory, slug), None);
+        fs::write(
+            directory.join("b.jsonl"),
+            "not json\n{\"cwd\":\"C:\\\\Users\\\\example\\\\project\\\\cliora\"}\n",
+        )
+        .unwrap();
+        assert_eq!(
+            recorded_project(&directory, slug).as_deref(),
+            Some("C:\\Users\\example\\project\\cliora")
+        );
     }
 
     #[test]

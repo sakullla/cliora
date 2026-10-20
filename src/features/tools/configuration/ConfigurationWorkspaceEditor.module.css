@@ -14,7 +14,7 @@
 .required { color: var(--danger); font-weight: var(--fw-semibold); }
 .scroll .name > input { min-height: 38px; padding: 8px 12px; border-radius: var(--radius-sm); background: var(--surface); font-size: var(--fs-body); font-weight: var(--fw-semibold); }
 .scroll .name[data-empty] > input { border-color: var(--warning-line); background: var(--surface); }
-.scroll .name > input:focus { border-color: var(--accent); background: var(--surface); outline: 2px solid var(--accent); outline-offset: 2px; }
+.scroll .name > input:focus { border-color: var(--accent); background: var(--surface); outline: 2px solid var(--accent); outline-offset: -1px; box-shadow: 0 0 0 4px var(--accent-ring); }
 .fileTabs { display: flex; flex-wrap: wrap; gap: 4px; width: fit-content; max-width: 100%; padding: 3px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
 .fileTabs button { min-height: 27px; padding: 0 11px; border: 0; border-radius: 7px; background: transparent; box-shadow: none; color: var(--text-2); font-family: var(--font-mono); font-size: var(--fs-caption); font-weight: var(--fw-regular); }
 .fileTabs button:hover:not(:disabled):not([aria-pressed='true']) { background: color-mix(in srgb, var(--surface) 70%, transparent); color: var(--text); }

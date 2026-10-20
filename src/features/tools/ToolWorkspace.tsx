@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -144,11 +144,12 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   const [resource, setResource] = useState<ResourceView>(repair?.resourceView ?? readStoredContexts()[tool]?.resource ?? 'config');
   const [frame, setFrame] = useState<EditFrame | null>(null);
   const [dirty, setDirty] = useState(false);
-  const [resourceDirty, setResourceDirty] = useState({ mcp: false, skills: false, agents: false });
+  const [resourceDirty, setResourceDirty] = useState({ mcp: false, skills: false, agents: false, memory: false });
   const [resourceEpoch, setResourceEpoch] = useState(0);
   const mcpDirty = useCallback((value: boolean) => setResourceDirty(previous => previous.mcp === value ? previous : { ...previous, mcp: value }), []);
   const skillsDirty = useCallback((value: boolean) => setResourceDirty(previous => previous.skills === value ? previous : { ...previous, skills: value }), []);
   const agentsDirty = useCallback((value: boolean) => setResourceDirty(previous => previous.agents === value ? previous : { ...previous, agents: value }), []);
+  const memoryDirty = useCallback((value: boolean) => setResourceDirty(previous => previous.memory === value ? previous : { ...previous, memory: value }), []);
   const [comparison, setComparison] = useState<ApplyComparison | null>(null);
   const [filter, setFilter] = useState('');
   const [customPath, setCustomPath] = useState('');
@@ -207,7 +208,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     const identity = currentContext.current; const revision = epoch.current;
     return confirmAction(message, () => alive.current && currentContext.current === identity && epoch.current === revision, { title: t('common.app.leaveDirtyTitle'), confirmLabel: t('common.app.leaveDirtyConfirm') });
   }
-  function discard() { setFrame(null); setDirty(false); setResourceDirty({ mcp: false, skills: false, agents: false }); setResourceEpoch(value => value + 1); epoch.current++; }
+  function discard() { setFrame(null); setDirty(false); setResourceDirty({ mcp: false, skills: false, agents: false, memory: false }); setResourceEpoch(value => value + 1); epoch.current++; }
   async function closeFrame() { if (await mayLeave()) { discard(); } }
   async function openFrame(subject: ConfigurationSubject, profile: RegisteredProfile | null = null, confirmed = false, title?: string) {
     if (!confirmed && !await mayLeave()) return;
@@ -396,12 +397,13 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   const linkedAuthentication = workspace?.profiles.find(profile => profile.id === accountUsageQuery?.config.identity.profileId)?.authentication;
   const queryAccount = linkedAuthentication?.kind === 'oauth' ? linkedAuthentication.accountId : accountUsageQuery?.config.identity.profileId ? undefined : accountUsageQuery?.config.identity.accountId ?? undefined;
   const resourceContext = scopedContext?.key === context ? scopedContext.value : null;
+  const memoryProjects = useMemo(() => projects.flatMap(project => project.available && project.path ? [{ name: project.name, path: project.path }] : []), [projects]);
   const resourcesReady = resourceContext !== null && !resourceContext.nativeContextError;
   if (!descriptor) return <p>{t('tools.workspace.noTools')}</p>;
   return <section className={styles.workspace} aria-label={t('common.nav.connections')}><ToastScope toasts={toasts}>
-    <div className={styles.chrome}>
+    <div className={styles.chrome} data-workspace-chrome>
     <div className={styles.toolbar}><ToolSwitcher tools={managedTools} selected={toolId} onSelect={id => void switchTool(id)} /></div>
-    <div className={styles.taskBar}><div className={styles.views} role="tablist" aria-label={t('tools.workspace.tasksAria')} onKeyDown={navigateChoices}>{resourceViews.filter((id) => supported[id]).map((id) => { const label = t(`tools.workspace.view.${id}`); const shortcutIndex = resourceViews.findIndex((view) => view === id) + 1; return <button role="tab" key={id} aria-selected={resource === id} aria-keyshortcuts={`Alt+${shortcutIndex}`} tabIndex={resource === id ? 0 : -1} title={t('tools.workspace.viewTitle', { label, index: shortcutIndex })} className={resource === id ? styles.selected : ''} onClick={() => void switchResource(id)}>{label}</button>; })}</div><div className={styles.scopeBar}><FilterSelect className={styles.projectSelect} label={t('tools.workspace.scopeLabel')} value={scope === 'global' ? '__global__' : projectPath} forceSearch searchLabel={t('home.launcher.searchLabel')} options={[{ value: '__global__', label: t('tools.workspace.scopeGlobal') }, ...projects.map(project => ({ value: project.path ?? project.id, label: project.name, detail: project.path ? shortPath(project.path) : undefined, disabled: !project.available || !project.path })), ...(projectPath && !projects.some(project => project.path === projectPath) ? [{ value: projectPath, label: projectPath.split(/[\\/]/).at(-1) ?? projectPath }] : [])]} onChange={value => void switchScope(value === '__global__' ? 'global' : 'project', value === '__global__' ? '' : value)} onPickFolder={() => void pickProject()} pickFolderLabel={t('common.filterSelect.pickFolder')} /></div></div>
+    <div className={styles.taskBar}><div className={styles.views} role="tablist" aria-label={t('tools.workspace.tasksAria')} onKeyDown={navigateChoices}>{resourceViews.filter((id) => supported[id]).map((id) => { const label = t(`tools.workspace.view.${id}`); const shortcutIndex = resourceViews.findIndex((view) => view === id) + 1; return <button role="tab" key={id} aria-selected={resource === id} aria-keyshortcuts={`Alt+${shortcutIndex}`} tabIndex={resource === id ? 0 : -1} title={t('tools.workspace.viewTitle', { label, index: shortcutIndex })} className={resource === id ? styles.selected : ''} onClick={() => void switchResource(id)}>{label}</button>; })}</div><div className={styles.scopeBar} hidden={resource === 'memory'}><FilterSelect className={styles.projectSelect} label={t('tools.workspace.scopeLabel')} value={scope === 'global' ? '__global__' : projectPath} forceSearch searchLabel={t('home.launcher.searchLabel')} options={[{ value: '__global__', label: t('tools.workspace.scopeGlobal') }, ...projects.map(project => ({ value: project.path ?? project.id, label: project.name, detail: project.path ? shortPath(project.path) : undefined, disabled: !project.available || !project.path })), ...(projectPath && !projects.some(project => project.path === projectPath) ? [{ value: projectPath, label: projectPath.split(/[\\/]/).at(-1) ?? projectPath }] : [])]} onChange={value => void switchScope(value === '__global__' ? 'global' : 'project', value === '__global__' ? '' : value)} onPickFolder={() => void pickProject()} pickFolderLabel={t('common.filterSelect.pickFolder')} /></div></div>
     </div>
     <div hidden={resource !== 'config'}>
       {workspace && <InstallPanel toolName={descriptor.name} probe={workspace.probe} customPath={customPath} busy={busy} loading={loading} onCustomPath={setCustomPath} onSavePath={() => void savePath()} onMaintain={(action, source, lineVersion, target) => void maintain(action, source, false, lineVersion, target)} onUsePath={path => void usePath(path)} />}
@@ -428,7 +430,7 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
     {resourcesReady && resource === 'skills' && supported.skills && <SkillsWorkspace key={`${context}:${resourceEpoch}:${resourceContext?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={resourceContext?.effectiveContextId ?? null} onDirtyChange={skillsDirty} />}
     {resourcesReady && resource === 'agents' && supported.agents && <AgentsWorkspace key={`${context}:${resourceEpoch}:${resourceContext?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={resourceContext?.effectiveContextId ?? null} onDirtyChange={agentsDirty} />}
     {resourcesReady && resource === 'plugins' && supported.plugins && <PluginsWorkspace key={`${context}:${resourceEpoch}:${resourceContext?.effectiveContextId}`} toolId={toolId} scope={scope} projectPath={projectPath} contextId={resourceContext?.effectiveContextId ?? null} />}
-    {resource === 'memory' && supported.memory && management?.memory && <MemoryWorkspace key={toolId} toolId={toolId} memory={management.memory} active={active} suggestedProjectPath={scope === 'project' && projectPath ? projectPath : readStoredContexts()[toolId]?.projectPath ?? null} />}
+    {resource === 'memory' && supported.memory && management?.memory && <MemoryWorkspace key={toolId} toolId={toolId} toolName={descriptor.name} memory={management.memory} active={active} suggestedProjectPath={scope === 'project' && projectPath ? projectPath : readStoredContexts()[toolId]?.projectPath ?? null} projects={memoryProjects} onDirtyChange={memoryDirty} />}
     <MaintenanceDialog state={maintenance} busy={busy} canRetry={maintenance?.tool === toolId} onCancel={cancelMaintenance} onRetry={() => { if (maintenance) void maintain(maintenance.action, maintenance.source, true, maintenance.lineVersion, maintenance.target); }} onClose={() => setMaintenance(null)} onMinimize={() => setMaintenance(previous => previous ? { ...previous, minimized: true } : previous)} onRestore={() => setMaintenance(previous => previous ? { ...previous, minimized: false } : previous)} />
   </ToastScope></section>;
 }

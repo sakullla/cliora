@@ -162,6 +162,11 @@ impl MemoryLayout for Codex {
         Ok(None)
     }
 
+    /// One user-level setting governs every store of this CLI.
+    fn switch_shared(&self) -> bool {
+        true
+    }
+
     /// Verified default: the feature is off unless `[features] memories` is
     /// explicitly true (`codex features list` reports false in a fresh home
     /// and an absent key behaves as disabled).

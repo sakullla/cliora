@@ -417,6 +417,8 @@ export default {
       urlInvalid: 'The URL must start with http:// or https://.',
     },
     commandPreview: 'Runs',
+    copyCommand: 'Copy command',
+    commandCopied: 'Copied',
     rowReveal: 'Show row {{index}} value',
     rowHide: 'Hide row {{index}} value',
     maskedHint: 'Secret-like values are masked on screen and saved as typed.',

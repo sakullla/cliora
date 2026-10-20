@@ -1,6 +1,7 @@
 import { useEffect, useId, useState, type ClipboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { mcpCommandLine, mcpDraftIssues, parseMcpServerJson, type KeyValueRow, type McpParsedServer } from '../../lib/mcp';
+import { writeClipboard } from '../../lib/clipboard';
 import type { McpDraft, McpTransport } from '../../types/resources';
 import { Icon } from '../Icon';
 import { KeyValueRows } from './KeyValueRows';
@@ -33,6 +34,12 @@ export function McpFormFields({ draft, onChange, envRows, onEnvRowsChange, heade
   const [pasteError, setPasteError] = useState('');
   const [pasteNotice, setPasteNotice] = useState('');
   const [urlBlurred, setUrlBlurred] = useState(false);
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 1600);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
   useEffect(() => {
     if (!pasteNotice) return;
     const timer = window.setTimeout(() => setPasteNotice(''), 4000);
@@ -95,7 +102,11 @@ export function McpFormFields({ draft, onChange, envRows, onEnvRowsChange, heade
         {commandIssue && <small id={`${id}-command`} className={styles.fieldError}>{t(`tools.mcp.issue.${commandIssue}`)}</small>}
       </label>
       <KeyValueRows single label={t('tools.mcp.args')} rows={draft.args.length ? draft.args.map((value) => ({ key: '', value })) : [{ key: '', value: '' }]} disabled={disabled} onChange={(rows) => onChange({ ...draft, args: rows.map((row) => row.value) })} valuePlaceholder={t('tools.mcp.argPlaceholder')} />
-      {preview && <div className={styles.preview}><span>{t('tools.mcp.commandPreview')}</span><code><i aria-hidden="true">$</i>{preview}</code></div>}
+      {preview && <div className={styles.preview}>
+        <span className={styles.previewLabel}><Icon name="terminal" size={13} />{t('tools.mcp.commandPreview')}</span>
+        <code><i aria-hidden="true">$</i>{preview}</code>
+        <button type="button" className={styles.previewCopy} data-copied={copied || undefined} aria-label={copied ? t('tools.mcp.commandCopied') : t('tools.mcp.copyCommand')} title={t('tools.mcp.copyCommand')} onClick={() => void writeClipboard(preview).then(ok => setCopied(ok))}><Icon name={copied ? 'check' : 'copy'} size={14} /></button>
+      </div>}
       <KeyValueRows maskSensitive label={t('tools.mcp.env')} rows={envRows} disabled={disabled} onChange={onEnvRowsChange} keyPlaceholder={t('tools.mcp.envKeyPlaceholder')} valuePlaceholder={t('tools.mcp.envValuePlaceholder')} />
     </> : <>
       <label className={styles.field}>URL

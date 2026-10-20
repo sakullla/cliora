@@ -159,12 +159,29 @@ pub struct MemoryFailedSource {
     pub reason: String,
 }
 
+/// One listed store: the exact target that reaches it again, its switch
+/// state, and how many entries it holds. Stores without entries are listed
+/// too so their switch and write target stay reachable.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryStoreSummary {
+    pub label: String,
+    pub directory: String,
+    pub target: MemoryTarget,
+    pub in_use: bool,
+    pub detail: String,
+    pub entry_count: usize,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MemoryAggregate {
     pub tool_id: String,
     pub entries: Vec<MemoryStoreEntry>,
     pub failed_sources: Vec<MemoryFailedSource>,
+    pub stores: Vec<MemoryStoreSummary>,
+    /// True when one native switch governs every store of the CLI.
+    pub switch_shared: bool,
 }
 
 /// Lists every store the CLI already keeps on disk, one protected shared
@@ -188,6 +205,8 @@ pub fn list_all_memories(
     crate::adapters::memory::publish(&declaration).ok_or("此 CLI 的记忆尚未核实")?;
     let mut entries = Vec::new();
     let mut failed_sources = Vec::new();
+    let mut stores = Vec::new();
+    let switch_shared = port.layout().is_some_and(|layout| layout.switch_shared());
     for store in port.existing_stores(home) {
         let target = MemoryTarget {
             tool_id: tool_id.to_owned(),
@@ -198,6 +217,14 @@ pub fn list_all_memories(
         };
         match list_memories(db, registry, home, &target) {
             Ok(list) => {
+                stores.push(MemoryStoreSummary {
+                    label: store.label.clone(),
+                    directory: store.directory.display().to_string(),
+                    target: target.clone(),
+                    in_use: list.in_use,
+                    detail: list.detail.clone(),
+                    entry_count: list.entries.len(),
+                });
                 entries.extend(list.entries.into_iter().map(|entry| MemoryStoreEntry {
                     id: entry.id,
                     path: entry.path,
@@ -219,6 +246,8 @@ pub fn list_all_memories(
         tool_id: tool_id.to_owned(),
         entries,
         failed_sources,
+        stores,
+        switch_shared,
     })
 }
 
