@@ -744,6 +744,13 @@ fn qoder_registered_scan_resumes_original_project_and_retains_failed_parent() {
     }).collect::<Vec<_>>().join("\n");
     fs::write(&path, text).unwrap();
     let db = Database::open(&temp.path().join("index.db")).unwrap();
+    // Command generation needs a terminal selection, but never launches it.
+    // Keep the test independent of desktop terminals installed on the host.
+    let terminal = temp.path().join("fixture-terminal");
+    fs::write(&terminal, "").unwrap();
+    crate::launch::set_custom_terminal(
+        &db, terminal.display().to_string(), vec!["{script}".into()],
+    ).unwrap();
     let registry = Registry::with_adapters(vec![&QODER_CN]).unwrap().with_fixture_installation("qoder_cn", "1.2.0");
     let scan = refresh_controlled(&db, &registry, temp.path(), &["qoder_cn".into()], &|| false).unwrap();
     assert_eq!(scan[0].failed_count, 0);
