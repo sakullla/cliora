@@ -1128,3 +1128,55 @@ test('Skill page without a project only asks for a project', async ({ page }) =>
   await expect(page.getByText('只管理用户目录下的本地插件')).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => (window as any).__skillScans ?? 0)).toBe(0);
 });
+
+test('Skill page keeps the choose-project prompt when an earlier workspace read finishes', async ({ page }) => {
+  await mockResources(page);
+  await page.addInitScript(() => {
+    localStorage.setItem('cliora:workspace-context', JSON.stringify({ codex: { resource: 'skills', scope: 'project', projectPath: '' } }));
+    const win = window as any;
+    win.__skillScans = 0;
+    win.__heldReads = [];
+    const original = win.__TAURI_INTERNALS__.invoke;
+    const adapters = [
+      { id: 'claude_code', name: 'Claude Code', interfaceFormats: [], nativeConfig: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' } },
+      { id: 'codex', name: 'Codex', interfaceFormats: [], nativeConfig: { state: 'available', reason: '' }, resources: { state: 'available', reason: '' } },
+    ];
+    const failedWorkspace = {
+      probe: { selectedPath: null, installations: [], nativeFiles: [], nativeWrites: { state: 'unknown', reason: '尚未安装' }, interfaceFormats: [], providerPresets: [], dependencies: [], installUrl: '', upgradeHint: '', installCommand: null, upgradeCommand: null },
+      profiles: [], common: null, binding: null, effectiveContextId: null, nativeContextError: '上一工具上下文失败', snapshots: [], recoveryNeeded: [], customPath: null,
+    };
+    win.__TAURI_INTERNALS__.invoke = async (command: string, args: Record<string, any> = {}) => {
+      if (command === 'get_bootstrap') return { preferences: { schema_version: 1, managed_tools: ['claude_code', 'codex'], theme: 'system' }, tools: adapters.map((item) => ({ id: item.id, name: item.name, installation: 'not_checked', configuration: 'not_checked' })) };
+      if (command === 'list_cli_adapters') return { registered: adapters, managedIds: ['claude_code', 'codex'], preservedUnknown: [] };
+      if (command === 'scan_native_skills') {
+        win.__skillScans += 1;
+        return [{ name: 'late-skill', path: '/tmp/skills/late-skill', digest: null, state: 'external', detail: '', packageId: null, source: 'writable', pluginName: null, pluginEnabled: null }];
+      }
+      if ((command === 'get_registered_tool_workspace' || command === 'get_registered_tool_context') && args.toolId === 'claude_code') {
+        return new Promise((resolve) => {
+          win.__heldReads.push(() => resolve(command === 'get_registered_tool_context'
+            ? { effectiveContextId: null, nativeContextError: '上一工具上下文失败' }
+            : failedWorkspace));
+        });
+      }
+      return original(command, args);
+    };
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__heldReads.length)).toBeGreaterThan(0);
+  await page.getByRole('tab', { name: 'Codex' }).click();
+  await expect(page.getByText('请先选择项目目录。')).toBeVisible();
+  await page.evaluate(async () => {
+    const held = (window as any).__heldReads.splice(0) as Array<() => void>;
+    held.forEach((release) => release());
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  });
+  await expect(page.getByText('请先选择项目目录。')).toBeVisible();
+  await expect(page.getByText('工具上下文读取失败。')).toHaveCount(0);
+  await expect(page.getByText('上一工具上下文失败')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '重新读取' })).toHaveCount(0);
+  await expect(page.getByText('这个 CLI 还没有生效的 Skill')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /late-skill/ })).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => (window as any).__skillScans ?? 0)).toBe(0);
+});
