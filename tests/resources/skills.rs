@@ -1208,3 +1208,53 @@ fn readonly_or_plugin_skills_remain_when_the_writable_root_is_empty() {
     assert_eq!(quiet.plugin_enabled, None);
     assert_eq!(quiet.state, "read_only");
 }
+
+#[test]
+fn codebuddy_user_plugin_skills_stay_global_and_leave_the_project_list() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let registry = Registry::builtins();
+    let home = temp.path().join("home");
+    let project = temp.path().join("work");
+    fs::create_dir_all(&project).unwrap();
+    let user_plugin = temp.path().join("user-plugin");
+    let project_plugin = temp.path().join("project-plugin");
+    write_skill(&user_plugin.join("skills/user-skill"), "---\ndescription: User plugin\n---\n");
+    write_skill(&project_plugin.join("skills/project-skill"), "---\ndescription: Project plugin\n---\n");
+    let project_path = project.display().to_string();
+    let ledger = serde_json::json!({
+        "version": 2,
+        "plugins": {
+            "user@market": [{
+                "scope": "user",
+                "installPath": user_plugin.display().to_string(),
+                "version": "1.0.0"
+            }],
+            "project@market": [{
+                "scope": "project",
+                "projectPath": project_path,
+                "installPath": project_plugin.display().to_string(),
+                "version": "1.0.0"
+            }]
+        }
+    });
+    let root = home.join(".codebuddy");
+    fs::create_dir_all(root.join("plugins")).unwrap();
+    fs::write(root.join("plugins/installed_plugins.json"), ledger.to_string()).unwrap();
+
+    let global = scan_native(&db, &registry, &home, "codebuddy", Scope::Global, None).unwrap();
+    assert!(global.iter().any(|entry| entry.name == "user-skill" && entry.source == "plugin"));
+    assert!(global.iter().all(|entry| entry.name != "project-skill"));
+
+    let project_entries = scan_native(
+        &db,
+        &registry,
+        &home,
+        "codebuddy",
+        Scope::Project,
+        Some(&project_path),
+    )
+    .unwrap();
+    assert!(project_entries.iter().all(|entry| entry.name != "user-skill"));
+    assert!(project_entries.iter().any(|entry| entry.name == "project-skill" && entry.source == "plugin"));
+}
