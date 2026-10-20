@@ -47,11 +47,373 @@ fn path(id: &str) -> Result<Vec<String>, String> {
         .ok_or_else(|| "Qoder CN 未声明此配置字段".into())
 }
 
+fn native_path(path: &[String]) -> &[String] {
+    if path
+        .first()
+        .is_some_and(|part| matches!(part.as_str(), "settings" | "local_settings"))
+    {
+        &path[1..]
+    } else {
+        path
+    }
+}
+
+fn sensitive_path(path: &[String]) -> bool {
+    let path = native_path(path);
+    // MCP accepts arbitrary environment/header names: the whole container is
+    // private, including values whose names do not resemble a conventional key.
+    if path.len() >= 3 && path[0] == "mcpServers" && matches!(path[2].as_str(), "env" | "headers") {
+        return true;
+    }
+    // providers.<id>.apiKey is native in 1.1.74. Keep credential-shaped native
+    // extensions private too; ordinary configuration never owns login material.
+    path.last().is_some_and(|key| {
+        matches!(
+            key.to_ascii_lowercase().as_str(),
+            "apikey"
+                | "api_key"
+                | "authorization"
+                | "password"
+                | "secret"
+                | "token"
+                | "auth"
+                | "oauth"
+                | "credentials"
+                | "access_token"
+                | "refresh_token"
+                | "anthropic_api_key"
+                | "anthropic_auth_token"
+                | "experimental_bearer_token"
+        )
+    })
+}
+
+/// Input is the public document after shared current-file redaction, or a new
+/// untrusted draft. Native private nodes are restored only by the shared session
+/// patcher; accepting them here would let raw edits bypass credential ownership.
+pub(super) fn validate_public_settings(root: &Value) -> Result<(), String> {
+    fn visit(value: &Value, path: &mut Vec<String>) -> Result<(), String> {
+        if sensitive_path(path) {
+            return Err("Qoder CN 凭据及 MCP 环境变量、请求头由原生配置保留，不能通过普通配置草稿新增或修改".into());
+        }
+        match value {
+            Value::Object(map) => {
+                for (key, value) in map {
+                    path.push(key.clone());
+                    visit(value, path)?;
+                    path.pop();
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    visit(item, path)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    // Shared redaction walks objects, not arrays. Refuse malformed native maps
+    // rather than returning an unexamined secret-bearing array in a draft.
+    for container in ["mcpServers", "providers"] {
+        if let Some(value) = root.get(container) {
+            let entries = value
+                .as_object()
+                .ok_or("Qoder CN MCP 与供应商配置必须是原生对象映射")?;
+            if entries.values().any(|entry| !entry.is_object()) {
+                return Err("Qoder CN MCP 与供应商条目必须是原生对象".into());
+            }
+        }
+    }
+    visit(root, &mut Vec::new())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::adapters::qoder_cn::QODER_CN;
     use crate::{adapters::Registry, native::configuration};
+
+    #[derive(Default)]
+    struct CurrentStore(std::sync::Mutex<BTreeMap<String, String>>);
+    impl crate::credentials::CredentialStore for CurrentStore {
+        fn put(&self, id: &str, secret: &str) -> Result<(), String> {
+            self.0.lock().unwrap().insert(id.into(), secret.into());
+            Ok(())
+        }
+        fn get(&self, id: &str) -> Result<String, String> {
+            self.0
+                .lock()
+                .unwrap()
+                .get(id)
+                .cloned()
+                .ok_or("missing".into())
+        }
+        fn delete(&self, id: &str) -> Result<(), String> {
+            self.0.lock().unwrap().remove(id);
+            Ok(())
+        }
+    }
+    // Synthetic native text deliberately retains escaped bytes and spacing.
+    const PRIVATE_SETTINGS: &str = r#"{
+  "model": { "name": "old-model" },
+  "providers": { "fixture": { "apiKey" : "\u0073ynthetic-provider-key", "baseUrl": "https://example.test/v1" }, "private-only": { "apiKey": "synthetic-private-only" } },
+  "mcpServers": { "fixture": { "command": "fixture-mcp", "env" : { "GITHUB_TOKEN" : "synthetic-mcp-env", "PUBLIC_LABEL": "private-container-value" }, "headers" : { "Authorization" : "Bearer synthetic-header", "X-Custom-Credential": "synthetic-custom-header" } }, "private-only": { "env": { "OPAQUE": "synthetic-private-only-env" } } },
+  "customNative": { "keep": true }
+}"#;
+    fn current_request(
+        id: &str,
+        scope: Scope,
+        project: Option<&std::path::Path>,
+    ) -> crate::native::workspace::ConfigurationBeginRequest {
+        crate::native::workspace::ConfigurationBeginRequest {
+            tool_id: "qoder_cn".into(),
+            scope,
+            project_path: project.map(|path| path.to_string_lossy().into_owned()),
+            session_id: id.into(),
+            subject: crate::adapters::configuration::ConfigurationSubject::Current,
+            profile: None,
+        }
+    }
+    fn assert_public(value: &impl serde::Serialize) {
+        let text = serde_json::to_string(value).unwrap();
+        for private in [
+            "synthetic-provider-key",
+            "synthetic-mcp-env",
+            "private-container-value",
+            "synthetic-header",
+            "synthetic-custom-header",
+            "synthetic-private-only",
+            "GITHUB_TOKEN",
+            "X-Custom-Credential",
+        ] {
+            assert!(
+                !text.contains(private),
+                "private native node crossed the public boundary"
+            );
+        }
+    }
+
+    #[test]
+    fn qoder_current_sessions_redact_and_preserve_secret_nodes_through_preview_save_and_reopen() {
+        use crate::{
+            adapters::CliAdapter,
+            native::{apply, workspace::DraftSessions},
+        };
+        for (scope, role) in [
+            (Scope::Global, "settings"),
+            (Scope::Project, "local_settings"),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let project = (scope == Scope::Project).then_some(temp.path());
+            let registry = Registry::with_adapters(vec![&QODER_CN]).unwrap();
+            let db = crate::database::Database::open(&temp.path().join("current.db")).unwrap();
+            let sessions = DraftSessions::default();
+            let store = CurrentStore::default();
+            let files = QODER_CN.native_files(scope, temp.path(), project, true);
+            let file = files.iter().find(|file| file.role == role).unwrap();
+            std::fs::create_dir_all(std::path::Path::new(&file.path).parent().unwrap()).unwrap();
+            std::fs::write(&file.path, PRIVATE_SETTINGS).unwrap();
+            let mut draft = sessions
+                .begin(
+                    &registry,
+                    &db,
+                    current_request("current-private", scope, project),
+                    None,
+                    files.clone(),
+                    None,
+                )
+                .unwrap();
+            assert!(draft.issues.is_empty(), "{:?}", draft.issues);
+            assert_public(&draft);
+            assert!(store.0.lock().unwrap().is_empty());
+            for (field, value) in [
+                ("model.name", json!("new-model")),
+                ("ui.language", json!("zh-CN")),
+                ("autoMemoryEnabled", json!(true)),
+                ("autoMemoryUserScopeEnabled", json!(false)),
+            ] {
+                draft = sessions
+                    .edit(&registry, draft, action(role, "set", field, value))
+                    .unwrap();
+            }
+            assert_public(
+                &apply::preview_registered(&registry, &draft.profile, draft.common.as_ref(), scope)
+                    .unwrap(),
+            );
+            assert_public(&sessions.compare_current(&registry, draft.clone()).unwrap());
+            let saved = sessions
+                .save_current(&registry, &db, &store, draft, &files)
+                .unwrap();
+            assert_public(&saved);
+            let mut public_profile = saved.draft.profile.clone();
+            let text = std::fs::read_to_string(&file.path).unwrap();
+            for fragment in [
+                r#""apiKey" : "\u0073ynthetic-provider-key""#,
+                r#""GITHUB_TOKEN" : "synthetic-mcp-env""#,
+                r#""Authorization" : "Bearer synthetic-header""#,
+            ] {
+                assert!(text.contains(fragment), "private source bytes were changed");
+            }
+            let original: Value = serde_json::from_str(PRIVATE_SETTINGS).unwrap();
+            let actual: Value = serde_json::from_str(&text).unwrap();
+            for key in ["providers", "mcpServers", "customNative"] {
+                assert_eq!(actual[key], original[key]);
+            }
+            assert_eq!(actual["model"]["name"], "new-model");
+            assert_eq!(actual["ui"]["language"], "zh-CN");
+            assert_eq!(actual["autoMemoryEnabled"], true);
+            assert_eq!(actual["autoMemoryUserScopeEnabled"], false);
+            assert_public(
+                &sessions
+                    .preview_backup(
+                        &registry,
+                        &db,
+                        &store,
+                        saved.draft,
+                        role.into(),
+                        saved.application.unwrap().transaction_id,
+                    )
+                    .unwrap(),
+            );
+            assert_public(
+                &sessions
+                    .begin(
+                        &registry,
+                        &db,
+                        current_request("current-reread", scope, project),
+                        None,
+                        files.clone(),
+                        None,
+                    )
+                    .unwrap(),
+            );
+            assert!(
+                crate::native::profile::list_registered_profiles(&db, "qoder_cn")
+                    .unwrap()
+                    .is_empty()
+            );
+            if scope == Scope::Global {
+                public_profile.id.clear();
+                public_profile.name = "Public settings only".into();
+                public_profile.version = 0;
+                let mut public: Value = serde_json::from_str(&public_profile.files[role]).unwrap();
+                public["model"]["name"] = json!("named-model");
+                public_profile.files.insert(role.into(), public.to_string());
+                let named = crate::native::profile::save_registered_profile(
+                    &db,
+                    &registry,
+                    public_profile,
+                    None,
+                )
+                .unwrap();
+                assert_public(&named);
+                assert!(apply::apply_registered_validated(
+                    &registry, &db, &store, &named, None, &files, "global", scope, false,
+                )
+                .is_err());
+                apply::apply_registered_validated(
+                    &registry, &db, &store, &named, None, &files, "global", scope, true,
+                )
+                .unwrap();
+                let actual: Value =
+                    serde_json::from_str(&std::fs::read_to_string(&file.path).unwrap()).unwrap();
+                assert_eq!(actual["model"]["name"], "named-model");
+                assert_eq!(actual["providers"], original["providers"]);
+                assert_eq!(actual["mcpServers"], original["mcpServers"]);
+            }
+        }
+    }
+
+    #[test]
+    fn qoder_current_sessions_reject_new_sensitive_containers_and_protect_parent_deletion() {
+        use crate::{
+            adapters::CliAdapter,
+            native::{apply, workspace::DraftSessions},
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let registry = Registry::with_adapters(vec![&QODER_CN]).unwrap();
+        let db = crate::database::Database::open(&temp.path().join("injection.db")).unwrap();
+        let sessions = DraftSessions::default();
+        let store = CurrentStore::default();
+        let files = QODER_CN.native_files(Scope::Global, temp.path(), None, true);
+        let file = &files[0];
+        std::fs::create_dir_all(std::path::Path::new(&file.path).parent().unwrap()).unwrap();
+        std::fs::write(&file.path, "{}").unwrap();
+        for (index, injection) in [
+            json!({"mcpServers":{"new":{"env":{"GITHUB_TOKEN":"synthetic-injection"}}}}),
+            json!({"mcpServers":{"new":{"headers":{"X-Custom":"synthetic-injection"}}}}),
+            json!({"providers":{"new":{"apiKey":"synthetic-injection"}}}),
+            json!({"providers":{"new":{"apiKey":"${QODER_NATIVE_KEY}"}}}),
+            json!({"mcpServers":{"new":{"env":[{"CUSTOM":"synthetic-injection"}]}}}),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let draft = sessions
+                .begin(
+                    &registry,
+                    &db,
+                    current_request(&format!("injection-{index}"), Scope::Global, None),
+                    None,
+                    files.clone(),
+                    None,
+                )
+                .unwrap();
+            let invalid = sessions
+                .raw(
+                    &registry,
+                    draft,
+                    BTreeMap::from([("settings".into(), injection.to_string())]),
+                )
+                .unwrap();
+            assert!(!invalid.issues.is_empty(), "sensitive injection accepted");
+            assert!(
+                apply::preview_registered(&registry, &invalid.profile, None, Scope::Global)
+                    .is_err()
+            );
+            assert!(sessions
+                .save_current(&registry, &db, &store, invalid.clone(), &files)
+                .is_err());
+            assert!(crate::native::profile::save_registered_profile(
+                &db,
+                &registry,
+                invalid.profile,
+                None
+            )
+            .is_err());
+            assert_eq!(std::fs::read_to_string(&file.path).unwrap(), "{}");
+        }
+        std::fs::write(&file.path, PRIVATE_SETTINGS).unwrap();
+        for parent in ["providers", "mcpServers"] {
+            let draft = sessions
+                .begin(
+                    &registry,
+                    &db,
+                    current_request(&format!("delete-{parent}"), Scope::Global, None),
+                    None,
+                    files.clone(),
+                    None,
+                )
+                .unwrap();
+            let mut public: Value = serde_json::from_str(&draft.profile.files["settings"]).unwrap();
+            public.as_object_mut().unwrap().remove(parent);
+            let edited = sessions
+                .raw(
+                    &registry,
+                    draft,
+                    BTreeMap::from([("settings".into(), public.to_string())]),
+                )
+                .unwrap();
+            assert!(sessions
+                .save_current(&registry, &db, &store, edited, &files)
+                .is_err());
+            assert_eq!(
+                std::fs::read_to_string(&file.path).unwrap(),
+                PRIVATE_SETTINGS
+            );
+        }
+    }
 
     fn fixture() -> Value {
         serde_json::from_str(include_str!(
@@ -541,7 +903,9 @@ impl ConfigurationAdapter for QoderAdapter {
         Ok(None)
     }
     fn portable_field_kind(&self, path: &[String]) -> PortableFieldKind {
-        if path.len() > 1 && self::path(&path[1..].join(".")).is_ok() {
+        if sensitive_path(path) {
+            PortableFieldKind::Credential
+        } else if self::path(&native_path(path).join(".")).is_ok() {
             PortableFieldKind::Parameter
         } else {
             PortableFieldKind::Unknown
@@ -557,7 +921,13 @@ impl ConfigurationAdapter for QoderAdapter {
         let mut flat = BTreeMap::new();
         crate::native::apply::flatten(desired, &mut vec![], &mut flat);
         flat.retain(|path, value| {
-            !(matches!(path.as_str(), "/model" | "/general" | "/ui")
+            // A redacted credential-only provider/MCP entry is an empty object.
+            // It must not claim the whole native container during named apply.
+            !((matches!(
+                path.as_str(),
+                "/model" | "/general" | "/ui" | "/providers" | "/mcpServers"
+            ) || path.starts_with("/providers/")
+                || path.starts_with("/mcpServers/"))
                 && value.as_object().is_some_and(|v| v.is_empty()))
         });
         let mut managed = ManagedConfiguration {

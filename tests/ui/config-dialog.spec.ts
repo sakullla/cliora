@@ -559,7 +559,7 @@ test('common configuration hides tabs that have no fields', async ({ page }) => 
 });
 
 test('a CLI without common fields opens native text and hides the empty tabs', async ({ page }) => {
-  await setupConfigurationWorkspace(page, 'qoder_cn');
+  await setupConfigurationWorkspace(page, 'cursor');
   await page.getByRole('button', { name: '通用配置', exact: true }).first().click();
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByRole('button', { name: '连接与模型', exact: true })).toHaveCount(0);
@@ -830,7 +830,7 @@ test('history replaces the current editor with sanitized typed preview and guard
 });
 
 test('generic registered fallback uses temporary keys for directory and cancels without modifying the saved key', async ({ page }) => {
-  await setupConfigurationWorkspace(page, 'qoder_cn');
+  await setupConfigurationWorkspace(page, 'cursor');
   await page.getByRole('button', { name: '修改', exact: true }).last().click(); const dialog = page.getByRole('dialog');
   await expect(dialog.getByLabel('兼容配置连接')).toBeVisible();
   await dialog.getByText('密钥已保存到系统 · 空输入保留', { exact: true }).click();
@@ -954,7 +954,7 @@ test('cancel request error offers retry and suppresses the old response', async 
 });
 
 test('API source buffers separate changed connection B from the stored A key and restore A', async ({ page }) => {
-  await setupConfigurationWorkspace(page, 'qoder_cn');
+  await setupConfigurationWorkspace(page, 'cursor');
   await page.getByRole('button', { name: '修改', exact: true }).last().click(); const dialog = page.getByRole('dialog');
   const sourceNative = dialog.getByRole('radio', { name: '使用 CLI 当前登录或凭据', exact: true });
   const sourceApi = dialog.getByRole('radio', { name: '为此连接提供 API 密钥', exact: true });
@@ -1164,7 +1164,7 @@ test('connection fields follow provider, address, sign-in, then model', async ({
 });
 
 test('compatible connection keeps sign-in between the address and the model', async ({ page }) => {
-  await setupConfigurationWorkspace(page, 'qoder_cn');
+  await setupConfigurationWorkspace(page, 'cursor');
   await page.getByRole('button', { name: '新建配置' }).click();
   const dialog = page.getByRole('dialog');
   const top = async (locator: ReturnType<typeof dialog.getByLabel>) => (await locator.boundingBox())!.y;
