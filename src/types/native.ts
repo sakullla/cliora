@@ -56,10 +56,22 @@ export type MemoryStoreEntry = {
   inUse: boolean;
   detail: string;
 };
+/** One listed store, including stores that hold no entry yet. */
+export type MemoryStoreSummary = {
+  label: string;
+  directory: string;
+  target: MemoryTarget;
+  inUse: boolean;
+  detail: string;
+  entryCount: number;
+};
 export type MemoryAggregate = {
   toolId: string;
   entries: MemoryStoreEntry[];
   failedSources: MemoryFailedSource[];
+  stores: MemoryStoreSummary[];
+  /** One native switch governs every store of the CLI. */
+  switchShared: boolean;
 };
 export type AdapterFacet = { state: 'available' | 'planned' | 'supported' | 'unsupported'; reason: string };
 export type AdapterDescriptor = {

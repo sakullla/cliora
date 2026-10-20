@@ -121,13 +121,12 @@ export function MaintenanceDialog({ state, busy, canRetry, onCancel, onRetry, on
         <div className={styles.facts}>
           {showFlow && <span className={styles.flow} aria-label={t('tools.workspace.maintenanceFlowAria', { from: state.from || '—', to: to || t('tools.workspace.maintenanceLatest') })}>
             {state.from && <span className={styles.version} data-role="from">{state.from}</span>}
-            {state.from && <Icon name="arrowRight" size={14} />}
+            {state.from && <span className={styles.arrow}><Icon name="arrowRight" size={13} /></span>}
             <span className={styles.version} data-role="to">{to || t('tools.workspace.maintenanceLatest')}</span>
           </span>}
-          <span className={styles.elapsed}><Icon name="clock" size={14} />{t('tools.workspace.maintenanceElapsed', { time: elapsed })}</span>
+          <span className={styles.elapsed}><Icon name="clock" size={13} />{t('tools.workspace.maintenanceElapsed', { time: elapsed })}</span>
+          {phase === 'running' && <span className={styles.track} aria-hidden="true"><span /></span>}
         </div>
-
-        <div className={styles.track} aria-hidden="true"><span /></div>
         {state.running && state.error && <p role="alert" className={styles.inlineError}>{state.error}</p>}
 
         <section className={styles.terminal} data-open={logOpen || undefined}>

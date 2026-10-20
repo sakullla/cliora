@@ -73,14 +73,14 @@
   width: fit-content;
   min-height: 26px;
   padding: 0 10px;
-  border: 1px dashed var(--line-strong);
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
+  border: 1px solid transparent;
+  border-radius: 99px;
+  background: transparent;
   box-shadow: none;
-  color: var(--text-2);
+  color: var(--accent);
   font-size: var(--fs-caption);
-  font-weight: var(--fw-medium);
+  font-weight: var(--fw-semibold);
 }
-.add:hover:not(:disabled) { border-style: solid; border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.add:hover:not(:disabled) { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); box-shadow: none; }
 .duplicate { margin: 0; color: var(--danger); font-size: var(--fs-body); font-weight: var(--fw-medium); }
 .hint { margin: 0; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-regular); line-height: 1.5; }

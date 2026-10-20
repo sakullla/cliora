@@ -1708,6 +1708,19 @@ fn aggregated_listing_merges_stores_and_keeps_write_paths() {
     );
     assert_eq!(aggregate.failed_sources[0].label, "坏源");
     assert!(aggregate.failed_sources[0].reason.contains("总开关"));
+    // 每个可列出的存储都有摘要（含条目数与原样 target）；引擎托管的开关按存储区分。
+    let mut summaries: Vec<(&str, usize)> = aggregate
+        .stores
+        .iter()
+        .map(|store| (store.label.as_str(), store.entry_count))
+        .collect();
+    summaries.sort_unstable();
+    assert_eq!(summaries, [("proj-slug", 1), ("全局", 1)]);
+    assert!(aggregate
+        .stores
+        .iter()
+        .all(|store| store.target.store_directory.as_deref() == Some(store.directory.as_str())));
+    assert!(!aggregate.switch_shared);
 
     let global_entry = aggregate
         .entries
@@ -2028,6 +2041,8 @@ fn slug_hash_and_uuid_stores_drive_the_shared_engine_without_a_project() {
         ("mimo_code", mimo_id, "mimo-note", "mimo body", &mimo_store),
     ] {
         let aggregate = list_all_memories(&db, &registry, &home, tool).unwrap();
+        // 原生布局的总开关为整个 CLI 共用（mimo 无总开关，不声明共用）。
+        assert_eq!(aggregate.switch_shared, tool != "mimo_code", "{tool}");
         assert!(
             aggregate.failed_sources.is_empty(),
             "{tool}: {:?}",

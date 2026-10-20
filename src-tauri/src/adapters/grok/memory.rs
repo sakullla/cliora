@@ -210,6 +210,11 @@ impl MemoryLayout for Grok {
         Ok(None)
     }
 
+    /// One user-level setting governs every store of this CLI.
+    fn switch_shared(&self) -> bool {
+        true
+    }
+
     fn switch_state(&self, home: &Path, _directory: &Path) -> Result<MemorySwitchState, String> {
         let path = config_path(home);
         let mut governed = "memory";
