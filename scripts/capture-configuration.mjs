@@ -3,13 +3,15 @@ import fs from 'node:fs';
 import ts from 'typescript';
 import { expect } from '@playwright/test';
 
-const toolNames = { pi: 'Pi', open_code: 'OpenCode', kimi_code: 'Kimi Code', codex: 'Codex', claude_code: 'Claude Code' };
+const toolNames = { pi: 'Pi', open_code: 'OpenCode', kimi_code: 'Kimi Code', codex: 'Codex', claude_code: 'Claude Code', qoder_cn: 'Qoder CN' };
 const toolSlugs = { pi: 'pi', open_code: 'opencode', kimi_code: 'kimi', codex: 'codex', claude_code: 'claude' };
-const variants = Object.keys(toolNames).flatMap(tool => [
+const variants = Object.keys(toolSlugs).flatMap(tool => [
   { name: `${toolSlugs[tool]}-default`, tool, title: `${toolNames[tool]} · 简洁编辑首屏`, state: '连接摘要、按需展开的模型与单独保存' },
   { name: `${toolSlugs[tool]}-parameters`, tool, title: `${toolNames[tool]} · 原生模型参数`, state: '上下文、输出、推理与输入能力', details: true },
 ]);
 const extra = [
+  ['qoder-settings', 'qoder_cn', 'Qoder CN · 常用设置', '模型、权限、语言、两类原生记忆开关', 'qoder-settings'],
+  ['qoder-memory-explicit', 'qoder_cn', 'Qoder CN · 显式记忆配置', '用户和项目分开设置，支持恢复原生默认', 'qoder-memory-explicit'],
   ['pi-input-capabilities', 'pi', 'Pi · 文本、图片与推理', '原生 input 与 reasoning 字段', 'capabilities'],
   ['opencode-modalities', 'open_code', 'OpenCode · 输入输出模态', '文本、图片等输入输出能力', 'capabilities'],
   ['kimi-capabilities', 'kimi_code', 'Kimi · 图片、思考与工具调用', '原生模型能力标记', 'capabilities'],
@@ -131,6 +133,14 @@ export async function captureConfiguration({ browser, themes, widths, selected, 
             const directory = dialog.getByLabel('模型目录', { exact: true });
             await directory.getByLabel('new-1', { exact: true }).check(); await directory.getByLabel('new-2', { exact: true }).check();
             if (action === 'directory-required') { await directory.getByRole('button', { name: '添加所选模型', exact: true }).click(); await expect(dialog.getByRole('alert').filter({ hasText: 'new-1 缺少必填上下文' })).toBeVisible(); }
+          }
+        }
+        if (action?.startsWith('qoder-')) {
+          await expect(dialog.getByLabel('项目自动记忆', { exact: true })).toBeVisible();
+          await expect(dialog.getByRole('button', { name: '连接与模型', exact: true })).toHaveCount(0);
+          if (action === 'qoder-memory-explicit') {
+            await dialog.getByLabel('项目自动记忆', { exact: true }).selectOption('启用');
+            await dialog.getByLabel('用户自动记忆', { exact: true }).selectOption('停用');
           }
         }
         if (action === 'source') await dialog.getByRole('radio', { name: '使用 CLI 当前登录或凭据', exact: true }).click();

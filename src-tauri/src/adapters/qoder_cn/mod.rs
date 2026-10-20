@@ -103,6 +103,9 @@ fn resolve_config_root(home: &Path, directory: &str, explicit: Option<&Path>, cl
 
 impl CliAdapter for QoderAdapter {
     fn configuration(&self) -> Option<&dyn super::configuration::ConfigurationAdapter> { Some(self) }
+    fn validate_draft(&self, _role: &str, parsed: &Value) -> Result<(), String> {
+        configuration::validate_public_settings(parsed)
+    }
     fn validate_role_scope(&self, role: &str, scope: Scope) -> Result<(), String> {
         config_directory_name(env::var("QODERCN_CONFIG_DIR_NAME").ok().as_deref(), self.directory)?;
         if role == "local_settings" && scope != Scope::Project { return Err("settings.local.json 仅适用于项目".into()); }
