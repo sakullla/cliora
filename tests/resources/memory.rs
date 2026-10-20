@@ -144,6 +144,9 @@ impl crate::adapters::memory::MemoryAdapter for MemoryCli {
     }
 
     fn existing_stores(&self, home: &Path) -> Vec<crate::adapters::memory::MemoryStoreRef> {
+        if self.id == "fixture_memory_performance" {
+            MEMORY_ENUM_COUNT.with(|count| count.set(count.get() + 1));
+        }
         self.stores
             .iter()
             .filter_map(|(label, scope, name)| {
@@ -421,7 +424,12 @@ fn harness() -> Harness {
     }
 }
 
-fn memory_target(tool: &str, scope: Scope, project: Option<&Path>, context: Option<&str>) -> MemoryTarget {
+fn memory_target(
+    tool: &str,
+    scope: Scope,
+    project: Option<&Path>,
+    context: Option<&str>,
+) -> MemoryTarget {
     MemoryTarget {
         tool_id: tool.into(),
         scope,
@@ -571,9 +579,7 @@ fn apply_oauth_binding(db: &Database, tool: &str, context_id: &str) {
         files: BTreeMap::new(),
         suppressed: BTreeMap::new(),
         connection: None,
-        authentication: crate::native::profile::ProfileAuthentication::OAuth {
-            account_id,
-        },
+        authentication: crate::native::profile::ProfileAuthentication::OAuth { account_id },
         native_credentials: BTreeMap::new(),
     };
     let snapshot = crate::native::apply::AppliedProfileSnapshot {
@@ -951,7 +957,10 @@ fn omitted_context_stays_unbound_when_oauth_binding_is_applied() {
     )
     .unwrap();
     assert!(!switched.in_use);
-    assert!(switched.entries.iter().all(|entry| entry.path.contains("_unbound")));
+    assert!(switched
+        .entries
+        .iter()
+        .all(|entry| entry.path.contains("_unbound")));
     let enabled = set_memory_enabled(
         &harness.db,
         &harness.store,
@@ -1483,10 +1492,7 @@ fn unverified_builtin_memory_does_not_create_memory() {
     // builtin store either way.
     let mut unverified = 0;
     for adapter in registry.iter() {
-        let declaration = adapter
-            .memory()
-            .expect("builtin memory port")
-            .declaration();
+        let declaration = adapter.memory().expect("builtin memory port").declaration();
         if !declaration.unverified_reason.trim().is_empty() {
             unverified += 1;
             let error = list_memories(
@@ -1579,7 +1585,11 @@ fn reject_linked_memory(harness: &Harness, link_target: &MemoryTarget, real_note
         .unwrap_err(),
     );
     assert_eq!(fs::read_to_string(real_note).unwrap(), "original memory");
-    assert!(!real_note.parent().unwrap().join(".cliora-memory-switch").exists());
+    assert!(!real_note
+        .parent()
+        .unwrap()
+        .join(".cliora-memory-switch")
+        .exists());
 }
 
 #[test]
@@ -1766,8 +1776,13 @@ fn aggregated_listing_merges_stores_and_keeps_write_paths() {
     let plain = memory_target(cli.id, Scope::Global, None, None);
     save(&harness, plain, "plain-note", "plain body", "", false).unwrap();
     assert_eq!(
-        fs::read_to_string(harness.home.join("cliora-memory-scan").join("plain-note.md"))
-            .unwrap(),
+        fs::read_to_string(
+            harness
+                .home
+                .join("cliora-memory-scan")
+                .join("plain-note.md")
+        )
+        .unwrap(),
         "plain body"
     );
 }
@@ -1855,8 +1870,9 @@ fn builtin_existing_stores_scan_the_verified_locations() {
         .unwrap()
         .existing_stores(&home);
     assert!(
-        stores.iter().any(|store| store.label == "改址根"
-            && store.directory == relocated),
+        stores
+            .iter()
+            .any(|store| store.label == "改址根" && store.directory == relocated),
         "{stores:?}"
     );
     // IO 错误跳过：projects 根变成普通文件后只剩改址根。
@@ -2036,7 +2052,13 @@ fn slug_hash_and_uuid_stores_drive_the_shared_engine_without_a_project() {
     fs::write(mimo_store.join("mimo-note.md"), "mimo body").unwrap();
 
     for (tool, label, id, body, store) in [
-        ("claude_code", claude_slug, "claude-note", "claude body", &claude_store),
+        (
+            "claude_code",
+            claude_slug,
+            "claude-note",
+            "claude body",
+            &claude_store,
+        ),
         ("grok", grok_slug, "grok-note", "grok body", &grok_store),
         ("mimo_code", mimo_id, "mimo-note", "mimo body", &mimo_store),
     ] {
@@ -2104,13 +2126,333 @@ fn slug_hash_and_uuid_stores_drive_the_shared_engine_without_a_project() {
     assert!(index_text.contains("# Memory Index"));
     let mut stray = Vec::new();
     for entry in fs::read_dir(&home).unwrap().flatten() {
-        if entry
-            .file_name()
-            .to_string_lossy()
-            .starts_with(".cliora-")
-        {
+        if entry.file_name().to_string_lossy().starts_with(".cliora-") {
             stray.push(entry.path());
         }
     }
     assert!(stray.is_empty(), "{stray:?}");
+}
+
+thread_local! { static MEMORY_ENUM_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
+#[test]
+fn memory_batches_bound_work_and_reuse_enumeration_on_ten_stores() {
+    static CLI: MemoryCli = MemoryCli {
+        id: "fixture_memory_performance",
+        location: "perf",
+        read_only: false,
+        binds_account: false,
+        global: true,
+        project: false,
+        stores: &[
+            ("0", Scope::Global, "perf/0"),
+            ("1", Scope::Global, "perf/1"),
+            ("2", Scope::Global, "perf/2"),
+            ("3", Scope::Global, "perf/3"),
+            ("4", Scope::Global, "perf/4"),
+            ("5", Scope::Global, "perf/5"),
+            ("6", Scope::Global, "perf/6"),
+            ("7", Scope::Global, "perf/7"),
+            ("8", Scope::Global, "perf/8"),
+            ("9", Scope::Global, "perf/9"),
+        ],
+    };
+    let h = harness();
+    let registry = Registry::with_adapters(vec![&CLI]).unwrap();
+    for store in 0..10 {
+        let path = h.home.join(format!("perf/{store}"));
+        fs::create_dir_all(&path).unwrap();
+        for index in 0..100 {
+            fs::write(
+                path.join(format!("entry-{index}.md")),
+                format!("# Entry {index}\nStore {store}"),
+            )
+            .unwrap();
+        }
+    }
+    let reset = || {
+        MEMORY_READ_COUNT.with(|count| count.set(0));
+        MEMORY_ENUM_COUNT.with(|count| count.set(0));
+    };
+    let counts = || {
+        (
+            MEMORY_ENUM_COUNT.with(|count| count.get()),
+            MEMORY_READ_COUNT.with(|count| count.get()),
+        )
+    };
+    reset();
+    let baseline = list_all_memories(&h.db, &registry, &h.home, CLI.id).unwrap();
+    for entry in &baseline.entries {
+        read_memory(&h.db, &registry, &h.home, &entry.target, &entry.id).unwrap();
+    }
+    assert_eq!(counts(), (1001, 2000));
+    println!(
+        "MEMORY_PERF baseline_single_reads ipc=1001 enumerations={} bodies={}",
+        counts().0,
+        counts().1
+    );
+    reset();
+    let first = list_all_memories(&h.db, &registry, &h.home, CLI.id).unwrap();
+    assert_eq!(counts(), (1, 1000));
+    let requests: Vec<_> = first
+        .entries
+        .iter()
+        .map(|entry| MemoryReadRequest {
+            target: entry.target.clone(),
+            id: entry.id.clone(),
+        })
+        .collect();
+    for batch in requests.chunks(32) {
+        let result = read_memories(&h.db, &registry, &h.home, batch).unwrap();
+        assert!(result
+            .iter()
+            .all(|item| item.document.is_some() && item.error.is_none()));
+    }
+    assert_eq!(counts(), (33, 2000));
+    println!(
+        "MEMORY_PERF cold ipc=33 enumerations={} bodies={}",
+        counts().0,
+        counts().1
+    );
+    reset();
+    let warm = list_all_memories(&h.db, &registry, &h.home, CLI.id).unwrap();
+    assert!(warm
+        .entries
+        .iter()
+        .zip(&first.entries)
+        .all(|(a, b)| a.fingerprint == b.fingerprint));
+    assert_eq!(counts(), (1, 1000));
+    println!(
+        "MEMORY_PERF warm ipc=1 enumerations={} bodies={}",
+        counts().0,
+        counts().1
+    );
+    for entry in first.entries.iter().take(3) {
+        fs::write(&entry.path, "external change").unwrap();
+    }
+    reset();
+    let changed = list_all_memories(&h.db, &registry, &h.home, CLI.id).unwrap();
+    let requests: Vec<_> = changed
+        .entries
+        .iter()
+        .zip(&first.entries)
+        .filter(|(a, b)| a.fingerprint != b.fingerprint)
+        .map(|(entry, _)| MemoryReadRequest {
+            target: entry.target.clone(),
+            id: entry.id.clone(),
+        })
+        .collect();
+    assert_eq!(requests.len(), 3);
+    read_memories(&h.db, &registry, &h.home, &requests).unwrap();
+    assert_eq!(counts(), (2, 1003));
+    println!(
+        "MEMORY_PERF changed_3 ipc=2 enumerations={} bodies={}",
+        counts().0,
+        counts().1
+    );
+
+    assert!(read_memories(&h.db, &registry, &h.home, &vec![requests[0].clone(); 33]).is_err());
+    let mut mixed = requests.clone();
+    mixed[1].target.tool_id = "unregistered".into();
+    let unknown = read_memories(&h.db, &registry, &h.home, &mixed).unwrap();
+    assert!(unknown[0].document.is_some() && unknown[1].error.is_some());
+    mixed[1] = requests[1].clone();
+    mixed[1].id = "missing".into();
+    let result = read_memories(&h.db, &registry, &h.home, &mixed).unwrap();
+    assert!(
+        result[0].document.is_some() && result[1].error.is_some() && result[2].document.is_some()
+    );
+    fs::write(&changed.entries[0].path, "x".repeat(MAX_BYTES)).unwrap();
+    let result = read_memories(&h.db, &registry, &h.home, &vec![requests[0].clone(); 6]).unwrap();
+    assert_eq!(
+        result.iter().filter(|item| item.document.is_some()).count(),
+        4
+    );
+    assert!(result[4].error.as_ref().unwrap().contains("字节上限"));
+    fs::write(&changed.entries[0].path, "x".repeat(MAX_BYTES + 1)).unwrap();
+    assert!(
+        read_memories(&h.db, &registry, &h.home, &requests[..1]).unwrap()[0]
+            .error
+            .is_some()
+    );
+    assert!(read_memory(
+        &h.db,
+        &registry,
+        &h.home,
+        &requests[0].target,
+        &requests[0].id
+    )
+    .is_ok());
+    // Snapshot never authorizes a later operation after the store disappears.
+    fs::remove_dir_all(Path::new(&changed.entries[0].path).parent().unwrap()).unwrap();
+    assert!(
+        read_memories(&h.db, &registry, &h.home, &requests[..1]).unwrap()[0]
+            .error
+            .is_some()
+    );
+}
+
+#[test]
+fn qoder_memory_native_indexes_groups_and_conflicts_are_transactional() {
+    let h = harness();
+    let registry = Registry::builtins();
+    let port = registry.get("qoder_cn").unwrap().memory().unwrap();
+    let project = h.temp.path().join("项目-😀");
+    fs::create_dir_all(&project).unwrap();
+    let user = memory_target("qoder_cn", Scope::Global, None, None);
+    let project_target = memory_target("qoder_cn", Scope::Project, Some(&project), None);
+    let empty = list_all_memories(&h.db, &registry, &h.home, "qoder_cn").unwrap();
+    assert!(empty.stores.is_empty() && empty.switch_groups.len() == 2);
+    assert!(empty
+        .switch_groups
+        .iter()
+        .all(|group| group.enabled.is_none()));
+    assert!(!port
+        .declaration()
+        .operations
+        .contains(&MemoryOperation::ItemEnable));
+    assert!(!h.home.join(".qoder-cn").exists());
+    for target in [&user, &project_target] {
+        let saved = save_memory(
+            &h.db,
+            &h.store,
+            &registry,
+            &h.home,
+            &MemorySave {
+                target: target.clone(),
+                id: "topic".into(),
+                text: "---\nname: Native topic\ndescription: A fixture\n---\nhello".into(),
+                baseline: String::new(),
+                confirm_external: false,
+            },
+        )
+        .unwrap();
+        assert!(saved.detail.contains("生效状态未知"));
+        let index = Path::new(&saved.path).parent().unwrap().join("MEMORY.md");
+        assert!(fs::read_to_string(&index)
+            .unwrap()
+            .contains("[Native topic](topic.md)"));
+        let before = fs::read_to_string(&index).unwrap();
+        fs::write(&saved.path, "external").unwrap();
+        assert!(save_memory(
+            &h.db,
+            &h.store,
+            &registry,
+            &h.home,
+            &MemorySave {
+                target: target.clone(),
+                id: "topic".into(),
+                text: "overwrite".into(),
+                baseline: saved.text,
+                confirm_external: false,
+            }
+        )
+        .unwrap_err()
+        .contains("外部修改"));
+        assert_eq!(fs::read_to_string(&index).unwrap(), before);
+        fs::write(&index, format!("{before}\nKeep this unrelated line\n")).unwrap();
+        delete_memory(
+            &h.db,
+            &h.store,
+            &registry,
+            &h.home,
+            &MemoryDelete {
+                target: target.clone(),
+                id: "topic".into(),
+                baseline: "external".into(),
+            },
+        )
+        .unwrap();
+        let after = fs::read_to_string(&index).unwrap();
+        assert!(!after.contains("topic.md") && after.contains("Keep this unrelated line"));
+    }
+    let settings = h.home.join(".qoder-cn/settings.json");
+    fs::write(&settings, "{\"unknown\":{\"keep\":123}}\n").unwrap();
+    set_memory_switch_group(
+        &h.db,
+        &h.store,
+        &registry,
+        &h.home,
+        "qoder_cn",
+        "autoMemoryEnabled",
+        false,
+    )
+    .unwrap();
+    let groups = list_all_memories(&h.db, &registry, &h.home, "qoder_cn")
+        .unwrap()
+        .switch_groups;
+    assert_eq!(
+        groups
+            .iter()
+            .find(|g| g.scope == Scope::Project)
+            .unwrap()
+            .enabled,
+        Some(false)
+    );
+    assert_eq!(
+        groups
+            .iter()
+            .find(|g| g.scope == Scope::Global)
+            .unwrap()
+            .enabled,
+        None
+    );
+    set_memory_switch_group(
+        &h.db,
+        &h.store,
+        &registry,
+        &h.home,
+        "qoder_cn",
+        "autoMemoryUserScopeEnabled",
+        true,
+    )
+    .unwrap();
+    let value: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(settings).unwrap()).unwrap();
+    assert_eq!(value["unknown"]["keep"], 123);
+    assert!(set_memory_switch_group(
+        &h.db, &h.store, &registry, &h.home, "qoder_cn", "unknown", true
+    )
+    .is_err());
+    assert!(save_memory(
+        &h.db,
+        &h.store,
+        &registry,
+        &h.home,
+        &MemorySave {
+            target: user,
+            id: "MEMORY".into(),
+            text: "bad".into(),
+            baseline: String::new(),
+            confirm_external: false
+        }
+    )
+    .is_err());
+}
+
+#[test]
+fn qoder_memory_group_switch_rejects_junction_without_changing_settings() {
+    let h = harness();
+    let registry = Registry::builtins();
+    let outside = h.temp.path().join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    let settings = outside.join("settings.json");
+    let sentinel = "{\"autoMemoryEnabled\":true,\"unknown\":123}";
+    fs::write(&settings, sentinel).unwrap();
+    link_directory(&outside, &h.home.join(".qoder-cn"));
+    assert!(set_memory_switch_group(
+        &h.db,
+        &h.store,
+        &registry,
+        &h.home,
+        "qoder_cn",
+        "autoMemoryEnabled",
+        false
+    )
+    .is_err());
+    assert_eq!(fs::read_to_string(&settings).unwrap(), sentinel);
+    #[cfg(windows)]
+    fs::remove_dir(h.home.join(".qoder-cn")).unwrap();
+    #[cfg(unix)]
+    fs::remove_file(h.home.join(".qoder-cn")).unwrap();
 }

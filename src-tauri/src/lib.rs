@@ -252,6 +252,8 @@ pub fn run() {
             commands::list_memories,
             commands::list_all_memories,
             commands::read_memory,
+            commands::read_memories,
+            commands::set_memory_switch_group,
             commands::save_memory,
             commands::delete_memory,
             commands::set_memory_enabled,

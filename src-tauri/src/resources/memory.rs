@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use crate::accounts::selection;
 use crate::adapters::memory::{
     MemoryAdapter, MemoryDeclaration, MemoryFileChange, MemoryLayout, MemoryManagement,
-    MemoryOperation, MemoryStoreRef, MemoryTargetDimension,
+    MemoryOperation, MemoryStoreRef, MemorySwitchGroup, MemoryTargetDimension,
 };
 use crate::adapters::{CliAdapter, Registry};
 use crate::credentials::CredentialStore;
@@ -182,6 +182,7 @@ pub struct MemoryAggregate {
     pub stores: Vec<MemoryStoreSummary>,
     /// True when one native switch governs every store of the CLI.
     pub switch_shared: bool,
+    pub switch_groups: Vec<MemorySwitchGroup>,
 }
 
 /// Lists every store the CLI already keeps on disk, one protected shared
@@ -198,15 +199,18 @@ pub fn list_all_memories(
         return Err("用户目录必须是绝对路径".into());
     }
     let adapter = registry.get(tool_id).ok_or("此 CLI 尚无注册适配器")?;
-    let port = adapter
-        .memory()
-        .ok_or("此 CLI 没有已核实的记忆")?;
+    let port = adapter.memory().ok_or("此 CLI 没有已核实的记忆")?;
     let declaration = port.declaration();
     crate::adapters::memory::publish(&declaration).ok_or("此 CLI 的记忆尚未核实")?;
     let mut entries = Vec::new();
     let mut failed_sources = Vec::new();
     let mut stores = Vec::new();
     let switch_shared = port.layout().is_some_and(|layout| layout.switch_shared());
+    let switch_groups = port
+        .layout()
+        .map(|layout| layout.switch_groups(home))
+        .transpose()?
+        .unwrap_or_default();
     for store in port.existing_stores(home) {
         let target = MemoryTarget {
             tool_id: tool_id.to_owned(),
@@ -215,7 +219,12 @@ pub fn list_all_memories(
             context_id: None,
             store_directory: Some(store.directory.display().to_string()),
         };
-        match list_memories(db, registry, home, &target) {
+        match prepare_with_store(db, registry, home, &target, Some(store.clone())).and_then(
+            |prepared| {
+                require(&prepared, MemoryOperation::List)?;
+                finish_list(&prepared)
+            },
+        ) {
             Ok(list) => {
                 stores.push(MemoryStoreSummary {
                     label: store.label.clone(),
@@ -248,6 +257,7 @@ pub fn list_all_memories(
         failed_sources,
         stores,
         switch_shared,
+        switch_groups,
     })
 }
 
@@ -259,15 +269,179 @@ pub fn read_memory(
     id: &str,
 ) -> Result<MemoryDocument, String> {
     let prepared = prepare(db, registry, home, target)?;
-    require(&prepared, MemoryOperation::Open)?;
-    let path = entry_path(&prepared, id)?;
+    read_prepared(&prepared, id, None)
+}
+
+fn read_prepared(
+    prepared: &Prepared,
+    id: &str,
+    byte_limit: Option<usize>,
+) -> Result<MemoryDocument, String> {
+    require(prepared, MemoryOperation::Open)?;
+    let path = entry_path(prepared, id)?;
     if !path.is_file() {
         return Err("记忆不存在".into());
     }
-    let bytes = read_entry_bytes(&path)?;
+    if let Some(limit) = byte_limit {
+        let size = fs::metadata(&path)
+            .map_err(|error| error.to_string())?
+            .len();
+        if size > limit as u64 {
+            return Err("批量读取字节上限，请单独打开此记忆".into());
+        }
+    }
+    let bytes = read_entry_bytes_limited(&path, byte_limit)?;
+    if byte_limit.is_some_and(|limit| bytes.len() > limit) {
+        return Err("批量读取字节上限，请单独打开此记忆".into());
+    }
     let text = String::from_utf8(bytes.clone())
         .map_err(|_| "无法读取记忆，请重试：正文不是 UTF-8".to_owned())?;
-    document(&prepared, id, &path, text, &bytes)
+    document(prepared, id, &path, text, &bytes)
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryReadRequest {
+    pub target: MemoryTarget,
+    pub id: String,
+}
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryReadResult {
+    pub document: Option<MemoryDocument>,
+    pub error: Option<String>,
+}
+
+pub fn read_memories(
+    db: &Database,
+    registry: &Registry,
+    home: &Path,
+    requests: &[MemoryReadRequest],
+) -> Result<Vec<MemoryReadResult>, String> {
+    if requests.len() > 32 {
+        return Err("一次最多读取 32 条记忆".into());
+    }
+    if !home.is_absolute() {
+        return Err("用户目录必须是绝对路径".into());
+    }
+    let mut snapshots = BTreeMap::<String, Result<Vec<MemoryStoreRef>, String>>::new();
+    for request in requests {
+        if snapshots.contains_key(&request.target.tool_id) {
+            continue;
+        }
+        let stores = (|| {
+            let port = registry
+                .get(&request.target.tool_id)
+                .and_then(|adapter| adapter.memory())
+                .ok_or("此 CLI 没有已核实的记忆")?;
+            crate::adapters::memory::publish(&port.declaration()).ok_or("此 CLI 的记忆尚未核实")?;
+            Ok(port.existing_stores(home))
+        })();
+        snapshots.insert(request.target.tool_id.clone(), stores);
+    }
+    let mut results: Vec<Option<MemoryReadResult>> = (0..requests.len()).map(|_| None).collect();
+    let mut groups = BTreeMap::<String, Vec<usize>>::new();
+    for (index, request) in requests.iter().enumerate() {
+        groups
+            .entry(serde_json::to_string(&request.target).map_err(|error| error.to_string())?)
+            .or_default()
+            .push(index);
+    }
+    let mut remaining = 4 * MAX_BYTES;
+    for indices in groups.values() {
+        let target = &requests[indices[0]].target;
+        let prepared = (|| {
+            let snapshot = snapshots[&target.tool_id].as_ref().map_err(Clone::clone)?;
+            let store = if let Some(path) = requested_store(target) {
+                Some(
+                    snapshot
+                        .iter()
+                        .find(|store| {
+                            store.directory == PathBuf::from(path)
+                                && store.scope == target.scope
+                                && store.project_path == target.project_path
+                        })
+                        .cloned()
+                        .ok_or("该记忆存储已不在磁盘上，请刷新后重试")?,
+                )
+            } else {
+                None
+            };
+            prepare_with_store(db, registry, home, target, store)
+        })();
+        for &index in indices {
+            let result = match &prepared {
+                Ok(prepared) => read_prepared(
+                    prepared,
+                    &requests[index].id,
+                    Some(remaining.min(MAX_BYTES)),
+                ),
+                Err(error) => Err(error.clone()),
+            };
+            results[index] = Some(match result {
+                Ok(document) => {
+                    remaining -= document.text.len();
+                    MemoryReadResult {
+                        document: Some(document),
+                        error: None,
+                    }
+                }
+                Err(error) => MemoryReadResult {
+                    document: None,
+                    error: Some(error),
+                },
+            });
+        }
+    }
+    Ok(results.into_iter().flatten().collect())
+}
+
+pub fn set_memory_switch_group(
+    db: &Database,
+    credentials: &dyn CredentialStore,
+    registry: &Registry,
+    home: &Path,
+    tool_id: &str,
+    group_id: &str,
+    enabled: bool,
+) -> Result<(), String> {
+    if !home.is_absolute() {
+        return Err("用户目录必须是绝对路径".into());
+    }
+    reject_reparse_ancestors(home)?;
+    let port = registry
+        .get(tool_id)
+        .and_then(|adapter| adapter.memory())
+        .ok_or("此 CLI 没有已核实的记忆")?;
+    let management =
+        crate::adapters::memory::publish(&port.declaration()).ok_or("此 CLI 的记忆尚未核实")?;
+    if !management
+        .operations
+        .contains(&MemoryOperation::MasterSwitch)
+    {
+        return Err("此记忆存储不支持开关".into());
+    }
+    let layout = port.layout().ok_or("此记忆存储不支持分组开关")?;
+    if !layout
+        .switch_groups(home)?
+        .iter()
+        .any(|group| group.id == group_id)
+    {
+        return Err("未知记忆开关".into());
+    }
+    if let Some(change) = layout.switch_group_patch(home, group_id, enabled)? {
+        // Native settings may be outside the memory root; the adapter chooses
+        // them. Shared file transactions enforce absolute paths, fresh baseline,
+        // backup and reparse checks exactly as the existing master switch.
+        reject_reparse_ancestors(&change.path)?;
+        transaction::apply_files(
+            db,
+            credentials,
+            &[file_change(change)],
+            commit_without_records,
+        )?;
+    }
+    Ok(())
 }
 
 pub fn save_memory(
@@ -514,6 +688,16 @@ fn prepare<'a>(
     home: &Path,
     target: &MemoryTarget,
 ) -> Result<Prepared<'a>, String> {
+    prepare_with_store(db, registry, home, target, None)
+}
+
+fn prepare_with_store<'a>(
+    db: &Database,
+    registry: &'a Registry,
+    home: &Path,
+    target: &MemoryTarget,
+    snapshot_store: Option<MemoryStoreRef>,
+) -> Result<Prepared<'a>, String> {
     if !home.is_absolute() {
         return Err("用户目录必须是绝对路径".into());
     }
@@ -525,7 +709,10 @@ fn prepare<'a>(
     let management =
         crate::adapters::memory::publish(&declaration).ok_or("此 CLI 的记忆尚未核实")?;
     let store = match requested_store(target) {
-        Some(_) => Some(matched_store(port, home, target)?),
+        Some(_) => Some(match snapshot_store {
+            Some(store) => store,
+            None => matched_store(port, home, target)?,
+        }),
         None => None,
     };
     let (scope, project) = checked_scope(&declaration, target, store.as_ref())?;
@@ -663,8 +850,9 @@ fn checked_scope(
             if store.is_some() {
                 return Ok((Scope::Project, None));
             }
-            let project =
-                projects::checked_directory(target.project_path.as_deref().ok_or("请选择项目目录")?)?;
+            let project = projects::checked_directory(
+                target.project_path.as_deref().ok_or("请选择项目目录")?,
+            )?;
             Ok((Scope::Project, Some(project)))
         }
         _ => Err("此 CLI 的记忆不覆盖当前范围".into()),
@@ -889,7 +1077,11 @@ fn list_entries(prepared: &Prepared) -> Result<Vec<MemoryEntry>, String> {
             if !valid_segment(&entry.id) || overlaps_path(&entry.path, &prepared.excluded) {
                 continue;
             }
-            let bytes = read_entry_bytes(&entry.path)?;
+            let checked = entry_path(prepared, &entry.id)?;
+            if checked != entry.path {
+                return Err("记忆路径与条目标识不匹配".into());
+            }
+            let bytes = read_entry_bytes(&checked)?;
             entries.push(MemoryEntry {
                 id: entry.id,
                 path: entry.path.display().to_string(),
@@ -942,7 +1134,16 @@ fn overlaps_path(path: &Path, excluded: &[PathBuf]) -> bool {
     excluded.iter().any(|item| overlaps(path, item))
 }
 
+#[cfg(test)]
+thread_local! { static MEMORY_READ_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
 fn read_entry_bytes(path: &Path) -> Result<Vec<u8>, String> {
+    read_entry_bytes_limited(path, None)
+}
+fn read_entry_bytes_limited(path: &Path, limit: Option<usize>) -> Result<Vec<u8>, String> {
+    #[cfg(test)]
+    MEMORY_READ_COUNT.with(|count| count.set(count.get() + 1));
+    reject_reparse_ancestors(path)?;
     if is_symlink(path)? {
         return Err(format!("不跟随符号链接：{}", path.display()));
     }
@@ -951,7 +1152,13 @@ fn read_entry_bytes(path: &Path) -> Result<Vec<u8>, String> {
     if !metadata.is_file() {
         return Err(format!("无法读取记忆，请重试：{}", path.display()));
     }
-    fs::read(path).map_err(|_| format!("无法读取记忆，请重试：{}", path.display()))
+    let file = fs::File::open(path).map_err(|error| error.to_string())?;
+    let mut bytes = Vec::new();
+    use std::io::Read;
+    file.take(limit.map(|limit| limit as u64 + 1).unwrap_or(u64::MAX))
+        .read_to_end(&mut bytes)
+        .map_err(|_| format!("无法读取记忆，请重试：{}", path.display()))?;
+    Ok(bytes)
 }
 
 fn is_symlink(path: &Path) -> Result<bool, String> {

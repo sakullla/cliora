@@ -154,6 +154,16 @@ pub struct MemorySwitchState {
     pub detail: String,
 }
 
+/// Native switch shared by a scope. None means dynamic native default, unknown locally.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemorySwitchGroup {
+    pub id: String,
+    pub scope: Scope,
+    pub enabled: Option<bool>,
+    pub detail: String,
+}
+
 /// Adapter-owned storage semantics for a verified native family: entry
 /// mapping, native index upkeep, and the native master switch. The shared
 /// engine keeps its transaction, baseline, exclusion, and symlink protections
@@ -173,8 +183,11 @@ pub trait MemoryLayout: Sync {
         text: &str,
     ) -> Result<Option<MemoryFileChange>, String>;
     /// Index upkeep applied in the same transaction as an entry delete.
-    fn index_after_delete(&self, directory: &Path, id: &str)
-        -> Result<Option<MemoryFileChange>, String>;
+    fn index_after_delete(
+        &self,
+        directory: &Path,
+        id: &str,
+    ) -> Result<Option<MemoryFileChange>, String>;
     /// Native master-switch state for usage display.
     fn switch_state(&self, home: &Path, directory: &Path) -> Result<MemorySwitchState, String>;
     /// Native master-switch write plan; `None` when the state already holds.
@@ -188,6 +201,17 @@ pub trait MemoryLayout: Sync {
     /// directory argument is ignored), so the management surface shows a
     /// single switch instead of one per store. The default keeps per-store
     /// switches.
+    fn switch_groups(&self, _home: &Path) -> Result<Vec<MemorySwitchGroup>, String> {
+        Ok(Vec::new())
+    }
+    fn switch_group_patch(
+        &self,
+        _home: &Path,
+        _group: &str,
+        _enabled: bool,
+    ) -> Result<Option<MemoryFileChange>, String> {
+        Err("此记忆存储不支持分组开关".into())
+    }
     fn switch_shared(&self) -> bool {
         false
     }
@@ -300,7 +324,10 @@ mod tests {
         })
         .unwrap();
         assert_eq!(published.operations, READ);
-        assert!(published.operations.iter().all(|operation| !operation.is_write()));
+        assert!(published
+            .operations
+            .iter()
+            .all(|operation| !operation.is_write()));
         for operation in WRITES {
             assert!(!published.operations.contains(operation), "{operation:?}");
         }

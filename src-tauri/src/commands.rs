@@ -937,6 +937,22 @@ pub async fn list_all_memories(
 }
 
 #[tauri::command]
+pub async fn read_memories(app: AppHandle, requests: Vec<resources::memory::MemoryReadRequest>) -> Result<Vec<resources::memory::MemoryReadResult>, ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        resources::memory::read_memories(&db, &adapters::Registry::builtins(), &home()?, &requests).map_err(native_error)
+    }).await
+}
+
+#[tauri::command]
+pub async fn set_memory_switch_group(app: AppHandle, tool_id: String, group_id: String, enabled: bool) -> Result<(), ApiError> {
+    blocking(move || {
+        let db = app.state::<AppState>().database(&app)?;
+        resources::memory::set_memory_switch_group(&db, &SystemCredentialStore, &adapters::Registry::builtins(), &home()?, &tool_id, &group_id, enabled).map_err(native_error)
+    }).await
+}
+
+#[tauri::command]
 pub async fn read_memory(
     app: AppHandle,
     target: resources::memory::MemoryTarget,

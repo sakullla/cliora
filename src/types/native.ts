@@ -65,6 +65,9 @@ export type MemoryStoreSummary = {
   detail: string;
   entryCount: number;
 };
+export type MemoryReadRequest = { target: MemoryTarget; id: string };
+export type MemoryReadResult = { document: MemoryDocument | null; error: string | null };
+export type MemorySwitchGroup = { id: string; scope: Scope; enabled: boolean | null; detail: string };
 export type MemoryAggregate = {
   toolId: string;
   entries: MemoryStoreEntry[];
@@ -72,6 +75,7 @@ export type MemoryAggregate = {
   stores: MemoryStoreSummary[];
   /** One native switch governs every store of the CLI. */
   switchShared: boolean;
+  switchGroups?: MemorySwitchGroup[];
 };
 export type AdapterFacet = { state: 'available' | 'planned' | 'supported' | 'unsupported'; reason: string };
 export type AdapterDescriptor = {
