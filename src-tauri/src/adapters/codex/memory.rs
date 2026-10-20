@@ -136,6 +136,8 @@ impl MemoryLayout for Codex {
                 path: item.path(),
             });
         }
+        // Filesystem enumeration order differs across platforms.
+        entries.sort_by(|left, right| left.id.cmp(&right.id));
         Ok(entries)
     }
 
