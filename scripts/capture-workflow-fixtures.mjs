@@ -1,6 +1,6 @@
 /** Sanitized history UI fixtures; no native credentials or billing calls. */
 
-export function qoderHistoryFixtures() {
+export function qoderHistoryFixtures(options = {}) {
   const prior = window.__TAURI_INTERNALS__?.invoke;
   const now = Date.now();
   const start = new Date().setHours(0, 0, 0, 0);
@@ -11,8 +11,10 @@ export function qoderHistoryFixtures() {
     { unit: 'credits', value: 0.125, originalValue: null, billable: null, records: 1, unknownOriginalRecords: 1 },
   ];
   const totals = { requests: 5, usageRecords: 5, unknownRequestRecords: 0, unknownTokenRecords: 5, sessions: 1, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, total: 0, cost: null, unpricedTokens: 0, nativeUsage };
+  if (options?.unknownAmounts) Object.assign(totals, { requests: 1, usageRecords: 1, unknownTokenRecords: 1, nativeUsage: [] });
   const zero = { ...totals, requests: 0, usageRecords: 0, unknownTokenRecords: 0, sessions: 0, nativeUsage: [] };
   const session = { id: 'qoder-credits', toolId: 'qoder_cn', nativeId: '11111111-2222-4333-8444-555555555555', title: 'Qoder CN · 原生 Credits 与会话', cwd: 'C:/Synthetic/Qoder', model: 'qfmodel', projectId: null, startedAt: now - 600000, updatedAt: now - 1000, favorite: false, partial: false, stale: false, messageCount: 2, usageCount: 5 };
+  session.usageCount = totals.usageRecords;
   const included = (filter = {}) => (!filter.toolId || filter.toolId === session.toolId) && (!filter.model || filter.model === session.model)
     && (!filter.search || session.title.includes(filter.search)) && (!filter.favoriteOnly || session.favorite)
     && (!filter.fromMs || now - 1000 >= filter.fromMs) && (!filter.toMs || now - 1000 < filter.toMs);

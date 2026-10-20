@@ -765,6 +765,55 @@ fn qoder_registered_scan_resumes_original_project_and_retains_failed_parent() {
 }
 
 #[test]
+fn qoder_unknown_amount_calls_persist_report_and_export_and_invalid_shapes_stale_index() {
+    use crate::adapters::qoder_cn::QODER_CN;
+    let temp = tempfile::tempdir().unwrap();
+    let logs = temp.path().join(".qoder-cn/projects/synthetic");
+    fs::create_dir_all(&logs).unwrap();
+    let path = logs.join("11111111-2222-4333-8444-555555555555.jsonl");
+    let db = Database::open(&temp.path().join("index.db")).unwrap();
+    let registry = Registry::with_adapters(vec![&QODER_CN]).unwrap();
+    let refresh = || refresh_controlled(&db, &registry, temp.path(), &["qoder_cn".into()], &|| false).unwrap();
+    fs::write(&path, "{\"type\":\"assistant\"}\n").unwrap();
+    assert_eq!(refresh()[0].failed_count, 1, "invalid shape fails on the initial scan");
+    assert!(list(&db, &HistoryFilter::default()).unwrap().is_empty());
+    let row = serde_json::json!({"type":"assistant","uuid":"a","parentUuid":null,"timestamp":"2026-10-20T08:00:00Z","message":{"id":"response","content":"answer","model":"qfmodel","usage":{"request_id":"known-call","input_tokens":0,"output_tokens":0,"credits":null}}});
+    fs::write(&path, row.to_string()).unwrap();
+    assert_eq!(refresh()[0].failed_count, 0);
+    let id = list(&db, &HistoryFilter::default()).unwrap().remove(0).id;
+    let saved = detail(&db, &id).unwrap();
+    assert_eq!(saved.usage.len(), 1);
+    assert_eq!(saved.usage[0].request_count, Some(1));
+    assert!(saved.usage[0].native_usage.is_none() && saved.usage[0].input.is_none());
+    let report = usage_report(&db, &HistoryFilter { tool_id: Some("qoder_cn".into()), model: Some("qfmodel".into()), ..Default::default() }).unwrap();
+    assert_eq!(report.totals.requests, 1);
+    assert_eq!(report.totals.usage_records, 1);
+    assert_eq!(report.totals.unknown_token_records, 1);
+    assert!(report.totals.native_usage.is_empty());
+    assert_eq!(report.totals.cost, None);
+    assert_eq!(report.by_model[0].totals.requests, 1);
+    assert_eq!(report.timeline.iter().map(|bucket| bucket.totals.requests).sum::<u64>(), 1);
+    let json_path = temp.path().join("export.json");
+    export(&db, &id, "json", &json_path).unwrap();
+    let json: Value = serde_json::from_str(&fs::read_to_string(json_path).unwrap()).unwrap();
+    assert_eq!(json["totals"]["requests"], 1);
+    assert_eq!(json["totals"]["unknownTokenRecords"], 1);
+    assert_eq!(json["usage"][0]["nativeUsage"], Value::Null);
+    let md_path = temp.path().join("export.md");
+    export(&db, &id, "markdown", &md_path).unwrap();
+    assert!(fs::read_to_string(md_path).unwrap().contains("Token：未知"));
+    fs::write(&path, format!("{row}\n{{\"type\":\"assistant\"}}\n")).unwrap();
+    assert_eq!(refresh()[0].failed_count, 0);
+    assert!(detail(&db, &id).unwrap().session.partial, "mixed valid and invalid shapes are partial");
+    fs::write(&path, "{\"type\":\"assistant\"}\n").unwrap();
+    assert_eq!(refresh()[0].failed_count, 1);
+    let preserved = detail(&db, &id).unwrap();
+    assert!(preserved.session.stale);
+    assert_eq!(preserved.messages[0].text, "answer");
+    assert_eq!(preserved.totals.requests, 1);
+}
+
+#[test]
 fn missing_native_request_ids_are_scoped_to_the_source() {
     use crate::adapters::{codebuddy::history as buddy, command_code::history as command};
     for (tool, name) in [("codebuddy", "codebuddy-2.161.1-session.jsonl"), ("command_code", "command-code-1.73-session.jsonl")] {
