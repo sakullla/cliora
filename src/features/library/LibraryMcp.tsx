@@ -215,7 +215,7 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
           <span className={styles.rowIcon} data-transport={item.transport} aria-hidden="true"><Icon name={item.transport === 'http' ? 'globe' : 'terminal'} size={17} /></span>
           <div className={styles.rowMain}>
             <div className={styles.rowTitle}>
-              <button className={styles.cardTitle} type="button" onClick={() => editMcp(item)}>{item.name}</button>
+              <button className={styles.cardTitle} type="button" onClick={() => editMcp(item)}><span className={styles.cardName}>{item.name}</span></button>
               <span className={styles.badge} data-accent={item.transport === 'http' || undefined}>{item.transport === 'http' ? 'HTTP' : 'stdio'}</span>
               {envCount > 0 && <span className={styles.metaChip} title={keyList}><Icon name="lock" size={11} />{t('library.resources.envCount', { count: envCount })}</span>}
               {headerCount > 0 && <span className={styles.metaChip} title={keyList}><Icon name="lock" size={11} />{t('library.resources.headerCount', { count: headerCount })}</span>}
