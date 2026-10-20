@@ -177,7 +177,13 @@ export function ToolWorkspacePage({ managedTools, initialTool, openSequence = 0,
   useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
   useEffect(() => { if (!supported[resource]) setResource('config'); if (resource !== 'accounts') setAccountUsageQuery(null); }, [resource, supported.accounts, supported.mcp, supported.skills, supported.agents, supported.plugins, supported.memory]);
   const reload = useCallback(async (nextTool: string, nextScope: Scope, nextProject: string, fresh = false) => {
-    if (!nativeAvailable || !nextTool || nextScope === 'project' && !nextProject) { setLoading(false); setWorkspace(null); return null; }
+    if (nextScope === 'project' && !nextProject) {
+      setLoading(false);
+      setWorkspace(null);
+      setScopedContext({ key: JSON.stringify([nextTool, nextScope, nextProject]), value: { effectiveContextId: null, nativeContextError: null } });
+      return null;
+    }
+    if (!nativeAvailable || !nextTool) { setLoading(false); setWorkspace(null); return null; }
     const request = ++loadSequence.current; setLoading(true); setError('');
     const key = JSON.stringify([nextTool, nextScope, nextProject]);
     let completed = false;
