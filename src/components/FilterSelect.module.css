@@ -21,7 +21,7 @@
 }
 .trigger:hover:not(:disabled) { border-color: var(--text-3); background-color: var(--surface-2); }
 .trigger[data-open="true"] { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
-.trigger:focus-visible { border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: 2px; }
+.trigger:focus-visible { border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: -1px; box-shadow: 0 0 0 4px var(--accent-ring); }
 .trigger[data-empty="true"] .triggerCopy > span { color: var(--text-2); }
 .trigger:disabled { opacity: .5; }
 .triggerIcon { display: grid; place-items: center; flex: none; margin-right: 7px; }

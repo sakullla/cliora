@@ -301,6 +301,8 @@ export default {
     reading: '正在读取记忆正文',
     modified: '更新于 {{time}}',
     properties: '属性 · {{count}}',
+    openLinked: '打开关联记忆「{{name}}」',
+    missingLinked: '没有找到关联记忆「{{name}}」',
     emptyBody: '这条记忆没有正文。',
     copyPath: '复制文件路径',
     pathCopied: '已复制文件路径',

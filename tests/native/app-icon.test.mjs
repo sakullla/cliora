@@ -248,9 +248,28 @@ test('product marks are the leaf on a transparent canvas', () => {
   imagesFromIco(read('src-tauri/icons/icon.ico')).forEach((image, index) => {
     assertTransparentLeaf(image, `icon.ico#${index} ${image.width}x${image.height}`);
   });
-  imagesFromIcns(read('src-tauri/icons/icon.icns')).forEach((image, index) => {
-    assertTransparentLeaf(image, `icon.icns#${index} ${image.width}x${image.height}`);
+});
+
+// macOS places a bare mark on a grey system plate in the Dock (it reads as a
+// dimmed icon), so the bundle icon is the leaf on the standard light tile:
+// transparent corners outside the rounded square, a light plate inside it.
+function assertMacTile(image, label) {
+  const seen = inspect(image);
+  seen.cornerAlpha.forEach((alpha, index) => {
+    assert.equal(alpha, 0, `${label} corner ${index} is opaque`);
   });
+  if (image.mask) return;
+  const center = ((image.height >> 1) * image.width + (image.width >> 1)) * 4;
+  assert.ok(image.rgba[center + 3] > 200, `${label} tile is not opaque in the middle`);
+  assert.ok(seen.light > 0, `${label} lost the light tile`);
+  assert.ok(seen.green > 0, `${label} lost the green leaf`);
+  assert.ok(seen.dark > 0, `${label} lost the dark vein`);
+}
+
+test('macOS bundle icon is the leaf on a full rounded tile', () => {
+  const images = imagesFromIcns(read('src-tauri/icons/icon.icns'));
+  images.forEach((image, index) => assertMacTile(image, `icon.icns#${index} ${image.width}x${image.height}`));
+  assertMacTile(decodePng(read('src-tauri/icons/macos-tile-1024.png')), 'macos-tile-1024.png');
 });
 
 test('tray template stays a monochrome leaf on transparency', () => {

@@ -63,5 +63,5 @@
 .fetch { justify-content: flex-start; width: 100%; min-height: var(--control-h-sm); padding: 0 8px; border: 1px dashed var(--line-strong); border-radius: 6px; background: transparent; box-shadow: none; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-regular); }
 .fetch:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 
-.trigger:focus-visible { border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: 2px; }
+.trigger:focus-visible { border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: -1px; box-shadow: 0 0 0 4px var(--accent-ring); }
 .trigger::placeholder { color: var(--text-3); font-family: inherit; }

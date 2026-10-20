@@ -1,13 +1,13 @@
 /* ---------- Page ---------------------------------------------------- */
 
-.page { --memory-sticky-top: 150px; display: grid; gap: 14px; min-width: 0; padding-top: 4px; container-type: inline-size; container-name: memory; }
+.page { --memory-split-h: 620px; display: grid; gap: 14px; min-width: 0; padding-top: 4px; container-type: inline-size; container-name: memory; }
 .mono { font-family: var(--font-mono); }
 
 .head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 12px 16px; }
 .headCopy { display: grid; flex: 1 1 320px; gap: 5px; min-width: 0; }
 .headCopy h2 { margin: 0; font-size: var(--fs-title); font-weight: var(--fw-semibold); letter-spacing: -.01em; }
 .headCopy p { margin: 0; color: var(--text-2); font-size: var(--fs-body); line-height: 1.6; }
-.headActions { display: flex; flex: none; align-items: center; gap: 8px; }
+.headActions { display: flex; flex: none; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
 .primary { gap: 6px; }
 
 .iconButton {
@@ -24,32 +24,27 @@
 .danger:hover:not(:disabled) { border-color: var(--danger-line); background: var(--danger-soft); color: var(--danger); }
 @keyframes memory-spin { to { transform: rotate(360deg); } }
 
-/* ---------- Status card (master switch / limitation) --------------- */
+/* ---------- Auto-memory toggle and notes ------------------------- */
 
-.statusCard {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  min-width: 0;
-  padding: 14px 16px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  background: var(--surface);
-  box-shadow: var(--shadow-xs);
-  animation: reveal var(--medium) var(--ease) both;
-}
-.statusCard[data-state="on"] { border-color: var(--accent-line); background: linear-gradient(120deg, color-mix(in srgb, var(--accent-soft) 85%, var(--surface)) 0%, var(--surface) 70%); }
-.statusCard[data-state="off"] { border-color: var(--warning-line); background: linear-gradient(120deg, color-mix(in srgb, var(--warning-soft) 90%, var(--surface)) 0%, var(--surface) 70%); }
-.statusIcon { display: grid; flex: none; place-items: center; width: 36px; height: 36px; border-radius: 11px; background: var(--surface-2); color: var(--text-2); box-shadow: inset 0 0 0 1px var(--line); }
-.statusCard[data-state="on"] .statusIcon { background: var(--accent); color: var(--on-accent); box-shadow: var(--shadow-accent); }
-.statusCard[data-state="off"] .statusIcon { background: var(--warning-soft); color: var(--warning); box-shadow: inset 0 0 0 1px var(--warning-line); }
-.statusCopy { display: grid; flex: 1 1 auto; gap: 3px; min-width: 0; }
-.statusCopy strong { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--text); font-size: var(--fs-body); font-weight: var(--fw-semibold); }
-.statusCopy > span { color: var(--text-2); font-size: var(--fs-control); line-height: 1.55; overflow-wrap: anywhere; }
-.statusCopy small { color: var(--text-3); font-size: var(--fs-caption); line-height: 1.5; overflow-wrap: anywhere; }
-.statusPill { padding: 0 8px; border-radius: 99px; background: var(--surface-3); color: var(--text-2); font-size: var(--fs-micro); font-weight: var(--fw-semibold); line-height: 19px; }
-.statusCard[data-state="on"] .statusPill { background: var(--accent-soft); color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent-line); }
-.statusCard[data-state="off"] .statusPill { background: var(--warning-soft); color: var(--warning); box-shadow: inset 0 0 0 1px var(--warning-line); }
+.autoToggle { display: inline-flex; align-items: center; gap: 10px; min-height: var(--control-h-sm); padding: 0 6px 0 12px; border: 1px solid var(--line); border-radius: 99px; background: var(--surface); box-shadow: var(--shadow-xs); }
+.autoToggle[data-state="on"] { border-color: var(--accent-line); background: color-mix(in srgb, var(--accent-soft) 55%, var(--surface)); }
+.autoToggle[data-state="off"] { border-color: var(--warning-line); background: color-mix(in srgb, var(--warning-soft) 70%, var(--surface)); }
+.autoDot { width: 7px; height: 7px; border-radius: 50%; background: var(--line-strong); }
+.autoToggle[data-state="on"] .autoDot { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
+.autoToggle[data-state="off"] .autoDot { background: var(--warning); }
+.autoLabel { display: inline-flex; align-items: center; gap: 7px; color: var(--text); font-size: var(--fs-control); font-weight: var(--fw-semibold); white-space: nowrap; }
+.statusPill { padding: 0 7px; border-radius: 99px; background: var(--surface-3); color: var(--text-2); font-size: var(--fs-micro); font-weight: var(--fw-semibold); line-height: 18px; }
+.autoToggle[data-state="on"] .statusPill { background: var(--accent-soft); color: var(--accent); }
+.autoToggle[data-state="off"] .statusPill { background: var(--warning-soft); color: var(--warning); }
+.autoToggle .switch { width: 36px; min-width: 36px; height: 21px; }
+.autoToggle .switch > span { width: 15px; height: 15px; }
+.autoToggle .switch[aria-checked="true"] > span { transform: translateX(15px); }
+
+.offNote { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: -4px 0 0; padding: 8px 12px; border-radius: var(--radius); background: var(--warning-soft); color: var(--text-2); font-size: var(--fs-control); line-height: 1.5; box-shadow: inset 0 0 0 1px var(--warning-line); }
+.offNote > svg { flex: none; color: var(--warning); }
+.offNote strong { color: var(--warning); font-weight: var(--fw-semibold); }
+.limitNote { display: flex; align-items: flex-start; gap: 7px; margin: -6px 0 0; color: var(--text-3); font-size: var(--fs-caption); line-height: 1.5; overflow-wrap: anywhere; }
+.limitNote > svg { flex: none; margin-top: 2px; }
 
 /* ---------- Switch -------------------------------------------------- */
 
@@ -101,8 +96,11 @@
 
 /* ---------- Split view ---------------------------------------------- */
 
-.split { display: grid; grid-template-columns: minmax(270px, 350px) minmax(0, 1fr); gap: 16px; align-items: start; min-width: 0; }
-.listPane, .detailPane { min-width: 0; }
+/* The split fills the rest of the window; each column scrolls on its own. */
+.split { display: grid; grid-template-columns: minmax(270px, 350px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 16px; height: var(--memory-split-h); min-width: 0; }
+.listPane, .detailPane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.listPane > .list, .listPane > .noMatch { flex: 1 1 auto; min-height: 0; }
+.list { align-content: start; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 
 .list, .noMatch {
   display: grid;
@@ -192,15 +190,12 @@
 
 /* ---------- Detail pane --------------------------------------------- */
 
-.detailPane { position: sticky; top: var(--memory-sticky-top); scroll-margin-top: var(--memory-sticky-top); }
-.split[data-writing] { min-height: calc(100vh - var(--memory-sticky-top) - 16px); }
-.split[data-writing] .detail { height: var(--memory-detail-max, calc(100vh - var(--memory-sticky-top) - 20px)); }
 .detail, .placeholder {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  max-height: var(--memory-detail-max, calc(100vh - var(--memory-sticky-top) - 20px));
-  min-height: 340px;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
@@ -208,10 +203,18 @@
   box-shadow: var(--shadow-sm);
   animation: reveal var(--medium) var(--ease) both;
 }
-.detailHead { display: grid; flex: none; gap: 8px; min-width: 0; padding: 18px 20px 12px; border-bottom: 1px solid var(--line); background: linear-gradient(180deg, color-mix(in srgb, var(--surface-2) 55%, var(--surface)) 0%, var(--surface) 100%); }
+.detailHead { display: grid; flex: none; gap: 8px; min-width: 0; padding: 14px 16px 12px 20px; border-bottom: 1px solid var(--line); background: linear-gradient(180deg, color-mix(in srgb, var(--surface-2) 55%, var(--surface)) 0%, var(--surface) 100%); }
 .back { display: none; justify-self: start; gap: 6px; min-height: 28px; padding: 0 10px 0 6px; border: 0; background: transparent; box-shadow: none; color: var(--text-2); }
 .back:hover:not(:disabled) { background: var(--surface-3); box-shadow: none; }
-.crumb { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; color: var(--text-3); font-size: var(--fs-caption); white-space: nowrap; }
+.headTop { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 30px; }
+.detailActions { display: inline-flex; flex: none; align-items: center; gap: 2px; margin-left: auto; }
+.ghostIcon, .ghostIcon:hover:not(:disabled) { display: inline-grid; place-items: center; width: 30px; min-width: 30px; height: 30px; min-height: 30px; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; box-shadow: none; color: var(--text-3); }
+.ghostIcon:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
+.ghostIcon.danger:hover:not(:disabled) { background: var(--danger-soft); color: var(--danger); }
+.metaButton, .metaButton:hover:not(:disabled) { display: inline-flex; align-items: center; gap: 5px; min-height: 26px; padding: 0 9px; border: 0; border-radius: 99px; background: transparent; box-shadow: none; color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-medium); }
+.metaButton:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
+.metaButton[aria-expanded="true"] { background: var(--surface-3); color: var(--text); }
+.crumb { display: flex; flex: 1 1 auto; align-items: center; gap: 6px; min-width: 0; overflow: hidden; color: var(--text-3); font-size: var(--fs-caption); white-space: nowrap; }
 .crumb > svg { flex: none; }
 .crumb > .mono { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .titleRow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; min-width: 0; }
@@ -228,15 +231,26 @@
 .segmented button:hover:not(:disabled):not([aria-pressed="true"]) { background: color-mix(in srgb, var(--surface) 55%, transparent); color: var(--text); box-shadow: none; }
 .segmented button[aria-pressed="true"] { background: var(--surface); color: var(--text); box-shadow: var(--shadow-xs); font-weight: var(--fw-semibold); }
 
-.readBody { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 18px 22px 26px; scrollbar-gutter: stable; }
-.properties { margin: 0 0 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); font-size: var(--fs-caption); }
-.properties > summary { padding: 8px 12px; color: var(--text-2); font-weight: var(--fw-medium); }
-.properties dl { display: grid; gap: 0; margin: 0; padding: 0 12px 8px; }
-.properties dl > div { display: grid; grid-template-columns: minmax(110px, 210px) minmax(0, 1fr); gap: 12px; padding: 6px 0; border-top: 1px dashed var(--line); }
+.readBody { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 18px 22px 28px 20px; scrollbar-gutter: stable; }
+.properties { display: grid; margin: 4px 0 0; padding: 4px 12px; border-radius: var(--radius); background: var(--surface-2); font-size: var(--fs-caption); animation: reveal var(--medium) var(--ease); }
+.properties > div { display: grid; grid-template-columns: minmax(110px, 200px) minmax(0, 1fr); gap: 12px; padding: 6px 0; }
+.properties > div + div { border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent); }
 .properties dt { color: var(--text-3); font-family: var(--font-mono); overflow-wrap: anywhere; }
 .properties dd { margin: 0; color: var(--text); overflow-wrap: anywhere; white-space: pre-wrap; }
 
-.prose { min-width: 0; color: var(--text); font-size: var(--fs-body); line-height: 1.8; overflow-wrap: anywhere; }
+.prose { max-width: 76ch; min-width: 0; color: var(--text); font-size: var(--fs-body); line-height: 1.8; overflow-wrap: anywhere; }
+.wikiLink, .externalLink { display: inline-flex; align-items: center; gap: 4px; min-height: 0; height: auto; padding: 0 7px; border: 0; border-radius: 99px; background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent-line); color: var(--accent); font-size: .92em; font-weight: var(--fw-medium); line-height: 1.7; vertical-align: baseline; white-space: nowrap; }
+.wikiLink:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-soft) 60%, var(--accent-line)); box-shadow: inset 0 0 0 1px var(--accent); }
+.wikiLink[data-missing] { background: transparent; box-shadow: inset 0 0 0 1px var(--line); color: var(--text-3); cursor: default; opacity: 1; }
+.externalLink { padding: 0; background: none; box-shadow: none; text-decoration: underline; text-underline-offset: 3px; white-space: normal; }
+.externalLink:hover:not(:disabled) { background: none; box-shadow: none; color: var(--accent-hover); }
+.codeBlock { margin: 12px 0; padding: 12px 14px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); font-family: var(--font-mono); font-size: var(--fs-caption); line-height: 1.7; white-space: pre; }
+.codeBlock code { padding: 0; border: 0; background: none; box-shadow: none; color: var(--text); font-size: inherit; }
+.tableScroll { max-width: 100%; margin: 12px 0; overflow: auto; }
+.tableScroll table { width: 100%; border-collapse: collapse; font-size: var(--fs-caption); }
+.tableScroll th, .tableScroll td { padding: 7px 10px; border: 1px solid var(--line); text-align: left; }
+.tableScroll th { background: var(--surface-2); font-weight: var(--fw-semibold); }
+.imageNote { display: inline-block; padding: 2px 8px; border: 1px dashed var(--line-strong); border-radius: 4px; color: var(--text-3); }
 .prose p { margin: 0 0 12px; }
 .prose > :first-child { margin-top: 0; }
 .prose > :last-child { margin-bottom: 0; }
@@ -291,8 +305,9 @@
   .split { grid-template-columns: minmax(0, 1fr); }
   .split[data-view="detail"] > .listPane { display: none; }
   .split[data-view="list"] > .detailPane { display: none; }
-  .detailPane { position: static; }
-  .detail, .split[data-writing] .detail { max-height: none; height: auto; }
+  .split { height: auto; grid-template-rows: none; }
+  .list { overflow: visible; }
+  .detail { min-height: 420px; }
   .readBody { overflow: visible; }
   .back { display: inline-flex; }
   .loadingSplit { grid-template-columns: minmax(0, 1fr); }
@@ -302,6 +317,5 @@
   .page:has(.split[data-view="detail"]) .toolbar { display: none; }
 }
 @container memory (max-width: 520px) {
-  .statusCard { flex-wrap: wrap; }
   .headActions { width: 100%; justify-content: flex-end; }
 }

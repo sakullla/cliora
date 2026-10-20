@@ -209,39 +209,33 @@ export function LibraryMcp({ active, tools, projects, createSignal = 0, onCountC
         const headerKeys = filledKeys(item.headers);
         const envCount = envKeys.length;
         const headerCount = headerKeys.length;
-        const previewKeys = [...envKeys, ...headerKeys].slice(0, 3);
         const summary = mcpSummary(item);
-        return <article className={styles.card} data-placed={places.length > 0 || undefined} key={item.id}>
-          <div className={styles.cardHead}>
-            <span className={styles.cardIcon} data-transport={item.transport} aria-hidden="true"><Icon name={item.transport === 'http' ? 'globe' : 'terminal'} size={16} /></span>
-            <div className={styles.cardHeading}>
+        const keyList = [...envKeys, ...headerKeys].join('\n');
+        return <article className={styles.row} data-placed={places.length > 0 || undefined} key={item.id}>
+          <span className={styles.rowIcon} data-transport={item.transport} aria-hidden="true"><Icon name={item.transport === 'http' ? 'globe' : 'terminal'} size={17} /></span>
+          <div className={styles.rowMain}>
+            <div className={styles.rowTitle}>
               <button className={styles.cardTitle} type="button" onClick={() => editMcp(item)}>{item.name}</button>
-              <span className={styles.cardMeta}>
-                <span className={styles.badge} data-accent={item.transport === 'http' || undefined}>{item.transport === 'http' ? 'HTTP' : 'stdio'}</span>
-                {envCount > 0 && <span className={styles.metaChip}>{t('library.resources.envCount', { count: envCount })}</span>}
-                {headerCount > 0 && <span className={styles.metaChip}>{t('library.resources.headerCount', { count: headerCount })}</span>}
-                <span className={styles.placedNote} data-placed={places.length > 0 || undefined} data-empty={!places.length || undefined}>{places.length ? t('library.resources.placedCount', { count: places.length }) : t('library.resources.notPlaced')}</span>
-              </span>
+              <span className={styles.badge} data-accent={item.transport === 'http' || undefined}>{item.transport === 'http' ? 'HTTP' : 'stdio'}</span>
+              {envCount > 0 && <span className={styles.metaChip} title={keyList}><Icon name="lock" size={11} />{t('library.resources.envCount', { count: envCount })}</span>}
+              {headerCount > 0 && <span className={styles.metaChip} title={keyList}><Icon name="lock" size={11} />{t('library.resources.headerCount', { count: headerCount })}</span>}
+              <span className={styles.placedNote} data-placed={places.length > 0 || undefined}>{places.length ? t('library.resources.placedCount', { count: places.length }) : t('library.resources.notPlaced')}</span>
             </div>
-            <div className={styles.iconActions}>
-              <button type="button" aria-label={t('library.resources.duplicate')} title={t('library.resources.duplicate')} disabled={busy} onClick={() => void duplicateMcp(item)}><Icon name="copy" size={16} /></button>
-              <button type="button" className={styles.danger} aria-label={t('tools.agents.delete')} title={t('tools.agents.delete')} disabled={busy} onClick={() => void remove(item)}><Icon name="trash" size={16} /></button>
-            </div>
+            <code className={styles.command} title={summary}>{summary ? <><i aria-hidden="true">{item.transport === 'http' ? '↗' : '$'}</i>{summary}</> : (item.transport === 'http' ? t('library.resources.noUrl') : t('library.resources.noCommand'))}</code>
           </div>
-          <div className={styles.commandBlock}>
-            <code className={styles.command} title={summary}>{summary || (item.transport === 'http' ? t('library.resources.noUrl') : t('library.resources.noCommand'))}</code>
-            {previewKeys.length > 0 && <div className={styles.keyPills} aria-hidden="true">
-              {previewKeys.map((key) => <span className={styles.keyPill} key={key}>{key}</span>)}
-              {envCount + headerCount > previewKeys.length && <span className={styles.keyPillMore}>+{envCount + headerCount - previewKeys.length}</span>}
-            </div>}
-          </div>
-          <div className={styles.cardBar}>
+          <div className={styles.rowTargets}>
             <ScopeMarks contextLabel={contextLabel} accountContexts label={t('library.page.cliMarks', { title: item.name })} tools={tools} places={places} projects={projects} busy={busy} onToggle={(toolId, scope, projectPath, contextId) => void toggleMcp(item, toolId, scope, projectPath, contextId)} mark={(place) => {
               if (!place) return { pressed: false, state: 'off', status: t('library.page.markOff') };
               if (!place.enabled) return { pressed: true, state: 'unavailable', status: t('library.resources.markDisabled') };
               return { pressed: true, state: 'current', status: t('library.page.markCurrent') };
             }} />
+          </div>
+          <div className={styles.rowActions}>
             <button type="button" className={styles.editButton} onClick={() => editMcp(item)}><Icon name="pencil" size={14} />{t('library.resources.edit')}</button>
+            <span className={styles.iconActions}>
+              <button type="button" aria-label={t('library.resources.duplicate')} title={t('library.resources.duplicate')} disabled={busy} onClick={() => void duplicateMcp(item)}><Icon name="copy" size={15} /></button>
+              <button type="button" className={styles.danger} aria-label={t('tools.agents.delete')} title={t('tools.agents.delete')} disabled={busy} onClick={() => void remove(item)}><Icon name="trash" size={15} /></button>
+            </span>
           </div>
         </article>;
       }) : needle
