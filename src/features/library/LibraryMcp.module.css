@@ -11,11 +11,12 @@
 .dangerQuiet, .dangerQuiet:hover:not(:disabled) { display: inline-flex; align-items: center; gap: 6px; border-color: transparent; background: transparent; box-shadow: none; color: var(--danger); }
 .dangerQuiet:hover:not(:disabled) { background: var(--danger-soft); }
 
-/* One row per server: identity and command | where it is written | actions. */
+/* One row per server: identity and command | where it is written | actions.
+   The name track keeps a floor so a full set of CLI marks cannot crush it. */
 .row {
   position: relative;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-columns: auto minmax(13rem, 1.4fr) minmax(0, 1fr) auto;
   grid-template-areas: 'icon main targets actions';
   align-items: center;
   gap: 4px 16px;
@@ -37,8 +38,12 @@
 .rowMain { grid-area: main; display: grid; gap: 4px; min-width: 0; }
 .rowTitle { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
 .cardTitle {
+  display: inline-grid;
+  grid-template-columns: minmax(0, 1fr);
   justify-content: flex-start !important;
+  flex: 0 1 auto;
   min-width: 0;
+  max-width: 100%;
   min-height: 0 !important;
   padding: 0 !important;
   border: 0 !important;
@@ -49,8 +54,14 @@
   font-weight: var(--fw-semibold) !important;
   line-height: 1.4;
   text-align: left;
-  white-space: normal !important;
-  overflow-wrap: anywhere;
+  white-space: nowrap !important;
+}
+.cardName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow-wrap: normal;
 }
 /* The whole row opens the editor; inner controls sit above this layer. */
 .cardTitle::after { content: ''; position: absolute; inset: 0; }
@@ -60,10 +71,15 @@
 .badge { flex: none; padding: 0 7px; border-radius: 99px; background: var(--surface-3); color: var(--text-2); font-family: var(--font-mono); font-size: var(--fs-micro); font-weight: var(--fw-semibold); line-height: 18px; }
 .badge[data-accent] { background: var(--info-soft); color: var(--info); }
 .metaChip { position: relative; z-index: 1; display: inline-flex; flex: none; align-items: center; gap: 4px; padding: 0 7px; border-radius: 99px; background: var(--surface-2); color: var(--text-3); font-size: var(--fs-micro); font-weight: var(--fw-medium); line-height: 18px; box-shadow: inset 0 0 0 1px var(--line); cursor: default; }
-.command { display: block; min-width: 0; overflow: hidden; padding: 0; border: 0; background: none; color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-caption); line-height: 1.5; text-overflow: ellipsis; white-space: nowrap; }
+.command { display: block; min-width: 0; overflow: hidden; padding: 0; border: 0; background: none; color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-caption); line-height: 1.5; text-overflow: ellipsis; white-space: nowrap; overflow-wrap: normal; }
 .command > i { margin-right: 6px; color: var(--accent); font-style: normal; font-weight: var(--fw-semibold); }
 
-.rowTargets { position: relative; z-index: 1; grid-area: targets; display: grid; justify-items: end; gap: 4px; min-width: 0; }
+.rowTargets { position: relative; z-index: 1; grid-area: targets; display: grid; align-items: center; gap: 4px; min-width: 0; max-width: 100%; }
+/* Scope lines live in the shared marks stylesheet. Constrain them here so the
+   mark buttons wrap inside this column instead of widening the row. */
+.rowTargets > * { display: flex; flex-direction: column; align-items: flex-end; width: 100%; min-width: 0; max-width: 100%; }
+.rowTargets > * > * { display: flex; flex-wrap: nowrap; align-items: center; justify-content: flex-end; gap: 8px; width: fit-content; max-width: 100%; margin-left: auto; min-width: 0; }
+.rowTargets > * > * > :last-child { display: flex; flex: 1 1 auto; flex-wrap: wrap; justify-content: flex-end; gap: 6px; min-width: 0; max-width: 100%; }
 .placedNote { display: inline-flex; align-items: center; gap: 5px; color: var(--text-3); font-size: var(--fs-caption); font-weight: var(--fw-medium); white-space: nowrap; }
 .placedNote:not([data-placed])::before { content: '·'; }
 .placedNote[data-placed] { color: var(--accent); font-weight: var(--fw-semibold); }
@@ -94,6 +110,9 @@
 @container mcp-list (max-width: 760px) {
   .row { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: 'icon main actions' 'icon targets targets'; gap: 10px 12px; align-items: start; }
   .rowTargets { justify-items: start; }
+  .rowTargets > * { align-items: flex-start; }
+  .rowTargets > * > * { margin-left: 0; justify-content: flex-start; }
+  .rowTargets > * > * > :last-child { justify-content: flex-start; }
 }
 
 .empty { grid-column: 1 / -1; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 40px 16px; border: 1px dashed var(--line-strong); border-radius: var(--radius-lg); color: var(--text-2); font-size: var(--fs-body); font-weight: var(--fw-regular); text-align: center; }
