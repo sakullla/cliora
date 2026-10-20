@@ -17,7 +17,7 @@ const iso = (daysAgo) => new Date(Date.now() - daysAgo * 86400000).toISOString()
 const doc = (name, description, type, daysAgo, body) => `---\nname: ${name}\ndescription: "${description}"\nmetadata:\n  node_type: memory\n  type: ${type}\n  originSessionId: 0f6c2a5e-8f0b-4f61-9a43-2d1b6f0c11aa\n  modified: ${iso(daysAgo)}\n---\n\n${body}\n`;
 const fixtures = {
   qoder_cn: {
-    name: 'Qoder CN', switchShared: false,
+    name: 'Qoder CN', switchShared: false, nativeFileNames: true,
     switchGroups: [{ id: 'autoMemoryUserScopeEnabled', scope: 'global', enabled: null, detail: '跟随原生默认，当前生效状态未知' }, { id: 'autoMemoryEnabled', scope: 'project', enabled: null, detail: '跟随原生默认，当前生效状态未知' }],
     management: { scope: { global: true, project: true }, targets: ['project'], operations: ['list', 'open', 'create', 'edit', 'delete', 'master_switch'], limitation: '用户和项目记忆分别使用用户设置中的原生开关；项目设置及非交互环境可能覆盖，运行中的会话需重新加载。原生不支持单条启停。' },
     stores: [
@@ -78,9 +78,9 @@ function installMock(seed) {
       const detail = inUse ? '' : '记忆当前未使用';
       const target = targetOf(toolId, store);
       stores.push({ label: store.label, directory: store.directory, target, inUse, detail, entryCount: Object.keys(store.entries).length });
-      for (const id of Object.keys(store.entries)) entries.push({ id, path: `${store.directory}/${id}.md`, enabled: !(fixture.disabled ?? []).includes(id), fingerprint: `fp-${id}`, sourceLabel: store.label, target, inUse, detail });
+      for (const id of Object.keys(store.entries)) entries.push({ id, path: `${store.directory}/${id}.md`, enabled: !(fixture.disabled ?? []).includes(id), fingerprint: state.unreadable === id ? '' : `fp-${id}`, readError: state.unreadable === id ? '文件暂时被其它进程独占，请重试' : undefined, sourceLabel: store.label, target, inUse, detail });
     }
-    return { toolId, entries, failedSources: [], stores, switchShared: fixture.switchShared, switchGroups: fixture.switchGroups };
+    return { toolId, entries, failedSources: [], stores, switchShared: fixture.switchShared, switchGroups: fixture.switchGroups, nativeFileNames: fixture.nativeFileNames };
   };
   const find = (target, id) => state.fixtures[target.toolId].stores.find(store => store.directory === target.storeDirectory)?.entries[id];
   Object.assign(window, {
@@ -93,7 +93,7 @@ function installMock(seed) {
       if (command === 'get_registered_tool_workspace' || command === 'get_registered_tool_context') return { effectiveContextId: null, probe: { selectedPath: null, installations: [], nativeFiles: [], nativeWrites: { state: 'unknown', reason: '' }, interfaceFormats: [], installUrl: '', upgradeHint: '', dependencies: [], installCommand: null, upgradeCommand: null, providerPresets: [] }, profiles: [], binding: null, snapshots: [], recoveryNeeded: [], common: null, customPath: null };
       if (command === 'get_tray_status') return { available: false, error: null };
       if (command === 'list_all_memories') return aggregate(args.toolId);
-      if (command === 'read_memories') return args.requests.map(({ target, id }) => ({ document: { id, path: `${target.storeDirectory}/${id}.md`, text: find(target, id) ?? '', fingerprint: `fp-${id}`, enabled: true, inUse: true, detail: '' }, error: null }));
+      if (command === 'read_memories') return args.requests.map(({ target, id }) => state.unreadable === id ? { document: null, error: '文件暂时被其它进程独占，请重试' } : ({ document: { id, path: `${target.storeDirectory}/${id}.md`, text: find(target, id) ?? '', fingerprint: `fp-${id}`, enabled: true, inUse: true, detail: '' }, error: null }));
       if (command === 'read_memory') { const text = find(args.target, args.id) ?? ''; return { id: args.id, path: `${args.target.storeDirectory}/${args.id}.md`, text, fingerprint: `fp-${args.id}`, enabled: true, inUse: true, detail: '' }; }
       if (command === 'save_memory' || command === 'delete_memory' || command === 'set_memory_enabled') return null;
       if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
@@ -103,6 +103,7 @@ function installMock(seed) {
 }
 
 const scenarios = [
+  { name: 'qoder-partial-read', tool: 'Qoder CN', seed: { unreadable: 'architecture' } },
   { name: 'qoder-native-default', tool: 'Qoder CN', run: async page => { await page.getByRole('button', { name: /preferences.md/ }).click(); } },
   { name: 'qoder-empty', tool: 'Qoder CN', seed: { emptyQoder: true } },
   { name: 'qoder-create', tool: 'Qoder CN', seed: { emptyQoder: true }, run: async page => { await page.getByRole('button', { name: '新建记忆' }).first().click(); await page.getByRole('textbox', { name: '文件名' }).fill('project-notes'); } },
@@ -122,7 +123,8 @@ const scenarios = [
 const browser = await chromium.launch();
 const shots = [];
 const problems = [];
-for (const theme of themes) for (const width of widths) for (const scenario of scenarios) {
+const selected = option('--only', '').split(',').filter(Boolean);
+for (const theme of themes) for (const width of widths) for (const scenario of scenarios.filter(item => !selected.length || selected.includes(item.name))) {
   const page = await browser.newPage({ viewport: { width, height: 940 }, colorScheme: theme });
   page.on('pageerror', error => problems.push(`${scenario.name}/${theme}/${width}: ${error.message}`));
   await page.addInitScript(installMock, { fixtures, theme, ...(scenario.seed ?? {}) });

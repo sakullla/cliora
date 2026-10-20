@@ -218,6 +218,12 @@ pub trait MemoryLayout: Sync {
 }
 
 pub trait MemoryAdapter: Sync {
+    /// Native topic filenames may contain Unicode and internal dots. The shared
+    /// engine still validates one safe filename component; other families keep
+    /// their existing identifier restrictions unless they explicitly opt in.
+    fn native_file_names(&self) -> bool {
+        false
+    }
     fn declaration(&self) -> MemoryDeclaration;
     /// Resolves the storage directory for the target, or returns the reason
     /// storage is unavailable. The result must be absolute; the shared engine

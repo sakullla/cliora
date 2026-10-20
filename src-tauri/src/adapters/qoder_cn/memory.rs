@@ -16,6 +16,9 @@ const USER_SWITCH: &str = "autoMemoryUserScopeEnabled";
 const DEFAULT_DETAIL: &str = "跟随原生默认，当前生效状态未知";
 
 impl MemoryAdapter for QoderAdapter {
+    fn native_file_names(&self) -> bool {
+        true
+    }
     fn declaration(&self) -> MemoryDeclaration {
         MemoryDeclaration {
             scope: MemoryScope { global: true, project: true },

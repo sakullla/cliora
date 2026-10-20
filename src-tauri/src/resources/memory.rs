@@ -81,6 +81,8 @@ pub struct MemoryEntry {
     pub path: String,
     pub enabled: bool,
     pub fingerprint: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_error: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -117,6 +119,7 @@ struct Prepared<'a> {
     excluded: Vec<PathBuf>,
     management: MemoryManagement,
     layout: Option<&'a dyn MemoryLayout>,
+    native_file_names: bool,
     _guard: Option<selection::ContextGuard>,
 }
 
@@ -149,6 +152,8 @@ pub struct MemoryStoreEntry {
     pub target: MemoryTarget,
     pub in_use: bool,
     pub detail: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_error: Option<String>,
 }
 
 /// A store whose listing failed; the remaining stores are still returned.
@@ -183,6 +188,7 @@ pub struct MemoryAggregate {
     /// True when one native switch governs every store of the CLI.
     pub switch_shared: bool,
     pub switch_groups: Vec<MemorySwitchGroup>,
+    pub native_file_names: bool,
 }
 
 /// Lists every store the CLI already keeps on disk, one protected shared
@@ -239,6 +245,7 @@ pub fn list_all_memories(
                     path: entry.path,
                     enabled: entry.enabled,
                     fingerprint: entry.fingerprint,
+                    read_error: entry.read_error,
                     source_label: store.label.clone(),
                     target: target.clone(),
                     in_use: list.in_use,
@@ -258,6 +265,7 @@ pub fn list_all_memories(
         stores,
         switch_shared,
         switch_groups,
+        native_file_names: port.native_file_names(),
     })
 }
 
@@ -757,6 +765,7 @@ fn prepare_with_store<'a>(
         excluded,
         management,
         layout: port.layout(),
+        native_file_names: port.native_file_names(),
         _guard: guard,
     })
 }
@@ -1002,7 +1011,7 @@ fn require(prepared: &Prepared, operation: MemoryOperation) -> Result<(), String
 }
 
 fn entry_path(prepared: &Prepared, id: &str) -> Result<PathBuf, String> {
-    if !valid_segment(id) {
+    if !valid_entry_id(prepared, id) {
         return Err("记忆标识无效，请修改后重试".into());
     }
     let path = match prepared.layout {
@@ -1033,6 +1042,46 @@ fn valid_segment(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+}
+
+fn valid_entry_id(prepared: &Prepared, value: &str) -> bool {
+    if !prepared.native_file_names {
+        return valid_segment(value);
+    }
+    if value.is_empty()
+        || value.starts_with('.')
+        || value.ends_with(['.', ' '])
+        || value.encode_utf16().count() > 240
+        || value.chars().any(|ch| {
+            ch.is_control() || matches!(ch, '/' | '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*')
+        })
+    {
+        return false;
+    }
+    let base = value
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .trim_end()
+        .to_uppercase();
+    !matches!(
+        base.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) && !["COM", "LPT"].iter().any(|prefix| {
+        base.strip_prefix(prefix).is_some_and(|suffix| {
+            matches!(
+                suffix,
+                "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+            )
+        })
+    })
+}
+
+fn entry_fingerprint(path: &Path) -> (String, Option<String>) {
+    match read_entry_bytes(path) {
+        Ok(bytes) => (transaction::fingerprint(&bytes), None),
+        Err(error) => (String::new(), Some(error)),
+    }
 }
 
 fn reject_excluded(path: &Path, excluded: &[PathBuf]) -> Result<(), String> {
@@ -1074,19 +1123,22 @@ fn list_entries(prepared: &Prepared) -> Result<Vec<MemoryEntry>, String> {
             .entries(&prepared.directory)
             .map_err(|error| format!("无法列出记忆，请重试：{error}"))?
         {
-            if !valid_segment(&entry.id) || overlaps_path(&entry.path, &prepared.excluded) {
+            if !valid_entry_id(prepared, &entry.id)
+                || overlaps_path(&entry.path, &prepared.excluded)
+            {
                 continue;
             }
             let checked = entry_path(prepared, &entry.id)?;
             if checked != entry.path {
                 return Err("记忆路径与条目标识不匹配".into());
             }
-            let bytes = read_entry_bytes(&checked)?;
+            let (fingerprint, read_error) = entry_fingerprint(&checked);
             entries.push(MemoryEntry {
                 id: entry.id,
                 path: entry.path.display().to_string(),
                 enabled: true,
-                fingerprint: transaction::fingerprint(&bytes),
+                fingerprint,
+                read_error,
             });
         }
         entries.sort_by(|left, right| left.id.cmp(&right.id));
@@ -1118,12 +1170,13 @@ fn list_entries(prepared: &Prepared) -> Result<Vec<MemoryEntry>, String> {
         if !valid_segment(id) || overlaps_path(&item.path(), &prepared.excluded) {
             continue;
         }
-        let bytes = read_entry_bytes(&item.path())?;
+        let (fingerprint, read_error) = entry_fingerprint(&item.path());
         entries.push(MemoryEntry {
             id: id.to_owned(),
             path: item.path().display().to_string(),
             enabled: entry_enabled(&map, id),
-            fingerprint: transaction::fingerprint(&bytes),
+            fingerprint,
+            read_error,
         });
     }
     entries.sort_by(|left, right| left.id.cmp(&right.id));

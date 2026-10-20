@@ -255,6 +255,10 @@ export default {
     updateTitle: 'Cliora {{version}} is available. Click to see what’s new',
   },
   memory: {
+    nativeIdInvalid: 'Use a safe filename without path separators, reserved names, or trailing dots/spaces',
+    nativeIdHint: 'Unicode and internal dots are supported; omit the .md extension',
+    entryReadFailed: 'Body unavailable; click to retry',
+
     missingDraft: 'The original file is no longer listed. Your unsaved draft is preserved; saving will check the file again.',
     retryBodies: 'Retry body loading',
     partialBodies: '{{count}} bodies could not be loaded; search may be incomplete. Retry or open an entry individually.',

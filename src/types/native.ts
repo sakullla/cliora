@@ -19,7 +19,7 @@ export type MemoryTarget = {
   /** Adapter-enumerated store directory; only a store the backend re-enumerates is accepted. */
   storeDirectory?: string | null;
 };
-export type MemoryEntry = { id: string; path: string; enabled: boolean; fingerprint: string };
+export type MemoryEntry = { id: string; path: string; enabled: boolean; fingerprint: string; readError?: string };
 export type MemoryList = {
   inUse: boolean;
   detail: string;
@@ -55,6 +55,7 @@ export type MemoryStoreEntry = {
   target: MemoryTarget;
   inUse: boolean;
   detail: string;
+  readError?: string;
 };
 /** One listed store, including stores that hold no entry yet. */
 export type MemoryStoreSummary = {
@@ -76,6 +77,7 @@ export type MemoryAggregate = {
   /** One native switch governs every store of the CLI. */
   switchShared: boolean;
   switchGroups?: MemorySwitchGroup[];
+  nativeFileNames?: boolean;
 };
 export type AdapterFacet = { state: 'available' | 'planned' | 'supported' | 'unsupported'; reason: string };
 export type AdapterDescriptor = {

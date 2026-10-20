@@ -255,6 +255,10 @@ export default {
     updateTitle: '栖点 {{version}} 已发布，点击查看更新内容',
   },
   memory: {
+    nativeIdInvalid: '文件名不能包含路径分隔符、保留名称或以点和空格结尾',
+    nativeIdHint: '支持中文和文件名中的点；无需输入 .md 后缀',
+    entryReadFailed: '正文暂不可读，点击重试',
+
     missingDraft: '原文件已不在列表中，未保存的草稿已保留；保存时会重新校验文件。',
     retryBodies: '重试正文读取',
     partialBodies: '有 {{count}} 条正文尚未读入，搜索结果可能不完整。可重试或单独打开。',
