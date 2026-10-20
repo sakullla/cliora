@@ -1,11 +1,12 @@
 //! Qoder CN native CLI adapter. International Qoder is no longer registered.
 //! Paths, command entry and builtin Agent evidence belong to this package.
 //! Configuration, MCP, plugin and Agent management consume shared protection
-//! services. Native account credentials and transcript parsing stay unavailable.
+//! services. Native account credentials stay unavailable; history uses read-only native logs.
 
 pub(crate) mod agents;
 pub(crate) mod configuration;
 pub(crate) mod memory;
+pub(crate) mod history;
 pub(crate) mod plugins;
 
 use std::collections::BTreeMap;
@@ -354,9 +355,21 @@ impl CliAdapter for QoderAdapter {
         }
         Ok(args)
     }
+    fn history_sources(&self, home: &Path) -> Result<Vec<crate::history::HistorySource>, String> {
+        history::sources(home, &|| false)
+    }
+    fn history_sources_controlled(&self, home: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<crate::history::HistorySource>, String> {
+        history::sources(home, cancelled)
+    }
+    fn parse_history(&self, source: &crate::history::HistorySource) -> Result<crate::history::ParsedSession, String> {
+        history::parse(source, &|| false)
+    }
+    fn parse_history_controlled(&self, source: &crate::history::HistorySource, cancelled: &dyn Fn() -> bool) -> Result<crate::history::ParsedSession, String> {
+        history::parse(source, cancelled)
+    }
+    fn history_supported(&self) -> bool { true }
     fn history_resume_version_supported(&self, version: &str) -> bool {
-        // 1.x is the verified line; the resume entry itself stays gated on the
-        // undelivered session dimension.
+        // 1.1.74 is tested evidence; ordinary compatible 1.x updates are accepted.
         version.starts_with("1.")
     }
     fn install_guidance(&self) -> (&'static str, &'static str) {
@@ -416,16 +429,16 @@ impl CliAdapter for QoderAdapter {
                 reason: "可在外部终端启动；工作目录与跳过审批参数由当前 CLI 适配器提供",
             },
             resume: Facet {
-                state: "planned",
-                reason: "会话 jsonl 字段未从官方来源或实测样本核实，会话维度整体不交付；官方恢复命令为 qoder -r <id>",
+                state: "available",
+                reason: "已核验 Qoder CN 1.1.74 原生会话，使用 qoderclicn -r <id> 恢复",
             },
             resources: Facet {
                 state: "available",
                 reason: "MCP 直写 settings.json mcpServers 配置面；Skills 与 Agents 目录和 qoder plugins 子命令由适配器提供",
             },
             history: Facet {
-                state: "planned",
-                reason: "会话 jsonl 内部字段官方未文档化且无可核实实测样本；用量官方仅以 Credits 计量，无 token 记录契约",
+                state: "available",
+                reason: "读取原生会话与子代理用量；保留 Credits 原始值和计费状态，占位 token 显示未知，不查询余额",
             },
         }
     }
@@ -517,7 +530,7 @@ mod tests {
         );
         assert!(Qoder.history_resume_version_supported("1.1.63"));
         assert!(!Qoder.history_resume_version_supported("0.9.0"));
-        assert!(!Qoder.history_supported());
+        assert!(Qoder.history_supported());
     }
 
     #[test]

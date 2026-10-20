@@ -1,0 +1,8 @@
+.summary { margin: 14px 0; padding: 16px; border: 1px solid var(--line); border-radius: 12px; min-width: 0; }
+.summary h3 { margin: 0 0 12px; font-size: 14px; }
+.summary ul { display: flex; flex-wrap: wrap; gap: 12px 28px; margin: 0; padding: 0; list-style: none; }
+.summary li { display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.summary strong { font-size: 20px; font-variant-numeric: tabular-nums; }
+.summary span { font-size: 12px; }
+.summary small, .summary p { color: var(--text-2); font-size: 12px; line-height: 1.6; }
+.summary p { margin: 12px 0 0; }

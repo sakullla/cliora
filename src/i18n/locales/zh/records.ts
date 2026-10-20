@@ -1,4 +1,12 @@
 export default {
+  native: {
+    title: '原生单位用量', billable: '原生标记：可计费', unbilled: '原生标记：未计费', unknownBilling: '计费状态未知',
+    original: '原始值：{{value}}', unknownOriginal: '{{count}} 条记录原始值未知', unknown: '未知',
+    hint: '这些值来自本机日志，不代表余额或货币金额。计费标记保留原生含义。',
+    unknownTokens: '{{count}} 条记录没有已知 token，未参与 token 统计和费用估算。',
+    noTokens: '日志未提供已知 token', knownTokens: '已知 Token',
+  },
+
   format: {
     unpriced: '未定价',
     noPrice: '没有可用价格',
@@ -296,7 +304,7 @@ export default {
     title: '用量总览',
     filtered: '筛选：{{parts}}',
     filterSearch: '搜索「{{query}}」',
-    overviewSubtitle: '查看本机记录中的 Token 与调用次数。',
+    overviewSubtitle: '查看本机记录中的 Token、原生单位用量与调用次数。',
     priceSettings: '设置估算价格',
     toolFilter: '用量工具',
     modelFilter: '用量模型',

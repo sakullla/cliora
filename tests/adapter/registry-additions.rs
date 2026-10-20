@@ -202,12 +202,11 @@ fn five_added_adapters_declare_their_delivered_dimensions() {
         .launch_args(None, crate::adapters::LaunchMode::Yolo)
         .is_err());
     // Qoder CN: terminal CLI with full plugin verbs and project scope, agents and
-    // YOLO; the session dimension stays planned because the transcript fields
-    // are undocumented and usage is metered in Credits only.
+    // YOLO; verified native sessions and Credits retain unknown token semantics.
     let qoder = registry.get("qoder_cn").unwrap();
-    assert!(!qoder.history_supported());
-    assert_eq!(qoder.descriptor().history.state, "planned");
-    assert_eq!(qoder.descriptor().resume.state, "planned");
+    assert!(qoder.history_supported());
+    assert_eq!(qoder.descriptor().history.state, "available");
+    assert_eq!(qoder.descriptor().resume.state, "available");
     assert!(qoder.agents().is_some());
     assert_eq!(
         qoder.plugins().unwrap().capability().actions,

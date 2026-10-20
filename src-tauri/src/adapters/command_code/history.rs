@@ -179,7 +179,7 @@ pub fn parse_controlled(
                         }
                         // costUsd has no channel in the shared UsageEvent
                         // contract; see the module docs.
-                        session.usage.push(UsageEvent {
+                        session.usage.push(UsageEvent { native_usage: None,
                             request_count: Some(1),
                             id: format!("command-code:usage:{id}"),
                             model,

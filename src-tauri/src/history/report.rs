@@ -21,6 +21,9 @@ const MAX_GROUPS: usize = 24;
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageTotals {
+    pub native_usage: Vec<NativeUsageTotal>,
+    /// Records with no reported token buckets (native credits are not tokens).
+    pub unknown_token_records: u64,
     /// Known native model calls after de-duplication. Unknown aggregates add no calls.
     pub requests: u64,
     pub usage_records: u64,
@@ -36,6 +39,17 @@ pub struct UsageTotals {
     pub cost: Option<f64>,
     /// Tokens whose model has no price, so `cost` leaves them out.
     pub unpriced_tokens: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeUsageTotal {
+    pub unit: String,
+    pub billable: Option<bool>,
+    pub value: f64,
+    pub original_value: Option<f64>,
+    pub records: u64,
+    pub unknown_original_records: u64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -275,6 +289,8 @@ impl PricedModel {
 /// One de-duplicated usage record with disjoint token buckets.
 #[derive(Clone, Debug)]
 struct Call {
+    native_usage: Option<super::NativeUsage>,
+    tokens_known: bool,
     session: usize,
     request_count: Option<u64>,
     /// Index into `Loaded::tools`.
@@ -317,6 +333,18 @@ impl Tally {
         totals.requests += call.request_count.unwrap_or(0);
         totals.usage_records += 1;
         totals.unknown_request_records += u64::from(call.request_count.is_none());
+        totals.unknown_token_records += u64::from(!call.tokens_known);
+        if let Some(native) = &call.native_usage {
+            let index = totals.native_usage.iter().position(|item| item.unit == native.unit && item.billable == native.billable);
+            let total = if let Some(index) = index { &mut totals.native_usage[index] } else {
+                totals.native_usage.push(NativeUsageTotal { unit: native.unit.clone(), billable: native.billable, ..Default::default() });
+                totals.native_usage.last_mut().unwrap()
+            };
+            total.value += native.value;
+            total.records += 1;
+            if let Some(value) = native.original_value { *total.original_value.get_or_insert(0.0) += value; }
+            else { total.unknown_original_records += 1; }
+        }
         totals.input += call.input;
         totals.cache_read += call.cache_read;
         totals.cache_write += call.cache_write;
@@ -336,6 +364,7 @@ impl Tally {
     }
     fn finish(mut self) -> UsageTotals {
         self.totals.sessions = self.sessions.len() as u64;
+        self.totals.native_usage.sort_by(|a, b| a.unit.cmp(&b.unit).then(a.billable.cmp(&b.billable)));
         self.totals
     }
 }
@@ -420,7 +449,7 @@ fn load_calls(conn: &Connection, filter: &HistoryFilter, from: Option<i64>, to: 
     }
     let sql = format!(
         "SELECT u.session_id, u.event_id, u.tool, u.model, u.timestamp, u.input, u.output, u.cache_read, u.cache_write,
-                u.input_includes_cache, u.request_count
+                u.input_includes_cache, u.request_count, u.native_usage_json
          FROM {}
          WHERE {clause}
          ORDER BY u.timestamp", usage_source(filter)
@@ -508,10 +537,12 @@ fn load_calls(conn: &Connection, filter: &HistoryFilter, from: Option<i64>, to: 
             last_model = Some(index);
             index
         };
-        let input = count(row.get(5).map_err(|error| error.to_string())?);
-        let output = count(row.get(6).map_err(|error| error.to_string())?);
-        let mut cache_read = count(row.get(7).map_err(|error| error.to_string())?);
-        let mut cache_write = count(row.get(8).map_err(|error| error.to_string())?);
+        let token_counts: Vec<Option<i64>> = (5..=8).map(|column| row.get(column)).collect::<Result<_, _>>().map_err(|error| error.to_string())?;
+        let tokens_known = token_counts.iter().any(Option::is_some);
+        let input = count(token_counts[0]);
+        let output = count(token_counts[1]);
+        let mut cache_read = count(token_counts[2]);
+        let mut cache_write = count(token_counts[3]);
         let includes_cache = row.get::<_, i64>(9).map_err(|error| error.to_string())? != 0;
         // OpenAI-style logs fold cache into input; others report it beside input.
         let fresh = if includes_cache {
@@ -522,6 +553,10 @@ fn load_calls(conn: &Connection, filter: &HistoryFilter, from: Option<i64>, to: 
             input
         };
         let mut call = Call {
+            native_usage: row.get::<_, Option<String>>(11).map_err(|error| error.to_string())?
+                .map(|value| serde_json::from_str::<super::NativeUsage>(&value)).transpose().map_err(|error| error.to_string())?
+                .filter(super::NativeUsage::valid),
+            tokens_known,
             request_count: row.get::<_, Option<i64>>(10).map_err(|error| error.to_string())?.map(|value| value.max(0) as u64),
             session,
             tool,
@@ -533,11 +568,29 @@ fn load_calls(conn: &Connection, filter: &HistoryFilter, from: Option<i64>, to: 
             output,
             cost: None,
         };
-        call.cost = rates[call.model].as_ref().map(|price| price.cost(&call));
+        if call.tokens_known { call.cost = rates[call.model].as_ref().map(|price| price.cost(&call)); }
         loaded.calls.push(call);
     }
     loaded.price_sources = sources.into_iter().collect();
     Ok(loaded)
+}
+
+/// Native-only reports rank within a common unit. Unlike units are never
+/// converted or added together; requests provide a stable secondary ranking.
+fn compare_totals(left: &UsageTotals, right: &UsageTotals) -> std::cmp::Ordering {
+    let tokens = right.total.cmp(&left.total);
+    if tokens != std::cmp::Ordering::Equal { return tokens; }
+    let single_unit = |totals: &UsageTotals| -> Option<(String, f64)> {
+        let unit = totals.native_usage.first()?.unit.as_str();
+        totals.native_usage.iter().all(|item| item.unit == unit)
+            .then(|| (unit.to_owned(), totals.native_usage.iter().map(|item| item.value).sum()))
+    };
+    match (single_unit(left), single_unit(right)) {
+        (Some((a_unit, a)), Some((b_unit, b))) => a_unit.cmp(&b_unit).then(b.total_cmp(&a)).then(right.requests.cmp(&left.requests)),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => right.requests.cmp(&left.requests),
+    }
 }
 
 fn ranked(groups: Vec<(UsageGroup, Tally)>, limit: usize) -> Vec<UsageGroup> {
@@ -550,7 +603,7 @@ fn ranked(groups: Vec<(UsageGroup, Tally)>, limit: usize) -> Vec<UsageGroup> {
         })
         .collect();
     groups.sort_by(|left, right| {
-        right.totals.total.cmp(&left.totals.total).then_with(|| left.key.cmp(&right.key))
+        compare_totals(&left.totals, &right.totals).then_with(|| left.key.cmp(&right.key))
     });
     groups.truncate(limit);
     groups
@@ -674,7 +727,7 @@ pub fn usage_report(db: &Database, filter: &HistoryFilter) -> Result<UsageReport
             .enumerate()
             .map(|(index, tally)| (index, tally.finish()))
             .collect();
-        ranked_sessions.sort_by(|left, right| right.1.total.cmp(&left.1.total).then_with(|| left.0.cmp(&right.0)));
+        ranked_sessions.sort_by(|left, right| compare_totals(&left.1, &right.1).then_with(|| left.0.cmp(&right.0)));
         ranked_sessions.truncate(TOP_SESSIONS);
         let mut top_sessions = Vec::new();
         {

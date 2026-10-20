@@ -1,5 +1,47 @@
 /** Sanitized history UI fixtures; no native credentials or billing calls. */
 
+export function qoderHistoryFixtures() {
+  const prior = window.__TAURI_INTERNALS__?.invoke;
+  const now = Date.now();
+  const start = new Date().setHours(0, 0, 0, 0);
+  const tool = { id: 'qoder_cn', name: 'Qoder CN', yoloAvailable: true, history: { state: 'available', reason: '' }, resume: { state: 'available', reason: '' }, interfaceFormats: [], management: { accounts: false } };
+  const nativeUsage = [
+    { unit: 'credits', value: 12.345, originalValue: 24.69, billable: false, records: 3, unknownOriginalRecords: 0 },
+    { unit: 'credits', value: 0.75, originalValue: 1.5, billable: true, records: 1, unknownOriginalRecords: 0 },
+    { unit: 'credits', value: 0.125, originalValue: null, billable: null, records: 1, unknownOriginalRecords: 1 },
+  ];
+  const totals = { requests: 5, usageRecords: 5, unknownRequestRecords: 0, unknownTokenRecords: 5, sessions: 1, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, total: 0, cost: null, unpricedTokens: 0, nativeUsage };
+  const zero = { ...totals, requests: 0, usageRecords: 0, unknownTokenRecords: 0, sessions: 0, nativeUsage: [] };
+  const session = { id: 'qoder-credits', toolId: 'qoder_cn', nativeId: '11111111-2222-4333-8444-555555555555', title: 'Qoder CN · 原生 Credits 与会话', cwd: 'C:/Synthetic/Qoder', model: 'qfmodel', projectId: null, startedAt: now - 600000, updatedAt: now - 1000, favorite: false, partial: false, stale: false, messageCount: 2, usageCount: 5 };
+  const included = (filter = {}) => (!filter.toolId || filter.toolId === session.toolId) && (!filter.model || filter.model === session.model)
+    && (!filter.search || session.title.includes(filter.search)) && (!filter.favoriteOnly || session.favorite)
+    && (!filter.fromMs || now - 1000 >= filter.fromMs) && (!filter.toMs || now - 1000 < filter.toMs);
+  const calls = [];
+  Object.assign(window, { isTauri: true, __qoderHistoryCalls: calls, __TAURI_INTERNALS__: { invoke: async (command, args = {}) => {
+    calls.push({ command, args });
+    if (command === 'get_bootstrap') { const original = prior ? await prior(command, args) : null; return { preferences: { schema_version: 1, managed_tools: ['qoder_cn'], theme: original?.preferences?.theme ?? 'light' }, tools: [tool] }; }
+    if (command === 'list_cli_adapters') return { registered: [tool], managedIds: ['qoder_cn'], preservedUnknown: [] };
+    if (['list_projects', 'list_history_prices', 'refresh_history'].includes(command)) return [];
+    if (command === 'list_history_sessions') return included(args.filter) ? [session] : [];
+    if (command === 'get_history_session') return { session, totals, usage: [], resumeReason: null, messages: [
+      { id: 'qoder-u', role: 'user', text: '请检查项目并给出修改建议。', timestamp: now - 600000, timestampSource: 'native' },
+      { id: 'qoder-a', role: 'assistant', text: '已检查项目。原生会话正文保留，工具输出和子代理正文不混入这段对话。', timestamp: now - 1000, timestampSource: 'native' },
+    ] };
+    if (command === 'get_usage_report') {
+      const active = included(args.filter); const sum = active ? totals : zero;
+      const group = (key, label, extra = {}) => ({ key, label, toolId: 'qoder_cn', model: null, projectId: null, priced: false, totals: sum, ...extra });
+      return { generatedAt: now, from: args.filter?.fromMs ?? start, to: args.filter?.toMs ?? now + 1, bucket: 'day', currency: 'USD', totals: sum, previous: null,
+        timeline: active ? [{ start, end: start + 86400000, totals: sum }] : [], byModel: active ? [group('qoder_cn|qfmodel', 'qfmodel', { model: 'qfmodel' })] : [], byTool: active ? [group('qoder_cn', 'Qoder CN')] : [], byProject: active ? [group('unknown', '未归类')] : [], topSessions: active ? [{ ...session, totals: sum }] : [], models: ['qfmodel'], untimedRequests: 0, duplicateRequests: 1, partialSessions: 0, staleSessions: 0, mixedCurrency: false, latestEventAt: now - 1000, priceSources: [], scans: [] };
+    }
+    if (command === 'copy_history_resume_command') return `qoderclicn -r ${session.nativeId}`;
+    if (command === 'resume_history_session') return { toolId: 'qoder_cn', projectId: null, mode: args.mode, terminal: 'power_shell', status: 'terminal_requested' };
+    if (command === 'get_history_scan_progress') return { running: false, toolId: '', completedSources: 0, totalSources: 0 };
+    if (command === 'get_tray_status') return { available: false, error: null };
+    if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
+    return prior ? prior(command, args) : null;
+  } } });
+}
+
 // Runs in the browser after the general capture harness has been installed.
 export function workflowFixtures() {
   const invoke = window.__TAURI_INTERNALS__.invoke;

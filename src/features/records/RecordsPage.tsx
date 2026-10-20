@@ -1,3 +1,4 @@
+import { NativeUsageSummary } from './NativeUsageSummary';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { save } from '@tauri-apps/plugin-dialog';
@@ -464,6 +465,7 @@ export function RecordsPage({ active, tools, onOpenProjects }: { active: boolean
           {selected.resumeReason && <button type="button" onClick={onOpenProjects}>{t('records.page.relinkProject')}</button>}
         </div>
         </div>
+        {selected.totals && <NativeUsageSummary totals={selected.totals} />}
         <SessionReader key={selected.session.id} detail={selected} toolName={toolName(selected.session.toolId)} />
       </> : detailError ? <div className={styles.empty} role="alert"><Icon name="alert" size={24} /><h3>{t('records.page.openFailed')}</h3><p>{detailError}</p><button type="button" onClick={() => setDetailRetry((value) => value + 1)}>{t('records.page.reloadSession')}</button></div> : selectedId && sessions.some((item) => item.id === selectedId) ? <div className={styles.detailLoading} role="status" aria-label={t('records.page.loadingSession')}><span className={styles.detailSkeleton} /><span className={styles.detailSkeleton} data-size="short" /><span className={styles.detailSkeleton} data-size="block" /></div>
       : <div className={styles.empty}><span className="empty-symbol"><Icon name="records" size={20} /></span><p>{t('records.page.pickSession')}</p></div>}</div>

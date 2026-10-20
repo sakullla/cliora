@@ -1,3 +1,4 @@
+import { NativeUsageSummary } from './NativeUsageSummary';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { native, nativeAvailable } from '../../lib/native';
@@ -8,7 +9,7 @@ import { FilterSelect } from '../../components/FilterSelect';
 import { GuideDialog } from '../../components/GuideDialog';
 import { ToolIcon, toolOptions } from '../../components/ToolIcon';
 import { Icon } from '../../components/Icon';
-import { DAY_MS, bucketLabel, cacheHitRate, clockTime, exactMoney, formatMoney, formatPercent, formatTokens, niceScale, ratio, shortDate, tokenParts } from './usageFormat';
+import { formatNativeValue, nativeUnitLabel, nativeValue, knownTokens, formatTotalTokens, usageSummary, DAY_MS, bucketLabel, cacheHitRate, clockTime, exactMoney, formatMoney, formatPercent, formatTokens, niceScale, ratio, shortDate, tokenParts } from './usageFormat';
 import { navigateChoices } from '../../lib/choiceNavigation';
 import { saveShortcutHint } from '../../lib/shortcut';
 import { DateRangeFilter, type RangeKey } from './DateRangeFilter';
@@ -16,6 +17,8 @@ import i18n from '../../i18n';
 import styles from './UsageDashboard.module.css';
 
 type UsageRange = RangeKey;
+type Metric = 'tokens' | 'cost' | `native:${string}`;
+const metricValueOf = (totals: UsageTotals, metric: Metric) => metric.startsWith('native:') ? nativeValue(totals, metric.slice(7)) : metric === 'cost' ? totals.cost ?? 0 : totals.total;
 const rangeIds: UsageRange[] = ['today', 'yesterday', '7', '30', 'month', 'all', 'custom'];
 const rangePresetKey = (id: UsageRange) => id === '7' ? 'week' : id === '30' ? 'month30' : id;
 const ranges = (): Array<{ id: UsageRange; label: string }> => rangeIds.map((id) => ({ id, label: i18n.t(`records.page.preset.${rangePresetKey(id)}`) }));
@@ -102,12 +105,12 @@ function Composition({ totals }: { totals: UsageTotals }) {
   </div>;
 }
 
-function TrendChart({ report, metric, now }: { report: UsageReport; metric: 'tokens' | 'cost'; now: number }) {
+function TrendChart({ report, metric, now }: { report: UsageReport; metric: Metric; now: number }) {
   const [active, setActive] = useState<number | null>(null);
   const buckets = report.timeline;
-  const value = (totals: UsageTotals) => metric === 'cost' ? totals.cost ?? 0 : totals.total;
+  const value = (totals: UsageTotals) => metricValueOf(totals, metric);
   const { top, ticks } = niceScale(Math.max(0, ...buckets.map((bucket) => value(bucket.totals))));
-  const format = (amount: number) => metric === 'cost' ? formatMoney(amount, report.currency) : formatTokens(amount);
+  const format = (amount: number) => metric.startsWith('native:') ? `${formatNativeValue(amount)} ${nativeUnitLabel(metric.slice(7))}` : metric === 'cost' ? formatMoney(amount, report.currency) : formatTokens(amount);
   const multiYear = buckets.length > 0 && new Date(buckets[0].start).getFullYear() !== new Date(buckets[buckets.length - 1].start).getFullYear();
   const labelEvery = Math.max(1, Math.ceil(buckets.length / (report.bucket === 'hour' ? 8 : 10)));
   const shown = active === null ? null : buckets[active];
@@ -140,7 +143,8 @@ function TrendChart({ report, metric, now }: { report: UsageReport; metric: 'tok
       {shown && active !== null && <div className={styles.tooltip} data-align={align} style={{ left: `${((active + 0.5) / buckets.length) * 100}%` }} role="status">
         <strong>{bucketLabel(shown, report.bucket, true, multiYear)}</strong>
         {shown.totals.usageRecords ? <>
-          <p><span>{i18n.t('records.usage.totalTokens')}</span><b>{formatTokens(shown.totals.total)}</b></p>
+          <p><span>{i18n.t('records.usage.totalTokens')}</span><b>{formatTotalTokens(shown.totals)}</b></p>
+          {metric.startsWith('native:') && <p><span>{nativeUnitLabel(metric.slice(7))}</span><b>{format(value(shown.totals))}</b></p>}
           {tokenParts().map((part) => shown.totals[part.key] > 0 && <p key={part.key}><span><i data-key={part.key} />{part.label}</span><b>{formatTokens(shown.totals[part.key])}</b></p>)}
           <p><span>{i18n.t('records.usage.estCost')}</span><b>{formatMoney(shown.totals.cost, report.currency)}</b></p>
           <p><span>{i18n.t('records.usage.requests')}</span><b>{i18n.t('records.usage.requestCount', { count: shown.totals.requests.toLocaleString() })}{shown.totals.unknownRequestRecords > 0 ? i18n.t('records.usage.partialUnknown') : ''}{i18n.t('records.usage.sessionCount', { count: shown.totals.sessions })}</b></p>
@@ -189,12 +193,12 @@ function Breakdown({ report, toolName, filter, onFilter, onPrice, view, onView }
           <span className={styles.rankIcon}>{view === 'project' ? <Icon name="folder" size={16} /> : <ToolIcon toolId={row.toolId ?? ''} size={20} />}</span>
           <span className={styles.rankName}><strong title={row.label}>{view === 'tool' ? toolName(row.label) : row.label}</strong><small>{subtitle(row)}</small></span>
           <span className={styles.rankBar} aria-hidden="true"><i style={{ width: `${Math.max(share * 100, row.totals.total > 0 ? 1 : 0)}%` }} /></span>
-          <span className={styles.rankValue} title={`${row.totals.total.toLocaleString()} token`}><strong>{formatTokens(row.totals.total)}</strong><small>{formatPercent(share)}</small></span>
+          <span className={styles.rankValue} title={`${formatTotalTokens(row.totals)} token`}><strong>{usageSummary(row.totals)}</strong><small>{knownTokens(row.totals) ? (row.totals.nativeUsage?.length ? `${formatTotalTokens(row.totals)} token · ${formatPercent(share)}` : formatPercent(share)) : t('records.native.noTokens')}</small></span>
           <span className={styles.rankCost} data-unpriced={row.totals.cost === null || undefined} title={exactMoney(row.totals.cost, report.currency)}>{formatMoney(row.totals.cost, report.currency)}</span>
         </>;
         return <li key={row.key} data-active={isActive(row) || undefined}>
           {clickable ? <button type="button" className={styles.rankMain} aria-pressed={isActive(row)} title={isActive(row) ? t('records.usage.untoggleTitle') : t('records.usage.toggleTitle')} onClick={() => toggle(row)}>{content}</button> : <div className={styles.rankMain}>{content}</div>}
-          {view === 'model' && row.toolId && <button type="button" className={styles.priceButton} data-unpriced={!row.priced || undefined} onClick={() => onPrice(row.toolId ?? '', row.model ?? '')} title={row.priced ? t('records.usage.priceTitleAdjust', { label: row.label }) : t('records.usage.priceTitleFill', { label: row.label })}>{row.priced ? t('records.usage.priceEdit') : t('records.usage.priceSet')}</button>}
+          {view === 'model' && row.toolId && knownTokens(row.totals) && <button type="button" className={styles.priceButton} data-unpriced={!row.priced || undefined} onClick={() => onPrice(row.toolId ?? '', row.model ?? '')} title={row.priced ? t('records.usage.priceTitleAdjust', { label: row.label }) : t('records.usage.priceTitleFill', { label: row.label })}>{row.priced ? t('records.usage.priceEdit') : t('records.usage.priceSet')}</button>}
         </li>;
       })}
     </ol>
@@ -215,7 +219,7 @@ export function UsageDashboard({ search, favoriteOnly, onClearSearch, onClearFav
   const [toolId, setToolId] = useState('');
   const [model, setModel] = useState('');
   const [projectId, setProjectId] = useState('');
-  const [metric, setMetric] = useState<'tokens' | 'cost'>('tokens');
+  const [metric, setMetric] = useState<Metric>('tokens');
   const [breakdownView, setBreakdownView] = useState<BreakdownView>('model');
   const [report, setReport] = useState<UsageReport | null>(null);
   const [loading, setLoading] = useState(false);
@@ -270,10 +274,13 @@ export function UsageDashboard({ search, favoriteOnly, onClearSearch, onClearFav
   const empty = !!report && report.totals.usageRecords === 0;
   const pricedShare = totals ? ratio(totals.total - totals.unpricedTokens, totals.total) : 0;
   const multiDay = report?.bucket !== 'hour';
-  const shownMetric = totals?.cost === null ? 'tokens' : metric;
+  const nativeUnits = [...new Set((totals?.nativeUsage ?? []).map((usage) => usage.unit))];
+  const shownMetric: Metric = metric.startsWith('native:') && nativeUnits.includes(metric.slice(7)) ? metric
+    : metric === 'cost' && totals?.cost !== null ? 'cost'
+    : totals && !knownTokens(totals) && nativeUnits.length ? `native:${nativeUnits[0]}` : 'tokens';
   const timedBuckets = report?.timeline.filter((bucket) => bucket.start <= now) ?? [];
-  const metricValue = (value: UsageTotals) => shownMetric === 'cost' ? value.cost ?? 0 : value.total;
-  const metricFormat = (value: number) => shownMetric === 'cost' ? formatMoney(value, report?.currency ?? 'USD') : formatTokens(value);
+  const metricValue = (value: UsageTotals) => metricValueOf(value, shownMetric);
+  const metricFormat = (value: number) => shownMetric.startsWith('native:') ? `${formatNativeValue(value)} ${nativeUnitLabel(shownMetric.slice(7))}` : shownMetric === 'cost' ? formatMoney(value, report?.currency ?? 'USD') : formatTokens(value);
   const average = timedBuckets.length ? timedBuckets.reduce((sum, bucket) => sum + metricValue(bucket.totals), 0) / timedBuckets.length : 0;
   const peak = report?.timeline.reduce<UsageBucket | null>((best, bucket) => metricValue(bucket.totals) > (best ? metricValue(best.totals) : 0) ? bucket : best, null) ?? null;
 
@@ -344,11 +351,12 @@ export function UsageDashboard({ search, favoriteOnly, onClearSearch, onClearFav
       <p>{toolId || model || projectId ? t('records.usage.emptyFilteredHint') : range === 'all' ? t('records.usage.emptyAllHint') : t('records.usage.emptyRangeHint')}</p>
       <div>{range !== '7' && <button type="button" onClick={() => setRange('7')}>{t('records.usage.viewWeek')}</button>}{range !== 'all' && <button type="button" onClick={() => setRange('all')}>{t('records.usage.viewAll')}</button>}</div>
     </div> : totals && <>
+      <NativeUsageSummary totals={totals} />
       <section className={styles.summary} aria-label={t('records.usage.summaryAria')}>
         <div className={styles.primary}>
-          <small><Icon name="sparkle" size={16} />{t('records.usage.totalTokens')}</small>
-          <strong title={`${totals.total.toLocaleString()} token`}>{formatTokens(totals.total)}</strong>
-          <Delta current={totals.total} previous={previous?.totals.total} label={compare} title={compareTitle} />
+          <small><Icon name="sparkle" size={16} />{t(totals.unknownTokenRecords && knownTokens(totals) ? 'records.native.knownTokens' : 'records.usage.totalTokens')}</small>
+          <strong>{formatTotalTokens(totals)}</strong>
+          <Delta current={totals.unknownTokenRecords ? null : totals.total} previous={previous?.totals.total} label={compare} title={compareTitle} />
         </div>
         <div className={styles.metric}>
           <small><Icon name="archive" size={16} />{t('records.usage.estCost')} <span className={styles.currency}>{report.currency}</span></small>
@@ -360,12 +368,12 @@ export function UsageDashboard({ search, favoriteOnly, onClearSearch, onClearFav
         <div className={styles.metric}>
           <small><Icon name="connections" size={16} />{totals.unknownRequestRecords ? t('records.usage.knownCalls') : t('records.usage.calls')}</small>
           <strong>{totals.requests.toLocaleString()}</strong>
-          <span className={styles.metricNote}>{t('records.usage.sessionsNote', { sessions: totals.sessions, detail: totals.unknownRequestRecords ? t('records.usage.unknownCounts', { count: totals.unknownRequestRecords.toLocaleString() }) : totals.requests ? t('records.usage.perRequest', { amount: formatTokens(totals.total / totals.requests) }) : t('records.usage.noRequests') })}</span>
+          <span className={styles.metricNote}>{t('records.usage.sessionsNote', { sessions: totals.sessions, detail: totals.unknownRequestRecords ? t('records.usage.unknownCounts', { count: totals.unknownRequestRecords.toLocaleString() }) : totals.unknownTokenRecords ? t('records.native.noTokens') : totals.requests ? t('records.usage.perRequest', { amount: formatTokens(totals.total / totals.requests) }) : t('records.usage.noRequests') })}</span>
         </div>
         <div className={styles.metric}>
           <small><Icon name="leaf" size={16} />{t('records.usage.cacheHit')}</small>
-          <strong title={t('records.usage.cacheHitTitle')}>{formatPercent(cacheHitRate(totals))}</strong>
-          <span className={styles.metricNote}>{t('records.usage.ioNote', { input: formatTokens(totals.input), output: formatTokens(totals.output) })}</span>
+          <strong title={t('records.usage.cacheHitTitle')}>{knownTokens(totals) ? formatPercent(cacheHitRate(totals)) : t('records.native.unknown')}</strong>
+          <span className={styles.metricNote}>{knownTokens(totals) ? t('records.usage.ioNote', { input: formatTokens(totals.input), output: formatTokens(totals.output) }) : t('records.native.noTokens')}</span>
         </div>
       </section>
 
@@ -373,9 +381,10 @@ export function UsageDashboard({ search, favoriteOnly, onClearSearch, onClearFav
       <section className={styles.card} aria-labelledby="usage-trend-title">
         <header className={styles.cardHead}>
           <h3 id="usage-trend-title">{t('records.usage.trendTitle')}<small>{t(`records.usage.bucket.${report.bucket}`)}</small></h3>
-          {totals.cost !== null && <div className={styles.miniTabs} role="tablist" aria-label={t('records.usage.metricAria')} onKeyDown={navigateChoices}>
-            <button type="button" role="tab" tabIndex={metric === 'tokens' ? 0 : -1} aria-selected={metric === 'tokens'} onClick={() => setMetric('tokens')}>Token</button>
-            <button type="button" role="tab" tabIndex={metric === 'cost' ? 0 : -1} aria-selected={metric === 'cost'} onClick={() => setMetric('cost')}>{t('records.usage.cost')}</button>
+          {(totals.cost !== null || nativeUnits.length > 0) && <div className={styles.miniTabs} role="tablist" aria-label={t('records.usage.metricAria')} onKeyDown={navigateChoices}>
+            {knownTokens(totals) && <button type="button" role="tab" tabIndex={shownMetric === 'tokens' ? 0 : -1} aria-selected={shownMetric === 'tokens'} onClick={() => setMetric('tokens')}>Token</button>}
+            {totals.cost !== null && <button type="button" role="tab" tabIndex={shownMetric === 'cost' ? 0 : -1} aria-selected={shownMetric === 'cost'} onClick={() => setMetric('cost')}>{t('records.usage.cost')}</button>}
+            {nativeUnits.map((unit) => <button type="button" role="tab" key={unit} tabIndex={shownMetric === `native:${unit}` ? 0 : -1} aria-selected={shownMetric === `native:${unit}`} onClick={() => setMetric(`native:${unit}`)}>{nativeUnitLabel(unit)}</button>)}
           </div>}
         </header>
         <p className={styles.trendStats}>
@@ -388,7 +397,7 @@ export function UsageDashboard({ search, favoriteOnly, onClearSearch, onClearFav
       </section>
       <section className={styles.card} aria-labelledby="usage-composition-title">
         <header className={styles.cardHead}><h3 id="usage-composition-title">{t('records.usage.compositionTitle')}</h3><span className={styles.cardHint}>{t('records.usage.compositionHint')}</span></header>
-        <Composition totals={totals} />
+        {knownTokens(totals) ? <Composition totals={totals} /> : <p className={styles.cardHint}>{t('records.native.noTokens')}</p>}
       </section>
       </div>
 
@@ -404,7 +413,7 @@ export function UsageDashboard({ search, favoriteOnly, onClearSearch, onClearFav
             {report.topSessions.map((item) => <li key={item.id}><button type="button" onClick={() => onOpenSession(item.id)} title={t('records.usage.openTitle')}>
               <ToolIcon toolId={item.toolId} size={20} />
               <span className={styles.rankName}><strong title={item.title}>{item.title}</strong><small>{toolName(item.toolId)}{item.model ? ` · ${item.model}` : ''} · {shortDate(item.updatedAt)}</small></span>
-              <span className={styles.rankValue} title={`${item.totals.total.toLocaleString()} token`}><strong>{formatTokens(item.totals.total)}</strong><small>{formatMoney(item.totals.cost, report.currency)}</small></span>
+              <span className={styles.rankValue} title={`${formatTotalTokens(item.totals)} token`}><strong>{usageSummary(item.totals)}</strong><small>{formatMoney(item.totals.cost, report.currency)}</small></span>
             </button></li>)}
           </ol>
         </section>

@@ -1,4 +1,12 @@
 export default {
+  native: {
+    title: 'Native unit usage', billable: 'Native flag: billable', unbilled: 'Native flag: not billed', unknownBilling: 'Billing status unknown',
+    original: 'Original: {{value}}', unknownOriginal: '{{count}} records with unknown original value', unknown: 'Unknown',
+    hint: 'Values come from local logs, not a balance or currency amount. Billing flags retain their native meaning.',
+    unknownTokens: '{{count}} records have unknown tokens and are excluded from token totals and cost estimates.',
+    noTokens: 'The logs do not provide known tokens', knownTokens: 'Known tokens',
+  },
+
   format: {
     unpriced: 'Unpriced',
     noPrice: 'No price available',
@@ -296,7 +304,7 @@ export default {
     title: 'Usage overview',
     filtered: 'Filtered: {{parts}}',
     filterSearch: 'search "{{query}}"',
-    overviewSubtitle: 'View tokens and call counts in local records.',
+    overviewSubtitle: 'View tokens, native units and call counts in local records.',
     priceSettings: 'Set estimated prices',
     toolFilter: 'Usage tool',
     modelFilter: 'Usage model',

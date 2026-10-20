@@ -5,6 +5,15 @@ export const DAY_MS = 86_400_000;
 
 const compactFormat = new Intl.NumberFormat('en-US', { notation: 'compact', maximumSignificantDigits: 3 });
 export const formatTokens = (value: number) => value < 1000 ? Math.round(value).toLocaleString() : compactFormat.format(value);
+export const formatNativeValue = (value: number) => value.toLocaleString('en-US', { maximumSignificantDigits: 12 });
+export const nativeUnitLabel = (unit: string) => unit.charAt(0).toUpperCase() + unit.slice(1);
+export const knownTokens = (totals: UsageTotals) => !totals.usageRecords || (totals.unknownTokenRecords ?? 0) < totals.usageRecords;
+export const formatTotalTokens = (totals: UsageTotals) => !knownTokens(totals) ? i18n.t('records.native.unknown') : `${formatTokens(totals.total)}${totals.unknownTokenRecords ? '+' : ''}`;
+export const nativeValue = (totals: UsageTotals, unit: string) => (totals.nativeUsage ?? []).filter((usage) => usage.unit === unit).reduce((value, usage) => value + usage.value, 0);
+export function usageSummary(totals: UsageTotals) {
+  const units = [...new Set((totals.nativeUsage ?? []).map((usage) => usage.unit))];
+  return units.length ? units.map((unit) => `${formatNativeValue(nativeValue(totals, unit))} ${nativeUnitLabel(unit)}`).join(' · ') : formatTotalTokens(totals);
+}
 
 const symbols: Record<string, string> = { USD: '$', CNY: '¥', EUR: '€', GBP: '£', JPY: '¥', HKD: 'HK$' };
 export function formatMoney(value: number | null, currency: string) {
