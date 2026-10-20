@@ -552,3 +552,26 @@ test('native credits retain billing groups and unknown tokens across detail, rep
   await expect.poll(() => page.evaluate(() => (window as any).__qoderHistoryCalls.filter((call: any) => call.command === 'get_usage_report').at(-1).args.filter)).toMatchObject({ toolId: 'qoder_cn', model: 'qfmodel' });
   await expect(usage.getByRole('region', { name: '原生单位用量' })).toContainText('12.345 Credits');
 });
+
+test('known Qoder request with unknown credits and tokens stays visible as one call', async ({ page }) => {
+  await page.addInitScript(qoderHistoryFixtures, { unknownAmounts: true });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '使用记录' }).click();
+  await page.getByRole('button', { name: /Qoder CN · 原生 Credits 与会话/ }).click();
+  const detail = page.getByRole('tabpanel', { name: /^会话/ });
+  await expect(detail).toContainText('1 条记录没有已知 token');
+  await expect(detail).not.toContainText('0 Credits');
+  await page.getByRole('tab', { name: '用量', exact: true }).click();
+  const usage = page.getByRole('tabpanel', { name: '用量', exact: true });
+  const summary = usage.getByRole('region', { name: '用量概览' });
+  await expect(summary).not.toContainText('暂无调用次数');
+  await expect(summary).toContainText('1');
+  await expect(summary).toContainText('未知');
+  await expect(summary).not.toContainText('$0');
+  await expect(summary).not.toContainText('每次约');
+  await expect(usage).toContainText('1 条记录没有已知 token');
+  await expect(usage.getByRole('tab', { name: 'Credits', exact: true })).toHaveCount(0);
+  const trend = usage.getByRole('region', { name: '用量趋势 按天' });
+  await expect(trend).toContainText('日志未提供已知 token');
+  await expect(trend.getByRole('group')).toHaveCount(0);
+});

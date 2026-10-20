@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium, expect } from '@playwright/test';
 import { workflowFixtures, qoderHistoryFixtures } from './capture-workflow-fixtures.mjs';
 import { captureConfiguration, configurationScenarios, installCaptureConfigurationProtocol } from './capture-configuration.mjs';
-const qoderHistoryScenarioNames=['qoder-history-detail','qoder-history-credits','qoder-history-groups'];
+const qoderHistoryScenarioNames=['qoder-history-detail','qoder-history-credits','qoder-history-groups','qoder-history-unknown'];
 const historyScenarioNames=['grok-precise-detail','grok-inferred-time','grok-no-usage','grok-statistics','grok-statistics-details'];
 const scenarioNames=[...configurationScenarios.map(item=>item.name),...historyScenarioNames,...qoderHistoryScenarioNames];
 const option=(flag,fallback)=>{const index=process.argv.indexOf(flag);if(index<0)return fallback;const value=process.argv[index+1];if(!value||value.startsWith('--'))throw new Error('Missing value for '+flag);return value;};
@@ -257,16 +257,25 @@ async function captureHistoryFeatures(){
 }
 
 async function captureQoderHistoryFeatures(){
- for(const width of widths)for(const theme of themes){
+ const variants=[false,true].filter(unknown=>selectedScenarios.some(name=>qoderHistoryScenarioNames.includes(name)&&(name==='qoder-history-unknown')===unknown));
+ for(const width of widths)for(const theme of themes)for(const unknownAmounts of variants){
   const page=await browser.newPage({viewport:{width,height:1100}});
   page.on('pageerror',error=>failures.push({type:'pageerror',theme,width,message:error.message}));
   await page.addInitScript(mock,theme);
-  await page.addInitScript(qoderHistoryFixtures);
+  await page.addInitScript(qoderHistoryFixtures,{unknownAmounts});
   async function capture(name,state){if(selectedScenarios.includes(name))await captureImage(page,name,theme,width,{category:'records',title:name,state});}
   try {
    await page.goto(previewUrl);
    await page.getByRole('navigation',{name:'页面'}).getByRole('button',{name:'使用记录'}).click();
    await page.getByRole('button',{name:/Qoder CN · 原生 Credits 与会话/}).click();
+   if(unknownAmounts){
+    await expect(page.getByRole('tabpanel',{name:/^会话/})).toContainText('1 条记录没有已知 token');
+    await page.getByRole('tab',{name:'用量',exact:true}).click();
+    await expect(page.getByRole('region',{name:'用量概览'})).toContainText('未知');
+    await expect(page.getByRole('region',{name:'用量概览'})).not.toContainText('暂无调用次数');
+    await capture('qoder-history-unknown','one known call with unknown native amounts and tokens');
+    continue;
+   }
    await expect(page.getByRole('region',{name:'原生单位用量'})).toContainText('12.345 Credits');
    await capture('qoder-history-detail','native transcript and original/billable credits');
    await page.getByRole('tab',{name:'用量',exact:true}).click();

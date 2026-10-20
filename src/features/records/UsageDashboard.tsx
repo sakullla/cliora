@@ -387,13 +387,14 @@ export function UsageDashboard({ search, favoriteOnly, onClearSearch, onClearFav
             {nativeUnits.map((unit) => <button type="button" role="tab" key={unit} tabIndex={shownMetric === `native:${unit}` ? 0 : -1} aria-selected={shownMetric === `native:${unit}`} onClick={() => setMetric(`native:${unit}`)}>{nativeUnitLabel(unit)}</button>)}
           </div>}
         </header>
-        <p className={styles.trendStats}>
+        {shownMetric === 'tokens' && !knownTokens(totals) ? <p className={styles.cardHint}>{t('records.native.noTokens')}</p> : <><p className={styles.trendStats}>
           {peak && <span>{t('records.usage.peak')} <b>{metricFormat(metricValue(peak.totals))}</b> · {bucketLabel(peak, report.bucket, true)}</span>}
           {timedBuckets.length > 1 && <span>{t('records.usage.average', { unit: multiDay ? t(report.bucket === 'month' ? 'records.usage.unitMonth' : 'records.usage.unitDay') : t('records.usage.unitHour') })} <b>{metricFormat(average)}</b></span>}
         </p>
         <TrendChart report={report} metric={shownMetric} now={now} />
         {shownMetric === 'tokens' && <ul className={styles.legend} aria-hidden="true">{tokenParts().map((part) => <li key={part.key}><i data-key={part.key} />{part.label}</li>)}</ul>}
         {shownMetric === 'cost' && <p className={styles.cardHint}>{t('records.usage.costHint')}</p>}
+        </>}
       </section>
       <section className={styles.card} aria-labelledby="usage-composition-title">
         <header className={styles.cardHead}><h3 id="usage-composition-title">{t('records.usage.compositionTitle')}</h3><span className={styles.cardHint}>{t('records.usage.compositionHint')}</span></header>

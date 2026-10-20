@@ -6,7 +6,9 @@ import styles from './NativeUsageSummary.module.css';
 /** Registry-independent native units; no token conversion or balance inference. */
 export function NativeUsageSummary({ totals }: { totals: UsageTotals }) {
   const { t } = useTranslation();
-  if (!totals.nativeUsage?.length) return null;
+  if (!totals.nativeUsage?.length) return totals.unknownTokenRecords
+    ? <p className={styles.summary}>{t('records.native.unknownTokens', { count: totals.unknownTokenRecords })}</p>
+    : null;
   return <section className={styles.summary} aria-label={t('records.native.title')}>
     <h3>{t('records.native.title')}</h3>
     <ul>{totals.nativeUsage.map((usage) => <li key={`${usage.unit}:${usage.billable}`}>
