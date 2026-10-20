@@ -268,7 +268,7 @@ export default {
     nativeDefaultShort: 'Native default',
 
     title: 'Memory',
-    description: 'Long-term memory {{tool}} keeps across sessions. Grouped by source; read, edit, and tidy it here.',
+    description: 'Long-term memory {{tool}} keeps across sessions. Titles, summaries, and scope come first; open an entry to read it.',
     refresh: 'Refresh memory',
     create: 'New memory',
     listLabel: 'Memory list',
@@ -279,6 +279,9 @@ export default {
     typeFilter: 'Filter by type',
     typeAll: 'All',
     type: { user: 'User', feedback: 'Feedback', project: 'Project', reference: 'Reference' },
+    scopeUser: 'User',
+    scopeProject: 'Project',
+    scopeProjectNamed: 'Project · {{name}}',
     countAll: '{{count}} entries · {{stores}} sources',
     countFiltered: '{{filtered}} / {{total}} entries',
     entryCount: '{{count}} entries',

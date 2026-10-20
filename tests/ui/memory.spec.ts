@@ -150,7 +150,7 @@ async function openMemory(page: Page, tool = 'Alpha') {
   await expect(page.getByRole('region', { name: '记忆' })).toBeVisible();
 }
 
-const entryButton = (page: Page, id: string) => page.getByRole('navigation', { name: '记忆列表' }).getByRole('button', { name: new RegExp(`${id}\\.md`) });
+const entryButton = (page: Page, id: string) => page.getByRole('navigation', { name: '记忆列表' }).locator(`button[data-entry-id="${id}"]`);
 const reader = (page: Page) => page.getByRole('article');
 const editor = (page: Page) => page.getByRole('textbox', { name: '记忆正文' });
 
@@ -173,21 +173,36 @@ test('a session-only CLI does not get a memory tab', async ({ page }) => {
   await expect(page.getByRole('tab', { name: '记忆', exact: true })).toHaveCount(0);
 });
 
-test('the memory tab groups stores by source with summaries and no scope selector', async ({ page }) => {
+test('the memory list leads with title, summary, and user or project scope', async ({ page }) => {
   await install(page);
   await openMemory(page);
   const region = page.getByRole('region', { name: '记忆' });
   const list = page.getByRole('navigation', { name: '记忆列表' });
-  await expect(entryButton(page, 'global-note')).toBeVisible();
-  await expect(entryButton(page, 'a-note')).toBeVisible();
-  await expect(entryButton(page, 'b-note')).toBeVisible();
-  await expect(list.getByRole('button', { name: /^全局/ })).toBeVisible();
-  await expect(list.getByRole('button', { name: /^项目 · 栖点 A/ })).toBeVisible();
-  await expect(list.getByRole('button', { name: /^项目 · 栖点 B/ })).toBeVisible();
-  // Each row also carries a body summary read over the existing entry IPC.
-  await expect(entryButton(page, 'global-note')).toContainText('from-global');
-  await expect(entryButton(page, 'a-note')).toContainText('from-a');
-  await expect(entryButton(page, 'b-note')).toContainText('from-b');
+  const global = entryButton(page, 'global-note');
+  const projectA = entryButton(page, 'a-note');
+  const projectB = entryButton(page, 'b-note');
+  await expect(list.getByRole('button')).toHaveCount(3);
+  await expect(global).toContainText('Global note');
+  await expect(global).toContainText('from-global');
+  await expect(global).toContainText('用户');
+  await expect(global).not.toContainText('global-note.md');
+  await expect(global).not.toContainText(alphaGlobalStore);
+  await expect(projectA).toContainText('A note');
+  await expect(projectA).toContainText('from-a');
+  await expect(projectA).toContainText('项目');
+  await expect(projectA).not.toContainText('a-note.md');
+  await expect(projectA).not.toContainText(alphaAStore);
+  await expect(projectB).toContainText('B note');
+  await expect(projectB).toContainText('from-b');
+  await expect(projectB).toContainText('项目');
+  await page.getByRole('button', { name: '筛选来源' }).click();
+  await page.getByRole('option', { name: /项目 · 栖点 B/ }).click();
+  await expect(projectB).toBeVisible();
+  await expect(global).toHaveCount(0);
+  await expect(projectA).toHaveCount(0);
+  await page.getByRole('button', { name: '筛选来源' }).click();
+  await page.getByRole('option', { name: '全部来源' }).click();
+  await expect(global).toBeVisible();
   // The workspace scope selector is hidden on this tab; no account selector either.
   await expect(page.getByRole('button', { name: '配置范围' })).toBeHidden();
   await expect(region.getByText(/账号/)).toHaveCount(0);
@@ -202,12 +217,15 @@ test('the memory tab groups stores by source with summaries and no scope selecto
   await page.getByRole('tab', { name: 'Beta', exact: true }).click();
   await page.getByRole('tab', { name: '记忆', exact: true }).click();
   await expect(page.getByText(readOnlyLimitation)).toBeVisible();
+  await expect(entryButton(page, 'beta-note')).toContainText('Beta note');
   await expect(entryButton(page, 'beta-note')).toContainText('from-beta');
+  await expect(entryButton(page, 'beta-note')).toContainText('用户');
+  await expect(entryButton(page, 'beta-note')).not.toContainText('beta-note.md');
   await expect(page.getByRole('button', { name: '新建记忆' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: /删除/ })).toHaveCount(0);
   await expect(page.getByRole('switch')).toHaveCount(0);
   await entryButton(page, 'beta-note').click();
-  await expect(reader(page)).toContainText('from-beta');
+  await expect(reader(page).getByRole('region', { name: '记忆正文' })).toContainText('from-beta');
   await expect(reader(page).getByText('只读', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '编辑', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '保存记忆' })).toHaveCount(0);
@@ -228,11 +246,19 @@ test('frontmatter supplies titles, types, and descriptions; search and type filt
   // A file without frontmatter takes its leading heading as the title.
   await expect(entryButton(page, 'b-note')).toContainText('Coding style');
   await expect(entryButton(page, 'b-note')).toContainText('Two-space indentation.');
+  await expect(entryButton(page, 'b-note')).toContainText('项目');
+  await expect(entryButton(page, 'a-note')).not.toContainText('a-note.md');
+  await expect(entryButton(page, 'b-note')).not.toContainText('b-note.md');
 
   await entryButton(page, 'a-note').click();
   await expect(reader(page).getByRole('heading', { name: 'Release ritual' })).toBeVisible();
+  await expect(reader(page).getByRole('region', { name: '记忆正文' })).toContainText('同步版本文件');
   await expect(reader(page).getByRole('heading', { name: '发布流程' })).toBeVisible();
   await expect(reader(page).getByText('版本发布步骤').first()).toBeVisible();
+  await expect(reader(page)).toContainText('a-note.md');
+  await reader(page).getByRole('button', { name: /属性/ }).click();
+  await expect(reader(page).locator('dt').filter({ hasText: 'description' })).toBeVisible();
+  await expect(reader(page).locator('dd').filter({ hasText: '版本发布步骤' })).toBeVisible();
 
   await page.getByRole('group', { name: '按类型筛选' }).getByRole('button', { name: '项目', exact: true }).click();
   await expect(entryButton(page, 'a-note')).toBeVisible();
@@ -278,7 +304,7 @@ test('open, edit, and save carry the entry target and only affect that store', a
   await install(page);
   await openMemory(page);
   await entryButton(page, 'a-note').click();
-  await expect(reader(page)).toContainText('from-a');
+  await expect(reader(page).getByRole('region', { name: '记忆正文' })).toContainText('from-a');
   await page.getByRole('button', { name: '编辑', exact: true }).click();
   await expect(editor(page)).toHaveText('from-a');
   await expect(page.getByRole('button', { name: '保存记忆' })).toBeDisabled();
@@ -289,7 +315,7 @@ test('open, edit, and save carry the entry target and only affect that store', a
   const saved = (await memoryCalls(page)).filter(call => call.command === 'save_memory');
   expect(saved[0].args.request).toMatchObject({ id: 'a-note', text: 'edited-a', baseline: 'from-a', confirmExternal: false, target: { toolId: 'alpha', scope: 'project', projectPath: 'C:/A', storeDirectory: alphaAStore } });
   // Saving returns to reading with the saved text.
-  await expect(reader(page)).toContainText('edited-a');
+  await expect(reader(page).getByRole('region', { name: '记忆正文' })).toContainText('edited-a');
   await expect(editor(page)).toHaveCount(0);
   // The aggregate reload keeps the other stores listed and untouched.
   await entryButton(page, 'b-note').click();
@@ -417,14 +443,28 @@ test('per-store switches stay readable when off and switch writes carry the stor
   expect(item?.args.request).toMatchObject({ enabled: false, target: { scope: 'project', projectPath: 'C:/B', storeDirectory: alphaBStore } });
 });
 
-test('a CLI-wide switch appears once and path labels show their folder name', async ({ page }) => {
+test('a CLI-wide switch appears once and list rows keep folder names secondary to the title', async ({ page }) => {
   await install(page, { mode: 'master-off' });
   await openMemory(page, 'Epsilon');
   await expect(page.getByRole('switch')).toHaveCount(1);
   await expect(page.getByText('自动记忆')).toBeVisible();
   await expect(page.getByText('已关闭', { exact: true })).toBeVisible();
   const list = page.getByRole('navigation', { name: '记忆列表' });
-  await expect(list.getByRole('button', { name: /^one/ })).toContainText('C:\\Work\\one');
+  await expect(list.getByRole('button')).toHaveCount(2);
+  const one = entryButton(page, 'one-note');
+  await expect(one).toContainText('One note');
+  await expect(one).toContainText('from-one');
+  await expect(one).toContainText('项目');
+  await expect(one).toContainText('one');
+  await expect(one).not.toContainText('C:\\Work\\one');
+  await one.click();
+  await expect(reader(page).getByRole('heading', { name: 'One note' })).toBeVisible();
+  await expect(reader(page).getByRole('region', { name: '记忆正文' })).toContainText('from-one');
+  await expect(reader(page)).toContainText('C:\\Work\\one');
+  await expect(reader(page)).toContainText('one-note.md');
+  await page.getByRole('button', { name: '筛选来源' }).click();
+  await expect(page.getByRole('option', { name: /^one/ })).toContainText('C:\\Work\\one');
+  await page.getByRole('button', { name: '筛选来源' }).click();
   // A store without entries is not listed, but stays a write destination.
   await expect(list.getByRole('button', { name: /^three/ })).toHaveCount(0);
   await expect(page.getByText('2 条 · 2 个来源')).toBeVisible();
