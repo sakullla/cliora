@@ -71,6 +71,8 @@ fn run()->Result<Value,String>{
     let target=target(&request);
     let id=request["id"].as_str().unwrap_or_default().to_owned();
     let out=match request["op"].as_str().unwrap_or_default(){
+        "aggregate"=>json!(memory::list_all_memories(&database,&registry,&home,&target.tool_id)?),
+        "group"=>{memory::set_memory_switch_group(&database,&store,&registry,&home,&target.tool_id,request["group"].as_str().ok_or("missing group")?,request["enabled"]==true)?;json!({"updated":true})},
         "list"=>json!(memory::list_memories(&database,&registry,&home,&target)?),
         "read"=>json!(memory::read_memory(&database,&registry,&home,&target,&id)?),
         "save"=>json!(memory::save_memory(&database,&store,&registry,&home,&MemorySave{
@@ -506,7 +508,40 @@ async function probeGrok(engine, marker, temporary, context) {
   return record;
 }
 
+// Qoder is validated against an isolated home only. This proves the product's
+// index/config contract, not a live paid session consuming that memory.
+async function probeQoder(engine, marker, temporary) {
+  const record = { tool: 'qoder_cn', marker, scope: 'global/project', checks: [] };
+  const isolated = path.join(temporary, 'qoder-home');
+  const project = path.join(temporary, 'qoder-project');
+  await fs.mkdir(project, { recursive: true });
+  const env = { ...process.env };
+  for (const key of ['QODERCN_CONFIG_DIR', 'CONFIG_DIR_NAME', 'CLI_HOME', 'GEMINI_CLI_HOME']) delete env[key];
+  const base = { tool: 'qoder_cn', home: isolated };
+  const empty = await engine.op({ ...base, op: 'aggregate' }, env);
+  check(record, 'two unknown native-default scope switches without creating a store', empty.stores.length === 0 && empty.switchGroups.length === 2 && empty.switchGroups.every(group => group.enabled === null));
+  for (const scope of ['global', 'project']) {
+    const target = { ...base, scope, project: scope === 'project' ? project : undefined, id: 'cliora-native-fixture' };
+    const saved = await engine.op({ ...target, op: 'save', text: `---\nname: Native fixture\ntype: reference\n---\n${marker}` }, env);
+    const index = path.join(path.dirname(saved.path), 'MEMORY.md');
+    check(record, `${scope}: topic and native index persisted`, (await fs.readFile(index, 'utf8')).includes('](cliora-native-fixture.md)'));
+    const read = await engine.op({ ...target, op: 'read' }, env);
+    check(record, `${scope}: shared read returns written bytes`, read.text === saved.text);
+    await engine.op({ ...target, op: 'delete', baseline: read.text }, env);
+    check(record, `${scope}: delete removes index reference and topic`, !(await fs.readFile(index, 'utf8')).includes('](cliora-native-fixture.md)') && !fssync.existsSync(saved.path));
+    check(record, `${scope}: no private item enable records`, noClioraFiles(path.dirname(saved.path)));
+  }
+  await engine.op({ ...base, op: 'group', group: 'autoMemoryEnabled', enabled: false }, env);
+  await engine.op({ ...base, op: 'group', group: 'autoMemoryUserScopeEnabled', enabled: true }, env);
+  const result = await engine.op({ ...base, op: 'aggregate' }, env);
+  check(record, 'project and user native switches remain independent', result.switchGroups.find(group => group.scope === 'project')?.enabled === false && result.switchGroups.find(group => group.scope === 'global')?.enabled === true);
+  record.result = record.checks.every(item => item.passed) ? 'unverified' : 'failed';
+  record.reason = '隔离原生格式 CRUD/索引/开关通过；未启动付费推理或改写真实用户配置，原生交互消费效果未验证';
+  return record;
+}
+
 const RECIPES = {
+  qoder_cn: probeQoder,
   claude_code: probeClaude,
   codex: probeCodex,
   codebuddy: probeCodebuddy,
@@ -612,6 +647,7 @@ export async function verifyMemoryNative({ only, report: reportPath, summary: su
     limits: [
       '每个已接入 CLI 的重放复用该 CLI 接入任务的原生探针形态（真实会话/网关捕获/开关探测）。',
       '未接入 CLI 仅随注册表结论报告原因，不做存储探测。',
+      'Qoder CN 仅隔离 home 的原生格式契约回归；不执行真实会话、付费推理或改写真实配置，消费效果报告 unverified。',
       '会话行为证据是模型回答或捕获请求体，不是网络抓包。',
       'claude/codebuddy 的用户级 settings.json 与 mimo/grok 的真实存储在探针后按字节恢复。',
     ],

@@ -255,6 +255,14 @@ export default {
     updateTitle: 'Cliora {{version}} is available. Click to see what’s new',
   },
   memory: {
+    missingDraft: 'The original file is no longer listed. Your unsaved draft is preserved; saving will check the file again.',
+    retryBodies: 'Retry body loading',
+    partialBodies: '{{count}} bodies could not be loaded; search may be incomplete. Retry or open an entry individually.',
+    userScopeSwitch: 'User memory',
+    projectScopeSwitch: 'All project memory',
+    nativeDefault: 'Native default; effective state unknown',
+    nativeDefaultShort: 'Native default',
+
     title: 'Memory',
     description: 'Long-term memory {{tool}} keeps across sessions. Grouped by source; read, edit, and tidy it here.',
     refresh: 'Refresh memory',

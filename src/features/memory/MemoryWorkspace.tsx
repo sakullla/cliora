@@ -14,14 +14,31 @@ import { writeClipboard } from '../../lib/clipboard';
 import { useFeedback } from '../../lib/toast';
 import { modLabel, withMod } from '../../lib/shortcut';
 import { displayPath } from '../../lib/paths';
-import type { MemoryAggregate, MemoryManagement, MemoryOperation, MemoryStoreEntry, MemoryTarget } from '../../types/native';
+import type { MemoryAggregate, MemoryReadRequest, MemoryManagement, MemoryOperation, MemoryStoreEntry, MemoryTarget } from '../../types/native';
 import { createTemplate, fileName, parseMemory, relativeTime, storeLabelParts, type ParsedMemory } from './memoryDocument';
 import styles from './MemoryWorkspace.module.css';
+
+// Shared across remounts so switching tools cannot exceed two native batches.
+const bodySlots: Promise<void>[] = [Promise.resolve(), Promise.resolve()];
+let nextBodySlot = 0;
+async function readBatch(requests: MemoryReadRequest[], current: () => boolean) {
+  const slot = nextBodySlot++ % bodySlots.length;
+  const previous = bodySlots[slot];
+  let release!: () => void;
+  bodySlots[slot] = new Promise<void>(resolve => { release = resolve; });
+  await previous;
+  try { return current() ? await native.readMemories(requests) : null; }
+  finally { release(); }
+}
 
 const MemoryMarkdown = lazy(() => import('./MemoryMarkdown'));
 
 type Failure = { message: string; retry: (() => Promise<void>) | null };
-type Doc = { text: string; fingerprint: string };
+type Doc = { text: string; fingerprint: string; parsed: ParsedMemory; search: string };
+function documentCache(id: string, text: string, fingerprint: string): Doc {
+  const parsed = parseMemory(id, text);
+  return { text, fingerprint, parsed, search: [id, parsed.title, parsed.description, parsed.body].join("\n").toLocaleLowerCase() };
+}
 type OpenEntry = { key: string; target: MemoryTarget; id: string; text: string; fingerprint: string };
 type Compose = { destination: string; id: string; text: string; template: string };
 type Store = { key: string; label: string; name: string; path: string; directory: string; target: MemoryTarget; inUse: boolean; detail: string; entryCount: number };
@@ -39,7 +56,7 @@ function isExternalChange(error: unknown): boolean {
 
 /** One store behind the aggregate. */
 function storeKey(target: MemoryTarget): string {
-  return JSON.stringify([target.scope, target.projectPath ?? null, target.contextId ?? null, target.storeDirectory ?? null]);
+  return JSON.stringify([target.toolId, target.scope, target.projectPath ?? null, target.contextId ?? null, target.storeDirectory ?? null]);
 }
 
 function samePath(left: string, right: string): boolean {
@@ -69,14 +86,18 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
   const [split, setSplit] = useState<HTMLDivElement | null>(null);
   const [propertiesOpen, setPropertiesOpen] = useState(false);
   const [aggregate, setAggregate] = useState<MemoryAggregate | null>(null);
+  const aggregateRef = useRef(aggregate); aggregateRef.current = aggregate;
   const [docs, setDocs] = useState<Record<string, Doc | null>>({});
+  const [docErrors, setDocErrors] = useState<Record<string, string>>({});
   const [listFailure, setListFailure] = useState<Failure | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [opened, setOpened] = useState<OpenEntry | null>(null);
+  const openedRef = useRef(opened); openedRef.current = opened;
   const [reading, setReading] = useState(false);
   const [mode, setMode] = useState<'read' | 'edit'>('read');
   const [draft, setDraft] = useState('');
+  const [missingDraft, setMissingDraft] = useState(false);
   const [compose, setCompose] = useState<Compose | null>(null);
   const [picked, setPicked] = useState<string[]>([]);
   const [failure, setFailure] = useState<Failure | null>(null);
@@ -115,41 +136,99 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
   }, [split]);
 
   const loadEpoch = useRef(0);
-  // Bodies are read per entry over the existing read IPC for titles, summaries,
-  // and search. Failures are silent: an unreadable body still lists its entry.
-  const loadDocs = useCallback(async (value: MemoryAggregate) => {
-    const epoch = ++loadEpoch.current;
-    const results = await Promise.allSettled(value.entries.map(async entry => {
-      const document = await native.readMemory(entry.target, entry.id);
-      return { text: document.text, fingerprint: document.fingerprint };
-    }));
-    if (!mounted.current || epoch !== loadEpoch.current) return;
-    setDocs(Object.fromEntries(value.entries.map((entry, index) => {
-      const result = results[index];
-      return [`${storeKey(entry.target)}:${entry.id}`, result.status === 'fulfilled' ? result.value : null];
-    })));
-  }, []);
+  const readEpoch = useRef(0);
+  const docsRef = useRef<Record<string, Doc | null>>({});
+  const docRevision = useRef<Record<string, number>>({});
+  const publishDocs = useCallback((value: Record<string, Doc | null>) => { docsRef.current = value; setDocs(value); }, []);
+  const cacheDocument = (key: string, id: string, text: string, fingerprint: string) => {
+    setDocErrors(previous => { const next = { ...previous }; delete next[key]; return next; });
+    docRevision.current[key] = (docRevision.current[key] ?? 0) + 1;
+    publishDocs({ ...docsRef.current, [key]: documentCache(id, text, fingerprint) });
+  };
+  // Two bounded batches in flight; unchanged fingerprints retain parsed bodies.
+  const loadDocs = useCallback(async (value: MemoryAggregate, epoch: number) => {
+    const next: Record<string, Doc | null> = {};
+    const pending: MemoryStoreEntry[] = [];
+    for (const entry of value.entries) {
+      const key = `${storeKey(entry.target)}:${entry.id}`;
+      const cached = docsRef.current[key];
+      if (cached?.fingerprint === entry.fingerprint) next[key] = cached;
+      else pending.push(entry);
+    }
+    publishDocs(next);
+    setDocErrors({});
+    // Refresh the open document through the unrestricted single read. It must
+    // not wait behind slow batches or retain stale text after a batch size limit.
+    const focusedIndex = dirtyRef.current ? -1 : pending.findIndex(entry => `${storeKey(entry.target)}:${entry.id}` === openedRef.current?.key);
+    const focused = focusedIndex >= 0 ? pending.splice(focusedIndex, 1)[0] : null;
+    const refreshFocused = async () => {
+      if (!focused) return;
+      const key = `${storeKey(focused.target)}:${focused.id}`;
+      const revision = docRevision.current[key] ?? 0;
+      try {
+        const document = await native.readMemory(focused.target, focused.id);
+        if (!mounted.current || epoch !== loadEpoch.current || (docRevision.current[key] ?? 0) !== revision) return;
+        publishDocs({ ...docsRef.current, [key]: documentCache(focused.id, document.text, document.fingerprint) });
+      } catch (error) {
+        if (!mounted.current || epoch !== loadEpoch.current || (docRevision.current[key] ?? 0) !== revision) return;
+        publishDocs({ ...docsRef.current, [key]: null });
+        setDocErrors(previous => ({ ...previous, [key]: formatFailure(error, t('common.memory.readFailed'), t('common.memory.retryNext')) }));
+      }
+    };
+    let offset = 0;
+    const worker = async () => {
+      while (mounted.current && epoch === loadEpoch.current && offset < pending.length) {
+        const batch = pending.slice(offset, offset += 32);
+        const revisions = batch.map(entry => docRevision.current[`${storeKey(entry.target)}:${entry.id}`] ?? 0);
+        const results = await readBatch(batch.map(entry => ({ target: entry.target, id: entry.id })), () => mounted.current && epoch === loadEpoch.current).catch(() => null);
+        if (!mounted.current || epoch !== loadEpoch.current) return;
+        const updated = { ...docsRef.current };
+        const errors: Record<string, string> = {};
+        batch.forEach((entry, index) => {
+          const key = `${storeKey(entry.target)}:${entry.id}`;
+          if ((docRevision.current[key] ?? 0) !== revisions[index]) return;
+          const document = results?.[index]?.document;
+          if (!document) errors[key] = results?.[index]?.error || t('common.memory.readFailed');
+          updated[key] = document ? documentCache(entry.id, document.text, document.fingerprint) : null;
+        });
+        publishDocs(updated);
+        setDocErrors(previous => ({ ...previous, ...errors }));
+      }
+    };
+    await Promise.all([refreshFocused(), worker(), worker()]);
+  }, [publishDocs, t]);
 
-  const reload = useCallback(async () => {
+  const reload = useCallback(async (): Promise<MemoryAggregate | null> => {
+    const epoch = ++loadEpoch.current;
+    ++readEpoch.current;
+    setReading(false);
     setRefreshing(true);
     try {
       const value = await native.listAllMemories(toolId);
-      if (!mounted.current) return;
+      if (!mounted.current || epoch !== loadEpoch.current) return null;
+      // An externally deleted entry must not make an unsaved editor disappear.
+      setMissingDraft(false);
+      const editingKey = dirtyRef.current ? openedRef.current?.key : null;
+      if (editingKey && !value.entries.some(entry => `${storeKey(entry.target)}:${entry.id}` === editingKey)) {
+        const retained = aggregateRef.current?.entries.find(entry => `${storeKey(entry.target)}:${entry.id}` === editingKey);
+        if (retained) { value.entries.push(retained); setMissingDraft(true); }
+      }
       setAggregate(value);
       setListFailure(null);
-      void loadDocs(value);
+      void loadDocs(value, epoch);
+      return value;
     } catch (error) {
-      if (!mounted.current) return;
-      setAggregate(null);
-      setDocs({});
-      setListFailure({ message: formatFailure(error, t('common.memory.listFailed'), t('common.memory.retryNext')), retry: () => reload() });
-    } finally { if (mounted.current) setRefreshing(false); }
+      if (!mounted.current || epoch !== loadEpoch.current) return null;
+      setListFailure({ message: formatFailure(error, t('common.memory.listFailed'), t('common.memory.retryNext')), retry: async () => { await reload(); } });
+      return null;
+    } finally { if (mounted.current && epoch === loadEpoch.current) setRefreshing(false); }
   }, [toolId, t, loadDocs]);
 
   useEffect(() => {
-    setAggregate(null); setDocs({}); setSelected(null); setOpened(null); setDraft(''); setMode('read');
+    ++loadEpoch.current; ++readEpoch.current; docRevision.current = {};
+    setAggregate(null); publishDocs({}); setSelected(null); setOpened(null); setDraft(''); setMode('read');
     setCompose(null); setFailure(null); setBusy(false); setQuery(''); setSource('all'); setKind('all'); setPicked([]);
-  }, [toolId]);
+  }, [toolId, publishDocs]);
   useEffect(() => { if (active) void reload(); }, [active, reload]);
 
   const report = useCallback((error: unknown, summary: string, retry: (() => Promise<void>) | null) => {
@@ -178,7 +257,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
     const store = storeKey(entry.target);
     const key = `${store}:${entry.id}`;
     const doc = docs[key];
-    const parsed = doc ? parseMemory(entry.id, doc.text) : null;
+    const parsed = doc?.parsed ?? null;
     return { entry, key, store, parsed, pending: !(key in docs), modified: relativeTime(parsed?.modified ?? null, i18n.language) };
   }), [aggregate, docs, i18n.language]);
 
@@ -188,14 +267,14 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
   }, [rows]);
 
   const needle = query.trim().toLocaleLowerCase();
-  const visible = rows.filter(row => {
+  const visible = useMemo(() => rows.filter(row => {
     if (source !== 'all' && row.store !== source) return false;
     if (kind !== 'all' && row.parsed?.type !== kind) return false;
     if (!needle) return true;
-    const haystack = [row.entry.id, row.parsed?.title, row.parsed?.description, row.entry.sourceLabel, row.parsed ? row.parsed.body : ''].join('\n').toLocaleLowerCase();
+    const haystack = (docs[row.key]?.search ?? row.entry.id.toLocaleLowerCase()) + '\n' + row.entry.sourceLabel.toLocaleLowerCase();
     return haystack.includes(needle);
-  });
-  const groups = stores
+  }), [rows, source, kind, needle, docs]);
+  const groups = useMemo(() => stores
     .filter(store => source === 'all' || store.key === source)
     .map(store => ({
       store,
@@ -203,8 +282,8 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
       latest: Math.max(0, ...rows.filter(row => row.store === store.key).map(row => row.modified?.time ?? 0)),
     }))
     .filter(group => group.rows.length > 0)
-    .sort((left, right) => Number(right.store.target.scope === 'global') - Number(left.store.target.scope === 'global') || right.latest - left.latest || right.store.entryCount - left.store.entryCount);
-  const ordered = groups.flatMap(group => collapsed.has(group.store.key) ? [] : group.rows);
+    .sort((left, right) => Number(right.store.target.scope === 'global') - Number(left.store.target.scope === 'global') || right.latest - left.latest || right.store.entryCount - left.store.entryCount), [stores, rows, visible, source]);
+  const ordered = useMemo(() => groups.flatMap(group => collapsed.has(group.store.key) ? [] : group.rows), [groups, collapsed]);
   const filtering = !!needle || source !== 'all' || kind !== 'all';
   // Stores without entries stay valid write destinations but are not listed.
   const listedStores = stores.filter(store => rows.some(row => row.store === store.key));
@@ -213,7 +292,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
   const current = rows.find(row => row.key === selected) ?? null;
   const currentStore = current ? stores.find(store => store.key === current.store) ?? null : null;
   const currentDoc = current ? (opened?.key === current.key ? { text: opened.text, fingerprint: opened.fingerprint } : docs[current.key] ?? null) : null;
-  const currentParsed = current && currentDoc ? parseMemory(current.entry.id, currentDoc.text) : current?.parsed ?? null;
+  const currentParsed = useMemo(() => current && currentDoc ? parseMemory(current.entry.id, currentDoc.text) : current?.parsed ?? null, [current?.entry.id, currentDoc?.text, current?.parsed]);
   const editing = mode === 'edit' && !!opened && opened.key === selected && can('edit');
   const focusWriting = editing || !!compose;
   // Writing keeps the whole split in view when a short window made the page scroll.
@@ -224,10 +303,19 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
   }, [focusWriting, split]);
   const dirty = (editing && draft !== opened!.text) || (!!compose && (compose.id.trim() !== '' || compose.text !== compose.template));
   const dirtyRef = useRef(dirty); dirtyRef.current = dirty;
+  useEffect(() => {
+    if (!opened || dirty || busy) return;
+    const fresh = docs[opened.key];
+    if (fresh && fresh.fingerprint !== opened.fingerprint) {
+      setOpened({ ...opened, text: fresh.text, fingerprint: fresh.fingerprint });
+      setDraft(fresh.text);
+    }
+  }, [docs, opened, dirty, busy]);
   useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
   useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
 
-  const shared = !!aggregate?.switchShared;
+  const switchGroups = aggregate?.switchGroups ?? [];
+  const shared = !!aggregate?.switchShared || switchGroups.length > 0;
   const masterStore = stores[0] ?? null;
 
   // ---------- Destinations for new entries ----------
@@ -265,7 +353,6 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
     return confirmAction(t('common.memory.abandonMessage'), () => mounted.current, { title: t('common.memory.abandonTitle'), confirmLabel: t('common.memory.abandonConfirm'), destructive: true });
   }
 
-  const readEpoch = useRef(0);
   async function openRow(row: Row, nextMode: 'read' | 'edit' = 'read') {
     const epoch = ++readEpoch.current;
     setSelected(row.key);
@@ -276,7 +363,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
       const value = await native.readMemory(row.entry.target, row.entry.id);
       if (!mounted.current || epoch !== readEpoch.current) return;
       setOpened({ key: row.key, target: row.entry.target, id: value.id, text: value.text, fingerprint: value.fingerprint });
-      setDocs(previous => ({ ...previous, [row.key]: { text: value.text, fingerprint: value.fingerprint } }));
+      cacheDocument(row.key, row.entry.id, value.text, value.fingerprint);
       setDraft(value.text);
       setFailure(null);
     } catch (error) {
@@ -288,19 +375,24 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
   }
 
   async function select(row: Row) {
-    if (row.key === selected && !compose) return;
+    if (busy) return;
+    if (row.key === selected && !compose && !docErrors[row.key]) return;
     if (!await mayLeave()) return;
     await openRow(row);
   }
 
   async function startEdit() {
-    if (!current) return;
+    if (!current || busy) return;
     if (opened?.key === current.key) { setDraft(opened.text); setMode('edit'); return; }
     await openRow(current, 'edit');
   }
 
   async function stopEdit() {
     if (!await mayLeave()) return;
+    if (missingDraft) {
+      dirtyRef.current = false; setSelected(null); setOpened(null); setDraft(''); setMode('read');
+      await reload(); return;
+    }
     if (opened) setDraft(opened.text);
     setMode('read');
   }
@@ -309,6 +401,8 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
     if (!opened) return;
     const target = opened;
     const text = draft;
+    ++loadEpoch.current; ++readEpoch.current;
+    setReading(false);
     setBusy(true);
     try {
       let writeExternal = confirmExternal;
@@ -326,7 +420,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
       const saved = await native.saveMemory({ target: target.target, id: target.id, text, baseline: target.text, confirmExternal: writeExternal });
       if (!mounted.current) return;
       setOpened({ ...target, id: saved.id, text: saved.text, fingerprint: saved.fingerprint });
-      setDocs(previous => ({ ...previous, [target.key]: { text: saved.text, fingerprint: saved.fingerprint } }));
+      cacheDocument(target.key, saved.id, saved.text, saved.fingerprint);
       setDraft(value => value === text ? saved.text : value);
       setMode('read');
       setFailure(null);
@@ -341,6 +435,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
         await saveOpened(true);
         return;
       }
+      await reload();
       report(error, t('common.memory.saveFailed'), () => saveOpened(confirmExternal));
     } finally { if (mounted.current) setBusy(false); }
   }
@@ -371,6 +466,8 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
     if (!idValid(id)) { setFailure({ message: t('common.memory.idInvalid'), retry: null }); return; }
     if (!confirmExternal && rows.some(row => row.entry.id === id && storeKey(row.entry.target) === storeKey(destination.target))) { setFailure({ message: t('common.memory.idTaken', { id }), retry: null }); return; }
     const text = compose.text;
+    ++loadEpoch.current; ++readEpoch.current;
+    setReading(false);
     setBusy(true);
     try {
       const saved = await native.saveMemory({ target: destination.target, id, text, baseline: '', confirmExternal });
@@ -378,11 +475,9 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
       setCompose(null);
       setFailure(null);
       feedback.setNotice(t('common.memory.createdNotice', { title: parseMemory(id, saved.text).title }));
-      const value = await native.listAllMemories(toolId).catch(() => null);
+      const value = await reload();
       if (!mounted.current) return;
       if (value) {
-        setAggregate(value);
-        void loadDocs(value);
         const created = value.entries.find(entry => entry.id === saved.id && (samePath(entry.path, saved.path) || storeKey(entry.target) === storeKey(destination.target)));
         if (created) {
           const key = `${storeKey(created.target)}:${created.id}`;
@@ -390,7 +485,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
           setMode('read');
           setOpened({ key, target: created.target, id: saved.id, text: saved.text, fingerprint: saved.fingerprint });
           setDraft(saved.text);
-          setDocs(previous => ({ ...previous, [key]: { text: saved.text, fingerprint: saved.fingerprint } }));
+          cacheDocument(key, saved.id, saved.text, saved.fingerprint);
         }
       } else await reload();
     } catch (error) {
@@ -402,11 +497,14 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
         await createMemory(true);
         return;
       }
+      await reload();
       report(error, t('common.memory.saveFailed'), () => createMemory(confirmExternal));
     } finally { if (mounted.current) setBusy(false); }
   }
 
   async function remove(row: Row, baseline: string) {
+    ++loadEpoch.current; ++readEpoch.current;
+    setReading(false);
     setBusy(true);
     try {
       await native.deleteMemory({ target: row.entry.target, id: row.entry.id, baseline });
@@ -425,6 +523,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
       await reload();
     } catch (error) {
       if (!mounted.current) return;
+      await reload();
       report(error, t('common.memory.deleteFailed'), () => remove(row, baseline));
     } finally { if (mounted.current) setBusy(false); }
   }
@@ -453,6 +552,8 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
   }
 
   async function setEnabled(enabled: boolean, target: MemoryTarget, id?: string) {
+    ++loadEpoch.current; ++readEpoch.current;
+    setReading(false);
     setBusy(true);
     try {
       await native.setMemoryEnabled({ target, id: id ?? null, enabled });
@@ -461,7 +562,21 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
       await reload();
     } catch (error) {
       if (!mounted.current) return;
+      await reload();
       report(error, t('common.memory.saveFailed'), () => setEnabled(enabled, target, id));
+    } finally { if (mounted.current) setBusy(false); }
+  }
+
+  async function setGroupEnabled(groupId: string, enabled: boolean) {
+    ++loadEpoch.current; ++readEpoch.current;
+    setBusy(true);
+    try {
+      await native.setMemorySwitchGroup(toolId, groupId, enabled);
+      if (!mounted.current) return;
+      setFailure(null);
+      await reload();
+    } catch (error) {
+      if (mounted.current) { await reload(); report(error, t('common.memory.saveFailed'), () => setGroupEnabled(groupId, enabled)); }
     } finally { if (mounted.current) setBusy(false); }
   }
 
@@ -483,6 +598,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
   }
 
   function onListKey(event: KeyboardEvent<HTMLElement>) {
+    if (busy) return;
     if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp' && event.key !== 'Home' && event.key !== 'End') return;
     if (!ordered.length) return;
     event.preventDefault();
@@ -526,7 +642,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
   const composeDestination = compose ? destinations.find(item => item.value === compose.destination) ?? null : null;
   const composeIdError = compose && compose.id.trim() && !idValid(compose.id.trim()) ? t('common.memory.idInvalid') : '';
 
-  const master = can('master_switch') && shared ? masterStore : null;
+  const master = can('master_switch') && shared && switchGroups.length === 0 ? masterStore : null;
   const anyOff = stores.some(store => !store.inUse);
   const offWithoutSwitch = anyOff && !can('master_switch');
 
@@ -547,9 +663,21 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
       </div>
     </header>
 
+    {aggregate && switchGroups.length > 0 && <div className={styles.scopeSwitches}>
+      {switchGroups.map(group => <div key={group.id} className={styles.scopeSwitch}>
+        <div><strong>{t(group.scope === 'global' ? 'common.memory.userScopeSwitch' : 'common.memory.projectScopeSwitch')}</strong><span>{group.enabled === null ? t('common.memory.nativeDefault') : group.enabled ? t('common.memory.autoOnShort') : t('common.memory.autoOffShort')}</span></div>
+        {can('master_switch') && <select aria-label={t(group.scope === 'global' ? 'common.memory.userScopeSwitch' : 'common.memory.projectScopeSwitch')} value={group.enabled === null ? 'default' : group.enabled ? 'on' : 'off'} disabled={busy} onChange={event => void setGroupEnabled(group.id, event.target.value === 'on')}>
+          {group.enabled === null && <option value="default" disabled>{t('common.memory.nativeDefaultShort')}</option>}
+          <option value="on">{t('common.memory.autoOnShort')}</option><option value="off">{t('common.memory.autoOffShort')}</option>
+        </select>}
+      </div>)}
+    </div>}
+
     {aggregate && (master && !master.inUse || offWithoutSwitch) && <p className={styles.offNote} role="status"><Icon name="eyeOff" size={14} /><strong>{t('common.memory.notInUse')}</strong><span>{((detail: string) => detail && detail !== t('common.memory.notInUse') ? detail : t('common.memory.notInUseHint'))((master ? master.detail : stores.find(store => !store.inUse)?.detail) ?? '')}</span></p>}
     {aggregate && limitation && <p className={styles.limitNote}><Icon name={showWrites ? 'info' : 'lock'} size={13} /><span role="status">{limitation}</span></p>}
 
+    {missingDraft && <StatusBanner tone="warning">{t('common.memory.missingDraft')}</StatusBanner>}
+    {Object.keys(docErrors).length > 0 && <StatusBanner tone="warning" action={<button type="button" className="button" disabled={busy || refreshing} onClick={() => void reload()}>{t('common.memory.retryBodies')}</button>}>{t('common.memory.partialBodies', { count: Object.keys(docErrors).length })} {Object.values(docErrors)[0]}</StatusBanner>}
     {listFailure && <StatusBanner tone="error" action={listFailure.retry ? <button type="button" className="button" onClick={() => { const retry = listFailure.retry; setListFailure(null); void retry?.(); }}>{t('common.memory.retry')}</button> : undefined}>{listFailure.message}</StatusBanner>}
     {failure && <StatusBanner tone="error" onDismiss={() => setFailure(null)} action={failure.retry ? <button type="button" className="button" onClick={() => { const retry = failure.retry; setFailure(null); void retry?.(); }}>{t('common.memory.retry')}</button> : undefined}>{failure.message}</StatusBanner>}
     {aggregate && aggregate.failedSources.length > 0 && <div className={styles.sourceFailures}>{aggregate.failedSources.map(item => <p key={item.label} role="status"><Icon name="alert" size={14} />{t('common.memory.sourceFailed', { label: item.label, reason: item.reason })}</p>)}</div>}
@@ -584,13 +712,13 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
                       <span className={styles.groupName}><strong>{group.store.name}</strong>{group.store.path && <small>{group.store.path}</small>}</span>
                       <span className={styles.groupCount}>{filtering ? `${group.rows.length}/${group.store.entryCount}` : group.store.entryCount}</span>
                     </button>
-                    {!group.store.inUse && !master && <span className={styles.offBadge} title={group.store.detail || t('common.memory.notInUse')}>{t('common.memory.storeOff')}</span>}
+                    {!group.store.inUse && !master && !switchGroups.some(item => item.scope === group.store.target.scope && item.enabled === null) && <span className={styles.offBadge} title={group.store.detail || t('common.memory.notInUse')}>{t('common.memory.storeOff')}</span>}
                     {can('master_switch') && !shared && <Switch checked={group.store.inUse} label={t('common.memory.masterFor', { source: group.store.label })} disabled={busy} onChange={value => void setEnabled(value, group.store.target)} />}
                   </div>
                   {!closed && group.rows.map(row => {
                     const title = row.parsed?.title ?? row.entry.id;
                     const summary = row.parsed ? (row.parsed.description || row.parsed.excerpt) : '';
-                    return <button key={row.key} type="button" tabIndex={selected === row.key || (!selected && row === ordered[0]) ? 0 : -1} data-key={row.key} aria-current={selected === row.key || undefined} className={styles.item} data-disabled={!row.entry.enabled || undefined} onClick={() => void select(row)}>
+                    return <button key={row.key} type="button" tabIndex={selected === row.key || (!selected && row === ordered[0]) ? 0 : -1} data-key={row.key} disabled={busy} aria-current={selected === row.key || undefined} className={styles.item} data-disabled={!row.entry.enabled || undefined} onClick={() => void select(row)}>
                       <span className={styles.itemTitle}><strong title={title}>{title}</strong>{row.parsed?.type && <span className={styles.typeBadge} data-type={row.parsed.type}>{typeLabel(row.parsed.type)}</span>}{!row.entry.enabled && <span className={styles.typeBadge} data-type="off">{t('common.memory.disabledBadge')}</span>}</span>
                       {summary ? <span className={styles.itemSummary}>{summary}</span> : row.pending && <span className={styles.itemSummaryPending} aria-hidden="true" />}
                       <span className={styles.itemMeta}><span className={styles.mono}>{fileName(row.entry.path)}</span>{row.modified && <time dateTime={row.parsed?.modified ?? undefined} title={row.modified.absolute}>{row.modified.text}</time>}</span>
@@ -650,8 +778,8 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
               <div className={styles.detailBar}>
                 {can('edit')
                   ? <div className={styles.segmented} role="group" aria-label={t('common.memory.viewMode')}>
-                    <button type="button" aria-pressed={!editing} onClick={() => { if (editing) void stopEdit(); }}><Icon name="eye" size={14} />{t('common.memory.read')}</button>
-                    <button type="button" aria-pressed={editing} disabled={reading && !editing} onClick={() => { if (!editing) void startEdit(); }}><Icon name="pencil" size={14} />{t('common.memory.edit')}</button>
+                    <button type="button" aria-pressed={!editing} disabled={busy} onClick={() => { if (editing) void stopEdit(); }}><Icon name="eye" size={14} />{t('common.memory.read')}</button>
+                    <button type="button" aria-pressed={editing} disabled={busy || (reading && !editing)} onClick={() => { if (!editing) void startEdit(); }}><Icon name="pencil" size={14} />{t('common.memory.edit')}</button>
                   </div>
                   : <span className={styles.readOnlyPill}><Icon name="lock" size={12} />{t('common.memory.readOnly')}</span>}
                 <span className={styles.barGap} />

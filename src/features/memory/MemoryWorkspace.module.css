@@ -319,3 +319,9 @@
 @container memory (max-width: 520px) {
   .headActions { width: 100%; justify-content: flex-end; }
 }
+
+.scopeSwitches { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
+.scopeSwitch { flex: 1 1 260px; display: flex; gap: 12px; justify-content: space-between; align-items: center; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.scopeSwitch > div { display: grid; gap: 4px; font-size: 12px; min-width: 0; }
+.scopeSwitch span { color: var(--text-3); }
+.scopeSwitch select { max-width: 140px; background: var(--surface); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px; }

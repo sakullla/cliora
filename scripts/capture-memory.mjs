@@ -16,6 +16,15 @@ fs.mkdirSync(out, { recursive: true });
 const iso = (daysAgo) => new Date(Date.now() - daysAgo * 86400000).toISOString();
 const doc = (name, description, type, daysAgo, body) => `---\nname: ${name}\ndescription: "${description}"\nmetadata:\n  node_type: memory\n  type: ${type}\n  originSessionId: 0f6c2a5e-8f0b-4f61-9a43-2d1b6f0c11aa\n  modified: ${iso(daysAgo)}\n---\n\n${body}\n`;
 const fixtures = {
+  qoder_cn: {
+    name: 'Qoder CN', switchShared: false,
+    switchGroups: [{ id: 'autoMemoryUserScopeEnabled', scope: 'global', enabled: null, detail: '跟随原生默认，当前生效状态未知' }, { id: 'autoMemoryEnabled', scope: 'project', enabled: null, detail: '跟随原生默认，当前生效状态未知' }],
+    management: { scope: { global: true, project: true }, targets: ['project'], operations: ['list', 'open', 'create', 'edit', 'delete', 'master_switch'], limitation: '用户和项目记忆分别使用用户设置中的原生开关；项目设置及非交互环境可能覆盖，运行中的会话需重新加载。原生不支持单条启停。' },
+    stores: [
+      { label: '用户记忆', scope: 'global', directory: 'C:/Users/dev/.qoder-cn/memory', inUse: false, entries: { preferences: doc('用户偏好', '简洁回答，使用中文', 'user', 1, '项目说明与提交记录采用中文。') } },
+      { label: 'C--Users-dev-project-cliora', scope: 'project', directory: 'C:/Users/dev/.qoder-cn/projects/C--Users-dev-project-cliora/memory', inUse: false, entries: { architecture: doc('项目架构', '原生适配器与共享服务边界', 'project', 2, '配置、记忆目录和协议由适配器提供，共享事务服务负责安全写入。') } },
+    ],
+  },
   claude: {
     name: 'Claude Code', switchShared: true,
     management: { scope: { global: false, project: true }, targets: ['project'], operations: ['list', 'open', 'create', 'edit', 'delete', 'master_switch'], limitation: 'Claude Code 无单条记忆启停；总开关映射用户级 settings.json 的 autoMemoryEnabled，项目目录 .claude 下的同名键覆盖不在此处改写' },
@@ -64,14 +73,14 @@ function installMock(seed) {
   const aggregate = (toolId) => {
     const fixture = state.fixtures[toolId];
     const entries = []; const stores = [];
-    for (const store of fixture.stores) {
+    for (const store of (state.emptyQoder && toolId === 'qoder_cn' ? [] : fixture.stores)) {
       const inUse = state.off && fixture.switchShared ? false : store.inUse ?? true;
       const detail = inUse ? '' : '记忆当前未使用';
       const target = targetOf(toolId, store);
       stores.push({ label: store.label, directory: store.directory, target, inUse, detail, entryCount: Object.keys(store.entries).length });
       for (const id of Object.keys(store.entries)) entries.push({ id, path: `${store.directory}/${id}.md`, enabled: !(fixture.disabled ?? []).includes(id), fingerprint: `fp-${id}`, sourceLabel: store.label, target, inUse, detail });
     }
-    return { toolId, entries, failedSources: [], stores, switchShared: fixture.switchShared };
+    return { toolId, entries, failedSources: [], stores, switchShared: fixture.switchShared, switchGroups: fixture.switchGroups };
   };
   const find = (target, id) => state.fixtures[target.toolId].stores.find(store => store.directory === target.storeDirectory)?.entries[id];
   Object.assign(window, {
@@ -84,6 +93,7 @@ function installMock(seed) {
       if (command === 'get_registered_tool_workspace' || command === 'get_registered_tool_context') return { effectiveContextId: null, probe: { selectedPath: null, installations: [], nativeFiles: [], nativeWrites: { state: 'unknown', reason: '' }, interfaceFormats: [], installUrl: '', upgradeHint: '', dependencies: [], installCommand: null, upgradeCommand: null, providerPresets: [] }, profiles: [], binding: null, snapshots: [], recoveryNeeded: [], common: null, customPath: null };
       if (command === 'get_tray_status') return { available: false, error: null };
       if (command === 'list_all_memories') return aggregate(args.toolId);
+      if (command === 'read_memories') return args.requests.map(({ target, id }) => ({ document: { id, path: `${target.storeDirectory}/${id}.md`, text: find(target, id) ?? '', fingerprint: `fp-${id}`, enabled: true, inUse: true, detail: '' }, error: null }));
       if (command === 'read_memory') { const text = find(args.target, args.id) ?? ''; return { id: args.id, path: `${args.target.storeDirectory}/${args.id}.md`, text, fingerprint: `fp-${args.id}`, enabled: true, inUse: true, detail: '' }; }
       if (command === 'save_memory' || command === 'delete_memory' || command === 'set_memory_enabled') return null;
       if (command === 'plugin:event|listen' || command === 'plugin:event|unlisten') return 1;
@@ -93,6 +103,9 @@ function installMock(seed) {
 }
 
 const scenarios = [
+  { name: 'qoder-native-default', tool: 'Qoder CN', run: async page => { await page.getByRole('button', { name: /preferences.md/ }).click(); } },
+  { name: 'qoder-empty', tool: 'Qoder CN', seed: { emptyQoder: true } },
+  { name: 'qoder-create', tool: 'Qoder CN', seed: { emptyQoder: true }, run: async page => { await page.getByRole('button', { name: '新建记忆' }).first().click(); await page.getByRole('textbox', { name: '文件名' }).fill('project-notes'); } },
   { name: 'claude-overview', tool: 'Claude Code' },
   { name: 'claude-read', tool: 'Claude Code', run: async page => { await page.getByRole('button', { name: /Release ritual/ }).click(); } },
   { name: 'claude-properties', tool: 'Claude Code', run: async page => { await page.getByRole('button', { name: /Linux build server/ }).click(); await page.getByRole('button', { name: /^属性/ }).click(); } },
@@ -129,5 +142,8 @@ for (const theme of themes) for (const width of widths) for (const scenario of s
   await page.close();
 }
 await browser.close();
+fs.writeFileSync(`${out}/capture-memory-manifest.json`, JSON.stringify({ out, count: shots.length, problems, shots }, null, 2));
+fs.writeFileSync(`${out}/README.md`, `# Memory captures\n\nSynthetic native IPC; not native acceptance.\n\n${shots.length} screenshots; ${problems.length} page errors/overflow/action failures.\n`);
 fs.writeFileSync(`${out}/index.html`, `<!doctype html><meta charset="utf-8"><title>Memory captures</title><style>body{font:14px system-ui;background:#222;color:#eee}figure{display:inline-block;margin:12px;vertical-align:top}img{max-width:680px;border:1px solid #555}</style>${shots.map((file) => `<figure><img src="${file}"><figcaption>${file}</figcaption></figure>`).join('')}`);
 console.log(JSON.stringify({ out, count: shots.length, problems }, null, 2));
+if (problems.length) process.exitCode = 1;

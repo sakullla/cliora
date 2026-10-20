@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
 type MemoryTargetArgs = { toolId?: string; scope?: string; projectPath?: string | null; contextId?: string | null; storeDirectory?: string };
-type MemoryCall = { command: string; args: { toolId?: string; target?: MemoryTargetArgs; request?: { target?: MemoryTargetArgs; id?: string | null; text?: string; baseline?: string; confirmExternal?: boolean; enabled?: boolean }; id?: string } };
+type MemoryCall = { command: string; args: { toolId?: string; target?: MemoryTargetArgs; request?: { target?: MemoryTargetArgs; id?: string | null; text?: string; baseline?: string; confirmExternal?: boolean; enabled?: boolean }; id?: string; requests?: { target: MemoryTargetArgs; id: string }[] } };
 
 const readOnlyLimitation = '只读存储，不能新建、编辑、删除或启停';
 
@@ -63,7 +63,7 @@ async function install(page: Page, options: { catalog?: 'none' | 'session' | 'me
     });
     const off = () => state.mode === 'master-off';
     const entry = (id: string, store: string, sourceLabel: string, target: Record<string, unknown>) => ({
-      id, path: `${store}/${id}.md`, enabled: true, fingerprint: `fp-${id}`, sourceLabel, target, inUse: !off(), detail: off() ? '记忆当前未使用' : '',
+      id, path: `${store}/${id}.md`, enabled: true, fingerprint: state.fingerprints[id] ?? `fp-${id}`, sourceLabel, target, inUse: !off(), detail: off() ? '记忆当前未使用' : '',
     });
     const summarize = (entries: ReturnType<typeof entry>[], labels: [string, string, Record<string, unknown>][]) => labels.map(([label, directory, target]) => ({
       label, directory, target, inUse: !off(), detail: off() ? '记忆当前未使用' : '', entryCount: entries.filter(item => item.target === target).length,
@@ -105,6 +105,7 @@ async function install(page: Page, options: { catalog?: 'none' | 'session' | 'me
           if (command === 'get_registered_tool_workspace' || command === 'get_registered_tool_context') return workspace();
           if (command === 'get_tray_status') return { available: false, error: null };
           if (command === 'list_all_memories') return aggregateFor(args.toolId ?? '');
+          if (command === 'read_memories') return (args.requests ?? []).map(({ id }) => ({ document: state.mode === 'read-fail' ? null : { id, path: `${id}.md`, text: state.texts[id] ?? 'hello', fingerprint: state.fingerprints[id] ?? `fp-${id}`, enabled: true, inUse: !off(), detail: '' }, error: state.mode === 'read-fail' ? 'read failed' : null }));
           if (command === 'read_memory') {
             state.reads += 1;
             if (state.mode === 'read-fail') throw new Error('无法读取记忆，请重试');
@@ -371,7 +372,7 @@ test('failed read, save, and delete show the error and a retry', async ({ page }
   await entryButton(page, 'a-note').click();
   await expect(page.getByRole('alert')).toContainText('无法读取记忆，请重试');
   await setMode(page, 'normal');
-  await page.getByRole('button', { name: '重试' }).click();
+  await page.getByRole('button', { name: '重试', exact: true }).click();
   await expect(reader(page)).toContainText('from-a');
 
   await page.getByRole('button', { name: '编辑', exact: true }).click();
@@ -381,7 +382,7 @@ test('failed read, save, and delete show the error and a retry', async ({ page }
   await expect(page.getByRole('alert')).toContainText('无法保存记忆，请重试');
   await setMode(page, 'normal');
   const failedSaves = (await memoryCalls(page)).filter(call => call.command === 'save_memory').length;
-  await page.getByRole('button', { name: '重试' }).click();
+  await page.getByRole('button', { name: '重试', exact: true }).click();
   await expect(page.getByRole('alert')).toHaveCount(0);
   await expect.poll(async () => (await memoryCalls(page)).filter(call => call.command === 'save_memory' && call.args.request?.text === 'retry-save').length).toBe(failedSaves + 1);
 
@@ -391,7 +392,7 @@ test('failed read, save, and delete show the error and a retry', async ({ page }
   await expect(page.getByRole('alert')).toContainText('无法删除记忆，请重试');
   await expect(entryButton(page, 'a-note')).toBeVisible();
   await setMode(page, 'normal');
-  await page.getByRole('button', { name: '重试' }).click();
+  await page.getByRole('button', { name: '重试', exact: true }).click();
   await expect(entryButton(page, 'a-note')).toHaveCount(0);
 });
 
@@ -477,4 +478,215 @@ test('a project-only CLI without a configured project disables create and explai
   await expect(page.getByRole('button', { name: '新建记忆' })).toBeDisabled();
   await expect(page.getByText('暂无可写入的位置：Delta 在本机还没有记忆来源，也没有可用的项目。')).toBeVisible();
   expect((await memoryCalls(page)).some(call => call.command === 'save_memory')).toBe(false);
+});
+
+
+type BatchProbe = {
+  calls: number; bodies: number; focusedReads: number; active: number; peak: number; lists: number;
+  revision: number; changed: number; hold: boolean; releases: (() => void)[];
+  failId: string | null; saved: Record<string, string>;
+};
+async function installBatchProbe(page: Page, count = 1000) {
+  await install(page);
+  await page.addInitScript(({ count }) => {
+    const internals = (window as unknown as { __TAURI_INTERNALS__: { invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__;
+    const original = internals.invoke;
+    const probe: BatchProbe = { calls: 0, bodies: 0, focusedReads: 0, active: 0, peak: 0, lists: 0, revision: 0, changed: 0, hold: false, releases: [], failId: null, saved: {} };
+    (window as unknown as { __batch: BatchProbe }).__batch = probe;
+    const target = (store: number) => ({ toolId: 'alpha', scope: 'global', projectPath: null, storeDirectory: `C:/perf/${store}` });
+    const number = (id: string) => Number(id.replace('entry-', ''));
+    const fingerprint = (id: string) => probe.saved[id] ?? (number(id) < probe.changed ? `changed-${probe.revision}` : `fp-${id}`);
+    const document = (id: string, store: unknown) => ({ id, path: `${store}/${id}.md`, text: probe.saved[id] ?? `---\nname: Memo ${number(id)}\ntype: ${number(id) % 2 ? 'project' : 'user'}\n---\nBody ${id} ${fingerprint(id)}`, fingerprint: fingerprint(id), enabled: true, inUse: true, detail: '' });
+    internals.invoke = async (command, args = {}) => {
+      if (command === 'list_all_memories' && args.toolId === 'alpha') {
+        probe.lists++;
+        const entries = Array.from({ length: count }, (_, index) => ({ id: `entry-${index}`, path: `C:/perf/${Math.floor(index / 100)}/entry-${index}.md`, enabled: true, fingerprint: fingerprint(`entry-${index}`), sourceLabel: `Store ${Math.floor(index / 100)}`, target: target(Math.floor(index / 100)), inUse: true, detail: '' }));
+        const stores = Array.from({ length: Math.ceil(count / 100) }, (_, index) => ({ label: `Store ${index}`, directory: `C:/perf/${index}`, target: target(index), inUse: true, detail: '', entryCount: entries.filter(entry => entry.target.storeDirectory === target(index).storeDirectory).length }));
+        return { toolId: 'alpha', entries, stores, failedSources: [], switchShared: false };
+      }
+      if (command === 'read_memories') {
+        probe.calls++; probe.active++; probe.peak = Math.max(probe.peak, probe.active);
+        const requests = args.requests as { id: string; target: { storeDirectory: string } }[];
+        probe.bodies += requests.length;
+        const results = requests.map(request => request.id === probe.failId ? { document: null, error: 'fixture body unavailable' } : { document: document(request.id, request.target.storeDirectory), error: null });
+        if (probe.hold) await new Promise<void>(resolve => probe.releases.push(resolve));
+        else await new Promise(resolve => setTimeout(resolve, probe.calls % 2 ? 25 : 1));
+        probe.active--;
+        return results;
+      }
+      if (command === 'read_memory' && (args.target as { toolId?: string })?.toolId === 'alpha') { probe.focusedReads++; return document(args.id as string, (args.target as { storeDirectory: string }).storeDirectory); }
+      if (command === 'save_memory') {
+        const request = args.request as { id: string; text: string; target: { storeDirectory: string } };
+        probe.saved[request.id] = request.text;
+        return document(request.id, request.target.storeDirectory);
+      }
+      return original(command, args);
+    };
+  }, { count });
+}
+const batchState = (page: Page) => page.evaluate(() => {
+  const value = (window as unknown as { __batch: BatchProbe }).__batch;
+  return { calls: value.calls, bodies: value.bodies, focusedReads: value.focusedReads, active: value.active, peak: value.peak, lists: value.lists };
+});
+
+test('1000 memories use bounded batches, reuse fingerprints, and refresh an open body', async ({ page }) => {
+  await installBatchProbe(page);
+  const start = Date.now();
+  await openMemory(page);
+  await expect.poll(async () => (await batchState(page)).bodies).toBe(1000);
+  await expect.poll(async () => (await batchState(page)).active).toBe(0);
+  expect(await batchState(page)).toMatchObject({ calls: 32, bodies: 1000, peak: 2, lists: 1 });
+  console.log('MEMORY_UI_PERF cold', { ...await batchState(page), elapsedMs: Date.now() - start });
+  await page.getByRole('button', { name: '刷新记忆' }).click();
+  await expect.poll(async () => (await batchState(page)).lists).toBe(2);
+  await expect(page.getByRole('button', { name: '刷新记忆' })).toBeEnabled();
+  expect(await batchState(page)).toMatchObject({ calls: 32, bodies: 1000 });
+  await entryButton(page, 'entry-0').click();
+  await expect(reader(page)).toContainText('fp-entry-0');
+  await page.evaluate(() => { const p = (window as unknown as { __batch: BatchProbe }).__batch; p.changed = 3; p.revision = 1; });
+  await page.getByRole('button', { name: '刷新记忆' }).click();
+  await expect(reader(page)).toContainText('changed-1');
+  expect(await batchState(page)).toMatchObject({ calls: 33, bodies: 1002, focusedReads: 2, peak: 2, lists: 3 });
+  await page.getByRole('searchbox', { name: '搜索记忆' }).fill('changed-1');
+  await expect(page.getByText('3 / 1000 条')).toBeVisible();
+  console.log('MEMORY_UI_PERF warm_and_changed3', await batchState(page));
+});
+
+test('late batches cannot overwrite refreshed or saved bodies; failed entries can retry', async ({ page }) => {
+  await installBatchProbe(page, 100);
+  await page.addInitScript(() => { (window as unknown as { __batch: BatchProbe }).__batch.hold = true; });
+  await openMemory(page);
+  await expect.poll(async () => (await batchState(page)).active).toBe(2);
+  // A focused open bypasses the batch queue.
+  await entryButton(page, 'entry-0').click();
+  await expect(reader(page)).toContainText('fp-entry-0');
+  await page.getByRole('button', { name: '编辑', exact: true }).click();
+  await editor(page).fill('saved fresh body');
+  await page.getByRole('button', { name: '保存记忆' }).click();
+  await expect(reader(page)).toContainText('saved fresh body');
+  await page.evaluate(() => {
+    const p = (window as unknown as { __batch: BatchProbe }).__batch;
+    p.hold = false; p.failId = 'entry-1';
+    p.releases.splice(0).forEach(release => release());
+  });
+  await expect.poll(async () => (await batchState(page)).active).toBe(0);
+  await expect(reader(page)).toContainText('saved fresh body');
+  expect((await batchState(page)).peak).toBe(2);
+  await expect(page.getByRole('status').filter({ hasText: '搜索结果可能不完整' })).toBeVisible();
+  await page.evaluate(() => { (window as unknown as { __batch: BatchProbe }).__batch.failId = null; });
+  await page.getByRole('button', { name: '重试正文读取', exact: true }).click();
+  await expect(page.getByRole('status').filter({ hasText: '搜索结果可能不完整' })).toHaveCount(0);
+  await expect(entryButton(page, 'entry-1')).toContainText('Memo 1');
+});
+
+test('refresh preserves drafts and switching tools ignores old queued batches', async ({ page }) => {
+  await installBatchProbe(page, 100);
+  await openMemory(page);
+  await expect.poll(async () => (await batchState(page)).bodies).toBe(100);
+  await expect.poll(async () => (await batchState(page)).active).toBe(0);
+  await entryButton(page, 'entry-0').click();
+  await page.getByRole('button', { name: '编辑', exact: true }).click();
+  await editor(page).fill('unsaved draft');
+  await page.evaluate(() => { const p = (window as unknown as { __batch: BatchProbe }).__batch; p.changed = 100; p.revision = 2; p.hold = true; });
+  await page.getByRole('button', { name: '刷新记忆' }).click();
+  await expect.poll(async () => (await batchState(page)).active).toBe(2);
+  await page.evaluate(() => { const p = (window as unknown as { __batch: BatchProbe }).__batch; p.hold = false; p.releases.splice(0).forEach(release => release()); });
+  await expect.poll(async () => (await batchState(page)).active).toBe(0);
+  await expect(editor(page)).toContainText('unsaved draft');
+  await page.getByRole('button', { name: '撤销修改', exact: true }).click();
+  await page.getByRole('button', { name: '放弃更改', exact: true }).click();
+  await page.evaluate(() => { const p = (window as unknown as { __batch: BatchProbe }).__batch; p.revision = 3; p.hold = true; });
+  await page.getByRole('button', { name: '刷新记忆' }).click();
+  await expect.poll(async () => (await batchState(page)).active).toBe(2);
+  await page.getByRole('tab', { name: 'Beta', exact: true }).click();
+  await page.getByRole('tab', { name: '记忆', exact: true }).click();
+  await page.evaluate(() => { const p = (window as unknown as { __batch: BatchProbe }).__batch; p.hold = false; p.releases.splice(0).forEach(release => release()); });
+  await expect.poll(async () => (await batchState(page)).active).toBe(0);
+  await expect(entryButton(page, 'beta-note')).toBeVisible();
+  await expect(entryButton(page, 'entry-0')).toHaveCount(0);
+});
+
+test('scope switches remain reachable with no stores and preserve native-default unknown', async ({ page }) => {
+  await install(page);
+  await page.addInitScript(() => {
+    const api = (window as unknown as { __TAURI_INTERNALS__: { invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__;
+    const original = api.invoke;
+    const groups = [{ id: 'user', scope: 'global', enabled: null as boolean | null, detail: '' }, { id: 'project', scope: 'project', enabled: null as boolean | null, detail: '' }];
+    api.invoke = async (command, args = {}) => {
+      if (command === 'list_all_memories') return { toolId: args.toolId, entries: [], stores: [], failedSources: [], switchShared: false, switchGroups: groups.map(group => ({ ...group })) };
+      if (command === 'set_memory_switch_group') { groups.find(group => group.id === args.groupId)!.enabled = args.enabled as boolean; return null; }
+      return original(command, args);
+    };
+  });
+  await openMemory(page);
+  await expect(page.getByText('跟随原生默认，当前生效状态未知')).toHaveCount(2);
+  await expect(page.getByText('未使用', { exact: true })).toHaveCount(0);
+  await page.getByRole('combobox', { name: '所有项目记忆' }).selectOption('off');
+  await expect(page.getByRole('combobox', { name: '所有项目记忆' })).toHaveValue('off');
+  await expect(page.getByRole('combobox', { name: '用户记忆' })).toHaveValue('default');
+  await page.getByRole('combobox', { name: '用户记忆' }).selectOption('on');
+  await expect(page.getByRole('combobox', { name: '用户记忆' })).toHaveValue('on');
+  await expect(page.getByRole('button', { name: '新建记忆' }).first()).toBeEnabled();
+});
+
+
+test('refresh replaces a pending generation without starting extra concurrent batches', async ({ page }) => {
+  await installBatchProbe(page, 100);
+  await page.addInitScript(() => { (window as unknown as { __batch: BatchProbe }).__batch.hold = true; });
+  await openMemory(page);
+  await expect.poll(async () => (await batchState(page)).active).toBe(2);
+  await page.evaluate(() => { const p = (window as unknown as { __batch: BatchProbe }).__batch; p.changed = 100; p.revision = 9; });
+  await page.getByRole('button', { name: '刷新记忆' }).click();
+  await expect.poll(async () => (await batchState(page)).lists).toBe(2);
+  await page.evaluate(() => { const p = (window as unknown as { __batch: BatchProbe }).__batch; p.hold = false; p.releases.splice(0).forEach(release => release()); });
+  await expect.poll(async () => (await batchState(page)).bodies).toBe(164);
+  await expect.poll(async () => (await batchState(page)).active).toBe(0);
+  expect((await batchState(page)).peak).toBe(2);
+  await page.getByRole('searchbox', { name: '搜索记忆' }).fill('changed-9');
+  await expect(page.getByText('100 / 100 条')).toBeVisible();
+  await page.getByRole('searchbox', { name: '搜索记忆' }).fill('fp-entry');
+  await expect(page.getByText('0 / 100 条')).toBeVisible();
+});
+
+
+test('an externally deleted entry keeps its unsaved editor reachable after refresh', async ({ page }) => {
+  await installBatchProbe(page, 3);
+  await openMemory(page);
+  await entryButton(page, 'entry-0').click();
+  await page.getByRole('button', { name: '编辑', exact: true }).click();
+  await editor(page).fill('recoverable draft after deletion');
+  await page.evaluate(() => {
+    const api = (window as unknown as { __TAURI_INTERNALS__: { invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__;
+    const original = api.invoke;
+    api.invoke = async (command, args = {}) => {
+      const value = await original(command, args);
+      if (command === 'list_all_memories') {
+        const result = value as { entries: { id: string }[] };
+        return { ...result, entries: result.entries.filter(entry => entry.id !== 'entry-0') };
+      }
+      return value;
+    };
+  });
+  await page.getByRole('button', { name: '刷新记忆' }).click();
+  await expect(page.getByRole('button', { name: '刷新记忆' })).toBeEnabled();
+  await expect(editor(page)).toContainText('recoverable draft after deletion');
+  await expect(page.getByRole('button', { name: '保存记忆' })).toBeEnabled();
+});
+
+
+test('refreshing the open body bypasses held background batches', async ({ page }) => {
+  await installBatchProbe(page, 100);
+  await openMemory(page);
+  await expect.poll(async () => (await batchState(page)).bodies).toBe(100);
+  await expect.poll(async () => (await batchState(page)).active).toBe(0);
+  await entryButton(page, 'entry-0').click();
+  await expect(reader(page)).toContainText('fp-entry-0');
+  await page.evaluate(() => { const p = (window as unknown as { __batch: BatchProbe }).__batch; p.changed = 100; p.revision = 7; p.hold = true; });
+  await page.getByRole('button', { name: '刷新记忆' }).click();
+  await expect(reader(page)).toContainText('changed-7');
+  await expect.poll(async () => (await batchState(page)).active).toBe(2);
+  expect((await batchState(page)).focusedReads).toBe(2);
+  await page.evaluate(() => { const p = (window as unknown as { __batch: BatchProbe }).__batch; p.hold = false; p.releases.splice(0).forEach(release => release()); });
+  await expect.poll(async () => (await batchState(page)).active).toBe(0);
+  await expect(reader(page)).toContainText('changed-7');
 });

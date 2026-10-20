@@ -255,6 +255,14 @@ export default {
     updateTitle: '栖点 {{version}} 已发布，点击查看更新内容',
   },
   memory: {
+    missingDraft: '原文件已不在列表中，未保存的草稿已保留；保存时会重新校验文件。',
+    retryBodies: '重试正文读取',
+    partialBodies: '有 {{count}} 条正文尚未读入，搜索结果可能不完整。可重试或单独打开。',
+    userScopeSwitch: '用户记忆',
+    projectScopeSwitch: '所有项目记忆',
+    nativeDefault: '跟随原生默认，当前生效状态未知',
+    nativeDefaultShort: '原生默认',
+
     title: '记忆',
     description: '{{tool}} 跨会话保留的长期记忆。按来源分组，可直接阅读、编辑和整理。',
     refresh: '刷新记忆',
