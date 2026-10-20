@@ -932,9 +932,9 @@ test('Skill workspace shows the scan failure inline when the empty state is caus
   await page.goto('/');
   await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
   await page.getByRole('tab', { name: 'Skill', exact: true }).click();
-  await expect(page.getByText('这个 CLI 还没有生效的 Skill')).toBeVisible();
+  await expect(page.getByText('这个 CLI 还没有生效的 Skill')).toHaveCount(0);
   await expect(page.getByText('Skill 列表加载失败：读取 Skill 目录失败')).toBeVisible();
-  await expect(page.getByRole('button', { name: '添加 Skill', exact: true })).toHaveCount(2);
+  await expect(page.getByText('只管理用户目录下的本地插件')).toHaveCount(0);
 });
 
 test('accounts workspace shows skeleton rows on first read and a rediscover action in the empty state', async ({ page }) => {
@@ -966,4 +966,165 @@ test('accounts workspace shows skeleton rows on first read and a rediscover acti
   await emptyState.getByRole('button', { name: '重新发现登录' }).click();
   await expect.poll(() => page.evaluate(() => (window as any).__accountCommands.filter((command: string) => command === 'discover_native_logins').length)).toBe(2);
   await page.evaluate(() => (window as any).__nativeLoginHolders.forEach((release: () => void) => release()));
+});
+
+test('Skill list shows writable, read-only, and plugin skills and limits actions by source', async ({ page }) => {
+  await mockResources(page);
+  await page.goto('/');
+  await page.evaluate(() => {
+    const win = window as any;
+    win.__resourceSkillPackages.push({ id: 'pkg-1', name: 'managed-one', description: 'Managed copy', fileCount: 1, digest: 'new', source: 'library', compatibility: null, inLibrary: true });
+    win.__resourceNativeSkills.push(
+      { name: 'managed-one', path: '/tmp/skills/managed-one', digest: 'old', state: 'managed', detail: 'Managed copy', packageId: 'pkg-1', source: 'writable', pluginName: null, pluginEnabled: null },
+      { name: 'local-write', path: '/tmp/skills/local-write', digest: null, state: 'external', detail: 'Writable document', packageId: null, source: 'writable', pluginName: null, pluginEnabled: null },
+      { name: 'compat-read', path: '/tmp/skills/compat-read', digest: null, state: 'read_only', detail: '兼容目录，只读', packageId: null, source: 'read_only', pluginName: null, pluginEnabled: null },
+      { name: 'alpha-skill', path: '/tmp/plugins/alpha/skills/alpha-skill', digest: null, state: 'read_only', detail: 'Alpha document', packageId: null, source: 'plugin', pluginName: 'Alpha Pack', pluginEnabled: true },
+      { name: 'beta-skill', path: '/tmp/plugins/alpha/skills/beta-skill', digest: null, state: 'read_only', detail: 'Beta document', packageId: null, source: 'plugin', pluginName: 'Alpha Pack', pluginEnabled: true },
+      { name: 'gamma-skill', path: '/tmp/plugins/gamma/skills/gamma-skill', digest: null, state: 'read_only', detail: 'Gamma document', packageId: null, source: 'plugin', pluginName: 'Gamma Pack', pluginEnabled: false },
+      { name: 'quiet-skill', path: '/tmp/plugins/quiet/skills/quiet-skill', digest: null, state: 'read_only', detail: 'Quiet document', packageId: null, source: 'plugin', pluginName: 'Quiet Pack', pluginEnabled: null },
+      { name: 'bad-skill', path: '/tmp/plugins/alpha/skills/bad-skill', digest: null, state: 'unreadable', detail: 'SKILL.md 应为 UTF-8', packageId: null, source: 'plugin', pluginName: 'Alpha Pack', pluginEnabled: true },
+    );
+    const original = win.__TAURI_INTERNALS__.invoke;
+    win.__skillWrites = [];
+    win.__TAURI_INTERNALS__.invoke = async (command: string, args: Record<string, any> = {}) => {
+      if (command === 'read_native_skill') {
+        if (String(args.directory).includes('bad-skill')) throw { message: 'SKILL.md 应为 UTF-8' };
+        return { name: 'skill', path: args.directory, content: `# ${args.directory}` };
+      }
+      if (command === 'list_skill_installations') {
+        return args.packageId === 'pkg-1' ? [{ packageId: 'pkg-1', toolId: 'codex', scope: 'global', projectPath: null, contextId: null, targetPath: '/tmp/skills/managed-one', state: 'update_available', digest: 'old' }] : [];
+      }
+      if (command === 'get_skill_enabled') return true;
+      if (command === 'preview_skill_local' || command === 'import_skill_local' || command === 'save_native_skill') {
+        win.__skillWrites.push(command);
+        if (command === 'preview_skill_local') return { name: 'compat-read', source: args.source, digest: 'copy', existingDigest: null, fileCount: 1, changes: [], compatibility: null };
+        if (command === 'import_skill_local') return { id: 'copied', name: 'compat-read', description: '', compatibility: null, source: args.source, digest: 'copy', fileCount: 1, updatedAt: 1, inLibrary: false };
+        return null;
+      }
+      return original(command, args);
+    };
+  });
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('tab', { name: 'Skill', exact: true }).click();
+  await expect(page.getByText('这个 CLI 还没有生效的 Skill')).toHaveCount(0);
+  const alpha = page.getByRole('button', { name: /alpha-skill/ });
+  const beta = page.getByRole('button', { name: /beta-skill/ });
+  const gamma = page.getByRole('button', { name: /gamma-skill/ });
+  const quiet = page.getByRole('button', { name: /quiet-skill/ });
+  const bad = page.getByRole('button', { name: /bad-skill/ });
+  await expect(alpha).toContainText('插件');
+  await expect(alpha).toContainText('Alpha Pack');
+  await expect(alpha).toContainText('会随插件加载');
+  await expect(beta).toContainText('插件');
+  await expect(beta).toContainText('Alpha Pack');
+  await expect(gamma).toContainText('当前不会加载');
+  await expect(gamma).toContainText('Gamma Pack');
+  await expect(quiet).toContainText('插件');
+  await expect(quiet).toContainText('Quiet Pack');
+  await expect(quiet).toContainText('只读');
+  await expect(quiet).not.toContainText('当前不会加载');
+  await expect(quiet).not.toContainText('会随插件加载');
+  await expect(bad).toContainText('暂不可读取');
+  await expect(bad).toContainText('插件');
+  await expect(page.getByRole('button', { name: /compat-read/ })).toContainText('只读');
+  await expect(page.getByRole('button', { name: /local-write/ })).toContainText('本机目录');
+
+  await page.getByRole('button', { name: /managed-one/ }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByText('有更新')).toBeVisible();
+  await expect(dialog.getByRole('checkbox', { name: '启用 Skill' })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: '从当前工具移除' })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: '保存', exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  await page.getByRole('button', { name: /local-write/ }).click();
+  await expect(dialog.getByRole('button', { name: '保存', exact: true })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: '放进资料库' })).toBeVisible();
+  await expect(dialog.getByRole('textbox', { name: 'SKILL.md', exact: true })).toHaveAttribute('contenteditable', 'true');
+  await page.keyboard.press('Escape');
+
+  await page.getByRole('button', { name: /compat-read/ }).click();
+  await expect(dialog.getByRole('button', { name: '保存', exact: true })).toHaveCount(0);
+  await expect(dialog.getByRole('checkbox', { name: '启用 Skill' })).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: '从当前工具移除' })).toHaveCount(0);
+  await expect(dialog.getByRole('textbox', { name: 'SKILL.md', exact: true })).toHaveAttribute('contenteditable', 'false');
+  await dialog.getByRole('button', { name: '放进资料库' }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__skillWrites)).toEqual(['preview_skill_local', 'import_skill_local']);
+  await expect.poll(() => page.evaluate(() => (window as any).__skillWrites.includes('save_native_skill'))).toBe(false);
+  await page.keyboard.press('Escape');
+
+  await gamma.click();
+  await expect(dialog.getByText('Gamma Pack · 当前不会加载')).toBeVisible();
+  await expect(dialog.getByRole('button', { name: '保存', exact: true })).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: '放进资料库' })).toHaveCount(0);
+  await expect(dialog.getByRole('checkbox', { name: '启用 Skill' })).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: '从当前工具移除' })).toHaveCount(0);
+  await expect(dialog.getByRole('textbox', { name: 'SKILL.md', exact: true })).toHaveAttribute('contenteditable', 'false');
+  await page.keyboard.press('Escape');
+
+  await quiet.click();
+  await expect(dialog.getByText('Quiet Pack · 只读')).toBeVisible();
+  await expect(dialog.getByText('当前不会加载')).toHaveCount(0);
+  await expect(dialog.getByText('会随插件加载')).toHaveCount(0);
+  await page.keyboard.press('Escape');
+
+  await alpha.click();
+  await expect(dialog.getByRole('textbox', { name: 'SKILL.md', exact: true })).toContainText('/tmp/plugins/alpha/skills/alpha-skill');
+  await page.keyboard.press('Escape');
+  await bad.click();
+  await expect(page.getByText('SKILL.md 应为 UTF-8')).toBeVisible();
+  await expect(page.getByRole('button', { name: /alpha-skill/ })).toBeVisible();
+});
+
+test('Skill scan failure replaces an existing list instead of keeping it as complete', async ({ page }) => {
+  await mockResources(page);
+  await page.goto('/');
+  await page.evaluate(() => {
+    const win = window as any;
+    win.__resourceSkillPackages.push({ id: 'pkg-1', name: 'kept', description: 'Managed copy', fileCount: 1, digest: 'new', source: 'library', compatibility: null, inLibrary: true });
+    win.__resourceNativeSkills.push({ name: 'kept', path: '/tmp/skills/kept', digest: 'old', state: 'managed', detail: '', packageId: 'pkg-1', source: 'writable', pluginName: null, pluginEnabled: null });
+    win.__skillScans = 0;
+    const original = win.__TAURI_INTERNALS__.invoke;
+    win.__TAURI_INTERNALS__.invoke = async (command: string, args: Record<string, any> = {}) => {
+      if (command === 'scan_native_skills') {
+        win.__skillScans += 1;
+        if (win.__skillScans > 1) throw { message: '插件清单无法读取' };
+        return win.__resourceNativeSkills;
+      }
+      if (command === 'set_skill_enabled') return null;
+      if (command === 'get_skill_enabled') return true;
+      if (command === 'list_skill_installations') return [{ packageId: 'pkg-1', toolId: 'codex', scope: 'global', projectPath: null, contextId: null, targetPath: '/tmp/skills/kept', state: 'current', digest: 'old' }];
+      if (command === 'read_native_skill') return { name: 'kept', path: args.directory, content: '# kept' };
+      return original(command, args);
+    };
+  });
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await page.getByRole('tab', { name: 'Skill', exact: true }).click();
+  await page.getByRole('button', { name: /kept/ }).click();
+  await page.getByRole('checkbox', { name: '启用 Skill' }).click();
+  await expect(page.getByText('Skill 列表加载失败：插件清单无法读取')).toBeVisible();
+  await expect(page.getByText('这个 CLI 还没有生效的 Skill')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /kept/ })).toHaveCount(0);
+});
+
+test('Skill page without a project only asks for a project', async ({ page }) => {
+  await mockResources(page);
+  await page.addInitScript(() => {
+    localStorage.setItem('cliora:workspace-context', JSON.stringify({ codex: { resource: 'skills', scope: 'project', projectPath: '' } }));
+  });
+  await page.goto('/');
+  await page.evaluate(() => {
+    const win = window as any;
+    win.__skillScans = 0;
+    const original = win.__TAURI_INTERNALS__.invoke;
+    win.__TAURI_INTERNALS__.invoke = async (command: string, args: Record<string, any> = {}) => {
+      if (command === 'scan_native_skills') { win.__skillScans += 1; return []; }
+      return original(command, args);
+    };
+  });
+  await page.getByRole('navigation', { name: '页面' }).getByRole('button', { name: '工具与连接' }).click();
+  await expect(page.getByText('请先选择项目目录。')).toBeVisible();
+  await expect(page.getByText('这个 CLI 还没有生效的 Skill')).toHaveCount(0);
+  await expect(page.getByText('只管理用户目录下的本地插件')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => (window as any).__skillScans ?? 0)).toBe(0);
 });

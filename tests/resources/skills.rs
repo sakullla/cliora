@@ -963,3 +963,248 @@ fn loose_frontmatter_stays_readable_and_round_trips_skill_markdown() {
     assert_eq!(package.name, "loose-skill");
     assert!(package.description.is_empty());
 }
+
+
+fn write_skill(dir: &Path, body: &str) {
+    fs::create_dir_all(dir).unwrap();
+    fs::write(dir.join("SKILL.md"), body).unwrap();
+}
+
+fn cursor_plugin(home: &Path, enabled: bool, folder: &str, display: &str) -> PathBuf {
+    let root = if enabled {
+        home.join(".cursor/plugins/local").join(folder)
+    } else {
+        home.join(".cursor/plugins/.cliora-disabled-plugins").join(folder)
+    };
+    fs::create_dir_all(root.join(".cursor-plugin")).unwrap();
+    fs::write(
+        root.join(".cursor-plugin/plugin.json"),
+        format!(r#"{{"name":"{display}"}}"#),
+    )
+    .unwrap();
+    root
+}
+
+#[test]
+fn plugin_skills_join_the_same_scan_without_using_observations() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let registry = Registry::builtins();
+    let home = temp.path().join("home");
+    write_skill(
+        &home.join(".cursor/skills/local-write"),
+        "---\ndescription: Writable document\n---\n",
+    );
+    write_skill(
+        &home.join(".claude/skills/compat-read"),
+        "---\ndescription: Compat document\n---\n",
+    );
+    let alpha = cursor_plugin(&home, true, "alpha-plugin", "Alpha Pack");
+    write_skill(&alpha.join("skills/alpha-skill"), "---\ndescription: Alpha document\n---\n");
+    write_skill(&alpha.join("skills/beta-skill"), "---\ndescription: Beta document\n---\n");
+    fs::create_dir_all(alpha.join("skills/notes")).unwrap();
+    fs::write(alpha.join("skills/notes/README.md"), "not a skill\n").unwrap();
+    let gamma = cursor_plugin(&home, false, "gamma-plugin", "Gamma Pack");
+    write_skill(&gamma.join("skills/gamma-skill"), "---\ndescription: Gamma document\n---\n");
+    let outside = temp.path().join("outside-skill");
+    write_skill(&outside, "---\ndescription: Outside\n---\n");
+    let escaped = alpha.join("skills/escaped");
+    #[cfg(windows)]
+    let linked = std::os::windows::fs::symlink_dir(&outside, &escaped);
+    #[cfg(not(windows))]
+    let linked = std::os::unix::fs::symlink(&outside, &escaped);
+
+    let entries = scan_native(&db, &registry, &home, "cursor", Scope::Global, None).unwrap();
+    let by_name = |name: &str| entries.iter().find(|entry| entry.name == name).unwrap_or_else(|| panic!("missing {name}"));
+    assert_eq!(by_name("local-write").source, "writable");
+    assert_eq!(by_name("local-write").state, "external");
+    assert!(by_name("local-write").plugin_name.is_none());
+    assert_eq!(by_name("compat-read").source, "read_only");
+    assert_eq!(by_name("compat-read").state, "read_only");
+    assert!(by_name("compat-read").detail.contains("只读"));
+    for name in ["alpha-skill", "beta-skill"] {
+        let entry = by_name(name);
+        assert_eq!(entry.source, "plugin");
+        assert_eq!(entry.plugin_name.as_deref(), Some("Alpha Pack"));
+        assert_eq!(entry.plugin_enabled, Some(true));
+        assert_eq!(entry.state, "read_only");
+        assert!(entry.package_id.is_none());
+        assert!(entry.digest.is_none());
+    }
+    let gamma_entry = by_name("gamma-skill");
+    assert_eq!(gamma_entry.source, "plugin");
+    assert_eq!(gamma_entry.plugin_name.as_deref(), Some("Gamma Pack"));
+    assert_eq!(gamma_entry.plugin_enabled, Some(false));
+    assert!(entries.iter().all(|entry| entry.name != "notes" && entry.name != "escaped" && entry.name != "outside-skill"));
+    if linked.is_ok() {
+        assert!(escaped.exists() || escaped.symlink_metadata().is_ok());
+    }
+
+    fs::rename(&gamma, home.join(".cursor/plugins/local/gamma-plugin")).unwrap();
+    let enabled = scan_native(&db, &registry, &home, "cursor", Scope::Global, None).unwrap();
+    let gamma_entry = enabled.iter().find(|entry| entry.name == "gamma-skill").unwrap();
+    assert_eq!(gamma_entry.plugin_enabled, Some(true));
+    assert_eq!(gamma_entry.plugin_name.as_deref(), Some("Gamma Pack"));
+}
+
+#[test]
+fn plugin_skill_files_expand_only_inside_the_plugin_root() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("plugin");
+    let nested = root.join("skills").join("literature-review");
+    write_skill(&nested, "---\ndescription: Review\n---\n");
+    let direct = root.join("direct");
+    write_skill(&direct, "---\ndescription: Direct\n---\n");
+    let outside = temp.path().join("outside");
+    write_skill(&outside, "---\ndescription: Outside\n---\n");
+    let mut found = Vec::new();
+    let mut seen = Vec::new();
+    let root = root.canonicalize().unwrap();
+    expand_plugin_skill_resource(&root, &root.join("skills"), "Pack", Some(true), &mut found, &mut seen).unwrap();
+    expand_plugin_skill_resource(&root, &direct.join("SKILL.md"), "Pack", None, &mut found, &mut seen).unwrap();
+    expand_plugin_skill_resource(&root, &outside, "Pack", Some(false), &mut found, &mut seen).unwrap();
+    expand_plugin_skill_resource(&root, &root.join("skills"), "Pack", Some(true), &mut found, &mut seen).unwrap();
+    let names: Vec<_> = found.iter().map(|item| item.name.as_str()).collect();
+    assert_eq!(names, vec!["literature-review", "direct"]);
+    assert_eq!(found[0].plugin_enabled, Some(true));
+    assert_eq!(found[1].plugin_enabled, None);
+    assert!(found.iter().all(|item| item.plugin_name == "Pack"));
+}
+
+#[test]
+fn one_unreadable_plugin_skill_keeps_the_rest_of_the_table() {
+    use crate::credentials::CredentialStore;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    #[derive(Default)]
+    struct Store(Mutex<HashMap<String, String>>);
+    impl CredentialStore for Store {
+        fn put(&self, key: &str, value: &str) -> Result<(), String> { self.0.lock().unwrap().insert(key.into(), value.into()); Ok(()) }
+        fn get(&self, key: &str) -> Result<String, String> { self.0.lock().unwrap().get(key).cloned().ok_or_else(|| "missing".into()) }
+        fn delete(&self, key: &str) -> Result<(), String> { self.0.lock().unwrap().remove(key); Ok(()) }
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let registry = Registry::builtins();
+    let home = temp.path().join("home");
+    let store = Store::default();
+    let alpha = cursor_plugin(&home, true, "alpha-plugin", "Alpha Pack");
+    write_skill(&alpha.join("skills/alpha-skill"), "---\ndescription: Alpha document\n---\n");
+    write_skill(&alpha.join("skills/bad-skill"), "placeholder");
+    fs::write(alpha.join("skills/bad-skill/SKILL.md"), [0xff, 0xfe]).unwrap();
+    let compat = home.join(".claude/skills/compat-read");
+    write_skill(&compat, "---\ndescription: Compat document\n---\n");
+    let before = fs::read(compat.join("SKILL.md")).unwrap();
+
+    let entries = scan_native(&db, &registry, &home, "cursor", Scope::Global, None).unwrap();
+    let bad = entries.iter().find(|entry| entry.name == "bad-skill").unwrap();
+    assert_eq!(bad.state, "unreadable");
+    assert_eq!(bad.source, "plugin");
+    assert!(bad.detail.contains("UTF-8"));
+    let good = entries.iter().find(|entry| entry.name == "alpha-skill").unwrap();
+    let document = read_document(&db, &registry, &home, "cursor", Scope::Global, None, &good.path).unwrap();
+    assert!(document.content.contains("Alpha document"));
+    let rejected = save_document(&db, &store, &registry, &home, "cursor", Scope::Global, None, &good.path, &document.content, "changed\n");
+    assert!(rejected.unwrap_err().contains("插件"));
+    assert!(fs::read_to_string(alpha.join("skills/alpha-skill/SKILL.md")).unwrap().contains("Alpha document"));
+    let compat_entry = entries.iter().find(|entry| entry.name == "compat-read").unwrap();
+    let compat_doc = read_document(&db, &registry, &home, "cursor", Scope::Global, None, &compat_entry.path).unwrap();
+    let message = save_document(&db, &store, &registry, &home, "cursor", Scope::Global, None, &compat_entry.path, &compat_doc.content, "changed\n").unwrap_err();
+    assert!(message.contains("只读"), "{message}");
+    assert!(!message.contains("插件"), "{message}");
+    import_local(&db, &compat_entry.path, None, None).unwrap();
+    assert_eq!(fs::read(compat.join("SKILL.md")).unwrap(), before);
+}
+
+#[test]
+fn missing_plugin_support_and_unmanaged_scopes_do_not_fail_the_skill_table() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let registry = Registry::builtins();
+    let home = temp.path().join("home");
+    write_skill(&home.join(".cline/skills/only-local"), "---\ndescription: Local\n---\n");
+    write_skill(
+        &home.join(".cline/plugins/managed/fake/skills/hidden-skill"),
+        "---\ndescription: Hidden\n---\n",
+    );
+    let entries = scan_native(&db, &registry, &home, "cline", Scope::Global, None).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].name, "only-local");
+    assert_eq!(entries[0].source, "writable");
+    assert!(entries[0].plugin_name.is_none());
+
+    let project = temp.path().join("work");
+    write_skill(&project.join(".cursor/skills/review"), "---\ndescription: Review\n---\n");
+    let plugin = cursor_plugin(&home, true, "alpha-plugin", "Alpha Pack");
+    write_skill(&plugin.join("skills/alpha-skill"), "---\ndescription: Alpha\n---\n");
+    let project_entries = scan_native(
+        &db,
+        &registry,
+        &home,
+        "cursor",
+        Scope::Project,
+        Some(&project.display().to_string()),
+    )
+    .unwrap();
+    assert!(project_entries.iter().any(|entry| entry.name == "review" && entry.source == "writable"));
+    assert!(project_entries.iter().all(|entry| entry.source != "plugin"));
+    let missing = scan_native(&db, &registry, &home, "cursor", Scope::Project, None).unwrap_err();
+    assert!(missing.contains("请选择项目"), "{missing}");
+    assert!(!missing.contains("本地插件"), "{missing}");
+}
+
+#[test]
+fn plugin_inventory_failure_and_the_combined_limit_fail_the_whole_table() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let registry = Registry::builtins();
+    let home = temp.path().join("home");
+    write_skill(&home.join(".kimi-code/skills/still-there"), "---\ndescription: Still\n---\n");
+    fs::create_dir_all(home.join(".kimi-code/plugins")).unwrap();
+    fs::write(home.join(".kimi-code/plugins/installed.json"), "{").unwrap();
+    let failed = scan_native(&db, &registry, &home, "kimi_code", Scope::Global, None).unwrap_err();
+    assert!(failed.contains("插件安装记录"), "{failed}");
+
+    let home = temp.path().join("limited");
+    for index in 0..128 {
+        write_skill(
+            &home.join(format!(".cursor/skills/skill-{index}")),
+            "---\ndescription: Counted\n---\n",
+        );
+    }
+    let plugin = cursor_plugin(&home, true, "alpha-plugin", "Alpha Pack");
+    write_skill(&plugin.join("skills/one-more"), "---\ndescription: Extra\n---\n");
+    let limited = scan_native(&db, &registry, &home, "cursor", Scope::Global, None).unwrap_err();
+    assert!(limited.contains("128"), "{limited}");
+}
+
+#[test]
+fn readonly_or_plugin_skills_remain_when_the_writable_root_is_empty() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("cliora.db")).unwrap();
+    let registry = Registry::builtins();
+    let home = temp.path().join("home");
+    write_skill(&home.join(".claude/skills/compat-read"), "---\ndescription: Compat\n---\n");
+    let plugin = cursor_plugin(&home, true, "alpha-plugin", "Alpha Pack");
+    write_skill(&plugin.join("skills/alpha-skill"), "---\ndescription: Alpha\n---\n");
+    fs::create_dir_all(home.join(".kimi-code/plugins/managed/quiet")).unwrap();
+    fs::write(
+        home.join(".kimi-code/plugins/managed/quiet/kimi.plugin.json"),
+        r#"{"name":"Quiet Pack"}"#,
+    )
+    .unwrap();
+    write_skill(
+        &home.join(".kimi-code/plugins/managed/quiet/skills/quiet-skill"),
+        "---\ndescription: Quiet\n---\n",
+    );
+    let cursor = scan_native(&db, &registry, &home, "cursor", Scope::Global, None).unwrap();
+    assert!(cursor.iter().any(|entry| entry.name == "compat-read" && entry.source == "read_only"));
+    assert!(cursor.iter().any(|entry| entry.name == "alpha-skill" && entry.plugin_name.as_deref() == Some("Alpha Pack")));
+    assert!(cursor.iter().all(|entry| entry.source != "writable"));
+    let kimi = scan_native(&db, &registry, &home, "kimi_code", Scope::Global, None).unwrap();
+    let quiet = kimi.iter().find(|entry| entry.name == "quiet-skill").unwrap();
+    assert_eq!(quiet.source, "plugin");
+    assert_eq!(quiet.plugin_name.as_deref(), Some("Quiet Pack"));
+    assert_eq!(quiet.plugin_enabled, None);
+    assert_eq!(quiet.state, "read_only");
+}

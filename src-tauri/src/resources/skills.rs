@@ -69,6 +69,10 @@ pub struct NativeSkillEntry {
     pub state: &'static str,
     pub detail: String,
     pub package_id: Option<String>,
+    /// `writable`, `read_only`, or `plugin`. Plugin rows stay out of skill observations.
+    pub source: &'static str,
+    pub plugin_name: Option<String>,
+    pub plugin_enabled: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -265,6 +269,7 @@ struct SkillFile {
     name: String,
     file: PathBuf,
     writable: bool,
+    plugin: bool,
 }
 
 fn skill_directory_name(directory: &str) -> Result<&str, String> {
@@ -286,6 +291,7 @@ fn same_directory(requested: &Path, dir: &Path) -> bool {
 }
 
 fn skill_markdown(
+    db: &Database,
     registry: &Registry,
     home: &Path,
     tool: &str,
@@ -303,6 +309,7 @@ fn skill_markdown(
             name: name.to_owned(),
             file: dir.join("SKILL.md"),
             writable: true,
+            plugin: false,
         });
     }
     let adapter = registry.get(tool).ok_or("此 CLI 尚无注册适配器")?;
@@ -318,6 +325,17 @@ fn skill_markdown(
                 name: name.to_owned(),
                 file: dir.join("SKILL.md"),
                 writable: false,
+                plugin: false,
+            });
+        }
+    }
+    for skill in plugin_skill_directories(db, registry, home, tool, scope, project_path)? {
+        if same_directory(requested, &skill.path) {
+            return Ok(SkillFile {
+                name: skill.name,
+                file: skill.path.join("SKILL.md"),
+                writable: false,
+                plugin: true,
             });
         }
     }
@@ -334,7 +352,7 @@ pub fn read_document(
     directory: &str,
 ) -> Result<NativeSkillDocument, String> {
     let _context = crate::accounts::selection::enter_bound(db, home, tool, scope, project_path.map(Path::new))?;
-    let located = skill_markdown(registry, home, tool, scope, project_path, directory)?;
+    let located = skill_markdown(db, registry, home, tool, scope, project_path, directory)?;
     let content = transaction::read_native(&located.file)?;
     Ok(NativeSkillDocument { name: located.name, path: directory.to_owned(), content })
 }
@@ -352,9 +370,13 @@ pub fn save_document(
     content: &str,
 ) -> Result<(), String> {
     let _context = crate::accounts::selection::enter_bound(db, home, tool, scope, project_path.map(Path::new))?;
-    let located = skill_markdown(registry, home, tool, scope, project_path, directory)?;
+    let located = skill_markdown(db, registry, home, tool, scope, project_path, directory)?;
     if !located.writable {
-        return Err("兼容目录和内置 Skill 只读，不能保存".into());
+        return Err(if located.plugin {
+            "插件内的 Skill 只读，不能保存".into()
+        } else {
+            "兼容目录和内置 Skill 只读，不能保存".into()
+        });
     }
     let file = located.file;
     let exists = file.is_file();
@@ -1162,8 +1184,202 @@ pub fn scan_native(
             )?;
         }
     }
+    for skill in plugin_skill_directories(db, registry, home, tool, scope, project_path)? {
+        if entries.len() >= 128 {
+            return Err("原生 Skills 目录超过 128 个，请缩小管理范围".into());
+        }
+        entries.push(NativeSkillEntry {
+            name: skill.name,
+            path: skill.path.display().to_string(),
+            digest: None,
+            state: if skill.unreadable { "unreadable" } else { "read_only" },
+            detail: skill.detail,
+            package_id: None,
+            source: "plugin",
+            plugin_name: Some(skill.plugin_name),
+            plugin_enabled: skill.plugin_enabled,
+        });
+    }
     entries.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(entries)
+}
+
+struct PluginSkillDirectory {
+    name: String,
+    path: PathBuf,
+    plugin_name: String,
+    plugin_enabled: Option<bool>,
+    detail: String,
+    unreadable: bool,
+}
+
+/// Installed plugin skills for this scope. A CLI without a plugin port, or a
+/// scope that does not manage plugins, contributes nothing and is not an error.
+/// Inventory failures stay errors so the skill table is not treated as complete.
+fn plugin_skill_directories(
+    db: &Database,
+    registry: &Registry,
+    home: &Path,
+    tool: &str,
+    scope: Scope,
+    project_path: Option<&str>,
+) -> Result<Vec<PluginSkillDirectory>, String> {
+    let Some(adapter) = registry.get(tool).and_then(|cli| cli.plugins()) else {
+        return Ok(Vec::new());
+    };
+    if scope == Scope::Project && !adapter.capability().project {
+        return Ok(Vec::new());
+    }
+    let snapshot = super::plugins::scan_resources(
+        db,
+        home,
+        &super::plugins::PluginTarget {
+            tool_id: tool.to_owned(),
+            scope,
+            project_path: project_path.map(str::to_owned),
+            context_id: None,
+        },
+    )?;
+    let mut found = Vec::new();
+    let mut seen = Vec::new();
+    for plugin in snapshot.entries {
+        if plugin.state == "not_installed" {
+            continue;
+        }
+        let Some(root) = plugin.root.as_deref() else {
+            continue;
+        };
+        let Ok(root) = Path::new(root).canonicalize() else {
+            continue;
+        };
+        for resource in plugin.resources.iter().filter(|resource| resource.kind == "skills") {
+            expand_plugin_skill_resource(
+                &root,
+                Path::new(&resource.path),
+                &plugin.name,
+                plugin.enabled,
+                &mut found,
+                &mut seen,
+            )?;
+        }
+    }
+    Ok(found)
+}
+
+fn paths_equivalent(left: &Path, right: &Path) -> bool {
+    if cfg!(windows) {
+        left.to_string_lossy().eq_ignore_ascii_case(&right.to_string_lossy())
+    } else {
+        left == right
+    }
+}
+
+fn within_root(root: &Path, path: &Path) -> bool {
+    let Ok(path) = path.canonicalize() else {
+        return false;
+    };
+    let root_parts: Vec<_> = root.components().collect();
+    let path_parts: Vec<_> = path.components().collect();
+    if path_parts.len() < root_parts.len() {
+        return false;
+    }
+    root_parts.iter().zip(&path_parts).all(|(expected, actual)| {
+        if cfg!(windows) {
+            expected.as_os_str().eq_ignore_ascii_case(actual.as_os_str())
+        } else {
+            expected == actual
+        }
+    })
+}
+
+/// `Ok(None)` means this directory is not a skill. A present `SKILL.md` that
+/// cannot be read stays on the list.
+fn inspect_plugin_skill(dir: &Path) -> Result<Option<(bool, String)>, String> {
+    let file = dir.join("SKILL.md");
+    match fs::symlink_metadata(&file) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Ok(Some((true, error.to_string()))),
+        Ok(meta) if meta.file_type().is_symlink() || !meta.is_file() => {
+            return Ok(Some((true, "SKILL.md 应为普通文件".into())));
+        }
+        Ok(_) => {}
+    }
+    match native_description(dir) {
+        Ok(description) => Ok(Some((false, description))),
+        Err(error) => Ok(Some((true, error))),
+    }
+}
+
+fn push_plugin_dir(
+    dir: &Path,
+    plugin_name: &str,
+    plugin_enabled: Option<bool>,
+    found: &mut Vec<PluginSkillDirectory>,
+    seen: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    let Some((unreadable, detail)) = inspect_plugin_skill(dir)? else {
+        return Ok(());
+    };
+    let canonical = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    if seen.iter().any(|existing| paths_equivalent(existing, &canonical)) {
+        return Ok(());
+    }
+    let Some(name) = dir.file_name().and_then(|value| value.to_str()).filter(|name| {
+        !name.is_empty() && *name != "." && *name != ".." && !name.starts_with('.')
+    }) else {
+        return Ok(());
+    };
+    seen.push(canonical);
+    found.push(PluginSkillDirectory {
+        name: name.to_owned(),
+        path: dir.to_path_buf(),
+        plugin_name: plugin_name.to_owned(),
+        plugin_enabled,
+        detail,
+        unreadable,
+    });
+    Ok(())
+}
+
+fn expand_plugin_skill_resource(
+    root: &Path,
+    resource: &Path,
+    plugin_name: &str,
+    plugin_enabled: Option<bool>,
+    found: &mut Vec<PluginSkillDirectory>,
+    seen: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    if !resource.exists() || !within_root(root, resource) {
+        return Ok(());
+    }
+    if resource.is_file() {
+        if resource.file_name().and_then(|name| name.to_str()) == Some("SKILL.md") {
+            if let Some(parent) = resource.parent() {
+                if within_root(root, parent) {
+                    push_plugin_dir(parent, plugin_name, plugin_enabled, found, seen)?;
+                }
+            }
+        }
+        return Ok(());
+    }
+    if !resource.is_dir() {
+        return Ok(());
+    }
+    if inspect_plugin_skill(resource)?.is_some() {
+        return push_plugin_dir(resource, plugin_name, plugin_enabled, found, seen);
+    }
+    for entry in fs::read_dir(resource).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        if entry.file_name().to_string_lossy().starts_with('.') {
+            continue;
+        }
+        let path = entry.path();
+        if !path.is_dir() || !within_root(root, &path) {
+            continue;
+        }
+        push_plugin_dir(&path, plugin_name, plugin_enabled, found, seen)?;
+    }
+    Ok(())
 }
 
 fn has_skill_manifest(path: &Path) -> bool {
@@ -1238,6 +1454,9 @@ fn scan_skill_children(
             state,
             detail,
             package_id,
+            source: if read_only { "read_only" } else { "writable" },
+            plugin_name: None,
+            plugin_enabled: None,
         });
     }
     Ok(())
