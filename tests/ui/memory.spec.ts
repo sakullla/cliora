@@ -78,7 +78,8 @@ async function install(page: Page, options: { catalog?: 'none' | 'session' | 'me
         const one = { toolId: 'epsilon', scope: 'project', projectPath: null, storeDirectory: stores.epsilon[0] };
         const two = { toolId: 'epsilon', scope: 'project', projectPath: null, storeDirectory: stores.epsilon[1] };
         const entries = [entry('one-note', stores.epsilon[0], 'C:\\Work\\one', one), entry('two-note', stores.epsilon[1], 'C:\\Work\\two', two)];
-        return { toolId, failedSources: [], entries, stores: summarize(entries, [['C:\\Work\\one', stores.epsilon[0], one], ['C:\\Work\\two', stores.epsilon[1], two]]), switchShared: true };
+        const three = { toolId: 'epsilon', scope: 'project', projectPath: null, storeDirectory: 'C:/home/.epsilon/projects/three/memory' };
+        return { toolId, failedSources: [], entries, stores: summarize(entries, [['C:\\Work\\one', stores.epsilon[0], one], ['C:\\Work\\two', stores.epsilon[1], two], ['C:\\Work\\three', 'C:/home/.epsilon/projects/three/memory', three]]), switchShared: true };
       }
       if (toolId !== 'alpha') return { toolId, failedSources: [], entries: [], stores: [], switchShared: false };
       const globalTarget = { toolId: 'alpha', scope: 'global', projectPath: null, storeDirectory: stores.alphaGlobal };
@@ -217,7 +218,7 @@ test('frontmatter supplies titles, types, and descriptions; search and type filt
   await page.evaluate(() => {
     const texts = (window as unknown as { __memory: { texts: Record<string, string> } }).__memory.texts;
     texts['a-note'] = '---\nname: release-ritual\ndescription: "版本发布步骤"\nmetadata:\n  type: project\n  modified: 2026-10-18T02:45:50.600Z\n---\n\n## 发布流程\n\n1. 同步版本文件\n';
-    texts['b-note'] = '# Coding style\n\nTwo-space indentation.';
+    texts['b-note'] = '# Coding style\n\nTwo-space indentation.\n\nSee [[release-ritual]] and [[gone-note]].';
   });
   await page.getByRole('tab', { name: '记忆', exact: true }).click();
   await expect(entryButton(page, 'a-note')).toContainText('Release ritual');
@@ -245,6 +246,12 @@ test('frontmatter supplies titles, types, and descriptions; search and type filt
   await expect(page.getByText('没有匹配「不存在」的记忆')).toBeVisible();
   await page.getByRole('button', { name: '清除筛选' }).click();
   await expect(entryButton(page, 'global-note')).toBeVisible();
+
+  // `[[name]]` links open the linked entry; unknown targets stay inert.
+  await entryButton(page, 'b-note').click();
+  await expect(reader(page).getByRole('button', { name: 'gone-note' })).toBeDisabled();
+  await reader(page).getByRole('button', { name: 'release-ritual' }).click();
+  await expect(reader(page).getByRole('heading', { name: 'Release ritual' })).toBeVisible();
 });
 
 test('a failed source is noted inline and does not block the other stores', async ({ page }) => {
@@ -417,6 +424,9 @@ test('a CLI-wide switch appears once and path labels show their folder name', as
   await expect(page.getByText('已关闭', { exact: true })).toBeVisible();
   const list = page.getByRole('navigation', { name: '记忆列表' });
   await expect(list.getByRole('button', { name: /^one/ })).toContainText('C:\\Work\\one');
+  // A store without entries is not listed, but stays a write destination.
+  await expect(list.getByRole('button', { name: /^three/ })).toHaveCount(0);
+  await expect(page.getByText('2 条 · 2 个来源')).toBeVisible();
   await page.getByRole('switch', { name: '记忆总开关' }).click();
   await expect.poll(async () => (await memoryCalls(page)).filter(call => call.command === 'set_memory_enabled').length).toBe(1);
   expect((await memoryCalls(page)).find(call => call.command === 'set_memory_enabled')?.args.request).toMatchObject({ id: null, enabled: true, target: { toolId: 'epsilon', storeDirectory: epsilonStores[0] } });

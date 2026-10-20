@@ -301,6 +301,8 @@ export default {
     reading: 'Reading memory text',
     modified: 'Updated {{time}}',
     properties: 'Properties · {{count}}',
+    openLinked: 'Open linked memory “{{name}}”',
+    missingLinked: 'Linked memory “{{name}}” was not found',
     emptyBody: 'This entry has no body text.',
     copyPath: 'Copy file path',
     pathCopied: 'File path copied',

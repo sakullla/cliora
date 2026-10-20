@@ -139,7 +139,7 @@
 .cardTitle:hover { color: var(--text) !important; text-decoration: underline; text-underline-offset: 3px; }
 .cardTitle:focus { color: var(--text) !important; }
 .cardTitle:focus-visible { outline: none; }
-.card:has(.cardTitle:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.card:has(.cardTitle:focus-visible) { outline: 2px solid var(--accent); outline-offset: -1px; box-shadow: 0 0 0 4px var(--accent-ring); }
 .card p {
   display: -webkit-box;
   min-width: 0;
@@ -225,8 +225,8 @@
    monochrome logos look the same in grayscale, so "off" is a dashed empty
    ring with a faded logo and "on" is a filled ring with a status dot. */
 .cliMarks { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.cliMarks button { position: relative; width: 30px; height: 30px; min-height: 30px; padding: 0; display: grid; place-items: center; border: 1px dashed var(--line-strong); border-radius: 999px; background: transparent; box-shadow: none; transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease); }
-.cliMarks button:hover:not(:disabled) { border-style: solid; border-color: var(--text-3); background: var(--surface-2); }
+.cliMarks button { position: relative; width: 30px; height: 30px; min-height: 30px; padding: 0; display: grid; place-items: center; border: 1px solid transparent; border-radius: 999px; background: var(--surface-2); box-shadow: none; transition: border-color var(--fast) var(--ease), background-color var(--fast) var(--ease); }
+.cliMarks button:hover:not(:disabled) { border-color: var(--line-strong); background: var(--surface); }
 .cliMarks button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .cliMarks button :global(.tool-logo) { filter: grayscale(1); opacity: .42; border-color: transparent; transition: opacity var(--fast) var(--ease), filter var(--fast) var(--ease); }
 .cliMarks button:hover:not(:disabled) :global(.tool-logo) { opacity: .75; }

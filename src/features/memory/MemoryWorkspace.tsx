@@ -18,7 +18,7 @@ import type { MemoryAggregate, MemoryManagement, MemoryOperation, MemoryStoreEnt
 import { createTemplate, fileName, parseMemory, relativeTime, storeLabelParts, type ParsedMemory } from './memoryDocument';
 import styles from './MemoryWorkspace.module.css';
 
-const MemoryMarkdown = lazy(() => import('../records/MessageMarkdown'));
+const MemoryMarkdown = lazy(() => import('./MemoryMarkdown'));
 
 type Failure = { message: string; retry: (() => Promise<void>) | null };
 type Doc = { text: string; fingerprint: string };
@@ -66,7 +66,8 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
   const mounted = useRef(true);
   const root = useRef<HTMLElement>(null);
   const listRef = useRef<HTMLElement>(null);
-  const [pane, setPane] = useState<HTMLDivElement | null>(null);
+  const [split, setSplit] = useState<HTMLDivElement | null>(null);
+  const [propertiesOpen, setPropertiesOpen] = useState(false);
   const [aggregate, setAggregate] = useState<MemoryAggregate | null>(null);
   const [docs, setDocs] = useState<Record<string, Doc | null>>({});
   const [listFailure, setListFailure] = useState<Failure | null>(null);
@@ -91,35 +92,27 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
 
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
-  // The workspace chrome above stays pinned; the reading pane sticks just below it.
+  // List and reader scroll on their own inside a split that fills the rest of
+  // the window, so the page never scrolls both columns together.
   useLayoutEffect(() => {
     const section = root.current;
-    const chrome = document.querySelector<HTMLElement>('[data-workspace-chrome]');
-    if (!section || !chrome) return;
-    const update = () => section.style.setProperty('--memory-sticky-top', `${Math.round(chrome.getBoundingClientRect().height) + 14}px`);
-    update();
-    const observer = new ResizeObserver(update);
-    observer.observe(chrome);
-    return () => observer.disconnect();
-  }, []);
-
-  // The reading pane never runs past the window: its height follows the space
-  // left below its current top, so the editor footer stays reachable.
-  useLayoutEffect(() => {
-    const section = root.current;
-    if (!section || !pane) return;
+    if (!section || !split) return;
+    const scroller = section.closest<HTMLElement>('.content') ?? document.documentElement;
     let frame = 0;
     const update = () => {
       frame = 0;
-      const top = Math.max(0, pane.getBoundingClientRect().top);
-      section.style.setProperty('--memory-detail-max', `${Math.max(340, Math.round(window.innerHeight - top - 16))}px`);
+      const scrollerTop = scroller === document.documentElement ? 0 : scroller.getBoundingClientRect().top;
+      const offset = split.getBoundingClientRect().top - scrollerTop + scroller.scrollTop;
+      section.style.setProperty('--memory-split-h', `${Math.max(380, Math.round(scroller.clientHeight - offset - 24))}px`);
     };
     const schedule = () => { if (!frame) frame = requestAnimationFrame(update); };
     update();
-    window.addEventListener('scroll', schedule, true);
+    const observer = new ResizeObserver(schedule);
+    observer.observe(section);
+    observer.observe(scroller);
     window.addEventListener('resize', schedule);
-    return () => { if (frame) cancelAnimationFrame(frame); window.removeEventListener('scroll', schedule, true); window.removeEventListener('resize', schedule); };
-  }, [pane]);
+    return () => { if (frame) cancelAnimationFrame(frame); observer.disconnect(); window.removeEventListener('resize', schedule); };
+  }, [split]);
 
   const loadEpoch = useRef(0);
   // Bodies are read per entry over the existing read IPC for titles, summaries,
@@ -209,10 +202,12 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
       rows: visible.filter(row => row.store === store.key).sort((left, right) => (right.modified?.time ?? 0) - (left.modified?.time ?? 0) || (left.parsed?.title ?? left.entry.id).localeCompare(right.parsed?.title ?? right.entry.id)),
       latest: Math.max(0, ...rows.filter(row => row.store === store.key).map(row => row.modified?.time ?? 0)),
     }))
-    .filter(group => group.rows.length > 0 || (!needle && kind === 'all'))
+    .filter(group => group.rows.length > 0)
     .sort((left, right) => Number(right.store.target.scope === 'global') - Number(left.store.target.scope === 'global') || right.latest - left.latest || right.store.entryCount - left.store.entryCount);
   const ordered = groups.flatMap(group => collapsed.has(group.store.key) ? [] : group.rows);
   const filtering = !!needle || source !== 'all' || kind !== 'all';
+  // Stores without entries stay valid write destinations but are not listed.
+  const listedStores = stores.filter(store => rows.some(row => row.store === store.key));
   const total = rows.length;
 
   const current = rows.find(row => row.key === selected) ?? null;
@@ -221,12 +216,12 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
   const currentParsed = current && currentDoc ? parseMemory(current.entry.id, currentDoc.text) : current?.parsed ?? null;
   const editing = mode === 'edit' && !!opened && opened.key === selected && can('edit');
   const focusWriting = editing || !!compose;
-  // Writing gets the full window: bring the pane up to its pinned position.
+  // Writing keeps the whole split in view when a short window made the page scroll.
   useEffect(() => {
-    if (!focusWriting || !pane) return;
-    const frame = requestAnimationFrame(() => pane.scrollIntoView({ block: 'start' }));
+    if (!focusWriting || !split) return;
+    const frame = requestAnimationFrame(() => split.scrollIntoView({ block: 'nearest' }));
     return () => cancelAnimationFrame(frame);
-  }, [focusWriting, pane]);
+  }, [focusWriting, split]);
   const dirty = (editing && draft !== opened!.text) || (!!compose && (compose.id.trim() !== '' || compose.text !== compose.template));
   const dirtyRef = useRef(dirty); dirtyRef.current = dirty;
   useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
@@ -513,10 +508,21 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
     setCollapsed(previous => { const next = new Set(previous); if (next.has(key)) next.delete(key); else next.add(key); return next; });
   }
 
+  /** `[[target]]` resolves to an entry by id or frontmatter name, preferring the same store. */
+  function linkedRow(target: string, store: string): Row | null {
+    const normal = (value: string) => value.trim().toLowerCase().replace(/\.md$/, '').replace(/[_\s]+/g, '-');
+    const wanted = normal(target);
+    const matches = rows.filter(row => {
+      const name = row.parsed?.properties.find(item => item.key.toLowerCase() === 'name')?.value ?? '';
+      return normal(row.entry.id) === wanted || (!!name && normal(name) === wanted);
+    });
+    return matches.find(row => row.store === store) ?? matches[0] ?? null;
+  }
+
   // ---------- Render ----------
   const typeLabel = (value: string) => knownTypes.includes(value) ? t(`common.memory.type.${value}`) : value;
   const showDetail = !!current || !!compose;
-  const sourceOptions = [{ value: 'all', label: t('common.memory.sourceAll'), note: String(total) }, ...stores.map(store => ({ value: store.key, label: store.name, detail: store.path || undefined, note: String(store.entryCount) }))];
+  const sourceOptions = [{ value: 'all', label: t('common.memory.sourceAll'), note: String(total) }, ...listedStores.map(store => ({ value: store.key, label: store.name, detail: store.path || undefined, note: String(store.entryCount) }))];
   const composeDestination = compose ? destinations.find(item => item.value === compose.destination) ?? null : null;
   const composeIdError = compose && compose.id.trim() && !idValid(compose.id.trim()) ? t('common.memory.idInvalid') : '';
 
@@ -531,24 +537,18 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
         <p>{t('common.memory.description', { tool })}</p>
       </div>
       <div className={styles.headActions}>
+        {aggregate && master && <span className={styles.autoToggle} data-state={master.inUse ? 'on' : 'off'} title={limitation || undefined}>
+          <span className={styles.autoDot} aria-hidden="true" />
+          <span className={styles.autoLabel}>{t('common.memory.autoTitle')}<span className={styles.statusPill}>{master.inUse ? t('common.memory.autoOnShort') : t('common.memory.autoOffShort')}</span></span>
+          <Switch checked={master.inUse} label={t('common.memory.master')} disabled={busy} onChange={value => void setEnabled(value, master.target)} />
+        </span>}
         <button type="button" className={styles.iconButton} aria-label={t('common.memory.refresh')} title={t('common.memory.refresh')} disabled={refreshing || busy} data-spinning={refreshing || undefined} onClick={() => void reload()}><Icon name="refresh" size={15} /></button>
         {can('create') && <button type="button" className={`button primary ${styles.primary}`} disabled={busy || !aggregate || destinations.length === 0} title={destinations.length === 0 && aggregate ? t('common.memory.createUnavailable', { tool }) : undefined} onClick={() => void startCompose()}><Icon name="plus" size={14} />{t('common.memory.create')}</button>}
       </div>
     </header>
 
-    {aggregate && (master || offWithoutSwitch || limitation) && <div className={styles.statusCard} data-state={master ? (master.inUse ? 'on' : 'off') : offWithoutSwitch ? 'off' : 'info'}>
-      <span className={styles.statusIcon} aria-hidden="true"><Icon name={master ? (master.inUse ? 'sparkle' : 'eyeOff') : offWithoutSwitch ? 'alert' : showWrites ? 'info' : 'lock'} size={18} /></span>
-      <div className={styles.statusCopy}>
-        {master
-          ? <><strong>{t('common.memory.autoTitle')}<span className={styles.statusPill}>{master.inUse ? t('common.memory.autoOnShort') : t('common.memory.autoOffShort')}</span></strong>
-            <span>{master.inUse ? t('common.memory.autoOn', { tool }) : (master.detail || t('common.memory.notInUse'))}</span></>
-          : offWithoutSwitch
-            ? <><strong>{t('common.memory.notInUse')}</strong><span>{stores.find(store => !store.inUse)?.detail || t('common.memory.notInUseHint')}</span></>
-            : <strong>{showWrites ? t('common.memory.noteTitle') : t('common.memory.readOnlyTitle')}</strong>}
-        {limitation && <small role="status">{limitation}</small>}
-      </div>
-      {master && <Switch checked={master.inUse} label={t('common.memory.master')} disabled={busy} onChange={value => void setEnabled(value, master.target)} />}
-    </div>}
+    {aggregate && (master && !master.inUse || offWithoutSwitch) && <p className={styles.offNote} role="status"><Icon name="eyeOff" size={14} /><strong>{t('common.memory.notInUse')}</strong><span>{((detail: string) => detail && detail !== t('common.memory.notInUse') ? detail : t('common.memory.notInUseHint'))((master ? master.detail : stores.find(store => !store.inUse)?.detail) ?? '')}</span></p>}
+    {aggregate && limitation && <p className={styles.limitNote}><Icon name={showWrites ? 'info' : 'lock'} size={13} /><span role="status">{limitation}</span></p>}
 
     {listFailure && <StatusBanner tone="error" action={listFailure.retry ? <button type="button" className="button" onClick={() => { const retry = listFailure.retry; setListFailure(null); void retry?.(); }}>{t('common.memory.retry')}</button> : undefined}>{listFailure.message}</StatusBanner>}
     {failure && <StatusBanner tone="error" onDismiss={() => setFailure(null)} action={failure.retry ? <button type="button" className="button" onClick={() => { const retry = failure.retry; setFailure(null); void retry?.(); }}>{t('common.memory.retry')}</button> : undefined}>{failure.message}</StatusBanner>}
@@ -556,20 +556,20 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
 
     {!aggregate && !listFailure && <div className={styles.loading} role="status" aria-label={t('common.memory.loading')}><span className="skeleton-block short" /><div className={styles.loadingSplit}><div><span className="skeleton-block" /><span className="skeleton-block" /><span className="skeleton-block" /></div><span className="skeleton-block tall" /></div></div>}
 
-    {aggregate && total === 0 && stores.length === 0 && !compose && <EmptyState icon="sparkle" title={t('common.memory.emptyTitle')} detail={aggregate.failedSources.length ? t('common.memory.emptyFailed') : t('common.memory.emptyAll')} action={can('create') && destinations.length > 0 ? <button type="button" className="button primary" disabled={busy} onClick={() => void startCompose()}><Icon name="plus" size={14} />{t('common.memory.create')}</button> : undefined} />}
+    {aggregate && total === 0 && !compose && <EmptyState icon="sparkle" title={t('common.memory.emptyTitle')} detail={aggregate.failedSources.length ? t('common.memory.emptyFailed') : t('common.memory.emptyAll')} action={can('create') && destinations.length > 0 ? <button type="button" className="button primary" disabled={busy} onClick={() => void startCompose()}><Icon name="plus" size={14} />{t('common.memory.create')}</button> : undefined} />}
     {aggregate && can('create') && destinations.length === 0 && <p className={styles.hint}><Icon name="info" size={14} />{t('common.memory.createUnavailable', { tool })}</p>}
 
-    {aggregate && (total > 0 || stores.length > 0 || compose) && <>
+    {aggregate && (total > 0 || compose) && <>
       {total > 0 && <div className={styles.toolbar}>
         <SearchField type="search" className={styles.search} label={t('common.memory.searchLabel')} placeholder={t('common.memory.searchPlaceholder')} value={query} onChange={setQuery} />
-        {stores.length > 1 && <FilterSelect className={styles.sourceSelect} label={t('common.memory.sourceFilter')} value={source} options={sourceOptions} triggerDetail={false} onChange={setSource} />}
+        {listedStores.length > 1 && <FilterSelect className={styles.sourceSelect} label={t('common.memory.sourceFilter')} value={source} options={sourceOptions} triggerDetail={false} onChange={setSource} />}
         {types.length > 0 && <div className={styles.chips} role="group" aria-label={t('common.memory.typeFilter')}>
           {['all', ...types].map(value => <button key={value} type="button" aria-pressed={kind === value} data-type={value} onClick={() => setKind(value)}>{value === 'all' ? t('common.memory.typeAll') : typeLabel(value)}</button>)}
         </div>}
-        <span className={styles.count}>{filtering ? t('common.memory.countFiltered', { filtered: visible.length, total }) : t('common.memory.countAll', { count: total, stores: stores.length })}</span>
+        <span className={styles.count}>{filtering ? t('common.memory.countFiltered', { filtered: visible.length, total }) : t('common.memory.countAll', { count: total, stores: listedStores.length })}</span>
       </div>}
 
-      <div className={styles.split} data-view={showDetail ? 'detail' : 'list'} data-writing={focusWriting || undefined}>
+      <div ref={setSplit} className={styles.split} data-view={showDetail ? 'detail' : 'list'} data-writing={focusWriting || undefined}>
         <div className={styles.listPane}>
           {filtering && visible.length === 0
             ? <div className={styles.noMatch}><Icon name="search" size={18} /><p>{needle ? t('common.memory.noMatch', { query: query.trim() }) : t('common.memory.noMatchFilter')}</p><button type="button" className="button" onClick={clearFilters}>{t('common.memory.clearFilters')}</button></div>
@@ -587,7 +587,6 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
                     {!group.store.inUse && !master && <span className={styles.offBadge} title={group.store.detail || t('common.memory.notInUse')}>{t('common.memory.storeOff')}</span>}
                     {can('master_switch') && !shared && <Switch checked={group.store.inUse} label={t('common.memory.masterFor', { source: group.store.label })} disabled={busy} onChange={value => void setEnabled(value, group.store.target)} />}
                   </div>
-                  {!closed && group.rows.length === 0 && <p className={styles.groupEmpty}>{t('common.memory.storeEmpty')}</p>}
                   {!closed && group.rows.map(row => {
                     const title = row.parsed?.title ?? row.entry.id;
                     const summary = row.parsed ? (row.parsed.description || row.parsed.excerpt) : '';
@@ -602,7 +601,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
             </nav>}
         </div>
 
-        <div ref={setPane} className={styles.detailPane}>
+        <div className={styles.detailPane}>
           {compose ? <form className={styles.detail} aria-label={t('common.memory.createTitle')} onSubmit={event => { event.preventDefault(); void createMemory(false); }}>
             <div className={styles.detailHead}>
               <button type="button" className={styles.back} onClick={() => void cancelCompose()}><Icon name="arrowLeft" size={14} />{t('common.memory.back')}</button>
@@ -634,7 +633,14 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
           : current ? <article className={styles.detail} aria-label={currentParsed?.title ?? current.entry.id} aria-busy={reading || undefined}>
             <div className={styles.detailHead}>
               <button type="button" className={styles.back} onClick={() => void (async () => { if (await mayLeave()) { setSelected(null); setMode('read'); } })()}><Icon name="arrowLeft" size={14} />{t('common.memory.back')}</button>
-              <span className={styles.crumb} title={currentStore?.path || currentStore?.label}><Icon name={current.entry.target.scope === 'global' ? 'globe' : 'folder'} size={13} />{currentStore?.name ?? current.entry.sourceLabel}<span aria-hidden="true">/</span><span className={styles.mono}>{fileName(current.entry.path)}</span></span>
+              <div className={styles.headTop}>
+                <span className={styles.crumb} title={currentStore?.path || currentStore?.label}><Icon name={current.entry.target.scope === 'global' ? 'globe' : 'folder'} size={13} />{currentStore?.name ?? current.entry.sourceLabel}<span aria-hidden="true">/</span><span className={styles.mono}>{fileName(current.entry.path)}</span></span>
+                <span className={styles.detailActions}>
+                  {can('item_enable') && <span className={styles.inlineSwitch}><span aria-hidden="true">{t('common.memory.enabledLabel')}</span><Switch checked={current.entry.enabled} label={t('common.memory.enable', { id: current.entry.id })} disabled={busy} onChange={value => void setEnabled(value, current.entry.target, current.entry.id)} /></span>}
+                  <button type="button" className={styles.ghostIcon} aria-label={t('common.memory.copyPath')} title={`${t('common.memory.copyPath')}\n${displayPath(current.entry.path)}`} onClick={() => void copyPath(current.entry.path)}><Icon name="copy" size={15} /></button>
+                  {can('delete') && <button type="button" className={`${styles.ghostIcon} ${styles.danger}`} aria-label={t('common.memory.delete', { id: current.entry.id })} title={t('common.memory.delete', { id: current.entry.id })} disabled={busy} onClick={() => void confirmRemove(current)}><Icon name="trash" size={15} /></button>}
+                </span>
+              </div>
               <div className={styles.titleRow}>
                 <h3>{currentParsed?.title ?? current.entry.id}</h3>
                 {currentParsed?.type && <span className={styles.typeBadge} data-type={currentParsed.type}>{typeLabel(currentParsed.type)}</span>}
@@ -648,12 +654,11 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
                     <button type="button" aria-pressed={editing} disabled={reading && !editing} onClick={() => { if (!editing) void startEdit(); }}><Icon name="pencil" size={14} />{t('common.memory.edit')}</button>
                   </div>
                   : <span className={styles.readOnlyPill}><Icon name="lock" size={12} />{t('common.memory.readOnly')}</span>}
-                {currentParsed?.modified && <span className={styles.metaText}><Icon name="clock" size={13} />{t('common.memory.modified', { time: relativeTime(currentParsed.modified, i18n.language)?.text ?? currentParsed.modified })}</span>}
                 <span className={styles.barGap} />
-                {can('item_enable') && <span className={styles.inlineSwitch}><span aria-hidden="true">{t('common.memory.enabledLabel')}</span><Switch checked={current.entry.enabled} label={t('common.memory.enable', { id: current.entry.id })} disabled={busy} onChange={value => void setEnabled(value, current.entry.target, current.entry.id)} /></span>}
-                <button type="button" className={styles.iconButton} aria-label={t('common.memory.copyPath')} title={`${t('common.memory.copyPath')}\n${displayPath(current.entry.path)}`} onClick={() => void copyPath(current.entry.path)}><Icon name="copy" size={15} /></button>
-                {can('delete') && <button type="button" className={`${styles.iconButton} ${styles.danger}`} aria-label={t('common.memory.delete', { id: current.entry.id })} title={t('common.memory.delete', { id: current.entry.id })} disabled={busy} onClick={() => void confirmRemove(current)}><Icon name="trash" size={15} /></button>}
+                {currentParsed?.modified && <span className={styles.metaText} title={relativeTime(currentParsed.modified, i18n.language)?.absolute}><Icon name="clock" size={13} />{t('common.memory.modified', { time: relativeTime(currentParsed.modified, i18n.language)?.text ?? currentParsed.modified })}</span>}
+                {!editing && currentParsed && currentParsed.properties.length > 0 && <button type="button" className={styles.metaButton} aria-expanded={propertiesOpen} onClick={() => setPropertiesOpen(value => !value)}><Icon name="info" size={13} />{t('common.memory.properties', { count: currentParsed.properties.length })}</button>}
               </div>
+              {!editing && propertiesOpen && currentParsed && currentParsed.properties.length > 0 && <dl className={styles.properties}>{currentParsed.properties.map(item => <div key={item.key}><dt>{item.key}</dt><dd>{item.value || '—'}</dd></div>)}</dl>}
             </div>
             {editing
               ? <>
@@ -665,13 +670,9 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
                 </div>
               </>
               : <div className={styles.readBody}>
-                {currentParsed && currentParsed.properties.length > 0 && <details className={styles.properties}>
-                  <summary>{t('common.memory.properties', { count: currentParsed.properties.length })}</summary>
-                  <dl>{currentParsed.properties.map(item => <div key={item.key}><dt>{item.key}</dt><dd>{item.value || '—'}</dd></div>)}</dl>
-                </details>}
                 {currentParsed
                   ? currentParsed.displayBody.trim()
-                    ? <div className={styles.prose}><Suspense fallback={<pre className={styles.raw}>{currentParsed.displayBody}</pre>}><MemoryMarkdown text={currentParsed.displayBody} /></Suspense></div>
+                    ? <div className={styles.prose}><Suspense fallback={<pre className={styles.raw}>{currentParsed.displayBody}</pre>}><MemoryMarkdown text={currentParsed.displayBody} resolve={target => !!linkedRow(target, current.store)} onOpen={target => { const row = linkedRow(target, current.store); if (row) void select(row); }} /></Suspense></div>
                     : <p className={styles.emptyBody}>{t('common.memory.emptyBody')}</p>
                   : reading || current.pending
                     ? <div className={styles.bodyPending} role="status" aria-label={t('common.memory.reading')}><span /><span /><span /></div>

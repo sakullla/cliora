@@ -22,7 +22,7 @@ const fixtures = {
     stores: [
       { label: 'C:\\Users\\dev\\project\\cliora', directory: 'C:/Users/dev/.claude/projects/C--Users-dev-project-cliora/memory', entries: {
         user_profile: doc('user-profile', 'User works in Chinese, terse directives, expects autonomous end-to-end problem solving', 'user', 2, 'The user communicates in Chinese with short, high-level directives.\n\n- Prefers **autonomous decisions** over clarifying questions\n- Expects verification evidence with every change\n- Reviews UI changes through screenshots'),
-        'release-ritual': doc('release-ritual', '五处版本文件→chore 提交→push main→vX.Y.Z tag；已发布 tag 不移动', 'project', 5, '## 发布流程\n\n1. 同步五处版本文件：`package.json`、`Cargo.toml`、`tauri.conf.json`…\n2. 提交 `chore: release vX.Y.Z`\n3. 推送 main 后打 tag\n\n> 已发布的 tag 永远不移动；修复走下一个补丁版本。'),
+        'release-ritual': doc('release-ritual', '五处版本文件→chore 提交→push main→vX.Y.Z tag；已发布 tag 不移动', 'project', 5, '## 发布流程\n\n1. 同步五处版本文件：`package.json`、`Cargo.toml`、`tauri.conf.json`…\n2. 提交 `chore: release vX.Y.Z`\n3. 推送 main 后打 tag\n\n> 已发布的 tag 永远不移动；修复走下一个补丁版本。\n\nRelated: [[linux-build-server]] · [[missing-note]]'),
         feedback_requirement_docs: doc('requirement-docs-new-not-revise', '延续已关闭 workflow 的需求时新建独立需求文档，不修订旧文档', 'feedback', 1, '对已关闭 workflow 交付的需求做后续强化时，新建 `docs/requirements/<日期>-<主题>.md`，不修订旧需求文档。\n\n**Why:** 旧文档是已验收交付的依据。\n\n**How to apply:** 新需求引用旧文档路径即可。'),
         'linux-build-server': doc('linux-build-server', 'Debian 13 构建机；无 GitHub 访问（scp 中转）；GUI 冒烟需要 DBus+Xvfb', 'reference', 12, '构建机 `192.168.0.109`，Debian 13。\n\n```bash\nscp target/release/bundle/deb/*.deb build:/tmp/\nxvfb-run -a dbus-run-session ./cliora\n```'),
       } },
@@ -30,6 +30,7 @@ const fixtures = {
         project_sample-app_playback: doc('project-sample-app-playback', '播放器使用 mpv 嵌入；字幕与音轨切换走 IPC 命令', 'project', 9, '播放链路：mpv 嵌入窗口 → IPC 命令切换字幕与音轨。'),
         user_profile: doc('user-profile', 'Prefers Kotlin, compact code, and Chinese commit messages', 'user', 30, 'Kotlin first; compact code; Chinese commit summaries.'),
       } },
+      { label: 'C:\\Users\\dev\\project\\empty-store', directory: 'C:/Users/dev/.claude/projects/C--Users-dev-project-empty-store/memory', entries: {} },
       { label: 'C:\\Users\\dev\\IdeaProjects\\sample-proxy', directory: 'C:/Users/dev/.claude/projects/C--Users-dev-IdeaProjects-sample-proxy/memory', entries: {
         'ui-permission-controls-in-composer': '# Composer permission controls\n\nPermission toggles live in the composer footer, not in a modal.', } },
     ],
@@ -94,7 +95,7 @@ function installMock(seed) {
 const scenarios = [
   { name: 'claude-overview', tool: 'Claude Code' },
   { name: 'claude-read', tool: 'Claude Code', run: async page => { await page.getByRole('button', { name: /Release ritual/ }).click(); } },
-  { name: 'claude-properties', tool: 'Claude Code', run: async page => { await page.getByRole('button', { name: /Linux build server/ }).click(); await page.getByText(/^属性/).click(); } },
+  { name: 'claude-properties', tool: 'Claude Code', run: async page => { await page.getByRole('button', { name: /Linux build server/ }).click(); await page.getByRole('button', { name: /^属性/ }).click(); } },
   { name: 'claude-edit', tool: 'Claude Code', run: async page => { await page.getByRole('button', { name: /User profile/ }).first().click(); await page.getByRole('button', { name: '编辑', exact: true }).click(); await page.getByRole('textbox', { name: '记忆正文' }).click(); await page.keyboard.press('End'); await page.keyboard.type(' 已编辑'); } },
   { name: 'claude-create', tool: 'Claude Code', run: async page => { await page.getByRole('button', { name: '新建记忆' }).first().click(); await page.getByRole('textbox', { name: '文件名' }).fill('coding-style'); } },
   { name: 'claude-filter', tool: 'Claude Code', run: async page => { await page.getByRole('button', { name: '反馈', exact: true }).click(); } },
