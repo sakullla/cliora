@@ -424,11 +424,20 @@ for (const theme of ['light', 'dark'] as const) {
     const input = dialog.getByRole('textbox', { name: copy.zh.nameAria, exact: true });
     const save = dialog.locator('[data-dialog-save]');
     const background = (locator: typeof http) => locator.evaluate((el) => getComputedStyle(el).backgroundColor);
-    const rest = await background(http);
-    await http.hover();
-    await expect.poll(() => background(http), { timeout: 1000 }).not.toBe(rest);
+    // Reset the pointer after opening/scrolling the dialog so the baseline is
+    // genuinely at rest. Retry the interaction as well as the assertion: a
+    // layout/scroll update can move the card out from under a stationary pointer.
     await input.hover();
-    await expect.poll(() => background(http), { timeout: 1000 }).toBe(rest);
+    await expect.poll(() => http.evaluate((el) => el.matches(':hover'))).toBe(false);
+    const rest = await background(http);
+    await expect(async () => {
+      await http.hover();
+      await expect.poll(() => http.evaluate((el) => el.matches(':hover'))).toBe(true);
+      await expect.poll(() => background(http)).not.toBe(rest);
+    }).toPass({ timeout: 10000 });
+    await input.hover();
+    await expect.poll(() => http.evaluate((el) => el.matches(':hover'))).toBe(false);
+    await expect.poll(() => background(http)).toBe(rest);
 
     const tokens = await page.evaluate(() => {
       const root = getComputedStyle(document.documentElement);
