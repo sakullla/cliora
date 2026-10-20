@@ -268,7 +268,7 @@ export default {
     nativeDefaultShort: '原生默认',
 
     title: '记忆',
-    description: '{{tool}} 跨会话保留的长期记忆。按来源分组，可直接阅读、编辑和整理。',
+    description: '{{tool}} 跨会话保留的长期记忆。先看标题、摘要和范围，打开后阅读正文。',
     refresh: '刷新记忆',
     create: '新建记忆',
     listLabel: '记忆列表',
@@ -279,6 +279,9 @@ export default {
     typeFilter: '按类型筛选',
     typeAll: '全部',
     type: { user: '用户', feedback: '反馈', project: '项目', reference: '参考' },
+    scopeUser: '用户',
+    scopeProject: '项目',
+    scopeProjectNamed: '项目 · {{name}}',
     countAll: '{{count}} 条 · {{stores}} 个来源',
     countFiltered: '{{filtered}} / {{total}} 条',
     entryCount: '{{count}} 条',

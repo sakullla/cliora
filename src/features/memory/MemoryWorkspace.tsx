@@ -15,7 +15,7 @@ import { useFeedback } from '../../lib/toast';
 import { modLabel, withMod } from '../../lib/shortcut';
 import { displayPath } from '../../lib/paths';
 import type { MemoryAggregate, MemoryReadRequest, MemoryManagement, MemoryOperation, MemoryStoreEntry, MemoryTarget } from '../../types/native';
-import { createTemplate, fileName, parseMemory, relativeTime, storeLabelParts, type ParsedMemory } from './memoryDocument';
+import { createTemplate, parseMemory, relativeTime, storeLabelParts, type ParsedMemory } from './memoryDocument';
 import styles from './MemoryWorkspace.module.css';
 
 // Shared across remounts so switching tools cannot exceed two native batches.
@@ -105,7 +105,6 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
   const [query, setQuery] = useState('');
   const [source, setSource] = useState('all');
   const [kind, setKind] = useState('all');
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
 
   const can = (operation: MemoryOperation) => memory.operations.includes(operation);
   const limitation = (memory.limitation || '').trim();
@@ -277,16 +276,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
     const haystack = (docs[row.key]?.search ?? row.entry.id.toLocaleLowerCase()) + '\n' + row.entry.sourceLabel.toLocaleLowerCase();
     return haystack.includes(needle);
   }), [rows, source, kind, needle, docs]);
-  const groups = useMemo(() => stores
-    .filter(store => source === 'all' || store.key === source)
-    .map(store => ({
-      store,
-      rows: visible.filter(row => row.store === store.key).sort((left, right) => (right.modified?.time ?? 0) - (left.modified?.time ?? 0) || (left.parsed?.title ?? left.entry.id).localeCompare(right.parsed?.title ?? right.entry.id)),
-      latest: Math.max(0, ...rows.filter(row => row.store === store.key).map(row => row.modified?.time ?? 0)),
-    }))
-    .filter(group => group.rows.length > 0)
-    .sort((left, right) => Number(right.store.target.scope === 'global') - Number(left.store.target.scope === 'global') || right.latest - left.latest || right.store.entryCount - left.store.entryCount), [stores, rows, visible, source]);
-  const ordered = useMemo(() => groups.flatMap(group => collapsed.has(group.store.key) ? [] : group.rows), [groups, collapsed]);
+  const ordered = useMemo(() => [...visible].sort((left, right) => (right.modified?.time ?? 0) - (left.modified?.time ?? 0) || (left.parsed?.title ?? left.entry.id).localeCompare(right.parsed?.title ?? right.entry.id)), [visible]);
   const filtering = !!needle || source !== 'all' || kind !== 'all';
   // Stores without entries stay valid write destinations but are not listed.
   const listedStores = stores.filter(store => rows.some(row => row.store === store.key));
@@ -320,6 +310,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
   const switchGroups = aggregate?.switchGroups ?? [];
   const shared = !!aggregate?.switchShared || switchGroups.length > 0;
   const masterStore = stores[0] ?? null;
+  const storeSwitches = can('master_switch') && !shared ? listedStores : [];
 
   // ---------- Destinations for new entries ----------
   const destinations = useMemo<Destination[]>(() => {
@@ -626,9 +617,6 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
   }
 
   function clearFilters() { setQuery(''); setSource('all'); setKind('all'); }
-  function toggleGroup(key: string) {
-    setCollapsed(previous => { const next = new Set(previous); if (next.has(key)) next.delete(key); else next.add(key); return next; });
-  }
 
   /** `[[target]]` resolves to an entry by id or frontmatter name, preferring the same store. */
   function linkedRow(target: string, store: string): Row | null {
@@ -643,6 +631,17 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
 
   // ---------- Render ----------
   const typeLabel = (value: string) => knownTypes.includes(value) ? t(`common.memory.type.${value}`) : value;
+  const scopeOf = (entry: MemoryStoreEntry, store: Store | null) => {
+    const title = store?.path || store?.label || entry.sourceLabel;
+    if (entry.target.scope === 'global') return { text: t('common.memory.scopeUser'), title };
+    const marker = ' · ';
+    const short = !store ? ''
+      : store.path ? store.name
+      : store.name.includes(marker) ? store.name.split(marker).slice(1).join(marker)
+      : store.name && store.name !== t('common.memory.scopeProject') ? store.name
+      : '';
+    return { text: short ? t('common.memory.scopeProjectNamed', { name: short }) : t('common.memory.scopeProject'), title };
+  };
   const showDetail = !!current || !!compose;
   const sourceOptions = [{ value: 'all', label: t('common.memory.sourceAll'), note: String(total) }, ...listedStores.map(store => ({ value: store.key, label: store.name, detail: store.path || undefined, note: String(store.entryCount) }))];
   const composeDestination = compose ? destinations.find(item => item.value === compose.destination) ?? null : null;
@@ -705,33 +704,39 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
 
       <div ref={setSplit} className={styles.split} data-view={showDetail ? 'detail' : 'list'} data-writing={focusWriting || undefined}>
         <div className={styles.listPane}>
+          {storeSwitches.length > 0 && <div className={styles.storeSwitches}>
+            {storeSwitches.map(store => {
+              const sample = rows.find(row => row.store === store.key);
+              const scope = sample ? scopeOf(sample.entry, store) : { text: store.name, title: store.path || store.label };
+              const off = !store.inUse && !master && !switchGroups.some(item => item.scope === store.target.scope && item.enabled === null);
+              return <div key={store.key} className={styles.storeSwitch}>
+                <span className={styles.storeSwitchName} title={scope.title}><Icon name={store.target.scope === 'global' ? 'globe' : 'folder'} size={13} /><span>{scope.text}</span></span>
+                {off && <span className={styles.offBadge} title={store.detail || t('common.memory.notInUse')}>{t('common.memory.storeOff')}</span>}
+                <Switch checked={store.inUse} label={t('common.memory.masterFor', { source: store.label })} disabled={busy} onChange={value => void setEnabled(value, store.target)} />
+              </div>;
+            })}
+          </div>}
           {filtering && visible.length === 0
             ? <div className={styles.noMatch}><Icon name="search" size={18} /><p>{needle ? t('common.memory.noMatch', { query: query.trim() }) : t('common.memory.noMatchFilter')}</p><button type="button" className="button" onClick={clearFilters}>{t('common.memory.clearFilters')}</button></div>
             : <nav ref={listRef} className={styles.list} aria-label={t('common.memory.listLabel')} onKeyDown={onListKey}>
-              {groups.map(group => {
-                const closed = collapsed.has(group.store.key);
-                return <div key={group.store.key} className={styles.group}>
-                  <div className={styles.groupHead}>
-                    <button type="button" className={styles.groupToggle} aria-expanded={!closed} title={group.store.path || group.store.name} onClick={() => toggleGroup(group.store.key)}>
-                      <Icon name={closed ? 'chevronRight' : 'chevronDown'} size={13} />
-                      <span className={styles.groupIcon} data-scope={group.store.target.scope}><Icon name={group.store.target.scope === 'global' ? 'globe' : 'folder'} size={13} /></span>
-                      <span className={styles.groupName}><strong>{group.store.name}</strong>{group.store.path && <small>{group.store.path}</small>}</span>
-                      <span className={styles.groupCount}>{filtering ? `${group.rows.length}/${group.store.entryCount}` : group.store.entryCount}</span>
-                    </button>
-                    {!group.store.inUse && !master && !switchGroups.some(item => item.scope === group.store.target.scope && item.enabled === null) && <span className={styles.offBadge} title={group.store.detail || t('common.memory.notInUse')}>{t('common.memory.storeOff')}</span>}
-                    {can('master_switch') && !shared && <Switch checked={group.store.inUse} label={t('common.memory.masterFor', { source: group.store.label })} disabled={busy} onChange={value => void setEnabled(value, group.store.target)} />}
-                  </div>
-                  {!closed && group.rows.map(row => {
-                    const title = row.parsed?.title ?? row.entry.id;
-                    const summary = row.parsed ? (row.parsed.description || row.parsed.excerpt) : '';
-                    return <button key={row.key} type="button" tabIndex={selected === row.key || (!selected && row === ordered[0]) ? 0 : -1} data-key={row.key} disabled={busy} aria-current={selected === row.key || undefined} className={styles.item} data-disabled={!row.entry.enabled || undefined} onClick={() => void select(row)}>
-                      <span className={styles.itemTitle}><strong title={title}>{title}</strong>{row.parsed?.type && <span className={styles.typeBadge} data-type={row.parsed.type}>{typeLabel(row.parsed.type)}</span>}{!row.entry.enabled && <span className={styles.typeBadge} data-type="off">{t('common.memory.disabledBadge')}</span>}</span>
-                      {docErrors[row.key] && <span className={styles.itemSummary} title={docErrors[row.key]}>{t('common.memory.entryReadFailed')}</span>}
-                      {summary ? <span className={styles.itemSummary}>{summary}</span> : row.pending && <span className={styles.itemSummaryPending} aria-hidden="true" />}
-                      <span className={styles.itemMeta}><span className={styles.mono}>{fileName(row.entry.path)}</span>{row.modified && <time dateTime={row.parsed?.modified ?? undefined} title={row.modified.absolute}>{row.modified.text}</time>}</span>
-                    </button>;
-                  })}
-                </div>;
+              {ordered.map(row => {
+                const title = row.parsed?.title ?? row.entry.id;
+                const summary = row.parsed ? (row.parsed.description || row.parsed.excerpt) : '';
+                const scope = scopeOf(row.entry, stores.find(item => item.key === row.store) ?? null);
+                return <button key={row.key} type="button" tabIndex={selected === row.key || (!selected && row === ordered[0]) ? 0 : -1} data-key={row.key} data-entry-id={row.entry.id} disabled={busy} aria-current={selected === row.key || undefined} className={styles.item} data-disabled={!row.entry.enabled || undefined} onClick={() => void select(row)}>
+                  <span className={styles.itemTitle}><strong title={title}>{title}</strong></span>
+                  {docErrors[row.key]
+                    ? <span className={styles.itemSummary} title={docErrors[row.key]}>{t('common.memory.entryReadFailed')}</span>
+                    : summary
+                      ? <span className={styles.itemSummary}>{summary}</span>
+                      : row.pending && <span className={styles.itemSummaryPending} aria-hidden="true" />}
+                  <span className={styles.itemMeta}>
+                    {row.parsed?.type && <span className={styles.typeBadge} data-type={row.parsed.type}>{typeLabel(row.parsed.type)}</span>}
+                    <span className={styles.scopeBadge} data-scope={row.entry.target.scope} title={scope.title}>{scope.text}</span>
+                    {!row.entry.enabled && <span className={styles.typeBadge} data-type="off">{t('common.memory.disabledBadge')}</span>}
+                    {row.modified && <time dateTime={row.parsed?.modified ?? undefined} title={row.modified.absolute}>{row.modified.text}</time>}
+                  </span>
+                </button>;
               })}
             </nav>}
         </div>
@@ -769,7 +774,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
             <div className={styles.detailHead}>
               <button type="button" className={styles.back} onClick={() => void (async () => { if (await mayLeave()) { setSelected(null); setMode('read'); } })()}><Icon name="arrowLeft" size={14} />{t('common.memory.back')}</button>
               <div className={styles.headTop}>
-                <span className={styles.crumb} title={currentStore?.path || currentStore?.label}><Icon name={current.entry.target.scope === 'global' ? 'globe' : 'folder'} size={13} />{currentStore?.name ?? current.entry.sourceLabel}<span aria-hidden="true">/</span><span className={styles.mono}>{fileName(current.entry.path)}</span></span>
+                <span className={styles.crumb}><Icon name={current.entry.target.scope === 'global' ? 'globe' : 'folder'} size={13} /><span className={styles.crumbScope}>{scopeOf(current.entry, currentStore).text}</span></span>
                 <span className={styles.detailActions}>
                   {can('item_enable') && <span className={styles.inlineSwitch}><span aria-hidden="true">{t('common.memory.enabledLabel')}</span><Switch checked={current.entry.enabled} label={t('common.memory.enable', { id: current.entry.id })} disabled={busy} onChange={value => void setEnabled(value, current.entry.target, current.entry.id)} /></span>}
                   <button type="button" className={styles.ghostIcon} aria-label={t('common.memory.copyPath')} title={`${t('common.memory.copyPath')}\n${displayPath(current.entry.path)}`} onClick={() => void copyPath(current.entry.path)}><Icon name="copy" size={15} /></button>
@@ -793,6 +798,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
                 {currentParsed?.modified && <span className={styles.metaText} title={relativeTime(currentParsed.modified, i18n.language)?.absolute}><Icon name="clock" size={13} />{t('common.memory.modified', { time: relativeTime(currentParsed.modified, i18n.language)?.text ?? currentParsed.modified })}</span>}
                 {!editing && currentParsed && currentParsed.properties.length > 0 && <button type="button" className={styles.metaButton} aria-expanded={propertiesOpen} onClick={() => setPropertiesOpen(value => !value)}><Icon name="info" size={13} />{t('common.memory.properties', { count: currentParsed.properties.length })}</button>}
               </div>
+              <p className={styles.pathLine} title={displayPath(current.entry.path)}>{currentStore?.path && currentStore.path !== displayPath(current.entry.path) && <span>{currentStore.path}</span>}<span className={styles.mono}>{displayPath(current.entry.path)}</span></p>
               {!editing && propertiesOpen && currentParsed && currentParsed.properties.length > 0 && <dl className={styles.properties}>{currentParsed.properties.map(item => <div key={item.key}><dt>{item.key}</dt><dd>{item.value || '—'}</dd></div>)}</dl>}
             </div>
             {editing
@@ -804,7 +810,7 @@ export function MemoryWorkspace({ toolId, toolName, memory, active, suggestedPro
                   <button type="button" className={`button primary ${styles.primary}`} disabled={busy || !dirty} onClick={() => void saveOpened(false)}>{t('common.memory.save')}</button>
                 </div>
               </>
-              : <div className={styles.readBody}>
+              : <div className={styles.readBody} role="region" aria-label={t('common.memory.textLabel')}>
                 {currentParsed
                   ? currentParsed.displayBody.trim()
                     ? <div className={styles.prose}><Suspense fallback={<pre className={styles.raw}>{currentParsed.displayBody}</pre>}><MemoryMarkdown text={currentParsed.displayBody} resolve={target => !!linkedRow(target, current.store)} onOpen={target => { const row = linkedRow(target, current.store); if (row) void select(row); }} /></Suspense></div>
