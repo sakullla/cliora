@@ -814,6 +814,67 @@ fn qoder_unknown_amount_calls_persist_report_and_export_and_invalid_shapes_stale
 }
 
 #[test]
+fn qoder_duplicate_main_subagent_requests_preserve_billing_groups_and_exports() {
+    use crate::adapters::qoder_cn::QODER_CN;
+    let temp = tempfile::tempdir().unwrap();
+    let logs = temp.path().join(".qoder-cn/projects/synthetic");
+    let native_id = "11111111-2222-4333-8444-555555555555";
+    let wires = logs.join(format!("{native_id}/subagents"));
+    fs::create_dir_all(&wires).unwrap();
+    let main = [
+        serde_json::json!({"request_id":"r1","credits":1,"original_credits":2,"billable":false}),
+        serde_json::json!({"request_id":"r2","credits":0.1}),
+        serde_json::json!({"request_id":"r3","credits":1,"original_credits":2,"billable":true}),
+        serde_json::json!({"request_id":"r4","credits":0.25,"original_credits":0.5,"billable":false}),
+    ];
+    let child = [
+        serde_json::json!({"request_id":"r1","credits":1.5}),
+        serde_json::json!({"request_id":"r2","credits":0.5,"original_credits":1,"billable":true}),
+        serde_json::json!({"request_id":"r3","original_credits":0,"billable":false}),
+        serde_json::json!({"request_id":"r4","credits":0,"original_credits":0,"billable":true}),
+    ];
+    let rows = |usages: &[Value]| usages.iter().enumerate().map(|(index, usage)| serde_json::json!({
+        "type":"assistant","uuid":format!("a{index}"),"parentUuid":index.checked_sub(1).map(|index| format!("a{index}")),
+        "sessionId":native_id,"timestamp":"2026-10-20T08:00:00Z","message":{"content":"answer","model":"qfmodel","usage":usage}
+    }).to_string()).collect::<Vec<_>>().join("\n");
+    fs::write(logs.join(format!("{native_id}.jsonl")), rows(&main)).unwrap();
+    let db = Database::open(&temp.path().join("index.db")).unwrap();
+    let registry = Registry::with_adapters(vec![&QODER_CN]).unwrap();
+    let refresh = || refresh_controlled(&db, &registry, temp.path(), &["qoder_cn".into()], &|| false).unwrap();
+    assert_eq!(refresh()[0].failed_count, 0);
+    let id = list(&db, &HistoryFilter::default()).unwrap().remove(0).id;
+    fs::write(wires.join("agent-duplicate.jsonl"), rows(&child)).unwrap();
+    assert_eq!(refresh()[0].failed_count, 0);
+    let saved = detail(&db, &id).unwrap();
+    assert_eq!(saved.usage.len(), 4);
+    assert_eq!(saved.totals.requests, 4);
+    assert_eq!(saved.usage[3].native_usage.as_ref().unwrap().value, 0.0);
+    let report = usage_report(&db, &HistoryFilter { tool_id: Some("qoder_cn".into()), model: Some("qfmodel".into()), ..Default::default() }).unwrap();
+    let totals = &report.totals;
+    assert_eq!(totals.requests, 4);
+    assert_eq!(totals.native_usage.len(), 2, "no request moves to unknown billing because a duplicate omits metadata");
+    for (billable, value, original) in [(false, 2.5, 2.0), (true, 0.5, 1.0)] {
+        let group = totals.native_usage.iter().find(|group| group.billable == Some(billable)).unwrap();
+        assert_eq!((group.value, group.original_value, group.records, group.unknown_original_records), (value, Some(original), 2, 0));
+    }
+    assert_eq!(saved.totals.native_usage, totals.native_usage);
+    assert_eq!(report.by_model[0].totals.native_usage, totals.native_usage);
+    assert_eq!(report.timeline[0].totals.native_usage, totals.native_usage);
+    let json_path = temp.path().join("export.json");
+    export(&db, &id, "json", &json_path).unwrap();
+    let json: Value = serde_json::from_str(&fs::read_to_string(json_path).unwrap()).unwrap();
+    assert_eq!(json["usage"][0]["nativeUsage"]["originalValue"], 2.0);
+    assert_eq!(json["usage"][0]["nativeUsage"]["billable"], false);
+    assert_eq!(json["usage"][3]["nativeUsage"]["value"], 0.0);
+    assert_eq!(json["usage"][3]["nativeUsage"]["originalValue"], 0.0);
+    let md_path = temp.path().join("export.md");
+    export(&db, &id, "markdown", &md_path).unwrap();
+    let markdown = fs::read_to_string(md_path).unwrap();
+    assert!(markdown.contains("credits：2.5；原始值：2；原生标记未计费"));
+    assert!(markdown.contains("credits：0.5；原始值：1；原生标记可计费"));
+}
+
+#[test]
 fn missing_native_request_ids_are_scoped_to_the_source() {
     use crate::adapters::{codebuddy::history as buddy, command_code::history as command};
     for (tool, name) in [("codebuddy", "codebuddy-2.161.1-session.jsonl"), ("command_code", "command-code-1.73-session.jsonl")] {

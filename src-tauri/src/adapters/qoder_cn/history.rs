@@ -1,7 +1,7 @@
 //! Qoder CN 1.1.74: projects/<slug>/<uuid>.jsonl and sibling subagent wires.
 //! Credits are native usage, not currency or remaining balance. Zero token
 //! buckets in this release are placeholders and cannot establish a token price.
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -40,7 +40,7 @@ pub fn sources(home: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<HistoryS
         }
         history::check_cancelled(cancelled)?;
         source.fingerprint = if source.fingerprint_error.is_some() { String::new() }
-            else { format!("qoder-cn-session-v2|{}", parts.join("|")) };
+            else { format!("qoder-cn-session-v3|{}", parts.join("|")) };
     }
     Ok(sources)
 }
@@ -66,13 +66,17 @@ fn text(content: &Value) -> String {
         .collect::<Vec<_>>().join("\n")
 }
 
-fn record_usage(session: &mut ParsedSession, seen: &mut HashSet<String>, row: &Value, source: &HistorySource, line: usize, time: Option<i64>, model: Option<String>) {
+struct UsageObservation {
+    index: usize,
+    credits: Option<f64>,
+    original: Option<f64>,
+    billable: Option<bool>,
+}
+
+fn record_usage(session: &mut ParsedSession, seen: &mut HashMap<String, UsageObservation>, row: &Value, source: &HistorySource, line: usize, time: Option<i64>, model: Option<String>) {
     let Some(message) = row.get("message") else { return; };
     let Some(usage) = message.get("usage").filter(|value| value.is_object()) else { return; };
-    let number = |field| usage.get(field).and_then(Value::as_f64).filter(|value| value.is_finite() && *value >= 0.0);
-    let native_usage = number("credits").map(|value| NativeUsage {
-        unit: "credits".into(), value, original_value: number("original_credits"), billable: usage.get("billable").and_then(Value::as_bool),
-    });
+    let number = |field: &str| usage.get(field).and_then(Value::as_f64).filter(|value| value.is_finite() && *value >= 0.0);
     if ["credits", "original_credits"].iter().any(|field| usage.get(field).is_some_and(|value| !value.is_null()) && number(field).is_none()) {
         session.partial = true;
     }
@@ -84,7 +88,7 @@ fn record_usage(session: &mut ParsedSession, seen: &mut HashSet<String>, row: &V
     let message_id = message.get("id").and_then(Value::as_str).filter(|id| !id.trim().is_empty());
     let native_session = row.get("sessionId").and_then(Value::as_str).filter(|id| history::valid_native_id(id))
         .or(source.native_id.as_deref());
-    if native_usage.is_none() && tokens.iter().all(Option::is_none)
+    if number("credits").is_none() && tokens.iter().all(Option::is_none)
         && request.is_none() && (message_id.is_none() || native_session.is_none()) { return; }
     let (id, request_count) = if let Some(request) = request { (format!("request:{request}"), Some(1)) }
         // Message counters are not assumed globally unique across sessions.
@@ -93,23 +97,31 @@ fn record_usage(session: &mut ParsedSession, seen: &mut HashSet<String>, row: &V
             let identity = row.get("uuid").and_then(Value::as_str).map(str::to_owned).unwrap_or_else(|| format!("line-{line}"));
             (format!("{}:{identity}", source.key()), None)
         };
-    if seen.insert(id.clone()) {
-        session.usage.push(UsageEvent { native_usage, request_count, id, model, timestamp: time,
-            input: tokens[0], output: tokens[1], cache_read: tokens[2], cache_write: tokens[3], input_includes_cache: false });
-    } else if let Some(event) = session.usage.iter_mut().find(|event| event.id == id) {
-        // Streaming revisions/chunks repeat a request; later known values may
-        // complete an earlier unknown observation without adding another call.
-        event.native_usage = native_usage.or(event.native_usage.take());
-        event.input = tokens[0].or(event.input); event.output = tokens[1].or(event.output);
-        event.cache_read = tokens[2].or(event.cache_read); event.cache_write = tokens[3].or(event.cache_write);
-    }
+    let observed = seen.entry(id.clone()).or_insert_with(|| {
+        let index = session.usage.len();
+        session.usage.push(UsageEvent { native_usage: None, request_count, id, model, timestamp: time,
+            input: None, output: None, cache_read: None, cache_write: None, input_includes_cache: false });
+        UsageObservation { index, credits: None, original: None, billable: None }
+    });
+    // Each field is an independent observation, including metadata arriving
+    // before Credits. Missing/null fields never erase earlier known values;
+    // explicit zero/false remain updates. Main and subagents share this map.
+    observed.credits = number("credits").or(observed.credits);
+    observed.original = number("original_credits").or(observed.original);
+    observed.billable = usage.get("billable").and_then(Value::as_bool).or(observed.billable);
+    let event = &mut session.usage[observed.index];
+    event.native_usage = observed.credits.map(|value| NativeUsage {
+        unit: "credits".into(), value, original_value: observed.original, billable: observed.billable,
+    });
+    event.input = tokens[0].or(event.input); event.output = tokens[1].or(event.output);
+    event.cache_read = tokens[2].or(event.cache_read); event.cache_write = tokens[3].or(event.cache_write);
 }
 
 pub fn parse(source: &HistorySource, cancelled: &dyn Fn() -> bool) -> Result<ParsedSession, String> {
     history::check_source_path(&source.path)?;
     let mut session = ParsedSession::new();
     session.native_id = source.path.file_stem().and_then(|stem| stem.to_str()).filter(|stem| session_stem(stem)).map(str::to_owned);
-    let mut seen = HashSet::new();
+    let mut seen = HashMap::new();
     let mut transcript = transcript::Transcript::default();
     let mut title = None;
     let mut recognized = false;
@@ -217,7 +229,7 @@ mod tests {
     fn qoder_usage_rejects_invalid_numbers_and_preserves_unknown_requests() {
         let source = HistorySource { native_title: None, path: PathBuf::from("synthetic"), native_id: None, fingerprint: String::new(), fingerprint_error: None };
         let mut parsed = ParsedSession::new();
-        let mut seen = HashSet::new();
+        let mut seen = HashMap::new();
         let row = serde_json::json!({"uuid":"row-one","message":{"usage":{"credits":2.0,"original_credits":-1,"input_tokens":0}}});
         record_usage(&mut parsed, &mut seen, &row, &source, 1, None, None);
         assert!(parsed.partial);
@@ -324,6 +336,30 @@ mod tests {
             assert_eq!(parse_rows(&[row.clone()]).unwrap().usage[0].request_count, Some(1), "reliable message identity also proves a call");
             row["message"].as_object_mut().unwrap().remove("id");
             assert!(parse_rows(&[row]).unwrap().usage.is_empty(), "no numeric evidence or reliable call identity");
+        }
+    }
+
+    #[test]
+    fn qoder_duplicate_requests_merge_native_fields_without_erasing_known_values() {
+        let cases = [
+            (serde_json::json!({"credits":1,"original_credits":2,"billable":false}), serde_json::json!({"credits":1.5}), 1.5, Some(2.0), Some(false)),
+            (serde_json::json!({"credits":1}), serde_json::json!({"credits":2,"original_credits":3,"billable":true}), 2.0, Some(3.0), Some(true)),
+            (serde_json::json!({"credits":1,"original_credits":2,"billable":true}), serde_json::json!({"credits":0,"original_credits":0,"billable":false}), 0.0, Some(0.0), Some(false)),
+            (serde_json::json!({"credits":0,"original_credits":0,"billable":false}), serde_json::json!({"credits":1,"billable":true}), 1.0, Some(0.0), Some(true)),
+            (serde_json::json!({"credits":1,"original_credits":2,"billable":false}), serde_json::json!({"credits":null,"original_credits":null,"billable":null}), 1.0, Some(2.0), Some(false)),
+            (serde_json::json!({"credits":1,"original_credits":2,"billable":true}), serde_json::json!({"original_credits":0,"billable":false}), 1.0, Some(0.0), Some(false)),
+            (serde_json::json!({"original_credits":2,"billable":false}), serde_json::json!({"credits":1}), 1.0, Some(2.0), Some(false)),
+        ];
+        for (mut first, mut last, value, original, billable) in cases {
+            first["request_id"] = "same-call".into(); last["request_id"] = "same-call".into();
+            let mut a = message("a", None, "assistant", "first chunk"); a["message"]["usage"] = first;
+            let mut b = message("b", Some("a"), "assistant", "last chunk"); b["message"]["usage"] = last;
+            let parsed = parse_rows(&[a, b]).unwrap();
+            assert_eq!(parsed.usage.len(), 1);
+            assert_eq!(parsed.usage[0].request_count, Some(1));
+            let native = parsed.usage[0].native_usage.as_ref().unwrap();
+            assert_eq!((native.value, native.original_value, native.billable), (value, original, billable));
+            assert!(!parsed.partial);
         }
     }
 
